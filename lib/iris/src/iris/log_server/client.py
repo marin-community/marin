@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Iterable
+
+from connectrpc.interceptor import Interceptor
 
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
@@ -35,8 +38,9 @@ class LogPusher:
         timeout_ms: int = 10_000,
         batch_size: int = 1000,
         flush_interval: float = 5.0,
+        interceptors: Iterable[Interceptor] = (),
     ) -> None:
-        self._client = LogServiceClientSync(address=server_url, timeout_ms=timeout_ms)
+        self._client = LogServiceClientSync(address=server_url, timeout_ms=timeout_ms, interceptors=tuple(interceptors))
         self._batch_size = batch_size
         self._flush_interval = flush_interval
         self._buffers: dict[str, list[logging_pb2.LogEntry]] = {}
@@ -100,6 +104,42 @@ class LogPusher:
         self.flush()
         with self._send_lock:
             self._closed = True
+        self._client.close()
+
+
+class LogServiceProxy:
+    """Protocol adapter that forwards push_logs/fetch_logs to a remote LogService over RPC.
+
+    Bridges ``LogServiceClientSync`` (an RPC client with kwargs-only,
+    ctx-less methods) to the ``LogServiceSync`` protocol (positional
+    ``ctx`` arg) expected by ``LogServiceWSGIApplication`` and the
+    controller/dashboard call sites. Used in place of ``LogServiceImpl``
+    when the log service is hosted in a separate process.
+    """
+
+    def __init__(
+        self,
+        address: str,
+        timeout_ms: int = 10_000,
+        interceptors: Iterable[Interceptor] = (),
+    ) -> None:
+        self._client = LogServiceClientSync(address=address, timeout_ms=timeout_ms, interceptors=tuple(interceptors))
+
+    def push_logs(
+        self,
+        request: logging_pb2.PushLogsRequest,
+        ctx: object,
+    ) -> logging_pb2.PushLogsResponse:
+        return self._client.push_logs(request)
+
+    def fetch_logs(
+        self,
+        request: logging_pb2.FetchLogsRequest,
+        ctx: object,
+    ) -> logging_pb2.FetchLogsResponse:
+        return self._client.fetch_logs(request)
+
+    def close(self) -> None:
         self._client.close()
 
 

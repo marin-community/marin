@@ -467,7 +467,10 @@ class Worker:
         log_addr = self._resolve_log_service()
         if not log_addr:
             return
-        self._log_pusher = LogPusher(log_addr)
+        log_interceptors = ()
+        if self._config.auth_token:
+            log_interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
+        self._log_pusher = LogPusher(log_addr, interceptors=log_interceptors)
         self._log_handler = RemoteLogHandler(
             self._log_pusher,
             key=worker_log_key(self._worker_id),
@@ -699,7 +702,8 @@ class Worker:
 
         Processing order (sequential, not concurrent):
         1. Submit tasks_to_run — registers each task in self._tasks
-        2. Kill tasks_to_kill — async, sets stop flag immediately
+        2. Kill tasks_to_kill — synchronously, blocks until old process is stopped
+           so the controller does not assign new work while old tasks hold resources
         3. Reconcile expected_tasks — for each expected task, report its current
            state. If not found in self._tasks, report WORKER_FAILED ("Task not
            found on worker"). This happens when the worker has reset its state
@@ -713,8 +717,8 @@ class Worker:
         for newly-assigned tasks) will be submitted before reconciliation checks
         for it, so it will be found.
 
-        Kill operations are performed asynchronously in daemon threads to avoid
-        blocking the heartbeat RPC.
+        Reconciliation kills (step 4) remain async to avoid blocking the heartbeat
+        for stale-task cleanup that is not part of a preemption handoff.
         """
         # Reset heartbeat deadline
         self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
@@ -729,14 +733,16 @@ class Worker:
                     except Exception as e:
                         logger.warning("Heartbeat: failed to submit task %s: %s", run_req.task_id, e)
 
-            # Kill requested tasks asynchronously so the heartbeat returns immediately
-            with slow_log(logger, "heartbeat kill_tasks", threshold_ms=100):
+            # Kill requested tasks synchronously so the old process is fully stopped
+            # before the heartbeat returns. This prevents the controller from assigning
+            # new work while the old task still holds accelerator resources (TPU/GPU chips).
+            with slow_log(logger, "heartbeat kill_tasks", threshold_ms=5000):
                 for task_id in request.tasks_to_kill:
                     try:
                         current = self._get_current_attempt(task_id)
                         if current:
-                            self._kill_task_attempt(task_id, current.attempt_id, async_kill=True)
-                            logger.info("Heartbeat: initiated async kill for task %s", task_id)
+                            self._kill_task_attempt(task_id, current.attempt_id, async_kill=False)
+                            logger.info("Heartbeat: killed task %s", task_id)
                     except Exception as e:
                         logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
 

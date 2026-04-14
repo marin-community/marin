@@ -58,7 +58,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --all-packages --extra=cpu --no-default-groups
+        run: uv sync --all-packages --extra=cpu --extra=controller --no-default-groups
 
       - name: Write CoreWeave kubeconfig
         run: |
@@ -195,7 +195,7 @@ jobs:
             Read .agents/skills/canary-triage/SKILL.md and follow it.
           claude_args: |
             --model opus
-            --max-turns 50
+            --max-turns 500
             --allowedTools "Bash(kubectl:*),Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*)"
         env:
           CANARY_LANE: gpu

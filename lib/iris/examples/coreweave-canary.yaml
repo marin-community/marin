@@ -57,7 +57,6 @@ scale_groups:
       capacity_type: on-demand
     worker:
       attributes:
-        region: US-WEST-04A
         pool: cpu-erapids
     buffer_slices: 0
     max_slices: 1
@@ -80,7 +79,6 @@ scale_groups:
       capacity_type: on-demand
     worker:
       attributes:
-        region: US-WEST-04A
         pool: h100-8x
     buffer_slices: 0
     max_slices: 1

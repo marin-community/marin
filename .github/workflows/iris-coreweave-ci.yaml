@@ -104,7 +104,7 @@ jobs:
         run: |
           cd lib/iris && uv run --group dev iris -v \
             --config=examples/coreweave-ci.yaml \
-            cluster start
+            cluster start --fresh
 
       - name: Run integration tests
         env:
@@ -185,9 +185,14 @@ jobs:
 
       - name: Capture failure diagnostics
         if: failure()
+        env:
+          LOG_DIR: ${{ github.workspace }}/iris-cw-logs
         run: |
           export KUBECONFIG=~/.kube/coreweave-iris
-          echo "=== Controller logs ==="
+          mkdir -p "$LOG_DIR"
+
+          # Stream to the GH Actions log for quick triage…
+          echo "=== Controller logs (tail) ==="
           kubectl -n "$IRIS_NAMESPACE" logs -l app=iris-controller --tail=500 || true
           echo "=== Controller pod describe ==="
           kubectl -n "$IRIS_NAMESPACE" describe pod -l app=iris-controller || true
@@ -195,6 +200,36 @@ jobs:
           kubectl -n "$IRIS_NAMESPACE" get pods -l "$IRIS_MANAGED_LABEL=true" || true
           echo "=== Warning events ==="
           kubectl -n "$IRIS_NAMESPACE" get events --sort-by='.lastTimestamp' --field-selector type!=Normal || true
+
+          # …and also persist per-pod logs + describe so failures in worker
+          # containers are recoverable from the uploaded artifact, not just
+          # the controller's view.
+          kubectl -n "$IRIS_NAMESPACE" logs -l app=iris-controller --tail=-1 --all-containers \
+            > "$LOG_DIR/controller.log" 2>&1 || true
+          kubectl -n "$IRIS_NAMESPACE" logs -l app=iris-controller --tail=-1 --all-containers --previous \
+            > "$LOG_DIR/controller-previous.log" 2>&1 || true
+          kubectl -n "$IRIS_NAMESPACE" describe pod -l app=iris-controller \
+            > "$LOG_DIR/controller-describe.txt" 2>&1 || true
+
+          for pod in $(kubectl -n "$IRIS_NAMESPACE" get pods -l "$IRIS_MANAGED_LABEL=true" -o name 2>/dev/null); do
+            safe=$(echo "$pod" | tr '/' '-')
+            kubectl -n "$IRIS_NAMESPACE" logs "$pod" --tail=-1 --all-containers \
+              > "$LOG_DIR/${safe}.log" 2>&1 || true
+            kubectl -n "$IRIS_NAMESPACE" describe "$pod" \
+              > "$LOG_DIR/${safe}-describe.txt" 2>&1 || true
+          done
+
+          kubectl -n "$IRIS_NAMESPACE" get events --sort-by='.lastTimestamp' \
+            > "$LOG_DIR/events.txt" 2>&1 || true
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iris-cw-ci-logs
+          path: iris-cw-logs/
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Set commit status to result
         if: always() && github.event_name == 'issue_comment'

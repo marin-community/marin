@@ -11,10 +11,16 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from iris.cluster.constraints import WellKnownAttribute, device_variant_constraint
+from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.log_server.server import LogServiceImpl
-from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
+from iris.cluster.controller.codec import constraints_from_json
+from iris.cluster.controller.transitions import (
+    Assignment,
+    ControllerTransitions,
+    HeartbeatApplyRequest,
+    TaskUpdate,
+)
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
@@ -115,8 +121,7 @@ def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state)
 
     job = _query_job(state, JobName.root("test-user", "bundle-job"))
     assert job is not None
-    assert job.request.bundle_blob == b""
-    assert len(job.request.bundle_id) == 64
+    assert len(job.bundle_id) == 64
 
 
 def test_launch_job_rejects_duplicate_name(service):
@@ -824,6 +829,14 @@ def test_list_jobs_job_query_roots_and_children(service, state):
     )
     assert [job.job_id for job in children_response.jobs] == [child_id.to_wire()]
 
+    # Legacy flat parent_job_id field (no JobQuery sub-message) must also
+    # filter to children only — see issue #4705.
+    legacy_children_response = service.list_jobs(
+        controller_pb2.Controller.ListJobsRequest(parent_job_id=parent_id.to_wire()),
+        None,
+    )
+    assert [job.job_id for job in legacy_children_response.jobs] == [child_id.to_wire()]
+
 
 # =============================================================================
 # SQL Aggregation Tests
@@ -948,15 +961,15 @@ def test_launch_job_injects_device_constraints_from_tpu_resource(service, state)
     service.launch_job(request, None)
 
     job = _query_job(state, JobName.root("test-user", "tpu-job"))
-    stored_constraints = list(job.request.constraints)
+    stored_constraints = constraints_from_json(job.constraints_json)
     keys = {c.key for c in stored_constraints}
     assert WellKnownAttribute.DEVICE_TYPE in keys
     assert WellKnownAttribute.DEVICE_VARIANT in keys
 
     dt = next(c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_TYPE)
-    assert dt.value.string_value == "tpu"
+    assert dt.values[0].value == "tpu"
     dv = next(c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_VARIANT)
-    assert dv.value.string_value == "v5litepod-16"
+    assert dv.values[0].value == "v5litepod-16"
 
 
 def test_launch_job_user_constraints_override_auto(service, state):
@@ -975,17 +988,17 @@ def test_launch_job_user_constraints_override_auto(service, state):
     service.launch_job(request, None)
 
     job = _query_job(state, JobName.root("test-user", "multi-variant-job"))
-    stored_constraints = list(job.request.constraints)
+    stored_constraints = constraints_from_json(job.constraints_json)
 
     # device-variant should be the user's IN constraint, not the auto EQ
     dv_constraints = [c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_VARIANT]
     assert len(dv_constraints) == 1
-    assert dv_constraints[0].op == job_pb2.CONSTRAINT_OP_IN
+    assert dv_constraints[0].op == ConstraintOp.IN
 
     # device-type should still be auto-injected
     dt_constraints = [c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_TYPE]
     assert len(dt_constraints) == 1
-    assert dt_constraints[0].value.string_value == "tpu"
+    assert dt_constraints[0].values[0].value == "tpu"
 
 
 def test_launch_job_cpu_resource_no_constraints_injected(service, state):
@@ -1000,7 +1013,7 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
     service.launch_job(request, None)
 
     job = _query_job(state, JobName.root("test-user", "cpu-job"))
-    assert len(job.request.constraints) == 0
+    assert len(constraints_from_json(job.constraints_json)) == 0
 
 
 # =============================================================================

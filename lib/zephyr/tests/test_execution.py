@@ -20,14 +20,14 @@ from zephyr.execution import CounterSnapshot, ZephyrContext, zephyr_worker_ctx
 def test_simple_map(zephyr_ctx):
     """Map pipeline produces correct results."""
     ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     assert sorted(results) == [2, 4, 6]
 
 
 def test_filter(zephyr_ctx):
     """Filter pipeline produces correct results."""
     ds = Dataset.from_list([1, 2, 3, 4, 5]).filter(lambda x: x > 3)
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     assert sorted(results) == [4, 5]
 
 
@@ -65,7 +65,7 @@ def test_subprocess_propagates_user_counters(zephyr_ctx):
     target_logger.setLevel(logging.INFO)
     try:
         ds = Dataset.from_list([1, 2, 3, 4, 5]).map(increment_per_item)
-        results = list(zephyr_ctx.execute(ds))
+        results = zephyr_ctx.execute(ds).results
     finally:
         target_logger.removeHandler(handler)
         target_logger.setLevel(prior_level)
@@ -104,7 +104,7 @@ def test_subprocess_exception_includes_subprocess_traceback(zephyr_ctx):
     ds = Dataset.from_list([0]).map(buggy_index_lookup)
 
     with pytest.raises(ZephyrWorkerError) as exc_info:
-        list(zephyr_ctx.execute(ds))
+        zephyr_ctx.execute(ds)
 
     rendered = str(exc_info.value) + "".join(getattr(exc_info.value, "__notes__", []))
     # The wrapping ZephyrWorkerError should chain through the parent's
@@ -140,7 +140,7 @@ def test_shared_data(integration_client, tmp_path):
     )
     zctx.put("multiplier", 10)
     ds = Dataset.from_list([1, 2, 3]).map(use_shared)
-    results = list(zctx.execute(ds))
+    results = zctx.execute(ds).results
     assert sorted(results) == [10, 20, 30]
     zctx.shutdown()
 
@@ -148,7 +148,7 @@ def test_shared_data(integration_client, tmp_path):
 def test_multi_stage(zephyr_ctx):
     """Multi-stage pipeline (map + filter) works."""
     ds = Dataset.from_list([1, 2, 3, 4, 5]).map(lambda x: x * 2).filter(lambda x: x > 5)
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     assert sorted(results) == [6, 8, 10]
 
 
@@ -161,7 +161,7 @@ def test_context_manager(local_client):
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
     )
     ds = Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)
-    results = list(zctx.execute(ds))
+    results = zctx.execute(ds).results
     assert sorted(results) == [2, 3, 4]
 
 
@@ -169,7 +169,7 @@ def test_write_jsonl(tmp_path, zephyr_ctx):
     """Pipeline writing to jsonl file."""
     output = str(tmp_path / "out-{shard}.jsonl")
     ds = Dataset.from_list([{"a": 1}, {"a": 2}, {"a": 3}]).write_jsonl(output)
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     assert len(results) == 3
     # Verify all files were written and contain correct data
     all_records = []
@@ -184,21 +184,21 @@ def test_write_jsonl(tmp_path, zephyr_ctx):
 def test_dry_run(zephyr_ctx):
     """Dry run shows plan without executing."""
     ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
-    results = list(zephyr_ctx.execute(ds, dry_run=True))
+    results = zephyr_ctx.execute(ds, dry_run=True).results
     assert results == []
 
 
 def test_flat_map(zephyr_ctx):
     """FlatMap pipeline produces correct results."""
     ds = Dataset.from_list([1, 2, 3]).flat_map(lambda x: [x, x * 10])
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     assert sorted(results) == [1, 2, 3, 10, 20, 30]
 
 
 def test_empty_dataset(zephyr_ctx):
     """Empty dataset produces empty results."""
     ds = Dataset.from_list([])
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     assert results == []
 
 
@@ -214,7 +214,7 @@ def test_chunk_cleanup(local_client, tmp_path):
     )
 
     ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
-    results = list(ctx.execute(ds))
+    results = ctx.execute(ds).results
 
     assert sorted(results) == [2, 4, 6]
 
@@ -633,7 +633,7 @@ def test_fresh_actors_per_execute(integration_client, tmp_path):
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
     )
     ds = Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)
-    results = list(zctx.execute(ds))
+    results = zctx.execute(ds).results
     assert sorted(results) == [2, 3, 4]
 
     # After execute(): coordinator job is torn down
@@ -642,7 +642,7 @@ def test_fresh_actors_per_execute(integration_client, tmp_path):
 
     # Can execute again (creates fresh coordinator job)
     ds2 = Dataset.from_list([10, 20]).map(lambda x: x * 2)
-    results2 = list(zctx.execute(ds2))
+    results2 = zctx.execute(ds2).results
     assert sorted(results2) == [20, 40]
 
     assert zctx._coordinator_job is None
@@ -669,7 +669,7 @@ def test_fatal_errors_fail_fast(local_client, tmp_path):
 
     start = time.monotonic()
     with pytest.raises(ZephyrWorkerError, match="ValueError"):
-        list(zctx.execute(ds))
+        zctx.execute(ds)
     elapsed = time.monotonic() - start
 
     # Should fail fast — well under the 30s heartbeat timeout
@@ -698,7 +698,7 @@ def test_chunk_storage_with_join(integration_client, tmp_path):
         combiner=lambda left, right: {**left, **right},
     )
 
-    results = sorted(list(ctx.execute(joined)), key=lambda x: x["id"])
+    results = sorted(ctx.execute(joined).results, key=lambda x: x["id"])
     assert len(results) == 2
     assert results[0] == {"id": 1, "a": "x", "b": "p"}
     assert results[1] == {"id": 2, "a": "y", "b": "q"}
@@ -714,7 +714,7 @@ def test_workers_capped_to_shard_count(local_client, tmp_path):
         chunk_storage_prefix=str(tmp_path / "chunks"),
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
     )
-    results = list(ctx.execute(ds.map(lambda x: x * 2)))
+    results = ctx.execute(ds.map(lambda x: x * 2)).results
     assert sorted(results) == [2, 4, 6]
     # Everything torn down after execute; correct results prove workers
     # were created and sized properly (min(10, 3) = 3)
@@ -925,7 +925,7 @@ def test_execute_stops_coordinator_thread(local_client, tmp_path):
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
     )
 
-    results = list(ctx.execute(Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)))
+    results = ctx.execute(Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)).results
     assert sorted(results) == [2, 3, 4]
 
     deadline = time.monotonic() + 2.0
@@ -962,7 +962,7 @@ def test_execute_retries_on_coordinator_death(tmp_path):
     )
 
     # First execute() succeeds normally
-    results = list(ctx.execute(Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)))
+    results = ctx.execute(Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)).results
     assert sorted(results) == [2, 4, 6]
 
     # Patch submit to fail on the first coordinator job, then succeed on retry.
@@ -980,7 +980,7 @@ def test_execute_retries_on_coordinator_death(tmp_path):
 
     # Next execute() should: fail on attempt 0 (submit raises),
     # then succeed on attempt 1 with a fresh coordinator job.
-    results = list(ctx.execute(Dataset.from_list([10, 20]).map(lambda x: x + 1)))
+    results = ctx.execute(Dataset.from_list([10, 20]).map(lambda x: x + 1)).results
     assert sorted(results) == [11, 21]
     assert submit_count[0] >= 2, "Expected at least 2 submit attempts (1 failed + 1 succeeded)"
 
@@ -1009,7 +1009,7 @@ def test_execute_does_not_retry_worker_errors(local_client, tmp_path):
 
     start = time.monotonic()
     with pytest.raises(ZephyrWorkerError, match="ValueError"):
-        list(ctx.execute(ds))
+        ctx.execute(ds)
     elapsed = time.monotonic() - start
 
     # Should fail fast — no retries for application errors
@@ -1021,9 +1021,9 @@ def test_execute_does_not_retry_worker_errors(local_client, tmp_path):
 
 def test_simple_map_integration(integration_ctx):
     ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
-    assert sorted(integration_ctx.execute(ds)) == [2, 4, 6]
+    assert sorted(integration_ctx.execute(ds).results) == [2, 4, 6]
 
 
 def test_multi_stage_integration(integration_ctx):
     ds = Dataset.from_list([1, 2, 3, 4, 5]).map(lambda x: x * 2).filter(lambda x: x > 5)
-    assert sorted(integration_ctx.execute(ds)) == [6, 8, 10]
+    assert sorted(integration_ctx.execute(ds).results) == [6, 8, 10]

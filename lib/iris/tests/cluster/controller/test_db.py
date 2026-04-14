@@ -3,6 +3,7 @@
 
 """Tests for TransactionCursor escape-hatch methods and read pool in db.py."""
 
+import sqlite3
 import threading
 from pathlib import Path
 
@@ -101,9 +102,12 @@ def test_worker_scheduling_columns_exist_after_migrations(db: ControllerDB) -> N
 
 
 def test_job_scheduling_columns_exist_after_migrations(db: ControllerDB) -> None:
-    columns = {row[1] for row in db._conn.execute("PRAGMA table_info(jobs)").fetchall()}
-    assert "resources_proto" in columns
-    assert "constraints_proto" in columns
+    columns = {row[1] for row in db._conn.execute("PRAGMA table_info(job_config)").fetchall()}
+    assert "res_cpu_millicores" in columns
+    assert "res_memory_bytes" in columns
+    assert "res_disk_bytes" in columns
+    assert "res_device_json" in columns
+    assert "constraints_json" in columns
     assert "has_coscheduling" in columns
     assert "coscheduling_group_by" in columns
     assert "scheduling_timeout_ms" in columns
@@ -247,16 +251,46 @@ def test_replace_from_reattaches_profiles_db(tmp_path: Path) -> None:
     backup_dir.mkdir()
     db.backup_to(backup_dir / "controller.sqlite3")
 
-    # The profiles DB is a separate file; copy it into the backup dir so
-    # replace_from can find it.
-    import shutil
-
-    shutil.copy2(db.profiles_db_path, backup_dir / ControllerDB.PROFILES_DB_FILENAME)
+    # The profiles DB is a separate WAL-mode file; export a standalone backup
+    # so replace_from can restore from a self-contained sqlite file.
+    profiles_backup = backup_dir / ControllerDB.PROFILES_DB_FILENAME
+    src = sqlite3.connect(str(db.profiles_db_path))
+    dest = sqlite3.connect(str(profiles_backup))
+    try:
+        src.backup(dest)
+        dest.execute("PRAGMA journal_mode = DELETE")
+        dest.commit()
+    finally:
+        src.close()
+        dest.close()
 
     db.replace_from(str(backup_dir))
 
     profiles = get_task_profiles(db, "task-1")
     assert len(profiles) == 1
+    db.close()
+
+
+def test_replace_from_replaces_db_with_live_wal_sidecars_present(tmp_path: Path) -> None:
+    """replace_from() must discard stale sidecars from the live DB before reopening."""
+    db = ControllerDB(db_dir=tmp_path)
+
+    # Leave main DB WAL/shm sidecars behind on the live path.
+    with db.transaction() as cur:
+        cur.execute("INSERT INTO meta(key, value) VALUES (?, ?)", ("live-key", 1))
+
+    backup_dir = tmp_path / "backup"
+    backup_dir.mkdir()
+    db.backup_to(backup_dir / "controller.sqlite3")
+
+    assert db.db_path.with_name(f"{db.db_path.name}-wal").exists()
+    assert db.db_path.with_name(f"{db.db_path.name}-shm").exists()
+
+    db.replace_from(str(backup_dir))
+
+    rows = db.fetchall("SELECT value FROM meta WHERE key = ?", ("live-key",))
+    assert len(rows) == 1
+    assert rows[0]["value"] == 1
     db.close()
 
 

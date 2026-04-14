@@ -2,8 +2,8 @@ name: Iris - Dev Cluster Daily Restart
 
 on:
   schedule:
-    # Daily at 06:00 UTC
-    - cron: "0 6 * * *"
+    # Daily at 05:00 UTC — staggered before canary ferry (06:00 UTC)
+    - cron: "0 5 * * *"
   workflow_dispatch:
 
 permissions:

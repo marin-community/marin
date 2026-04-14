@@ -156,7 +156,7 @@ jobs:
             Read .agents/skills/canary-triage/SKILL.md and follow it.
           claude_args: |
             --model opus
-            --max-turns 50
+            --max-turns 500
             --allowedTools "Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*)"
         env:
           CANARY_LANE: datakit-smoke

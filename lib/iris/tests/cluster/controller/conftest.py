@@ -39,6 +39,7 @@ from iris.cluster.controller.db import (
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
+    JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
     JOB_SCHEDULING_PROJECTION,
     TASK_DETAIL_PROJECTION,
@@ -237,7 +238,10 @@ def query_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: in
 def query_job(state: ControllerTransitions, job_id: JobName) -> JobDetailRow | None:
     with state._db.snapshot() as q:
         return JOB_DETAIL_PROJECTION.decode_one(
-            q.fetchall("SELECT * FROM jobs WHERE job_id = ? LIMIT 1", (job_id.to_wire(),))
+            q.fetchall(
+                f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ? LIMIT 1",
+                (job_id.to_wire(),),
+            )
         )
 
 
@@ -245,7 +249,10 @@ def query_job_row(state: ControllerTransitions, job_id: JobName):
     """Query a job as a JobSchedulingRow (scheduling projection with resources/constraints)."""
     with state._db.snapshot() as q:
         return JOB_SCHEDULING_PROJECTION.decode_one(
-            q.fetchall("SELECT * FROM jobs WHERE job_id = ? LIMIT 1", (job_id.to_wire(),))
+            q.fetchall(
+                f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ? LIMIT 1",
+                (job_id.to_wire(),),
+            )
         )
 
 
@@ -725,7 +732,7 @@ def make_demand_entries(
     constraint_list: list[Constraint] = []
     if device_type is not None:
         constraint_list.append(
-            Constraint(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value=device_type.value)
+            Constraint.create(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value=device_type.value)
         )
     if effective_variants:
         constraint_list.append(device_variant_constraint(sorted(effective_variants)))
@@ -736,14 +743,12 @@ def make_demand_entries(
     if required_zones:
         for z in sorted(required_zones):
             constraint_list.append(zone_constraint(z))
-    proto_constraints = [c.to_proto() for c in constraint_list]
-
     return [
         DemandEntry(
             task_ids=[f"{task_prefix}-{i}"],
             coschedule_group_id=None,
             normalized=normalized,
-            constraints=proto_constraints,
+            constraints=constraint_list,
             resources=resources,
         )
         for i in range(count)

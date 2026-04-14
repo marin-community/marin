@@ -13,6 +13,7 @@ import os
 
 from rigging.filesystem import marin_temp_bucket, url_to_fs
 from rigging.log_setup import configure_logging
+from rigging.timing import log_time
 
 from fray import ResourceConfig
 from marin.datakit.download.huggingface import download_hf_step
@@ -55,6 +56,8 @@ def build_steps(run_id: str) -> list[StepSpec]:
     )
 
     # Dedup peaked at ~5 GB mem (default 32g is 6x over), 22 GB disk (default 5g).
+    # max_parallelism=128: 10BT has only 106 normalized shards — 1024 created
+    # ~900 empty reduce shards and massive scheduling overhead.
     deduped = StepSpec(
         name="datakit-smoke/dedup_fuzzy_document",
         deps=[normalized],
@@ -62,7 +65,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         fn=lambda output_path: dedup_fuzzy_document(
             input_paths=normalized.output_path,
             output_path=output_path,
-            max_parallelism=1024,
+            max_parallelism=128,
             cc_max_iterations=3,
             worker_resources=ResourceConfig(cpu=5, ram="16g", disk="30g"),
         ),
@@ -132,7 +135,8 @@ def main() -> None:
     run_id = os.environ["SMOKE_RUN_ID"]
 
     _write_status("running", marin_prefix)
-    StepRunner().run(build_steps(run_id))
+    with log_time("Datakit ferry total wall time"):
+        StepRunner().run(build_steps(run_id))
     _write_status("succeeded", marin_prefix)
 
 
