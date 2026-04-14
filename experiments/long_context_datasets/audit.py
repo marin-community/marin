@@ -98,7 +98,8 @@ class ExactSourceStats:
 
     total_documents: int | None
     total_tokens: int | None
-    stats_source: str
+    total_documents_source: str | None
+    total_tokens_source: str | None
 
 
 @dataclass(frozen=True)
@@ -245,10 +246,8 @@ def summarize_source(
         sample_documents=sample_count,
         total_documents=exact_stats.total_documents if exact_stats else None,
         total_tokens=exact_stats.total_tokens if exact_stats else None,
-        total_documents_source=(
-            exact_stats.stats_source if exact_stats and exact_stats.total_documents is not None else None
-        ),
-        total_tokens_source=(exact_stats.stats_source if exact_stats and exact_stats.total_tokens is not None else None),
+        total_documents_source=exact_stats.total_documents_source if exact_stats else None,
+        total_tokens_source=exact_stats.total_tokens_source if exact_stats else None,
         char_count_p50=_quantile_int(char_counts, 0.5),
         char_count_p90=_quantile_int(char_counts, 0.9),
         char_count_p99=_quantile_int(char_counts, 0.99),
@@ -321,18 +320,24 @@ def discover_exact_stats(source: AuditSource, *, prefix: str) -> ExactSourceStat
         return None
 
     if cache_stats is None:
-        return ExactSourceStats(total_documents=parquet_docs, total_tokens=None, stats_source="parquet_metadata")
+        return ExactSourceStats(
+            total_documents=parquet_docs,
+            total_tokens=None,
+            total_documents_source="parquet_metadata",
+            total_tokens_source=None,
+        )
 
     total_documents = cache_stats.total_documents
-    stats_source = cache_stats.stats_source
+    total_documents_source = cache_stats.total_documents_source
     if total_documents is None and parquet_docs is not None:
         total_documents = parquet_docs
-        stats_source = "cache_and_parquet_metadata"
+        total_documents_source = "parquet_metadata"
 
     return ExactSourceStats(
         total_documents=total_documents,
         total_tokens=cache_stats.total_tokens,
-        stats_source=stats_source,
+        total_documents_source=total_documents_source,
+        total_tokens_source=cache_stats.total_tokens_source,
     )
 
 
@@ -567,7 +572,7 @@ def _discover_cache_stats(source: AuditSource, *, prefix: str) -> ExactSourceSta
         return None
 
     matches = _glob(cache_glob)
-    best_total_tokens = -1
+    best_total_tokens: int | None = None
     best_documents: int | None = None
     for match in matches:
         stats_path = _join_path(match, "train/.stats.json")
@@ -576,19 +581,23 @@ def _discover_cache_stats(source: AuditSource, *, prefix: str) -> ExactSourceSta
                 stats = json.load(f)
         except FileNotFoundError:
             continue
-        total_tokens = int(stats.get("total_tokens", 0))
+        total_tokens = stats.get("total_tokens")
+        if total_tokens is None:
+            continue
+        total_tokens = int(total_tokens)
         total_documents = stats.get("total_elements")
-        if total_tokens > best_total_tokens:
+        if best_total_tokens is None or total_tokens > best_total_tokens:
             best_total_tokens = total_tokens
             best_documents = int(total_documents) if total_documents is not None else None
 
-    if best_total_tokens < 0:
+    if best_total_tokens is None:
         return None
 
     return ExactSourceStats(
         total_documents=best_documents,
         total_tokens=best_total_tokens,
-        stats_source="tokenized_cache",
+        total_documents_source="tokenized_cache" if best_documents is not None else None,
+        total_tokens_source="tokenized_cache",
     )
 
 

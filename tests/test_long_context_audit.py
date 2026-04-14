@@ -5,6 +5,7 @@ from experiments.long_context_datasets.audit import (
     AuditSource,
     ExactSourceStats,
     ExtractedDocument,
+    _discover_cache_stats,
     compute_text_quality,
     extract_document_fields,
     summarize_source,
@@ -99,7 +100,12 @@ def test_summarize_source_uses_exact_stats_when_available():
     summary = summarize_source(
         source=FINEPDFS_SOURCE,
         documents=documents,
-        exact_stats=ExactSourceStats(total_documents=100, total_tokens=10_000, stats_source="tokenized_cache"),
+        exact_stats=ExactSourceStats(
+            total_documents=100,
+            total_tokens=10_000,
+            total_documents_source="tokenized_cache",
+            total_tokens_source="tokenized_cache",
+        ),
     )
 
     assert summary.source_key == "finepdfs-edu/eng_Latn"
@@ -110,3 +116,46 @@ def test_summarize_source_uses_exact_stats_when_available():
     assert summary.total_tokens_source == "tokenized_cache"
     assert summary.token_count_p50 == 4
     assert summary.language_counts == {"en": 2, "fr": 1}
+
+
+def test_summarize_source_keeps_distinct_doc_and_token_provenance():
+    summary = summarize_source(
+        source=FINEPDFS_SOURCE,
+        documents=[ExtractedDocument(doc_id="a", text="alpha beta", token_count=2, language="en")],
+        exact_stats=ExactSourceStats(
+            total_documents=100,
+            total_tokens=10_000,
+            total_documents_source="parquet_metadata",
+            total_tokens_source="tokenized_cache",
+        ),
+    )
+
+    assert summary.total_documents_source == "parquet_metadata"
+    assert summary.total_tokens_source == "tokenized_cache"
+
+
+def test_discover_cache_stats_skips_incomplete_stats_file(tmp_path):
+    source = AuditSource(
+        key="finepdfs-edu/eng_Latn",
+        raw_path="unused/*.parquet",
+        format="parquet",
+        text_paths=(("text",),),
+        tokenized_cache_glob="tokenized/finepdfs_edu_eng_Latn_llama3*",
+    )
+
+    incomplete_dir = tmp_path / "tokenized" / "finepdfs_edu_eng_Latn_llama3-incomplete" / "train"
+    incomplete_dir.mkdir(parents=True)
+    (incomplete_dir / ".stats.json").write_text('{"total_elements": 17}\n')
+
+    complete_dir = tmp_path / "tokenized" / "finepdfs_edu_eng_Latn_llama3-complete" / "train"
+    complete_dir.mkdir(parents=True)
+    (complete_dir / ".stats.json").write_text('{"total_elements": 23, "total_tokens": 1234}\n')
+
+    stats = _discover_cache_stats(source, prefix=str(tmp_path))
+
+    assert stats == ExactSourceStats(
+        total_documents=23,
+        total_tokens=1234,
+        total_documents_source="tokenized_cache",
+        total_tokens_source="tokenized_cache",
+    )
