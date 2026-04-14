@@ -3,4 +3,4 @@
 
 """Autoscaler package public API."""
 
-from iris.cluster.controller.autoscaler.runtime import Autoscaler, DEFAULT_UNRESOLVABLE_TIMEOUT
+from iris.cluster.controller.autoscaler.runtime import Autoscaler, DEFAULT_BOOT_TIMEOUT, DEFAULT_UNRESOLVABLE_TIMEOUT

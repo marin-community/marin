@@ -65,6 +65,11 @@ SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
 # After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
 DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
 
+# After this long in BOOTING/CREATING/BOOTSTRAPPING state, treat the slice as FAILED.
+# Reserved TPU slices can get stuck in a provisioning state indefinitely if the cloud
+# provider never completes the request. This prevents zombie slices that block capacity.
+DEFAULT_BOOT_TIMEOUT = Duration.from_minutes(60)
+
 
 class Autoscaler:
     """Manages scaling across scale groups.
@@ -88,6 +93,7 @@ class Autoscaler:
         base_worker_config: config_pb2.WorkerConfig | None = None,
         db: ControllerDB | None = None,
         unresolvable_timeout: Duration = DEFAULT_UNRESOLVABLE_TIMEOUT,
+        boot_timeout: Duration = DEFAULT_BOOT_TIMEOUT,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -100,6 +106,8 @@ class Autoscaler:
                 and passed to platform.create_slice(). None disables bootstrap (test/local mode).
             db: Optional DB handle for write-through persistence of tracked workers.
             unresolvable_timeout: How long a slice can remain UNKNOWN before being treated as FAILED.
+            boot_timeout: How long a slice can remain in BOOTING/CREATING/BOOTSTRAPPING state
+                before being treated as FAILED. Prevents zombie slices from stuck provisioning.
         """
         self._groups = scale_groups
         self._platform = platform
@@ -107,6 +115,7 @@ class Autoscaler:
         self.evaluation_interval = evaluation_interval
         self._base_worker_config = base_worker_config
         self._unresolvable_timeout = unresolvable_timeout
+        self._boot_timeout = boot_timeout
 
         # Centralized per-worker state indexed by worker_id
         self._worker_registry = WorkerRegistry()
@@ -462,6 +471,41 @@ class Autoscaler:
                             slice_id,
                             age,
                             self._unresolvable_timeout,
+                        )
+                else:
+                    # Slice is in a non-terminal provisioning state (CREATING,
+                    # BOOTSTRAPPING, REPAIRING, DELETING). Apply boot timeout
+                    # so zombie slices from stuck provisioning are reaped.
+                    age = Duration.from_ms(timestamp.epoch_ms() - handle.created_at.epoch_ms())
+                    if age >= self._boot_timeout:
+                        logger.warning(
+                            "Slice %s stuck in %s for %s (boot timeout %s); marking FAILED",
+                            slice_id,
+                            status.state,
+                            age,
+                            self._boot_timeout,
+                        )
+                        group.mark_slice_failed(
+                            slice_id,
+                            error_message=f"boot timeout: stuck in {status.state} for {age}",
+                        )
+                        group.scale_down(slice_id)
+                        self._unregister_slice_workers(slice_id)
+                        group.record_failure()
+                        self._log_action(
+                            "slice_failed",
+                            group.name,
+                            slice_id,
+                            reason=f"boot timeout: stuck in {status.state} for {age}",
+                            status="failed",
+                        )
+                    else:
+                        logger.debug(
+                            "Slice %s in %s (age %s < boot timeout %s); waiting",
+                            slice_id,
+                            status.state,
+                            age,
+                            self._boot_timeout,
                         )
 
         for group in self._groups.values():

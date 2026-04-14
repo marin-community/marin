@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from iris.cluster.controller.autoscaler import Autoscaler, DEFAULT_UNRESOLVABLE_TIMEOUT
+from iris.cluster.controller.autoscaler import Autoscaler, DEFAULT_BOOT_TIMEOUT, DEFAULT_UNRESOLVABLE_TIMEOUT
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.routing import route_demand
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
@@ -1565,3 +1565,99 @@ class TestAutoscalerUnresolvableTimeout:
 
         assert group.ready_slice_count() == 1
         autoscaler.shutdown()
+
+
+class TestAutoscalerBootTimeout:
+    """Tests for BOOTING/BOOTSTRAPPING slice -> FAILED after boot timeout."""
+
+    def _make_group_with_bootstrapping_slice(
+        self,
+        scale_group_config: config_pb2.ScaleGroupConfig,
+        created_at_ms: int,
+        cloud_state: CloudSliceState = CloudSliceState.BOOTSTRAPPING,
+        boot_timeout: Duration = Duration.from_minutes(60),
+    ) -> tuple[Autoscaler, ScalingGroup, FakeSliceHandle]:
+        """Set up a group with one BOOTING slice reporting a non-terminal cloud state."""
+        handle = make_mock_slice_handle("slice-001", created_at_ms=created_at_ms)
+        handle._status = SliceStatus(state=cloud_state, worker_count=0, workers=[])
+
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+
+        autoscaler = Autoscaler(
+            scale_groups={"test-group": group},
+            evaluation_interval=Duration.from_seconds(0.1),
+            platform=platform,
+            boot_timeout=boot_timeout,
+        )
+        return autoscaler, group, handle
+
+    def test_bootstrapping_before_timeout_stays_booting(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A slice in BOOTSTRAPPING state before the boot timeout remains tracked."""
+        created_at_ms = 0
+        autoscaler, group, _ = self._make_group_with_bootstrapping_slice(scale_group_config, created_at_ms)
+
+        # Refresh at 30 min -- well under 60 min boot timeout
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(30 * 60 * 1000))
+
+        assert group.slice_count() == 1
+        assert group.ready_slice_count() == 0
+        autoscaler.shutdown()
+
+    def test_bootstrapping_after_timeout_triggers_failure(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A slice in BOOTSTRAPPING state past the boot timeout is failed and removed."""
+        created_at_ms = 0
+        autoscaler, group, _ = self._make_group_with_bootstrapping_slice(scale_group_config, created_at_ms)
+
+        # Refresh at 61 min -- past the 60 min boot timeout
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(61 * 60 * 1000))
+
+        assert group.slice_count() == 0
+        autoscaler.shutdown()
+
+    def test_creating_after_timeout_triggers_failure(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A slice in CREATING state past the boot timeout is failed and removed."""
+        created_at_ms = 0
+        autoscaler, group, _ = self._make_group_with_bootstrapping_slice(
+            scale_group_config, created_at_ms, cloud_state=CloudSliceState.CREATING
+        )
+
+        # Refresh at 61 min -- past the 60 min boot timeout
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(61 * 60 * 1000))
+
+        assert group.slice_count() == 0
+        autoscaler.shutdown()
+
+    def test_bootstrapping_then_ready_before_timeout_recovers(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A slice that was BOOTSTRAPPING but becomes READY before timeout is marked ready."""
+        created_at_ms = 0
+        handle = make_mock_slice_handle("slice-001", created_at_ms=created_at_ms)
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+
+        autoscaler = Autoscaler(
+            scale_groups={"test-group": group},
+            evaluation_interval=Duration.from_seconds(0.1),
+            platform=platform,
+            boot_timeout=DEFAULT_BOOT_TIMEOUT,
+        )
+
+        # First refresh: BOOTSTRAPPING at 30 min -> should stay BOOTING
+        handle._status = SliceStatus(state=CloudSliceState.BOOTSTRAPPING, worker_count=0, workers=[])
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(30 * 60 * 1000))
+        assert group.slice_count() == 1
+        assert group.ready_slice_count() == 0
+
+        # Second refresh: READY before timeout
+        worker = make_mock_worker_handle("slice-001-vm-0", "10.0.1.0", vm_pb2.VM_STATE_READY)
+        handle._status = SliceStatus(state=CloudSliceState.READY, worker_count=1, workers=[worker])
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(45 * 60 * 1000))
+
+        assert group.ready_slice_count() == 1
+        autoscaler.shutdown()
+
+    def test_default_boot_timeout_is_60_minutes(self):
+        """Verify the default boot timeout constant."""
+        assert DEFAULT_BOOT_TIMEOUT == Duration.from_minutes(60)
