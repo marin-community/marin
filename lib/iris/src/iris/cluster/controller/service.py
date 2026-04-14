@@ -22,6 +22,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
+from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.controller.codec import (
     constraints_from_json,
     proto_from_json,
@@ -55,22 +56,17 @@ from iris.rpc.auth import (
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
-    TERMINAL_JOB_STATES,
-    TERMINAL_TASK_STATES,
     ControllerDB,
     EndpointQuery,
     TaskJobSummary,
     UserStats,
     attempt_is_worker_failure,
-    endpoint_query_sql,
-    job_is_finished,
     running_tasks_by_worker,
     task_row_can_be_scheduled,
 )
 from iris.cluster.controller.schema import (
     API_KEY_PROJECTION,
     ATTEMPT_PROJECTION,
-    ENDPOINT_PROJECTION,
     JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
     JOB_ROW_PROJECTION,
@@ -97,7 +93,15 @@ from iris.cluster.controller.provider import ProviderError
 from iris.cluster.log_store import build_log_source, worker_log_key
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
-from iris.cluster.types import JobName, WorkerId, get_gpu_count, get_tpu_count
+from iris.cluster.types import (
+    TERMINAL_JOB_STATES,
+    TERMINAL_TASK_STATES,
+    JobName,
+    WorkerId,
+    get_gpu_count,
+    get_tpu_count,
+    is_job_finished,
+)
 from iris.log_server.client import LogServiceProxy
 from iris.log_server.server import LogServiceImpl
 from iris.rpc import logging_pb2, vm_pb2
@@ -111,26 +115,6 @@ from rigging.timing import Timestamp, Timer
 logger = logging.getLogger(__name__)
 
 DEFAULT_TRANSACTION_LIMIT = 50
-
-# Pattern for env var keys that contain secrets and should be redacted in API responses.
-_SENSITIVE_ENV_KEY_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", re.IGNORECASE)
-REDACTED_VALUE = "**REDACTED**"
-
-
-def redact_request_env_vars(
-    request: controller_pb2.Controller.LaunchJobRequest,
-) -> controller_pb2.Controller.LaunchJobRequest:
-    """Return a copy of *request* with sensitive env var values replaced."""
-    if not request.environment.env_vars:
-        return request
-
-    redacted = controller_pb2.Controller.LaunchJobRequest()
-    redacted.CopyFrom(request)
-    env_vars = redacted.environment.env_vars
-    for key in list(env_vars):
-        if _SENSITIVE_ENV_KEY_RE.search(key):
-            env_vars[key] = REDACTED_VALUE
-    return redacted
 
 
 DEFAULT_MAX_TOTAL_LINES = 100000
@@ -187,7 +171,8 @@ def _active_worker_id(task: TaskDetailRow) -> WorkerId | None:
 def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> job_pb2.TaskStatus:
     """Convert a task row to a TaskStatus proto.
 
-    Handles attempt conversion, timestamps, and resource_usage.
+    Handles attempt conversion and timestamps.  resource_usage is NOT populated
+    here — callers must attach it separately from task_resource_history.
     The caller is responsible for resolving worker_address from worker_id if needed.
     """
     current_attempt = _current_attempt(task)
@@ -408,6 +393,8 @@ def _reconstruct_launch_job_request(job: JobDetailRow) -> controller_pb2.Control
         req.constraints.append(c.to_proto())
     for port in json.loads(job.ports_json):
         req.ports.append(port)
+    for arg in json.loads(job.submit_argv_json):
+        req.submit_argv.append(arg)
 
     if job.has_coscheduling:
         req.coscheduling.CopyFrom(job_pb2.CoschedulingConfig(group_by=job.coscheduling_group_by))
@@ -718,8 +705,16 @@ def _query_from_list_jobs_request(
         query = controller_pb2.Controller.JobQuery()
         query.CopyFrom(request.query)
     else:
+        # Legacy parent_job_id is only honored under SCOPE_CHILDREN; without
+        # this mapping the filter is silently dropped and all jobs are
+        # returned. See https://github.com/marin-community/marin/issues/4705.
+        scope = (
+            controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN
+            if request.parent_job_id
+            else controller_pb2.Controller.JOB_QUERY_SCOPE_ALL
+        )
         query = controller_pb2.Controller.JobQuery(
-            scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ALL,
+            scope=scope,
             parent_job_id=request.parent_job_id,
             name_filter=request.name_filter,
             state_filter=request.state_filter,
@@ -729,11 +724,13 @@ def _query_from_list_jobs_request(
             limit=request.limit,
         )
 
-    # Clamp paging: 0 means "unbounded" (used by the Python client); otherwise cap at MAX.
-    if query.limit > MAX_LIST_JOBS_LIMIT:
+    # Clamp paging: 0 (unset) defaults to MAX; explicit values are capped at MAX.
+    # We no longer support unbounded listing — callers that previously relied on
+    # limit=0 must paginate. Unbounded queries scale poorly because downstream
+    # per-page work (_task_summaries_for_jobs, _parent_ids_with_children) grows
+    # an IN-clause with one placeholder per returned row.
+    if query.limit <= 0 or query.limit > MAX_LIST_JOBS_LIMIT:
         query.limit = MAX_LIST_JOBS_LIMIT
-    if query.limit < 0:
-        query.limit = 0
     if query.offset < 0:
         query.offset = 0
     return query
@@ -813,12 +810,6 @@ def _worker_roster(db: ControllerDB) -> list[WorkerDetailRow]:
                 attrs_by_worker.setdefault(wid, {})[key] = value
             workers = [dataclasses.replace(w, attributes=attrs_by_worker.get(str(w.worker_id), {})) for w in workers]
         return workers
-
-
-def _query_endpoints(db: ControllerDB, query: EndpointQuery = EndpointQuery()) -> list[EndpointRow]:
-    sql, params = endpoint_query_sql(query)
-    with db.read_snapshot() as q:
-        return ENDPOINT_PROJECTION.decode(q.fetchall(sql, tuple(params)))
 
 
 def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[JobDetailRow]:
@@ -1109,15 +1100,15 @@ class ControllerServiceImpl:
                     f"Job {job_id} already exists (state={job_pb2.JobState.Name(existing_job.state)})",
                 )
             elif policy == job_pb2.EXISTING_JOB_POLICY_KEEP:
-                if not job_is_finished(existing_job.state):
+                if not is_job_finished(existing_job.state):
                     return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
                 # Job finished, replace it (KEEP only preserves running jobs)
                 self._transitions.remove_finished_job(job_id)
             elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
-                if not job_is_finished(existing_job.state):
+                if not is_job_finished(existing_job.state):
                     self._transitions.cancel_job(job_id, "Replaced by new submission")
                 self._transitions.remove_finished_job(job_id)
-            elif job_is_finished(existing_job.state):
+            elif is_job_finished(existing_job.state):
                 # Default/UNSPECIFIED: replace finished jobs
                 logger.info(
                     "Replacing finished job %s (state=%s) with new submission",
@@ -1160,14 +1151,15 @@ class ControllerServiceImpl:
         autoscaler = self._controller.autoscaler
         if autoscaler is not None:
             replicas = request.replicas if request.HasField("coscheduling") else None
+            constraints = [Constraint.from_proto(c) for c in request.constraints]
             error = autoscaler.job_feasibility(
-                constraints=[Constraint.from_proto(c) for c in request.constraints],
+                constraints=constraints,
                 replicas=replicas,
             )
             if error:
                 raise ConnectError(
                     Code.FAILED_PRECONDITION,
-                    f"Job is unschedulable: {error}",
+                    f"Job {job_id} is unschedulable: {error} (constraints: {constraints})",
                 )
 
         self._transitions.submit_job(job_id, request, Timestamp.now())
@@ -1495,10 +1487,40 @@ class ControllerServiceImpl:
         tasks = _tasks_for_listing(self._db, job_id=job_id)
         worker_addr_by_id = _worker_addresses_for_tasks(self._db, tasks)
 
+        # Batch-fetch latest resource usage per task from task_resource_history.
+        # Join through tasks table (same pattern as the aggregate query in get_job_status).
+        resource_by_task: dict[str, job_pb2.ResourceUsage] = {}
+        if tasks:
+            with self._db.read_snapshot() as q:
+                rows = q.raw(
+                    "SELECT trh.task_id, trh.cpu_millicores, trh.memory_mb, trh.disk_mb, trh.memory_peak_mb "
+                    "FROM task_resource_history trh "
+                    "INNER JOIN ("
+                    "  SELECT trh2.task_id, MAX(trh2.id) as max_id "
+                    "  FROM task_resource_history trh2 "
+                    "  JOIN tasks t ON trh2.task_id = t.task_id AND trh2.attempt_id = t.current_attempt_id "
+                    "  WHERE t.job_id = ? "
+                    "  GROUP BY trh2.task_id"
+                    ") latest ON trh.id = latest.max_id",
+                    (job_id.to_wire(),),
+                )
+            for r in rows:
+                resource_by_task[r.task_id] = job_pb2.ResourceUsage(
+                    cpu_millicores=r.cpu_millicores,
+                    memory_mb=r.memory_mb,
+                    disk_mb=r.disk_mb,
+                    memory_peak_mb=r.memory_peak_mb,
+                )
+
         task_statuses = []
         for task in tasks:
             twid = _task_worker_id(task)
             proto_task_status = task_to_proto(task, worker_address=worker_addr_by_id.get(twid, "") if twid else "")
+
+            # Attach latest resource usage if available.
+            usage = resource_by_task.get(task.task_id.to_wire())
+            if usage is not None:
+                proto_task_status.resource_usage.CopyFrom(usage)
 
             # Don't add scheduling diagnostics in list view - too expensive
             # Users should check job detail page for scheduling diagnostics
@@ -1649,8 +1671,7 @@ class ControllerServiceImpl:
         if prefix.startswith("/system/"):
             return self._list_system_endpoints(prefix, exact=request.exact)
 
-        endpoints = _query_endpoints(
-            self._db,
+        endpoints = self._db.endpoints.query(
             EndpointQuery(
                 exact_name=prefix if request.exact else None,
                 name_prefix=None if request.exact else prefix,

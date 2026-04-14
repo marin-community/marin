@@ -31,8 +31,6 @@ from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
     FAILURE_TASK_STATES,
-    TERMINAL_JOB_STATES,
-    TERMINAL_TASK_STATES,
     ControllerDB,
     TransactionCursor,
     task_row_can_be_scheduled,
@@ -48,6 +46,8 @@ from iris.cluster.controller.schema import (
     WorkerDetailRow,
 )
 from iris.cluster.types import (
+    TERMINAL_JOB_STATES,
+    TERMINAL_TASK_STATES,
     JobName,
     WorkerId,
     get_gpu_count,
@@ -304,9 +304,9 @@ def _has_reservation_flag(request: controller_pb2.Controller.LaunchJobRequest) -
     return 1 if request.HasField("reservation") and request.reservation.entries else 0
 
 
-def delete_task_endpoints(cur: TransactionCursor, task_id: str) -> None:
-    """Remove all registered endpoints for a task."""
-    cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id,))
+def delete_task_endpoints(cur: TransactionCursor, registry, task_id: str) -> None:
+    """Remove all registered endpoints for a task through the endpoint registry."""
+    registry.remove_by_task(cur, JobName.from_wire(task_id))
 
 
 def enqueue_run_dispatch(
@@ -418,6 +418,7 @@ def _assign_task(
 
 def _terminate_task(
     cur: TransactionCursor,
+    registry,
     task_id: str,
     attempt_id: int | None,
     state: int,
@@ -481,7 +482,7 @@ def _terminate_task(
         tuple(params),
     )
 
-    delete_task_endpoints(cur, task_id)
+    delete_task_endpoints(cur, registry, task_id)
 
     if worker_id is not None and resources is not None:
         _decommit_worker_resources(cur, worker_id, resources)
@@ -489,6 +490,7 @@ def _terminate_task(
 
 def _kill_non_terminal_tasks(
     cur: Any,
+    registry,
     job_id_wire: str,
     reason: str,
     now_ms: int,
@@ -522,6 +524,7 @@ def _kill_non_terminal_tasks(
             task_kill_workers[task_name] = WorkerId(str(worker_id))
         _terminate_task(
             cur,
+            registry,
             task_id,
             int(row["current_attempt_id"]),
             job_pb2.TASK_STATE_KILLED,
@@ -536,6 +539,7 @@ def _kill_non_terminal_tasks(
 
 def _cascade_children(
     cur: Any,
+    registry,
     job_id: JobName,
     now_ms: int,
     reason: str,
@@ -573,7 +577,9 @@ def _cascade_children(
         ).fetchall()
     for child_row in descendants:
         child_job_id = str(child_row["job_id"])
-        child_tasks_to_kill, child_task_kill_workers = _kill_non_terminal_tasks(cur, child_job_id, reason, now_ms)
+        child_tasks_to_kill, child_task_kill_workers = _kill_non_terminal_tasks(
+            cur, registry, child_job_id, reason, now_ms
+        )
         tasks_to_kill.update(child_tasks_to_kill)
         task_kill_workers.update(child_task_kill_workers)
         terminal_placeholders = ",".join("?" for _ in TERMINAL_JOB_STATES)
@@ -593,13 +599,14 @@ def _cascade_children(
 
 def _cascade_terminal_job(
     cur: Any,
+    registry,
     job_id: JobName,
     now_ms: int,
     reason: str,
 ) -> tuple[set[JobName], dict[JobName, WorkerId]]:
     """Kill remaining tasks and descendant jobs when a job reaches a terminal state."""
-    tasks_to_kill, task_kill_workers = _kill_non_terminal_tasks(cur, job_id.to_wire(), reason, now_ms)
-    child_tasks_to_kill, child_task_kill_workers = _cascade_children(cur, job_id, now_ms, reason)
+    tasks_to_kill, task_kill_workers = _kill_non_terminal_tasks(cur, registry, job_id.to_wire(), reason, now_ms)
+    child_tasks_to_kill, child_task_kill_workers = _cascade_children(cur, registry, job_id, now_ms, reason)
     tasks_to_kill.update(child_tasks_to_kill)
     task_kill_workers.update(child_task_kill_workers)
     return tasks_to_kill, task_kill_workers
@@ -648,6 +655,7 @@ def _find_coscheduled_siblings(
 
 def _terminate_coscheduled_siblings(
     cur: Any,
+    registry,
     siblings: Iterable[_CoscheduledSibling],
     failed_task_id: JobName,
     resources: "job_pb2.ResourceSpecProto",
@@ -665,6 +673,7 @@ def _terminate_coscheduled_siblings(
     for sib in siblings:
         _terminate_task(
             cur,
+            registry,
             sib.task_id,
             sib.attempt_id,
             job_pb2.TASK_STATE_WORKER_FAILED,
@@ -710,6 +719,7 @@ _TERMINAL_STATE_REASONS: dict[int, str] = {
 
 def _finalize_terminal_job(
     cur: Any,
+    registry,
     job_id: JobName,
     terminal_state: int,
     now_ms: int,
@@ -724,13 +734,13 @@ def _finalize_terminal_job(
     Non-succeeded jobs cascade only if the preemption policy is TERMINATE_CHILDREN.
     """
     reason = _TERMINAL_STATE_REASONS.get(terminal_state, "Job finalized")
-    tasks_to_kill, task_kill_workers = _kill_non_terminal_tasks(cur, job_id.to_wire(), reason, now_ms)
+    tasks_to_kill, task_kill_workers = _kill_non_terminal_tasks(cur, registry, job_id.to_wire(), reason, now_ms)
     should_cascade = True
     if terminal_state != job_pb2.JOB_STATE_SUCCEEDED:
         policy = _resolve_preemption_policy(cur, job_id)
         should_cascade = policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
     if should_cascade:
-        child_tasks_to_kill, child_task_kill_workers = _cascade_children(cur, job_id, now_ms, reason)
+        child_tasks_to_kill, child_task_kill_workers = _cascade_children(cur, registry, job_id, now_ms, reason)
         tasks_to_kill.update(child_tasks_to_kill)
         task_kill_workers.update(child_task_kill_workers)
     return tasks_to_kill, task_kill_workers
@@ -1135,8 +1145,8 @@ class ControllerTransitions:
                 "entrypoint_json, environment_json, bundle_id, ports_json, "
                 "max_retries_failure, max_retries_preemption, timeout_ms, "
                 "preemption_policy, existing_job_policy, priority_band, "
-                "task_image, reservation_json, fail_if_exists"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "task_image, submit_argv_json, reservation_json, fail_if_exists"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job_id.to_wire(),
                     job_name_lower,
@@ -1161,6 +1171,7 @@ class ControllerTransitions:
                     int(request.existing_job_policy),
                     int(request.priority_band),
                     request.task_image,
+                    json.dumps(list(request.submit_argv)),
                     reservation_json,
                     1 if request.fail_if_exists else 0,
                 ),
@@ -1384,10 +1395,7 @@ class ControllerTransitions:
                     *cancel_guard_states,
                 ),
             )
-            cur.execute(
-                f"DELETE FROM endpoints WHERE job_id IN ({placeholders})",
-                tuple(subtree_ids),
-            )
+            self._db.endpoints.remove_by_job_ids(cur, [JobName.from_wire(jid) for jid in subtree_ids])
             self._record_transaction(cur, "cancel_job", [("job_cancelled", job_id.to_wire(), {"reason": reason})])
             return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
@@ -1700,6 +1708,19 @@ class ControllerTransitions:
             ).fetchone()
             if attempt_row is None:
                 continue
+            # The attempt is already terminal (e.g. preempted, killed) but the task has
+            # been rolled back to PENDING for retry and current_attempt_id still points
+            # at the dead attempt. Reviving it would produce an inconsistent row where
+            # state contradicts finished_at_ms/error.
+            if int(attempt_row["state"]) in TERMINAL_TASK_STATES:
+                logger.debug(
+                    "Dropping late update for terminal attempt: task=%s attempt=%d attempt_state=%d reported=%d",
+                    update.task_id,
+                    update.attempt_id,
+                    int(attempt_row["state"]),
+                    int(update.new_state),
+                )
+                continue
             worker_id = attempt_row["worker_id"]
             if update.resource_usage is not None:
                 ru = update.resource_usage
@@ -1832,7 +1853,7 @@ class ControllerTransitions:
                     _decommit_worker_resources(cur, str(worker_id), resources)
 
             if update.new_state in TERMINAL_TASK_STATES:
-                delete_task_endpoints(cur, update.task_id.to_wire())
+                delete_task_endpoints(cur, self._db.endpoints, update.task_id.to_wire())
 
             # Coscheduled jobs: a terminal host failure should cascade to siblings.
             if jc is not None and task_state in FAILURE_TASK_STATES:
@@ -1845,7 +1866,7 @@ class ControllerTransitions:
                     jc["res_device_json"],
                 )
                 cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
-                    cur, siblings, update.task_id, resources, now_ms
+                    cur, self._db.endpoints, siblings, update.task_id, resources, now_ms
                 )
                 tasks_to_kill.update(cascade_kill)
                 task_kill_workers.update(cascade_workers)
@@ -1860,7 +1881,9 @@ class ControllerTransitions:
                 continue
             new_job_state = self._recompute_job_state(cur, job_id)
             if new_job_state in TERMINAL_JOB_STATES:
-                final_tasks_to_kill, final_task_kill_workers = _finalize_terminal_job(cur, job_id, new_job_state, now_ms)
+                final_tasks_to_kill, final_task_kill_workers = _finalize_terminal_job(
+                    cur, self._db.endpoints, job_id, new_job_state, now_ms
+                )
                 tasks_to_kill.update(final_tasks_to_kill)
                 task_kill_workers.update(final_task_kill_workers)
                 cascaded_jobs.add(job_id)
@@ -2043,6 +2066,7 @@ class ControllerTransitions:
             else:
                 _terminate_task(
                     cur,
+                    self._db.endpoints,
                     tid,
                     int(task_row["current_attempt_id"]),
                     new_task_state,
@@ -2056,7 +2080,7 @@ class ControllerTransitions:
             new_job_state = self._recompute_job_state(cur, parent_job_id)
             if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
                 cascaded_tasks_to_kill, cascaded_task_kill_workers = _cascade_terminal_job(
-                    cur, parent_job_id, now_ms, f"Worker {worker_id} failed"
+                    cur, self._db.endpoints, parent_job_id, now_ms, f"Worker {worker_id} failed"
                 )
                 tasks_to_kill.update(cascaded_tasks_to_kill)
                 task_kill_workers.update(cascaded_task_kill_workers)
@@ -2065,6 +2089,7 @@ class ControllerTransitions:
                 if policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
                     child_tasks_to_kill, child_task_kill_workers = _cascade_children(
                         cur,
+                        self._db.endpoints,
                         parent_job_id,
                         now_ms,
                         "Parent task preempted",
@@ -2226,6 +2251,7 @@ class ControllerTransitions:
             now_ms = Timestamp.now().epoch_ms()
             _terminate_task(
                 cur,
+                self._db.endpoints,
                 task_id.to_wire(),
                 None,
                 job_pb2.TASK_STATE_UNSCHEDULABLE,
@@ -2286,6 +2312,7 @@ class ControllerTransitions:
 
             _terminate_task(
                 cur,
+                self._db.endpoints,
                 task_id.to_wire(),
                 int(row["current_attempt_id"]),
                 new_state,
@@ -2301,7 +2328,9 @@ class ControllerTransitions:
             job_id = JobName.from_wire(str(row["job_id"]))
             new_job_state = self._recompute_job_state(cur, job_id)
             if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
-                cascade_kills, cascade_workers = _finalize_terminal_job(cur, job_id, new_job_state, now_ms)
+                cascade_kills, cascade_workers = _finalize_terminal_job(
+                    cur, self._db.endpoints, job_id, new_job_state, now_ms
+                )
                 tasks_to_kill.update(cascade_kills)
                 task_kill_workers.update(cascade_workers)
             elif new_state == job_pb2.TASK_STATE_PENDING:
@@ -2309,6 +2338,7 @@ class ControllerTransitions:
                 if policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
                     child_kills, child_workers = _cascade_children(
                         cur,
+                        self._db.endpoints,
                         job_id,
                         now_ms,
                         reason,
@@ -2409,6 +2439,7 @@ class ControllerTransitions:
                 attempt_id = row["current_attempt_id"]
                 _terminate_task(
                     cur,
+                    self._db.endpoints,
                     task_id_wire,
                     int(attempt_id) if attempt_id is not None else None,
                     job_pb2.TASK_STATE_FAILED,
@@ -2434,7 +2465,7 @@ class ControllerTransitions:
                 # Pick the first direct-timeout task in this job as the "cause" for the error message.
                 cause_tid = next(JobName.from_wire(str(r["task_id"])) for r in rows if str(r["job_id"]) == job_id_wire)
                 cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
-                    cur, siblings, cause_tid, job_resources, now_ms
+                    cur, self._db.endpoints, siblings, cause_tid, job_resources, now_ms
                 )
                 tasks_to_kill.update(cascade_kill)
                 task_kill_workers.update(cascade_workers)
@@ -2444,7 +2475,7 @@ class ControllerTransitions:
                 new_job_state = self._recompute_job_state(cur, JobName.from_wire(job_wire))
                 if new_job_state in TERMINAL_JOB_STATES:
                     final_kill, final_workers = _finalize_terminal_job(
-                        cur, JobName.from_wire(job_wire), new_job_state, now_ms
+                        cur, self._db.endpoints, JobName.from_wire(job_wire), new_job_state, now_ms
                     )
                     tasks_to_kill.update(final_kill)
                     task_kill_workers.update(final_workers)
@@ -2814,6 +2845,9 @@ class ControllerTransitions:
                 break
             job_id = row["job_id"]
             with self._db.transaction() as cur:
+                # Invalidate endpoint cache BEFORE the CASCADE so the registry
+                # drops rows SQLite is about to delete for us.
+                self._db.endpoints.remove_by_job_ids(cur, [JobName.from_wire(str(job_id))])
                 cur.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
                 self._record_transaction(cur, "prune_old_data", [("job_pruned", str(job_id), {})])
             jobs_deleted += 1
@@ -3071,35 +3105,17 @@ class ControllerTransitions:
     # --- Endpoint Management ---
 
     def add_endpoint(self, endpoint: EndpointRow) -> bool:
-        """Add an endpoint row to the DB, associated with a non-terminal task.
+        """Add an endpoint row through the endpoint registry.
 
         Returns True if the endpoint was inserted, False if the task is already
         terminal (to prevent orphaned endpoints that would never be cleaned up).
         """
-        task_id = endpoint.task_id
-        job_id, _task_index = task_id.require_task()
         with self._db.transaction() as cur:
-            row = cur.execute("SELECT state FROM tasks WHERE task_id = ?", (task_id.to_wire(),)).fetchone()
-            if row is not None and int(row["state"]) in TERMINAL_TASK_STATES:
-                return False
-            cur.execute(
-                "INSERT OR REPLACE INTO endpoints("
-                "endpoint_id, name, address, job_id, task_id, metadata_json, registered_at_ms"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    endpoint.endpoint_id,
-                    endpoint.name,
-                    endpoint.address,
-                    job_id.to_wire(),
-                    task_id.to_wire(),
-                    json.dumps(endpoint.metadata),
-                    endpoint.registered_at.epoch_ms(),
-                ),
-            )
-            return True
+            return self._db.endpoints.add(cur, endpoint)
 
     def remove_endpoint(self, endpoint_id: str) -> EndpointRow | None:
-        return self._db.delete_endpoint(endpoint_id)
+        with self._db.transaction() as cur:
+            return self._db.endpoints.remove(cur, endpoint_id)
 
     # ---------------------------------------------------------------------
     # Test-only SQL mutation helpers
@@ -3289,6 +3305,18 @@ class ControllerTransitions:
                 ).fetchone()
                 if attempt_row is None:
                     continue
+                # See _apply_task_transitions for rationale: the current attempt may
+                # be terminal while the task is retrying in PENDING; late reports
+                # must not revive it.
+                if int(attempt_row["state"]) in TERMINAL_TASK_STATES:
+                    logger.debug(
+                        "Dropping late update for terminal attempt: task=%s attempt=%d attempt_state=%d reported=%d",
+                        update.task_id,
+                        update.attempt_id,
+                        int(attempt_row["state"]),
+                        int(update.new_state),
+                    )
+                    continue
 
                 if update.resource_usage is not None:
                     ru = update.resource_usage
@@ -3417,7 +3445,7 @@ class ControllerTransitions:
                 jc_row = cur.execute("SELECT * FROM job_config WHERE job_id = ?", (task.job_id.to_wire(),)).fetchone()
 
                 if update.new_state in TERMINAL_TASK_STATES:
-                    delete_task_endpoints(cur, update.task_id.to_wire())
+                    delete_task_endpoints(cur, self._db.endpoints, update.task_id.to_wire())
 
                 # Coscheduled sibling cascade.
                 if jc_row is not None and task_state in FAILURE_TASK_STATES:
@@ -3430,7 +3458,7 @@ class ControllerTransitions:
                         jc_row["res_device_json"],
                     )
                     cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
-                        cur, siblings, update.task_id, job_resources, now_ms
+                        cur, self._db.endpoints, siblings, update.task_id, job_resources, now_ms
                     )
                     tasks_to_kill.update(cascade_kill)
                     task_kill_workers.update(cascade_workers)
@@ -3439,7 +3467,7 @@ class ControllerTransitions:
                     new_job_state = self._recompute_job_state(cur, task.job_id)
                     if new_job_state in TERMINAL_JOB_STATES:
                         final_tasks_to_kill, final_task_kill_workers = _finalize_terminal_job(
-                            cur, task.job_id, new_job_state, now_ms
+                            cur, self._db.endpoints, task.job_id, new_job_state, now_ms
                         )
                         tasks_to_kill.update(final_tasks_to_kill)
                         task_kill_workers.update(final_task_kill_workers)

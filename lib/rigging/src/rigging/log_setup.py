@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import faulthandler
 import logging
+import os
+import signal
 import sys
 import time
 from collections import deque
@@ -147,10 +150,69 @@ def get_global_buffer() -> LogRingBuffer:
 
 
 _configured = False
+_fault_handler_installed = False
+
+# Environment variable to disable automatic faulthandler installation.
+# Useful for tests or environments that install their own signal handlers.
+FAULTHANDLER_DISABLE_ENV = "RIGGING_DISABLE_FAULTHANDLER"
+
+
+def install_fault_handler(*, sigusr_dump: bool = True) -> bool:
+    """Install :mod:`faulthandler` so fatal-signal tracebacks reach stderr.
+
+    Dumps a Python traceback to stderr when the process is killed by
+    ``SIGSEGV`` / ``SIGABRT`` / ``SIGBUS`` / ``SIGFPE`` / ``SIGILL``. Without
+    this, crashes in C extensions (JAX/XLA, PyArrow, NumPy, ...) produce only
+    a bare ``Exit code 139: killed by SIGSEGV`` with no diagnostic.
+
+    Idempotent. A no-op if the ``RIGGING_DISABLE_FAULTHANDLER`` env var is set.
+
+    Args:
+        sigusr_dump: If True and ``SIGUSR1`` is available, also register a
+            user signal that dumps a traceback for every thread on demand
+            (``kill -USR1 <pid>``). Callers that need ``SIGUSR1`` for their
+            own purposes can pass ``False``.
+
+    Returns:
+        True if faulthandler was enabled by this call (or already enabled);
+        False if it was skipped because of the opt-out env var.
+    """
+    global _fault_handler_installed
+    if _fault_handler_installed:
+        return True
+    if os.environ.get(FAULTHANDLER_DISABLE_ENV):
+        return False
+
+    # faulthandler dup()s the fd at enable-time, so later reassignments of
+    # sys.stderr don't redirect the traceback. That's what we want — if the
+    # interpreter is crashing, any higher-level stderr wrapping may be
+    # unsafe to call.
+    faulthandler.enable(file=sys.stderr, all_threads=True)
+
+    # SIGUSR1 for on-demand thread dumps. Only register if the signal exists
+    # (it does not on Windows) and nothing else has claimed it already.
+    if sigusr_dump and hasattr(signal, "SIGUSR1"):
+        try:
+            existing = signal.getsignal(signal.SIGUSR1)
+        except (ValueError, OSError):
+            existing = None
+        # SIG_DFL is the out-of-box handler; anything else means a caller
+        # already installed something and we must not stomp on it.
+        if existing in (signal.SIG_DFL, None):
+            faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True, chain=False)
+
+    _fault_handler_installed = True
+    return True
 
 
 def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
-    """Configure logging: stderr handler + ring buffer. Idempotent."""
+    """Configure logging: stderr handler + ring buffer. Idempotent.
+
+    Also installs :func:`install_fault_handler` so any process that sets up
+    logging through rigging gets SIGSEGV/SIGABRT tracebacks for free.
+    """
+    install_fault_handler()
+
     global _configured
     if _configured:
         root = logging.getLogger()

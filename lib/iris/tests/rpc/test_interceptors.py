@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import threading
+import time
 from dataclasses import dataclass
 from unittest.mock import Mock
 
@@ -9,7 +11,7 @@ import pytest
 from connectrpc.errors import ConnectError
 
 from iris.rpc.errors import extract_error_details
-from iris.rpc.interceptors import RequestTimingInterceptor
+from iris.rpc.interceptors import ConcurrencyLimitInterceptor, RequestTimingInterceptor
 
 
 @dataclass(frozen=True)
@@ -98,3 +100,72 @@ def test_interceptor_logs_traceback_regardless_of_flag(caplog):
             interceptor.intercept_unary_sync(failing_handler, "request", ctx)
 
     assert any("kaboom" in r.message and r.exc_info is not None for r in caplog.records)
+
+
+def test_concurrency_limit_passes_through_unlimited_methods():
+    interceptor = ConcurrencyLimitInterceptor({"FetchLogs": 1})
+    ctx = _make_ctx("LaunchJob")
+    result = interceptor.intercept_unary_sync(lambda req, ctx: "ok", "request", ctx)
+    assert result == "ok"
+
+
+def test_concurrency_limit_caps_in_flight_calls():
+    limit = 3
+    interceptor = ConcurrencyLimitInterceptor({"FetchLogs": limit})
+    release = threading.Event()
+    in_flight = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def handler(req, ctx):
+        nonlocal in_flight, peak
+        with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        try:
+            assert release.wait(timeout=5.0), "handler never released"
+            return "ok"
+        finally:
+            with lock:
+                in_flight -= 1
+
+    num_callers = limit + 3
+
+    def run():
+        interceptor.intercept_unary_sync(handler, "request", _make_ctx("FetchLogs"))
+
+    threads = [threading.Thread(target=run) for _ in range(num_callers)]
+    for t in threads:
+        t.start()
+
+    # Wait for the first wave to saturate the semaphore.
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        with lock:
+            if in_flight >= limit:
+                break
+
+    with lock:
+        assert in_flight == limit
+
+    release.set()
+    for t in threads:
+        t.join(timeout=5.0)
+        assert not t.is_alive()
+
+    assert peak == limit
+
+
+def test_concurrency_limit_releases_slot_on_exception():
+    interceptor = ConcurrencyLimitInterceptor({"FetchLogs": 1})
+
+    def boom(req, ctx):
+        raise ValueError("nope")
+
+    ctx = _make_ctx("FetchLogs")
+    for _ in range(3):
+        with pytest.raises(ValueError):
+            interceptor.intercept_unary_sync(boom, "request", ctx)
+    # If the slot leaked, the fourth call would deadlock — a successful
+    # passthrough proves the semaphore was released on each exception.
+    assert interceptor.intercept_unary_sync(lambda req, ctx: "ok", "request", ctx) == "ok"

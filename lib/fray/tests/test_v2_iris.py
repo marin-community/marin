@@ -37,7 +37,7 @@ class TestConvertConstraints:
         assert len(constraints) == 1
         c = constraints[0]
         assert c.key == "preemptible"
-        assert c.value == "false"
+        assert c.values[0].value == "false"
 
     def test_single_region_produces_eq_constraint(self):
         resources = ResourceConfig(regions=["us-central1"])
@@ -48,7 +48,7 @@ class TestConvertConstraints:
         from iris.cluster.constraints import ConstraintOp
 
         assert c.op == ConstraintOp.EQ
-        assert c.value == "us-central1"
+        assert c.values[0].value == "us-central1"
 
     def test_multiple_regions_produce_in_constraint(self):
         resources = ResourceConfig(regions=["us-central1", "us-central2"])
@@ -59,7 +59,7 @@ class TestConvertConstraints:
         from iris.cluster.constraints import ConstraintOp
 
         assert c.op == ConstraintOp.IN
-        assert c.values == ("us-central1", "us-central2")
+        assert tuple(v.value for v in c.values) == ("us-central1", "us-central2")
 
     def test_zone_produces_eq_constraint(self):
         resources = ResourceConfig(zone="us-east1-d")
@@ -70,7 +70,7 @@ class TestConvertConstraints:
         from iris.cluster.constraints import ConstraintOp
 
         assert c.op == ConstraintOp.EQ
-        assert c.value == "us-east1-d"
+        assert c.values[0].value == "us-east1-d"
 
 
 class TestConvertConstraintsDeviceAlternatives:
@@ -89,7 +89,7 @@ class TestConvertConstraintsDeviceAlternatives:
         from iris.cluster.constraints import ConstraintOp
 
         assert c.op == ConstraintOp.IN
-        assert set(c.values) == {"v4-8", "v5p-8"}
+        assert {v.value for v in c.values} == {"v4-8", "v5p-8"}
 
 
 class TestIrisActorHandlePickle:
@@ -171,6 +171,62 @@ class TestImagePlumbing:
 
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] == "custom/swetrace:dev"
+
+
+class TestActorGroupEnvironment:
+    """Verify create_actor_group passes device-appropriate env vars to Iris."""
+
+    def test_tpu_actor_gets_tpu_env_vars(self):
+        """TPU actors must receive JAX_PLATFORMS='' and LIBTPU_INIT_ARGS from device defaults."""
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-tpu")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+
+        class _DummyActor:
+            pass
+
+        resources = ResourceConfig.with_tpu("v5p-8")
+        client.create_actor_group(_DummyActor, name="tpu-actor", count=1, resources=resources)
+
+        kwargs = fake_iris.submit.call_args.kwargs
+        env = kwargs["environment"]
+        assert env is not None
+        assert env.env_vars["JAX_PLATFORMS"] == ""
+        assert "LIBTPU_INIT_ARGS" in env.env_vars
+
+    def test_cpu_actor_gets_cpu_env_vars(self):
+        """CPU actors must receive JAX_PLATFORMS=cpu."""
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-cpu")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+
+        class _DummyActor:
+            pass
+
+        resources = ResourceConfig(cpu=2, ram="4g")
+        client.create_actor_group(_DummyActor, name="cpu-actor", count=1, resources=resources)
+
+        kwargs = fake_iris.submit.call_args.kwargs
+        env = kwargs["environment"]
+        assert env is not None
+        assert env.env_vars["JAX_PLATFORMS"] == "cpu"
+
+    def test_gpu_actor_gets_gpu_env_vars(self):
+        """GPU actors must receive JAX_PLATFORMS='' from GpuConfig defaults."""
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-gpu")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+
+        class _DummyActor:
+            pass
+
+        resources = ResourceConfig.with_gpu("a100-80g")
+        client.create_actor_group(_DummyActor, name="gpu-actor", count=1, resources=resources)
+
+        kwargs = fake_iris.submit.call_args.kwargs
+        env = kwargs["environment"]
+        assert env is not None
+        assert env.env_vars["JAX_PLATFORMS"] == ""
 
 
 class TestWithTpuFlexible:

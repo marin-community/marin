@@ -755,6 +755,22 @@ scale_groups:
             assert local_config.defaults.autoscaler.evaluation_interval.milliseconds == 500
             assert local_config.defaults.autoscaler.scale_up_delay.milliseconds == 1000
 
+    def test_example_config_zones_in_known_gcp_zones(self):
+        """All GCP zones used in example configs must be in KNOWN_GCP_ZONES."""
+        from iris.cluster.providers.gcp.service import KNOWN_GCP_ZONES
+
+        iris_root = Path(__file__).parent.parent.parent.parent
+        for config_path in [iris_root / "examples" / "marin.yaml", iris_root / "examples" / "marin-dev.yaml"]:
+            if not config_path.exists():
+                pytest.skip(f"Example config not found: {config_path}")
+            config = load_config(config_path)
+            for name, sg in config.scale_groups.items():
+                template = sg.slice_template
+                if template.WhichOneof("platform") == "gcp" and template.gcp.zone:
+                    assert (
+                        template.gcp.zone in KNOWN_GCP_ZONES
+                    ), f"Scale group '{name}': zone '{template.gcp.zone}' not in KNOWN_GCP_ZONES"
+
 
 def _valid_scale_group() -> config_pb2.ScaleGroupConfig:
     """Create a valid ScaleGroupConfig for use in validation tests."""

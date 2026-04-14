@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useControllerRpc } from '@/composables/useRpc'
-import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import type { GetTransactionsResponse, TransactionAction, ProtoTimestamp } from '@/types/rpc'
 import { timestampMs, formatLogTime } from '@/utils/formatting'
 import EmptyState from '@/components/shared/EmptyState.vue'
 
 const { data, loading, error, refresh } = useControllerRpc<GetTransactionsResponse>('GetTransactions')
 
-useAutoRefresh(refresh, 5_000)
+useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
 onMounted(refresh)
 
 const actions = computed<TransactionAction[]>(() => {

@@ -57,7 +57,6 @@ from iris.cluster.controller.service import (
     _descendant_jobs,
     _live_user_stats,
     _parent_ids_with_children,
-    _query_endpoints,
     _query_jobs,
     _read_job,
     _read_task_with_attempts,
@@ -426,11 +425,11 @@ def benchmark_dashboard(db: ControllerDB) -> None:
 
     bench("_live_user_stats", lambda: _live_user_stats(db))
 
-    bench("_query_endpoints (all)", lambda: _query_endpoints(db))
+    bench("endpoint_registry.query (all)", lambda: db.endpoints.query())
 
     bench(
-        "_query_endpoints (prefix)",
-        lambda: _query_endpoints(db, EndpointQuery(name_prefix="test")),
+        "endpoint_registry.query (prefix)",
+        lambda: db.endpoints.query(EndpointQuery(name_prefix="test")),
     )
 
     bench("_transaction_actions", lambda: _transaction_actions(db))

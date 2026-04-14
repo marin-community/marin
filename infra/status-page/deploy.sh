@@ -111,7 +111,7 @@ gcloud beta run deploy "${SERVICE}" \
   --set-env-vars="GCP_PROJECT=${PROJECT},CONTROLLER_ZONE=${ZONE},CONTROLLER_LABEL=${CONTROLLER_LABEL},CONTROLLER_PORT=${CONTROLLER_PORT},CLUSTER_NAME=marin" \
   --set-secrets="GITHUB_TOKEN=${GITHUB_TOKEN_SECRET}:latest" \
   --timeout=60 \
-  --memory=512Mi \
+  --memory=1Gi \
   --cpu=1 \
   --min-instances=1 \
   --max-instances=1 \

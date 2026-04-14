@@ -770,7 +770,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
 
       <!-- Job Request Details -->
       <div
-        v-if="jobRequest?.entrypoint?.runCommand?.argv?.length || jobRequest?.environment?.envVars || jobRequest?.environment?.pipPackages?.length || jobRequest?.ports?.length"
+        v-if="jobRequest?.entrypoint?.runCommand?.argv?.length || jobRequest?.submitArgv?.length || jobRequest?.environment?.envVars || jobRequest?.environment?.pipPackages?.length || jobRequest?.ports?.length"
         class="mb-6 rounded-lg border border-surface-border bg-surface px-4 py-3"
       >
         <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
@@ -780,6 +780,10 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           <div v-if="jobRequest.entrypoint?.runCommand?.argv?.length">
             <span class="text-text-muted text-xs">Command</span>
             <pre class="mt-0.5 px-2 py-1 bg-surface-sunken rounded font-mono text-xs whitespace-pre-wrap break-all">{{ jobRequest.entrypoint.runCommand.argv.join(' ') }}</pre>
+          </div>
+          <div v-if="jobRequest.submitArgv?.length">
+            <span class="text-text-muted text-xs">Submitted via</span>
+            <pre class="mt-0.5 px-2 py-1 bg-surface-sunken rounded font-mono text-xs whitespace-pre-wrap break-all">{{ jobRequest.submitArgv.join(' ') }}</pre>
           </div>
           <div v-if="jobRequest.entrypoint?.setupCommands?.length">
             <span class="text-text-muted text-xs">Setup Commands</span>
