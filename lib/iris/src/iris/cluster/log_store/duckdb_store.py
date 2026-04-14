@@ -44,7 +44,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Condition, Lock, Semaphore
+from threading import Condition, Lock
 
 
 import duckdb
@@ -350,16 +350,6 @@ class _RWLock:
 # wedging the controller. 4GB is generous against realistic working sets
 # (5 segments x 500MB + zstd decompression scratch).
 _DEFAULT_DUCKDB_MEMORY_LIMIT = "4GB"
-
-# Global cap on simultaneous log reads. Prevents many callers from piling onto
-# disk at once and evicting the page cache. Callers block on the semaphore;
-# gRPC deadlines already handle the case where a caller no longer wants to
-# wait.
-_MAX_CONCURRENT_READS = 4
-
-
-_read_semaphore = Semaphore(_MAX_CONCURRENT_READS)
-
 
 _cursor_counter = 0
 _cursor_counter_lock = Lock()
@@ -812,30 +802,23 @@ class DuckDBLogStore:
         segment_filter: _SegmentFilter = _SEGMENT_FILTER_ALL,
         exact_key: str | None = None,
     ) -> LogReadResult:
-        # Global concurrency limiter: at most _MAX_CONCURRENT_READS reads run
-        # in parallel. Excess callers block here instead of piling DuckDB
-        # scans onto disk and evicting the page cache.
-        if not _read_semaphore.acquire(blocking=False):
-            logger.debug("Log read blocked waiting for semaphore")
-            _read_semaphore.acquire()
+        # Acquire the segments read lock BEFORE snapshotting paths. This
+        # guarantees that no file in our snapshot can be deleted (by GC or
+        # consolidation) until we release the lock after DuckDB is done.
+        # Concurrent read count is capped at the RPC layer by
+        # ConcurrencyLimitInterceptor on the LogService endpoint.
+        self._segments_rwlock.read_acquire()
         try:
-            # Acquire the segments read lock BEFORE snapshotting paths. This
-            # guarantees that no file in our snapshot can be deleted (by GC or
-            # consolidation) until we release the lock after DuckDB is done.
-            self._segments_rwlock.read_acquire()
-            try:
-                rows = self._run_read_locked(
-                    where_parts=where_parts,
-                    params=params,
-                    max_lines=max_lines,
-                    tail=tail,
-                    include_key_in_select=include_key_in_select,
-                    segment_filter=segment_filter,
-                )
-            finally:
-                self._segments_rwlock.read_release()
+            rows = self._run_read_locked(
+                where_parts=where_parts,
+                params=params,
+                max_lines=max_lines,
+                tail=tail,
+                include_key_in_select=include_key_in_select,
+                segment_filter=segment_filter,
+            )
         finally:
-            _read_semaphore.release()
+            self._segments_rwlock.read_release()
 
         if tail and max_lines > 0:
             rows.reverse()

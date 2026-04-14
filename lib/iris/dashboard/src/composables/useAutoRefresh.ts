@@ -13,6 +13,10 @@
  */
 import { ref, onUnmounted } from 'vue'
 
+// Default cadence for background polling. Individual components that need
+// tighter liveness (e.g. active job detail, log tail) pass an explicit value.
+export const DEFAULT_REFRESH_MS = 60_000
+
 export interface AutoRefreshState {
   active: Readonly<ReturnType<typeof ref<boolean>>>
   start: () => void

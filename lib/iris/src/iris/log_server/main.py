@@ -28,7 +28,14 @@ from starlette.routing import Mount
 
 from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import AuthInterceptor, NullAuthInterceptor
+from iris.rpc.interceptors import ConcurrencyLimitInterceptor
 from iris.rpc.logging_connect import LogServiceWSGIApplication
+
+# Cap on concurrent FetchLogs RPCs. Each read can fan out into DuckDB scans
+# across hundreds of MB of parquet; allowing unbounded parallelism evicts the
+# page cache and wedges the process. Tune alongside the working-set caps in
+# duckdb_store.py.
+_MAX_CONCURRENT_FETCH_LOGS = 4
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +54,19 @@ def build_log_server_asgi(
     service: LogServiceImpl,
     *,
     interceptors: Iterable[Interceptor] = (),
+    max_concurrent_fetch_logs: int = _MAX_CONCURRENT_FETCH_LOGS,
 ) -> Starlette:
-    """Build the ASGI app that serves the LogService RPC endpoints."""
-    wsgi_app = LogServiceWSGIApplication(service=service, interceptors=tuple(interceptors))
+    """Build the ASGI app that serves the LogService RPC endpoints.
+
+    A ``ConcurrencyLimitInterceptor`` is appended to ``interceptors`` to cap
+    parallel ``FetchLogs`` RPCs. Callers override ``max_concurrent_fetch_logs``
+    in tests that want to exercise the cap deterministically.
+    """
+    full_interceptors = (
+        *tuple(interceptors),
+        ConcurrencyLimitInterceptor({"FetchLogs": max_concurrent_fetch_logs}),
+    )
+    wsgi_app = LogServiceWSGIApplication(service=service, interceptors=full_interceptors)
     return Starlette(routes=[Mount(wsgi_app.path, app=WSGIMiddleware(wsgi_app))])
 
 
