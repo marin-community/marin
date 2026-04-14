@@ -13,6 +13,8 @@ import numpy as np
 from levanter.tokenizers import MarinTokenizer
 from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.environments.spec import EnvironmentIdentity, EnvironmentSample
+from marin.rl.traces import EpisodeResponseTrace, EpisodeTrace
 from marin.rl.types import RolloutGroup
 
 from .base import MarinEnv
@@ -271,6 +273,14 @@ class MockEnv(MarinEnv):
             f"{len(self.train_examples)} train examples and {len(self.eval_examples)} eval examples."
         )
 
+    def environment_identity(self) -> EnvironmentIdentity:
+        return EnvironmentIdentity(
+            task_name=f"mock_env:{self.task_type}",
+            task_version="v1",
+            verifier_name="mock_env.reward",
+            verifier_version="v1",
+        )
+
     def sample(
         self,
         inference_ctx: BaseInferenceContext,
@@ -280,7 +290,7 @@ class MockEnv(MarinEnv):
         prng_key,
         mode: str = "train",
         system_prompt: str | None = None,
-    ) -> tuple[list[RolloutGroup], dict[str, float]]:
+    ) -> EnvironmentSample:
         """Sample examples, generate responses, and create rollouts."""
         # Select dataset
         if mode == "train":
@@ -309,10 +319,14 @@ class MockEnv(MarinEnv):
         )
 
         # Evaluate and create rollouts
+        identity = self.environment_identity()
         rollout_groups = []
+        traces = []
 
         for prompt, completion in zip(prompts, completions, strict=True):
             group = []
+            response_traces = []
+            env_example_id = str(hash(prompt))
 
             for choice in completion.choices:
                 true_answer = sampled_examples[prompt]
@@ -322,15 +336,34 @@ class MockEnv(MarinEnv):
                     prompt,
                     choice,
                     env_name=f"mock_env:{self.task_type}",
-                    env_example_id=hash(prompt),
+                    env_example_id=env_example_id,
                     reward=reward,
                     decoding=decoding,
                 )
 
                 group.append(rollout)
+                response_traces.append(
+                    EpisodeResponseTrace(
+                        response_text=choice.message.content,
+                        reward=reward,
+                        is_truncated=choice.finish_reason == "length",
+                    )
+                )
             rollout_groups.append(RolloutGroup(rollouts=group))
+            traces.append(
+                EpisodeTrace(
+                    env_name=f"mock_env:{self.task_type}",
+                    env_example_id=env_example_id,
+                    prompt=prompt,
+                    responses=tuple(response_traces),
+                    task_name=identity.task_name,
+                    task_version=identity.task_version,
+                    verifier_name=identity.verifier_name,
+                    verifier_version=identity.verifier_version,
+                )
+            )
 
-        return rollout_groups, {}
+        return EnvironmentSample(rollout_groups=rollout_groups, metrics={}, traces=traces, identity=identity)
 
     def training_data(self) -> Iterator[MockEnvExample]:
         """Stream training data."""

@@ -18,6 +18,7 @@ def test_load_mock_environment():
     assert env.task_type == "cats"
     assert len(env.train_examples) > 0
     assert len(env.eval_examples) > 0
+    assert env.environment_identity().task_name == "mock_env:cats"
 
 
 def test_load_math_environment():
@@ -36,3 +37,4 @@ def test_load_math_environment():
     assert isinstance(env, MathEnv)
     assert len(env.train_examples) > 0
     assert len(env.eval_examples) > 0
+    assert env.environment_identity().task_name == "math"

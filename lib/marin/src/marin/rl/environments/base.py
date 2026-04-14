@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
-from marin.rl.types import RolloutGroup
+from marin.rl.environments.spec import EnvironmentIdentity, EnvironmentSample
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ class MarinEnv(ABC):
         prng_key,
         mode: str = "train",
         system_prompt: str | None = None,
-    ) -> tuple[list[RolloutGroup], dict[str, float]]:
+    ) -> EnvironmentSample:
         """Sample examples, generate responses, and create rollouts.
 
         Args:
@@ -42,9 +42,14 @@ class MarinEnv(ABC):
             system_prompt: Optional system prompt to use for generation
 
         Returns:
-            Tuple of (rollout_groups, metrics)
+            EnvironmentSample with rollout groups, metrics, and prompt-level traces
         """
         ...
+
+    def environment_identity(self) -> EnvironmentIdentity:
+        """Return stable task and verifier identity for this environment."""
+
+        return EnvironmentIdentity(task_name=f"{self.__class__.__module__}.{self.__class__.__name__}")
 
 
 @dataclass
