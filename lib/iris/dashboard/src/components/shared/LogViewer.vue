@@ -21,19 +21,6 @@ const level = ref('info')
 const tailLines = ref(500)
 const selectedAttemptId = ref(props.currentAttemptId ?? -1)
 
-const LOG_LEVEL_PRIORITY: Record<string, number> = {
-  debug: 0,
-  info: 1,
-  warning: 2,
-  error: 3,
-  critical: 4,
-}
-
-function levelPriority(lvl: string | undefined): number {
-  if (!lvl) return 1
-  return LOG_LEVEL_PRIORITY[lvl.toLowerCase()] ?? 1
-}
-
 // FetchLogs is served by the LogService (co-hosted on the controller)
 const useRpc = useLogServiceRpc
 
@@ -49,6 +36,8 @@ const taskLogState = props.taskId
           : `${props.taskId}/\\d+:.*`,
       maxLines: tailLines.value || undefined,
       tail: true,
+      substring: filter.value || undefined,
+      minLevel: level.value ? level.value.toUpperCase() : undefined,
     }))
   : null
 
@@ -57,6 +46,8 @@ const processLogState = !props.taskId
       source: props.workerId ? `/system/worker/${props.workerId}` : '/system/controller',
       maxLines: tailLines.value || undefined,
       tail: true,
+      substring: filter.value || undefined,
+      minLevel: level.value ? level.value.toUpperCase() : undefined,
     }))
   : null
 
@@ -70,6 +61,13 @@ const { active: autoRefreshActive, toggle: toggleAutoRefresh } = useAutoRefresh(
 
 watch(selectedAttemptId, () => doRefresh())
 watch(tailLines, () => doRefresh())
+watch(level, () => doRefresh())
+
+let filterDebounce: ReturnType<typeof setTimeout> | undefined
+watch(filter, () => {
+  if (filterDebounce) clearTimeout(filterDebounce)
+  filterDebounce = setTimeout(() => doRefresh(), 250)
+})
 watch(
   () => [props.taskId, props.currentAttemptId] as const,
   ([taskId, currentAttemptId], [previousTaskId, previousCurrentAttemptId]) => {
@@ -102,16 +100,7 @@ function extractEntries(): LogEntry[] {
   return []
 }
 
-const filteredLogs = computed(() => {
-  const entries = extractEntries()
-  const minPriority = levelPriority(level.value)
-  const filterText = filter.value.toLowerCase()
-
-  return entries.filter(entry => {
-    if (filterText && !(entry.data ?? '').toLowerCase().includes(filterText)) return false
-    return levelPriority(entry.level) >= minPriority
-  })
-})
+const filteredLogs = computed(() => extractEntries())
 
 defineExpose({ selectedAttemptId })
 </script>
