@@ -682,7 +682,7 @@ def _run_tpu_bootstrap(
     handle: GcpSliceHandle,
     worker_config: config_pb2.WorkerConfig,
     poll_interval: float = 10.0,
-    cloud_ready_timeout: float = 600.0,
+    cloud_ready_timeout: float | None = None,
     bootstrap_timeout: float = 600.0,
     queued_resource_poll_interval: float = 60.0,
 ) -> None:
@@ -693,12 +693,12 @@ def _run_tpu_bootstrap(
     Phase 2: Poll worker health endpoints until all respond healthy.
     On timeout: query Cloud Logging for [iris-init] entries for diagnostics.
     """
-    queued_resource_ready_timeout = (
-        RESERVED_TPU_CLOUD_READY_TIMEOUT if handle.is_queued_resource else cloud_ready_timeout
-    )
+    effective_cloud_ready_timeout = cloud_ready_timeout
+    if effective_cloud_ready_timeout is None:
+        effective_cloud_ready_timeout = RESERVED_TPU_CLOUD_READY_TIMEOUT if handle.is_queued_resource else 600.0
 
     # Single deadline covers Phase 0 (queued resource wait) + Phase 1 (cloud READY).
-    cloud_deadline = Deadline.from_now(Duration.from_seconds(queued_resource_ready_timeout))
+    cloud_deadline = Deadline.from_now(Duration.from_seconds(effective_cloud_ready_timeout))
 
     # Phase 0: If this is a queued resource (reserved TPU), wait for ACTIVE
     # before polling the TPU VM state. The queued resource may sit in QUEUED
@@ -717,7 +717,7 @@ def _run_tpu_bootstrap(
             time.sleep(queued_resource_poll_interval)
         else:
             raise InfraError(
-                f"Queued resource {handle.slice_id} did not become ACTIVE " f"within {queued_resource_ready_timeout}s"
+                f"Queued resource {handle.slice_id} did not become ACTIVE " f"within {effective_cloud_ready_timeout}s"
             )
 
     while not cloud_deadline.expired():
@@ -736,7 +736,7 @@ def _run_tpu_bootstrap(
             )
         time.sleep(poll_interval)
     else:
-        raise InfraError(f"Slice {handle.slice_id} did not reach cloud READY within {queued_resource_ready_timeout}s")
+        raise InfraError(f"Slice {handle.slice_id} did not reach cloud READY within {effective_cloud_ready_timeout}s")
 
     workers = cloud_status.workers
     worker_addrs = [(w.worker_id, w.internal_address) for w in workers]
