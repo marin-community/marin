@@ -29,6 +29,7 @@ def build_steps() -> list[StepSpec]:
         "raw/fineweb-edu",
         hf_dataset_id="HuggingFaceFW/fineweb-edu",
         revision="87f0914",
+        hf_urls_glob=["sample/10BT/*.parquet"],
     )
 
     dedup_step = StepSpec(
