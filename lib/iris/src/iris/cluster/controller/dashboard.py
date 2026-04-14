@@ -265,13 +265,12 @@ class ControllerDashboard:
             interceptors.insert(0, NullAuthInterceptor(verifier=self._auth_verifier))
         rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
 
+        # PushLogs is kept on the controller as a forwarding proxy: older workers
+        # cached /system/log-server -> controller URL, so we must accept their
+        # pushes and forward them to the real log server. Forwarding happens
+        # transparently because self._log_service is a LogServiceProxy whose
+        # push_logs() calls the remote LogService over RPC.
         log_wsgi_app = LogServiceWSGIApplication(service=self._log_service, interceptors=interceptors)
-
-        # Workers push directly to the log server; remove PushLogs from the
-        # controller so there is no stale proxy path.
-        _LOG_PUSH_ENDPOINT = "/iris.logging.LogService/PushLogs"
-        log_wsgi_app._endpoints.pop(_LOG_PUSH_ENDPOINT, None)
-
         log_app = WSGIMiddleware(log_wsgi_app)
 
         # Backward-compat: old clients call ControllerService/FetchLogs (removed
