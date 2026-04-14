@@ -112,7 +112,7 @@ tpu_pools:
       4096: { buffer_slices: 0, max_slices: 1 }
 
 scale_groups:
-  cpu_vm_e2_highmem_2_ondemand:
+  cpu_vm_n2_highmem_2_ondemand:
     zones: [us-central1-a, us-central2-b, us-east1-b, us-east1-d, us-east5-a, us-east5-b, us-west1-a, us-west4-a, europe-west4-a, europe-west4-b]
     num_vms: 1
     priority: 500

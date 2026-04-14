@@ -163,7 +163,7 @@ tpu_pools:
 scale_groups:
   # Low-priority fallback CPU VM group for on-demand scheduling.
   # n2-highmem-2: 2 vCPU / 16 GiB, available in all target zones including us-central2-b.
-  cpu_vm_e2_highmem_2_ondemand:
+  cpu_vm_n2_highmem_2_ondemand:
     zones: [us-central1-a, us-central2-b, us-east1-b, us-east1-d, us-east5-a, us-east5-b, us-west1-a, us-west4-a, europe-west4-a, europe-west4-b]
     num_vms: 1
     priority: 500
