@@ -5,6 +5,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import logging
 from typing import Protocol
 
 import equinox as eqx
@@ -12,21 +13,13 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
-from levanter.layers.attention import AttentionMask
+
+from marin.rl.scoring import LocalScoreSource, ModelRoles, ScoreRequirements, ScoreSource
 from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmHeadModel
-from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
-from marin.rl.kl_regularization import (
-    KLConfig,
-    kl_penalty_from_log_ratio,
-    kl_statistics_from_log_ratio,
-    masked_response_mean,
-    token_log_ratio,
-)
 from marin.rl.types import Rollout, TrainingBatch
 
-# TODO(power) - these should be refactored to accept the precomputed logits instead
-# of computing outputs themselves.
+logger = logging.getLogger(__name__)
 
 
 class RLLossModule(Protocol):
@@ -90,132 +83,6 @@ def compute_metadata_metrics(
     }
 
     return metrics
-
-
-def compute_logprobs_and_entropy(
-    model: LmHeadModel,
-    batch: TrainingBatch,
-    key: jax.Array | None,
-    *,
-    compute_entropy: bool,
-) -> tuple[jax.Array, jax.Array | None]:
-    """Compute selected-token logprobs and, optionally, full-vocabulary entropy.
-
-    Args:
-        model: The language model
-        batch: Training batch containing input_ids, position_ids, temperature
-        key: JAX random key for dropout
-        compute_entropy: Whether to compute full-vocabulary entropy for each predicted token
-    Returns:
-        Tuple of selected-token logprobs and optional entropy arrays, each shaped [batch, seq_len].
-    """
-    batch_size, _seq_len = batch.input_ids.array.shape
-
-    model_output = model(
-        input_ids=batch.input_ids,
-        attn_mask=AttentionMask.causal(),
-        pos_ids=batch.position_ids,
-        key=key,
-    )
-
-    # logits[i] predicts token at position i+1
-    # We want logprob[j] = P(token[j] | tokens[0:j])
-    # This comes from logits[j-1] indexed by token[j]
-    logits_array = model_output.array.astype(jnp.float32)[:, :-1, :]  # Drop last position [batch, seq_len-1, vocab]
-    target_ids_array = batch.input_ids.array[:, 1:]  # Drop first position [batch, seq_len-1]
-
-    safe_temperature = jnp.where(batch.temperature.array == 0, 1.0, batch.temperature.array).reshape(batch_size, 1, 1)
-    logits_array = logits_array / safe_temperature.astype(jnp.float32)
-
-    log_probs = jax.nn.log_softmax(logits_array, axis=-1)
-    logprobs_shifted = jnp.take_along_axis(log_probs, target_ids_array[..., None], axis=-1).squeeze(
-        -1
-    )  # [batch, seq_len-1]
-
-    logprobs = jnp.concatenate(
-        [jnp.zeros((logprobs_shifted.shape[0], 1), dtype=logprobs_shifted.dtype), logprobs_shifted], axis=1
-    )  # [batch, seq_len]
-
-    if not compute_entropy:
-        return logprobs, None
-
-    probs = jax.nn.softmax(logits_array, axis=-1)
-    entropy_shifted = jax.nn.logsumexp(logits_array, axis=-1) - jnp.sum(probs * logits_array, axis=-1)
-    entropy = jnp.concatenate(
-        [jnp.zeros((entropy_shifted.shape[0], 1), dtype=entropy_shifted.dtype), entropy_shifted],
-        axis=1,
-    )
-
-    return logprobs, entropy
-
-
-def compute_logprobs(
-    model: LmHeadModel,
-    batch: TrainingBatch,
-    key: jax.Array | None,
-) -> jax.Array:
-    """Compute log probabilities of target tokens.
-
-    Args:
-        model: The language model
-        batch: Training batch containing input_ids, position_ids, temperature
-        key: JAX random key for dropout
-    Returns:
-        logprobs array of shape [batch, seq_len]
-    """
-    logprobs, _entropy = compute_logprobs_and_entropy(model, batch, key, compute_entropy=False)
-    return logprobs
-
-
-def chunked_compute_logprobs(
-    model: LmHeadModel,
-    batch: TrainingBatch,
-    key: jax.Array | None,
-    block_size: int,
-) -> jax.Array:
-    """Compute log probabilities of target tokens in a chunked manner to save memory.
-
-    This avoids materializing the full [batch, seq, vocab] logits tensor by using
-    the fused cross-entropy kernel with blockwise processing.
-    """
-    # Get activations
-    activations = model.activations(
-        input_ids=batch.input_ids,
-        attn_mask=AttentionMask.causal(),
-        pos_ids=batch.position_ids,
-        key=key,
-    )
-    if isinstance(activations, tuple):
-        activations, _aux = activations
-
-    pred_embeddings = activations.astype(jnp.float32)
-    pred_lm_head = model.get_lm_head().astype(jnp.float32)
-
-    safe_temperature = hax.where(batch.temperature == 0, 1.0, batch.temperature).astype(jnp.float32)
-    pred_embeddings = pred_embeddings / safe_temperature
-
-    pos_axis = batch.input_ids.resolve_axis("position")
-    target_y = hax.roll(batch.input_ids, -1, pos_axis)
-
-    loss = fused_cross_entropy_loss_and_logsumexp_penalty(
-        pred_embeddings,
-        pred_lm_head,
-        Contract=model.Embed,
-        Label=model.Vocab,
-        target_y=target_y,
-        reduction=None,
-        logsumexp_weight=0.0,
-        block_size=block_size,
-        dtype=jnp.float32,
-    )
-
-    logprobs_shifted = -loss.array[:, :-1]
-    logprobs = jnp.concatenate(
-        [jnp.zeros((logprobs_shifted.shape[0], 1), dtype=logprobs_shifted.dtype), logprobs_shifted],
-        axis=1,
-    )
-
-    return logprobs
 
 
 def compute_ppo_loss_objective(
@@ -288,41 +155,45 @@ def rloo_loss_with_importance_sampling(
     model: LmHeadModel,
     reference_model: LmHeadModel | None,
     batch: TrainingBatch,
+    score_source: ScoreSource,
     *,
     key: jax.Array | None,
-    kl: KLConfig,
+    kl_coef: float,
     clip_epsilon_low: float,
     clip_epsilon_high: float,
     tis_importance_sampling_ratio_max: float,
     do_trainer_inference_mismatch_importance_sampling: bool = False,
     synchronous: bool = False,
     do_overlong_filtering: bool = False,
-    log_policy_entropy: bool = False,
-    compute_policy_stats_fn: Callable = compute_logprobs_and_entropy,
 ) -> tuple[jax.Array, dict[str, Metric]]:
     """Compute RLOO (Reward Leave-One-Out) loss with importance sampling for off-policy data.
 
     Args:
         model: The language model
-        batch: Training batch containing rollout data with RLOO advantages
+        batch: dict containing rollout data with RLOO advantages
         key: JAX random key for dropout
-        kl: KL regularization configuration
+        kl_coef: Coefficient for KL regularization
         clip_epsilon_low: Lower clipping epsilon for importance sampling ratio
         clip_epsilon_high: Upper clipping epsilon for importance sampling ratio
-        log_policy_entropy: Whether to log exact full-vocabulary policy entropy
-        compute_policy_stats_fn: Function to compute logprobs and optional entropy
-
     Returns:
         Tuple of (loss, aux_metrics)
     """
-    policy_logprobs_array = batch.policy_logprobs.array
+    score_bundle = score_source.score(
+        batch,
+        info=None,
+        roles=ModelRoles(student=model, reference=reference_model),
+        key=key,
+    )
+    if score_bundle.student_logprobs is None:
+        raise ValueError("score source did not produce student logprobs")
+    if score_bundle.behavior_logprobs is None:
+        raise ValueError("score source did not produce behavior logprobs")
+
+    policy_logprobs_array = score_bundle.behavior_logprobs
     loss_weights_array = batch.loss_weights.array
     loss_masks_array = batch.loss_masks.array
 
-    # Get logits from current policy
-    current_logprobs, current_policy_entropy = compute_policy_stats_fn(
-        model, batch, key, compute_entropy=log_policy_entropy
-    )
+    current_logprobs = score_bundle.student_logprobs
     current_logprobs = current_logprobs * loss_masks_array
 
     if synchronous:
@@ -375,21 +246,22 @@ def rloo_loss_with_importance_sampling(
     # weighted_loss = -clipped_ratio * loss_weights_array * loss_masks_array
     # KL regularization
 
-    log_ratio = jnp.zeros_like(current_logprobs)
-    kl_penalty = jnp.zeros_like(current_logprobs)
-    kl_loss = jnp.asarray(0.0, dtype=current_logprobs.dtype)
-    kl_statistics = kl_statistics_from_log_ratio(log_ratio, loss_masks_array)
-    if kl.enabled():
+    if kl_coef > 0:
         if reference_model is None:
-            raise ValueError("reference_model is required when KL regularization is enabled")
-        reference_logprobs, _reference_entropy = compute_policy_stats_fn(
-            reference_model, batch, key, compute_entropy=False
-        )
+            raise ValueError("reference_model is required when kl_coef > 0")
+        if score_bundle.reference_logprobs is None:
+            raise ValueError("score source did not produce reference logprobs")
+        reference_logprobs = score_bundle.reference_logprobs
         reference_logprobs = reference_logprobs * loss_masks_array
-        log_ratio = token_log_ratio(current_logprobs, reference_logprobs)
-        kl_penalty = kl_penalty_from_log_ratio(log_ratio, kl.mode)
-        kl_statistics = kl_statistics_from_log_ratio(log_ratio, loss_masks_array)
-        kl_loss = kl.beta * masked_response_mean(kl_penalty, loss_masks_array)
+        # log_ratio = (current_logprobs - reference_logprobs_array) * loss_masks_array
+        kl_penalty = jnp.exp(reference_logprobs - current_logprobs) - (reference_logprobs - current_logprobs) - 1
+        # https://github.com/openai/lm-human-preferences/blob/cbfd210bb8b08f6bc5c26878c10984b90f516c66/lm_human_preferences/train_policy.py#L151
+        # kl_penalty = jnp.abs(log_ratio)
+        kl_loss = jnp.mean(jnp.sum(kl_penalty * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1))
+        kl_loss = kl_coef * kl_loss
+    else:
+        kl_penalty = 0
+        kl_loss = 0
 
     loss = reinforce_loss + kl_loss
 
@@ -401,8 +273,11 @@ def rloo_loss_with_importance_sampling(
     clipped_ratio_mean_over_responses_only = jnp.mean(
         jnp.sum(clipped_ratio * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1)
     )
+    kl_penalty_over_responses_only = jnp.mean(
+        jnp.sum(kl_penalty * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1)
+    )
 
-    metrics = {
+    return loss, {
         "ratio_mean": Metric.from_value(ratio_mean_over_responses_only.astype(jnp.float32), ReductionType.MEAN),
         "clipped_ratio_mean": Metric.from_value(
             clipped_ratio_mean_over_responses_only.astype(jnp.float32), ReductionType.MEAN
@@ -410,28 +285,29 @@ def rloo_loss_with_importance_sampling(
         "clip_fraction": Metric.from_value(clip_fraction.astype(jnp.float32), ReductionType.MEAN),
         "reinforce_loss": Metric.from_value(reinforce_loss.astype(jnp.float32), ReductionType.MEAN),
         "kl_loss": Metric.from_value(jnp.asarray(kl_loss, dtype=jnp.float32), ReductionType.MEAN),
-        "kl_beta": Metric.from_value(jnp.asarray(kl.beta, dtype=jnp.float32), ReductionType.MEAN),
-        "kl_k1_mean": Metric.from_value(jnp.asarray(kl_statistics.k1_mean, dtype=jnp.float32), ReductionType.MEAN),
-        "kl_k2_mean": Metric.from_value(jnp.asarray(kl_statistics.k2_mean, dtype=jnp.float32), ReductionType.MEAN),
-        "kl_k3_mean": Metric.from_value(jnp.asarray(kl_statistics.k3_mean, dtype=jnp.float32), ReductionType.MEAN),
+        "kl_penalty": Metric.from_value(
+            jnp.asarray(kl_penalty_over_responses_only, dtype=jnp.float32), ReductionType.MEAN
+        ),
         "trainer_inference_importance_sampling_ratio_mean": Metric.from_value(
             trainer_inference_importance_sampling_ratio_mean.astype(jnp.float32), ReductionType.MEAN
         ),
         "temperature": Metric.from_value(jnp.mean(batch.temperature.array).astype(jnp.float32), ReductionType.MEAN),
         "top_k": Metric.from_value(jnp.mean(batch.top_k.array).astype(jnp.float32), ReductionType.MEAN),
+        "scoring/student_pass_count": Metric.from_value(
+            jnp.asarray(score_bundle.student_pass_count, dtype=jnp.float32),
+            ReductionType.MEAN,
+        ),
+        "scoring/reference_pass_count": Metric.from_value(
+            jnp.asarray(score_bundle.reference_pass_count, dtype=jnp.float32),
+            ReductionType.MEAN,
+        ),
+        "scoring/teacher_pass_count": Metric.from_value(
+            jnp.asarray(score_bundle.teacher_pass_count, dtype=jnp.float32),
+            ReductionType.MEAN,
+        ),
         **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
         **metadata,
     }
-
-    if log_policy_entropy:
-        if current_policy_entropy is None:
-            raise ValueError("compute_policy_stats_fn must return entropy when log_policy_entropy=True")
-        policy_entropy = masked_response_mean(current_policy_entropy, loss_masks_array)
-        metrics["current_policy_entropy"] = Metric.from_value(
-            jax.lax.stop_gradient(policy_entropy).astype(jnp.float32), ReductionType.MEAN
-        )
-
-    return loss, metrics
 
 
 def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
@@ -452,7 +328,7 @@ def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
 class RLOOLoss(RLLossModule):
     """RLOO loss with importance sampling."""
 
-    kl: KLConfig
+    kl_coef: float = 0.1
     clip_epsilon_low: float = 0.2
     clip_epsilon_high: float = 0.2
     tis_importance_sampling_ratio_max: float = 2.0
@@ -460,7 +336,6 @@ class RLOOLoss(RLLossModule):
     do_trainer_inference_mismatch_importance_sampling: bool = False
     do_overlong_filtering: bool = False
     vocab_tile_size: int | None = None
-    log_policy_entropy: bool = False
 
     def build(self, reference_model: eqx.Module) -> RLLossModule:
         """Initialize any learned components (e.g., value heads)."""
@@ -472,43 +347,42 @@ class RLOOLoss(RLLossModule):
 
     def needs_reference_model(self) -> bool:
         """Return whether KL regularization requires a reference model."""
-        return self.kl.enabled()
+        return self.kl_coef > 0
 
     def create_loss_fn(self, reference_model: eqx.Module | None, train_model: eqx.Module) -> Callable:
         """Create the loss function for training."""
         if self.needs_reference_model() and reference_model is None:
-            raise ValueError("reference_model is required when KL regularization is enabled")
-        if self.log_policy_entropy and self.vocab_tile_size is not None:
-            raise ValueError(
-                "Exact policy entropy is not supported with vocab_tile_size yet. "
-                "Set vocab_tile_size=None or implement chunked entropy first."
-            )
+            raise ValueError("reference_model is required when kl_coef > 0")
+
+        score_source = LocalScoreSource(
+            score_requirements=ScoreRequirements(
+                student_logprobs=True,
+                behavior_logprobs=True,
+                reference_logprobs=self.needs_reference_model(),
+            ),
+            vocab_tile_size=self.vocab_tile_size,
+        )
+        logger.info(
+            "Using score source backend=%s requirements=%s vocab_tile_size=%s",
+            score_source.backend_name,
+            score_source.requirements(),
+            self.vocab_tile_size,
+        )
 
         def loss_fn(model, batch, key):
-            if self.vocab_tile_size is not None:
-
-                def compute_policy_stats_fn(m, b, k, *, compute_entropy: bool):
-                    if compute_entropy:
-                        raise ValueError("Exact policy entropy is not supported with vocab_tile_size yet")
-                    return chunked_compute_logprobs(m, b, k, self.vocab_tile_size), None
-
-            else:
-                compute_policy_stats_fn = compute_logprobs_and_entropy
-
             return rloo_loss_with_importance_sampling(
                 model,
                 reference_model,
                 batch,
+                score_source,
                 key=key,
-                kl=self.kl,
+                kl_coef=self.kl_coef,
                 clip_epsilon_low=self.clip_epsilon_low,
                 clip_epsilon_high=self.clip_epsilon_high,
                 tis_importance_sampling_ratio_max=self.tis_importance_sampling_ratio_max,
                 synchronous=self.synchronous,
                 do_trainer_inference_mismatch_importance_sampling=self.do_trainer_inference_mismatch_importance_sampling,
                 do_overlong_filtering=self.do_overlong_filtering,
-                log_policy_entropy=self.log_policy_entropy,
-                compute_policy_stats_fn=compute_policy_stats_fn,
             )
 
         return loss_fn
