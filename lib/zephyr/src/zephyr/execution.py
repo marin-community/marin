@@ -41,7 +41,7 @@ from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfi
 from fray.v2.client import JobHandle
 from fray.v2.types import Entrypoint, JobRequest
 from rigging.filesystem import marin_temp_bucket
-from rigging.timing import ExponentialBackoff
+from rigging.timing import ExponentialBackoff, log_time
 
 from zephyr.dataset import Dataset
 from zephyr.plan import (
@@ -171,16 +171,12 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
     exec_dir = f"{prefix}/{execution_id}"
     fs = url_to_fs(exec_dir)[0]
 
-    # TODO: use log_time util when possible
-    t_0 = time.monotonic()
-    if fs.exists(exec_dir):
-        try:
-            fs.rm(exec_dir, recursive=True)
-        except Exception as e:
-            logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
-        finally:
-            elapsed = time.monotonic() - t_0
-            logger.info(f"Cleaned up execution directory {exec_dir} in {elapsed:.1f}s")
+    with log_time(f"Cleaning up execution directory {exec_dir}"):
+        if fs.exists(exec_dir):
+            try:
+                fs.rm(exec_dir, recursive=True)
+            except Exception as e:
+                logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
 
 
 def _write_pickle_chunks(
