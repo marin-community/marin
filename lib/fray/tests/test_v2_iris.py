@@ -37,7 +37,7 @@ class TestConvertConstraints:
         assert len(constraints) == 1
         c = constraints[0]
         assert c.key == "preemptible"
-        assert c.value == "false"
+        assert c.values[0].value == "false"
 
     def test_single_region_produces_eq_constraint(self):
         resources = ResourceConfig(regions=["us-central1"])
@@ -48,7 +48,7 @@ class TestConvertConstraints:
         from iris.cluster.constraints import ConstraintOp
 
         assert c.op == ConstraintOp.EQ
-        assert c.value == "us-central1"
+        assert c.values[0].value == "us-central1"
 
     def test_multiple_regions_produce_in_constraint(self):
         resources = ResourceConfig(regions=["us-central1", "us-central2"])
@@ -59,7 +59,7 @@ class TestConvertConstraints:
         from iris.cluster.constraints import ConstraintOp
 
         assert c.op == ConstraintOp.IN
-        assert c.values == ("us-central1", "us-central2")
+        assert tuple(v.value for v in c.values) == ("us-central1", "us-central2")
 
     def test_zone_produces_eq_constraint(self):
         resources = ResourceConfig(zone="us-east1-d")
@@ -70,7 +70,7 @@ class TestConvertConstraints:
         from iris.cluster.constraints import ConstraintOp
 
         assert c.op == ConstraintOp.EQ
-        assert c.value == "us-east1-d"
+        assert c.values[0].value == "us-east1-d"
 
 
 class TestConvertConstraintsDeviceAlternatives:
@@ -89,7 +89,7 @@ class TestConvertConstraintsDeviceAlternatives:
         from iris.cluster.constraints import ConstraintOp
 
         assert c.op == ConstraintOp.IN
-        assert set(c.values) == {"v4-8", "v5p-8"}
+        assert {v.value for v in c.values} == {"v4-8", "v5p-8"}
 
 
 class TestIrisActorHandlePickle:
