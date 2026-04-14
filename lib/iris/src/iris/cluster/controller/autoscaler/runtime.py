@@ -62,7 +62,8 @@ logger = logging.getLogger(__name__)
 # Slices that die within this time of creation trigger backoff (preemption detection)
 SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
 
-# After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
+# After this long in a non-terminal state (UNKNOWN, CREATING, BOOTSTRAPPING, REPAIRING),
+# treat the slice as FAILED. Quota timeout is 5 min, so this is conservative.
 DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
 
 
@@ -442,10 +443,20 @@ class Autoscaler:
                         reason=reason,
                         status="failed",
                     )
-                elif status.state == CloudSliceState.UNKNOWN:
+                elif status.state in (
+                    CloudSliceState.UNKNOWN,
+                    CloudSliceState.CREATING,
+                    CloudSliceState.BOOTSTRAPPING,
+                    CloudSliceState.REPAIRING,
+                ):
                     age = Duration.from_ms(timestamp.epoch_ms() - handle.created_at.epoch_ms())
                     if age >= self._unresolvable_timeout:
-                        group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
+                        reason = (
+                            f"TPU unresolvable for {age}"
+                            if status.state == CloudSliceState.UNKNOWN
+                            else f"boot timeout: still {status.state} after {age}"
+                        )
+                        group.mark_slice_failed(slice_id, error_message=reason)
                         group.scale_down(slice_id)
                         self._unregister_slice_workers(slice_id)
                         group.record_failure()
@@ -453,13 +464,14 @@ class Autoscaler:
                             "slice_failed",
                             group.name,
                             slice_id,
-                            reason=f"TPU unresolvable for {age}",
+                            reason=reason,
                             status="failed",
                         )
                     else:
                         logger.debug(
-                            "Slice %s UNKNOWN (age %s < timeout %s); will retry",
+                            "Slice %s %s (age %s < timeout %s); will retry",
                             slice_id,
+                            status.state,
                             age,
                             self._unresolvable_timeout,
                         )

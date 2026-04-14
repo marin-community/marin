@@ -18,7 +18,7 @@ import pytest
 
 from iris.cluster.providers.gcp.controller import GcpControllerProvider
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
-from iris.cluster.providers.gcp.handles import GcpVmSliceHandle, _build_gce_resource_name
+from iris.cluster.providers.gcp.handles import GcpVmSliceHandle, _build_gce_resource_name, _composite_slice_state
 from iris.cluster.providers.remote_exec import DirectSshRemoteExec, GceRemoteExec, GcloudRemoteExec
 from iris.cluster.providers.gcp.workers import (
     GcpWorkerProvider,
@@ -1107,3 +1107,23 @@ def test_vm_bootstrap_cloud_not_ready_raises_phase1_timeout():
             cloud_ready_timeout=0.05,
             bootstrap_timeout=300.0,
         )
+
+
+class TestCompositeSliceState:
+    """Tests for _composite_slice_state combining cloud and bootstrap states."""
+
+    def test_bootstrap_failed_propagates_when_cloud_creating(self):
+        """Bootstrap FAILED overrides CREATING cloud state (reserved slice timeout)."""
+        assert _composite_slice_state(CloudSliceState.CREATING, CloudSliceState.FAILED) == CloudSliceState.FAILED
+
+    def test_bootstrap_failed_propagates_when_cloud_ready(self):
+        assert _composite_slice_state(CloudSliceState.READY, CloudSliceState.FAILED) == CloudSliceState.FAILED
+
+    def test_cloud_creating_without_bootstrap_failure(self):
+        assert _composite_slice_state(CloudSliceState.CREATING, None) == CloudSliceState.CREATING
+
+    def test_cloud_ready_bootstrap_none_is_bootstrapping(self):
+        assert _composite_slice_state(CloudSliceState.READY, None) == CloudSliceState.BOOTSTRAPPING
+
+    def test_cloud_ready_bootstrap_ready(self):
+        assert _composite_slice_state(CloudSliceState.READY, CloudSliceState.READY) == CloudSliceState.READY

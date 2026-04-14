@@ -1538,6 +1538,52 @@ class TestAutoscalerUnresolvableTimeout:
         assert group.slice_count() == 0
         autoscaler.shutdown()
 
+    @pytest.mark.parametrize("state", [CloudSliceState.CREATING, CloudSliceState.BOOTSTRAPPING])
+    def test_boot_timeout_triggers_failure(
+        self, scale_group_config: config_pb2.ScaleGroupConfig, state: CloudSliceState
+    ):
+        """A slice stuck in CREATING or BOOTSTRAPPING past the timeout is failed."""
+        handle = make_mock_slice_handle("slice-001", created_at_ms=0)
+        handle._status = SliceStatus(state=state, worker_count=0, workers=[])
+
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+
+        autoscaler = Autoscaler(
+            scale_groups={"test-group": group},
+            evaluation_interval=Duration.from_seconds(0.1),
+            platform=platform,
+            unresolvable_timeout=Duration.from_minutes(15),
+        )
+
+        # Refresh at 16 min -- past the 15 min timeout
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(16 * 60 * 1000))
+        assert group.slice_count() == 0
+        autoscaler.shutdown()
+
+    def test_creating_before_timeout_stays_booting(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A slice in CREATING state before the timeout remains tracked."""
+        handle = make_mock_slice_handle("slice-001", created_at_ms=0)
+        handle._status = SliceStatus(state=CloudSliceState.CREATING, worker_count=0, workers=[])
+
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+
+        autoscaler = Autoscaler(
+            scale_groups={"test-group": group},
+            evaluation_interval=Duration.from_seconds(0.1),
+            platform=platform,
+            unresolvable_timeout=Duration.from_minutes(15),
+        )
+
+        # Refresh at 5 min -- well under 15 min timeout
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(5 * 60 * 1000))
+        assert group.slice_count() == 1
+        assert group.ready_slice_count() == 0
+        autoscaler.shutdown()
+
     def test_unknown_then_ready_before_timeout_recovers(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """A slice that was UNKNOWN but becomes READY before timeout is marked ready."""
         created_at_ms = 0

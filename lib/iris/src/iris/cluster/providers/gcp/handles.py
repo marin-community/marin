@@ -110,13 +110,18 @@ def _composite_slice_state(
     cloud_state: CloudSliceState,
     bootstrap_state: CloudSliceState | None,
 ) -> CloudSliceState:
-    """Compose cloud lifecycle with bootstrap lifecycle into effective slice state."""
+    """Compose cloud lifecycle with bootstrap lifecycle into effective slice state.
+
+    Bootstrap FAILED is always propagated — if the bootstrap thread gave up
+    (e.g. queued-resource timeout), the slice is unrecoverable regardless of
+    the cloud-level state.
+    """
+    if bootstrap_state == CloudSliceState.FAILED:
+        return CloudSliceState.FAILED
     if cloud_state != CloudSliceState.READY:
         return cloud_state
     if bootstrap_state is None:
         return CloudSliceState.BOOTSTRAPPING
-    if bootstrap_state == CloudSliceState.FAILED:
-        return CloudSliceState.FAILED
     return CloudSliceState.READY
 
 
