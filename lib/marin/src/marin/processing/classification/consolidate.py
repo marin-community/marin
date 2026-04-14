@@ -10,15 +10,16 @@ the attributes.  Handles three cases:
 - Span removal produces attributes (e.g., duplicate_text spans). Remove text spans.
 - Document removal via attribute produced by deduplication.
 
-Joins documents with their attribute files via a streaming map-side merge:
+Joins documents with their attribute files via Zephyr's ``sorted_merge_join``:
 the datakit convention guarantees that attribute files share the input file
-partitioning (1:1 file pairing, sorted by id), so each shard can be processed
-independently with constant memory per filter.
+partitioning (1:1 file pairing, sorted by id), so each shard pairs with its
+corresponding attribute shard without a shuffle. Multiple filters are chained
+as successive left joins.
 """
 
 import logging
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
@@ -30,7 +31,6 @@ from marin.utils import (
     rebase_file_path,
 )
 from zephyr import Dataset, ZephyrContext
-from zephyr.readers import InputFileSpec, load_file
 
 
 class FilterType(StrEnum):
@@ -147,6 +147,10 @@ def extract_id(row: dict, corpus_type: str) -> str:
     return val
 
 
+def _make_id_extractor(corpus_type: str) -> Callable[[dict], Any]:
+    return lambda r: extract_id(r, corpus_type)
+
+
 def _compute_percentile_threshold(
     attr_paths: list[str], attr_name: str, attr_label: str | None, keep_fraction: float
 ) -> float:
@@ -224,7 +228,7 @@ def calculate_percentile_thresholds(
             updated_filters.append(filt)
             continue
 
-        attr_paths = [_resolve_attribute_path(input_path, inp, filt, filetype) for inp in input_paths]
+        attr_paths = _attribute_paths_for_filter(input_path, input_paths, filt, filetype)
         attr_paths = [p for p in attr_paths if p is not None]
 
         threshold = _compute_percentile_threshold(attr_paths, filt.name, filt.label, filt.keep_fraction)
@@ -232,40 +236,6 @@ def calculate_percentile_thresholds(
         updated_filters.append(replace(filt, lower_threshold=threshold, keep_fraction=None))
 
     return updated_filters
-
-
-class _PeekableIter:
-    """Iterator with one-element lookahead used by the merge walk.
-
-    ``peek()`` returns the next item without consuming it (or ``None`` if exhausted);
-    ``advance()`` discards the current peeked item.
-    """
-
-    __slots__ = ("_has_peek", "_it", "_peeked")
-
-    def __init__(self, iterator):
-        self._it = iter(iterator)
-        self._peeked = None
-        self._has_peek = False
-
-    def peek(self):
-        if not self._has_peek:
-            try:
-                self._peeked = next(self._it)
-                self._has_peek = True
-            except StopIteration:
-                return None
-        return self._peeked
-
-    def advance(self) -> None:
-        if self._has_peek:
-            self._has_peek = False
-            self._peeked = None
-        else:
-            try:
-                next(self._it)
-            except StopIteration:
-                pass
 
 
 def _resolve_attribute_path(input_base: str, input_path: str, filt: FilterConfig, filetype: str) -> str | None:
@@ -283,67 +253,50 @@ def _resolve_attribute_path(input_base: str, input_path: str, filt: FilterConfig
     candidates = fsspec_glob(f"{attr_path}.*")
     if candidates:
         return candidates[0]
-    logger.warning(f"Attribute file not found: {attr_path}")
     return None
 
 
-def process_file_shard(*, shard, filters: list[FilterConfig], input_base: str, filetype: str) -> Iterator[dict]:
-    """Filter documents in a file shard using a streaming merge join with each attribute file.
+def _attribute_paths_for_filter(input_base: str, input_paths: list[str], filt: FilterConfig, filetype: str) -> list[str]:
+    """Resolve the 1:1 input→attribute paths for a filter.
 
-    Both the input file and each attribute file are sorted by id (datakit convention),
-    so we can walk all streams in lockstep with constant memory per filter.
+    Raises if any shard's attribute file is missing — the datakit invariant is
+    that all attribute files exist. ``keep_if_missing`` governs missing *rows*
+    within a file, not missing files.
     """
-    input_path = next(iter(shard))
-    corpus_type = "dclm" if "dclm" in input_path else "default"
-    id_key = CORPUS_TYPE_TO_ID_GUIDE[corpus_type]["key"]
+    resolved = []
+    for inp in input_paths:
+        path = _resolve_attribute_path(input_base, inp, filt, filetype)
+        if path is None:
+            raise FileNotFoundError(
+                f"No attribute file for filter '{filt.name}' corresponding to input {inp} "
+                f"under {filt.attribute_path}"
+            )
+        resolved.append(path)
+    return resolved
 
-    # Open one peekable attribute stream per filter (1:1 file pairing).
-    attr_iters: list[_PeekableIter] = []
-    for filt in filters:
-        attr_path = _resolve_attribute_path(input_base, input_path, filt, filetype)
-        if attr_path is None:
-            attr_iters.append(_PeekableIter(iter([])))
-            continue
-        attr_iters.append(_PeekableIter(load_file(InputFileSpec(path=attr_path, columns=[id_key, "attributes"]))))
 
-    logger.info(f"Processing {input_path}")
-    for doc in load_file(input_path):
-        doc_id = extract_id(doc, corpus_type)
-        keep = True
+def _make_filter_combiner(filt: FilterConfig) -> Callable[[dict, dict | None], dict | None]:
+    """Build a combiner for one filter.
 
-        for filt, attr_iter in zip(filters, attr_iters, strict=True):
-            if not keep:
-                # NOTE: if at any point the doc is rejected, stop processing further filters.
-                break
+    Called by ``sorted_merge_join`` with the current doc (``left``) and the
+    matching attribute row or ``None`` (``right``). Returns the doc (possibly
+    with mutated text for ``REMOVE_SPANS``) or ``None`` to drop it.
+    """
 
-            # Advance the attribute stream past any orphan ids (id < doc_id).
-            while True:
-                peek = attr_iter.peek()
-                if peek is None or extract_id(peek, corpus_type) >= doc_id:
-                    break
-                attr_iter.advance()
+    def combine(left: dict, right: dict | None) -> dict | None:
+        if right is None:
+            return left if filt.keep_if_missing else None
 
-            peek = attr_iter.peek()
-            if peek is None or extract_id(peek, corpus_type) != doc_id:
-                # No matching attribute for this doc.
-                if filt.keep_if_missing:
-                    continue
-                keep = False
-                break
+        attrs = right["attributes"]
+        if filt.type == FilterType.CLASSIFY:
+            return left if _is_valid(left, filt, attrs) else None
+        if filt.type == FilterType.REMOVE_DOC:
+            return left if not attrs.get(filt.name, False) else None
+        assert filt.type == FilterType.REMOVE_SPANS
+        mutated = _remove_spans_from_doc(left, filt, attrs)
+        return mutated if mutated.get("text") else None
 
-            filt_attrs: dict[str, Any] = peek["attributes"]
-            attr_iter.advance()
-
-            if filt.type == FilterType.CLASSIFY:
-                keep = _is_valid(doc, filt, filt_attrs)
-            elif filt.type == FilterType.REMOVE_DOC:
-                keep = not filt_attrs.get(filt.name, False)
-            else:
-                assert filt.type == FilterType.REMOVE_SPANS
-                doc = _remove_spans_from_doc(doc, filt, filt_attrs)
-
-        if keep and doc.get("text"):
-            yield doc
+    return combine
 
 
 def consolidate(
@@ -356,9 +309,10 @@ def consolidate(
 ) -> None:
     """Consolidate documents by applying filters based on attributes.
 
-    Joins each input file with its (co-partitioned, sorted) attribute files via a
-    streaming merge — no in-memory hash table is materialized. Output is written
-    to Parquet in ``output_path``.
+    Joins each input file with its (co-partitioned, sorted) attribute files via
+    chained ``sorted_merge_join`` ops — one left join per filter, with the
+    filter's keep/mutate/drop logic encoded in its combiner. No in-memory hash
+    table is materialized.
 
     Args:
         input_path: Directory (recursively) containing input documents.
@@ -368,18 +322,39 @@ def consolidate(
         worker_resources: Optional Zephyr worker resource config (defaults to Zephyr defaults).
     """
     filters = calculate_percentile_thresholds(input_path=input_path, filters=filters, filetype=filetype)
-    input_paths = fsspec_glob(os.path.join(input_path, f"**/*.{filetype}"))
-    logger.info(f"Consolidating {len(input_paths)} document files")
+    input_paths = sorted(fsspec_glob(os.path.join(input_path, f"**/*.{filetype}")))
+    if not input_paths:
+        raise ValueError(f"No input files matched {input_path}/**/*.{filetype}")
+    logger.info(f"Consolidating {len(input_paths)} document files via {len(filters)} sorted_merge_join(s)")
+
+    # Determine id key; assume a uniform corpus across shards (matches prior per-shard behavior
+    # since datakit inputs are all "default" — "dclm" was the only alternative).
+    corpus_type = "dclm" if any("dclm" in p for p in input_paths) else "default"
+    id_key = CORPUS_TYPE_TO_ID_GUIDE[corpus_type]["key"]
+    key_fn = _make_id_extractor(corpus_type)
+
+    # Resolve attribute paths up front so the plan can be built before execution.
+    filter_attr_paths = [
+        (filt, _attribute_paths_for_filter(input_path, input_paths, filt, filetype)) for filt in filters
+    ]
+
+    ds = Dataset.from_list(input_paths).load_parquet()
+    for filt, attr_paths in filter_attr_paths:
+        attrs = Dataset.from_list(attr_paths).load_parquet(columns=[id_key, "attributes"])
+        ds = ds.sorted_merge_join(
+            attrs,
+            left_key=key_fn,
+            right_key=key_fn,
+            combiner=_make_filter_combiner(filt),
+            how="left",
+        )
+        # Drop rejected docs before the next join so its key extractor never sees None.
+        ds = ds.filter(lambda r: r is not None)
 
     output_pattern = f"{output_path}/part-{{shard:04d}}.parquet"
-
-    ctx = ZephyrContext(name="consolidate-filter", **({"resources": worker_resources} if worker_resources else {}))
-    results = ctx.execute(
-        Dataset.from_list(input_paths)
-        .map_shard(
-            lambda shard, _: process_file_shard(shard=shard, filters=filters, input_base=input_path, filetype=filetype)
-        )
-        .write_parquet(output_pattern)
-    ).results
-
+    ctx = ZephyrContext(
+        name="consolidate-filter",
+        **({"resources": worker_resources} if worker_resources else {}),
+    )
+    results = ctx.execute(ds.write_parquet(output_pattern)).results
     logger.info(f"Consolidation complete. Wrote {len(results)} output files")
