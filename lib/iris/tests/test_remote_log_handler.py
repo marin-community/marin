@@ -8,8 +8,9 @@ import threading
 
 import pytest
 
-from iris.log_server.client import LogPusher, RemoteLogHandler
+from iris.log_server.client import LogPusher, RemoteLogHandler, _WARN_INTERVAL
 from iris.rpc import logging_pb2
+from rigging.timing import RateLimiter
 
 
 class FakeLogPusher:
@@ -166,26 +167,7 @@ def test_log_pusher_flushes_at_batch_size():
 
 def test_send_warns_on_rpc_failure(caplog):
     """LogPusher._send() emits a warning (not debug) on RPC failure."""
-    sent_count = 0
 
-    class FailingPusher(LogPusher):
-        def __init__(self):
-            self._batch_size = 1000
-            self._flush_interval = 999.0
-            self._buffers: dict[str, list[logging_pb2.LogEntry]] = {}
-            self._lock = threading.Lock()
-            self._send_lock = threading.Lock()
-            self._closed = False
-            self._flush_timer = None
-            self._consecutive_failures = 0
-            self._last_fail_warn_time = 0.0
-
-        def _send(self, key, entries):
-            nonlocal sent_count
-            # Simulate an RPC failure by calling the real _send with a broken client.
-            raise ConnectionError("server unavailable")
-
-    # Instead of subclassing, directly test the real _send with a failing client.
     class FailingClient:
         def push_logs(self, request):
             raise ConnectionError("server unavailable")
@@ -203,7 +185,7 @@ def test_send_warns_on_rpc_failure(caplog):
     pusher._closed = False
     pusher._flush_timer = None
     pusher._consecutive_failures = 0
-    pusher._last_fail_warn_time = 0.0
+    pusher._warn_limiter = RateLimiter(interval_seconds=_WARN_INTERVAL)
 
     entry = logging_pb2.LogEntry(source="test", data="line")
     with caplog.at_level(logging.WARNING, logger="iris.log_server.client"):
@@ -233,7 +215,7 @@ def test_send_warns_rate_limited(caplog):
     pusher._closed = False
     pusher._flush_timer = None
     pusher._consecutive_failures = 0
-    pusher._last_fail_warn_time = 0.0
+    pusher._warn_limiter = RateLimiter(interval_seconds=_WARN_INTERVAL)
 
     entry = logging_pb2.LogEntry(source="test", data="line")
     with caplog.at_level(logging.WARNING, logger="iris.log_server.client"):
@@ -272,7 +254,7 @@ def test_send_logs_recovery(caplog):
     pusher._closed = False
     pusher._flush_timer = None
     pusher._consecutive_failures = 0
-    pusher._last_fail_warn_time = 0.0
+    pusher._warn_limiter = RateLimiter(interval_seconds=_WARN_INTERVAL)
 
     entry = logging_pb2.LogEntry(source="test", data="line")
     with caplog.at_level(logging.INFO, logger="iris.log_server.client"):

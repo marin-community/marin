@@ -13,8 +13,8 @@ RemoteLogHandler: Python logging.Handler that formats records and pushes
 from __future__ import annotations
 
 import logging
+import sys
 import threading
-import time
 from collections.abc import Iterable
 
 from connectrpc.interceptor import Interceptor
@@ -22,6 +22,7 @@ from connectrpc.interceptor import Interceptor
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
 from iris.rpc.logging_connect import LogServiceClientSync
+from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class LogPusher:
 
         self._flush_timer: threading.Timer | None = None
         self._consecutive_failures = 0
-        self._last_fail_warn_time = 0.0
+        self._warn_limiter = RateLimiter(interval_seconds=_WARN_INTERVAL)
         self._schedule_flush()
 
     def _schedule_flush(self) -> None:
@@ -92,6 +93,9 @@ class LogPusher:
             self._send(key, entries)
 
     def _send(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
+        warn_args: tuple[int, str, int] | None = None
+        warn_exc_info = None
+        recovery_count: int | None = None
         with self._send_lock:
             if self._closed:
                 return
@@ -99,21 +103,23 @@ class LogPusher:
                 self._client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
             except Exception:
                 self._consecutive_failures += 1
-                now = time.monotonic()
-                if self._consecutive_failures == 1 or now - self._last_fail_warn_time >= _WARN_INTERVAL:
-                    logger.warning(
-                        "Failed to push %d log entries for key %s (%d consecutive failures)",
-                        len(entries),
-                        key,
-                        self._consecutive_failures,
-                        exc_info=True,
-                    )
-                    self._last_fail_warn_time = now
-                return
-            if self._consecutive_failures > 0:
-                logger.info("Log push recovered after %d consecutive failures", self._consecutive_failures)
-                self._consecutive_failures = 0
-                self._last_fail_warn_time = 0.0
+                if self._warn_limiter.should_run():
+                    warn_args = (len(entries), key, self._consecutive_failures)
+                    warn_exc_info = sys.exc_info()
+            else:
+                if self._consecutive_failures > 0:
+                    recovery_count = self._consecutive_failures
+                    self._consecutive_failures = 0
+                    self._warn_limiter.reset()
+        # Log outside the lock to avoid re-entrant deadlock via RemoteLogHandler.
+        if warn_args is not None:
+            logger.warning(
+                "Failed to push %d log entries for key %s (%d consecutive failures)",
+                *warn_args,
+                exc_info=warn_exc_info,
+            )
+        if recovery_count is not None:
+            logger.info("Log push recovered after %d consecutive failures", recovery_count)
 
     def flush(self) -> None:
         """Force-flush all buffered entries."""
