@@ -31,8 +31,6 @@ from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
     FAILURE_TASK_STATES,
-    TERMINAL_JOB_STATES,
-    TERMINAL_TASK_STATES,
     ControllerDB,
     TransactionCursor,
     task_row_can_be_scheduled,
@@ -48,6 +46,8 @@ from iris.cluster.controller.schema import (
     WorkerDetailRow,
 )
 from iris.cluster.types import (
+    TERMINAL_JOB_STATES,
+    TERMINAL_TASK_STATES,
     JobName,
     WorkerId,
     get_gpu_count,

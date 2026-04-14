@@ -55,14 +55,11 @@ from iris.rpc.auth import (
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
-    TERMINAL_JOB_STATES,
-    TERMINAL_TASK_STATES,
     ControllerDB,
     EndpointQuery,
     TaskJobSummary,
     UserStats,
     attempt_is_worker_failure,
-    job_is_finished,
     running_tasks_by_worker,
     task_row_can_be_scheduled,
 )
@@ -95,7 +92,15 @@ from iris.cluster.controller.provider import ProviderError
 from iris.cluster.log_store import build_log_source, worker_log_key
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
-from iris.cluster.types import JobName, WorkerId, get_gpu_count, get_tpu_count
+from iris.cluster.types import (
+    TERMINAL_JOB_STATES,
+    TERMINAL_TASK_STATES,
+    JobName,
+    WorkerId,
+    get_gpu_count,
+    get_tpu_count,
+    is_job_finished,
+)
 from iris.log_server.client import LogServiceProxy
 from iris.log_server.server import LogServiceImpl
 from iris.rpc import logging_pb2, vm_pb2
@@ -1112,15 +1117,15 @@ class ControllerServiceImpl:
                     f"Job {job_id} already exists (state={job_pb2.JobState.Name(existing_job.state)})",
                 )
             elif policy == job_pb2.EXISTING_JOB_POLICY_KEEP:
-                if not job_is_finished(existing_job.state):
+                if not is_job_finished(existing_job.state):
                     return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
                 # Job finished, replace it (KEEP only preserves running jobs)
                 self._transitions.remove_finished_job(job_id)
             elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
-                if not job_is_finished(existing_job.state):
+                if not is_job_finished(existing_job.state):
                     self._transitions.cancel_job(job_id, "Replaced by new submission")
                 self._transitions.remove_finished_job(job_id)
-            elif job_is_finished(existing_job.state):
+            elif is_job_finished(existing_job.state):
                 # Default/UNSPECIFIED: replace finished jobs
                 logger.info(
                     "Replacing finished job %s (state=%s) with new submission",

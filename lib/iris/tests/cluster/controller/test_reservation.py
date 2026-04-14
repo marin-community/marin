@@ -28,7 +28,7 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
 
-from iris.cluster.controller.db import job_is_finished, task_row_can_be_scheduled
+from iris.cluster.controller.db import task_row_can_be_scheduled
 from iris.cluster.controller.schema import WorkerRow
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
@@ -47,7 +47,7 @@ from iris.cluster.constraints import (
     get_device_type,
     get_device_variant,
 )
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import JobName, WorkerId, is_job_finished
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from rigging.timing import Timestamp
@@ -479,7 +479,7 @@ def test_cleanup_removes_finished_job_claims():
     ctrl.state.cancel_job(jid, reason="test")
 
     job = _query_job(ctrl.state, jid)
-    assert job_is_finished(job.state)
+    assert is_job_finished(job.state)
 
     ctrl._cleanup_stale_claims()
 
@@ -1156,7 +1156,7 @@ def test_taint_exemption_for_children_of_reservation_job():
     for task in pending:
         job_row = _query_job_row(ctrl.state, task.job_id)
         job_detail = _query_job(ctrl.state, task.job_id)
-        if job_row and not job_is_finished(job_row.state):
+        if job_row and not is_job_finished(job_row.state):
             jobs[task.job_id] = job_requirements_from_job(job_row)
             if job_detail and job_detail.reservation_json is not None:
                 has_reservation.add(task.job_id)
@@ -1169,7 +1169,7 @@ def test_taint_exemption_for_children_of_reservation_job():
     has_direct_reservation: set[JobName] = set()
     for task in pending:
         job_detail = _query_job(ctrl.state, task.job_id)
-        if job_detail and not job_is_finished(job_detail.state) and job_detail.reservation_json is not None:
+        if job_detail and not is_job_finished(job_detail.state) and job_detail.reservation_json is not None:
             has_direct_reservation.add(task.job_id)
 
     # Child does NOT get NOT_EXISTS constraint (descendant, no constraint at all)
@@ -1266,7 +1266,7 @@ def test_grandchildren_inherit_reservation_from_ancestor():
     for task in pending:
         job_row = _query_job_row(ctrl.state, task.job_id)
         job_detail = _query_job(ctrl.state, task.job_id)
-        if job_row and not job_is_finished(job_row.state):
+        if job_row and not is_job_finished(job_row.state):
             jobs[task.job_id] = job_requirements_from_job(job_row)
             if job_detail and job_detail.reservation_json is not None:
                 has_reservation.add(task.job_id)
@@ -1281,7 +1281,7 @@ def test_grandchildren_inherit_reservation_from_ancestor():
     has_direct_reservation: set[JobName] = set()
     for task in pending:
         job_detail = _query_job(ctrl.state, task.job_id)
-        if job_detail and not job_is_finished(job_detail.state) and job_detail.reservation_json is not None:
+        if job_detail and not is_job_finished(job_detail.state) and job_detail.reservation_json is not None:
             has_direct_reservation.add(task.job_id)
 
     # Neither grandchild gets any taint constraint (descendants)
