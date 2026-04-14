@@ -89,13 +89,6 @@ accidental collision with normal job names."""
 HEARTBEAT_FAILURE_THRESHOLD = 10
 """Consecutive heartbeat failures before marking worker as failed."""
 
-HEARTBEAT_STALENESS_THRESHOLD = Duration.from_seconds(900)
-"""If a worker's last successful heartbeat is older than this, it is failed
-immediately. Catches workers restored from a checkpoint whose backing VMs
-no longer exist — without this, the controller would need 10 consecutive
-RPC failures (50s) per worker to notice, during which they appear healthy
-in the dashboard and block scheduling capacity."""
-
 WORKER_TASK_HISTORY_RETENTION = 500
 """Maximum worker_task_history rows retained per worker."""
 

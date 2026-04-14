@@ -94,7 +94,6 @@ from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
-    HEARTBEAT_STALENESS_THRESHOLD,
     RESERVATION_HOLDER_JOB_NAME,
     Assignment,
     ClusterCapacity,
@@ -2119,28 +2118,37 @@ class Controller:
         last_heartbeat_ms but consecutive_failures=0 and healthy=1.  If the
         backing VMs were preempted during the outage, we'd otherwise wait for
         10 RPC timeouts per worker before marking them dead.  This check
-        short-circuits that by failing any worker that hasn't heartbeated in
-        HEARTBEAT_STALENESS_THRESHOLD (15 minutes).
+        short-circuits that by failing any worker that hasn't heartbeated
+        within the computed staleness window.
+
+        The threshold is derived from heartbeat_interval * heartbeat_failure_threshold * 2
+        (default: 5s * 10 * 2 = 100s), which gives a reasonable safety margin over the
+        expected failure detection time while catching dead workers far sooner than the
+        previous hardcoded 15-minute constant.
         """
         if isinstance(self._provider, K8sTaskProvider):
             return
         if self._config.dry_run:
             return
-        threshold_ms = HEARTBEAT_STALENESS_THRESHOLD.to_ms()
+        staleness_threshold = Duration.from_seconds(
+            self._config.heartbeat_interval.to_seconds() * self._config.heartbeat_failure_threshold * 2,
+        )
+        threshold_ms = staleness_threshold.to_ms()
         workers = healthy_active_workers_with_attributes(self._db)
         stale = [w for w in workers if w.last_heartbeat.age_ms() > threshold_ms]
         if not stale:
             return
 
+        threshold_seconds = int(staleness_threshold.to_seconds())
         logger.warning(
             "Failing %d workers with stale heartbeats (threshold=%ds): %s",
             len(stale),
-            HEARTBEAT_STALENESS_THRESHOLD.to_seconds(),
+            threshold_seconds,
             [str(w.worker_id) for w in stale[:10]],
         )
         failure_result = self._transitions.fail_workers_batch(
             [str(w.worker_id) for w in stale],
-            reason=f"heartbeat stale (>{int(HEARTBEAT_STALENESS_THRESHOLD.to_seconds())}s since last heartbeat)",
+            reason=f"heartbeat stale (>{threshold_seconds}s since last heartbeat)",
         )
         for wid, addr in failure_result.removed_workers:
             self._provider.on_worker_failed(wid, addr)

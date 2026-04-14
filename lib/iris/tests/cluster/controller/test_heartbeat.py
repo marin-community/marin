@@ -16,7 +16,6 @@ from tests.cluster.controller.conftest import FakeProvider
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
-    HEARTBEAT_STALENESS_THRESHOLD,
     HeartbeatAction,
     HeartbeatApplyRequest,
     DispatchBatch,
@@ -236,8 +235,12 @@ def test_reap_stale_workers_removes_old_heartbeat(tmp_path, worker_metadata):
     controller = Controller(config=config, provider=FakeProvider(), db=db)
     state = controller.state
 
-    # Register a worker with a timestamp well beyond the staleness threshold.
-    stale_ts = Timestamp.from_ms(Timestamp.now().epoch_ms() - HEARTBEAT_STALENESS_THRESHOLD.to_ms() - 60_000)
+    # Register a worker with a timestamp well beyond the config-derived staleness
+    # threshold (heartbeat_interval * heartbeat_failure_threshold * 2).
+    staleness_ms = int(
+        config.heartbeat_interval.to_seconds() * config.heartbeat_failure_threshold * 2 * 1000,
+    )
+    stale_ts = Timestamp.from_ms(Timestamp.now().epoch_ms() - staleness_ms - 60_000)
     state.register_or_refresh_worker(
         worker_id=WorkerId("stale-worker"),
         address="10.0.0.1:10001",
