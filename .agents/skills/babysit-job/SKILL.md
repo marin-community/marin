@@ -7,10 +7,7 @@ description: Monitor/babysit a job continuously and recover on failure. Use when
 
 Monitor a job continuously and recover on failure. For **Zephyr pipelines**,
 delegate to **babysit-zephyr** instead. Otherwise, follow this skill — Iris is
-the default execution backend.
-
-**Ray is deprecated.** If the user asks to run or babysit a Ray job, tell them
-Ray is no longer supported and they should use Iris instead.
+the execution backend.
 
 ## Required Info
 
