@@ -316,7 +316,7 @@ dependencies. Cleanup workflows should flag any violation.
 - No tautological tests (asserting that a constructor sets an attribute).
 - No mocks except at I/O boundaries. Prefer fakes backed by in-memory state.
 - Every test function must contain at least one `assert` or `pytest.raises`.
-- Run relevant tests before submitting: `uv run pytest -m 'not slow' <paths>`.
+- Run relevant tests before submitting: `uv run pytest <paths>` (the default `addopts` in `pyproject.toml` already skips `slow`, `tpu_ci`, and `integration` tests).
 
 ---
 

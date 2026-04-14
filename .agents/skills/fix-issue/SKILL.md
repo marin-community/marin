@@ -102,7 +102,7 @@ beginning work. Your tests will be minimal and refrain from using mocks.
 * You never use mocks when testing.
 * You keep tests simple and minimal. You do not test obvious behavior like "object has an attr".
 * You run `./infra/pre-commit.py --all-files --fix` and resolve all reported issues before uploading.
-* You will test using `uv run pytest -m 'not slow'` before uploading.
+* You will test using `uv run pytest` before uploading. The defaults in `pyproject.toml` already skip `slow`, `tpu_ci`, and `integration` tests.
 * You will ensure _all_ tests pass.
 
 ## Uploading

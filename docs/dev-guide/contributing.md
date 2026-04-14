@@ -29,9 +29,11 @@ You can also run them manually with `./infra/pre-commit.py --all-files --fix` or
 For most changes, start with targeted fast tests:
 
 ```bash
-uv run pytest -m 'not slow' <relevant test paths>
+uv run pytest <relevant test paths>
 ```
 
+The default pytest options in `pyproject.toml` already skip `slow`, `tpu_ci`,
+and `integration` tests, so a plain `uv run pytest` is the right local command.
 Use `make test` when you need the full default test suite.
 
 *Note* that to run the unit tests, you must not have set `RAY_ADDRESS`. You can unset it with `unset RAY_ADDRESS` or `export RAY_ADDRESS=""`.
@@ -41,7 +43,7 @@ Use `make test` when you need the full default test suite.
 Before opening a pull request:
 
 1. Run `./infra/pre-commit.py --all-files --fix`.
-2. Run `uv run pytest -m 'not slow'` for the files or packages you changed.
+2. Run `uv run pytest` for the files or packages you changed (the default `addopts` in `pyproject.toml` skips `slow`, `tpu_ci`, and `integration` tests).
 3. If your change adds, removes, renames, or rewires docs pages or docs-owned links, run `uv run python infra/check_docs_source_links.py`.
 4. If your change is docs-heavy, run `uv run mkdocs build --strict`.
 5. If your change adds or rewrites substantial prose, do a final prose-only review using `./.agents/skills/writing-style/SKILL.md`. Remove generic significance framing, stock AI-writing templates, and polished filler that does not add information.
