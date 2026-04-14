@@ -248,9 +248,20 @@ def _load_existing_rollouts(resume_from: str) -> dict[str, int]:
         with open(resume_from) as f:
             data = json.load(f)
     counts: dict[str, int] = defaultdict(int)
+    skipped = 0
     for r in data:
+        status = r.get("info", {}).get("exit_status", "")
+        if "API error" in status or "Connection error" in status:
+            skipped += 1
+            continue
         counts[r["instance_id"]] += 1
-    logger.info("Resume: loaded %d existing rollouts across %d PRs from %s", len(data), len(counts), resume_from)
+    logger.info(
+        "Resume: loaded %d valid rollouts across %d PRs from %s (skipped %d error rollouts)",
+        sum(counts.values()),
+        len(counts),
+        resume_from,
+        skipped,
+    )
     return dict(counts)
 
 
@@ -395,7 +406,19 @@ def _run_with_vllm(
                 with open(resume_out_path) as f:
                     prior_dicts = json.load(f)
             if prior_dicts:
-                logger.info("Resume: pre-loaded %d rollouts from %s for append", len(prior_dicts), resume_out_path)
+                pre_filter = len(prior_dicts)
+                prior_dicts = [
+                    r
+                    for r in prior_dicts
+                    if "API error" not in r.get("info", {}).get("exit_status", "")
+                    and "Connection error" not in r.get("info", {}).get("exit_status", "")
+                ]
+                logger.info(
+                    "Resume: pre-loaded %d rollouts from %s for append (filtered %d error rollouts)",
+                    len(prior_dicts),
+                    resume_out_path,
+                    pre_filter - len(prior_dicts),
+                )
         except Exception:
             pass
     completed_rollouts: list[Rollout] = []
