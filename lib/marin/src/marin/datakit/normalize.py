@@ -182,8 +182,8 @@ def _build_pipeline(
     """Build a single Zephyr pipeline for one subdirectory."""
     normalize_record = _make_normalize_fn(text_field, id_field)
 
-    def dedup_and_sort(_key: int, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
-        """Deduplicate by id. Items arrive sorted by id via sort_by."""
+    def dedup(_key: int, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        """Drop adjacent duplicate ids. Items arrive sorted by id via sort_by."""
         prev_id: str | None = None
         for record in items:
             rid = record["id"]
@@ -209,7 +209,7 @@ def _build_pipeline(
         .map(normalize_record)
         .group_by(
             key=lambda r: int(r["id"], 16) % num_shards,
-            reducer=dedup_and_sort if exact_dedup else passthrough,
+            reducer=dedup if exact_dedup else passthrough,
             sort_by=lambda r: r["id"],
             num_output_shards=num_shards,
         )
