@@ -118,11 +118,6 @@ class CausalSelfAttention(eqx.Module):
     w_k: Float[Array, "D MH"]
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
-    # Gate weights — shape depends on attn_gate_mode:
-    #   "full":      attn_gate is [D, N]
-    #   "truncated": attn_gate is [gate_dim, N]
-    #   "lora":      attn_gate is [D, low_rank], attn_gate_up is [low_rank, N]
-    #   "none":      attn_gate is None
     attn_gate: Float[Array, "... N"] | None
     attn_gate_up: Float[Array, "R N"] | None
     cfg: GrugModelConfig = eqx.field(static=True)

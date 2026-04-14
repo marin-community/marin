@@ -54,9 +54,12 @@ Most promotable changes will land in one of three files:
 
 ## Documentation & GitHub Issues
 
+Create a new branch for each experiment issue. Branch off `grug_moe_heuristic`
+(the current best recipe branch).
+
 Follow `.agents/skills/agent-research/SKILL.md` for all documentation, logbooks,
 W&B tracking, and GitHub experiment issue management tied to work in this
-directory.
+directory. Pay attention to this file carefully.
 
 Experiment issues should be titled `Agent MoE Experiment: [description]` and
 reference #4281 as the parent tracking issue.

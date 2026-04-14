@@ -98,6 +98,6 @@ all_steps = _make_sweep_steps()
 
 if __name__ == "__main__":
     executor_main(
-        steps=all_steps,
-        description="Attention gate sizing sweep: none/truncated/lora at gate 1 scales.",
+        steps=all_steps[:1],
+        description="Attention gate sizing sweep: single test run.",
     )
