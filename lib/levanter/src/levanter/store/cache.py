@@ -30,6 +30,7 @@ from zephyr.writers import write_levanter_cache
 
 from levanter.data.dataset import AsyncDataset
 from levanter.utils.jax_utils import broadcast_one_to_all
+from levanter.utils.thread_utils import blocking_wait
 
 from ..data._preprocessor import BatchProcessor, BatchResult, dict_from_record_batch
 from ..data.sharded_datasource import ShardedDataSource
@@ -160,6 +161,219 @@ class TreeCache(AsyncDataset[T_co]):
         return True
 
 
+class _VirtualRead:
+    def __init__(self, read_async):
+        self._read_async = read_async
+
+    def read(self):
+        return self
+
+    def __await__(self):
+        return self._read_async().__await__()
+
+    def result(self):
+        return blocking_wait(self._read_async())
+
+
+class _ShardedArray:
+    def __init__(self, arrays, sizes: list[int]):
+        self._arrays = arrays
+        self._sizes = sizes
+        self._boundaries = _cumulative_offsets(sizes)
+
+    def __getitem__(self, item):
+        return _VirtualRead(lambda: self._read(item))
+
+    async def _read(self, item):
+        if isinstance(item, slice):
+            start, stop, step = item.indices(self._boundaries[-1])
+            if step != 1:
+                values = await self._read(slice(start, stop))
+                return values[::step]
+            pieces = []
+            for shard_index, local_slice in _split_slice_by_boundaries(start, stop, self._boundaries):
+                pieces.append(await self._arrays[shard_index][local_slice].read())
+            return _concatenate_or_empty(pieces)
+
+        index = item
+        if index < 0:
+            index += self._boundaries[-1]
+        if index < 0 or index >= self._boundaries[-1]:
+            raise IndexError("Index out of bounds")
+        shard_index = bisect.bisect_right(self._boundaries, index) - 1
+        local_index = index - self._boundaries[shard_index]
+        return await self._arrays[shard_index][local_index].read()
+
+
+class _ShardedOffsets:
+    def __init__(self, stores: list[JaggedArrayStore]):
+        self._stores = stores
+        self._num_rows = sum(store.num_rows for store in stores)
+        self._data_sizes = [store.data_size for store in stores]
+
+    def __getitem__(self, item):
+        return _VirtualRead(lambda: self._read(item))
+
+    async def _read(self, item):
+        offsets = await self._full_offsets()
+        return offsets[item]
+
+    async def _full_offsets(self):
+        offset_reads = [store.offsets[0 : store.num_rows + 1].read() for store in self._stores]
+        per_shard_offsets = await asyncio.gather(*offset_reads)
+        adjusted_offsets = [np.asarray([self._num_rows], dtype=np.int64)]
+        data_base = 0
+        for offsets, data_size in zip(per_shard_offsets, self._data_sizes):
+            offsets = np.asarray(offsets, dtype=np.int64)
+            offsets[0] = 0
+            adjusted_offsets.append(offsets[1:] + data_base)
+            data_base += data_size
+        return np.concatenate(adjusted_offsets)
+
+
+class _ShardedShapes:
+    def __init__(self, stores: list[JaggedArrayStore]):
+        self._stores = stores
+        self._sizes = [store.num_rows for store in stores]
+        self._boundaries = _cumulative_offsets(self._sizes)
+
+    def __getitem__(self, item):
+        return _VirtualRead(lambda: self._read(item))
+
+    async def _read(self, item):
+        if isinstance(item, slice):
+            start, stop, step = item.indices(self._boundaries[-1])
+            if step != 1:
+                values = await self._read(slice(start, stop))
+                return values[::step]
+            pieces = []
+            for shard_index, local_slice in _split_slice_by_boundaries(start, stop, self._boundaries):
+                shapes = self._stores[shard_index].shapes
+                assert shapes is not None
+                pieces.append(await shapes[local_slice].read())
+            return _concatenate_or_empty(pieces)
+
+        index = item
+        if index < 0:
+            index += self._boundaries[-1]
+        if index < 0 or index >= self._boundaries[-1]:
+            raise IndexError("Index out of bounds")
+        shard_index = bisect.bisect_right(self._boundaries, index) - 1
+        local_index = index - self._boundaries[shard_index]
+        shapes = self._stores[shard_index].shapes
+        assert shapes is not None
+        return await shapes[local_index].read()
+
+
+class ShardedJaggedArrayStore:
+    """Virtual JaggedArrayStore backed by multiple shard-local stores."""
+
+    def __init__(self, stores: list[JaggedArrayStore]):
+        if not stores:
+            raise ValueError("ShardedJaggedArrayStore requires at least one store")
+        self._stores = stores
+        self.item_rank = stores[0].item_rank
+        self.offsets = _ShardedOffsets(stores)
+        self.data = _ShardedArray([store.data for store in stores], [store.data_size for store in stores])
+        self.shapes = _ShardedShapes(stores) if stores[0].shapes is not None else None
+
+    @property
+    def num_rows(self):
+        return sum(store.num_rows for store in self._stores)
+
+    async def num_rows_async(self):
+        return self.num_rows
+
+    @property
+    def data_size(self):
+        return sum(store.data_size for store in self._stores)
+
+    async def data_size_async(self):
+        return self.data_size
+
+    def __len__(self):
+        return self.num_rows
+
+    def __getitem__(self, item):
+        if isinstance(item, slice):
+            start, stop, step = item.indices(len(self))
+            return self.get_batch_sync(list(range(start, stop, step)))
+        shard_index, local_index = self._resolve_row(item)
+        return self._stores[shard_index][local_index]
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[np.ndarray]:
+        shard_groups = _group_indices_by_shard(indices, self._row_boundaries())
+
+        results: list[None | np.ndarray] = [None] * len(indices)
+
+        async def fetch_shard(shard_index: int, items: list[tuple[int, int]]):
+            local_indices = [local_index for _, local_index in items]
+            batch = await self._stores[shard_index].get_batch(local_indices)
+            for (position, _), value in zip(items, batch):
+                results[position] = value
+
+        await asyncio.gather(*[fetch_shard(shard_index, items) for shard_index, items in shard_groups.items()])
+        return results
+
+    def get_batch_sync(self, indices: Sequence[int]) -> Sequence[np.ndarray]:
+        shard_groups = _group_indices_by_shard(indices, self._row_boundaries())
+        results: list[None | np.ndarray] = [None] * len(indices)
+        for shard_index, items in shard_groups.items():
+            local_indices = [local_index for _, local_index in items]
+            batch = self._stores[shard_index].get_batch_sync(local_indices)
+            for (position, _), value in zip(items, batch):
+                results[position] = value
+        return results
+
+    def _resolve_row(self, index: int) -> tuple[int, int]:
+        boundaries = self._row_boundaries()
+        if index < 0:
+            index += boundaries[-1]
+        if index < 0 or index >= boundaries[-1]:
+            raise IndexError("Index out of bounds")
+        shard_index = bisect.bisect_right(boundaries, index) - 1
+        return shard_index, index - boundaries[shard_index]
+
+    def _row_boundaries(self):
+        return _cumulative_offsets([store.num_rows for store in self._stores])
+
+
+class ShardedTreeStore:
+    """Virtual TreeStore backed by multiple shard-local TreeStores."""
+
+    def __init__(self, stores: list[TreeStore]):
+        if not stores:
+            raise ValueError("ShardedTreeStore requires at least one store")
+        self.path = stores[0].path
+        self.mode = "r"
+        self._stores = stores
+        self.tree = jax.tree.map(
+            lambda *leaves: ShardedJaggedArrayStore(list(leaves)), *[store.tree for store in stores]
+        )
+
+    def __len__(self):
+        return len(jax.tree.leaves(self.tree)[0])
+
+    async def async_len(self):
+        return len(self)
+
+    def __getitem__(self, item):
+        if isinstance(item, slice):
+            start, stop, step = item.indices(len(self))
+            return self.get_batch_sync(list(range(start, stop, step)))
+        return jax.tree.map(lambda reader: reader[item], self.tree)
+
+    async def get_batch(self, indices) -> List[T_co]:
+        grouped = jax.tree.map(lambda reader: reader.get_batch(indices), self.tree)
+        leaves, structure = jax.tree.flatten(grouped)
+        awaited_leaves = await asyncio.gather(*leaves)
+        return [jax.tree.unflatten(structure, [leaf[i] for leaf in awaited_leaves]) for i in range(len(indices))]
+
+    def get_batch_sync(self, indices) -> List[T_co]:
+        grouped = jax.tree.map(lambda reader: reader.get_batch_sync(indices), self.tree)
+        return [jax.tree.map(lambda _, leaf: leaf[i], self.tree, grouped) for i in range(len(indices))]
+
+
 class ShardedTreeCache(AsyncDataset[T_co]):
     """Reads across multiple shard caches without requiring a consolidation step.
 
@@ -181,6 +395,11 @@ class ShardedTreeCache(AsyncDataset[T_co]):
             rows = ledger.shard_rows.get(shard_name, 0)
             self._cum_rows.append(self._cum_rows[-1] + rows)
             self._stores.append(TreeStore.open(exemplar, path, mode="r", cache_metadata=False))
+        self._store = ShardedTreeStore(self._stores)
+
+    @property
+    def store(self) -> ShardedTreeStore:
+        return self._store
 
     def _resolve_index(self, global_idx: int) -> tuple[int, int]:
         """Return (shard_index, local_row) for a global row index."""
@@ -203,7 +422,10 @@ class ShardedTreeCache(AsyncDataset[T_co]):
         shard_idx, local_idx = self._resolve_index(item)
         return self._stores[shard_idx][local_idx]
 
-    async def get_batch(self, indices: Sequence[int]) -> Sequence:
+    async def get_batch(self, indices: Sequence[int] | slice) -> Sequence:
+        if isinstance(indices, slice):
+            indices = range(indices.start or 0, indices.stop or len(self), indices.step or 1)
+
         # Group indices by shard, preserving original order
         shard_groups: dict[int, list[tuple[int, int]]] = {}  # shard_idx -> [(position_in_output, local_idx)]
         for pos, global_idx in enumerate(indices):
@@ -246,6 +468,51 @@ class ShardedTreeCache(AsyncDataset[T_co]):
     @property
     def is_finished(self):
         return True
+
+
+def _cumulative_offsets(sizes: Sequence[int]) -> list[int]:
+    offsets = [0]
+    for size in sizes:
+        offsets.append(offsets[-1] + size)
+    return offsets
+
+
+def _split_slice_by_boundaries(start: int, stop: int, boundaries: Sequence[int]) -> list[tuple[int, slice]]:
+    if start >= stop:
+        return []
+    pieces = []
+    shard_index = bisect.bisect_right(boundaries, start) - 1
+    while shard_index < len(boundaries) - 1 and start < stop:
+        shard_start = boundaries[shard_index]
+        shard_stop = boundaries[shard_index + 1]
+        piece_stop = min(stop, shard_stop)
+        if start < piece_stop:
+            pieces.append((shard_index, slice(start - shard_start, piece_stop - shard_start)))
+        start = piece_stop
+        shard_index += 1
+    return pieces
+
+
+def _concatenate_or_empty(pieces: Sequence[np.ndarray]) -> np.ndarray:
+    if not pieces:
+        return np.asarray([])
+    if len(pieces) == 1:
+        return np.asarray(pieces[0])
+    return np.concatenate(pieces)
+
+
+def _group_indices_by_shard(indices: Sequence[int], boundaries: Sequence[int]) -> dict[int, list[tuple[int, int]]]:
+    shard_groups: dict[int, list[tuple[int, int]]] = {}
+    total_rows = boundaries[-1]
+    for position, index in enumerate(indices):
+        if index < 0:
+            index += total_rows
+        if index < 0 or index >= total_rows:
+            raise IndexError("Index out of bounds")
+        shard_index = bisect.bisect_right(boundaries, index) - 1
+        local_index = index - boundaries[shard_index]
+        shard_groups.setdefault(shard_index, []).append((position, local_index))
+    return shard_groups
 
 
 @dataclass_json
