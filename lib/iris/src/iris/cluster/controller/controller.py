@@ -1361,7 +1361,7 @@ class Controller:
 
             if wal_checkpoint_limiter.should_run():
                 try:
-                    busy, log_frames, checkpointed = self._db.wal_checkpoint("TRUNCATE")
+                    busy, log_frames, checkpointed = self._db.wal_checkpoint()
                     logger.info(
                         "wal_checkpoint(TRUNCATE): busy=%d log_frames=%d checkpointed=%d",
                         busy,

@@ -638,3 +638,202 @@ def test_sealed_buffers_readable_before_flush(tmp_path: Path):
     assert len(result2.entries) == 10
 
     store.close()
+
+
+# =============================================================================
+# Tail fallback, working-set cap, and concurrency limiter tests
+# =============================================================================
+
+
+def _make_store_with_segments(log_dir: Path, num_segments: int, rows_per_segment: int) -> DuckDBLogStore:
+    """Build a store with `num_segments` parquet segments, each holding
+    `rows_per_segment` rows under a regex-matchable key prefix.
+
+    Uses segment_target_bytes=1 so every seal creates a new file.
+    """
+    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
+    for batch in range(num_segments):
+        entries = [
+            _make_entry(
+                f"{'MATCH' if i == 0 and batch == 0 else 'nomatch'}-batch{batch}-{i}",
+                epoch_ms=batch * 1000 + i,
+            )
+            for i in range(rows_per_segment)
+        ]
+        store.append(KEY, entries)
+        store._executor.shutdown(wait=True)
+        store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+    return store
+
+
+def test_tail_fallback_finds_match_in_oldest_of_capped_window(tmp_path: Path):
+    """When the seq-bounded fast path misses, the fallback query still finds
+    a match that lives in the oldest segment within the per-read cap."""
+    log_dir = tmp_path / "logs"
+    # 5 segments (fits within _MAX_PARQUETS_PER_READ); match is in segment 0.
+    store = _make_store_with_segments(log_dir, num_segments=5, rows_per_segment=20)
+    try:
+        # Regex pattern forces include_key_in_select=True, which engages the
+        # fast-path + fallback logic.
+        result = store.get_logs("/job/test/.*", max_lines=10, tail=True, substring_filter="MATCH")
+        assert len(result.entries) == 1
+        assert "MATCH" in result.entries[0].data
+    finally:
+        store.close()
+
+
+def test_read_caps_to_newest_segments(tmp_path: Path):
+    """A single read never scans more than _MAX_PARQUETS_PER_READ segments;
+    matches outside that window are not visible to this call."""
+    from iris.cluster.log_store.duckdb_store import _MAX_PARQUETS_PER_READ
+
+    log_dir = tmp_path / "logs"
+    num_segments = _MAX_PARQUETS_PER_READ + 3
+    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
+    try:
+        for batch in range(num_segments):
+            # Match marker lives only in the oldest segment (batch 0).
+            entries = [
+                _make_entry(f"{'MATCH' if batch == 0 else 'nomatch'}-b{batch}-{i}", epoch_ms=batch * 1000 + i)
+                for i in range(10)
+            ]
+            store.append(KEY, entries)
+            store._executor.shutdown(wait=True)
+            store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+
+        result = store.get_logs("/job/test/.*", max_lines=20, tail=True, substring_filter="MATCH")
+        # Oldest segment is outside the newest-N window; match is invisible.
+        assert len(result.entries) == 0
+    finally:
+        store.close()
+
+
+def test_tail_fallback_accumulates_across_segments(tmp_path: Path):
+    """Filter matches spread across older segments are returned when newer
+    segments have fewer than max_lines matches."""
+    log_dir = tmp_path / "logs"
+    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
+    try:
+        # Write 4 segments. Each has 2 MATCH rows.
+        for batch in range(4):
+            entries = []
+            for i in range(10):
+                tag = "MATCH" if i < 2 else "nomatch"
+                entries.append(_make_entry(f"{tag}-batch{batch}-{i}", epoch_ms=batch * 1000 + i))
+            store.append(KEY, entries)
+            store._executor.shutdown(wait=True)
+            store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+
+        # Ask for 6 MATCH rows; must pull from at least 3 segments.
+        result = store.get_logs("/job/test/.*", max_lines=6, tail=True, substring_filter="MATCH")
+        assert len(result.entries) == 6
+        assert all("MATCH" in e.data for e in result.entries)
+        # Results are sorted ascending in LogReadResult (DESC then reversed).
+        seqs = [e.timestamp.epoch_ms for e in result.entries]
+        assert seqs == sorted(seqs)
+    finally:
+        store.close()
+
+
+def test_tail_fast_path_short_circuits(tmp_path: Path, monkeypatch):
+    """When the tail window has enough matches, only one SQL query runs."""
+    log_dir = tmp_path / "logs"
+    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
+    try:
+        # Two segments, all rows match the filter, so the fast path is
+        # sufficient for max_lines=5.
+        for batch in range(2):
+            entries = [_make_entry(f"MATCH-{batch}-{i}", epoch_ms=batch * 1000 + i) for i in range(20)]
+            store.append(KEY, entries)
+            store._executor.shutdown(wait=True)
+            store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+
+        call_count = 0
+        from iris.cluster.log_store import duckdb_store as mod
+
+        original = mod._build_union_source
+
+        def counting(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(mod, "_build_union_source", counting)
+
+        result = store.get_logs("/job/test/.*", max_lines=5, tail=True, substring_filter="MATCH")
+        assert len(result.entries) == 5
+        # Exactly one source build: the fast path. No fallback query.
+        assert call_count == 1
+    finally:
+        store.close()
+
+
+def test_read_semaphore_limits_concurrency(log_store: LogStore):
+    """No more than _MAX_CONCURRENT_READS reads execute concurrently."""
+    from iris.cluster.log_store import duckdb_store as mod
+
+    log_store.append(KEY, [_make_entry(f"line-{i}", epoch_ms=i) for i in range(10)])
+
+    release = threading.Event()
+    in_flight = 0
+    peak = 0
+    lock = threading.Lock()
+
+    original_checkout = mod._ConnectionPool.checkout
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def slow_checkout(self, buffer_tables):
+        nonlocal in_flight, peak
+        with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        try:
+            # Block until the main thread releases; this keeps the semaphore
+            # slot occupied and forces extra callers to wait.
+            release.wait(timeout=5.0)
+            with original_checkout(self, buffer_tables) as result:
+                yield result
+        finally:
+            with lock:
+                in_flight -= 1
+
+    try:
+        mod._ConnectionPool.checkout = slow_checkout
+
+        num_readers = mod._MAX_CONCURRENT_READS + 2
+        threads = [
+            threading.Thread(target=lambda: log_store.get_logs(KEY, max_lines=5, tail=True)) for _ in range(num_readers)
+        ]
+        for t in threads:
+            t.start()
+
+        # Give the first wave time to reach the blocking checkout.
+        # Poll instead of sleeping — we're checking that peak saturates
+        # at the semaphore limit even though more threads exist.
+        deadline = threading.Event()
+        timer = threading.Timer(1.0, deadline.set)
+        timer.start()
+        while not deadline.is_set():
+            with lock:
+                if in_flight >= mod._MAX_CONCURRENT_READS:
+                    break
+        timer.cancel()
+
+        # The semaphore should prevent more than _MAX_CONCURRENT_READS from
+        # being in flight simultaneously.
+        with lock:
+            assert in_flight <= mod._MAX_CONCURRENT_READS
+            assert peak <= mod._MAX_CONCURRENT_READS
+
+        release.set()
+        for t in threads:
+            t.join(timeout=10.0)
+            assert not t.is_alive()
+
+        # All readers eventually completed, so they must have queued.
+        assert peak == mod._MAX_CONCURRENT_READS
+    finally:
+        mod._ConnectionPool.checkout = original_checkout
+        release.set()

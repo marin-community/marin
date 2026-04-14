@@ -325,3 +325,49 @@ def test_migration_with_dml_does_not_leave_open_transaction(tmp_path: Path) -> N
     assert rows[0]["val"] == "world"
     assert rows[1]["val"] == "after_commit"
     db.close()
+
+
+def test_auto_vacuum_migrates_legacy_db(tmp_path: Path) -> None:
+    """A DB created with the SQLite default (auto_vacuum=0) must migrate to INCREMENTAL."""
+    db_dir = tmp_path / "ctrl"
+    db_dir.mkdir()
+    legacy_path = db_dir / ControllerDB.DB_FILENAME
+
+    # Seed a legacy DB with auto_vacuum disabled and some data to reclaim.
+    conn = sqlite3.connect(str(legacy_path))
+    conn.execute("PRAGMA auto_vacuum = NONE")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, blob TEXT)")
+    conn.executemany("INSERT INTO t (blob) VALUES (?)", [("x" * 4096,) for _ in range(200)])
+    conn.commit()
+    conn.close()
+    assert legacy_path.stat().st_size > 0
+
+    db = ControllerDB(db_dir=db_dir)
+    try:
+        row = db.fetchone("PRAGMA main.auto_vacuum")
+        assert row[0] == 2, f"expected auto_vacuum=INCREMENTAL(2), got {row[0]}"
+    finally:
+        db.close()
+
+
+def test_wal_checkpoint_truncate_runs_incremental_vacuum(tmp_path: Path) -> None:
+    """After TRUNCATE, freed pages from a large delete should be reclaimed."""
+    db = ControllerDB(db_dir=tmp_path)
+    try:
+        with db.transaction() as cur:
+            cur.execute("CREATE TABLE big (id INTEGER PRIMARY KEY, blob TEXT)")
+            cur.executemany("INSERT INTO big (blob) VALUES (?)", [("y" * 8192,) for _ in range(500)])
+
+        # Baseline size after population + checkpoint.
+        db.wal_checkpoint()
+        size_full = db.db_path.stat().st_size
+
+        with db.transaction() as cur:
+            cur.execute("DELETE FROM big")
+
+        # TRUNCATE flushes WAL and then reclaims freelist pages; file shrinks.
+        db.wal_checkpoint()
+        size_after = db.db_path.stat().st_size
+        assert size_after < size_full, f"expected shrink: before={size_full} after={size_after}"
+    finally:
+        db.close()

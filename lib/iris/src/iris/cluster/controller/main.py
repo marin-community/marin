@@ -57,20 +57,24 @@ def _start_log_server(
         env[LOG_SERVER_JWT_KEY_ENV_VAR] = signing_key
     if strict_auth:
         env[LOG_SERVER_AUTH_STRICT_ENV_VAR] = "1"
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "iris.log_server.main",
-            "--port",
-            str(port),
-            "--log-dir",
-            str(log_dir),
-            "--remote-log-dir",
-            remote_log_dir,
-        ],
-        env=env,
-    )
+    argv = [
+        sys.executable,
+        "-m",
+        "iris.log_server.main",
+        "--port",
+        str(port),
+        "--log-dir",
+        str(log_dir),
+        "--remote-log-dir",
+        remote_log_dir,
+    ]
+    # Run log server at idle I/O priority so Parquet writes and GCS uploads
+    # don't starve the controller's interactive disk I/O. ionice is Linux-only
+    # and absent on macOS / minimal containers — skip silently if unavailable.
+    ionice = shutil.which("ionice") if sys.platform == "linux" else None
+    if ionice is not None:
+        argv = [ionice, "-c", "3", *argv]
+    proc = subprocess.Popen(argv, env=env)
     ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
         lambda: port_is_open(port),
         timeout=Duration.from_seconds(10.0),
