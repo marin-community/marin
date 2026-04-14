@@ -400,6 +400,48 @@ def test_gc_drops_oldest_segments_by_bytes(tmp_path: Path):
         store.close()
 
 
+def test_reads_recover_when_local_segment_vanishes(tmp_path: Path):
+    """Out-of-band deletion of a Parquet file must not permanently break reads.
+
+    The store's in-memory ``_local_segments`` is populated at startup by
+    globbing the log dir, but it can drift from disk if files are removed
+    by anything other than ``_gc_local_segments`` (manual ``rm``, eviction,
+    leftover entries from an old filename format). Without self-healing,
+    DuckDB raises ``No files found that match the pattern …`` on every
+    subsequent read until the process restarts.
+    """
+    log_dir = tmp_path / "logs"
+    store = DuckDBLogStore(
+        log_dir=log_dir,
+        max_local_segments=100,  # don't GC during the test
+        segment_target_bytes=1,  # seal on every append
+    )
+    try:
+        for batch in range(3):
+            store.append(KEY, [_make_entry(f"batch{batch}-{i}", epoch_ms=batch * 100 + i) for i in range(10)])
+        store._executor.shutdown(wait=True)
+        store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+
+        parquet_files = sorted(log_dir.glob("logs_*.parquet"))
+        assert len(parquet_files) == 3
+        # Simulate out-of-band deletion of the oldest segment.
+        parquet_files[0].unlink()
+
+        # Read still succeeds and returns the rows from the surviving segments.
+        result = store.get_logs(KEY)
+        data = [e.data for e in result.entries]
+        assert any("batch1" in d for d in data)
+        assert any("batch2" in d for d in data)
+        assert not any("batch0" in d for d in data)
+
+        # In-memory index was pruned, so a follow-up read does not re-trigger the failure.
+        assert len(store._local_segments) == 2
+        result2 = store.get_logs(KEY)
+        assert [e.data for e in result2.entries] == data
+    finally:
+        store.close()
+
+
 # =============================================================================
 # Parquet-specific tests
 # =============================================================================

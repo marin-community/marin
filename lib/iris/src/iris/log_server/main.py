@@ -37,7 +37,7 @@ from iris.rpc.logging_connect import LogServiceWSGIApplication
 # duckdb_store.py.
 _MAX_CONCURRENT_FETCH_LOGS = 4
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("iris.log_server")
 
 
 # Env var used by the subprocess entrypoint to receive the controller's JWT

@@ -625,6 +625,13 @@ class DuckDBLogStore:
             self._pending = []
             self._sealed.append(sealed)
             self._last_flush_time = time.monotonic()
+        logger.info(
+            "Sealed head buffer: rows=%d seq=[%d,%d] est_bytes=%d",
+            sealed.table.num_rows,
+            sealed.min_seq,
+            sealed.max_seq,
+            sealed.table.num_rows * _EST_BYTES_PER_ROW,
+        )
         self._executor.submit(self._flush_sealed_buffer, sealed)
 
     def _flush_sealed_buffer(self, sealed: _SealedBuffer) -> None:
@@ -653,6 +660,7 @@ class DuckDBLogStore:
         if can_consolidate:
             assert latest is not None
             try:
+                consolidate_start = time.monotonic()
                 existing_table = pq.read_table(latest.path)
                 combined = pa.concat_tables([existing_table, new_table])
                 combined = combined.sort_by([("key", "ascending"), ("seq", "ascending")])
@@ -699,6 +707,17 @@ class DuckDBLogStore:
                 finally:
                     self._segments_rwlock.write_release()
 
+                logger.info(
+                    "Wrote consolidated segment %s: rows=%d (added=%d) bytes=%d seq=[%d,%d] elapsed_ms=%d",
+                    filename,
+                    combined.num_rows,
+                    new_table.num_rows,
+                    seg.size_bytes,
+                    combined_min_seq,
+                    combined_max_seq,
+                    int((time.monotonic() - consolidate_start) * 1000),
+                )
+
                 # GCS upload overwrites the same object (same filename).
                 self._offload_to_gcs(filename, filepath)
                 self._gc_local_segments()
@@ -712,6 +731,7 @@ class DuckDBLogStore:
         filename = f"logs_{new_min_seq:019d}.parquet"
         filepath = self._log_dir / filename
 
+        write_start = time.monotonic()
         try:
             tmp_path = filepath.with_suffix(".parquet.tmp")
             pq.write_table(
@@ -741,6 +761,16 @@ class DuckDBLogStore:
                 pass
             sealed.flushed = True
 
+        logger.info(
+            "Wrote segment %s: rows=%d bytes=%d seq=[%d,%d] elapsed_ms=%d",
+            filename,
+            new_table.num_rows,
+            seg.size_bytes,
+            new_min_seq,
+            new_max_seq,
+            int((time.monotonic() - write_start) * 1000),
+        )
+
         self._offload_to_gcs(filename, filepath)
         self._gc_local_segments()
 
@@ -753,14 +783,18 @@ class DuckDBLogStore:
         """
         with self._lock:
             total_bytes = sum(s.size_bytes for s in self._local_segments)
-            to_delete: list[str] = []
+            to_delete: list[tuple[str, int]] = []
+            remaining_count = len(self._local_segments)
+            remaining_bytes = total_bytes
 
             while self._local_segments and (
                 len(self._local_segments) > self._max_local_segments or total_bytes > self._max_local_bytes
             ):
                 oldest = self._local_segments.popleft()
                 total_bytes -= oldest.size_bytes
-                to_delete.append(oldest.path)
+                to_delete.append((oldest.path, oldest.size_bytes))
+                remaining_count -= 1
+                remaining_bytes -= oldest.size_bytes
 
         if not to_delete:
             return
@@ -769,7 +803,7 @@ class DuckDBLogStore:
         # (which hold the read lock) finish before we unlink anything.
         self._segments_rwlock.write_acquire()
         try:
-            for path in to_delete:
+            for path, _ in to_delete:
                 try:
                     Path(path).unlink(missing_ok=True)
                 except Exception:
@@ -777,15 +811,62 @@ class DuckDBLogStore:
         finally:
             self._segments_rwlock.write_release()
 
+        logger.info(
+            "GC'd %d local segment(s), freed=%d bytes, remaining=%d segments / %d bytes",
+            len(to_delete),
+            sum(b for _, b in to_delete),
+            remaining_count,
+            remaining_bytes,
+        )
+
+    def _drop_missing_local_segments(self, paths: list[str]) -> list[str]:
+        """Filter ``paths`` to those that still exist on disk.
+
+        If any are missing they're also pruned from ``_local_segments`` so
+        future reads don't repeatedly hit the same DuckDB error. Vanishing
+        files normally come from out-of-band deletion (manual ``rm``, disk
+        pressure outside our GC, leftover entries from an old filename
+        format) — anything our own GC removes is gone from the in-memory
+        list before the file is unlinked.
+        """
+        existing: list[str] = []
+        missing: list[str] = []
+        for p in paths:
+            if Path(p).exists():
+                existing.append(p)
+            else:
+                missing.append(p)
+        if not missing:
+            return existing
+
+        missing_set = set(missing)
+        with self._lock:
+            self._local_segments = deque(s for s in self._local_segments if s.path not in missing_set)
+        logger.warning(
+            "Pruned %d missing local segment(s) from in-memory index (e.g. %s)",
+            len(missing),
+            missing[:3],
+        )
+        return existing
+
     def _offload_to_gcs(self, filename: str, filepath: Path) -> None:
         """Copy a Parquet file to GCS (best-effort)."""
         if not self._remote_log_dir:
             return
         remote_path = f"{self._remote_log_dir.rstrip('/')}/{filename}"
+        upload_start = time.monotonic()
         try:
             _fsspec_copy(str(filepath), remote_path)
         except Exception:
             logger.warning("Failed to offload %s to GCS", filepath, exc_info=True)
+            return
+        logger.info(
+            "Offloaded %s to %s: bytes=%d elapsed_ms=%d",
+            filename,
+            remote_path,
+            filepath.stat().st_size,
+            int((time.monotonic() - upload_start) * 1000),
+        )
 
     # ------------------------------------------------------------------
     # Internal: read
@@ -888,6 +969,7 @@ class DuckDBLogStore:
 
         segments = _cap_segments(segment_filter.apply(segments))
         parquet_files = [s.path for s in segments]
+        parquet_files = self._drop_missing_local_segments(parquet_files)
 
         where_clause = " AND ".join(where_parts)
         select_cols = (

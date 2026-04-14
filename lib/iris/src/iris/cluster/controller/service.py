@@ -22,6 +22,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
+from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.controller.codec import (
     constraints_from_json,
     proto_from_json,
@@ -114,26 +115,6 @@ from rigging.timing import Timestamp, Timer
 logger = logging.getLogger(__name__)
 
 DEFAULT_TRANSACTION_LIMIT = 50
-
-# Pattern for env var keys that contain secrets and should be redacted in API responses.
-_SENSITIVE_ENV_KEY_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", re.IGNORECASE)
-REDACTED_VALUE = "**REDACTED**"
-
-
-def redact_request_env_vars(
-    request: controller_pb2.Controller.LaunchJobRequest,
-) -> controller_pb2.Controller.LaunchJobRequest:
-    """Return a copy of *request* with sensitive env var values replaced."""
-    if not request.environment.env_vars:
-        return request
-
-    redacted = controller_pb2.Controller.LaunchJobRequest()
-    redacted.CopyFrom(request)
-    env_vars = redacted.environment.env_vars
-    for key in list(env_vars):
-        if _SENSITIVE_ENV_KEY_RE.search(key):
-            env_vars[key] = REDACTED_VALUE
-    return redacted
 
 
 DEFAULT_MAX_TOTAL_LINES = 100000
@@ -412,6 +393,8 @@ def _reconstruct_launch_job_request(job: JobDetailRow) -> controller_pb2.Control
         req.constraints.append(c.to_proto())
     for port in json.loads(job.ports_json):
         req.ports.append(port)
+    for arg in json.loads(job.submit_argv_json):
+        req.submit_argv.append(arg)
 
     if job.has_coscheduling:
         req.coscheduling.CopyFrom(job_pb2.CoschedulingConfig(group_by=job.coscheduling_group_by))
