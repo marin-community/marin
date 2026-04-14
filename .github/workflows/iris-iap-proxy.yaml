@@ -28,8 +28,28 @@ jobs:
               - 'infra/iris-iap-proxy/**'
               - '.github/workflows/iris-iap-proxy.yaml'
 
-  deploy:
+  build:
     needs: changes
+    if: needs.changes.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build container image
+        uses: docker/build-push-action@v6
+        with:
+          context: infra/iris-iap-proxy
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: [changes, build]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
