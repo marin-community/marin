@@ -654,6 +654,7 @@ JOB_CONFIG = Table(
         Column("existing_job_policy", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
         Column("priority_band", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
         Column("task_image", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("submit_argv_json", "TEXT", "NOT NULL DEFAULT '[]'", python_type=str, decoder=str, default="[]"),
         Column("reservation_json", "TEXT", "", python_type=str | None, decoder=_nullable(str), default=None),
         Column(
             "fail_if_exists",
@@ -1492,6 +1493,7 @@ class JobDetailRow:
     existing_job_policy: int
     priority_band: int
     task_image: str
+    submit_argv_json: str
     reservation_json: str | None
     fail_if_exists: bool
 
@@ -1845,6 +1847,7 @@ _job_detail_cols, _job_detail_aliases = _job_columns(
     "existing_job_policy",
     "priority_band",
     "task_image",
+    "submit_argv_json",
     "reservation_json",
     "fail_if_exists",
 )

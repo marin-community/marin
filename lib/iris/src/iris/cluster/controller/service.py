@@ -388,6 +388,8 @@ def _reconstruct_launch_job_request(job: JobDetailRow) -> controller_pb2.Control
         req.constraints.append(c.to_proto())
     for port in json.loads(job.ports_json):
         req.ports.append(port)
+    for arg in json.loads(job.submit_argv_json):
+        req.submit_argv.append(arg)
 
     if job.has_coscheduling:
         req.coscheduling.CopyFrom(job_pb2.CoschedulingConfig(group_by=job.coscheduling_group_by))
