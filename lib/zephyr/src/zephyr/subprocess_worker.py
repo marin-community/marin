@@ -118,16 +118,8 @@ def execute_shard(task_file: str, result_file: str) -> None:
     ``SUBPROCESS_COUNTER_FLUSH_INTERVAL`` seconds so the parent can forward
     live updates via heartbeats.
     """
-    import faulthandler
-
     import pyarrow as pa
     from rigging.log_setup import configure_logging
-
-    # Dump a Python traceback to stderr if the subprocess hits a fatal signal
-    # (SIGSEGV / SIGABRT / SIGBUS / SIGFPE / SIGILL). Without this, a crash in
-    # a C extension (Arrow, NumPy, ...) is invisible to the parent — it just
-    # sees `proc.returncode` < 0 with no diagnostic.
-    faulthandler.enable()
 
     # Each shard already runs in its own subprocess, so PyArrow's internal
     # I/O and CPU thread pools provide redundant parallelism — we get
@@ -135,6 +127,9 @@ def execute_shard(task_file: str, result_file: str) -> None:
     pa.set_io_thread_count(1)
     pa.set_cpu_count(1)
 
+    # configure_logging installs faulthandler for us, so SIGSEGV / SIGABRT /
+    # SIGBUS / SIGFPE / SIGILL in a C extension (Arrow, NumPy, ...) produces
+    # a Python traceback on stderr instead of a bare ``returncode < 0``.
     configure_logging(level=logging.INFO)
 
     ctx = _SubprocessWorkerContext("", "")
