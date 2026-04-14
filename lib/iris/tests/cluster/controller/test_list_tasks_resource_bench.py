@@ -69,27 +69,31 @@ def _populate_synthetic_db(db: ControllerDB, target_tasks: int, unrelated_tasks:
     target_attempt_rows = []
     for i in range(target_tasks):
         task_id = target_job_id.task(i).to_wire()
-        target_task_rows.append((
-            task_id,
-            target_job_id.to_wire(),
-            i,  # task_index
-            job_pb2.TASK_STATE_RUNNING,
-            0,  # current_attempt_id
-            now_ms,  # submitted_at_ms
-            0,  # max_retries_failure
-            0,  # max_retries_preemption
-            0,  # failure_count
-            0,  # preemption_count
-            0,  # priority_neg_depth
-            now_ms,  # priority_root_submitted_ms
-            i,  # priority_insertion
-        ))
-        target_attempt_rows.append((
-            task_id,
-            0,  # attempt_id
-            job_pb2.TASK_STATE_RUNNING,
-            now_ms,  # created_at_ms
-        ))
+        target_task_rows.append(
+            (
+                task_id,
+                target_job_id.to_wire(),
+                i,  # task_index
+                job_pb2.TASK_STATE_RUNNING,
+                0,  # current_attempt_id
+                now_ms,  # submitted_at_ms
+                0,  # max_retries_failure
+                0,  # max_retries_preemption
+                0,  # failure_count
+                0,  # preemption_count
+                0,  # priority_neg_depth
+                now_ms,  # priority_root_submitted_ms
+                i,  # priority_insertion
+            )
+        )
+        target_attempt_rows.append(
+            (
+                task_id,
+                0,  # attempt_id
+                job_pb2.TASK_STATE_RUNNING,
+                now_ms,  # created_at_ms
+            )
+        )
 
     conn.executemany(
         "INSERT INTO tasks (task_id, job_id, task_index, state, current_attempt_id, submitted_at_ms, "
@@ -131,21 +135,23 @@ def _populate_synthetic_db(db: ControllerDB, target_tasks: int, unrelated_tasks:
         conn.execute("INSERT INTO job_config (job_id) VALUES (?)", (ujob_id.to_wire(),))
         for i in range(tasks_per_job):
             task_id = ujob_id.task(i).to_wire()
-            unrelated_task_rows.append((
-                task_id,
-                ujob_id.to_wire(),
-                i,
-                job_pb2.TASK_STATE_RUNNING,
-                0,
-                now_ms,
-                0,
-                0,
-                0,
-                0,
-                0,
-                now_ms,
-                j * tasks_per_job + i,
-            ))
+            unrelated_task_rows.append(
+                (
+                    task_id,
+                    ujob_id.to_wire(),
+                    i,
+                    job_pb2.TASK_STATE_RUNNING,
+                    0,
+                    now_ms,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    now_ms,
+                    j * tasks_per_job + i,
+                )
+            )
             unrelated_attempt_rows.append((task_id, 0, job_pb2.TASK_STATE_RUNNING, now_ms))
 
     conn.executemany(
@@ -168,15 +174,17 @@ def _populate_synthetic_db(db: ControllerDB, target_tasks: int, unrelated_tasks:
     for task_id in all_task_ids:
         for h in range(history_per_task):
             ts = now_ms - (history_per_task - h) * 10_000
-            history_batch.append((
-                task_id,
-                0,  # attempt_id
-                1000 + h,  # cpu_millicores
-                512 + h,  # memory_mb
-                10,  # disk_mb
-                600 + h,  # memory_peak_mb
-                ts,
-            ))
+            history_batch.append(
+                (
+                    task_id,
+                    0,  # attempt_id
+                    1000 + h,  # cpu_millicores
+                    512 + h,  # memory_mb
+                    10,  # disk_mb
+                    600 + h,  # memory_peak_mb
+                    ts,
+                )
+            )
             if len(history_batch) >= batch_size:
                 conn.executemany(
                     "INSERT INTO task_resource_history "
@@ -255,9 +263,9 @@ def test_list_tasks_resource_query_performance(bench_db):
 
     # Verify data was inserted correctly
     row_count = db.fetchone("SELECT COUNT(*) as cnt FROM task_resource_history")["cnt"]
-    target_task_count = db.fetchone(
-        "SELECT COUNT(*) as cnt FROM tasks WHERE job_id = ?", (target_job_id.to_wire(),)
-    )["cnt"]
+    target_task_count = db.fetchone("SELECT COUNT(*) as cnt FROM tasks WHERE job_id = ?", (target_job_id.to_wire(),))[
+        "cnt"
+    ]
     print(f"\n  task_resource_history rows: {row_count:,}")
     print(f"  target job tasks: {target_task_count:,}")
 
@@ -314,7 +322,7 @@ def test_list_tasks_full_rpc_performance(bench_db):
     p50 = times[len(times) // 2]
     p95 = times[int(len(times) * 0.95)]
 
-    print(f"\n  Full list_tasks flow (tasks + resource history):")
+    print("\n  Full list_tasks flow (tasks + resource history):")
     print(f"    p50={p50:.1f}ms  p95={p95:.1f}ms  n={iterations}")
     print(f"    {len(tasks)} tasks, {len(resource_by_task)} resource entries")
 
@@ -346,6 +354,6 @@ def test_query_plan_uses_index(bench_db):
 
     # The plan should reference the index, not SCAN task_resource_history
     plan_lower = plan_text.lower()
-    assert "idx_task" in plan_lower or "using" in plan_lower or "search" in plan_lower, (
-        f"Query plan may not be using indexes efficiently:\n{plan_text}"
-    )
+    assert (
+        "idx_task" in plan_lower or "using" in plan_lower or "search" in plan_lower
+    ), f"Query plan may not be using indexes efficiently:\n{plan_text}"
