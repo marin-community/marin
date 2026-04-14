@@ -81,7 +81,7 @@ iris rpc controller get-provider-status         # scheduling events, cluster cap
 iris cluster vm status                          # scale groups with slice counts
 ```
 
-Priority bands: `PRIORITY_BAND_INTERACTIVE` (default), `PRIORITY_BAND_PRODUCTION` (can preempt interactive).
+Priority bands: `PRIORITY_BAND_INTERACTIVE` (default), `PRIORITY_BAND_PRODUCTION` (can preempt interactive), `PRIORITY_BAND_BATCH` (preemptible). See [`docs/priority-bands.md`](docs/priority-bands.md) for the user-facing guide on when to pick each band.
 
 ## SQL Queries
 
