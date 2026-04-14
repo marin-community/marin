@@ -21,13 +21,13 @@ from collections.abc import Callable, Generator
 from threading import Event, Thread
 from typing import TypeVar
 
-from iris.distributed_lock import (
+from rigging.distributed_lock import (
     HEARTBEAT_INTERVAL,
     LeaseLostError,
     create_lock,
     default_worker_id,
 )
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class StatusFile:
       Contains {worker_id, timestamp}. Must be refreshed periodically.
     - Status file (simple text): Final state - SUCCESS, FAILURE, or RUNNING.
 
-    Lock acquisition delegates to ``iris.distributed_lock``.
+    Lock acquisition delegates to ``rigging.distributed_lock``.
     """
 
     def __init__(self, output_path: str, worker_id: str):

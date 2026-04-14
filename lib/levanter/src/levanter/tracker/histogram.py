@@ -107,13 +107,6 @@ def _single_shard_histogram(a: NamedArray, bin_edges, reduce_mesh):
     bin_idx = ((a_exp >= left_edges) & (a_exp < right_edges)).astype(dtype)
     counts = bin_idx.sum(axis=1, dtype=dtype)
 
-    # bin_idx = jnp.searchsorted(bin_edges, a, side='right', method='compare_all')
-    # bin_idx = jnp.where(a == bin_edges[-1], len(bin_edges) - 1, bin_idx)
-    # counts = jnp.zeros(len(bin_edges), a.dtype).at[bin_idx].add(1.0)[1:]
-
-    # pallas histogram
-    # counts = histogram_large_a(a, bin_edges)
-
     if len(reduce_mesh):
         counts = jax.lax.psum(counts, axis_name=reduce_mesh)
     return counts

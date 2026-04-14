@@ -33,7 +33,7 @@ from iris.actor.resolver import Resolver
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
 from iris.rpc.errors import call_with_retry
-from iris.time_utils import ExponentialBackoff
+from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +59,8 @@ class ActorClient:
         resolver: Resolver,
         name: str,
         call_timeout: float | None = None,
-        max_call_attempts: int = 5,
-        backoff: ExponentialBackoff = ExponentialBackoff(initial=0.1, maximum=10.0, factor=2.0, jitter=0.25),
+        max_call_attempts: int = 10,
+        backoff: ExponentialBackoff = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0, jitter=0.25),
     ):
         """Initialize the actor client.
 

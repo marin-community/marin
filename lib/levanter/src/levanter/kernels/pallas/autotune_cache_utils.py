@@ -5,7 +5,7 @@ import json
 from typing import Any, Optional, cast
 
 import jax
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 
 from levanter.utils.fsspec_utils import join_path
 

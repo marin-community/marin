@@ -35,6 +35,7 @@ def dedup_fuzzy_document(
     fuzzy_minhash_ngram_size: int = 5,
     fuzzy_minhash_seed: int = 42,
     max_parallelism: int,
+    cc_max_iterations: int = 10,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
 ) -> dict:
@@ -115,7 +116,9 @@ def dedup_fuzzy_document(
             for record in compute_minhash_lsh_batches(batch)
         )
     )
-    converged, cc_files = connected_components(doc_minhash_lsh, ctx, output_dir=f"{output_path}/metadata/cc")
+    converged, cc_files = connected_components(
+        doc_minhash_lsh, ctx, output_dir=f"{output_path}/metadata/cc", max_iterations=cc_max_iterations
+    )
     if not converged:
         # TODO (rav): log the number of changed nodes?
         logger.warning("Connected components did not converge")
@@ -127,24 +130,22 @@ def dedup_fuzzy_document(
         counter_prefix="dedup/fuzzy/document",
     )
 
-    shard_results = list(
-        ctx.execute(
-            Dataset.from_list(cc_files)
-            .load_vortex()
-            .map(
-                lambda r: {
-                    "id": r["record_id"],
-                    "is_dup": r["component_id"] != r["id_norm"],
-                    "file_idx": r["file_idx"],
-                }
-            )
-            .group_by(
-                lambda r: r["file_idx"],
-                sort_by=lambda r: r["id"],
-                reducer=aggregate_and_write,
-            ),
-            verbose=True,
+    shard_results = ctx.execute(
+        Dataset.from_list(cc_files)
+        .load_parquet()
+        .map(
+            lambda r: {
+                "id": r["record_id"],
+                "is_dup": r["component_id"] != r["id_norm"],
+                "file_idx": r["file_idx"],
+            }
+        )
+        .group_by(
+            lambda r: r["file_idx"],
+            sort_by=lambda r: r["id"],
+            reducer=aggregate_and_write,
         ),
-    )
+        verbose=True,
+    ).results
 
     return finalize_dedup(shard_results, DedupMode.FUZZY_DOCUMENT, method="fuzzy", level="document")

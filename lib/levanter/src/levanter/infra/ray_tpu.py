@@ -64,7 +64,7 @@ def run_docker_on_pod(
         tpu_type=tpu_type,
         num_slices=num_slices,
         max_retries_failure=retries,
-        max_retries_preemption=10000,
+        max_retries_preemption=1000,
     )
 
 
@@ -175,47 +175,3 @@ def _massage_env(env):
 
 if __name__ == "__main__":
     main()
-
-    # leaving this here for testing purposes
-    # ray.init()
-    # tpu_type = "v4-8"
-    # num_slices = 2
-    #
-    # @ray.remote(max_calls=1)
-    # def fn():
-    #     import jax
-    #     import jax.random as jrandom
-    #     from jax.lax import with_sharding_constraint
-    #     from jax.sharding import Mesh
-    #     from jax.sharding import PartitionSpec as P
-    #
-    #     mesh = Mesh(jax.devices("tpu"), ("x",))
-    #     print(jax.devices())
-    #
-    #     @jax.jit
-    #     def init():
-    #         with mesh:
-    #             x = jrandom.normal(jrandom.PRNGKey(0), (32,))
-    #             weights = jrandom.normal(jrandom.PRNGKey(1), (32, 4))
-    #             bias = jrandom.normal(jrandom.PRNGKey(2), (4,))
-    #
-    #             x_sharded = with_sharding_constraint(x, P("x"))
-    #             weights_sharded = with_sharding_constraint(weights, P("x"))
-    #             return x_sharded, weights_sharded, bias
-    #
-    #     x, weights, bias = init()
-    #
-    #     @jax.jit
-    #     def layer(x, weights, bias):
-    #         with mesh:
-    #             return with_sharding_constraint(jax.nn.sigmoid(x @ weights + bias), P())
-    #
-    #     out = layer(x, weights, bias)
-    #
-    #     import numpy
-    #
-    #     return numpy.array(out)
-    #
-    # results = ray.get(run_on_pod_new(fn, tpu_type, num_slices=num_slices))
-    #
-    # print(f"Results: {results}")

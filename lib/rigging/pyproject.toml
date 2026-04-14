@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-rigging"
+version = "0.99"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "fsspec>=2024.0.0",
+    "gcsfs>=2024.0.0",
+    "s3fs>=2024.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.2",
+    "pytest-timeout",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rigging"]
+
+[tool.pytest.ini_options]
+timeout = 10

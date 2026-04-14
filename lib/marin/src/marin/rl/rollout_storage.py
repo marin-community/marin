@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import fsspec
-from iris.marin_fs import filesystem as marin_filesystem
+from rigging.filesystem import filesystem as marin_filesystem
 
 from .types import RolloutBatch
 

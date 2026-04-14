@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_mkdirs
@@ -327,7 +327,7 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
         .write_jsonl(f"{cfg.output_path}/.metrics/part-{{shard:05d}}.jsonl", skip_existing=True)
     )
     ctx = ZephyrContext(name="download-uncheatable-eval")
-    output_paths = ctx.execute(pipeline)
+    output_paths = ctx.execute(pipeline).results
 
     for dataset, metadata_file in zip(filtered_datasets, output_paths, strict=True):
         with open_url(metadata_file, "r", encoding="utf-8") as meta_file:

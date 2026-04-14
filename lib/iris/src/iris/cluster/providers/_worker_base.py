@@ -24,7 +24,7 @@ from iris.cluster.providers.remote_exec import (
     wait_for_connection,
 )
 from iris.cluster.providers.types import CommandResult
-from iris.time_utils import Duration
+from rigging.timing import Duration
 
 logger = logging.getLogger(__name__)
 
@@ -103,3 +103,13 @@ class RemoteExecWorkerBase:
 
     def reboot(self) -> None:
         self._remote_exec.run("sudo reboot", timeout=Duration.from_seconds(10))
+
+    def restart_worker(self, bootstrap_script: str) -> None:
+        """Restart the worker with a fresh bootstrap script.
+
+        Re-runs the full bootstrap which pulls the latest image, stops the
+        old container, and starts a new one. The new worker process discovers
+        and adopts existing task containers via Docker labels.
+        """
+        logger.info("Restarting worker on %s via bootstrap", self._vm_id)
+        self.bootstrap(bootstrap_script)

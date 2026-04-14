@@ -31,7 +31,7 @@ from iris.cluster.controller.controller import (
 from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.vm_lifecycle import ControllerStatus
-from iris.cluster.controller.scaling_group import (
+from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_DOWN_RATE_LIMIT,
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
@@ -44,7 +44,8 @@ from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 from iris.rpc.auth import hash_token
-from iris.time_utils import Duration, Timestamp
+from iris.time_proto import duration_from_proto
+from rigging.timing import Duration, Timestamp
 
 
 def create_local_autoscaler(
@@ -115,7 +116,7 @@ def create_local_autoscaler(
         gcp_service=gcp_service,
     )
 
-    scale_up_delay = Duration.from_proto(config.defaults.autoscaler.scale_up_delay)
+    scale_up_delay = duration_from_proto(config.defaults.autoscaler.scale_up_delay)
 
     scale_groups: dict[str, ScalingGroup] = {}
     for name, sg_config in config.scale_groups.items():
@@ -322,7 +323,7 @@ def make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
 
     sg = config_pb2.ScaleGroupConfig(
         name="local-cpu",
-        min_slices=1,
+        buffer_slices=1,
         max_slices=max_workers,
         num_vms=1,
         resources=config_pb2.ScaleGroupResources(

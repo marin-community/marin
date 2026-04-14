@@ -132,8 +132,8 @@ def _attentionish_inputs(
     q = c.reshape(groups, seq_len, 1, state_dim)
     k = b.reshape(groups, seq_len, 1, state_dim)
     v = x.reshape(groups, seq_len, 1, x.shape[-1])
-    q_bias = None
-    k_bias = None
+    q_bias = jnp.zeros((1, state_dim), dtype=dt.dtype)
+    k_bias = jnp.zeros((1, state_dim), dtype=dt.dtype)
     da_cs = a_log_cumsum.reshape(groups, 1, seq_len)
     dt_seq = dt.reshape(groups, 1, seq_len)
     return q, k, v, q_bias, k_bias, da_cs, dt_seq, trap
@@ -279,11 +279,7 @@ def _benchmark(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark Mamba-3 reference and XLA chunked paths.")
     parser.add_argument("--dtype", type=str, default="bfloat16")
-    parser.add_argument(
-        "--api",
-        type=str,
-        default="chunked_public,attentionish_public",
-    )
+    parser.add_argument("--api", type=str, default="chunked_public,attentionish_public")
     parser.add_argument("--steps", type=int, default=10)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--seq-lens", type=str, default="")

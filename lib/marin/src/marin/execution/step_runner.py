@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextvars
 import dataclasses
+from datetime import timedelta
 import json
 import logging
 import os
@@ -28,7 +29,7 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 
 import levanter.utils.fsspec_utils as fsspec_utils
-from iris.marin_fs import open_url, url_to_fs
+from rigging.filesystem import open_url, url_to_fs
 
 from fray.v2.client import JobHandle, JobStatus
 from fray.v2.local_backend import LocalJobHandle
@@ -322,15 +323,17 @@ def run_step(step: StepSpec) -> None:
         with step_lock(output_path, step_label) as status_file:
             # 3. Run the function
             try:
+                t0 = time.monotonic()
                 if isinstance(step.fn, RemoteCallable):
                     _run_remote_step(step, output_path)
                 else:
                     result = step.fn(output_path)  # pyrefly: ignore[not-callable]
                     Artifact.save(result, output_path)
+                elapsed = timedelta(seconds=time.monotonic() - t0)
 
                 # 4. Mark success
                 status_file.write_status(STATUS_SUCCESS)
-                logger.info(f"Step {step_label} succeeded")
+                logger.info(f"Step {step_label} succeeded in {elapsed}")
             except Exception:
                 status_file.write_status(STATUS_FAILED)
                 raise

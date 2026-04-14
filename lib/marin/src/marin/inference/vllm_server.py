@@ -19,7 +19,7 @@ from typing import Literal
 from urllib.parse import urlparse
 
 import requests
-from iris.marin_fs import marin_prefix
+from rigging.filesystem import marin_prefix
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 
@@ -464,8 +464,8 @@ def _pick_free_port(host: str) -> int:
 def _detect_tpu_environment() -> bool:
     """Return True when running on TPU hardware.
 
-    Ray TPU pods do not consistently set `TPU_NAME`, so we also detect the
-    presence of TPU device nodes and other TPU-related environment variables.
+    Some containerized TPU environments do not consistently set `TPU_NAME`, so
+    we also detect TPU device nodes and other TPU-related environment variables.
     """
 
     if os.environ.get("TPU_NAME"):
@@ -485,27 +485,6 @@ def _detect_tpu_environment() -> bool:
     ):
         if os.environ.get(key):
             return True
-
-    # Ray TPU workers may not expose TPU env vars/device nodes to the driver
-    # container, but Ray's TPUAcceleratorManager can still report topology.
-    try:
-        from ray._private.accelerators import TPUAcceleratorManager
-
-        pod_type = None
-        if hasattr(TPUAcceleratorManager, "_get_current_node_tpu_pod_type"):
-            pod_type = TPUAcceleratorManager._get_current_node_tpu_pod_type()
-        elif hasattr(TPUAcceleratorManager, "get_current_node_tpu_pod_type"):
-            pod_type = TPUAcceleratorManager.get_current_node_tpu_pod_type()
-        if pod_type:
-            return True
-
-        tpu_name = None
-        if hasattr(TPUAcceleratorManager, "get_current_node_tpu_name"):
-            tpu_name = TPUAcceleratorManager.get_current_node_tpu_name()
-        if tpu_name:
-            return True
-    except Exception:
-        pass
 
     return False
 
@@ -620,11 +599,11 @@ def _require_docker_available() -> None:
     if not os.path.exists("/var/run/docker.sock"):
         raise RuntimeError(
             "Docker socket not available at /var/run/docker.sock. "
-            "This job requires docker-alongside-docker (mount the socket into the Ray container)."
+            "This job requires docker-alongside-docker (mount the socket into the current container)."
         )
     if shutil.which("docker") is None:
         raise RuntimeError(
-            "`docker` CLI not found on PATH. Install the Docker client in the Ray image to run vLLM as a sidecar."
+            "`docker` CLI not found on PATH. Install the Docker client in the current image to run vLLM as a sidecar."
         )
 
 

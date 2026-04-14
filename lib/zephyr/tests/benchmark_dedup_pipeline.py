@@ -5,8 +5,8 @@
 """Benchmark Zephyr deduplication pipeline (generate docs → map → deduplicate by simhash → write).
 
 Usage:
-    uv run python tests/benchmark_dedup_pipeline.py                           # Run benchmark with defaults
-    uv run python tests/benchmark_dedup_pipeline.py benchmark --backends ray  # Benchmark specific backend
+    uv run python tests/benchmark_dedup_pipeline.py                                         # Run benchmark with defaults
+    uv run python tests/benchmark_dedup_pipeline.py benchmark --backends threadpool         # Benchmark specific backend
     uv run python tests/benchmark_dedup_pipeline.py write-input --output-dir /tmp/input  # Just generate input files
 """
 
@@ -136,7 +136,7 @@ def run_benchmark(
         mem_before = process.memory_info().rss
         exec_start = time.time()
         ctx = ZephyrContext(name="benchmark")
-        results = list(ctx.execute(pipeline))
+        results = ctx.execute(pipeline).results
         exec_time = time.time() - exec_start
         mem_after = process.memory_info().rss
 
@@ -229,7 +229,7 @@ def setup_input_files(
 @click.option(
     "--backends",
     multiple=True,
-    type=click.Choice(["sync", "threadpool", "ray"]),
+    type=click.Choice(["sync", "threadpool"]),
     default=["threadpool"],
     help="Backends to benchmark",
 )
@@ -282,9 +282,6 @@ def benchmark(
                 print(f"{'=' * 70}")
 
                 env = os.environ.copy()
-                if backend == "ray":
-                    env["RAY_LOCAL_MODE"] = "1"
-                    print("Using RAY_LOCAL_MODE=1 for single-process profiling")
 
                 speedscope_file = profile_output / f"profile_{backend}.speedscope"
 

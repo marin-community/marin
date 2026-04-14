@@ -16,7 +16,7 @@ from iris.actor.resolver import ACTOR_ENDPOINT_HEADER, ProxyResolver
 from iris.cluster.controller.actor_proxy import PROXY_ROUTE
 from iris.cluster.dashboard_common import on_shutdown
 from iris.managed_thread import ThreadContainer
-from iris.time_utils import Duration, ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff
 
 
 class StatusActor:

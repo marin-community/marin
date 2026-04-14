@@ -26,7 +26,7 @@ from fray.v1.cluster.base import (
     ResourceConfig,
     TpuConfig,
 )
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

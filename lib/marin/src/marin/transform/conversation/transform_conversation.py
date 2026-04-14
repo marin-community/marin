@@ -25,7 +25,7 @@ from typing import Any
 import datasets
 import draccus
 import fsspec
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.execution import unwrap_versioned_value
 from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
@@ -398,7 +398,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
         .write_jsonl(f"{metrics_path}/{{shard:05d}}-transform.jsonl", skip_existing=True)
     )
     ctx = ZephyrContext(name="transform-conversation")
-    metric_files = ctx.execute(pipeline)
+    metric_files = ctx.execute(pipeline).results
 
     # Log summary by subset/split
     by_subset_split = defaultdict(list)

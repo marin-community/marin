@@ -11,7 +11,7 @@ from typing import Callable, Dict, List, Optional, Tuple, Iterable
 
 import fsspec
 import humanfriendly
-from iris.marin_fs import filesystem as marin_filesystem
+from rigging.filesystem import filesystem as marin_filesystem
 import jax
 import jax.numpy as jnp
 import numpy as np

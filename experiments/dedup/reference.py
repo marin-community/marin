@@ -1,8 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from iris.logging import configure_logging
-from iris.marin_fs import marin_prefix
+from rigging.log_setup import configure_logging
+from rigging.filesystem import marin_prefix
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document

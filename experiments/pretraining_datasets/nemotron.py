@@ -6,12 +6,19 @@
 import dataclasses
 import os.path
 
+from fray.v2.types import ResourceConfig
+
 from experiments.defaults import DEFAULT_NEW_RUN_DATA_SHUFFLE
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from marin.datakit.download.nemotron_v1 import download_nemotron_v1_step
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
+from marin.execution.remote import remote
 from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
+
+# Fray resources for running a single Nemotron tokenize split as a remote job.
+# TODO (rav): debug why this needs 32g - probably levanter store consolidation
+NEMOTRON_SPLIT_TOKENIZE_RESOURCES = ResourceConfig(ram="32g", cpu=2)
 
 
 def nemotron_cc_download() -> ExecutorStep:
@@ -51,22 +58,35 @@ NEMOTRON_LLAMA3_OVERRIDES = {
 }
 
 
+# Hardcoded path to the nemotron download output so that glob or download
+# step changes don't alter the tokenize step's version hash.
+_NEMOTRON_CC_DATA_PATH = InputName.hardcoded("raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/")
+
+
 def _get_nemotron_split_paths(split: str):
     """Helper to get file paths for a nemotron split."""
-    base = output_path_of(nemotron_cc_download(), "contrib/Nemotron/Nemotron-CC/data-jsonl/")
-    return [base / pattern for pattern in NEMOTRON_DATASETS[split]]
+    return [_NEMOTRON_CC_DATA_PATH / pattern for pattern in NEMOTRON_DATASETS[split]]
 
 
 def tokenize_nemotron(
     *,
     tokenizer: str | None = None,
     max_workers: int = 4096,
+    cache_copy_max_workers: int = 128,
 ) -> dict[str, TokenizerStep]:
-    """Generate tokenization steps for all Nemotron CC dataset splits."""
+    """Generate tokenization steps for all Nemotron CC dataset splits.
+
+    Each split's tokenize function is wrapped with ``@remote`` so it runs as
+    its own Fray job (see ``NEMOTRON_SPLIT_TOKENIZE_RESOURCES``). This keeps the
+    entrypoint pod lightweight and lets the tokenize+consolidate work survive
+    entrypoint restarts.
+    """
     if tokenizer is None:
         from experiments.llama import llama3_tokenizer
 
         tokenizer = llama3_tokenizer
+
+    tokenize_fn = remote(tokenize, resources=NEMOTRON_SPLIT_TOKENIZE_RESOURCES)
 
     nemotron_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for split in NEMOTRON_DATASETS:
@@ -74,13 +94,14 @@ def tokenize_nemotron(
         nemotron_split_paths = _get_nemotron_split_paths(split)
         step = ExecutorStep(
             name=nemotron_split_output_path,
-            fn=tokenize,
+            fn=tokenize_fn,
             config=TokenizeConfig(
                 train_paths=nemotron_split_paths,
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
                 max_workers=max_workers,
+                cache_copy_max_workers=cache_copy_max_workers,
             ),
         )
 

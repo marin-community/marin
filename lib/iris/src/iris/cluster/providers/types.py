@@ -21,7 +21,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
-from iris.time_utils import Deadline, Duration, Timestamp
+from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,29 @@ def find_free_port(start: int = -1) -> int:
             except OSError:
                 continue
     raise RuntimeError(f"No free port found in range {start}-{start + 1000}")
+
+
+def port_is_open(port: int, host: str = "localhost") -> bool:
+    """Check if a TCP port is accepting connections."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.1)
+        return s.connect_ex((host, port)) == 0
+
+
+def resolve_external_host(host: str) -> str:
+    """Return an externally-reachable address for a bind host.
+
+    Workers running off-host cannot connect to the unspecified address
+    ``0.0.0.0``; probe for a real network IP instead.
+    """
+    if host != "0.0.0.0":
+        return host
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
 
 
 def wait_for_port(port: int, host: str = "localhost", timeout: float = 30.0) -> bool:
@@ -226,6 +249,18 @@ class RemoteWorkerHandle(Protocol):
         """Reboot the worker."""
         ...
 
+    def restart_worker(self, bootstrap_script: str) -> None:
+        """Restart the Iris worker process with a fresh bootstrap script.
+
+        Runs the bootstrap script which pulls the latest image, stops the
+        old container, and starts a new one. The new worker process discovers
+        and adopts existing task containers via Docker labels.
+
+        Args:
+            bootstrap_script: Full bootstrap script to execute on the worker VM.
+        """
+        ...
+
 
 class StandaloneWorkerHandle(RemoteWorkerHandle, Protocol):
     """Handle to a standalone worker (e.g., controller). Can be terminated and labeled.
@@ -249,7 +284,7 @@ class StandaloneWorkerHandle(RemoteWorkerHandle, Protocol):
         """Run the bootstrap script on the worker."""
         ...
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         """Destroy the worker."""
         ...
 
@@ -305,7 +340,7 @@ class SliceHandle(Protocol):
         """Query cloud state, returning status and worker handles."""
         ...
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         """Destroy the slice and all its workers."""
         ...
 

@@ -31,6 +31,19 @@ class WeightTransferServerMetrics:
     total_transfers: int = 0
     successful_transfers: int = 0
     failed_transfers: int = 0
+    total_transfer_bytes: int = 0
+    transfer_bytes: int = 0
+    param_count: int = 0
+    largest_param_bytes: int = 0
+    state_dict_time: float = 0.0
+    materialize_time: float = 0.0
+    serialize_time: float = 0.0
+    store_time: float = 0.0
+    update_time: float = 0.0
+    serve_time: float = 0.0
+    materialize_mib_per_second: float = 0.0
+    serialize_mib_per_second: float = 0.0
+    store_mib_per_second: float = 0.0
 
 
 @dataclass
@@ -40,9 +53,15 @@ class WeightTransferClientMetrics:
     total_polls: int = 0
     successful_receives: int = 0
     failed_receives: int = 0
+    total_receive_bytes: int = 0
+    receive_bytes: int = 0
+    param_count: int = 0
+    largest_param_bytes: int = 0
     fetch_time: float = 0
     decode_time: float = 0
     poll_time: float = 0
+    fetch_mib_per_second: float = 0.0
+    decode_mib_per_second: float = 0.0
 
 
 @dataclass
@@ -74,6 +93,7 @@ class WeightTransferConfig:
     flight_port: int = 0  # 0 = auto-assign
     convert_to_bfloat16: bool = True
     """Whether to convert weights to bfloat16 during transfer. Reduces transfer size by 50% for float32 weights."""
+    debug_weight_transfer: bool = False
 
 
 class WeightTransferServer(ABC):
@@ -97,6 +117,10 @@ class WeightTransferServer(ABC):
     @abstractmethod
     def get_metrics(self) -> dict:
         pass
+
+    def get_debug_snapshot(self) -> dict[str, object]:
+        """Return lightweight server-local debug state for checkpoint diagnostics."""
+        return {}
 
 
 class WeightTransferClient(ABC):

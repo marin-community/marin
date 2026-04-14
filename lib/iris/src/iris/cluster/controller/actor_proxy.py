@@ -20,7 +20,7 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from iris.cluster.controller.db import ControllerDB, Endpoint, EndpointQuery, decode_rows, endpoint_query_sql
+from iris.cluster.controller.db import ControllerDB
 
 logger = logging.getLogger(__name__)
 
@@ -97,11 +97,8 @@ class ActorProxy:
         )
 
     def _resolve_endpoint(self, name: str) -> str | None:
-        """Resolve an endpoint name to an address via the controller DB."""
-        query = EndpointQuery(exact_name=name)
-        sql, params = endpoint_query_sql(query)
-        with self._db.read_snapshot() as q:
-            endpoints = decode_rows(Endpoint, q.fetchall(sql, tuple(params)))
-        if not endpoints:
+        """Resolve an endpoint name to an address via the in-memory registry."""
+        row = self._db.endpoints.resolve(name)
+        if row is None:
             return None
-        return endpoints[0].address
+        return row.address

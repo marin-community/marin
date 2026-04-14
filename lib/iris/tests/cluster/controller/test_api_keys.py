@@ -20,12 +20,13 @@ from iris.cluster.controller.auth import (
     list_api_keys,
 )
 from iris.rpc.auth import VerifiedIdentity, hash_token
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import ControllerTransitions
-from iris.cluster.log_store import LogStore
-from iris.rpc import cluster_pb2, config_pb2
+from iris.log_server.server import LogServiceImpl
+from iris.rpc import config_pb2
+from iris.rpc import job_pb2
 from iris.rpc.auth import _verified_identity
 
 
@@ -38,8 +39,7 @@ def db(tmp_path):
 
 def _make_service(db, auth=None):
     """Create a ControllerServiceImpl with minimal dependencies for API key tests."""
-    log_store = LogStore(log_dir=db.db_path.parent / "logs")
-    state = ControllerTransitions(db=db, log_store=log_store)
+    state = ControllerTransitions(db=db)
 
     controller_mock = Mock()
     controller_mock.wake = Mock()
@@ -54,7 +54,7 @@ def _make_service(db, auth=None):
         db,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
-        log_store=log_store,
+        log_service=LogServiceImpl(),
         auth=auth or ControllerAuth(),
     )
 
@@ -166,7 +166,7 @@ def test_login_rejects_system_prefix(db):
     service = _make_service(db, auth=auth)
 
     with pytest.raises(ConnectError) as exc_info:
-        service.login(cluster_pb2.LoginRequest(identity_token="fake"), None)
+        service.login(job_pb2.LoginRequest(identity_token="fake"), None)
     assert exc_info.value.code == Code.PERMISSION_DENIED
 
 
@@ -186,7 +186,7 @@ def test_login_creates_user_and_key(db):
     )
     service = _make_service(db, auth=auth)
 
-    response = service.login(cluster_pb2.LoginRequest(identity_token="gcp-id-token"), None)
+    response = service.login(job_pb2.LoginRequest(identity_token="gcp-id-token"), None)
     assert response.user_id == "alice@example.com"
     assert response.token
     assert response.key_id.startswith("iris_k_")
@@ -212,8 +212,8 @@ def test_login_is_idempotent(db):
     )
     service = _make_service(db, auth=auth)
 
-    resp1 = service.login(cluster_pb2.LoginRequest(identity_token="tok1"), None)
-    resp2 = service.login(cluster_pb2.LoginRequest(identity_token="tok2"), None)
+    resp1 = service.login(job_pb2.LoginRequest(identity_token="tok1"), None)
+    resp2 = service.login(job_pb2.LoginRequest(identity_token="tok2"), None)
 
     # First token should be revoked (JTI added to revocation set)
     with pytest.raises(ValueError, match="revoked"):
@@ -235,7 +235,7 @@ def test_login_not_available_without_login_verifier(db):
     service = _make_service(db, auth=auth)
 
     with pytest.raises(ConnectError) as exc_info:
-        service.login(cluster_pb2.LoginRequest(identity_token="token"), None)
+        service.login(job_pb2.LoginRequest(identity_token="token"), None)
     assert exc_info.value.code == Code.UNIMPLEMENTED
 
 
@@ -253,7 +253,7 @@ def test_create_api_key_returns_raw_token(db):
     token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
     try:
         response = service.create_api_key(
-            cluster_pb2.CreateApiKeyRequest(name="my-key"),
+            job_pb2.CreateApiKeyRequest(name="my-key"),
             None,
         )
     finally:
@@ -277,7 +277,7 @@ def test_list_api_keys_never_exposes_hash(db):
     token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
     try:
         response = service.list_api_keys(
-            cluster_pb2.ListApiKeysRequest(user_id="alice"),
+            job_pb2.ListApiKeysRequest(user_id="alice"),
             None,
         )
     finally:
@@ -306,7 +306,7 @@ def test_revoke_key_owner_only(db):
     try:
         with pytest.raises(ConnectError) as exc_info:
             service.revoke_api_key(
-                cluster_pb2.RevokeApiKeyRequest(key_id=alice_keys[0].key_id),
+                job_pb2.RevokeApiKeyRequest(key_id=alice_keys[0].key_id),
                 None,
             )
         assert exc_info.value.code == Code.PERMISSION_DENIED
@@ -330,7 +330,7 @@ def test_admin_can_revoke_any_key(db):
     token = _verified_identity.set(VerifiedIdentity(user_id="bob", role="admin"))
     try:
         service.revoke_api_key(
-            cluster_pb2.RevokeApiKeyRequest(key_id=alice_key_id),
+            job_pb2.RevokeApiKeyRequest(key_id=alice_key_id),
             None,
         )
     finally:
@@ -353,7 +353,7 @@ def test_get_auth_info_returns_gcp_provider(db):
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, auth=auth)
 
-    response = service.get_auth_info(cluster_pb2.GetAuthInfoRequest(), None)
+    response = service.get_auth_info(job_pb2.GetAuthInfoRequest(), None)
     assert response.provider == "gcp"
     assert response.gcp_project_id == "test-project"
 
@@ -364,7 +364,7 @@ def test_get_auth_info_returns_static_provider(db):
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, auth=auth)
 
-    response = service.get_auth_info(cluster_pb2.GetAuthInfoRequest(), None)
+    response = service.get_auth_info(job_pb2.GetAuthInfoRequest(), None)
     assert response.provider == "static"
     assert response.gcp_project_id == ""
 
@@ -375,7 +375,7 @@ def test_get_auth_info_returns_empty_when_no_auth(db):
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, auth=auth)
 
-    response = service.get_auth_info(cluster_pb2.GetAuthInfoRequest(), None)
+    response = service.get_auth_info(job_pb2.GetAuthInfoRequest(), None)
     assert response.provider == ""
     assert response.gcp_project_id == ""
 
@@ -402,12 +402,12 @@ def test_discovery_login_flow(db):
     service = _make_service(db, auth=auth)
 
     # Step 1: Client discovers auth method (unauthenticated)
-    auth_info = service.get_auth_info(cluster_pb2.GetAuthInfoRequest(), None)
+    auth_info = service.get_auth_info(job_pb2.GetAuthInfoRequest(), None)
     assert auth_info.provider == "gcp"
     assert auth_info.gcp_project_id == "test-project"
 
     # Step 2: Client obtains an access token (mocked) and calls Login
-    response = service.login(cluster_pb2.LoginRequest(identity_token="fake-access-token"), None)
+    response = service.login(job_pb2.LoginRequest(identity_token="fake-access-token"), None)
     assert response.user_id == "alice@example.com"
     assert response.token
     assert response.key_id.startswith("iris_k_")
@@ -457,11 +457,11 @@ def test_null_auth_rpcs_work_with_anonymous_token(db):
     verified = auth.verifier.verify(jwt_token)
     reset = _verified_identity.set(verified)
     try:
-        keys_resp = service.list_api_keys(cluster_pb2.ListApiKeysRequest(), None)
+        keys_resp = service.list_api_keys(job_pb2.ListApiKeysRequest(), None)
         assert keys_resp is not None
 
         create_resp = service.create_api_key(
-            cluster_pb2.CreateApiKeyRequest(name="test-key"),
+            job_pb2.CreateApiKeyRequest(name="test-key"),
             None,
         )
         assert create_resp.token
@@ -482,7 +482,7 @@ def test_null_auth_get_current_user(db):
     verified = auth.verifier.verify(jwt_token)
     reset = _verified_identity.set(verified)
     try:
-        resp = service.get_current_user(cluster_pb2.GetCurrentUserRequest(), None)
+        resp = service.get_current_user(job_pb2.GetCurrentUserRequest(), None)
         assert resp.user_id == "anonymous"
         assert resp.role == "admin"
     finally:

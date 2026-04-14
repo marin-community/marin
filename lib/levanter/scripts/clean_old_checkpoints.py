@@ -9,7 +9,7 @@ import os
 import sys
 from datetime import datetime, timezone
 
-from iris.marin_fs import filesystem as marin_filesystem
+from rigging.filesystem import filesystem as marin_filesystem
 
 
 AGE = 30  # days

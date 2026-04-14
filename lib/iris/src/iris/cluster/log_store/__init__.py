@@ -17,11 +17,12 @@ import logging
 import os
 
 from iris.cluster.log_store._types import (
-    PROCESS_LOG_KEY,
+    CONTROLLER_LOG_KEY,
     LogReadResult,
     _EST_BYTES_PER_ROW,
     build_log_source,
     task_log_key,
+    worker_log_key,
 )
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
@@ -31,7 +32,16 @@ def _is_test_environment() -> bool:
     return "PYTEST_CURRENT_TEST" in os.environ or "CI" in os.environ
 
 
-if _is_test_environment():
+def _has_duckdb() -> bool:
+    try:
+        import duckdb
+
+        return True
+    except ImportError:
+        return False
+
+
+if _is_test_environment() or not _has_duckdb():
     from iris.cluster.log_store.mem_store import MemStore as LogStore
 else:
     from iris.cluster.log_store.duckdb_store import DuckDBLogStore as LogStore
@@ -54,7 +64,7 @@ class LogCursor:
 class LogStoreHandler(logging.Handler):
     """Logging handler that writes formatted records directly into a LogStore."""
 
-    def __init__(self, log_store: LogStore, key: str = PROCESS_LOG_KEY):
+    def __init__(self, log_store: LogStore, key: str):
         super().__init__()
         self._log_store = log_store
         self._key = key
@@ -80,7 +90,7 @@ class LogStoreHandler(logging.Handler):
 
 
 __all__ = [
-    "PROCESS_LOG_KEY",
+    "CONTROLLER_LOG_KEY",
     "_EST_BYTES_PER_ROW",
     "LogCursor",
     "LogReadResult",
@@ -88,4 +98,5 @@ __all__ = [
     "LogStoreHandler",
     "build_log_source",
     "task_log_key",
+    "worker_log_key",
 ]

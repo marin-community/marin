@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from fray.v1.cluster import ResourceConfig
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray

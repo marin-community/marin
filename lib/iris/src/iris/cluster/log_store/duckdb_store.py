@@ -15,7 +15,7 @@ Lifecycle of a log entry:
           concatenates the new rows, and writes a replacement file. This
           keeps the file count low (no thousands of tiny files).
        b. If the newest segment is already large (>= ``SEGMENT_TARGET_BYTES``),
-          a new Parquet file is created.
+          a new Parquet file is created (named by the new buffer's min_seq).
        c. The sealed RAM buffer is removed (readers no longer need it).
        d. The new/updated file is copied to GCS (best-effort).
        e. GC drops oldest local segments past count/byte limits.
@@ -100,6 +100,14 @@ _ROW_GROUP_SIZE = 16_384
 # full scan. 10x covers most realistic filter selectivities.
 _TAIL_SEQ_MARGIN = 10
 
+# Hard ceiling on the per-read parquet working set. Any single read scans at
+# most this many newest local segments, up to _MAX_PARQUET_BYTES_PER_READ of
+# cumulative on-disk data. Older segments remain retrievable by subsequent
+# reads with a moving cursor. This prevents a pathological filter from
+# pulling the full local retention through DuckDB in one shot.
+_MAX_PARQUETS_PER_READ = 5
+_MAX_PARQUET_BYTES_PER_READ = 500 * 1024 * 1024
+
 
 def _prefix_upper_bound(prefix: str) -> str | None:
     """Return the exclusive upper bound for a prefix range, or None if unbounded.
@@ -123,20 +131,37 @@ def _fsspec_copy(src: str, dst: str) -> None:
         f_dst.write(f_src.read())
 
 
-def _recover_max_seq(log_dir: Path) -> int:
-    """Parse the max sequence number from existing Parquet segment filenames.
+def _read_seq_bounds(path: Path) -> tuple[int, int]:
+    """Read min/max seq from Parquet row-group statistics."""
+    try:
+        meta = pq.read_metadata(path)
+        schema = meta.schema.to_arrow_schema()
+        seq_idx = schema.get_field_index("seq")
+        min_seq = 0
+        max_seq = 0
+        for i in range(meta.num_row_groups):
+            col = meta.row_group(i).column(seq_idx)
+            if col.statistics is not None and col.statistics.has_min_max:
+                if not min_seq or col.statistics.min < min_seq:
+                    min_seq = col.statistics.min
+                if col.statistics.max > max_seq:
+                    max_seq = col.statistics.max
+        return min_seq, max_seq
+    except Exception:
+        return 0, 0
 
-    Filenames are ``logs_{min_seq:019d}_{max_seq:019d}.parquet``.
+
+def _recover_max_seq(log_dir: Path) -> int:
+    """Recover the max sequence number by reading Parquet row-group statistics.
+
+    Filenames are ``logs_{min_seq:019d}.parquet``.
     Returns max_seq + 1 so the counter can resume, or 1 if no files exist.
     """
     max_seen = -1
-    for p in log_dir.glob("logs_*_*.parquet"):
-        parts = p.stem.split("_")
-        if len(parts) >= 3:
-            try:
-                max_seen = max(max_seen, int(parts[2]))
-            except ValueError:
-                continue
+    for p in log_dir.glob("logs_*.parquet"):
+        _, max_seq = _read_seq_bounds(p)
+        if max_seq > max_seen:
+            max_seen = max_seq
     return max_seen + 1 if max_seen >= 0 else 1
 
 
@@ -320,8 +345,11 @@ class _RWLock:
             self._cond.notify_all()
 
 
-_DEFAULT_DUCKDB_MEMORY_LIMIT = "256MB"
-
+# Per-connection memory ceiling for DuckDB. Tight limits (e.g. 256MB) caused
+# spill-to-disk loops under concurrent tail reads over large row groups,
+# wedging the controller. 4GB is generous against realistic working sets
+# (5 segments x 500MB + zstd decompression scratch).
+_DEFAULT_DUCKDB_MEMORY_LIMIT = "4GB"
 
 _cursor_counter = 0
 _cursor_counter_lock = Lock()
@@ -419,10 +447,8 @@ class DuckDBLogStore:
         self._segments_rwlock = _RWLock()
 
         # Discover pre-existing Parquet files from a previous run.
-        for p in sorted(self._log_dir.glob("logs_*_*.parquet")):
-            parts = p.stem.split("_")
-            min_seq = int(parts[1]) if len(parts) >= 3 else 0
-            max_seq = int(parts[2]) if len(parts) >= 3 else 0
+        for p in sorted(self._log_dir.glob("logs_*.parquet")):
+            min_seq, max_seq = _read_seq_bounds(p)
             min_key, max_key = _read_key_bounds(p)
             self._local_segments.append(
                 _LocalSegment(
@@ -599,6 +625,13 @@ class DuckDBLogStore:
             self._pending = []
             self._sealed.append(sealed)
             self._last_flush_time = time.monotonic()
+        logger.info(
+            "Sealed head buffer: rows=%d seq=[%d,%d] est_bytes=%d",
+            sealed.table.num_rows,
+            sealed.min_seq,
+            sealed.max_seq,
+            sealed.table.num_rows * _EST_BYTES_PER_ROW,
+        )
         self._executor.submit(self._flush_sealed_buffer, sealed)
 
     def _flush_sealed_buffer(self, sealed: _SealedBuffer) -> None:
@@ -627,60 +660,65 @@ class DuckDBLogStore:
         if can_consolidate:
             assert latest is not None
             try:
+                consolidate_start = time.monotonic()
                 existing_table = pq.read_table(latest.path)
                 combined = pa.concat_tables([existing_table, new_table])
                 combined = combined.sort_by([("key", "ascending"), ("seq", "ascending")])
                 combined_min_seq = latest.min_seq
                 combined_max_seq = new_max_seq
-                filename = f"logs_{combined_min_seq:019d}_{combined_max_seq:019d}.parquet"
+                # Reuse the same filename (keyed only on min_seq) so the GCS
+                # upload overwrites the old object in place — no deletion needed.
+                filename = f"logs_{combined_min_seq:019d}.parquet"
                 filepath = self._log_dir / filename
 
-                # Write to a temp file first, then rename for atomicity.
+                # Write combined data to a temp file. Then hold the write lock
+                # across both the rename and the segment-list update so that no
+                # reader can snapshot a state where the file has the combined
+                # content AND the sealed buffer is still in RAM tables (which
+                # would cause double-counting).
                 tmp_path = filepath.with_suffix(".parquet.tmp")
                 pq.write_table(
                     combined, tmp_path, compression="zstd", row_group_size=_ROW_GROUP_SIZE, write_page_index=True
                 )
-                tmp_path.rename(filepath)
-
                 key_col = combined.column("key")
                 seg = _LocalSegment(
                     path=str(filepath),
-                    size_bytes=filepath.stat().st_size,
+                    size_bytes=tmp_path.stat().st_size,
                     min_seq=combined_min_seq,
                     max_seq=combined_max_seq,
                     min_key=key_col[0].as_py(),
                     max_key=key_col[-1].as_py(),
                 )
 
-                with self._lock:
-                    # Replace the old segment with the consolidated one.
-                    try:
-                        # Find and remove the old segment from the deque.
+                self._segments_rwlock.write_acquire()
+                try:
+                    tmp_path.rename(filepath)
+                    with self._lock:
                         for i, s in enumerate(self._local_segments):
                             if s.path == latest.path:
                                 del self._local_segments[i]
                                 break
-                    except (ValueError, IndexError):
-                        pass
-                    self._local_segments.append(seg)
-                    try:
-                        self._sealed.remove(sealed)
-                    except ValueError:
-                        pass
-                    sealed.flushed = True
+                        self._local_segments.append(seg)
+                        try:
+                            self._sealed.remove(sealed)
+                        except ValueError:
+                            pass
+                        sealed.flushed = True
+                finally:
+                    self._segments_rwlock.write_release()
 
-                # Delete the old segment file (now replaced). Hold the write lock
-                # so concurrent reads that snapshotted the old path finish first.
-                if str(filepath) != latest.path:
-                    self._segments_rwlock.write_acquire()
-                    try:
-                        Path(latest.path).unlink(missing_ok=True)
-                    except Exception:
-                        logger.warning("Failed to delete old segment %s", latest.path, exc_info=True)
-                    finally:
-                        self._segments_rwlock.write_release()
+                logger.info(
+                    "Wrote consolidated segment %s: rows=%d (added=%d) bytes=%d seq=[%d,%d] elapsed_ms=%d",
+                    filename,
+                    combined.num_rows,
+                    new_table.num_rows,
+                    seg.size_bytes,
+                    combined_min_seq,
+                    combined_max_seq,
+                    int((time.monotonic() - consolidate_start) * 1000),
+                )
 
-                # GCS offload for the consolidated file.
+                # GCS upload overwrites the same object (same filename).
                 self._offload_to_gcs(filename, filepath)
                 self._gc_local_segments()
                 return
@@ -690,9 +728,10 @@ class DuckDBLogStore:
                 # Fall through to write as a new standalone segment.
 
         # Write as a new standalone segment.
-        filename = f"logs_{new_min_seq:019d}_{new_max_seq:019d}.parquet"
+        filename = f"logs_{new_min_seq:019d}.parquet"
         filepath = self._log_dir / filename
 
+        write_start = time.monotonic()
         try:
             tmp_path = filepath.with_suffix(".parquet.tmp")
             pq.write_table(
@@ -722,18 +761,18 @@ class DuckDBLogStore:
                 pass
             sealed.flushed = True
 
+        logger.info(
+            "Wrote segment %s: rows=%d bytes=%d seq=[%d,%d] elapsed_ms=%d",
+            filename,
+            new_table.num_rows,
+            seg.size_bytes,
+            new_min_seq,
+            new_max_seq,
+            int((time.monotonic() - write_start) * 1000),
+        )
+
         self._offload_to_gcs(filename, filepath)
         self._gc_local_segments()
-
-    def _offload_to_gcs(self, filename: str, filepath: Path) -> None:
-        """Copy a Parquet file to GCS (best-effort)."""
-        if not self._remote_log_dir:
-            return
-        remote_path = f"{self._remote_log_dir.rstrip('/')}/{filename}"
-        try:
-            _fsspec_copy(str(filepath), remote_path)
-        except Exception:
-            logger.warning("Failed to offload %s to GCS", filepath, exc_info=True)
 
     def _gc_local_segments(self) -> None:
         """Drop oldest local Parquet segments if count or size exceeds limits.
@@ -744,29 +783,90 @@ class DuckDBLogStore:
         """
         with self._lock:
             total_bytes = sum(s.size_bytes for s in self._local_segments)
-            to_delete: list[str] = []
+            to_delete: list[tuple[str, int]] = []
+            remaining_count = len(self._local_segments)
+            remaining_bytes = total_bytes
 
             while self._local_segments and (
                 len(self._local_segments) > self._max_local_segments or total_bytes > self._max_local_bytes
             ):
                 oldest = self._local_segments.popleft()
                 total_bytes -= oldest.size_bytes
-                to_delete.append(oldest.path)
+                to_delete.append((oldest.path, oldest.size_bytes))
+                remaining_count -= 1
+                remaining_bytes -= oldest.size_bytes
 
         if not to_delete:
             return
 
-        # Hold the write lock while deleting files so concurrent reads
+        # Hold the write lock while deleting local files so concurrent reads
         # (which hold the read lock) finish before we unlink anything.
         self._segments_rwlock.write_acquire()
         try:
-            for path in to_delete:
+            for path, _ in to_delete:
                 try:
                     Path(path).unlink(missing_ok=True)
                 except Exception:
                     logger.warning("Failed to delete old segment %s", path, exc_info=True)
         finally:
             self._segments_rwlock.write_release()
+
+        logger.info(
+            "GC'd %d local segment(s), freed=%d bytes, remaining=%d segments / %d bytes",
+            len(to_delete),
+            sum(b for _, b in to_delete),
+            remaining_count,
+            remaining_bytes,
+        )
+
+    def _drop_missing_local_segments(self, paths: list[str]) -> list[str]:
+        """Filter ``paths`` to those that still exist on disk.
+
+        If any are missing they're also pruned from ``_local_segments`` so
+        future reads don't repeatedly hit the same DuckDB error. Vanishing
+        files normally come from out-of-band deletion (manual ``rm``, disk
+        pressure outside our GC, leftover entries from an old filename
+        format) — anything our own GC removes is gone from the in-memory
+        list before the file is unlinked.
+        """
+        existing: list[str] = []
+        missing: list[str] = []
+        for p in paths:
+            if Path(p).exists():
+                existing.append(p)
+            else:
+                missing.append(p)
+        if not missing:
+            return existing
+
+        missing_set = set(missing)
+        with self._lock:
+            self._local_segments = deque(s for s in self._local_segments if s.path not in missing_set)
+        logger.warning(
+            "Pruned %d missing local segment(s) from in-memory index (e.g. %s)",
+            len(missing),
+            missing[:3],
+        )
+        return existing
+
+    def _offload_to_gcs(self, filename: str, filepath: Path) -> None:
+        """Copy a Parquet file to GCS (best-effort)."""
+        if not self._remote_log_dir:
+            return
+        remote_path = f"{self._remote_log_dir.rstrip('/')}/{filename}"
+        upload_start = time.monotonic()
+        try:
+            _fsspec_copy(str(filepath), remote_path)
+        except Exception:
+            logger.warning("Failed to offload %s to GCS", filepath, exc_info=True)
+            return
+        logger.info(
+            "Offloaded %s to %s: bytes=%d elapsed_ms=%d",
+            filename,
+            remote_path,
+            filepath.stat().st_size,
+            int((time.monotonic() - upload_start) * 1000),
+        )
 
     # ------------------------------------------------------------------
     # Internal: read
@@ -786,51 +886,18 @@ class DuckDBLogStore:
         # Acquire the segments read lock BEFORE snapshotting paths. This
         # guarantees that no file in our snapshot can be deleted (by GC or
         # consolidation) until we release the lock after DuckDB is done.
+        # Concurrent read count is capped at the RPC layer by
+        # ConcurrencyLimitInterceptor on the LogService endpoint.
         self._segments_rwlock.read_acquire()
         try:
-            with self._lock:
-                segments = list(self._local_segments)
-                ram_tables: list[pa.Table] = [sb.table for sb in self._sealed]
-                ram_tables.extend(self._chunks)
-                if self._pending:
-                    ram_tables.append(_build_buffer_table(self._pending))
-                current_max_seq = self._next_seq - 1
-
-            parquet_files = [s.path for s in segment_filter.apply(segments)]
-
-            where_clause = " AND ".join(where_parts)
-
-            if include_key_in_select:
-                select_cols = "seq, key, source, data, epoch_ms, level"
-            else:
-                select_cols = "seq, source, data, epoch_ms, level"
-
-            order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
-            limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
-
-            # Register each RAM table individually so DuckDB scans them
-            # via zero-copy Arrow, avoiding a pa.concat_tables() copy.
-            with self._pool.checkout(ram_tables) as (conn, ram_names):
-                source = _build_union_source(parquet_files, ram_names)
-
-                # For tail+prefix queries, try a seq-bounded scan first. The
-                # last max_lines rows must have seq within a bounded range of
-                # the global max. Use a generous margin and fall back to a
-                # full scan if we get fewer rows than requested. Skip this
-                # for exact-key queries since row-group pruning already
-                # narrows the scan sufficiently.
-                rows = None
-                if tail and max_lines > 0 and include_key_in_select:
-                    seq_lower = max(0, current_max_seq - max_lines * _TAIL_SEQ_MARGIN)
-                    bounded_where = f"{where_clause} AND seq > {seq_lower}"
-                    sql = f"SELECT {select_cols} FROM ({source}) WHERE {bounded_where} {order} {limit}"
-                    rows = conn.execute(sql, params).fetchall()
-                    if len(rows) < max_lines:
-                        rows = None  # margin was too tight, fall back
-
-                if rows is None:
-                    sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
-                    rows = conn.execute(sql, params).fetchall()
+            rows = self._run_read_locked(
+                where_parts=where_parts,
+                params=params,
+                max_lines=max_lines,
+                tail=tail,
+                include_key_in_select=include_key_in_select,
+                segment_filter=segment_filter,
+            )
         finally:
             self._segments_rwlock.read_release()
 
@@ -871,10 +938,89 @@ class DuckDBLogStore:
 
         return LogReadResult(entries=entries, cursor=max_seq)
 
+    def _run_read_locked(
+        self,
+        *,
+        where_parts: list[str],
+        params: dict,
+        max_lines: int,
+        tail: bool,
+        include_key_in_select: bool,
+        segment_filter: _SegmentFilter,
+    ) -> list[tuple]:
+        """Snapshot in-memory buffers and run the DuckDB query. Caller holds
+        the segments read lock.
+
+        Fast path for filtered tail reads (no exact key): restrict seq to the
+        last max_lines * _TAIL_SEQ_MARGIN entries and retry if too sparse.
+        Row-group pruning on `seq` lets DuckDB skip whole files.
+
+        Working set cap: at most _MAX_PARQUETS_PER_READ newest segments and
+        _MAX_PARQUET_BYTES_PER_READ cumulative bytes. Callers with stale
+        cursors will make forward progress across successive reads.
+        """
+        with self._lock:
+            segments = list(self._local_segments)
+            ram_tables: list[pa.Table] = [sb.table for sb in self._sealed]
+            ram_tables.extend(self._chunks)
+            if self._pending:
+                ram_tables.append(_build_buffer_table(self._pending))
+            current_max_seq = self._next_seq - 1
+
+        segments = _cap_segments(segment_filter.apply(segments))
+        parquet_files = [s.path for s in segments]
+        parquet_files = self._drop_missing_local_segments(parquet_files)
+
+        where_clause = " AND ".join(where_parts)
+        select_cols = (
+            "seq, key, source, data, epoch_ms, level" if include_key_in_select else "seq, source, data, epoch_ms, level"
+        )
+        order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
+        limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
+
+        # Register each RAM table individually so DuckDB scans them via
+        # zero-copy Arrow, avoiding a pa.concat_tables() copy.
+        with self._pool.checkout(ram_tables) as (conn, ram_names):
+            source = _build_union_source(parquet_files, ram_names)
+
+            # Seq-bounded fast path: only useful for filtered tail reads
+            # where `key` row-group stats can't already prune (i.e. regex
+            # / prefix scans, which is the `include_key_in_select` path).
+            # Exact-key tails are already pruned by row-group `key` stats.
+            if tail and max_lines > 0 and include_key_in_select:
+                seq_lower = max(0, current_max_seq - max_lines * _TAIL_SEQ_MARGIN)
+                bounded_where = f"{where_clause} AND seq > {seq_lower}"
+                sql = f"SELECT {select_cols} FROM ({source}) WHERE {bounded_where} {order} {limit}"
+                rows = conn.execute(sql, params).fetchall()
+                if len(rows) >= max_lines:
+                    return rows
+
+            sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
+            return conn.execute(sql, params).fetchall()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _cap_segments(segments: list[_LocalSegment]) -> list[_LocalSegment]:
+    """Cap a segment list at the newest _MAX_PARQUETS_PER_READ entries and
+    _MAX_PARQUET_BYTES_PER_READ cumulative bytes, returned in ascending
+    min_seq order.
+    """
+    if not segments:
+        return segments
+    newest_first = sorted(segments, key=lambda s: s.min_seq, reverse=True)[:_MAX_PARQUETS_PER_READ]
+    capped: list[_LocalSegment] = []
+    total = 0
+    for seg in newest_first:
+        if capped and total + seg.size_bytes > _MAX_PARQUET_BYTES_PER_READ:
+            break
+        capped.append(seg)
+        total += seg.size_bytes
+    capped.sort(key=lambda s: s.min_seq)
+    return capped
 
 
 def _regex_literal_prefix(pattern: str) -> str:

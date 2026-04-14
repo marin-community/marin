@@ -36,6 +36,8 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
     outputs:
       label-prefix: ${{ steps.label.outputs.prefix }}
     steps:
@@ -103,11 +105,15 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Write SSH key
+      - name: Set up OS Login SSH key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.MARIN_SSH_KEY }}" > ~/.ssh/marin_ray_cluster.pem
-          chmod 600 ~/.ssh/marin_ray_cluster.pem
+          ssh-keygen -t rsa -b 4096 -f ~/.ssh/google_compute_engine -N "" -q -C "gha-${{ github.run_id }}-${{ github.run_attempt }}"
+          chmod 600 ~/.ssh/google_compute_engine
+          gcloud compute os-login ssh-keys add \
+            --key-file ~/.ssh/google_compute_engine.pub \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --ttl=2h
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -161,6 +167,112 @@ jobs:
             --tb=short -v \
             --timeout=1200
 
+      - name: Collect controller and worker logs
+        if: failure()
+        env:
+          LOG_DIR: ${{ github.workspace }}/iris-cloud-logs
+          LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
+          PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          mkdir -p "$LOG_DIR"
+          MANAGED_LABEL="iris-${LABEL_PREFIX}-managed"
+          CONTROLLER_LABEL="iris-${LABEL_PREFIX}-controller"
+
+          # Always try to grab docker/host logs directly from every VM we
+          # spun up. This works even when the controller never became
+          # reachable (e.g. tunnel never opened, controller crashed during
+          # boot), which is exactly the case where these logs matter most.
+          gcloud compute instances list \
+            --project="$PROJECT" \
+            --filter="labels.${MANAGED_LABEL}=true OR labels.${CONTROLLER_LABEL}=true" \
+            --format="csv[no-heading](name,zone,labels.list())" 2>/dev/null \
+          | while IFS=, read -r name zone labels; do
+              [ -z "$name" ] && continue
+              role=worker
+              case "$labels" in *"$CONTROLLER_LABEL"*) role=controller ;; esac
+              echo "Fetching host logs from $role $name ($zone)"
+              out="$LOG_DIR/${role}-${name}"
+              gcloud compute ssh "$name" \
+                --project="$PROJECT" --zone="$zone" \
+                --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+                --ssh-key-file ~/.ssh/google_compute_engine \
+                --quiet \
+                --command '
+                set +e
+                echo "=== docker ps -a ==="
+                sudo docker ps -a
+                for cid in $(sudo docker ps -aq); do
+                  echo "=== docker logs $cid ==="
+                  sudo docker logs --timestamps --tail 5000 "$cid" 2>&1
+                done
+                echo "=== startup script ==="
+                sudo journalctl -u google-startup-scripts.service --no-pager 2>&1 | tail -n 2000
+                echo "=== kernel/cloud-init ==="
+                sudo journalctl -u cloud-final.service --no-pager 2>&1 | tail -n 500
+              ' > "${out}.log" 2>&1 || echo "ssh to $name failed (see ${out}.log)"
+            done
+
+          if [ -z "$IRIS_CONTROLLER_URL" ]; then
+            echo "No controller URL, skipping RPC-based log collection"
+            exit 0
+          fi
+          cd lib/iris
+
+          # Cluster status (controller process info + worker summary)
+          uv run --group dev iris \
+            --config=examples/smoke-gcp.yaml \
+            cluster status \
+            --url "$IRIS_CONTROLLER_URL" \
+            > "$LOG_DIR/cluster-status.txt" 2>&1 || true
+
+          # Fetch recent controller and worker logs via RPC
+          uv run --group dev python3 -c "
+          import json, sys
+          from iris.rpc import controller_connect
+          from iris.rpc import controller_pb2, job_pb2
+
+          url = '$IRIS_CONTROLLER_URL'
+          client = controller_connect.ControllerServiceClientSync(url)
+
+          # Controller process status with recent logs
+          proc = client.get_process_status(job_pb2.GetProcessStatusRequest())
+          with open('$LOG_DIR/controller-process.json', 'w') as f:
+              json.dump({
+                  'git_hash': proc.process_info.git_hash,
+                  'pid': proc.process_info.pid,
+                  'memory_mb': proc.process_info.memory_mb,
+                  'recent_logs': [l.message for l in proc.process_info.recent_logs],
+              }, f, indent=2)
+
+          # List workers and fetch status for each
+          workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
+          for w in workers:
+              wid = w.worker_id
+              try:
+                  status = client.get_worker_status(
+                      controller_pb2.Controller.GetWorkerStatusRequest(worker_id=wid)
+                  )
+                  with open(f'$LOG_DIR/worker-{wid}.json', 'w') as f:
+                      json.dump({
+                          'worker_id': wid,
+                          'healthy': w.healthy,
+                          'address': w.address,
+                          'recent_logs': [l.message for l in (status.process_info.recent_logs if status.HasField('process_info') else [])],
+                      }, f, indent=2)
+              except Exception as e:
+                  with open(f'$LOG_DIR/worker-{wid}.txt', 'w') as f:
+                      f.write(f'Failed to fetch status: {e}\n')
+          " 2>&1 || true
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iris-cloud-smoke-logs
+          path: iris-cloud-logs/
+          retention-days: 14
+          if-no-files-found: ignore
+
       - name: Stop tunnel
         if: always()
         run: |
@@ -174,6 +286,13 @@ jobs:
           cd lib/iris && uv run --group dev iris -v \
             --config=examples/smoke-gcp.yaml \
             cluster stop --label "$LABEL_PREFIX" || true
+
+      - name: Remove OS Login SSH key
+        if: always()
+        run: |
+          gcloud compute os-login ssh-keys remove \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --key-file ~/.ssh/google_compute_engine.pub || true
 
       - name: Upload screenshots
         if: always()

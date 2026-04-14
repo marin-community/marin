@@ -241,17 +241,7 @@ The `tokenized` directory contains the tokenized dataset.
 ### Inspecting the Experiment in the Data Browser
 
 The JSON file contains a record of the experiment, including the steps and dependencies.
-(Note that this link won't work unless you [start the data browser](data-browser.md), and you'll need to replace `3000` with whatever port your config uses.)
-
-You can do that by running:
-
-```bash
-cd data_browser
-npm install
-uv run python run-dev.py --config conf/local.conf
-```
-
-which should start a browser pointed at [http://localhost:3000](http://localhost:3000).
+You can browse it using the [data browser](https://github.com/marin-community/data_browser) — see its README for setup instructions. Once running, it should start a browser pointed at [http://localhost:3000](http://localhost:3000).
 
 From there, you can click on the first link to select the prefix directory, then navigate to the experiment JSON file (experiments -> `train_tiny_model_cpu-xxxxxx.json`).
 Then click on "Go to experiment" to see the details of your experiment.

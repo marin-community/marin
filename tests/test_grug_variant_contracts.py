@@ -14,7 +14,6 @@ import json
 import logging
 import uuid
 from io import StringIO
-
 from pathlib import Path
 
 import equinox as eqx

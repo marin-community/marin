@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import functools
 import io
 import logging
 import os
@@ -13,12 +12,12 @@ from urllib.parse import urlparse
 import fsspec
 import humanfriendly
 from fsspec.implementations.local import LocalFileSystem
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 from huggingface_hub import create_commit, upload_folder
 from tqdm_loggable.auto import tqdm
 
 from marin.execution import ExecutorStep, InputName
-from marin.utilities.fn_utils import with_retries
 from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
@@ -222,16 +221,22 @@ def _actually_upload_to_hf(config: UploadToHfConfig):
                 )
 
 
-@functools.wraps(upload_folder)
-@with_retries()
 def retrying_upload_folder(*args, **kwargs):
-    return upload_folder(*args, **kwargs)
+    return retry_with_backoff(
+        lambda: upload_folder(*args, **kwargs),
+        max_attempts=3,
+        backoff=ExponentialBackoff(initial=2.0, maximum=30.0, factor=2.0),
+        operation="upload_folder",
+    )
 
 
-@functools.wraps(create_commit)
-@with_retries()
 def retrying_create_commit(*args, **kwargs):
-    return create_commit(*args, **kwargs)
+    return retry_with_backoff(
+        lambda: create_commit(*args, **kwargs),
+        max_attempts=3,
+        backoff=ExponentialBackoff(initial=2.0, maximum=30.0, factor=2.0),
+        operation="create_commit",
+    )
 
 
 def _wrap_in_buffered_base(fileobj):

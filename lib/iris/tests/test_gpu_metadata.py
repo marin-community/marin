@@ -3,7 +3,6 @@
 """GPU worker metadata test with mocked nvidia-smi."""
 
 import subprocess
-import time
 import uuid
 from unittest.mock import patch
 
@@ -12,9 +11,9 @@ from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.managed_thread import ThreadContainer
-from iris.rpc import cluster_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration
+from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
+from rigging.timing import Duration, ExponentialBackoff
 
 from .conftest import _make_controller_only_config
 
@@ -58,17 +57,20 @@ def test_gpu_worker_metadata(tmp_path):
 
             try:
                 controller_client = ControllerServiceClientSync(address=url, timeout_ms=10000)
-                deadline = time.monotonic() + 15.0
-                workers = []
-                while time.monotonic() < deadline:
-                    request = cluster_pb2.Controller.ListWorkersRequest()
-                    response = controller_client.list_workers(request)
-                    workers = [w for w in response.workers if w.healthy]
-                    if workers:
-                        break
-                    time.sleep(0.5)
 
-                assert workers, "Worker did not register within timeout"
+                workers: list = []
+
+                def _has_healthy_worker() -> bool:
+                    nonlocal workers
+                    response = controller_client.list_workers(controller_pb2.Controller.ListWorkersRequest())
+                    workers = [w for w in response.workers if w.healthy]
+                    return len(workers) > 0
+
+                ExponentialBackoff(initial=0.05, maximum=0.5).wait_until_or_raise(
+                    _has_healthy_worker,
+                    timeout=Duration.from_seconds(15.0),
+                    error_message="Worker did not register within timeout",
+                )
                 w = workers[0]
                 meta = w.metadata
                 assert meta.gpu_count == 8
@@ -81,7 +83,7 @@ def test_gpu_worker_metadata(tmp_path):
 
                 attrs = meta.attributes
                 assert WellKnownAttribute.GPU_VARIANT in attrs
-                assert "H100" in attrs[WellKnownAttribute.GPU_VARIANT].string_value
+                assert "h100" in attrs[WellKnownAttribute.GPU_VARIANT].string_value
                 assert WellKnownAttribute.GPU_COUNT in attrs
                 assert attrs[WellKnownAttribute.GPU_COUNT].int_value == 8
 

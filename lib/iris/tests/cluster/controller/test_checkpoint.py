@@ -15,7 +15,7 @@ from iris.cluster.controller.controller import (
     ControllerConfig,
 )
 from iris.cluster.controller.db import ControllerDB
-from iris.time_utils import Duration
+from rigging.timing import Duration
 from tests.cluster.controller.conftest import FakeProvider
 
 
@@ -202,6 +202,19 @@ def test_download_from_explicit_path_pairs_auth_db(tmp_path):
     assert (local_db_dir / "controller.sqlite3").exists()
 
     assert (local_db_dir / "auth.sqlite3").exists(), "auth DB should be downloaded into local_db_dir"
+
+
+def test_download_from_explicit_path_pairs_profiles_db(tmp_path):
+    """Restoring from checkpoint includes the profiles DB."""
+    remote_dir = f"file://{tmp_path}/remote"
+    source_db = ControllerDB(db_dir=tmp_path / "source")
+    path, _ = write_checkpoint(source_db, remote_dir)
+    source_db.close()
+
+    local_db_dir = tmp_path / "local"
+    result = download_checkpoint_to_local(remote_dir, local_db_dir, checkpoint_dir=path)
+    assert result is True
+    assert (local_db_dir / "profiles.sqlite3").exists(), "profiles DB should be downloaded into local_db_dir"
 
 
 def test_periodic_checkpoint_inline(tmp_path):

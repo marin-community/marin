@@ -1,18 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import gzip
 import json
-from io import BytesIO
+import threading
+from collections.abc import Iterator
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import Mock, patch
 
 import pytest
 import zstandard as zstd
-from iris.marin_fs import open_url as _real_open_url
-from marin.datakit.download.nemotron_v1 import download_nemotron_cc
 
-_OPEN_URL_TARGET = "marin.datakit.download.nemotron_v1.open_url"
-_REQUESTS_SESSION_TARGET = "marin.datakit.download.nemotron_v1.requests.Session"
+from marin.datakit.download.nemotron_v1 import NCC_PATHS_SUFFIX, download_nemotron_cc
 
 SAMPLE_NEMOTRON_RECORDS = [
     {
@@ -39,98 +38,79 @@ SAMPLE_NEMOTRON_RECORDS = [
 ]
 
 
-def create_zstd_compressed_jsonl(records: list[dict]) -> bytes:
-    jsonl_content = "\n".join(json.dumps(record) for record in records) + "\n"
-    jsonl_bytes = jsonl_content.encode("utf-8")
-    cctx = zstd.ZstdCompressor()
-    return cctx.compress(jsonl_bytes)
+def _zstd_jsonl(records: list[dict]) -> bytes:
+    jsonl = ("\n".join(json.dumps(r) for r in records) + "\n").encode("utf-8")
+    return zstd.ZstdCompressor().compress(jsonl)
 
 
-def create_paths_file(paths: list[str]) -> bytes:
-    import gzip
-
-    content = "\n".join(paths) + "\n"
-    return gzip.compress(content.encode("utf-8"))
+def _gzip_text(lines: list[str]) -> bytes:
+    return gzip.compress(("\n".join(lines) + "\n").encode("utf-8"))
 
 
-def read_all_jsonl_zst(directory: Path, pattern: str = "*.jsonl.zst") -> list[dict]:
+def _read_all_jsonl_zst(directory: Path, pattern: str = "*.jsonl.zst") -> list[dict]:
     records = []
     dctx = zstd.ZstdDecompressor()
     for file_path in sorted(directory.glob(pattern)):
-        with open(file_path, "rb") as f:
-            with dctx.stream_reader(f) as reader:
-                text = reader.read().decode("utf-8")
-                for line in text.splitlines():
-                    if line.strip():
-                        records.append(json.loads(line))
+        with open(file_path, "rb") as f, dctx.stream_reader(f) as reader:
+            for line in reader.read().decode("utf-8").splitlines():
+                if line.strip():
+                    records.append(json.loads(line))
     return records
 
 
 @pytest.fixture()
-def mock_paths_open(tmp_path):
-    """Patches open_url to serve a local paths file for commoncrawl URLs."""
-    paths_file = tmp_path / "data-jsonl.paths.gz"
+def local_ncc_server(tmp_path) -> Iterator[tuple[str, Path]]:
+    """Serves `tmp_path / "server"` over HTTP as a stand-in for data.commoncrawl.org."""
+    server_root = tmp_path / "server"
+    server_root.mkdir()
 
-    def _make_mock(paths: list[str]):
-        paths_file.write_bytes(create_paths_file(paths))
+    class Handler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(server_root), **kwargs)
 
-        def _mock_open_url(path, mode="r", **kwargs):
-            if "data.commoncrawl.org" in path and "data-jsonl.paths.gz" in path:
-                return paths_file.open("rb")
-            return _real_open_url(path, mode, **kwargs)
+        def log_message(self, format, *args):  # noqa: A002  # SimpleHTTPRequestHandler signature
+            pass
 
-        return _mock_open_url
-
-    return _make_mock
-
-
-def _mock_session_for(url_to_data: dict[str, bytes]):
-    """Build a mock requests.Session whose .get() dispatches on URL substrings."""
-    session = Mock()
-
-    def mock_get(url, **kwargs):
-        response = Mock()
-        response.raise_for_status = Mock()
-        for key, data in url_to_data.items():
-            if key in url:
-                response.raw = BytesIO(data)
-                return response
-        raise ValueError(f"Unexpected URL: {url}")
-
-    session.return_value.get = mock_get
-    session.return_value.mount = Mock()
-    return session
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = httpd.server_address
+        yield f"http://{host}:{port}", server_root
+    finally:
+        httpd.shutdown()
+        thread.join()
 
 
-def test_download_nemotron_cc_pipeline(tmp_path, mock_paths_open):
+def _publish(server_root: Path, relative_path: str, data: bytes) -> None:
+    full = server_root / relative_path
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_bytes(data)
+
+
+def test_download_nemotron_cc_pipeline(tmp_path, local_ncc_server):
+    base_url, server_root = local_ncc_server
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
     paths = ["contrib/Nemotron/file1.jsonl.zstd", "contrib/Nemotron/file2.jsonl.zstd"]
-    file1_data = create_zstd_compressed_jsonl([SAMPLE_NEMOTRON_RECORDS[0]])
-    file2_data = create_zstd_compressed_jsonl(SAMPLE_NEMOTRON_RECORDS[1:])
+    _publish(server_root, NCC_PATHS_SUFFIX, _gzip_text(paths))
+    _publish(server_root, paths[0], _zstd_jsonl([SAMPLE_NEMOTRON_RECORDS[0]]))
+    _publish(server_root, paths[1], _zstd_jsonl(SAMPLE_NEMOTRON_RECORDS[1:]))
 
-    with (
-        patch(_OPEN_URL_TARGET, side_effect=mock_paths_open(paths)),
-        patch(_REQUESTS_SESSION_TARGET, _mock_session_for({"file1": file1_data, "file2": file2_data})),
-    ):
-        download_nemotron_cc(str(output_dir))
+    download_nemotron_cc(str(output_dir), base_url=base_url)
 
-    all_records = read_all_jsonl_zst(output_dir / "contrib" / "Nemotron")
+    all_records = _read_all_jsonl_zst(output_dir / "contrib" / "Nemotron")
 
     assert len(all_records) == 3
-    assert all_records[0]["id"] == "record-001"
-    assert all_records[1]["id"] == "record-002"
-    assert all_records[2]["id"] == "record-003"
-
+    assert [r["id"] for r in all_records] == ["record-001", "record-002", "record-003"]
     for record in all_records:
-        assert "id" in record
-        assert "text" in record
         assert record["source"] == "nemotron"
         assert "metadata" in record
 
 
-def test_download_nemotron_cc_dolma_format(tmp_path, mock_paths_open):
+def test_download_nemotron_cc_dolma_format(tmp_path, local_ncc_server):
+    base_url, server_root = local_ncc_server
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -143,17 +123,13 @@ def test_download_nemotron_cc_dolma_format(tmp_path, mock_paths_open):
         "perplexity": 245.3,
         "bucket": "high",
     }
+    path = "contrib/Nemotron/test.jsonl.zstd"
+    _publish(server_root, NCC_PATHS_SUFFIX, _gzip_text([path]))
+    _publish(server_root, path, _zstd_jsonl([nemotron_record]))
 
-    paths = ["contrib/Nemotron/test.jsonl.zstd"]
-    compressed_data = create_zstd_compressed_jsonl([nemotron_record])
+    download_nemotron_cc(str(output_dir), base_url=base_url)
 
-    with (
-        patch(_OPEN_URL_TARGET, side_effect=mock_paths_open(paths)),
-        patch(_REQUESTS_SESSION_TARGET, _mock_session_for({"test": compressed_data})),
-    ):
-        download_nemotron_cc(str(output_dir))
-
-    records = read_all_jsonl_zst(output_dir / "contrib" / "Nemotron")
+    records = _read_all_jsonl_zst(output_dir / "contrib" / "Nemotron")
     assert len(records) == 1
 
     dolma_record = records[0]
@@ -172,21 +148,20 @@ def test_download_nemotron_cc_dolma_format(tmp_path, mock_paths_open):
     assert "nemotron_text" not in metadata
 
 
-def test_download_nemotron_cc_skips_existing(tmp_path, mock_paths_open):
+def test_download_nemotron_cc_skips_existing(tmp_path, local_ncc_server):
+    base_url, server_root = local_ncc_server
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
-    paths = ["contrib/Nemotron/existing.jsonl.zstd"]
+    path = "contrib/Nemotron/existing.jsonl.zstd"
+    _publish(server_root, NCC_PATHS_SUFFIX, _gzip_text([path]))
+    # Intentionally do NOT publish the data file — if the pipeline tries to fetch it,
+    # the server will return 404 and the test will fail.
 
     existing_output = output_dir / "contrib" / "Nemotron" / "existing.jsonl.zst"
     existing_output.parent.mkdir(parents=True)
     existing_output.write_text("existing")
 
-    with (
-        patch(_OPEN_URL_TARGET, side_effect=mock_paths_open(paths)),
-        patch(_REQUESTS_SESSION_TARGET) as mock_session,
-    ):
-        download_nemotron_cc(str(output_dir))
+    download_nemotron_cc(str(output_dir), base_url=base_url)
 
-    mock_session.return_value.get.assert_not_called()
     assert existing_output.read_text() == "existing"

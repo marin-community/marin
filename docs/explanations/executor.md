@@ -64,7 +64,7 @@ has it into the local marin prefix, respecting the per-path transfer budget.
 
 - `budget_gb` (default 10) caps how much data (in GB) a single step may copy
   cross-region.  The budget is enforced via the `mirror_budget` context manager
-  from `iris.marin_fs`.
+  from `rigging.filesystem`.
 - Paths that already exist in the local prefix are not re-copied.
 - `mirrored()` can wrap plain strings or `VersionedValue` / `InputName`
   references.
@@ -85,7 +85,7 @@ The environment will have the following packages installed:
   [`pyproject.toml`](https://github.com/marin-community/marin/blob/main/pyproject.toml)), which include fsspec, draccus, etc.
 - **Step-specific packages**: remote steps can specify
   `pip_dependency_groups` via the `remote()` wrapper, a list of either (i) a key from
-  `project.optional-dependencies` dictionary (e.g., `rl`), or (2) a
+  `project.optional-dependencies` in [`lib/marin/pyproject.toml`](https://github.com/marin-community/marin/blob/main/lib/marin/pyproject.toml) (e.g., `rl`), or (2) a
   specific pip package.  This allows each step to have its own environment and
   not interfere with other steps.
 
@@ -105,7 +105,7 @@ Finally, to launch an experiment, use [`ray_run.py`](https://github.com/marin-co
 launches jobs to the Ray cluster:
 
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py -- python experiments/hello_world.py
+uv run lib/marin/src/marin/run/ray_run.py -- python experiments/tutorials/hello_world.py
 ```
 
 This script ensure that:

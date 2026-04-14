@@ -20,11 +20,15 @@ from iris.cli.build import (
     find_marin_root,
     get_git_sha,
 )
-from iris.cli.main import require_controller_url
+from iris.cli.main import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
 from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
-from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
+from iris.rpc import vm_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
-from iris.time_utils import Timestamp
+from iris.time_proto import timestamp_from_proto
+from rigging.config_discovery import list_cluster_configs
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 # =============================================================================
 # Helpers
@@ -55,15 +59,15 @@ def _format_status_table(status: vm_pb2.AutoscalerStatus) -> str:
 
 
 def _get_autoscaler_status(controller_url: str) -> vm_pb2.AutoscalerStatus:
-    client = cluster_connect.ControllerServiceClientSync(controller_url)
-    request = cluster_pb2.Controller.GetAutoscalerStatusRequest()
-    return client.get_autoscaler_status(request).status
+    with rpc_client(controller_url) as client:
+        request = controller_pb2.Controller.GetAutoscalerStatusRequest()
+        return client.get_autoscaler_status(request).status
 
 
-def _get_worker_status(controller_url: str, worker_id: str) -> cluster_pb2.Controller.GetWorkerStatusResponse:
-    client = cluster_connect.ControllerServiceClientSync(controller_url)
-    request = cluster_pb2.Controller.GetWorkerStatusRequest(id=worker_id)
-    return client.get_worker_status(request)
+def _get_worker_status(controller_url: str, worker_id: str) -> controller_pb2.Controller.GetWorkerStatusResponse:
+    with rpc_client(controller_url) as client:
+        request = controller_pb2.Controller.GetWorkerStatusRequest(id=worker_id)
+        return client.get_worker_status(request)
 
 
 def _parse_ghcr_tag(image_tag: str) -> tuple[str, str, str] | None:
@@ -207,10 +211,25 @@ def cluster(ctx):
 # =============================================================================
 
 
+@cluster.command("list")
+def cluster_list():
+    """List available cluster configurations."""
+    configs = list_cluster_configs(dirs=IRIS_CLUSTER_CONFIG_DIRS)
+    if not configs:
+        click.echo("No cluster configurations found.")
+        return
+    click.echo("Available clusters:")
+    for name, path in sorted(configs.items()):
+        click.echo(f"  {name:30s} {path}")
+
+
 @cluster.command("start")
 @click.option("--local", is_flag=True, help="Create a local cluster for testing that mimics the original config")
+@click.option(
+    "--fresh", is_flag=True, default=False, help="Start with an empty database, ignoring any remote checkpoint"
+)
 @click.pass_context
-def cluster_start(ctx, local: bool):
+def cluster_start(ctx, local: bool, fresh: bool):
     """Start controller and wait for health.
 
     Each platform handles its own controller lifecycle:
@@ -256,7 +275,7 @@ def cluster_start(ctx, local: bool):
         else:
             iris_config = IrisConfig(config)
             bundle = iris_config.provider_bundle()
-            address = bundle.controller.start_controller(config)
+            address = bundle.controller.start_controller(config, fresh=fresh)
             click.echo(f"Controller started at {address}")
             click.echo("\nController is running with integrated autoscaler.")
             click.echo("Use 'iris --config=... cluster status' to check cluster state.")
@@ -286,7 +305,7 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
 
     # Set ephemeral state dir via marin_temp_bucket, which resolves
     # region-appropriate storage from MARIN_PREFIX.
-    from iris.marin_fs import marin_temp_bucket
+    from rigging.filesystem import marin_temp_bucket
 
     config.storage.remote_state_dir = marin_temp_bucket(ttl_days=7, prefix=f"iris/state/{label_prefix}")
 
@@ -321,20 +340,20 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
         with bundle.controller.tunnel(address) as url:
             click.echo(f"Tunnel ready: {url}")
 
-            client = cluster_connect.ControllerServiceClientSync(url, timeout_ms=30000)
-            deadline = time.monotonic() + worker_timeout
-            healthy_count = 0
-            while time.monotonic() < deadline:
-                workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
-                healthy = [w for w in workers if w.healthy]
-                healthy_count = len(healthy)
-                if healthy_count >= min_workers:
-                    break
-                time.sleep(2)
-            else:
-                raise click.ClickException(
-                    f"Only {healthy_count} of {min_workers} workers healthy after {worker_timeout}s"
-                )
+            with rpc_client(url) as client:
+                deadline = time.monotonic() + worker_timeout
+                healthy_count = 0
+                while time.monotonic() < deadline:
+                    workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
+                    healthy = [w for w in workers if w.healthy]
+                    healthy_count = len(healthy)
+                    if healthy_count >= min_workers:
+                        break
+                    time.sleep(2)
+                else:
+                    raise click.ClickException(
+                        f"Only {healthy_count} of {min_workers} workers healthy after {worker_timeout}s"
+                    )
 
             click.echo(f"{healthy_count} workers ready, writing URL to {url_file}")
             Path(url_file).write_text(url)
@@ -397,10 +416,10 @@ def cluster_status_cmd(ctx):
     controller_url = require_controller_url(ctx)
     click.echo("Checking controller status...")
     try:
-        client = cluster_connect.ControllerServiceClientSync(controller_url)
-        proc = client.get_process_status(cluster_pb2.GetProcessStatusRequest()).process_info
-        workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
-        as_status = client.get_autoscaler_status(cluster_pb2.Controller.GetAutoscalerStatusRequest()).status
+        with rpc_client(controller_url) as client:
+            proc = client.get_process_status(job_pb2.GetProcessStatusRequest()).process_info
+            workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
+            as_status = client.get_autoscaler_status(controller_pb2.Controller.GetAutoscalerStatusRequest()).status
         healthy = sum(1 for w in workers if w.healthy)
         click.echo("Controller Status:")
         click.echo("  Running: True")
@@ -443,28 +462,49 @@ def cluster_dashboard(ctx):
 
 
 @cluster.command("dashboard-proxy")
-@click.option("--port", default=8080, type=int, help="Local port to serve the dashboard on")
+@click.option("--port", default=8080, type=int, help="Local port for the RPC proxy")
 @click.pass_context
 def cluster_dashboard_proxy(ctx, port: int):
-    """Start a local dashboard that proxies RPC calls to the remote controller.
+    """Start a local dev dashboard that proxies RPC calls to the remote controller.
 
-    Serves the Vue dashboard UI locally and forwards all Connect RPC requests
-    to the upstream controller. Useful for viewing a remote controller without
-    SSH tunneling. Rebuilds dashboard assets on each run.
+    Runs the rsbuild dev server (with hot module replacement) for the Vue
+    frontend alongside a Python proxy that forwards Connect RPC requests to
+    the upstream controller. Open the rsbuild URL (printed on startup) in
+    your browser.
     """
+    import signal
+    import subprocess
+
     import uvicorn
 
-    from iris.cli.build import _ensure_dashboard_dist
     from iris.cluster.controller.dashboard import ProxyControllerDashboard
-
-    # Rebuild dashboard assets so the proxy always serves the latest UI.
-    _ensure_dashboard_dist()
+    from iris.cluster.dashboard_common import VUE_DIST_DIR
 
     controller_url = require_controller_url(ctx)
     dashboard = ProxyControllerDashboard(upstream_url=controller_url, port=port)
     click.echo(f"Proxying to controller at {controller_url}")
-    click.echo(f"Dashboard: http://localhost:{port}")
-    uvicorn.run(dashboard.app, host="127.0.0.1", port=port, log_level="info")
+
+    dashboard_dir = VUE_DIST_DIR.parent
+    click.echo(f"Starting rsbuild dev server in {dashboard_dir}")
+    click.echo("Installing npm dependencies...")
+    subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True)
+
+    dev_proc = subprocess.Popen(["npm", "run", "dev"], cwd=dashboard_dir)
+
+    def _cleanup(signum, frame):
+        dev_proc.terminate()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGINT, _cleanup)
+    signal.signal(signal.SIGTERM, _cleanup)
+
+    click.echo(f"RPC proxy: http://localhost:{port}")
+    click.echo("Rsbuild dev server will print its URL above (usually http://localhost:3000)")
+    try:
+        uvicorn.run(dashboard.app, host="127.0.0.1", port=port, log_level="info")
+    finally:
+        dev_proc.terminate()
+        dev_proc.wait()
 
 
 # =============================================================================
@@ -508,7 +548,7 @@ def vm_status(ctx, scale_group):
         click.echo(f"    Initializing: {counts.get('initializing', 0)}")
         click.echo(f"    Failed: {counts.get('failed', 0)}")
         click.echo(f"  Demand: {group.current_demand} (peak: {group.peak_demand})")
-        backoff_ms = Timestamp.from_proto(group.backoff_until).epoch_ms()
+        backoff_ms = timestamp_from_proto(group.backoff_until).epoch_ms()
         if backoff_ms > 0:
             click.echo(f"  Backoff until: {_format_timestamp(backoff_ms)}")
             click.echo(f"  Consecutive failures: {group.consecutive_failures}")
@@ -523,7 +563,7 @@ def vm_status(ctx, scale_group):
                     click.echo(f"      {vi.vm_id}: {vm_state_name(vi.state)} ({vi.address})")
                     if vi.init_error:
                         click.echo(f"        Error: {vi.init_error}")
-    last_eval_ms = Timestamp.from_proto(as_status.last_evaluation).epoch_ms()
+    last_eval_ms = timestamp_from_proto(as_status.last_evaluation).epoch_ms()
     click.echo(f"\nLast evaluation: {_format_timestamp(last_eval_ms)}")
 
 
@@ -571,7 +611,6 @@ def controller(ctx):
 @controller.command("serve")
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=10000, type=int, help="Bind port")
-@click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
 @click.option(
     "--checkpoint-path",
     default=None,
@@ -589,8 +628,14 @@ def controller(ctx):
     default=False,
     help="Start in dry-run mode: compute scheduling but suppress all side effects",
 )
+@click.option(
+    "--fresh",
+    is_flag=True,
+    default=False,
+    help="Start with an empty database, ignoring any remote checkpoint",
+)
 @click.pass_context
-def controller_serve(ctx, host, port, scheduler_interval, checkpoint_path, checkpoint_interval, dry_run):
+def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_run, fresh):
     """Start a local controller process.
 
     Loads the cluster config, restores from checkpoint, and runs the full
@@ -613,10 +658,10 @@ def controller_serve(ctx, host, port, scheduler_interval, checkpoint_path, check
         config,
         host=host,
         port=port,
-        scheduler_interval=scheduler_interval,
         checkpoint_path=checkpoint_path,
         checkpoint_interval=checkpoint_interval,
         dry_run=dry_run,
+        fresh=fresh,
     )
 
 
@@ -630,12 +675,12 @@ def controller_checkpoint(ctx, stop: bool):
     briefly and writes a consistent checkpoint DB copy.
     """
     controller_url = require_controller_url(ctx)
-    client = cluster_connect.ControllerServiceClientSync(controller_url)
-    try:
-        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest(), timeout_ms=60_000)
-    except Exception as e:
-        click.echo(f"Checkpoint failed: {e}", err=True)
-        raise SystemExit(1) from e
+    with rpc_client(controller_url) as client:
+        try:
+            resp = client.begin_checkpoint(controller_pb2.Controller.BeginCheckpointRequest(), timeout_ms=60_000)
+        except Exception as e:
+            click.echo(f"Checkpoint failed: {e}", err=True)
+            raise SystemExit(1) from e
 
     click.echo(f"Checkpoint DB written: {resp.checkpoint_path}")
     click.echo(f"  Jobs:    {resp.job_count}")
@@ -718,17 +763,15 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
         click.echo("Skipping pre-restart checkpoint.")
     else:
         click.echo(f"Taking checkpoint (timeout {checkpoint_timeout}s)...")
-        client = cluster_connect.ControllerServiceClientSync(controller_url)
-        try:
-            resp = client.begin_checkpoint(
-                cluster_pb2.Controller.BeginCheckpointRequest(),
-                timeout_ms=checkpoint_timeout * 1000,
-            )
-        except Exception as e:
-            click.echo(f"Checkpoint failed: {e}", err=True)
-            raise SystemExit(1) from e
-        finally:
-            client.close()
+        with rpc_client(controller_url) as client:
+            try:
+                resp = client.begin_checkpoint(
+                    controller_pb2.Controller.BeginCheckpointRequest(),
+                    timeout_ms=checkpoint_timeout * 1000,
+                )
+            except Exception as e:
+                click.echo(f"Checkpoint failed: {e}", err=True)
+                raise SystemExit(1) from e
         click.echo(f"Checkpoint: {resp.checkpoint_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
 
     # Build fresh images so the new controller VM gets the latest code
@@ -746,3 +789,154 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
         click.echo(f"Failed to restart controller: {e}", err=True)
         raise SystemExit(1) from e
     click.echo(f"Controller restarted at {address}")
+
+
+@controller.command("worker-restart")
+@click.option("--worker-id", multiple=True, help="Worker(s) to restart (repeatable; default: all)")
+@click.option("--timeout", type=int, default=120, help="Max seconds to wait per worker to become healthy")
+@click.option("--max-batch", type=int, default=64, help="Maximum workers to restart concurrently")
+@click.option(
+    "--observation-window",
+    type=int,
+    default=60,
+    help="Seconds to observe restarted workers for failures before advancing",
+)
+@click.pass_context
+def worker_restart(
+    ctx,
+    worker_id: tuple[str, ...],
+    timeout: int,
+    max_batch: int,
+    observation_window: int,
+):
+    """Rolling restart of workers with adaptive batch sizing.
+
+    Restarts workers in progressively larger batches (1, 2, 4, ... up to
+    --max-batch). After each batch, waits for workers to become healthy, then
+    observes them for --observation-window seconds to catch post-restart
+    failures. Aborts immediately if any worker fails to come back healthy or
+    develops failures during observation.
+
+    Running Docker containers are preserved and adopted by the new worker
+    process, so tasks are not disrupted.
+    """
+    controller_url = require_controller_url(ctx)
+
+    with rpc_client(controller_url) as client:
+        workers_resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
+        all_workers = workers_resp.workers
+
+        if worker_id:
+            requested = set(worker_id)
+            workers = [w for w in all_workers if w.worker_id in requested]
+            missing = requested - {w.worker_id for w in workers}
+            if missing:
+                click.echo(f"Workers not found: {', '.join(sorted(missing))}", err=True)
+                raise SystemExit(1)
+        else:
+            workers = list(all_workers)
+
+        if not workers:
+            click.echo("No workers to restart")
+            return
+
+        worker_ids = [w.worker_id for w in workers]
+        total = len(worker_ids)
+        click.echo(
+            f"Restarting {total} worker(s) "
+            f"(timeout={timeout}s, observation={observation_window}s, max_batch={max_batch})"
+        )
+
+        succeeded = 0
+        batch_size = 1
+        offset = 0
+
+        while offset < total:
+            batch = worker_ids[offset : offset + batch_size]
+            click.echo(f"\n--- Batch of {len(batch)} (workers {offset + 1}-{offset + len(batch)} of {total}) ---")
+
+            # Issue restart RPCs for the batch
+            for wid in batch:
+                click.echo(f"  Restarting {wid}...")
+                resp = client.restart_worker(
+                    controller_pb2.Controller.RestartWorkerRequest(worker_id=wid),
+                    timeout_ms=timeout * 1000,
+                )
+                if not resp.accepted:
+                    click.echo(f"  ABORT: restart rejected for {wid}: {resp.error}", err=True)
+                    _print_summary(succeeded, total - succeeded, offset)
+                    raise SystemExit(1)
+
+            # Wait for all workers in the batch to become healthy
+            click.echo(f"  Waiting for {len(batch)} worker(s) to become healthy...")
+            unhealthy = _wait_for_workers_healthy(client, set(batch), timeout)
+            if unhealthy:
+                click.echo(
+                    f"  ABORT: workers did not become healthy within {timeout}s: " f"{', '.join(sorted(unhealthy))}",
+                    err=True,
+                )
+                _print_summary(succeeded, total - succeeded, offset)
+                raise SystemExit(1)
+
+            click.echo(f"  All {len(batch)} worker(s) healthy. Observing for {observation_window}s...")
+            time.sleep(observation_window)
+
+            # Re-check health after observation window
+            failed_workers = _check_worker_health(client, set(batch))
+            if failed_workers:
+                click.echo(
+                    f"  ABORT: workers developed failures during observation: "
+                    f"{', '.join(f'{wid} ({msg})' for wid, msg in sorted(failed_workers))}",
+                    err=True,
+                )
+                _print_summary(succeeded, total - succeeded, offset)
+                raise SystemExit(1)
+
+            succeeded += len(batch)
+            offset += len(batch)
+            click.echo(f"  Batch OK ({succeeded}/{total} complete)")
+
+            # Double batch size for next round, capped at max_batch
+            batch_size = min(batch_size * 2, max_batch)
+
+    click.echo(f"\nDone: {succeeded}/{total} workers restarted successfully")
+
+
+def _wait_for_workers_healthy(client, worker_ids: set[str], timeout: int) -> set[str]:
+    """Poll until all workers in the set are healthy. Returns IDs that failed to become healthy."""
+    remaining = set(worker_ids)
+    backoff = ExponentialBackoff(initial=5.0, maximum=5.0, jitter=0.0)
+
+    def _all_healthy() -> bool:
+        try:
+            resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
+            for w in resp.workers:
+                if w.worker_id in remaining and w.healthy:
+                    remaining.discard(w.worker_id)
+        except Exception:
+            pass
+        return len(remaining) == 0
+
+    backoff.wait_until(_all_healthy, timeout=Duration.from_seconds(timeout))
+    return remaining
+
+
+def _check_worker_health(client, worker_ids: set[str]) -> list[tuple[str, str]]:
+    """Check that all workers are still healthy. Returns list of (worker_id, problem) for failures."""
+    failures: list[tuple[str, str]] = []
+    try:
+        resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
+        by_id = {w.worker_id: w for w in resp.workers}
+        for wid in worker_ids:
+            w = by_id.get(wid)
+            if w is None:
+                failures.append((wid, "disappeared"))
+            elif not w.healthy:
+                failures.append((wid, w.status_message or f"{w.consecutive_failures} consecutive failures"))
+    except Exception as e:
+        failures.append(("(rpc)", str(e)))
+    return failures
+
+
+def _print_summary(succeeded: int, remaining: int, offset: int):
+    click.echo(f"\nSummary: {succeeded} succeeded, {remaining} remaining (aborted at worker {offset + 1})")

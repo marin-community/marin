@@ -100,6 +100,18 @@ class ActorMethod(Protocol):
         """Invoke the method remotely. Returns a future."""
         ...
 
+    def submit(self, *args: Any, **kwargs: Any) -> ActorFuture:
+        """Invoke via long-running operation with polling.
+
+        Use for methods that run for minutes/hours where holding an HTTP
+        connection open is fragile. The backend uses a durable polling
+        mechanism (e.g. StartOperation + GetOperation RPCs) so that
+        transient connection drops don't kill the call.
+
+        For local and Ray backends this is identical to remote().
+        """
+        ...
+
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Invoke the method synchronously (blocking)."""
         ...

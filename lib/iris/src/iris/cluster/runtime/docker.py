@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,13 +43,15 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerStats,
     ContainerStatus,
+    DiscoveredContainer,
+    ExecutionStage,
     ImageInfo,
     MountKind,
     MountSpec,
 )
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
-from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
+from iris.rpc import job_pb2
+from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -294,12 +297,31 @@ class DockerContainerHandle:
     _resolved_mounts: list[ResolvedMount] = field(default_factory=list, repr=False)
     _run_container_id: str | None = field(default=None, repr=False)
 
+    @classmethod
+    def from_existing(cls, container_id: str, runtime: "DockerRuntime") -> "DockerContainerHandle":
+        """Wrap an already-running container for adoption after worker restart.
+
+        Skips container creation — the container already exists.
+        The returned handle supports status(), stop(), log_reader(), stats(),
+        and cleanup(), but build()/run() should not be called.
+        """
+        # Minimal config — we only need it for status/stop/log operations
+        # which don't reference config fields.
+        config = ContainerConfig(
+            image="",
+            entrypoint=job_pb2.RuntimeEntrypoint(),
+            env={},
+        )
+        handle = cls(config=config, runtime=runtime, _run_container_id=container_id)
+        runtime.track_container(container_id)
+        return handle
+
     @property
     def container_id(self) -> str | None:
         """Return the Docker container ID (hash), if any."""
         return self._run_container_id
 
-    def build(self) -> list[LogLine]:
+    def build(self, on_logs: Callable[[list[LogLine]], None] | None = None) -> list[LogLine]:
         """Run setup_commands (uv sync, pip install, etc) in a temporary container.
 
         Creates a temporary container that runs setup_commands, waits for completion,
@@ -307,6 +329,10 @@ class DockerContainerHandle:
         and will be available to the run container.
 
         If there are no setup_commands, this is a no-op.
+
+        Args:
+            on_logs: Optional callback invoked with each incremental batch of
+                log lines during the build. Enables streaming to LogService.
 
         Returns:
             List of log lines captured during the build phase.
@@ -322,7 +348,8 @@ class DockerContainerHandle:
         setup_script = self._generate_setup_script()
         self._write_setup_script(setup_script)
 
-        # Build containers get max(8 GB, task request) memory
+        # Build containers get max(32 GB, task request) memory — uv sync on a large
+        # workspace OOMed at the old 8 GB ceiling on a host with 1.4 TB free.
         task_memory_bytes = self.config.resources.memory_bytes if self.config.resources else 0
         build_memory_bytes = (
             max(self._BUILD_MEMORY_LIMIT_BYTES, task_memory_bytes)
@@ -351,6 +378,8 @@ class DockerContainerHandle:
                 if new_logs:
                     build_logs.extend(new_logs)
                     last_log_time = Timestamp.from_seconds(new_logs[-1].timestamp.timestamp()).add_ms(1)
+                    if on_logs:
+                        on_logs(new_logs)
 
                 if status.phase == ContainerPhase.STOPPED:
                     break
@@ -358,11 +387,14 @@ class DockerContainerHandle:
 
             # Final log fetch after container stops
             final_logs = _docker_logs(build_container_id, since=last_log_time)
-            build_logs.extend(final_logs)
+            if final_logs:
+                build_logs.extend(final_logs)
+                if on_logs:
+                    on_logs(final_logs)
 
             if status.exit_code != 0:
                 log_text = "\n".join(f"[{entry.source}] {entry.data}" for entry in build_logs[-50:])
-                raise RuntimeError(f"Build failed with exit_code={status.exit_code}\n" f"Last 50 log lines:\n{log_text}")
+                raise RuntimeError(f"Build failed with exit_code={status.exit_code}\nLast 50 log lines:\n{log_text}")
 
             logger.info("Build phase completed successfully for task %s", self.config.task_id)
             return build_logs
@@ -447,7 +479,7 @@ exec {quoted_cmd}
     def stats(self) -> ContainerStats:
         """Get resource usage statistics."""
         if not self._run_container_id:
-            return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
+            return ContainerStats(memory_mb=0, cpu_millicores=0, process_count=0, available=False)
         return self._docker_stats(self._run_container_id)
 
     def disk_usage_mb(self) -> int:
@@ -459,7 +491,7 @@ exec {quoted_cmd}
                     return int(shutil.disk_usage(path).used / (1024 * 1024))
         return 0
 
-    def profile(self, duration_seconds: int, profile_type: "cluster_pb2.ProfileType") -> bytes:
+    def profile(self, duration_seconds: int, profile_type: "job_pb2.ProfileType") -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
         container_id = self._run_container_id
         if not container_id:
@@ -497,7 +529,7 @@ exec {quoted_cmd}
         self._docker_exec(container_id, ["rm", "-f", *paths], capture_output=True, timeout=10)
 
     def _profile_cpu(
-        self, container_id: str, duration_seconds: int, cpu_config: "cluster_pb2.CpuProfile", profile_id: str
+        self, container_id: str, duration_seconds: int, cpu_config: "job_pb2.CpuProfile", profile_id: str
     ) -> bytes:
         """Profile CPU using py-spy."""
         spec = resolve_cpu_spec(cpu_config, duration_seconds, pid="1")
@@ -521,7 +553,7 @@ exec {quoted_cmd}
             self._docker_rm_files(container_id, [output_path])
 
     def _profile_memory(
-        self, container_id: str, duration_seconds: int, memory_config: "cluster_pb2.MemoryProfile", profile_id: str
+        self, container_id: str, duration_seconds: int, memory_config: "job_pb2.MemoryProfile", profile_id: str
     ) -> bytes:
         """Profile memory using memray."""
         spec = resolve_memory_spec(memory_config, duration_seconds, pid="1")
@@ -530,7 +562,6 @@ exec {quoted_cmd}
         output_path = f"/tmp/memray-output-{profile_id}.{spec.ext}"
 
         attach_cmd = build_memray_attach_cmd(spec, memray_bin, trace_path)
-        transform_cmd = build_memray_transform_cmd(spec, memray_bin, trace_path, output_path)
 
         logger.info(
             "Memory profiling container %s for %ds (format=%s, leaks=%s)",
@@ -546,6 +577,10 @@ exec {quoted_cmd}
             if result.returncode != 0:
                 raise RuntimeError(f"memray attach failed: {result.stderr}")
 
+            if spec.is_raw:
+                return self._docker_read_file(container_id, trace_path)
+
+            transform_cmd = build_memray_transform_cmd(spec, memray_bin, trace_path, output_path)
             result = self._docker_exec(container_id, transform_cmd, capture_output=True, text=True, timeout=30)
             if result.returncode != 0:
                 raise RuntimeError(f"memray {spec.reporter} failed: {result.stderr}")
@@ -568,7 +603,7 @@ exec {quoted_cmd}
     # Docker CLI helpers
     # -------------------------------------------------------------------------
 
-    _BUILD_MEMORY_LIMIT_BYTES = 8 * 1024**3
+    _BUILD_MEMORY_LIMIT_BYTES = 32 * 1024**3
 
     def _docker_create(
         self,
@@ -597,6 +632,8 @@ exec {quoted_cmd}
             "create",
             "--ulimit",
             "core=0:0",
+            "--ulimit",
+            "nofile=65536:524288",
             "-w",
             config.workdir,
         ]
@@ -623,18 +660,28 @@ exec {quoted_cmd}
 
         if not is_tpu_run:
             cmd.extend(["--cap-drop", "ALL"])
-            cmd.extend(["--cap-add", "SYS_PTRACE"])
+        # Always add SYS_PTRACE so py-spy can attach via docker exec regardless of TPU/CPU.
+        # TPU containers use --privileged but docker exec processes don't reliably inherit it.
+        cmd.extend(["--cap-add", "SYS_PTRACE"])
 
         # Device flags (TPU passthrough etc) - only for run container
         if include_devices:
             cmd.extend(_build_device_flags(config))
 
-        # Labels for discoverability
+        # Labels for discoverability and container adoption after worker restart
         cmd.extend(["--label", "iris.managed=true"])
         if config.task_id:
             cmd.extend(["--label", f"iris.task_id={config.task_id}{label_suffix}"])
         if config.job_id:
             cmd.extend(["--label", f"iris.job_id={config.job_id}"])
+        if config.attempt_id is not None:
+            cmd.extend(["--label", f"iris.attempt_id={config.attempt_id}"])
+        if config.worker_id:
+            cmd.extend(["--label", f"iris.worker_id={config.worker_id}"])
+        # Phase label: used during adoption to distinguish adoptable run
+        # containers from transient build containers that should be cleaned up.
+        phase = ExecutionStage.BUILD if label_suffix == "_build" else ExecutionStage.RUN
+        cmd.extend(["--label", f"iris.phase={phase}"])
 
         # Resource limits (cgroups v2) — always applied
         cpu_millicores = config.get_cpu_millicores()
@@ -749,7 +796,7 @@ exec {quoted_cmd}
         if result.returncode != 0:
             return ContainerStats(
                 memory_mb=0,
-                cpu_percent=0,
+                cpu_millicores=0,
                 process_count=0,
                 available=False,
             )
@@ -761,21 +808,24 @@ exec {quoted_cmd}
             memory_mb = _parse_memory_size(memory_str)
 
             cpu_str = stats.get("CPUPerc", "0%").rstrip("%")
-            cpu_percent = int(float(cpu_str)) if cpu_str else 0
+            # Docker reports CPUPerc with 100% == one fully utilized CPU core, so
+            # converting to millicores is a straight percent * 10. See
+            # https://docs.docker.com/reference/cli/docker/container/stats/
+            cpu_millicores = int(float(cpu_str) * 10) if cpu_str else 0
 
             pids_str = stats.get("PIDs", "0")
             process_count = int(pids_str) if pids_str.isdigit() else 0
 
             return ContainerStats(
                 memory_mb=memory_mb,
-                cpu_percent=cpu_percent,
+                cpu_millicores=cpu_millicores,
                 process_count=process_count,
                 available=True,
             )
         except (json.JSONDecodeError, ValueError, KeyError):
             return ContainerStats(
                 memory_mb=0,
-                cpu_percent=0,
+                cpu_millicores=0,
                 process_count=0,
                 available=False,
             )
@@ -939,18 +989,81 @@ class DockerRuntime:
             return []
         return [cid for cid in result.stdout.strip().split("\n") if cid]
 
-    def remove_all_iris_containers(self) -> int:
-        """Force remove all iris-managed containers. Returns count attempted."""
+    def discover_containers(self) -> list[DiscoveredContainer]:
+        """Discover iris-managed containers from a previous worker process.
+
+        Inspects all iris-managed containers and extracts metadata from labels
+        and state. Used during worker restart to find running containers that
+        can be adopted instead of killed.
+        """
         container_ids = self.list_iris_containers(all_states=True)
         if not container_ids:
-            return 0
+            return []
 
+        # Batch inspect all containers in one call
+        result = subprocess.run(
+            ["docker", "inspect", *container_ids],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            logger.warning("docker inspect failed during discovery: %s", result.stderr)
+            return []
+
+        discovered: list[DiscoveredContainer] = []
+        for info in json.loads(result.stdout):
+            labels = info.get("Config", {}).get("Labels", {})
+            state = info.get("State", {})
+
+            task_id = labels.get("iris.task_id", "")
+            attempt_id_str = labels.get("iris.attempt_id")
+            if not task_id or attempt_id_str is None:
+                # Missing required labels — cannot adopt
+                continue
+
+            # Find the /app mount's host path
+            workdir_host_path = ""
+            for mount in info.get("Mounts", []):
+                if mount.get("Destination") == "/app":
+                    workdir_host_path = mount.get("Source", "")
+                    break
+
+            discovered.append(
+                DiscoveredContainer(
+                    container_id=info["Id"],
+                    task_id=task_id,
+                    attempt_id=int(attempt_id_str),
+                    job_id=labels.get("iris.job_id", ""),
+                    worker_id=labels.get("iris.worker_id", ""),
+                    phase=ExecutionStage(labels.get("iris.phase", "run")),
+                    running=state.get("Running", False),
+                    exit_code=state.get("ExitCode") if not state.get("Running", False) else None,
+                    started_at=state.get("StartedAt", ""),
+                    workdir_host_path=workdir_host_path,
+                )
+            )
+
+        return discovered
+
+    def adopt_container(self, container_id: str) -> DockerContainerHandle:
+        """Wrap an existing container for adoption after worker restart."""
+        return DockerContainerHandle.from_existing(container_id, self)
+
+    def remove_containers(self, container_ids: list[str]) -> int:
+        """Force remove specific containers by ID. Returns count removed."""
+        if not container_ids:
+            return 0
         subprocess.run(
             ["docker", "rm", "-f", *container_ids],
             capture_output=True,
             check=False,
         )
         return len(container_ids)
+
+    def remove_all_iris_containers(self) -> int:
+        """Force remove all iris-managed containers. Returns count attempted."""
+        return self.remove_containers(self.list_iris_containers(all_states=True))
 
     def cleanup(self) -> None:
         """Clean up all containers managed by this runtime."""

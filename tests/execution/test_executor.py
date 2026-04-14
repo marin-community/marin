@@ -666,7 +666,7 @@ def test_mirrored_value_truediv_instantiate():
 
 def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
     """Test taking over a stale lock from a dead worker and then refreshing it."""
-    from iris.distributed_lock import HEARTBEAT_TIMEOUT, Lease
+    from rigging.distributed_lock import HEARTBEAT_TIMEOUT, Lease
 
     # Simulate worker A creating a stale lock (as if it died)
     dead_worker = StatusFile(tmp_path, worker_id="dead-worker")

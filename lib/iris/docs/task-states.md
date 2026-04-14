@@ -55,6 +55,17 @@ independent job state machine.
                                 v
                           (terminal)
 
+                          +-----------+            |
+                          | PREEMPTED |            |
+                          +-----------+            |
+                                ^                  |
+                                | exhausted        |
+                                |                  |
+                          +-----------+            |
+                          | preempt   |------------+
+                          | (ctrl)    |
+                          +-----------+
+
       Other terminal states: KILLED, UNSCHEDULABLE (never retried)
 ```
 
@@ -72,6 +83,7 @@ independent job state machine.
 | `KILLED` | 6 | Yes | No | Controller: job cancellation (`_on_job_cancelled`), job failure cascade (`_mark_remaining_tasks_killed`), per-task timeout | `killed` (grey) |
 | `WORKER_FAILED` | 7 | Yes | Yes | Controller: worker death cascade (`_on_worker_failed`), coscheduled sibling kill | `worker_failed` (purple) |
 | `UNSCHEDULABLE` | 8 | Yes | No | Controller: scheduling timeout expired (`_mark_task_unschedulable`) | `unschedulable` (red) |
+| `PREEMPTED` | 10 | Yes | Yes | Controller: priority preemption with budget exhausted (`preempt_task`) | `preempted` (orange) |
 
 
 ## State Transitions in Detail
@@ -171,6 +183,31 @@ terminally, `_cascade_coscheduled_failure` exhausts the preemption budget of
 all running siblings and transitions them to `WORKER_FAILED` (terminal). This
 prevents other hosts from hanging on collective operations.
 
+### PREEMPTED
+
+Set by the controller when a higher-priority task evicts a lower-priority
+running task via `preempt_task`. The preemption loop (`_run_preemption_pass`)
+selects victims from lower priority bands and calls `preempt_task` for each.
+
+Retry evaluation uses `_resolve_task_failure_state` with the preemption budget:
+
+1. **ASSIGNED tasks**: always retry to PENDING regardless of budget (the task
+   never started executing, so preemption is free).
+2. **BUILDING or RUNNING tasks**: `preemption_count` is incremented and compared
+   against `max_retries_preemption`.
+   - If `preemption_count <= max_retries_preemption`: task is requeued to
+     `PENDING` for retry. The current attempt is marked `PREEMPTED`.
+   - If `preemption_count > max_retries_preemption`: task state is set to
+     `PREEMPTED` (terminal). Both the attempt and the task are `PREEMPTED`.
+
+`PREEMPTED` is in both `TERMINAL_TASK_STATES` and `FAILURE_TASK_STATES`.
+When a coscheduled task becomes terminally `PREEMPTED`, the job state is
+recomputed. If all tasks in the job are terminal, `_finalize_terminal_job`
+kills any remaining non-terminal tasks and cascades to child jobs. Note that
+unlike `WORKER_FAILED` reported via heartbeat, `preempt_task` does not
+directly cascade coscheduled siblings — the cascade only occurs through job
+finalization.
+
 ### UNSCHEDULABLE
 
 Set by the controller's scheduling loop when a task's scheduling deadline
@@ -185,10 +222,10 @@ are killed.
 
 Iris maintains two independent retry budgets per task:
 
-| Budget | Counter | Limit Field | Default | Trigger State |
+| Budget | Counter | Limit Field | Default | Trigger States |
 |---|---|---|---|---|
 | Failure | `failure_count` | `max_retries_failure` | 0 (no retries) | `FAILED` |
-| Preemption | `preemption_count` | `max_retries_preemption` | 100 | `WORKER_FAILED` |
+| Preemption | `preemption_count` | `max_retries_preemption` | 100 | `WORKER_FAILED`, `PREEMPTED` |
 
 ### Retry flow
 
@@ -209,15 +246,18 @@ Iris maintains two independent retry budgets per task:
 ### What counts toward job failure
 
 Only `TASK_STATE_FAILED` counts toward the job's `max_task_failures` threshold.
-Worker failures (preemptions) do not count. This means a job can survive
+Worker failures and preemptions do not count. This means a job can survive
 unlimited preemptions as long as the per-task preemption budget is not
-exhausted.
+exhausted. `TASK_STATE_PREEMPTED` and `TASK_STATE_WORKER_FAILED` are grouped
+together for job state derivation: if all tasks are terminal and any are in
+one of these states, the job becomes `JOB_STATE_WORKER_FAILED`.
 
 ### States that are never retried
 
 - `SUCCEEDED`: task completed successfully
 - `KILLED`: explicit termination by user or cascade
 - `UNSCHEDULABLE`: scheduling timeout expired
+- `PREEMPTED`: only when preemption budget is exhausted (otherwise retried as `PENDING`)
 
 ## Terminal State Summary
 
@@ -230,6 +270,7 @@ A task is considered finished (`is_finished() == True`) when:
 | `UNSCHEDULABLE` | Always finished |
 | `FAILED` | Finished when `failure_count > max_retries_failure` |
 | `WORKER_FAILED` | Finished when `preemption_count > max_retries_preemption` |
+| `PREEMPTED` | Finished when `preemption_count > max_retries_preemption` |
 
 The distinction matters: a task in `FAILED` state with retry budget remaining
 is in a terminal state at the attempt level but is not finished at the task
@@ -252,6 +293,7 @@ strings (e.g., `TASK_STATE_RUNNING`) to lowercase display names by stripping the
 | `killed` | `.status-killed` | Grey (#57606a) |
 | `worker_failed` | `.status-worker_failed` | Purple (#8250df) |
 | `unschedulable` | `.status-unschedulable` | Red (#cf222e) |
+| `preempted` | `.status-preempted` | Orange (#bc4c00) |
 
 The job detail page shows per-task attempt history. Each attempt has its own
 state badge, and worker failures are annotated with "(worker failure)" in the

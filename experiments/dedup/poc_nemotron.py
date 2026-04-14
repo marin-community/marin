@@ -3,14 +3,14 @@
 
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
 import os
 from typing import TypeVar
 from marin.execution.step_runner import StepRunner
 from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
 from fray.v2 import ResourceConfig
-from iris.marin_fs import marin_temp_bucket, region_from_metadata, check_path_in_region
+from rigging.filesystem import marin_temp_bucket, region_from_metadata, check_path_in_region
 from marin.execution.step_spec import StepSpec
 
 import logging

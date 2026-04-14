@@ -16,7 +16,7 @@ from collections import deque
 
 import jax
 import levanter.checkpoint as levanter_checkpoint
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree

@@ -6,8 +6,8 @@ import jax
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from marin.rl.types import RolloutGroup
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.types import RolloutGroup
 
 logger = logging.getLogger(__name__)
 

@@ -8,20 +8,13 @@ Deduplication is performed per-file: duplicate question IDs within each input
 file are removed, keeping the first occurrence. Duplicates across different
 input files are NOT removed.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
-    lib/marin/src/marin/transform/stackexchange/filter_stackexchange.py \
-    --input_path gs://marin-us-central2/raw/stackexchange/ \
-    --output_path gs://marin-us-central2/processed/stackexchange/filtered \
-    --min_vote_threshold 10 \
-    --remove_duplicate_questions
 """
 
 import dataclasses
 import json
 
 import draccus
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 from zephyr import Dataset, ZephyrContext
 
 

@@ -43,6 +43,8 @@ class ProfilerConfig:
 
 
 def profile(path: str, start_step: int, num_steps: int, create_perfetto_link: bool) -> Callable[[StepInfo], None]:
+    artifact_name = f"jax-profile-step-{start_step}-{start_step + num_steps}"
+
     def profiler_callback_fn(step: StepInfo):
         # -1 b/c step is the finished step
         if step.step == start_step - 1:
@@ -68,7 +70,11 @@ def profile(path: str, start_step: int, num_steps: int, create_perfetto_link: bo
             if create_perfetto_link and jax.process_index() == 0:
                 event.set()
 
-            levanter.tracker.current_tracker().log_artifact(path, type="jax_profile")
+            levanter.tracker.current_tracker().log_artifact(
+                path,
+                name=artifact_name,
+                type="jax_profile",
+            )
             barrier_sync()
 
     return profiler_callback_fn

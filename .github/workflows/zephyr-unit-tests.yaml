@@ -58,9 +58,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          uv sync --package zephyr --group test --frozen
+          uv sync --package marin-zephyr --group test --frozen
 
       - name: Test with pytest
         run: |
           # important: don't cd into lib/zephyr so that ray uv integration doesn't freak out
-          uv run --package zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/
+          uv run --package marin-zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/

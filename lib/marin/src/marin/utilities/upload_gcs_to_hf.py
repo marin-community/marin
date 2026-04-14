@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from google.cloud import storage
 from google.cloud.storage import transfer_manager
 from huggingface_hub import HfApi, create_repo
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 # Set up logging
 logger = logging.getLogger(__name__)

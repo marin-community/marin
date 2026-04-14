@@ -2,16 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-import dataclasses
 import logging
-import os
-import tempfile
 import typing
 import warnings
 from contextlib import AbstractContextManager
 from typing import Any, Literal, Optional
 
-import draccus
 import jax
 from jaxtyping import Scalar
 
@@ -185,10 +181,9 @@ def log_hyperparameters(hparams: dict[str, Any]):
     _global_tracker.log_hyperparameters(hparams)
 
 
-def log_configuration(hparams: Any, config_name: Optional[str] = None):
+def log_configuration(hparams: Any):
     """
-     Logs a configuration object to the global tracker. If the configuration object is a dataclass,
-        it is dumped to a yaml file and logged as an artifact.
+     Logs a configuration object to the global tracker as hyperparameters.
 
     Args:
          hparams: Hyperparameters to log
@@ -200,17 +195,6 @@ def log_configuration(hparams: Any, config_name: Optional[str] = None):
 
     hparams_dict = hparams_to_dict(hparams)
     _global_tracker.log_hyperparameters(hparams_dict)
-
-    if dataclasses.is_dataclass(hparams):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = os.path.join(tmpdir, "config.yaml")
-            try:
-                with open(config_path, "w") as f:
-                    draccus.dump(hparams, f, encoding="utf-8")
-                    name = config_name or "config.yaml"
-                    _global_tracker.log_artifact(config_path, name=name, type="config")
-            except Exception:  # noqa
-                logger.warning("Failed to dump config to yaml. Skipping logging as artifact.", exc_info=True)
 
 
 def set_global_tracker(tracker: Tracker):

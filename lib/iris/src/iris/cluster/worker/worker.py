@@ -13,9 +13,10 @@ from pathlib import Path
 import uvicorn
 
 from iris.chaos import chaos
-from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
+from iris.cluster.log_store import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
-from iris.cluster.runtime.types import ContainerRuntime
+from iris.log_server.client import LogPusher, RemoteLogHandler
+from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
 from iris.cluster.types import JobName, TaskAttempt as TaskAttemptId
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.dashboard import WorkerDashboard
@@ -27,18 +28,23 @@ from iris.cluster.worker.env_probe import (
     check_worker_health,
     construct_worker_id,
     infer_worker_id,
+    probe_disk_writable,
     probe_hardware,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
-from iris.logging import slow_log
+from rigging.log_setup import slow_log
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc import config_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
+from iris.rpc import worker_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
-from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
+from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.time_proto import timestamp_to_proto
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +69,7 @@ class WorkerConfig:
     accelerator_type: int = 0
     accelerator_variant: str = ""
     gpu_count: int = 0
-    preemptible: bool = False
+    capacity_type: int = 0
     storage_prefix: str = ""
     auth_token: str = ""
 
@@ -110,7 +116,7 @@ def worker_config_from_proto(
         accelerator_type=proto.accelerator_type,
         accelerator_variant=proto.accelerator_variant,
         gpu_count=proto.gpu_count,
-        preemptible=proto.preemptible,
+        capacity_type=proto.capacity_type,
         storage_prefix=proto.storage_prefix,
         auth_token=proto.auth_token,
     )
@@ -127,7 +133,7 @@ class Worker:
         environment_provider: EnvironmentProvider | None = None,
         port_allocator: PortAllocator | None = None,
         threads: ThreadContainer | None = None,
-        worker_metadata: cluster_pb2.WorkerMetadata | None = None,
+        worker_metadata: job_pb2.WorkerMetadata | None = None,
     ):
         self._config = config
 
@@ -135,6 +141,11 @@ class Worker:
             raise ValueError("WorkerConfig.cache_dir is required")
         self._cache_dir = config.cache_dir
         self._cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Probe cache-dir writability once at startup. Failures propagate so
+        # the worker aborts and the controller reaps the machine; heartbeats
+        # deliberately do not repeat this probe (see #4732).
+        probe_disk_writable(str(self._cache_dir))
 
         # Use overrides if provided, otherwise create defaults
         self._bundle_store = bundle_store or BundleStore(
@@ -158,7 +169,7 @@ class Worker:
                 accelerator_type=config.accelerator_type,
                 accelerator_variant=config.accelerator_variant,
                 gpu_count_override=config.gpu_count,
-                preemptible=config.preemptible,
+                capacity_type=config.capacity_type,
                 worker_attributes=config.worker_attributes,
             )
 
@@ -169,13 +180,12 @@ class Worker:
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
-        self._log_store = LogStore()
-        self._log_store_handler = LogStoreHandler(self._log_store, key=PROCESS_LOG_KEY)
-        self._log_store_handler.setLevel(logging.INFO)
-        self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
-        logging.getLogger().addHandler(self._log_store_handler)
+        # LogPusher and RemoteLogHandler are created after registration, once
+        # the worker can resolve /system/log-server via ListEndpoints.
+        self._log_pusher: LogPusher | None = None
+        self._log_handler: RemoteLogHandler | None = None
 
-        self._service = WorkerServiceImpl(self, log_store=self._log_store)
+        self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
             self._service,
             host=config.host,
@@ -200,8 +210,11 @@ class Worker:
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
 
     def start(self) -> None:
-        # Clean up any orphaned containers from previous runs
-        self._cleanup_all_iris_containers()
+        # Try to adopt running containers from a previous worker process.
+        # If adoption succeeds, skip the destructive cleanup that would kill them.
+        adopted = self.adopt_running_containers()
+        if adopted == 0:
+            self._cleanup_all_iris_containers()
 
         # Start HTTP server
         # timeout_keep_alive=120: default 5s races with controller heartbeat intervals,
@@ -247,23 +260,118 @@ class Worker:
         if removed > 0:
             logger.info("Startup cleanup: removed %d iris containers", removed)
 
+    def adopt_running_containers(self) -> int:
+        """Discover and adopt running containers from a previous worker process.
+
+        Inspects Docker containers labeled with iris metadata. Running containers
+        whose worker_id matches this worker are adopted — a TaskAttempt is created
+        in RUNNING state and a monitoring thread is spawned. Non-adoptable
+        containers (build-phase, exited, wrong worker_id) are removed.
+
+        Returns the count of successfully adopted containers.
+        """
+        discovered = self._runtime.discover_containers()
+        if not discovered:
+            return 0
+
+        adopted = 0
+        to_remove: list[str] = []
+
+        for container in discovered:
+            if container.phase != ExecutionStage.RUN or not container.running:
+                to_remove.append(container.container_id)
+                continue
+
+            # Only adopt containers from this worker. Containers with no worker_id
+            # label (pre-adoption-era or unset) are adopted by any worker — this is
+            # intentional for backward compatibility with containers created before
+            # the worker_id label was added.
+            if self._worker_id and container.worker_id and container.worker_id != self._worker_id:
+                to_remove.append(container.container_id)
+                continue
+
+            # Create a handle wrapping the existing container
+            try:
+                handle = self._runtime.adopt_container(container.container_id)
+            except NotImplementedError:
+                logger.warning("Container adoption not supported by this runtime")
+                continue
+            attempt = TaskAttempt.adopt(
+                discovered=container,
+                container_handle=handle,
+                log_pusher=self._log_pusher,
+                port_allocator=self._port_allocator,
+                poll_interval_seconds=self._config.poll_interval.to_seconds(),
+            )
+
+            key = (container.task_id, container.attempt_id)
+            with self._lock:
+                self._tasks[key] = attempt
+
+            # Spawn monitoring thread
+            def _run_adopted(stop_event: threading.Event, a: TaskAttempt = attempt) -> None:
+                a.resume_monitoring()
+
+            def _stop_adopted(a: TaskAttempt = attempt) -> None:
+                try:
+                    a.stop(force=True)
+                except RuntimeError:
+                    pass
+
+            self._task_threads.spawn(
+                target=_run_adopted,
+                name=f"adopted-{container.task_id}",
+                on_stop=_stop_adopted,
+            )
+
+            adopted += 1
+            logger.info(
+                "Adopted container %s for task %s attempt %d",
+                container.container_id[:12],
+                container.task_id,
+                container.attempt_id,
+            )
+
+        # Clean up non-adoptable containers
+        if to_remove:
+            removed = self._runtime.remove_containers(to_remove)
+            logger.info("Cleaned up %d non-adoptable containers", removed)
+
+        if adopted > 0:
+            logger.info("Adopted %d running containers from previous worker process", adopted)
+
+        return adopted
+
     def wait(self) -> None:
         self._threads.wait()
 
-    def stop(self) -> None:
-        # Stop task threads first so running tasks exit before infrastructure
-        # tears down. ThreadContainer.stop() signals each thread's stop_event,
-        # which the _run_task watcher bridges to attempt.should_stop + container kill.
-        self._task_threads.stop()
+    def stop(self, preserve_containers: bool = False) -> None:
+        """Stop the worker.
+
+        Args:
+            preserve_containers: When True, stop the worker process but leave
+                Docker containers running so a new worker can adopt them.
+                Used during rolling restarts.
+        """
+        if not preserve_containers:
+            # Stop task threads first so running tasks exit before infrastructure
+            # tears down. ThreadContainer.stop() signals each thread's stop_event,
+            # which the _run_task watcher bridges to attempt.should_stop + container kill.
+            self._task_threads.stop()
+        else:
+            logger.info("Preserving %d running containers for adoption by new worker", len(self._tasks))
+            # Detach task threads from the parent so _threads.stop() won't
+            # cascade into _task_threads and trigger on_stop container kills.
+            self._threads.detach_child(self._task_threads)
 
         if self._server:
             self._server.should_exit = True
         self._threads.stop()
         if self._controller_client:
             self._controller_client.close()
-        logging.getLogger().removeHandler(self._log_store_handler)
-        self._log_store_handler.close()
-        self._log_store.close()
+        self._detach_log_handler()
+        if self._log_pusher is not None:
+            self._log_pusher.close()
         self._bundle_store.close()
 
     def _run_lifecycle(self, stop_event: threading.Event) -> None:
@@ -274,15 +382,26 @@ class Worker:
         2. Register with controller (retry until accepted)
         3. Serve (wait for heartbeats from controller)
         4. If heartbeat timeout expires, return to step 1
+
+        On the first iteration after a restart with adopted containers,
+        step 1 is skipped to preserve the running tasks.
         """
+        first_iteration = True
         try:
             while not stop_event.is_set():
-                self._reset_worker_state()
+                # Skip reset on the first iteration if we adopted containers,
+                # to avoid killing the tasks we just took over.
+                if first_iteration and self._tasks:
+                    logger.info("Skipping reset: %d adopted tasks present", len(self._tasks))
+                else:
+                    self._reset_worker_state()
+                first_iteration = False
                 worker_id = self._register(stop_event)
                 if worker_id is None:
                     # Shutdown requested during registration
                     break
                 self._worker_id = worker_id
+                self._attach_log_handler()
                 self._serve(stop_event)
         except Exception:
             logger.exception("Worker lifecycle crashed")
@@ -310,10 +429,12 @@ class Worker:
                         raise rule.error
 
                 response = self._controller_client.register(
-                    cluster_pb2.Controller.RegisterRequest(
+                    controller_pb2.Controller.RegisterRequest(
                         address=address,
                         metadata=metadata,
                         worker_id=self._worker_id or "",
+                        slice_id=self._config.slice_id or "",
+                        scale_group=self._config.worker_attributes.get("scale-group", ""),
                     )
                 )
                 if response.accepted:
@@ -326,6 +447,53 @@ class Worker:
             stop_event.wait(5.0)
 
         return None
+
+    def _resolve_log_service(self) -> str | None:
+        """Resolve the LogService address via the /system/log-server endpoint."""
+        if not self._controller_client:
+            return None
+        resp = self._controller_client.list_endpoints(
+            controller_pb2.Controller.ListEndpointsRequest(
+                prefix="/system/log-server",
+                exact=True,
+            ),
+        )
+        if not resp.endpoints:
+            logger.warning("No /system/log-server endpoint registered on controller")
+            return None
+        addr = resp.endpoints[0].address
+        logger.info("Resolved /system/log-server -> %s", addr)
+        return addr
+
+    def _attach_log_handler(self) -> None:
+        """Create LogPusher and attach RemoteLogHandler after registration."""
+        self._detach_log_handler()
+        if not self._worker_id:
+            return
+        log_addr = self._resolve_log_service()
+        if not log_addr:
+            return
+        log_interceptors = ()
+        if self._config.auth_token:
+            log_interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
+        self._log_pusher = LogPusher(log_addr, interceptors=log_interceptors)
+        self._log_handler = RemoteLogHandler(
+            self._log_pusher,
+            key=worker_log_key(self._worker_id),
+        )
+        self._log_handler.setLevel(logging.INFO)
+        self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+        logging.getLogger().addHandler(self._log_handler)
+
+    def _detach_log_handler(self) -> None:
+        """Remove and close the current RemoteLogHandler and LogPusher if any."""
+        if self._log_handler is not None:
+            logging.getLogger().removeHandler(self._log_handler)
+            self._log_handler.close()
+            self._log_handler = None
+        if self._log_pusher is not None:
+            self._log_pusher.close()
+            self._log_pusher = None
 
     def _resolve_address(self) -> str:
         """Resolve the address to advertise to the controller."""
@@ -381,10 +549,10 @@ class Worker:
 
     _TERMINAL_STATES = frozenset(
         {
-            cluster_pb2.TASK_STATE_SUCCEEDED,
-            cluster_pb2.TASK_STATE_FAILED,
-            cluster_pb2.TASK_STATE_KILLED,
-            cluster_pb2.TASK_STATE_WORKER_FAILED,
+            job_pb2.TASK_STATE_SUCCEEDED,
+            job_pb2.TASK_STATE_FAILED,
+            job_pb2.TASK_STATE_KILLED,
+            job_pb2.TASK_STATE_WORKER_FAILED,
         }
     )
 
@@ -398,7 +566,7 @@ class Worker:
         matching.sort(key=lambda x: x[0][1], reverse=True)
         return matching[0][1]
 
-    def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str:
+    def submit_task(self, request: job_pb2.RunTaskRequest) -> str:
         """Submit a new task for execution.
 
         If a non-terminal task with the same task_id already exists:
@@ -476,7 +644,7 @@ class Worker:
             default_task_image=self._config.default_task_image,
             resolve_image=self._config.resolve_image,
             port_allocator=self._port_allocator,
-            log_store=self._log_store,
+            log_pusher=self._log_pusher,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )
 
@@ -535,12 +703,13 @@ class Worker:
                 by_task[task_id] = task
         return list(by_task.values())
 
-    def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse:
+    def handle_heartbeat(self, request: job_pb2.HeartbeatRequest) -> job_pb2.HeartbeatResponse:
         """Handle controller-initiated heartbeat with reconciliation.
 
         Processing order (sequential, not concurrent):
         1. Submit tasks_to_run — registers each task in self._tasks
-        2. Kill tasks_to_kill — async, sets stop flag immediately
+        2. Kill tasks_to_kill — synchronously, blocks until old process is stopped
+           so the controller does not assign new work while old tasks hold resources
         3. Reconcile expected_tasks — for each expected task, report its current
            state. If not found in self._tasks, report WORKER_FAILED ("Task not
            found on worker"). This happens when the worker has reset its state
@@ -554,8 +723,8 @@ class Worker:
         for newly-assigned tasks) will be submitted before reconciliation checks
         for it, so it will be found.
 
-        Kill operations are performed asynchronously in daemon threads to avoid
-        blocking the heartbeat RPC.
+        Reconciliation kills (step 4) remain async to avoid blocking the heartbeat
+        for stale-task cleanup that is not part of a preemption handoff.
         """
         # Reset heartbeat deadline
         self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
@@ -570,18 +739,20 @@ class Worker:
                     except Exception as e:
                         logger.warning("Heartbeat: failed to submit task %s: %s", run_req.task_id, e)
 
-            # Kill requested tasks asynchronously so the heartbeat returns immediately
-            with slow_log(logger, "heartbeat kill_tasks", threshold_ms=100):
+            # Kill requested tasks synchronously so the old process is fully stopped
+            # before the heartbeat returns. This prevents the controller from assigning
+            # new work while the old task still holds accelerator resources (TPU/GPU chips).
+            with slow_log(logger, "heartbeat kill_tasks", threshold_ms=5000):
                 for task_id in request.tasks_to_kill:
                     try:
                         current = self._get_current_attempt(task_id)
                         if current:
-                            self._kill_task_attempt(task_id, current.attempt_id, async_kill=True)
-                            logger.info("Heartbeat: initiated async kill for task %s", task_id)
+                            self._kill_task_attempt(task_id, current.attempt_id, async_kill=False)
+                            logger.info("Heartbeat: killed task %s", task_id)
                     except Exception as e:
                         logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
 
-            tasks: list[cluster_pb2.Controller.WorkerTaskStatus] = []
+            tasks: list[job_pb2.WorkerTaskStatus] = []
 
             with slow_log(logger, "heartbeat reconciliation", threshold_ms=200):
                 with self._lock:
@@ -594,31 +765,27 @@ class Worker:
 
                         if task is None:
                             tasks.append(
-                                cluster_pb2.Controller.WorkerTaskStatus(
+                                job_pb2.WorkerTaskStatus(
                                     task_id=task_id,
                                     attempt_id=expected_attempt_id,
-                                    state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+                                    state=job_pb2.TASK_STATE_WORKER_FAILED,
                                     exit_code=0,
                                     error="Task not found on worker",
-                                    finished_at=Timestamp.now().to_proto(),
+                                    finished_at=timestamp_to_proto(Timestamp.now()),
                                 )
                             )
                         else:
                             task_proto = task.to_proto()
                             reported_state = task.status
-                            if reported_state == cluster_pb2.TASK_STATE_PENDING:
-                                reported_state = cluster_pb2.TASK_STATE_BUILDING
+                            if reported_state == job_pb2.TASK_STATE_PENDING:
+                                reported_state = job_pb2.TASK_STATE_BUILDING
 
-                            is_terminal = task.status in self._TERMINAL_STATES
-                            log_cap = 50000 if is_terminal else 5000
-                            log_entries = task.drain_heartbeat_logs(max_entries=log_cap, final=is_terminal)
-                            entry = cluster_pb2.Controller.WorkerTaskStatus(
+                            entry = job_pb2.WorkerTaskStatus(
                                 task_id=task_id,
                                 attempt_id=task_proto.current_attempt_id,
                                 state=reported_state,
                                 exit_code=task_proto.exit_code,
                                 error=task_proto.error or "",
-                                log_entries=log_entries,
                                 container_id=task_proto.container_id or "",
                             )
                             if task.status in self._TERMINAL_STATES:
@@ -652,7 +819,7 @@ class Worker:
                 total_processes = 0
                 with self._lock:
                     for task in self._tasks.values():
-                        if task.status == cluster_pb2.TASK_STATE_RUNNING:
+                        if task.status == job_pb2.TASK_STATE_RUNNING:
                             running_count += 1
                             total_processes += task.process_count
                 resource_snapshot.running_task_count = running_count
@@ -664,7 +831,7 @@ class Worker:
                 if not health.healthy:
                     logger.warning("Worker health check failed: %s", health.error)
 
-            return cluster_pb2.HeartbeatResponse(
+            return job_pb2.HeartbeatResponse(
                 tasks=tasks,
                 resource_snapshot=resource_snapshot,
                 worker_healthy=health.healthy,
@@ -694,9 +861,9 @@ class Worker:
 
         # Check if already in terminal state
         if task.status not in (
-            cluster_pb2.TASK_STATE_RUNNING,
-            cluster_pb2.TASK_STATE_BUILDING,
-            cluster_pb2.TASK_STATE_PENDING,
+            job_pb2.TASK_STATE_RUNNING,
+            job_pb2.TASK_STATE_BUILDING,
+            job_pb2.TASK_STATE_PENDING,
         ):
             return False
 
@@ -726,7 +893,7 @@ class Worker:
         try:
             task.stop(force=False)
 
-            running_states = (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
+            running_states = (job_pb2.TASK_STATE_RUNNING, job_pb2.TASK_STATE_BUILDING)
             stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
                 lambda: task.status not in running_states,
                 timeout=Duration.from_ms(term_timeout_ms),
@@ -752,7 +919,7 @@ class Worker:
         self,
         task_id: str,
         duration_seconds: int,
-        profile_type: cluster_pb2.ProfileType,
+        profile_type: job_pb2.ProfileType,
         attempt_id: int | None = None,
     ) -> bytes:
         """Profile a running task by delegating to its container handle.
@@ -772,27 +939,27 @@ class Worker:
             attempt = self._get_current_attempt(task_id)
             if not attempt:
                 raise ValueError(f"Task {task_id} not found")
-        if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
-            raise ValueError(f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})")
+        if attempt.status != job_pb2.TASK_STATE_RUNNING:
+            raise ValueError(f"Task {task_id} is not running (state={job_pb2.TaskState.Name(attempt.status)})")
         return attempt.profile(duration_seconds, profile_type)
 
     def exec_in_container(
         self, task_id: str, command: list[str], timeout_seconds: int = 60
-    ) -> cluster_pb2.Worker.ExecInContainerResponse:
+    ) -> worker_pb2.Worker.ExecInContainerResponse:
         """Execute a command in a running task's container.
 
         Delegates to the container handle's underlying runtime (docker exec, subprocess, kubectl exec).
         """
         attempt = self._get_current_attempt(task_id)
         if not attempt:
-            return cluster_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} not found")
-        if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
-            return cluster_pb2.Worker.ExecInContainerResponse(
-                error=f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})"
+            return worker_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} not found")
+        if attempt.status != job_pb2.TASK_STATE_RUNNING:
+            return worker_pb2.Worker.ExecInContainerResponse(
+                error=f"Task {task_id} is not running (state={job_pb2.TaskState.Name(attempt.status)})"
             )
         container_id = attempt.container_id
         if not container_id:
-            return cluster_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} has no container")
+            return worker_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} has no container")
         return attempt.exec_in_container(command, timeout_seconds)
 
     @property

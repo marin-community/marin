@@ -13,12 +13,17 @@ from dataclasses import dataclass, field
 
 from iris.cluster.log_store import build_log_source
 from iris.cluster.types import JobName
-from iris.rpc import cluster_pb2
+from iris.rpc import logging_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
-from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Timestamp
+from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
+from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.logging_connect import LogServiceClientSync
+from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
+_FAILED_JOB_STATES = {"failed", "worker_failed", "unschedulable"}
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +73,15 @@ class WorkerReport:
 
 
 @dataclass
+class DescendantJobReport:
+    job_id: str
+    state: str
+    exit_code: int
+    error: str
+    finished_at: str
+
+
+@dataclass
 class BugReport:
     job_id: str
     job_name: str
@@ -86,6 +100,7 @@ class BugReport:
     task_state_counts: dict[str, int]
     pending_reason: str
     tasks: list[TaskReport]
+    descendant_jobs: list[DescendantJobReport] = field(default_factory=list)
     workers: dict[str, WorkerReport] = field(default_factory=dict)
     entrypoint: str = ""
 
@@ -105,28 +120,32 @@ def gather_bug_report(
     """Gather all diagnostic data for a job into a BugReport."""
     interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
     client = ControllerServiceClientSync(controller_url, timeout_ms=30000, interceptors=interceptors)
+    log_client = LogServiceClientSync(controller_url, timeout_ms=30000, interceptors=interceptors)
     try:
-        return _gather(client, job_id, tail=tail)
+        return _gather(client, log_client, job_id, tail=tail)
     finally:
+        log_client.close()
         client.close()
 
 
 def _gather(
     client: ControllerServiceClientSync,
+    log_client: LogServiceClientSync,
     job_id: JobName,
     *,
     tail: int,
 ) -> BugReport:
     # 1. Job status + original request
-    resp = client.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire()))
+    resp = client.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire()))
     job = resp.job
     request = resp.request
 
     # 2. List tasks
-    tasks_resp = client.list_tasks(cluster_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire()))
+    tasks_resp = client.list_tasks(controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire()))
+    descendant_jobs = _list_descendant_jobs(client, job_id)
 
     # 3. List workers, filter to those involved in this job
-    workers_resp = client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
+    workers_resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
     involved_worker_ids: set[str] = set()
     for t in tasks_resp.tasks:
         if t.worker_id:
@@ -141,8 +160,8 @@ def _gather(
         try:
             # Fetch all attempts for this task, taking only the last `tail` lines.
             source = build_log_source(JobName.from_wire(task.task_id))
-            log_resp = client.fetch_logs(
-                cluster_pb2.FetchLogsRequest(
+            log_resp = log_client.fetch_logs(
+                logging_pb2.FetchLogsRequest(
                     source=source,
                     max_lines=tail,
                     tail=True,
@@ -169,9 +188,15 @@ def _gather(
             worker_reports[w.worker_id] = _build_worker_report(w)
 
     # 8. Assemble — prefer ListTasks count over the JobStatus convenience field
-    state_name = _job_state_name(job.state)
+    state_name = job_state_friendly(job.state)
     error = job.error or ""
-    error_summary = error[:100] if error else state_name
+    failed_descendants = [descendant for descendant in descendant_jobs if descendant.state in _FAILED_JOB_STATES]
+    if error:
+        error_summary = error[:100]
+    elif failed_descendants:
+        error_summary = f"{len(failed_descendants)} descendant job(s) failed"
+    else:
+        error_summary = state_name
     task_count = len(task_reports) or job.task_count
 
     return BugReport(
@@ -192,6 +217,7 @@ def _gather(
         task_state_counts=dict(job.task_state_counts),
         pending_reason=job.pending_reason,
         tasks=task_reports,
+        descendant_jobs=descendant_jobs,
         workers=worker_reports,
         entrypoint=entrypoint_str,
     )
@@ -202,12 +228,12 @@ def _gather(
 # ---------------------------------------------------------------------------
 
 
-def _build_task_report(task: cluster_pb2.TaskStatus, logs: list[str]) -> TaskReport:
+def _build_task_report(task: job_pb2.TaskStatus, logs: list[str]) -> TaskReport:
     attempts = [
         AttemptReport(
             attempt_id=a.attempt_id,
             worker_id=a.worker_id,
-            state=_task_state_name(a.state),
+            state=task_state_friendly(a.state),
             exit_code=a.exit_code,
             error=a.error,
             is_worker_failure=a.is_worker_failure,
@@ -218,7 +244,7 @@ def _build_task_report(task: cluster_pb2.TaskStatus, logs: list[str]) -> TaskRep
     ]
     return TaskReport(
         task_id=task.task_id,
-        state=_task_state_name(task.state),
+        state=task_state_friendly(task.state),
         worker_id=task.worker_id,
         worker_address=task.worker_address,
         exit_code=task.exit_code,
@@ -233,7 +259,7 @@ def _build_task_report(task: cluster_pb2.TaskStatus, logs: list[str]) -> TaskRep
 
 
 def _build_worker_report(
-    w: cluster_pb2.Controller.WorkerHealthStatus,
+    w: controller_pb2.Controller.WorkerHealthStatus,
 ) -> WorkerReport:
     meta = w.metadata
     gpu_info = ""
@@ -261,23 +287,48 @@ def _build_worker_report(
     )
 
 
+def _list_descendant_jobs(
+    client: ControllerServiceClientSync,
+    job_id: JobName,
+) -> list[DescendantJobReport]:
+    if job_id.is_task:
+        return []
+
+    try:
+        log_resp = client.get_task_logs(
+            controller_pb2.Controller.GetTaskLogsRequest(
+                id=job_id.to_wire(),
+                include_children=True,
+                max_total_lines=1,
+                tail=True,
+            )
+        )
+    except Exception:
+        logger.warning("Failed to fetch descendant job statuses for %s", job_id, exc_info=True)
+        return []
+
+    return [_build_descendant_job_report(job) for job in log_resp.child_job_statuses]
+
+
+def _build_descendant_job_report(job: job_pb2.JobStatus) -> DescendantJobReport:
+    return DescendantJobReport(
+        job_id=job.job_id,
+        state=job_state_friendly(job.state),
+        exit_code=job.exit_code,
+        error=job.error,
+        finished_at=_format_timestamp(job.finished_at),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
 
 
-def _job_state_name(state: cluster_pb2.JobState) -> str:
-    return cluster_pb2.JobState.Name(state).replace("JOB_STATE_", "").lower()
-
-
-def _task_state_name(state: cluster_pb2.TaskState) -> str:
-    return cluster_pb2.TaskState.Name(state).replace("TASK_STATE_", "").lower()
-
-
 def _format_timestamp(ts) -> str:
     if not ts or not ts.epoch_ms:
         return "-"
-    return Timestamp.from_proto(ts).as_formatted_date()
+    return timestamp_from_proto(ts).as_formatted_date()
 
 
 def _compute_duration(start, end) -> str:
@@ -308,7 +359,7 @@ def _format_exit_code(code: int) -> str:
     return str(code)
 
 
-def _format_resources(resources: cluster_pb2.ResourceSpecProto | None) -> str:
+def _format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
     if not resources:
         return "-"
     parts: list[str] = []
@@ -365,6 +416,11 @@ def format_bug_report(report: BugReport) -> str:
 
     lines.append(f"| Failures | {report.failure_count} |")
     lines.append(f"| Preemptions | {report.preemption_count} |")
+    if report.descendant_jobs:
+        lines.append(f"| Descendant Jobs | {len(report.descendant_jobs)} |")
+        descendant_failures = [job for job in report.descendant_jobs if job.state in _FAILED_JOB_STATES]
+        if descendant_failures:
+            lines.append(f"| Descendant Failures | {len(descendant_failures)} |")
     lines.append(f"| Resources | {report.resources} |")
     if report.entrypoint:
         lines.append(f"| Entrypoint | `{report.entrypoint}` |")
@@ -413,6 +469,16 @@ def format_bug_report(report: BugReport) -> str:
             for log_line in t.recent_logs:
                 lines.append(log_line)
             lines.append("```\n")
+
+    if report.descendant_jobs:
+        lines.append("## Descendant Jobs\n")
+        lines.append("| Job | State | Exit | Error | Finished |")
+        lines.append("|-----|-------|------|-------|----------|")
+        for job in report.descendant_jobs:
+            error_col = _escape_md(job.error) if job.error else "-"
+            exit_col = _format_exit_code(job.exit_code)
+            lines.append(f"| `{job.job_id}` | {job.state} | {exit_col} | {error_col} | {job.finished_at} |")
+        lines.append("")
 
     # Involved Workers
     if report.workers:

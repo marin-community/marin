@@ -37,8 +37,9 @@ from iris.cluster.providers.types import (
 from iris.cluster.providers.gcp.bootstrap import (
     build_controller_bootstrap_script_from_config,
 )
+from iris.cluster.providers.gcp.ssh import OS_LOGIN_METADATA
 from iris.rpc import config_pb2
-from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timer
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 
 logger = logging.getLogger(__name__)
 
@@ -302,6 +303,10 @@ def _build_controller_vm_config(
         vm_config.gcp.zone = zone
         vm_config.gcp.machine_type = gcp_ctrl.machine_type or "n2-standard-4"
         vm_config.gcp.boot_disk_size_gb = gcp_ctrl.boot_disk_size_gb or 100
+        vm_config.gcp.service_account = gcp_ctrl.service_account
+        if config.defaults.ssh.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
+            for key, value in OS_LOGIN_METADATA.items():
+                vm_config.metadata[key] = value
     elif which == "manual":
         manual_ctrl = config.controller.manual
         if not manual_ctrl.host:
@@ -322,15 +327,21 @@ def start_controller(
     config: config_pb2.IrisClusterConfig,
     resolve_image: Callable[[str, str | None], str] | None = None,
     health_check_timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS,
+    fresh: bool = False,
 ) -> tuple[str, StandaloneWorkerHandle]:
     """Start or discover existing controller. Returns (address, vm_handle).
 
     1. Try to discover an existing healthy controller
-    2. If found and healthy, return it
+    2. If found and healthy, return it (unless ``fresh`` is set)
     3. Otherwise, create a new VM and bootstrap it
 
     For GCP: creates a GCE instance, SSHs in, bootstraps the controller container.
     For Manual: allocates a host, SSHs in, bootstraps.
+
+    If ``fresh`` is True, any existing controller VM is terminated and
+    recreated so the new container starts from an empty database. The
+    ``--fresh`` flag is also threaded into the bootstrap script so the
+    controller skips the remote checkpoint restore on startup.
     """
     _resolve_image = resolve_image or _identity_resolve_image
     label_prefix = config.platform.label_prefix or "iris"
@@ -339,13 +350,20 @@ def start_controller(
     # Check for existing controller
     existing_vm = _discover_controller_vm(platform, label_prefix)
     if existing_vm:
-        logger.info("Found existing controller VM %s, checking health...", existing_vm.vm_id)
-        if wait_healthy(existing_vm, port, timeout=health_check_timeout):
-            address = f"http://{existing_vm.internal_address}:{port}"
-            logger.info("Existing controller at %s is healthy", address)
-            return address, existing_vm
-        logger.info("Existing controller is unhealthy, terminating and recreating")
-        existing_vm.terminate()
+        if fresh:
+            logger.info(
+                "Found existing controller VM %s, terminating for --fresh start",
+                existing_vm.vm_id,
+            )
+            existing_vm.terminate(wait=True)
+        else:
+            logger.info("Found existing controller VM %s, checking health...", existing_vm.vm_id)
+            if wait_healthy(existing_vm, port, timeout=health_check_timeout):
+                address = f"http://{existing_vm.internal_address}:{port}"
+                logger.info("Existing controller at %s is healthy", address)
+                return address, existing_vm
+            logger.info("Existing controller is unhealthy, terminating and recreating")
+            existing_vm.terminate(wait=True)
 
     # Create new controller VM
     vm_config = _build_controller_vm_config(config)
@@ -354,11 +372,15 @@ def start_controller(
 
     # Wait for connection
     if not vm.wait_for_connection(timeout=Duration.from_seconds(300)):
-        vm.terminate()
+        vm.terminate(wait=True)
         raise RuntimeError(f"Controller VM {vm_config.name} did not become reachable within 300s")
 
     # Bootstrap
-    bootstrap_script = build_controller_bootstrap_script_from_config(config, resolve_image=_resolve_image)
+    bootstrap_script = build_controller_bootstrap_script_from_config(
+        config,
+        resolve_image=_resolve_image,
+        fresh=fresh,
+    )
     vm.bootstrap(bootstrap_script)
 
     # Health check
@@ -419,6 +441,6 @@ def stop_controller(platform: WorkerInfraProvider, config: config_pb2.IrisCluste
     vm = _discover_controller_vm(platform, label_prefix)
     if vm:
         logger.info("Stopping controller VM %s", vm.vm_id)
-        vm.terminate()
+        vm.terminate(wait=True)
     else:
         logger.info("No controller VM found to stop")

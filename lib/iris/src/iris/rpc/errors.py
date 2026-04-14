@@ -15,7 +15,8 @@ from connectrpc.errors import ConnectError
 from google.protobuf.any_pb2 import Any as AnyProto
 
 from iris.rpc import errors_pb2
-from iris.time_utils import Deadline, ExponentialBackoff, Timestamp
+from iris.time_proto import timestamp_to_proto
+from rigging.timing import Deadline, ExponentialBackoff, Timestamp, retry_with_backoff
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def connect_error_sanitized(
 ) -> ConnectError:
     """Create a ConnectError WITHOUT traceback details. For production use."""
     details = errors_pb2.ErrorDetails(message=message)
-    details.timestamp.CopyFrom(Timestamp.now().to_proto())
+    details.timestamp.CopyFrom(timestamp_to_proto(Timestamp.now()))
     if exc is not None:
         details.exception_type = f"{type(exc).__module__}.{type(exc).__name__}"
     return ConnectError(code, message, details=[details])
@@ -75,7 +76,7 @@ def connect_error_with_traceback(
     details = errors_pb2.ErrorDetails(
         message=message,
     )
-    details.timestamp.CopyFrom(Timestamp.now().to_proto())
+    details.timestamp.CopyFrom(timestamp_to_proto(Timestamp.now()))
 
     if exc is not None:
         details.exception_type = f"{type(exc).__module__}.{type(exc).__name__}"
@@ -170,56 +171,22 @@ def call_with_retry(
     Raises:
         Exception from call_fn if all retries exhausted or error is not retryable
     """
-    if backoff is None:
-        backoff = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0)
-    else:
-        backoff = backoff.copy()
-    last_exception = None
-    start_time = time.monotonic()
+    wrapped_on_retry: Callable[[Exception, int], None] | None = None
+    if on_retry is not None:
 
-    for attempt in range(max_attempts):
-        try:
-            return call_fn()
-        except Exception as e:
-            last_exception = e
-            if not is_retryable_error(e):
-                raise
+        def wrapped_on_retry(exc: Exception, _attempt: int) -> None:
+            assert on_retry is not None
+            on_retry(exc)
 
-            if on_retry is not None:
-                on_retry(e)
-
-            elapsed = time.monotonic() - start_time
-            attempts_exhausted = attempt + 1 >= max_attempts
-            time_exhausted = max_elapsed is not None and elapsed >= max_elapsed
-
-            if attempts_exhausted or time_exhausted:
-                logger.exception(
-                    "Operation %s failed after %d attempts (%.1fs elapsed): %s",
-                    operation,
-                    attempt + 1,
-                    elapsed,
-                    e,
-                )
-                raise
-
-            delay = backoff.next_interval()
-            if max_elapsed is not None:
-                remaining = max_elapsed - elapsed
-                delay = min(delay, max(0, remaining))
-
-            logger.exception(
-                "Operation %s failed (attempt %d/%d, %.1fs elapsed), retrying in %.2fs: %s",
-                operation,
-                attempt + 1,
-                max_attempts,
-                elapsed,
-                delay,
-                e,
-            )
-            time.sleep(delay)
-
-    assert last_exception is not None
-    raise last_exception
+    return retry_with_backoff(
+        call_fn,
+        retryable=is_retryable_error,
+        max_attempts=max_attempts,
+        max_elapsed=max_elapsed,
+        backoff=backoff,
+        on_retry=wrapped_on_retry,
+        operation=operation,
+    )
 
 
 def poll_with_retries(

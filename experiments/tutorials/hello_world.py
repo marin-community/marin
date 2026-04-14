@@ -12,7 +12,7 @@ import logging
 import os
 from dataclasses import dataclass
 
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 

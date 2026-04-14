@@ -33,6 +33,7 @@ jobs:
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/examples/marin.yaml
+      IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
 
     steps:
       - name: Checkout code
@@ -61,13 +62,15 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Warm up SSH to marin controller
+      - name: Set up OS Login SSH key
         run: |
           mkdir -p ~/.ssh
-          ssh-keygen -t rsa -b 4096 -f ~/.ssh/google_compute_engine -N "" -q
-          gcloud compute ssh iris-controller-marin \
-            --zone=us-central1-a --project=${{ secrets.GCP_PROJECT_ID }} \
-            --quiet -- 'echo ok'
+          ssh-keygen -t rsa -b 4096 -f ~/.ssh/google_compute_engine -N "" -q -C "gha-${{ github.run_id }}-${{ github.run_attempt }}"
+          chmod 600 ~/.ssh/google_compute_engine
+          gcloud compute os-login ssh-keys add \
+            --key-file ~/.ssh/google_compute_engine.pub \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --ttl=6h
 
       - name: Submit canary ferry
         id: submit
@@ -75,7 +78,8 @@ jobs:
         run: |
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
-            --memory=16G --disk=16G --cpu=1 --extra=cpu \
+            --memory=2G --disk=4G --cpu=1 --extra=cpu \
+            --priority production \
             --reserve v5p-8 \
             -e RUN_ID "$RUN_ID" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
@@ -142,18 +146,74 @@ jobs:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
 
       - name: Capture failure diagnostics
-        if: failure()
+        if: failure() || cancelled()
+        env:
+          JOB_ID: ${{ steps.submit.outputs.job_id }}
+          DIAG_DIR: ${{ github.workspace }}/canary-diagnostics
+          PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          CONTROLLER_LABEL: iris-marin-controller
         run: |
-          echo "=== Controller logs ==="
+          mkdir -p "$DIAG_DIR"
+
+          echo "=== Controller process logs ==="
           .venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
-            process logs --max-lines=200 || true
-          echo "=== Job list ==="
+            process logs --max-lines=500 > "$DIAG_DIR/controller-process.log" 2>&1 || true
+
+          echo "=== Job tree for $JOB_ID ==="
           .venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
-            job list --json 2>/dev/null | jq '.[0:5]' || true
+            job list --json --prefix "$JOB_ID" > "$DIAG_DIR/job-tree.json" 2>&1 || true
+          jq '.' "$DIAG_DIR/job-tree.json" || true
+
+          # SSH to the controller VM: grab docker logs + SQLite rows for this job.
+          # Matches the approach in iris-cloud-smoke-gcp.yaml.
+          gcloud compute instances list \
+            --project="$PROJECT" \
+            --filter="labels.${CONTROLLER_LABEL}=true" \
+            --format="csv[no-heading](name,zone)" 2>/dev/null \
+          | while IFS=, read -r name zone; do
+              [ -z "$name" ] && continue
+              echo "Fetching host logs from controller $name ($zone)"
+              out="$DIAG_DIR/controller-${name}"
+              gcloud compute ssh "$name" \
+                --project="$PROJECT" --zone="$zone" \
+                --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+                --ssh-key-file ~/.ssh/google_compute_engine \
+                --quiet \
+                --command "
+                set +e
+                echo '=== docker ps -a ==='
+                sudo docker ps -a
+                echo '=== docker logs iris-controller (last 5000 lines) ==='
+                sudo docker logs --timestamps --tail 5000 iris-controller 2>&1
+                echo '=== jobs+tasks for $JOB_ID ==='
+                sudo docker exec iris-controller python3 -c \"
+          import sqlite3, json
+          c = sqlite3.connect('/var/cache/iris/controller/db/controller.sqlite3')
+          c.row_factory = sqlite3.Row
+          prefix = '$JOB_ID'
+          rows = list(c.execute('SELECT * FROM jobs WHERE job_id = ? OR parent_job_id LIKE ? OR job_id LIKE ?', (prefix, prefix + '%', prefix + '%')))
+          for r in rows: print('JOB', json.dumps(dict(r), default=str))
+          for r in rows:
+              for t in c.execute('SELECT * FROM tasks WHERE job_id = ?', (r['job_id'],)):
+                  print('TASK', json.dumps(dict(t), default=str))
+                  for a in c.execute('SELECT * FROM task_attempts WHERE task_id = ?', (t['task_id'],)):
+                      print('ATTEMPT', json.dumps(dict(a), default=str))
+          \"
+              " > \"\${out}.log\" 2>&1 || echo \"ssh to \$name failed (see \${out}.log)\"
+            done
+
+      - name: Upload diagnostics
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canary-diagnostics
+          path: canary-diagnostics/
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Claude triage
         id: claude_triage
-        if: failure() && github.event_name == 'schedule'
+        if: (failure() || cancelled()) && github.event_name == 'schedule'
         uses: anthropics/claude-code-action@v1
         timeout-minutes: 30
         with:
@@ -162,7 +222,7 @@ jobs:
             Read .agents/skills/canary-triage/SKILL.md and follow it.
           claude_args: |
             --model opus
-            --max-turns 50
+            --max-turns 500
             --allowedTools "Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*)"
         env:
           CANARY_LANE: tpu
@@ -175,7 +235,7 @@ jobs:
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Notify Slack on failure
-        if: failure() && github.event_name == 'schedule'
+        if: (failure() || cancelled()) && github.event_name == 'schedule'
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           FALLBACK_TEXT: ":red_circle: *TPU Canary failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -187,3 +247,10 @@ jobs:
           fi
           PAYLOAD=$(python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))" <<< "$TEXT")
           curl -sf -X POST -H 'Content-Type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL"
+
+      - name: Remove OS Login SSH key
+        if: always()
+        run: |
+          gcloud compute os-login ssh-keys remove \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --key-file ~/.ssh/google_compute_engine.pub || true

@@ -15,10 +15,12 @@ permissions:
   pull-requests: read   # needed for issue_comment to access PR metadata
   statuses: write       # post commit status from issue_comment trigger
 
-# Single concurrency group — only one CW CI run at a time across all PRs.
-# The warm cluster is shared; concurrent runs would conflict.
+# Shared concurrency group with marin-canary-ferry-cw.yaml — both rebuild/roll
+# the shared iris-ci controller and submit against the shared H100 in
+# US-WEST-04A. Only one run cluster-wide at a time. cancel-in-progress=false
+# so a mid-flight canary is not killed by a PR firing.
 concurrency:
-  group: iris-coreweave-ci
+  group: iris-coreweave-ci-shared
   cancel-in-progress: false
 
 jobs:
@@ -104,7 +106,7 @@ jobs:
         run: |
           cd lib/iris && uv run --group dev iris -v \
             --config=examples/coreweave-ci.yaml \
-            cluster start
+            cluster start --fresh
 
       - name: Run integration tests
         env:
@@ -120,19 +122,30 @@ jobs:
           FSSPEC_S3: '{"endpoint_url": "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"}'
         run: |
           export KUBECONFIG=~/.kube/coreweave-iris
-          kubectl port-forward -n "$IRIS_NAMESPACE" svc/iris-ci-controller-svc 10000:10000 &
+
+          # Wait for rollout to fully settle (old pod terminated, exactly 1 ready).
+          kubectl rollout status deployment/iris-controller -n "$IRIS_NAMESPACE" --timeout=120s
+          kubectl wait pod -n "$IRIS_NAMESPACE" -l app=iris-controller \
+            --for=condition=Ready --timeout=60s
+
+          LOCAL_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()")
+          kubectl port-forward -n "$IRIS_NAMESPACE" svc/iris-ci-controller-svc "${LOCAL_PORT}:10000" &
           PF_PID=$!
           echo "PF_PID=$PF_PID" >> "$GITHUB_ENV"
+          echo "LOCAL_PORT=$LOCAL_PORT" >> "$GITHUB_ENV"
 
-          IRIS_CONTROLLER_URL="http://localhost:10000"
+          IRIS_CONTROLLER_URL="http://localhost:${LOCAL_PORT}"
 
-          # Controller deployment is already confirmed ready by `cluster start`;
-          # this just waits for the port-forward to be usable.
+          # Wait for the port-forward tunnel to be usable.
           HEALTHY=false
           for i in $(seq 1 60); do
             if ! kill -0 "$PF_PID" 2>/dev/null; then
-              echo "port-forward process died unexpectedly"
-              exit 1
+              echo "port-forward process died — restarting"
+              kubectl port-forward -n "$IRIS_NAMESPACE" svc/iris-ci-controller-svc "${LOCAL_PORT}:10000" &
+              PF_PID=$!
+              echo "PF_PID=$PF_PID" >> "$GITHUB_ENV"
+              sleep 2
+              continue
             fi
             if curl -sf "$IRIS_CONTROLLER_URL/health" > /dev/null 2>&1; then
               HEALTHY=true
@@ -162,8 +175,8 @@ jobs:
           AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
           FSSPEC_S3: '{"endpoint_url": "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"}'
         run: |
-          IRIS_CONTROLLER_URL="http://localhost:10000"
-          timeout 600 uv run tests/integration/iris/run_iris_full_integration.py \
+          IRIS_CONTROLLER_URL="http://localhost:${LOCAL_PORT}"
+          timeout 600 uv run tests/integration_test.py \
             --controller-url "$IRIS_CONTROLLER_URL"
 
       - name: Stop port-forward
@@ -174,9 +187,14 @@ jobs:
 
       - name: Capture failure diagnostics
         if: failure()
+        env:
+          LOG_DIR: ${{ github.workspace }}/iris-cw-logs
         run: |
           export KUBECONFIG=~/.kube/coreweave-iris
-          echo "=== Controller logs ==="
+          mkdir -p "$LOG_DIR"
+
+          # Stream to the GH Actions log for quick triage…
+          echo "=== Controller logs (tail) ==="
           kubectl -n "$IRIS_NAMESPACE" logs -l app=iris-controller --tail=500 || true
           echo "=== Controller pod describe ==="
           kubectl -n "$IRIS_NAMESPACE" describe pod -l app=iris-controller || true
@@ -184,6 +202,36 @@ jobs:
           kubectl -n "$IRIS_NAMESPACE" get pods -l "$IRIS_MANAGED_LABEL=true" || true
           echo "=== Warning events ==="
           kubectl -n "$IRIS_NAMESPACE" get events --sort-by='.lastTimestamp' --field-selector type!=Normal || true
+
+          # …and also persist per-pod logs + describe so failures in worker
+          # containers are recoverable from the uploaded artifact, not just
+          # the controller's view.
+          kubectl -n "$IRIS_NAMESPACE" logs -l app=iris-controller --tail=-1 --all-containers \
+            > "$LOG_DIR/controller.log" 2>&1 || true
+          kubectl -n "$IRIS_NAMESPACE" logs -l app=iris-controller --tail=-1 --all-containers --previous \
+            > "$LOG_DIR/controller-previous.log" 2>&1 || true
+          kubectl -n "$IRIS_NAMESPACE" describe pod -l app=iris-controller \
+            > "$LOG_DIR/controller-describe.txt" 2>&1 || true
+
+          for pod in $(kubectl -n "$IRIS_NAMESPACE" get pods -l "$IRIS_MANAGED_LABEL=true" -o name 2>/dev/null); do
+            safe=$(echo "$pod" | tr '/' '-')
+            kubectl -n "$IRIS_NAMESPACE" logs "$pod" --tail=-1 --all-containers \
+              > "$LOG_DIR/${safe}.log" 2>&1 || true
+            kubectl -n "$IRIS_NAMESPACE" describe "$pod" \
+              > "$LOG_DIR/${safe}-describe.txt" 2>&1 || true
+          done
+
+          kubectl -n "$IRIS_NAMESPACE" get events --sort-by='.lastTimestamp' \
+            > "$LOG_DIR/events.txt" 2>&1 || true
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iris-cw-ci-logs
+          path: iris-cw-logs/
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Set commit status to result
         if: always() && github.event_name == 'issue_comment'
