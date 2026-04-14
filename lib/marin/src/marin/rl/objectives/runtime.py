@@ -143,12 +143,22 @@ def _validate_score_source_requirements(provided: ScoreRequirements, required: S
         raise ValueError(f"score source is missing required scores: {', '.join(missing)}")
 
 
+def _validate_runtime_config(config: ObjectiveRuntimeConfig) -> None:
+    """Reject objective shapes the active runtime cannot execute yet."""
+    if config.objective.batch_view is not BatchView.SEQUENCE:
+        raise NotImplementedError(
+            "The active objective runtime currently supports only sequence batches; "
+            f"got batch_view={config.objective.batch_view.value!r}"
+        )
+
+
 def build_objective_runtime(
     config: ObjectiveRuntimeConfig,
     *,
     score_source: ScoreSource | None = None,
 ) -> ObjectiveRuntime:
     """Build a compiled objective runtime from the public objective spec."""
+    _validate_runtime_config(config)
     signal_builder = build_signal_builder(config.objective.signal_builder)
     terms = build_loss_terms(
         config.objective.terms,

@@ -1,14 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import jax
 import numpy as np
+import pytest
 
 from marin.rl.objectives.recipes import make_rloo_objective
 from marin.rl.objectives.runtime import ObjectiveRuntimeConfig, build_objective_runtime
 from marin.rl.objectives.signals import compute_rloo_advantages_from_rewards
+from marin.rl.objectives.spec import BatchView
 from marin.rl.rl_losses import rloo_loss_with_importance_sampling
 from marin.rl.scoring import ScoreBundle, ScoreRequirements
 from marin.rl.train_batch import create_sequence_batch_from_rollouts, create_training_batch_from_rollouts
@@ -118,6 +120,13 @@ def test_build_objective_runtime_requires_reference_scores_for_kl_recipe():
         assert "reference_logprobs" in str(exc)
     else:
         raise AssertionError("expected build_objective_runtime to reject missing reference scores")
+
+
+def test_build_objective_runtime_rejects_group_batch_view_up_front():
+    objective = replace(make_rloo_objective(kl_coef=0.0), batch_view=BatchView.GROUP)
+
+    with pytest.raises(NotImplementedError, match="supports only sequence batches"):
+        build_objective_runtime(ObjectiveRuntimeConfig(objective=objective))
 
 
 def test_rloo_objective_runtime_matches_current_rloo_loss_path():
