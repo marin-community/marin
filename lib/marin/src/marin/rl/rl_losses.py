@@ -15,6 +15,9 @@ from levanter.models.lm_model import LmHeadModel
 from levanter.metrics import Metric, ReductionType
 import numpy as np
 
+from marin.rl.objectives.reductions import compute_dapo_loss
+from marin.rl.objectives.signals import compute_rloo_advantages_from_rewards
+from marin.rl.objectives.terms import compute_metadata_metrics, importance_sampling_ratio
 from marin.rl.scoring import LocalScoreSource, ModelRoles, ScoreRequirements, ScoreSource
 from marin.rl.types import Rollout, TrainingBatch
 
@@ -39,49 +42,6 @@ class RLLossModule(Protocol):
     def create_loss_fn(self, reference_model: eqx.Module | None, train_model: eqx.Module) -> Callable:
         """Create the loss function for training."""
         ...
-
-
-def compute_metadata_metrics(
-    current_logprobs: jax.Array,
-    policy_logprobs_array: jax.Array,
-    loss_weights_array: jax.Array,
-    loss_masks_array: jax.Array,
-) -> dict[str, jax.Array]:
-    """Compute metadata metrics for the loss function."""
-    batch_size, _ = policy_logprobs_array.shape
-
-    mean_ratio_difference = jnp.sum(
-        (jnp.abs(jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array))) * loss_masks_array, axis=1
-    ) / jnp.sum(loss_masks_array, axis=1)
-    mean_ratio_difference = jnp.mean(mean_ratio_difference)
-
-    flattened_current_logprobs = current_logprobs.reshape(-1)
-    flattened_policy_logprobs = policy_logprobs_array.reshape(-1)
-    flattened_loss_masks = loss_masks_array.reshape(-1)
-
-    policy_entropy = -jnp.sum(flattened_policy_logprobs * flattened_loss_masks) / jnp.sum(flattened_loss_masks)
-    current_entropy = -jnp.sum(flattened_current_logprobs * flattened_loss_masks) / jnp.sum(flattened_loss_masks)
-
-    mean_advantages = jnp.sum(loss_weights_array * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1)
-    mean_advantages = jnp.mean(mean_advantages)
-
-    max_ratio_diff = jnp.max(jnp.abs(jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array)) * loss_masks_array)
-
-    metrics = {
-        "trainer_sampler_prob_diff_max": Metric.from_value(max_ratio_diff.astype(jnp.float32), ReductionType.MAX),
-        "trainer_sampler_prob_diff_mean": Metric.from_value(
-            mean_ratio_difference.astype(jnp.float32), ReductionType.MEAN
-        ),
-        "current_entropy": Metric.from_value(current_entropy.astype(jnp.float32), ReductionType.MEAN),
-        "max_advantages": Metric.from_value(jnp.max(loss_weights_array).astype(jnp.float32), ReductionType.MAX),
-        "mean_advantages": Metric.from_value(mean_advantages.astype(jnp.float32), ReductionType.MEAN),
-        "policy_entropy": Metric.from_value(policy_entropy.astype(jnp.float32), ReductionType.MEAN),
-        "response_tokens_length": Metric.from_value(
-            (jnp.sum(loss_masks_array) / batch_size).astype(jnp.float32), ReductionType.MEAN
-        ),
-    }
-
-    return metrics
 
 
 def compute_ppo_loss_objective(
@@ -120,52 +80,6 @@ def compute_ppo_loss_objective(
         "loss_std_over_batch": Metric.from_value(jnp.std(per_batch_loss).astype(jnp.float32), ReductionType.MEAN),
     }
     return loss, metadata
-
-
-def compute_ppo_loss(
-    loss_objective: jax.Array,
-    loss_masks: jax.Array,
-) -> jax.Array:
-    """Compute PPO loss (per-example normalization)."""
-    return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1))
-
-
-def compute_dapo_loss(
-    loss_objective: jax.Array,
-    loss_masks: jax.Array,
-) -> jax.Array:
-    """Compute DAPO-like loss (global token normalization).
-
-    Divides by total tokens across all examples in the batch, not per-example.
-    """
-    return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks))
-
-
-def compute_grpo_loss(
-    loss_objective: jax.Array,
-    loss_masks: jax.Array,
-    max_output_tokens: int,
-) -> jax.Array:
-    """Compute GRPO loss (token-level loss)."""
-    return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / max_output_tokens)
-
-
-def importance_sampling_ratio(
-    current_logprobs: jax.Array,
-    policy_logprobs_array: jax.Array,
-    loss_masks_array: jax.Array,
-    *,
-    stop_current_logprob_gradient: bool = False,
-    stop_policy_logprob_gradient: bool = True,
-) -> jax.Array:
-    if stop_current_logprob_gradient:
-        current_logprobs = jax.lax.stop_gradient(current_logprobs)
-
-    if stop_policy_logprob_gradient:
-        policy_logprobs_array = jax.lax.stop_gradient(policy_logprobs_array)
-
-    prob_difference = jnp.exp(current_logprobs - policy_logprobs_array) * loss_masks_array
-    return prob_difference
 
 
 def rloo_loss_with_importance_sampling(
@@ -330,16 +244,8 @@ def rloo_loss_with_importance_sampling(
 
 def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
     """Compute RLOO (Reward Leave-One-Out) advantages for a group of rollouts."""
-    rewards = np.array([r.episode_reward for r in rollouts])
-
-    n = len(rewards)
-    if n <= 1:
-        return np.zeros_like(rewards)
-
-    total = rewards.sum()
-    leave_one_out_baselines = (total - rewards) / (n - 1)
-    advantages = rewards - leave_one_out_baselines
-    return advantages
+    rewards = np.array([r.episode_reward for r in rollouts], dtype=np.float32)
+    return compute_rloo_advantages_from_rewards(rewards)
 
 
 @dataclass
