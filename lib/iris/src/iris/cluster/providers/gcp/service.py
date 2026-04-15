@@ -86,6 +86,18 @@ _OPERATION_TIMEOUT = 600  # seconds to wait for an operation to complete
 _RPC_CODE_RESOURCE_EXHAUSTED = 8
 
 
+def _default_tpu_operation_timeout(accelerator_type: str) -> float:
+    """Return an LRO timeout sized for TPU topology."""
+    topology = next((topology for topology in TPU_TOPOLOGIES if topology.name == accelerator_type), None)
+    if topology is None:
+        return _OPERATION_TIMEOUT
+    if topology.vm_count >= 256:
+        return 1800.0
+    if topology.vm_count >= 64:
+        return 900.0
+    return _OPERATION_TIMEOUT
+
+
 # ============================================================================
 # Data types
 # ============================================================================
@@ -566,7 +578,7 @@ class CloudGcpService:
         data = resp.json()
         op_name = data.get("name", "")
         if op_name and "/operations/" in op_name:
-            self._wait_tpu_operation(op_name)
+            self._wait_tpu_operation(op_name, timeout=_default_tpu_operation_timeout(request.accelerator_type))
 
         tpu_data = self._tpu_get(request.name, request.zone)
         return _parse_tpu_info(tpu_data, request.zone)
