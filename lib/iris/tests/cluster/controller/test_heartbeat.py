@@ -3,10 +3,12 @@
 
 """Tests for worker heartbeat timeout handling, health checks, and unified heartbeat path."""
 
+import logging
 import time
 
+import iris.cluster.controller.worker_provider as worker_provider_module
 import pytest
-from iris.cluster.controller.controller import Controller, ControllerConfig
+from iris.cluster.controller.controller import Controller, ControllerConfig, _SyncFailureAccumulator
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import (
     TASK_DETAIL_PROJECTION,
@@ -23,7 +25,7 @@ from iris.cluster.controller.transitions import (
     RunningTaskEntry,
     TaskUpdate,
 )
-from iris.cluster.controller.worker_provider import WorkerProvider
+from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.log_store._types import TaskAttempt, task_log_key
 from iris.cluster.types import JobName, WorkerId
 from iris.log_server.server import LogServiceImpl
@@ -228,7 +230,7 @@ def test_unhealthy_worker_cascades_to_tasks(tmp_path):
     assert task.state == job_pb2.TASK_STATE_WORKER_FAILED
 
 
-def test_reap_stale_workers_removes_old_heartbeat(tmp_path, worker_metadata):
+def test_reap_stale_workers_removes_old_heartbeat(tmp_path, worker_metadata, caplog):
     """Workers restored from checkpoint with heartbeat older than the staleness
     threshold are failed immediately by the heartbeat loop's reap pass."""
     db = ControllerDB(db_dir=tmp_path)
@@ -256,11 +258,15 @@ def test_reap_stale_workers_removes_old_heartbeat(tmp_path, worker_metadata):
         assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("stale-worker",)) is not None
         assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("fresh-worker",)) is not None
 
-    controller._reap_stale_workers()
+    with caplog.at_level(logging.WARNING):
+        controller._reap_stale_workers()
 
     with db.snapshot() as q:
         assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("stale-worker",)) is None
         assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("fresh-worker",)) is not None
+    assert "stale-worker" in caplog.text
+    assert "age_s" in caplog.text
+    assert "10.0.0.1:10001" in caplog.text
 
     controller.stop()
 
@@ -296,6 +302,14 @@ class _FakeStub:
         return self._response
 
 
+class _RaisingStub:
+    def __init__(self, exc: Exception):
+        self._exc = exc
+
+    def heartbeat(self, request: job_pb2.HeartbeatRequest) -> job_pb2.HeartbeatResponse:
+        raise self._exc
+
+
 class _FakeStubFactory:
     def __init__(self, stub: _FakeStub):
         self._stub = stub
@@ -305,6 +319,90 @@ class _FakeStubFactory:
 
     def evict(self, address: str) -> None:
         pass
+
+    def close(self) -> None:
+        pass
+
+
+def test_handle_failed_heartbeats_logs_diagnostics(tmp_path, worker_metadata, caplog):
+    db = ControllerDB(db_dir=tmp_path)
+    config = ControllerConfig(remote_state_dir="file:///tmp/iris-test-state", local_state_dir=tmp_path)
+    controller = Controller(config=config, provider=FakeProvider(), db=db)
+    state = controller.state
+    _register_worker(state, "worker1", worker_metadata, address="10.0.0.1:10001")
+
+    batch = DispatchBatch(
+        worker_id=WorkerId("worker1"),
+        worker_address="10.0.0.1:10001",
+        running_tasks=[RunningTaskEntry(JobName.from_wire("/user/test-job/0"), 0)],
+        tasks_to_run=[],
+        tasks_to_kill=[],
+    )
+    acc = _SyncFailureAccumulator()
+    with caplog.at_level(logging.WARNING):
+        primary_failed_workers = controller._handle_failed_heartbeats(
+            [(batch, "deadline exceeded after 12000ms")],
+            acc,
+        )
+
+    assert primary_failed_workers == []
+    assert acc.fail_count == 1
+    assert "worker=worker1" in caplog.text
+    assert "address=10.0.0.1:10001" in caplog.text
+    assert "action=transient_failure" in caplog.text
+    assert "failures=1/10" in caplog.text
+    assert "last_success_age_s=" in caplog.text
+    assert "deadline exceeded after 12000ms" in caplog.text
+
+    controller.stop()
+
+
+def test_rpc_worker_stub_factory_uses_longer_default_timeout(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _RecordingClient:
+        def __init__(self, address: str, timeout_ms: int):
+            captured["address"] = address
+            captured["timeout_ms"] = timeout_ms
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(worker_provider_module, "WorkerServiceClientSync", _RecordingClient)
+
+    factory = RpcWorkerStubFactory()
+    factory.get_stub("host:8080")
+
+    assert captured["address"] == "http://host:8080"
+    assert captured["timeout_ms"] == 30_000
+
+    factory.close()
+
+
+def test_heartbeat_failure_error_includes_rpc_context():
+    provider = WorkerProvider(
+        stub_factory=_FakeStubFactory(_RaisingStub(RuntimeError("deadline exceeded"))),
+    )
+    batch = DispatchBatch(
+        worker_id=WorkerId("w1"),
+        worker_address="host:8080",
+        running_tasks=[RunningTaskEntry(JobName.from_wire("/user/test-job/0"), 0)],
+        tasks_to_run=[],
+        tasks_to_kill=[],
+    )
+
+    results = provider.sync([batch])
+
+    assert len(results) == 1
+    _, apply_req, error = results[0]
+    assert apply_req is None
+    assert error is not None
+    assert "heartbeat RPC failed:" in error
+    assert "worker=w1" in error
+    assert "address=host:8080" in error
+    assert "expected=1" in error
+
+    provider.close()
 
 
 def test_heartbeat_forwards_old_worker_log_entries(tmp_path):
