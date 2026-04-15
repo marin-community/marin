@@ -61,51 +61,57 @@ entry point — `launch.py` uses it to produce the baseline step. Callers that
 want full manual control pass `GrugModelConfig` and `GrugMoeAdamHConfig`
 directly to `GrugMoeLaunchConfig`.
 
-## v16 isoflop sweep: best runs per compute budget
+## v16 isoflop sweep
 
 From the v16 sweep (`group=isoflop-moe-v16` on wandb, project `dial_moe`).
 See [issue #4447](https://github.com/marin-community/marin/issues/4447) for
-the full sweep context, per-cell results, and extrapolation tables. Rankings
-below are by **Paloma macro loss** at the final eval step. All runs use the
-architecture described above, QB routing, shared expert, GQA 4:1, seq_len
-4096. Budget → best run:
+the full sweep context, per-cell results, and extrapolation tables. All runs
+use the architecture described above, QB routing, shared expert, GQA 4:1,
+seq_len 4096. The sweep tested multiple hidden dims at each compute budget
+(1e18–3e20) to find the optimal model size per budget.
 
-| Budget | Best dim | Layers | Paloma macro | c4_en BPB | Run |
-|--------|----------|--------|-------------|-----------|-----|
-| 1e18   | d768     | 8      | **3.5273**  | 1.0658 | [isoflop-moe-v16-1e+18-d768](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+18-d768) |
-| 3e18   | d768     | 8      | **3.3398**  | 1.0122 | [isoflop-moe-v16-3e+18-d768](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+18-d768) |
-| 1e19   | d1024    | 11     | **3.1494**  | 0.9541 | [isoflop-moe-v16-1e+19-d1024](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+19-d1024) |
-| 3e19   | d1536    | 16     | **3.0066**  | 0.9123 | [isoflop-moe-v16-3e+19-d1536-v2](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+19-d1536-v2) |
-| 1e20   | d1536    | 16     | **2.8509**  | 0.8665 | [isoflop-moe-v16-1e+20-d1536-v2](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+20-d1536-v2) |
-| 3e20   | d2048    | 21     | **2.7222**  | 0.8289 | [isoflop-moe-v16-3e+20-d2048](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+20-d2048) |
-
-Derived scaling laws (fit on 1e18–3e20 optima):
+Scaling laws fit on the v16 sweep optima:
 
 - `N*(C) = 1.09e-2 · C^0.535`
 - `T*(C) = 1.60e+1 · C^0.464`
-- Paloma macro: `1.6 + 95.18 · C^(-0.0941)` (irreducible L∞ pinned to 1.6)
-- c4_en BPB: `0.4814 + 25.97 · C^(-0.0915)` (free-fit asymptote)
+- Paloma macro: `1.6 + 95.18 · C^(-0.0941)` (L∞ pinned at 1.6)
 
 Projections:
 
-| Budget | Projected macro | Projected c4_en BPB |
-|--------|-----------------|---------------------|
-| 1e21   | 2.606           | 0.7923              |
-| 1e23   | 2.252           | 0.6854              |
+| Budget | Projected macro |
+|--------|-----------------|
+| 1e21   | 2.606           |
+| 1e23   | 2.252           |
 
-The **measured** 1e21 d2560-v2 run came in at macro **2.599** / bpb **0.7923**.
+The **measured** 1e21 d2560-v2 run came in at macro **2.599**.
+
+## Compute-optimal baseline
+
+Using `N*(C)` from the isoflop sweep, we inverted to find the optimal compute
+budget for each hidden dim, then ran each at its predicted optimal budget. These
+are the baseline runs that ablation experiments compare against.
+
+| Budget   | Dim      | Layers | Paloma macro | Tokens  | v5p-8 avg tok/s | v5p-8 runtime | Run |
+|----------|----------|--------|-------------|---------|-----------------|---------------|-----|
+| 2.19e17  | d512     | 6      | **3.8104**  | 8.37e8  | 405,630         | 0.6h          | [moe-v16-compute-opt-d512-2.19e+17](https://wandb.ai/marin-community/dial_moe/runs/moe-v16-compute-opt-d512-2.19e+17) |
+| 1.70e18  | d768     | 8      | **3.4339**  | 2.71e9  | 273,532         | 2.8h          | [moe-v16-compute-opt-d768-1.70e+18](https://wandb.ai/marin-community/dial_moe/runs/moe-v16-compute-opt-d768-1.70e+18) |
+| 9.00e18  | d1024    | 11     | **3.1605**  | 6.63e9  | 175,165         | 10.5h         | [moe-v16-compute-opt-d1024-9.00e+18](https://wandb.ai/marin-community/dial_moe/runs/moe-v16-compute-opt-d1024-9.00e+18) |
+| 3e19     | d1536    | 16     | **3.0066**  | 7.83e9  |                 |               | [isoflop-moe-v16-3e+19-d1536-v2](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+19-d1536-v2) |
 
 ## Promotion criteria
 
-Changes can be promoted to this recipe when they demonstrate:
+Changes can be promoted to this recipe when they demonstrate some combination
+of the following. Typically point 1 is sufficient.
 
-1. **Lower loss at the same runtime** on the rungs of the 1e18 – 3e20 compute
-   ladder (measured on the optima above, at the same token count / step count).
-2. **Lower projected c4_en BPB at 1e21 and 1e23 FLOPs**, using the scaling-law
-   fit above (L∞ pinned at 1.6 for Paloma macro). Re-fit the power law on the
-   candidate's ladder and compare projections head-to-head.
-3. **Low curvature around the minimum of each isoflop curve** — stable
-   behavior across under- and over-trained regimes.
+1. **Passes gate 1 and gate 2** as defined in [`agent.md`](./agent.md) —
+   effective speedup > 1 at all compute-optimal baseline points, and lower
+   projected macro_loss at 1e21 and 1e23.
+2. **Low curvature around the minimum of each isoflop curve** — stable
+   behavior across under- and over-trained regimes, in particular the
+   overtrained regime.
+3. **Stability and scaling improvements** — better routing balance, controlled
+   norm growth, fewer activation outliers. Anything that makes the recipe more
+   robust to scaling, even if loss is neutral at small scale.
 
 Most promotable changes will land in one of three files:
 
@@ -118,8 +124,7 @@ Most promotable changes will land in one of three files:
 
 Some discretionary factors may influence the promotion decision even when the
 loss criteria are met — for example, impact on training memory footprint,
-inference latency / KV-cache size, serving compatibility, or interactions
-with unrelated in-flight work.
+inference latency / KV-cache size, serving compatibility, or interaction effects with other promotable changes.
 
 ## Files
 
@@ -133,3 +138,4 @@ with unrelated in-flight work.
 - [`launch.py`](./launch.py) — `GrugMoeLaunchConfig`, baseline `ExecutorStep`,
   and `executor_main` wiring.
 - [`adamh.py`](./adamh.py) — shared AdamH utilities.
+- [`agent.md`](./agent.md) — agent guide for running ablation experiments on Iris.
