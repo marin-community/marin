@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Namespace-aware resolver for actor discovery via cluster controller."""
+"""Namespace-aware resolver for actor discovery through the cluster controller."""
 
 import os
 
