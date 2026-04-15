@@ -23,7 +23,7 @@ permissions:
 jobs:
   shuffle-itest:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     concurrency:
       group: zephyr-shuffle-itest-${{ matrix.scenario }}
       cancel-in-progress: true
@@ -101,7 +101,7 @@ jobs:
         shell: bash -l {0}
         run: |
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
-            job run --no-wait \
+            job run --no-wait --priority production \
             --memory=2G --disk=8G --cpu=1 --extra=cpu \
             -e SMOKE_RUN_ID "$RUN_ID" \
             -- python lib/zephyr/tests/benchmark_shuffle.py \
@@ -112,6 +112,7 @@ jobs:
                  --max-workers 4 --worker-cpu 1 --worker-ram 8g \
                  --hot-shard-frac "${{ matrix.hot_shard_frac }}" \
                  --hot-key-pool "${{ matrix.hot_key_pool }}" \
+                 --repeat 3 \
                  --label "$RUN_ID")
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
           echo "Submitted job: $JOB_ID"
@@ -148,14 +149,14 @@ jobs:
             esac
           done
 
-      - name: Print benchmark result
+      - name: Print benchmark results
         if: success()
         shell: bash -l {0}
         run: |
           JOB_ID="${{ steps.submit.outputs.job_id }}"
           .venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
-            job logs "$JOB_ID" --max-lines 20 2>/dev/null \
-            | grep "RESULT:" | tail -1 || echo "No RESULT line found"
+            job logs "$JOB_ID" --max-lines 200 2>/dev/null \
+            | grep "RESULT:" || echo "No RESULT lines found"
 
       - name: Capture failure diagnostics
         if: failure()

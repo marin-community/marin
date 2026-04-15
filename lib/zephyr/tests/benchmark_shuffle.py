@@ -165,6 +165,13 @@ def _build_pipeline(
 @click.option("--worker-ram", type=str, default="4g")
 @click.option("--max-workers", type=int, default=None)
 @click.option("--label", type=str, default="shuffle-bench")
+@click.option(
+    "--repeat",
+    type=int,
+    default=1,
+    help="Run the shuffle this many times sequentially in the same process. "
+    "Each iteration emits its own RESULT line (tagged with 'repeat').",
+)
 def main(
     num_input_shards: int,
     items_per_shard: int,
@@ -177,6 +184,7 @@ def main(
     worker_ram: str,
     max_workers: int | None,
     label: str,
+    repeat: int,
 ) -> None:
     configure_logging()
 
@@ -187,7 +195,7 @@ def main(
 
     logger.info(
         "Shuffle benchmark: %d shards x %d items x ~%d bytes = %.2f GB synthetic data, "
-        "num_output_shards=%d, hot_shard_frac=%.2f (hot_keys=%d routing to shard 0)",
+        "num_output_shards=%d, hot_shard_frac=%.2f (hot_keys=%d routing to shard 0), repeat=%d",
         num_input_shards,
         items_per_shard,
         item_bytes,
@@ -195,6 +203,7 @@ def main(
         n_out,
         hot_shard_frac,
         len(hot_keys),
+        repeat,
     )
 
     pipeline = _build_pipeline(num_input_shards, items_per_shard, item_bytes, num_keys, n_out, hot_shard_frac, hot_keys)
@@ -206,37 +215,42 @@ def main(
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
 
+    # Reuse one ZephyrContext across repeats so worker actors stay warm and
+    # variance from coordinator/worker startup is isolated from shuffle time.
     ctx = ZephyrContext(**ctx_kwargs)
 
-    t0 = time.monotonic()
-    result = ctx.execute(pipeline)
-    elapsed = time.monotonic() - t0
+    for i in range(repeat):
+        t0 = time.monotonic()
+        result = ctx.execute(pipeline)
+        elapsed = time.monotonic() - t0
 
-    counted = sum(result.results) if result.results else 0
-    # Throughput is computed against the *input* item count, not the
-    # post-aggregation count, so the number reflects the bytes pushed
-    # through scatter+reduce.
-    throughput_items = total_items / elapsed if elapsed > 0 else 0.0
-    throughput_mb = (total_items * item_bytes) / (1024**2) / elapsed if elapsed > 0 else 0.0
+        counted = sum(result.results) if result.results else 0
+        # Throughput is computed against the *input* item count, not the
+        # post-aggregation count, so the number reflects the bytes pushed
+        # through scatter+reduce.
+        throughput_items = total_items / elapsed if elapsed > 0 else 0.0
+        throughput_mb = (total_items * item_bytes) / (1024**2) / elapsed if elapsed > 0 else 0.0
 
-    summary = {
-        "label": label,
-        "num_input_shards": num_input_shards,
-        "items_per_shard": items_per_shard,
-        "item_bytes": item_bytes,
-        "num_keys": num_keys,
-        "num_output_shards": n_out,
-        "hot_shard_frac": hot_shard_frac,
-        "hot_key_pool": len(hot_keys),
-        "expected_items": total_items,
-        "counted_items": counted,
-        "elapsed_s": round(elapsed, 2),
-        "items_per_sec": round(throughput_items, 1),
-        "mb_per_sec": round(throughput_mb, 1),
-        "target_gb": round(target_gb, 2),
-        "counters": result.counters,
-    }
-    print("RESULT:", json.dumps(summary))
+        summary = {
+            "label": label,
+            "repeat": i,
+            "repeats": repeat,
+            "num_input_shards": num_input_shards,
+            "items_per_shard": items_per_shard,
+            "item_bytes": item_bytes,
+            "num_keys": num_keys,
+            "num_output_shards": n_out,
+            "hot_shard_frac": hot_shard_frac,
+            "hot_key_pool": len(hot_keys),
+            "expected_items": total_items,
+            "counted_items": counted,
+            "elapsed_s": round(elapsed, 2),
+            "items_per_sec": round(throughput_items, 1),
+            "mb_per_sec": round(throughput_mb, 1),
+            "target_gb": round(target_gb, 2),
+            "counters": result.counters,
+        }
+        print("RESULT:", json.dumps(summary))
 
     status_path = os.environ.get("BENCH_STATUS_PATH")
     if status_path:
