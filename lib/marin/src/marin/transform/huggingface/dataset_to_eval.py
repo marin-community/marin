@@ -260,7 +260,9 @@ def get_nested_item(data: dict[str, Any], key: str, default_item: Any = None) ->
             result = result[k]
         return result
     except (KeyError, TypeError) as e:
+        # pyrefly: ignore[unbound-name] - k is bound on first iteration before result[k] can raise
         if len(k) > 1:
+            # pyrefly: ignore[unbound-name] - same as above
             print(f"Error getting nested item {k} in data {data}: {e}")
         return default_item
 
@@ -339,7 +341,7 @@ def standardize_options(options: list | dict) -> list:
 
 
 def format_prompt_response(
-    question_text: str, options: list[str], labels: list[str], answer_idx: str, answer_text: str
+    question_text: str, options: list[str], labels: list[str], answer_idx: int, answer_text: str
 ) -> tuple[str, str]:
     """
     Produce a fully formatted input string from a question, set of options, and labels

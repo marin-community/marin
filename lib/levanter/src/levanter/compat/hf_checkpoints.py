@@ -612,6 +612,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         config = self.LevConfigClass.from_hf_config(hf_config)
         if overrides is not None:
             config = dataclasses.replace(config, **overrides)  # type: ignore
+        # pyrefly: ignore[bad-return] - pyrefly loses the type of `config` through dataclasses.replace over `# type: ignore`
         return config
 
     def hf_config_from_config(self, config: LevConfig, vocab_size: Optional[int] = None) -> HfConfig:

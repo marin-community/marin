@@ -420,7 +420,7 @@ def update_cluster_configs(infra_path: str = "infra") -> None:
             # appending worker types
             # (we need to indent it by 2 spaces)
             # available_node_types:
-            generation = config["tpu_generation"]
+            generation = str(config["tpu_generation"])
             generation_config = GENERATION_CONFIGS[generation]
             worker_config = make_tpu_worker_config(generation, generation_config["base_worker"], config["min_workers"])
             base_string = yaml.dump(worker_config, default_flow_style=False, indent=2)

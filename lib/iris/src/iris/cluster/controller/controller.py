@@ -2294,6 +2294,7 @@ class Controller:
         if _HEALTH_SUMMARY_INTERVAL.should_run():
             workers = healthy_active_workers_with_attributes(self._db)
             with self._db.read_snapshot() as snap:
+                # pyrefly: ignore[unsupported-operation] - COUNT(*) always returns one row
                 active = snap.fetchone("SELECT COUNT(*) FROM jobs j WHERE j.state = ?", (job_pb2.JOB_STATE_RUNNING,))[
                     0
                 ]  # type: ignore[index]

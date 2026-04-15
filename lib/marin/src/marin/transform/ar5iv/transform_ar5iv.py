@@ -139,14 +139,15 @@ def process_record(
     try:
         filtered_html = clean_html(row["content"], remove_reference_section)
         result = convert_page(filtered_html, extract_method=extract_method, config=extract_config)
+        content = result["content"] or ""
         if remove_reference_section:
-            result["content"] = re.sub(r"\s?\\\[(?:\d+(?:,\s*\d+)*)\\\]", "", result["content"])
+            content = re.sub(r"\s?\\\[(?:\d+(?:,\s*\d+)*)\\\]", "", content)
 
         out_dict = {
             "id": row["filename"],
             "source": "ar5iv",
             "format": "text",
-            "text": result["content"],
+            "text": content,
         }
 
         return out_dict

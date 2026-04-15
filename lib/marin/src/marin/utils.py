@@ -1,11 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import functools
 import logging
 import os
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import fields, is_dataclass
 from datetime import datetime
@@ -231,9 +230,10 @@ def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None,
     return result
 
 
-def remove_tpu_lockfile_on_exit(fn=None):
+@contextmanager
+def remove_tpu_lockfile_on_exit() -> Iterator[None]:
     """
-    Context manager to remove the TPU lockfile on exit. Can be used as a context manager or decorator.
+    Context manager to remove the TPU lockfile on exit.
 
     Example:
     ```
@@ -242,20 +242,6 @@ def remove_tpu_lockfile_on_exit(fn=None):
     ```
 
     """
-    if fn is None:
-        return _remove_tpu_lockfile_on_exit_cm()
-    else:
-
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            with _remove_tpu_lockfile_on_exit_cm():
-                return fn(*args, **kwargs)
-
-        return wrapper
-
-
-@contextmanager
-def _remove_tpu_lockfile_on_exit_cm():
     try:
         yield
     finally:

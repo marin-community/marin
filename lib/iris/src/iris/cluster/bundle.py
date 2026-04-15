@@ -136,6 +136,7 @@ class BundleStore:
                     raise RuntimeError(f"Failed to fetch {content_id}: {e}") from e
                 time.sleep(0.25 * (2**attempt))
 
+        # pyrefly: ignore[unbound-name] - blob is set by the break path; attempt==2 else-branch raises
         actual = bundle_id_for_zip(blob)
         if actual != content_id:
             raise ValueError(f"Hash mismatch while fetching {content_id}: got {actual}")

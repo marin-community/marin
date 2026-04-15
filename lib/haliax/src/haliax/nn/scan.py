@@ -210,6 +210,7 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
 
             return BlockSeq(seq, Block, gradient_checkpointing)
 
+        # pyrefly: ignore[bad-return] - fn is a callable that returns BlockSeq; ModuleInit[S] is structurally compatible
         return fn
 
     def scan(self, init: T, *extra_args, unroll: int | bool | None = None, **extra_kwargs):
@@ -745,6 +746,7 @@ class Stacked(ModuleWithStateDictSerialization, Generic[M]):
         # first just do the normal thing with our own dict, which we'll post-process
         stacked = _stack_state_dict(state_dict, prefix=prefix)
         out = super().from_state_dict(stacked, prefix=prefix)  # type: ignore
+        # pyrefly: ignore[bad-return] - self is an instance of M, so super().from_state_dict returns Self compatible with M
         return out
 
 

@@ -216,6 +216,12 @@ async def replay_all_with_warmup(
         current_start = end_idx
         batch_idx += 1
 
+    return {
+        "total_requests": len(requests),
+        "total_batches": total_batches,
+        "completed_batches": batch_idx,
+    }
+
 
 class CompletionReplayer:
     """Replays chat completion requests through an inference server."""

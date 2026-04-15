@@ -55,6 +55,7 @@ def create_weight_transfer_server(
             If provided, the server uses it directly instead of discovering via fray v1.
     """
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
+        assert JAXTransferServer is not None, "JAX transfer server is unavailable in this environment"
         return JAXTransferServer(config, mesh, axis_mapping)
 
     elif config.mode == WeightTransferMode.ARROW_FLIGHT:
@@ -84,6 +85,7 @@ def create_weight_transfer_client(
             If provided, the client uses it directly instead of discovering via fray v1.
     """
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
+        assert JAXTransferClient is not None, "JAX transfer client is unavailable in this environment"
         return JAXTransferClient(config, mesh, axis_mapping)
 
     elif config.mode == WeightTransferMode.ARROW_FLIGHT:
