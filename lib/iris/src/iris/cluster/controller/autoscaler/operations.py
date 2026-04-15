@@ -62,8 +62,6 @@ def restart_worker(
 
     slice_handle = group.get_slice(row.slice_id)
     if slice_handle is None:
-        slice_handle = group.adopt_discovered_slice(row.slice_id)
-    if slice_handle is None:
         raise ValueError(f"Slice {row.slice_id} not found in group {row.scale_group}")
 
     workers = slice_handle.describe().workers

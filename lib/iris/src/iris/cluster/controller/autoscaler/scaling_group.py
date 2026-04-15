@@ -20,7 +20,7 @@ from enum import Enum, StrEnum
 from collections.abc import Sequence
 
 from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import CloudSliceState, Labels, QuotaExhaustedError, SliceHandle
+from iris.cluster.providers.types import Labels, QuotaExhaustedError, SliceHandle
 from iris.cluster.constraints import (
     AttributeValue,
     CONSTRAINT_REGISTRY,
@@ -178,17 +178,6 @@ def _lifecycle_to_vm_state(lifecycle: SliceLifecycleState) -> vm_pb2.VmState:
         SliceLifecycleState.READY: vm_pb2.VM_STATE_READY,
         SliceLifecycleState.FAILED: vm_pb2.VM_STATE_FAILED,
     }[lifecycle]
-
-
-def _state_from_handle(handle: SliceHandle, timestamp: Timestamp | None = None) -> SliceState:
-    """Build tracked slice state from a discovered handle."""
-    state = SliceState(handle=handle)
-    status = handle.describe()
-    if status.state == CloudSliceState.READY:
-        state.lifecycle = SliceLifecycleState.READY
-        state.worker_ids = [worker.worker_id for worker in status.workers]
-        state.last_active = timestamp or Timestamp.now()
-    return state
 
 
 def slice_state_to_proto(state: SliceState, idle_threshold: Duration | None = None) -> vm_pb2.SliceInfo:
@@ -499,23 +488,9 @@ class ScalingGroup:
         slice_handles = self._platform.list_slices(zones, labels)
         with self._slices_lock:
             for handle in slice_handles:
-                state = _state_from_handle(handle)
+                state = SliceState(handle=handle)
                 self._slices[handle.slice_id] = state
                 self._db_upsert_slice(handle.slice_id, state)
-
-    def adopt_discovered_slice(self, slice_id: str, timestamp: Timestamp | None = None) -> SliceHandle | None:
-        """Adopt a live cloud slice into tracking if it belongs to this group."""
-        zones = _zones_from_config(self._config)
-        labels = {self._labels.iris_scale_group: self._config.name}
-        for handle in self._platform.list_slices(zones, labels):
-            if handle.slice_id != slice_id:
-                continue
-            state = _state_from_handle(handle, timestamp)
-            with self._slices_lock:
-                self._slices[handle.slice_id] = state
-            self._db_upsert_slice(handle.slice_id, state)
-            return handle
-        return None
 
     def scale_up(
         self,

@@ -18,7 +18,6 @@ from iris.cluster.controller.autoscaler import Autoscaler, DEFAULT_UNRESOLVABLE_
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.routing import route_demand
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.providers.types import (
     CloudSliceState,
     QuotaExhaustedError,
@@ -1205,47 +1204,6 @@ class TestPerGroupWorkerConfig:
         assert wc is not None
         assert wc.worker_attributes[WellKnownAttribute.REGION] == "us-east5"
         assert wc.worker_attributes[WellKnownAttribute.ZONE] == "us-east5-a"
-
-
-class TestRestartWorker:
-    """Tests for worker restart operations."""
-
-    def test_restart_worker_reconciles_missing_slice(self, tmp_path):
-        """restart_worker re-adopts a live slice before rejecting the request."""
-        handle = make_mock_slice_handle("slice-001", all_ready=True)
-        worker = handle.describe().workers[0]
-        platform = make_mock_platform(slices_to_discover=[handle])
-        group = ScalingGroup(make_scale_group_config(name="test-group", max_slices=5), platform)
-        db = ControllerDB(db_dir=tmp_path / "db")
-        base_wc = config_pb2.WorkerConfig(
-            docker_image="ghcr.io/marin-community/iris-worker:latest",
-            port=10001,
-            controller_address="controller:10000",
-            cache_dir="/tmp/iris-cache",
-        )
-        autoscaler = make_autoscaler({"test-group": group}, platform=platform, base_worker_config=base_wc)
-
-        with db.transaction() as cur:
-            cur.execute(
-                "INSERT INTO workers ("
-                "worker_id, address, healthy, active, consecutive_failures, last_heartbeat_ms, "
-                "committed_cpu_millicores, committed_mem_bytes, committed_gpu, committed_tpu, "
-                "total_cpu_millicores, total_memory_bytes, total_gpu_count, total_tpu_count, "
-                "device_type, device_variant, slice_id, scale_group"
-                ") VALUES (?, ?, 1, 1, 0, ?, 0, 0, 0, 0, 0, 0, 0, 0, '', '', ?, ?)",
-                (worker.worker_id, worker.internal_address, Timestamp.now().epoch_ms(), handle.slice_id, group.name),
-            )
-
-        try:
-            autoscaler._db = db
-            autoscaler.restart_worker(worker.worker_id)
-
-            tracked = group.get_slice(handle.slice_id)
-            assert tracked is handle
-            assert worker.restart_scripts
-        finally:
-            db.close()
-            autoscaler.shutdown()
 
 
 class TestGpuScaleGroupBugs:
