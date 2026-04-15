@@ -197,7 +197,8 @@ class FileRolloutReader(RolloutReader):
     def read_batch(self, timeout: float | None = None) -> RolloutBatch | None:
         """Read a single batch with optional timeout."""
         start_time = time.time()
-        while time.time() - start_time < timeout:
+        deadline = start_time + timeout if timeout is not None else float("inf")
+        while time.time() < deadline:
             available_files = self._get_available_files()
             for file_path in available_files:
                 if file_path not in self._read_files:

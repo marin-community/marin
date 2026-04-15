@@ -177,7 +177,9 @@ def unwrap_eqn(html: str):
     return str(html)
 
 
-def postprocess_content(content: str, digit_threshold: int, word_threshold: int, special_char_threshold: float) -> str:
+def postprocess_content(
+    content: str, digit_threshold: int, word_threshold: int, special_char_threshold: float
+) -> str | None:
     """
     Postprocesses the content by deleting it if its is mainly digits, words, and special characters.
     """
