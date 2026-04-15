@@ -29,7 +29,13 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import job_pb2
 from rigging.timing import Duration
-from tests.cluster.worker.conftest import create_mock_container_handle, create_run_task_request
+from iris.cluster.worker.worker_types import LogLine
+from tests.cluster.worker.conftest import (
+    FakeContainerHandle,
+    FakeLogReader,
+    create_mock_container_handle,
+    create_run_task_request,
+)
 from iris.test_util import wait_for_condition
 
 pytestmark = pytest.mark.timeout(10)
@@ -150,6 +156,78 @@ def test_task_failure_on_nonzero_exit(mock_worker, mock_runtime):
     assert final_task.status == job_pb2.TASK_STATE_FAILED
     assert final_task.exit_code == 1
     assert "Exit code: 1" in final_task.error
+
+
+def test_tpu_bad_node_stderr_promotes_to_worker_failed(mock_worker, mock_runtime):
+    """Non-zero exit with TPU bad-node stderr -> WORKER_FAILED (issue #4783)."""
+    bad_node_stderr = [
+        LogLine.now(source="stdout", data="startup: launching vLLM engine"),
+        LogLine.now(
+            source="stderr",
+            data=(
+                "jax.errors.JaxRuntimeError: UNKNOWN: TPU initialization failed: "
+                "open(/dev/vfio/0): Device or resource busy: Device or resource busy; "
+                "Couldn't open iommu group /dev/vfio/0"
+            ),
+        ),
+    ]
+    populated_reader = FakeLogReader(_logs=list(bad_node_stderr))
+
+    class _HandleWithStderr(FakeContainerHandle):
+        def log_reader(self) -> FakeLogReader:
+            return populated_reader
+
+    mock_handle = _HandleWithStderr(
+        status_sequence=[
+            ContainerStatus(phase=ContainerPhase.RUNNING),
+            ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=1),
+        ]
+    )
+    mock_runtime.create_container = Mock(return_value=mock_handle)
+
+    request = create_run_task_request()
+    task_id = mock_worker.submit_task(request)
+
+    task = mock_worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    final_task = mock_worker.get_task(task_id)
+    assert final_task.status == job_pb2.TASK_STATE_WORKER_FAILED
+    assert final_task.exit_code == 1
+    assert final_task.error is not None
+    assert "TPU init failure" in final_task.error
+    assert "Couldn't open iommu group" in final_task.error
+
+
+def test_non_tpu_stderr_still_maps_to_failed(mock_worker, mock_runtime):
+    """Non-zero exit with unrelated stderr stays FAILED (no false promotion)."""
+    user_stderr = [
+        LogLine.now(source="stderr", data="Traceback (most recent call last):"),
+        LogLine.now(source="stderr", data='ValueError: bad user config: expected "foo"'),
+    ]
+    populated_reader = FakeLogReader(_logs=list(user_stderr))
+
+    class _HandleWithStderr(FakeContainerHandle):
+        def log_reader(self) -> FakeLogReader:
+            return populated_reader
+
+    mock_handle = _HandleWithStderr(
+        status_sequence=[
+            ContainerStatus(phase=ContainerPhase.RUNNING),
+            ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=1),
+        ]
+    )
+    mock_runtime.create_container = Mock(return_value=mock_handle)
+
+    request = create_run_task_request()
+    task_id = mock_worker.submit_task(request)
+
+    task = mock_worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    final_task = mock_worker.get_task(task_id)
+    assert final_task.status == job_pb2.TASK_STATE_FAILED
+    assert final_task.exit_code == 1
 
 
 def test_task_failure_on_error(mock_worker, mock_runtime):
