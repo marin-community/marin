@@ -78,6 +78,8 @@ class GrugModelConfig:
     # Fraction of hidden_dim for truncated gate_dim or LoRA low_rank.
     # Only used when attn_gate_mode is "truncated" or "lora".
     attn_gate_fraction: float = 1.0
+    # x0 skip: blend current hidden state with initial post-embedding state.
+    use_x0_skip: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -454,6 +456,9 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    # x0 skip: learnable blend of current state with initial embedding.
+    x0_lambda1: jax.Array | None  # init 1.0
+    x0_lambda2: jax.Array | None  # init 0.0
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
@@ -471,6 +476,8 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            x0_lambda1=jnp.array(1.0) if cfg.use_x0_skip else None,
+            x0_lambda2=jnp.array(0.0) if cfg.use_x0_skip else None,
         )
 
     @named_call
@@ -478,7 +485,10 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        x0: Float[Array, "B S D"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        if self.x0_lambda1 is not None and x0 is not None:
+            x = self.x0_lambda1 * x + self.x0_lambda2 * x0
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
@@ -531,6 +541,7 @@ class Transformer(eqx.Module):
         cfg = self.config
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        x0 = hidden if cfg.use_x0_skip else None
 
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
@@ -539,7 +550,7 @@ class Transformer(eqx.Module):
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask, x0)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
