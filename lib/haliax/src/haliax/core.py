@@ -1352,6 +1352,7 @@ def _compute_new_axes_and_slices_for_index(
         new_axes = tuple(axis for axis, keep in zip(array.axes, kept_axes) if keep)
 
     new_axes = tuple(axis_name(ax) for ax in new_axes)
+    # pyrefly: ignore[bad-return] - new_axes was reassigned to a tuple of axis names; AxisSpec accepts Sequence[Axis] but not tuple[str, ...]
     return new_axes, ordered_slices
 
 

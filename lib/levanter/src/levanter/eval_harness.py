@@ -397,6 +397,7 @@ def get_segment_ids_from_batch(batch: LmExample, max_segments_per_ex: int) -> li
     if batch.attn_mask.segment_ids is None:
         segment_ids = []
     else:
+        # pyrefly: ignore[bad-index] - segment_ids is a NamedArray here (None-branch handled above)
         segment_ids = jax.device_get(batch.attn_mask.segment_ids[0].array)
 
     unique_segs = np.unique(segment_ids).tolist()
@@ -420,6 +421,7 @@ def get_padding_count_from_batch(batch: LmExample, pad_token_id: int) -> tuple[i
     return padding_count, total_tokens
 
 
+# pyrefly: ignore[invalid-inheritance] - TemplateLM is from lm-eval-harness which lacks type stubs
 class LevanterHarnessLM(TemplateLM):
     """
     Levanter implementation of the LM Eval Harness TemplateLM interface.
@@ -700,6 +702,7 @@ class LevanterHarnessLM(TemplateLM):
         """
         if not add_special_tokens:
             add_special_tokens = False
+        # pyrefly: ignore[not-callable] - `tokenizer` is declared as a property in TemplateLM, but it returns a callable HF tokenizer
         encoding: Union[List[List[int]], List[int]] = self.tokenizer(
             string,
             add_special_tokens=add_special_tokens,
@@ -731,6 +734,7 @@ class LevanterHarnessLM(TemplateLM):
             return None
 
         # Process stop sequences to ensure EOS is included
+        # pyrefly: ignore[not-callable] - handle_stop_sequences is None only when lm_eval is unavailable; guarded at import site
         processed_until = handle_stop_sequences(until, eos=eos)
 
         if not processed_until:
@@ -918,6 +922,7 @@ class LevanterHarnessLM(TemplateLM):
                 text = self.tokenizer.decode(full_tokens, skip_special_tokens=True)
 
                 # Post-process the generated text using the imported utility function
+                # pyrefly: ignore[not-callable] - postprocess_generated_text is None only when lm_eval is unavailable
                 text = postprocess_generated_text(
                     text, gen_kwargs.get("until"), None  # think_end_token - could be made configurable if needed
                 )

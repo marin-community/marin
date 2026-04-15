@@ -934,6 +934,7 @@ class Dataset(Generic[T]):
             >>> count = ctx.execute(ds.count()).results[0]
             50
         """
+        # pyrefly: ignore[bad-return] - sum's Literal[0] init widens result; equivalent to int
         return self.reduce(
             local_reducer=lambda items: sum(1 for _ in items),
             global_reducer=sum,

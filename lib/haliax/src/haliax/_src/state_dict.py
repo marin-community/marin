@@ -194,10 +194,12 @@ def from_state_dict(tree: T, state_dict: StateDict, prefix: str | None = None) -
         else:
             return default_eqx_module_from_state_dict(tree, state_dict, prefix)
     elif isinstance(tree, list):
+        # pyrefly: ignore[bad-return] - T narrowed by isinstance(tree, list) at runtime
         return [
             from_state_dict(item, state_dict, with_prefix(prefix, str(i))) for i, item in enumerate(tree)
         ]  # type: ignore
     elif isinstance(tree, dict):
+        # pyrefly: ignore[bad-return] - T narrowed by isinstance(tree, dict) at runtime
         return {
             k: from_state_dict(v, state_dict, prefix=with_prefix(prefix, k)) for k, v in tree.items()
         }  # type: ignore
@@ -232,6 +234,7 @@ def from_state_dict(tree: T, state_dict: StateDict, prefix: str | None = None) -
     else:
         if prefix is None:
             return tree
+        # pyrefly: ignore[bad-return] - fallback path returns the input tree of type T
         return state_dict.get(prefix, tree)
 
 

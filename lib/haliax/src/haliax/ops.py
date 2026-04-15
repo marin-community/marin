@@ -377,17 +377,22 @@ def unique(
     ret.append(unique_values)
 
     if return_index:
+        # pyrefly: ignore[unbound-name] - index set under matching `if return_index` branch above
         ret.append(haliax.named(index, Unique))
 
     if return_inverse:
         if axis is not None:
+            # pyrefly: ignore[unbound-name] - axis_index set in matching `if axis is not None` branch above
             assert axis_index is not None
+            # pyrefly: ignore[unbound-name] - inverse set under matching `if return_inverse` branch above
             inverse = haliax.named(inverse, array.axes[axis_index])
         else:
+            # pyrefly: ignore[unbound-name] - inverse set under matching `if return_inverse` branch above
             inverse = haliax.named(inverse, array.axes)
         ret.append(inverse)
 
     if return_counts:
+        # pyrefly: ignore[unbound-name] - counts set under matching `if return_counts` branch above
         ret.append(haliax.named(counts, Unique))
 
     return tuple(ret)
