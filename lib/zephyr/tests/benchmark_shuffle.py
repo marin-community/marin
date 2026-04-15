@@ -127,9 +127,7 @@ def _build_pipeline(
     return (
         Dataset.from_list(seeds)
         .map_shard(
-            lambda items, info: _gen_shard(
-                items, info, items_per_shard, item_bytes, num_keys, hot_shard_frac, hot_keys
-            )
+            lambda items, info: _gen_shard(items, info, items_per_shard, item_bytes, num_keys, hot_shard_frac, hot_keys)
         )
         .group_by(
             key=lambda x: x["key"],
@@ -199,9 +197,7 @@ def main(
         len(hot_keys),
     )
 
-    pipeline = _build_pipeline(
-        num_input_shards, items_per_shard, item_bytes, num_keys, n_out, hot_shard_frac, hot_keys
-    )
+    pipeline = _build_pipeline(num_input_shards, items_per_shard, item_bytes, num_keys, n_out, hot_shard_frac, hot_keys)
 
     ctx_kwargs: dict = {
         "name": label,
