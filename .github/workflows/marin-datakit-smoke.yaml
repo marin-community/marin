@@ -22,7 +22,7 @@ jobs:
       FERRY_STATUS_PATH: gs://marin-tmp-us-central1/ttl=1d/ci/datakit-smoke-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
-      IRIS_CONFIG: lib/iris/examples/marin-dev.yaml
+      IRIS_CONFIG: lib/iris/examples/marin.yaml
       IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
 
     steps:
