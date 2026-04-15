@@ -78,6 +78,8 @@ class GrugModelConfig:
     # Fraction of hidden_dim for truncated gate_dim or LoRA low_rank.
     # Only used when attn_gate_mode is "truncated" or "lora".
     attn_gate_fraction: float = 1.0
+    # Combine weight function for selected experts: "sigmoid" or "softmax".
+    combine_fn: str = "sigmoid"
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -397,9 +399,12 @@ class MoEMLP(eqx.Module):
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
         qb_alpha = _topk_logits[:, -1:]
         selected_experts = selected_experts[:, :-1]
-        # Sigmoid combine weights on unbiased logits for selected experts.
+        # Combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
+        if self.cfg.combine_fn == "softmax":
+            combine_weights = jax.nn.softmax(unbiased_topk, axis=-1).astype(x.dtype)
+        else:
+            combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
         router_stats = _routing_stats(
             selected_experts,
             router_probs,
