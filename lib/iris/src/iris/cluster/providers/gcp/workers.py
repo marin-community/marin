@@ -105,7 +105,7 @@ def _wait_for_queued_resource_activation(
         if qr.state == "ACTIVE":
             logger.info("Queued resource %s is ACTIVE, proceeding to TPU bootstrap", handle.slice_id)
             return
-        if qr.state in ("FAILED", "SUSPENDED"):
+        if qr.state in ("FAILED", "SUSPENDED", "DELETING"):
             raise InfraError(f"Queued resource {handle.slice_id} entered state {qr.state}")
 
         if qr.state == "PROVISIONING":
