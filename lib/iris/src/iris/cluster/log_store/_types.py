@@ -21,6 +21,16 @@ def worker_log_key(worker_id: str) -> str:
     return f"{_WORKER_LOG_PREFIX}{worker_id}"
 
 
+def bootstrap_log_key(identifier: str) -> str:
+    """Build the log store key for a worker's pre-registration bootstrap logs.
+
+    Used before the controller has assigned a canonical worker_id. ``identifier``
+    must be stable enough to correlate logs from the same VM across retries —
+    typically ``{slice_id}-{ip_address}`` or the probed IP when no slice exists.
+    """
+    return f"{_WORKER_LOG_PREFIX}bootstrap/{identifier}"
+
+
 # Characters that indicate a regex pattern (vs. a literal key).
 REGEX_META_RE = re.compile(r"[.*+?\[\](){}^$|\\]")
 
