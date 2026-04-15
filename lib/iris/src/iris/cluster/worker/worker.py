@@ -180,8 +180,13 @@ class Worker:
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
-        # LogPusher and RemoteLogHandler are created after registration, once
-        # the worker can resolve /system/log-server via ListEndpoints.
+        # LogPusher and RemoteLogHandler are created before registration so
+        # pre-register failures (container bring-up, disk/health probes,
+        # registration rejection) leave remote logs. Attachment relies on
+        # ``self._worker_id`` having been resolved locally (IRIS_WORKER_ID,
+        # slice_id + TPU index, or GCE instance name); the rare case where
+        # the controller assigns the id is handled by re-attaching post-
+        # register.
         self._log_pusher: LogPusher | None = None
         self._log_handler: RemoteLogHandler | None = None
 
@@ -379,9 +384,14 @@ class Worker:
 
         This loop runs continuously until shutdown. On each iteration:
         1. Reset worker state (kill all containers)
-        2. Register with controller (retry until accepted)
-        3. Serve (wait for heartbeats from controller)
-        4. If heartbeat timeout expires, return to step 1
+        2. Attach the remote log handler so pre-registration log lines ship
+           to the central log server (and a refreshed /system/log-server
+           endpoint is picked up after any log-server failover)
+        3. Register with controller (retry until accepted)
+        4. If the controller assigned a worker_id we didn't know locally,
+           re-attach the handler under the canonical key
+        5. Serve (wait for heartbeats from controller)
+        6. If heartbeat timeout expires, return to step 1
 
         On the first iteration after a restart with adopted containers,
         step 1 is skipped to preserve the running tasks.
@@ -396,12 +406,14 @@ class Worker:
                 else:
                     self._reset_worker_state()
                 first_iteration = False
+                self._attach_log_handler()
                 worker_id = self._register(stop_event)
                 if worker_id is None:
                     # Shutdown requested during registration
                     break
-                self._worker_id = worker_id
-                self._attach_log_handler()
+                if worker_id != self._worker_id:
+                    self._worker_id = worker_id
+                    self._attach_log_handler()
                 self._serve(stop_event)
         except Exception:
             logger.exception("Worker lifecycle crashed")
@@ -449,15 +461,25 @@ class Worker:
         return None
 
     def _resolve_log_service(self) -> str | None:
-        """Resolve the LogService address via the /system/log-server endpoint."""
+        """Resolve the LogService address via the /system/log-server endpoint.
+
+        Called before registration, so the controller may not yet be reachable.
+        Treats RPC errors and missing endpoints the same: log a warning and
+        return None so the caller can skip remote log attachment without
+        crashing the lifecycle thread.
+        """
         if not self._controller_client:
             return None
-        resp = self._controller_client.list_endpoints(
-            controller_pb2.Controller.ListEndpointsRequest(
-                prefix="/system/log-server",
-                exact=True,
-            ),
-        )
+        try:
+            resp = self._controller_client.list_endpoints(
+                controller_pb2.Controller.ListEndpointsRequest(
+                    prefix="/system/log-server",
+                    exact=True,
+                ),
+            )
+        except Exception as e:
+            logger.warning("Failed to resolve /system/log-server: %s", e)
+            return None
         if not resp.endpoints:
             logger.warning("No /system/log-server endpoint registered on controller")
             return None
@@ -466,7 +488,16 @@ class Worker:
         return addr
 
     def _attach_log_handler(self) -> None:
-        """Create LogPusher and attach RemoteLogHandler after registration."""
+        """Create LogPusher and attach RemoteLogHandler under ``worker_log_key``.
+
+        Always tears down any existing handler first so each lifecycle cycle
+        re-resolves /system/log-server (picking up log-server failover) and
+        rebuilds the LogPusher against the fresh address.
+
+        Skipped when ``self._worker_id`` is not yet known locally — in that
+        (rare) case the controller will assign an id during ``_register`` and
+        the lifecycle loop re-calls this method with the canonical id.
+        """
         self._detach_log_handler()
         if not self._worker_id:
             return
