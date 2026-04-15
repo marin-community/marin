@@ -78,6 +78,10 @@ class GrugModelConfig:
     # Fraction of hidden_dim for truncated gate_dim or LoRA low_rank.
     # Only used when attn_gate_mode is "truncated" or "lora".
     attn_gate_fraction: float = 1.0
+    # Partial key offset: "none" (default), "every_4th", "every_layer".
+    # Applies partial RoPE (first half of head_dim) and shifts stationary
+    # key dims forward by one position to enable 1-layer induction.
+    partial_key_offset: str = "none"
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -157,7 +161,12 @@ class CausalSelfAttention(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        use_partial_key_offset: bool = False,
+    ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
@@ -167,7 +176,18 @@ class CausalSelfAttention(eqx.Module):
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
         q = rms_norm(q)
         k = rms_norm(k)
-        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+        if use_partial_key_offset:
+            # Partial RoPE: only rotate the first half of head dims.
+            half = head_dim // 2
+            q_rot, k_rot = apply_rotary_embedding(
+                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
+            )
+            q = q.at[..., :half].set(q_rot)
+            k = k.at[..., :half].set(k_rot)
+            # Shift stationary key dims forward by one position (enables 1-layer induction).
+            k = k.at[:, 1:, :, half:].set(k[:, :-1, :, half:])
+        else:
+            q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
@@ -478,9 +498,10 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        use_partial_key_offset: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask)
+        x = x + self.attn(attn_in, mask, use_partial_key_offset=use_partial_key_offset)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -536,10 +557,12 @@ class Transformer(eqx.Module):
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
 
+        pko_mode = cfg.partial_key_offset
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            use_pko = (pko_mode == "every_layer") or (pko_mode == "every_4th" and i % 4 == 3)
+            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask, use_pko)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
