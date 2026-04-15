@@ -4,9 +4,11 @@
 """Scatter/shuffle support for Zephyr pipelines.
 
 Each source-shard's scatter output is a single binary file containing a
-sequence of zstd-compressed frames. Each frame is ``zstd(pickle(items))`` —
-the entire sorted chunk for one target shard is pickled as a single list,
-then compressed as one zstd frame.
+sequence of zstd-compressed frames. Within one chunk's zstd frame, items
+are written in sub-batches of ``_SUB_BATCH_SIZE`` — each sub-batch is a
+single ``pickle.dump(list_of_items)`` into the zstd stream. This amortises
+per-item pickle/zstd dispatch over a sub-batch while still letting the
+reader stream sub-batches lazily without materialising the full chunk.
 
 A JSON sidecar (``.scatter_meta``) maps ``target_shard -> [(offset, length)]``
 byte ranges into the data file, plus per-shard ``max_chunk_rows`` and a global
@@ -14,11 +16,13 @@ byte ranges into the data file, plus per-shard ``max_chunk_rows`` and a global
 into a single ``scatter_metadata`` manifest at the end of the scatter stage,
 which reducers consume to build :class:`ScatterShard` instances.
 
-On read, each :class:`ScatterFileIterator` issues *one* coalesced range GET
-per (source file, target shard) covering all of that shard's chunks, then
-hands per-chunk byte slices to the merge. This avoids one fsspec file open
-per chunk — the dominant cost when target shards are sharded across many
-source files.
+On read, each chunk is fetched with a single ``cat_file`` range GET (one
+HTTP request, no per-chunk file handle), then streamed via
+``pickle.load`` on a length-bounded zstd reader. Per-iterator memory stays
+near-constant: one buffered item plus the zstd decoder state plus the
+chunk's compressed bytes (typically a few MB). This bound is essential for
+skewed shuffles where one reducer pulls disproportionate data and the
+external-sort fan-in opens hundreds of chunk iterators at once.
 
 Compared to the previous Parquet-based layout this drops Arrow from the
 shuffle data plane, removes schema-evolution segment splits, and replaces
@@ -28,6 +32,7 @@ row-group statistics with explicit byte ranges.
 from __future__ import annotations
 
 import concurrent.futures
+import io
 import json
 import logging
 import os
@@ -93,6 +98,9 @@ _SCATTER_SAMPLE_SIZE = 100
 _SCATTER_READ_BUFFER_FRACTION = 0.25
 
 _ZSTD_COMPRESS_LEVEL = 3
+# Items per pickle.dump call within a chunk. Larger = faster (less per-call
+# dispatch overhead), smaller = lower per-iterator read memory.
+_SUB_BATCH_SIZE = 1024
 
 
 # ---------------------------------------------------------------------------
@@ -167,10 +175,10 @@ def _write_scatter_manifest(scatter_paths: list[str], output_path: str) -> None:
 class ScatterFileIterator:
     """Reads chunks for one target shard from one scatter file.
 
-    ``chunks`` is a tuple of ``(offset, length)`` byte ranges. The constructor
-    fetches the smallest contiguous byte range covering all chunks in a
-    single GCS GET on first iteration, then yields per-chunk iterators that
-    decode lazily from the in-memory blob.
+    ``chunks`` is a tuple of ``(offset, length)`` byte ranges. Each chunk is
+    fetched on demand via a single ``cat_file`` and streamed item-by-item.
+    Per-iterator memory is bounded by the chunk's compressed size (typically
+    a few MB) plus tiny zstd/pickle state.
     """
 
     path: str
@@ -185,29 +193,28 @@ class ScatterFileIterator:
             yield from chunk_iter
 
     def get_chunk_iterators(self) -> Iterator[Iterator]:
-        """Yield one lazy iterator per chunk, in write order.
-
-        Issues a single coalesced ``cat_file`` covering all chunks for this
-        (source file, target shard) pair. The compressed bytes for this
-        shard are typically ~total_data / num_shards per file.
-        """
-        if not self.chunks:
-            return
-
-        start = min(off for off, _ in self.chunks)
-        end = max(off + length for off, length in self.chunks)
-        fs, fs_path = url_to_fs(self.path)
-        blob = fs.cat_file(fs_path, start=start, end=end)
-
+        """Yield one lazy iterator per chunk, in write order."""
         for offset, length in self.chunks:
-            rel = offset - start
-            yield _decode_chunk(blob, rel, length)
+            yield _iter_chunk(self.path, offset, length)
 
 
-def _decode_chunk(blob: bytes, offset: int, length: int) -> Iterator:
-    """Decompress and unpickle a single chunk frame, yielding its items."""
-    items = pickle.loads(zstd.ZstdDecompressor().decompress(blob[offset : offset + length]))
-    yield from items
+def _iter_chunk(path: str, offset: int, length: int) -> Iterator:
+    """Fetch one chunk's compressed bytes via cat_file and stream items.
+
+    Each chunk is a zstd frame containing a sequence of pickled sub-batches
+    (lists of up to ``_SUB_BATCH_SIZE`` items). The reader streams one
+    sub-batch at a time, so per-iterator memory is bounded by the
+    sub-batch size plus the chunk's compressed bytes.
+    """
+    fs, fs_path = url_to_fs(path)
+    blob = fs.cat_file(fs_path, start=offset, end=offset + length)
+    with zstd.ZstdDecompressor().stream_reader(io.BytesIO(blob)) as reader:
+        while True:
+            try:
+                sub_batch = pickle.load(reader)
+            except EOFError:
+                return
+            yield from sub_batch
 
 
 # ---------------------------------------------------------------------------
@@ -309,9 +316,19 @@ def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> li
 
 
 def _write_chunk_frame(items: list) -> bytes:
-    """Encode a list of items as one zstd frame: ``zstd(pickle(items))``."""
-    raw = pickle.dumps(items, protocol=pickle.HIGHEST_PROTOCOL)
-    return zstd.ZstdCompressor(level=_ZSTD_COMPRESS_LEVEL).compress(raw)
+    """Encode a list of items as one zstd frame of pickled sub-batches.
+
+    Items are split into sub-batches of ``_SUB_BATCH_SIZE`` and each
+    sub-batch is written as a single ``pickle.dump(sublist)`` into the
+    same zstd stream. This batches per-call dispatch overhead while
+    keeping per-iterator read memory bounded by the sub-batch size.
+    """
+    raw = io.BytesIO()
+    cctx = zstd.ZstdCompressor(level=_ZSTD_COMPRESS_LEVEL)
+    with cctx.stream_writer(raw, closefd=False) as zf:
+        for i in range(0, len(items), _SUB_BATCH_SIZE):
+            pickle.dump(items[i : i + _SUB_BATCH_SIZE], zf, protocol=pickle.HIGHEST_PROTOCOL)
+    return raw.getvalue()
 
 
 def _write_scatter(
