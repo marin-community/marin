@@ -44,6 +44,7 @@ class FakeWorkerHandle:
     _internal_address: str
     _state: CloudWorkerState = CloudWorkerState.RUNNING
     _bootstrap_log: str = ""
+    restart_scripts: list[str] | None = None
 
     @property
     def worker_id(self) -> str:
@@ -78,6 +79,11 @@ class FakeWorkerHandle:
 
     def reboot(self) -> None:
         pass
+
+    def restart_worker(self, bootstrap_script: str) -> None:
+        if self.restart_scripts is None:
+            self.restart_scripts = []
+        self.restart_scripts.append(bootstrap_script)
 
 
 @dataclass
