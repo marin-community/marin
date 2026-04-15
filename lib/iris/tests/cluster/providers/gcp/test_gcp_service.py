@@ -22,7 +22,6 @@ from iris.cluster.providers.gcp.service import (
     CloudGcpService,
     TpuCreateRequest,
     VmCreateRequest,
-    _recommended_tpu_operation_timeout,
 )
 from iris.rpc import config_pb2
 from iris.cluster.providers.types import InfraError, QuotaExhaustedError, ResourceNotFoundError
@@ -222,13 +221,6 @@ def test_service_account_is_preserved_on_created_resources(svc: InMemoryGcpServi
 
     assert tpu_info.service_account == "iris-worker@test-project.iam.gserviceaccount.com"
     assert vm_info.service_account == "iris-controller@test-project.iam.gserviceaccount.com"
-
-
-def test_recommended_tpu_operation_timeout_scales_with_topology() -> None:
-    assert _recommended_tpu_operation_timeout("v4-8") == 600
-    assert _recommended_tpu_operation_timeout("v4-512") == 900.0
-    assert _recommended_tpu_operation_timeout("v4-2048") == 1800.0
-    assert _recommended_tpu_operation_timeout("unknown-topology") == 600
 
 
 # ========================================================================
