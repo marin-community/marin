@@ -73,6 +73,9 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    # Weight factor for routed expert output: x = x + shared_out + routed_weight * routed_out.
+    # Set to "learnable" for a trainable scalar initialized to 1.0.
+    routed_weight: float | str = 1.0
     # Attention gate mode: "full" (default), "none", "truncated", "lora".
     attn_gate_mode: str = "full"
     # Fraction of hidden_dim for truncated gate_dim or LoRA low_rank.
@@ -454,6 +457,7 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    routed_weight: jax.Array | None  # learnable scalar, or None if fixed
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
@@ -463,6 +467,9 @@ class Block(eqx.Module):
             shared = DenseMLP.init(
                 cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
             )
+        learnable_weight = None
+        if cfg.routed_weight == "learnable":
+            learnable_weight = jnp.array(1.0)
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
@@ -471,6 +478,7 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            routed_weight=learnable_weight,
         )
 
     @named_call
@@ -482,7 +490,13 @@ class Block(eqx.Module):
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
+        routed_out, router_stats = self.mlp(mlp_in)
+        # Apply routed weight: x = x + shared_out + λ * routed_out
+        if self.routed_weight is not None:
+            routed_out = self.routed_weight * routed_out
+        elif self.cfg.routed_weight != "learnable" and self.cfg.routed_weight != 1.0:
+            routed_out = self.cfg.routed_weight * routed_out
+        mlp_out = routed_out
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
