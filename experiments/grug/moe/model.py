@@ -78,6 +78,9 @@ class GrugModelConfig:
     # Fraction of hidden_dim for truncated gate_dim or LoRA low_rank.
     # Only used when attn_gate_mode is "truncated" or "lora".
     attn_gate_fraction: float = 1.0
+    # Layer-grain prediction: output = λ0*x0 + Σ(λi*diff_i) instead of
+    # standard residual stream.
+    use_layer_grain_prediction: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -497,6 +500,10 @@ class Transformer(eqx.Module):
     blocks: tuple[Block, ...]
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
+    # Layer-grain prediction: per-layer lambdas stored as individual fields
+    # so they appear as separate params in wandb.
+    lgp_lambda_x0: jax.Array | None
+    lgp_lambdas: tuple[jax.Array, ...] | None  # one per layer
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -507,6 +514,11 @@ class Transformer(eqx.Module):
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
         blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+        lgp_lambda_x0 = None
+        lgp_lambdas = None
+        if cfg.use_layer_grain_prediction:
+            lgp_lambda_x0 = jnp.array(1.0)
+            lgp_lambdas = tuple(jnp.array(1.0) for _ in range(cfg.num_layers))
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -515,6 +527,8 @@ class Transformer(eqx.Module):
             blocks=blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
+            lgp_lambda_x0=lgp_lambda_x0,
+            lgp_lambdas=lgp_lambdas,
             config=cfg,
         )
 
@@ -531,16 +545,26 @@ class Transformer(eqx.Module):
         cfg = self.config
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        x0 = hidden
 
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
 
+        layer_diffs: list[jax.Array] = []
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
+            hidden_prev = hidden
             hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            if self.lgp_lambdas is not None:
+                layer_diffs.append(hidden - hidden_prev)
             moe_router_stats.append(router_stats)
+
+        if self.lgp_lambdas is not None:
+            hidden = self.lgp_lambda_x0 * x0
+            for i, diff in enumerate(layer_diffs):
+                hidden = hidden + self.lgp_lambdas[i] * diff
 
         router_metrics = {
             "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
