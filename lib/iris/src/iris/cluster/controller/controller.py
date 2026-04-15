@@ -81,7 +81,6 @@ from iris.cluster.controller.budget import (
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.controller.provider import TaskProvider
-from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
@@ -1058,10 +1057,10 @@ class Controller:
         log_client_interceptors = _log_client_interceptors(config)
         self._remote_log_service = LogServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
 
-        # Providers push directly to the log server via RPC.
-        provider_log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
-        if isinstance(self._provider, (K8sTaskProvider, WorkerProvider)):
-            self._provider.log_pusher = provider_log_pusher
+        # Providers that collect logs outside the worker process push directly
+        # to the log server via RPC.
+        if isinstance(self._provider, K8sTaskProvider):
+            self._provider.log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
 
         # Controller process logs ship to the log server via RemoteLogHandler.
         self._log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
