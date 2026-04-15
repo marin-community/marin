@@ -243,8 +243,20 @@ class TestWithTpuFlexible:
         assert rc.replicas == 1  # both v4-8 and v5p-8 have vm_count=1
 
     def test_mismatched_vm_count_raises(self):
-        with pytest.raises(ValueError, match="same vm_count"):
+        with pytest.raises(ValueError, match="vm_count and chips_per_vm"):
             ResourceConfig.with_tpu(["v4-8", "v4-16"])
+
+    def test_mismatched_chips_per_vm_raises(self):
+        # v6e-4 and v6e-8 both have vm_count=1 but 4 vs 8 chips per VM;
+        # the single VM of a v6e-8 is indivisible so these must not mix.
+        with pytest.raises(ValueError, match="vm_count and chips_per_vm"):
+            ResourceConfig.with_tpu(["v6e-4", "v6e-8"])
+
+    def test_same_chips_per_vm_different_generations_ok(self):
+        # v4-8 and v5p-8 both have vm_count=1 and chips_per_vm=4.
+        rc = ResourceConfig.with_tpu(["v4-8", "v5p-8"])
+        assert rc.device.variant == "v4-8"
+        assert rc.device_alternatives == ["v5p-8"]
 
     def test_empty_raises(self):
         with pytest.raises(ValueError, match="non-empty"):

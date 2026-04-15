@@ -718,6 +718,78 @@ def constraints_from_resources(resources: job_pb2.ResourceSpecProto) -> list[Con
     return constraints
 
 
+def validate_tpu_request(
+    resources: job_pb2.ResourceSpecProto,
+    constraints: Sequence[Constraint],
+) -> str | None:
+    """Check that a TPU job's chip count matches the VM shape of every candidate variant.
+
+    A TPU VM is the atomic scheduling unit: the scheduler reserves chips from a
+    worker's advertised capacity, but a single-VM slice (e.g. ``v6e-8``) cannot
+    be shared between two jobs even if their combined chip count fits. This
+    check rejects submissions where:
+
+    - the declared ``resources.device.tpu.count`` differs from the primary
+      variant's ``chips_per_vm``, or
+    - a multi-variant ``device-variant`` IN constraint lists candidates with
+      mismatched ``chips_per_vm`` / ``vm_count`` (e.g. ``["v6e-4", "v6e-8"]``).
+
+    Returns ``None`` if the request is valid, or a human-readable error
+    message suitable for returning as ``INVALID_ARGUMENT``.
+    """
+    from iris.cluster.types import get_tpu_topology
+
+    if not resources.HasField("device") or not resources.device.HasField("tpu"):
+        return None
+
+    primary = resources.device.tpu.variant
+    if not primary or primary == "auto":
+        return None
+
+    try:
+        primary_topo = get_tpu_topology(primary)
+    except ValueError:
+        return None
+
+    chips_requested = resources.device.tpu.count
+    if chips_requested and chips_requested != primary_topo.chips_per_vm:
+        return (
+            f"TPU chip count mismatch: requested {chips_requested} chips but variant "
+            f"{primary!r} has {primary_topo.chips_per_vm} chips per VM. A TPU VM is "
+            "indivisible; the per-replica chip count must equal the variant's chips_per_vm."
+        )
+
+    variants = [primary]
+    for c in constraints:
+        if c.key != WellKnownAttribute.DEVICE_VARIANT:
+            continue
+        if c.op == ConstraintOp.IN:
+            variants = [str(av.value) for av in c.values if av.value]
+            break
+        if c.op == ConstraintOp.EQ and c.values:
+            variants = [str(c.values[0].value)]
+            break
+
+    topos: dict[str, tuple[int, int]] = {}
+    for v in variants:
+        try:
+            topo = get_tpu_topology(v)
+        except ValueError:
+            continue
+        topos[v] = (topo.vm_count, topo.chips_per_vm)
+
+    if len({shape for shape in topos.values()}) > 1:
+        return (
+            "TPU variant alternatives have incompatible VM shapes: "
+            f"{ {v: {'vm_count': shape[0], 'chips_per_vm': shape[1]} for v, shape in topos.items()} }. "
+            "All candidates must share vm_count and chips_per_vm; single-VM variants like "
+            "v6e-8 or v5litepod-8 cannot be mixed with smaller variants because their VM is "
+            "indivisible and would be shared between co-scheduled jobs."
+        )
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Executor heuristic: auto-tag small CPU-only jobs as non-preemptible
 # ---------------------------------------------------------------------------

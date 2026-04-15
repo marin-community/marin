@@ -358,7 +358,11 @@ class ResourceConfig:
 
         When ``tpu_type`` is a list, the first entry is canonical (used for
         chip_count, env_vars, resource sizing) and the rest are alternatives.
-        All types in a list must share the same ``vm_count``.
+        All types in a list must share both ``vm_count`` and ``chips_per_vm``:
+        a TPU VM is the atomic scheduling unit, so mixing variants with
+        different per-VM chip counts (e.g. ``v6e-4`` + ``v6e-8``) would let
+        the scheduler co-locate two partial-VM jobs onto a VM that cannot
+        actually be shared.
         """
         if isinstance(tpu_type, str):
             tpu_types = [tpu_type]
@@ -368,9 +372,16 @@ class ResourceConfig:
         if not tpu_types:
             raise ValueError("tpu_type must be non-empty")
 
-        vm_counts = {t: get_tpu_topology(t).vm_count for t in tpu_types}
-        if len(set(vm_counts.values())) != 1:
-            raise ValueError(f"All TPU types must have the same vm_count for flexible scheduling. Got: {vm_counts}")
+        topos = {t: get_tpu_topology(t) for t in tpu_types}
+        vm_counts = {t: topo.vm_count for t, topo in topos.items()}
+        chips_per_vm = {t: topo.chips_per_vm for t, topo in topos.items()}
+        if len(set(vm_counts.values())) != 1 or len(set(chips_per_vm.values())) != 1:
+            raise ValueError(
+                "All TPU types in a flexible request must share both vm_count and chips_per_vm. "
+                f"Got vm_count={vm_counts}, chips_per_vm={chips_per_vm}. "
+                "Single-VM variants like v6e-8 or v5litepod-8 cannot be mixed with smaller "
+                "single-VM variants because the VM is indivisible and would be shared between jobs."
+            )
 
         primary = tpu_types[0]
         alternatives = list(tpu_types[1:]) or None
