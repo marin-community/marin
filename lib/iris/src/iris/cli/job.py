@@ -33,7 +33,9 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.types import (
+    TERMINAL_TASK_STATES,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
@@ -552,6 +554,7 @@ def run_iris_job(
     reserve: tuple[str, ...] | None = None,
     priority: str | None = None,
     token_provider: TokenProvider | None = None,
+    submit_argv: list[str] | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -645,6 +648,7 @@ def run_iris_job(
         reservation=reservation,
         priority_band=priority_band,
         token_provider=token_provider,
+        submit_argv=submit_argv,
     )
 
 
@@ -666,6 +670,7 @@ def _submit_and_wait_job(
     reservation: list[ReservationEntry] | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     token_provider: TokenProvider | None = None,
+    submit_argv: list[str] | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -688,6 +693,7 @@ def _submit_and_wait_job(
         user=user,
         reservation=reservation,
         priority_band=priority_band,
+        submit_argv=submit_argv,
     )
 
     logger.info(f"Job submitted: {job.job_id}")
@@ -853,6 +859,8 @@ def run(
     if not command:
         raise click.UsageError("No command provided after --")
 
+    submit_argv = redact_submit_argv(list(sys.argv))
+
     # ignore_unknown_options silently passes typo'd flags (e.g. --reservation
     # instead of --reserve) into cmd. Catch any flags that leaked through
     # before the actual command starts — these were meant for iris, not the
@@ -889,6 +897,7 @@ def run(
             reserve=reserve or None,
             priority=priority,
             token_provider=ctx.obj.get("token_provider"),
+            submit_argv=submit_argv,
         )
     except Exception:
         bundle = ctx.obj.get("provider_bundle")
@@ -996,20 +1005,6 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
     click.echo(tabulate(rows, headers=headers, tablefmt="plain"))
 
 
-# Mirrors iris.cluster.controller.db.TERMINAL_TASK_STATES. Duplicated here to
-# avoid a CLI → controller.db import dependency just for the constant.
-_TERMINAL_TASK_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.TASK_STATE_SUCCEEDED,
-        job_pb2.TASK_STATE_FAILED,
-        job_pb2.TASK_STATE_KILLED,
-        job_pb2.TASK_STATE_UNSCHEDULABLE,
-        job_pb2.TASK_STATE_WORKER_FAILED,
-        job_pb2.TASK_STATE_PREEMPTED,
-    }
-)
-
-
 def _task_index(task_id: str) -> str:
     last = task_id.rsplit("/", 1)[-1]
     return last or task_id
@@ -1063,7 +1058,7 @@ def build_job_summary(
                 # Only surface exit_code once the task is terminal. Proto scalar
                 # defaults mean a RUNNING/ASSIGNED/BUILDING task would otherwise
                 # report exit=0 and look like a clean success.
-                "exit_code": int(t.exit_code) if t.state in _TERMINAL_TASK_STATES else None,
+                "exit_code": int(t.exit_code) if t.state in TERMINAL_TASK_STATES else None,
                 "duration_ms": _task_duration_ms(t),
                 "memory_mb": int(usage.memory_mb) if usage.memory_mb else 0,
                 "memory_peak_mb": int(usage.memory_peak_mb) if usage.memory_peak_mb else 0,

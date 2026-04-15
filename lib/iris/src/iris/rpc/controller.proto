@@ -99,6 +99,13 @@ message Controller {
     // need a custom runtime (e.g. an image with runsc/skopeo for sandboxing
     // untrusted child workloads).
     string task_image = 34;
+
+    // Full argv of the CLI invocation that submitted this job (e.g. the
+    // user's `iris ... job run -- python train.py ...`). Captured from
+    // sys.argv at the client with secret-looking env var values redacted.
+    // Empty when submitted programmatically. Bookkeeping only; not
+    // interpreted by the controller.
+    repeated string submit_argv = 35;
   }
 
   message LaunchJobResponse {

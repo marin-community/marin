@@ -516,50 +516,51 @@ class HealthCheckResult:
     error: str = ""
 
 
+def probe_disk_writable(disk_path: str) -> None:
+    """Verify the work directory accepts writes by creating and removing a probe file.
+
+    Called once at worker startup. Raises OSError on failure so the worker
+    aborts and the controller reaps the machine; heartbeat-time health checks
+    deliberately do not repeat this probe because per-heartbeat file churn can
+    itself trigger EMFILE under load (see #4732).
+    """
+    dp = Path(disk_path)
+    if not dp.is_dir():
+        return
+    probe_path = dp / ".iris_health_probe"
+    probe_path.write_text("ok")
+    probe_path.unlink()
+
+
 def check_worker_health(disk_path: str = "/") -> HealthCheckResult:
-    """Run basic health probes and return a combined result.
+    """Run heartbeat-time health probes and return a combined result.
 
     Checks performed:
-    - Can write and remove a tempfile in the work directory
     - Root/work volume has >= 5% free space
 
     Docker probing is implicit: if the worker is processing heartbeats
     and fetching task status, Docker is operational.
 
     If disk_path is not an existing directory (e.g. during teardown, or on
-    platforms where the path does not exist), the probe is skipped and the
-    worker is considered healthy.
+    platforms where the path does not exist), the disk-free check is skipped.
     """
     dp = Path(disk_path)
     if not dp.is_dir():
         return HealthCheckResult(healthy=True)
 
-    errors: list[str] = []
-
-    # Check tempfile write
-    try:
-        probe_path = dp / ".iris_health_probe"
-        probe_path.write_text("ok")
-        probe_path.unlink()
-    except FileNotFoundError:
-        # TOCTOU: directory vanished between is_dir() check and write
-        pass
-    except OSError as e:
-        errors.append(f"tempfile write failed: {e}")
-
-    # Check disk free space
     try:
         usage = shutil.disk_usage(disk_path)
-        if usage.total > 0:
-            free_fraction = (usage.total - usage.used) / usage.total
-            if free_fraction < MIN_DISK_FREE_FRACTION:
-                pct = free_fraction * 100
-                errors.append(f"disk free space {pct:.1f}% below threshold {MIN_DISK_FREE_FRACTION * 100:.0f}%")
     except OSError as e:
-        errors.append(f"disk usage check failed: {e}")
+        return HealthCheckResult(healthy=False, error=f"disk usage check failed: {e}")
 
-    if errors:
-        return HealthCheckResult(healthy=False, error="; ".join(errors))
+    if usage.total > 0:
+        free_fraction = (usage.total - usage.used) / usage.total
+        if free_fraction < MIN_DISK_FREE_FRACTION:
+            pct = free_fraction * 100
+            return HealthCheckResult(
+                healthy=False,
+                error=f"disk free space {pct:.1f}% below threshold {MIN_DISK_FREE_FRACTION * 100:.0f}%",
+            )
     return HealthCheckResult(healthy=True)
 
 

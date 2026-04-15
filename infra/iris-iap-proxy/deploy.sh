@@ -112,7 +112,7 @@ gcloud beta run deploy "${SERVICE}" \
   --vpc-egress=private-ranges-only \
   --set-env-vars="GCP_PROJECT=${PROJECT},CONTROLLER_ZONE=${ZONE},CONTROLLER_LABEL=${CONTROLLER_LABEL},CONTROLLER_PORT=10000" \
   --timeout=300 \
-  --memory=512Mi \
+  --memory=1Gi \
   --cpu=1 \
   --min-instances=1 \
   --max-instances=1 \

@@ -47,7 +47,6 @@ from iris.cluster.controller.db import (
     ControllerDB,
     healthy_active_workers_with_attributes,
     insert_task_profile,
-    job_is_finished,
     job_scheduling_deadline,
     running_tasks_by_worker,
     task_row_can_be_scheduled,
@@ -117,6 +116,7 @@ from iris.cluster.types import (
     WorkerId,
     get_gpu_count,
     get_tpu_count,
+    is_job_finished,
 )
 from rigging.log_setup import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
@@ -332,7 +332,7 @@ def compute_demand_entries(
         job = jobs_by_id.get(job_id)
         if not job:
             continue
-        if job_is_finished(job.state):
+        if is_job_finished(job.state):
             continue
 
         job_constraints = constraints_from_json(job.constraints_json)
@@ -1361,7 +1361,7 @@ class Controller:
 
             if wal_checkpoint_limiter.should_run():
                 try:
-                    busy, log_frames, checkpointed = self._db.wal_checkpoint("TRUNCATE")
+                    busy, log_frames, checkpointed = self._db.wal_checkpoint()
                     logger.info(
                         "wal_checkpoint(TRUNCATE): busy=%d log_frames=%d checkpointed=%d",
                         busy,
@@ -1614,7 +1614,7 @@ class Controller:
                 stale.append(worker_id)
                 continue
             job = jobs_by_id.get(claim.job_id)
-            if job is None or job_is_finished(job.state):
+            if job is None or is_job_finished(job.state):
                 stale.append(worker_id)
         for wid in stale:
             del claims[wid]

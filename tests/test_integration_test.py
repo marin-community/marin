@@ -8,6 +8,7 @@ import tempfile
 import pytest
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip this test in CI, since we run it as a separate worflow.")
 def test_integration_test_run():
     MARIN_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))

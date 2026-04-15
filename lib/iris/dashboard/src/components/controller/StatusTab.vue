@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useControllerRpc, controllerRpcCall } from '@/composables/useRpc'
-import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { useProfileAction } from '@/composables/useProfileAction'
 import type { GetProcessStatusResponse, ProcessInfo } from '@/types/rpc'
 import { formatBytes, formatCpuMillicores, formatUptime } from '@/utils/formatting'
@@ -13,7 +13,7 @@ import ProfileButtons from '@/components/shared/ProfileButtons.vue'
 const { data, loading, error, refresh } = useControllerRpc<GetProcessStatusResponse>('GetProcessStatus')
 const { profiling, profile } = useProfileAction(controllerRpcCall, '/system/process')
 
-useAutoRefresh(refresh, 10_000)
+useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
 onMounted(refresh)
 
 const info = computed<ProcessInfo | null>(() => data.value?.processInfo ?? null)
