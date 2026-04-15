@@ -765,7 +765,8 @@ class Worker:
             with slow_log(logger, "heartbeat submit_tasks", threshold_ms=200):
                 for run_req in request.tasks_to_run:
                     try:
-                        self.submit_task(run_req)
+                        with slow_log(logger, f"heartbeat submit_task[{run_req.task_id}]", threshold_ms=500):
+                            self.submit_task(run_req)
                         logger.info("Heartbeat: submitted task %s", run_req.task_id)
                     except Exception as e:
                         logger.warning("Heartbeat: failed to submit task %s: %s", run_req.task_id, e)
@@ -778,7 +779,8 @@ class Worker:
                     try:
                         current = self._get_current_attempt(task_id)
                         if current:
-                            self._kill_task_attempt(task_id, current.attempt_id, async_kill=False)
+                            with slow_log(logger, f"heartbeat kill_task[{task_id}]", threshold_ms=2000):
+                                self._kill_task_attempt(task_id, current.attempt_id, async_kill=False)
                             logger.info("Heartbeat: killed task %s", task_id)
                     except Exception as e:
                         logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
