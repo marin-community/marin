@@ -13,7 +13,7 @@ from pathlib import Path
 import uvicorn
 
 from iris.chaos import chaos
-from iris.cluster.log_store import bootstrap_log_key, worker_log_key
+from iris.cluster.log_store import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.log_server.client import LogPusher, RemoteLogHandler
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
@@ -182,9 +182,11 @@ class Worker:
 
         # LogPusher and RemoteLogHandler are created before registration so
         # pre-register failures (container bring-up, disk/health probes,
-        # registration rejection) leave remote logs. The initial key uses
-        # ``bootstrap_log_key``; it is swapped to ``worker_log_key`` once the
-        # controller assigns a canonical worker_id.
+        # registration rejection) leave remote logs. Attachment relies on
+        # ``self._worker_id`` having been resolved locally (IRIS_WORKER_ID,
+        # slice_id + TPU index, or GCE instance name); the rare case where
+        # the controller assigns the id is handled by re-attaching post-
+        # register.
         self._log_pusher: LogPusher | None = None
         self._log_handler: RemoteLogHandler | None = None
 
@@ -382,10 +384,12 @@ class Worker:
 
         This loop runs continuously until shutdown. On each iteration:
         1. Reset worker state (kill all containers)
-        2. Attach the log handler under a bootstrap key so pre-registration
-           log lines reach the central log server
+        2. Attach the remote log handler so pre-registration log lines ship
+           to the central log server (and a refreshed /system/log-server
+           endpoint is picked up after any log-server failover)
         3. Register with controller (retry until accepted)
-        4. Rekey the log handler to the assigned worker_id
+        4. If the controller assigned a worker_id we didn't know locally,
+           re-attach the handler under the canonical key
         5. Serve (wait for heartbeats from controller)
         6. If heartbeat timeout expires, return to step 1
 
@@ -407,8 +411,9 @@ class Worker:
                 if worker_id is None:
                     # Shutdown requested during registration
                     break
-                self._worker_id = worker_id
-                self._rekey_log_handler_for_worker()
+                if worker_id != self._worker_id:
+                    self._worker_id = worker_id
+                    self._attach_log_handler()
                 self._serve(stop_event)
         except Exception:
             logger.exception("Worker lifecycle crashed")
@@ -483,16 +488,18 @@ class Worker:
         return addr
 
     def _attach_log_handler(self) -> None:
-        """Create LogPusher and attach RemoteLogHandler.
+        """Create LogPusher and attach RemoteLogHandler under ``worker_log_key``.
 
-        Called before ``_register`` so bootstrap logs (container bring-up,
-        disk probes, registration rejections) reach the central log server.
-        If the log server cannot be resolved the worker keeps running — the
-        controller would not be reachable for registration either, and the
-        register loop already retries.
+        Always tears down any existing handler first so each lifecycle cycle
+        re-resolves /system/log-server (picking up log-server failover) and
+        rebuilds the LogPusher against the fresh address.
+
+        Skipped when ``self._worker_id`` is not yet known locally — in that
+        (rare) case the controller will assign an id during ``_register`` and
+        the lifecycle loop re-calls this method with the canonical id.
         """
-        if self._log_handler is not None:
-            self._log_handler.key = self._current_log_key()
+        self._detach_log_handler()
+        if not self._worker_id:
             return
         log_addr = self._resolve_log_service()
         if not log_addr:
@@ -503,37 +510,11 @@ class Worker:
         self._log_pusher = LogPusher(log_addr, interceptors=log_interceptors)
         self._log_handler = RemoteLogHandler(
             self._log_pusher,
-            key=self._current_log_key(),
+            key=worker_log_key(self._worker_id),
         )
         self._log_handler.setLevel(logging.INFO)
         self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger().addHandler(self._log_handler)
-
-    def _current_log_key(self) -> str:
-        """Return the log store key for this worker's process logs.
-
-        Uses the canonical ``worker_log_key`` once a worker_id is known
-        (either derived from slice/hardware or assigned by the controller).
-        Falls back to ``bootstrap_log_key`` keyed by slice_id + ip so bootstrap
-        lines from the same VM land under a stable key across retries.
-        """
-        if self._worker_id:
-            return worker_log_key(self._worker_id)
-        ip = self._worker_metadata.ip_address or "unknown"
-        slice_id = self._config.slice_id
-        identifier = f"{slice_id}-{ip}" if slice_id else ip
-        return bootstrap_log_key(identifier)
-
-    def _rekey_log_handler_for_worker(self) -> None:
-        """Move the attached handler to the canonical ``worker_log_key``.
-
-        If the handler was not attached pre-register (log server unreachable),
-        retry attachment now that the controller has confirmed the worker_id.
-        """
-        if self._log_handler is None:
-            self._attach_log_handler()
-            return
-        self._log_handler.key = self._current_log_key()
 
     def _detach_log_handler(self) -> None:
         """Remove and close the current RemoteLogHandler and LogPusher if any."""

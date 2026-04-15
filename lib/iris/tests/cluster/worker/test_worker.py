@@ -7,6 +7,7 @@ import hashlib
 import socket
 import time
 import zipfile
+from typing import ClassVar
 from unittest.mock import Mock
 
 import pytest
@@ -584,128 +585,120 @@ def test_port_binding_failure(mock_bundle_store, tmp_path):
 
 
 # ============================================================================
-# Bootstrap log handler tests
+# Remote log handler attach tests (regression for #4794)
 # ============================================================================
 
 
-def test_log_handler_attached_before_register_uses_bootstrap_key(mock_bundle_store, mock_runtime, tmp_path, monkeypatch):
-    """Worker attaches a remote log handler under a bootstrap key before register,
-    then re-keys to worker_log_key once the controller assigns a worker_id.
+def _log_server_endpoints(address: str):
+    from iris.rpc import controller_pb2
 
-    Regression test for #4794: pre-registration failures must still produce
-    searchable remote logs.
-    """
-    import logging as _logging
+    return controller_pb2.Controller.ListEndpointsResponse(
+        endpoints=[
+            controller_pb2.Controller.Endpoint(
+                endpoint_id="/system/log-server",
+                name="/system/log-server",
+                address=address,
+            )
+        ]
+    )
 
-    from iris.cluster.log_store import bootstrap_log_key, worker_log_key
+
+class _RecordingPusher:
+    """Records server_url so tests can observe LogPusher re-creation."""
+
+    instances: ClassVar[list["_RecordingPusher"]] = []
+
+    def __init__(self, server_url, **_kwargs):
+        self.server_url = server_url
+        _RecordingPusher.instances.append(self)
+
+    def push(self, key, entries):
+        pass
+
+    def flush(self):
+        pass
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def recording_log_pusher(monkeypatch):
+    """Swap iris.log_server.client.LogPusher for a recorder that tracks constructions."""
     from iris.cluster.worker import worker as worker_module
-    from iris.log_server.client import RemoteLogHandler
-    from iris.rpc import controller_pb2, logging_pb2
 
-    pushed: list[tuple[str, list[logging_pb2.LogEntry]]] = []
+    _RecordingPusher.instances = []
+    monkeypatch.setattr(worker_module, "LogPusher", _RecordingPusher)
+    yield _RecordingPusher
 
-    class _Pusher:
-        def __init__(self, server_url, **_kwargs):
-            self.server_url = server_url
 
-        def push(self, key, entries):
-            pushed.append((key, list(entries)))
-
-        def flush(self):
-            pass
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(worker_module, "LogPusher", _Pusher)
+def test_attach_log_handler_uses_worker_log_key_before_register(
+    mock_bundle_store, mock_runtime, tmp_path, recording_log_pusher
+):
+    """Worker known locally (e.g. via slice_id) attaches under worker_log_key
+    *before* register so pre-register failures ship remote logs."""
+    from iris.cluster.log_store import worker_log_key
 
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
-        poll_interval=Duration.from_seconds(0.1),
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
-        slice_id="slice-abc",
+        worker_id="w-1",
     )
     worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
-
-    # Inject a fake controller client returning a log-server address.
-    fake_client = Mock()
-    fake_client.list_endpoints = Mock(
-        return_value=controller_pb2.Controller.ListEndpointsResponse(
-            endpoints=[
-                controller_pb2.Controller.Endpoint(
-                    endpoint_id="/system/log-server",
-                    name="/system/log-server",
-                    address="http://log-server:9000",
-                )
-            ]
-        )
-    )
-    worker._controller_client = fake_client
-    # Simulate a probed IP; slice_id comes from config.
-    worker._worker_metadata.ip_address = "10.0.0.5"
-    # Pre-register: worker_id is not yet assigned by controller.
-    worker._worker_id = None
+    worker._controller_client = Mock(list_endpoints=Mock(return_value=_log_server_endpoints("http://log:9000")))
 
     try:
         worker._attach_log_handler()
-        assert isinstance(worker._log_handler, RemoteLogHandler)
-        expected_bootstrap = bootstrap_log_key("slice-abc-10.0.0.5")
-        assert worker._log_handler.key == expected_bootstrap
-
-        root = _logging.getLogger()
-        record = root.makeRecord("test", _logging.INFO, __file__, 1, "pre-register line", None, None)
-        worker._log_handler.emit(record)
-        assert pushed, "expected push before register"
-        assert pushed[-1][0] == expected_bootstrap
-        assert pushed[-1][1][0].data.endswith("pre-register line")
-
-        # Simulate controller assigning a worker_id during register.
-        worker._worker_id = "worker-250"
-        worker._rekey_log_handler_for_worker()
-        assert worker._log_handler.key == worker_log_key("worker-250")
-
-        record2 = root.makeRecord("test", _logging.INFO, __file__, 2, "post-register line", None, None)
-        worker._log_handler.emit(record2)
-        assert pushed[-1][0] == worker_log_key("worker-250")
-        assert pushed[-1][1][0].data.endswith("post-register line")
+        assert worker._log_handler is not None
+        assert worker._log_handler.key == worker_log_key("w-1")
     finally:
-        # Detach so the RemoteLogHandler doesn't survive the test.
-        if worker._log_handler is not None:
-            _logging.getLogger().removeHandler(worker._log_handler)
-            worker._log_handler.close()
+        worker._detach_log_handler()
 
 
-def test_log_handler_attach_survives_controller_unreachable(mock_bundle_store, mock_runtime, tmp_path, monkeypatch):
-    """If /system/log-server cannot be resolved (controller unreachable),
-    the worker logs a warning and continues without a remote handler instead
-    of crashing the lifecycle thread."""
-    from iris.cluster.worker import worker as worker_module
-
-    class _Pusher:
-        def __init__(self, *_args, **_kwargs):
-            raise AssertionError("LogPusher must not be constructed on resolve failure")
-
-    monkeypatch.setattr(worker_module, "LogPusher", _Pusher)
-
+def test_attach_log_handler_tolerates_resolve_failure(mock_bundle_store, mock_runtime, tmp_path, recording_log_pusher):
+    """A ListEndpoints RPC failure must not crash the lifecycle thread."""
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
-        poll_interval=Duration.from_seconds(0.1),
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
+        worker_id="w-1",
     )
     worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
+    worker._controller_client = Mock(list_endpoints=Mock(side_effect=ConnectionError("controller down")))
 
-    fake_client = Mock()
-    fake_client.list_endpoints = Mock(side_effect=ConnectionError("controller down"))
-    worker._controller_client = fake_client
-
-    # Must not raise.
     worker._attach_log_handler()
     assert worker._log_handler is None
     assert worker._log_pusher is None
+    assert recording_log_pusher.instances == []
+
+
+def test_attach_log_handler_rebuilds_pusher_on_reattach(mock_bundle_store, mock_runtime, tmp_path, recording_log_pusher):
+    """Repeated attach must tear down the old LogPusher so log-server failover
+    is picked up — protects against the regression Codex flagged."""
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+        worker_id="w-1",
+    )
+    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
+    addrs = iter(["http://log-a:9000", "http://log-b:9000"])
+    worker._controller_client = Mock(list_endpoints=Mock(side_effect=lambda _req: _log_server_endpoints(next(addrs))))
+
+    try:
+        worker._attach_log_handler()
+        worker._attach_log_handler()
+        assert [p.server_url for p in recording_log_pusher.instances] == [
+            "http://log-a:9000",
+            "http://log-b:9000",
+        ]
+        assert worker._log_pusher is recording_log_pusher.instances[-1]
+    finally:
+        worker._detach_log_handler()
 
 
 # ============================================================================
