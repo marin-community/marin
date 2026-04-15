@@ -39,10 +39,10 @@ class EmaModelAveraging(ModelAveraging[M]):
     model: M
     beta: float = eqx.field(static=True)
 
-    def update(self: S, new_model: M, step: int) -> S:
+    def update(self: S, model: M, step: int) -> S:
         del step
         # 1 - beta because increment_update expects the weight of the new model
-        return dataclasses.replace(self, model=optax.incremental_update(new_model, self.model, 1 - self.beta))  # type: ignore
+        return dataclasses.replace(self, model=optax.incremental_update(model, self.model, 1 - self.beta))  # type: ignore
 
     @property
     def model_params(self) -> M:
@@ -70,11 +70,11 @@ class EmaDecaySqrtModelAveraging(ModelAveraging[M]):
         frac = jnp.clip(t / self.decay_steps, 0.0, 1.0)
         return float(1.0 - jnp.sqrt(frac))
 
-    def update(self, new_model: M, step: int) -> "EmaDecaySqrtModelAveraging[M]":
+    def update(self, model: M, step: int) -> "EmaDecaySqrtModelAveraging[M]":
         w = self._raw_weight(step)
         new_tot_w = self.tot_weight + w
         alpha = 0.0 if new_tot_w == 0.0 else w / new_tot_w
-        updated = optax.incremental_update(new_model, self.model, alpha)
+        updated = optax.incremental_update(model, self.model, alpha)
         return dataclasses.replace(self, model=updated, tot_weight=new_tot_w)  # type: ignore[arg-type]
 
     @property

@@ -362,14 +362,15 @@ class InferenceContext:
         while not self.shutdown_event.is_set():
             try:
                 batch = self.batch_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            try:
                 with (
                     self.model_lock,
                     hax.partitioning.set_mesh(self.config.trainer.device_mesh),
                     hax.axis_mapping(self.config.trainer.compute_axis_mapping),
                 ):
                     self._execute_batch(batch)
-            except queue.Empty:
-                continue
             except Exception as e:
                 logger.error(f"Error executing batch: {e}", exc_info=True)
                 # Set exceptions on all futures in the batch

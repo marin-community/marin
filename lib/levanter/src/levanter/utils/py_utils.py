@@ -126,7 +126,8 @@ class FailSafeJSONEncoder(json.JSONEncoder):
         super().__init__(*args, **kwargs)
         self.bytes_strategy = bytes_strategy
 
-    def default(self, obj):
+    def default(self, o):
+        obj = o
         # Known clean conversions
         if isinstance(obj, (datetime.datetime, datetime.date, datetime.time)):
             # ISO 8601; preserves tzinfo if present
