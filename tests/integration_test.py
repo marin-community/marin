@@ -38,7 +38,7 @@ from marin.execution.executor import (
     this_output_path,
 )
 from marin.execution.step_spec import StepSpec
-from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, FilterType, consolidate
+from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
 from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
 from marin.processing.tokenize import lm_data_config
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
@@ -101,16 +101,16 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     dedup_exact_paragraph_step = dedup_exact_paragraph_spec.as_executor_step()
 
     # Consolidate
-    consolidate_step = ExecutorStep(
+    consolidate_spec = StepSpec(
         name=os.path.join(prefix, "cleaned"),
-        fn=consolidate,
-        config=ConsolidateConfig(
-            input_path=transform_hq_data_step,
-            output_path=this_output_path(),
+        deps=[transform_hq_data_spec, dedup_exact_paragraph_spec],
+        fn=lambda output_path: consolidate(
+            input_path=transform_hq_data_spec.output_path,
+            output_path=output_path,
             filters=[
                 FilterConfig(
                     type=FilterType.REMOVE_SPANS,
-                    attribute_path=dedup_exact_paragraph_step.cd("data"),
+                    attribute_path=f"{dedup_exact_paragraph_spec.output_path}/data",
                     name="dup_spans",
                     attribute_filetype="parquet",
                     keep_if_missing=True,
@@ -118,6 +118,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             ],
         ),
     )
+    consolidate_step = consolidate_spec.as_executor_step()
 
     # Tokenize
     tokenize_step = ExecutorStep(

@@ -5,18 +5,21 @@
 Consolidate takes a set of documents with corresponding attributes and writes
 out a subset of the documents based on various filters defined with respect to
 the attributes.  Handles two cases:
-- Quality filtering produces attributes (e.g., fasttext-quality) with labels
-  (e.g., __label__hq), filter on threshold.
 - Span removal produces attributes (e.g., duplicate_text spans). Remove text spans.
 - Document removal via attribute produced by deduplication.
+
+Joins documents with their attribute files via Zephyr's ``sorted_merge_join``:
+the datakit convention guarantees that attribute files share the input file
+partitioning (1:1 file pairing, sorted by id), so each shard pairs with its
+corresponding attribute shard without a shuffle. Multiple filters are chained
+as successive left joins.
 """
 
 import logging
 import os
-from collections.abc import Iterator
-from dataclasses import dataclass, replace
+from collections.abc import Callable
+from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
 
 from fray import ResourceConfig
 from marin.utils import (
@@ -24,12 +27,10 @@ from marin.utils import (
     fsspec_glob,
     rebase_file_path,
 )
-from zephyr import Dataset, ZephyrContext
-from zephyr.readers import InputFileSpec, load_file
+from zephyr import Dataset, ZephyrContext, ZephyrExecutionResult
 
 
 class FilterType(StrEnum):
-    CLASSIFY = "classify"
     REMOVE_SPANS = "remove_spans"
     REMOVE_DOC = "remove_docs"
 
@@ -50,21 +51,6 @@ class FilterConfig:
     name: str
     """Name of attribute to use for filtering."""
 
-    label: str | None = None
-    """The label under the attribute name."""
-
-    lower_threshold: float | None = None
-    """Keep documents where the value is above this."""
-
-    keep_fraction: float | None = None
-    """Keep documents where the score is in the top percentile. Calculates the threshold from the entire dataset."""
-
-    upper_threshold: float | None = None
-    """Keep documents where the value is below this."""
-
-    reverse: bool = False
-    """Reverse the filter."""
-
     attribute_filetype: str | None = None
     """File extension for attribute files (e.g. 'jsonl.gz', 'vortex'). If None, uses the input filetype."""
 
@@ -72,63 +58,10 @@ class FilterConfig:
     """If True, keep docs that have no attribute entry. If False (default), reject them."""
 
 
-@dataclass(frozen=True)
-class ConsolidateConfig:
-    """Config for Consolidation operation on Marin data."""
-
-    input_path: str
-    """The input path to a directory (recursively) containing documents."""
-
-    output_path: str
-    """The output path to save the filtered (consolidated) data."""
-
-    filters: list[FilterConfig]
-    """List of filters to apply to the documents."""
-
-    filetype: str = "jsonl.gz"
-    """The filetype of the input data."""
-
-    worker_resources: ResourceConfig | None = None
-    """Resource config per Zephyr worker. Uses Zephyr defaults (1 CPU, 1g RAM) when None."""
-
-
-# Dictionary-based navigation guide for extracting IDs from different corpus types
-CORPUS_TYPE_TO_ID_GUIDE = {
-    "default": {"key": "id"},  # Direct key access
-    "dclm": {"key": "metadata", "nested": {"key": "WARC-Record-ID"}},  # Nested dictionary access
-}
-
-
-def _is_valid(doc: dict, filt: FilterConfig, attributes: dict) -> bool:
-    assert filt.type == FilterType.CLASSIFY
-    attribute_value = attributes[filt.name]
-
-    # Handle nested attributes structure if a label is specified
-    if filt.label is not None:
-        if isinstance(attribute_value, dict) and filt.label in attribute_value:
-            value = attribute_value[filt.label]
-        else:
-            raise ValueError(f"Label {filt.label} not found in attribute {filt.name} for document {doc}")
-    else:
-        value = attribute_value
-
-    # Check both lower and upper bounds if specified
-    accepted = True
-    if filt.lower_threshold is not None and value < filt.lower_threshold:
-        accepted = False
-    if filt.upper_threshold is not None and value > filt.upper_threshold:
-        accepted = False
-
-    if filt.reverse:
-        accepted = not accepted
-
-    return accepted
-
-
 def _remove_spans_from_doc(doc: dict, filt: FilterConfig, attributes: dict) -> dict:
     def _remove_spans(text: str, spans: list[list[int]]) -> str:
-        """
-        Return `text` with `spans` removed.
+        """Return ``text`` with ``spans`` removed.
+
         Example: text = "hello", spans = [[1, 4]], returns "ho"
         """
         # Sort spans in reverse order to avoid index shifting
@@ -144,209 +77,111 @@ def _remove_spans_from_doc(doc: dict, filt: FilterConfig, attributes: dict) -> d
     return {**doc, "text": new_text}
 
 
-def extract_id(row: dict, corpus_type: str) -> str:
-    """Extract ID from row based on corpus type.
+def _resolve_attribute_path(input_base: str, input_path: str, filt: FilterConfig, filetype: str) -> str | None:
+    """Map an input file path to its attribute file path, with glob fallback for compression suffixes."""
+    new_extension = f".{filt.attribute_filetype}" if filt.attribute_filetype else f".{filetype}"
+    attr_path = rebase_file_path(
+        input_base,
+        input_path,
+        filt.attribute_path,
+        new_extension=new_extension,
+        old_extension=f".{filetype}",
+    )
+    if fsspec_exists(attr_path):
+        return attr_path
+    candidates = fsspec_glob(f"{attr_path}.*")
+    if candidates:
+        return candidates[0]
+    return None
 
-    Recursively navigates nested structures as defined in CORPUS_TYPE_TO_ID_GUIDE."""
-    guide = CORPUS_TYPE_TO_ID_GUIDE[corpus_type]
 
-    # grab the key, then navigate nested if needed
-    val = row[guide["key"]]
+def _attribute_paths_for_filter(input_base: str, input_paths: list[str], filt: FilterConfig, filetype: str) -> list[str]:
+    """Resolve the 1:1 input→attribute paths for a filter.
 
-    while "nested" in guide:
-        nested = guide["nested"]
-        assert isinstance(nested, dict)
-        val = val[nested["key"]]
-        guide = nested
+    Raises if any shard's attribute file is missing — the datakit invariant is
+    that all attribute files exist. ``keep_if_missing`` governs missing *rows*
+    within a file, not missing files.
+    """
+    resolved = []
+    for inp in input_paths:
+        path = _resolve_attribute_path(input_base, inp, filt, filetype)
+        if path is None:
+            raise FileNotFoundError(
+                f"No attribute file for filter '{filt.name}' corresponding to input {inp} "
+                f"under {filt.attribute_path}"
+            )
+        resolved.append(path)
+    return resolved
 
-    return val
+
+def _make_filter_combiner(filt: FilterConfig) -> Callable[[dict, dict | None], dict | None]:
+    """Build a combiner for one filter.
+
+    Called by ``sorted_merge_join`` with the current doc (``left``) and the
+    matching attribute row or ``None`` (``right``). Returns the doc (possibly
+    with mutated text for ``REMOVE_SPANS``) or ``None`` to drop it.
+    """
+
+    def combine(left: dict, right: dict | None) -> dict | None:
+        if right is None:
+            return left if filt.keep_if_missing else None
+
+        attrs = right["attributes"]
+        if filt.type == FilterType.REMOVE_DOC:
+            return left if not attrs.get(filt.name, False) else None
+        assert filt.type == FilterType.REMOVE_SPANS
+        mutated = _remove_spans_from_doc(left, filt, attrs)
+        return mutated if mutated.get("text") else None
+
+    return combine
 
 
-def _compute_percentile_threshold(
-    attr_paths: list[str], attr_name: str, attr_label: str | None, keep_fraction: float
-) -> float:
-    """Compute percentile threshold for a single filter using DDSketch reduction.
+def consolidate(
+    *,
+    input_path: str,
+    output_path: str,
+    filters: list[FilterConfig],
+    filetype: str = "jsonl.gz",
+    worker_resources: ResourceConfig | None = None,
+) -> ZephyrExecutionResult:
+    """Consolidate documents by applying filters based on attributes.
+
+    Joins each input file with its (co-partitioned, sorted) attribute files via
+    chained ``sorted_merge_join`` ops — one left join per filter, with the
+    filter's keep/mutate/drop logic encoded in its combiner.
 
     Args:
-        attr_paths: Paths to attribute files
-        attr_name: Name of attribute to extract
-        attr_label: Optional label within attribute (for nested dicts)
-        keep_fraction: Fraction of documents to keep (0-1)
-
-    Returns:
-        Threshold value at the (1 - keep_fraction) quantile
+        input_path: Directory (recursively) containing input documents.
+        output_path: Destination directory for filtered Parquet output.
+        filters: List of filters to apply (see :class:`FilterConfig`).
+        filetype: Extension of the input documents (default: ``"jsonl.gz"``).
+        worker_resources: Optional Zephyr worker resource config (defaults to Zephyr defaults).
     """
-    from ddsketch import DDSketch
+    input_paths = sorted(fsspec_glob(os.path.join(input_path, f"**/*.{filetype}")))
+    if not input_paths:
+        raise ValueError(f"No input files matched {input_path}/**/*.{filetype}")
+    logger.info(f"Consolidating {len(input_paths)} document files via {len(filters)} filters")
 
-    def local_reducer(rows: Iterator[dict], attr_name: str = attr_name, attr_label: str | None = attr_label) -> DDSketch:
-        """Build DDSketch from rows in a single shard."""
-        sketch = DDSketch()
-        for row in rows:
-            attributes = row["attributes"]
-            value = attributes[attr_name][attr_label] if attr_label else attributes[attr_name]
-            sketch.add(value)
-        return sketch
+    # Resolve attribute paths up front so the plan can be built before execution.
+    filter_attr_paths = [
+        (filt, _attribute_paths_for_filter(input_path, input_paths, filt, filetype)) for filt in filters
+    ]
 
-    def global_reducer(sketches: Iterator[DDSketch]) -> DDSketch:
-        """Merge all shard sketches into one."""
-        combined = DDSketch()
-        for sketch in sketches:
-            combined.merge(sketch)
-        return combined
-
-    ctx = ZephyrContext(name="consolidate-stats")
-    result = ctx.execute(
-        Dataset.from_list(attr_paths)
-        .load_file()
-        .select("attributes")
-        .reduce(local_reducer=local_reducer, global_reducer=global_reducer)
-    ).results
-
-    combined_sketch = next(iter(result))
-    threshold = combined_sketch.get_quantile_value(1 - keep_fraction)
-    return threshold
-
-
-def calculate_percentile_thresholds(config: ConsolidateConfig) -> list[FilterConfig]:
-    """Resolve keep_fraction filters to lower_threshold using percentile calculation.
-
-    Args:
-        config: Consolidation configuration
-
-    Returns:
-        Updated filters with percentile thresholds resolved
-    """
-    updated_filters = []
-    input_paths = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
-
-    for filt in config.filters:
-        # Validate threshold configuration
-        if filt.keep_fraction is not None and filt.lower_threshold is not None:
-            raise ValueError("Cannot specify both keep_fraction and lower_threshold. Please specify only one.")
-
-        # Skip if no percentile calculation needed
-        if filt.keep_fraction is None:
-            updated_filters.append(filt)
-            continue
-
-        if not (0 < filt.keep_fraction < 1):
-            raise ValueError("keep_fraction must be between 0 and 1")
-
-        # Only applies to CLASSIFY filters
-        if filt.type != FilterType.CLASSIFY:
-            logger.warning(f"keep_fraction only applies to CLASSIFY filters, ignoring for {filt.name}")
-            updated_filters.append(filt)
-            continue
-
-        # Build list of attribute file paths
-        rebase_kwargs = {}
-        if filt.attribute_filetype:
-            rebase_kwargs["new_extension"] = f".{filt.attribute_filetype}"
-            rebase_kwargs["old_extension"] = f".{config.filetype}"
-        attr_paths = [
-            rebase_file_path(config.input_path, inp, filt.attribute_path, **rebase_kwargs) for inp in input_paths
-        ]
-
-        # Compute threshold using reduction
-        threshold = _compute_percentile_threshold(attr_paths, filt.name, filt.label, filt.keep_fraction)
-        logger.info(f"Calculated threshold {threshold} for {filt.name} to keep {filt.keep_fraction} of documents")
-        updated_filters.append(replace(filt, lower_threshold=threshold, keep_fraction=None))
-
-    return updated_filters
-
-
-def process_file_shard(*, shard, filters: list[FilterConfig], input_base: str, filetype: str) -> Iterator[dict]:
-    """Filter documents in a file shard based on provided filters."""
-    # Shard has __iter__, iterate to get the single file path
-    input_path = next(iter(shard))
-    corpus_type = "dclm" if "dclm" in input_path else "default"
-
-    # Load all attribute files for this input file and build mapping
-    attr_file_paths = {
-        filt.name: rebase_file_path(
-            input_base,
-            input_path,
-            filt.attribute_path,
-            new_extension=f".{filt.attribute_filetype}" if filt.attribute_filetype else f".{filetype}",
-            old_extension=f".{filetype}",
+    ds = Dataset.from_list(input_paths).load_parquet()
+    for filt, attr_paths in filter_attr_paths:
+        attrs = Dataset.from_list(attr_paths).load_parquet(columns=["id", "attributes"])
+        ds = ds.sorted_merge_join(
+            attrs,
+            left_key=lambda r: r["id"],
+            right_key=lambda r: r["id"],
+            combiner=_make_filter_combiner(filt),
+            how="left",
         )
-        for filt in filters
-    }
-
-    filter_to_doc_attrs: dict[str, dict[str, dict[str, Any]]] = {}
-    for filt_name, attr_path in attr_file_paths.items():
-        # Try exact path first, then look for compressed versions (.gz, .zst, etc.)
-        if fsspec_exists(attr_path):
-            final_attr_path = attr_path
-        else:
-            candidates = fsspec_glob(f"{attr_path}.*")
-            if candidates:
-                final_attr_path = candidates[0]
-            else:
-                logger.warning(f"Attribute file not found: {attr_path}")
-                continue
-
-        # Build dict mapping doc_id -> attributes
-        doc_attrs = {}
-        columns = [CORPUS_TYPE_TO_ID_GUIDE[corpus_type]["key"], "attributes"]
-        for row in load_file(InputFileSpec(path=final_attr_path, columns=columns)):
-            doc_id = extract_id(row, corpus_type)
-            doc_attrs[doc_id] = row["attributes"]
-
-        filter_to_doc_attrs[filt_name] = doc_attrs
-
-    logger.info(f"Processing {input_path}")
-    for doc in load_file(input_path):
-        doc_id = extract_id(doc, corpus_type)
-        keep = True
-
-        for filt in filters:
-            if keep is False:
-                # NOTE: if at any point the doc is rejected, stop processing further filters
-                break
-
-            filt_attrs: dict[str, Any] | None = filter_to_doc_attrs.get(filt.name, {}).get(doc_id)
-            if not filt_attrs:
-                if filt.keep_if_missing:
-                    continue
-                keep = False
-                break
-
-            if filt.type == FilterType.CLASSIFY:
-                keep = _is_valid(doc, filt, filt_attrs)
-            elif filt.type == FilterType.REMOVE_DOC:
-                keep = not filt_attrs.get(filt.name, False)
-            else:
-                assert filt.type == FilterType.REMOVE_SPANS
-                doc = _remove_spans_from_doc(doc, filt, filt_attrs)
-
-        if keep and doc["text"]:
-            yield doc
-
-
-def consolidate(config: ConsolidateConfig):
-    """
-    Consolidate documents by applying filters based on attributes.
-
-    The output is written to Parquet files in the specified output path.
-    """
-    filters = calculate_percentile_thresholds(config)
-    input_paths = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
-    logger.info(f"Consolidating {len(input_paths)} document files")
-
-    output_pattern = f"{config.output_path}/part-{{shard:04d}}.parquet"
+        # Drop rejected docs before the next join so its key extractor never sees None.
+        ds = ds.filter(lambda r: r is not None)
 
     ctx = ZephyrContext(
-        name="consolidate-filter", **({"resources": config.worker_resources} if config.worker_resources else {})
+        name="consolidate-filter",
+        **({"resources": worker_resources} if worker_resources else {}),
     )
-    results = ctx.execute(
-        Dataset.from_list(input_paths)
-        .map_shard(
-            lambda shard, _: process_file_shard(
-                shard=shard, filters=filters, input_base=config.input_path, filetype=config.filetype
-            )
-        )
-        .write_parquet(output_pattern)
-    ).results
-
-    logger.info(f"Consolidation complete. Wrote {len(results)} output files")
+    return ctx.execute(ds.write_parquet(f"{output_path}/part-{{shard:05d}}-of-{{total:05d}}.parquet"))

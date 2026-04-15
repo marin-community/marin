@@ -1414,18 +1414,6 @@ wheels = [
 ]
 
 [[package]]
-name = "ddsketch"
-version = "3.0.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "six" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b8/c7/25f300ba359c7e723180ce962a30e1f820c3990e3f3e8bbed16ae9387cab/ddsketch-3.0.1.tar.gz", hash = "sha256:aa8f20b2965e61731ca4fee2ca9c209f397f5bbb23f9d192ec8bd7a2f5bd9824", size = 30010, upload-time = "2024-04-01T13:11:39.734Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ac/da/c821e4958c8df43ded1a92aaca678d89ec8b7a4df5bb561ef25354be1912/ddsketch-3.0.1-py3-none-any.whl", hash = "sha256:6d047b455fe2837c43d366ff1ae6ba0c3166e15499de8688437a75cea914224e", size = 19113, upload-time = "2024-04-01T13:11:38.159Z" },
-]
-
-[[package]]
 name = "debugpy"
 version = "1.8.19"
 source = { registry = "https://pypi.org/simple" }
@@ -4599,7 +4587,6 @@ dependencies = [
     { name = "braceexpand" },
     { name = "cryptography" },
     { name = "datasets" },
-    { name = "ddsketch" },
     { name = "deepdiff" },
     { name = "draccus" },
     { name = "fasteners" },
@@ -4772,7 +4759,6 @@ requires-dist = [
     { name = "braceexpand" },
     { name = "cryptography", specifier = ">=45" },
     { name = "datasets", specifier = "<4.0.0" },
-    { name = "ddsketch" },
     { name = "deepdiff" },
     { name = "draccus", specifier = ">=0.11.5" },
     { name = "dupekit", marker = "extra == 'dedup'" },

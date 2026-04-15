@@ -21,7 +21,6 @@ from marin.datakit.normalize import normalize_step
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import (
-    ConsolidateConfig,
     FilterConfig,
     FilterType,
     consolidate,
@@ -76,21 +75,19 @@ def build_steps(run_id: str) -> list[StepSpec]:
         name="datakit-smoke/consolidate",
         deps=[normalized, deduped],
         fn=lambda output_path: consolidate(
-            ConsolidateConfig(
-                input_path=normalized.output_path,
-                output_path=output_path,
-                filetype="parquet",
-                filters=[
-                    FilterConfig(
-                        type=FilterType.REMOVE_DOC,
-                        attribute_path=f"{deduped.output_path}/data",
-                        name="dup_doc",
-                        attribute_filetype="parquet",
-                        keep_if_missing=True,
-                    ),
-                ],
-                worker_resources=ResourceConfig(cpu=1, ram="8g"),
-            )
+            input_path=normalized.output_path,
+            output_path=output_path,
+            filetype="parquet",
+            filters=[
+                FilterConfig(
+                    type=FilterType.REMOVE_DOC,
+                    attribute_path=f"{deduped.output_path}/data",
+                    name="dup_doc",
+                    attribute_filetype="parquet",
+                    keep_if_missing=True,
+                ),
+            ],
+            worker_resources=ResourceConfig(cpu=1, ram="8g"),
         ),
         override_output_path=f"{base}/consolidate",
     )

@@ -12,7 +12,6 @@ dependencies = [
     "braceexpand",
     "cryptography>=45",
     "datasets<4.0.0",
-    "ddsketch",
     "deepdiff",
     "draccus>=0.11.5",
     "fasteners>=0.19",
