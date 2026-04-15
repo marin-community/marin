@@ -23,6 +23,38 @@ function runAppearance(run: FerryRun): { className: string; style?: CSSPropertie
   }
 }
 
+// Flag runs whose wall time is at least SLOW_RUN_STDDEV_THRESHOLD standard
+// deviations longer than the mean of the preceding SLOW_RUN_WINDOW successful
+// runs. Successful only — failures/cancels/timeouts have unrepresentative
+// wall times (early exits, hangs) and would poison the baseline. history[0]
+// is the most recent run, so "prior" means higher indices.
+const SLOW_RUN_WINDOW = 7;
+const SLOW_RUN_STDDEV_THRESHOLD = 1;
+
+function slowRunThreshold(history: FerryRun[], index: number): number | null {
+  const priorDurations: number[] = [];
+  for (let j = index + 1; j < history.length && priorDurations.length < SLOW_RUN_WINDOW; j++) {
+    const prev = history[j];
+    if (prev.conclusion === "success" && prev.durationSeconds !== null) {
+      priorDurations.push(prev.durationSeconds);
+    }
+  }
+  if (priorDurations.length < SLOW_RUN_WINDOW) return null;
+  const mean = priorDurations.reduce((a, b) => a + b, 0) / priorDurations.length;
+  const variance =
+    priorDurations.reduce((s, x) => s + (x - mean) ** 2, 0) / priorDurations.length;
+  const stddev = Math.sqrt(variance);
+  if (stddev === 0) return null;
+  return mean + SLOW_RUN_STDDEV_THRESHOLD * stddev;
+}
+
+function isSlowRun(history: FerryRun[], index: number): boolean {
+  const run = history[index];
+  if (run.durationSeconds === null) return false;
+  const threshold = slowRunThreshold(history, index);
+  return threshold !== null && run.durationSeconds > threshold;
+}
+
 function formatDuration(seconds: number | null): string {
   if (seconds === null) return "—";
   if (seconds < 60) return `${seconds}s`;
@@ -96,18 +128,41 @@ function WorkflowCard({ wf }: { wf: FerryWorkflowStatus }) {
               so all 30 fit on a ~340px phone content area without
               wrapping to a second row. */}
           <div className="mt-3 flex gap-px sm:gap-1">
-            {wf.history.map((run) => {
+            {wf.history.map((run, i) => {
               const a = runAppearance(run);
+              const slow = isSlowRun(wf.history, i);
+              const threshold = slow ? slowRunThreshold(wf.history, i) : null;
               return (
                 <a
                   key={run.id}
                   href={run.url}
                   target="_blank"
                   rel="noreferrer"
-                  title={`${run.shaShort} · ${run.conclusion ?? run.status} · ${formatRelative(run.startedAt)}`}
-                  className={`h-5 w-2 rounded-sm sm:w-2.5 ${a.className} hover:ring-2 hover:ring-slate-400`}
+                  className={`group relative h-5 w-2 rounded-sm sm:w-2.5 ${a.className} hover:ring-2 hover:ring-slate-400`}
                   style={a.style}
-                />
+                >
+                  {slow && (
+                    <span
+                      aria-label="slow run"
+                      className="pointer-events-none absolute -right-0.5 -top-1 font-bold leading-none text-amber-300"
+                      style={{ fontSize: "10px", textShadow: "0 0 2px #0f172a, 0 0 2px #0f172a" }}
+                    >
+                      !
+                    </span>
+                  )}
+                  <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded border border-slate-700 bg-slate-950/95 px-2 py-1 text-xs text-slate-200 shadow-lg group-hover:block">
+                    <div className="font-mono text-slate-300">{run.shaShort}</div>
+                    <div className="text-slate-400">
+                      {run.conclusion ?? run.status} · {formatRelative(run.startedAt)}
+                    </div>
+                    <div>wall time: {formatDuration(run.durationSeconds)}</div>
+                    {slow && threshold !== null && (
+                      <div className="text-amber-300">
+                        slow · prior 7 successful runs mean+1σ ≈ {formatDuration(Math.round(threshold))}
+                      </div>
+                    )}
+                  </div>
+                </a>
               );
             })}
           </div>
