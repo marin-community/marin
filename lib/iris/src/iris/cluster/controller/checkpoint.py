@@ -28,6 +28,8 @@ import logging
 import os
 import sqlite3
 import tempfile
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -125,50 +127,71 @@ class DatabaseBackup:
             self.profiles_path.unlink(missing_ok=True)
 
 
+@contextmanager
+def _reserved_tmp_sqlite(tmp_dir: Path) -> Iterator[Path]:
+    """Reserve a tempfile path under *tmp_dir* and guarantee cleanup on error.
+
+    On normal exit the file is left in place -- callers adopt ownership
+    (via ``ExitStack.pop_all``).  On exception the reserved file and its
+    SQLite sidecars are removed so no orphans survive.  SQLite may create
+    ``<name>-journal``/``-wal``/``-shm`` sidecars during backup even
+    though we never open the file in WAL mode; we unlink all three
+    defensively.
+
+    We deliberately catch ``Exception`` rather than ``BaseException``:
+    after ``pop_all()`` transfers our callback to a discarded stack, GC
+    of the held generator raises ``GeneratorExit`` here, and we must
+    treat that as a successful hand-off -- not unlink the file.
+    """
+    fd, tmp_name = tempfile.mkstemp(suffix=".sqlite3", dir=tmp_dir)
+    os.close(fd)
+    path = Path(tmp_name)
+    try:
+        yield path
+    except Exception:
+        path.unlink(missing_ok=True)
+        for suffix in ("-journal", "-wal", "-shm"):
+            path.with_name(path.name + suffix).unlink(missing_ok=True)
+        raise
+
+
 def backup_databases(db: ControllerDB) -> DatabaseBackup:
-    """Create local SQLite backup copies of the main and auth databases.
+    """Create local SQLite backup copies of the main, auth and profiles DBs.
 
     Should be called while holding the write lock against the main DB -- it
     uses the SQLite backup API for a consistent snapshot.  The returned
     ``DatabaseBackup`` owns the temporary files and must be cleaned up by the
-    caller (via ``DatabaseBackup.cleanup``).
+    caller (via ``DatabaseBackup.cleanup``) on the success path.  If any of
+    the backup operations raise, all reserved temp files are unlinked before
+    the exception propagates.
     """
     created_at = Timestamp.now()
     tmp_dir = db.db_path.parent
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    fd, tmp_name = tempfile.mkstemp(suffix=".sqlite3", dir=tmp_dir)
-    os.close(fd)
-    main_tmp = Path(tmp_name)
-
-    auth_tmp: Path | None = None
-    auth_path = db.auth_db_path
-    if auth_path.exists():
-        fd2, tmp_name2 = tempfile.mkstemp(suffix=".sqlite3", dir=tmp_dir)
-        os.close(fd2)
-        auth_tmp = Path(tmp_name2)
-
-    profiles_tmp: Path | None = None
-    profiles_path = db.profiles_db_path
-    if profiles_path.exists():
-        fd3, tmp_name3 = tempfile.mkstemp(suffix=".sqlite3", dir=tmp_dir)
-        os.close(fd3)
-        profiles_tmp = Path(tmp_name3)
-
-    backup = DatabaseBackup(main_path=main_tmp, auth_path=auth_tmp, profiles_path=profiles_tmp, created_at=created_at)
-    ok = False
-    try:
+    with ExitStack() as stack:
+        main_tmp = stack.enter_context(_reserved_tmp_sqlite(tmp_dir))
         db.backup_to(main_tmp)
-        if auth_tmp is not None:
-            _backup_sqlite_file(auth_path, auth_tmp)
-        if profiles_tmp is not None:
-            _backup_sqlite_file(profiles_path, profiles_tmp)
-        ok = True
-    finally:
-        if not ok:
-            backup.cleanup()
 
-    return backup
+        auth_tmp: Path | None = None
+        if db.auth_db_path.exists():
+            auth_tmp = stack.enter_context(_reserved_tmp_sqlite(tmp_dir))
+            _backup_sqlite_file(db.auth_db_path, auth_tmp)
+
+        profiles_tmp: Path | None = None
+        if db.profiles_db_path.exists():
+            profiles_tmp = stack.enter_context(_reserved_tmp_sqlite(tmp_dir))
+            _backup_sqlite_file(db.profiles_db_path, profiles_tmp)
+
+        # Success: transfer temp-file ownership to the returned DatabaseBackup,
+        # whose .cleanup() is the caller's responsibility.
+        stack.pop_all()
+        return DatabaseBackup(
+            main_path=main_tmp,
+            auth_path=auth_tmp,
+            profiles_path=profiles_tmp,
+            created_at=created_at,
+        )
 
 
 def upload_checkpoint(

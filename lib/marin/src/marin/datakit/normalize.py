@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 import dupekit
@@ -30,6 +32,28 @@ from zephyr import Dataset, ZephyrContext
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 
 logger = logging.getLogger(__name__)
+
+# Default cap on the longest consecutive whitespace run in a document.
+# Runs exceeding this are compacted to this length at normalization time.
+# Pathologically long whitespace runs (e.g. multi-MB runs from broken
+# HTML→text extraction, cf. #4588) can OOM downstream tokenization.
+# 128 matches the longest whitespace run that Llama's tokenizer collapses
+# into a single token, so capping here is lossless for that tokenizer.
+DEFAULT_MAX_WHITESPACE_RUN_CHARS = 128
+
+# Counter name for documents that had whitespace runs compacted.
+COMPACTED_WHITESPACE_COUNTER = "datakit_normalize_compacted_whitespace"
+
+
+class DedupMode(StrEnum):
+    """How aggressively to deduplicate records during normalization.
+
+    ``EXACT`` drops records with duplicate ``id`` (i.e. byte-identical text)
+    within each output shard.  ``NONE`` skips the dedup pass entirely.
+    """
+
+    NONE = "none"
+    EXACT = "exact"
 
 
 @dataclass
@@ -171,24 +195,51 @@ def _compute_total_bytes(file_paths: list[str]) -> int:
     return total
 
 
+def _make_whitespace_compactor(max_whitespace_run_chars: int) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """Return a map function that compacts consecutive whitespace runs exceeding the limit.
+
+    Any run of whitespace longer than *max_whitespace_run_chars* is truncated to
+    that length (preserving the original whitespace characters). Affected records
+    are counted via the ``COMPACTED_WHITESPACE_COUNTER`` Zephyr counter, and the
+    ``id`` is recomputed to reflect the new text.
+    """
+    pattern = re.compile(r"\s{" + str(max_whitespace_run_chars + 1) + r",}")
+
+    def compact(record: dict[str, Any]) -> dict[str, Any]:
+        text = record["text"]
+        compacted = pattern.sub(lambda m: m.group(0)[:max_whitespace_run_chars], text)
+        if len(compacted) != len(text):
+            counters.increment(COMPACTED_WHITESPACE_COUNTER)
+            record = {**record, "text": compacted, "id": generate_id(compacted)}
+        return record
+
+    return compact
+
+
 def _build_pipeline(
     files: list[str],
     output_dir: str,
     num_shards: int,
     text_field: str,
     id_field: str | None,
+    dedup_mode: DedupMode,
+    max_whitespace_run_chars: int,
 ) -> Dataset:
     """Build a single Zephyr pipeline for one subdirectory."""
     normalize_record = _make_normalize_fn(text_field, id_field)
 
-    def dedup_and_sort(_key: int, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
-        """Deduplicate by id. Items arrive sorted by id via sort_by."""
+    def dedup(_key: int, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        """Drop adjacent duplicate ids. Items arrive sorted by id via sort_by."""
         prev_id: str | None = None
         for record in items:
             rid = record["id"]
             if rid != prev_id:
                 prev_id = rid
                 yield record
+
+    def passthrough(_key: int, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        """Yield items unchanged; used when dedup is disabled."""
+        yield from items
 
     def has_text(record: dict[str, Any]) -> bool:
         text = record.get(text_field)
@@ -197,14 +248,17 @@ def _build_pipeline(
             return False
         return True
 
+    reducers: dict[DedupMode, Callable] = {DedupMode.EXACT: dedup, DedupMode.NONE: passthrough}
+
     return (
         Dataset.from_list(files)
         .flat_map(load_file)
         .filter(has_text)
         .map(normalize_record)
+        .map(_make_whitespace_compactor(max_whitespace_run_chars))
         .group_by(
             key=lambda r: int(r["id"], 16) % num_shards,
-            reducer=dedup_and_sort,
+            reducer=reducers[dedup_mode],
             sort_by=lambda r: r["id"],
             num_output_shards=num_shards,
         )
@@ -222,16 +276,18 @@ def normalize_to_parquet(
     text_field: str = "text",
     id_field: str = "id",
     target_partition_bytes: int = 256 * 1024 * 1024,
+    max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
     file_extensions: tuple[str, ...] | None = None,
+    dedup_mode: DedupMode = DedupMode.EXACT,
 ) -> NormalizeResult:
     """Normalize raw downloaded data to the datakit standard Parquet format.
 
     Discovers all data files under *input_path*, groups them by subdirectory,
     and launches one Zephyr pipeline per subdirectory concurrently.  Each
     pipeline normalizes records (``id``, ``text``, preserves all other columns),
-    deduplicates by content, sorts by ``id``, and writes Parquet partitions
-    sized by *target_partition_bytes*.
+    optionally deduplicates by content per *dedup_mode*, sorts by ``id``, and
+    writes Parquet partitions sized by *target_partition_bytes*.
 
     Args:
         input_path: Root directory containing raw downloaded data.
@@ -242,6 +298,12 @@ def normalize_to_parquet(
             silently skipped.
         target_partition_bytes: Target size in bytes per output partition.
             Used to compute the number of output shards per subdirectory.
+        max_whitespace_run_chars: Compact any consecutive whitespace run
+            longer than this many characters down to this length.
+            Pathologically long whitespace runs (e.g. multi-MB runs from
+            broken HTML→text extraction, cf. #4588) can OOM downstream
+            tokenization. Affected records are counted via the
+            ``datakit_normalize_compacted_whitespace`` Zephyr counter.
         worker_resources: Per-worker resource request for the Zephyr pipeline.
             Defaults to 2 CPU / 16GB RAM / 10GB disk, sized for
             ``target_partition_bytes`` of 256MB.  Scale up when increasing
@@ -249,6 +311,10 @@ def normalize_to_parquet(
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
             ``zephyr.readers.load_file``.
+        dedup_mode: How to deduplicate records within each output shard.
+            ``EXACT`` (the default) drops records with duplicate ``id`` values
+            (i.e. byte-identical text).  ``NONE`` skips dedup and preserves
+            all input records.
 
     Returns:
         A :class:`NormalizeResult` describing the output files and zephyr
@@ -276,7 +342,15 @@ def normalize_to_parquet(
             num_shards,
         )
 
-        pipeline = _build_pipeline(files, output_dir, num_shards, text_field, id_field)
+        pipeline = _build_pipeline(
+            files,
+            output_dir,
+            num_shards,
+            text_field,
+            id_field,
+            dedup_mode,
+            max_whitespace_run_chars,
+        )
         ctx = ZephyrContext(
             name=f"normalize-{subdir.replace('/', '-') if subdir else 'all'}",
             resources=resources,
@@ -319,10 +393,12 @@ def normalize_step(
     text_field: str = "text",
     id_field: str = "id",
     target_partition_bytes: int = 256 * 1024 * 1024,
+    max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
     override_output_path: str | None = None,
     input_path: str | None = None,
     file_extensions: tuple[str, ...] | None = None,
+    dedup_mode: DedupMode = DedupMode.EXACT,
 ) -> StepSpec:
     """Create a StepSpec that normalizes downloaded data to Parquet.
 
@@ -340,6 +416,8 @@ def normalize_step(
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
             ``zephyr.readers.load_file``.
+        dedup_mode: How to deduplicate records within each output shard.
+            Defaults to ``DedupMode.EXACT``; use ``DedupMode.NONE`` to skip.
     """
     resolved_input = input_path or download.output_path
 
@@ -351,16 +429,20 @@ def normalize_step(
             text_field=text_field,
             id_field=id_field,
             target_partition_bytes=target_partition_bytes,
+            max_whitespace_run_chars=max_whitespace_run_chars,
             worker_resources=worker_resources,
             file_extensions=file_extensions,
+            dedup_mode=dedup_mode,
         ),
         deps=[download],
         hash_attrs={
             "text_field": text_field,
             "id_field": id_field,
             "target_partition_bytes": target_partition_bytes,
+            "max_whitespace_run_chars": max_whitespace_run_chars,
             "input_path": resolved_input,
             "file_extensions": file_extensions,
+            "dedup_mode": dedup_mode,
         },
         override_output_path=override_output_path,
     )

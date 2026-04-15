@@ -1,5 +1,15 @@
 name: Marin - CoreWeave GPU Canary Ferry
 
+# The canary submits a small training job to the shared `iris-ci` controller
+# and reuses the warm `iris-ci-h100-8x` NodePool. We do *not* provision a
+# separate H100 — CoreWeave's account quota in US-WEST-04A only allows one
+# `gd-8xh100ib-i128` at a time, which the permanent iris-ci nodepool holds.
+#
+# `iris cluster start --fresh` rebuilds the controller/worker/task images from
+# the current checkout and rolls the shared controller deployment to pick them
+# up. The shared concurrency group `iris-coreweave-ci-shared` serialises this
+# workflow with iris-coreweave-ci.yaml so PR CI and the cron canary never roll
+# the controller at the same time.
 on:
   schedule:
     - cron: '0 10 * * *'  # Daily at 10 AM UTC
@@ -9,10 +19,6 @@ on:
         description: 'Override training token budget'
         type: number
         required: false
-      keep_nodepool:
-        description: 'Keep CW node pool alive after the run (for faster re-runs)'
-        type: boolean
-        default: false
 
 permissions:
   contents: read   # actions/checkout
@@ -20,13 +26,18 @@ permissions:
   issues: write    # claude triage files issues
   id-token: write  # claude-code-action OIDC
 
+# Serialise with iris-coreweave-ci.yaml — both rebuild/roll the shared
+# iris-ci controller and submit jobs against the shared H100, so only one
+# run is allowed cluster-wide at a time. cancel-in-progress=false so a
+# mid-flight CI integration run is not killed by the cron firing.
+concurrency:
+  group: iris-coreweave-ci-shared
+  cancel-in-progress: false
+
 jobs:
   canary-ferry-cw:
     runs-on: ubuntu-latest
     timeout-minutes: 180
-    concurrency:
-      group: canary-ferry-cw-iris-canary
-      cancel-in-progress: true
     env:
       RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: gpu
@@ -34,14 +45,11 @@ jobs:
       CANARY_TARGET_TOKENS: "6553600"
       CANARY_MIN_STEPS: "40"
       CANARY_MAX_LOSS: "8.0"
-      CANARY_MAX_WALL_CLOCK: "7200"
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
-      IRIS_CONFIG: lib/iris/examples/coreweave-canary.yaml
-      # Must match the label_prefix and namespace in IRIS_CONFIG so teardown
-      # targets only this cluster's resources.
-      IRIS_LABEL_PREFIX: iris-canary
-      IRIS_NAMESPACE: iris-canary
+      IRIS_CONFIG: lib/iris/examples/coreweave-ci.yaml
+      IRIS_NAMESPACE: iris-ci
+      IRIS_MANAGED_LABEL: iris-iris-ci-managed
 
     steps:
       - name: Checkout code
@@ -76,18 +84,59 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Start CoreWeave cluster
-        run: .venv/bin/iris -v --config=${{ env.IRIS_CONFIG }} cluster start
+      # Clear leftover task pods from the previous run (canary or PR CI) so the
+      # autoscaler recreates them with the images we're about to push.
+      # NodePools survive — the H100 node is warm.
+      - name: Reset stale task pods
+        run: |
+          export KUBECONFIG=~/.kube/coreweave-iris
+          kubectl delete pods -n "$IRIS_NAMESPACE" -l "$IRIS_MANAGED_LABEL=true" \
+            --grace-period=0 --ignore-not-found || true
+
+      - name: Start shared iris-ci controller
         env:
           BUILDKIT_PROGRESS: plain
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: .venv/bin/iris -v --config=${{ env.IRIS_CONFIG }} cluster start --fresh
+
+      - name: Port-forward to iris-ci controller
+        run: |
+          export KUBECONFIG=~/.kube/coreweave-iris
+          kubectl rollout status deployment/iris-controller -n "$IRIS_NAMESPACE" --timeout=120s
+          kubectl wait pod -n "$IRIS_NAMESPACE" -l app=iris-controller \
+            --for=condition=Ready --timeout=60s
+
+          LOCAL_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()")
+          kubectl port-forward -n "$IRIS_NAMESPACE" svc/iris-ci-controller-svc "${LOCAL_PORT}:10000" &
+          PF_PID=$!
+          echo "PF_PID=$PF_PID" >> "$GITHUB_ENV"
+          echo "LOCAL_PORT=$LOCAL_PORT" >> "$GITHUB_ENV"
+          echo "IRIS_CONTROLLER_URL=http://localhost:${LOCAL_PORT}" >> "$GITHUB_ENV"
+
+          # Konnectivity can take ~20s to become usable after controller restart.
+          for i in $(seq 1 60); do
+            if ! kill -0 "$PF_PID" 2>/dev/null; then
+              kubectl port-forward -n "$IRIS_NAMESPACE" svc/iris-ci-controller-svc "${LOCAL_PORT}:10000" &
+              PF_PID=$!
+              echo "PF_PID=$PF_PID" >> "$GITHUB_ENV"
+              sleep 2
+              continue
+            fi
+            if curl -sf "http://localhost:${LOCAL_PORT}/health" > /dev/null 2>&1; then
+              echo "Controller healthy on localhost:${LOCAL_PORT}"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Controller did not become healthy within timeout"
+          exit 1
 
       - name: Submit canary ferry
         id: submit
         shell: bash -l {0}
         run: |
-          JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+          JOB_ID=$(.venv/bin/iris --controller-url="$IRIS_CONTROLLER_URL" \
             job run --no-wait \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
             -e MARIN_PREFIX s3://marin-na/marin/ \
@@ -118,7 +167,7 @@ jobs:
           JOB_ID="${{ steps.submit.outputs.job_id }}"
           echo "Polling job status: $JOB_ID"
           while true; do
-            STATE=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+            STATE=$(.venv/bin/iris --controller-url="$IRIS_CONTROLLER_URL" \
               job list --json --prefix "$JOB_ID" \
               | jq -r --arg id "$JOB_ID" '[.[] | select(.job_id == $id)][0].state // empty')
             case "$STATE" in
@@ -136,7 +185,7 @@ jobs:
                 ;;
               *)
                 echo "Job finished with state: $STATE"
-                .venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+                .venv/bin/iris --controller-url="$IRIS_CONTROLLER_URL" \
                   job list --json --prefix "$JOB_ID" \
                   | jq --arg id "$JOB_ID" '.[] | {job_id, state, error}' || true
                 exit 1
@@ -166,27 +215,62 @@ jobs:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
 
       - name: Capture failure diagnostics
-        if: failure()
+        # Runs on both failures and cancellations — GHA timeouts surface as
+        # cancelled(), not failure(). That gap hid two weeks of hung H100
+        # provisioning before we noticed.
+        if: failure() || cancelled()
         run: |
+          KCI="kubectl --kubeconfig ~/.kube/coreweave-iris"
+          JOB_ID="${{ steps.submit.outputs.job_id }}"
+          # iris.job_id labels replace '/' with '.' on k8s (see
+          # lib/iris/src/iris/cluster/providers/k8s/tasks.py).
+          JOB_LABEL=$(echo "${JOB_ID#/}" | tr '/' '.')
+          mkdir -p /tmp/canary-diag
+
           echo "=== Controller logs ==="
-          kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
-            logs -l app=iris-controller --tail=500 || true
-          echo "=== Controller pod describe ==="
-          kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
-            describe pod -l app=iris-controller || true
-          echo "=== Task pod logs ==="
-          kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
-            logs -l iris.managed=true --tail=200 || true
-          echo "=== Task pod describe ==="
-          kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
-            describe pod -l iris.managed=true || true
-          echo "=== Warning events ==="
-          kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
-            get events --sort-by='.lastTimestamp' --field-selector type!=Normal || true
+          $KCI -n "$IRIS_NAMESPACE" logs -l app=iris-controller --tail=500 \
+            | tee /tmp/canary-diag/controller.log || true
+          echo "=== This canary's task pods ==="
+          $KCI -n "$IRIS_NAMESPACE" get pods -l "iris.job_id=$JOB_LABEL" -o wide \
+            | tee /tmp/canary-diag/task-pods.txt || true
+          $KCI -n "$IRIS_NAMESPACE" describe pod -l "iris.job_id=$JOB_LABEL" \
+            | tee /tmp/canary-diag/task-describe.txt || true
+          $KCI -n "$IRIS_NAMESPACE" logs -l "iris.job_id=$JOB_LABEL" \
+            --tail=-1 --all-containers \
+            | tee /tmp/canary-diag/task.log || true
+          echo "=== Pod events (all types) ==="
+          $KCI -n "$IRIS_NAMESPACE" get events --sort-by='.lastTimestamp' \
+            | tee /tmp/canary-diag/events.txt || true
+          echo "=== NodePools (cluster-wide) ==="
+          # Canary hangs are often account-wide GPU capacity contention; dump
+          # every nodepool, not just this namespace's.
+          $KCI get nodepools.compute.coreweave.com -A -o wide \
+            | tee /tmp/canary-diag/nodepools.txt || true
+          $KCI get nodepools.compute.coreweave.com -A -o yaml \
+            > /tmp/canary-diag/nodepools.yaml || true
+          echo "=== Nodes ==="
+          $KCI get nodes -o wide | tee /tmp/canary-diag/nodes.txt || true
+          echo "=== Iris autoscaler / scheduler state ==="
+          .venv/bin/iris --controller-url="$IRIS_CONTROLLER_URL" \
+            rpc controller get-autoscaler-status \
+            > /tmp/canary-diag/autoscaler-status.txt 2>&1 || true
+          .venv/bin/iris --controller-url="$IRIS_CONTROLLER_URL" \
+            rpc controller get-scheduler-state \
+            > /tmp/canary-diag/scheduler-state.txt 2>&1 || true
+          cat /tmp/canary-diag/autoscaler-status.txt || true
+
+      - name: Upload diagnostics bundle
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canary-diag-${{ github.run_id }}
+          path: /tmp/canary-diag
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Claude triage
         id: claude_triage
-        if: failure() && github.event_name == 'schedule'
+        if: (failure() || cancelled()) && github.event_name == 'schedule'
         uses: anthropics/claude-code-action@v1
         timeout-minutes: 30
         with:
@@ -208,22 +292,14 @@ jobs:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-      # `cluster stop` only deletes Pods; NodePools survive and rely on the
-      # CW autoscaler to scale down. Delete them explicitly to avoid lingering
-      # H100 costs.
-      - name: Tear down CoreWeave cluster
+      - name: Stop port-forward
         if: always()
         run: |
-          .venv/bin/iris -v --config=${{ env.IRIS_CONFIG }} cluster stop || true
-          if [ "${{ inputs.keep_nodepool }}" != "true" ]; then
-            kubectl --kubeconfig ~/.kube/coreweave-iris \
-              delete nodepool -l iris-${{ env.IRIS_LABEL_PREFIX }}-managed=true
-          else
-            echo "Keeping node pool alive (keep_nodepool=true)"
-          fi
+          [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null || true
+          pkill -f "kubectl port-forward.*$IRIS_NAMESPACE" 2>/dev/null || true
 
       - name: Notify Slack on failure
-        if: failure() && github.event_name == 'schedule'
+        if: (failure() || cancelled()) && github.event_name == 'schedule'
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           FALLBACK_TEXT: ":red_circle: *GPU Canary failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

@@ -66,6 +66,14 @@ def _spawn_bootstrap_thread(
             bootstrap_fn()
         except Exception as e:
             logger.error("Bootstrap failed for slice %s: %s", handle.slice_id, e)
+            try:
+                handle.cleanup_bootstrap_failure()
+            except Exception as cleanup_error:
+                logger.warning(
+                    "Failed bootstrap cleanup for slice %s: %s",
+                    handle.slice_id,
+                    cleanup_error,
+                )
             with handle._bootstrap_lock:
                 handle._bootstrap_state = CloudSliceState.FAILED
 
@@ -76,6 +84,50 @@ DEFAULT_MACHINE_TYPE = "n2-standard-4"
 DEFAULT_BOOT_DISK_SIZE_GB = 50
 # pd-ssd provides ~6000 IOPS vs ~38 on pd-standard, critical for controller DB
 DEFAULT_BOOT_DISK_TYPE = "pd-ssd"
+DEFAULT_TPU_CLOUD_READY_TIMEOUT = 600.0
+RESERVED_TPU_ASSIGN_TIMEOUT = 4 * 60 * 60.0
+RESERVED_TPU_PROVISION_TIMEOUT = 2 * 60 * 60.0
+
+
+def _wait_for_queued_resource_activation(
+    gcp_service: GcpService,
+    handle: GcpSliceHandle,
+    poll_interval: float,
+) -> None:
+    """Wait for a reserved TPU queued resource to be assigned and provisioned."""
+    assign_deadline = Deadline.from_now(Duration.from_seconds(RESERVED_TPU_ASSIGN_TIMEOUT))
+    provision_deadline: Deadline | None = None
+
+    while True:
+        qr = gcp_service.queued_resource_describe(handle.slice_id, handle.zone)
+        if qr is None:
+            raise InfraError(f"Queued resource {handle.slice_id} not found")
+        if qr.state == "ACTIVE":
+            logger.info("Queued resource %s is ACTIVE, proceeding to TPU bootstrap", handle.slice_id)
+            return
+        if qr.state in ("FAILED", "SUSPENDED", "DELETING"):
+            raise InfraError(f"Queued resource {handle.slice_id} entered state {qr.state}")
+
+        if qr.state == "PROVISIONING":
+            if provision_deadline is None:
+                logger.info(
+                    "Queued resource %s entered PROVISIONING; allowing up to %ss for ACTIVE",
+                    handle.slice_id,
+                    RESERVED_TPU_PROVISION_TIMEOUT,
+                )
+                provision_deadline = Deadline.from_now(Duration.from_seconds(RESERVED_TPU_PROVISION_TIMEOUT))
+            elif provision_deadline.expired():
+                raise InfraError(
+                    f"Queued resource {handle.slice_id} did not become ACTIVE "
+                    f"within {RESERVED_TPU_PROVISION_TIMEOUT}s after entering PROVISIONING"
+                )
+        elif assign_deadline.expired():
+            raise InfraError(
+                f"Queued resource {handle.slice_id} did not enter PROVISIONING " f"within {RESERVED_TPU_ASSIGN_TIMEOUT}s"
+            )
+
+        logger.info("Queued resource %s is %s, waiting...", handle.slice_id, qr.state)
+        time.sleep(poll_interval)
 
 
 def _gcp_instance_metadata(
@@ -681,7 +733,7 @@ def _run_tpu_bootstrap(
     handle: GcpSliceHandle,
     worker_config: config_pb2.WorkerConfig,
     poll_interval: float = 10.0,
-    cloud_ready_timeout: float = 600.0,
+    cloud_ready_timeout: float | None = None,
     bootstrap_timeout: float = 600.0,
     queued_resource_poll_interval: float = 60.0,
 ) -> None:
@@ -692,28 +744,19 @@ def _run_tpu_bootstrap(
     Phase 2: Poll worker health endpoints until all respond healthy.
     On timeout: query Cloud Logging for [iris-init] entries for diagnostics.
     """
-    # Single deadline covers Phase 0 (queued resource wait) + Phase 1 (cloud READY).
-    cloud_deadline = Deadline.from_now(Duration.from_seconds(cloud_ready_timeout))
+    effective_cloud_ready_timeout = cloud_ready_timeout
+    if effective_cloud_ready_timeout is None:
+        effective_cloud_ready_timeout = DEFAULT_TPU_CLOUD_READY_TIMEOUT
 
     # Phase 0: If this is a queued resource (reserved TPU), wait for ACTIVE
     # before polling the TPU VM state. The queued resource may sit in QUEUED
     # or PROVISIONING for an extended period.
     if handle.is_queued_resource:
-        while not cloud_deadline.expired():
-            qr = gcp_service.queued_resource_describe(handle.slice_id, handle.zone)
-            if qr is None:
-                raise InfraError(f"Queued resource {handle.slice_id} not found")
-            if qr.state == "ACTIVE":
-                logger.info("Queued resource %s is ACTIVE, proceeding to TPU bootstrap", handle.slice_id)
-                break
-            if qr.state in ("FAILED", "SUSPENDED"):
-                raise InfraError(f"Queued resource {handle.slice_id} entered state {qr.state}")
-            logger.info("Queued resource %s is %s, waiting...", handle.slice_id, qr.state)
-            time.sleep(queued_resource_poll_interval)
-        else:
-            raise InfraError(
-                f"Queued resource {handle.slice_id} did not become ACTIVE " f"within {cloud_ready_timeout}s"
-            )
+        _wait_for_queued_resource_activation(gcp_service, handle, queued_resource_poll_interval)
+
+    # Phase 1: once the QR is ACTIVE (or immediately for non-queued TPUs),
+    # wait for the TPU VM to reach READY with all worker IPs.
+    cloud_deadline = Deadline.from_now(Duration.from_seconds(effective_cloud_ready_timeout))
 
     while not cloud_deadline.expired():
         cloud_status = handle._describe_cloud()
@@ -731,7 +774,7 @@ def _run_tpu_bootstrap(
             )
         time.sleep(poll_interval)
     else:
-        raise InfraError(f"Slice {handle.slice_id} did not reach cloud READY within {cloud_ready_timeout}s")
+        raise InfraError(f"Slice {handle.slice_id} did not reach cloud READY within {effective_cloud_ready_timeout}s")
 
     workers = cloud_status.workers
     worker_addrs = [(w.worker_id, w.internal_address) for w in workers]

@@ -203,6 +203,35 @@ def test_skip_existing_idempotent(tmp_path: Path, write_jsonl_gz):
     assert parquet_files[0].stat().st_mtime == mtime_first
 
 
+def test_whitespace_compaction(tmp_path: Path, write_jsonl_gz):
+    """Long whitespace runs are compacted, not dropped. Content is preserved."""
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+
+    records = [
+        {"id": "normal", "text": "Hello world"},
+        {"id": "pathological", "text": "before" + " " * 500 + "after"},
+        {"id": "also_normal", "text": "short  spaces  are  fine"},
+    ]
+    write_jsonl_gz(input_dir / "data.jsonl.gz", records)
+
+    normalize_to_parquet(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        max_whitespace_run_chars=100,
+    )
+
+    results = _read_all_parquet(output_dir)
+    # All three records survive — the pathological one is compacted, not dropped
+    assert len(results) == 3
+    by_source = {r["source_id"]: r for r in results}
+    assert by_source["pathological"]["text"] == "before" + " " * 100 + "after"
+    # id is recomputed from the compacted text
+    assert by_source["pathological"]["id"] == generate_id("before" + " " * 100 + "after")
+    # Normal docs are untouched
+    assert by_source["normal"]["text"] == "Hello world"
+
+
 def test_no_input_files_raises(tmp_path: Path):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
