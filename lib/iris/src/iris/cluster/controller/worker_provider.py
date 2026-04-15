@@ -7,7 +7,7 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from time import sleep
+from time import monotonic, sleep
 from typing import Protocol
 
 from iris.chaos import chaos
@@ -17,7 +17,6 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.cluster.log_store._types import LogPusherProtocol, TaskAttempt, task_log_key
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
 from iris.rpc import worker_pb2
@@ -25,6 +24,23 @@ from iris.rpc.worker_connect import WorkerServiceClientSync
 from rigging.timing import Duration
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_WORKER_RPC_TIMEOUT = Duration.from_seconds(30.0)
+_SLOW_HEARTBEAT_RPC_LOG_THRESHOLD_MS = 10_000
+
+
+def _heartbeat_rpc_context(
+    batch: DispatchBatch,
+    *,
+    elapsed_ms: int,
+    timeout_ms: int | None,
+) -> str:
+    timeout_fragment = f" timeout_ms={timeout_ms}" if timeout_ms is not None else ""
+    return (
+        f"worker={batch.worker_id} address={batch.worker_address or '<missing>'}"
+        f" elapsed_ms={elapsed_ms}{timeout_fragment}"
+        f" expected={len(batch.running_tasks)} run={len(batch.tasks_to_run)} kill={len(batch.tasks_to_kill)}"
+    )
 
 
 class WorkerStubFactory(Protocol):
@@ -39,10 +55,14 @@ class RpcWorkerStubFactory:
     """Caches WorkerServiceClientSync stubs by address so each worker gets
     one persistent httpx.Client instead of a new one per RPC."""
 
-    def __init__(self, timeout: Duration = Duration.from_seconds(5.0)) -> None:
+    def __init__(self, timeout: Duration = DEFAULT_WORKER_RPC_TIMEOUT) -> None:
         self._timeout = timeout
         self._stubs: dict[str, WorkerServiceClientSync] = {}
         self._lock = threading.Lock()
+
+    @property
+    def timeout_ms(self) -> int:
+        return self._timeout.to_ms()
 
     def get_stub(self, address: str) -> WorkerServiceClientSync:
         with self._lock:
@@ -105,7 +125,6 @@ class WorkerProvider:
     """
 
     stub_factory: WorkerStubFactory
-    log_pusher: LogPusherProtocol | None = None
     parallelism: int = 32
     _pool: ThreadPoolExecutor = field(init=False)
 
@@ -131,6 +150,9 @@ class WorkerProvider:
 
     def _heartbeat_one(self, batch: DispatchBatch) -> HeartbeatApplyRequest:
         """Send heartbeat RPC to one worker and return the apply request."""
+        started = monotonic()
+        timeout_ms = getattr(self.stub_factory, "timeout_ms", None)
+
         if rule := chaos("controller.heartbeat"):
             sleep(rule.delay_seconds)
             raise ProviderError("chaos: heartbeat unavailable")
@@ -155,23 +177,26 @@ class WorkerProvider:
             tasks_to_kill=batch.tasks_to_kill,
             expected_tasks=expected_tasks,
         )
-        response = stub.heartbeat(request)
+        try:
+            response = stub.heartbeat(request)
 
-        if not response.worker_healthy:
-            health_error = response.health_error or "worker reported unhealthy"
-            raise ProviderError(f"worker {batch.worker_id} reported unhealthy: {health_error}")
+            if not response.worker_healthy:
+                health_error = response.health_error or "worker reported unhealthy"
+                raise ProviderError(f"worker {batch.worker_id} reported unhealthy: {health_error}")
 
-        # Forward log entries from old workers that still piggyback logs on
-        # heartbeat responses.  New workers push logs directly via LogPusher.
-        if self.log_pusher:
-            for entry in response.tasks:
-                if entry.log_entries:
-                    key = task_log_key(
-                        TaskAttempt(task_id=JobName.from_wire(entry.task_id), attempt_id=entry.attempt_id)
-                    )
-                    self.log_pusher.push(key, list(entry.log_entries))
-
-        return _apply_request_from_response(batch.worker_id, response)
+            elapsed_ms = int((monotonic() - started) * 1000)
+            if elapsed_ms >= _SLOW_HEARTBEAT_RPC_LOG_THRESHOLD_MS:
+                logger.warning(
+                    "Slow heartbeat RPC succeeded: %s",
+                    _heartbeat_rpc_context(batch, elapsed_ms=elapsed_ms, timeout_ms=timeout_ms),
+                )
+            return _apply_request_from_response(batch.worker_id, response)
+        except Exception as e:
+            elapsed_ms = int((monotonic() - started) * 1000)
+            context = _heartbeat_rpc_context(batch, elapsed_ms=elapsed_ms, timeout_ms=timeout_ms)
+            if isinstance(e, ProviderError):
+                raise ProviderError(f"{e}; {context}") from e
+            raise ProviderError(f"heartbeat RPC failed: {context}; error={e}") from e
 
     def get_process_status(
         self,

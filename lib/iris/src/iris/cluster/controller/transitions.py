@@ -226,6 +226,9 @@ class HeartbeatApplyResult(TxResult):
 class HeartbeatFailureResult(TxResult):
     worker_removed: bool = False
     action: HeartbeatAction = HeartbeatAction.TRANSIENT_FAILURE
+    consecutive_failures: int = 0
+    failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD
+    last_heartbeat_age_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -2121,12 +2124,19 @@ class ControllerTransitions:
         tasks_to_kill: set[JobName] = set()
         task_kill_workers: dict[JobName, WorkerId] = {}
         row = cur.execute(
-            "SELECT consecutive_failures FROM workers WHERE worker_id = ? AND active = 1",
+            "SELECT consecutive_failures, last_heartbeat_ms FROM workers WHERE worker_id = ? AND active = 1",
             (str(worker_id),),
         ).fetchone()
         if row is None:
-            return HeartbeatFailureResult(worker_removed=True, action=HeartbeatAction.WORKER_FAILED)
+            return HeartbeatFailureResult(
+                worker_removed=True,
+                action=HeartbeatAction.WORKER_FAILED,
+                failure_threshold=self._heartbeat_failure_threshold,
+            )
 
+        now_ms = now_ms or Timestamp.now().epoch_ms()
+        last_heartbeat_ms = row["last_heartbeat_ms"]
+        last_heartbeat_age_ms = None if last_heartbeat_ms is None else max(0, now_ms - int(last_heartbeat_ms))
         failures = int(row["consecutive_failures"]) + 1
         cur.execute(
             "UPDATE workers SET consecutive_failures = ?, healthy = CASE WHEN ? >= ? THEN 0 ELSE healthy END "
@@ -2134,7 +2144,6 @@ class ControllerTransitions:
             (failures, failures, self._heartbeat_failure_threshold, str(worker_id)),
         )
         should_remove = force_remove or failures >= self._heartbeat_failure_threshold
-        now_ms = now_ms or Timestamp.now().epoch_ms()
         if should_remove:
             removal = self._remove_failed_worker(cur, worker_id, error, now_ms=now_ms)
             tasks_to_kill.update(removal.tasks_to_kill)
@@ -2150,6 +2159,9 @@ class ControllerTransitions:
             task_kill_workers=task_kill_workers,
             worker_removed=should_remove,
             action=action,
+            consecutive_failures=failures,
+            failure_threshold=self._heartbeat_failure_threshold,
+            last_heartbeat_age_ms=last_heartbeat_age_ms,
         )
 
     def record_heartbeat_failure(

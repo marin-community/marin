@@ -81,7 +81,6 @@ from iris.cluster.controller.budget import (
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.controller.provider import TaskProvider
-from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
@@ -1058,10 +1057,10 @@ class Controller:
         log_client_interceptors = _log_client_interceptors(config)
         self._remote_log_service = LogServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
 
-        # Providers push directly to the log server via RPC.
-        provider_log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
-        if isinstance(self._provider, (K8sTaskProvider, WorkerProvider)):
-            self._provider.log_pusher = provider_log_pusher
+        # Providers that collect logs outside the worker process push directly
+        # to the log server via RPC.
+        if isinstance(self._provider, K8sTaskProvider):
+            self._provider.log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
 
         # Controller process logs ship to the log server via RemoteLogHandler.
         self._log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
@@ -2131,12 +2130,20 @@ class Controller:
         stale = [w for w in workers if w.last_heartbeat.age_ms() > threshold_ms]
         if not stale:
             return
+        stale_samples = [
+            {
+                "worker_id": str(w.worker_id),
+                "age_s": int(w.last_heartbeat.age_ms() / 1000),
+                "address": w.address,
+            }
+            for w in stale[:10]
+        ]
 
         logger.warning(
             "Failing %d workers with stale heartbeats (threshold=%ds): %s",
             len(stale),
             HEARTBEAT_STALENESS_THRESHOLD.to_seconds(),
-            [str(w.worker_id) for w in stale[:10]],
+            stale_samples,
         )
         failure_result = self._transitions.fail_workers_batch(
             [str(w.worker_id) for w in stale],
@@ -2231,7 +2238,25 @@ class Controller:
 
         primary_failed_workers: list[str] = []
         for (batch, error), result in zip(failure_entries, failure_result.results, strict=False):
-            logger.debug("Sync error for %s: %s", batch.worker_id, error)
+            last_success_age_s = (
+                "unknown" if result.last_heartbeat_age_ms is None else f"{result.last_heartbeat_age_ms / 1000.0:.1f}"
+            )
+            log_level = logging.ERROR if result.action == HeartbeatAction.WORKER_FAILED else logging.WARNING
+            logger.log(
+                log_level,
+                "Heartbeat RPC failure: worker=%s address=%s action=%s failures=%d/%d last_success_age_s=%s "
+                "expected=%d run=%d kill=%d error=%s",
+                batch.worker_id,
+                batch.worker_address or "<missing>",
+                result.action.value,
+                result.consecutive_failures,
+                result.failure_threshold,
+                last_success_age_s,
+                len(batch.running_tasks),
+                len(batch.tasks_to_run),
+                len(batch.tasks_to_kill),
+                error,
+            )
             if result.action == HeartbeatAction.WORKER_FAILED:
                 acc.fail_count += 1
                 acc.failed_workers.append(batch.worker_id)
