@@ -66,15 +66,14 @@ def _spawn_bootstrap_thread(
             bootstrap_fn()
         except Exception as e:
             logger.error("Bootstrap failed for slice %s: %s", handle.slice_id, e)
-            if isinstance(handle, GcpSliceHandle) and handle.is_queued_resource:
-                try:
-                    handle.terminate()
-                except Exception as cleanup_error:
-                    logger.warning(
-                        "Failed to cancel queued resource for slice %s after bootstrap failure: %s",
-                        handle.slice_id,
-                        cleanup_error,
-                    )
+            try:
+                handle.cleanup_bootstrap_failure()
+            except Exception as cleanup_error:
+                logger.warning(
+                    "Failed bootstrap cleanup for slice %s: %s",
+                    handle.slice_id,
+                    cleanup_error,
+                )
             with handle._bootstrap_lock:
                 handle._bootstrap_state = CloudSliceState.FAILED
 
