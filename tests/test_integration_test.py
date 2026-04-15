@@ -24,10 +24,6 @@ _CONTROLLER_URL_RE = re.compile(r"Controller started at (\S+)")
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(
-    os.getenv("CI") == "true",
-    reason="Skip in CI; the marin-itest workflow runs the script directly against its own cluster.",
-)
 def test_integration_test_run(tmp_path):
     with _iris_controller_url(tmp_path) as url:
         result = subprocess.run(
