@@ -24,35 +24,46 @@ function runAppearance(run: FerryRun): { className: string; style?: CSSPropertie
 }
 
 // Flag runs whose wall time is at least SLOW_RUN_STDDEV_THRESHOLD standard
-// deviations longer than the mean of the preceding SLOW_RUN_WINDOW successful
-// runs. Successful only — failures/cancels/timeouts have unrepresentative
-// wall times (early exits, hangs) and would poison the baseline. history[0]
-// is the most recent run, so "prior" means higher indices.
-const SLOW_RUN_WINDOW = 7;
+// deviations longer than the mean of the preceding successful runs. Uses up
+// to SLOW_RUN_MAX samples, but requires at least SLOW_RUN_MIN so the baseline
+// doesn't collapse to noise on new/sparse workflows. Successful only —
+// failures/cancels/timeouts have unrepresentative wall times (early exits,
+// hangs) and would poison the baseline. history[0] is the most recent run,
+// so "prior" means higher indices.
+const SLOW_RUN_MIN = 3;
+const SLOW_RUN_MAX = 7;
 const SLOW_RUN_STDDEV_THRESHOLD = 1;
 
-function slowRunThreshold(history: FerryRun[], index: number): number | null {
+interface SlowRunBaseline {
+  threshold: number;
+  sampleSize: number;
+}
+
+function slowRunBaseline(history: FerryRun[], index: number): SlowRunBaseline | null {
   const priorDurations: number[] = [];
-  for (let j = index + 1; j < history.length && priorDurations.length < SLOW_RUN_WINDOW; j++) {
+  for (let j = index + 1; j < history.length && priorDurations.length < SLOW_RUN_MAX; j++) {
     const prev = history[j];
     if (prev.conclusion === "success" && prev.durationSeconds !== null) {
       priorDurations.push(prev.durationSeconds);
     }
   }
-  if (priorDurations.length < SLOW_RUN_WINDOW) return null;
+  if (priorDurations.length < SLOW_RUN_MIN) return null;
   const mean = priorDurations.reduce((a, b) => a + b, 0) / priorDurations.length;
   const variance =
     priorDurations.reduce((s, x) => s + (x - mean) ** 2, 0) / priorDurations.length;
   const stddev = Math.sqrt(variance);
   if (stddev === 0) return null;
-  return mean + SLOW_RUN_STDDEV_THRESHOLD * stddev;
+  return {
+    threshold: mean + SLOW_RUN_STDDEV_THRESHOLD * stddev,
+    sampleSize: priorDurations.length,
+  };
 }
 
 function isSlowRun(history: FerryRun[], index: number): boolean {
   const run = history[index];
   if (run.durationSeconds === null) return false;
-  const threshold = slowRunThreshold(history, index);
-  return threshold !== null && run.durationSeconds > threshold;
+  const baseline = slowRunBaseline(history, index);
+  return baseline !== null && run.durationSeconds > baseline.threshold;
 }
 
 function formatDuration(seconds: number | null): string {
@@ -131,7 +142,7 @@ function WorkflowCard({ wf }: { wf: FerryWorkflowStatus }) {
             {wf.history.map((run, i) => {
               const a = runAppearance(run);
               const slow = isSlowRun(wf.history, i);
-              const threshold = slow ? slowRunThreshold(wf.history, i) : null;
+              const baseline = slow ? slowRunBaseline(wf.history, i) : null;
               return (
                 <a
                   key={run.id}
@@ -156,9 +167,10 @@ function WorkflowCard({ wf }: { wf: FerryWorkflowStatus }) {
                       {run.conclusion ?? run.status} · {formatRelative(run.startedAt)}
                     </div>
                     <div>wall time: {formatDuration(run.durationSeconds)}</div>
-                    {slow && threshold !== null && (
+                    {slow && baseline !== null && (
                       <div className="text-amber-300">
-                        slow · prior 7 successful runs mean+1σ ≈ {formatDuration(Math.round(threshold))}
+                        slow · prior {baseline.sampleSize} successful runs mean+1σ ≈{" "}
+                        {formatDuration(Math.round(baseline.threshold))}
                       </div>
                     )}
                   </div>
