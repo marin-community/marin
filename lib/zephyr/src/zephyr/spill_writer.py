@@ -67,7 +67,7 @@ class TableAccumulator:
 def _background_writer_loop(
     write_queue: "queue.Queue[pa.Table | object]",
     writer: pq.ParquetWriter,
-    error_box: list[BaseException],
+    error_box: list[Exception],
 ) -> None:
     """Drain write_queue, writing each table as a row group. Stops on _SENTINEL."""
     while True:
@@ -76,7 +76,7 @@ def _background_writer_loop(
             return
         try:
             writer.write_table(item)
-        except BaseException as exc:
+        except Exception as exc:
             error_box.append(exc)
             return
 
@@ -111,7 +111,7 @@ class SpillWriter:
         # produces the next batch. Backpressure is automatic — put() blocks when
         # the slot is occupied.
         self._queue: queue.Queue[pa.Table | object] = queue.Queue(maxsize=1)
-        self._error_box: list[BaseException] = []
+        self._error_box: list[Exception] = []
         self._thread = threading.Thread(
             target=_background_writer_loop,
             args=(self._queue, self._writer, self._error_box),
@@ -140,19 +140,37 @@ class SpillWriter:
 
     def close(self) -> None:
         """Flush remaining accumulated data and wait for the background thread to finish."""
+        self._close(abort=False)
+
+    def _close(self, *, abort: bool) -> None:
+        # abort=True (caller raised inside `with`): skip the final flush — the
+        # partial file will never be read. Either way, we must still drain the
+        # queue so the background thread exits and the parquet file handle is
+        # closed cleanly.
+        #
+        # If the background thread has already errored, its `get()` consumed the
+        # last item and then the thread returned, leaving the queue empty. So a
+        # single `put(_SENTINEL)` into the maxsize=1 queue does not block —
+        # but putting anything *before* that sentinel would, because nothing is
+        # draining. Hence we only enqueue `remaining` when the thread is still
+        # healthy (error_box empty) and we're not aborting.
         if self._closed:
             return
         self._closed = True
-        remaining = self._accumulator.flush()
-        if remaining is not None:
-            self._queue.put(remaining)
-        self._queue.put(_SENTINEL)
-        self._thread.join()
-        self._writer.close()
-        self._check_error()
+        try:
+            if not abort and not self._error_box:
+                remaining = self._accumulator.flush()
+                if remaining is not None:
+                    self._queue.put(remaining)
+            self._queue.put(_SENTINEL)
+            self._thread.join()
+        finally:
+            self._writer.close()
+        if not abort:
+            self._check_error()
 
     def __enter__(self) -> "SpillWriter":
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        self.close()
+        self._close(abort=exc_type is not None)

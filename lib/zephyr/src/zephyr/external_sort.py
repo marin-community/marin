@@ -74,6 +74,11 @@ def _safe_read_batch_size(n_runs: int, sample_run_path: str) -> int:
             num_rows = md.num_rows
             total_bytes = sum(md.row_group(i).column(0).total_uncompressed_size for i in range(md.num_row_groups))
     except Exception:
+        logger.warning(
+            "Failed to read parquet metadata from %s; falling back to default batch size",
+            sample_run_path,
+            exc_info=True,
+        )
         return _WRITE_BATCH_SIZE
 
     if num_rows <= 0:
