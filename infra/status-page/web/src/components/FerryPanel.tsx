@@ -1,17 +1,25 @@
+import type { CSSProperties } from "react";
 import { useFerry } from "../hooks/useFerry";
 import type { FerryRun, FerryWorkflowStatus } from "../api";
 
-function runColor(run: FerryRun): string {
-  if (run.status !== "completed") return "bg-amber-400";
+// Diagonal gray/red stripe marks cancelled runs — they count as failures
+// for success-rate math but carry a distinct cause worth surfacing.
+const CANCELLED_STRIPE: CSSProperties = {
+  backgroundImage:
+    "repeating-linear-gradient(45deg, #64748b 0, #64748b 3px, #f43f5e 3px, #f43f5e 6px)",
+};
+
+function runAppearance(run: FerryRun): { className: string; style?: CSSProperties } {
+  if (run.status !== "completed") return { className: "bg-amber-400" };
   switch (run.conclusion) {
     case "success":
-      return "bg-emerald-500";
+      return { className: "bg-emerald-500" };
     case "failure":
-      return "bg-rose-500";
+      return { className: "bg-rose-500" };
     case "cancelled":
-      return "bg-slate-500";
+      return { className: "", style: CANCELLED_STRIPE };
     default:
-      return "bg-slate-600";
+      return { className: "bg-slate-600" };
   }
 }
 
@@ -66,7 +74,10 @@ function WorkflowCard({ wf }: { wf: FerryWorkflowStatus }) {
                 rel="noreferrer"
                 className="inline-flex items-center gap-2 text-slate-200 hover:text-emerald-300"
               >
-                <span className={`h-3 w-3 rounded-full ${runColor(latest)}`} />
+                {(() => {
+                  const a = runAppearance(latest);
+                  return <span className={`h-3 w-3 rounded-full ${a.className}`} style={a.style} />;
+                })()}
                 <span className="font-mono text-xs">{latest.shaShort}</span>
                 <span className="text-slate-400">{formatRelative(latest.startedAt)}</span>
                 <span className="text-slate-500">({formatDuration(latest.durationSeconds)})</span>
@@ -85,16 +96,20 @@ function WorkflowCard({ wf }: { wf: FerryWorkflowStatus }) {
               so all 30 fit on a ~340px phone content area without
               wrapping to a second row. */}
           <div className="mt-3 flex gap-px sm:gap-1">
-            {wf.history.map((run) => (
-              <a
-                key={run.id}
-                href={run.url}
-                target="_blank"
-                rel="noreferrer"
-                title={`${run.shaShort} · ${run.conclusion ?? run.status} · ${formatRelative(run.startedAt)}`}
-                className={`h-5 w-2 rounded-sm sm:w-2.5 ${runColor(run)} hover:ring-2 hover:ring-slate-400`}
-              />
-            ))}
+            {wf.history.map((run) => {
+              const a = runAppearance(run);
+              return (
+                <a
+                  key={run.id}
+                  href={run.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={`${run.shaShort} · ${run.conclusion ?? run.status} · ${formatRelative(run.startedAt)}`}
+                  className={`h-5 w-2 rounded-sm sm:w-2.5 ${a.className} hover:ring-2 hover:ring-slate-400`}
+                  style={a.style}
+                />
+              );
+            })}
           </div>
         </>
       )}
