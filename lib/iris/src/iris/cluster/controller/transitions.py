@@ -1784,6 +1784,11 @@ class ControllerTransitions:
                     task_state = job_pb2.TASK_STATE_PENDING
                     terminal_ms = None
 
+            # An attempt is terminal whenever the update itself is terminal, even
+            # if the TASK rolls back to PENDING for a retry. terminal_ms above
+            # tracks the task's finished_at_ms; the attempt needs its own stamp.
+            attempt_terminal_ms = now_ms if int(update.new_state) in TERMINAL_TASK_STATES else None
+
             cur.execute(
                 "UPDATE task_attempts SET state = ?, started_at_ms = COALESCE(started_at_ms, ?), "
                 "finished_at_ms = COALESCE(finished_at_ms, ?), exit_code = COALESCE(?, exit_code), "
@@ -1791,7 +1796,7 @@ class ControllerTransitions:
                 (
                     int(update.new_state),
                     started_ms,
-                    terminal_ms,
+                    attempt_terminal_ms,
                     task_exit,
                     update.error,
                     update.task_id.to_wire(),
@@ -3393,6 +3398,10 @@ class ControllerTransitions:
                         task_state = job_pb2.TASK_STATE_PENDING
                         terminal_ms = None
 
+                # An attempt is terminal whenever the update itself is terminal, even
+                # if the TASK rolls back to PENDING for a retry.
+                attempt_terminal_ms = now_ms if int(update.new_state) in TERMINAL_TASK_STATES else None
+
                 cur.execute(
                     "UPDATE task_attempts SET state = ?, started_at_ms = COALESCE(started_at_ms, ?), "
                     "finished_at_ms = COALESCE(finished_at_ms, ?), exit_code = COALESCE(?, exit_code), "
@@ -3400,7 +3409,7 @@ class ControllerTransitions:
                     (
                         int(update.new_state),
                         started_ms,
-                        terminal_ms,
+                        attempt_terminal_ms,
                         task_exit,
                         update.error,
                         update.task_id.to_wire(),
