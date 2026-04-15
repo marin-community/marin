@@ -22,7 +22,7 @@ import os
 import socket
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import partial
@@ -121,7 +121,7 @@ def _create_binary_array(buffer_data: np.ndarray) -> pa.Array:
 
 def state_dict_to_batches(
     state_dict: dict[str, np.ndarray], shape_dict: dict[str, tuple[int, ...]], weight_id: int
-) -> dict[str, tuple[pa.Schema, Sequence[pa.RecordBatch]]]:
+) -> dict[str, tuple[pa.Schema, list[pa.RecordBatch]]]:
     """Convert state_dict to Arrow RecordBatch per parameter using Haliax state_dict for efficient transfer.
 
     Large arrays are split into multiple RecordBatches if needed to avoid hitting the Arrow
@@ -273,7 +273,7 @@ class MarinFlightServer(flight.FlightServerBase):
     """Arrow Flight server for serving model weights."""
 
     config: WeightTransferConfig
-    _weights_store: dict[int, dict[str, tuple[pa.Schema, Sequence[pa.RecordBatch]]]]
+    _weights_store: dict[int, dict[str, tuple[pa.Schema, list[pa.RecordBatch]]]]
     _latest_weight_id: int | None
     _lock: threading.Lock
     _location: str
@@ -339,7 +339,7 @@ class MarinFlightServer(flight.FlightServerBase):
                     )
                     yield info
 
-    def store_weights(self, weight_id: int, params_dict: dict[str, tuple[pa.Schema, Sequence[pa.RecordBatch]]]) -> None:
+    def store_weights(self, weight_id: int, params_dict: dict[str, tuple[pa.Schema, list[pa.RecordBatch]]]) -> None:
         with self._lock:
             # remove all other weights
             self._weights_store.clear()

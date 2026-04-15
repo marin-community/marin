@@ -60,6 +60,8 @@ def einsum(
        The result of the einsum.
     """
     lhses, rhs = parse_einsum(equation)
+    if lhses is None:
+        raise_parse_error("expected at least one lhs expression", equation, None)
 
     # we have essentially 3 cases:
     # 1. normal positional einsum
@@ -291,8 +293,10 @@ def _positional_einsum_spec(equation, arrays, lhses, rhs, axis_aliases):
                     f"Axis name {name} does not occur on the left hand side", equation, capture.char_range
                 )
 
+            # pyrefly: ignore[unbound-name] - letter is bound in the if branch; else branch raises
             named_on_left_but_not_right.discard(letter)
 
+            # pyrefly: ignore[unbound-name] - same as above
             spec += letter
             out_axes.append(axis)
 
