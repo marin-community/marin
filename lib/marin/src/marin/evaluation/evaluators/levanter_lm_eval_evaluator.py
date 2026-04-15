@@ -15,7 +15,8 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.evaluators.evaluator import Evaluator
+from marin.inference.model_config import ModelConfig
 
 logger = logging.getLogger(__name__)
 

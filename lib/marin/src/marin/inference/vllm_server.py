@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 import requests
 from rigging.filesystem import marin_prefix
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.inference.model_config import ModelConfig
 
 logger = logging.getLogger(__name__)
 DEFAULT_VLLM_TPU_DOCKER_IMAGE: str = "vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e"

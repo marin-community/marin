@@ -10,12 +10,12 @@ from contextlib import ExitStack
 
 from rigging.log_setup import configure_logging
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.inference.chat_completions import OpenAIChatCompletionProvider
+from marin.inference.model_config import ModelConfig
 from marin.inference.vllm_server import VllmEnvironment
 from marin.test_time_scaling import (
     DEFAULT_REASONING_SELECTORS,
     CandidateGenerationConfig,
-    OpenAIChatCompletionProvider,
     SelectorName,
     TestTimeScalingConfig,
     build_run_summary,

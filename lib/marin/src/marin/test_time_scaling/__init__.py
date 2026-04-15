@@ -9,7 +9,7 @@ from marin.test_time_scaling.config import (
     SelectorName,
     TestTimeScalingConfig,
 )
-from marin.test_time_scaling.generate import CompletionProvider, OpenAIChatCompletionProvider, generate_candidates
+from marin.test_time_scaling.generate import generate_candidates
 from marin.test_time_scaling.manifests import (
     MANIFEST_FILENAME,
     PROMPTS_FILENAME,

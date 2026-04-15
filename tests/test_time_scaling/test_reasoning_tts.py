@@ -8,6 +8,7 @@ from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_usage import CompletionUsage
 
+from marin.inference.chat_completions import ChatCompletionRequest
 from marin.test_time_scaling import (
     CandidateGenerationConfig,
     PromptManifest,
@@ -82,11 +83,14 @@ def _create_completion(tokenizer, responses: list[tuple[str, list[float]]]) -> C
 class FakeCompletionProvider:
     def __init__(self, completions: list[ChatCompletion]):
         self._completions = completions
+        self._request_index = 0
 
-    def complete_messages(self, messages, generation_config, request_index):
-        assert generation_config.num_candidates == 3
-        assert messages[0]["role"] == "user"
-        return self._completions[request_index]
+    def complete_messages(self, request: ChatCompletionRequest):
+        assert request.num_completions == 3
+        assert request.messages[0]["role"] == "user"
+        completion = self._completions[self._request_index]
+        self._request_index += 1
+        return completion
 
 
 def test_end_to_end_reasoning_tts_math_vertical_slice(tmp_path, gpt2_tokenizer):

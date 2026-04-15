@@ -13,7 +13,7 @@ import requests
 from fray.v2 import current_client
 from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.inference.model_config import ModelConfig
 from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
 from marin.utils import remove_tpu_lockfile_on_exit
 
