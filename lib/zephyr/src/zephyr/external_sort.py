@@ -8,85 +8,66 @@ Used by the reduce stage when the number of sorted chunk iterators exceeds
 exhausting worker memory.
 
 Pass 1: batch the k iterators into groups of EXTERNAL_SORT_FAN_IN, merge each
-group with heapq.merge, and spill items to a Parquet run file under
-``{external_sort_dir}/run-{i:04d}.parquet``.  Items are pickled into a single
-``_zephyr_payload`` binary column and written as byte-budgeted row groups via
-:class:`SpillWriter`, overlapping serialization with background I/O.
+group with heapq.merge, and spill items to a run file under
+``{external_sort_dir}/run-{i:04d}.spill`` via :class:`SpillWriter`.
 
 Pass 2: heapq.merge over the (much smaller) set of run file iterators.  Each
-iterator streams row groups from its parquet file, unpickling one batch at a
-time; the read batch size is computed from the cgroup memory limit so that all
-concurrent batches together stay within ``_READ_MEMORY_FRACTION`` of available
-memory.
+iterator streams chunks from its spill file via :class:`SpillReader`; the read
+batch size is computed from the cgroup memory limit so that all concurrent
+batches together stay within ``_READ_MEMORY_FRACTION`` of available memory.
 
 Run files are deleted after the final merge completes.
 """
 
 import heapq
 import logging
-import pickle
 from collections.abc import Callable, Iterator
 from itertools import islice
 
-import fsspec
-import pyarrow as pa
-import pyarrow.parquet as pq
 from iris.env_resources import TaskResources
 from rigging.filesystem import url_to_fs
 
-from zephyr.spill_writer import SpillWriter
+from zephyr.spill import SpillReader, SpillWriter
 
 logger = logging.getLogger(__name__)
 
 # Maximum simultaneous chunk iterators per pass-1 batch.
 EXTERNAL_SORT_FAN_IN = 500
 
-# Items buffered before converting to an Arrow RecordBatch and handing to the
-# SpillWriter. Larger values amortize Arrow/parquet overhead.
+# Items buffered before handing to the SpillWriter. Larger values amortize
+# per-chunk overhead in the spill format.
 _WRITE_BATCH_SIZE = 10_000
 
-# Target bytes per parquet row group in pass-1 spills.
+# Target bytes per spill chunk in pass-1 runs.
 _ROW_GROUP_BYTES = 8 * 1024 * 1024
 
 # Fraction of container memory budgeted for pass-2 read buffers.
 _READ_MEMORY_FRACTION = 0.25
 
-_SPILL_SCHEMA = pa.schema([pa.field("_zephyr_payload", pa.binary())])
-
-
-def _items_to_table(items: list) -> pa.Table:
-    payloads = [pickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL) for item in items]
-    return pa.table({"_zephyr_payload": pa.array(payloads, type=pa.binary())})
-
 
 def _safe_read_batch_size(n_runs: int, sample_run_path: str) -> int:
     """Compute a pass-2 read batch size that fits within the memory budget.
 
-    Uses the parquet file's uncompressed byte size and row count to estimate
-    in-memory bytes per item, then divides the memory budget by
-    ``n_runs * item_bytes`` so that all concurrent run-file buffers together
-    stay within ``_READ_MEMORY_FRACTION`` of available container memory.
+    Uses the spill's per-item byte estimate to divide the memory budget across
+    concurrent run-file buffers so they together stay within
+    ``_READ_MEMORY_FRACTION`` of available container memory.
     """
     try:
-        with fsspec.open(sample_run_path, "rb") as f:
-            pf = pq.ParquetFile(f)
-            md = pf.metadata
-            num_rows = md.num_rows
-            total_bytes = sum(md.row_group(i).column(0).total_uncompressed_size for i in range(md.num_row_groups))
+        item_bytes_raw = SpillReader(sample_run_path).approx_item_bytes
     except Exception:
         logger.warning(
-            "Failed to read parquet metadata from %s; falling back to default batch size",
+            "Failed to read spill metadata from %s; falling back to default batch size",
             sample_run_path,
             exc_info=True,
         )
         return _WRITE_BATCH_SIZE
 
-    if num_rows <= 0:
+    if item_bytes_raw <= 0:
         return _WRITE_BATCH_SIZE
 
-    # Uncompressed payload size x 3 approximates Python object overhead (dicts
-    # are ~3x larger in memory than their pickled form).
-    item_bytes = max(64, (total_bytes // num_rows) * 3)
+    # Payload size x 3 approximates Python object overhead (dicts are ~3x
+    # larger in memory than their pickled form).
+    item_bytes = max(64, item_bytes_raw * 3)
 
     available = TaskResources.from_environment().memory_bytes
     budget = int(available * _READ_MEMORY_FRACTION)
@@ -123,8 +104,8 @@ def external_sort_merge(
     run_paths: list[str] = []
     batch_idx = 0
 
-    # pq.ParquetWriter does not auto-create parent directories the way
-    # fsspec.open("wb") did, so make sure the spill dir exists up front.
+    # SpillWriter does not auto-create parent directories, so ensure the spill
+    # dir exists up front.
     spill_fs, spill_dir = url_to_fs(external_sort_dir)
     spill_fs.makedirs(spill_dir, exist_ok=True)
 
@@ -132,18 +113,18 @@ def external_sort_merge(
         batch = list(islice(chunk_iterators_gen, EXTERNAL_SORT_FAN_IN))
         if not batch:
             break
-        run_path = f"{external_sort_dir}/run-{batch_idx:04d}.parquet"
+        run_path = f"{external_sort_dir}/run-{batch_idx:04d}.spill"
         item_count = 0
         pending: list = []
-        with SpillWriter(run_path, _SPILL_SCHEMA, row_group_bytes=_ROW_GROUP_BYTES) as writer:
+        with SpillWriter(run_path, row_group_bytes=_ROW_GROUP_BYTES) as writer:
             for item in heapq.merge(*batch, key=merge_key):
                 pending.append(item)
                 if len(pending) >= _WRITE_BATCH_SIZE:
-                    writer.write_table(_items_to_table(pending))
+                    writer.write(pending)
                     item_count += len(pending)
                     pending = []
             if pending:
-                writer.write_table(_items_to_table(pending))
+                writer.write(pending)
                 item_count += len(pending)
         run_paths.append(run_path)
         logger.info(
@@ -157,12 +138,9 @@ def external_sort_merge(
     read_batch_size = _safe_read_batch_size(len(run_paths), run_paths[0]) if run_paths else _WRITE_BATCH_SIZE
 
     def _read_run(path: str) -> Iterator:
-        with fsspec.open(path, "rb") as f:
-            pf = pq.ParquetFile(f)
-            for record_batch in pf.iter_batches(batch_size=read_batch_size, columns=["_zephyr_payload"]):
-                payloads = record_batch.column("_zephyr_payload").to_pylist()
-                for payload in payloads:
-                    yield pickle.loads(payload)
+        reader = SpillReader(path, batch_size=read_batch_size)
+        for chunk in reader.iter_chunks():
+            yield from chunk
 
     run_iters = [_read_run(p) for p in run_paths]
     try:
