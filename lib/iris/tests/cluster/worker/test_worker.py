@@ -888,6 +888,144 @@ def test_task_attempt_adopt_factory():
 
 
 # ============================================================================
+# Bootstrap Log Handler Tests
+# ============================================================================
+
+
+class _StubLogPusher:
+    """In-process stand-in for LogPusher that records push() calls."""
+
+    def __init__(self, server_url: str, **kwargs) -> None:
+        self.server_url = server_url
+        self.pushed: list[tuple[str, list]] = []
+        self.closed = False
+
+    def push(self, key: str, entries: list) -> None:
+        self.pushed.append((key, list(entries)))
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _install_stub_log_pusher(monkeypatch) -> list[_StubLogPusher]:
+    """Monkeypatch LogPusher in the worker module and return the list of instances."""
+    from iris.cluster.worker import worker as worker_mod
+
+    instances: list[_StubLogPusher] = []
+
+    def _factory(server_url: str, **kwargs) -> _StubLogPusher:
+        pusher = _StubLogPusher(server_url, **kwargs)
+        instances.append(pusher)
+        return pusher
+
+    monkeypatch.setattr(worker_mod, "LogPusher", _factory)
+    return instances
+
+
+def test_attach_log_handler_before_registration_uses_bootstrap_key(mock_worker, monkeypatch):
+    """Pre-registration logs land under a bootstrap-{ip} key."""
+    import logging as py_logging
+
+    from iris.cluster.log_store import worker_log_key
+
+    pushers = _install_stub_log_pusher(monkeypatch)
+    monkeypatch.setattr(mock_worker, "_resolve_log_service", lambda: "log.local:50051")
+
+    # No worker_id is configured in the mock fixture and no slice/GCP metadata is
+    # inferable, so the bootstrap key must fall back to bootstrap-{ip}.
+    assert mock_worker._worker_id is None
+
+    root = py_logging.getLogger()
+    prior_level = root.level
+    root.setLevel(py_logging.INFO)
+    try:
+        mock_worker._attach_log_handler()
+        assert mock_worker._log_handler is not None
+        assert len(pushers) == 1
+
+        py_logging.getLogger(__name__).info("bootstrap message")
+
+        assert pushers[0].pushed, "expected a bootstrap log push"
+        key, _entries = pushers[0].pushed[-1]
+        assert key.startswith(worker_log_key("bootstrap-")), f"expected bootstrap-prefixed key, got {key!r}"
+    finally:
+        mock_worker._detach_log_handler()
+        root.setLevel(prior_level)
+
+
+def test_update_log_handler_key_rewrites_to_assigned_worker_id(mock_worker, monkeypatch):
+    """After registration, subsequent logs land under worker_log_key(worker_id)."""
+    import logging as py_logging
+
+    from iris.cluster.log_store import worker_log_key
+
+    pushers = _install_stub_log_pusher(monkeypatch)
+    monkeypatch.setattr(mock_worker, "_resolve_log_service", lambda: "log.local:50051")
+
+    root = py_logging.getLogger()
+    prior_level = root.level
+    root.setLevel(py_logging.INFO)
+    try:
+        mock_worker._attach_log_handler()
+        py_logging.getLogger(__name__).info("pre-register message")
+
+        # Simulate _register() assigning a canonical worker_id.
+        mock_worker._worker_id = "worker-42"
+        mock_worker._update_log_handler_key()
+        py_logging.getLogger(__name__).info("post-register message")
+
+        # Same LogPusher is reused; only the key changes.
+        assert len(pushers) == 1
+        keys = [k for k, _ in pushers[0].pushed]
+        assert any(k.startswith(worker_log_key("bootstrap-")) for k in keys), keys
+        assert worker_log_key("worker-42") in keys, keys
+    finally:
+        mock_worker._detach_log_handler()
+        root.setLevel(prior_level)
+
+
+def test_attach_log_handler_tolerates_missing_endpoint(mock_worker, monkeypatch):
+    """If /system/log-server isn't resolvable yet, attach is a no-op (no crash)."""
+    pushers = _install_stub_log_pusher(monkeypatch)
+    monkeypatch.setattr(mock_worker, "_resolve_log_service", lambda: None)
+
+    mock_worker._attach_log_handler()
+
+    assert mock_worker._log_handler is None
+    assert mock_worker._log_pusher is None
+    assert pushers == []
+
+
+def test_attach_log_handler_is_idempotent(mock_worker, monkeypatch):
+    """Calling _attach_log_handler twice is a no-op on the second call."""
+    pushers = _install_stub_log_pusher(monkeypatch)
+    monkeypatch.setattr(mock_worker, "_resolve_log_service", lambda: "log.local:50051")
+
+    try:
+        mock_worker._attach_log_handler()
+        first_handler = mock_worker._log_handler
+        mock_worker._attach_log_handler()
+        assert mock_worker._log_handler is first_handler
+        assert len(pushers) == 1
+    finally:
+        mock_worker._detach_log_handler()
+
+
+def test_resolve_log_service_swallows_rpc_errors(mock_worker):
+    """Transient ListEndpoints failures return None rather than crashing."""
+    from unittest.mock import Mock
+
+    client = Mock()
+    client.list_endpoints = Mock(side_effect=RuntimeError("controller unreachable"))
+    mock_worker._controller_client = client
+
+    assert mock_worker._resolve_log_service() is None
+
+
+# ============================================================================
 # Docker-based Adoption Integration Tests
 # ============================================================================
 

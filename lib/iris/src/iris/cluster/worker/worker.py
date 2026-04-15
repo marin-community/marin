@@ -180,8 +180,12 @@ class Worker:
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
-        # LogPusher and RemoteLogHandler are created after registration, once
-        # the worker can resolve /system/log-server via ListEndpoints.
+        # LogPusher and RemoteLogHandler are attached as early as possible in
+        # the lifecycle loop (before _register) so bootstrap logs reach the
+        # central log store. Pre-registration entries use a bootstrap key
+        # derived from the locally-inferred worker_id or the worker IP; once
+        # the controller assigns a canonical worker_id, the handler's key is
+        # rewritten in place rather than detached/re-attached.
         self._log_pusher: LogPusher | None = None
         self._log_handler: RemoteLogHandler | None = None
 
@@ -389,6 +393,13 @@ class Worker:
         first_iteration = True
         try:
             while not stop_event.is_set():
+                # Attach the log handler as early as possible so pre-registration
+                # logs (reset, registration retries, rejection warnings) reach
+                # the central log store. If /system/log-server is not yet
+                # resolvable, this is a no-op; the register loop retries.
+                if self._log_handler is None:
+                    self._attach_log_handler()
+
                 # Skip reset on the first iteration if we adopted containers,
                 # to avoid killing the tasks we just took over.
                 if first_iteration and self._tasks:
@@ -401,7 +412,9 @@ class Worker:
                     # Shutdown requested during registration
                     break
                 self._worker_id = worker_id
-                self._attach_log_handler()
+                # Rewrite the bootstrap key to the canonical worker_id without
+                # tearing down the pusher session.
+                self._update_log_handler_key()
                 self._serve(stop_event)
         except Exception:
             logger.exception("Worker lifecycle crashed")
@@ -421,6 +434,12 @@ class Worker:
         logger.info("Attempting to register with controller at %s", self._config.controller_address)
 
         while not stop_event.is_set():
+            # Retry early log-handler attach if the first attempt couldn't
+            # resolve /system/log-server (e.g. controller transiently
+            # unreachable). Once attached, registration-retry logs are also
+            # captured centrally.
+            if self._log_handler is None:
+                self._attach_log_handler()
             try:
                 # Chaos injection for testing delayed registration
                 if rule := chaos("worker.register"):
@@ -449,15 +468,24 @@ class Worker:
         return None
 
     def _resolve_log_service(self) -> str | None:
-        """Resolve the LogService address via the /system/log-server endpoint."""
+        """Resolve the LogService address via the /system/log-server endpoint.
+
+        Safe to call before registration — ListEndpoints does not require a
+        registered worker. Returns None if the endpoint is not yet published
+        or the RPC fails transiently; the caller is expected to retry.
+        """
         if not self._controller_client:
             return None
-        resp = self._controller_client.list_endpoints(
-            controller_pb2.Controller.ListEndpointsRequest(
-                prefix="/system/log-server",
-                exact=True,
-            ),
-        )
+        try:
+            resp = self._controller_client.list_endpoints(
+                controller_pb2.Controller.ListEndpointsRequest(
+                    prefix="/system/log-server",
+                    exact=True,
+                ),
+            )
+        except Exception as exc:
+            logger.warning("ListEndpoints(/system/log-server) failed: %s", exc)
+            return None
         if not resp.endpoints:
             logger.warning("No /system/log-server endpoint registered on controller")
             return None
@@ -465,10 +493,28 @@ class Worker:
         logger.info("Resolved /system/log-server -> %s", addr)
         return addr
 
+    def _bootstrap_log_id(self) -> str:
+        """Identity used in the log-store key before registration completes.
+
+        Uses the locally-inferred worker_id (from WorkerConfig, slice_id+TPU
+        index, or GCP metadata) when available so bootstrap logs usually land
+        under the same key as post-registration logs. Falls back to
+        ``bootstrap-{ip}`` when no identity is inferable yet.
+        """
+        if self._worker_id:
+            return self._worker_id
+        ip = self._worker_metadata.ip_address or "unknown"
+        return f"bootstrap-{ip}"
+
     def _attach_log_handler(self) -> None:
-        """Create LogPusher and attach RemoteLogHandler after registration."""
-        self._detach_log_handler()
-        if not self._worker_id:
+        """Create LogPusher and attach RemoteLogHandler.
+
+        Safe to call before registration — uses a bootstrap key derived from
+        the locally-known identity. Call :meth:`_update_log_handler_key` after
+        registration assigns a canonical worker_id to rewrite the key in place
+        without tearing down the pusher session.
+        """
+        if self._log_handler is not None:
             return
         log_addr = self._resolve_log_service()
         if not log_addr:
@@ -479,11 +525,22 @@ class Worker:
         self._log_pusher = LogPusher(log_addr, interceptors=log_interceptors)
         self._log_handler = RemoteLogHandler(
             self._log_pusher,
-            key=worker_log_key(self._worker_id),
+            key=worker_log_key(self._bootstrap_log_id()),
         )
         self._log_handler.setLevel(logging.INFO)
         self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger().addHandler(self._log_handler)
+
+    def _update_log_handler_key(self) -> None:
+        """Rewrite the RemoteLogHandler key to the canonical worker_id.
+
+        Called after :meth:`_register` returns so subsequent log entries are
+        stored under the assigned worker_id rather than the bootstrap key.
+        Bootstrap entries pushed earlier remain under the bootstrap key.
+        """
+        if self._log_handler is None or not self._worker_id:
+            return
+        self._log_handler.key = worker_log_key(self._worker_id)
 
     def _detach_log_handler(self) -> None:
         """Remove and close the current RemoteLogHandler and LogPusher if any."""
