@@ -18,6 +18,7 @@ from iris.cluster.worker.worker_types import TaskInfo
 from iris.rpc import job_pb2
 from iris.rpc import worker_pb2
 from iris.rpc.errors import rpc_error_handler
+from rigging.log_setup import slow_log
 from rigging.timing import Timer
 
 logger = logging.getLogger(__name__)
@@ -100,7 +101,7 @@ class WorkerServiceImpl:
 
         Processes tasks_to_run and tasks_to_kill, then returns current state.
         """
-        with rpc_error_handler("heartbeat"):
+        with rpc_error_handler("heartbeat"), slow_log(logger, "heartbeat rpc", threshold_ms=1000):
             # Chaos injection for testing heartbeat failures and delays
             if rule := chaos("worker.heartbeat"):
                 if rule.delay_seconds > 0:
@@ -111,6 +112,13 @@ class WorkerServiceImpl:
                 if not rule.delay_seconds:
                     raise RuntimeError("chaos: worker.heartbeat")
 
+            logger.debug(
+                "heartbeat rpc received n_run=%d n_kill=%d n_expected=%d req_bytes=%d",
+                len(request.tasks_to_run),
+                len(request.tasks_to_kill),
+                len(request.expected_tasks),
+                request.ByteSize(),
+            )
             # Delegate to worker for reconciliation
             return self._provider.handle_heartbeat(request)
 
