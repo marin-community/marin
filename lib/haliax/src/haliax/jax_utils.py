@@ -357,7 +357,8 @@ def multilevel_scan(f, carry, xs, outer_size, length, reverse=False, unroll=1):
 
 
 def to_jax_shape(shape):
-    from haliax.core import Axis, ensure_tuple
+    from haliax.core import Axis
+    from haliax.util import ensure_tuple
 
     shape = ensure_tuple(shape)
     return tuple(axis.size if isinstance(axis, Axis) else axis for axis in shape)
