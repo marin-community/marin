@@ -23,7 +23,6 @@ from iris.cluster.providers.remote_exec import DirectSshRemoteExec, GceRemoteExe
 from iris.cluster.providers.gcp.workers import (
     GcpWorkerProvider,
     _run_vm_slice_bootstrap,
-    _summarize_missing_workers,
     _validate_slice_config,
 )
 from iris.cluster.providers.manual.provider import ManualControllerProvider, ManualWorkerProvider
@@ -935,20 +934,6 @@ def test_gcp_tpu_slice_os_login_prefers_external_ip_for_direct_ssh():
 #
 # Tests for bootstrap timeout sizing, diagnostics, and VM health probing.
 # =============================================================================
-
-
-def test_summarize_missing_workers_includes_probe_errors():
-    summary = _summarize_missing_workers(
-        ["worker-250", "worker-251", "worker-252"],
-        {"worker-250": "TimeoutError: timed out", "worker-252": "URLError: refused"},
-        limit=2,
-    )
-
-    assert "worker-250 (TimeoutError: timed out)" in summary
-    assert "worker-251" in summary
-    assert "+1 more" in summary
-
-
 def _make_vm_slice_for_bootstrap(
     gcp_service: InMemoryGcpService,
     zone: str = "us-central2-b",

@@ -93,7 +93,7 @@ TPU_BOOTSTRAP_PROGRESS_LOG_INTERVAL = 60.0
 TPU_BOOTSTRAP_DIAGNOSTIC_LIMIT = 8
 
 
-def _recommended_tpu_cloud_ready_timeout(worker_count: int) -> float:
+def _default_tpu_cloud_ready_timeout(worker_count: int) -> float:
     """Return a cloud READY timeout sized for TPU pod startup."""
     if worker_count >= 256:
         return 1800.0
@@ -102,20 +102,13 @@ def _recommended_tpu_cloud_ready_timeout(worker_count: int) -> float:
     return DEFAULT_TPU_CLOUD_READY_TIMEOUT
 
 
-def _recommended_tpu_bootstrap_timeout(worker_count: int) -> float:
+def _default_tpu_bootstrap_timeout(worker_count: int) -> float:
     """Return a worker health timeout sized for TPU pod bootstrap."""
     if worker_count >= 256:
         return 1800.0
     if worker_count >= 64:
         return 900.0
     return DEFAULT_TPU_BOOTSTRAP_TIMEOUT
-
-
-def _format_probe_error(error: BaseException) -> str:
-    message = str(error).strip()
-    if message:
-        return f"{type(error).__name__}: {message}"
-    return type(error).__name__
 
 
 def _summarize_missing_workers(
@@ -806,11 +799,11 @@ def _run_tpu_bootstrap(
 
     effective_cloud_ready_timeout = cloud_ready_timeout
     if effective_cloud_ready_timeout is None:
-        effective_cloud_ready_timeout = _recommended_tpu_cloud_ready_timeout(worker_count)
+        effective_cloud_ready_timeout = _default_tpu_cloud_ready_timeout(worker_count)
 
     effective_bootstrap_timeout = bootstrap_timeout
     if effective_bootstrap_timeout is None:
-        effective_bootstrap_timeout = _recommended_tpu_bootstrap_timeout(worker_count)
+        effective_bootstrap_timeout = _default_tpu_bootstrap_timeout(worker_count)
 
     logger.info(
         "Using TPU bootstrap timeouts for %s: cloud_ready_timeout=%ss bootstrap_timeout=%ss worker_count=%d",
@@ -875,7 +868,7 @@ def _run_tpu_bootstrap(
                     last_probe_errors.pop(worker_id, None)
                     logger.info("Worker %s is healthy", worker_id)
             except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError) as e:
-                last_probe_errors[worker_id] = _format_probe_error(e)
+                last_probe_errors[worker_id] = str(e).strip() or type(e).__name__
 
         if len(healthy_workers) == len(worker_addrs):
             break
