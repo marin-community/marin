@@ -549,3 +549,47 @@ def test_tpu_create_lro_resource_exhausted_raises_quota_error(svc: CloudGcpServi
                 capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
             )
         )
+
+
+def test_tpu_create_returns_visible_tpu_when_lro_reports_error(svc: CloudGcpService, backend: GcpFakeBackend):
+    """If the TPU is already visible, do not fail create just because the LRO later reports an error."""
+    op_name = f"projects/{PROJECT}/locations/{ZONE_EU}/operations/op-tpu-visible-error"
+
+    orig_handle = backend._handle_tpu
+
+    def _patched_tpu(method, url, body):
+        if method == "POST" and "/nodes" in url and "nodeId=visible-error-tpu" in url:
+            zone = backend._extract_tpu_zone(url)
+            backend.tpus[("visible-error-tpu", zone)] = {
+                "name": f"projects/{PROJECT}/locations/{zone}/nodes/visible-error-tpu",
+                "state": "CREATING",
+                "acceleratorType": "v5litepod-16",
+                "runtimeVersion": "v2-alpha-tpuv5-lite",
+                "labels": {},
+                "metadata": {},
+                "networkEndpoints": [],
+                "serviceAccount": None,
+                "createTime": "2026-01-01T00:00:00Z",
+            }
+            backend.operations[op_name] = {
+                "name": op_name,
+                "done": True,
+                "error": {"code": 13, "message": "internal error after node became visible"},
+            }
+            return httpx.Response(200, json={"name": op_name, "done": False})
+        return orig_handle(method, url, body)
+
+    backend._handle_tpu = _patched_tpu
+
+    tpu = svc.tpu_create(
+        TpuCreateRequest(
+            name="visible-error-tpu",
+            zone=ZONE_EU,
+            accelerator_type="v5litepod-16",
+            runtime_version="v2-alpha-tpuv5-lite",
+            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+        )
+    )
+
+    assert tpu.name == "visible-error-tpu"
+    assert tpu.state == "CREATING"

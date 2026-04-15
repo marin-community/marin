@@ -495,28 +495,32 @@ class CloudGcpService:
             time.sleep(_OPERATION_POLL_INTERVAL)
 
     def _wait_tpu_operation(self, operation_name: str, timeout: float = _OPERATION_TIMEOUT) -> dict:
-        url = f"{_TPU_BASE}/{operation_name}"
         deadline = time.monotonic() + timeout
         while True:
-            resp = self._client.get(url, headers=self._headers())
-            self._classify_response(resp)
-            data = resp.json()
+            data = self._get_tpu_operation(operation_name)
             if data.get("done"):
                 if "error" in data:
-                    error = data["error"]
-                    msg = error.get("message", str(error))
-                    # Zone stockouts ("no more capacity in the zone ...") come
-                    # back as RESOURCE_EXHAUSTED on the LRO rather than on the
-                    # initial HTTP response. Surface them as QuotaExhaustedError
-                    # so the autoscaler treats them like any other quota hit
-                    # (terse warning + backoff, no stack trace).
-                    if error.get("code") == _RPC_CODE_RESOURCE_EXHAUSTED:
-                        raise QuotaExhaustedError(msg)
-                    raise InfraError(f"TPU operation failed: {msg}")
+                    self._raise_tpu_operation_error(data["error"])
                 return data
             if time.monotonic() >= deadline:
                 raise InfraError(f"TPU operation {operation_name} timed out after {timeout}s")
             time.sleep(_OPERATION_POLL_INTERVAL)
+
+    def _get_tpu_operation(self, operation_name: str) -> dict:
+        url = f"{_TPU_BASE}/{operation_name}"
+        resp = self._client.get(url, headers=self._headers())
+        self._classify_response(resp)
+        return resp.json()
+
+    def _raise_tpu_operation_error(self, error: dict) -> None:
+        msg = error.get("message", str(error))
+        # Zone stockouts ("no more capacity in the zone ...") come back as
+        # RESOURCE_EXHAUSTED on the LRO rather than on the initial HTTP response.
+        # Surface them as QuotaExhaustedError so the autoscaler treats them like
+        # any other quota hit (terse warning + backoff, no stack trace).
+        if error.get("code") == _RPC_CODE_RESOURCE_EXHAUSTED:
+            raise QuotaExhaustedError(msg)
+        raise InfraError(f"TPU operation failed: {msg}")
 
     # ========================================================================
     # Low-level REST helpers
@@ -559,17 +563,43 @@ class CloudGcpService:
 
         logger.info("Creating TPU: %s (type=%s, zone=%s)", request.name, request.accelerator_type, request.zone)
 
-        # POST to create, wait for LRO, then GET the final node state
+        # POST to create, probe the LRO once, then describe the node if it is
+        # already visible. Do not block slice bookkeeping on the full TPU LRO.
         url = f"{_TPU_BASE}/{self._tpu_parent(request.zone)}/nodes"
         resp = self._client.post(url, params={"nodeId": request.name}, headers=self._headers(), json=body)
         self._classify_response(resp)
         data = resp.json()
         op_name = data.get("name", "")
         if op_name and "/operations/" in op_name:
-            self._wait_tpu_operation(op_name)
+            op = self._get_tpu_operation(op_name)
+            if op.get("done") and "error" in op:
+                existing = self.tpu_describe(request.name, request.zone)
+                if existing is not None:
+                    logger.warning(
+                        "TPU operation %s reported failure after TPU %s became visible: %s",
+                        op_name,
+                        request.name,
+                        op["error"].get("message", op["error"]),
+                    )
+                    return existing
+                self._raise_tpu_operation_error(op["error"])
 
-        tpu_data = self._tpu_get(request.name, request.zone)
-        return _parse_tpu_info(tpu_data, request.zone)
+        existing = self.tpu_describe(request.name, request.zone)
+        if existing is not None:
+            return existing
+
+        return TpuInfo(
+            name=request.name,
+            state="CREATING",
+            accelerator_type=request.accelerator_type,
+            zone=request.zone,
+            labels=dict(request.labels),
+            metadata=dict(request.metadata),
+            service_account=request.service_account,
+            network_endpoints=[],
+            external_network_endpoints=[],
+            created_at=Timestamp.now(),
+        )
 
     def tpu_delete(self, name: str, zone: str) -> None:
         logger.info("Deleting TPU (async): %s", name)
