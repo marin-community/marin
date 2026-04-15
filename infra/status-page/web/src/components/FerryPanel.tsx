@@ -52,7 +52,9 @@ function slowRunBaseline(history: FerryRun[], index: number): SlowRunBaseline | 
   const variance =
     priorDurations.reduce((s, x) => s + (x - mean) ** 2, 0) / priorDurations.length;
   const stddev = Math.sqrt(variance);
-  if (stddev === 0) return null;
+  // σ=0 (all prior durations identical) still yields a valid threshold at
+  // the mean — anything strictly slower than a perfectly stable baseline is
+  // genuinely anomalous.
   return {
     threshold: mean + SLOW_RUN_STDDEV_THRESHOLD * stddev,
     sampleSize: priorDurations.length,
