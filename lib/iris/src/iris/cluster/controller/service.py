@@ -21,7 +21,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
-from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
+from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.controller.codec import (
     constraints_from_json,
@@ -1134,6 +1134,14 @@ class ControllerServiceImpl:
         # Explicit user constraints for canonical keys (device-type,
         # device-variant, etc.) replace auto-generated ones.
         request = _inject_resource_constraints(request)
+
+        # Reject TPU requests whose chip count doesn't match a single VM, or
+        # whose device-variant alternatives mix incompatible VM shapes (e.g.
+        # v6e-4 + v6e-8). Co-scheduling jobs onto a single-VM slice like v6e-8
+        # would put two tenants on one indivisible VM.
+        tpu_error = validate_tpu_request(request.resources, [Constraint.from_proto(c) for c in request.constraints])
+        if tpu_error:
+            raise ConnectError(Code.INVALID_ARGUMENT, tpu_error)
 
         # Reject jobs that can never be scheduled so they fail fast instead
         # of sitting in the pending queue. For coscheduled jobs this also
