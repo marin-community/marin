@@ -17,7 +17,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 
-VERSION = "v0.12"
+VERSION = "v0.14"
 WANDB_PROJECT = "eric-czech/marin"
 WANDB_RUN_PREFIX = f"dna-bolinas-transfer-{VERSION}"
 CACHE_PATH = Path(f"/tmp/transfer_{VERSION}_finished.json")
@@ -109,21 +109,31 @@ COLOR_NEGATIVE = "#D62728"
 def plot(df: pd.DataFrame) -> None:
     df = df.dropna(subset=["eval/loss", "learning_rate"]).copy()
 
-    # Separate grid points from controls
-    grid = df[df["label"].str.startswith("learning_rate-")].sort_values("learning_rate")
-    controls = df[df["label"].isin(("positive-control", "negative-control"))]
+    # Combine grid points with positive control (both are "transferred")
+    is_transferred = df["label"].str.startswith("learning_rate-") | (df["label"] == "positive-control")
+    transferred = df[is_transferred].sort_values("learning_rate")
+    negative = df[df["label"] == "negative-control"].iloc[0]
 
-    # Evenly-spaced x positions for grid points
-    grid_xs = list(range(len(grid)))
-    grid_lrs = grid["learning_rate"].tolist()
+    # Evenly-spaced x positions
+    xs = list(range(len(transferred)))
+    lrs = transferred["learning_rate"].tolist()
 
     fig, ax = plt.subplots(figsize=(10, 5))
 
-    # Plot grid points
-    ax.plot(grid_xs, grid["eval/loss"].values, color=COLOR_LR, linewidth=1, alpha=0.5, zorder=2)
+    def _fmt_lr(lr: float) -> str:
+        exp = int(f"{lr:.1e}".split("e")[1])
+        mantissa = lr / (10**exp)
+        return rf"${mantissa:.1f} \times 10^{{{exp}}}$"
+
+    # Plot transferred series line through all points
+    ax.plot(xs, transferred["eval/loss"].values, color=COLOR_LR, linewidth=1, alpha=0.5, zorder=2)
+
+    # Plot grid points (circles) and optimal point (diamond) separately
+    is_optimal = transferred["label"] == "positive-control"
+    grid_mask = ~is_optimal
     ax.scatter(
-        grid_xs,
-        grid["eval/loss"],
+        [x for x, m in zip(xs, grid_mask, strict=True) if m],
+        transferred.loc[grid_mask, "eval/loss"],
         s=50,
         color=COLOR_LR,
         edgecolors="k",
@@ -131,51 +141,86 @@ def plot(df: pd.DataFrame) -> None:
         zorder=3,
         label="LR sweep (transferred)",
     )
+    opt_x = next(x for x, m in zip(xs, is_optimal, strict=True) if m)
+    opt_row = transferred[is_optimal].iloc[0]
+    ax.scatter(
+        opt_x,
+        opt_row["eval/loss"],
+        s=70,
+        color=COLOR_LR,
+        edgecolors="k",
+        linewidths=0.4,
+        zorder=4,
+        marker="D",
+        label="Optimal (transferred)",
+    )
+    ax.annotate(
+        f"LR={_fmt_lr(opt_row['learning_rate'])}",
+        (opt_x, opt_row["eval/loss"]),
+        textcoords="offset points",
+        xytext=(8, -7),
+        fontsize=8,
+        ha="left",
+        color=COLOR_LR,
+    )
 
-    # Plot controls with interpolated x positions — positive first, negative last (for legend order)
-    control_order = ["positive-control", "negative-control"]
-    control_labels = {"positive-control": "Optimal (transferred)", "negative-control": "Optimal (untransferred)"}
-    control_colors = {"positive-control": COLOR_POSITIVE, "negative-control": COLOR_NEGATIVE}
-    for ctrl in control_order:
-        row = controls[controls["label"] == ctrl].iloc[0]
-        x = _interpolate_x(row["learning_rate"], grid_lrs, grid_xs)
-        color = control_colors[ctrl]
-        ax.scatter(
-            x,
-            row["eval/loss"],
-            s=70,
-            color=color,
-            edgecolors="k",
-            linewidths=0.4,
-            zorder=4,
-            marker="D",
-            label=control_labels[ctrl],
-        )
-        ax.annotate(
-            f"LR={row['learning_rate']:.4g}",
-            (x, row["eval/loss"]),
-            textcoords="offset points",
-            xytext=(8, -4),
-            fontsize=7,
-            ha="left",
-            color=color,
-        )
+    # Plot negative control separately
+    neg_x = _interpolate_x(negative["learning_rate"], lrs, xs)
+    ax.scatter(
+        neg_x,
+        negative["eval/loss"],
+        s=70,
+        color=COLOR_NEGATIVE,
+        edgecolors="k",
+        linewidths=0.4,
+        zorder=4,
+        marker="D",
+        label="Optimal (untransferred)",
+    )
+    ax.annotate(
+        f"LR={_fmt_lr(negative['learning_rate'])}",
+        (neg_x, negative["eval/loss"]),
+        textcoords="offset points",
+        xytext=(8, -4),
+        fontsize=8,
+        ha="left",
+        color=COLOR_NEGATIVE,
+    )
 
     # X-axis: show actual LR values as tick labels
-    def _fmt_lr(lr: float) -> str:
-        if lr >= 0.001:
-            return f"{lr:.4f}".rstrip("0").rstrip(".")
-        return f"{lr:.1e}"
-
-    ax.set_xticks(grid_xs)
-    ax.set_xticklabels([_fmt_lr(lr) for lr in grid_lrs], rotation=30, ha="right", fontsize=8)
+    ax.set_xticks(xs)
+    ax.set_xticklabels([_fmt_lr(lr) for lr in lrs], rotation=30, ha="right", fontsize=8)
     ax.set_xlabel("learning_rate")
     ax.set_ylabel("eval/loss")
     ax.set_title(
         "Bolinas DNA transfer validation — eval/loss vs learning rate\n"
         "Reference: ~25M params, 2.5B tokens → Transfer: ~1.1B params, 10B tokens"
     )
-    ax.legend(fontsize=8, loc="upper right")
+    handles, labels = ax.get_legend_handles_labels()
+    for h in handles:
+        if h.get_paths()[0].vertices.shape[0] == 5:  # diamond has 5 vertices
+            h.set_sizes([30])
+        else:
+            h.set_sizes([50])
+    ax.legend(handles, labels, fontsize=8, loc="upper left")
+    ax.annotate(
+        "All configurations equal\nexcept for LR",
+        xy=(xs[0], transferred.iloc[0]["eval/loss"]),
+        xytext=(40, 30),
+        textcoords="offset points",
+        fontsize=8,
+        ha="center",
+        arrowprops=dict(arrowstyle="->", color="gray", lw=0.8),
+    )
+    ax.annotate(
+        r"Reference-optimal differs in $\eta_0, \epsilon, \beta_2$",
+        xy=(neg_x, negative["eval/loss"]),
+        xytext=(25, -35),
+        textcoords="offset points",
+        fontsize=8,
+        ha="center",
+        arrowprops=dict(arrowstyle="->", color="gray", lw=0.8),
+    )
     fig.tight_layout()
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     fig.savefig(PLOT_PATH, dpi=300)

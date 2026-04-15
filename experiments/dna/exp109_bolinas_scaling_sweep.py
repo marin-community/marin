@@ -684,7 +684,6 @@ DNA_TRANSFER_HEURISTIC = CompletedAdamHHeuristic(
     max_batch_size=8192,
 )
 
-# TODO: delete; v0.13 -> central1, v0.14 -> east5
 TRANSFER_VERSION = "v0.14"
 TRANSFER_HIDDEN_SIZE = 1920  # ~1.12B params
 TRANSFER_TARGET_TOKENS = 10_000_000_000
@@ -976,7 +975,7 @@ def run_transfer_validation_sweep():
     # TODO: Remove this filter — temporary hack to run a subset of steps
     # _skip = ("-negative-control", "-positive-control", *[f"-learning_rate-{i}" for i in range(TRANSFER_NUM_POINTS)])
     # all_steps = [s for s in all_steps if not any(s.name.endswith(k) for k in _skip)]
-    all_steps = [s for s in all_steps if "-learning_rate-" in s.name]
+    # all_steps = [s for s in all_steps if "-beta2-" in s.name]
 
     executor_main(steps=all_steps, description=f"DNA Bolinas transfer validation {version}")
 
