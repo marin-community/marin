@@ -49,20 +49,3 @@ SMOKE_RUN_ID=$SMOKE_RUN_ID \
 ```
 
 Confirms row counts and dedup fraction across stages.
-
-## Notes / gotchas
-
-- SSH tunnel to the controller is established automatically on every
-  `iris` invocation; if commands hang, check
-  `ps aux | grep "gcloud.*ssh.*iris-controller"` and kill stale tunnels
-  with `pkill -f "gcloud.*ssh.*iris-controller"`.
-- TPU worker preemption can kill the Zephyr coordinator mid-run; the
-  pipeline auto-retries up to ~100 times. Watch for
-  `attempt 0 failed ... retrying` in the logs — as long as attempts are
-  progressing, let it run.
-- Skip steps by setting their status on the output path to `SUCCESS`, or
-  rely on `StepRunner`'s built-in caching (already-succeeded steps are
-  skipped by matching `name_with_hash` + `output_path`).
-- `datakit-smoke/download` has a fixed output path
-  (`$MARIN_PREFIX/datakit-smoke/download`) so it can be cached across
-  runs; all other steps are per-`SMOKE_RUN_ID`.
