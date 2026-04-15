@@ -33,7 +33,9 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.types import (
+    TERMINAL_TASK_STATES,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
@@ -46,7 +48,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import job_pb2
 from iris.rpc.auth import TokenProvider
-from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
+from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, job_state_friendly, priority_band_value, task_state_friendly
 from iris.time_proto import timestamp_from_proto
 from rigging.timing import Duration, Timestamp
 
@@ -550,7 +552,9 @@ def run_iris_job(
     zone: str | None = None,
     user: str | None = None,
     reserve: tuple[str, ...] | None = None,
+    priority: str | None = None,
     token_provider: TokenProvider | None = None,
+    submit_argv: list[str] | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -621,6 +625,11 @@ def run_iris_job(
         logger.info(f"Reservation: {len(reservation)} entries")
 
     logger.info(f"Using controller: {controller_url}")
+    priority_band = job_pb2.PRIORITY_BAND_UNSPECIFIED
+    if priority is not None:
+        priority_band = priority_band_value(priority)
+        logger.info(f"Priority band: {priority}")
+
     return _submit_and_wait_job(
         controller_url=controller_url,
         job_name=job_name,
@@ -637,7 +646,9 @@ def run_iris_job(
         coscheduling=coscheduling,
         user=user,
         reservation=reservation,
+        priority_band=priority_band,
         token_provider=token_provider,
+        submit_argv=submit_argv,
     )
 
 
@@ -657,7 +668,9 @@ def _submit_and_wait_job(
     coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
     reservation: list[ReservationEntry] | None = None,
+    priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     token_provider: TokenProvider | None = None,
+    submit_argv: list[str] | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -679,6 +692,8 @@ def _submit_and_wait_job(
         timeout=Duration.from_seconds(timeout) if timeout else None,
         user=user,
         reservation=reservation,
+        priority_band=priority_band,
+        submit_argv=submit_argv,
     )
 
     logger.info(f"Job submitted: {job.job_id}")
@@ -800,6 +815,12 @@ Examples:
     ),
 )
 @click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES, case_sensitive=False),
+    default=None,
+    help="Priority band for scheduling (default: interactive). Lower bands run first; batch jobs yield to interactive.",
+)
+@click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
     help="Terminate the job on Ctrl+C (default: terminate). Tunnel failures never kill the job.",
@@ -825,6 +846,7 @@ def run(
     zone: str | None,
     extra: tuple[str, ...],
     reserve: tuple[str, ...],
+    priority: str | None,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
 ):
@@ -836,6 +858,8 @@ def run(
     command = list(cmd)
     if not command:
         raise click.UsageError("No command provided after --")
+
+    submit_argv = redact_submit_argv(list(sys.argv))
 
     # ignore_unknown_options silently passes typo'd flags (e.g. --reservation
     # instead of --reserve) into cmd. Catch any flags that leaked through
@@ -871,7 +895,9 @@ def run(
             regions=region or None,
             zone=zone,
             reserve=reserve or None,
+            priority=priority,
             token_provider=ctx.obj.get("token_provider"),
+            submit_argv=submit_argv,
         )
     except Exception:
         bundle = ctx.obj.get("provider_bundle")
@@ -979,20 +1005,6 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
     click.echo(tabulate(rows, headers=headers, tablefmt="plain"))
 
 
-# Mirrors iris.cluster.controller.db.TERMINAL_TASK_STATES. Duplicated here to
-# avoid a CLI → controller.db import dependency just for the constant.
-_TERMINAL_TASK_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.TASK_STATE_SUCCEEDED,
-        job_pb2.TASK_STATE_FAILED,
-        job_pb2.TASK_STATE_KILLED,
-        job_pb2.TASK_STATE_UNSCHEDULABLE,
-        job_pb2.TASK_STATE_WORKER_FAILED,
-        job_pb2.TASK_STATE_PREEMPTED,
-    }
-)
-
-
 def _task_index(task_id: str) -> str:
     last = task_id.rsplit("/", 1)[-1]
     return last or task_id
@@ -1046,7 +1058,7 @@ def build_job_summary(
                 # Only surface exit_code once the task is terminal. Proto scalar
                 # defaults mean a RUNNING/ASSIGNED/BUILDING task would otherwise
                 # report exit=0 and look like a clean success.
-                "exit_code": int(t.exit_code) if t.state in _TERMINAL_TASK_STATES else None,
+                "exit_code": int(t.exit_code) if t.state in TERMINAL_TASK_STATES else None,
                 "duration_ms": _task_duration_ms(t),
                 "memory_mb": int(usage.memory_mb) if usage.memory_mb else 0,
                 "memory_peak_mb": int(usage.memory_peak_mb) if usage.memory_peak_mb else 0,
@@ -1140,7 +1152,7 @@ def summary(ctx, job_id: str, json_output: bool) -> None:
     default=0,
     help="Maximum number of log lines to return (0 = server default, currently 1000).",
 )
-@click.option("--tail", is_flag=True, help="Return the most recent lines instead of the earliest.")
+@click.option("--tail/--no-tail", default=True, help="Return the most recent lines instead of the earliest.")
 @click.option(
     "--level",
     type=click.Choice(["debug", "info", "warning", "error", "critical"], case_sensitive=False),

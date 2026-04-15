@@ -29,20 +29,3 @@ def str_to_log_level(level_name: str) -> int:
         if level_name
         else logging_pb2.LOG_LEVEL_UNKNOWN
     )
-
-
-def log_level_to_str(level: int) -> str:
-    """Convert a LogLevel proto enum value to canonical level name.
-
-    Returns "" for LOG_LEVEL_UNKNOWN (0).
-    """
-    from iris.rpc import logging_pb2
-
-    _ENUM_TO_STR = {
-        logging_pb2.LOG_LEVEL_DEBUG: "DEBUG",
-        logging_pb2.LOG_LEVEL_INFO: "INFO",
-        logging_pb2.LOG_LEVEL_WARNING: "WARNING",
-        logging_pb2.LOG_LEVEL_ERROR: "ERROR",
-        logging_pb2.LOG_LEVEL_CRITICAL: "CRITICAL",
-    }
-    return _ENUM_TO_STR.get(level, "")

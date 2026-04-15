@@ -40,10 +40,11 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from iris.cluster.controller.actor_proxy import PROXY_ROUTE, ActorProxy
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, on_shutdown, static_files_mount
+from iris.log_server.client import LogServiceProxy
 from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.controller_connect import ControllerServiceWSGIApplication
-from iris.rpc.interceptors import RequestTimingInterceptor
+from iris.rpc.interceptors import ConcurrencyLimitInterceptor, RequestTimingInterceptor
 from iris.rpc.logging_connect import LogServiceWSGIApplication
 
 logger = logging.getLogger(__name__)
@@ -230,7 +231,7 @@ class ControllerDashboard:
     def __init__(
         self,
         service: ControllerServiceImpl,
-        log_service: LogServiceImpl,
+        log_service: LogServiceImpl | LogServiceProxy,
         host: str = "0.0.0.0",
         port: int = 8080,
         auth_verifier: TokenVerifier | None = None,
@@ -264,7 +265,15 @@ class ControllerDashboard:
             interceptors.insert(0, NullAuthInterceptor(verifier=self._auth_verifier))
         rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
 
-        log_wsgi_app = LogServiceWSGIApplication(service=self._log_service, interceptors=interceptors)
+        # PushLogs is kept on the controller as a forwarding proxy: older workers
+        # cached /system/log-server -> controller URL, so we must accept their
+        # pushes and forward them to the real log server. Forwarding happens
+        # transparently because self._log_service is a LogServiceProxy whose
+        # push_logs() calls the remote LogService over RPC.
+        # Cap concurrent FetchLogs RPCs to avoid evicting the page cache with
+        # parallel DuckDB scans. See duckdb_store.py for working-set caps.
+        log_interceptors = [*interceptors, ConcurrencyLimitInterceptor({"FetchLogs": 4})]
+        log_wsgi_app = LogServiceWSGIApplication(service=self._log_service, interceptors=log_interceptors)
         log_app = WSGIMiddleware(log_wsgi_app)
 
         # Backward-compat: old clients call ControllerService/FetchLogs (removed
@@ -455,6 +464,7 @@ class ProxyControllerDashboard:
             Route("/bundles/{bundle_id:str}.zip", self._proxy_bundle),
             Route("/blobs/{blob_id:str}", self._proxy_blob),
             Route("/health", self._health),
+            Route("/auth/{path:path}", self._proxy_auth),
             Route("/iris.cluster.ControllerService/{method}", self._proxy_rpc, methods=["POST"]),
             Route("/iris.logging.LogService/{method}", self._proxy_log_rpc, methods=["POST"]),
             static_files_mount(),
@@ -484,6 +494,20 @@ class ProxyControllerDashboard:
 
     def _health(self, _request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
+
+    async def _proxy_auth(self, request: Request) -> Response:
+        path = request.path_params["path"]
+        upstream_resp = await self._client.request(
+            request.method,
+            f"/auth/{path}",
+            content=await request.body() if request.method in ("POST", "PUT") else None,
+            headers={"content-type": request.headers.get("content-type", "application/json")},
+        )
+        return Response(
+            content=upstream_resp.content,
+            status_code=upstream_resp.status_code,
+            media_type=upstream_resp.headers.get("content-type"),
+        )
 
     async def _proxy_rpc(self, request: Request) -> Response:
         method = request.path_params["method"]

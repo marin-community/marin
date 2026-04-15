@@ -5,20 +5,19 @@
 """Benchmark Iris controller DB queries against a local checkpoint.
 
 Usage:
-    # Download a checkpoint
-    gsutil cp gs://<bucket>/<prefix>/controller-state/latest.sqlite3 ./controller.sqlite3
+    # Auto-download latest archive from the marin cluster and run all benchmarks
+    uv run python lib/iris/scripts/benchmark_db_queries.py
 
-    # Run all benchmarks
+    # Use a specific local checkpoint
     uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3
 
-    # Run specific benchmark group
-    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only scheduling
-    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only dashboard
-    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only heartbeat
+    # Re-download even if cached
+    uv run python lib/iris/scripts/benchmark_db_queries.py --fresh
 
-    # Compare with/without ANALYZE statistics
-    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only heartbeat
-    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only heartbeat --no-analyze
+    # Run specific benchmark group
+    uv run python lib/iris/scripts/benchmark_db_queries.py --only scheduling
+    uv run python lib/iris/scripts/benchmark_db_queries.py --only dashboard
+    uv run python lib/iris/scripts/benchmark_db_queries.py --only heartbeat
 """
 
 import shutil
@@ -31,6 +30,7 @@ from collections.abc import Callable
 
 import click
 
+from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     _building_counts,
     _find_reservation_ancestor,
@@ -49,6 +49,7 @@ from iris.cluster.controller.db import (
     tasks_for_job_with_attempts,
 )
 from iris.cluster.controller.schema import (
+    JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
 )
 from iris.cluster.controller.service import (
@@ -56,7 +57,6 @@ from iris.cluster.controller.service import (
     _descendant_jobs,
     _live_user_stats,
     _parent_ids_with_children,
-    _query_endpoints,
     _query_jobs,
     _read_job,
     _read_task_with_attempts,
@@ -85,6 +85,8 @@ _results: list[tuple[str, float, float, int]] = []
 # Tables needed for write-path benchmarks (queue_assignments, heartbeat, prune).
 _CLONE_TABLES = [
     "jobs",
+    "job_config",
+    "job_workdir_files",
     "tasks",
     "task_attempts",
     "workers",
@@ -373,7 +375,7 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         with db.read_snapshot() as q:
             return JOB_DETAIL_PROJECTION.decode(
                 q.fetchall(
-                    f"SELECT * FROM jobs WHERE state IN ({placeholders}) AND depth = 1",
+                    f"SELECT * FROM jobs j {JOB_CONFIG_JOIN} " f"WHERE j.state IN ({placeholders}) AND j.depth = 1",
                     (*USER_JOB_STATES,),
                 ),
             )
@@ -423,11 +425,11 @@ def benchmark_dashboard(db: ControllerDB) -> None:
 
     bench("_live_user_stats", lambda: _live_user_stats(db))
 
-    bench("_query_endpoints (all)", lambda: _query_endpoints(db))
+    bench("endpoint_registry.query (all)", lambda: db.endpoints.query())
 
     bench(
-        "_query_endpoints (prefix)",
-        lambda: _query_endpoints(db, EndpointQuery(name_prefix="test")),
+        "endpoint_registry.query (prefix)",
+        lambda: db.endpoints.query(EndpointQuery(name_prefix="test")),
     )
 
     bench("_transaction_actions", lambda: _transaction_actions(db))
@@ -635,8 +637,32 @@ def print_db_stats(db: ControllerDB) -> None:
     print(f"  DB stats: {', '.join(f'{t}={c}' for t, c in row_counts.items())}")
 
 
+MARIN_REMOTE_STATE_DIR = "gs://marin-us-central2/iris/marin/state"
+DEFAULT_DB_DIR = Path("/tmp/iris_benchmark")
+
+
+def _ensure_db(db_path: Path | None) -> Path:
+    """Download latest archive from the marin cluster if no local DB is provided."""
+    if db_path is not None:
+        return db_path
+
+    db_dir = DEFAULT_DB_DIR
+    db_file = db_dir / ControllerDB.DB_FILENAME
+    if db_file.exists():
+        print(f"Using cached DB at {db_file}")
+        return db_file
+
+    print(f"Downloading latest controller archive from {MARIN_REMOTE_STATE_DIR} ...")
+    db_dir.mkdir(parents=True, exist_ok=True)
+    ok = download_checkpoint_to_local(MARIN_REMOTE_STATE_DIR, db_dir)
+    if not ok:
+        raise click.ClickException("No checkpoint found in remote state dir")
+    print(f"Downloaded to {db_file}\n")
+    return db_file
+
+
 @click.command()
-@click.argument("db_path", type=click.Path(exists=True, path_type=Path))
+@click.argument("db_path", type=click.Path(exists=True, path_type=Path), required=False, default=None)
 @click.option(
     "--only",
     "only_group",
@@ -644,10 +670,17 @@ def print_db_stats(db: ControllerDB) -> None:
     help="Run only this group",
 )
 @click.option("--no-analyze", is_flag=True, help="Skip ANALYZE to test unoptimized query plans")
-def main(db_path: Path, only_group: str | None, no_analyze: bool) -> None:
+@click.option("--fresh", is_flag=True, help="Re-download the archive even if cached")
+def main(db_path: Path | None, only_group: str | None, no_analyze: bool, fresh: bool) -> None:
     """Benchmark Iris controller DB queries against a local checkpoint."""
     _results.clear()
 
+    if fresh and db_path is None:
+        cached = DEFAULT_DB_DIR / ControllerDB.DB_FILENAME
+        if cached.exists():
+            cached.unlink()
+
+    db_path = _ensure_db(db_path)
     db = ControllerDB(db_dir=db_path.parent)
     db.apply_migrations()
     if no_analyze:

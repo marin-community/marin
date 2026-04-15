@@ -24,10 +24,11 @@ import sys
 from datetime import datetime, timezone
 import threading
 import time
+import traceback
 import uuid
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -40,7 +41,7 @@ from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfi
 from fray.v2.client import JobHandle
 from fray.v2.types import Entrypoint, JobRequest
 from rigging.filesystem import marin_temp_bucket
-from rigging.timing import ExponentialBackoff
+from rigging.timing import ExponentialBackoff, log_time
 
 from zephyr.dataset import Dataset
 from zephyr.plan import (
@@ -53,7 +54,7 @@ from zephyr.plan import (
     StageType,
     compute_plan,
 )
-from zephyr.writers import ensure_parent_dir
+from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
@@ -170,16 +171,12 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
     exec_dir = f"{prefix}/{execution_id}"
     fs = url_to_fs(exec_dir)[0]
 
-    # TODO: use log_time util when possible
-    t_0 = time.monotonic()
-    if fs.exists(exec_dir):
-        try:
-            fs.rm(exec_dir, recursive=True)
-        except Exception as e:
-            logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
-        finally:
-            elapsed = time.monotonic() - t_0
-            logger.info(f"Cleaned up execution directory {exec_dir} in {elapsed:.1f}s")
+    with log_time(f"Cleaning up execution directory {exec_dir}"):
+        if fs.exists(exec_dir):
+            try:
+                fs.rm(exec_dir, recursive=True)
+            except Exception as e:
+                logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
 
 
 def _write_pickle_chunks(
@@ -191,8 +188,7 @@ def _write_pickle_chunks(
 
     Returns a ListShard containing PickleDiskChunk references.
     """
-    # TODO: make chunk_size configurable per writer
-    chunk_size = 100_000
+    chunk_size = INTERMEDIATE_CHUNK_SIZE
     chunks: list[Iterable] = []
     batch: list = []
     pidx = 0
@@ -517,7 +513,8 @@ class ZephyrCoordinator:
             dead,
         )
         if retried:
-            logger.warning("[%s] Shards retried (shard: attempts): %s", self._execution_id, retried)
+            attempts_histogram = dict(sorted(Counter(retried.values()).items()))
+            logger.warning("[%s] Shards retried (attempts: shard count): %s", self._execution_id, attempts_histogram)
 
     def _record_shard_failure(self, worker_id: str, error_info: str | None = None) -> bool:
         """Record a failure for the worker's in-flight shard. Must be called with lock held.
@@ -891,9 +888,6 @@ class ZephyrCoordinator:
             for items in materialized:
                 flat_result.extend(items)
 
-            # Signal workers to shut down now that all stages are complete.
-            self.shutdown()
-
             return flat_result
         finally:
             with self._lock:
@@ -1195,8 +1189,6 @@ class ZephyrWorker:
                 task_count += 1
             except Exception as e:
                 logger.error("Worker %s error on shard %d: %s", self._worker_id, task.shard_idx, e)
-                import traceback
-
                 coordinator.report_error.remote(
                     self._worker_id,
                     task.shard_idx,
@@ -1343,6 +1335,25 @@ def _regroup_result_refs(
 
 
 @dataclass(frozen=True)
+class ZephyrExecutionResult:
+    """Result of running a Zephyr pipeline.
+
+    This is also the wire format pickled by ``_run_coordinator_job`` into the
+    result file, so callers of ``ZephyrContext.execute`` receive it as-is.
+
+    Attributes:
+        results: Flat list of items produced by the terminal stage of the
+            pipeline (e.g. output file paths for write stages).
+        counters: Aggregated counter values from the run, including built-in
+            zephyr counters (e.g. ``zephyr/records_in``) and any user counters
+            recorded via ``zephyr.counters.increment``.
+    """
+
+    results: list
+    counters: dict[str, int]
+
+
+@dataclass(frozen=True)
 class _CoordinatorJobConfig:
     """Serializable config for the coordinator job entrypoint."""
 
@@ -1424,10 +1435,12 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
 
     try:
         results = coordinator.run_pipeline.submit(config.plan, config.execution_id).result()
+        counters = coordinator.get_counters.remote().result(timeout=10.0) or {}
+        payload = ZephyrExecutionResult(results=results, counters=counters)
 
         ensure_parent_dir(result_path)
         with open_url(result_path, "wb") as f:
-            f.write(cloudpickle.dumps(results))
+            f.write(cloudpickle.dumps(payload))
     except Exception as e:
         # Persist the exception so the caller can recover the original type
         # (important for non-retryable error detection).
@@ -1575,7 +1588,7 @@ class ZephyrContext:
         dataset: Dataset,
         verbose: bool = False,
         dry_run: bool = False,
-    ) -> Sequence:
+    ) -> ZephyrExecutionResult:
         """Execute a dataset pipeline.
 
         Submits a coordinator *job* that creates coordinator and worker
@@ -1583,12 +1596,19 @@ class ZephyrContext:
         disk. If the coordinator job dies (e.g., VM preemption), the
         pipeline is retried up to ``max_execution_retries`` times.
         Application errors (``ZephyrWorkerError``) are never retried.
+
+        Returns:
+            A ``ZephyrExecutionResult`` containing the flat list of results
+            produced by the terminal stage and the aggregated counters from
+            the run. Callers that only care about the results should access
+            ``.results``; counters are exposed for callers that want to
+            persist or surface them.
         """
         plan = compute_plan(dataset)
         if verbose or dry_run:
             _print_plan(dataset.operations, plan)
         if dry_run:
-            return []
+            return ZephyrExecutionResult(results=[], counters={})
 
         # NOTE: pipeline ID incremented on clean completion only
         self._pipeline_id += 1
@@ -1648,10 +1668,10 @@ class ZephyrContext:
 
                 # Read results written by the coordinator job.
                 # This must succeed — the job completed successfully.
-                result = _read_coordinator_result(result_path)
-                if isinstance(result, Exception):
-                    raise result
-                return result
+                payload = _read_coordinator_result(result_path)
+                if isinstance(payload, Exception):
+                    raise payload
+                return payload
 
             except _NON_RETRYABLE_ERRORS:
                 raise

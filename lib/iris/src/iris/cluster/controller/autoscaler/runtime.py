@@ -23,6 +23,7 @@ import logging
 from collections import deque
 from collections.abc import Sequence
 
+from iris.cluster.constraints import Constraint, WellKnownAttribute
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import (
     CloudSliceState,
@@ -30,7 +31,6 @@ from iris.cluster.providers.types import (
     RemoteWorkerHandle,
     SliceHandle,
 )
-from iris.cluster.constraints import ConstraintIndex, routing_constraints
 from iris.cluster.controller.autoscaler.models import (
     DemandEntry,
     ScalingAction,
@@ -45,7 +45,7 @@ from iris.cluster.controller.autoscaler.recovery import (
     load_autoscaler_checkpoint,
     restore_autoscaler_state,
 )
-from iris.cluster.controller.autoscaler.routing import route_demand
+from iris.cluster.controller.autoscaler.routing import job_feasibility, route_demand
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.autoscaler.status import routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
@@ -53,7 +53,6 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.types import WorkerStatusMap
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2, vm_pb2
-from iris.rpc import job_pb2
 from iris.time_proto import duration_from_proto, timestamp_to_proto
 from rigging.timing import Duration, Timestamp
 
@@ -380,6 +379,14 @@ class Autoscaler:
             for k, v in group.config.worker.attributes.items():
                 wc.worker_attributes[k] = v
 
+        region = group.region
+        if region and not wc.worker_attributes.get(WellKnownAttribute.REGION):
+            wc.worker_attributes[WellKnownAttribute.REGION] = region
+
+        zone = group.zone
+        if zone and not wc.worker_attributes.get(WellKnownAttribute.ZONE):
+            wc.worker_attributes[WellKnownAttribute.ZONE] = zone
+
         if group.config.name:
             wc.worker_attributes["scale-group"] = group.config.name
 
@@ -530,41 +537,23 @@ class Autoscaler:
         """Get bootstrap log for a VM by platform worker ID."""
         return self._worker_registry.init_log(vm_id, tail)
 
-    def check_coscheduling_feasibility(
+    def job_feasibility(
         self,
-        replicas: int,
-        constraints: list[job_pb2.Constraint],
+        constraints: list[Constraint],
+        *,
+        replicas: int | None = None,
     ) -> str | None:
-        """Check if a coscheduled job with the given replicas can ever be scheduled.
+        """Gate LaunchJob: can this job shape ever be scheduled?
 
-        A coscheduled job is feasible when its replica count is an exact multiple of
-        some matching group's num_vms (e.g. 4 VMs can serve 4, 8, 12, ... replicas).
+        Returns None if some scaling group can, in principle, host the job
+        (autoscaler may still need to scale up); otherwise a human-readable
+        reason suitable for returning to the caller.
 
-        Returns None if feasible, or a human-readable error message if no scaling
-        group can accommodate the replica count.
+        `replicas` applies only to coscheduled jobs — None skips the
+        num_vms-divisibility check.
         """
-        groups = list(self._groups.values())
-        if not groups:
-            return None
-
-        group_attrs = {g.name: g.to_attributes() for g in groups}
-        group_index = ConstraintIndex.build(group_attrs)
-        routing_cs = routing_constraints(constraints)
-        matching_names = group_index.matching_entities(routing_cs)
-        matching_groups = [g for g in groups if g.name in matching_names]
-
-        if not matching_groups:
-            return f"no scaling group matches the job constraints; " f"available groups: {[g.name for g in groups]}"
-
-        if any(replicas % g.num_vms == 0 for g in matching_groups):
-            return None
-
-        group_sizes = {g.name: g.num_vms for g in matching_groups}
-        return (
-            f"job requires {replicas} coscheduled replicas but no matching scaling group "
-            f"has a compatible size (replicas must be an exact multiple of num_vms); "
-            f"matching group sizes: {group_sizes}"
-        )
+        result = job_feasibility(self._groups.values(), constraints, replicas=replicas)
+        return result.reason
 
     def get_status(self) -> vm_pb2.AutoscalerStatus:
         """Build status for the status API."""

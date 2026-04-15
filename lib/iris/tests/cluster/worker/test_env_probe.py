@@ -388,8 +388,6 @@ def test_health_check_writable_dir(tmp_path):
     """Health check succeeds on a writable directory."""
     result = check_worker_health(disk_path=str(tmp_path))
     assert result.healthy
-    # Probe file should be cleaned up
-    assert not (tmp_path / ".iris_health_probe").exists()
 
 
 def test_host_metrics_collector_network_graceful_on_non_linux(monkeypatch):

@@ -325,6 +325,10 @@ class ResourceConfig:
     convenience builders like `with_tpu(..., slice_count=4)` can carry the
     replica count alongside the resource spec.
 
+    `image` is an optional override for the task container image. When None,
+    the backend uses its cluster-configured default. Used for jobs that need
+    a custom runtime (e.g. an image with runsc/skopeo for sandboxing
+    untrusted child workloads).
     """
 
     cpu: float = 1
@@ -336,6 +340,7 @@ class ResourceConfig:
     zone: str | None = None
     replicas: int = 1
     device_alternatives: Sequence[str] | None = None
+    image: str | None = None
 
     def chip_count(self) -> int:
         """Total accelerator chips across all replicas."""

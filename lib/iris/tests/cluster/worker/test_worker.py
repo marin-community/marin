@@ -346,12 +346,12 @@ def test_duplicate_attempt_rejected(mock_worker, mock_runtime):
     task.thread.join(timeout=15.0)
 
 
-def test_heartbeat_kill_is_non_blocking(mock_worker, mock_runtime):
-    """Heartbeat returns immediately when killing tasks, without waiting for container shutdown."""
+def test_heartbeat_kill_blocks_until_stopped(mock_worker, mock_runtime):
+    """Heartbeat blocks on tasks_to_kill so the old task releases resources before returning."""
     mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
 
     def slow_stop(force=False):
-        time.sleep(0.5)
+        time.sleep(0.3)
 
     mock_handle.stop_hook = slow_stop
     mock_runtime.create_container = Mock(return_value=mock_handle)
@@ -376,17 +376,12 @@ def test_heartbeat_kill_is_non_blocking(mock_worker, mock_runtime):
 
     response = mock_worker.handle_heartbeat(heartbeat_req)
 
-    # should_stop is set synchronously by the heartbeat before the async stop() runs
     assert task.should_stop is True
-    # The task is not yet KILLED because slow_stop is async — confirms kill is non-blocking
-    assert task.status != job_pb2.TASK_STATE_KILLED
+    # The task is KILLED by the time handle_heartbeat returns — kill is blocking
+    assert task.status == job_pb2.TASK_STATE_KILLED
 
     # The response should still include the task's current state
     assert len(response.tasks) >= 1
-
-    # Wait for the task to finish
-    task.thread.join(timeout=15.0)
-    assert task.status == job_pb2.TASK_STATE_KILLED
 
 
 def test_heartbeat_reconciliation_kill_is_non_blocking(mock_worker, mock_runtime):
@@ -502,6 +497,48 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     assert env["JOB_ONLY"] == "from_job"
     # Iris system vars are always injected.
     assert "IRIS_TASK_ID" in env
+
+
+def test_task_image_override_uses_request_value(mock_bundle_store, mock_runtime, tmp_path):
+    """Per-task task_image overrides the worker's default_task_image."""
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        poll_interval=Duration.from_seconds(0.1),
+        cache_dir=tmp_path / "cache",
+        default_task_image="default/cluster-image:latest",
+    )
+    w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
+
+    request = create_run_task_request(task_image="custom/swetrace:dev")
+    task_id = w.submit_task(request)
+    task = w.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    assert mock_runtime.create_container.called
+    container_config = mock_runtime.create_container.call_args[0][0]
+    assert container_config.image == "custom/swetrace:dev"
+
+
+def test_task_image_default_used_when_override_empty(mock_bundle_store, mock_runtime, tmp_path):
+    """Empty task_image falls back to the cluster default."""
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        poll_interval=Duration.from_seconds(0.1),
+        cache_dir=tmp_path / "cache",
+        default_task_image="default/cluster-image:latest",
+    )
+    w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
+
+    request = create_run_task_request()  # task_image="" by default
+    task_id = w.submit_task(request)
+    task = w.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    assert mock_runtime.create_container.called
+    container_config = mock_runtime.create_container.call_args[0][0]
+    assert container_config.image == "default/cluster-image:latest"
 
 
 def test_port_binding_failure(mock_bundle_store, tmp_path):

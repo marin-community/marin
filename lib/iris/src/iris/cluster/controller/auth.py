@@ -169,6 +169,11 @@ class JwtTokenManager:
         # Tracks the last wall-clock time we wrote last_used_at per jti.
         self._last_touched: dict[str, float] = {}
 
+    @property
+    def signing_key(self) -> str:
+        """HMAC secret used to sign and verify JWTs. Do not log or serialize."""
+        return self._signing_key
+
     def create_token(
         self,
         user_id: str,

@@ -7,11 +7,13 @@ Runs against the FineWeb-Edu ``sample/10BT`` subset using the StepSpec DAG runne
 Output paths are placed under ``$MARIN_PREFIX/datakit-smoke/$SMOKE_RUN_ID/...``.
 """
 
+import json
 import logging
 import os
 
-from rigging.filesystem import marin_temp_bucket
+from rigging.filesystem import marin_temp_bucket, url_to_fs
 from rigging.log_setup import configure_logging
+from rigging.timing import log_time
 
 from fray import ResourceConfig
 from marin.datakit.download.huggingface import download_hf_step
@@ -19,7 +21,6 @@ from marin.datakit.normalize import normalize_step
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import (
-    ConsolidateConfig,
     FilterConfig,
     FilterType,
     consolidate,
@@ -54,6 +55,8 @@ def build_steps(run_id: str) -> list[StepSpec]:
     )
 
     # Dedup peaked at ~5 GB mem (default 32g is 6x over), 22 GB disk (default 5g).
+    # max_parallelism=128: 10BT has only 106 normalized shards — 1024 created
+    # ~900 empty reduce shards and massive scheduling overhead.
     deduped = StepSpec(
         name="datakit-smoke/dedup_fuzzy_document",
         deps=[normalized],
@@ -61,7 +64,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         fn=lambda output_path: dedup_fuzzy_document(
             input_paths=normalized.output_path,
             output_path=output_path,
-            max_parallelism=1024,
+            max_parallelism=128,
             cc_max_iterations=3,
             worker_resources=ResourceConfig(cpu=5, ram="16g", disk="30g"),
         ),
@@ -72,21 +75,19 @@ def build_steps(run_id: str) -> list[StepSpec]:
         name="datakit-smoke/consolidate",
         deps=[normalized, deduped],
         fn=lambda output_path: consolidate(
-            ConsolidateConfig(
-                input_path=normalized.output_path,
-                output_path=output_path,
-                filetype="parquet",
-                filters=[
-                    FilterConfig(
-                        type=FilterType.REMOVE_DOC,
-                        attribute_path=f"{deduped.output_path}/data",
-                        name="dup_doc",
-                        attribute_filetype="parquet",
-                        keep_if_missing=True,
-                    ),
-                ],
-                worker_resources=ResourceConfig(cpu=1, ram="8g"),
-            )
+            input_path=normalized.output_path,
+            output_path=output_path,
+            filetype="parquet",
+            filters=[
+                FilterConfig(
+                    type=FilterType.REMOVE_DOC,
+                    attribute_path=f"{deduped.output_path}/data",
+                    name="dup_doc",
+                    attribute_filetype="parquet",
+                    keep_if_missing=True,
+                ),
+            ],
+            worker_resources=ResourceConfig(cpu=1, ram="8g"),
         ),
         override_output_path=f"{base}/consolidate",
     )
@@ -109,14 +110,31 @@ def build_steps(run_id: str) -> list[StepSpec]:
     return [downloaded, normalized, deduped, consolidated, tokenized]
 
 
+def _write_status(status: str, marin_prefix: str) -> None:
+    """Write ferry run status to FERRY_STATUS_PATH if set."""
+    status_path = os.environ.get("FERRY_STATUS_PATH")
+    if not status_path:
+        return
+    payload = json.dumps({"status": status, "marin_prefix": marin_prefix})
+    fs, _ = url_to_fs(status_path)
+    with fs.open(status_path, "w") as f:
+        f.write(payload)
+    logger.info("Wrote ferry status to %s", status_path)
+
+
 def main() -> None:
     configure_logging()
     if not os.environ.get("MARIN_PREFIX"):
         os.environ["MARIN_PREFIX"] = marin_temp_bucket(ttl_days=1)
 
-    logger.info("MARIN_PREFIX defaulted to %s", os.environ["MARIN_PREFIX"])
+    marin_prefix = os.environ["MARIN_PREFIX"]
+    logger.info("MARIN_PREFIX defaulted to %s", marin_prefix)
     run_id = os.environ["SMOKE_RUN_ID"]
-    StepRunner().run(build_steps(run_id))
+
+    _write_status("running", marin_prefix)
+    with log_time("Datakit ferry total wall time"):
+        StepRunner().run(build_steps(run_id))
+    _write_status("succeeded", marin_prefix)
 
 
 if __name__ == "__main__":

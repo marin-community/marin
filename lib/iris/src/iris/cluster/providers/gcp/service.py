@@ -39,10 +39,12 @@ KNOWN_GCP_ZONES: frozenset[str] = frozenset(
         "us-central1-c",
         "us-central1-f",
         "us-central2-b",
+        "us-east1-b",
         "us-east1-d",
         "us-east5-a",
         "us-east5-b",
         "us-east5-c",
+        "us-west1-a",
         "us-west1-c",
         "us-west4-a",
         "us-south1-a",
@@ -77,6 +79,11 @@ _REFRESH_MARGIN = 300  # seconds before expiry to refresh token
 _DEFAULT_TIMEOUT = 120  # seconds
 _OPERATION_POLL_INTERVAL = 2  # seconds between operation status polls
 _OPERATION_TIMEOUT = 600  # seconds to wait for an operation to complete
+
+# google.rpc.Code value for RESOURCE_EXHAUSTED. Used to classify LRO failures
+# where the initial HTTP response was 200 but the async operation ended with a
+# quota/stockout error (e.g. "no more capacity in the zone").
+_RPC_CODE_RESOURCE_EXHAUSTED = 8
 
 
 # ============================================================================
@@ -498,6 +505,13 @@ class CloudGcpService:
                 if "error" in data:
                     error = data["error"]
                     msg = error.get("message", str(error))
+                    # Zone stockouts ("no more capacity in the zone ...") come
+                    # back as RESOURCE_EXHAUSTED on the LRO rather than on the
+                    # initial HTTP response. Surface them as QuotaExhaustedError
+                    # so the autoscaler treats them like any other quota hit
+                    # (terse warning + backoff, no stack trace).
+                    if error.get("code") == _RPC_CODE_RESOURCE_EXHAUSTED:
+                        raise QuotaExhaustedError(msg)
                     raise InfraError(f"TPU operation failed: {msg}")
                 return data
             if time.monotonic() >= deadline:
@@ -677,7 +691,9 @@ class CloudGcpService:
         logger.info("Deleting queued resource (force): %s", name)
         qr_name = f"projects/{self._project_id}/locations/{zone}/queuedResources/{name}"
         try:
-            self._tpu_alpha_client.delete_queued_resource(name=qr_name, force=True)
+            self._tpu_alpha_client.delete_queued_resource(
+                request=tpu_v2alpha1.DeleteQueuedResourceRequest(name=qr_name, force=True)
+            )
         except google.api_core.exceptions.NotFound:
             pass
         except google.api_core.exceptions.GoogleAPICallError as exc:

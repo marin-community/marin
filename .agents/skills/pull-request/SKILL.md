@@ -85,6 +85,11 @@ A specification contains:
 
 ## Creating the PR
 
+Unless the user says otherwise, and when permissions allow, push directly to a
+branch on the main repository and open the PR from that branch. Do not default
+to pushing to a fork. Use a fork only when direct push to the main repository
+is not available or the user explicitly asks for it.
+
 Use `gh pr create` with these flags:
 
 ```bash

@@ -21,14 +21,21 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
     AttributeValue,
     Constraint,
+    ConstraintOp,
     PlacementRequirements,
     WellKnownAttribute,
     constraints_from_resources,
     evaluate_constraint,
     extract_placement_requirements,
     merge_constraints,
+    region_constraint as make_region_constraint,
 )
 from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.codec import (
+    constraints_from_json,
+    reservation_entries_from_json,
+    resource_spec_from_scalars,
+)
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.checkpoint import (
     CheckpointResult,
@@ -40,7 +47,6 @@ from iris.cluster.controller.db import (
     ControllerDB,
     healthy_active_workers_with_attributes,
     insert_task_profile,
-    job_is_finished,
     job_scheduling_deadline,
     running_tasks_by_worker,
     task_row_can_be_scheduled,
@@ -48,18 +54,19 @@ from iris.cluster.controller.db import (
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
+    JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
     JOB_SCHEDULING_PROJECTION,
     TASK_DETAIL_PROJECTION,
     TASK_ROW_PROJECTION,
     WORKER_DETAIL_PROJECTION,
     JobDetailRow,
+    JobRow,
     JobSchedulingRow,
     TaskDetailRow,
     TaskRow,
     WorkerDetailRow,
     WorkerRow,
-    proto_cache,
     proto_decoder,
     tasks_with_attempts,
 )
@@ -96,8 +103,12 @@ from iris.cluster.controller.transitions import (
     ReservationClaim,
     SchedulingEvent,
 )
-from iris.cluster.log_store import CONTROLLER_LOG_KEY, LogStoreHandler
+from iris.cluster.log_store import CONTROLLER_LOG_KEY
+from iris.cluster.providers.types import find_free_port, resolve_external_host
+from iris.log_server.client import LogPusher, LogServiceProxy, RemoteLogHandler
+from iris.log_server.main import build_log_server_asgi
 from iris.log_server.server import LogServiceImpl
+from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider
 from iris.cluster.types import (
     JobName,
     WorkerStatus,
@@ -105,10 +116,10 @@ from iris.cluster.types import (
     WorkerId,
     get_gpu_count,
     get_tpu_count,
+    is_job_finished,
 )
 from rigging.log_setup import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import logging_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from iris.rpc.auth import TokenVerifier
@@ -126,21 +137,6 @@ _SLOW_HEARTBEAT_MS = 5000
 # How often the prune loop trims worker_task_history (independent of the
 # full data-prune interval, which is typically 1 hour).
 _HISTORY_CLEANUP_INTERVAL_S = 60.0
-
-
-class _InProcessLogPusher:
-    """Adapts LogServiceImpl to the LogPusherProtocol for in-process use.
-
-    Avoids a network round-trip when the K8s provider is co-hosted with
-    the controller: calls push_logs() directly on the service impl.
-    """
-
-    def __init__(self, log_service: LogServiceImpl) -> None:
-        self._log_service = log_service
-
-    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-        if entries:
-            self._log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries), ctx=None)
 
 
 class SchedulingOutcome(enum.Enum):
@@ -224,11 +220,18 @@ class _SchedulingOrder:
     user_budget_limits: dict[str, int]
 
 
+def _resource_spec_from_row(job: JobRow | JobSchedulingRow) -> job_pb2.ResourceSpecProto:
+    """Reconstruct a ResourceSpecProto from native job columns."""
+    return resource_spec_from_scalars(
+        job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
+    )
+
+
 def job_requirements_from_job(job: JobSchedulingRow) -> JobRequirements:
     """Convert a job row to scheduler-compatible JobRequirements."""
     return JobRequirements(
-        resources=job.resources or job_pb2.ResourceSpecProto(),
-        constraints=job.constraints,
+        resources=_resource_spec_from_row(job),
+        constraints=constraints_from_json(job.constraints_json),
         is_coscheduled=job.has_coscheduling,
         coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
     )
@@ -329,11 +332,11 @@ def compute_demand_entries(
         job = jobs_by_id.get(job_id)
         if not job:
             continue
-        if job_is_finished(job.state):
+        if is_job_finished(job.state):
             continue
 
-        job_constraints = job.constraints
-        job_resources = job.resources or job_pb2.ResourceSpecProto()
+        job_constraints = constraints_from_json(job.constraints_json)
+        job_resources = _resource_spec_from_row(job)
 
         invalid_reason: str | None = None
         try:
@@ -408,7 +411,8 @@ def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, J
     with queries.read_snapshot() as snapshot:
         jobs = JOB_SCHEDULING_PROJECTION.decode(
             snapshot.fetchall(
-                f"SELECT {JOB_SCHEDULING_PROJECTION.select_clause()} FROM jobs j WHERE j.job_id IN ({placeholders})",
+                f"SELECT {JOB_SCHEDULING_PROJECTION.select_clause()} "
+                f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id IN ({placeholders})",
                 tuple(wires),
             ),
         )
@@ -418,13 +422,14 @@ def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, J
 def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[JobDetailRow]:
     """Fetch only jobs that have reservations, filtering at the SQL level.
 
-    Uses the denormalized has_reservation column to avoid deserializing
-    request_proto for all active jobs.
+    Uses the has_reservation column on the jobs table to filter without a JOIN.
     """
     placeholders = ",".join("?" for _ in states)
     with queries.read_snapshot() as snapshot:
         rows = snapshot._fetchall(
-            f"SELECT * FROM jobs WHERE state IN ({placeholders}) AND has_reservation = 1",
+            f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} "
+            f"FROM jobs j {JOB_CONFIG_JOIN} "
+            f"WHERE j.state IN ({placeholders}) AND j.has_reservation = 1",
             list(states),
         )
     return JOB_DETAIL_PROJECTION.decode(rows)
@@ -445,9 +450,10 @@ def _get_running_tasks_with_band_and_value(
     with db.read_snapshot() as q:
         rows = q.raw(
             "SELECT t.task_id, t.priority_band, t.current_worker_id AS worker_id, "
-            "j.resources_proto, j.has_coscheduling "
+            "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, "
+            "jc.has_coscheduling "
             "FROM tasks t "
-            "JOIN jobs j ON j.job_id = t.job_id "
+            "JOIN job_config jc ON jc.job_id = t.job_id "
             "WHERE t.state = ? AND t.current_worker_id IS NOT NULL",
             (job_pb2.TASK_STATE_RUNNING,),
             decoders={
@@ -463,7 +469,12 @@ def _get_running_tasks_with_band_and_value(
         wid = row.worker_id
         if wid in claimed_workers:
             continue
-        resources = proto_cache.get_or_decode(row.resources_proto, _RESOURCE_SPEC_DECODER)
+        resources = resource_spec_from_scalars(
+            row.res_cpu_millicores,
+            row.res_memory_bytes,
+            row.res_disk_bytes,
+            row.res_device_json,
+        )
         band = compute_effective_band(row.priority_band, row.task_id.user, _spend, _limits)
         result.append(
             RunningTaskInfo(
@@ -568,14 +579,16 @@ def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -
     with queries.read_snapshot() as snapshot:
         tasks = TASK_DETAIL_PROJECTION.decode(
             snapshot.fetchall(
-                f"SELECT * FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
+                f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} "
+                f"FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
                 tuple(task_wires),
             ),
         )
         attempts = ATTEMPT_PROJECTION.decode(
             snapshot.fetchall(
-                f"SELECT * FROM task_attempts a WHERE a.task_id IN ({placeholders}) "
-                "ORDER BY a.task_id ASC, a.attempt_id ASC",
+                f"SELECT {ATTEMPT_PROJECTION.select_clause()} FROM task_attempts ta "
+                f"WHERE ta.task_id IN ({placeholders}) "
+                "ORDER BY ta.task_id ASC, ta.attempt_id ASC",
                 tuple(task_wires),
             ),
         )
@@ -612,7 +625,11 @@ def _workers_by_id(queries: ControllerDB, worker_ids: set[WorkerId]) -> dict[Wor
     placeholders = ",".join("?" for _ in wires)
     with queries.read_snapshot() as snapshot:
         workers = WORKER_DETAIL_PROJECTION.decode(
-            snapshot.fetchall(f"SELECT * FROM workers w WHERE w.worker_id IN ({placeholders})", tuple(wires)),
+            snapshot.fetchall(
+                f"SELECT {WORKER_DETAIL_PROJECTION.select_clause()} "
+                f"FROM workers w WHERE w.worker_id IN ({placeholders})",
+                tuple(wires),
+            ),
         )
     return {worker.worker_id: worker for worker in workers}
 
@@ -646,8 +663,7 @@ def _worker_matches_reservation_entry(
     explicit = [Constraint.from_proto(c) for c in res_entry.constraints]
     merged = merge_constraints(auto, explicit)
 
-    merged_protos = [c.to_proto() for c in merged]
-    for constraint in merged_protos:
+    for constraint in merged:
         attr = worker.attributes.get(constraint.key)
         if not evaluate_constraint(attr, constraint):
             return False
@@ -705,18 +721,15 @@ def _inject_taint_constraints(
     if has_direct_reservation is None:
         has_direct_reservation = set()
 
-    taint_constraint = job_pb2.Constraint(
-        key=RESERVATION_TAINT_KEY,
-        op=job_pb2.CONSTRAINT_OP_NOT_EXISTS,
-    )
+    taint_constraint = Constraint(key=RESERVATION_TAINT_KEY, op=ConstraintOp.NOT_EXISTS)
 
     modified: dict[JobName, JobRequirements] = {}
     for job_id, req in jobs.items():
         if job_id in has_direct_reservation:
-            eq_constraint = job_pb2.Constraint(
+            eq_constraint = Constraint.create(
                 key=RESERVATION_TAINT_KEY,
-                op=job_pb2.CONSTRAINT_OP_EQ,
-                value=job_pb2.AttributeValue(string_value=job_id.to_wire()),
+                op=ConstraintOp.EQ,
+                value=job_id.to_wire(),
             )
             modified[job_id] = replace(
                 req,
@@ -736,7 +749,7 @@ def _find_reservation_ancestor(queries: ControllerDB, job_id: JobName) -> JobNam
     """Walk up the job hierarchy to find the nearest ancestor with a reservation.
 
     Returns the ancestor's JobName, or None if no ancestor has a reservation.
-    Uses the denormalized has_reservation column to avoid decoding request_proto.
+    Uses the has_reservation column on the jobs table.
     """
     current = job_id.parent
     with queries.read_snapshot() as q:
@@ -755,8 +768,8 @@ def _reservation_region_constraints(
     job_id_wire: str,
     claims: dict[WorkerId, ReservationClaim],
     queries: ControllerDB,
-    existing_constraints: list[job_pb2.Constraint],
-) -> list[job_pb2.Constraint]:
+    existing_constraints: list[Constraint],
+) -> list[Constraint]:
     """Derive region constraints from claimed reservation workers.
 
     When a reservation job has no explicit region constraint, this function
@@ -785,21 +798,7 @@ def _reservation_region_constraints(
     if not regions:
         return existing_constraints
 
-    region_list = sorted(regions)
-    if len(region_list) == 1:
-        region_constraint = job_pb2.Constraint(
-            key=WellKnownAttribute.REGION,
-            op=job_pb2.CONSTRAINT_OP_EQ,
-            value=job_pb2.AttributeValue(string_value=region_list[0]),
-        )
-    else:
-        region_constraint = job_pb2.Constraint(
-            key=WellKnownAttribute.REGION,
-            op=job_pb2.CONSTRAINT_OP_IN,
-            values=[job_pb2.AttributeValue(string_value=r) for r in region_list],
-        )
-
-    return [*existing_constraints, region_constraint]
+    return [*existing_constraints, make_region_constraint(sorted(regions))]
 
 
 def _preference_pass(
@@ -955,6 +954,26 @@ class ControllerConfig:
     user_budget_defaults: UserBudgetDefaults = field(default_factory=UserBudgetDefaults)
     """Default budget settings applied when a new user is first seen."""
 
+    log_service_address: str | None = None
+    """Address of an externally-hosted log server (e.g. http://localhost:10001).
+    When set, the controller connects to the existing server. When None,
+    the Controller starts an in-process LogServiceImpl on a free port.
+    Either way, all controller code accesses the log server via RPC clients."""
+
+
+def _log_client_interceptors(config: "ControllerConfig") -> tuple:
+    """Return Connect interceptors for controller-originated LogService RPCs.
+
+    When auth is configured, attach the worker JWT as a bearer token so the
+    log server accepts PushLogs/FetchLogs. The worker token is signed with
+    the same key the log server verifies against; no separate admin token
+    is required for controller-initiated pushes.
+    """
+    token = config.auth.worker_token if config.auth and config.auth.worker_token else None
+    if not token:
+        return ()
+    return (AuthTokenInjector(StaticTokenProvider(token)),)
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -1018,21 +1037,39 @@ class Controller:
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
 
-        self._log_service = LogServiceImpl(
-            log_dir=config.local_state_dir / "logs",
-            remote_log_dir=f"{config.remote_state_dir.rstrip('/')}/logs",
-        )
+        # ThreadContainer must be initialized before the log service setup
+        # because _start_local_log_server spawns a uvicorn thread.
+        self._threads = threads if threads is not None else get_thread_container()
 
-        # Wire an in-process log pusher into providers so log entries are
-        # forwarded through the LogService without a network hop.
-        # - K8sTaskProvider: its LogCollector pushes logs directly.
-        # - WorkerProvider: forwards log_entries piggybacked on heartbeat
-        #   responses from old workers that predate push-based logging.
-        in_process_log_pusher = _InProcessLogPusher(self._log_service)
-        if isinstance(self._provider, K8sTaskProvider):
-            self._provider.log_pusher = in_process_log_pusher
-        elif isinstance(self._provider, WorkerProvider):
-            self._provider.log_pusher = in_process_log_pusher
+        # --- Log service setup ---
+        # The log server is always accessed via RPC. In production the
+        # controller's main() starts a subprocess; in tests/local mode
+        # the Controller spins up an in-process uvicorn thread. After the
+        # server is running, all access goes through RPC clients — no
+        # branching on hosting mode.
+        self._log_service: LogServiceImpl | None = None
+        self._log_server: uvicorn.Server | None = None
+
+        if config.log_service_address:
+            self._log_service_address = config.log_service_address
+        else:
+            self._log_service_address = self._start_local_log_server()
+
+        log_client_interceptors = _log_client_interceptors(config)
+        self._remote_log_service = LogServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
+
+        # Providers push directly to the log server via RPC.
+        provider_log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
+        if isinstance(self._provider, (K8sTaskProvider, WorkerProvider)):
+            self._provider.log_pusher = provider_log_pusher
+
+        # Controller process logs ship to the log server via RemoteLogHandler.
+        self._log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
+        self._log_handler = RemoteLogHandler(self._log_pusher, key=CONTROLLER_LOG_KEY)
+
+        self._log_handler.setLevel(logging.DEBUG)
+        self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+        logging.getLogger("iris").addHandler(self._log_handler)
 
         self._transitions = ControllerTransitions(
             db=self._db,
@@ -1048,13 +1085,13 @@ class Controller:
             self._db,
             controller=self,
             bundle_store=self._bundle_store,
-            log_service=self._log_service,
+            log_service=self._remote_log_service,
             auth=config.auth,
             system_endpoints={},
         )
         self._dashboard = ControllerDashboard(
             self._service,
-            log_service=self._log_service,
+            log_service=self._remote_log_service,
             host=config.host,
             port=config.port,
             auth_verifier=config.auth_verifier,
@@ -1062,15 +1099,7 @@ class Controller:
             auth_optional=config.auth.optional if config.auth else False,
         )
 
-        # Ingest controller process logs into the LogStore via LogStoreHandler.
-        # This writes directly to the co-hosted LogStore (no RPC round-trip).
-        self._log_store_handler = LogStoreHandler(self._log_service.log_store, key=CONTROLLER_LOG_KEY)
-        self._log_store_handler.setLevel(logging.DEBUG)
-        self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
-        logging.getLogger("iris").addHandler(self._log_store_handler)
-
         # Background loop state
-        self._threads = threads if threads is not None else get_thread_container()
         self._wake_event = threading.Event()
         self._heartbeat_event = threading.Event()
         self._server: uvicorn.Server | None = None
@@ -1128,11 +1157,48 @@ class Controller:
         """Whether the controller loops have been started."""
         return self._started
 
+    def _start_local_log_server(self) -> str:
+        """Start an in-process log server on a free port and return its address.
+
+        Used in local/test mode when no external log server is configured.
+        The server runs in a background thread managed by the ThreadContainer.
+        """
+        log_server_port = find_free_port()
+        self._log_service = LogServiceImpl(
+            log_dir=self._config.local_state_dir / "logs",
+            remote_log_dir=f"{self._config.remote_state_dir.rstrip('/')}/logs",
+        )
+
+        # Wrap the verifier in NullAuthInterceptor so anonymous calls are
+        # still accepted in null-auth/test mode, matching the dashboard's
+        # behaviour. Real workers attach JWTs that the verifier validates.
+        interceptors = (NullAuthInterceptor(verifier=self._config.auth_verifier),)
+        app = build_log_server_asgi(self._log_service, interceptors=interceptors)
+        log_server_config = uvicorn.Config(
+            app,
+            host=self._config.host,
+            port=log_server_port,
+            log_level="warning",
+            log_config=None,
+            timeout_keep_alive=120,
+        )
+        self._log_server = uvicorn.Server(log_server_config)
+        self._threads.spawn_server(self._log_server, name="log-server")
+        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
+            lambda: self._log_server is not None and self._log_server.started,
+            timeout=Duration.from_seconds(5.0),
+        )
+
+        address = f"http://{self.external_host}:{log_server_port}"
+        logger.info("Local log server ready at %s", address)
+        return address
+
     def start(self) -> None:
         """Start main controller loop, dashboard server, and optionally autoscaler."""
         self._started = True
         if self._config.dry_run:
             logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
+
         if isinstance(self._provider, K8sTaskProvider):
             self._heartbeat_thread = self._threads.spawn(self._run_direct_provider_loop, name="provider-loop")
         else:
@@ -1173,10 +1239,9 @@ class Controller:
             timeout=Duration.from_seconds(5.0),
         )
 
-        # Register system endpoints with the externally-reachable URL so
-        # workers can resolve them via ListEndpoints.
-        self._service._system_endpoints["/system/log-server"] = self.url
-        logger.info("Registered system endpoint /system/log-server -> %s", self.url)
+        # Register log server endpoint so workers can resolve it via ListEndpoints.
+        self._service._system_endpoints["/system/log-server"] = self._log_service_address
+        logger.info("Registered system endpoint /system/log-server -> %s", self._log_service_address)
 
     def stop(self) -> None:
         """Stop all background components gracefully.
@@ -1213,11 +1278,14 @@ class Controller:
         self._threads.stop()
         self._provider.close()
 
-        # Remove log handler before closing the log store to avoid
-        # sqlite3.ProgrammingError spam from late log records.
-        logging.getLogger("iris").removeHandler(self._log_store_handler)
-        self._log_store_handler.close()
-        self._log_service.close()
+        # Remove log handler before closing log resources to avoid errors
+        # from late log records hitting a closed store or connection.
+        logging.getLogger("iris").removeHandler(self._log_handler)
+        self._log_handler.close()
+        self._log_pusher.close()
+        self._remote_log_service.close()
+        if self._log_service:
+            self._log_service.close()
         self._db.close()
         self._bundle_store.close()
 
@@ -1268,6 +1336,7 @@ class Controller:
         """Background pruning loop: history cleanup every 60s, full data prune on the configured interval."""
         last_full_prune = 0.0
         resource_history_limiter = RateLimiter(interval_seconds=600.0)
+        wal_checkpoint_limiter = RateLimiter(interval_seconds=600.0)
         full_prune_interval = self._config.prune_interval.to_seconds()
 
         while not stop_event.is_set():
@@ -1285,6 +1354,22 @@ class Controller:
                     self._transitions.prune_worker_resource_history()
                 except Exception:
                     logger.exception("Worker resource history cleanup failed")
+                try:
+                    self._transitions.prune_task_resource_history()
+                except Exception:
+                    logger.exception("Task resource history cleanup failed")
+
+            if wal_checkpoint_limiter.should_run():
+                try:
+                    busy, log_frames, checkpointed = self._db.wal_checkpoint()
+                    logger.info(
+                        "wal_checkpoint(TRUNCATE): busy=%d log_frames=%d checkpointed=%d",
+                        busy,
+                        log_frames,
+                        checkpointed,
+                    )
+                except Exception:
+                    logger.exception("WAL checkpoint failed")
 
             now = time.monotonic()
             if now - last_full_prune >= full_prune_interval:
@@ -1499,18 +1584,15 @@ class Controller:
         return sum(1 for c in claims.values() if c.job_id == job_id_wire)
 
     def _reservation_entry_count(self, job_id: JobName) -> int:
-        """Get the number of reservation entries for a job by decoding request_proto.
+        """Get the number of reservation entries for a job from job_config.
 
-        Only called for the rare jobs that have reservations; the proto decode
-        cost is negligible compared to the worker claim logic.
+        Only called for the rare jobs that have reservations.
         """
         with self._db.read_snapshot() as q:
-            row = q.fetchone("SELECT request_proto FROM jobs WHERE job_id = ?", (job_id.to_wire(),))
-        if row is None:
+            row = q.fetchone("SELECT reservation_json FROM job_config WHERE job_id = ?", (job_id.to_wire(),))
+        if row is None or row[0] is None:
             return 0
-        req = controller_pb2.Controller.LaunchJobRequest()
-        req.ParseFromString(row[0])
-        return len(req.reservation.entries) if req.HasField("reservation") else 0
+        return len(reservation_entries_from_json(row[0]))
 
     def _cleanup_stale_claims(self, claims: dict[WorkerId, ReservationClaim] | None = None) -> bool:
         """Remove claims for workers that disappeared or jobs that finished."""
@@ -1532,7 +1614,7 @@ class Controller:
                 stale.append(worker_id)
                 continue
             job = jobs_by_id.get(claim.job_id)
-            if job is None or job_is_finished(job.state):
+            if job is None or is_job_finished(job.state):
                 stale.append(worker_id)
         for wid in stale:
             del claims[wid]
@@ -1563,7 +1645,7 @@ class Controller:
         reservation_jobs = _jobs_with_reservations(self._db, reservable_states)
         for job in reservation_jobs:
             job_wire = job.job_id.to_wire()
-            for idx, res_entry in enumerate(job.request.reservation.entries):
+            for idx, res_entry in enumerate(reservation_entries_from_json(job.reservation_json)):
                 if (job_wire, idx) in claimed_entries:
                     continue
 
@@ -2348,17 +2430,7 @@ class Controller:
         When bound to 0.0.0.0, probes for the real network IP (same technique
         workers use in env_probe._get_ip_address).
         """
-        host = self._config.host
-        if host == "0.0.0.0":
-            import socket
-
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                    s.connect(("8.8.8.8", 80))
-                    return s.getsockname()[0]
-            except Exception:
-                return "127.0.0.1"
-        return host
+        return resolve_external_host(self._config.host)
 
     @property
     def url(self) -> str:

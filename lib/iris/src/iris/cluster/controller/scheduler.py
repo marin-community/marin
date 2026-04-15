@@ -23,6 +23,7 @@ from typing import Any, Protocol
 
 from iris.cluster.constraints import (
     AttributeValue,
+    Constraint,
     ConstraintIndex,
     ResourceCapacity,
     WellKnownAttribute,
@@ -124,13 +125,10 @@ class RejectionReason:
 
 @dataclass
 class JobRequirements:
-    """What a job needs from a worker. Scheduler's input type.
-
-    Protos are readonly -- shared by reference, no copy needed.
-    """
+    """What a job needs from a worker. Scheduler's input type."""
 
     resources: job_pb2.ResourceSpecProto
-    constraints: list[job_pb2.Constraint]
+    constraints: list[Constraint]
     is_coscheduled: bool
     coscheduling_group_by: str | None
 
@@ -260,7 +258,7 @@ class WorkerCapacity:
         # Increment building count since new tasks start in BUILDING state
         self.building_task_count += 1
 
-    def matches_constraints(self, constraints: Sequence[job_pb2.Constraint]) -> bool:
+    def matches_constraints(self, constraints: Sequence[Constraint]) -> bool:
         """Check if this worker matches all given constraints."""
         for constraint in constraints:
             attr = self.attributes.get(constraint.key)
@@ -363,7 +361,7 @@ class SchedulingContext:
             max_assignments_per_worker=max_assignments_per_worker,
         )
 
-    def matching_workers(self, constraints: Sequence[job_pb2.Constraint]) -> set[WorkerId]:
+    def matching_workers(self, constraints: Sequence[Constraint]) -> set[WorkerId]:
         """Get workers matching ALL constraints.
 
         Uses posting lists for fast EQ/EXISTS/NOT_EXISTS lookups.
@@ -421,7 +419,7 @@ class SchedulingResult:
 
 def _rank_by_soft_score(
     candidate_ids: set[WorkerId],
-    soft_constraints: list[job_pb2.Constraint],
+    soft_constraints: list[Constraint],
     context: SchedulingContext,
 ) -> list[WorkerId]:
     """Sort candidate workers by soft-constraint satisfaction (descending).

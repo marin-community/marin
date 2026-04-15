@@ -464,7 +464,6 @@ class InMemoryGcpService:
                 for k, v in worker_config.worker_attributes.items():
                     extra_attrs.setdefault(k, v)
 
-            extra_attrs.setdefault("region", "local")
             # Use the canonical capacity_type from the slice config proto.
             capacity_type_val = config.capacity_type or config_pb2.CAPACITY_TYPE_ON_DEMAND
 

@@ -94,6 +94,7 @@ export interface TaskStatus {
   pendingReason?: string
   canBeScheduled?: boolean
   containerId?: string
+  resourceHistory?: ResourceUsage[]
 }
 
 // -- Jobs --
@@ -144,17 +145,45 @@ export interface ListJobsResponse {
 export interface GetJobStatusResponse {
   job: JobStatus
   request?: LaunchJobRequest
+  resourceMin?: ResourceUsage
+  resourceMax?: ResourceUsage
+}
+
+export interface CommandEntrypoint {
+  argv?: string[]
+}
+
+export interface RuntimeEntrypoint {
+  setupCommands?: string[]
+  runCommand?: CommandEntrypoint
+  workdirFiles?: Record<string, string>
+  workdirFileRefs?: Record<string, string>
+}
+
+export interface EnvironmentConfig {
+  pipPackages?: string[]
+  envVars?: Record<string, string>
+  extras?: string[]
+  pythonVersion?: string
+  dockerfile?: string
 }
 
 export interface LaunchJobRequest {
   name: string
+  entrypoint?: RuntimeEntrypoint
+  environment?: EnvironmentConfig
   resources?: ResourceSpecProto
   constraints?: Constraint[]
+  ports?: string[]
+  bundleId?: string
   replicas?: number
+  priorityBand?: string
+  submitArgv?: string[]
 }
 
 export interface GetTaskStatusResponse {
   task: TaskStatus
+  jobResources?: ResourceSpecProto
 }
 
 export interface ListTasksResponse {
@@ -253,6 +282,8 @@ export interface VmInfo {
   initPhase?: string
   initLogTail?: string
   initError?: string
+  /** Number of tasks currently assigned to this VM by the scheduler. */
+  runningTaskCount?: number
   labels?: Record<string, string>
 }
 

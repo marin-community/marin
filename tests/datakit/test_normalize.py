@@ -118,16 +118,37 @@ def test_missing_id_field_silently_skipped(tmp_path: Path, write_jsonl_gz):
     [
         {"other": "no text here"},  # missing text field
         {"text": "   "},  # whitespace-only text
+        {"text": "\xa0\xa0\xa0\n\n\xa0\xa0\xa0"},  # non-breaking spaces + newlines
+        {"text": ""},  # empty string
+        {"text": None},  # explicit None
     ],
-    ids=["missing", "whitespace"],
+    ids=["missing", "whitespace", "nbsp", "empty", "none"],
 )
-def test_missing_or_empty_text_raises(tmp_path: Path, write_jsonl_gz, record):
+def test_missing_or_empty_text_filtered(tmp_path: Path, write_jsonl_gz, record):
+    """Records with missing or blank text are silently filtered out."""
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
 
-    write_jsonl_gz(input_dir / "data.jsonl.gz", [record])
+    write_jsonl_gz(input_dir / "data.jsonl.gz", [{"text": "valid"}, record])
 
-    with pytest.raises(Exception, match="text"):
+    result = normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
+
+    results = _read_all_parquet(output_dir)
+    assert len(results) == 1
+    assert results[0]["text"] == "valid"
+
+    total_empty = sum(s.counters.get("normalize/empty_text_filtered", 0) for s in result.subdirs)
+    assert total_empty >= 1
+
+
+def test_all_records_empty_text_raises(tmp_path: Path, write_jsonl_gz):
+    """Pipeline fails when every record has missing/empty text."""
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+
+    write_jsonl_gz(input_dir / "data.jsonl.gz", [{"text": "   "}, {"text": ""}, {"text": None}])
+
+    with pytest.raises(ValueError, match=r"All 3 records were filtered out.*wrong column"):
         normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
 
 

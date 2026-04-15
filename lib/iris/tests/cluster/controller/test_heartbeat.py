@@ -28,6 +28,7 @@ from iris.cluster.log_store._types import TaskAttempt, task_log_key
 from iris.cluster.types import JobName, WorkerId
 from iris.log_server.server import LogServiceImpl
 from iris.rpc import logging_pb2
+from tests.cluster.providers.k8s.conftest import InProcessLogPusher
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from rigging.timing import Duration, Timestamp
@@ -261,7 +262,7 @@ def test_reap_stale_workers_removes_old_heartbeat(tmp_path, worker_metadata):
         assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("stale-worker",)) is None
         assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("fresh-worker",)) is not None
 
-    db.close()
+    controller.stop()
 
 
 def test_reap_stale_workers_no_op_when_all_fresh(tmp_path, worker_metadata):
@@ -282,7 +283,7 @@ def test_reap_stale_workers_no_op_when_all_fresh(tmp_path, worker_metadata):
     with db.snapshot() as q:
         assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("worker1",)) is not None
 
-    db.close()
+    controller.stop()
 
 
 class _FakeStub:
@@ -304,17 +305,6 @@ class _FakeStubFactory:
 
     def evict(self, address: str) -> None:
         pass
-
-
-class _InProcessLogPusher:
-    """Adapts LogServiceImpl for in-process use in tests."""
-
-    def __init__(self, log_service: LogServiceImpl) -> None:
-        self._log_service = log_service
-
-    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-        if entries:
-            self._log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries), ctx=None)
 
 
 def test_heartbeat_forwards_old_worker_log_entries(tmp_path):
@@ -343,7 +333,7 @@ def test_heartbeat_forwards_old_worker_log_entries(tmp_path):
 
     provider = WorkerProvider(
         stub_factory=_FakeStubFactory(_FakeStub(response)),
-        log_pusher=_InProcessLogPusher(log_service),
+        log_pusher=InProcessLogPusher(log_service),
     )
 
     batch = DispatchBatch(
@@ -388,7 +378,7 @@ def test_heartbeat_no_log_entries_no_push(tmp_path):
 
     provider = WorkerProvider(
         stub_factory=_FakeStubFactory(_FakeStub(response)),
-        log_pusher=_InProcessLogPusher(log_service),
+        log_pusher=InProcessLogPusher(log_service),
     )
 
     batch = DispatchBatch(
@@ -438,7 +428,7 @@ def test_heartbeat_forwards_logs_for_multiple_tasks(tmp_path):
 
     provider = WorkerProvider(
         stub_factory=_FakeStubFactory(_FakeStub(response)),
-        log_pusher=_InProcessLogPusher(log_service),
+        log_pusher=InProcessLogPusher(log_service),
     )
 
     batch = DispatchBatch(
