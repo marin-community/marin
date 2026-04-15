@@ -6,6 +6,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
 
 import jinja2
 import yaml
@@ -314,7 +315,14 @@ CONFIGS = {
     },
 }
 
-GENERATION_CONFIGS = {
+
+class _GenerationConfig(TypedDict):
+    runtime_version: str
+    base_worker: str
+    slices: list[int]
+
+
+GENERATION_CONFIGS: dict[str, _GenerationConfig] = {
     "v4": {
         "runtime_version": "tpu-ubuntu2204-base",
         "base_worker": "8",

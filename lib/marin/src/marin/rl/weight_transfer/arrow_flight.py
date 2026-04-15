@@ -264,9 +264,8 @@ class ArrowFlightCoordinator:
             param_names=param_names,
         )
         logger.info(f"Updated server: weight_id={weight_id}, params={len(param_names)}, servers={len(server_locations)}")
-        return 123
 
-    def fetch_server(self) -> ServerInfo:
+    def fetch_server(self) -> ServerInfo | None:
         return self._server_info
 
 
@@ -305,6 +304,8 @@ class MarinFlightServer(flight.FlightServerBase):
             with self._lock:
                 if weight_id != self._latest_weight_id:
                     logger.debug(f"Requested weight_id {weight_id} stale, returning {self._latest_weight_id}")
+                    if self._latest_weight_id is None:
+                        raise flight.FlightUnavailableError("No weights available yet")
                     weight_id = self._latest_weight_id
 
                 (schema, batches) = self._weights_store[weight_id][param_name]

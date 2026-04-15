@@ -212,7 +212,7 @@ class SyncVLLMWrapper:
         logger.info(f"Engine initialized: {engine}")
         return engine
 
-    def generate(self, prompts: list[str], sampling_params: SamplingParams) -> str:
+    def generate(self, prompts: list[str], sampling_params: SamplingParams) -> list[str]:
         """
         Synchronous generate method - runs async code under the hood.
 

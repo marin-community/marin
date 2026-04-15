@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 
 
 class CustomJsonEncoder(json.JSONEncoder):
-    def default(self, obj):
+    def default(self, o):
+        obj = o
         if isinstance(obj, timedelta):
             return {"days": obj.days, "seconds": obj.seconds, "microseconds": obj.microseconds}
         if isinstance(obj, Path):
