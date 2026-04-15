@@ -972,9 +972,11 @@ class RolloutWorker:
                     break
 
                 if use_jax_rng:
+                    # pyrefly: ignore[unbound-name] - rng is set in the matching use_jax_rng init branch above
                     rng, seed_key = jax.random.split(rng)
                     seed = int(seed_key[0])
                 else:
+                    # pyrefly: ignore[unbound-name] - py_rng is set in the matching else init branch above
                     seed = py_rng.randint(0, 2**31 - 1)
 
                 try:
@@ -992,8 +994,10 @@ class RolloutWorker:
                     worker_index=self.config.worker_index,
                 ):
                     if use_jax_rng:
+                        # pyrefly: ignore[unbound-name] - rng set in matching init branch above
                         rng, micro_eval_rng = jrandom.split(rng)
                     else:
+                        # pyrefly: ignore[unbound-name] - py_rng set in matching init branch above
                         micro_eval_rng = py_rng.randint(0, 2**31 - 1)
                     self._evaluate_lesson(
                         lesson_id=lesson_id,
@@ -1011,8 +1015,10 @@ class RolloutWorker:
                     worker_index=self.config.worker_index,
                 ):
                     if use_jax_rng:
+                        # pyrefly: ignore[unbound-name] - rng set in matching init branch above
                         rng, eval_rng = jrandom.split(rng)
                     else:
+                        # pyrefly: ignore[unbound-name] - py_rng set in matching init branch above
                         eval_rng = py_rng.randint(0, 2**31 - 1)
                     self._evaluate_curriculum(eval_rng, self._current_train_step)
                     self._last_eval_train_step = self._current_train_step
@@ -1020,8 +1026,10 @@ class RolloutWorker:
                 logger.info(f"Sampled lesson '{lesson_id}' from curriculum")
 
                 if use_jax_rng:
+                    # pyrefly: ignore[unbound-name] - rng set in matching init branch above
                     rng, input_rng = jax.random.split(rng)
                 else:
+                    # pyrefly: ignore[unbound-name] - py_rng set in matching init branch above
                     input_rng = py_rng.randint(0, 2**31 - 1)
 
                 lesson_config = self.config.curriculum_config.lessons[lesson_id]

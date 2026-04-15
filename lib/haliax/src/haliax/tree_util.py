@@ -26,6 +26,7 @@ def tree_map(fn, tree, *rest, is_leaf=None):
     if is_leaf is None:
         is_leaf = lambda x: isinstance(x, NamedArray)
     else:
+        # pyrefly: ignore[not-callable] - old_is_leaf is non-None in the else-branch
         is_leaf = lambda x: old_is_leaf(x) or is_named_array(x)
 
     return jax.tree.map(fn, tree, *rest, is_leaf=is_leaf)
@@ -56,6 +57,7 @@ def scan_aware_tree_map(fn, tree, *rest, is_leaf=None):
     if is_leaf is None:
         is_leaf = _is_scan_stack_leaf
     else:
+        # pyrefly: ignore[not-callable] - old_is_leaf is non-None in the else-branch
         is_leaf = lambda x: old_is_leaf(x) or _is_scan_stack_leaf(x)
 
     mapped_fn = functools.partial(scan_aware_tree_map, fn, is_leaf=is_leaf)

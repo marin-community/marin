@@ -548,6 +548,7 @@ class MixtralTransformer(eqx.Module):
         self, x: NamedArray, attn_mask: Optional[NamedArray], *, key, pos_ids: NamedArray | None = None
     ) -> tuple[NamedArray, dict]:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
+        # pyrefly: ignore[not-iterable] - scan's return is over-widened; MixtralDecoderLayer always returns (x, extras)
         x, extras = self.layers.scan(x, mask=attn_mask, key=keys)
         x = self.norm(x)
 

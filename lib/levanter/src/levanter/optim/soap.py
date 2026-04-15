@@ -341,6 +341,7 @@ def scale_by_soap(
                 lambda g, s, os: _map_fn(False, 0, int(s), lambda p, shape=os: jnp.reshape(p, shape), g),
                 updates,
                 scanned_layers_,
+                # pyrefly: ignore[unbound-name] - original_shapes set in matching merge_small_dims branch above
                 original_shapes,
             )
 
@@ -593,6 +594,7 @@ def scale_by_soap(
                 dummy_updates_tree,
                 norm_updates,
                 scanned_layers_,
+                # pyrefly: ignore[unbound-name] - partitioners set in matching partition_grads_into_blocks branch above
                 partitioners,
             )
             exp_avg_sq = jax.tree.map(
@@ -644,18 +646,21 @@ def scale_by_soap(
                 lambda g, s, os: _map_fn(False, 0, int(s), lambda p, shape=os: jnp.reshape(p, shape), g),
                 norm_updates,
                 scanned_layers_,
+                # pyrefly: ignore[unbound-name] - original_shapes set in matching merge_small_dims branch above
                 original_shapes,
             )
             exp_avg = jax.tree.map(
                 lambda g, s, os: _map_fn(False, 0, int(s), lambda p, shape=os: jnp.reshape(p, shape), g),
                 exp_avg,
                 scanned_layers_,
+                # pyrefly: ignore[unbound-name] - original_shapes set in matching merge_small_dims branch above
                 original_shapes,
             )
             exp_avg_sq = jax.tree.map(
                 lambda g, s, os: _map_fn(False, 0, int(s), lambda p, shape=os: jnp.reshape(p, shape), g),
                 exp_avg_sq,
                 scanned_layers_,
+                # pyrefly: ignore[unbound-name] - original_shapes set in matching merge_small_dims branch above
                 original_shapes,
             )
 
@@ -859,7 +864,9 @@ def init_conditioner(p_shape, max_precond_dim: int, dtype: Optional[Union[str, j
             output.append(jnp.zeros((s, s), dtype=dtype))
             flag = False
             if mesh is not None:
+                # pyrefly: ignore[unbound-name] - fsdp_size set in matching `if mesh is not None` branch above
                 if s % fsdp_size == 0:
+                    # pyrefly: ignore[unbound-name] - fsdp_axis_name set in matching `if mesh is not None` branch above
                     q_sharding = PartitionSpec(fsdp_axis_name, None)
                 else:
                     q_sharding = PartitionSpec(None, None)

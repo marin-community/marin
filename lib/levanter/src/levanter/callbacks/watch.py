@@ -137,6 +137,7 @@ def compute_watch_stats(
 
 @dataclass(frozen=True)
 class WatchConfig:
+    # pyrefly: ignore[bad-assignment] - lambda returns list[str] but elements are Target literals; pyrefly cannot narrow list content
     watch_targets: Union[list[Target], Target] = dataclasses.field(default_factory=lambda: ["grads", "params"])
     """
     What to watch during training. Can be a single target or a list of targets.

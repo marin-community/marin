@@ -128,6 +128,7 @@ def microbatched(
 
             with jax.named_scope("accum"):
                 # Unpack structure: ((loss, metrics_dict), grads)
+                # pyrefly: ignore[not-iterable] - R is constrained at call sites to this tuple-of-tuples shape
                 (this_loss, this_metrics), this_grads = this_r
                 (acc_loss, acc_metrics), acc_grads = acc
 
