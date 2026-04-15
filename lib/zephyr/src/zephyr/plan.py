@@ -644,18 +644,31 @@ def _merge_sorted_chunks(
     )
 
     if use_external:
+        from zephyr.external_sort import compute_fan_in
+
+        memory_limit = _TaskResources.from_environment().memory_bytes
+        # Per-iterator memory ~= compressed bytes for one chunk held by
+        # cat_file. Use uncompressed (max_chunk_rows * avg_item_bytes) as a
+        # conservative upper bound — scatter writes ASCII-ish data with
+        # mediocre zstd ratio.
+        per_iter_bytes = int(shard.max_chunk_rows * shard.avg_item_bytes)
+        fan_in = compute_fan_in(per_iter_bytes, memory_limit)
         logger.info(
-            "External sort triggered for shard with %d iterators, spilling to %s",
+            "External sort triggered for shard with %d iterators, fan_in=%d (per_iter≈%dKB), spilling to %s",
             sum(it.chunk_count for it in shard.iterators),
+            fan_in,
+            per_iter_bytes // 1024,
             external_sort_dir,
         )
         # Pass lazy generator — external_sort_merge consumes in batches without opening all files
-        merged_stream = external_sort_merge(shard.get_iterators(), merge_key, external_sort_dir)
+        merged_stream = external_sort_merge(
+            shard.get_iterators(), merge_key, external_sort_dir, fan_in=fan_in
+        )
     else:
         chunk_iterators = list(shard.get_iterators())
         logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
         if external_sort_dir is not None and len(chunk_iterators) > EXTERNAL_SORT_FAN_IN:
-            # Fallback: stats unavailable, use fan_in threshold
+            # Fallback: stats unavailable, use the hard-cap fan-in.
             merged_stream = external_sort_merge(iter(chunk_iterators), merge_key, external_sort_dir)
         else:
             merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
