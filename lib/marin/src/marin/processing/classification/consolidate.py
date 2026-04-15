@@ -20,7 +20,6 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
 
 from fray import ResourceConfig
 from marin.utils import (
@@ -28,7 +27,7 @@ from marin.utils import (
     fsspec_glob,
     rebase_file_path,
 )
-from zephyr import Dataset, ZephyrContext
+from zephyr import Dataset, ZephyrContext, ZephyrExecutionResult
 
 
 class FilterType(StrEnum):
@@ -59,13 +58,6 @@ class FilterConfig:
     """If True, keep docs that have no attribute entry. If False (default), reject them."""
 
 
-# Dictionary-based navigation guide for extracting IDs from different corpus types
-CORPUS_TYPE_TO_ID_GUIDE = {
-    "default": {"key": "id"},  # Direct key access
-    "dclm": {"key": "metadata", "nested": {"key": "WARC-Record-ID"}},  # Nested dictionary access
-}
-
-
 def _remove_spans_from_doc(doc: dict, filt: FilterConfig, attributes: dict) -> dict:
     def _remove_spans(text: str, spans: list[list[int]]) -> str:
         """Return ``text`` with ``spans`` removed.
@@ -83,28 +75,6 @@ def _remove_spans_from_doc(doc: dict, filt: FilterConfig, attributes: dict) -> d
     spans = attributes[filt.name]
     new_text = _remove_spans(doc["text"], spans)
     return {**doc, "text": new_text}
-
-
-def extract_id(row: dict, corpus_type: str) -> str:
-    """Extract ID from row based on corpus type.
-
-    Recursively navigates nested structures as defined in CORPUS_TYPE_TO_ID_GUIDE."""
-    guide = CORPUS_TYPE_TO_ID_GUIDE[corpus_type]
-
-    # grab the key, then navigate nested if needed
-    val = row[guide["key"]]
-
-    while "nested" in guide:
-        nested = guide["nested"]
-        assert isinstance(nested, dict)
-        val = val[nested["key"]]
-        guide = nested
-
-    return val
-
-
-def _make_id_extractor(corpus_type: str) -> Callable[[dict], Any]:
-    return lambda r: extract_id(r, corpus_type)
 
 
 def _resolve_attribute_path(input_base: str, input_path: str, filt: FilterConfig, filetype: str) -> str | None:
@@ -173,7 +143,7 @@ def consolidate(
     filters: list[FilterConfig],
     filetype: str = "jsonl.gz",
     worker_resources: ResourceConfig | None = None,
-) -> None:
+) -> ZephyrExecutionResult:
     """Consolidate documents by applying filters based on attributes.
 
     Joins each input file with its (co-partitioned, sorted) attribute files via
@@ -190,13 +160,7 @@ def consolidate(
     input_paths = sorted(fsspec_glob(os.path.join(input_path, f"**/*.{filetype}")))
     if not input_paths:
         raise ValueError(f"No input files matched {input_path}/**/*.{filetype}")
-    logger.info(f"Consolidating {len(input_paths)} document files via {len(filters)} sorted_merge_join(s)")
-
-    # Determine id key; assume a uniform corpus across shards (matches prior per-shard behavior)
-    # since datakit inputs are all "default" — "dclm" was the only alternative).
-    corpus_type = "dclm" if any("dclm" in p for p in input_paths) else "default"
-    id_key = CORPUS_TYPE_TO_ID_GUIDE[corpus_type]["key"]
-    key_fn = _make_id_extractor(corpus_type)
+    logger.info(f"Consolidating {len(input_paths)} document files via {len(filters)} filters")
 
     # Resolve attribute paths up front so the plan can be built before execution.
     filter_attr_paths = [
@@ -205,21 +169,19 @@ def consolidate(
 
     ds = Dataset.from_list(input_paths).load_parquet()
     for filt, attr_paths in filter_attr_paths:
-        attrs = Dataset.from_list(attr_paths).load_parquet(columns=[id_key, "attributes"])
+        attrs = Dataset.from_list(attr_paths).load_parquet(columns=["id", "attributes"])
         ds = ds.sorted_merge_join(
             attrs,
-            left_key=key_fn,
-            right_key=key_fn,
+            left_key=lambda r: r["id"],
+            right_key=lambda r: r["id"],
             combiner=_make_filter_combiner(filt),
             how="left",
         )
         # Drop rejected docs before the next join so its key extractor never sees None.
         ds = ds.filter(lambda r: r is not None)
 
-    output_pattern = f"{output_path}/part-{{shard:04d}}.parquet"
     ctx = ZephyrContext(
         name="consolidate-filter",
         **({"resources": worker_resources} if worker_resources else {}),
     )
-    results = ctx.execute(ds.write_parquet(output_pattern)).results
-    logger.info(f"Consolidation complete. Wrote {len(results)} output files")
+    return ctx.execute(ds.write_parquet(f"{output_path}/part-{{shard:05d}}-of-{{total:05d}}.parquet"))
