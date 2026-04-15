@@ -23,10 +23,6 @@ near-constant: one buffered item plus the zstd decoder state plus the
 chunk's compressed bytes (typically a few MB). This bound is essential for
 skewed shuffles where one reducer pulls disproportionate data and the
 external-sort fan-in opens hundreds of chunk iterators at once.
-
-Compared to the previous Parquet-based layout this drops Arrow from the
-shuffle data plane, removes schema-evolution segment splits, and replaces
-row-group statistics with explicit byte ranges.
 """
 
 from __future__ import annotations
