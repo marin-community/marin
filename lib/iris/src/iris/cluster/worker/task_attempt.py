@@ -36,6 +36,7 @@ from iris.cluster.types import (
 )
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.port_allocator import PortAllocator
+from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
 from iris.cluster.log_store._types import task_log_key
 from iris.log_server.client import LogPusher
@@ -50,6 +51,10 @@ from iris.time_proto import timestamp_to_proto
 from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+
+# How many trailing stderr lines to scan for TPU bad-node signatures.
+# Bounded so we don't rescan the full container log on every failure.
+_TPU_STDERR_TAIL_LINES = 200
 
 # Signal numbers for interpreting exit codes > 128
 _SIGNAL_NAMES = {
@@ -827,21 +832,43 @@ class TaskAttempt:
                 elif status.exit_code == 0:
                     self.transition_to(job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
                 else:
-                    stderr_line = None
-                    for entry in reversed(log_reader.read_all()):
-                        if entry.source == "stderr" and entry.data:
-                            stderr_line = entry.data
-                            break
+                    stderr_tail: list[str] = [
+                        entry.data for entry in log_reader.read_all() if entry.source == "stderr" and entry.data
+                    ]
+                    stderr_line = stderr_tail[-1] if stderr_tail else None
                     error = _format_exit_error(status.exit_code, status.oom_killed)
                     if stderr_line:
                         error = f"{error}. stderr: {stderr_line}"
                     if status.oom_killed:
                         self._append_log(source="error", data="Container was OOM killed by the kernel")
-                    self.transition_to(
-                        job_pb2.TASK_STATE_FAILED,
-                        error=error,
-                        exit_code=status.exit_code or -1,
-                    )
+                    # Promote known TPU bad-node signatures to WORKER_FAILED so
+                    # the attempt consumes the preemption budget instead of the
+                    # user-code failure budget. Scan a bounded tail — these
+                    # signatures are emitted close to process exit.
+                    tpu_pattern = detect_tpu_init_failure(stderr_tail[-_TPU_STDERR_TAIL_LINES:])
+                    if tpu_pattern is not None:
+                        tpu_error = f"TPU init failure ({tpu_pattern!r}): {error}"
+                        logger.warning(
+                            "Task %s: detected TPU bad-node signature %r; " "promoting FAILED -> WORKER_FAILED",
+                            self.task_id,
+                            tpu_pattern,
+                        )
+                        self._append_log(
+                            source="error",
+                            data=f"iris: TPU bad-node signature detected ({tpu_pattern!r}); "
+                            "reporting as worker failure",
+                        )
+                        self.transition_to(
+                            job_pb2.TASK_STATE_WORKER_FAILED,
+                            error=tpu_error,
+                            exit_code=status.exit_code or -1,
+                        )
+                    else:
+                        self.transition_to(
+                            job_pb2.TASK_STATE_FAILED,
+                            error=error,
+                            exit_code=status.exit_code or -1,
+                        )
                 break
 
             # Stream logs incrementally
