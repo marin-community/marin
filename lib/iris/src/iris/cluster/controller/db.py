@@ -13,9 +13,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace as dc_replace
 from pathlib import Path
 from threading import Lock, RLock
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from iris.cluster.constraints import AttributeValue
+
+if TYPE_CHECKING:
+    from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.controller.schema import decode_timestamp_ms, decode_worker_id
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId
 from iris.rpc import job_pb2
@@ -331,7 +334,7 @@ class ControllerDB:
         logger.info("EndpointRegistry initialized in %.2fs", time.monotonic() - t0)
 
     @property
-    def endpoints(self) -> EndpointRegistry:  # noqa: F821
+    def endpoints(self) -> EndpointRegistry:
         """Process-local cache for the ``endpoints`` table; authoritative for reads."""
         return self._endpoint_registry
 

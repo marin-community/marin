@@ -776,7 +776,7 @@ def run_stage(
 
         if isinstance(op, Map):
             if op.needs_shard_context:
-                stream = op.fn(stream, shard_idx=ctx.shard_idx, total_shards=ctx.total_shards)
+                stream = op.fn(stream, ShardInfo(shard_idx=ctx.shard_idx, total_shards=ctx.total_shards))
             else:
                 stream = op.fn(stream)
             op_index += 1
