@@ -371,3 +371,80 @@ def test_wal_checkpoint_truncate_runs_incremental_vacuum(tmp_path: Path) -> None
         assert size_after < size_full, f"expected shrink: before={size_full} after={size_after}"
     finally:
         db.close()
+
+
+def test_backfill_attempt_finished_at_migration(tmp_path: Path) -> None:
+    """0032 backfills finished_at_ms for orphaned terminal attempts.
+
+    Reproduces the historical bug where a FAILED/WORKER_FAILED attempt whose
+    task was retried kept finished_at_ms=NULL. The migration should populate
+    it using the next attempt's created_at_ms (and fall back to started_at_ms
+    or created_at_ms when no next attempt exists).
+
+    Exercises the migration SQL directly against a minimal schema so it
+    doesn't need to negotiate controller triggers / FKs.
+    """
+    import importlib
+
+    conn = sqlite3.connect(str(tmp_path / "c.sqlite3"))
+    conn.execute(
+        """
+        CREATE TABLE task_attempts (
+            task_id TEXT NOT NULL,
+            attempt_id INTEGER NOT NULL,
+            worker_id TEXT,
+            state INTEGER NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            started_at_ms INTEGER,
+            finished_at_ms INTEGER,
+            exit_code INTEGER,
+            error TEXT,
+            PRIMARY KEY (task_id, attempt_id)
+        )
+        """
+    )
+    rows = [
+        # task A: FAILED attempt followed by another FAILED attempt.
+        # Backfill must use next.created_at_ms (2000), not this row's started_at_ms.
+        ("/u/A", 0, 5, 1000, 1100, None),
+        ("/u/A", 1, 5, 2000, 2100, 2500),
+        # task B: FAILED orphan followed by a still-RUNNING retry.
+        # Next exists (created at 4000), so that's the bound — even though the
+        # next attempt isn't itself terminal.
+        ("/u/B", 0, 5, 3000, 3100, None),
+        ("/u/B", 1, 3, 4000, 4100, None),
+        # task C: FAILED orphan with no next attempt at all — fall back to
+        # started_at_ms (5100).
+        ("/u/C", 0, 5, 5000, 5100, None),
+        # task D: FAILED orphan, no next attempt, no started_at_ms — fall back
+        # to created_at_ms (6000).
+        ("/u/D", 0, 5, 6000, None, None),
+        # task E: control cases. Already-stamped row must not be rewritten; a
+        # non-terminal row must never be touched.
+        ("/u/E", 0, 4, 7000, 7100, 7200),
+        ("/u/E", 1, 3, 8000, 8100, None),
+    ]
+    conn.executemany(
+        "INSERT INTO task_attempts(task_id, attempt_id, state, created_at_ms, "
+        "started_at_ms, finished_at_ms) VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+
+    mod = importlib.import_module("iris.cluster.controller.migrations.0032_backfill_attempt_finished_at")
+    mod.migrate(conn)
+    conn.commit()
+
+    out = {
+        (r[0], r[1]): r[2]
+        for r in conn.execute("SELECT task_id, attempt_id, finished_at_ms FROM task_attempts").fetchall()
+    }
+    assert out[("/u/A", 0)] == 2000
+    assert out[("/u/A", 1)] == 2500
+    assert out[("/u/B", 0)] == 4000
+    assert out[("/u/B", 1)] is None
+    assert out[("/u/C", 0)] == 5100
+    assert out[("/u/D", 0)] == 6000
+    assert out[("/u/E", 0)] == 7200
+    assert out[("/u/E", 1)] is None
+    conn.close()

@@ -3466,6 +3466,17 @@ def test_apply_failed_with_retry(state):
     # Task should be PENDING again (1 failure <= 1 max_retries_failure).
     assert _task_state_direct(state, task_id) == job_pb2.TASK_STATE_PENDING
 
+    # The dead attempt 0 must have finished_at_ms stamped even though the task
+    # itself rolled back to PENDING. Otherwise the row is indistinguishable from
+    # a still-assigned attempt. Regression guard for the terminal_ms conflation.
+    with state._db.snapshot() as q:
+        attempts = ATTEMPT_PROJECTION.decode(
+            q.fetchall("SELECT * FROM task_attempts WHERE task_id = ?", (task_id.to_wire(),))
+        )
+    assert len(attempts) == 1
+    assert attempts[0].state == job_pb2.TASK_STATE_FAILED
+    assert attempts[0].finished_at is not None
+
     # Draining again should promote it for a second attempt.
     batch = state.drain_for_direct_provider()
     assert len(batch.tasks_to_run) == 1
