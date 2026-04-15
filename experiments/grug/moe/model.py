@@ -73,6 +73,7 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    use_xsa: bool = True
     # Attention gate mode: "full" (default), "none", "truncated", "lora".
     attn_gate_mode: str = "full"
     # Fraction of hidden_dim for truncated gate_dim or LoRA low_rank.
@@ -170,13 +171,14 @@ class CausalSelfAttention(eqx.Module):
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)
-        aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
-        # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
-        # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
-        dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
-        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+        if self.cfg.use_xsa:
+            aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
+            aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
+            # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
+            # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
+            dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
+            v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
+            attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
         # Headwise gating: sigmoid produces one scalar per head.
         if self.attn_gate is not None:
             if self.attn_gate_up is not None:
