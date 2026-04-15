@@ -66,7 +66,8 @@ MICROBATCH_SIZE = 32  # 2 gradient accumulation steps (v4-64 OOMs at 64)
 # NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * DATASET_SIZE / TRAIN_BATCH_SIZE)
 NUM_TRAIN_STEPS = 4000
 
-RESOURCES = ResourceConfig.with_tpu("v4-64")
+# RESOURCES = ResourceConfig.with_tpu("v4-64")
+RESOURCES = ResourceConfig.with_tpu("v5p-64")
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
