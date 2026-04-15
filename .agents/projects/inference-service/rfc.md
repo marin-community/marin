@@ -58,7 +58,7 @@ There are 3 separate iris `Job` in this system:
   - Spin up a local InferenceProxy http service, speaks to the broker using Iris's gRPC `ActorClient` system.
   - Read the eval data, submit inference work to the proxy.
 - InferenceBroker: A single Iris job, using the `ActorServer` component to act as a centralized RPC server. It sits on top of a local queue to track the outstanding work.
-- InferenceWorker: Iris tasks that (1) boot up a local inference engine and (2) pull work from the broker's queue.
+- InferenceWorker: Iris tasks that (1) boot up a local inference engine (vLLM or Levanter) exposed as a local OpenAI HTTP server, and (2) pull work from the broker's queue and forward it to that local server.
 
 ```mermaid
 flowchart LR
@@ -71,12 +71,14 @@ flowchart LR
     Queue[(Work queue)]
   end
   subgraph Workers["InferenceWorker × N (preemptible)"]
-    W1[Engine<br/>vLLM / Levanter]
+    WP[Worker process]
+    Engine[Engine<br/>vLLM / Levanter]
   end
   Client -->|"OpenAI HTTP"| Proxy
   Proxy <-->|"gRPC ActorClient"| Actor
   Actor <--> Queue
-  W1 <-->|"gRPC pull / push result"| Actor
+  WP <-->|"gRPC pull / push result"| Actor
+  WP <-->|"OpenAI HTTP (local)"| Engine
 ```
 
 ### Configurations
