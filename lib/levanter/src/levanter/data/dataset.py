@@ -3,7 +3,7 @@
 
 import abc
 import logging
-from typing import Callable, Generic, Optional, Sequence, TypeAlias, TypeVar
+from typing import Any, Callable, Generic, Optional, Sequence, TypeAlias, TypeVar
 
 import jax.random
 import numpy as np
@@ -324,7 +324,7 @@ class BatchMappedAsyncDataset(AsyncDataset[U]):
 
     def __init__(
         self,
-        dataset: AsyncDataset[T],
+        dataset: AsyncDataset[Any],
         fn: MapFunction[Sequence[U]],
         *extra_args,
         **extra_kwargs,
