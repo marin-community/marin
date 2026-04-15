@@ -158,12 +158,7 @@ def test_task_failure_on_nonzero_exit(mock_worker, mock_runtime):
 
 
 def test_tpu_bad_node_stderr_promotes_to_worker_failed(mock_worker, mock_runtime):
-    """A non-zero container exit whose stderr tail matches a TPU bad-node
-    signature must be promoted from TASK_STATE_FAILED to TASK_STATE_WORKER_FAILED
-    so the attempt consumes the preemption budget and can retry elsewhere.
-
-    See: https://github.com/marin-community/marin/issues/4783
-    """
+    """Non-zero exit with TPU bad-node stderr -> WORKER_FAILED (issue #4783)."""
     bad_node_stderr = [
         LogLine.now(source="stdout", data="startup: launching vLLM engine"),
         LogLine.now(
@@ -204,9 +199,7 @@ def test_tpu_bad_node_stderr_promotes_to_worker_failed(mock_worker, mock_runtime
 
 
 def test_non_tpu_stderr_still_maps_to_failed(mock_worker, mock_runtime):
-    """A non-zero container exit with unrelated stderr must remain TASK_STATE_FAILED
-    (no false positive promotion to WORKER_FAILED).
-    """
+    """Non-zero exit with unrelated stderr stays FAILED (no false promotion)."""
     user_stderr = [
         LogLine.now(source="stderr", data="Traceback (most recent call last):"),
         LogLine.now(source="stderr", data='ValueError: bad user config: expected "foo"'),

@@ -52,8 +52,7 @@ from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
-# How many trailing stderr lines to scan for TPU bad-node signatures.
-# Bounded so we don't rescan the full container log on every failure.
+# Trailing stderr lines scanned for TPU bad-node signatures on non-zero exit.
 _TPU_STDERR_TAIL_LINES = 200
 
 # Signal numbers for interpreting exit codes > 128
@@ -841,15 +840,11 @@ class TaskAttempt:
                         error = f"{error}. stderr: {stderr_line}"
                     if status.oom_killed:
                         self._append_log(source="error", data="Container was OOM killed by the kernel")
-                    # Promote known TPU bad-node signatures to WORKER_FAILED so
-                    # the attempt consumes the preemption budget instead of the
-                    # user-code failure budget. Scan a bounded tail — these
-                    # signatures are emitted close to process exit.
+                    # Promote known TPU bad-node signatures to WORKER_FAILED.
                     tpu_pattern = detect_tpu_init_failure(stderr_tail[-_TPU_STDERR_TAIL_LINES:])
                     if tpu_pattern is not None:
-                        tpu_error = f"TPU init failure ({tpu_pattern!r}): {error}"
                         logger.warning(
-                            "Task %s: detected TPU bad-node signature %r; " "promoting FAILED -> WORKER_FAILED",
+                            "Task %s: TPU bad-node signature %r; promoting FAILED -> WORKER_FAILED",
                             self.task_id,
                             tpu_pattern,
                         )
@@ -860,7 +855,7 @@ class TaskAttempt:
                         )
                         self.transition_to(
                             job_pb2.TASK_STATE_WORKER_FAILED,
-                            error=tpu_error,
+                            error=f"TPU init failure ({tpu_pattern!r}): {error}",
                             exit_code=status.exit_code or -1,
                         )
                     else:
