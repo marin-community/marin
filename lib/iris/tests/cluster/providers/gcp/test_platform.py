@@ -22,7 +22,10 @@ from iris.cluster.providers.gcp.handles import GcpVmSliceHandle, _build_gce_reso
 from iris.cluster.providers.remote_exec import DirectSshRemoteExec, GceRemoteExec, GcloudRemoteExec
 from iris.cluster.providers.gcp.workers import (
     GcpWorkerProvider,
+    _recommended_tpu_bootstrap_timeout,
+    _recommended_tpu_cloud_ready_timeout,
     _run_vm_slice_bootstrap,
+    _summarize_missing_workers,
     _validate_slice_config,
 )
 from iris.cluster.providers.manual.provider import ManualControllerProvider, ManualWorkerProvider
@@ -930,10 +933,32 @@ def test_gcp_tpu_slice_os_login_prefers_external_ip_for_direct_ssh():
 
 
 # =============================================================================
-# Section 6: VM Slice Bootstrap Tests
+# Section 6: TPU/VM Bootstrap Tests
 #
-# Tests for _run_vm_slice_bootstrap with split timeouts and health probing.
+# Tests for bootstrap timeout sizing, diagnostics, and VM health probing.
 # =============================================================================
+
+
+def test_recommended_tpu_timeouts_scale_with_pod_size():
+    assert _recommended_tpu_cloud_ready_timeout(8) == 600.0
+    assert _recommended_tpu_cloud_ready_timeout(64) == 900.0
+    assert _recommended_tpu_cloud_ready_timeout(256) == 1800.0
+
+    assert _recommended_tpu_bootstrap_timeout(8) == 600.0
+    assert _recommended_tpu_bootstrap_timeout(64) == 900.0
+    assert _recommended_tpu_bootstrap_timeout(256) == 1800.0
+
+
+def test_summarize_missing_workers_includes_probe_errors():
+    summary = _summarize_missing_workers(
+        ["worker-250", "worker-251", "worker-252"],
+        {"worker-250": "TimeoutError: timed out", "worker-252": "URLError: refused"},
+        limit=2,
+    )
+
+    assert "worker-250 (TimeoutError: timed out)" in summary
+    assert "worker-251" in summary
+    assert "+1 more" in summary
 
 
 def _make_vm_slice_for_bootstrap(

@@ -47,6 +47,7 @@ from iris.cluster.providers.types import (
     generate_slice_suffix,
 )
 from iris.cluster.service_mode import ServiceMode
+from iris.cluster.types import get_tpu_topology
 from iris.cluster.worker.env_probe import construct_worker_id
 from iris.cluster.providers.remote_exec import GceRemoteExec
 from iris.rpc import config_pb2
@@ -85,8 +86,59 @@ DEFAULT_BOOT_DISK_SIZE_GB = 50
 # pd-ssd provides ~6000 IOPS vs ~38 on pd-standard, critical for controller DB
 DEFAULT_BOOT_DISK_TYPE = "pd-ssd"
 DEFAULT_TPU_CLOUD_READY_TIMEOUT = 600.0
+DEFAULT_TPU_BOOTSTRAP_TIMEOUT = 600.0
 RESERVED_TPU_ASSIGN_TIMEOUT = 4 * 60 * 60.0
 RESERVED_TPU_PROVISION_TIMEOUT = 2 * 60 * 60.0
+TPU_BOOTSTRAP_PROGRESS_LOG_INTERVAL = 60.0
+TPU_BOOTSTRAP_DIAGNOSTIC_LIMIT = 8
+
+
+def _recommended_tpu_cloud_ready_timeout(worker_count: int) -> float:
+    """Return a cloud READY timeout sized for TPU pod startup."""
+    if worker_count >= 256:
+        return 1800.0
+    if worker_count >= 64:
+        return 900.0
+    return DEFAULT_TPU_CLOUD_READY_TIMEOUT
+
+
+def _recommended_tpu_bootstrap_timeout(worker_count: int) -> float:
+    """Return a worker health timeout sized for TPU pod bootstrap."""
+    if worker_count >= 256:
+        return 1800.0
+    if worker_count >= 64:
+        return 900.0
+    return DEFAULT_TPU_BOOTSTRAP_TIMEOUT
+
+
+def _format_probe_error(error: BaseException) -> str:
+    message = str(error).strip()
+    if message:
+        return f"{type(error).__name__}: {message}"
+    return type(error).__name__
+
+
+def _summarize_missing_workers(
+    missing_workers: list[str],
+    last_probe_errors: dict[str, str],
+    limit: int = TPU_BOOTSTRAP_DIAGNOSTIC_LIMIT,
+) -> str:
+    """Summarize missing TPU workers and their last probe errors for logs."""
+    if not missing_workers:
+        return "none"
+
+    rendered: list[str] = []
+    for worker_id in missing_workers[:limit]:
+        probe_error = last_probe_errors.get(worker_id)
+        if probe_error:
+            rendered.append(f"{worker_id} ({probe_error})")
+        else:
+            rendered.append(worker_id)
+
+    if len(missing_workers) > limit:
+        rendered.append(f"... +{len(missing_workers) - limit} more")
+
+    return ", ".join(rendered)
 
 
 def _wait_for_queued_resource_activation(
@@ -734,7 +786,7 @@ def _run_tpu_bootstrap(
     worker_config: config_pb2.WorkerConfig,
     poll_interval: float = 10.0,
     cloud_ready_timeout: float | None = None,
-    bootstrap_timeout: float = 600.0,
+    bootstrap_timeout: float | None = None,
     queued_resource_poll_interval: float = 60.0,
 ) -> None:
     """Monitor TPU startup-script bootstrap via health endpoint polling.
@@ -744,9 +796,29 @@ def _run_tpu_bootstrap(
     Phase 2: Poll worker health endpoints until all respond healthy.
     On timeout: query Cloud Logging for [iris-init] entries for diagnostics.
     """
+    try:
+        worker_count = get_tpu_topology(handle._accelerator_variant).vm_count
+    except ValueError as e:
+        raise InfraError(
+            f"Unknown TPU topology '{handle._accelerator_variant}' for slice {handle.slice_id}. "
+            "Cannot size bootstrap timeouts."
+        ) from e
+
     effective_cloud_ready_timeout = cloud_ready_timeout
     if effective_cloud_ready_timeout is None:
-        effective_cloud_ready_timeout = DEFAULT_TPU_CLOUD_READY_TIMEOUT
+        effective_cloud_ready_timeout = _recommended_tpu_cloud_ready_timeout(worker_count)
+
+    effective_bootstrap_timeout = bootstrap_timeout
+    if effective_bootstrap_timeout is None:
+        effective_bootstrap_timeout = _recommended_tpu_bootstrap_timeout(worker_count)
+
+    logger.info(
+        "Using TPU bootstrap timeouts for %s: cloud_ready_timeout=%ss bootstrap_timeout=%ss worker_count=%d",
+        handle.slice_id,
+        effective_cloud_ready_timeout,
+        effective_bootstrap_timeout,
+        worker_count,
+    )
 
     # Phase 0: If this is a queued resource (reserved TPU), wait for ACTIVE
     # before polling the TPU VM state. The queued resource may sit in QUEUED
@@ -779,7 +851,9 @@ def _run_tpu_bootstrap(
     workers = cloud_status.workers
     worker_addrs = [(w.worker_id, w.internal_address) for w in workers]
     healthy_workers: set[str] = set()
-    health_deadline = Deadline.from_now(Duration.from_seconds(bootstrap_timeout))
+    last_probe_errors: dict[str, str] = {}
+    health_deadline = Deadline.from_now(Duration.from_seconds(effective_bootstrap_timeout))
+    next_progress_log = time.monotonic() + TPU_BOOTSTRAP_PROGRESS_LOG_INTERVAL
 
     logger.info(
         "Polling health endpoints for %d workers in slice %s",
@@ -798,14 +872,33 @@ def _run_tpu_bootstrap(
                 )
                 if resp.status == 200:
                     healthy_workers.add(worker_id)
+                    last_probe_errors.pop(worker_id, None)
                     logger.info("Worker %s is healthy", worker_id)
-            except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
-                pass
+            except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError) as e:
+                last_probe_errors[worker_id] = _format_probe_error(e)
 
         if len(healthy_workers) == len(worker_addrs):
             break
+        if time.monotonic() >= next_progress_log:
+            missing_workers = [worker_id for worker_id, _addr in worker_addrs if worker_id not in healthy_workers]
+            logger.info(
+                "TPU bootstrap progress for %s: %d/%d workers healthy; missing=%s",
+                handle.slice_id,
+                len(healthy_workers),
+                len(worker_addrs),
+                _summarize_missing_workers(missing_workers, last_probe_errors),
+            )
+            next_progress_log = time.monotonic() + TPU_BOOTSTRAP_PROGRESS_LOG_INTERVAL
         time.sleep(poll_interval)
     else:
+        missing_workers = [worker_id for worker_id, _addr in worker_addrs if worker_id not in healthy_workers]
+        logger.error(
+            "TPU bootstrap stalled for %s: %d/%d workers healthy; missing=%s",
+            handle.slice_id,
+            len(healthy_workers),
+            len(worker_addrs),
+            _summarize_missing_workers(missing_workers, last_probe_errors),
+        )
         _fetch_bootstrap_logs(gcp_service, handle)
         raise InfraError(
             f"TPU slice {handle.slice_id} bootstrap timed out: "
