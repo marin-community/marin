@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Literal, NewType, Self
+from typing import Any, Literal, NewType
 
 logger = logging.getLogger(__name__)
 
@@ -436,11 +436,11 @@ class Entrypoint:
         c: Callable[..., Any],
         args: Sequence[Any] = (),
         kwargs: dict[str, Any] | None = None,
-    ) -> Self:
+    ) -> Entrypoint:
         return Entrypoint(callable_entrypoint=CallableEntrypoint(callable=c, args=args, kwargs=kwargs or {}))
 
     @staticmethod
-    def from_binary(command: str, args: Sequence[str]) -> Self:
+    def from_binary(command: str, args: Sequence[str]) -> Entrypoint:
         return Entrypoint(binary_entrypoint=BinaryEntrypoint(command=command, args=args))
 
 
@@ -479,7 +479,7 @@ class JobStatus(StrEnum):
     STOPPED = "stopped"
 
     @staticmethod
-    def finished(status: Self) -> bool:
+    def finished(status: JobStatus) -> bool:
         return status in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.STOPPED)
 
 

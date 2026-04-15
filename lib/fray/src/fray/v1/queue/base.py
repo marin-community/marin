@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from typing import Generic, Protocol, TypeVar
 
 T = TypeVar("T")
-T_co = TypeVar("T_co", covariant=True)
 
 
 @dataclass
@@ -29,39 +28,39 @@ class Lease(Generic[T]):
     timestamp: float
 
 
-class Queue(Protocol[T_co]):
+class Queue(Protocol[T]):
     """Distributed queue interface with lease-based task acquisition."""
 
-    def push(self, item: T_co) -> None:
+    def push(self, item: T) -> None:
         """Add an item to the queue."""
         ...
 
-    def peek(self) -> T_co | None:
+    def peek(self) -> T | None:
         """View the next available item without acquiring a lease."""
         ...
 
-    def pop(self, lease_timeout: float = 60.0) -> Lease[T_co] | None:
+    def pop(self, lease_timeout: float = 60.0) -> Lease[T] | None:
         """Acquire a lease on the next available item."""
         ...
 
-    def done(self, lease: Lease[T_co]) -> None:
+    def done(self, lease: Lease[T]) -> None:
         """Mark a leased task as successfully completed."""
         ...
 
-    def release(self, lease: Lease[T_co]) -> None:
+    def release(self, lease: Lease[T]) -> None:
         """Release a lease and requeue the item for reprocessing."""
         ...
 
 
-class MemoryQueue(Queue[T_co]):
+class MemoryQueue(Queue[T]):
     def __init__(self):
         self.queue = []
         self.leases = {}  # lease_id -> (item, timestamp, timeout)
 
-    def push(self, item: T_co) -> None:
+    def push(self, item: T) -> None:
         self.queue.append(item)
 
-    def peek(self) -> T_co | None:
+    def peek(self) -> T | None:
         self._recover_expired_leases()
         if self.queue:
             return self.queue[0]
@@ -80,7 +79,7 @@ class MemoryQueue(Queue[T_co]):
             self.queue.insert(0, item)
             del self.leases[lease_id]
 
-    def pop(self, lease_timeout: float = 60.0) -> Lease[T_co] | None:
+    def pop(self, lease_timeout: float = 60.0) -> Lease[T] | None:
         self._recover_expired_leases()
         if self.queue:
             item = self.queue.pop(0)
@@ -91,11 +90,11 @@ class MemoryQueue(Queue[T_co]):
             return lease
         return None
 
-    def done(self, lease: Lease[T_co]) -> None:
+    def done(self, lease: Lease[T]) -> None:
         if lease.lease_id in self.leases:
             del self.leases[lease.lease_id]
 
-    def release(self, lease: Lease[T_co]) -> None:
+    def release(self, lease: Lease[T]) -> None:
         if lease.lease_id in self.leases:
             item, _, _ = self.leases[lease.lease_id]
             self.queue.insert(0, item)

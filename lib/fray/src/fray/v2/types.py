@@ -15,7 +15,7 @@ import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Literal, Self
+from typing import Any, Literal
 
 # ---------------------------------------------------------------------------
 # TPU topology
@@ -509,11 +509,11 @@ class Entrypoint:
         c: Callable[..., Any],
         args: Sequence[Any] = (),
         kwargs: dict[str, Any] | None = None,
-    ) -> Self:
+    ) -> Entrypoint:
         return Entrypoint(callable_entrypoint=CallableEntrypoint(callable=c, args=args, kwargs=kwargs or {}))
 
     @staticmethod
-    def from_binary(command: str, args: Sequence[str]) -> Self:
+    def from_binary(command: str, args: Sequence[str]) -> Entrypoint:
         return Entrypoint(binary_entrypoint=BinaryEntrypoint(command=command, args=args))
 
 
