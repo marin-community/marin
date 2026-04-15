@@ -43,7 +43,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import zstandard as zstd
-from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import open_url, url_to_fs
 from rigging.timing import log_time
 

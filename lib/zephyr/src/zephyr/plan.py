@@ -644,7 +644,7 @@ def _merge_sorted_chunks(
     )
 
     if use_external:
-        from zephyr.external_sort import compute_fan_in
+        from zephyr.external_sort import compute_fan_in, compute_write_batch_size
 
         memory_limit = _TaskResources.from_environment().memory_bytes
         # Per-iterator memory ~= compressed bytes for one chunk held by
@@ -653,16 +653,23 @@ def _merge_sorted_chunks(
         # mediocre zstd ratio.
         per_iter_bytes = int(shard.max_chunk_rows * shard.avg_item_bytes)
         fan_in = compute_fan_in(per_iter_bytes, memory_limit)
+        write_batch_size = compute_write_batch_size(shard.avg_item_bytes)
         logger.info(
-            "External sort triggered for shard with %d iterators, fan_in=%d (per_iter≈%dKB), spilling to %s",
+            "External sort triggered for shard with %d iterators, "
+            "fan_in=%d (per_iter≈%dKB), write_batch_size=%d, spilling to %s",
             sum(it.chunk_count for it in shard.iterators),
             fan_in,
             per_iter_bytes // 1024,
+            write_batch_size,
             external_sort_dir,
         )
         # Pass lazy generator — external_sort_merge consumes in batches without opening all files
         merged_stream = external_sort_merge(
-            shard.get_iterators(), merge_key, external_sort_dir, fan_in=fan_in
+            shard.get_iterators(),
+            merge_key,
+            external_sort_dir,
+            fan_in=fan_in,
+            write_batch_size=write_batch_size,
         )
     else:
         chunk_iterators = list(shard.get_iterators())
