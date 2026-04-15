@@ -234,3 +234,5 @@ scr/*
 .agents/tmp/
 .codex
 .entire
+
+.worktrees
