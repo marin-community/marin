@@ -433,6 +433,7 @@ class JaggedArrayStore:
         data = await asyncio.gather(*data_futs)
 
         if self.shapes is not None:
+            # pyrefly: ignore[unbound-name] - shapes_futs set in matching `self.shapes is not None` branch above
             shapes = await asyncio.gather(*shapes_futs)
 
             data = [d.reshape(*s, -1) for d, s in zip(data, shapes)]
@@ -452,6 +453,7 @@ class JaggedArrayStore:
         data = [d.result() for d in data_futs]
 
         if self.shapes is not None:
+            # pyrefly: ignore[unbound-name] - shapes_futs set in matching `self.shapes is not None` branch above
             shapes = [s.result() for s in shapes_futs]  # noqa
             data = [d.reshape(*s, -1) for d, s in zip(data, shapes)]
 
@@ -521,7 +523,7 @@ class JaggedArrayStore:
                     zero_pos = len(offsets_futs) - 1
 
         offsets = [fut.result() for fut in offsets_futs]
-        offsets = [(offset[0], offset[-1]) for offset in offsets]
+        offsets = [[offset[0], offset[-1]] for offset in offsets]
 
         if zero_pos is not None:
             offsets[zero_pos] = [0, offsets[zero_pos][1]]
@@ -545,7 +547,7 @@ class JaggedArrayStore:
                     zero_pos = len(offsets_futs) - 1
 
         offsets = await asyncio.gather(*[fut for fut in offsets_futs])
-        offsets = [(offset[0], offset[-1]) for offset in offsets]
+        offsets = [[offset[0], offset[-1]] for offset in offsets]
 
         if zero_pos is not None:
             offsets[zero_pos] = [0, offsets[zero_pos][1]]

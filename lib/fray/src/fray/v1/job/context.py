@@ -348,7 +348,7 @@ class ThreadContext:
     def wait(self, futures: list[Future | GeneratorFuture], num_returns: int = 1) -> tuple[list, list]:
         """Wait for futures to complete, unwrapping GeneratorFuture objects."""
         # Create mapping from raw futures to original (possibly wrapped) futures
-        raw_to_wrapped = {}
+        raw_to_wrapped: dict[Future, Future | GeneratorFuture] = {}
         raw_futures = []
         for f in futures:
             if isinstance(f, GeneratorFuture):
