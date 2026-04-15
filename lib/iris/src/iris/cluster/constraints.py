@@ -67,14 +67,11 @@ def get_device_type_enum(device: job_pb2.DeviceConfig) -> DeviceType:
 
 
 def get_device_type(device: job_pb2.DeviceConfig) -> str:
-    """Extract device type from DeviceConfig."""
-    if device.HasField("cpu"):
-        return "cpu"
-    if device.HasField("gpu"):
-        return "gpu"
-    if device.HasField("tpu"):
-        return "tpu"
-    return "cpu"
+    """Extract device type string from DeviceConfig.
+
+    Delegates to get_device_type_enum() to avoid duplicating the dispatch logic.
+    """
+    return get_device_type_enum(device).value
 
 
 def get_device_variant(device: job_pb2.DeviceConfig) -> str | None:

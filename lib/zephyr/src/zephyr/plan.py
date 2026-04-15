@@ -683,9 +683,8 @@ def _sorted_merge_join(
     Yields:
         Joined items according to join_type
     """
-    # Materialize left stream and tag both streams
-    left_items = list(left_stream)
-    left_tagged = (("left", left_key_fn(item), item) for item in left_items)
+    # Tag both streams with their side for the merged iteration
+    left_tagged = (("left", left_key_fn(item), item) for item in left_stream)
     right_tagged = (("right", right_key_fn(item), item) for item in right_stream)
 
     # Merge both sorted streams by key
