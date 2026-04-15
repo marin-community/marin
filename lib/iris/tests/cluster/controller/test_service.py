@@ -147,7 +147,30 @@ def test_launch_job_rejects_mixed_vm_shape_alternatives(service):
         service.launch_job(request, None)
 
     assert exc_info.value.code == Code.INVALID_ARGUMENT
-    assert "incompatible VM shapes" in exc_info.value.message
+    # Mismatched shapes necessarily imply a chip-count mismatch for at least one
+    # candidate, so the per-candidate count check fires first.
+    assert "chip count mismatch" in exc_info.value.message
+    assert "v6e-8" in exc_info.value.message
+
+
+def test_launch_job_rejects_variant_override_with_smaller_primary(service):
+    """Explicit device-variant constraint overrides the primary; chip count must match it.
+
+    Regression for Codex review: primary v6e-4 (chips_per_vm=4) with an explicit
+    `device-variant EQ v6e-8` constraint would schedule onto a single v6e-8 VM
+    while reserving only 4 of its 8 chips — the exact partial-VM collision we
+    want to block. The validator must check chip count against every effective
+    candidate, not just the primary.
+    """
+    request = make_job_request("variant-override-mismatch")
+    request.resources.device.CopyFrom(tpu_device("v6e-4"))
+    request.constraints.append(device_variant_constraint(["v6e-8"]).to_proto())
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+    assert "chip count mismatch" in exc_info.value.message
 
 
 def test_launch_job_accepts_same_shape_alternatives(service):

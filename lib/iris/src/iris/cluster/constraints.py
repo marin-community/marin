@@ -726,18 +726,24 @@ def validate_tpu_request(
 
     A TPU VM is the atomic scheduling unit: the scheduler reserves chips from a
     worker's advertised capacity, but a single-VM slice (e.g. ``v6e-8``) cannot
-    be shared between two jobs even if their combined chip count fits. This
-    check rejects submissions where:
+    be shared between two jobs even if their combined chip count fits.
 
-    - the declared ``resources.device.tpu.count`` differs from the primary
-      variant's ``chips_per_vm``, or
-    - a multi-variant ``device-variant`` IN constraint lists candidates with
-      mismatched ``chips_per_vm`` / ``vm_count`` (e.g. ``["v6e-4", "v6e-8"]``).
+    An explicit ``device-variant`` constraint is authoritative for scheduling
+    (it replaces the auto-generated constraint from the primary variant), so
+    we validate the requested chip count against every effective candidate —
+    not just the primary. This rejects submissions where:
+
+    - any candidate variant's ``chips_per_vm`` differs from
+      ``resources.device.tpu.count`` (e.g. primary ``v6e-4`` with
+      ``device-variant EQ v6e-8`` would schedule on a single v6e-8 VM while
+      reserving only 4 of its 8 chips), or
+    - an IN constraint lists candidates with mismatched VM shapes
+      (e.g. ``["v6e-4", "v6e-8"]``).
 
     Returns ``None`` if the request is valid, or a human-readable error
     message suitable for returning as ``INVALID_ARGUMENT``.
     """
-    from iris.cluster.types import get_tpu_topology
+    from iris.cluster.types import TpuTopologyInfo, get_tpu_topology
 
     if not resources.HasField("device") or not resources.device.HasField("tpu"):
         return None
@@ -746,20 +752,11 @@ def validate_tpu_request(
     if not primary or primary == "auto":
         return None
 
-    try:
-        primary_topo = get_tpu_topology(primary)
-    except ValueError:
-        return None
-
     chips_requested = resources.device.tpu.count
-    if chips_requested and chips_requested != primary_topo.chips_per_vm:
-        return (
-            f"TPU chip count mismatch: requested {chips_requested} chips but variant "
-            f"{primary!r} has {primary_topo.chips_per_vm} chips per VM. A TPU VM is "
-            "indivisible; the per-replica chip count must equal the variant's chips_per_vm."
-        )
 
-    variants = [primary]
+    # Effective candidates: an explicit device-variant constraint overrides
+    # the primary. Fall back to the primary when no such constraint exists.
+    variants: list[str] = [primary]
     for c in constraints:
         if c.key != WellKnownAttribute.DEVICE_VARIANT:
             continue
@@ -770,18 +767,31 @@ def validate_tpu_request(
             variants = [str(c.values[0].value)]
             break
 
-    topos: dict[str, tuple[int, int]] = {}
+    topos: dict[str, TpuTopologyInfo] = {}
     for v in variants:
         try:
-            topo = get_tpu_topology(v)
+            topos[v] = get_tpu_topology(v)
         except ValueError:
-            continue
-        topos[v] = (topo.vm_count, topo.chips_per_vm)
+            continue  # unknown variants fall through to the scheduler
 
-    if len({shape for shape in topos.values()}) > 1:
+    if not topos:
+        return None
+
+    mismatched = {
+        v: topo.chips_per_vm for v, topo in topos.items() if chips_requested and chips_requested != topo.chips_per_vm
+    }
+    if mismatched:
+        return (
+            f"TPU chip count mismatch: requested {chips_requested} chips per replica, but "
+            f"candidate variants have chips_per_vm={mismatched}. A TPU VM is indivisible; "
+            "the per-replica chip count must equal every candidate variant's chips_per_vm."
+        )
+
+    shapes = {v: (topo.vm_count, topo.chips_per_vm) for v, topo in topos.items()}
+    if len(set(shapes.values())) > 1:
         return (
             "TPU variant alternatives have incompatible VM shapes: "
-            f"{ {v: {'vm_count': shape[0], 'chips_per_vm': shape[1]} for v, shape in topos.items()} }. "
+            f"{ {v: {'vm_count': s[0], 'chips_per_vm': s[1]} for v, s in shapes.items()} }. "
             "All candidates must share vm_count and chips_per_vm; single-VM variants like "
             "v6e-8 or v5litepod-8 cannot be mixed with smaller variants because their VM is "
             "indivisible and would be shared between co-scheduled jobs."
