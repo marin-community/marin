@@ -35,7 +35,6 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import cloudpickle
-import pyarrow as pa
 from rigging.filesystem import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from fray.v2.client import JobHandle
@@ -114,8 +113,7 @@ from zephyr.shuffle import (  # noqa: E402
     MemChunk,
     ScatterShard,  # noqa: F401 — re-exported for plan.py and external callers
     _build_scatter_shard_from_manifest,  # noqa: F401 — re-exported for plan.py
-    _make_envelope,
-    _write_parquet_scatter,
+    _write_scatter,
     _write_scatter_manifest,
     _SCATTER_MANIFEST_NAME,
 )
@@ -232,36 +230,22 @@ def _write_stage_output(
     TaskResult with a ListShard.
     """
     if scatter_op is not None:
-        # Peek first item to test Arrow serializability
         first_item = next(stage_gen, None)
         if first_item is None:
             return TaskResult(shard=ListShard(refs=[]))
 
         full_gen = itertools.chain([first_item], stage_gen)
 
-        use_pickle_envelope = False
-        try:
-            test_envelope = _make_envelope([first_item], 0, 0)
-            pa.RecordBatch.from_pylist(test_envelope)
-            logger.info("Using Parquet for scatter serialization for shard %d", source_shard)
-        except Exception:
-            use_pickle_envelope = True
-            logger.info(
-                "Using Parquet with pickle envelope for scatter serialization for shard %d",
-                source_shard,
-            )
-
         num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
-        parquet_path = f"{stage_dir}/shard-{shard_idx:04d}.parquet"
-        shard = _write_parquet_scatter(
+        data_path = f"{stage_dir}/shard-{shard_idx:04d}.shuffle"
+        shard = _write_scatter(
             full_gen,
             source_shard,
-            parquet_path,
+            data_path,
             key_fn=scatter_op.key_fn,
             num_output_shards=num_output_shards,
             sort_fn=scatter_op.sort_fn,
             combiner_fn=scatter_op.combiner_fn,
-            pickled=use_pickle_envelope,
         )
         return TaskResult(shard=shard)
 

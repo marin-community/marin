@@ -64,7 +64,7 @@ class Shard(Protocol):
 
     Implementations:
     - ListShard: backed by iterable references (source data, non-scatter)
-    - ScatterShard: backed by scatter Parquet files with predicate pushdown
+    - ScatterShard: backed by scatter zstd-chunk files with byte-range sidecar
     """
 
     def __iter__(self) -> Iterator: ...
