@@ -100,6 +100,14 @@ _ROW_GROUP_SIZE = 16_384
 # full scan. 10x covers most realistic filter selectivities.
 _TAIL_SEQ_MARGIN = 10
 
+# Hard ceiling on the per-read parquet working set. Any single read scans at
+# most this many newest local segments, up to _MAX_PARQUET_BYTES_PER_READ of
+# cumulative on-disk data. Older segments remain retrievable by subsequent
+# reads with a moving cursor. This prevents a pathological filter from
+# pulling the full local retention through DuckDB in one shot.
+_MAX_PARQUETS_PER_READ = 5
+_MAX_PARQUET_BYTES_PER_READ = 500 * 1024 * 1024
+
 
 def _prefix_upper_bound(prefix: str) -> str | None:
     """Return the exclusive upper bound for a prefix range, or None if unbounded.
@@ -337,8 +345,11 @@ class _RWLock:
             self._cond.notify_all()
 
 
-_DEFAULT_DUCKDB_MEMORY_LIMIT = "256MB"
-
+# Per-connection memory ceiling for DuckDB. Tight limits (e.g. 256MB) caused
+# spill-to-disk loops under concurrent tail reads over large row groups,
+# wedging the controller. 4GB is generous against realistic working sets
+# (5 segments x 500MB + zstd decompression scratch).
+_DEFAULT_DUCKDB_MEMORY_LIMIT = "4GB"
 
 _cursor_counter = 0
 _cursor_counter_lock = Lock()
@@ -875,52 +886,18 @@ class DuckDBLogStore:
         # Acquire the segments read lock BEFORE snapshotting paths. This
         # guarantees that no file in our snapshot can be deleted (by GC or
         # consolidation) until we release the lock after DuckDB is done.
+        # Concurrent read count is capped at the RPC layer by
+        # ConcurrencyLimitInterceptor on the LogService endpoint.
         self._segments_rwlock.read_acquire()
         try:
-            with self._lock:
-                segments = list(self._local_segments)
-                ram_tables: list[pa.Table] = [sb.table for sb in self._sealed]
-                ram_tables.extend(self._chunks)
-                if self._pending:
-                    ram_tables.append(_build_buffer_table(self._pending))
-                current_max_seq = self._next_seq - 1
-
-            parquet_files = [s.path for s in segment_filter.apply(segments)]
-            parquet_files = self._drop_missing_local_segments(parquet_files)
-
-            where_clause = " AND ".join(where_parts)
-
-            if include_key_in_select:
-                select_cols = "seq, key, source, data, epoch_ms, level"
-            else:
-                select_cols = "seq, source, data, epoch_ms, level"
-
-            order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
-            limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
-
-            # Register each RAM table individually so DuckDB scans them
-            # via zero-copy Arrow, avoiding a pa.concat_tables() copy.
-            with self._pool.checkout(ram_tables) as (conn, ram_names):
-                source = _build_union_source(parquet_files, ram_names)
-
-                # For tail+prefix queries, try a seq-bounded scan first. The
-                # last max_lines rows must have seq within a bounded range of
-                # the global max. Use a generous margin and fall back to a
-                # full scan if we get fewer rows than requested. Skip this
-                # for exact-key queries since row-group pruning already
-                # narrows the scan sufficiently.
-                rows = None
-                if tail and max_lines > 0 and include_key_in_select:
-                    seq_lower = max(0, current_max_seq - max_lines * _TAIL_SEQ_MARGIN)
-                    bounded_where = f"{where_clause} AND seq > {seq_lower}"
-                    sql = f"SELECT {select_cols} FROM ({source}) WHERE {bounded_where} {order} {limit}"
-                    rows = conn.execute(sql, params).fetchall()
-                    if len(rows) < max_lines:
-                        rows = None  # margin was too tight, fall back
-
-                if rows is None:
-                    sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
-                    rows = conn.execute(sql, params).fetchall()
+            rows = self._run_read_locked(
+                where_parts=where_parts,
+                params=params,
+                max_lines=max_lines,
+                tail=tail,
+                include_key_in_select=include_key_in_select,
+                segment_filter=segment_filter,
+            )
         finally:
             self._segments_rwlock.read_release()
 
@@ -961,10 +938,89 @@ class DuckDBLogStore:
 
         return LogReadResult(entries=entries, cursor=max_seq)
 
+    def _run_read_locked(
+        self,
+        *,
+        where_parts: list[str],
+        params: dict,
+        max_lines: int,
+        tail: bool,
+        include_key_in_select: bool,
+        segment_filter: _SegmentFilter,
+    ) -> list[tuple]:
+        """Snapshot in-memory buffers and run the DuckDB query. Caller holds
+        the segments read lock.
+
+        Fast path for filtered tail reads (no exact key): restrict seq to the
+        last max_lines * _TAIL_SEQ_MARGIN entries and retry if too sparse.
+        Row-group pruning on `seq` lets DuckDB skip whole files.
+
+        Working set cap: at most _MAX_PARQUETS_PER_READ newest segments and
+        _MAX_PARQUET_BYTES_PER_READ cumulative bytes. Callers with stale
+        cursors will make forward progress across successive reads.
+        """
+        with self._lock:
+            segments = list(self._local_segments)
+            ram_tables: list[pa.Table] = [sb.table for sb in self._sealed]
+            ram_tables.extend(self._chunks)
+            if self._pending:
+                ram_tables.append(_build_buffer_table(self._pending))
+            current_max_seq = self._next_seq - 1
+
+        segments = _cap_segments(segment_filter.apply(segments))
+        parquet_files = [s.path for s in segments]
+        parquet_files = self._drop_missing_local_segments(parquet_files)
+
+        where_clause = " AND ".join(where_parts)
+        select_cols = (
+            "seq, key, source, data, epoch_ms, level" if include_key_in_select else "seq, source, data, epoch_ms, level"
+        )
+        order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
+        limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
+
+        # Register each RAM table individually so DuckDB scans them via
+        # zero-copy Arrow, avoiding a pa.concat_tables() copy.
+        with self._pool.checkout(ram_tables) as (conn, ram_names):
+            source = _build_union_source(parquet_files, ram_names)
+
+            # Seq-bounded fast path: only useful for filtered tail reads
+            # where `key` row-group stats can't already prune (i.e. regex
+            # / prefix scans, which is the `include_key_in_select` path).
+            # Exact-key tails are already pruned by row-group `key` stats.
+            if tail and max_lines > 0 and include_key_in_select:
+                seq_lower = max(0, current_max_seq - max_lines * _TAIL_SEQ_MARGIN)
+                bounded_where = f"{where_clause} AND seq > {seq_lower}"
+                sql = f"SELECT {select_cols} FROM ({source}) WHERE {bounded_where} {order} {limit}"
+                rows = conn.execute(sql, params).fetchall()
+                if len(rows) >= max_lines:
+                    return rows
+
+            sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
+            return conn.execute(sql, params).fetchall()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _cap_segments(segments: list[_LocalSegment]) -> list[_LocalSegment]:
+    """Cap a segment list at the newest _MAX_PARQUETS_PER_READ entries and
+    _MAX_PARQUET_BYTES_PER_READ cumulative bytes, returned in ascending
+    min_seq order.
+    """
+    if not segments:
+        return segments
+    newest_first = sorted(segments, key=lambda s: s.min_seq, reverse=True)[:_MAX_PARQUETS_PER_READ]
+    capped: list[_LocalSegment] = []
+    total = 0
+    for seg in newest_first:
+        if capped and total + seg.size_bytes > _MAX_PARQUET_BYTES_PER_READ:
+            break
+        capped.append(seg)
+        total += seg.size_bytes
+    capped.sort(key=lambda s: s.min_seq)
+    return capped
 
 
 def _regex_literal_prefix(pattern: str) -> str:

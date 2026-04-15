@@ -15,10 +15,12 @@ permissions:
   pull-requests: read   # needed for issue_comment to access PR metadata
   statuses: write       # post commit status from issue_comment trigger
 
-# Single concurrency group — only one CW CI run at a time across all PRs.
-# The warm cluster is shared; concurrent runs would conflict.
+# Shared concurrency group with marin-canary-ferry-cw.yaml — both rebuild/roll
+# the shared iris-ci controller and submit against the shared H100 in
+# US-WEST-04A. Only one run cluster-wide at a time. cancel-in-progress=false
+# so a mid-flight canary is not killed by a PR firing.
 concurrency:
-  group: iris-coreweave-ci
+  group: iris-coreweave-ci-shared
   cancel-in-progress: false
 
 jobs:

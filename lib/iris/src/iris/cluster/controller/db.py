@@ -419,21 +419,24 @@ class ControllerDB:
         with self._lock:
             self._conn.execute("PRAGMA optimize")
 
-    def wal_checkpoint(self, mode: str = "TRUNCATE") -> tuple[int, int, int]:
-        """Run ``PRAGMA wal_checkpoint`` to move pages from the WAL into the main DB.
+    def wal_checkpoint(self) -> tuple[int, int, int]:
+        """Reclaim freelist pages, flush WAL into the main DB, and truncate it.
 
         Left unchecked, the WAL grows unbounded under continuous write load and
-        makes every reader walk more frames to assemble a snapshot. TRUNCATE also
-        shrinks the WAL file on disk once all frames are checkpointed.
+        makes every reader walk more frames to assemble a snapshot. The preceding
+        ``PRAGMA incremental_vacuum`` (enabled via the auto_vacuum=INCREMENTAL
+        migration) writes frames describing the shortened file; the subsequent
+        TRUNCATE checkpoint flushes those frames and physically truncates both
+        the main DB and WAL on disk. ``executescript`` drains the pragma so every
+        available freelist page is reclaimed (it yields one row per freed page).
 
         Returns ``(busy, log_frames, checkpointed_frames)`` exactly as SQLite does.
         """
-        mode = mode.upper()
-        assert mode in ("PASSIVE", "FULL", "RESTART", "TRUNCATE"), f"invalid checkpoint mode {mode!r}"
         # Pin to the main schema so the attached auth/profiles DBs (which may
         # not even be in WAL mode) cannot raise SQLITE_LOCKED here.
         with self._lock:
-            row = self._conn.execute(f"PRAGMA main.wal_checkpoint({mode})").fetchone()
+            self._conn.executescript("PRAGMA main.incremental_vacuum")
+            row = self._conn.execute("PRAGMA main.wal_checkpoint(TRUNCATE)").fetchone()
         return (int(row[0]), int(row[1]), int(row[2]))
 
     def close(self) -> None:
@@ -592,7 +595,7 @@ class ControllerDB:
             # Checkpoint and truncate the WAL so the migration's write volume
             # does not linger as a giant WAL file that every subsequent reader
             # must walk to build a snapshot.
-            busy, log_frames, checkpointed = self.wal_checkpoint("TRUNCATE")
+            busy, log_frames, checkpointed = self.wal_checkpoint()
             logger.info(
                 "Post-migration wal_checkpoint(TRUNCATE): busy=%d log_frames=%d checkpointed=%d",
                 busy,
@@ -651,34 +654,23 @@ class ControllerDB:
         self-contained file (no -wal/-shm sidecars) that survives
         compression and remote upload without corruption.
 
-        The backup is also VACUUMed with auto_vacuum=INCREMENTAL so that
-        controllers restoring from this checkpoint start in incremental
-        mode without needing a full VACUUM at boot.
+        We also set ``auto_vacuum=INCREMENTAL`` on the backup and run one
+        incremental vacuum pass so controllers restoring from this
+        checkpoint start in incremental mode without needing a full
+        VACUUM at boot.  This is a single-pass operation against the
+        already-written backup file -- no redundant copy is required.
         """
-        import time
-
         destination.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
             dest = sqlite3.connect(str(destination))
             try:
                 self._conn.backup(dest)
                 dest.execute("PRAGMA journal_mode = DELETE")
+                dest.execute("PRAGMA auto_vacuum = INCREMENTAL")
+                dest.execute("PRAGMA incremental_vacuum")
                 dest.commit()
             finally:
                 dest.close()
-
-        # VACUUM INTO a compacted copy with incremental auto_vacuum enabled.
-        # Runs outside the lock since it operates on the already-written backup.
-        t0 = time.monotonic()
-        vacuumed = destination.with_suffix(".vacuumed.sqlite3")
-        conn = sqlite3.connect(str(destination))
-        try:
-            conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
-            conn.execute(f"VACUUM INTO '{vacuumed}'")
-        finally:
-            conn.close()
-        vacuumed.rename(destination)
-        logger.info("Checkpoint vacuumed in %.1fs", time.monotonic() - t0)
 
     @staticmethod
     def _sidecar_paths(path: Path) -> tuple[Path, Path]:

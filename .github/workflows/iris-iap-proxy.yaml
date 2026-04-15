@@ -1,15 +1,15 @@
-name: Marin - Infra Dashboard
+name: Iris - IAP Proxy
 on:
   push:
     branches:
       - main
     paths:
-      - 'infra/status-page/**'
-      - '.github/workflows/marin-infra-dashboard.yaml'
+      - 'infra/iris-iap-proxy/**'
+      - '.github/workflows/iris-iap-proxy.yaml'
   pull_request:
     paths:
-      - 'infra/status-page/**'
-      - '.github/workflows/marin-infra-dashboard.yaml'
+      - 'infra/iris-iap-proxy/**'
+      - '.github/workflows/iris-iap-proxy.yaml'
 
 
 concurrency:
@@ -19,40 +19,33 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: infra/status-page
+    timeout-minutes: 15
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build container image
+        uses: docker/build-push-action@v6
         with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: infra/status-page/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Build
-        run: npm run build
+          context: infra/iris-iap-proxy
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   deploy:
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        cluster: [marin, marin-dev]
     concurrency:
-      group: marin-infra-dashboard-deploy
+      group: iris-iap-proxy-deploy-${{ matrix.cluster }}
       cancel-in-progress: false
     steps:
       - name: Checkout code
@@ -70,4 +63,4 @@ jobs:
           install_components: beta
 
       - name: Deploy to Cloud Run
-        run: ./infra/status-page/deploy.sh
+        run: ./infra/iris-iap-proxy/deploy.sh ${{ matrix.cluster }}
