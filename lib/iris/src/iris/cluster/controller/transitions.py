@@ -89,6 +89,13 @@ accidental collision with normal job names."""
 HEARTBEAT_FAILURE_THRESHOLD = 10
 """Consecutive heartbeat failures before marking worker as failed."""
 
+FAIL_HEARTBEATS_CHUNK_SIZE = 10
+"""Number of worker failures processed per transaction in
+``fail_heartbeats_batch``. Commits between chunks so the SQLite writer is
+released and other RPCs (RegisterEndpoint, Register, LaunchJob,
+apply_heartbeats_batch) can interleave. Keeps worst-case writer-hold
+below ~1s even when a zone-wide failure removes hundreds of workers."""
+
 HEARTBEAT_STALENESS_THRESHOLD = Duration.from_seconds(900)
 """If a worker's last successful heartbeat is older than this, it is failed
 immediately. Catches workers restored from a checkpoint whose backing VMs
@@ -2220,8 +2227,22 @@ class ControllerTransitions:
         failures: list[tuple[DispatchBatch, str]],
         *,
         force_remove: bool = False,
+        chunk_size: int = FAIL_HEARTBEATS_CHUNK_SIZE,
     ) -> WorkerFailureBatchResult:
-        """Apply a batch of heartbeat RPC failures in one transaction."""
+        """Apply heartbeat RPC failures in chunked transactions.
+
+        Each chunk is its own write transaction so we release the SQLite
+        writer between chunks and other RPCs (RegisterEndpoint, Register,
+        LaunchJob, apply_heartbeats_batch) can interleave instead of
+        stalling for the full batch. A single big transaction would starve
+        them for seconds when a zone-wide failure knocks out hundreds of
+        workers at once.
+
+        Heartbeat failures are idempotent at the semantic level
+        (``_record_heartbeat_failure`` guards on ``active = 1``), so
+        partial progress on crash is safe. Downstream consumers do not
+        rely on cross-worker atomicity.
+        """
         if not failures:
             return WorkerFailureBatchResult()
 
@@ -2229,26 +2250,33 @@ class ControllerTransitions:
         removed_workers: list[tuple[WorkerId, str | None]] = []
         all_tasks_to_kill: set[JobName] = set()
         all_task_kill_workers: dict[JobName, WorkerId] = {}
-        actions: list[tuple[str, str, dict[str, object]]] = []
 
-        with self._db.transaction() as cur:
-            now_ms = Timestamp.now().epoch_ms()
-            for snapshot, error in failures:
-                result = self._record_heartbeat_failure(
+        for chunk_start in range(0, len(failures), chunk_size):
+            chunk = failures[chunk_start : chunk_start + chunk_size]
+            chunk_actions: list[tuple[str, str, dict[str, object]]] = []
+            with self._db.transaction() as cur:
+                now_ms = Timestamp.now().epoch_ms()
+                for snapshot, error in chunk:
+                    result = self._record_heartbeat_failure(
+                        cur,
+                        snapshot.worker_id,
+                        error,
+                        snapshot,
+                        force_remove=force_remove,
+                        now_ms=now_ms,
+                    )
+                    results.append(result)
+                    chunk_actions.append(("worker_heartbeat_failed", str(snapshot.worker_id), {"error": error}))
+                    all_tasks_to_kill.update(result.tasks_to_kill)
+                    all_task_kill_workers.update(result.task_kill_workers)
+                    if result.worker_removed:
+                        removed_workers.append((snapshot.worker_id, snapshot.worker_address))
+                self._record_transaction(
                     cur,
-                    snapshot.worker_id,
-                    error,
-                    snapshot,
-                    force_remove=force_remove,
-                    now_ms=now_ms,
+                    "heartbeat_failures_batch",
+                    chunk_actions,
+                    payload={"count": len(chunk_actions)},
                 )
-                results.append(result)
-                actions.append(("worker_heartbeat_failed", str(snapshot.worker_id), {"error": error}))
-                all_tasks_to_kill.update(result.tasks_to_kill)
-                all_task_kill_workers.update(result.task_kill_workers)
-                if result.worker_removed:
-                    removed_workers.append((snapshot.worker_id, snapshot.worker_address))
-            self._record_transaction(cur, "heartbeat_failures_batch", actions, payload={"count": len(actions)})
 
         for worker_id, _ in removed_workers:
             self._db.remove_worker_from_attr_cache(worker_id)
