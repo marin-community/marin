@@ -311,7 +311,10 @@ def create_nano_train_worker_config(rollout_storage: RolloutStorageConfig, outpu
         optimizer=create_nano_optimizer_config(),
         weight_transfer=create_weight_transfer_config(),
         curriculum_config=create_test_curriculum_config(),
+        lora=None,
         tokenizer=DummyTokenizer(),
+        run_manifest_path=str(Path(output_dir) / "rl_run_manifest.json"),
+        inference_type="vllm",
         replay_buffer=ReplayBufferConfig(
             capacity=2048,
             alpha=3.0,

@@ -16,6 +16,7 @@ import signal
 import sys
 import time
 from dataclasses import dataclass
+from typing import Literal
 
 import haliax as hax
 import jax
@@ -28,14 +29,17 @@ from levanter.checkpoint import (
     register_debug_checkpointer_state_provider,
     unregister_debug_checkpointer_state_provider,
 )
+from levanter.lora import LoraConfig, lora_trainable_params_filter, loraize
 from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend
 from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.optim import OptimizerConfig
 from levanter.tokenizers import MarinTokenizer
 from levanter.trainer import Trainer, TrainerConfig
+from levanter.utils.jax_utils import parameter_count
 from marin.rl import weight_transfer
 from marin.rl.curriculum import CurriculumConfig
+from marin.rl.lora_manifest import build_rl_run_manifest, write_rl_run_manifest
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.runtime import RLRuntimeHandles
 from marin.rl.weight_transfer import WeightTransferConfig
@@ -143,8 +147,12 @@ class TrainWorkerConfig:
     weight_transfer: WeightTransferConfig
     curriculum_config: CurriculumConfig
     loss: RLLossModule
+    lora: LoraConfig | None
     tokenizer: MarinTokenizer
     run_id: str
+    run_manifest_path: str
+    inference_type: Literal["levanter", "vllm"]
+    rollout_policy_format: Literal["merged", "adapter"] = "merged"
 
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
@@ -269,6 +277,7 @@ class TrainWorker:
     loss_module: RLLossModule
     initial_model: LmHeadModel | None
     reference_model: LmHeadModel | None
+    trainable_model_filter: object
 
     def __init__(
         self,
@@ -336,7 +345,7 @@ class TrainWorker:
     def _build_models(self):
         """Build the initial policy model and optional retained reference model."""
         config = self.config
-        model_key = jrandom.PRNGKey(config.seed)
+        model_key, lora_key = jrandom.split(jrandom.PRNGKey(config.seed))
         vocab_size = config.vocab_size if config.vocab_size is not None else self.tokenizer.vocab_size
         Vocab = hax.Axis("vocab", vocab_size)
 
@@ -357,10 +366,52 @@ class TrainWorker:
                 key=model_key,
             )
 
-        self.initial_model = _load_model()
+        base_model = _load_model()
+        self.trainable_model_filter = True
+
+        if config.lora is None:
+            self.initial_model = base_model
+        else:
+
+            @hax.named_jit(axis_resources=config.trainer.parameter_axis_mapping)
+            def _loraize_model(model: LmHeadModel) -> LmHeadModel:
+                return loraize(model, config.lora, key=lora_key)
+
+            self.initial_model = _loraize_model(base_model)
+            self.trainable_model_filter = lora_trainable_params_filter(self.initial_model)
+
         # Keep compatibility for callers that inspect the worker immediately after construction.
         # The zero-KL path clears this alias once trainer state has been materialized.
-        self.reference_model = self.initial_model
+        self.reference_model = base_model
+
+    def _write_run_manifest(self) -> None:
+        """Persist LoRA run metadata needed for checkpoint validation and future exports."""
+        manifest = build_rl_run_manifest(
+            initial_checkpoint=self.config.initial_checkpoint,
+            model_config=self.config.model,
+            lora_config=self.config.lora,
+            rollout_policy_format=self.config.rollout_policy_format,
+            inference_type=self.config.inference_type,
+        )
+        write_rl_run_manifest(self.config.run_manifest_path, manifest)
+
+    def _log_lora_parameter_metrics(self, state) -> None:
+        """Log total and trainable parameter counts for LoRA runs."""
+        all_param_count = parameter_count(state.model)
+        trainable_param_count = parameter_count(state.trainable_model)
+        fraction_trainable = trainable_param_count / all_param_count
+
+        levanter.tracker.log_summary(
+            {
+                "parameter_count": all_param_count,
+                "trainable_parameter_count": trainable_param_count,
+                "fraction_trainable": fraction_trainable,
+            }
+        )
+
+        logger.info("Total parameter count: %d", all_param_count)
+        logger.info("Trainable parameter count: %d", trainable_param_count)
+        logger.info("Fraction of parameters that are trainable: %.3e", fraction_trainable)
 
     def _drop_bootstrap_model_references(self) -> None:
         """Release one-shot bootstrap model references once trainer state exists."""
@@ -464,7 +515,17 @@ class TrainWorker:
                 if debug_checkpointer:
                     install_tensorstore_metrics_hook(trainer, every=1)
                 _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
-                state = trainer.initial_state(training_key, model=self.initial_model)
+                if config.lora is None:
+                    state = trainer.initial_state(training_key, model=self.initial_model)
+                else:
+                    if jax.process_index() == 0:
+                        self._write_run_manifest()
+                    state = trainer.initial_state(
+                        training_key,
+                        model=self.initial_model,
+                        is_trainable=self.trainable_model_filter,
+                    )
+                    self._log_lora_parameter_metrics(state)
                 self._drop_bootstrap_model_references()
                 startup_rollout_state = _initial_rollout_state(int(state.step))
                 logger.info(
