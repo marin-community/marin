@@ -151,6 +151,9 @@ class LowRankLinear(eqx.Module):
         # Peft always uses out_first=True (i.e. normal Torch convention) for linear, even for gpt2-style Conv1d
         lora_A = hnn.Linear.init(In, _R, key=key_A, use_bias=False, out_first=True)
         lora_B = hnn.Linear.init(_R, Out, key=key_B, use_bias=False, out_first=True)
+        # Match common LoRA initialization semantics: keep one factor random and zero the other so the
+        # initial adapter delta is exactly zero.
+        lora_B = dataclasses.replace(lora_B, weight=hax.zeros_like(lora_B.weight))
         dropout = hnn.Dropout(dropout_prob)
 
         return LowRankLinear(lora_A, lora_B, dropout, alpha / r)

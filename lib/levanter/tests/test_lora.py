@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import tempfile
 
 import equinox as eqx
@@ -21,6 +22,7 @@ from levanter.layers.attention import AttentionMask
 from levanter.lora import (
     LoraConfig,
     LoraLinear,
+    LowRankLinear,
     lora_trainable_params_filter,
     loraize,
     merge_lora_modules,
@@ -34,6 +36,16 @@ from levanter.utils.tree_utils import inference_mode
 In = hax.Axis("In", 10)
 Mid = hax.Axis("Mid", 20)
 Out = hax.Axis("Out", 5)
+
+
+def _inject_test_lora_delta(model):
+    def activate(node):
+        if isinstance(node, LowRankLinear):
+            updated_lora_b = dataclasses.replace(node.lora_B, weight=node.lora_B.weight + 0.01)
+            return dataclasses.replace(node, lora_B=updated_lora_b)
+        return node
+
+    return jax.tree.map(activate, model, is_leaf=lambda node: isinstance(node, LowRankLinear))
 
 
 def test_loraize_simple():
@@ -56,9 +68,10 @@ def test_loraize_simple():
     loraized = loraize(module, LoraConfig(r=8, target_modules=["second"]), key=k0)
     assert isinstance(loraized.first, hnn.Linear)
     assert isinstance(loraized.second, LoraLinear)
+    assert hax.all(hax.isclose(loraized.second.lora.lora_B.weight, hax.zeros_like(loraized.second.lora.lora_B.weight)))
 
     input = hax.random.normal(k0, (In,))
-    assert not hax.all(hax.isclose(module(input), loraized(input)))
+    assert hax.all(hax.isclose(module(input), loraized(input)))
 
 
 def test_lora_scan_layers():
@@ -88,10 +101,15 @@ def test_lora_scan_layers():
 
     assert loraized.stacked.first.lora.lora_A.weight.axes == (Layers, hax.Axis("LORA_R", 8), In)
     assert loraized.stacked.first.lora.lora_B.weight.axes == (Layers, Mid, hax.Axis("LORA_R", 8))
+    assert hax.all(
+        hax.isclose(
+            loraized.stacked.first.lora.lora_B.weight, hax.zeros_like(loraized.stacked.first.lora.lora_B.weight)
+        )
+    )
 
     assert loraized.stacked.second.weight.axes == (Layers, In, Mid)
     input = hax.random.normal(k0, (In,))
-    assert not hax.all(hax.isclose(module.fold(input), loraized.fold(input)))
+    assert hax.all(hax.isclose(module.fold(input), loraized.fold(input)))
 
 
 def test_merge_lora():
@@ -144,6 +162,7 @@ def test_merge_lora():
     input = hax.random.normal(k0, (In,))
     # light tolerances for TPU
     assert_trees_all_close(merged.fold(input), loraized.fold(input), rtol=1e-3, atol=3e-3)
+    assert_trees_all_close(merged.fold(input), module.fold(input), rtol=1e-3, atol=3e-3)
 
 
 @skip_if_module_missing("peft")
@@ -170,6 +189,7 @@ def test_lora_load_in_peft():
 
         lora_config = LoraConfig(r=8, target_modules=["c_attn"])
         loraized = loraize(model, lora_config, key=jax.random.PRNGKey(0))
+        loraized = _inject_test_lora_delta(loraized)
         save_peft_pretrained(loraized, lora_config, f"{tmpdir}/model", f"{tmpdir}/loraized")
         peft_config = PeftConfig.from_pretrained(f"{tmpdir}/loraized")
 
@@ -218,6 +238,7 @@ def test_lora_merged_load_in_hf():
 
         lora_config = LoraConfig(r=8, target_modules=["c_attn"])
         loraized = loraize(model, lora_config, key=jax.random.PRNGKey(0))
+        loraized = _inject_test_lora_delta(loraized)
         save_merged_hf_model(loraized, converter, f"{tmpdir}/loraized")
 
         hf_model = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/model").cpu()
