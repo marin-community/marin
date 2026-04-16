@@ -2192,21 +2192,6 @@ class Controller:
                         )
             except Exception as e:
                 logger.warning("StartTasks RPC failed for worker %s: %s", worker_id, e)
-                for task in tasks:
-                    self._task_update_queue.put(
-                        HeartbeatApplyRequest(
-                            worker_id=worker_id,
-                            worker_resource_snapshot=None,
-                            updates=[
-                                TaskUpdate(
-                                    task_id=JobName.from_wire(task.task_id),
-                                    attempt_id=task.attempt_id,
-                                    new_state=job_pb2.TASK_STATE_WORKER_FAILED,
-                                    error=f"StartTasks RPC failed: {e}",
-                                )
-                            ],
-                        )
-                    )
 
     def _stop_tasks_direct(
         self,
