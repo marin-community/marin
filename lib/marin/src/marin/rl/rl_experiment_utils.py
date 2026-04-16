@@ -27,6 +27,7 @@ from marin.execution.remote import remote
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.environments.inference_ctx import VLLMSamplingConfig, vLLMInferenceContextConfig
 from marin.rl.lora_manifest import RUN_MANIFEST_FILENAME, RolloutPolicyFormat
+from marin.rl.model_utils import is_hf_checkpoint
 from marin.rl.placement import marin_prefix_for_region, resolve_launcher_region, singleton_region_list
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
@@ -38,6 +39,9 @@ from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 logger = logging.getLogger(__name__)
 
 RL_EXECUTOR_STEP_RESOURCES = ResourceConfig.with_cpu(cpu=0.5, ram="4g", disk="30g")
+ADAPTER_ARTIFACTS_DIR = "adapter_artifacts"
+EXPORTS_DIR = "exports"
+MERGED_EXPORT_DIR = "merged"
 
 
 ModelArtifact = ExecutorStep | InputName | str
@@ -76,6 +80,8 @@ class RLExperimentConfig:
     experiment_name_suffix: str
     lora: LoraConfig | None = None
     rollout_policy_format: RolloutPolicyFormat = "merged"
+    adapter_artifacts_path: str | None = None
+    merged_hf_export_path: str | None = None
 
     # trainer params
     train_batch_size: int = 1024
@@ -226,6 +232,13 @@ def _build_rl_job_config(
     checkpoints_path = join_path(output_path, "checkpoints")
     rollout_storage_path = join_path(output_path, "rollouts")
     run_manifest_path = join_path(output_path, RUN_MANIFEST_FILENAME)
+    adapter_artifacts_path = config.adapter_artifacts_path
+    if adapter_artifacts_path is None and config.lora is not None and is_hf_checkpoint(model_path):
+        adapter_artifacts_path = join_path(output_path, ADAPTER_ARTIFACTS_DIR)
+
+    merged_hf_export_path = config.merged_hf_export_path
+    if merged_hf_export_path is None and config.lora is not None:
+        merged_hf_export_path = join_path(join_path(output_path, EXPORTS_DIR), MERGED_EXPORT_DIR)
 
     trainer_config = TrainerConfig(
         tracker=WandbConfig(
@@ -317,6 +330,8 @@ def _build_rl_job_config(
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
         run_manifest_path=run_manifest_path,
+        adapter_artifacts_path=adapter_artifacts_path,
+        merged_hf_export_path=merged_hf_export_path,
         run_id=name,
         log_freq=1,
         run_config=RunConfig(

@@ -48,6 +48,7 @@ import json
 import logging
 import os
 import re
+import urllib.parse
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, TypeVar, Union
 
@@ -344,7 +345,8 @@ def save_peft_pretrained(
             as a repo name + branch
         upload_kwargs: kwargs to pass to the upload function
     """
-    os.makedirs(path, exist_ok=True)
+    if urllib.parse.urlparse(path).scheme == "":
+        os.makedirs(path, exist_ok=True)
     hf_config = to_hf_config(config, base_model_name_or_path=base_model_name_or_path)
     state_dict = lora_state_dict(lora_model, prefix=prefix)
 

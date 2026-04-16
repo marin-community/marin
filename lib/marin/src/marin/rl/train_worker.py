@@ -30,8 +30,16 @@ from levanter.checkpoint import (
     register_debug_checkpointer_state_provider,
     unregister_debug_checkpointer_state_provider,
 )
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook
-from levanter.lora import LoraConfig, lora_trainable_params_filter, loraize, merge_lora_modules
+from levanter.lora import (
+    LoraConfig,
+    lora_trainable_params_filter,
+    loraize,
+    merge_lora_modules,
+    save_merged_hf_model,
+    save_peft_pretrained,
+)
 from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend
 from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
 from levanter.models.lm_model import LmConfig
@@ -39,12 +47,13 @@ from levanter.models.lm_model import LmHeadModel
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.tokenizers import MarinTokenizer
+from levanter.utils.fsspec_utils import join_path
 from levanter.utils.jax_utils import parameter_count
 
 from marin.rl import weight_transfer
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.lora_manifest import RLRunManifest, build_rl_run_manifest, read_rl_run_manifest, write_rl_run_manifest
-from marin.rl.model_utils import load_model_from_checkpoint
+from marin.rl.model_utils import is_hf_checkpoint, load_model_from_checkpoint
 from marin.rl.runtime import RLRuntimeHandles
 from marin.rl.weight_transfer import WeightTransferConfig
 
@@ -54,6 +63,7 @@ from .rollout_storage import RolloutStorageConfig
 from .train_batch import create_training_batch_from_rollouts
 
 logger = logging.getLogger(__name__)
+FINAL_EXPORT_DIR = "final"
 
 
 @dataclass(frozen=True)
@@ -157,6 +167,8 @@ class TrainWorkerConfig:
     run_manifest_path: str
     inference_type: Literal["levanter", "vllm"]
     rollout_policy_format: Literal["merged", "adapter"] = "merged"
+    adapter_artifacts_path: str | None = None
+    merged_hf_export_path: str | None = None
 
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
@@ -495,6 +507,73 @@ class TrainWorker:
             "base",
         )
 
+    def _adapter_artifacts_path(self) -> str | None:
+        """Return the adapter export root, if configured."""
+        return getattr(self.config, "adapter_artifacts_path", None)
+
+    def _merged_hf_export_path(self) -> str | None:
+        """Return the merged-HF export root, if configured."""
+        return getattr(self.config, "merged_hf_export_path", None)
+
+    def _final_export_path(self, base_path: str) -> str:
+        """Return the final export directory under an artifact root."""
+        return join_path(base_path, FINAL_EXPORT_DIR)
+
+    def _adapter_base_model_name_or_path(self) -> str | None:
+        """Return the base checkpoint identifier used by PEFT adapter exports."""
+        if self.config.initial_checkpoint is not None:
+            return self.config.initial_checkpoint
+
+        reference_checkpoint = getattr(self.config.model, "reference_checkpoint", None)
+        if reference_checkpoint is None:
+            return None
+
+        return str(reference_checkpoint)
+
+    def _hf_export_converter(self) -> HFCheckpointConverter:
+        """Build an HF converter for merged full-model exports."""
+        if not hasattr(self.config.model, "hf_checkpoint_converter"):
+            raise ValueError("Merged HF export requires an HF-compatible model config")
+
+        converter = self.config.model.hf_checkpoint_converter(self.config.initial_checkpoint)
+        return converter.replaced(tokenizer=self.tokenizer)
+
+    def _export_lora_artifacts(self, model: LmHeadModel) -> None:
+        """Export adapter and merged artifacts for LoRA runs."""
+        if self.config.lora is None:
+            return
+
+        exported_paths: dict[str, str] = {}
+
+        adapter_artifacts_path = self._adapter_artifacts_path()
+        if adapter_artifacts_path is not None:
+            base_model_name_or_path = self._adapter_base_model_name_or_path()
+            if base_model_name_or_path is None or not is_hf_checkpoint(base_model_name_or_path):
+                raise ValueError(
+                    "PEFT adapter export requires an HF-compatible base checkpoint, " f"got {base_model_name_or_path!r}"
+                )
+
+            adapter_export_path = self._final_export_path(adapter_artifacts_path)
+            logger.info("Exporting LoRA adapter artifacts to %s", adapter_export_path)
+            save_peft_pretrained(
+                model,
+                self.config.lora,
+                base_model_name_or_path,
+                adapter_export_path,
+                tokenizer=self.tokenizer,
+            )
+            exported_paths["adapter_artifacts_path"] = adapter_export_path
+
+        merged_hf_export_path = self._merged_hf_export_path()
+        if merged_hf_export_path is not None:
+            merged_export_path = self._final_export_path(merged_hf_export_path)
+            logger.info("Exporting merged HF model to %s", merged_export_path)
+            save_merged_hf_model(model, self._hf_export_converter(), merged_export_path)
+            exported_paths["merged_hf_export_path"] = merged_export_path
+
+        if exported_paths:
+            levanter.tracker.log_summary(exported_paths)
+
     def _drop_bootstrap_model_references(self) -> None:
         """Release one-shot bootstrap model references once trainer state exists."""
         self.initial_model = None
@@ -640,7 +719,8 @@ class TrainWorker:
 
                     self._configure_training_hooks(trainer)
                     try:
-                        trainer.train(state, self.data_loader)
+                        final_info = trainer.train(state, self.data_loader)
+                        self._export_lora_artifacts(final_info.eval_model)
                     except StopTrainerException:
                         pass
         except StopTrainerException:
