@@ -28,6 +28,7 @@ worker_provider: {}
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
+  use_split_heartbeat: false  # Stay on legacy heartbeat path until split mode burns in elsewhere.
   gcp:
     service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
     zone: us-central1-a

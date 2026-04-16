@@ -82,7 +82,6 @@ from iris.cluster.controller.budget import (
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.controller.provider import TaskProvider
-from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
@@ -964,11 +963,12 @@ class ControllerConfig:
     dry_run: bool = False
     """Start in dry-run mode: compute scheduling but suppress all side effects."""
 
-    use_split_heartbeat: bool = False
-    """When True, use direct StartTasks/StopTasks RPCs instead of the dispatch_queue.
-    Scheduling sends StartTasks immediately after committing assignments; kills
-    send StopTasks directly. A task-updater thread applies state transitions from
-    a queue fed by poll results and RPC failures."""
+    use_split_heartbeat: bool = True
+    """When True (default), use direct StartTasks/StopTasks RPCs instead of the
+    dispatch_queue. Scheduling sends StartTasks immediately after committing
+    assignments; kills send StopTasks directly. A task-updater thread applies
+    state transitions from a queue fed by poll results and RPC failures.
+    Set False to fall back to the legacy monolithic Heartbeat path."""
 
     user_budget_defaults: UserBudgetDefaults = field(default_factory=UserBudgetDefaults)
     """Default budget settings applied when a new user is first seen."""
@@ -2121,7 +2121,7 @@ class Controller:
         if self._config.dry_run:
             logger.info("[DRY-RUN] Would kill %d tasks on workers: %s", len(task_ids), list(task_ids)[:5])
             return
-        if self._config.use_split_heartbeat and isinstance(self._provider, WorkerProvider):
+        if self._config.use_split_heartbeat and not isinstance(self._provider, K8sTaskProvider):
             self._stop_tasks_direct(task_ids, task_kill_workers)
             return
         any_buffered = False
@@ -2169,7 +2169,6 @@ class Controller:
         for worker_id, address, run_request in result.start_requests:
             by_worker.setdefault((worker_id, address), []).append(run_request)
 
-        assert isinstance(self._provider, WorkerProvider)
         for (worker_id, address), tasks in by_worker.items():
             attempt_by_task = {t.task_id: t.attempt_id for t in tasks}
             try:
@@ -2215,7 +2214,6 @@ class Controller:
         task_kill_workers: dict[JobName, WorkerId] | None = None,
     ) -> None:
         """Send StopTasks RPCs directly to workers."""
-        assert isinstance(self._provider, WorkerProvider)
         mapping = dict(task_kill_workers or {})
         unresolved = task_ids - set(mapping.keys())
         if unresolved:
@@ -2263,7 +2261,6 @@ class Controller:
             try:
                 self._reap_stale_workers()
                 workers = self._get_active_worker_addresses()
-                assert isinstance(self._provider, WorkerProvider)
                 results = self._provider.ping_workers(workers)
 
                 dead_workers: list[str] = []
@@ -2336,7 +2333,6 @@ class Controller:
         """Poll all workers for task state and feed results into the updater queue."""
         if self._config.dry_run:
             return
-        assert isinstance(self._provider, WorkerProvider)
         running, addresses = self._transitions.get_running_tasks_for_poll()
         if not running:
             return

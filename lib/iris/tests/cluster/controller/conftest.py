@@ -108,6 +108,22 @@ class FakeProvider:
     ) -> job_pb2.ProfileTaskResponse:
         raise ProviderUnsupportedError("fake")
 
+    # --- Split heartbeat surface (no-op stubs so split-mode tests can run) ---
+
+    def ping_workers(self, workers):
+        return []
+
+    def start_tasks(self, worker_id, address, tasks):
+        from iris.rpc import worker_pb2
+
+        return worker_pb2.Worker.StartTasksResponse()
+
+    def stop_tasks(self, worker_id, address, task_ids):
+        return None
+
+    def poll_workers(self, running, worker_addresses):
+        return []
+
     def close(self) -> None:
         pass
 
