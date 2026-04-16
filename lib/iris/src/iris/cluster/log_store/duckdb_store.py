@@ -113,6 +113,11 @@ _TAIL_SEQ_MARGIN = 10
 _MAX_PARQUETS_PER_READ = 25
 _MAX_PARQUET_BYTES_PER_READ = 2_500 * 1024 * 1024
 
+# Batch size for the tail early-stop loop. Scans this many parquet files per
+# DuckDB query so planning overhead is amortized and file reads parallelize,
+# while still allowing short-circuit once LIMIT is met.
+_TAIL_BATCH_SEGMENTS = 5
+
 
 def _prefix_upper_bound(prefix: str) -> str | None:
     """Return the exclusive upper bound for a prefix range, or None if unbounded.
@@ -1006,7 +1011,11 @@ class DuckDBLogStore:
                     return rows
 
             if tail and max_lines > 0:
-                # Early-stop: iterate newest→oldest, break once LIMIT filled.
+                # Early-stop: iterate newest→oldest in batches, break once
+                # LIMIT filled. Batching amortizes per-query planning and
+                # lets DuckDB parallelize scans across the batch; the batch
+                # size trades short-circuit aggressiveness against fixed
+                # per-execute overhead.
                 # RAM tables hold seqs strictly greater than any parquet, so
                 # they come first. Parquet files are in ascending min_seq.
                 collected: list[tuple] = []
@@ -1014,12 +1023,14 @@ class DuckDBLogStore:
                     ram_source = _build_union_source([], ram_names)
                     sql = f"SELECT {select_cols} FROM ({ram_source}) WHERE {where_clause} {order} LIMIT {max_lines}"
                     collected.extend(conn.execute(sql, params).fetchall())
-                for path in reversed(parquet_files):
+                newest_first = list(reversed(parquet_files))
+                for start in range(0, len(newest_first), _TAIL_BATCH_SEGMENTS):
                     if len(collected) >= max_lines:
                         break
+                    batch = newest_first[start : start + _TAIL_BATCH_SEGMENTS]
                     remaining = max_lines - len(collected)
-                    seg_source = _build_union_source([path], [])
-                    sql = f"SELECT {select_cols} FROM ({seg_source}) WHERE {where_clause} {order} LIMIT {remaining}"
+                    batch_source = _build_union_source(batch, [])
+                    sql = f"SELECT {select_cols} FROM ({batch_source}) WHERE {where_clause} {order} LIMIT {remaining}"
                     collected.extend(conn.execute(sql, params).fetchall())
                 return collected
 
