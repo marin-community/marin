@@ -581,7 +581,14 @@ def _run_with_vllm(
     completed_rollouts: list[Rollout] = []
     save_interval = max(1, min(10, total // 20)) if total else 1
 
+    def _is_error_rollout(rollout: Rollout) -> bool:
+        status = rollout.error or ""
+        return "API error" in status or "Connection error" in status
+
     def _on_rollout_done(done: int, total_n: int, rollout: Rollout) -> None:
+        if _is_error_rollout(rollout):
+            logger.warning("Dropping error rollout %d/%d for %s: %s", done, total_n, rollout.instance_id, rollout.error)
+            return
         completed_rollouts.append(rollout)
         if done % save_interval == 0 or done == total_n:
             save_json(
@@ -589,7 +596,7 @@ def _run_with_vllm(
                 os.path.join(output_dir, output_filename),
             )
             lease.refresh()
-            logger.info("Checkpoint: saved %d/%d rollouts", done, total_n)
+            logger.info("Checkpoint: saved %d/%d rollouts (%d valid)", done, total_n, len(completed_rollouts))
 
     process, server_url, log_dir = _start_vllm_server(
         model_name_or_path=model_path,
@@ -631,11 +638,12 @@ def _run_with_vllm(
             process.kill()
         lease.release()
 
-    save_json(prior_dicts + [r.to_dict() for r in rollouts], os.path.join(output_dir, output_filename))
+    valid_rollouts = [r for r in rollouts if not _is_error_rollout(r)]
+    save_json(prior_dicts + [r.to_dict() for r in valid_rollouts], os.path.join(output_dir, output_filename))
 
     # Per-language report
     by_lang_rollouts: dict[str, list] = defaultdict(list)
-    for r in rollouts:
+    for r in valid_rollouts:
         lang = pr_to_language.get(r.instance_id, "unknown")
         by_lang_rollouts[lang].append(r)
 
@@ -688,8 +696,11 @@ def _run_with_vllm(
         }
 
     # Aggregate
-    total_n = len(rollouts)
-    total_finished = sum(1 for r in rollouts if r.finished)
+    n_errors = len(rollouts) - len(valid_rollouts)
+    if n_errors:
+        logger.info("Filtered %d error rollouts from final output", n_errors)
+    total_n = len(valid_rollouts)
+    total_finished = sum(1 for r in valid_rollouts if r.finished)
     summary_payload = {
         "total_rollouts": total_n,
         "total_prs": len({r.instance_id for r in rollouts}),

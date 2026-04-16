@@ -313,11 +313,17 @@ def _interactive_batch_set(args) -> set[int]:
     return set(range(min(n, args.batches)))
 
 
+def _tpu_config_for_batch(args, batch: int) -> tuple[str, int]:
+    """Return (tpu_types, tensor_parallel_size) for a batch."""
+    return args.tpu_types, args.tensor_parallel_size
+
+
 def _submit_batch(args, round_idx: int, layout: BatchLayout) -> None:
     hf_token = _hf_token()
     if not hf_token:
         raise RuntimeError("HF_TOKEN not found in env or ~/.cache/huggingface/token")
     priority = _priority_for_batch(args, layout.batch)
+    tpu_types, tp_size = _tpu_config_for_batch(args, layout.batch)
     cmd = [
         args.iris_bin,
         "--cluster",
@@ -327,7 +333,7 @@ def _submit_batch(args, round_idx: int, layout: BatchLayout) -> None:
         "--job-name",
         f"swe-zero-100b-r{round_idx}-batch{layout.batch}",
         "--tpu",
-        args.tpu_types,
+        tpu_types,
         "--enable-extra-resources",
         "--replicas",
         str(layout.replicas),
@@ -373,7 +379,7 @@ def _submit_batch(args, round_idx: int, layout: BatchLayout) -> None:
         "--n-rollouts",
         str(args.n_rollouts),
         "--tensor-parallel-size",
-        str(args.tensor_parallel_size),
+        str(tp_size),
         "--max-num-seqs",
         str(args.max_num_seqs),
         "--max-model-len",
@@ -386,9 +392,17 @@ def _submit_batch(args, round_idx: int, layout: BatchLayout) -> None:
         str(args.seed),
         "--output_dir",
         args.output_root,
-        "--disable-shard-lease",
+        "--lease-stale-minutes",
+        "20",
     ]
-    logger.info("Submitting batch %02d as round %d (priority=%s)", layout.batch, round_idx, priority)
+    logger.info(
+        "Submitting batch %02d round %d (priority=%s, tpu=%s, tp=%d)",
+        layout.batch,
+        round_idx,
+        priority,
+        tpu_types,
+        tp_size,
+    )
     _run(cmd)
 
 
@@ -434,8 +448,8 @@ def main() -> int:
     parser.add_argument("--max-retries", type=int, default=10)
     parser.add_argument(
         "--tpu-types",
-        default="v6e-4",
-        help="TPU variant for replacement batches. Must match --tensor-parallel-size (v6e-4 = 4 chips).",
+        default="v6e-4,v5p-8,v5litepod-4,v4-8",
+        help="TPU variants (all must have 4 chips_per_vm to match TP=4).",
     )
     parser.add_argument("--n-rollouts", type=int, default=100)
     parser.add_argument("--tensor-parallel-size", type=int, default=4)
