@@ -53,6 +53,7 @@ from marin.rl.environments.inference_ctx import (
 from marin.rl.environments.inference_ctx.staging import (
     prepare_vllm_inference_config_for_inflight,
 )
+from marin.rl.lora_manifest import RolloutPolicyFormat
 from marin.rl.metrics import pass_at_k_estimator
 from marin.rl.model_utils import load_model_from_checkpoint
 
@@ -247,6 +248,9 @@ class RolloutWorkerConfig:
 
     worker_index: int = 0
     """Index of this worker among all rollout workers."""
+
+    rollout_policy_format: RolloutPolicyFormat = "merged"
+    """Expected trainer-to-rollout policy payload format."""
 
 
 def find_open_port() -> int:

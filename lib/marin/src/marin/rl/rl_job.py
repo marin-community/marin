@@ -17,17 +17,20 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from fray.v2 import JobHandle
+from levanter.lora import LoraConfig
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from levanter.trainer import TrainerConfig
+from levanter.utils.fsspec_utils import join_path
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.environments.inference_ctx import (
     LevanterInferenceContextConfig,
     vLLMInferenceContextConfig,
 )
+from marin.rl.lora_manifest import RUN_MANIFEST_FILENAME, RolloutPolicyFormat
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
@@ -37,6 +40,8 @@ from marin.rl.weight_transfer import WeightTransferConfig
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger(__name__)
+
+ROLLOUT_POLICY_FORMAT: RolloutPolicyFormat = "merged"
 
 
 @dataclass
@@ -80,6 +85,7 @@ class TrainParams:
 
     optimizer: OptimizerConfig
     rl_loss: "RLLossModule"
+    lora: LoraConfig | None = None
     replay_buffer: ReplayBufferConfig = field(
         default_factory=lambda: ReplayBufferConfig(
             capacity=4096,
@@ -108,6 +114,7 @@ class RLJobConfig:
     tokenizer: str | MarinTokenizer
 
     inference_type: Literal["levanter", "vllm"]
+    rollout_policy_format: RolloutPolicyFormat = ROLLOUT_POLICY_FORMAT
 
     seed: int = 42
 
@@ -126,6 +133,7 @@ class RLJobConfig:
         )
     )
     weight_transfer: WeightTransferConfig = field(default_factory=WeightTransferConfig)
+    run_manifest_path: str | None = None
 
     # Deployment configuration
     run_config: RunConfig | None = None
@@ -228,6 +236,19 @@ class RLJob:
         Returns:
             Tuple of (TrainWorkerConfig, RolloutWorkerConfig)
         """
+        if self.config.train_params.lora is not None:
+            raise ValueError(
+                "LoRA RL rollout serving is not implemented yet; "
+                "trainer-side LoRA support lands in this PR, but rollout workers still require "
+                "merged full-model transfers from the trainer"
+            )
+
+        if self.config.rollout_policy_format != "merged":
+            raise ValueError(
+                "rollout_policy_format='adapter' is not implemented yet; "
+                "use rollout_policy_format='merged' for the current RL runtime"
+            )
+
         # Create tokenizer
         tokenizer = make_tokenizer(self.config.tokenizer)
 
@@ -287,12 +308,20 @@ class RLJob:
             trainer=self.config.trainer,
             optimizer=self.config.train_params.optimizer,
             loss=self.config.train_params.rl_loss,
+            lora=self.config.train_params.lora,
             tokenizer=tokenizer,
             replay_buffer=self.config.train_params.replay_buffer,
             initial_checkpoint=self.config.initial_checkpoint,
             vocab_size=self.config.vocab_size,
             run_id=self.config.run_id,
+            run_manifest_path=(
+                self.config.run_manifest_path
+                if self.config.run_manifest_path is not None
+                else join_path(self.config.trainer.checkpointer.base_path, RUN_MANIFEST_FILENAME)
+            ),
             curriculum_config=self.config.curriculum,
+            inference_type=self.config.inference_type,
+            rollout_policy_format=self.config.rollout_policy_format,
             seed=self.config.seed,
         )
 
@@ -315,6 +344,7 @@ class RLJob:
             system_prompt=self.config.system_prompt,
             inflight_weight_updates=self.config.inflight_weight_updates,
             tracker_config=self.config.rollout_tracker,
+            rollout_policy_format=self.config.rollout_policy_format,
         )
 
         return train_worker_config, rollout_worker_config
