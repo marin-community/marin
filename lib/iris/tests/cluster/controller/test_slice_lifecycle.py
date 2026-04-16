@@ -1,13 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for slice lifecycle state machine transitions, exercised via ScalingGroup.dispatch()."""
+"""Tests for slice lifecycle state machine transitions, exercised via ScalingGroup.dispatch().
+
+Organization:
+- `test_table_transitions_produce_expected_state` is a parametrized sanity
+  check that every entry in TRANSITIONS yields the declared new_state. Catches
+  typos in the table without writing one test per entry.
+- Invariant tests below cover behavior that isn't readable off the table:
+  cross-machine cascades (backoff triggers), timestamp/worker-id bookkeeping
+  on READY, exponential backoff math, exhaustiveness, and no-op paths.
+"""
 
 import pytest
 
-from iris.cluster.controller.autoscaler.models import SliceLifecycleState
+from iris.cluster.controller.autoscaler.models import SliceLifecycleState, SliceState
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.autoscaler.slice_lifecycle import (
+    BACKOFF_TRIGGERS,
     SHORT_LIVED_SLICE_THRESHOLD,
     TRANSITIONS,
     SliceEvent,
@@ -17,7 +27,7 @@ from tests.cluster.controller.conftest import make_scale_group_config
 from tests.cluster.providers.conftest import make_fake_slice_handle, make_mock_platform
 
 CREATED_AT_MS = 1_000_000
-SHORT_LIVED_NOW = Timestamp.from_ms(CREATED_AT_MS + 60_000)  # 60s after creation, well within threshold
+SHORT_LIVED_NOW = Timestamp.from_ms(CREATED_AT_MS + 60_000)
 LONG_LIVED_NOW = Timestamp.from_ms(CREATED_AT_MS + int(SHORT_LIVED_SLICE_THRESHOLD.to_ms()) + 60_000)
 
 
@@ -28,177 +38,180 @@ def group() -> ScalingGroup:
 
 
 def _seed(
-    group: ScalingGroup, slice_id: str = "slice-001", lifecycle: SliceLifecycleState = SliceLifecycleState.BOOTING
+    group: ScalingGroup,
+    slice_id: str = "slice-001",
+    lifecycle: SliceLifecycleState = SliceLifecycleState.BOOTING,
 ):
     handle = make_fake_slice_handle(slice_id, created_at_ms=CREATED_AT_MS)
-    from iris.cluster.controller.autoscaler.models import SliceState
-
-    state = SliceState(handle=handle, lifecycle=lifecycle)
     with group._slices_lock:
-        group._slices[slice_id] = state
+        group._slices[slice_id] = SliceState(handle=handle, lifecycle=lifecycle)
     return handle
 
 
-def test_booting_to_ready(group: ScalingGroup):
-    handle = _seed(group, lifecycle=SliceLifecycleState.BOOTING)
-    fake_workers = handle.describe().workers
+# ---------------------------------------------------------------------------
+# Transition table sanity — every declared transition is reachable and
+# produces its declared target state.
+# ---------------------------------------------------------------------------
 
-    result = group.dispatch("slice-001", SliceEvent.CLOUD_STATE_READY, {"workers": fake_workers}, now=SHORT_LIVED_NOW)
 
+@pytest.mark.parametrize(
+    "from_state,event,expected_to_state",
+    [(key[0], key[1], transition.to_state) for key, transition in TRANSITIONS.items()],
+    ids=[f"{key[0].value}+{key[1].value}" for key in TRANSITIONS],
+)
+def test_table_transitions_produce_expected_state(
+    from_state: SliceLifecycleState,
+    event: SliceEvent,
+    expected_to_state: SliceLifecycleState,
+    group: ScalingGroup,
+):
+    handle = _seed(group, lifecycle=from_state)
+    workers = handle.describe().workers
+    result = group.dispatch("slice-001", event, {"workers": workers}, now=LONG_LIVED_NOW)
     assert result.applied
-    assert result.prior_state == SliceLifecycleState.BOOTING
-    assert result.new_state == SliceLifecycleState.READY
-    assert result.registered_workers == list(fake_workers)
-    assert group._slices["slice-001"].lifecycle == SliceLifecycleState.READY
-    assert group._slices["slice-001"].last_active == SHORT_LIVED_NOW
+    assert result.prior_state == from_state
+    assert result.new_state == expected_to_state
 
 
-def test_booting_to_initializing(group: ScalingGroup):
-    _seed(group)
-    result = group.dispatch("slice-001", SliceEvent.CLOUD_STATE_INITIALIZING, now=SHORT_LIVED_NOW)
-    assert result.applied
-    assert result.new_state == SliceLifecycleState.INITIALIZING
-    assert result.detached_handle is None
-    assert not result.triggered_backoff
+# ---------------------------------------------------------------------------
+# READY invariants: last_active and worker_ids must be set atomically.
+# Without this, freshly-ready slices are immediately scaledown-eligible and
+# find_slice_for_worker() returns nothing, breaking worker-failure teardown.
+# ---------------------------------------------------------------------------
 
 
-def test_initializing_to_ready(group: ScalingGroup):
-    handle = _seed(group, lifecycle=SliceLifecycleState.INITIALIZING)
-    fake_workers = handle.describe().workers
-    result = group.dispatch("slice-001", SliceEvent.CLOUD_STATE_READY, {"workers": fake_workers}, now=SHORT_LIVED_NOW)
-    assert result.applied
-    assert result.new_state == SliceLifecycleState.READY
-    assert result.registered_workers == list(fake_workers)
-
-
-def test_short_lived_failure_triggers_backoff(group: ScalingGroup):
-    """Slice that fails within SHORT_LIVED_SLICE_THRESHOLD bumps consecutive_failures."""
+def test_ready_transition_sets_last_active_and_worker_ids(group: ScalingGroup):
     handle = _seed(group)
-    result = group.dispatch(
-        "slice-001", SliceEvent.CLOUD_STATE_FAILED, {"error_message": "preempted"}, now=SHORT_LIVED_NOW
+    workers = handle.describe().workers
+    result = group.dispatch("slice-001", SliceEvent.CLOUD_STATE_READY, {"workers": workers}, now=SHORT_LIVED_NOW)
+
+    assert result.registered_workers == list(workers)
+    state = group._slices["slice-001"]
+    assert state.last_active == SHORT_LIVED_NOW
+    assert state.worker_ids == [w.worker_id for w in workers]
+
+
+# ---------------------------------------------------------------------------
+# Cross-machine backoff cascade: slice failure triggers (or doesn't trigger)
+# group backoff based on slice age, event kind, and platform-vs-cloud origin.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("event", sorted(BACKOFF_TRIGGERS))
+def test_short_lived_failure_triggers_backoff(event: SliceEvent, group: ScalingGroup):
+    """Every event in BACKOFF_TRIGGERS counts toward backoff when the slice was short-lived."""
+    from_state = (
+        SliceLifecycleState.READY if event == SliceEvent.WORKER_FAILURE_REPORTED else SliceLifecycleState.BOOTING
     )
-    assert result.applied
-    assert result.new_state == SliceLifecycleState.FAILED
-    assert result.detached_handle is handle
+    _seed(group, lifecycle=from_state)
+    result = group.dispatch("slice-001", event, now=SHORT_LIVED_NOW)
     assert result.triggered_backoff
     assert group.consecutive_failures == 1
-    assert group._backoff_until is not None
 
 
-def test_long_lived_failure_no_backoff(group: ScalingGroup):
-    """Slice that fails past the threshold detaches but does NOT trigger backoff."""
-    handle = _seed(group)
-    result = group.dispatch("slice-001", SliceEvent.CLOUD_STATE_FAILED, {"error_message": "crashed"}, now=LONG_LIVED_NOW)
-    assert result.applied
-    assert result.detached_handle is handle
-    assert not result.triggered_backoff
-    assert group.consecutive_failures == 0
-
-
-def test_unknown_timeout_short_lived_triggers_backoff(group: ScalingGroup):
-    _seed(group)
-    result = group.dispatch("slice-001", SliceEvent.CLOUD_STATE_UNKNOWN_TIMEOUT, now=SHORT_LIVED_NOW)
-    assert result.applied
-    assert result.new_state == SliceLifecycleState.FAILED
-    assert result.triggered_backoff
-
-
-def test_worker_failure_short_lived_triggers_backoff(group: ScalingGroup):
-    handle = _seed(group, lifecycle=SliceLifecycleState.READY)
-    result = group.dispatch(
-        "slice-001", SliceEvent.WORKER_FAILURE_REPORTED, {"failed_workers": ["w1"]}, now=SHORT_LIVED_NOW
+@pytest.mark.parametrize("event", sorted(BACKOFF_TRIGGERS))
+def test_long_lived_failure_no_backoff(event: SliceEvent, group: ScalingGroup):
+    from_state = (
+        SliceLifecycleState.READY if event == SliceEvent.WORKER_FAILURE_REPORTED else SliceLifecycleState.BOOTING
     )
-    assert result.applied
-    assert result.new_state == SliceLifecycleState.FAILED
-    assert result.detached_handle is handle
-    assert result.triggered_backoff
-
-
-def test_idle_timeout_no_backoff(group: ScalingGroup):
-    """IDLE_TIMEOUT is healthy scaledown — never counts toward group backoff."""
-    handle = _seed(group, lifecycle=SliceLifecycleState.READY)
-    result = group.dispatch("slice-001", SliceEvent.IDLE_TIMEOUT, now=SHORT_LIVED_NOW)
-    assert result.applied
-    assert result.new_state == SliceLifecycleState.FAILED
-    assert result.detached_handle is handle
+    _seed(group, lifecycle=from_state)
+    result = group.dispatch("slice-001", event, now=LONG_LIVED_NOW)
     assert not result.triggered_backoff
     assert group.consecutive_failures == 0
 
 
-def test_requesting_to_booting(group: ScalingGroup):
-    _seed(group, lifecycle=SliceLifecycleState.REQUESTING)
-    result = group.dispatch("slice-001", SliceEvent.PLATFORM_CALL_SUCCEEDED, now=SHORT_LIVED_NOW)
-    assert result.applied
-    assert result.new_state == SliceLifecycleState.BOOTING
-    assert result.detached_handle is None
-
-
-def test_requesting_failure_triggers_backoff_unconditionally(group: ScalingGroup):
-    """PLATFORM_CALL_FAILED triggers backoff regardless of slice age — platform errors always count."""
-    handle = _seed(group, lifecycle=SliceLifecycleState.REQUESTING)
-    result = group.dispatch("slice-001", SliceEvent.PLATFORM_CALL_FAILED, now=SHORT_LIVED_NOW)
-    assert result.applied
-    assert result.new_state == SliceLifecycleState.FAILED
-    assert result.detached_handle is handle
-    assert result.triggered_backoff
-
-
-def test_invalid_transition_returns_noop(group: ScalingGroup):
-    """READY + CLOUD_STATE_INITIALIZING is not a valid transition."""
+def test_idle_timeout_never_triggers_backoff(group: ScalingGroup):
+    """IDLE_TIMEOUT is healthy scaledown. Regression-guards against anyone adding
+    IDLE_TIMEOUT to BACKOFF_TRIGGERS."""
+    assert SliceEvent.IDLE_TIMEOUT not in BACKOFF_TRIGGERS
     _seed(group, lifecycle=SliceLifecycleState.READY)
-    result = group.dispatch("slice-001", SliceEvent.CLOUD_STATE_INITIALIZING, now=SHORT_LIVED_NOW)
-    assert not result.applied
-    assert group._slices["slice-001"].lifecycle == SliceLifecycleState.READY
+    result = group.dispatch("slice-001", SliceEvent.IDLE_TIMEOUT, now=SHORT_LIVED_NOW)
+    assert not result.triggered_backoff
+    assert group.consecutive_failures == 0
 
 
-def test_unknown_slice_returns_noop(group: ScalingGroup):
-    result = group.dispatch("nonexistent", SliceEvent.CLOUD_STATE_READY, {"worker_ids": ["w1"]})
-    assert not result.applied
+# ---------------------------------------------------------------------------
+# Terminal-and-detached invariant: FAILED removes the slice from tracking and
+# hands the handle back so the caller can async-terminate.
+# ---------------------------------------------------------------------------
 
 
-def test_failed_is_terminal(group: ScalingGroup):
-    """A FAILED slice is detached, so any event afterwards finds no slice."""
-    _seed(group)
-    group.dispatch("slice-001", SliceEvent.CLOUD_STATE_FAILED, now=SHORT_LIVED_NOW)
-    for event in SliceEvent:
-        result = group.dispatch("slice-001", event, now=SHORT_LIVED_NOW)
-        assert not result.applied, f"FAILED-then-{event} should noop"
+def test_failed_transition_detaches_slice_and_is_terminal(group: ScalingGroup):
+    handle = _seed(group)
+    result = group.dispatch("slice-001", SliceEvent.CLOUD_STATE_FAILED, now=LONG_LIVED_NOW)
+    assert result.detached_handle is handle
+    assert "slice-001" not in group._slices
+
+    # Terminal: subsequent events find no slice and noop.
+    again = group.dispatch("slice-001", SliceEvent.CLOUD_STATE_READY, now=LONG_LIVED_NOW)
+    assert not again.applied
 
 
-def test_transition_table_exhaustiveness():
-    """Every non-terminal state has at least one outgoing transition."""
-    non_terminal = {
-        SliceLifecycleState.REQUESTING,
-        SliceLifecycleState.BOOTING,
-        SliceLifecycleState.INITIALIZING,
-        SliceLifecycleState.READY,
-    }
-    for state in non_terminal:
-        outgoing = [k for k in TRANSITIONS if k[0] == state]
-        assert outgoing, f"State {state} has no outgoing transitions"
+# ---------------------------------------------------------------------------
+# Backoff math: exponential progression and clearing on successful scale-up.
+# ---------------------------------------------------------------------------
 
 
-def test_backoff_is_exponential(group: ScalingGroup):
-    """Repeated short-lived failures double the backoff each time."""
+def test_exponential_backoff_progression(group: ScalingGroup):
+    """Three short-lived failures → 5s, 10s, 20s. Asserts the exponent, not just count."""
     for i in range(3):
         _seed(group, slice_id=f"s-{i}")
         group.dispatch(f"s-{i}", SliceEvent.CLOUD_STATE_FAILED, now=SHORT_LIVED_NOW)
     assert group.consecutive_failures == 3
-    # 5s * 2^2 = 20s
     assert group._backoff_until is not None
     expected_ms = SHORT_LIVED_NOW.epoch_ms() + 20_000
     assert group._backoff_until.as_timestamp().epoch_ms() == expected_ms
 
 
 def test_complete_scale_up_clears_backoff(group: ScalingGroup):
-    """Successful scale-up clears accumulated failure state."""
     _seed(group)
     group.dispatch("slice-001", SliceEvent.CLOUD_STATE_FAILED, now=SHORT_LIVED_NOW)
     assert group.consecutive_failures == 1
 
     handle = make_fake_slice_handle("slice-002", created_at_ms=CREATED_AT_MS)
-    group.begin_scale_up(timestamp=Timestamp.from_ms(CREATED_AT_MS))
-    group.complete_scale_up(handle, Timestamp.from_ms(CREATED_AT_MS))
+    ts = Timestamp.from_ms(CREATED_AT_MS)
+    group.begin_scale_up(timestamp=ts)
+    group.complete_scale_up(handle, ts)
 
     assert group.consecutive_failures == 0
     assert group._backoff_until is None
+
+
+# ---------------------------------------------------------------------------
+# No-op paths and structural invariants.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "slice_exists,from_state,event",
+    [
+        (False, None, SliceEvent.CLOUD_STATE_READY),  # unknown slice
+        (True, SliceLifecycleState.READY, SliceEvent.CLOUD_STATE_INITIALIZING),  # invalid transition
+    ],
+    ids=["unknown_slice", "invalid_transition"],
+)
+def test_noop_returns_unapplied_result(
+    slice_exists: bool,
+    from_state: SliceLifecycleState | None,
+    event: SliceEvent,
+    group: ScalingGroup,
+):
+    if slice_exists:
+        _seed(group, lifecycle=from_state)
+    result = group.dispatch("slice-001", event, now=SHORT_LIVED_NOW)
+    assert not result.applied
+    assert result.detached_handle is None
+    assert not result.triggered_backoff
+
+
+def test_every_tracked_state_has_outgoing_transitions():
+    """Every lifecycle state that can appear on a tracked slice must have outgoing
+    transitions, or the slice gets stuck. (REQUESTING is not tracked on a slice — it
+    is derived from the pending-scale-up counter.)"""
+    tracked_non_terminal = {
+        SliceLifecycleState.BOOTING,
+        SliceLifecycleState.INITIALIZING,
+        SliceLifecycleState.READY,
+    }
+    for state in tracked_non_terminal:
+        assert any(key[0] == state for key in TRANSITIONS), f"{state.value} is a dead state"
