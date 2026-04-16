@@ -1128,11 +1128,16 @@ class Controller:
 
         # Rate-limits periodic (best-effort) checkpoint writes.
         # None when checkpoint_interval is not configured.
+        # mark_run() seeds the last-run time so the first checkpoint fires
+        # one interval after boot rather than immediately — avoids a
+        # checkpoint storm right when the controller comes up.
         self._periodic_checkpoint_limiter: RateLimiter | None = (
             RateLimiter(interval_seconds=config.checkpoint_interval.to_seconds())
             if config.checkpoint_interval is not None
             else None
         )
+        if self._periodic_checkpoint_limiter is not None:
+            self._periodic_checkpoint_limiter.mark_run()
 
     def wake(self) -> None:
         """Signal the scheduling loop to run immediately and reset backoff.
@@ -1217,6 +1222,9 @@ class Controller:
         if self._autoscaler:
             logger.info("Autoscaler configured with %d scale groups", len(self._autoscaler.groups))
             self._autoscaler_thread = self._threads.spawn(self._run_autoscaler_loop, name="autoscaler-loop")
+
+        if self._periodic_checkpoint_limiter is not None and not self._config.dry_run:
+            self._checkpoint_thread = self._threads.spawn(self._run_checkpoint_loop, name="checkpoint-loop")
 
         # Register atexit hook to capture final state for post-mortem analysis.
         # Unregistered in stop() so it doesn't fire against a closed DB.
@@ -1385,12 +1393,18 @@ class Controller:
             except Exception:
                 logger.exception("Autoscaler loop iteration failed")
 
-            if self._periodic_checkpoint_limiter is not None and self._periodic_checkpoint_limiter.should_run():
-                if not self._config.dry_run:
-                    try:
-                        write_checkpoint(self._db, self._config.remote_state_dir)
-                    except Exception:
-                        logger.exception("Periodic checkpoint failed")
+    def _run_checkpoint_loop(self, stop_event: threading.Event) -> None:
+        """Periodic checkpoint loop: runs on its own thread so the multi-second
+        backup+upload doesn't stall the autoscaler cadence."""
+        limiter = self._periodic_checkpoint_limiter
+        assert limiter is not None, "checkpoint loop spawned without configured limiter"
+        while not stop_event.is_set():
+            if not limiter.wait(cancel=stop_event):
+                break
+            try:
+                write_checkpoint(self._db, self._config.remote_state_dir)
+            except Exception:
+                logger.exception("Periodic checkpoint failed")
 
     def _run_provider_loop(self, stop_event: threading.Event) -> None:
         """Provider sync loop on its own thread so slow RPCs don't block scheduling."""
