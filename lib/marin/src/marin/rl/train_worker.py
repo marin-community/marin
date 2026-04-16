@@ -26,10 +26,12 @@ import wandb
 from levanter import callbacks
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook
 from levanter.checkpoint import (
+    discover_latest_checkpoint,
+    is_checkpoint_path,
     register_debug_checkpointer_state_provider,
     unregister_debug_checkpointer_state_provider,
 )
-from levanter.lora import LoraConfig, lora_trainable_params_filter, loraize
+from levanter.lora import LoraConfig, lora_trainable_params_filter, loraize, merge_lora_modules
 from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend
 from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
 from levanter.models.lm_model import LmConfig, LmHeadModel
@@ -39,7 +41,7 @@ from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 from marin.rl import weight_transfer
 from marin.rl.curriculum import CurriculumConfig
-from marin.rl.lora_manifest import build_rl_run_manifest, write_rl_run_manifest
+from marin.rl.lora_manifest import RLRunManifest, build_rl_run_manifest, read_rl_run_manifest, write_rl_run_manifest
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.runtime import RLRuntimeHandles
 from marin.rl.weight_transfer import WeightTransferConfig
@@ -266,6 +268,17 @@ class StopTrainerException(Exception):
     pass
 
 
+def _resume_checkpoint_path_for_validation(trainer: Trainer) -> str | None:
+    """Return the checkpoint path that a LoRA resume would load, if any."""
+    if trainer.config.load_checkpoint is False:
+        initialize_from = trainer.config.initialize_from
+        if initialize_from is None or not is_checkpoint_path(initialize_from):
+            return None
+        return initialize_from
+
+    return discover_latest_checkpoint(trainer.checkpoint_path)
+
+
 class TrainWorker:
     """Training worker that reads rollout data from a queue and trains the model using Levanter."""
 
@@ -386,14 +399,67 @@ class TrainWorker:
 
     def _write_run_manifest(self) -> None:
         """Persist LoRA run metadata needed for checkpoint validation and future exports."""
-        manifest = build_rl_run_manifest(
+        manifest = self._expected_run_manifest()
+        write_rl_run_manifest(self.config.run_manifest_path, manifest)
+
+    def _expected_run_manifest(self) -> RLRunManifest:
+        """Build the manifest expected for the current RL training configuration."""
+        return build_rl_run_manifest(
             initial_checkpoint=self.config.initial_checkpoint,
             model_config=self.config.model,
             lora_config=self.config.lora,
-            rollout_policy_format=self.config.rollout_policy_format,
+            rollout_policy_format=self._rollout_policy_format(),
             inference_type=self.config.inference_type,
         )
-        write_rl_run_manifest(self.config.run_manifest_path, manifest)
+
+    def _validate_run_manifest_for_resume(self, trainer: Trainer) -> None:
+        """Fail fast when a LoRA resume request does not match the saved run manifest."""
+        resume_checkpoint = _resume_checkpoint_path_for_validation(trainer)
+        if resume_checkpoint is None:
+            return
+
+        try:
+            manifest = read_rl_run_manifest(self.config.run_manifest_path)
+        except FileNotFoundError as exc:
+            raise ValueError(
+                f"LoRA resume from {resume_checkpoint!r} requires run manifest {self.config.run_manifest_path!r}"
+            ) from exc
+
+        expected = self._expected_run_manifest()
+        mismatches = {
+            "manifest_version": (expected.manifest_version, manifest.manifest_version),
+            "initial_checkpoint": (expected.initial_checkpoint, manifest.initial_checkpoint),
+            "model_config_type": (expected.model_config_type, manifest.model_config_type),
+            "model_config_fingerprint": (expected.model_config_fingerprint, manifest.model_config_fingerprint),
+            "lora_config_fingerprint": (expected.lora_config_fingerprint, manifest.lora_config_fingerprint),
+            "inference_type": (expected.inference_type, manifest.inference_type),
+            "rollout_policy_format": (expected.rollout_policy_format, manifest.rollout_policy_format),
+            "reference_mode": (expected.reference_mode, manifest.reference_mode),
+        }
+
+        for field_name, (expected_value, actual_value) in mismatches.items():
+            if expected_value != actual_value:
+                raise ValueError(
+                    f"LoRA resume manifest mismatch for {field_name}: "
+                    f"expected {expected_value!r}, found {actual_value!r}"
+                )
+
+    def _rollout_transfer_model(self, model: LmHeadModel) -> LmHeadModel:
+        """Return the plain rollout-serving model for the current trainer state."""
+        if self._rollout_policy_format() != "merged":
+            raise ValueError(
+                "rollout_policy_format='adapter' is not implemented yet; "
+                "rollout workers still require merged full-model transfers"
+            )
+
+        if getattr(self.config, "lora", None) is None:
+            return model
+
+        return merge_lora_modules(model)
+
+    def _rollout_policy_format(self) -> Literal["merged", "adapter"]:
+        """Return the rollout-serving format, defaulting to the v1 merged contract."""
+        return getattr(self.config, "rollout_policy_format", "merged")
 
     def _log_lora_parameter_metrics(self, state) -> None:
         """Log total and trainable parameter counts for LoRA runs."""
@@ -412,6 +478,20 @@ class TrainWorker:
         logger.info("Total parameter count: %d", all_param_count)
         logger.info("Trainable parameter count: %d", trainable_param_count)
         logger.info("Fraction of parameters that are trainable: %.3e", fraction_trainable)
+
+    def _log_rollout_policy_metadata(self) -> None:
+        """Record rollout-serving semantics for the current RL run."""
+        levanter.tracker.log_summary(
+            {
+                "rollout_policy_format": self._rollout_policy_format(),
+                "reference_mode": "base",
+            }
+        )
+        logger.info(
+            "Rollout serving configured with rollout_policy_format=%s reference_mode=%s",
+            self._rollout_policy_format(),
+            "base",
+        )
 
     def _drop_bootstrap_model_references(self) -> None:
         """Release one-shot bootstrap model references once trainer state exists."""
@@ -514,10 +594,12 @@ class TrainWorker:
             with Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer:
                 if debug_checkpointer:
                     install_tensorstore_metrics_hook(trainer, every=1)
+                self._log_rollout_policy_metadata()
                 _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
                 if config.lora is None:
                     state = trainer.initial_state(training_key, model=self.initial_model)
                 else:
+                    self._validate_run_manifest_for_resume(trainer)
                     if jax.process_index() == 0:
                         self._write_run_manifest()
                     state = trainer.initial_state(
@@ -546,7 +628,8 @@ class TrainWorker:
 
                 with self.replay_loader:
                     # Always transfer startup weights to rollout workers before we attempt to train.
-                    self.transfer_server.serve_weights(startup_rollout_state.weight_step, state.model)
+                    startup_rollout_model = self._rollout_transfer_model(state.model)
+                    self.transfer_server.serve_weights(startup_rollout_state.weight_step, startup_rollout_model)
 
                     # Wait for startup rollouts so both fresh runs and resumed runs begin with
                     # rollouts that match the currently served weights.
@@ -652,12 +735,13 @@ class TrainWorker:
         state = info.state
 
         logger.info(
-            "Transferring weights at step %d, loss=%s",
+            "Transferring weights at step %d, loss=%s, rollout_policy_format=%s",
             step,
             info.loss,
+            self._rollout_policy_format(),
         )
 
-        model_params = state.model
+        model_params = self._rollout_transfer_model(state.model)
 
         # Measure weight transfer time
         transfer_start = time.time()

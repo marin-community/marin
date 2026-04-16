@@ -7,6 +7,7 @@ import os
 import time
 
 import pytest
+from levanter.lora import LoraConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 
@@ -70,4 +71,44 @@ def test_rollout_and_train_workers(tmp_path):
 
     print(f"Weight transfers detected: {rollout_runner.weight_transfers}")
     assert rollout_runner.weight_transfers >= 1, "Expected at least 1 weight transfer"
+    assert rollout_runner.rollouts_generated > 0, "Should have generated at least one rollout"
+
+
+@pytest.mark.slow("Integration test.")
+def test_rollout_and_train_workers_with_lora(tmp_path):
+    """Test LoRA training with merged rollout weight serving."""
+    rollout_storage_config = create_test_rollout_storage_config()
+
+    trainer_config = create_nano_trainer_config(tmp_path)
+    trainer_config.num_train_steps = 100
+
+    job_config = RLJobConfig(
+        model=create_nano_llama_config(),
+        trainer=trainer_config,
+        train_params=TrainParams(
+            optimizer=create_nano_optimizer_config(),
+            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
+            lora=LoraConfig(r=4, alpha=8.0),
+        ),
+        curriculum=create_test_curriculum_config(),
+        tokenizer=DummyTokenizer(),
+        rollout_storage=rollout_storage_config,
+        inference_type="levanter",
+    )
+
+    job = RLJob(job_config)
+
+    training_runner = TrainWorkerRunner.from_job(job)
+    rollout_runner = RolloutWorkerRunner.from_job(job)
+
+    rollout_runner.rollout_worker_config.weight_transfer.sync_interval_steps = 1
+    rollout_runner.rollout_worker_config.max_rollouts = 100
+
+    with training_runner:
+        time.sleep(1)
+        with rollout_runner:
+            result = training_runner.wait_for_result(timeout=60)
+            assert result == WaitResult.SUCCESS, "Training timed out after 60s"
+
+    assert rollout_runner.weight_transfers >= 1, "Expected at least 1 merged weight transfer"
     assert rollout_runner.rollouts_generated > 0, "Should have generated at least one rollout"

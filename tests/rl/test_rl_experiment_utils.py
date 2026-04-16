@@ -338,7 +338,7 @@ def test_to_worker_configs_threads_manifest_fields_for_non_lora_runs(monkeypatch
     assert rollout_worker_config.rollout_policy_format == "merged"
 
 
-def test_to_worker_configs_rejects_lora_until_merged_rollout_sync_exists(monkeypatch):
+def test_to_worker_configs_threads_lora_fields(monkeypatch):
     class _FakeConverter:
         def __init__(self, *args, **kwargs):
             self.default_hf_config = SimpleNamespace(vocab_size=32000)
@@ -360,8 +360,13 @@ def test_to_worker_configs_rejects_lora_until_merged_rollout_sync_exists(monkeyp
         output_path="gs://marin-us-central1/rl_testing/rl-test",
     )
 
-    with pytest.raises(ValueError, match="LoRA RL rollout serving is not implemented yet"):
-        RLJob(job_config).to_worker_configs()
+    train_worker_config, rollout_worker_config = RLJob(job_config).to_worker_configs()
+
+    assert train_worker_config.lora == lora_config
+    assert train_worker_config.rollout_policy_format == "merged"
+    assert train_worker_config.run_manifest_path == "gs://marin-us-central1/rl_testing/rl-test/rl_run_manifest.json"
+    assert train_worker_config.inference_type == "vllm"
+    assert rollout_worker_config.rollout_policy_format == "merged"
 
 
 def test_to_worker_configs_rejects_unimplemented_adapter_rollout_format(monkeypatch):
