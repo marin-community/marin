@@ -6,10 +6,9 @@
 import asyncio
 import logging
 import threading
-from collections.abc import Coroutine
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from time import monotonic
-from typing import Any, Protocol, TypeVar
+from typing import Protocol
 
 from iris.chaos import chaos
 from iris.cluster.controller.provider import ProviderError
@@ -29,8 +28,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_WORKER_RPC_TIMEOUT = Duration.from_seconds(10.0)
 _SLOW_HEARTBEAT_RPC_LOG_THRESHOLD_MS = 5_000
 
-T = TypeVar("T")
-
 
 def _heartbeat_rpc_context(
     batch: DispatchBatch,
@@ -44,44 +41,6 @@ def _heartbeat_rpc_context(
         f" elapsed_ms={elapsed_ms}{timeout_fragment}"
         f" expected={len(batch.running_tasks)} run={len(batch.tasks_to_run)} kill={len(batch.tasks_to_kill)}"
     )
-
-
-class _AsyncLoopThread:
-    """Runs an asyncio event loop on a dedicated daemon thread.
-
-    Sync callers submit coroutines via `run()` / `submit()`; the loop hosts
-    the long-lived async httpx clients so their connection pools survive
-    across heartbeat rounds.
-    """
-
-    def __init__(self, name: str = "worker-provider-asyncio") -> None:
-        self._loop = asyncio.new_event_loop()
-        self._ready = threading.Event()
-        self._thread = threading.Thread(target=self._run, name=name, daemon=True)
-        self._thread.start()
-        self._ready.wait()
-
-    def _run(self) -> None:
-        asyncio.set_event_loop(self._loop)
-        self._ready.set()
-        try:
-            self._loop.run_forever()
-        finally:
-            self._loop.close()
-
-    @property
-    def loop(self) -> asyncio.AbstractEventLoop:
-        return self._loop
-
-    def run(self, coro: Coroutine[Any, Any, T], timeout: float | None = None) -> T:
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result(timeout=timeout)
-
-    def close(self) -> None:
-        if not self._loop.is_running():
-            return
-        self._loop.call_soon_threadsafe(self._loop.stop)
-        self._thread.join(timeout=5.0)
 
 
 class WorkerStubFactory(Protocol):
@@ -156,22 +115,15 @@ def _apply_request_from_response(
 class WorkerProvider:
     """TaskProvider backed by worker daemons via async heartbeat RPC.
 
-    Runs an asyncio event loop on a dedicated thread and dispatches
-    per-worker heartbeat RPCs concurrently via `asyncio.gather`, capped at
-    `parallelism` concurrent in-flight requests by a semaphore.
+    Per round, `sync()` spins up an asyncio event loop via `asyncio.run`
+    and dispatches per-worker heartbeat RPCs concurrently via
+    `asyncio.gather`, capped at `parallelism` in-flight requests by a
+    local semaphore. Cached stubs in the factory keep their pyqwest
+    connection pools across rounds independently of the Python loop.
     """
 
     stub_factory: WorkerStubFactory
     parallelism: int = 128
-    _loop_thread: _AsyncLoopThread = field(init=False)
-    _semaphore: asyncio.Semaphore = field(init=False)
-
-    def __post_init__(self) -> None:
-        self._loop_thread = _AsyncLoopThread()
-        self._semaphore = self._loop_thread.run(self._make_semaphore())
-
-    async def _make_semaphore(self) -> asyncio.Semaphore:
-        return asyncio.Semaphore(self.parallelism)
 
     def sync(
         self,
@@ -179,75 +131,76 @@ class WorkerProvider:
     ) -> list[tuple[DispatchBatch, HeartbeatApplyRequest | None, str | None]]:
         if not batches:
             return []
-        return self._loop_thread.run(self._sync_all(batches))
+        return asyncio.run(self._sync_all(batches))
 
     async def _sync_all(
         self,
         batches: list[DispatchBatch],
     ) -> list[tuple[DispatchBatch, HeartbeatApplyRequest | None, str | None]]:
-        coros = [self._heartbeat_one_safe(b) for b in batches]
-        return await asyncio.gather(*coros)
+        sem = asyncio.Semaphore(self.parallelism)
+        return await asyncio.gather(*(self._heartbeat_one_safe(sem, b) for b in batches))
 
     async def _heartbeat_one_safe(
         self,
+        sem: asyncio.Semaphore,
         batch: DispatchBatch,
     ) -> tuple[DispatchBatch, HeartbeatApplyRequest | None, str | None]:
-        try:
-            apply_req = await self._heartbeat_one(batch)
-            return (batch, apply_req, None)
-        except Exception as e:
-            return (batch, None, str(e))
+        async with sem:
+            try:
+                apply_req = await self._heartbeat_one(batch)
+                return (batch, apply_req, None)
+            except Exception as e:
+                return (batch, None, str(e))
 
     async def _heartbeat_one(self, batch: DispatchBatch) -> HeartbeatApplyRequest:
         """Send heartbeat RPC to one worker and return the apply request."""
-        async with self._semaphore:
-            started = monotonic()
-            timeout_ms = getattr(self.stub_factory, "timeout_ms", None)
+        started = monotonic()
+        timeout_ms = getattr(self.stub_factory, "timeout_ms", None)
 
-            if rule := chaos("controller.heartbeat"):
+        if rule := chaos("controller.heartbeat"):
+            await asyncio.sleep(rule.delay_seconds)
+            raise ProviderError("chaos: heartbeat unavailable")
+
+        if not batch.worker_address:
+            raise ProviderError(f"Worker {batch.worker_id} has no address for heartbeat")
+
+        stub = self.stub_factory.get_stub(batch.worker_address)
+
+        expected_tasks = []
+        for entry in batch.running_tasks:
+            if rule := chaos("controller.heartbeat.iteration"):
                 await asyncio.sleep(rule.delay_seconds)
-                raise ProviderError("chaos: heartbeat unavailable")
-
-            if not batch.worker_address:
-                raise ProviderError(f"Worker {batch.worker_id} has no address for heartbeat")
-
-            stub = self.stub_factory.get_stub(batch.worker_address)
-
-            expected_tasks = []
-            for entry in batch.running_tasks:
-                if rule := chaos("controller.heartbeat.iteration"):
-                    await asyncio.sleep(rule.delay_seconds)
-                expected_tasks.append(
-                    job_pb2.WorkerTaskStatus(
-                        task_id=entry.task_id.to_wire(),
-                        attempt_id=entry.attempt_id,
-                    )
+            expected_tasks.append(
+                job_pb2.WorkerTaskStatus(
+                    task_id=entry.task_id.to_wire(),
+                    attempt_id=entry.attempt_id,
                 )
-            request = job_pb2.HeartbeatRequest(
-                tasks_to_run=batch.tasks_to_run,
-                tasks_to_kill=batch.tasks_to_kill,
-                expected_tasks=expected_tasks,
             )
-            try:
-                response = await stub.heartbeat(request)
+        request = job_pb2.HeartbeatRequest(
+            tasks_to_run=batch.tasks_to_run,
+            tasks_to_kill=batch.tasks_to_kill,
+            expected_tasks=expected_tasks,
+        )
+        try:
+            response = await stub.heartbeat(request)
 
-                if not response.worker_healthy:
-                    health_error = response.health_error or "worker reported unhealthy"
-                    raise ProviderError(f"worker {batch.worker_id} reported unhealthy: {health_error}")
+            if not response.worker_healthy:
+                health_error = response.health_error or "worker reported unhealthy"
+                raise ProviderError(f"worker {batch.worker_id} reported unhealthy: {health_error}")
 
-                elapsed_ms = int((monotonic() - started) * 1000)
-                if elapsed_ms >= _SLOW_HEARTBEAT_RPC_LOG_THRESHOLD_MS:
-                    logger.warning(
-                        "Slow heartbeat RPC succeeded: %s",
-                        _heartbeat_rpc_context(batch, elapsed_ms=elapsed_ms, timeout_ms=timeout_ms),
-                    )
-                return _apply_request_from_response(batch.worker_id, response)
-            except Exception as e:
-                elapsed_ms = int((monotonic() - started) * 1000)
-                context = _heartbeat_rpc_context(batch, elapsed_ms=elapsed_ms, timeout_ms=timeout_ms)
-                if isinstance(e, ProviderError):
-                    raise ProviderError(f"{e}; {context}") from e
-                raise ProviderError(f"heartbeat RPC failed: {context}; error={e}") from e
+            elapsed_ms = int((monotonic() - started) * 1000)
+            if elapsed_ms >= _SLOW_HEARTBEAT_RPC_LOG_THRESHOLD_MS:
+                logger.warning(
+                    "Slow heartbeat RPC succeeded: %s",
+                    _heartbeat_rpc_context(batch, elapsed_ms=elapsed_ms, timeout_ms=timeout_ms),
+                )
+            return _apply_request_from_response(batch.worker_id, response)
+        except Exception as e:
+            elapsed_ms = int((monotonic() - started) * 1000)
+            context = _heartbeat_rpc_context(batch, elapsed_ms=elapsed_ms, timeout_ms=timeout_ms)
+            if isinstance(e, ProviderError):
+                raise ProviderError(f"{e}; {context}") from e
+            raise ProviderError(f"heartbeat RPC failed: {context}; error={e}") from e
 
     def get_process_status(
         self,
@@ -264,7 +217,7 @@ class WorkerProvider:
             log_substring=request.log_substring,
             min_log_level=request.min_log_level,
         )
-        return self._loop_thread.run(stub.get_process_status(forwarded, timeout_ms=10000))
+        return asyncio.run(stub.get_process_status(forwarded, timeout_ms=10000))
 
     def on_worker_failed(self, worker_id: WorkerId, address: str | None) -> None:
         if address:
@@ -277,7 +230,7 @@ class WorkerProvider:
         timeout_ms: int,
     ) -> job_pb2.ProfileTaskResponse:
         stub = self.stub_factory.get_stub(address)
-        return self._loop_thread.run(stub.profile_task(request, timeout_ms=timeout_ms))
+        return asyncio.run(stub.profile_task(request, timeout_ms=timeout_ms))
 
     def exec_in_container(
         self,
@@ -291,8 +244,7 @@ class WorkerProvider:
             rpc_timeout_ms = 3_600_000
         else:
             rpc_timeout_ms = (timeout_seconds + 5) * 1000
-        return self._loop_thread.run(stub.exec_in_container(request, timeout_ms=rpc_timeout_ms))
+        return asyncio.run(stub.exec_in_container(request, timeout_ms=rpc_timeout_ms))
 
     def close(self) -> None:
         self.stub_factory.close()
-        self._loop_thread.close()
