@@ -2166,7 +2166,8 @@ class Controller:
             return
 
         # Sync with the execution backend (ThreadPoolExecutor inside provider).
-        results = self._provider.sync(batches)
+        with slow_log(logger, "provider sync (RPC dispatch)", threshold_ms=1_000):
+            results = self._provider.sync(batches)
 
         acc = _SyncFailureAccumulator()
         with slow_log(logger, "provider sync (apply results)", threshold_ms=500):
