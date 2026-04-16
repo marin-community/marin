@@ -1124,15 +1124,12 @@ class Controller:
         # are only valid before the controller loops begin (e.g. LoadCheckpoint).
         self._started = False
 
-        # Checkpoint coordination: when set, scheduling and autoscaler loops
-        # skip their work so the snapshot captures a quiescent state.
-        # threading.Event (not a bare bool) for cross-thread memory ordering.
-        self._checkpoint_paused = threading.Event()
         self._atexit_registered = False
 
-        # Serializes heartbeat rounds against checkpoint snapshots so that
-        # begin_checkpoint cannot fire while dispatches from begin_heartbeat()
-        # are in flight (but not yet applied by complete_heartbeat).
+        # Serializes provider sync rounds so only one heartbeat round mutates
+        # DB state at a time. Checkpointing no longer takes this lock: the
+        # backup reads via a dedicated RO connection and each heartbeat round
+        # commits as an atomic batch, so snapshots are always consistent.
         self._heartbeat_lock = threading.Lock()
 
         # Rate-limits periodic (best-effort) checkpoint writes.
@@ -1319,9 +1316,6 @@ class Controller:
             if stop_event.is_set():
                 break
 
-            if self._checkpoint_paused.is_set():
-                continue
-
             if woken:
                 backoff.reset()
 
@@ -1392,8 +1386,6 @@ class Controller:
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
                 break
-            if self._checkpoint_paused.is_set():
-                continue
             try:
                 self._run_autoscaler_once()
             except Exception:
@@ -1415,8 +1407,6 @@ class Controller:
             limiter.mark_run()
             if stop_event.is_set():
                 break
-            if self._checkpoint_paused.is_set():
-                continue
             try:
                 with self._heartbeat_lock:
                     self._sync_all_execution_units()
@@ -1432,8 +1422,6 @@ class Controller:
             limiter.mark_run()
             if stop_event.is_set():
                 break
-            if self._checkpoint_paused.is_set():
-                continue
             try:
                 self._sync_direct_provider()
             except Exception:
@@ -1473,8 +1461,6 @@ class Controller:
             if stop_event.is_set():
                 break
             limiter.mark_run()
-            if self._checkpoint_paused.is_set():
-                continue
             try:
                 self._profile_all_running_tasks()
             except Exception:
@@ -2380,23 +2366,19 @@ class Controller:
         if self._config.dry_run:
             logger.info("[DRY-RUN] Skipping checkpoint write")
             return ("dry-run", CheckpointResult(created_at=Timestamp.now(), job_count=0, task_count=0, worker_count=0))
-        self._checkpoint_paused.set()
+        backup = backup_databases(self._db)
         try:
-            backup = backup_databases(self._db)
-            try:
-                path, result = upload_checkpoint(self._db, backup, self._config.remote_state_dir)
-            finally:
-                backup.cleanup()
-            logger.info(
-                "Checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
-                path,
-                result.job_count,
-                result.task_count,
-                result.worker_count,
-            )
-            return path, result
+            path, result = upload_checkpoint(self._db, backup, self._config.remote_state_dir)
         finally:
-            self._checkpoint_paused.clear()
+            backup.cleanup()
+        logger.info(
+            "Checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
+            path,
+            result.job_count,
+            result.task_count,
+            result.worker_count,
+        )
+        return path, result
 
     def launch_job(
         self,
