@@ -9,13 +9,13 @@ the standalone ``python -m iris.cluster.controller.main serve`` entrypoint
 serve`` subcommand in the main CLI.
 """
 
+import datetime
 import logging
 import os
 import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 from pathlib import Path
 
@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 LOCAL_STATE_DIR_DEFAULT = Path("/var/cache/iris/controller")
+DRY_RUN_STATE_DIR_ROOT = Path("/tmp/dry-run")
 HOURLY_CHECKPOINT_SECONDS = 3600.0
 
 # Default offset from the controller port for the log server.
@@ -92,6 +93,7 @@ def run_controller_serve(
     checkpoint_interval: float | None = None,
     dry_run: bool = False,
     fresh: bool = False,
+    state_dir: Path | None = None,
 ) -> None:
     """Start the Iris controller, block until SIGTERM/SIGINT.
 
@@ -115,14 +117,15 @@ def run_controller_serve(
         )
     logger.info("Using remote_state_dir from config: %s", remote_state_dir)
 
-    if dry_run:
-        _dry_run_tmpdir = tempfile.mkdtemp(prefix="iris-dry-run-")
-        local_state_dir = Path(_dry_run_tmpdir)
-        logger.info("Dry-run mode: using temporary local state dir %s", local_state_dir)
+    if state_dir is not None:
+        local_state_dir = state_dir
+    elif dry_run:
+        local_state_dir = DRY_RUN_STATE_DIR_ROOT / datetime.date.today().isoformat()
     elif cluster_config.storage.local_state_dir:
         local_state_dir = Path(cluster_config.storage.local_state_dir)
     else:
         local_state_dir = LOCAL_STATE_DIR_DEFAULT
+    logger.info("Controller local state dir: %s (dry_run=%s)", local_state_dir, dry_run)
 
     heartbeat_failure_threshold = cluster_config.controller.heartbeat_failure_threshold or HEARTBEAT_FAILURE_THRESHOLD
 
@@ -343,6 +346,12 @@ def cli():
     default=False,
     help="Start with an empty database, ignoring any remote checkpoint",
 )
+@click.option(
+    "--state-dir",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Override the local state dir (default: /var/cache/iris/controller, or /tmp/dry-run/{today} in dry-run)",
+)
 def serve(
     host: str,
     port: int,
@@ -352,6 +361,7 @@ def serve(
     checkpoint_interval: float | None,
     dry_run: bool,
     fresh: bool,
+    state_dir: Path | None,
 ):
     """Start the Iris controller service."""
     from iris.cluster.config import load_config
@@ -370,6 +380,7 @@ def serve(
         checkpoint_interval=checkpoint_interval,
         dry_run=dry_run,
         fresh=fresh,
+        state_dir=state_dir,
     )
 
 
