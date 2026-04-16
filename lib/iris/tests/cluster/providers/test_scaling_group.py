@@ -569,6 +569,17 @@ class TestScalingGroupIdleTracking:
         assert len(scaled_down) == 0
         assert group.slice_count() == 1
 
+    def test_pending_demand_tracks_raw_demand(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """update_pending_demand stores raw demand, accessible via pending_demand property."""
+        platform = make_mock_platform()
+        group = ScalingGroup(unbounded_config, platform)
+
+        assert group.pending_demand == 0
+        group.update_pending_demand(3)
+        assert group.pending_demand == 3
+        group.update_pending_demand(0)
+        assert group.pending_demand == 0
+
     def test_scale_down_cleans_up_idle_tracking(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """scale_down removes the slice from idle tracking."""
         discovered = [make_fake_slice_handle("slice-001", all_ready=True)]
