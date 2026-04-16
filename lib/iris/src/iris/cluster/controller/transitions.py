@@ -113,6 +113,17 @@ TASK_RESOURCE_HISTORY_RETENTION = 50
 """Maximum task_resource_history rows retained per (task_id, attempt_id).
 Logarithmic downsampling triggers at 2x this value."""
 
+TASK_RESOURCE_HISTORY_TERMINAL_TTL = Duration.from_hours(1)
+"""After a task reaches a terminal state, its resource history is fully
+evicted this long after the finish timestamp. Dashboards surface peak
+memory from tasks.peak_memory_mb once a task is done; retaining per-sample
+rows forever bloats the DB (~85% of task_resource_history on prod is for
+terminal tasks) and amplifies writer contention during heartbeat batches."""
+
+TASK_RESOURCE_HISTORY_DELETE_CHUNK = 5000
+"""Maximum ids per DELETE in prune_task_resource_history — bounds how long
+the writer lock is held per chunk so other RPCs can interleave."""
+
 DIRECT_PROVIDER_PROMOTION_RATE = 128
 """Token bucket capacity for task promotion (pods per minute).
 
@@ -2778,12 +2789,40 @@ class ControllerTransitions:
         )
 
     def prune_task_resource_history(self) -> int:
-        """Logarithmic downsampling: when a (task, attempt) exceeds 2*N rows,
-        thin the older half by deleting every other row.
+        """Two-pass prune:
 
-        Over repeated compaction cycles older data becomes exponentially sparser,
-        preserving long-term trends while bounding total row count.
+        1. Evict all history for tasks that have been in a terminal state
+           longer than TASK_RESOURCE_HISTORY_TERMINAL_TTL. Dashboards read
+           peak memory from tasks.peak_memory_mb after termination; the
+           per-sample rows are dead weight and are ~85% of the table on
+           prod.
+        2. Logarithmic downsampling for anything that remains: when a
+           (task, attempt) exceeds 2*N rows, thin the older half by deleting
+           every other row so older data grows exponentially sparser.
+
+        Deletes are chunked so the writer lock releases between chunks.
         """
+        now_ms = Timestamp.now().epoch_ms()
+        ttl_cutoff_ms = now_ms - TASK_RESOURCE_HISTORY_TERMINAL_TTL.to_ms()
+        terminal_placeholders = ",".join("?" for _ in TERMINAL_TASK_STATES)
+
+        evicted_terminal = 0
+        with self._db.transaction() as cur:
+            terminal_ids = [
+                str(r["task_id"])
+                for r in cur.execute(
+                    f"SELECT task_id FROM tasks "
+                    f"WHERE state IN ({terminal_placeholders}) "
+                    f"AND finished_at_ms IS NOT NULL AND finished_at_ms < ?",
+                    (*TERMINAL_TASK_STATES, ttl_cutoff_ms),
+                ).fetchall()
+            ]
+            for chunk_start in range(0, len(terminal_ids), TASK_RESOURCE_HISTORY_DELETE_CHUNK):
+                chunk = terminal_ids[chunk_start : chunk_start + TASK_RESOURCE_HISTORY_DELETE_CHUNK]
+                ph = ",".join("?" * len(chunk))
+                cur.execute(f"DELETE FROM task_resource_history WHERE task_id IN ({ph})", tuple(chunk))
+                evicted_terminal += cur.rowcount
+
         threshold = TASK_RESOURCE_HISTORY_RETENTION * 2
         with self._db.transaction() as cur:
             overflows = cur.execute(
@@ -2814,9 +2853,11 @@ class ControllerTransitions:
                 ph = ",".join("?" * len(chunk))
                 cur.execute(f"DELETE FROM task_resource_history WHERE id IN ({ph})", tuple(chunk))
                 total_deleted += cur.rowcount
+        if evicted_terminal > 0:
+            logger.info("Evicted %d task_resource_history rows (terminal TTL)", evicted_terminal)
         if total_deleted > 0:
             logger.info("Pruned %d task_resource_history rows (log downsampling)", total_deleted)
-        return total_deleted
+        return evicted_terminal + total_deleted
 
     def _batch_delete(
         self,
