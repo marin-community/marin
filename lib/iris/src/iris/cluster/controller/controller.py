@@ -1126,12 +1126,6 @@ class Controller:
 
         self._atexit_registered = False
 
-        # Serializes provider sync rounds so only one heartbeat round mutates
-        # DB state at a time. Checkpointing no longer takes this lock: the
-        # backup reads via a dedicated RO connection and each heartbeat round
-        # commits as an atomic batch, so snapshots are always consistent.
-        self._heartbeat_lock = threading.Lock()
-
         # Rate-limits periodic (best-effort) checkpoint writes.
         # None when checkpoint_interval is not configured.
         self._periodic_checkpoint_limiter: RateLimiter | None = (
@@ -1408,8 +1402,7 @@ class Controller:
             if stop_event.is_set():
                 break
             try:
-                with self._heartbeat_lock:
-                    self._sync_all_execution_units()
+                self._sync_all_execution_units()
             except Exception:
                 logger.exception("Provider sync round failed, will retry next interval")
 
@@ -1432,19 +1425,18 @@ class Controller:
             return
         assert isinstance(self._provider, K8sTaskProvider)
         provider = self._provider
-        with self._heartbeat_lock:
-            max_promotions = self._promotion_bucket.available
-            batch = self._transitions.drain_for_direct_provider(
-                max_promotions=max_promotions,
-            )
-            if batch.tasks_to_run:
-                self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
-            result = provider.sync(batch)
-            tx_result = self._transitions.apply_direct_provider_updates(result.updates)
-            self._provider_scheduling_events = list(result.scheduling_events) if result.scheduling_events else []
-            self._provider_capacity = result.capacity
-            if tx_result.tasks_to_kill:
-                self.kill_tasks_on_workers(tx_result.tasks_to_kill, tx_result.task_kill_workers)
+        max_promotions = self._promotion_bucket.available
+        batch = self._transitions.drain_for_direct_provider(
+            max_promotions=max_promotions,
+        )
+        if batch.tasks_to_run:
+            self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
+        result = provider.sync(batch)
+        tx_result = self._transitions.apply_direct_provider_updates(result.updates)
+        self._provider_scheduling_events = list(result.scheduling_events) if result.scheduling_events else []
+        self._provider_capacity = result.capacity
+        if tx_result.tasks_to_kill:
+            self.kill_tasks_on_workers(tx_result.tasks_to_kill, tx_result.task_kill_workers)
 
     def _run_profile_loop(self, stop_event: threading.Event) -> None:
         """Periodically capture CPU and memory profiles for all running tasks.
