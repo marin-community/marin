@@ -20,10 +20,12 @@ the vLLM server directly via ``subprocess.Popen(["vllm", "serve", ...])``.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import logging
 import os
 import random
+import socket
 import shutil
 import subprocess
 import tempfile
@@ -48,6 +50,153 @@ def save_json(data, output_path: str) -> None:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "w") as f:
             json.dump(data, f, indent=2)
+
+
+class ShardLease:
+    """Best-effort lease to prevent duplicate writers for the same shard output."""
+
+    def __init__(self, output_dir: str, stale_minutes: int = 180):
+        self.output_dir = output_dir.rstrip("/")
+        self.path = os.path.join(self.output_dir, "_active.lock.json")
+        self.stale_seconds = 60 * stale_minutes
+        self.owner = {
+            "hostname": socket.gethostname(),
+            "pid": os.getpid(),
+            "iris_task_id": os.environ.get("IRIS_TASK_ID", ""),
+        }
+        self.acquired = False
+
+    def _payload(self) -> str:
+        payload = dict(self.owner)
+        payload["updated_at"] = time.time()
+        return json.dumps(payload)
+
+    def _lock_is_fresh(self) -> bool:
+        if self.output_dir.startswith("gs://"):
+            gsutil = shutil.which("gsutil")
+            if gsutil:
+                proc = subprocess.run([gsutil, "ls", "-l", self.path], capture_output=True, text=True)
+                if proc.returncode != 0:
+                    return False
+                line = next((ln for ln in proc.stdout.splitlines() if self.path in ln), "")
+                parts = line.split()
+                if len(parts) < 3:
+                    return False
+                stamp = parts[1]
+                if stamp.endswith("Z"):
+                    stamp = stamp[:-1] + "+00:00"
+                try:
+                    updated = dt.datetime.fromisoformat(stamp).timestamp()
+                except ValueError:
+                    return True
+                return (time.time() - updated) < self.stale_seconds
+
+            import fsspec
+
+            fs, _ = fsspec.core.url_to_fs(self.path)
+            if not fs.exists(self.path):
+                return False
+            info = fs.info(self.path)
+            updated = info.get("updated") or info.get("mtime") or info.get("LastModified")
+            if updated is None:
+                return True
+            if isinstance(updated, (int, float)):
+                updated_ts = float(updated)
+            else:
+                updated_text = str(updated)
+                if updated_text.endswith("Z"):
+                    updated_text = updated_text[:-1] + "+00:00"
+                try:
+                    updated_ts = dt.datetime.fromisoformat(updated_text).timestamp()
+                except ValueError:
+                    return True
+            return (time.time() - updated_ts) < self.stale_seconds
+
+        if not os.path.exists(self.path):
+            return False
+        return (time.time() - os.path.getmtime(self.path)) < self.stale_seconds
+
+    def _remove(self) -> None:
+        if self.output_dir.startswith("gs://"):
+            gsutil = shutil.which("gsutil")
+            if gsutil:
+                subprocess.run([gsutil, "rm", "-f", self.path], capture_output=True, text=True)
+            else:
+                import fsspec
+
+                fs, _ = fsspec.core.url_to_fs(self.path)
+                try:
+                    fs.rm(self.path)
+                except FileNotFoundError:
+                    pass
+        else:
+            try:
+                os.unlink(self.path)
+            except FileNotFoundError:
+                pass
+
+    def _write(self, *, create_only: bool) -> bool:
+        payload = self._payload()
+        if self.output_dir.startswith("gs://"):
+            gsutil = shutil.which("gsutil")
+            if gsutil:
+                cmd = [gsutil]
+                if create_only:
+                    cmd.extend(["-h", "x-goog-if-generation-match:0"])
+                cmd.extend(["cp", "-", self.path])
+                proc = subprocess.run(cmd, input=payload, capture_output=True, text=True)
+                return proc.returncode == 0
+
+            import fsspec
+
+            fs, _ = fsspec.core.url_to_fs(self.path)
+            if create_only and fs.exists(self.path):
+                return False
+            with fs.open(self.path, "w") as f:
+                f.write(payload)
+            return True
+
+        Path(self.output_dir).mkdir(parents=True, exist_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT
+        if create_only:
+            flags |= os.O_EXCL
+        try:
+            fd = os.open(self.path, flags, 0o644)
+        except FileExistsError:
+            return False
+        with os.fdopen(fd, "w") as f:
+            f.write(payload)
+        return True
+
+    def acquire(self) -> bool:
+        if self._write(create_only=True):
+            self.acquired = True
+            logger.info("Acquired shard lease: %s", self.path)
+            return True
+
+        if self._lock_is_fresh():
+            logger.warning("Fresh shard lease already exists at %s; skipping duplicate worker", self.path)
+            return False
+
+        logger.warning("Shard lease at %s looks stale; removing it", self.path)
+        self._remove()
+        if self._write(create_only=True):
+            self.acquired = True
+            logger.info("Acquired shard lease after stale cleanup: %s", self.path)
+            return True
+
+        logger.warning("Could not acquire shard lease at %s after stale cleanup", self.path)
+        return False
+
+    def refresh(self) -> None:
+        if self.acquired:
+            self._write(create_only=False)
+
+    def release(self) -> None:
+        if self.acquired:
+            self._remove()
+            logger.info("Released shard lease: %s", self.path)
+            self.acquired = False
 
 
 def _sample_prs_per_language(
@@ -190,6 +339,7 @@ def _start_vllm_server(
         "--tensor-parallel-size",
         str(tensor_parallel_size),
         "--enforce-eager",
+        "--enable-prefix-caching",
     ]
 
     log_dir = tempfile.mkdtemp(prefix="vllm_server_")
@@ -283,6 +433,8 @@ def _run_with_vllm(
     shard_index: int = 0,
     total_shards: int = 1,
     dataset_id: str = "nebius/SWE-rebench-V2",
+    enable_shard_lease: bool = True,
+    lease_stale_minutes: int = 180,
 ) -> None:
     # Local imports of swe_zero modules only — no marin.evaluation /
     # marin.inference imports, to avoid pulling in transformers / torch.
@@ -314,6 +466,11 @@ def _run_with_vllm(
         logger.info("Sampling summary: %d total PRs across %d languages", len(sampled_prs), len(summary))
         for lang, info in sorted(summary.items()):
             logger.info("  %-10s: %d sampled / %d available", lang, info["sampled"], info["available"])
+
+    lease = ShardLease(output_dir, stale_minutes=lease_stale_minutes)
+    if enable_shard_lease and all_prs:
+        if not lease.acquire():
+            return
 
     # Auto-resume from output_dir/rollouts.json if it exists and no explicit
     # --resume-from was given. This makes sharded jobs idempotent under preemption:
@@ -431,6 +588,7 @@ def _run_with_vllm(
                 prior_dicts + [r.to_dict() for r in completed_rollouts],
                 os.path.join(output_dir, output_filename),
             )
+            lease.refresh()
             logger.info("Checkpoint: saved %d/%d rollouts", done, total_n)
 
     process, server_url, log_dir = _start_vllm_server(
@@ -471,6 +629,7 @@ def _run_with_vllm(
             process.wait(timeout=30)
         except subprocess.TimeoutExpired:
             process.kill()
+        lease.release()
 
     save_json(prior_dicts + [r.to_dict() for r in rollouts], os.path.join(output_dir, output_filename))
 
@@ -592,6 +751,17 @@ def main():
         help="HuggingFace dataset ID. Also supports nebius/SWE-rebench-V2-PRs (126K PRs).",
     )
     parser.add_argument(
+        "--disable-shard-lease",
+        action="store_true",
+        help="Disable the per-shard lease that prevents duplicate concurrent writers.",
+    )
+    parser.add_argument(
+        "--lease-stale-minutes",
+        type=int,
+        default=180,
+        help="Treat an existing shard lease as stale after this many minutes without refresh.",
+    )
+    parser.add_argument(
         "--all-prs",
         action="store_true",
         help="Sample EVERY PR in the dataset instead of n-per-language. "
@@ -668,6 +838,8 @@ def main():
         shard_index=shard_index,
         total_shards=total_shards,
         dataset_id=args.dataset,
+        enable_shard_lease=not args.disable_shard_lease,
+        lease_stale_minutes=args.lease_stale_minutes,
     )
 
 
