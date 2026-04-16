@@ -183,12 +183,12 @@ missing-import = false
 #   unknown-name (was false)       → re-enabled, residual items baselined
 #   missing-module-attribute       → cleared + re-enabled in PR-3
 
-# Untouched-for-now: keep disabled until cluster B (PR-4) triages them.
-unexpected-keyword = false
-no-matching-overload = false
-bad-argument-type = false
-missing-argument = false
-bad-argument-count = false
+# Cluster B categories (PR-4) all re-enabled; residual diagnostics land in
+# the baseline per the PR-3 pattern. The biggest residual bucket
+# (~80 diagnostics) is the haliax `Axis` widening story — pyrefly sees
+# `Axis | str | Mapping[str, int] | Sequence[Axis]` widened into concrete
+# `Axis` parameters. Deferred to a follow-on `.agents/projects/` doc per
+# user decision. Cluster B memo in `logs/pyrefly-tightening/stage3-cluster-b.md`.
 
 # Keep these enabled to catch real type errors:
 # bad-override = true (126 occurrences)

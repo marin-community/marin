@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -595,7 +596,7 @@ def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -
     return {task.task_id: task for task in tasks_with_attempts(tasks, attempts)}
 
 
-def _building_counts(queries: ControllerDB, workers: list[WorkerSnapshot]) -> dict[WorkerId, int]:
+def _building_counts(queries: ControllerDB, workers: Sequence[WorkerSnapshot]) -> dict[WorkerId, int]:
     """Count tasks in BUILDING or ASSIGNED state per worker, excluding reservation-holder jobs."""
     if not workers:
         return {}
@@ -672,7 +673,7 @@ def _worker_matches_reservation_entry(
 
 
 def _inject_reservation_taints(
-    workers: list[WorkerSnapshot],
+    workers: Sequence[WorkerSnapshot],
     claims: dict[WorkerId, ReservationClaim],
 ) -> list[WorkerSnapshot]:
     """Create modified worker copies with reservation taints and prioritization.
