@@ -26,7 +26,7 @@ NOTE (moojink): One tricky/subtle thing here when modifying the chat template wa
     Therefeore, we conditionally add both the newline character and generation block, separately.
 """
 
-QWEN_2_5_INSTRUCT_CHAT_TEMPLATE = r"""{%- if tools %}
+QWEN_2_5_INSTRUCT_CHAT_TEMPLATE = r"""{%- if tools is defined and tools %}
     {{- '<|im_start|>system\n' }}
     {%- if messages[0]['role'] == 'system' %}
         {{- messages[0]['content'] }}

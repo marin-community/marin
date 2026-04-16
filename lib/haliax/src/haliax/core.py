@@ -1,7 +1,6 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
-
 
 from __future__ import annotations
 
@@ -955,7 +954,13 @@ def take(array: NamedArray, axis: AxisSelector, index: int | NamedArray) -> Name
             return out
         else:
             new_axes = array.axes[:axis_index] + index.axes + array.axes[axis_index + 1 :]
-            new_array = jnp.take(array.array, index.array, axis=axis_index)
+            # Local import to avoid a circular import between core <-> partitioning.
+            from haliax.partitioning import get_pspec_for_manual_mesh
+
+            out_sharding = get_pspec_for_manual_mesh(new_axes)
+            indexer = [py_slice(None)] * array.array.ndim
+            indexer[axis_index] = index.array
+            new_array = array.array.at[tuple(indexer)].get(out_sharding=out_sharding)
 
             # new axes come from splicing the old axis with
             return NamedArray(new_array, new_axes)

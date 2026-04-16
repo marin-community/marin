@@ -1,17 +1,21 @@
 data:
-  configs:
-    owt:
-      train_urls:
-      - gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz
-      validation_urls:
-      - gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz
-    wikitext:
-      id: dlwh/wikitext_103_detokenized
   train_weights:
     owt: 0.6
     wikitext: 0.4
   tokenizer: gpt2
   cache_dir: gs://levanter-data/tokenized/data_mix
+  components:
+    owt:
+      source:
+        type: url
+        train_urls:
+        - gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz
+        validation_urls:
+        - gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz
+    wikitext:
+      source:
+        type: hf
+        id: dlwh/wikitext_103_detokenized
 eval_harness:
   task_spec:
   - piqa

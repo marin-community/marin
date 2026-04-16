@@ -1,35 +1,16 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
-"""Utilities for filtering Common Pile datasets by metadata extensions.
-
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
-    lib/marin/src/marin/transform/common_pile/filter_by_extension.py \
-    --input_path gs://marin-data/raw/common-pile/ \
-    --output_path gs://marin-data/processed/common-pile/filtered/ \
-    --allowed_extensions .txt .md
-"""
+"""Utilities for filtering Common Pile datasets by metadata extensions."""
 
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 
-from zephyr import Backend, Dataset, load_jsonl
+from zephyr import Dataset, ZephyrContext, load_jsonl
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def _normalize_extension(value: object, *, casefold: bool) -> str | None:
@@ -132,4 +113,5 @@ def filter_dataset_by_metadata_extension(config: FilterByMetadataExtensionConfig
         .filter(lambda record: record is not None)
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    Backend.execute(pipeline)
+    ctx = ZephyrContext(name="filter-by-extension")
+    ctx.execute(pipeline)

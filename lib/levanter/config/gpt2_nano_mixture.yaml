@@ -1,11 +1,5 @@
 data:
   cache_dir: data_mix_cache
-  configs:
-    wikitext:
-      id: dlwh/wikitext_103_detokenized
-    w2:
-      id: dlwh/wikitext_103_detokenized
-      cache_dir: wikitext2_cache
   train_weights:
   - - 0
     - wikitext: 0.8
@@ -13,6 +7,16 @@ data:
   - - 100
     - w2: 0.5
       wikitext: 0.5
+  components:
+    wikitext:
+      source:
+        type: hf
+        id: dlwh/wikitext_103_detokenized
+    w2:
+      cache_dir: wikitext2_cache
+      source:
+        type: hf
+        id: dlwh/wikitext_103_detokenized
 model:
   type: gpt2
   hidden_dim: 32

@@ -22,7 +22,7 @@ gpu_auto = ResourceConfig.with_gpu()  # auto-detect GPU type
 cpu_config = ResourceConfig.with_cpu()
 ```
 
-::: fray.cluster.base.ResourceConfig
+::: fray.v2.types.ResourceConfig
 
 ## Device Configurations
 
@@ -30,12 +30,12 @@ These are the underlying device types wrapped by `ResourceConfig`:
 
 ### CPU
 
-::: fray.cluster.base.CpuConfig
+::: fray.v2.types.CpuConfig
 
 ### GPU
 
-::: fray.cluster.base.GpuConfig
+::: fray.v2.types.GpuConfig
 
 ### TPU
 
-::: fray.cluster.base.TpuConfig
+::: fray.v2.types.TpuConfig

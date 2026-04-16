@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import string
@@ -23,7 +23,6 @@ from optax._src.utils import canonicalize_dtype
 
 from levanter.optim.config import OptimizerConfig
 
-
 # Define type variables for the pytree structure
 T = TypeVar("T")
 PartitionSpecTree = TypeVar(
@@ -32,6 +31,10 @@ PartitionSpecTree = TypeVar(
 
 # Type for the update probability schedule
 UpdateProbSchedule = Union[float, Callable[[int], float]]
+
+
+def _is_scanned_stack(x: object) -> bool:
+    return isinstance(x, (hax.nn.Stacked, hax.nn.ArrayStacked))
 
 
 @OptimizerConfig.register_subclass("kron")
@@ -273,7 +276,13 @@ def scale_by_kron(
 
     def init_fn(params, return_partition_specs_only=False):
         # unbox if haliax style partitioned
-        scanned_layers_ = None
+        scanned_layers_ = scanned_layers
+        if scanned_layers_ is None:
+            scanned_layers_ = jax.tree.map(
+                lambda x: (jax.tree.map(lambda _: True, x) if _is_scanned_stack(x) else False),
+                params,
+                is_leaf=_is_scanned_stack,
+            )
         params_sharding_ = params_sharding
         if have_hax:
             if any(
@@ -282,12 +291,6 @@ def scale_by_kron(
             ):
                 # if in haliax, we can grab scanned_layers and params_sharding from params
                 # this does not support nested stacks
-                if scanned_layers_ is None:
-                    scanned_layers_ = jax.tree.map(
-                        lambda x: (jax.tree.map(lambda _: True, x) if isinstance(x, hax.nn.Stacked) else False),
-                        params,
-                        is_leaf=lambda x: isinstance(x, hax.nn.Stacked),
-                    )
                 if params_sharding_ is None:
                     params_sharding_ = hax.partitioning.infer_resource_partitions(params)
                     params_sharding_ = jax.tree.map(lambda x: x.spec, params_sharding_)
@@ -444,7 +447,7 @@ def scale_by_kron(
                 add_dims_to_spec,
                 params,
                 Qs_sharding_no_leading_dims,
-                scanned_dim_sharding,
+                scanned_dim_sharding if scanned_dim_sharding is not None else nones,
             )
 
         if not return_partition_specs_only:
@@ -489,6 +492,12 @@ def scale_by_kron(
 
         # unbox if haliax style partitioned
         scanned_layers_ = scanned_layers
+        if scanned_layers_ is None:
+            scanned_layers_ = jax.tree.map(
+                lambda x: (jax.tree.map(lambda _: True, x) if _is_scanned_stack(x) else False),
+                updates,
+                is_leaf=_is_scanned_stack,
+            )
         params_sharding_ = params_sharding
         hax_partitioned = False
         if have_hax:
@@ -499,12 +508,6 @@ def scale_by_kron(
                 hax_partitioned = True
                 # if in haliax, we can grab scanned_layers and params_sharding from params
                 # this does not support nested stacks
-                if scanned_layers_ is None:
-                    scanned_layers_ = jax.tree.map(
-                        lambda x: (jax.tree.map(lambda _: True, x) if isinstance(x, hax.nn.Stacked) else False),
-                        updates,
-                        is_leaf=lambda x: isinstance(x, hax.nn.Stacked),
-                    )
                 if params_sharding_ is None:
                     params_sharding_ = hax.partitioning.infer_resource_partitions(updates)
                     params_sharding_ = jax.tree.map(lambda x: x.spec, params_sharding_)
@@ -732,7 +735,7 @@ def scale_by_kron(
                 add_dims_to_spec,
                 dummy_updates_tree,
                 Qs_sharding_no_leading_dims,
-                scanned_dim_sharding,
+                scanned_dim_sharding if scanned_dim_sharding is not None else nones,
             )
 
         # maybe update preconditioner
@@ -1027,39 +1030,6 @@ def kron(
         optimizer.append(transform.add_decayed_weights(weight_decay, weight_decay_mask))
     optimizer.append(transform.scale_by_learning_rate(learning_rate))
     return chain(*optimizer)
-
-
-def get_opt_state_partition_specs(params: base.Params, scale_by_kron_only: bool = False, **kwargs):
-    """Get tree of PartitionSpecs for kron optimizer state.
-
-    params converted to jax.ShapeDtypeStructs, no arrays are used.
-
-    Args:
-        params: pytree of Arrays, nn.Partitioned, or jax.ShapeDtypeStruct.
-        scale_by_kron_only: bool, If True, only returns partition specs for the
-            `scale_by_kron` function, otherwise the `kron` function.
-        kwargs: kwargs for kron (or scale_by_kron).
-
-    Returns:
-        tree of PartitionSpecs for optimizer state.
-    """
-    params_flat, params_struct = jax.tree.flatten(params)
-    if have_flax:
-        if isinstance(params_flat[0], nn.Partitioned):
-            params_flat = [p.unbox(p) for p in params_flat]
-    if not isinstance(params_flat[0], jax.ShapeDtypeStruct):
-        params_flat = [jax.ShapeDtypeStruct(p.shape, p.dtype) for p in params_flat]
-    params = params_struct.unflatten(params_flat)
-
-    specs = scale_by_kron(**kwargs).init(params, return_partition_specs_only=True)
-
-    if not scale_by_kron_only:
-        specs = (specs,)
-        if kwargs.get("weight_decay", 0.0) > 0.0:
-            specs += (None,)
-        specs += (None,)
-
-    return specs
 
 
 def _get_preconditioner_types(

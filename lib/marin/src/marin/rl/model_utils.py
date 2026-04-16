@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Model utilities for RL/post-training tasks.
@@ -20,17 +9,36 @@ including both local Levanter checkpoints and HuggingFace repositories.
 """
 
 import logging
+import os
 
 import equinox as eqx
 import haliax as hax
 import jax
 from jax.sharding import Mesh
 from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
+from levanter.compat.hf_checkpoints import (
+    HFCheckpointConverter,
+    PYTORCH_WEIGHTS_INDEX_NAME,
+    RepoRef,
+    SAFE_TENSORS_INDEX_NAME,
+)
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
+from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
+
+
+HF_CHECKPOINT_MARKERS = (
+    "config.json",
+    SAFE_TENSORS_INDEX_NAME,
+    PYTORCH_WEIGHTS_INDEX_NAME,
+    "tokenizer_config.json",
+)
+
+
+def _has_hf_checkpoint_files(checkpoint: str) -> bool:
+    return any(fsspec_exists(os.path.join(checkpoint, marker)) for marker in HF_CHECKPOINT_MARKERS)
 
 
 def is_hf_checkpoint(checkpoint: str) -> bool:
@@ -39,10 +47,18 @@ def is_hf_checkpoint(checkpoint: str) -> bool:
     Uses a simple heuristic: if the checkpoint looks like a path then
     assume it is a local Levanter checkpoint; otherwise assume it is a
     HuggingFace repository.
+
+    Note: hf:// URLs are treated as HuggingFace checkpoints since they use
+    the fsspec HuggingFace Hub protocol for streaming model loading.
     """
-    return not (
-        "://" in checkpoint or checkpoint.startswith("/") or checkpoint.startswith("./") or checkpoint.startswith("../")
-    )
+    # hf:// URLs are HuggingFace checkpoints (fsspec streaming protocol)
+    if checkpoint.startswith("hf://"):
+        return True
+
+    if "://" in checkpoint or checkpoint.startswith("/") or checkpoint.startswith("./") or checkpoint.startswith("../"):
+        return _has_hf_checkpoint_files(checkpoint)
+
+    return True
 
 
 def load_model_from_checkpoint(

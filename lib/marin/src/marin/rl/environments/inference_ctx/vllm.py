@@ -1,57 +1,80 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
+import gc
 import logging
 import os
 import time
-import re
-from typing import TYPE_CHECKING
-
-import jax
-import jax.numpy as jnp
-import numpy as np
 from dataclasses import dataclass
+from enum import StrEnum
+
+import numpy as np
+from levanter.models.lm_model import LmHeadModel
+from levanter.tokenizers import load_tokenizer
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.completion_usage import CompletionUsage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob, TopLogprob
-from haliax.partitioning import ResourceAxis
-from levanter.models.lm_model import LmHeadModel
-from marin.rl.weight_utils import levanter_to_nnx_state
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
+from marin.rl.environments.inference_ctx.render import Llama3Renderer, Qwen3Renderer, Renderer, Message
+from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
+from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 
 logger = logging.getLogger(__name__)
 
-if TYPE_CHECKING:
-    from vllm import LLM, SamplingParams
-    from vllm.outputs import RequestOutput
-
 try:
-    from vllm import LLM, SamplingParams
+    from vllm import LLM, SamplingParams, TokensPrompt
     from vllm.outputs import RequestOutput
+    from vllm.sampling_params import RequestOutputKind
 except ImportError:
     logger.warning("vLLM is not installed, so we will not be able to use vLLM inference context.")
     LLM = None
     SamplingParams = None
+    TokensPrompt = None
     RequestOutput = None
+    RequestOutputKind = None
 
 # Disable multiprocessing to have direct access to the model weights
 os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
-# Init vLLM model with random weights to speed up bootstrap time, because
-# model weights are synced from trainer later on
-os.environ["JAX_RANDOM_WEIGHTS"] = "True"
+
+
+class InferenceMode(StrEnum):
+    SYNC = "sync"
+    ASYNC = "async"
+
+
+@dataclass
+class VLLMSamplingConfig:
+    """Serializable sampling config that doesn't depend on vllm.
+
+    Replaces vllm.SamplingParams in config objects so they can be
+    serialized/deserialized on CPU workers without vllm installed.
+    Converted to vllm.SamplingParams inside the inference context.
+    """
+
+    temperature: float = 1.0
+    n: int = 1
+    max_tokens: int = 512
+    top_k: int = -1
+    stop: list[str] | None = None
+    include_stop_str_in_output: bool = False
+    logprobs: int | None = 1
+
+    def to_vllm(self):
+        """Convert to vllm.SamplingParams. Must be called where vllm is available."""
+        if SamplingParams is None:
+            raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
+        return SamplingParams(
+            temperature=self.temperature,
+            n=self.n,
+            max_tokens=self.max_tokens,
+            top_k=self.top_k,
+            stop=self.stop,
+            include_stop_str_in_output=self.include_stop_str_in_output,
+            logprobs=self.logprobs,
+        )
 
 
 @dataclass
@@ -62,99 +85,12 @@ class vLLMInferenceContextConfig:
     max_model_len: int
     tensor_parallel_size: int
     gpu_memory_utilization: float
-    sampling_params: SamplingParams
-
-
-def levanter_llama_to_vllm_mapping():
-    """Return a mapping of the the Levanter parameter names (from the training checkpoint) to vLLM names.
-    This is used to map the Levanter parameter names to the vLLM parameter names so that we can sync the weights.
-    The structure is as follows:
-    levanter_param_name: (vllm_param_name, partition_spec),
-    The partition_spec is a tuple of the axes that the parameter is partitioned along.
-    """
-    return {
-        "lm_head": ("model.lm_head", (None, "model")),
-        "model.embed_tokens": (
-            "model.embed.embedding",
-            ("model", None),
-        ),
-        "model.layers.*.input_layernorm": (
-            "model.layers.*.input_layernorm.scale",
-            (None,),
-        ),
-        "model.layers.*.mlp.down_proj": (
-            "model.layers.*.mlp.down_proj.kernel",
-            ("model", None),
-        ),
-        "model.layers.*.mlp.gate_proj": (
-            "model.layers.*.mlp.gate_proj.kernel",
-            (None, "model"),
-        ),
-        "model.layers.*.mlp.up_proj": (
-            "model.layers.*.mlp.up_proj.kernel",
-            (None, "model"),
-        ),
-        "model.layers.*.post_attention_layernorm": (
-            "model.layers.*.post_attention_layernorm.scale",
-            (None,),
-        ),
-        "model.layers.*.self_attn.k_proj": (
-            "model.layers.*.self_attn.k_proj.kernel",
-            (None, "model", None),
-        ),
-        "model.layers.*.self_attn.o_proj": (
-            "model.layers.*.self_attn.o_proj.kernel",
-            ("model", None, None),
-        ),
-        "model.layers.*.self_attn.q_proj": (
-            "model.layers.*.self_attn.q_proj.kernel",
-            (None, "model", None),
-        ),
-        "model.layers.*.self_attn.v_proj": (
-            "model.layers.*.self_attn.v_proj.kernel",
-            (None, "model", None),
-        ),
-        "model.norm": ("model.norm.scale", (None,)),
-    }
-
-
-def levanter_qwen_to_vllm_mapping():
-    mapping = levanter_llama_to_vllm_mapping()
-    mapping.update(
-        {
-            "model.layers.*.self_attn.q_norm": ("model.layers.*.self_attn.q_norm.scale", (None,)),
-            "model.layers.*.self_attn.k_norm": ("model.layers.*.self_attn.k_norm.scale", (None,)),
-        }
-    )
-    return mapping
-
-
-llama_transpose_keys = {
-    "lm_head": (1, 0),
-    "gate_proj": (1, 0),
-    "up_proj": (1, 0),
-    "down_proj": (1, 0),
-    "q_proj": (2, 0, 1),
-    "k_proj": (2, 0, 1),
-    "v_proj": (2, 0, 1),
-    "o_proj": (1, 2, 0),
-}
-
-MODEL_MAPPINGS = {
-    "meta-llama/Llama-3.2-1B-Instruct": levanter_llama_to_vllm_mapping(),
-    "meta-llama/Llama-3.2-3B-Instruct": levanter_llama_to_vllm_mapping(),
-    "Qwen/Qwen3-0.6B": levanter_qwen_to_vllm_mapping(),
-    "Qwen/Qwen3-1.7B": levanter_qwen_to_vllm_mapping(),
-    "meta-llama/Llama-3.1-8B-Instruct": levanter_llama_to_vllm_mapping(),
-}
-
-MODEL_TRANSPOSE_KEYS = {
-    "meta-llama/Llama-3.2-1B-Instruct": llama_transpose_keys,
-    "meta-llama/Llama-3.2-3B-Instruct": llama_transpose_keys,
-    "Qwen/Qwen3-0.6B": llama_transpose_keys,
-    "Qwen/Qwen3-1.7B": llama_transpose_keys,
-    "meta-llama/Llama-3.1-8B-Instruct": llama_transpose_keys,
-}
+    sampling_params: VLLMSamplingConfig
+    canonical_model_name: str | None = None
+    mode: InferenceMode = InferenceMode.SYNC
+    load_format: str = "auto"
+    enforce_eager: bool = True
+    kv_cache_metrics: bool = False
 
 
 class vLLMInferenceContext(BaseInferenceContext):
@@ -164,80 +100,101 @@ class vLLMInferenceContext(BaseInferenceContext):
         self,
         inference_config: vLLMInferenceContextConfig,
     ):
-        if LLM is None:
-            raise ImportError("vLLM is not installed. Please install vLLM to use vLLMInferenceContext.")
-        self.llm = LLM(
+        self.llm = self._get_llm_engine(inference_config)
+        # Mesh for the weight transfer client should be on the CPU and then
+        # in sync_weights function, we will reshard to the TPU
+        # self.mesh = jax.make_mesh(
+        #     (1, 1, 1),
+        #     (ResourceAxis.DATA, ResourceAxis.REPLICA, ResourceAxis.MODEL),
+        #     devices=jax.local_devices(backend="cpu")[:1],
+        # )
+        self.mesh = None
+        self.axis_mapping = {}
+        self.tokenizer = load_tokenizer(inference_config.model_name)
+        # Reverse vocab map for logprob token string display
+        self._id_to_token: dict[int, str] = {v: k for k, v in self.tokenizer.get_vocab().items()}
+        self.model_name = inference_config.model_name
+        self.canonical_model_name = inference_config.canonical_model_name or inference_config.model_name
+        self.sampling_config = inference_config.sampling_params
+        self._use_final_only = inference_config.mode == InferenceMode.ASYNC
+
+        # Initialize the appropriate renderer based on model type
+        self.renderer = self._get_renderer(self.canonical_model_name, self.tokenizer)
+
+    @staticmethod
+    def _get_renderer(model_name: str, tokenizer) -> Renderer:
+        """Get the appropriate renderer based on model name."""
+        model_name_lower = model_name.lower()
+        if "qwen" in model_name_lower:
+            return Qwen3Renderer(tokenizer)
+        elif "llama" in model_name_lower:
+            return Llama3Renderer(tokenizer)
+        else:
+            raise ValueError(f"Unsupported model type for {model_name}. Only Qwen3 and Llama3.1 models are supported.")
+
+    def _render_messages_to_tokens(self, messages: list[Message]) -> list[int]:
+        """Render a list of messages to token IDs using the appropriate renderer.
+
+        Uses the renderer's build_generation_prompt method to generate the complete
+        prompt with proper formatting, BOS tokens, and assistant header.
+
+        Args:
+            messages: List of message dictionaries with 'role' and 'content' keys
+
+        Returns:
+            List of token IDs ready to be passed to vLLM
+        """
+        return self.renderer.build_generation_prompt(messages)
+
+    @staticmethod
+    def _patch_tpu_inference_registry():
+        """Register architectures needed by RL hot-reload in tpu_inference."""
+        try:
+            from tpu_inference.models.common import model_loader
+            from tpu_inference.models.jax.llama3 import LlamaForCausalLM
+            from tpu_inference.models.jax.qwen2 import Qwen2ForCausalLM
+
+            required_architectures = {
+                # Qwen2 is still missing in the pinned tpu_inference registry.
+                "Qwen2ForCausalLM": Qwen2ForCausalLM,
+                # vLLM already resolves Mistral onto the Llama implementation;
+                # keep tpu_inference on the same JAX-native path for RL reloads.
+                "MistralForCausalLM": LlamaForCausalLM,
+            }
+
+            for architecture_name, model_cls in required_architectures.items():
+                if architecture_name in model_loader._MODEL_REGISTRY:
+                    continue
+                logger.info("Patching tpu_inference to support %s", architecture_name)
+                model_loader.register_model(architecture_name, model_cls)
+        except ImportError:
+            logger.exception("Failed to patch tpu_inference registry")
+            raise
+
+    @staticmethod
+    def _get_llm_engine(inference_config: vLLMInferenceContextConfig):
+        vLLMInferenceContext._patch_tpu_inference_registry()
+
+        if inference_config.mode == InferenceMode.SYNC:
+            if LLM is None:
+                raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
+            llm_engine_cls = LLM
+        elif inference_config.mode == InferenceMode.ASYNC:
+            llm_engine_cls = SyncVLLMWrapper
+        else:
+            raise ValueError(f"Invalid inference mode: {inference_config.mode}")
+
+        return llm_engine_cls(
             model=inference_config.model_name,
             max_model_len=inference_config.max_model_len,
             tensor_parallel_size=inference_config.tensor_parallel_size,
             gpu_memory_utilization=inference_config.gpu_memory_utilization,
+            load_format=inference_config.load_format,
+            enforce_eager=inference_config.enforce_eager,
+            kv_cache_metrics=inference_config.kv_cache_metrics,
         )
-        # Mesh for the weight transfer client should be on the CPU and then
-        # in sync_weights function, we will reshard to the TPU
-        self.mesh = jax.make_mesh(
-            (1, 1, 1),
-            (ResourceAxis.DATA, ResourceAxis.REPLICA, ResourceAxis.MODEL),
-            devices=jax.local_devices(backend="cpu")[:1],
-        )
-        self.axis_mapping = {}
-        self.tokenizer = self.llm.get_tokenizer()
-        self.model_name = inference_config.model_name
-        self.sampling_params = inference_config.sampling_params
 
-    def _convert_vllm_state_dict_to_trainer_keys(
-        self, state_dict_trainer: dict, state_dict_vllm: dict, mapping: dict
-    ) -> dict:
-        state_dict_vllm_with_trainer_keys = {}
-        for src_path, _ in state_dict_trainer.items():
-            src_key = ".".join(str(p) for p in src_path)
-
-            # Try to find a matching pattern
-            matched = False
-            for src_pattern, (dst_pattern, _) in mapping.items():
-
-                if not re.match(src_pattern, src_key):
-                    continue
-
-                match_layer_number = re.match(r".*layers\.(\d+).*", src_key)
-                if match_layer_number:
-                    layer_number = int(match_layer_number.group(1))
-                    dst_path = []
-                    for part in dst_pattern.split("."):
-                        if part == "*":
-                            dst_path.append(layer_number)
-                        else:
-                            dst_path.append(part)
-                    dst_path = tuple(dst_path)
-                    if dst_path in state_dict_vllm:
-                        state_dict_vllm_with_trainer_keys[src_path] = state_dict_vllm[dst_path]
-                        matched = True
-                        break
-                else:
-                    dst_path = tuple(dst_pattern.split("."))
-                    if dst_path in state_dict_vllm:
-                        state_dict_vllm_with_trainer_keys[src_path] = state_dict_vllm[dst_path]
-                        matched = True
-                        break
-
-            if not matched:
-                print(f"Warning: No mapping found for {src_key}")
-
-        return state_dict_vllm_with_trainer_keys
-
-    def _check_weight_differences(self, state_dict: dict, state_dict_other: dict):
-        for key in state_dict:
-            if key in state_dict_other:
-                assert (
-                    state_dict[key].shape == state_dict_other[key].shape
-                ), f"Shape mismatch for key {key}: {state_dict[key].shape} != {state_dict_other[key].shape}"
-                weight = jax.device_get(state_dict[key]).astype(jnp.bfloat16)
-                weight_other = jax.device_get(state_dict_other[key]).astype(jnp.bfloat16)
-                print(
-                    f"Weight {key}, max diff: {jnp.max(jnp.abs(weight - weight_other))}, \
-                    mean diff: {jnp.mean(jnp.abs(weight - weight_other))}"
-                )
-
-    def tokenize_prompt(self, prompt: str, choice: Choice | None = None) -> np.ndarray:
+    def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
         """Tokenize the prompt with the choice's prompt token IDs.
 
         NOTE(chris): This is a hack to get the prompt token IDs the same since
@@ -245,8 +202,16 @@ class vLLMInferenceContext(BaseInferenceContext):
         This is a known issue documented here:
         https://github.com/vllm-project/vllm/issues/27486
         """
-        assert choice is not None, "Choice is required to tokenize the prompt"
         return np.array(choice.prompt_token_ids, dtype=np.int32)
+
+    def response_tokens_from_choice(self, choice: Choice) -> np.ndarray:
+        """Extract response token IDs directly from the choice.
+
+        Uses the response_token_ids attached during vLLM-to-OpenAI conversion,
+        avoiding the lossy convert_ids_to_tokens/convert_tokens_to_ids round-trip
+        that fails for padding token IDs not in the tokenizer vocabulary.
+        """
+        return np.array(choice.response_token_ids, dtype=np.int32)
 
     def _convert_vllm_to_openai(self, request_output: RequestOutput) -> ChatCompletion:
         """Convert vLLM RequestOutput to OpenAI ChatCompletion format."""
@@ -255,8 +220,10 @@ class vLLMInferenceContext(BaseInferenceContext):
             # Convert logprobs
             logprobs_content = []
             for token_id, logprob_dict in zip(output.token_ids, output.logprobs, strict=False):
-                # Get the token string
-                token = self.tokenizer.convert_ids_to_tokens(token_id)
+                # Get the token string (may be None for padding token IDs)
+                token = self._id_to_token.get(token_id)
+                if token is None:
+                    token = f"<id_{token_id}>"
 
                 # Get the logprob for the selected token
                 selected_logprob = None
@@ -266,9 +233,12 @@ class vLLMInferenceContext(BaseInferenceContext):
                     if logprob_obj.rank == 1:
                         selected_logprob = logprob_obj.logprob
 
+                    token_str = self._id_to_token.get(tid)
+                    if token_str is None:
+                        token_str = f"<id_{tid}>"
                     top_logprobs.append(
                         TopLogprob(
-                            token=self.tokenizer.convert_ids_to_tokens(tid),
+                            token=token_str,
                             logprob=logprob_obj.logprob,
                             bytes=None,
                         )
@@ -281,7 +251,7 @@ class vLLMInferenceContext(BaseInferenceContext):
                 )
 
             choice = Choice(
-                finish_reason=output.finish_reason or "stop",
+                finish_reason=output.finish_reason,
                 index=output_idx,
                 logprobs=ChoiceLogprobs(content=logprobs_content),
                 message=ChatCompletionMessage(
@@ -292,10 +262,11 @@ class vLLMInferenceContext(BaseInferenceContext):
                 ),
             )
 
-            # Attach the prompt token IDs as a custom attribute to the choice since
-            # we need this since vLLM is injecting an extra BOS token at the start
-            # of the prompt.
+            # Attach token IDs as custom attributes to the choice.
+            # prompt_token_ids: needed since vLLM injects an extra BOS token at the start.
+            # response_token_ids: avoids lossy convert_ids_to_tokens/convert_tokens_to_ids round-trip.
             choice.prompt_token_ids = request_output.prompt_token_ids
+            choice.response_token_ids = list(output.token_ids)
             choices.append(choice)
 
         # Create usage information
@@ -310,53 +281,109 @@ class vLLMInferenceContext(BaseInferenceContext):
             id=request_output.request_id,
             choices=choices,
             created=int(time.time()),
-            model=self.model_name,
+            model=self.canonical_model_name,
             object="chat.completion",
             usage=usage,
         )
 
-    def reload_model(self, model: LmHeadModel) -> None:
-        nnx_state = levanter_to_nnx_state(model)
+    def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> LmHeadModel | None:
+        t0 = time.time()
+        logger.info("reload_model: starting prefix cache reset")
+        # Reset prefix cache before syncing weights to free up memory
+        self.llm.llm_engine.reset_prefix_cache()
+        gc.collect()
+
+        logger.info("reload_model: converting state dict")
+        # TODO(chris): levanter to vllm state dict
+        nnx_state = levanter_state_dict_to_nnx_state_on_cpu(state_dict)
+        t1 = time.time()
+        logger.info("reload_model: calling sync_weights (%d params, %.1fs so far)", len(nnx_state), t1 - t0)
         self.llm.llm_engine.model_executor.driver_worker.sync_weights(
             nnx_state,
-            mappings=MODEL_MAPPINGS[self.model_name],
-            transpose_keys=MODEL_TRANSPOSE_KEYS[self.model_name],
+            mappings=MODEL_MAPPINGS[self.canonical_model_name],
+            transpose_keys=MODEL_TRANSPOSE_KEYS[self.canonical_model_name],
             reshard_fn=None,
         )
 
+        t2 = time.time()
+        logger.info("reload_model: sync_weights done in %.1fs, resetting prefix cache", t2 - t1)
         self.llm.llm_engine.reset_prefix_cache()  # Reset prefix cache because of new weights
+        logger.info("reload_model: complete in %.1fs", time.time() - t0)
+        return model
 
     def start_server(self, model: LmHeadModel) -> None:
         pass
 
+    def shutdown(self) -> None:
+        pass
+
     def batch_completions(
         self,
-        prompts: list[str],
+        prompts: list[str] | list[list[dict]],
         temperature: float,
         n: int,
         max_tokens: int | None = None,
+        top_k: int | None = None,
         stop: list[str] | None = None,
+        system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
-        """Batch completions from the inference server."""
+        """Batch completions from the inference server.
+
+        Args:
+            prompts: Either a list of strings or a list of message lists (with few-shot examples)
+            temperature: Sampling temperature
+            n: Number of completions per prompt
+            max_tokens: Maximum tokens to generate
+            stop: Stop sequences
+            system_prompt: Optional system prompt (only used if prompts are strings)
+        """
         if SamplingParams is None:
-            raise ImportError("vLLM is not installed. Please install vLLM to use vLLMInferenceContext.")
-        sampling_params = SamplingParams(
-            temperature=temperature,
-            n=n,
-            # NOTE(chris): We allow the override to take precedence over the default sampling params.
-            max_tokens=max_tokens or self.sampling_params.max_tokens,
-            stop=stop or self.sampling_params.stop,
-            logprobs=1,
-        )
+            raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
+        kwargs = {
+            "temperature": temperature,
+            "n": n,
+            "max_tokens": max_tokens or self.sampling_config.max_tokens,
+            "top_k": top_k or self.sampling_config.top_k,
+            "stop": stop or self.sampling_config.stop,
+            "logprobs": 1,
+            "include_stop_str_in_output": self.sampling_config.include_stop_str_in_output,
+        }
+        if self._use_final_only and RequestOutputKind is not None:
+            kwargs["output_kind"] = RequestOutputKind.FINAL_ONLY
+        sampling_params = SamplingParams(**kwargs)
 
-        prompts_with_templates = [
-            self.tokenizer.apply_chat_template(
-                [{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True
-            )
-            for prompt in prompts
-        ]
+        # Convert prompts to message lists if they aren't already
+        message_lists: list[list[Message]] = []
+        if prompts and isinstance(prompts[0], list):
+            # Prompts are already message lists with few-shot examples
+            message_lists = prompts  # type: ignore
+        elif system_prompt:
+            # Plain string prompts with system prompt
+            assert all(isinstance(p, str) for p in prompts), "prompts must be strings when system_prompt is provided"
+            message_lists = [
+                [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}] for prompt in prompts  # type: ignore
+            ]
+        else:
+            # Plain string prompts without system prompt
+            assert all(isinstance(p, str) for p in prompts), "prompts must be strings when no system_prompt is provided"
+            message_lists = [[{"role": "user", "content": prompt}] for prompt in prompts]  # type: ignore
 
-        outputs = self.llm.generate(prompts_with_templates, sampling_params)
+        # Render messages to token IDs using the appropriate renderer
+        prompt_token_ids = []
+        for messages in message_lists:
+            tokens = self._render_messages_to_tokens(messages)
+            prompt_token_ids.append(tokens)
+
+        # Pass token IDs directly to vLLM
+        # See: https://docs.vllm.ai/en/v0.4.3/dev/offline_inference/llm_inputs.html
+        # vLLM accepts a list of TokensPrompt objects, which can be created by passing dicts with prompt_token_ids
+        if TokensPrompt is None:
+            raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
+        prompts_for_vllm = [TokensPrompt(prompt_token_ids=tokens) for tokens in prompt_token_ids]
+        logger.info("generate: starting, %d prompts, max_tokens=%d", len(prompts_for_vllm), sampling_params.max_tokens)
+        t0 = time.time()
+        outputs = self.llm.generate(prompts_for_vllm, sampling_params)
+        logger.info("generate: done in %.1fs", time.time() - t0)
 
         # Convert vLLM outputs to OpenAI ChatCompletion format
         return [self._convert_vllm_to_openai(output) for output in outputs]

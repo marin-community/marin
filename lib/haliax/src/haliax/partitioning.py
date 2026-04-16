@@ -1,11 +1,11 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
-
 
 import contextlib
 import dataclasses
 import functools
+import inspect
 import threading
 import typing
 import warnings
@@ -15,8 +15,8 @@ from typing import Any, Callable, ContextManager, Mapping, Optional, ParamSpec, 
 import equinox as eqx
 import jax
 from equinox import is_array, module_update_wrapper
-from jax._src.pjit import reshard
-from jax.experimental.shard_map import shard_map as jax_shard_map
+from jax import shard_map as jax_shard_map
+from jax.sharding import reshard
 from jax.lax import with_sharding_constraint
 from jax.sharding import AbstractMesh, NamedSharding, Mesh, PartitionSpec, get_abstract_mesh, AxisType
 
@@ -28,7 +28,7 @@ from haliax._src.compile_utils import compile_cache
 
 from .axis import Axis, AxisSelection, AxisSelector, axis_spec_to_shape_dict
 from .core import NamedArray
-from .jax_utils import Static, is_in_jit, is_jax_array_like, is_on_mac_metal
+from .jax_utils import Static, is_jax_array_like, is_on_mac_metal, is_in_jit
 from .tree_util import hashable_combine, hashable_partition
 from .util import StringHolderEnum
 
@@ -62,6 +62,7 @@ class _ResourceMappingHolder:
 
 
 _mapping_holder = _ResourceMappingHolder()
+_JAX_SHARD_MAP_PARAMETER_NAMES = frozenset(inspect.signature(jax_shard_map).parameters.keys())
 
 
 @contextlib.contextmanager
@@ -247,10 +248,9 @@ def shard(x: T, mapping: ResourceMapping | None = None, mesh: Mesh | None = None
             # this happens when we filter out params for things like lora.
             # could use eqx.partition to avoid this, but eh
             return named
-
         pspec = pspec_for(named, mapping)
         assert isinstance(pspec, PartitionSpec)
-        if is_in_jit():
+        if _is_jit_tracer(named.array):
             # ok so jax is mildly annoying right now. we have to use reshard if *all* mesh axes are explicit.
             # otherwise, we need to use with_sharding_constraint.
             if all_mesh_axes_explicit(resolved_mesh, pspec):
@@ -290,7 +290,7 @@ def pspec_for(
 
     def partition_spec(node: typing.Any):
         if isinstance(node, NamedArray):
-            return pspec_for_axis(node.axes, resource_mapping)
+            return pspec_for_axis(node.axis_names, resource_mapping)
         elif isinstance(node, eqx.Module):
             # handle eqx.Module explicitly so that we can look at axis_names metadata
             updates: dict[str, typing.Any] = {}
@@ -722,6 +722,53 @@ def pspec_for_axis(axis: AxisSelection, mapping: ResourceMapping | None = None) 
     return PartitionSpec(*(physical_axis_name(a, mapping) for a in axis))
 
 
+def get_pspec_for_manual_mesh(
+    axis: AxisSelection,
+    mapping: ResourceMapping | None = None,
+    *,
+    mesh: MeshLike | None = None,
+) -> PartitionSpec | None:
+    """Return a `PartitionSpec` for `axis` iff the active mesh uses explicit axis types.
+
+    Some JAX APIs (e.g. gather via `.at[...].get(out_sharding=...)`) require an output sharding to be
+    unambiguous. However, passing a `PartitionSpec` while under an `AbstractMesh` or a mesh with
+    `AxisType.Auto`/`AxisType.Manual` can raise errors because JAX cannot resolve a concrete device assignment.
+
+    This helper returns:
+      - `pspec_for_axis(axis, mapping)` when all referenced mesh axes are `AxisType.Explicit`, else
+      - `None` (caller should omit `out_sharding`).
+    """
+
+    resolved_mesh = _resolve_mesh(mesh)
+    if resolved_mesh is None or resolved_mesh.empty:
+        return None
+
+    pspec = pspec_for_axis(axis, mapping)
+
+    axis_type_by_name = dict(zip(resolved_mesh.axis_names, resolved_mesh.axis_types, strict=False))
+
+    def _iter_mesh_axes(spec_entry):
+        if spec_entry is None or spec_entry is PartitionSpec.UNCONSTRAINED:
+            return
+        if isinstance(spec_entry, str):
+            yield spec_entry
+        else:
+            for item in spec_entry:
+                if item is None or item is PartitionSpec.UNCONSTRAINED:
+                    continue
+                yield item
+
+    referenced = {name for entry in pspec for name in _iter_mesh_axes(entry)}
+    if not referenced:
+        return pspec
+
+    for name in referenced:
+        if axis_type_by_name.get(name) != AxisType.Explicit:
+            return None
+
+    return pspec
+
+
 def round_axis_for_partitioning(axis: Axis, mapping: ResourceMapping | None = None) -> Axis:
     """Round an axis so that it's divisible by the size of the partition it's on"""
     size = physical_axis_size(axis, mapping)
@@ -772,7 +819,7 @@ def shard_map(
     check_rep: bool = False,
     **shmap_kwargs: dict,
 ) -> Callable:
-    """A NamedArray-friendly wrapper around :func:`jax.experimental.shard_map.shard_map`.
+    """A NamedArray-friendly wrapper around :func:`jax.shard_map`.
 
     This function can be used either as ``haliax.shard_map(fn, ...)`` or as a
     decorator::
@@ -800,7 +847,8 @@ def shard_map(
             returned by [jax.sharding.get_abstract_mesh][].
         axis_mapping: Optional mapping from logical axis names to mesh axis names
             used when converting `Axis` objects to `PartitionSpec`.
-        check_rep: Passed through to `jax.shard_map`.
+        check_rep: Passed through to `jax.shard_map` as `check_rep` on older JAX,
+            or mapped to `check_vma` on JAX 0.8+.
         **shmap_kwargs: Additional arguments forwarded to `jax.shard_map`.
 
     Returns:
@@ -835,13 +883,21 @@ def shard_map(
 
         # for output, we need to evaluate the function on placeholder inputs to get the output shape
         # we have to do this under shard_map so that psum etc. work
+        shard_map_kwargs: dict[str, Any] = dict(shmap_kwargs)
+        if "check_rep" in _JAX_SHARD_MAP_PARAMETER_NAMES:
+            shard_map_kwargs["check_rep"] = check_rep
+        elif "check_vma" in _JAX_SHARD_MAP_PARAMETER_NAMES:
+            shard_map_kwargs["check_vma"] = check_rep
+        elif check_rep:
+            msg = "This JAX version's shard_map does not support check_rep/check_vma compatibility checks."
+            raise RuntimeError(msg)
+
         almost_shmap = functools.partial(
             jax_shard_map,
             inner,
             mesh=this_mesh,
             in_specs=this_in_specs,
-            check_rep=check_rep,
-            **shmap_kwargs,
+            **shard_map_kwargs,
         )
 
         if out_specs is not None:

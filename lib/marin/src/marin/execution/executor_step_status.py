@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Each `ExecutorStep` produces an `output_path`.
@@ -22,19 +11,27 @@ The LOCK file contains JSON with {worker_id, timestamp} and is refreshed periodi
 On GCS, we use generation-based conditional writes for atomicity.
 """
 
+import contextlib
+import functools
 import json
 import logging
 import os
 import time
-from dataclasses import asdict, dataclass
+from collections.abc import Callable, Generator
+from threading import Event, Thread
+from typing import TypeVar
 
-import fsspec
-from google.cloud import storage
+from rigging.distributed_lock import (
+    HEARTBEAT_INTERVAL,
+    LeaseLostError,
+    create_lock,
+    default_worker_id,
+)
+from rigging.filesystem import url_to_fs
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
-HEARTBEAT_INTERVAL = 30  # seconds between lease refreshes
-HEARTBEAT_TIMEOUT = 90  # seconds before considering a lease stale
+T = TypeVar("T")
 
 STATUS_RUNNING = "RUNNING"
 STATUS_FAILED = "FAILED"
@@ -47,18 +44,6 @@ def get_status_path(output_path: str) -> str:
     return os.path.join(output_path, ".executor_status")
 
 
-@dataclass
-class Lease:
-    """A lease held by a worker for a step."""
-
-    worker_id: str
-    timestamp: float
-
-    def is_stale(self) -> bool:
-        logger.debug(f"Is stale? {time.time()} {self.timestamp} {time.time() - self.timestamp}")
-        return (time.time() - self.timestamp) > HEARTBEAT_TIMEOUT
-
-
 class StatusFile:
     """Manages executor step status with distributed locking.
 
@@ -67,7 +52,7 @@ class StatusFile:
       Contains {worker_id, timestamp}. Must be refreshed periodically.
     - Status file (simple text): Final state - SUCCESS, FAILURE, or RUNNING.
 
-    Lock acquisition uses GCS generation-based conditional writes for atomicity.
+    Lock acquisition delegates to ``rigging.distributed_lock``.
     """
 
     def __init__(self, output_path: str, worker_id: str):
@@ -75,17 +60,8 @@ class StatusFile:
         self.path = get_status_path(output_path)
         self.worker_id = worker_id
         self._lock_path = self.path + ".lock"
-        self.fs = fsspec.core.url_to_fs(self.path, use_listings_cache=False)[0]
-
-    @property
-    def _is_gcs(self) -> bool:
-        return self.path.startswith("gs://")
-
-    def _parse_gcs_path(self, path: str) -> tuple[str, str]:
-        """Parse gs://bucket/path into (bucket, blob_path)."""
-        path = path[5:]  # Remove gs:// prefix
-        bucket, _, blob_path = path.partition("/")
-        return (bucket, blob_path)
+        self.fs = url_to_fs(self.path, use_listings_cache=False)[0]
+        self._lock = create_lock(self._lock_path, worker_id=worker_id)
 
     @property
     def status(self) -> str | None:
@@ -147,119 +123,158 @@ class StatusFile:
             self.release_lock()
         logger.debug("[%s] Wrote status %s to %s", self.worker_id, status, self.path)
 
-    def _read_lock_with_generation(self) -> tuple[int, Lease | None]:
-        """Read LOCK file and its generation. Returns (0, None) if doesn't exist."""
-        if self._is_gcs:
-            client = storage.Client()
-            bucket_name, blob_path = self._parse_gcs_path(self._lock_path)
-            bucket = client.bucket(bucket_name)
-            blob = bucket.get_blob(blob_path)
-            if blob is None:
-                return (0, None)
-            data = json.loads(blob.download_as_string())
-            return (blob.generation, Lease(**data))
-        else:
-            import fcntl
-
-            try:
-                # Use flock to avoid reading partially written files
-                with open(self._lock_path, "r") as f:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-                    content = f.read()
-                    if not content:
-                        return (0, None)
-                    data = json.loads(content)
-                return (1, Lease(**data))
-            except FileNotFoundError:
-                return (0, None)
-
-    def _write_lock(self, lease: Lease, if_generation_match: int) -> None:
-        """Write LOCK file with generation precondition.
-
-        On GCS, uses generation-based conditional writes.
-        On local, uses atomic rename then read-back to verify.
-        """
-        data = json.dumps(asdict(lease))
-
-        if self._is_gcs:
-            client = storage.Client()
-            bucket_name, blob_path = self._parse_gcs_path(self._lock_path)
-            bucket = client.bucket(bucket_name)
-            blob = bucket.blob(blob_path)
-            blob.upload_from_string(data, if_generation_match=if_generation_match)
-        else:
-            import fcntl
-
-            parent = os.path.dirname(self._lock_path)
-            os.makedirs(parent, exist_ok=True)
-
-            # Use flock on the lock file itself for mutual exclusion
-            with open(self._lock_path, "a+") as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                f.seek(0)
-                content = f.read()
-                if content:
-                    current = Lease(**json.loads(content))
-                    if not current.is_stale() and current.worker_id != lease.worker_id:
-                        raise FileExistsError(f"Lock held by {current.worker_id}")
-                f.seek(0)
-                f.truncate()
-                f.write(data)
-
     def refresh_lock(self) -> None:
-        """Refresh a lock held by the current worker."""
-        generation, lock_data = self._read_lock_with_generation()
-        if lock_data and lock_data.worker_id == self.worker_id:
-            logger.debug("Refreshing lock for worker %s at generation %s", self.worker_id, generation)
-            self._write_lock(Lease(self.worker_id, time.time()), generation)
-        else:
-            lock_worker = lock_data.worker_id if lock_data else "unknown"
-            raise ValueError(
-                f"Failed precondition: lock not held by current worker: found {lock_worker}, expected {self.worker_id}"
-            )
+        """Refresh a lock held by the current worker.
+
+        Raises ``LeaseLostError`` if another worker holds the lock.
+        """
+        self._lock.refresh()
 
     def try_acquire_lock(self) -> bool:
-        """Try to acquire the lock using atomic LOCK file, or update the lock if held.
-
-        On GCS, uses generation-based preconditions for atomicity.
-        """
-        generation, lock_data = self._read_lock_with_generation()
-
-        if lock_data and not lock_data.is_stale():
-            if lock_data.worker_id == self.worker_id:
-                logger.info("[%s] Already hold lock", self.worker_id)
-                return True
-            logger.info("[%s] Lock held by %s (fresh)", self.worker_id, lock_data.worker_id)
-            return False
-
-        if lock_data:
-            logger.info("[%s] Found stale lock from %s, attempting takeover", self.worker_id, lock_data.worker_id)
-
-        lease = Lease(worker_id=self.worker_id, timestamp=time.time())
-        try:
-            self._write_lock(lease, if_generation_match=generation)
-        except FileExistsError:
-            logger.info("[%s] Lost lock race", self.worker_id)
-            return False
-        except Exception as e:
-            if self._is_gcs and "PreconditionFailed" in type(e).__name__:
-                logger.info("[%s] Lost lock race", self.worker_id)
-                return False
-            raise
-
-        return True
+        """Try to acquire the lock using atomic LOCK file."""
+        return self._lock.try_acquire()
 
     def release_lock(self) -> None:
         """Release the lock if we hold it."""
-        try:
-            _, lock_data = self._read_lock_with_generation()
-            if lock_data and lock_data.worker_id == self.worker_id:
-                self.fs.rm(self._lock_path)
-                logger.debug("[%s] Released lock", self.worker_id)
-        except FileNotFoundError:
-            pass
+        self._lock.release()
 
     def has_active_lock(self) -> bool:
         """Check if any worker has an active (non-stale) lock."""
-        _, lock_data = self._read_lock_with_generation()
-        return lock_data is not None and not lock_data.is_stale()
+        return self._lock.has_active_holder()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def worker_id() -> str:
+    return default_worker_id()
+
+
+class PreviousTaskFailedError(Exception):
+    """Raised when a step failed previously and force_run_failed is False."""
+
+
+def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool = True) -> bool:
+    """Check if the step should run based on lease-based distributed locking.
+
+    Uses double-check locking: check status, attempt to acquire lock,
+    re-check status after acquisition to avoid overwriting a concurrent
+    completion.
+    """
+    wid = status_file.worker_id
+    log_once = True
+
+    while True:
+        status = status_file.status
+
+        if log_once:
+            logger.info(f"[{wid}] Status {step_name}: {status}")
+            log_once = False
+
+        if status == STATUS_SUCCESS:
+            logger.info(f"[{wid}] Step {step_name} has already succeeded.")
+            return False
+
+        if status in [STATUS_FAILED, STATUS_DEP_FAILED]:
+            if force_run_failed:
+                logger.info(f"[{wid}] Force running {step_name}, previous status: {status}")
+            else:
+                raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
+        elif status == STATUS_RUNNING and status_file.has_active_lock():
+            logger.debug(f"[{wid}] Step {step_name} has active lock, waiting...")
+            time.sleep(5)
+            continue
+        elif status == STATUS_RUNNING:
+            logger.info(f"[{wid}] Step {step_name} has no active lock, taking over.")
+
+        logger.info(f"[{wid}] Attempting to acquire lock for {step_name}")
+        if status_file.try_acquire_lock():
+            # Double-check: re-read status after acquiring lock to avoid
+            # overwriting a concurrent SUCCESS.
+            recheck = status_file.status
+            if recheck == STATUS_SUCCESS:
+                logger.info(f"[{wid}] Step {step_name} completed by another worker after lock acquired.")
+                status_file.release_lock()
+                return False
+
+            status_file.write_status(STATUS_RUNNING)
+            logger.info(f"[{wid}] Acquired lock for {step_name}")
+            return True
+
+        logger.info(f"[{wid}] Lost lock race for {step_name}, retrying...")
+        time.sleep(1)
+
+
+# ---------------------------------------------------------------------------
+# Step-level distributed lock decorator
+# ---------------------------------------------------------------------------
+
+
+class StepAlreadyDone(Exception):
+    """Raised by ``step_lock`` / ``distributed_lock`` when the step has already succeeded."""
+
+
+@contextlib.contextmanager
+def step_lock(output_path: str, step_label: str, *, force_run_failed: bool = True) -> Generator[StatusFile, None, None]:
+    """Context manager that acquires a distributed lock with heartbeat refresh.
+
+    Acquires the lock, starts a daemon heartbeat thread, yields the
+    ``StatusFile``, then tears down the heartbeat and releases the lock.
+
+    Raises ``StepAlreadyDone`` if another worker completed the step
+    while we waited for the lock.
+    """
+    status_file = StatusFile(output_path, worker_id())
+    if not should_run(status_file, step_label, force_run_failed=force_run_failed):
+        raise StepAlreadyDone(output_path)
+
+    # Start heartbeat — LeaseLostError is fatal and signals the main thread.
+    stop_event = Event()
+    lease_lost_event = Event()
+
+    def _heartbeat():
+        while not stop_event.wait(HEARTBEAT_INTERVAL):
+            try:
+                status_file.refresh_lock()
+            except LeaseLostError:
+                logger.error("Lease lost for %s — step must terminate", output_path, exc_info=True)
+                lease_lost_event.set()
+                return
+
+    heartbeat_thread = Thread(target=_heartbeat, daemon=True)
+    heartbeat_thread.start()
+
+    try:
+        yield status_file
+    finally:
+        stop_event.set()
+        heartbeat_thread.join(timeout=5)
+        if lease_lost_event.is_set():
+            raise LeaseLostError(f"Lease was lost during execution of {output_path}")
+        status_file.release_lock()
+
+
+def distributed_lock(fn: Callable[[str], T], *, force_run_failed: bool = True) -> Callable[[str], T]:
+    """Decorator: wrap *fn* with lease-based distributed locking.
+
+    The lock is keyed on the *output_path* argument passed to *fn*.  If
+    another worker already completed the step (``STATUS_SUCCESS``),
+    ``StepAlreadyDone`` is raised so that the caller (typically
+    ``disk_cached``) can load the cached artifact instead.
+
+    While *fn* is executing a heartbeat thread refreshes the lock so that
+    other workers see it as active.
+
+    This decorator does **not** write status or save artifacts — that is the
+    responsibility of the caller.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(output_path: str) -> T:
+        step_label = output_path.rsplit("/", 1)[-1]
+        with step_lock(output_path, step_label, force_run_failed=force_run_failed):
+            return fn(output_path)
+
+    return wrapper

@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Expression layer for filter and projection pushdown.
 
@@ -23,10 +12,9 @@ import operator
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
-if TYPE_CHECKING:
-    import pyarrow.compute as pc
+import pyarrow.compute as pc
 
 
 class Expr(ABC):
@@ -288,6 +276,28 @@ def lit(value: Any) -> LiteralExpr:
     return LiteralExpr(value)
 
 
+def referenced_columns(expr: Expr) -> set[str]:
+    """Return the set of column names referenced by an expression.
+
+    Walks the expression tree and collects all ColumnExpr.name values.
+
+    Example:
+        >>> referenced_columns((col("score") > 0.5) & (col("category") == "A"))
+        {'score', 'category'}
+    """
+    if isinstance(expr, ColumnExpr):
+        return {expr.name}
+    if isinstance(expr, LiteralExpr):
+        return set()
+    if isinstance(expr, (CompareExpr, LogicalExpr, ArithmeticExpr)):
+        return referenced_columns(expr.left) | referenced_columns(expr.right)
+    if isinstance(expr, (NotExpr, IsNullExpr)):
+        return referenced_columns(expr.child)
+    if isinstance(expr, FieldAccessExpr):
+        return referenced_columns(expr.parent)
+    return set()
+
+
 def to_pyarrow_expr(expr: Expr) -> pc.Expression:
     """Convert a Zephyr expression to a PyArrow compute expression.
 
@@ -297,8 +307,6 @@ def to_pyarrow_expr(expr: Expr) -> pc.Expression:
         >>> pa_expr = to_pyarrow_expr(col("score") > 0.5)
         >>> # Can be used with pq.read_table(..., filter=pa_expr)
     """
-    import pyarrow.compute as pc
-
     if isinstance(expr, ColumnExpr):
         return pc.field(expr.name)
     elif isinstance(expr, LiteralExpr):

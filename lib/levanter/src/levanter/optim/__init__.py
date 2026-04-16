@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 __all__ = [
@@ -24,6 +24,9 @@ __all__ = [
     "MuonConfig",
     "MuonHConfig",
     "ScaleByMuonState",
+    "GrugMuonConfig",
+    "NamoConfig",
+    "NamoDConfig",
     # rmsprop
     "RMSPropMomentumConfig",
     "ScaleByRMSPropMomState",
@@ -32,10 +35,6 @@ __all__ = [
     "ScionConfig",
     # soap
     "SoapConfig",
-    # sophia
-    "ScaleBySophiaState",
-    "SophiaHConfig",
-    "scale_by_sophia_h",
     # skipstep
     "SkipStepConfig",
     # model averaging
@@ -51,15 +50,12 @@ from .adamh import AdamHConfig
 from .kron import KronConfig
 from .mars import MarsConfig, ScaleByMarsState
 from .muon import MuonConfig, ScaleByMuonState
+from .grugmuon import GrugMuonConfig
 from .muonh import MuonHConfig
+from .namo import NamoConfig, NamoDConfig
 from .rmsprop import RMSPropMomentumConfig, ScaleByRMSPropMomState
 from .scion import ScaleByScionState, ScionConfig
 from .soap import SoapConfig
-from .sophia import (  # SophiaGConfig,; SophiaGObjective,; scale_by_sophia_g,
-    ScaleBySophiaState,
-    SophiaHConfig,
-    scale_by_sophia_h,
-)
 from .skipstep import SkipStepConfig
 from .model_averaging import (
     EmaDecaySqrtConfig,

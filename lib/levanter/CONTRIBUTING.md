@@ -16,7 +16,7 @@ cat <<'EOF' > .git/hooks/pre-commit
 #!/bin/sh
 set -e
 cd "$(git rev-parse --show-toplevel)"
-uv run python infra/pre-commit.py --fix
+./infra/pre-commit.py --fix
 EOF
 chmod +x .git/hooks/pre-commit
 ```
@@ -65,7 +65,7 @@ before you start making commits.
 
 You can also check all files in the current branch with this command:
 
-    uv run python infra/pre-commit.py --all-files
+    ./infra/pre-commit.py --all-files
 
 When your changes are operational you should verify that the current tests are passing.
 

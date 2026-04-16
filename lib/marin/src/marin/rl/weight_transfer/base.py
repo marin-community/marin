@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Base classes and configurations for weight transfer management.
@@ -42,6 +31,19 @@ class WeightTransferServerMetrics:
     total_transfers: int = 0
     successful_transfers: int = 0
     failed_transfers: int = 0
+    total_transfer_bytes: int = 0
+    transfer_bytes: int = 0
+    param_count: int = 0
+    largest_param_bytes: int = 0
+    state_dict_time: float = 0.0
+    materialize_time: float = 0.0
+    serialize_time: float = 0.0
+    store_time: float = 0.0
+    update_time: float = 0.0
+    serve_time: float = 0.0
+    materialize_mib_per_second: float = 0.0
+    serialize_mib_per_second: float = 0.0
+    store_mib_per_second: float = 0.0
 
 
 @dataclass
@@ -51,16 +53,23 @@ class WeightTransferClientMetrics:
     total_polls: int = 0
     successful_receives: int = 0
     failed_receives: int = 0
+    total_receive_bytes: int = 0
+    receive_bytes: int = 0
+    param_count: int = 0
+    largest_param_bytes: int = 0
     fetch_time: float = 0
     decode_time: float = 0
     poll_time: float = 0
+    fetch_mib_per_second: float = 0.0
+    decode_mib_per_second: float = 0.0
 
 
 @dataclass
 class WeightUpdate:
     """Result of receiving weights from a weight transfer server."""
 
-    model: PyTree
+    model: PyTree | None
+    state_dict: dict
     weight_id: int
 
 
@@ -82,6 +91,9 @@ class WeightTransferConfig:
     # Arrow Flight specific
     flight_host: str = "0.0.0.0"
     flight_port: int = 0  # 0 = auto-assign
+    convert_to_bfloat16: bool = True
+    """Whether to convert weights to bfloat16 during transfer. Reduces transfer size by 50% for float32 weights."""
+    debug_weight_transfer: bool = False
 
 
 class WeightTransferServer(ABC):
@@ -106,19 +118,27 @@ class WeightTransferServer(ABC):
     def get_metrics(self) -> dict:
         pass
 
+    def get_debug_snapshot(self) -> dict[str, object]:
+        """Return lightweight server-local debug state for checkpoint diagnostics."""
+        return {}
+
 
 class WeightTransferClient(ABC):
     """Abstract base class for weight transfer clients (inference worker side)."""
 
     @abstractmethod
-    def receive_weights(self, old_model: PyTree) -> WeightUpdate | None:
+    def receive_weights(self, old_model: PyTree | None) -> WeightUpdate | None:
         """Receive weights from server.
 
         Args:
             old_model: Previous model for memory optimization (optional)
+            apply_weight_update: Whether to apply the weight update to the model
 
         Returns:
-            WeightUpdate containing the new model and weight_id if update available, None otherwise.
+            WeightUpdate containing the new model or state_dict and weight_id if update available,
+            None otherwise. If old_model is None, the weight update will only contain the new state
+            dict but will not apply the weight update. If old model is not None, the weight update
+            will be applied to the model.
         """
         pass
 

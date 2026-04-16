@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 
@@ -48,7 +37,7 @@ from marin.processing.classification.decon import DeconConfig, DeconMode, NGramC
 from experiments.midtraining_datasets import finemath_3_plus
 from experiments.pretraining_datasets.simple import downloads
 from experiments.pretraining_datasets.dolmino import downloads as dolmino_downloads
-from experiments.pretraining_datasets.nemotron import downloads as nemotron_downloads
+from experiments.pretraining_datasets.nemotron import nemotron_cc_download
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -92,7 +81,7 @@ DATASET_CONFIGS = [
     DatasetConfig(name="starcoder", path=downloads["starcoderdata"], text_field="content"),
     DatasetConfig(name="proofpile", path=downloads["proofpile_2"]),
     DatasetConfig(name="dolmino", path=dolmino_downloads["dolmino"]),
-    DatasetConfig(name="nemotron_cc", path=nemotron_downloads["nemotron_cc"]),
+    DatasetConfig(name="nemotron_cc", path=nemotron_cc_download()),
 ]
 
 

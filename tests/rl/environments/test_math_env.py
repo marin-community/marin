@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Basic tests for MathEnv with new InferenceContext paradigm."""
 
@@ -21,7 +10,6 @@ from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_usage import CompletionUsage
-from transformers import AutoTokenizer
 
 from marin.rl.environments.math_env import MathEnv
 from marin.rl.environments.inference_ctx import LevanterInferenceContext
@@ -29,7 +17,7 @@ from marin.rl.environments.inference_ctx import LevanterInferenceContext
 
 def create_mock_chat_completion(tokenizer) -> ChatCompletion:
     """Create a mock ChatCompletion with logprobs for testing."""
-    response_text: str = "<answer>4</answer>"
+    response_text: str = "\\boxed{4}"
     tokens = tokenizer.encode(response_text, add_special_tokens=False)
     logprobs_content = [
         ChatCompletionTokenLogprob(
@@ -61,14 +49,23 @@ class DummyInferenceContext(LevanterInferenceContext):
         self._stop_tokens = None
         self.max_tokens = 512
 
-    def batch_completions(self, prompts, temperature, n, max_tokens=None, stop=None):
+    def batch_completions(
+        self,
+        prompts,
+        temperature,
+        n,
+        max_tokens=None,
+        stop=None,
+        system_prompt=None,
+        top_k=None,
+    ):
         """Return mock completions for each prompt."""
         return [create_mock_chat_completion(self.tokenizer) for prompt in prompts]
 
 
-def test_math_env_reward_calculation():
+def test_math_env_reward_calculation(gpt2_tokenizer):
     """Test that math env correctly calculates rewards and creates rollouts."""
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    tokenizer = gpt2_tokenizer
     inference_ctx = DummyInferenceContext(tokenizer)
     train_data = [
         {"problem": "What is 2+2?", "solution": "\\boxed{4}"},
@@ -93,7 +90,7 @@ def test_math_env_reward_calculation():
     response_txt = tokenizer.decode(rollout.response_tokens)
     prompt_txt = tokenizer.decode(rollout.prompt_tokens)
     assert "What is 2+2?" in prompt_txt, (prompt_txt, rollout)
-    assert "<answer>4</answer>" in response_txt, (response_txt, rollout)
+    assert "boxed{4}" in response_txt, (response_txt, rollout)
 
     # Verify basic rollout properties
     assert rollout.env_name == "math"
@@ -102,9 +99,7 @@ def test_math_env_reward_calculation():
     assert len(rollout.response_logprobs) == len(rollout.response_tokens)
     assert len(rollout.token_rewards) == len(rollout.response_tokens)
 
-    # Verify chat template was applied to prompt
-    decoded_prompt = tokenizer.decode(rollout.prompt_tokens.tolist())
-    assert "user:" in decoded_prompt.lower()
-
-    np.testing.assert_allclose(rollout.token_rewards, 1.2), (rollout, metrics)
-    assert rollout.episode_reward == pytest.approx(1.2), (rollout, metrics)
+    # Original MathEnv reward formula: format_coef * (format_valid - 1) + correct_answer
+    # With format_coef=0.1, format_valid=1.0, correct_answer=1.0: reward = 0.1 * 0 + 1.0 = 1.0
+    np.testing.assert_allclose(rollout.token_rewards, 1.0), (rollout, metrics)
+    assert rollout.episode_reward == pytest.approx(1.0), (rollout, metrics)

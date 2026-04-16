@@ -1,0 +1,110 @@
+// Copyright The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2023";
+
+package iris.logging;
+
+import "time.proto";
+
+// Best-effort parsed log level for a log entry.
+enum LogLevel {
+  LOG_LEVEL_UNKNOWN = 0;   // Could not parse a level from the log line
+  LOG_LEVEL_DEBUG = 1;
+  LOG_LEVEL_INFO = 2;
+  LOG_LEVEL_WARNING = 3;
+  LOG_LEVEL_ERROR = 4;
+  LOG_LEVEL_CRITICAL = 5;
+}
+
+// Log entry for task execution.
+// Used for both RPC responses and GCS persistence.
+message LogEntry {
+  iris.time.Timestamp timestamp = 1;
+  string source = 2;  // "stdout", "stderr", or "build"
+  string data = 3;    // Log line content
+  int32 attempt_id = 4;  // Which attempt produced this log
+  LogLevel level = 5;   // Best-effort parsed log level (UNKNOWN if unparseable)
+  string key = 6;     // Log store key (e.g. "/user/job/0:3"). Populated on multi-key queries.
+}
+
+// Collection of log entries for a single source (stdout/stderr/build).
+// Written to GCS as JSONL (one LogEntry per line).
+message LogBatch {
+  repeated LogEntry entries = 1;
+}
+
+// Task attempt metadata persisted to GCS.
+// Written once on task completion to metadata.json.
+message TaskAttemptMetadata {
+  string task_id = 1;                        // Full task ID: "/job/path/task/0"
+  int32 attempt_id = 2;
+  string worker_id = 3;
+
+  iris.time.Timestamp start_time = 4;
+  iris.time.Timestamp end_time = 5;
+
+  int32 exit_code = 6;
+  bool oom_killed = 7;
+  int32 status = 8;  // TaskState enum value from cluster.proto
+  string error_message = 9;
+
+  // Resource usage (if available)
+  ResourceUsage resource_usage = 10;
+}
+
+// Resource usage statistics for a task attempt.
+message ResourceUsage {
+  int64 peak_memory_bytes = 1;
+  double cpu_seconds = 2;
+  int64 gpu_memory_bytes = 3;
+}
+
+// ============================================================================
+// LOG SERVICE
+// ============================================================================
+
+message PushLogsRequest {
+  string key = 1;                  // Log store key (e.g. "/user/job/0:3", "/system/worker/w-1234", "/system/controller")
+  repeated LogEntry entries = 2;
+}
+
+message PushLogsResponse {}
+
+// Unified log fetching request. All logs are served from the central LogStore.
+// The source key identifies the log stream and supports regex patterns:
+//   /system/controller             - exact: controller process logs
+//   /system/worker/<worker_id>     - exact: worker process logs
+//   /user/job/.*                   - pattern: all task logs under a job
+//   /user/job/0:.*                 - pattern: all attempts of a single task
+//   /user/job/0:3                  - exact: specific task attempt
+message FetchLogsRequest {
+  string source = 1;           // Log source key or regex pattern
+  int64 since_ms = 2;          // Only return entries after this timestamp (exclusive)
+  int64 cursor = 3;            // Autoincrement id cursor (resume after this id)
+  string substring = 4;        // Literal substring match on log data
+  int32 max_lines = 5;         // Max entries to return (0 = default 1000)
+  bool tail = 6;               // Return last N entries instead of first N
+  string min_level = 7;        // Minimum log level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+}
+
+message FetchLogsResponse {
+  repeated LogEntry entries = 1;
+  int64 cursor = 2;            // Max autoincrement id seen (cursor for next poll)
+}
+
+service LogService {
+  rpc PushLogs(PushLogsRequest) returns (PushLogsResponse);
+  rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
+}

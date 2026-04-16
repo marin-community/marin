@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -204,7 +204,6 @@ def main(config: TrainASRConfig):
 
         ## OK, actually run training!
         trainer.train(state, train_loader)
-        # checkpointer.on_step(last_step, force=True)
 
 
 if __name__ == "__main__":

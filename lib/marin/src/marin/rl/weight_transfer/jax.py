@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 JAX transfer server-based weight transfer implementation.
@@ -33,7 +22,7 @@ import haliax as hax
 import jax
 import jax.experimental.transfer as jax_transfer
 import numpy as np
-from fray.job.context import get_default_job_ctx
+from fray.v1.job.context import get_default_job_ctx
 from haliax.jax_utils import is_jax_array_like
 from jax.sharding import Mesh
 from jaxtyping import PyTree
@@ -355,7 +344,7 @@ class JAXTransferServer(WeightTransferServer):
 
         self._ctx = get_default_job_ctx()
         self.coordinator = self._ctx.create_actor(
-            WeightTransferCoordinator, name=config.coordinator_name, get_if_exists=True, preemptible=False
+            WeightTransferCoordinator, name=config.coordinator_name, get_if_exists=True, preemptible=False, num_cpus=0
         )
 
         # Start transfer server and register its address with coordinator
@@ -447,7 +436,7 @@ class JAXTransferClient(WeightTransferClient):
 
         self._ctx = get_default_job_ctx()
         self.coordinator = self._ctx.create_actor(
-            WeightTransferCoordinator, name=config.coordinator_name, get_if_exists=True, preemptible=False
+            WeightTransferCoordinator, name=config.coordinator_name, get_if_exists=True, preemptible=False, num_cpus=0
         )
 
         # Start transfer server for client (doesn't register address with coordinator)
@@ -481,9 +470,16 @@ class JAXTransferClient(WeightTransferClient):
             # Use default device placement
             return jax.device_put(model, jax.devices()[0])
 
-    def receive_weights(self, old_model: PyTree) -> WeightUpdate | None:
+    def receive_weights(self, old_model: PyTree | None) -> WeightUpdate | None:
         """Receive weights with CPU transfer."""
         self.metrics.total_polls += 1
+
+        if old_model is None:
+            raise ValueError(
+                "For JAXTransfer server, old_model must be provided. \
+                TODO to implement state dict only mode. \
+                If you want state dict transfer, please use Arrow Flight."
+            )
 
         # First check if new weights are available without blocking
         try:
@@ -529,7 +525,7 @@ class JAXTransferClient(WeightTransferClient):
                 # Update metrics and track received weight ID
                 self.metrics.successful_receives += 1
                 self._last_received_weight_id = metadata.weight_id
-                return WeightUpdate(model=params, weight_id=metadata.weight_id)
+                return WeightUpdate(model=params, state_dict=None, weight_id=metadata.weight_id)
 
             return None
 

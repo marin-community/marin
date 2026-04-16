@@ -1,4 +1,4 @@
-.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit
+.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit rust-dev rust-user rust-status rust-package
 .DEFAULT: help
 
 
@@ -15,11 +15,17 @@ help:
 	@echo "    Run all tests"
 	@echo "make init"
 	@echo "    Init the repo for development"
+	@echo "make rust-dev"
+	@echo "    Switch to dev mode (build dupekit from source)"
+	@echo "make rust-user"
+	@echo "    Switch to user mode (install dupekit from pre-built wheel)"
+	@echo "make rust-status"
+	@echo "    Show current Rust build mode"
 
 init:
 	conda install -c conda-forge pandoc
 	npm install -g pandiff
-	uv sync
+	uv sync --extra cpu
 	huggingface-cli login
 
 clean:
@@ -27,18 +33,18 @@ clean:
 	find . -name "__pycache__" | xargs rm -rf
 
 check:
-	uv run python infra/pre-commit.py
+	./infra/pre-commit.py
 
 fix:
 	@FILES=$$(git diff --name-only HEAD); \
 	if [ -n "$$FILES" ]; then \
-		uv run python infra/pre-commit.py --fix $$FILES && git add $$FILES; \
+		./infra/pre-commit.py --fix $$FILES && git add $$FILES; \
 	else \
 		echo "No modified files to fix"; \
 	fi
 
 lint:
-	uv run python infra/pre-commit.py --all-files
+	./infra/pre-commit.py --all-files
 
 test:
 	export HUGGING_FACE_HUB_TOKEN=$HF_TOKEN
@@ -46,7 +52,7 @@ test:
 	RAY_ADDRESS= PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v
 
 # Define regions and tags for the Docker images
-CLUSTER_REPOS = us-central2 us-central1 europe-west4 us-west4 asia-northeast1 us-east5 us-east1
+CLUSTER_REPOS = us-central2 us-central1 europe-west4 us-west4 us-east5 us-east1
 TAG_DATE = $(shell date -u +"%Y%m%d")
 TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(TAG_DATE)
 
@@ -173,36 +179,53 @@ install_gcloud:
 	gcloud config set project hai-gcp-models
 
 
-# get secret ssh key from gcp secrets
-get_secret_key: install_gcloud
-	gcloud secrets versions access latest --secret=RAY_CLUSTER_PRIVATE_KEY > ~/.ssh/marin_ray_cluster.pem && \
-	chmod 600 ~/.ssh/marin_ray_cluster.pem
-	gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
-
-get_ray_auth_token: install_gcloud
-	mkdir -p $$HOME/.ray
-	gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN > $$HOME/.ray/auth_token
-	chmod 600 $$HOME/.ray/auth_token
-
-init_ray_auth_token_secret: install_gcloud
-	@if [ ! -f "$$HOME/.ray/auth_token" ]; then \
-		echo "Missing $$HOME/.ray/auth_token; generate one first (e.g. export RAY_AUTH_MODE=token && ray get-auth-token --generate)"; \
-		exit 1; \
-	fi
-	@if gcloud secrets describe RAY_AUTH_TOKEN >/dev/null 2>&1; then \
-		echo "Secret RAY_AUTH_TOKEN already exists; refusing to add a new version (token rotation) via Makefile."; \
-		exit 1; \
-	fi
-	gcloud secrets create RAY_AUTH_TOKEN --replication-policy=automatic
-	gcloud secrets versions add RAY_AUTH_TOKEN --data-file="$$HOME/.ray/auth_token"
-
-
 setup_pre_commit:
 	@HOOK_PATH=.git/hooks/pre-commit; \
 	mkdir -p .git/hooks; \
-	printf '%s\n' '#!/bin/sh' 'set -e' 'REPO_ROOT="$$(git rev-parse --show-toplevel)"' 'cd "$$REPO_ROOT"' 'uv run python infra/pre-commit.py --fix' > $$HOOK_PATH; \
+	printf '%s\n' '#!/bin/sh' 'set -e' 'REPO_ROOT="$$(git rev-parse --show-toplevel)"' 'cd "$$REPO_ROOT"' './infra/pre-commit.py --fix' > $$HOOK_PATH; \
 	chmod +x $$HOOK_PATH; \
 	echo "Installed git pre-commit hook -> $$HOOK_PATH"
 
-dev_setup: install_uv install_gcloud get_secret_key get_ray_auth_token setup_pre_commit
+install_node:
+	@if command -v node > /dev/null 2>&1; then \
+		echo "Node.js $$(node --version) is already installed."; \
+	elif command -v brew > /dev/null 2>&1; then \
+		echo "Installing Node.js via Homebrew..."; \
+		brew install node; \
+	elif command -v apt-get > /dev/null 2>&1; then \
+		echo "Installing Node.js via apt..."; \
+		curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && \
+		sudo apt-get install -y nodejs; \
+	else \
+		echo "Cannot auto-install Node.js. Please install manually: https://nodejs.org/"; \
+		exit 1; \
+	fi
+
+
+dev_setup: install_uv install_gcloud install_node setup_pre_commit
 	@echo "Dev setup complete."
+
+
+# Rust crate build mode (dupekit)
+# User mode (default): pre-built wheels resolved via find-links in pyproject.toml
+# Dev mode: adds dupekit path source to [tool.uv.sources] in pyproject.toml (requires Cargo)
+
+rust-dev:
+	@python3 scripts/rust_mode.py dev
+	uv sync
+	@echo "Done. Run 'make rust-user' before committing."
+
+rust-user:
+	@python3 scripts/rust_mode.py user
+	uv sync
+
+rust-package:
+	@python3 scripts/rust_package.py
+
+rust-status:
+	@python3 scripts/rust_mode.py status
+	@if command -v cargo > /dev/null 2>&1; then \
+		echo "Cargo: installed ($$(cargo --version))"; \
+	else \
+		echo "Cargo: not found (source builds will fail)"; \
+	fi

@@ -1,22 +1,11 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for operation fusion optimization via compute_plan."""
 
 from zephyr import Dataset, compute_plan
 from zephyr.dataset import FilterOp, MapOp, ReshardOp, TakePerShardOp
-from zephyr.plan import Map, Reshard
+from zephyr.plan import Map, PhysicalStage, Reshard
 
 
 def test_optimize_consecutive_maps():
@@ -97,7 +86,7 @@ def test_fused_execution_with_batch():
     Note: Batching happens per-shard. Since each input item becomes its own shard,
     and filtering may reduce items per shard, batches may not span across shards.
     """
-    from zephyr import Backend
+    from zephyr.execution import ZephyrContext
 
     # Use a flat_map to create multiple items in a single shard
     ds = (
@@ -108,5 +97,29 @@ def test_fused_execution_with_batch():
         .window(2)  # [[6, 8], [10, 12]]
     )
 
-    result = list(Backend.execute(ds))
+    ctx = ZephyrContext(name="test_fusion")
+    result = ctx.execute(ds).results
     assert result == [[6, 8], [10, 12]]
+
+
+def test_stage_name():
+    """PhysicalStage.stage_name() generates descriptive names from operations."""
+    ds = Dataset(
+        source=[1, 2, 3],
+        operations=[
+            MapOp(lambda x: x * 2),
+            FilterOp(lambda x: x > 5),
+        ],
+    )
+    plan = compute_plan(ds)
+
+    assert len(plan.stages) == 1
+    assert plan.stages[0].stage_name() == "Map"
+
+
+def test_stage_name_truncation():
+    """PhysicalStage.stage_name() truncates long names."""
+    stage = PhysicalStage(operations=[Map(fn=lambda x: x) for _ in range(20)])
+    name = stage.stage_name(max_length=20)
+    assert len(name) <= 20
+    assert name.endswith("...")

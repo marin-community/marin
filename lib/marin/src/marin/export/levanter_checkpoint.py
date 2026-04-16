@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 import logging
@@ -18,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import levanter.infra.cli_helpers
-from fray.cluster import (
+from fray.v1.cluster import (
     CpuConfig,
     Entrypoint,
     EnvironmentConfig,
@@ -41,10 +30,18 @@ from marin.execution.executor import (
     ensure_versioned,
     this_output_path,
 )
-from marin.training.training import _add_default_env_variables, _add_run_env_variables
+from marin.training.run_environment import add_run_env_variables
+from marin.training.training import _add_default_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
+
+
+# Default CPU resources for checkpoint export. The HF conversion streams one weight tensor
+# at a time, so a moderate RAM/disk budget is sufficient; `ResourceConfig.with_cpu()`'s
+# 128m/1g defaults are too small though.
+def _default_export_resources() -> ResourceConfig:
+    return ResourceConfig.with_cpu(cpu=8, ram="64g", disk="64g")
 
 
 @dataclass(frozen=True)
@@ -56,7 +53,7 @@ class ConvertCheckpointStepConfig:
     checkpoint_path: str | InputName | VersionedValue[str]
     trainer: TrainerConfig
     model: LmConfig
-    resources: ResourceConfig = dataclasses.field(default_factory=ResourceConfig.with_cpu)
+    resources: ResourceConfig = dataclasses.field(default_factory=_default_export_resources)
     output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore[arg-type]
     upload_to_hf: bool | str | RepoRef = False
     tokenizer: str | None = None
@@ -100,7 +97,7 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
         {},
         default_launch_config.env_for_accel(config.resources.device.variant),
     )
-    env = _add_run_env_variables(env)
+    env = add_run_env_variables(env)
 
     def convert_task():
         export_lm_to_hf.main(convert_config)
@@ -138,7 +135,6 @@ def convert_checkpoint_to_hf_step(
     save_tokenizer: bool = True,
     use_cpu: bool = False,
     override_output_path: str | None = None,
-    pip_dependency_groups: list[str] | None = None,
     discover_latest: bool = False,
 ) -> ExecutorStep:
     """
@@ -150,7 +146,8 @@ def convert_checkpoint_to_hf_step(
             ``train_step.cd("checkpoints/ckpt-210388")``.
         trainer: TrainerConfig that matches the topology the checkpoint was saved with.
         model: Model configuration that produced the checkpoint.
-        resources: Hardware resources to use when running the conversion. Defaults to CPU-only execution.
+        resources: Hardware resources to use when running the conversion. Defaults to CPU-only
+            execution (8 CPU, 64g RAM, 64g disk); override when using an accelerator.
         upload_to_hf: Optional HuggingFace repo reference (bool, repo-id string, or RepoRef).
         tokenizer: Optional tokenizer override. Defaults to the tokenizer specified by ``model``.
         override_vocab_size: If provided, resizes the vocabulary before exporting.
@@ -159,7 +156,6 @@ def convert_checkpoint_to_hf_step(
         use_cpu: Force conversion to run on CPU instead of the configured device mesh. When False, CPU mode is enabled
             automatically if the provided resources do not expose an accelerator.
         override_output_path: Explicit output path override. Useful when aligning with pre-existing directories.
-        pip_dependency_groups: Optional executor dependency groups.
         discover_latest: If True, resolves ``checkpoint_path`` to the most recent checkpoint in that directory.
     """
 
@@ -173,7 +169,7 @@ def convert_checkpoint_to_hf_step(
         checkpoint_path=checkpoint_value,
         trainer=trainer,
         model=model,
-        resources=resources or ResourceConfig.with_cpu(),
+        resources=resources or _default_export_resources(),
         upload_to_hf=upload_to_hf,
         tokenizer=tokenizer,
         override_vocab_size=override_vocab_size,
@@ -188,5 +184,4 @@ def convert_checkpoint_to_hf_step(
         fn=convert_checkpoint_to_hf,
         config=config,
         override_output_path=override_output_path,
-        pip_dependency_groups=pip_dependency_groups,
     )

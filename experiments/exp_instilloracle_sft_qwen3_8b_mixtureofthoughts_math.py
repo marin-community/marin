@@ -65,7 +65,7 @@ RESOURCES = ResourceConfig.with_tpu("v5p-64")
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
     tokenizer=qwen3_8b_base_tokenizer,
-    model_name_or_path="Qwen/Qwen3-8B-Base",
+    initialize_from_hf="Qwen/Qwen3-8B-Base",
     train_batch_size=TRAIN_BATCH_SIZE,
     per_device_parallelism=compute_per_device_parallelism(TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES),
     num_train_steps=NUM_TRAIN_STEPS,
@@ -88,7 +88,6 @@ mixture_sft_config = SimpleSFTConfig(
 mixture_config = lm_mixture_data_config(
     tokenized_datasets,
     mixture_weights,
-    permutation_type="feistel",
     shuffle=DATASET_SIZE,  # Era shuffling
     missing_weights_are_validation=True,
     mixture_block_size=32768,  # Match max_seq_len
@@ -99,7 +98,6 @@ qwen3_8b_base_32k_tokens = dataclasses.replace(
     qwen3_8b_base,
     max_seq_len=32768,
     rope=DefaultRotaryEmbeddingsConfig(theta=1_000_000.0),
-    cross_entropy_block_size=32000,  # Process vocab in chunks to reduce memory during loss computation
 )
 
 exp_instilloracle_sft_qwen3_8b_mot_math = default_sft(

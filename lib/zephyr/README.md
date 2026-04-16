@@ -5,10 +5,10 @@ Simple data processing library for Marin pipelines. Build lazy dataset pipelines
 ## Quick Start
 
 ```python
-from zephyr import Dataset, create_backend, load_jsonl
+from zephyr import Dataset, ZephyrContext, load_jsonl
 
 # Read, transform, write
-backend = create_backend("ray", max_parallelism=100)
+ctx = ZephyrContext(max_workers=100)
 pipeline = (
     Dataset.from_files("gs://input/", "**/*.jsonl.gz")
     .flat_map(load_jsonl)
@@ -16,7 +16,7 @@ pipeline = (
     .map(lambda x: transform_record(x))
     .write_jsonl("gs://output/data-{shard:05d}-of-{total:05d}.jsonl.gz")
 )
-list(backend.execute(pipeline))
+ctx.execute(pipeline)
 ```
 
 ## Key Patterns
@@ -39,21 +39,20 @@ list(backend.execute(pipeline))
 **Output:**
 - `.write_jsonl(pattern)` - write JSONL (gzip if `.gz`)
 - `.write_parquet(pattern, schema)` - write to a Parquet file
-- `.write_vortx(pattern)` - write to a Vortex file
+- `.write_vortex(pattern)` - write to a Vortex file
 
-**Backends:**
-- `RayBackend(max_parallelism=N)` - distributed Ray execution
-- `ThreadPoolBackend(max_parallelism=N)` - thread pool
-- `SyncBackend()` - synchronous (testing)
-- `flow_backend()` - adaptive (infers from CLI args)
+**Execution (`ZephyrContext`):**
+- `ZephyrContext(max_workers=N)` — auto-detects backend (Ray, Iris, or local) via `fray.v2.current_client()`
+- `ZephyrContext(client=LocalClient())` — explicit local backend (testing)
+- `ctx.execute(pipeline)` — runs the pipeline; returns a `ZephyrExecutionResult(results, counters)`
 
 ## Real Usage
 
 **Wikipedia Processing:**
 ```python
-from zephyr import Dataset, flow_backend, load_jsonl
+from zephyr import Dataset, ZephyrContext, load_jsonl
 
-backend = flow_backend()
+ctx = ZephyrContext(max_workers=100)
 pipeline = (
     Dataset.from_list(files)
     .load_jsonl()
@@ -61,53 +60,30 @@ pipeline = (
     .filter(lambda x: x is not None)
     .write_jsonl(f"{output}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
 )
-list(backend.execute(pipeline))
+ctx.execute(pipeline)
 ```
 
 **Dataset Sampling:**
 ```python
-from zephyr import Dataset, create_backend
+from zephyr import Dataset, ZephyrContext
 
-backend = create_backend("ray", max_parallelism=1000)
+ctx = ZephyrContext(max_workers=1000)
 pipeline = (
     Dataset.from_files(input_path, "**/*.jsonl.gz")
     .map(lambda path: sample_file(path, weights))
     .write_jsonl(f"{output}/sampled-{{shard:05d}}.jsonl.gz")
 )
-list(backend.execute(pipeline))
+ctx.execute(pipeline)
 ```
 
 **Parallel Downloads:**
 ```python
-from zephyr import Dataset, flow_backend
+from zephyr import Dataset, ZephyrContext
 
 tasks = [(config, fs, src, dst) for src, dst in file_pairs]
-backend = flow_backend()
+ctx = ZephyrContext(max_workers=32)
 pipeline = Dataset.from_list(tasks).map(lambda t: download(*t))
-list(backend.execute(pipeline))
-```
-
-## CLI Launcher
-
-```bash
-# Run with Ray backend
-uv run zephyr script.py --backend=ray --max-parallelism=100 --memory=2GB
-
-# Submit to cluster
-uv run zephyr script.py --backend=ray --cluster=us-central2 --memory=2GB
-
-# Show optimization plan
-uv run zephyr script.py --backend=ray --dry-run
-```
-
-Your script needs a `main()` entry point:
-```python
-from zephyr import flow_backend, Dataset
-
-def main():
-    backend = flow_backend()  # Configured from CLI args
-    pipeline = Dataset.from_files(...).map(...).write_jsonl(...)
-    list(backend.execute(pipeline))
+ctx.execute(pipeline)
 ```
 
 ## Installation
@@ -121,26 +97,37 @@ cd lib/zephyr
 uv pip install -e .
 ```
 
+## Running Tests
+
+Zephyr tests run against multiple execution backends to ensure correctness across different environments.
+
+### All Tests on Both Backends (Default)
+```bash
+uv run pytest lib/zephyr/tests
+# Runs all tests on both Local and Iris backends
+# Local Iris cluster is started automatically via ClusterManager
+```
+
+### Run Specific Backend Only
+```bash
+uv run pytest lib/zephyr/tests -k "local"
+uv run pytest lib/zephyr/tests -k "iris"
+uv run pytest lib/zephyr/tests -k "ray"
+```
+
+The Iris cluster is started once per test session and reused across all tests for efficiency.
+
 ## Design
 
-Zephyr consolidates 100+ ad-hoc Ray/HF dataset patterns in Marin into a simple abstraction. See [docs/design.md](docs/design.md) for details.
+Zephyr consolidates 100+ ad-hoc Ray/HF dataset patterns in Marin into a simple abstraction.
 
 **Key Features:**
 - Lazy evaluation with operation fusion
-- Ray backend with bounded parallelism
+- Disk-based inter-stage data flow for low memory footprint
+- Chunk-by-chunk streaming to minimize memory pressure
+- Distributed execution with bounded parallelism (Ray/Iris/local backends)
 - Automatic chunking to prevent large object overhead
 - fsspec integration (GCS, S3, local)
 - Type-safe operation chaining
 
-
-
-### Notes
-
-#### MacOS
-
-Ray 2.53 enables a `uv run` runtime_env hook by default. When tests are executed
-via `uv run pytest`, that hook can (a) start local workers with a different
-Python version and (b) attempt to inspect the process tree with psutil, which
-may fail in sandboxed Codex environments, at least on MacOS. Disable it for tests.
-See https://github.com/ray-project/ray/issues/59639 for (a). (b) seems like a reasonable
-design choice.
+See `AGENTS.md` for execution internals and source layout.

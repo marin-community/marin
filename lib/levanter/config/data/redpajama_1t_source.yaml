@@ -1,5 +1,10 @@
-id: togethercomputer/RedPajama-Data-1T
-cache_dir: gs://levanter-data/tokenized/redpajama/
 tokenizer: EleutherAI/gpt-neox-20b
-splits:
-  - train
+cache_dir: gs://levanter-data/tokenized
+components:
+  redpajama_1t:
+    source:
+      type: hf
+      id: togethercomputer/RedPajama-Data-1T
+      splits:
+        - train
+    cache_dir: gs://levanter-data/tokenized/redpajama/

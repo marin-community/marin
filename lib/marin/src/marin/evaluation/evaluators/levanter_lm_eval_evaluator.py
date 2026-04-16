@@ -1,25 +1,13 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 import json
 import logging
 import os
-import shutil
 
-import fsspec
 import jmp
+from rigging.filesystem import filesystem as marin_filesystem
 import levanter
 import levanter.eval_harness as eval_harness
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
@@ -27,11 +15,10 @@ from levanter.distributed import RayConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from experiments.evals.task_configs import convert_to_levanter_task_config
-from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.evaluators.levanter_tpu_evaluator import LevanterTpuEvaluator
-from fray.cluster.ray.deps import build_runtime_env_for_packages
+from fray.v1.cluster.ray.deps import build_runtime_env_for_packages
 
 logger = logging.getLogger(__name__)
 
@@ -75,11 +62,11 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         # Run the harness with the model and the specified evals
 
         try:
-            model_name_or_path: str = self.download_model_if_necessary(model)
+            model_name_or_path: str = self.model_name_or_path(model)
             name = model.name + "_lmeval_" + "-".join([eval_task.name for eval_task in evals])
             logger.info(f"WandB Run Name: {name}")
             logger.info(f"Running eval harness on model: {model_name_or_path}")
-            print("after wandb log")
+            logger.debug("after wandb log")
             # NOTE(chris): Before, the batch size was 16, but this is too large for the 8B model.
             # In the future, we should make this user-configurable.
             trainer_config = TrainerConfig(
@@ -88,7 +75,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 per_device_eval_parallelism=1,
                 ray=RayConfig(auto_start_cluster=False),
             )
-            print("after trainer?")
+            logger.debug("after trainer config")
 
             model_config = HFCheckpointConverter.from_hf(model_name_or_path).LevConfigClass()
 
@@ -99,11 +86,10 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             model_path = model_name_or_path
 
             logger.info(f"Model path: {model_path}")
-            logger.info(f"Levanter Cache Path: {LevanterTpuEvaluator.CACHE_PATH}")
             logger.info(f"Model name: {model.name}")
             logger.info(f"model_name_or_path: {model_name_or_path}")
 
-            print("starting harness")
+            logger.debug("starting harness")
             eval_config = eval_harness.EvalHarnessMainConfig(
                 eval_harness=eval_harness.LmEvalHarnessConfig(
                     task_spec=tasks,
@@ -122,7 +108,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             )
 
             results = eval_harness.run_eval_harness_main(eval_config)
-            print("finished harness")
+            logger.debug("finished harness")
 
             try:
                 # add a results.json to output path
@@ -131,7 +117,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 logger.info(f"Uploading results to GCS: {output_path}")
 
                 # write output JSON directly to output_path on GCS
-                fs = fsspec.filesystem("gcs")
+                fs = marin_filesystem("gcs")
                 with fs.open(output_path, "w") as f:
                     json.dump(results, f, indent=2, default=_json_default)
 
@@ -148,9 +134,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         finally:
             # Clean up resources
             self.cleanup(model)
-
-            if os.path.exists(LevanterTpuEvaluator.CACHE_PATH) and "gcsfuse" not in LevanterTpuEvaluator.CACHE_PATH:
-                shutil.rmtree(LevanterTpuEvaluator.CACHE_PATH)
 
 
 def _json_default(value):

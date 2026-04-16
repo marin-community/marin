@@ -53,14 +53,17 @@ See [JAX's installation guide](https://jax.readthedocs.io/en/latest/installation
 
 !!! tip
 If you are using a DGX Spark or similar machine with unified memory, you may need to dramatically reduce the memory that XLA preallocates for itself. You can do this by setting the `XLA_PYTHON_CLIENT_MEM_FRACTION` variable, to something like 0.5:
-`bash
-    export XLA_PYTHON_CLIENT_MEM_FRACTION=0.5
-    `
+
+```bash
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.5
+```
 
     You can also set this in your `.bashrc` or `.zshrc` file.
     ```bash
     echo 'export XLA_PYTHON_CLIENT_MEM_FRACTION=0.5' >> ~/.bashrc
     ```
+
+    For broader JAX/Levanter memory tuning (sharding, checkpointing, offloading), see [Making Things Fit in HBM](../references/hbm-optimization.md).
 
 ## Running an Experiment
 
@@ -70,7 +73,7 @@ Let's start by running the tiny model training script (GPU version) [`experiment
 ```bash
 export MARIN_PREFIX=local_store
 export WANDB_ENTITY=...
-python3 experiments/tutorials/train_tiny_model_gpu.py --prefix local_store
+uv run python experiments/tutorials/train_tiny_model_gpu.py --prefix local_store
 ```
 
 The `prefix` is the directory where the output will be saved. It can be a local directory or anything fsspec supports,
@@ -78,16 +81,18 @@ such as `s3://` or `gs://`.
 
 Let's take a look at the script.
 Whereas the [CPU version](https://github.com/marin-community/marin/blob/main/experiments/tutorials/train_tiny_model_cpu.py)
-requests `resources=CpuOnlyConfig(num_cpus=1)`,
+requests `resources=ResourceConfig.with_cpu()`,
 the [GPU version](https://github.com/marin-community/marin/blob/main/experiments/tutorials/train_tiny_model_gpu.py)
-requests `resources=GpuConfig(gpu_count=1)`:
+requests `resources=ResourceConfig.with_gpu(...)`:
 
 ```python
+from fray.cluster import ResourceConfig
+
 nano_train_config = SimpleTrainConfig(
     # Here we define the hardware resources we need.
-    resources=GpuConfig(gpu_count=1),
-    train_batch_size=128,
-    num_train_steps=1000,
+    resources=ResourceConfig.with_gpu("H100", count=8, cpu=32, disk="128G", ram="128G"),
+    train_batch_size=256,
+    num_train_steps=100,
     learning_rate=6e-4,
     weight_decay=0.1,
 )

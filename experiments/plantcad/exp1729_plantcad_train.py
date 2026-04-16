@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 PlantCAD training experiment: A single 600M model pretrained on 16 Angiosperm genomes
@@ -25,7 +14,7 @@ from levanter.models.llama import LlamaConfig
 from experiments.defaults import default_train, default_tokenize
 from experiments.simple_train_config import SimpleTrainConfig
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 if (backend := jax.default_backend()) not in {"gpu", "cpu"}:
     raise NotImplementedError(f"Only GPU and CPU backends supported, not {backend=}")

@@ -1,21 +1,11 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 from dataclasses import dataclass
 
 from fray.cluster import ResourceConfig
+from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.optim import OptimizerConfig
 from levanter.schedule import IntSchedule
@@ -55,11 +45,15 @@ class SimpleTrainConfig:
 
     steps_per_eval: int | None = None
     """how often to run validation losses"""
-    steps_per_export: int = 10000
+    steps_per_export: int | None = None
+    """How often to keep a permanent checkpoint. None (default) keeps only the final
+    checkpoint; rolling temporary checkpoints are still written for resumption."""
     steps_per_task_eval: int | None = None
     """how often to run task evaluations"""
     steps_per_hf_export: int | None = None
     """None means match steps_per_export, -1 disables"""
+    hf_generation_eos_token_ids: list[int] | None = None
+    """EOS token IDs to write to generation_config.json. None means no generation config."""
     per_device_parallelism: int = -1
     """How many examples to process in parallel on each device. -1 (default) means
     train_batch_size/num_devices (no gradient accumulation). Set to a positive value
@@ -96,10 +90,18 @@ class SimpleTrainConfig:
     watch: WatchConfig = dataclasses.field(default_factory=WatchConfig)
     """Config for watching gradients, parameters, etc. Default is to log norms of gradients and parameters."""
 
-    # profiler-related configuration
-    profiler: bool = False
-    """Whether to run the JAX profiler during training."""
-    profiler_start_step: int = 5
-    """Which step to start profiling."""
-    profiler_num_steps: int = 100
-    """How many steps to profile for once started."""
+    profiler: ProfilerConfig = dataclasses.field(default_factory=ProfilerConfig)
+    """JAX profiler settings for training."""
+
+    explicit_mesh_axes: bool = False
+    """If True, build the device mesh with `AxisType.Explicit` axes.
+
+    Required for models that call `jax.sharding.reshard(..., PartitionSpec(...))`.
+    """
+
+    tensor_parallel_size: int = 1
+    """Size of the model (tensor parallel) axis. >1 shards model weights and activations
+    across multiple devices. Useful when batch_size < num_chips."""
+
+    env_vars: dict[str, str] | None = None
+    """Environment variables to pass to the training task."""

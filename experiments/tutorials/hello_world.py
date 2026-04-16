@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Simple example of an experiment, which has two steps:
@@ -23,11 +12,11 @@ import logging
 import os
 from dataclasses import dataclass
 
-import fsspec
+from rigging.filesystem import open_url
 
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -45,7 +34,7 @@ def generate_data(config: GenerateDataConfig):
 
     # Write to file
     numbers_path = os.path.join(config.output_path, "numbers.json")
-    with fsspec.open(numbers_path, "w") as f:
+    with open_url(numbers_path, "w") as f:
         json.dump(numbers, f)
 
 
@@ -62,7 +51,7 @@ def compute_stats(config: ComputeStatsConfig):
     """Compute the sum of numbers in the input file and write it to the output file."""
     # Read from file
     numbers_path = os.path.join(config.input_path, "numbers.json")
-    with fsspec.open(numbers_path) as f:
+    with open_url(numbers_path) as f:
         numbers = json.load(f)
 
     # Compute statistics
@@ -72,7 +61,7 @@ def compute_stats(config: ComputeStatsConfig):
         "max": max(numbers),
     }
     stats_path = os.path.join(config.output_path, "stats.json")
-    with fsspec.open(stats_path, "w") as f:
+    with open_url(stats_path, "w") as f:
         json.dump(stats, f)
 
 

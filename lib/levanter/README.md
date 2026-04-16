@@ -43,8 +43,8 @@ that resumes are much faster and so that subsequent runs are even faster. As soo
 to log inside of JAX `jit`-ted functions.
 * **Reproducibility**: On TPU, Levanter is bitwise deterministic, meaning that the same configuration will always produce the same results, even in the face of preemption and resumption.
 * **Distributed Checkpointing**: Distributed checkpointing is supported via Google's [TensorStore](https://google.github.io/tensorstore/) library. Training can even be resumed on a different number of hosts, though this breaks reproducibility for now.
-* * **Optimization**: Levanter supports the new [Sophia](https://arxiv.org/abs/2305.14342) optimizer, which can be 2x as fast as Adam. We also support [Optax](https://github.com/deepmind/optax) for optimization with AdamW, etc.
-* * **Flexible**: Levanter supports tuning data mixtures without having to retokenize or shuffle data.
+* **Optimization**: We support [Optax](https://github.com/deepmind/optax) for optimization with AdamW, as well as newer optimizers like Muon, SOAP, and more.
+* **Flexible**: Levanter supports tuning data mixtures without having to retokenize or shuffle data.
 
 <!--levanter-intro-end-->
 

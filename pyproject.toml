@@ -9,38 +9,59 @@ description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
+    # workspaces
+    "marin-iris",
+    "marin-fray",
+    "marin-haliax",
+    "marin-levanter",
     "marin",
-    "levanter",
-    "zephyr",
-    "haliax",
-    "fray",
+    "marin-rigging",
+    "marin-zephyr",
+    # top level deps. try to keep these small.
+    "watchdog",
+    "dupekit >= 0.1.0",
 ]
 
 [tool.uv]
 fork-strategy = "fewest"
+find-links = [
+    "https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-40ac799",
+    "https://github.com/marin-community/kitoken/releases/expanded_assets/kitoken-0.10.2-a3012f4",
+]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "antlr4-python3-runtime==4.11",
+    "python-multipart>=0.0.22",
+    "wheel>=0.46.2",
+    "datasets>=3.1.0,<4.0.0",
+    "equinox>=0.11.10",  # Override vizier's pin for JAX 0.8 compatibility
 ]
 
 [tool.uv.workspace]
 members = [
-    "lib/marin",
-    "lib/levanter",
-    "lib/zephyr",
-    "lib/haliax",
+    "lib/iris",
     "lib/fray",
+    "lib/haliax",
+    "lib/levanter",
+    "lib/marin",
+    "lib/rigging",
+    "lib/zephyr",
 ]
 
 [tool.uv.sources]
-fray = { workspace = true }
-haliax = { workspace = true }
-levanter = { workspace = true }
+marin-iris = { workspace = true }
+marin-fray = { workspace = true }
+marin-haliax = { workspace = true }
+marin-levanter = { workspace = true }
 marin = { workspace = true }
-zephyr = { workspace = true }
-# NOTE: dupekit is an optional dependency, it could be a workspace member but declaring
-# it as a path dependency makes it less likely to trigger unnecessary build
-dupekit = { path = "lib/dupekit", editable = true }
+marin-rigging = { workspace = true }
+marin-zephyr = { workspace = true }
+# NOTE: harbor is a pinned git dependency (not a workspace member).
+# harbor lives in marin-community/harbor as a pinned git dependency.
+harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
+# ### BEGIN RUST-DEV SOURCES ###
+# ### END RUST-DEV SOURCES ###
+
 
 [tool.black]
 line-length = 121
@@ -63,7 +84,7 @@ extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]
-ignore = ["F722", "B008", "UP015", "A005", "I001"]
+ignore = ["F722", "B008", "UP015", "A005", "I001", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
@@ -78,7 +99,20 @@ exclude = ["marin/", "scripts/"]
 
 # Pyrefly type checker configuration
 [tool.pyrefly]
-project-includes = ["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py"]
+# Worktrees often live under hidden parent directories (e.g. `.codex/worktrees/*`).
+# Disable pyrefly's built-in exclude heuristics so hidden ancestors do not exclude
+# the entire project when running from those paths.
+disable-project-excludes-heuristics = true
+
+project-includes = [
+    "lib/marin/src/**/*.py",
+    "lib/levanter/src/**/*.py",
+    "lib/haliax/src/**/*.py",
+    "lib/fray/src/**/*.py",
+    "lib/iris/src/**/*.py",
+    "lib/rigging/src/**/*.py",
+    "lib/zephyr/src/**/*.py",
+]
 
 # Explicitly tell Pyrefly where our editable packages live so it resolves imports
 # against the library sources instead of the top-level `src` directory, which only
@@ -87,14 +121,17 @@ search-path = [
     "lib/marin/src",
     "lib/levanter/src",
     "lib/haliax/src",
+    "lib/rigging/src",
     "lib/zephyr/src",
     "lib/fray/src",
+    "lib/iris/src",
 ]
 disable-search-path-heuristics = true
 
 # Prevent pyrefly from querying the Python interpreter for site-packages
 # which would auto-detect workspace members as site packages and exclude them
 skip-interpreter-query = true
+use-ignore-files = false
 
 # Exclude non-production code from type checking
 project-excludes = [
@@ -103,8 +140,12 @@ project-excludes = [
     "tests/**",
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
-    "lib/**/post_training/**",  # No longer used
-    "lib/marin/src/marin/processing/classification/deduplication/vendor", # Exclude vendor stuff in dedupe
+    "lib/iris/src/iris/rpc/*_pb2*",  # Generated protobuf files
+    "lib/iris/src/iris/rpc/*_connect.py",  # Generated Connect RPC files
+    # Keep key excludes that pyrefly normally adds heuristically.
+    "**/node_modules",
+    "**/__pycache__",
+    "**/venv/**",
 ]
 
 # Disable specific error codes that are primarily noise from missing type stubs
@@ -171,15 +212,18 @@ packages = ["experiments"]
 packages = ["experiments"]
 
 [tool.pytest.ini_options]
-timeout = 300
+timeout = 60
 filterwarnings = ["ignore::DeprecationWarning"]
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
     "tpu_ci: mark tests that require a TPU",
+    "integration: mark tests as integration tests that require cluster infrastructure",
 ]
 testpaths = ["tests", "experiments"]
 
-# Make sure we timeout before CI kills us, and don't run TPU or slow tests by default
-addopts = "--session-timeout=500 -m 'not tpu_ci and not slow'"
+# Don't run TPU, slow, or integration tests by default. Integration tests
+# require external infrastructure (Iris cluster, GCS, gated HF repos, etc.)
+# and are run from dedicated CI workflows.
+addopts = "--session-timeout=480 -m 'not tpu_ci and not slow and not integration'"

@@ -1,20 +1,10 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
-from experiments.defaults import default_tokenize
+from experiments.defaults import default_download, default_tokenize
+from marin.datakit.download.huggingface import DownloadConfig
 from marin.processing.tokenize import HfDatasetSpec
-from marin.processing.tokenize.tokenize import HfTokenizeConfig
+from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfig
 
 
 def test_default_tokenize_with_dataset_name():
@@ -26,3 +16,40 @@ def test_default_tokenize_with_dataset_name():
     assert isinstance(step.config, HfTokenizeConfig)
     assert step.config.id == "cnn_dailymail"
     assert step.config.name == "3.0.0"
+
+
+def test_default_tokenize_with_hf_bucket_path_uses_filesystem_tokenize_config():
+    bucket_path = "hf://buckets/demo-user/demo-bucket/data/train.jsonl"
+    step = default_tokenize(
+        name="dummy",
+        dataset=bucket_path,
+        tokenizer="gpt2",
+    )
+
+    assert isinstance(step.config, TokenizeConfig)
+    assert step.config.train_paths == [bucket_path]
+
+
+def test_default_download_with_hf_bucket_path_uses_bucket_prefix():
+    bucket_path = "hf://buckets/demo-user/demo-bucket/data"
+    step_input = default_download(
+        name="dummy-bucket-download",
+        hf_dataset_id=bucket_path,
+    )
+
+    assert step_input.step is not None
+    assert isinstance(step_input.step.config, DownloadConfig)
+    assert step_input.step.config.hf_repo_type_prefix == ""
+    assert step_input.step.config.hf_dataset_id == "buckets/demo-user/demo-bucket/data"
+
+
+def test_default_download_requires_revision_for_hub_dataset_ids():
+    try:
+        default_download(
+            name="dummy-hf-download",
+            hf_dataset_id="allenai/c4",
+        )
+    except ValueError as error:
+        assert "revision is required" in str(error)
+    else:
+        raise AssertionError("expected ValueError when revision is missing for non-bucket dataset IDs")

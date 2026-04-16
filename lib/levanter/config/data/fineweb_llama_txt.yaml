@@ -1,10 +1,29 @@
-cache_dir: "gs://marin-data/tokenized/fineweb/llama2_tokenizer/txt"
-tokenizer: "NousResearch/Llama-2-7b-hf"
+cache_dir: gs://marin-data/tokenized/fineweb/llama2_tokenizer/txt
+tokenizer: NousResearch/Llama-2-7b-hf
 stop_strategy: restart
-configs:
-  "fineweb":
-    train_urls:
-      # - gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-*/*/*_processed.jsonl.gz
+train_weights:
+  fineweb: 1.0
+  paloma/4chan: 0.0
+  paloma/c4_100_domains: 0.0
+  paloma/c4_en: 0.0
+  paloma/dolma-v1_5: 0.0
+  paloma/dolma_100_programing_languages: 0.0
+  paloma/dolma_100_subreddits: 0.0
+  paloma/falcon-refinedweb: 0.0
+  paloma/gab: 0.0
+  paloma/m2d2_s2orc_unsplit: 0.0
+  paloma/m2d2_wikipedia_unsplit: 0.0
+  paloma/manosphere_meta_sep: 0.0
+  paloma/mc4: 0.0
+  paloma/ptb: 0.0
+  paloma/redpajama: 0.0
+  paloma/twitterAAE_HELM_fixed: 0.0
+  paloma/wikitext_103: 0.0
+components:
+  fineweb:
+    source:
+      type: url
+      train_urls:
       - gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-10/000_00000/{0..257}_processed.jsonl.gz
       - gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-10/000_00001/{0..258}_processed.jsonl.gz
       - gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-10/000_00002/{0..260}_processed.jsonl.gz
@@ -55,70 +74,83 @@ configs:
       - gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-10/000_00047/{0..273}_processed.jsonl.gz
       - gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-10/000_00048/{0..274}_processed.jsonl.gz
       - gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-10/000_00049/{0..275}_processed.jsonl.gz
-  # these are just for eval
-  "paloma/4chan":
-    validation_urls:
+  paloma/4chan:
+    source:
+      type: url
+      validation_urls:
       - gs://levanter-data/paloma/4chan_meta_sep/val/val*.jsonl.gz
-  "paloma/c4_100_domains":
-    validation_urls:
+  paloma/c4_100_domains:
+    source:
+      type: url
+      validation_urls:
       - gs://levanter-data/paloma/c4_100_domains/val/val*.jsonl.gz
-  "paloma/c4_en":
-    validation_urls:
+  paloma/c4_en:
+    source:
+      type: url
+      validation_urls:
       - gs://levanter-data/paloma/c4_en/val/val*.jsonl.gz
-  "paloma/dolma-v1_5":
-    validation_urls:
+  paloma/dolma-v1_5:
+    source:
+      type: url
+      validation_urls:
       - gs://levanter-data/paloma/dolma-v1_5/val/val*.jsonl.gz
-  "paloma/dolma_100_programing_languages":
-    validation_urls:
+  paloma/dolma_100_programing_languages:
+    source:
+      type: url
+      validation_urls:
       - gs://levanter-data/paloma/dolma_100_programing_languages/val/val*.jsonl.gz
-  "paloma/dolma_100_subreddits":
-    validation_urls:
+  paloma/dolma_100_subreddits:
+    source:
+      type: url
+      validation_urls:
       - gs://levanter-data/paloma/dolma_100_subreddits/val/val*.jsonl.gz
-  "paloma/falcon-refinedweb":
-    validation_urls:
+  paloma/falcon-refinedweb:
+    source:
+      type: url
+      validation_urls:
       - gs://levanter-data/paloma/falcon-refinedweb/val/val*.jsonl.gz
-  "paloma/gab":
-    validation_urls:
+  paloma/gab:
+    source:
+      type: url
+      validation_urls:
       - gs://levanter-data/paloma/gab/val/val*.jsonl.gz
-  "paloma/m2d2_s2orc_unsplit":
-    validation_urls:
+  paloma/m2d2_s2orc_unsplit:
+    source:
+      type: url
+      validation_urls:
       - gs://levanter-data/paloma/m2d2_s2orc_unsplit/val/val*.jsonl.gz
-  "paloma/m2d2_wikipedia_unsplit":
-    validation_urls:
+  paloma/m2d2_wikipedia_unsplit:
+    source:
+      type: url
+      validation_urls:
       - gs://levanter-data/paloma/m2d2_wikipedia_unsplit/val/val*.jsonl.gz
-  "paloma/manosphere_meta_sep":
-    validation_urls:
+  paloma/manosphere_meta_sep:
+    source:
+      type: url
+      validation_urls:
       - gs://levanter-data/paloma/manosphere_meta_sep/val/val*.jsonl.gz
-  "paloma/mc4":
-    validation_urls:
+  paloma/mc4:
+    source:
+      type: url
+      validation_urls:
       - gs://levanter-data/paloma/mc4/val/val*.jsonl.gz
-  "paloma/ptb":
-    validation_urls:
+  paloma/ptb:
+    source:
+      type: url
+      validation_urls:
       - gs://levanter-data/paloma/ptb/val/val*.jsonl.gz
-  "paloma/redpajama":
-    validation_urls:
+  paloma/redpajama:
+    source:
+      type: url
+      validation_urls:
       - gs://levanter-data/paloma/redpajama/val/val*.jsonl.gz
-  "paloma/twitterAAE_HELM_fixed":
-    validation_urls:
+  paloma/twitterAAE_HELM_fixed:
+    source:
+      type: url
+      validation_urls:
       - gs://levanter-data/paloma/twitterAAE_HELM_fixed/val/val*.jsonl.gz
-  "paloma/wikitext_103":
-    validation_urls:
+  paloma/wikitext_103:
+    source:
+      type: url
+      validation_urls:
       - gs://levanter-data/paloma/wikitext_103/val/val*.jsonl.gz
-train_weights:
-  fineweb: 1.0
-  paloma/4chan: 0.0
-  paloma/c4_100_domains: 0.0
-  paloma/c4_en: 0.0
-  paloma/dolma-v1_5: 0.0
-  paloma/dolma_100_programing_languages: 0.0
-  paloma/dolma_100_subreddits: 0.0
-  paloma/falcon-refinedweb: 0.0
-  paloma/gab: 0.0
-  paloma/m2d2_s2orc_unsplit: 0.0
-  paloma/m2d2_wikipedia_unsplit: 0.0
-  paloma/manosphere_meta_sep: 0.0
-  paloma/mc4: 0.0
-  paloma/ptb: 0.0
-  paloma/redpajama: 0.0
-  paloma/twitterAAE_HELM_fixed: 0.0
-  paloma/wikitext_103: 0.0

@@ -1,361 +1,187 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
-"""Generate ISOFlop sweep steps for varying model sizes on a target datasett.
+"""Registry of ISOFlop sweep runs.
 
-This script constructs `ExecutorStep` objects that train models of different
-sizes while keeping the total training FLOPs roughly constant.  It is intended
-as a lightweight scaffold for ISOFlop scaling law experiments.
+This module defines the sweep configurations for different datasets and budgets.
+Heuristic implementations live in experiments/scaling_law_sweeps/.
 """
 
-import dataclasses
-import math
+import json
+import logging
 import os
-from dataclasses import dataclass, replace
+import re
+from collections.abc import Sequence
+from dataclasses import dataclass
 
-from levanter.data.text import LMMixtureDatasetConfig
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
-from levanter.models.qwen import Qwen3Config
-from levanter.optim.cautious import CautiousConfig
-from levanter.optim.config import OptimizerConfig
-from levanter.utils.flop_utils import lm_flops_per_token
+import fsspec
 
 from experiments.common_pile.tokenize_common_pile import comma_main_mixture
-from experiments.defaults import default_tokenize, default_train
-from experiments.llama import compute_num_parameters, llama3_tokenizer
-from experiments.metrics.wandb_related import get_vocab_size_for_tokenizer
+from experiments.defaults import default_tokenize
+from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets.simple import downloads
-from experiments.simple_train_config import SimpleTrainConfig
+from experiments.scaling_law_sweeps import c_adamc as c_adamc_heuristic
+from experiments.scaling_law_sweeps import completed_adamh as completed_adamh_heuristic
 from experiments.tootsie.exp1295_32b import nemotron_mix
-from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, InputName, executor_main
+from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
+from marin.scaling_laws import FitScalingLawsResult, IsoFlopRecord, fit_scaling_laws, round_flops_to_bucket
+from marin.scaling_laws.eval_metrics_reader import read_eval_records
+from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
-DEFAULT_BUDGETS = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]
-MLP_RATIO = 4
+logger = logging.getLogger(__name__)
 
-# TPU v5p hardware constants for memory estimation
-# Constants for TPU v5p
-HBM_PER_CHIP_GIB = 95
-CORES_PER_CHIP = 2
-V5P_CORE_OPTIONS = [8, 16, 32, 128, 256, 512]  # TPU slices
-
-
-def estimate_bytes(
-    param_count: int,
-    hidden_dim: int,
-    num_layers: int,
-    batch: int,
-    seq_len: int,
-    vocab: int,
-    optim_mult: int = 3,
-    dtype_size: int = 4,
-    fudge_factor: float = 2,
-) -> int:
-    """
-    Estimate float32 memory usage (in bytes) for one training step.
-    Note(Will): I had to do more fudging than expected on this,
-    but not seems to work ok.
-
-    Parameters:
-    - hidden_dim: model hidden size
-    - num_layers: number of Transformer layers
-    - batch, seq_len: training batch size and sequence length
-    - vocab: vocabulary size
-    - optim_mult: optimizer memory multiplier (e.g., 100x for Adam + states)
-    - dtype_size: bytes per float (4 for float32)
-    - fudge_factor: safety margin for extra memory
-
-    Returns:
-    - total estimated memory in bytes
-    """
-    param_bytes = param_count * optim_mult * dtype_size
-
-    act_bytes = (batch * seq_len) * ((hidden_dim * num_layers) + vocab * fudge_factor)
-
-    total_bytes = param_bytes + act_bytes
-    return int(total_bytes) * fudge_factor
+# ---------------- Levanter WandB Metric Keys ----------------
+THROUGHPUT_TOKENS_KEY = "throughput/total_tokens"
+THROUGHPUT_GFLOPS_KEY = "throughput/total_gflops"
+PARAMETER_COUNT_KEY = "parameter_count"
 
 
-def pick_v5p_type(
-    config: Qwen3Config,
-    hidden: int,
-    layers: int,
-    batch: int,
-    seq_len: int,
-    vocab: int,
-) -> str:
-    """
-    Select the smallest TPU v5p slice that fits the model in float32.
-
-    Returns:
-    - TPU slice name, e.g., "v5p-8" or "v5p-32"
-    """
-    param_count = compute_num_parameters(config, vocab)
-    need_bytes = estimate_bytes(param_count, hidden, layers, batch, seq_len, vocab)
-    chip_bytes = HBM_PER_CHIP_GIB * 1024**3
-    chips = math.ceil(need_bytes / chip_bytes)
-    cores_req = chips * CORES_PER_CHIP
-
-    valid = [c for c in V5P_CORE_OPTIONS if c >= cores_req]
-    if not valid:
-        raise ValueError(f"Model too large for available v5p slices (need {cores_req} cores).")
-
-    return f"v5p-{min(valid)}"
+def parse_isoflop_run_name(run_name: str) -> str | None:
+    """Parse experiment name from isoflop run name."""
+    run_name = re.sub(r"-[0-9a-fA-F]{6}$", "", run_name)
+    for pattern in [
+        r"isoflop-(?:[0-9.e+]+)-N(?:[0-9.e+]+)-B(?:\d+)-(.+)",
+        r"isoflop-(?:[0-9.e+]+)-d(?:\d+)-L(?:\d+)-B(?:\d+)-(.+)",
+    ]:
+        match = re.match(pattern, run_name)
+        if match:
+            return match.group(1)
+    return None
 
 
-@dataclass
-class IsoFlopSweepConfig:
-    """Configuration for generating ISOFlop sweep steps."""
+def transform_levanter_metrics(
+    raw_records: list[dict],
+    metric_key: str,
+    label_map: dict[str, str] | None = None,
+    min_flops: float = 1e18,
+) -> list[IsoFlopRecord]:
+    """Transform raw Levanter metrics into IsoFlopRecord list."""
+    records = []
+    for raw in raw_records:
+        run_path = raw.get("run_path", "")
+        run_name = os.path.basename(run_path.rstrip("/"))
+        summary = raw.get("summary", {}) or {}
 
-    tokenized_dataset: InputName | str
-    tokenizer: str = "stanford-crfm/marin-tokenizer"
-    budgets: list[float] = dataclasses.field(default_factory=lambda: DEFAULT_BUDGETS)
-    seq_len: int = 4096
-    steps_per_run: int = 2**16
-    flop_tolerance: float = 0.01
-    base_hidden_layer_ratio: int = 64
-    hidden_head_ratio: int = 128
-    lr_constant: float = 0.33
-    min_hidden_pow: int = 9
-    max_hidden_pow: int = 12
-    base_optimizer_config: OptimizerConfig = dataclasses.field(
-        default_factory=lambda: CautiousConfig(
-            learning_rate=1.0,  # Placeholder
-            weight_decay=0.1,
-            min_lr_ratio=0.0,
-            warmup=0.1,
-            beta1=0.95,
-            beta2=0.98,
-            epsilon=1e-15,
-            max_grad_norm=1,
-            adamc_weight_decay=True,
-            lr_schedule="linear",
-            decay=0.2,
-        ),
-    )
-    base_train_config: SimpleTrainConfig = dataclasses.field(
-        default_factory=lambda: SimpleTrainConfig(
-            resources=ResourceConfig.with_tpu("v5p-8"),
-            train_batch_size=1,
-            num_train_steps=50_000,
-            learning_rate=1.0,  # Placeholder
-            weight_decay=0.1,
-            min_lr_ratio=0.0,
-            lr_schedule="linear",
-            decay=0.2,
-        )
-    )
+        tokens = summary.get(THROUGHPUT_TOKENS_KEY)
+        total_gflops = summary.get(THROUGHPUT_GFLOPS_KEY)
+        metric = summary.get(metric_key)
+        params = summary.get(PARAMETER_COUNT_KEY)
 
-
-def round_to_power_of_two(x: float) -> int:
-    """Round ``x`` to the nearest power of two."""
-
-    if x <= 1:
-        return 1
-    return 2 ** math.ceil(math.log2(x))
-
-
-def compute_total_flops(
-    batch: int,
-    num_layers: int,
-    hidden: int,
-    intermediate: int,
-    num_kv_heads: int,
-    num_heads: int,
-    steps: int,
-    seq_len: int,
-    vocab_size: int,
-) -> float:
-    """Compute total training FLOPs using Levanter utilities."""
-
-    flops_per_token = lm_flops_per_token(
-        hidden,
-        intermediate,
-        num_layers,
-        num_kv_heads,
-        num_heads,
-        seq_len,
-        vocab_size,
-        glu=True,
-    )
-    return flops_per_token * batch * steps * seq_len
-
-
-def candidate_configs(cfg: IsoFlopSweepConfig, budget: float):
-    """Yield candidate model configurations within the FLOP budget."""
-
-    vocab_size = get_vocab_size_for_tokenizer(cfg.tokenizer)
-
-    if budget > 9e18:
-        step_size = 256
-    else:
-        step_size = 128
-
-    for hidden_size in range(2**cfg.min_hidden_pow, (2**cfg.max_hidden_pow) + 1, step_size):
-        hs_pow = math.log2(hidden_size)
-        intermediate_dim = hidden_size * MLP_RATIO
-        num_layers = round(hidden_size / (cfg.base_hidden_layer_ratio + (hs_pow * 4) - cfg.min_hidden_pow))
-        n_heads = max(1, hidden_size // cfg.hidden_head_ratio)
-        n_kv_heads = n_heads
-
-        batch_exact = budget / compute_total_flops(
-            1,
-            num_layers,
-            hidden_size,
-            intermediate_dim,
-            n_kv_heads,
-            n_heads,
-            cfg.steps_per_run,
-            cfg.seq_len,
-            vocab_size,
-        )
-
-        batch_size = round_to_power_of_two(batch_exact)
-        lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
-        while lr > 0.01:
-            batch_size //= 2
-            lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
-        b2 = 0.98 ** (batch_size / 128)  # https://arxiv.org/pdf/2507.07101
-
-        if batch_size < 8:
+        if any(v is None for v in [tokens, total_gflops, metric, params]):
             continue
 
-        steps_exact = budget / compute_total_flops(
-            batch_size,
-            num_layers,
-            hidden_size,
-            intermediate_dim,
-            n_kv_heads,
-            n_heads,
-            1,
-            cfg.seq_len,
-            vocab_size,
-        )
-        train_steps = round(steps_exact)
-
-        achieved_flops = compute_total_flops(
-            batch_size,
-            num_layers,
-            hidden_size,
-            intermediate_dim,
-            n_kv_heads,
-            n_heads,
-            train_steps,
-            cfg.seq_len,
-            vocab_size,
-        )
-
-        if abs(achieved_flops - budget) / budget > cfg.flop_tolerance:
+        flops = round_flops_to_bucket(total_gflops * 1e9)
+        if flops < min_flops:
             continue
 
-        yield (hidden_size, intermediate_dim, num_layers, n_heads, n_kv_heads, batch_size, train_steps, lr, b2)
+        exp_name = parse_isoflop_run_name(run_name) or run_name
+        label = (label_map or {}).get(exp_name, exp_name)
 
-
-def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> list[ExecutorStep]:
-    """Generate executor steps for an ISOFlop sweep."""
-
-    steps: list[ExecutorStep] = []
-    metadata = []
-    vocab_size = get_vocab_size_for_tokenizer(config.tokenizer)
-
-    for budget in config.budgets:
-        for (
-            hidden_size,
-            intermediate_dim,
-            num_layers,
-            n_heads,
-            n_kv_heads,
-            batch_size,
-            train_steps,
-            lr,
-            b2,
-        ) in candidate_configs(config, budget):
-            model_cfg = Qwen3Config(
-                max_seq_len=config.seq_len,
-                hidden_dim=hidden_size,
-                intermediate_dim=intermediate_dim,
-                num_heads=n_heads,
-                num_kv_heads=n_kv_heads,
-                num_layers=num_layers,
-                rope=Llama3RotaryEmbeddingsConfig(),
+        records.append(
+            IsoFlopRecord(
+                tokens=float(tokens), metric=float(metric), flops=float(flops), params=float(params), label=label
             )
-            tpu_type = pick_v5p_type(
-                config=model_cfg,
-                hidden=hidden_size,
-                layers=num_layers,
-                batch=batch_size,
-                seq_len=config.seq_len,
-                vocab=vocab_size,
-            )
-            optimizer_cfg = replace(config.base_optimizer_config, learning_rate=lr, beta2=b2)
-            train_cfg = replace(
-                config.base_train_config,
-                train_batch_size=batch_size,
-                learning_rate=lr,
-                num_train_steps=train_steps,
-                resources=ResourceConfig.with_tpu(tpu_type),
-                optimizer_config=optimizer_cfg,
-            )
+        )
 
-            run_name = f"isoflop-{budget:.0e}-d{hidden_size}-L{num_layers}-B{batch_size}-{experiment_name}"
-            step = default_train(
-                name=run_name,
-                tokenized=config.tokenized_dataset,
-                model_config=model_cfg,
-                train_config=train_cfg,
-                eval_harness_tasks=[],
-                tags=(
-                    f"FLOPs={budget:.1e}",
-                    f"d={hidden_size}",
-                    f"L={num_layers}",
-                    f"B={batch_size}",
-                    f"steps={train_steps}",
-                    f"tpu={tpu_type}",
-                ),
-            )
-            metadata.append((budget, hidden_size, num_layers, batch_size, train_steps))
-            # Reuse checkpoints by pinning every sweep run to a deterministic directory.
-            static_output_path = os.path.join(
-                "checkpoints",
-                "isoflop",
-                run_name,
-            )
-            steps.append(step.with_output_path(static_output_path))
-
-    return steps, metadata
+    logger.info(f"Transformed {len(records)} records from {len(raw_records)} raw records")
+    return records
 
 
-def generate_isoflop_sweep(
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
-    experiment_name: str,
-    **kwargs,
-) -> list[ExecutorStep]:
-    sweep_cfg = IsoFlopSweepConfig(tokenized_dataset=tokenized, **kwargs)
-    steps, metadata = generate_isoflop_steps(sweep_cfg, experiment_name)
+def load_isoflop_records(config: "IsoFlopAnalysisConfig") -> list[IsoFlopRecord]:
+    raw_records = read_eval_records(
+        training_runs=config.training_runs,
+        metrics_filename=config.metrics_filename,
+        wandb_entity_project=config.wandb_entity_project,
+    )
+    if not raw_records:
+        logger.warning("No eval metrics found in training runs")
+        return []
 
-    return steps, metadata
+    label_map = dict(config.label_map) if config.label_map else None
+    records = transform_levanter_metrics(raw_records, config.metric_key, label_map)
+    if not records:
+        logger.warning("No valid isoflop data after transformation")
+        return []
+
+    logger.info(f"Loaded {len(records)} runs for scaling law analysis")
+    return records
 
 
-dclm_tokenized = dataclasses.replace(
-    default_tokenize(
-        name="dclm_baseline",
-        dataset=downloads["dclm_baseline"],
-        tokenizer=llama3_tokenizer,
-    ).with_output_path("tokenized/dclm_baseline-0206f1/"),
-)
+def save_isoflop_analysis_result(result: FitScalingLawsResult, output_path: str) -> None:
+    fs, _, _ = fsspec.get_fs_token_paths(output_path)
+    fs.makedirs(output_path, exist_ok=True)
 
+    result_path = os.path.join(output_path, "isoflop_analysis_result.json")
+    result_dict = {
+        "minima_records": [
+            {
+                "label": r.label,
+                "flops": r.flops,
+                "optimal_tokens": r.optimal_tokens,
+                "loss_at_optimal": r.loss_at_optimal,
+                "optimal_params": r.optimal_params,
+                "scaling_alpha": r.scaling_alpha,
+                "scaling_A": r.scaling_A,
+            }
+            for r in result.minima_records
+        ],
+        "scaling_fits": {k: list(v) for k, v in result.scaling_fits.items()},
+    }
+    with fs.open(result_path, "w") as f:
+        json.dump(result_dict, f, indent=2)
+    logger.info(f"Saved results to {result_path}")
+
+    fit_curves_path = os.path.join(output_path, "fit_curves.json")
+    fit_curves_json = {f"{label}|{flops}": list(coeffs) for (label, flops), coeffs in result.fit_curves.items()}
+    with fs.open(fit_curves_path, "w") as f:
+        json.dump(fit_curves_json, f, indent=2)
+    logger.info(f"Saved fit curves to {fit_curves_path}")
+
+
+# --- Budget configurations ---
+LEGACY_BUDGETS: tuple[float, ...] = (3e18, 9e18, 1.8e19, 3e19, 9e19, 1.8e20, 3e20)
+
+DEFAULT_METRIC_KEY = "eval/paloma/c4_en/bpb"
+
+
+# ---------------- IsoFlop Analysis ----------------
+
+
+@dataclass(frozen=True, kw_only=True)
+class IsoFlopAnalysisConfig:
+    """Configuration for IsoFLOP scaling law analysis."""
+
+    training_runs: Sequence[str]
+    output_path: str
+    metric_key: str = DEFAULT_METRIC_KEY
+    label_map: tuple[tuple[str, str], ...] | None = None
+    metrics_filename: str = "tracker_metrics.jsonl"
+    wandb_entity_project: str = f"{WANDB_ENTITY}/{WANDB_PROJECT}"
+
+
+def run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> FitScalingLawsResult:
+    """Execute IsoFLOP scaling law analysis."""
+    records = load_isoflop_records(config)
+    if not records:
+        return FitScalingLawsResult(minima_records=[], scaling_fits={}, fit_curves={})
+
+    result = fit_scaling_laws(records)
+
+    logger.info(f"Found {len(result.minima_records)} optimal configurations")
+    for label, scaling_fit in result.scaling_fits.items():
+        logger.info(f"  {label}: D* = {scaling_fit.A:.2e} * C^{scaling_fit.alpha:.3f}")
+
+    save_isoflop_analysis_result(result, config.output_path)
+    return result
+
+
+# --- Tokenized Datasets ---
+dclm_tokenized = default_tokenize(
+    name="dclm_baseline",
+    dataset=downloads["dclm_baseline"],
+    tokenizer=llama3_tokenizer,
+).with_output_path("tokenized/dclm_baseline-0206f1/")
 
 dclm_mix = lm_mixture_data_config(
     components={"dclm": dclm_tokenized},
@@ -363,13 +189,11 @@ dclm_mix = lm_mixture_data_config(
     num_validation_sequences={"dclm": 1024},
 )
 
-dolma3_mix_tokenized = dataclasses.replace(
-    default_tokenize(
-        name="dolma3_mix-150B-1025",
-        dataset=downloads["dolma3_mix_150b_1025"],
-        tokenizer=llama3_tokenizer,
-    ).with_output_path("tokenized/dolma3_mix-150B-1025-15d04ee/"),
-)
+dolma3_mix_tokenized = default_tokenize(
+    name="dolma3_mix-150B-1025",
+    dataset=downloads["dolma3_mix_150b_1025"],
+    tokenizer=llama3_tokenizer,
+).with_output_path("tokenized/dolma3_mix-150B-1025-15d04ee/")
 
 dolma3_mix = lm_mixture_data_config(
     components={"dolma3_mix-150B-1025": dolma3_mix_tokenized},
@@ -377,16 +201,36 @@ dolma3_mix = lm_mixture_data_config(
     num_validation_sequences={"dolma3_mix-150B-1025": 1024},
 )
 
+# --- Original C-AdamC sweeps (from main) ---
 MARIN_SCALING_SUITES = {
-    "nemotron": generate_isoflop_sweep(nemotron_mix, experiment_name="nemo-wider-depth-adapt"),
-    "common_pile": generate_isoflop_sweep(comma_main_mixture(permutation_type="linear"), experiment_name="comma-mix"),
-    "common_pile_feistel": generate_isoflop_sweep(
-        comma_main_mixture(permutation_type="feistel"), experiment_name="comma-mix-feistel"
+    "nemotron": c_adamc_heuristic.create_isoflop_sweep_steps(
+        tokenized=nemotron_mix,
+        experiment_name="nemo-wider-depth-adapt",
+        budgets=LEGACY_BUDGETS,
     ),
-    "dclm-default": generate_isoflop_sweep(dclm_mix, experiment_name="dclm-default"),
-    "dolma3_mix_150b": generate_isoflop_sweep(dolma3_mix, experiment_name="dolma3-mix-150b-1025"),
+    "common_pile_feistel": c_adamc_heuristic.create_isoflop_sweep_steps(
+        tokenized=comma_main_mixture(),
+        experiment_name="comma-mix-feistel",
+        budgets=LEGACY_BUDGETS,
+    ),
+    "dclm-default": c_adamc_heuristic.create_isoflop_sweep_steps(
+        tokenized=dclm_mix,
+        experiment_name="dclm-default",
+        budgets=LEGACY_BUDGETS,
+    ),
+    "dolma3_mix_150b": c_adamc_heuristic.create_isoflop_sweep_steps(
+        tokenized=dolma3_mix,
+        experiment_name="dolma3-mix-150b-1025",
+        budgets=LEGACY_BUDGETS,
+    ),
+    # --- Completed AdamH sweeps ---
+    "nemotron-completed-adamh": completed_adamh_heuristic.create_isoflop_sweep_steps(
+        tokenized=nemotron_mix,
+        experiment_name="adamh_scaling_v6",
+        budgets=LEGACY_BUDGETS,
+    ),
 }
 
 if __name__ == "__main__":
-    steps, _ = MARIN_SCALING_SUITES["dolma3_mix_150b"]
+    steps, _ = MARIN_SCALING_SUITES["nemotron-completed-adamh"]
     executor_main(steps=steps)

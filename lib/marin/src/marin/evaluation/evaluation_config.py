@@ -1,20 +1,15 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
+import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from fray.cluster import ResourceConfig
+from levanter.eval_harness import TaskConfig
+
+# Wandb project name for evaluations. Controlled via WANDB_PROJECT env var.
+WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
 
 
 @dataclass(frozen=True)
@@ -28,11 +23,19 @@ class EvalTaskConfig:
     task_alias: str | None = None
     """Alias for the task name."""
 
+    task_kwargs: dict | None = None
+    """Additional keyword arguments specifically for this task."""
+
 
 @dataclass(frozen=True)
 class EvaluationConfig:
     evaluator: str
     """Name of the evaluator to run."""
+
+    resource_config: ResourceConfig
+    """
+    Additional keyword arguments to pass to the Ray resources.
+    """
 
     model_name: str | None
     """
@@ -83,11 +86,6 @@ class EvaluationConfig:
     Additional keyword arguments to pass to the vLLM engine.
     """
 
-    resource_config: ResourceConfig | None = None
-    """
-    Additional keyword arguments to pass to the Ray resources.
-    """
-
     generation_params: dict | None = None
     """
     Additional keyword arguments passed to the vLLM sampling params engine
@@ -102,3 +100,19 @@ class EvaluationConfig:
     """
     Tags to add to the wandb run.
     """
+
+    base_eval_run_name: str | None = None
+    """Custom base name for wandb runs. If set, wandb runs will be named
+    evalchemy-{base_eval_run_name}[-step{N}]-{task}-seed{S}."""
+
+
+def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
+    """Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects."""
+    return [
+        TaskConfig(
+            task=task.name,
+            num_fewshot=task.num_fewshot,
+            task_alias=task.task_alias,
+        )
+        for task in tasks
+    ]

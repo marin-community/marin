@@ -1,21 +1,10 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 import time
 
 import pytest
+from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.run import evaluate
@@ -39,8 +28,7 @@ def model_config():
         engine_kwargs={"enforce_eager": True, "max_model_len": 1024},
         generation_params={"max_tokens": 16},
     )
-    yield config
-    config.destroy()
+    return config
 
 
 @pytest.mark.tpu_ci
@@ -54,6 +42,7 @@ def test_lm_eval_harness_levanter(current_date_time, model_config):
         evals=[mmlu_config],
         max_eval_instances=5,
         launch_with_ray=True,
+        resource_config=ResourceConfig.with_cpu(cpu=1),
         engine_kwargs=model_config.engine_kwargs,
     )
     evaluate(config=config)
@@ -70,6 +59,7 @@ def test_lm_eval_harness(current_date_time, model_config):
         evals=[gsm8k_config],
         max_eval_instances=1,
         launch_with_ray=True,
+        resource_config=ResourceConfig.with_cpu(cpu=1),
         engine_kwargs=model_config.engine_kwargs,
     )
     evaluate(config=config)
@@ -84,6 +74,7 @@ def test_alpaca_eval(current_date_time, model_config):
         evaluation_path=f"gs://marin-us-east5/evaluation/alpaca_eval/{model_config.name}-{current_date_time}",
         max_eval_instances=1,
         launch_with_ray=True,
+        resource_config=ResourceConfig.with_cpu(cpu=1),
         engine_kwargs={
             "temperature": 0.7,
             "presence_penalty": 0.0,

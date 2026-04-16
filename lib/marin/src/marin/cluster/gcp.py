@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """GCP utilities for cluster management.
 
@@ -54,14 +43,6 @@ def get_default_zone() -> str | None:
         return None
 
 
-def get_gcloud_config() -> dict[str, str | None]:
-    """Get common gcloud configuration values."""
-    return {
-        "project": get_project_id(),
-        "zone": get_default_zone(),
-    }
-
-
 # Compute instance utilities
 
 
@@ -82,17 +63,6 @@ def list_instances(project: str, zone: str, filter_expr: str | None = None) -> l
 
     result = run_gcloud_command(cmd)
     return json.loads(result.stdout)
-
-
-def find_head_node_ip(cluster_name: str, project: str, zone: str) -> str:
-    """Find the internal IP of the Ray cluster head node."""
-    filter_expr = f"labels.ray-node-type=head AND labels.ray-node-name=ray-{cluster_name}-head"
-    instances = list_instances(project, zone, filter_expr)
-
-    if not instances:
-        raise RuntimeError(f"No head node found for cluster {cluster_name} in zone {zone}")
-
-    return instances[0]["networkInterfaces"][0]["networkIP"]
 
 
 def list_tpu_nodes(project: str, zone: str, filter_expr: str = "") -> list[dict[str, Any]]:
@@ -133,8 +103,10 @@ def delete_tpu_node(node_name: str, project: str, zone: str, quiet: bool = False
     run_gcloud_command(cmd)
 
 
-def find_tpu_by_ip(target_ip: str, project: str, zone: str) -> tuple[str, str, int] | None:
+def find_tpu_by_ip(target_ip: str, project: str, zone: str = "-") -> tuple[str, str, int] | None:
     """Find TPU node by its internal IP address.
+
+    Searches all zones by default (zone="-").
 
     Returns:
         Tuple of (tpu_name, zone, worker_index) or None if not found
@@ -157,6 +129,56 @@ def find_tpu_by_ip(target_ip: str, project: str, zone: str) -> tuple[str, str, i
                     return full_name, zone, worker_index
 
     return None
+
+
+def find_vm_by_ip(target_ip: str, project: str) -> tuple[str, str] | None:
+    """Find a GCE VM by its internal IP address.
+
+    Searches all zones.
+
+    Returns:
+        Tuple of (instance_name, zone) or None if not found
+    """
+    cmd = [
+        "gcloud",
+        "compute",
+        "instances",
+        "list",
+        f"--project={project}",
+        f"--filter=networkInterfaces[0].networkIP={target_ip}",
+        "--format=json(name,zone)",
+    ]
+    result = run_gcloud_command(cmd)
+    instances = json.loads(result.stdout)
+    if not instances:
+        return None
+
+    if len(instances) > 1:
+        details = ", ".join(f"{i['name']} ({i['zone'].split('/')[-1]})" for i in instances)
+        raise RuntimeError(f"Multiple VMs found with IP {target_ip}: {details}")
+
+    instance = instances[0]
+    name = instance["name"]
+    # zone is a full URL like .../zones/us-central1-a
+    zone = instance["zone"].split("/")[-1]
+    return name, zone
+
+
+def ssh_to_vm(instance_name: str, zone: str, project: str, extra_args: list[str] | None = None) -> None:
+    """SSH into a GCE VM."""
+    cmd = [
+        "gcloud",
+        "compute",
+        "ssh",
+        instance_name,
+        f"--zone={zone}",
+        f"--project={project}",
+    ]
+
+    if extra_args:
+        cmd.extend(["--", *extra_args])
+
+    subprocess.run(cmd, check=True)
 
 
 def ssh_to_tpu(tpu_name: str, zone: str, project: str, extra_args: list[str] | None = None, worker_id: int = 0) -> None:
@@ -185,50 +207,6 @@ def ssh_to_tpu(tpu_name: str, zone: str, project: str, extra_args: list[str] | N
         cmd.extend(["--", *extra_args])
 
     subprocess.run(cmd, check=True)
-
-
-def get_tpu_health_status(project: str, zone: str) -> dict[str, Any]:
-    """Get health status of all TPU nodes in a zone."""
-    nodes = list_tpu_nodes(project, zone)
-
-    health_status = {
-        "healthy": [],
-        "unhealthy": [],
-        "preempted": [],
-        "creating": [],
-        "total_nodes": len(nodes),
-        "total_chips": 0,
-    }
-
-    for node in nodes:
-        name = node.get("name", "").split("/")[-1]  # Get simple name
-        state = node.get("state", "UNKNOWN")
-        accelerator_type = node.get("acceleratorType", "")
-
-        # Calculate chips for this node
-        try:
-            chips = int(accelerator_type.split("-")[-1])
-            health_status["total_chips"] += chips
-        except (ValueError, IndexError):
-            pass
-
-        node_info = {
-            "name": name,
-            "state": state,
-            "accelerator_type": accelerator_type,
-            "zone": zone,
-        }
-
-        if state == "READY":
-            health_status["healthy"].append(node_info)
-        elif state in ["PREEMPTED", "TERMINATED"]:
-            health_status["preempted"].append(node_info)
-        elif state in ["CREATING", "STARTING"]:
-            health_status["creating"].append(node_info)
-        else:
-            health_status["unhealthy"].append(node_info)
-
-    return health_status
 
 
 def terminate_tpus_in_cluster(project: str, zone: str, cluster_name: str) -> list[str]:

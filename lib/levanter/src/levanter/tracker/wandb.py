@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
@@ -6,6 +6,8 @@ import os
 import tempfile
 import typing
 import warnings
+import json
+import hashlib
 from dataclasses import dataclass
 from typing import Any, List, Optional, Union
 
@@ -32,11 +34,14 @@ logger = logging.getLogger(__name__)
 WandbRun = Union["wandb.sdk.wandb_run.Run", "wandb.sdk.lib.disabled.RunDisabled"]
 
 
+_WANDB_ARTIFACT_NAME_MAX_LENGTH = 128
+
+
 class WandbTracker(Tracker):
     name: str = "wandb"
     run: WandbRun
 
-    def __init__(self, run: Optional[WandbRun]):
+    def __init__(self, run: Optional[WandbRun], replicate_path: Optional[str] = None):
         import wandb
 
         if run is None:
@@ -52,6 +57,7 @@ class WandbTracker(Tracker):
             self.run = run
 
         self._last_warning_step = -500
+        self._replicate_path = replicate_path
 
     def log_hyperparameters(self, hparams: dict[str, Any]):
         self.run.config.update(_convert_value_to_loggable_rec(hparams), allow_val_change=True)
@@ -96,11 +102,72 @@ class WandbTracker(Tracker):
         self.run.summary.update(_convert_value_to_loggable_rec(metrics))
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
-        self.run.log_artifact(artifact_path, name=name, type=type)
+        artifact_name = name if name is not None else _default_wandb_artifact_name(artifact_path)
+        self.run.log_artifact(
+            artifact_path,
+            name=_truncate_wandb_artifact_name(artifact_name),
+            type=type,
+        )
 
     def finish(self):
         logger.info("Finishing wandb run...")
+        # Finish wandb first to ensure all metrics are synced to the summary
         self.run.finish()
+        # Then write the replicate file with the complete summary
+        self._write_replicate_file()
+
+    def _write_replicate_file(self):
+        if self._replicate_path is None:
+            return
+
+        import fsspec
+
+        metrics_file = f"{self._replicate_path}/tracker_metrics.jsonl"
+        fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
+        fs.makedirs(self._replicate_path, exist_ok=True)
+
+        with fs.open(metrics_file, "w") as f:
+            record = {
+                "config": _convert_value_to_loggable_rec(dict(self.run.config)),
+                "summary": _convert_value_to_loggable_rec(_summary_for_replicate(self.run)),
+            }
+            f.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+
+
+def _summary_for_replicate(run: WandbRun) -> dict[str, Any]:
+    """Read final W&B summary in a way that survives `run.finish()`."""
+    # run.summary can be stale before finish(); _final_summary has the fully flushed values
+    final_summary = getattr(run, "_final_summary", None)
+    if final_summary is None:
+        return dict(run.summary)
+
+    summary: dict[str, Any] = {}
+    for item in final_summary.item:
+        path: list[str] = list(item.nested_key)
+        if item.key:
+            path.append(item.key)
+        if not path:
+            continue
+
+        try:
+            value = json.loads(item.value_json)
+        except (TypeError, json.JSONDecodeError):
+            value = item.value_json
+
+        _set_nested(summary, path, value)
+
+    return summary
+
+
+def _set_nested(target: dict[str, Any], path: list[str], value: Any) -> None:
+    cur = target
+    for key in path[:-1]:
+        next_val = cur.get(key)
+        if not isinstance(next_val, dict):
+            next_val = {}
+            cur[key] = next_val
+        cur = next_val
+    cur[path[-1]] = value
 
 
 def _convert_value_to_loggable_rec(value: Any):
@@ -113,6 +180,13 @@ def _convert_value_to_loggable_rec(value: Any):
             return value.item()
         else:
             return np.array(value)
+    elif isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            return value.item()
+        else:
+            return value.tolist()
+    elif isinstance(value, np.generic):
+        return value.item()
     elif isinstance(value, Histogram):
         import wandb
 
@@ -160,8 +234,8 @@ class WandbConfig(TrackerConfig):
     save_xla_dumps: bool = False
     """If True, will save the XLA code to wandb (as configured by XLA_FLAGS). This is useful for debugging."""
 
-    init_timeout: int = 10 * 60
-    """Timeout in seconds for wandb.init(). Increase this if you see timeout errors in distributed training."""
+    replicate_path: Optional[str] = None
+    """If set, write config and summary to this path (local or GCS) on finish()."""
 
     def init(self, run_id: Optional[str]) -> WandbTracker:
         import wandb
@@ -190,9 +264,6 @@ class WandbConfig(TrackerConfig):
         if "git_commit" in git_settings:
             hparams_to_save["git_commit"] = git_settings["git_commit"]
 
-        # Create settings with init_timeout and git settings
-        init_settings = wandb.Settings(init_timeout=self.init_timeout, **git_settings)
-
         r = wandb.init(
             entity=self.entity,
             project=self.project,
@@ -203,7 +274,7 @@ class WandbConfig(TrackerConfig):
             resume=self.resume,
             mode=mode,
             config=hparams_to_save,
-            settings=init_settings,
+            settings=git_settings,
             allow_val_change=True,
         )
 
@@ -222,10 +293,8 @@ class WandbConfig(TrackerConfig):
                 id=r.id,
                 group=r.group,
             )
-            # Use a longer timeout to account for slow wandb.init() on some workers
-            sync_timeout = self.init_timeout + 120  # init_timeout + buffer
             metadata_to_share = jax_utils.multihost_broadcast_sync(
-                metadata_to_share, is_source=jax.process_index() == 0, timeout=sync_timeout
+                metadata_to_share, is_source=jax.process_index() == 0
             )
 
             # if jax.process_index() != 0:
@@ -248,7 +317,7 @@ class WandbConfig(TrackerConfig):
         wandb.summary["num_hosts"] = jax.process_count()  # type: ignore
         wandb.summary["backend"] = jax.default_backend()  # type: ignore
 
-        return WandbTracker(r)
+        return WandbTracker(r, replicate_path=self.replicate_path)
 
     def _git_settings(self):
         other_settings = dict()
@@ -300,3 +369,28 @@ class WandbConfig(TrackerConfig):
                 raise e
 
         return git_sha
+
+
+def _truncate_wandb_artifact_name(name: Optional[str]) -> Optional[str]:
+    """Truncate artifact names to keep within WandB's artifact-name limit."""
+    if name is None:
+        return None
+    if len(name) <= _WANDB_ARTIFACT_NAME_MAX_LENGTH:
+        return name
+    # Keep names stable and unique across different long inputs by keeping a short hash suffix.
+    hash_suffix = hashlib.sha256(name.encode("utf-8")).hexdigest()[:7]
+    max_truncated_prefix_len = _WANDB_ARTIFACT_NAME_MAX_LENGTH - len(hash_suffix) - 1
+    truncated = f"{name[:max_truncated_prefix_len]}-{hash_suffix}"
+    logger.warning(
+        "Wandb artifact name exceeds %d characters and will be truncated: %s -> %s",
+        _WANDB_ARTIFACT_NAME_MAX_LENGTH,
+        name,
+        truncated,
+    )
+    return truncated
+
+
+def _default_wandb_artifact_name(artifact_path: Any) -> str:
+    path = os.fspath(artifact_path)
+    basename = os.path.basename(path.rstrip("/\\"))
+    return basename or "artifact"

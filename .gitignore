@@ -1,12 +1,13 @@
 # redundant, but Ray looks for this otherwise.
 .git
 
-CLAUDE.md
-
 logs/
 
 # CPU profiles
 prof/
+
+# Downloaded build tools (zig, etc.)
+.tools/
 
 tests/snapshots/outputs
 tests/snapshots/diffs
@@ -211,9 +212,6 @@ archive/
 # wandb logs
 wandb
 
-# Generated leaderboard data
-marin/speedrun/static/data/runs.json
-
 # Ignore generated credentials from google-github-actions/auth
 gha-creds-*.json
 
@@ -223,8 +221,16 @@ gha-creds-*.json
 *.jsonl
 **/*.jsonl
 scr/*
+.weaver/
 
-# Generated restart scripts
-run_sft.sh
+# Local host Marin config
+.marin.yaml
 
-results.md
+/scratch
+
+.forge
+.claude
+!.claude/skills
+.agents/tmp/
+.codex
+.entire

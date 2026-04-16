@@ -12,7 +12,7 @@ Each dataset in your configuration can use a different format depending on its s
 |--------------|------------------------------------|------------------------------------------------------------------------------------------------------|
 | `text`       | Pretraining on plain text          | [`mlfoundations/dclm-baseline-1.0`](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0) |
 | `chat`       | Multi-turn chat models (SFT)       | [`allenai/tulu-3-sft-mixture`](https://huggingface.co/datasets/allenai/tulu-3-sft-mixture)           |
-| `supervised` | Instruction tuning / seq2seq tasks | [`tatsu-lab/alpaca`](https://huggingface.co/datasets/tatsu-lab/alpaca)                               |
+| `prebuilt`   | Pre-tokenized cache inputs         | (custom prebuilt data)                                                                               |
 
 ---
 
@@ -32,11 +32,15 @@ or be a [Hugging Face dataset]](https://huggingface.co/docs/datasets/create_data
 ```jsonl
 {"messages": [ {"role": "user", "content": "Hello!"}, {"role": "assistant", "content": "Hi there!"} ]}
 ```
-### `supervised` format
+### `prebuilt` format
 
 ```jsonl
-{"prompt": "Translate to French: Hello", "answer": "Bonjour"}
+{"input_ids": [101, 2023, 2003, 1037, 7099], "loss_weights": [1, 1, 1, 1, 1]}
 ```
+
+The `prebuilt` format is primarily intended for cases where you build the cache ahead of time using a custom
+Zephyr pipeline or `SerialCacheWriter`. For the recommended approach and examples, see
+[Direct Cache Construction](./Direct-Cache-Construction.md).
 
 ---
 
@@ -55,10 +59,9 @@ data:
   train_urls: ["gs://bucket/train.jsonl.gz"]
   validation_urls: ["gs://bucket/val.jsonl.gz"]
   format:
-    type: supervised
-    input_field: prompt
-    output_field: answer
-    separate_with: "\n"
+    type: prebuilt
+    input_ids_key: input_ids
+    loss_weights_key: loss_weights
   tokenizer: stanford-crfm/marin-tokenizer
   cache_dir: gs://bucket/cache
 ```
@@ -67,17 +70,23 @@ Or a mixture of multiple datasets:
 
 ```yaml
 data:
-  configs:
+  components:
     owt:
-      train_urls: ["gs://openwebtext/train.{1..128}.jsonl.gz"]
+      source:
+        type: url
+        train_urls: ["gs://openwebtext/train.{1..128}.jsonl.gz"]
     alpaca:
-      id: tatsu-lab/alpaca
+      source:
+        type: url
+        train_urls: ["gs://bucket/alpaca_pretokenized.jsonl.gz"]
       format:
-        type: supervised
-        input_field: instruction
-        output_field: response
+        type: prebuilt
+        input_ids_key: input_ids
+        loss_weights_key: loss_weights
     tulu:
-      id: allenai/tulu-3-sft-mixture
+      source:
+        type: hf
+        id: allenai/tulu-3-sft-mixture
       format:
         type: chat
         messages_key: messages
@@ -102,6 +111,49 @@ data:
 
 https://github.com/huggingface/transformers/blob/main/src/transformers/tokenization_utils_base.py#L1530
 
+### Shuffle Policies
+
+`data.shuffle` controls how training examples are shuffled:
+
+- `true`: full permutation shuffle (best mixing, highest random-access IO pressure)
+- positive integer: era shuffle with that era length
+- object: hierarchical block shuffle (`BlockShuffleConfig`)
+
+```yaml
+data:
+  # Full shuffle
+  shuffle: true
+```
+
+```yaml
+data:
+  # Era shuffle with 131072-example eras
+  shuffle: 131072
+  permutation_type: feistel
+```
+
+```yaml
+data:
+  # Hierarchical block shuffle
+  shuffle:
+    io_block_size: 256
+    window_blocks: 512
+    perm_type: feistel
+```
+
+Block shuffle is designed for TensorStore-backed training caches: it preserves more IO locality than full shuffle while
+still mixing globally better than era shuffle. Internally it shuffles full blocks, then shuffles examples within a
+window of blocks.
+
+Practical defaults:
+
+- Set `io_block_size` to match one underlying cache storage chunk in sequence-space when possible.
+- Start `window_blocks` around your train batch size in examples (e.g. batch size 512 -> `window_blocks: 512`).
+- Increase `window_blocks` if you observe a persistent validation-loss gap vs full shuffle.
+
+If the dataset length is not divisible by `io_block_size`, the final tiny block stays at the end of the dataset and is
+locally permuted within itself.
+
 
 ### Training Mixture Schedules
 
@@ -111,17 +163,23 @@ To do so, you need to specify the transition points in the `train_weights` secti
 
 ```yaml
 data:
-  configs:
+  components:
     owt:
-      train_urls: ["gs://openwebtext/train.{1..128}.jsonl.gz"]
+      source:
+        type: url
+        train_urls: ["gs://openwebtext/train.{1..128}.jsonl.gz"]
     alpaca:
-      id: tatsu-lab/alpaca
+      source:
+        type: url
+        train_urls: ["gs://bucket/alpaca_pretokenized.jsonl.gz"]
       format:
-        type: supervised
-        input_field: instruction
-        output_field: response
+        type: prebuilt
+        input_ids_key: input_ids
+        loss_weights_key: loss_weights
     tulu:
-      id: allenai/tulu-3-sft-mixture
+      source:
+        type: hf
+        id: allenai/tulu-3-sft-mixture
       format:
         type: chat
         messages_key: messages

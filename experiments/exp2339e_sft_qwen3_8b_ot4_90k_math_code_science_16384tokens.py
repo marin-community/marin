@@ -88,7 +88,7 @@ RESOURCES = ResourceConfig.with_tpu("v5p-64")
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
     tokenizer=qwen3_8b_tokenizer,
-    model_name_or_path="Qwen/Qwen3-8B",
+    initialize_from_hf="Qwen/Qwen3-8B",
     train_batch_size=TRAIN_BATCH_SIZE,
     per_device_parallelism=compute_per_device_parallelism(TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES),
     num_train_steps=NUM_TRAIN_STEPS,
@@ -108,7 +108,6 @@ mixture_sft_config = SimpleSFTConfig(
 mixture_config = lm_mixture_data_config(
     tokenized_datasets,
     mixture_weights,
-    permutation_type="feistel",
     shuffle=total_examples,  # IMPORTANT: Era shuffling (shuffle after every epoch). `shuffle=True` leads to same shuffle used in every epoch
     missing_weights_are_validation=True,
     mixture_block_size=12288,  # Doesn't matter for mixtures with 1 dataset
@@ -118,7 +117,6 @@ qwen3_8b_16384_seq_len = dataclasses.replace(
     qwen3_8b,
     max_seq_len=16384,
     rope=DefaultRotaryEmbeddingsConfig(theta=1_000_000.0),  # 1M theta value (same as original) is appropriate given that the base model was trained with 131K+ context length
-    cross_entropy_block_size=32000,  # Process vocab in chunks to reduce memory during loss computation
 )
 
 exp2339e_sft_qwen3_8b_ot4_90k = default_sft(

@@ -1,23 +1,12 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Environment Wrapper for the Environments Hub by Prime-Intellect, which contains a collection of environments.
 https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 """
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import Any, ClassVar, cast
 
 import jax.numpy as jnp
 import numpy as np
@@ -27,11 +16,7 @@ from marin.rl.environments.process_vllm_results import process_vllm_chat_results
 from marin.rl.environments.inference_ctx import BaseInferenceContext
 from marin.rl.types import Rollout, RolloutGroup
 
-# Lazy import for optional dependencies
-if TYPE_CHECKING:
-    pass
-
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 class PrimeIntellectEnv(MarinEnv):
@@ -94,9 +79,12 @@ class PrimeIntellectEnv(MarinEnv):
         prng_key,
         mode: str = "train",
         max_tokens: int | None = None,
+        top_k: int | None = None,
         stop: list[str] | None = None,
+        system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample problems and generate responses using the model."""
+        del prng_key, system_prompt
         self._ensure_verifiers_installed()
         from verifiers.types import GenerateOutputs
         import subprocess
@@ -112,6 +100,7 @@ class PrimeIntellectEnv(MarinEnv):
         sampling_args = {
             "max_tokens": max_tokens or self.max_tokens,
             "temperature": temperature,
+            "top_k": top_k,
             "logprobs": True,
             "stop": stop,
             # Note: return_tokens_as_token_ids is not supported by current vLLM version
@@ -185,6 +174,9 @@ class PrimeIntellectEnv(MarinEnv):
                     response_logprobs=response_logprobs,
                     token_rewards=token_rewards,
                     episode_reward=float(reward),
+                    temperature=temperature,
+                    top_k=top_k,
+                    is_truncated=False,  # prime intellect doesn't seem to report this easily
                 )
                 rollouts.append(rollout)
 

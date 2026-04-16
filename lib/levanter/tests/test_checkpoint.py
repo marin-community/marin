@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -17,6 +17,7 @@ import jax
 import jax.tree_util as jtu
 import numpy as np
 import optax
+import pytest
 from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
 from jax import ShapeDtypeStruct
@@ -25,13 +26,18 @@ from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import (
+    CheckpointDebugConfig,
     Checkpointer,
+    CheckpointerConfig,
     CheckpointInterval,
+    _collect_debug_checkpointer_state,
     _load_metadata,
     discover_latest_checkpoint,
     load_checkpoint,
     load_checkpoint_or_initialize,
+    register_debug_checkpointer_state_provider,
     save_checkpoint,
+    unregister_debug_checkpointer_state_provider,
 )
 from levanter.trainer_state import TrainerState
 
@@ -54,6 +60,11 @@ def _dummy_step_info(step):
     )
 
 
+def _on_step(checkpointer: Checkpointer, step: int, *, force: bool = False):
+    info = _dummy_step_info(step)
+    checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
+
+
 def _get_checkpoint_steps(checkpoint_dir):
     paths = list(pathlib.Path(checkpoint_dir).iterdir())
     return sorted([_load_metadata(f)["step"] for f in paths])
@@ -72,7 +83,7 @@ def test_checkpointer_changing_policy():
         )
 
         for step in range(1, 50):
-            checkpointer.on_step(_dummy_step_info(step))
+            _on_step(checkpointer, step)
 
         checkpointer.wait_until_finished()
 
@@ -92,18 +103,18 @@ def test_checkpointer_temporal_policy():
     with tempfile.TemporaryDirectory(prefix="checkpoints") as tmpdir:
         checkpointer = Checkpointer(tmpdir, timedelta(seconds=tick), [], dt_now_injection=lambda: fake_now)
 
-        checkpointer.on_step(_dummy_step_info(0))
+        _on_step(checkpointer, 0)
         advance_time(tick)
-        checkpointer.on_step(_dummy_step_info(1))
+        _on_step(checkpointer, 1)
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [1]
 
         advance_time(tick - 1)
-        checkpointer.on_step(_dummy_step_info(2))
+        _on_step(checkpointer, 2)
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [1]
         advance_time(1)
-        checkpointer.on_step(_dummy_step_info(3))
+        _on_step(checkpointer, 3)
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [3]
 
@@ -129,39 +140,39 @@ def test_checkpointer_mixed_policy():
             dt_now_injection=lambda: fake_now,
         )
 
-        checkpointer.on_step(_dummy_step_info(0))
+        _on_step(checkpointer, 0)
         advance_time(tick)
-        checkpointer.on_step(_dummy_step_info(1))
+        _on_step(checkpointer, 1)
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [1]
 
         advance_time(tick - 1)
         # time hasn't advanced enough, so we wouldn't save a checkpoint, but we do because of the interval
-        checkpointer.on_step(_dummy_step_info(2))
+        _on_step(checkpointer, 2)
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [2]
 
         advance_time(1)
         # time has advanced enough now from last temporal save, but we don't save a checkpoint because we just saved one
-        checkpointer.on_step(_dummy_step_info(3))
+        _on_step(checkpointer, 3)
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [2]
 
         for step in range(4, 11):
             advance_time(tick)
-            checkpointer.on_step(_dummy_step_info(step))
+            _on_step(checkpointer, step)
             # we need this to stop a race condition
 
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [2, 4, 6, 8, 10]
 
         advance_time(tick - 1)
-        checkpointer.on_step(_dummy_step_info(11))
+        _on_step(checkpointer, 11)
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [2, 4, 6, 8, 10]
 
         for step in range(12, 50):
-            checkpointer.on_step(_dummy_step_info(step))
+            _on_step(checkpointer, step)
             advance_time(tick)
 
         # ensure we saved the right checkpoints
@@ -254,6 +265,51 @@ def test_checkpoint_discovery():
         assert discover_latest_checkpoint("file:///tmp/does-not-exist") is None
 
 
+def test_checkpointer_config_propagates_debug_settings():
+    config = CheckpointerConfig(
+        base_path="/tmp/checkpoints",
+        delete_previous_temporary_checkpoint_after_save=False,
+        debug=CheckpointDebugConfig(
+            enabled=True,
+            log_interval=12.5,
+            dump_stacks_after=45.0,
+            tracemalloc_frames=17,
+            top_allocations=5,
+            force_gc_before_serialize=False,
+            flush_logs=False,
+        ),
+    )
+
+    checkpointer = config.create("run-1")
+
+    assert checkpointer.delete_previous_temporary_checkpoint_after_save is False
+    assert checkpointer.debug.enabled is True
+    assert checkpointer.debug.log_interval == 12.5
+    assert checkpointer.debug.dump_stacks_after == 45.0
+    assert checkpointer.debug.tracemalloc_frames == 17
+    assert checkpointer.debug.top_allocations == 5
+    assert checkpointer.debug.force_gc_before_serialize is False
+    assert checkpointer.debug.flush_logs is False
+
+
+def test_debug_checkpointer_state_providers_register_and_unregister():
+    provider_name = "unit-test-provider"
+    provider = lambda: {"weight_transfer": {"bytes": 123}}
+
+    try:
+        register_debug_checkpointer_state_provider(provider_name, provider)
+        assert _collect_debug_checkpointer_state()[provider_name] == {"weight_transfer": {"bytes": 123}}
+    finally:
+        unregister_debug_checkpointer_state_provider(provider_name)
+
+    assert provider_name not in _collect_debug_checkpointer_state()
+
+
+def test_checkpointer_config_rejects_invalid_debug_tracemalloc_settings():
+    with pytest.raises(AssertionError, match="checkpoint debug tracemalloc_frames must be positive"):
+        CheckpointerConfig(debug=CheckpointDebugConfig(tracemalloc_frames=0))
+
+
 def test_checkpointer_deletes_previous_checkpoints():
     fake_now = datetime.datetime(2021, 1, 1, 0, 0, 0)
 
@@ -274,14 +330,14 @@ def test_checkpointer_deletes_previous_checkpoints():
             dt_now_injection=lambda: fake_now,
         )
 
-        checkpointer.on_step(_dummy_step_info(0))
+        _on_step(checkpointer, 0)
         advance_time(tick)
         for i in range(1, 6):
-            checkpointer.on_step(_dummy_step_info(i))
+            _on_step(checkpointer, i)
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [5]
         advance_time(tick)
-        checkpointer.on_step(_dummy_step_info(6))
+        _on_step(checkpointer, 6)
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [5, 6]
 
@@ -296,9 +352,9 @@ def test_checkpointer_deletes_previous_checkpoints():
             dt_now_injection=lambda: fake_now,
         )
 
-        checkpointer.on_step(_dummy_step_info(7))
+        _on_step(checkpointer, 7)
         advance_time(tick)
-        checkpointer.on_step(_dummy_step_info(8))
+        _on_step(checkpointer, 8)
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [5, 8]
 
@@ -313,9 +369,9 @@ def test_checkpointer_deletes_previous_checkpoints():
             delete_old_temp_checkpoints=False,
         )
 
-        checkpointer.on_step(_dummy_step_info(9))
+        _on_step(checkpointer, 9)
         advance_time(tick)
-        checkpointer.on_step(_dummy_step_info(10))
+        _on_step(checkpointer, 10)
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [5, 8, 10]
 
@@ -341,19 +397,49 @@ def test_checkpointer_deletes_previous_checkpoints_under_relative_base_paths():
         )
 
         # step 0 doesn't save a checkpoint
-        checkpointer.on_step(_dummy_step_info(0))
+        _on_step(checkpointer, 0)
 
         advance_time(tick)
-        checkpointer.on_step(_dummy_step_info(1))
+        _on_step(checkpointer, 1)
         checkpointer.wait_until_finished()
         # step 1 should save a checkpoint
         assert _get_checkpoint_steps(tmpdir) == [1]
 
         advance_time(tick)
-        checkpointer.on_step(_dummy_step_info(2))
+        _on_step(checkpointer, 2)
         checkpointer.wait_until_finished()
         # step 2 should delete step 1 if we're handling relative paths properly
         assert _get_checkpoint_steps(tmpdir) == [2]
+
+
+def test_checkpointer_can_keep_previous_temporary_checkpoint_after_save():
+    fake_now = datetime.datetime(2021, 1, 1, 0, 0, 0)
+    tick = 10
+
+    def advance_time(delta_seconds):
+        nonlocal fake_now
+        fake_now += timedelta(seconds=delta_seconds)
+
+    with tempfile.TemporaryDirectory(prefix="checkpoints") as tmpdir:
+        checkpointer = Checkpointer(
+            tmpdir,
+            timedelta(seconds=tick),
+            [],
+            dt_now_injection=lambda: fake_now,
+            delete_previous_temporary_checkpoint_after_save=False,
+        )
+
+        _on_step(checkpointer, 0)
+
+        advance_time(tick)
+        _on_step(checkpointer, 1)
+        checkpointer.wait_until_finished()
+        assert _get_checkpoint_steps(tmpdir) == [1]
+
+        advance_time(tick)
+        _on_step(checkpointer, 2)
+        checkpointer.wait_until_finished()
+        assert _get_checkpoint_steps(tmpdir) == [1, 2]
 
 
 def test_load_from_checkpoint_or_initialize():
@@ -489,7 +575,7 @@ def test_ocdbt_merges_files():
             # Check that manifest.ocdbt exists
             # The manifest should be in one of the checkpoint subdirectories
             checkpoint_dir = pathlib.Path(tmpdir)
-            checkpoint_files = list(checkpoint_dir.rglob("*"))
+            checkpoint_files = [path for path in checkpoint_dir.rglob("*") if path.is_file()]
             assert (
                 len(checkpoint_files) <= 25
             ), f"There should be fewer than 25 files in the checkpoint directory: {checkpoint_files}"

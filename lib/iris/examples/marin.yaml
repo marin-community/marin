@@ -1,0 +1,177 @@
+# Iris production configuration for Marin cluster
+# Usage: uv run iris --cluster=marin cluster start
+
+platform:
+  label_prefix: marin
+  gcp:
+    project_id: hai-gcp-models
+
+defaults:
+  ssh:
+    auth_mode: SSH_AUTH_MODE_METADATA
+  autoscaler:
+    evaluation_interval:
+      milliseconds: 10000
+    scale_up_delay:
+      milliseconds: 60000
+    scale_down_delay:
+      milliseconds: 300000
+  worker:
+    docker_image: ghcr.io/marin-community/iris-worker:latest
+    default_task_image: ghcr.io/marin-community/iris-task:latest
+    port: 10001
+
+storage:
+  remote_state_dir: gs://marin-us-central2/iris/marin/state
+
+worker_provider: {}
+
+controller:
+  image: ghcr.io/marin-community/iris-controller:latest
+  gcp:
+    service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+    zone: us-central1-a
+    machine_type: e2-highmem-4
+    boot_disk_size_gb: 100
+    port: 10000
+
+# ---------------------------------------------------------------------------
+# TPU pools — each pool defines a TPU family + scheduling class.
+# Sizes are expanded into per-(size, zone) scale groups with topology-derived
+# fields (device_variant, num_vms, device_count) and allocation tier metadata
+# (quota_pool, allocation_tier) for monotonic quota blocking.
+# ---------------------------------------------------------------------------
+tpu_pools:
+  # v5e (v5litepod) — europe-west4-b, us-west4-a
+  # Per-VM: ct5lp-hightpu-4t — 112 vCPU, 192 GiB RAM
+  v5e-serving:
+    family: v5e
+    zones: [europe-west4-b, us-west4-a]
+    base_priority: 10
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: v2-alpha-tpuv5-lite
+    sizes:
+      4:   { buffer_slices: 2, max_slices: 1024 }
+      8:   { buffer_slices: 2, max_slices: 512 }
+
+  v5e-preemptible:
+    family: v5e
+    zones: [europe-west4-b, us-west4-a]
+    base_priority: 10
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: v2-alpha-tpuv5-lite
+    sizes:
+      16:  { max_slices: 256 }
+      32:  { max_slices: 128 }
+      64:  { max_slices: 64 }
+      128: { max_slices: 32 }
+      256: { max_slices: 16 }
+
+  # v6e — europe-west4-a, us-east1-d, us-east5-b
+  # Per-VM: ct6e-standard-4t — 180 vCPU, 720 GiB RAM
+  v6e-preemptible:
+    family: v6e
+    zones: [europe-west4-a, us-east1-d, us-east5-b]
+    base_priority: 10
+    resources: { cpu: 180, ram: 720GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: v2-alpha-tpuv6e
+    sizes:
+      4:   { buffer_slices: 2, max_slices: 1024 }
+      8:   { max_slices: 512 }
+      16:  { max_slices: 256 }
+      32:  { max_slices: 128 }
+      64:  { max_slices: 64 }
+      128: { max_slices: 32 }
+      256: { max_slices: 16 }
+
+  # v5p — us-central1-a, us-east5-a
+  # Per-VM: ct5p-hightpu-4t — 208 vCPU, 448 GiB RAM
+  v5p-preemptible:
+    family: v5p
+    zones: [us-central1-a, us-east5-a]
+    base_priority: 20
+    resources: { cpu: 208, ram: 448GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: v2-alpha-tpuv5
+    sizes:
+      8:    { max_slices: 2048 }
+      16:   { max_slices: 1024 }
+      32:   { max_slices: 512 }
+      64:   { max_slices: 256 }
+      128:  { max_slices: 128 }
+      256:  { max_slices: 64 }
+      512:  { max_slices: 32 }
+      1024: { max_slices: 16 }
+      2048: { max_slices: 8 }
+
+  # v4 — us-central2-b
+  # Per-VM: ct4p-hightpu-4t — 240 vCPU, ~400 GiB RAM
+  v4-preemptible:
+    family: v4
+    zones: [us-central2-b]
+    base_priority: 20
+    resources: { cpu: 240, ram: 400GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: tpu-ubuntu2204-base
+    sizes:
+      8:    { max_slices: 2048 }
+      16:   { max_slices: 1024 }
+      32:   { max_slices: 512 }
+      64:   { max_slices: 256 }
+      128:  { max_slices: 128 }
+      256:  { max_slices: 64 }
+      512:  { max_slices: 32 }
+      1024: { max_slices: 16 }
+      2048: { max_slices: 8 }
+      4096: { max_slices: 4 }
+
+  v4-reserved:
+    family: v4
+    zones: [us-central2-b]
+    base_priority: 1000
+    resources: { cpu: 240, ram: 400GB, disk: 100GB, capacity_type: reserved }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: tpu-ubuntu2204-base
+    sizes:
+      32:   { buffer_slices: 0, max_slices: 4 }
+      64:   { buffer_slices: 0, max_slices: 4 }
+      128:  { buffer_slices: 0, max_slices: 4 }
+      256:  { buffer_slices: 0, max_slices: 4 }
+      512:  { buffer_slices: 0, max_slices: 4 }
+      1024: { buffer_slices: 0, max_slices: 4 }
+      2048: { buffer_slices: 0, max_slices: 4 }
+      4096: { buffer_slices: 0, max_slices: 4 }
+
+# ---------------------------------------------------------------------------
+# Non-TPU scale groups (not part of tpu_pools)
+# ---------------------------------------------------------------------------
+scale_groups:
+  # Low-priority fallback CPU VM group for on-demand scheduling.
+  # n2-highmem-2: 2 vCPU / 16 GiB, available in all target zones including us-central2-b.
+  cpu_vm_e2_highmem_2_ondemand:
+    zones: [us-central1-a, us-central2-b, us-east1-b, us-east1-d, us-east5-a, us-east5-b, us-west1-a, us-west4-a, europe-west4-a, europe-west4-b]
+    num_vms: 1
+    priority: 500
+    resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
+    buffer_slices: 0
+    max_slices: 4
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        mode: GCP_SLICE_MODE_VM
+        machine_type: n2-highmem-2

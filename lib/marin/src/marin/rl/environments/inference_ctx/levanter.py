@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Context which uses the native Levanter engine for inference.
@@ -27,10 +16,13 @@ from jax.sharding import Mesh
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
-from transformers import PreTrainedTokenizer
+from levanter.tokenizers import MarinTokenizer
 from levanter.models.lm_model import LmHeadModel
 import haliax as hax
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+
+# TODO(chris): use a different weight transfer method update model, take it out from here
+from marin.rl.weight_transfer.arrow_flight import update_model
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +30,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class LevanterInferenceContextConfig:
     inference_server_config: InferenceServerConfig
-    tokenizer: PreTrainedTokenizer
+    tokenizer: MarinTokenizer
     mesh: Mesh
     axis_mapping: dict[str, str]
     stop_tokens: list[int] | None = None
@@ -71,8 +63,14 @@ class LevanterInferenceContext(BaseInferenceContext):
     def openai_address(self) -> str:
         return f"http://{self._inference_server.address()}/v1"
 
-    def reload_model(self, model: LmHeadModel) -> None:
-        self._inference_server.reload(lambda model: model)
+    def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> LmHeadModel | None:
+        assert model is not None or state_dict is not None, "Either model or state_dict must be provided"
+        if model is None and state_dict is not None:
+            with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
+                model = update_model(model, state_dict)
+
+        self._inference_server.reload(lambda _: model)
+        return model
 
     def start_server(self, model: LmHeadModel) -> None:
         with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
@@ -84,17 +82,21 @@ class LevanterInferenceContext(BaseInferenceContext):
         self._inference_thread = threading.Thread(target=lambda: self._inference_server.serve(), daemon=True)
         self._inference_thread.start()
 
+    def shutdown(self) -> None:
+        self._inference_server.shutdown()
+
     # TODO: add support for ChatCompletion style [ { role, content} ] messages
     def batch_completions(
         self,
-        prompts: list[str],
+        prompts: list[str] | list[list[dict]],
         temperature: float,
         n: int,
         max_tokens: int | None = None,
+        top_k: int | None = None,
         stop: list[str] | None = None,
+        system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
         """Call OpenAI API in batches with concurrency control."""
-
         if max_tokens is None:
             max_tokens = self.max_tokens
 

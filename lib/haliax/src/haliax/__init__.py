@@ -1,7 +1,6 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
-
 
 import typing as t
 from typing import Sequence
@@ -168,10 +167,12 @@ def ones(shape: AxisSpec, dtype: DTypeLike | None = None) -> NamedArray:
 def full(shape: AxisSpec, fill_value: T, dtype: DTypeLike | None = None) -> NamedArray:
     """Creates a NamedArray with all elements set to `fill_value`"""
     if isinstance(shape, Axis):
-        return NamedArray(jnp.full(shape=shape.size, fill_value=fill_value, dtype=dtype), (shape,))
+        r = NamedArray(jnp.full(shape=shape.size, fill_value=fill_value, dtype=dtype), (shape,))
     else:
         x_shape = to_jax_shape(shape)
-        return NamedArray(jnp.full(shape=x_shape, fill_value=fill_value, dtype=dtype), shape)
+        r = NamedArray(jnp.full(shape=x_shape, fill_value=fill_value, dtype=dtype), shape)
+
+    return auto_sharded(r)
 
 
 def zeros_like(a: NamedArray, dtype=None) -> NamedArray:

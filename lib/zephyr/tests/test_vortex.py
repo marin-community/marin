@@ -1,23 +1,14 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for vortex file format support."""
 
 import pytest
 
-from fray.job import create_job_ctx
-from zephyr import Backend, Dataset
+from fray.v2 import ResourceConfig
+from fray.v2.local_backend import LocalClient
+from zephyr import Dataset
+from zephyr.execution import ZephyrContext
 from zephyr.expr import col
 from zephyr.readers import InputFileSpec, load_vortex
 from zephyr.writers import write_vortex_file
@@ -32,15 +23,13 @@ def vortex_file(tmp_path):
     return path
 
 
-@pytest.fixture(
-    params=[
-        pytest.param("sync", id="sync"),
-        pytest.param("threadpool", id="thread"),
-    ]
-)
-def sync_backend(request):
-    """Backend fixture for sync and threadpool backends."""
-    return create_job_ctx(request.param, max_workers=2)
+@pytest.fixture
+def sync_ctx():
+    """ZephyrContext fixture for vortex tests."""
+    client = LocalClient()
+    ctx = ZephyrContext(client=client, max_workers=2, resources=ResourceConfig(cpu=1, ram="512m"), name="test-vortex")
+    yield ctx
+    ctx.shutdown()
 
 
 class TestVortexReader:
@@ -67,6 +56,15 @@ class TestVortexReader:
         write_vortex_file([], str(empty_path))
 
         records = list(load_vortex(str(empty_path)))
+        assert records == []
+
+    def test_load_vortex_empty_file_with_column_projection(self, tmp_path):
+        """Test loading an empty vortex file with column projection."""
+        empty_path = tmp_path / "empty.vortex"
+        write_vortex_file([], str(empty_path))
+
+        spec = InputFileSpec(path=str(empty_path), columns=["id", "attributes"])
+        records = list(load_vortex(spec))
         assert records == []
 
 
@@ -110,7 +108,7 @@ class TestVortexWriter:
 class TestVortexPipeline:
     """Tests for vortex in Dataset pipelines."""
 
-    def test_read_write_pipeline(self, sync_backend, vortex_file, tmp_path):
+    def test_read_write_pipeline(self, sync_ctx, vortex_file, tmp_path):
         """Test read -> filter -> write pipeline with vortex."""
         output_pattern = str(tmp_path / "output-{shard:05d}.vortex")
 
@@ -121,7 +119,7 @@ class TestVortexPipeline:
             .write_vortex(output_pattern)
         )
 
-        results = list(Backend.execute(ds, context=sync_backend))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 1
 
         # Verify output
@@ -129,22 +127,22 @@ class TestVortexPipeline:
         assert len(loaded) == 49  # scores 510, 520, ..., 990
         assert all(r["score"] > 500 for r in loaded)
 
-    def test_load_file_auto_detects_vortex(self, sync_backend, vortex_file, tmp_path):
+    def test_load_file_auto_detects_vortex(self, sync_ctx, vortex_file, tmp_path):
         """Test that load_file() auto-detects vortex format."""
         output_pattern = str(tmp_path / "output-{shard:05d}.jsonl.gz")
 
         ds = Dataset.from_files(str(vortex_file)).load_file().filter(lambda r: r["id"] < 10).write_jsonl(output_pattern)
 
-        results = list(Backend.execute(ds, context=sync_backend))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 1
 
-    def test_vortex_to_parquet_conversion(self, sync_backend, vortex_file, tmp_path):
+    def test_vortex_to_parquet_conversion(self, sync_ctx, vortex_file, tmp_path):
         """Test converting vortex to parquet."""
         output_pattern = str(tmp_path / "output-{shard:05d}.parquet")
 
         ds = Dataset.from_files(str(vortex_file)).load_vortex().write_parquet(output_pattern)
 
-        results = list(Backend.execute(ds, context=sync_backend))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 1
 
         # Verify parquet output
@@ -153,7 +151,7 @@ class TestVortexPipeline:
         loaded = list(load_parquet(results[0]))
         assert len(loaded) == 100
 
-    def test_parquet_to_vortex_conversion(self, sync_backend, tmp_path):
+    def test_parquet_to_vortex_conversion(self, sync_ctx, tmp_path):
         """Test converting parquet to vortex."""
         # Create parquet file
         from zephyr.writers import write_parquet_file
@@ -166,7 +164,7 @@ class TestVortexPipeline:
 
         ds = Dataset.from_files(str(parquet_path)).load_parquet().write_vortex(output_pattern)
 
-        results = list(Backend.execute(ds, context=sync_backend))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 1
 
         # Verify vortex output
@@ -177,18 +175,18 @@ class TestVortexPipeline:
 class TestVortexFilterPushdown:
     """Tests for filter pushdown to vortex reader."""
 
-    def test_expression_filter_pushdown(self, sync_backend, vortex_file):
+    def test_expression_filter_pushdown(self, sync_ctx, vortex_file):
         """Test filter pushdown with expression."""
         ds = Dataset.from_files(str(vortex_file)).load_vortex().filter(col("score") > 500)
 
-        results = list(Backend.execute(ds, context=sync_backend))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 49  # scores 510, 520, ..., 990
         assert all(r["score"] > 500 for r in results)
 
-    def test_column_select_pushdown(self, sync_backend, vortex_file):
+    def test_column_select_pushdown(self, sync_ctx, vortex_file):
         """Test column selection pushdown."""
         ds = Dataset.from_files(str(vortex_file)).load_vortex().select("id", "score")
 
-        results = list(Backend.execute(ds, context=sync_backend))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 100
         assert set(results[0].keys()) == {"id", "score"}

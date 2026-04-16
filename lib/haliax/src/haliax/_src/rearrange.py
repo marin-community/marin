@@ -1,7 +1,6 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
-
 
 # Support for einops-style rearrangement strings, but supporting named axes and unordered matching
 import dataclasses

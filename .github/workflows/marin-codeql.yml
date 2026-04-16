@@ -3,7 +3,6 @@ on:
   push:
     branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
   schedule:
     - cron: '45 17 * * 2'
 jobs:

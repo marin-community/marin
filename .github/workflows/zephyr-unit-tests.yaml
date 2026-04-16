@@ -3,37 +3,51 @@ on:
   push:
     branches:
       - main
-    paths:
-      - lib/zephyr/**
-      - uv.lock
-      - .github/workflows/zephyr-unit-tests.yaml
   pull_request:
-    branches:
-      - main
-    paths:
-      - lib/zephyr/**
-      - uv.lock
-      - .github/workflows/zephyr-unit-tests.yaml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  cpu-unit-test:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'lib/zephyr/**'
+              # Iris is being actively developed, to avoid bugs sneaking into zephyr, we trigger zephyr tests on iris change
+              - 'lib/iris/**'
+              - 'uv.lock'
+              - '.github/workflows/zephyr-unit-tests.yaml'
+
+  zephyr-tests:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      matrix:
-        python-version: ["3.12"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.12
         uses: actions/setup-python@v4
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
@@ -44,9 +58,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          uv sync --package zephyr --group test --frozen
+          uv sync --package marin-zephyr --group test --frozen
 
       - name: Test with pytest
         run: |
           # important: don't cd into lib/zephyr so that ray uv integration doesn't freak out
-          uv run --package zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/
+          uv run --package marin-zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/

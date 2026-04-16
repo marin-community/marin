@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -11,13 +11,16 @@ import optax
 from optax import tree_utils as otu
 
 import haliax
-from haliax.nn import Linear
 
 from levanter.optim.config import OptimizerConfig
-from levanter.optim.util import map_flattened_linear_layers
+from levanter.optim.util import (
+    CoefficientType,
+    label_linear_like_module,
+    map_flattened_linear_layers,
+    zeropower_via_newtonschulz5,
+)
 from levanter.utils.jax_utils import leaf_key_paths
 from levanter.optim.adamh import scale_by_adamh
-from levanter.optim.muon import zeropower_via_newtonschulz5
 
 
 @OptimizerConfig.register_subclass("muonH")
@@ -46,6 +49,7 @@ class MuonHConfig(OptimizerConfig):
     epsilon: float = 1e-8
     muon_epsilon: float = 1e-8
     max_grad_norm: float = 1.0
+    coefficient_type: CoefficientType = "quintic"  # Type of Newton-Schulz coefficients to use
 
     def build(self, num_train_steps):
         """
@@ -61,7 +65,12 @@ class MuonHConfig(OptimizerConfig):
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
                 components.append(
                     scale_with_muonh(
-                        self.momentum, self.nesterov, self.backend_steps, self.muon_epsilon, learning_rate
+                        self.momentum,
+                        self.nesterov,
+                        self.backend_steps,
+                        self.muon_epsilon,
+                        learning_rate,
+                        self.coefficient_type,
                     )
                 )
                 optimizer = optax.chain(*components)
@@ -109,13 +118,13 @@ class MuonHConfig(OptimizerConfig):
                 return "adam"
             elif "lm_head" in path_str:
                 return "adamh"
-            elif isinstance(param, Linear):
+            elif isinstance(param, haliax.nn.Linear):
                 # muonh for linear layers
-                return dataclasses.replace(param, weight="muonh", bias="adam" if param.bias is not None else None)
+                return label_linear_like_module(param, weight_label="muonh", bias_label="adam")
             else:
                 return "adam"
 
-        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, Linear))
+        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, haliax.nn.Linear))
 
 
 class ScaleByMuonHState(NamedTuple):
@@ -124,7 +133,9 @@ class ScaleByMuonHState(NamedTuple):
     momentum_buffer: optax.Updates
 
 
-def scale_with_muonh(momentum=0.95, nesterov=True, steps=5, muon_eps=1e-8, learning_rate=0.02):
+def scale_with_muonh(
+    momentum=0.95, nesterov=True, steps=5, muon_eps=1e-8, learning_rate=0.02, coefficient_type="quintic"
+):
     # Convert steps to concrete int at function definition time
     steps = int(steps)
 
@@ -154,7 +165,9 @@ def scale_with_muonh(momentum=0.95, nesterov=True, steps=5, muon_eps=1e-8, learn
             assert layer.weight.ndim == 2
             # steps is now a concrete int
             array = layer.weight.array
-            updated_weight_array = zeropower_via_newtonschulz5(array, steps=steps, eps=muon_eps)
+            updated_weight_array = zeropower_via_newtonschulz5(
+                array, steps=steps, eps=muon_eps, coefficient_type=coefficient_type
+            )
 
             updated_weight = dataclasses.replace(layer.weight, array=updated_weight_array)
 

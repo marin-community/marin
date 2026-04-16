@@ -517,8 +517,7 @@ learn differently from Transformers.
 
 ## A few other features
 
-* **Training**: Levanter uses [Optax](https://github.com/deepmind/optax) for optimization,
-  though our new optimizer, [Sophia](https://arxiv.org/abs/2305.14342), is coming to Levanter soon!
+* **Training**: Levanter uses [Optax](https://github.com/deepmind/optax) for optimization, as well as newer optimizers like Muon, SOAP, and more.
 * **Logging**: Logging is done with [WandB](https://wandb.ai/), complete with a fancy online visualization of the validation set during training.
 * **Checkpointing**: Distributed checkpointing is supported via Google's [TensorStore](https://google.github.io/tensorstore/) library. Training can even be resumed on a different number of hosts, though this breaks reproducibility for now.
 * **Export**: We also support exporting models to the Hugging Face Hub, with export compatible with Pytorch and Transformers via [SafeTensors](https://github.com/huggingface/safetensors).
@@ -606,7 +605,7 @@ trained on the [Lakh MIDI](https://colinraffel.com/projects/lmd/) corpus. The la
 This is just the beginning for Levanter. In the future, look for:
 * more models on interesting problem domains,
 * scaled up versions of new architectures developed here at Stanford and elsewhere,
-* new training techniques, including the newly released [Sophia](https://arxiv.org/abs/2305.14342) optimizer,
+* new training techniques and optimizers,
 * and larger models!
 
 Levanter is still a work in progress, but we are excited to share it with the community. We hope that Levanter will be

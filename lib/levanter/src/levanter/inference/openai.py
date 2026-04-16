@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -34,13 +34,11 @@ from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
 from pydantic import BaseModel, Field
-from transformers import PreTrainedTokenizer
-
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.models.lm_model import LmHeadModel
+from levanter.tokenizers import MarinTokenizer
 from levanter.trainer import TrainerConfig
-from levanter.utils.hf_utils import HfTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -256,7 +254,10 @@ class InferenceContext:
             ):
                 self.model = weight_callback(self.model)
                 self.engine = InferenceEngine.from_model_with_config(
-                    model=self.model, tokenizer=self.tokenizer, config=self.config.service
+                    model=self.model,
+                    tokenizer=self.tokenizer,
+                    config=self.config.service,
+                    axis_resources=self.config.trainer.compute_axis_mapping,
                 )
                 elapsed = time.time() - start
             logger.info(f"Model reloaded in {elapsed:.2f}s")
@@ -474,7 +475,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
             # Tokenize stop sequences
             stop_tokens = []
             for stop in stop_list:
-                stop_ids = ctx.tokenizer(stop, add_special_tokens=False)["input_ids"]
+                stop_ids = ctx.tokenizer.encode(stop, add_special_tokens=False)
                 if stop_ids:
                     stop_tokens.extend(stop_ids)
 
@@ -486,7 +487,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
 
         for i, prompt in enumerate(prompts):
             # Tokenize prompt
-            prompt_tokens = ctx.tokenizer(prompt, add_special_tokens=False)["input_ids"]
+            prompt_tokens = ctx.tokenizer.encode(prompt, add_special_tokens=False)
             total_prompt_tokens += len(prompt_tokens)
 
             # Create future for this request
@@ -563,10 +564,12 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _compute_tokens(messages: list[ChatMessage], tokenizer: PreTrainedTokenizer) -> List[int]:
+def _compute_tokens(messages: list[ChatMessage], tokenizer: MarinTokenizer) -> List[int]:
     try:
         dict_messages = [msg.model_dump(exclude_none=True) for msg in messages]
-        return tokenizer.apply_chat_template(dict_messages, tokenize=True, add_generation_prompt=True)
+        result = tokenizer.apply_chat_template(dict_messages, tokenize=True, add_generation_prompt=True)
+        assert isinstance(result, list)
+        return result
     except Exception as e:
         # Fallback: simple concatenation if template fails
         logger.warning(f"Chat template failed, using fallback: {e}", exc_info=True)
@@ -605,7 +608,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
 
             stop_tokens = []
             for stop in stop_list:
-                stop_ids = ctx.tokenizer(stop, add_special_tokens=False)["input_ids"]
+                stop_ids = ctx.tokenizer.encode(stop, add_special_tokens=False)
                 if stop_ids:
                     stop_tokens.extend(stop_ids)
 
@@ -703,13 +706,18 @@ class InferenceServer:
         self._server = None
 
     @staticmethod
-    def create(config: InferenceServerConfig, model: LmHeadModel, tokenizer: HfTokenizer) -> "InferenceServer":
+    def create(config: InferenceServerConfig, model: LmHeadModel, tokenizer: MarinTokenizer) -> "InferenceServer":
         """Create and initialize a new InferenceServer.
 
         This factory method loads the model, tokenizer, and creates all necessary
         components for the inference server.
         """
-        service = InferenceEngine.from_model_with_config(model=model, tokenizer=tokenizer, config=config.service)
+        service = InferenceEngine.from_model_with_config(
+            model=model,
+            tokenizer=tokenizer,
+            config=config.service,
+            axis_resources=config.trainer.compute_axis_mapping,
+        )
 
         # Create and start inference thread
         inference_context = InferenceContext(model, tokenizer, service, config)

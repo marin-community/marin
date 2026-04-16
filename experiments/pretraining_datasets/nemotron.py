@@ -1,47 +1,38 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """NEMOTRON CC dataset definitions and tokenization."""
 
+import dataclasses
 import os.path
 
-from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from fray.v2.types import ResourceConfig
+
+from experiments.defaults import DEFAULT_NEW_RUN_DATA_SHUFFLE
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
+from marin.datakit.download.nemotron_v1 import download_nemotron_v1_step
+from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
+from marin.execution.remote import remote
+from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-# Raw dataset download step
-downloads = {
-    "nemotron_cc": ExecutorStep(
-        name="raw/nemotro-cc",
-        fn=download_nemotron_cc,
-        config=NemotronIngressConfig(
-            output_path=this_output_path(),
-        ),
-    )
-}
+# Fray resources for running a single Nemotron tokenize split as a remote job.
+# TODO (rav): debug why this needs 32g - probably levanter store consolidation
+NEMOTRON_SPLIT_TOKENIZE_RESOURCES = ResourceConfig(ram="32g", cpu=2)
 
-_nemotron_cc_path = output_path_of(downloads["nemotron_cc"], "contrib/Nemotron/Nemotron-CC/data-jsonl/")
+
+def nemotron_cc_download() -> ExecutorStep:
+    return download_nemotron_v1_step().as_executor_step()
+
 
 NEMOTRON_DATASETS = {
-    "hq_actual": ["quality=high/kind=actual/**/*.jsonl.gz"],
-    "hq_synth": ["quality=high/kind=synthetic/**/*.jsonl.gz"],
-    "medium_high": ["quality=medium-high/**/*.jsonl.gz"],
-    "medium": ["quality=medium/**/*.jsonl.gz"],
-    "medium_low": ["quality=medium-low/**/*.jsonl.gz"],
-    "low_actual": ["quality=low/kind=actual/**/*.jsonl.gz"],
-    "low_synth": ["quality=low/kind=synthetic/**/*.jsonl.gz"],
+    "hq_actual": ["quality=high/kind=actual/**/*.jsonl.*"],
+    "hq_synth": ["quality=high/kind=synthetic/**/*.jsonl.*"],
+    "medium_high": ["quality=medium-high/**/*.jsonl.*"],
+    "medium": ["quality=medium/**/*.jsonl.*"],
+    "medium_low": ["quality=medium-low/**/*.jsonl.*"],
+    "low_actual": ["quality=low/kind=actual/**/*.jsonl.*"],
+    "low_synth": ["quality=low/kind=synthetic/**/*.jsonl.*"],
 }
 
 # Weights for each split based on their size in TiB
@@ -67,18 +58,35 @@ NEMOTRON_LLAMA3_OVERRIDES = {
 }
 
 
+# Hardcoded path to the nemotron download output so that glob or download
+# step changes don't alter the tokenize step's version hash.
+_NEMOTRON_CC_DATA_PATH = InputName.hardcoded("raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/")
+
+
 def _get_nemotron_split_paths(split: str):
     """Helper to get file paths for a nemotron split."""
-    patterns = NEMOTRON_DATASETS[split]
-    return [_nemotron_cc_path / pattern for pattern in patterns]
+    return [_NEMOTRON_CC_DATA_PATH / pattern for pattern in NEMOTRON_DATASETS[split]]
 
 
-def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
-    """Generate tokenization steps for all Nemotron CC dataset splits."""
+def tokenize_nemotron(
+    *,
+    tokenizer: str | None = None,
+    max_workers: int = 4096,
+    cache_copy_max_workers: int = 128,
+) -> dict[str, TokenizerStep]:
+    """Generate tokenization steps for all Nemotron CC dataset splits.
+
+    Each split's tokenize function is wrapped with ``@remote`` so it runs as
+    its own Fray job (see ``NEMOTRON_SPLIT_TOKENIZE_RESOURCES``). This keeps the
+    entrypoint pod lightweight and lets the tokenize+consolidate work survive
+    entrypoint restarts.
+    """
     if tokenizer is None:
         from experiments.llama import llama3_tokenizer
 
         tokenizer = llama3_tokenizer
+
+    tokenize_fn = remote(tokenize, resources=NEMOTRON_SPLIT_TOKENIZE_RESOURCES)
 
     nemotron_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for split in NEMOTRON_DATASETS:
@@ -86,12 +94,14 @@ def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerSte
         nemotron_split_paths = _get_nemotron_split_paths(split)
         step = ExecutorStep(
             name=nemotron_split_output_path,
-            fn=tokenize,
+            fn=tokenize_fn,
             config=TokenizeConfig(
                 train_paths=nemotron_split_paths,
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
+                max_workers=max_workers,
+                cache_copy_max_workers=cache_copy_max_workers,
             ),
         )
 
@@ -105,6 +115,22 @@ def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerSte
 
     assert nemotron_steps.keys() == NEMOTRON_WEIGHTS.keys()
     return nemotron_steps
+
+
+nemotron_mix = lm_mixture_data_config(
+    components={
+        **tokenize_nemotron(),
+        "starcoderdata": dclm_components_llama3["starcoderdata"],
+        "proofpile_2": dclm_components_llama3["proofpile_2"],
+    },
+    weights={
+        **NEMOTRON_WEIGHTS,
+        "starcoderdata": 0.25,
+        "proofpile_2": 0.055,
+    },
+)
+
+nemotron_mix_block_shuffle = dataclasses.replace(nemotron_mix, shuffle=DEFAULT_NEW_RUN_DATA_SHUFFLE)
 
 
 def tokenize_nemotron_subset(name: str, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:

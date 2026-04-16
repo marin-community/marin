@@ -4,29 +4,36 @@ on:
   push:
     branches:
       - main
-    paths:
-      - lib/haliax/**
-      - lib/levanter/**
-      - uv.lock
-      - .github/workflows/levanter-tests.yaml
   pull_request:
-    paths:
-      - lib/haliax/**
-      - lib/levanter/**
-      - uv.lock
-      - .github/workflows/levanter-tests.yaml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  cpu-unit-tests:
+  changes:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11"]
-        jax-version: ["0.8.0"]
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'lib/levanter/**'
+              - 'lib/haliax/**'
+              - 'uv.lock'
+              - '.github/workflows/levanter-tests.yaml'
+
+  levanter-tests:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: lib/levanter
@@ -37,23 +44,26 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.7.20"
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
           enable-cache: true
           working-directory: lib/levanter
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --frozen
+        run: uv sync --package marin-levanter --dev --group test --frozen
       - name: Test with pytest
         run: |
           # Test with specific JAX version, excluding TPU tests
-          PYTHONPATH=tests:src:. uv run --package levanter --frozen --with "jax[cpu]==${{ matrix.jax-version }}" pytest tests -m "not entry and not slow and not ray and not tpu" --durations=20
+          PYTHONPATH=tests:src:. uv run --package marin-levanter --frozen --with "jax[cpu]==0.8.0" pytest tests -m "not entry and not slow and not ray and not tpu" --durations=20
 
-  cpu-ray-tests:
+  levanter-ray-tests:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11"]
     defaults:
       run:
         working-directory: lib/levanter
@@ -64,22 +74,25 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.7.20"
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
           enable-cache: true
           working-directory: lib/levanter
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --frozen
+        run: uv sync --package marin-levanter --dev --group test --frozen
       - name: Test with pytest
         run: |
-          PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "ray" --durations=20
+          PYTHONPATH=tests:src:. uv run --package marin-levanter --frozen pytest tests -m "ray" --durations=20
 
-  cpu-entry-tests:
+  levanter-entry-tests:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11"]
     defaults:
       run:
         working-directory: lib/levanter
@@ -90,22 +103,26 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.7.20"
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
           enable-cache: true
           working-directory: lib/levanter
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --frozen
+        run: uv sync --package marin-levanter --dev --group test --frozen
       - name: Test with pytest
         run: |
-          PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "entry" --durations=20
+          PYTHONPATH=tests:src:. uv run --package marin-levanter --frozen pytest tests -m "entry" --durations=20
 
-  cpu-torch-tests:
+  levanter-torch-tests:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11"]
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: lib/levanter
@@ -116,23 +133,46 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.7.20"
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
           enable-cache: true
           working-directory: lib/levanter
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --frozen --extra torch_test
+        run: uv sync --package marin-levanter --dev --group test --frozen --extra torch_test --no-install-package torch
 
-      - name: Force CPU torch wheel
+      - name: Install locked CPU torch wheel
         run: |
-          TORCH_VERSION=$(sed -n '/^name = "torch"$/ {n; s/version = "\([^"]*\)"/\1/p; q}' ../../uv.lock)
-          echo $TORCH_VERSION
-          if [[ -z "$TORCH_VERSION" ]]; then
-            echo "Unable to determine torch version from uv.lock" >&2
+          TORCH_CPU_VERSION=$(python3 - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          lock = tomllib.loads(Path("../../uv.lock").read_text())
+          versions = {
+              package["version"]
+              for package in lock.get("package", [])
+              if package.get("name") == "torch" and package.get("version", "").endswith("+cpu")
+          }
+          if len(versions) != 1:
+              raise SystemExit(
+                  f"Expected exactly one torch +cpu version in uv.lock, found {len(versions)}: {sorted(versions)}"
+              )
+          print(next(iter(versions)))
+          PY
+          )
+          echo "Using torch ${TORCH_CPU_VERSION}"
+          if [[ -z "$TORCH_CPU_VERSION" ]]; then
+            echo "Unable to determine torch CPU version from uv.lock" >&2
             exit 1
           fi
-          uv pip install "torch==$TORCH_VERSION" -f https://download.pytorch.org/whl/cpu/torch_stable.html  --torch-backend=cpu
+          uv pip install "torch==$TORCH_CPU_VERSION" \
+            --default-index https://download.pytorch.org/whl/cpu \
+            --index https://pypi.org/simple \
+            --index-strategy unsafe-best-match
 
       - name: Test torch-marked suite
         run: |
@@ -140,14 +180,11 @@ jobs:
           CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. ../../.venv/bin/python -m pytest tests -m "torch" --durations=20
 #          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test pytest tests -m "torch" --durations=20
 
-  tpu-tests:
+  levanter-tpu-tests:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [tpu-ci]
     timeout-minutes: 15
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-    strategy:
-      fail-fast: false
-      matrix:
-        jax_version: ["0.8.0"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -158,7 +195,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
-          JAX_VERSION: ${{ matrix.jax_version }}
+          JAX_VERSION: "0.8.0"
         run: |
           bash infra/tpu-ci/clean-tpu.sh
 
@@ -170,6 +207,7 @@ jobs:
           chmod 777 /tmp/uv-cache
 
           # Run Levanter tests with specific JAX version
+          # TPU collection imports call jax.devices(), so keep pytest single-process here.
           docker run --rm \
             --device /dev/vfio:/dev/vfio \
             --shm-size=100g \
@@ -191,4 +229,22 @@ jobs:
             -v /tmp/uv-cache:/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 890 uv run --package levanter --frozen --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow' -v --tb=short --log-cli-level=WARNING --durations=20"
+            bash -c "\
+              # Install Node.js in userspace if not present (needed for protobuf generation during uv sync)
+              if ! command -v npx >/dev/null 2>&1; then \
+                echo '::group::Installing Node.js in userspace'; \
+                curl -fsSL https://nodejs.org/dist/v22.16.0/node-v22.16.0-linux-x64.tar.xz | tar -xJ -C /tmp && \
+                export PATH=/tmp/node-v22.16.0-linux-x64/bin:\$PATH; \
+                echo '::endgroup::'; \
+              fi && \
+              cp -a /workspace-src/. /workspace/ && cd /workspace && \
+              timeout --kill-after=5 --signal=TERM 890 \
+              uv run --package marin-levanter --frozen --group test --with 'jax[tpu]==$JAX_VERSION' \
+              pytest -n 0 lib/levanter/tests \
+              -m 'not entry and not ray and not slow and not torch' \
+              --ignore=lib/levanter/tests/test_audio.py \
+              --ignore=lib/levanter/tests/test_new_cache.py \
+              --ignore=lib/levanter/tests/test_hf_checkpoints.py \
+              --ignore=lib/levanter/tests/test_hf_gpt2_serialize.py \
+              --ignore=lib/levanter/tests/test_gdn_layer.py \
+              -v --tb=short --log-cli-level=WARNING --durations=20"

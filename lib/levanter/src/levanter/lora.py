@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -76,6 +76,8 @@ from levanter.utils.logging import silence_transformer_nag
 
 silence_transformer_nag()
 from transformers import PreTrainedTokenizerBase  # noqa: E402
+
+from levanter.tokenizers import MarinTokenizer  # noqa: E402
 
 
 logger = logging.getLogger(__name__)
@@ -243,7 +245,7 @@ def lora_trainable_params_filter(model: M) -> M:
     # Equinox's primitives don't really have a "match all tree nodes matching a predicate" function (just
     # a "match all tree leaves matching a predicate" function), so we need to be just a bit careful.
     # Basically, we want to halt recursion in the tree whenever we hit a node that is a lora param.
-    return jax.tree_util.tree_map(is_lora_param, model, is_leaf=is_lora_param)
+    return haliax.tree_util.tree_map(is_lora_param, model, is_leaf=is_lora_param)
 
 
 def _loraize(model: M, config: LoraConfig, key: jax.random.PRNGKey, prefix: str, batch_dims: Tuple[Axis, ...]) -> M:
@@ -320,7 +322,7 @@ def save_peft_pretrained(
     config: LoraConfig,
     base_model_name_or_path,
     path: str,
-    tokenizer: Optional[PreTrainedTokenizerBase] = None,
+    tokenizer: Optional[PreTrainedTokenizerBase | MarinTokenizer] = None,
     *,
     prefix: Optional[str] = DEFAULT_DICT_PREFIX,
     upload_to: Optional[Union[bool, str, RepoRef]] = None,
@@ -349,6 +351,8 @@ def save_peft_pretrained(
             json.dump(hf_config, f)
 
         if tokenizer is not None:
+            if isinstance(tokenizer, MarinTokenizer):
+                tokenizer = tokenizer.as_hf_tokenizer()
             tokenizer.save_pretrained(local_path)
 
         if upload_to is True:
@@ -363,7 +367,7 @@ def save_peft_checkpoint_callback(
     base_path,
     config: LoraConfig,
     base_model_name_or_path,
-    tokenizer: Optional[PreTrainedTokenizerBase] = None,
+    tokenizer: Optional[PreTrainedTokenizerBase | MarinTokenizer] = None,
     upload_to_hf: Optional[Union[bool, str, RepoRef]] = False,
     **hf_upload_kwargs,
 ):

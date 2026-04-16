@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Apache Arrow Flight-based weight transfer implementation.
@@ -28,11 +17,12 @@ We can likely extract a bit more performance by:
 
 import dataclasses
 import logging
+import math
 import os
 import socket
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import partial
@@ -40,10 +30,10 @@ from functools import partial
 import haliax as hax
 import haliax.state_dict as hsd
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
-from fray.job.context import get_default_job_ctx
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree
@@ -79,12 +69,48 @@ MAX_ELEMENTS_PER_RECORD = (2000 * 1000 * 1000) // 4
 _CPU_COUNT = os.cpu_count() or 1
 NUM_PARALLEL_SERVERS = max(1, _CPU_COUNT // 4)
 NUM_PARALLEL_RECEIVES = max(1, _CPU_COUNT // 4)
+_BYTES_PER_MIB = 1024 * 1024
+
+
+def _resolve_advertise_host() -> str:
+    """Resolve the host address for Arrow Flight server advertisement.
+
+    On GCP TPU VMs, queries the metadata server for the internal IP (which is
+    routable within the VPC). Elsewhere, falls back to the hostname if it's not
+    a .local mDNS name (gRPC's c-ares resolver can't handle mDNS), or localhost.
+    """
+    # Try GCP metadata server first (works on TPU VMs)
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(
+            "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip",
+            headers={"Metadata-Flavor": "Google"},
+        )
+        with urllib.request.urlopen(req, timeout=1) as resp:
+            ip = resp.read().decode().strip()
+            logger.info("Resolved advertise host via GCP metadata: %s", ip)
+            return ip
+    except Exception:
+        pass
+
+    hostname = socket.gethostname()
+    # gRPC's c-ares DNS resolver can't handle .local (mDNS) hostnames
+    if hostname.endswith(".local"):
+        return "localhost"
+    return hostname
 
 
 def _create_binary_array(buffer_data: np.ndarray) -> pa.Array:
-    """Construct a single element Arrow LargeBinary array from numpy buffer data without copies"""
-    # buffer_info = buffer_data.__array_interface__
-    # block = pa.foreign_buffer(buffer_info["data"][0], buffer_data.nbytes, base=buffer_data)
+    """Construct a single element Arrow LargeBinary array from numpy buffer data without copies.
+
+    Handles bfloat16 arrays by viewing them as uint8 — PyArrow's py_buffer doesn't
+    support bfloat16 via the Python buffer protocol.
+    """
+    # bfloat16 (from ml_dtypes/jax) isn't supported by PyArrow's buffer protocol.
+    # View as raw bytes instead — the dtype is stored separately in the schema metadata.
+    if hasattr(buffer_data, "dtype") and buffer_data.dtype.name == "bfloat16":
+        buffer_data = np.ascontiguousarray(buffer_data).view(np.uint8)
     block = pa.py_buffer(buffer_data)
     return pa.Array.from_buffers(
         pa.large_binary(),
@@ -133,7 +159,7 @@ def state_dict_to_batches(
             total_parts = 1
         else:
             assert value.ndim == 1, f"Expected flattened array for parameter {value.shape}"
-            splits = np.array_split(value, max(1, value.size // MAX_ELEMENTS_PER_RECORD))
+            splits = np.array_split(value, max(1, math.ceil(value.size / MAX_ELEMENTS_PER_RECORD)))
             total_parts = len(splits)
 
         # Create batches for each split
@@ -161,6 +187,12 @@ def state_dict_to_batches(
 @partial(jax.jit, donate_argnums=0)
 def update_model(old_model, new_state_dict):
     return hsd.from_state_dict(old_model, new_state_dict)
+
+
+def _mib_per_second(num_bytes: int, seconds: float) -> float:
+    if num_bytes <= 0 or seconds <= 0:
+        return 0.0
+    return num_bytes / _BYTES_PER_MIB / seconds
 
 
 def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -> jax.Array:
@@ -197,11 +229,11 @@ def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -
         buffers = [part.as_buffer() for part in parts]
         buffer_parts = [np.frombuffer(buf, dtype=np.uint8) for buf in buffers]
         array_np = np.concatenate(buffer_parts)
-        array_np = array_np.view(dtype).reshape(shape)
+        res = array_np.view(dtype).reshape(shape)
         # Convert to JAX array directly
         # If we place on the TPU then we OOM. Need the context manager or default device is TPU
-        with jax.default_device(jax.devices("cpu")[0]):
-            res = jax.numpy.asarray(array_np)
+        # with jax.default_device(jax.devices("cpu")[0]):
+        #     res = jax.numpy.asarray(array_np)
         ed = time.time()
         if ed - st > 0.1:
             logger.debug(f"Deserialized param {param_name} of shape {shape} and dtype {dtype} in {ed - st:.2f}s")
@@ -211,12 +243,21 @@ def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -
 class ArrowFlightCoordinator:
     """Ray actor for coordinating Arrow Flight weight transfers."""
 
-    _server_info = ServerInfo | None
+    _server_info: ServerInfo | None
 
     def __init__(self):
         self._server_info = None
 
     def update_server(self, weight_id: int, param_names: list[str], server_locations: list[tuple[str, int]]) -> None:
+        # Accept both forward updates and rollback updates.
+        # Rollbacks happen when the trainer restarts from an earlier checkpoint
+        # (or re-initializes to -1) after a failure.
+        # We only ignore exact duplicates to reduce redundant client fetch work.
+        current_weight_id = self._server_info.weight_id if self._server_info is not None else None
+        if current_weight_id is not None and weight_id == current_weight_id:
+            logger.info("Ignoring duplicate weight update: %s", weight_id)
+            return
+
         self._server_info = ServerInfo(
             weight_id=weight_id,
             server_addresses=[f"grpc://{host}:{port}" for host, port in server_locations],
@@ -305,13 +346,53 @@ class MarinFlightServer(flight.FlightServerBase):
             return self._latest_weight_id
 
 
-@jax.jit
-def copy_and_flatten(model: PyTree) -> tuple[dict[str, jax.Array], dict[str, tuple[int, ...]]]:
-    """Convert `model` into a state with flattened arrays and shapes."""
+@partial(jax.jit, static_argnames=("convert_to_bfloat16",))
+def copy_and_flatten(
+    model: PyTree, convert_to_bfloat16: bool = True
+) -> tuple[dict[str, jax.Array], dict[str, tuple[int, ...]]]:
+    """Convert `model` into a state with flattened arrays and shapes.
+
+    Optionally converts weights to bfloat16 for efficient transfer to inference workers.
+    This provides several benefits:
+    1. Reduces network transfer size by 50% (float32 -> bfloat16)
+    2. Reduces device-to-host copy bandwidth by 50%
+    3. Eliminates dtype conversion overhead in vLLM
+    4. Reduces memory fragmentation from temporary conversion buffers
+
+    The training model remains in float32 for numerical stability during optimization.
+    """
     state_dict = hsd.to_state_dict(model)
     shape_dict = jax.tree.map(lambda y: y.shape, state_dict)
-    flat_dict = jax.tree.map(lambda y: y.reshape(-1), state_dict)
+
+    if convert_to_bfloat16:
+        # Convert to bfloat16 for inference - happens on GPU before device_get
+        # Only cast floating point arrays to avoid issues with integer/bool arrays
+        def maybe_cast_to_bf16(arr):
+            if jnp.issubdtype(arr.dtype, jnp.floating):
+                return arr.astype(jnp.bfloat16)
+            return arr
+
+        bf16_dict = jax.tree.map(maybe_cast_to_bf16, state_dict)
+        flat_dict = jax.tree.map(lambda y: y.reshape(-1), bf16_dict)
+    else:
+        flat_dict = jax.tree.map(lambda y: y.reshape(-1), state_dict)
+
     return flat_dict, shape_dict
+
+
+def _summarize_flat_state_dict(flat_dict: dict[str, np.ndarray]) -> tuple[int, int, str | None]:
+    total_bytes = 0
+    largest_param_bytes = 0
+    largest_param_name: str | None = None
+
+    for name, value in flat_dict.items():
+        param_bytes = int(value.nbytes)
+        total_bytes += param_bytes
+        if param_bytes > largest_param_bytes:
+            largest_param_bytes = param_bytes
+            largest_param_name = name
+
+    return total_bytes, largest_param_bytes, largest_param_name
 
 
 class ArrowFlightServer(WeightTransferServer):
@@ -331,6 +412,7 @@ class ArrowFlightServer(WeightTransferServer):
     _server_threads: list[threading.Thread]
     _server_locations: list[str]
     metrics: WeightTransferServerMetrics
+    _latest_store_debug_snapshot: dict[str, object]
 
     def __init__(
         self,
@@ -338,6 +420,7 @@ class ArrowFlightServer(WeightTransferServer):
         mesh: Mesh | None = None,
         axis_mapping: ResourceMapping | None = None,
         num_servers: int = NUM_PARALLEL_SERVERS,
+        coordinator_handle=None,
     ):
         self.config = config
         self.mesh = mesh
@@ -349,7 +432,7 @@ class ArrowFlightServer(WeightTransferServer):
         self._server_threads = []
         self._server_locations = []
 
-        actual_host = config.flight_host if config.flight_host != "0.0.0.0" else socket.gethostname()
+        actual_host = config.flight_host if config.flight_host != "0.0.0.0" else _resolve_advertise_host()
 
         for i in range(num_servers):
             # Use port 0 to auto-assign for all servers
@@ -371,10 +454,14 @@ class ArrowFlightServer(WeightTransferServer):
             logger.info(f"Arrow Flight server {i} started at {server_location}")
 
         self.metrics = WeightTransferServerMetrics()
-        self._ctx = get_default_job_ctx()
-        self._coordinator = self._ctx.create_actor(
-            ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True, preemptible=False
-        )
+        self._latest_store_debug_snapshot = {
+            "latest_weight_id": None,
+            "stored_param_count": 0,
+            "stored_record_batch_count": 0,
+            "stored_arrow_bytes": 0,
+            "flight_server_count": len(self._flight_servers),
+        }
+        self._coordinator = coordinator_handle
         logger.info("Started Arrow Flight weight transfer with config: %s", self.config)
 
     def serve_weights(self, weight_id: int, model: PyTree) -> None:
@@ -389,14 +476,35 @@ class ArrowFlightServer(WeightTransferServer):
             barrier_sync()
 
             if jax.process_index() == 0:
-                # Fetching the entire state dict to CPU allows JAX to parallelize the individual transfers
-                flat_dict, shape_dict = copy_and_flatten(model)
-                state_dict_time = time.time()
-                flat_dict = jax.device_get(flat_dict)
-                copy_time = time.time()
+                flat_dict, shape_dict = copy_and_flatten(model, self.config.convert_to_bfloat16)
+                state_dict_done = time.time()
+                host_flat_dict = jax.device_get(flat_dict)
+                materialize_done = time.time()
+                total_bytes, largest_param_bytes, largest_param_name = _summarize_flat_state_dict(host_flat_dict)
+
+                self.metrics.state_dict_time = state_dict_done - start_time
+                self.metrics.materialize_time = materialize_done - state_dict_done
+                self.metrics.transfer_bytes = total_bytes
+                self.metrics.total_transfer_bytes += total_bytes
+                self.metrics.param_count = len(host_flat_dict)
+                self.metrics.largest_param_bytes = largest_param_bytes
+                self.metrics.materialize_mib_per_second = _mib_per_second(
+                    total_bytes,
+                    self.metrics.materialize_time,
+                )
 
                 # Convert to Arrow RecordBatch per parameter
-                params_dict = state_dict_to_batches(flat_dict, shape_dict, weight_id)
+                params_dict = state_dict_to_batches(host_flat_dict, shape_dict, weight_id)
+                stored_record_batch_count = sum(len(batches) for _, batches in params_dict.values())
+                stored_arrow_bytes = sum(sum(batch.nbytes for batch in batches) for _, batches in params_dict.values())
+                self._latest_store_debug_snapshot = {
+                    "latest_weight_id": weight_id,
+                    "stored_param_count": len(params_dict),
+                    "stored_record_batch_count": stored_record_batch_count,
+                    "stored_arrow_bytes": stored_arrow_bytes,
+                    "stored_arrow_bytes_mib": round(stored_arrow_bytes / _BYTES_PER_MIB, 2),
+                    "flight_server_count": len(self._flight_servers),
+                }
                 serialize_time = time.time()
 
                 for flight_server in self._flight_servers:
@@ -406,29 +514,48 @@ class ArrowFlightServer(WeightTransferServer):
 
                 # Update coordinator with weight info and server locations
                 param_names = list(params_dict.keys())
-                actual_host = self.config.flight_host if self.config.flight_host != "0.0.0.0" else socket.gethostname()
+                actual_host = (
+                    self.config.flight_host if self.config.flight_host != "0.0.0.0" else _resolve_advertise_host()
+                )
                 server_locations = [(actual_host, server.port) for server in self._flight_servers]
-                self._ctx.get(self._coordinator.update_server.remote(weight_id, param_names, server_locations))
+                self._coordinator.update_server.remote(weight_id, param_names, server_locations).result()
                 update_time = time.time()
 
+                self.metrics.serialize_time = serialize_time - materialize_done
+                self.metrics.store_time = store_time - serialize_time
+                self.metrics.update_time = update_time - store_time
+                self.metrics.serve_time = update_time - start_time
+                self.metrics.serialize_mib_per_second = _mib_per_second(
+                    total_bytes,
+                    self.metrics.serialize_time,
+                )
+                self.metrics.store_mib_per_second = _mib_per_second(
+                    total_bytes,
+                    self.metrics.store_time,
+                )
                 self.metrics.successful_transfers += 1
 
                 logger.info(
-                    "Served weights for weight_id %s. "
-                    "timings: state_dict=%.2fs, copy=%.2fs, serialize=%.2fs, store=%.2fs, update=%.2fs",
+                    "Served weights for weight_id %s: params=%d bytes=%.2f MiB largest=%s (%.2f MiB) "
+                    "timings: state_dict=%.2fs, materialize=%.2fs, serialize=%.2fs, store=%.2fs, update=%.2fs",
                     weight_id,
-                    state_dict_time - start_time,
-                    copy_time - state_dict_time,
-                    serialize_time - copy_time,
+                    len(host_flat_dict),
+                    total_bytes / _BYTES_PER_MIB,
+                    largest_param_name,
+                    largest_param_bytes / _BYTES_PER_MIB,
+                    self.metrics.state_dict_time,
+                    self.metrics.materialize_time,
+                    serialize_time - materialize_done,
                     store_time - serialize_time,
                     update_time - store_time,
                 )
 
             barrier_sync()
 
-        except Exception as e:
+        except Exception:
             self.metrics.failed_transfers += 1
-            logger.error(f"Failed to serve weights {weight_id} via Arrow Flight: {e}")
+            logger.exception(f"Failed to serve weights {weight_id} via Arrow Flight")
+            raise
 
     def cleanup(self) -> None:
         """Cleanup Flight server resources."""
@@ -440,6 +567,16 @@ class ArrowFlightServer(WeightTransferServer):
     def get_metrics(self) -> WeightTransferServerMetrics:
         """Get transfer metrics."""
         return self.metrics
+
+    def get_debug_snapshot(self) -> Mapping[str, object]:
+        latest_metrics = dataclasses.asdict(self.metrics)
+        latest_metrics["transfer_bytes_mib"] = round(self.metrics.transfer_bytes / _BYTES_PER_MIB, 2)
+        latest_metrics["largest_param_bytes_mib"] = round(self.metrics.largest_param_bytes / _BYTES_PER_MIB, 2)
+        latest_metrics["total_transfer_bytes_gib"] = round(self.metrics.total_transfer_bytes / (1024**3), 2)
+        return {
+            "latest_store": dict(self._latest_store_debug_snapshot),
+            "latest_transfer_metrics": latest_metrics,
+        }
 
 
 class ArrowFlightClient(WeightTransferClient):
@@ -455,22 +592,23 @@ class ArrowFlightClient(WeightTransferClient):
     _receive_pool: ThreadPoolExecutor
 
     def __init__(
-        self, config: WeightTransferConfig, mesh: Mesh | None = None, axis_mapping: ResourceMapping | None = None
+        self,
+        config: WeightTransferConfig,
+        mesh: Mesh | None = None,
+        axis_mapping: ResourceMapping | None = None,
+        coordinator_handle=None,
     ):
         self.config = config
         self.mesh = mesh
         self.axis_mapping = axis_mapping
 
-        self._last_weight_id = -1
+        self._last_weight_id = -2
         self._flight_clients = []
         self._server_locations = []
 
         self.metrics = WeightTransferClientMetrics()
         self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_RECEIVES)
-        self._ctx = get_default_job_ctx()
-        self._coordinator = self._ctx.create_actor(
-            ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True, preemptible=False
-        )
+        self._coordinator = coordinator_handle
 
     def _connect_to_servers(self, new_locations) -> bool:
         """Connect to all Arrow Flight servers."""
@@ -520,14 +658,15 @@ class ArrowFlightClient(WeightTransferClient):
         """
         self.metrics.total_polls += 1
 
-        if old_model is None:
-            raise ValueError("old_model is required for Arrow Flight weight transfer to preserve model structure")
+        # if old_model is None:
+        #     raise ValueError("old_model is required for Arrow Flight weight transfer to preserve model structure")
 
         try:
             start_time = time.time()
+            logger.info("receive_weights: polling for step > %s", self._last_weight_id)
 
             # Fetch server info from coordinator
-            server_info = self._ctx.get(self._coordinator.fetch_server.remote())
+            server_info = self._coordinator.fetch_server.remote().result()
 
             if not server_info:
                 logger.info("No Arrow Flight server info available from coordinator.")
@@ -558,26 +697,45 @@ class ArrowFlightClient(WeightTransferClient):
                 state_dict[param_name] = param_array
 
             fetch_time = time.time()
+            receive_bytes, largest_param_bytes, _ = _summarize_flat_state_dict(
+                {name: np.asarray(value).reshape(-1) for name, value in state_dict.items()}
+            )
 
             # Convert back to model using state_dict and move to target device
-            with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
-                model = update_model(old_model, state_dict)
+            if old_model is not None:
+                with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
+                    model = update_model(old_model, state_dict)
+            else:
+                model = None
 
             decode_time = time.time()
 
             self.metrics.successful_receives += 1
+            self.metrics.total_receive_bytes += receive_bytes
+            self.metrics.receive_bytes = receive_bytes
+            self.metrics.param_count = len(state_dict)
+            self.metrics.largest_param_bytes = largest_param_bytes
             self.metrics.poll_time = poll_time - start_time
             self.metrics.fetch_time = fetch_time - poll_time
             self.metrics.decode_time = decode_time - fetch_time
+            self.metrics.fetch_mib_per_second = _mib_per_second(receive_bytes, self.metrics.fetch_time)
+            self.metrics.decode_mib_per_second = _mib_per_second(receive_bytes, self.metrics.decode_time)
             self._last_weight_id = server_info.weight_id
 
             logger.info(
-                f"Received {len(server_info.param_names)} params for weight_id {server_info.weight_id} via Arrow Flight "
-                f"(poll={poll_time - start_time:.2f}s, fetch={fetch_time - poll_time:.2f}s, "
-                f"decode={decode_time - fetch_time:.2f}s)"
+                "Received %d params for weight_id %s via Arrow Flight "
+                "(bytes=%.2f MiB, poll=%.2fs, fetch=%.2fs, decode=%.2fs)",
+                len(server_info.param_names),
+                server_info.weight_id,
+                receive_bytes / _BYTES_PER_MIB,
+                poll_time - start_time,
+                fetch_time - poll_time,
+                decode_time - fetch_time,
             )
 
-            return WeightUpdate(model=model, weight_id=server_info.weight_id)
+            logger.info("receive_weights: update_model complete, total=%.1fs", time.time() - start_time)
+
+            return WeightUpdate(model=model, state_dict=state_dict, weight_id=server_info.weight_id)
 
         except Exception:
             self.metrics.failed_receives += 1

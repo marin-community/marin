@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for PrimeIntellectEnv integration with verifiers library."""
 
@@ -22,7 +11,7 @@ import pytest
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
-from transformers import AutoTokenizer
+from levanter.tokenizers import load_tokenizer
 
 try:
     import verifiers as vf
@@ -58,7 +47,7 @@ def create_mock_chat_completion(response_text: str = "42") -> ChatCompletion:
 @pytest.fixture
 def tokenizer():
     """Create a real tokenizer for testing."""
-    return AutoTokenizer.from_pretrained("gpt2")
+    return load_tokenizer("gpt2")
 
 
 @pytest.fixture

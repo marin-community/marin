@@ -37,6 +37,13 @@ docker:
       - --shm-size=100gb
       - -v
       - "/tmp:/tmp"
+      - -e MARIN_PREFIX=gs://marin-us-central2
+      - -e BUCKET=marin-us-central2
+      - -e MARIN_LOCAL_CACHE_DIR=/tmp/marin-cache
+      - -e AUTOSCALER_HEARTBEAT_TIMEOUT_S=600
+      - -e TPU_MIN_LOG_LEVEL=3
+      - -e TPU_STDERR_LOG_LEVEL=3
+      - -e TPU_LOG_DIR=disabled
       # this lets the worker run docker commands and have them run as sibling containers
       - -v "/var/run/docker.sock:/var/run/docker.sock"
 
@@ -48,6 +55,13 @@ docker:
       - -v "/tmp:/tmp"
       - --ulimit nofile=1048576:1048576
       - -e RAY_TPU_MAX_CONCURRENT_ACTIVE_CONNECTIONS=64
+      - -e MARIN_PREFIX=gs://marin-us-central2
+      - -e BUCKET=marin-us-central2
+      - -e MARIN_LOCAL_CACHE_DIR=/tmp/marin-cache
+      - -e AUTOSCALER_HEARTBEAT_TIMEOUT_S=600
+      - -e TPU_MIN_LOG_LEVEL=3
+      - -e TPU_STDERR_LOG_LEVEL=3
+      - -e TPU_LOG_DIR=disabled
 
       - -e RAY_AUTH_MODE=token
       - -e RAY_AUTH_TOKEN_PATH=/home/ray/.ray/auth_token
@@ -55,6 +69,9 @@ docker:
 
 
 initialization_commands:
+  # https://github.com/marin-community/marin/issues/3066
+  - sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
+  - sudo sysctl -w net.ipv4.tcp_tw_reuse=1
   - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
   - yes | gcloud auth configure-docker us-central2-docker.pkg.dev
   # always run this because ray doesn't run with sudo
@@ -79,15 +96,9 @@ setup_commands:
   - gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN > $HOME/.ray/auth_token
   - chmod 600 $HOME/.ray/auth_token
 
-  - echo 'export MARIN_PREFIX="gs://marin-us-central2"' >> $HOME/.bashrc
-  - echo 'export BUCKET="marin-us-central2"' >> $HOME/.bashrc
+  - mkdir -p /tmp/marin-cache
   # cf https://github.com/ray-project/ray/blob/0bc6ec86ffd0fc0d4e43fb339ffe0ac03ee5531b/python/ray/autoscaler/_private/constants.py#L66
   # this is set to 30s by default, which is much too short for our use case
-  - echo 'export AUTOSCALER_HEARTBEAT_TIMEOUT_S=600' >> $HOME/.bashrc
-  - echo 'export TPU_MIN_LOG_LEVEL=3' >> $HOME/.bashrc
-  - echo 'export TPU_STDERR_LOG_LEVEL=3' >> $HOME/.bashrc
-  - echo 'export TPU_LOG_DIR=disabled' >> $HOME/.bashrc
-  - gcsfuse --implicit-dirs --client-protocol grpc --cache-dir /dev/shm --file-cache-max-size-mb 160000 --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
 
 worker_setup_commands:
   # delete any old ray session data
@@ -122,8 +133,8 @@ available_node_types:
             # Set Source Image =>> Ubuntu 22.04 Base VM
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
-    max_workers: 1024
-    min_workers: 4
+    max_workers: 4
+    min_workers: 0
     node_config:
       acceleratorType: v4-8
       runtimeVersion: tpu-ubuntu2204-base
@@ -134,7 +145,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_16:
-    max_workers: 1024
+    max_workers: 2
     min_workers: 0
     node_config:
       acceleratorType: v4-16
@@ -146,7 +157,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_32:
-    max_workers: 1024
+    max_workers: 2
     min_workers: 0
     node_config:
       acceleratorType: v4-32
@@ -158,7 +169,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_64:
-    max_workers: 1024
+    max_workers: 2
     min_workers: 0
     node_config:
       acceleratorType: v4-64
@@ -170,7 +181,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_128:
-    max_workers: 1024
+    max_workers: 1
     min_workers: 0
     node_config:
       acceleratorType: v4-128
@@ -182,7 +193,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_256:
-    max_workers: 1024
+    max_workers: 1
     min_workers: 0
     node_config:
       acceleratorType: v4-256
@@ -194,7 +205,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_512:
-    max_workers: 1024
+    max_workers: 1
     min_workers: 0
     node_config:
       acceleratorType: v4-512
@@ -206,7 +217,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_1024:
-    max_workers: 1024
+    max_workers: 1
     min_workers: 0
     node_config:
       acceleratorType: v4-1024
@@ -218,7 +229,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_2048:
-    max_workers: 1024
+    max_workers: 1
     min_workers: 0
     node_config:
       acceleratorType: v4-2048
@@ -230,7 +241,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_4096:
-    max_workers: 1024
+    max_workers: 1
     min_workers: 0
     node_config:
       acceleratorType: v4-4096

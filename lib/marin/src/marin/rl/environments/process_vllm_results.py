@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Custom processing functions for vLLM environment results."""
 
@@ -45,11 +34,11 @@ def parse_chat_completion_tokens_from_bytes(chat_completion: ChatCompletion, tok
     Parse token IDs from chat completion.
 
     vLLM returns tokens as their string representations (from convert_ids_to_tokens()).
-    We need to convert them back using convert_tokens_to_ids() to get the correct token IDs.
+    We need to convert them back via the vocabulary to get the correct token IDs.
 
     Args:
         chat_completion: ChatCompletion object from vLLM
-        tokenizer: Tokenizer to use for converting token strings to IDs
+        tokenizer: Tokenizer (MarinTokenizer) to use for converting token strings to IDs
 
     Returns:
         List of token IDs
@@ -60,6 +49,7 @@ def parse_chat_completion_tokens_from_bytes(chat_completion: ChatCompletion, tok
         chat_completion.choices[0].logprobs.content is not None
     ), f"Logprob content should not be None: {chat_completion}"
 
+    vocab = tokenizer.get_vocab()
     tokens = []
     logprob_content = chat_completion.choices[0].logprobs.content
 
@@ -76,18 +66,13 @@ def parse_chat_completion_tokens_from_bytes(chat_completion: ChatCompletion, tok
                 pass
 
         # Case 2: Token is a string representation (the standard case with vLLM)
-        # Use convert_tokens_to_ids for correct BPE round-trip
-        # The server uses convert_ids_to_tokens which preserves BPE format (e.g., Ġ for spaces)
-        try:
-            token_id = tokenizer.convert_tokens_to_ids(token_str)
-            # Check if we got the unknown token ID
-            if token_id == tokenizer.unk_token_id:
-                logger.warning(f"Token '{token_str}' converted to unk_token_id, may indicate tokenizer mismatch")
+        # Look up in vocab for correct BPE round-trip
+        token_id = vocab.get(token_str)
+        if token_id is None:
+            logger.warning(f"Token '{token_str}' not found in vocabulary, may indicate tokenizer mismatch")
+            tokens.append(0)
+        else:
             tokens.append(token_id)
-        except Exception as e:
-            logger.warning(f"Failed to convert token '{token_str}' to ID: {e}")
-            # Use unk_token_id as fallback
-            tokens.append(tokenizer.unk_token_id or 0)
 
     return tokens
 

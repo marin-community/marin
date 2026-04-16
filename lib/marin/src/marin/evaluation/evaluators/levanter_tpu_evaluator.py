@@ -1,74 +1,23 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
-import logging
-import os
 from abc import ABC
-from urllib.parse import urlparse
 
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v1.cluster import ResourceConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.evaluation.utils import is_remote_path
-from marin.utils import remove_tpu_lockfile_on_exit
-
-logger = logging.getLogger(__name__)
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
 
 
 class LevanterTpuEvaluator(Evaluator, ABC):
     """For `Evaluator`s that runs inference with Levanter (primarily Lm Eval Harness) on TPUs."""
 
-    # Where to store checkpoints, cache inference results, etc.
-    CACHE_PATH: str = "/opt/gcsfuse_mount/models"
-
     @staticmethod
-    def _looks_like_url(path: str) -> bool:
-        parsed = urlparse(path)
-        return bool(parsed.scheme and parsed.netloc)
-
-    @staticmethod
-    def download_model_if_necessary(model: ModelConfig) -> str:
-        """Return a path or identifier Levanter can read without copying checkpoints needlessly."""
-
-        cache_destination = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.name)
-
-        if model.path:
-            if is_remote_path(model.path) or LevanterTpuEvaluator._looks_like_url(model.path):
-                downloaded_path = model.ensure_downloaded(local_path=cache_destination)
-                if downloaded_path is not None:
-                    return downloaded_path
-
-            if os.path.exists(model.path):
-                return model.path
-
-        downloaded_path: str | None = model.ensure_downloaded(local_path=cache_destination)
-
-        # Use the model name if a path is not specified (e.g., for Hugging Face models)
-        model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
-
-        return model_name_or_path
-
-    @staticmethod
-    def cleanup(model: ModelConfig) -> None:
-        """
-        Clean up resources.
-        """
-        logger.info("Cleaning up resources.")
-
-        # Delete the checkpoint
-        model.destroy()
+    def model_name_or_path(model: ModelConfig) -> str:
+        """Return a reference Levanter can read without staging to local disk."""
+        if model.path is None:
+            return model.name
+        return model.path
 
     def launch_evaluate_with_ray(
         self,
@@ -82,20 +31,15 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         """
         Launches the evaluation run with Fray.
         """
-
-        def _run():
-            with remove_tpu_lockfile_on_exit():
-                self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
-
-        job_request = JobRequest(
-            name="levanter-tpu-eval",
-            entrypoint=Entrypoint.from_callable(_run),
-            resources=resource_config,
-            environment=EnvironmentConfig.create(
-                extras=["eval", "tpu"],
-            ),
+        launch_evaluate_with_ray(
+            evaluator=self,
+            job_name="levanter-tpu-eval",
+            model=model,
+            evals=evals,
+            output_path=output_path,
+            resource_config=resource_config,
+            max_eval_instances=max_eval_instances,
+            wandb_tags=wandb_tags,
+            extras=("eval", "tpu"),
+            configure_logging=False,
         )
-
-        cluster = current_cluster()
-        job_id = cluster.launch(job_request)
-        cluster.wait(job_id, raise_on_failure=True)

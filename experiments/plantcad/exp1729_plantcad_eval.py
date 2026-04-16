@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 PlantCAD evaluation script: Performance on a single, zero-shot DNA sequence conservation task
@@ -25,6 +14,7 @@ from dataclasses import dataclass
 
 import fsspec
 import haliax as hax
+from rigging.filesystem import open_url
 import haliax.haxtyping as ht
 import jax.numpy as jnp
 import numpy as np
@@ -36,7 +26,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.utilities.json_encoder import CustomJsonEncoder
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 # -----------------------------------------------------------------------------
@@ -505,7 +495,7 @@ def run_plantcad_evaluation(config: DnaEvalConfig) -> dict:
         "metrics": metrics,
     }
 
-    with fsspec.open(results_file, "w") as f:
+    with open_url(results_file, "w") as f:
         json.dump(output_data, f, indent=2, cls=CustomJsonEncoder)
 
     logger.info(f"Results saved to: {results_file}")

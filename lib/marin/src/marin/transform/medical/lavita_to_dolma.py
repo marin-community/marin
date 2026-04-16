@@ -1,29 +1,11 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Transforming the Huggingface dataset lavita/medical-qa-datasets to dolma format.
 
 Note: It may not be a good idea to use lavita's allprocessed subset since it is contaminated
 with MMLU. We need to run it through a decontamination pipeline.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
-    lib/marin/src/marin/transform/medical/lavita_to_dolma.py \
-    --input_path gs://marin-us-central2/raw/medical/lavita-medical-qa-datasets/ \
-    --output_path gs://marin-data/processed/medical/lavita-v1.0/ \
-    --subset pubmed-qa \
-    --split train
 """
 
 import hashlib
@@ -31,7 +13,7 @@ import os
 from dataclasses import dataclass
 
 import draccus
-from zephyr import Backend, Dataset, load_parquet
+from zephyr import Dataset, ZephyrContext, load_parquet
 
 
 @dataclass
@@ -157,7 +139,8 @@ def convert_lavita_split_to_dolma(cfg: LavitaToDolmaConfig) -> None:
         .filter(lambda record: record is not None)
         .write_parquet(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
-    list(Backend.execute(pipeline))
+    ctx = ZephyrContext(name="lavita-to-dolma")
+    ctx.execute(pipeline)
 
 
 if __name__ == "__main__":

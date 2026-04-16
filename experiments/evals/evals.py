@@ -1,25 +1,31 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Canonical set of evals.
 """
 
 import logging
+import re
+from collections.abc import Sequence
+
+from fray.cluster import ResourceConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
+from marin.evaluation.run import evaluate
+from marin.execution.remote import remote
+from marin.execution.executor import (
+    ExecutorStep,
+    InputName,
+    OutputName,
+    executor_main,
+    output_path_of,
+    this_output_path,
+    versioned,
+)
 
 from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
-from fray.cluster import ResourceConfig
+from experiments.evals.evalchemy_results_compiler import compile_evalchemy_results_fn
+from experiments.evals.evalchemy_task_configs import EVALCHEMY_CORE_TASKS
 from experiments.evals.task_configs import (
     BASE_GENERATION_TASKS,
     CORE_TASKS,
@@ -32,69 +38,8 @@ from experiments.evals.task_configs import (
     OPEN_LM_LEADERBOARD_GEN,
     OPEN_LM_LEADERBOARD_MCQ,
 )
-from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
-from marin.evaluation.run import evaluate
-from marin.execution.executor import (
-    ExecutorStep,
-    InputName,
-    get_executor_step,
-    output_path_of,
-    this_output_path,
-    versioned,
-)
 
 logger = logging.getLogger(__name__)
-
-
-def evaluate_helm(model_name: str, model_path: str, evals: list[EvalTaskConfig]) -> ExecutorStep:
-    """
-    Create an ExecutorStep to evaluate the model using HELM.
-
-    Args:
-        model_name (str): Name of the model.
-        model_path (str): Path to the model.
-        evals (list[str]): List of evaluations to run with HELM, e.g, ["mmlu", "lite"].
-    """
-    return ExecutorStep(
-        name=f"evaluation/helm/{model_name}",
-        fn=evaluate,
-        config=EvaluationConfig(
-            evaluator="helm",
-            model_name=model_name,
-            model_path=model_path,
-            evaluation_path=this_output_path(),
-            evals=evals,
-        ),
-    )
-
-
-def evaluate_helm_on_step(
-    step: ExecutorStep | InputName, evals: list[EvalTaskConfig], max_eval_instances: int | None = None
-) -> ExecutorStep:
-    """
-    Create an ExecutorStep to evaluate the model using HELM on a step.
-
-    Args:
-        step (ExecutorStep | InputName): Executor Step to evaluate.
-        evals (list[str]): List of evaluations to run with HELM, e.g, ["mmlu", "lite"].
-    """
-    # TODO: support evaluating all checkpoints in a run
-    executor_step = get_executor_step(step)
-    model_step_path = output_path_of(executor_step)
-
-    return ExecutorStep(
-        name=f"evaluation/helm/{executor_step.name}",
-        fn=evaluate,
-        config=EvaluationConfig(
-            evaluator="helm",
-            model_name=None,
-            model_path=model_step_path,  # type: ignore
-            evaluation_path=this_output_path(),
-            evals=evals,
-            discover_latest_checkpoint=True,
-            max_eval_instances=max_eval_instances,
-        ),
-    )
 
 
 def evaluate_lm_evaluation_harness(
@@ -136,72 +81,6 @@ def evaluate_lm_evaluation_harness(
     )
 
 
-def evaluate_alpaca_eval(
-    model_name: str,
-    model_path: str,
-    resource_config: ResourceConfig,
-    engine_kwargs: dict | None = None,
-    max_eval_instances: int | None = None,
-    temperature: float = 0.7,
-    presence_penalty: float = 0.0,
-    frequency_penalty: float = 0.0,
-    repetition_penalty: float = 1.0,
-    top_p: float = 1.0,
-    top_k: int = -1,
-    stop_token_ids: list | None = None,
-) -> ExecutorStep:
-    """
-    Create an ExecutorStep to evaluate the model using AlpacaEval.
-
-    Args:
-        model_name (str): Name of the model.
-        model_path (str): Path to the model.
-        resource_config (ResourceConfig): Resource configuration for the evaluation.
-        temperature (float, optional): Float that controls the randomness of the sampling.
-            Lower values make the model more deterministic, while higher values make
-            the model more random. Zero means greedy sampling. Defaults to 0.7.
-        presence_penalty (float, optional): Float that penalizes new tokens based on whether they
-            appear in the generated text so far. Values > 0 encourage the model
-            to use new tokens, while values < 0 encourage the model to repeat tokens. Defaults to 0.0.
-        frequency_penalty (float, optional): Float that penalizes new tokens based on their
-            frequency in the generated text so far. Values > 0 encourage the model to
-            use new tokens, while values < 0 encourage the model to repeat tokens. Defaults to 0.0.
-        repetition_penalty (float, optional): Float that penalizes new tokens based on whether
-            they appear in the prompt and the generated text so far. Values > 1
-            encourage the model to use new tokens, while values < 1 encourage
-            the model to repeat tokens. Defaults to 1.0.
-        top_p (float, optional): Float that controls the cumulative probability of the top tokens
-            to consider. Must be in (0, 1]. Set to 1 to consider all tokens. Defaults to 1.0.
-        top_k (int, optional): Integer that controls the number of top tokens to consider.
-            Set to -1 to consider all tokens. Defaults to -1.
-        stop_token_ids (list, optional): List of integer token ids that controls the token ids
-            that vLLM should consider to stop the generation on. Defaults to None which uses
-            the tokenizer config's stop token ids
-    """
-    return ExecutorStep(
-        name=f"evaluation/alpaca_eval/{model_name}",
-        fn=evaluate,
-        config=EvaluationConfig(
-            evaluator="alpaca",
-            model_name=model_name,
-            model_path=model_path,
-            evaluation_path=this_output_path(),
-            max_eval_instances=max_eval_instances,
-            resource_config=resource_config,
-            engine_kwargs=engine_kwargs,
-            generation_params={
-                "temperature": temperature,
-                "presence_penalty": presence_penalty,
-                "frequency_penalty": frequency_penalty,
-                "repetition_penalty": repetition_penalty,
-                "top_p": top_p,
-                "top_k": top_k,
-                "stop_token_ids": stop_token_ids,
-            },
-        ),
-    )
-
-
 def _infer_model_name_for_path(model_path: str) -> str:
     """
     Infer model name from model path.
@@ -214,18 +93,28 @@ def _infer_model_name_for_path(model_path: str) -> str:
     return "_".join(model_path.split("/")[-2:])
 
 
-def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[str, str]:
+def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[str, InputName | str]:
     """
     Extract the model name and path from a step.
+
+    Always appends /hf for ExecutorSteps; run.py's _normalize_model_path handles
+    detecting whether the HF files are at root or in /hf at evaluation time.
     """
     if isinstance(step, ExecutorStep):
-        model_step_path = output_path_of(step, "hf" if "gcsfuse" not in step.name else "")
+        model_step_path = output_path_of(step, "hf")
         name = step.name
     elif isinstance(step, InputName):
-        model_step_path = output_path_of(step.step, "hf" if "gcsfuse" not in step.step.name else "")
+        # `InputName.hardcoded(...)` has `step.step is None`; treat it as a direct path.
         if step.step is None:
-            raise ValueError(f"Hardcoded path {step.name} is not part of the pipeline")
-        name = step.step.name
+            if step.name is None:
+                raise ValueError("Invalid InputName: both `step` and `name` are None.")
+            model_step_path = step.name
+            name = _infer_model_name_for_path(step.name)
+        else:
+            # If `name` is already set, the InputName refers to a specific subpath under the step's output.
+            # Otherwise default to the HF export directory.
+            model_step_path = step if step.name is not None else output_path_of(step.step, "hf")
+            name = step.step.name
     elif isinstance(step, str):
         model_step_path = step
         name = _infer_model_name_for_path(step)
@@ -480,11 +369,386 @@ def default_key_evals(
             resource_config,
             max_eval_instances=max_eval_instances,
         ),
-        evaluate_alpaca_eval(
-            model_name,
-            model_step_path,
-            resource_config,
-            engine_kwargs,
-            stop_token_ids=stop_token_ids,
-        ),
     ]
+
+
+def evaluate_harbor(
+    model_name: str,
+    model_path: str | None,
+    dataset: str,
+    version: str = "1.0",
+    max_eval_instances: int | None = None,
+    resource_config: ResourceConfig | None = None,
+    apply_chat_template: bool = False,
+    wandb_tags: list[str] | None = None,
+    generation_params: dict | None = None,
+    agent: str = "claude-code",
+    n_concurrent: int = 4,
+    env: str = "local",
+    agent_kwargs: dict | None = None,
+) -> ExecutorStep:
+    """
+    Evaluate on ANY Harbor dataset from the registry.
+
+    No custom adapters needed! Harbor's registry handles all datasets generically.
+
+    Available datasets: https://harborframework.com/registry
+    - aime@1.0: 60 math problems (AIME 2024, 2025-I, 2025-II)
+    - terminal-bench@2.0: 89 terminal tasks
+    - swebench-verified@1.0: 500 software engineering tasks
+    - And 40+ more benchmarks!
+
+    Args:
+        model_name: Model identifier
+        model_path: Path to model (can be None for API models like Claude)
+        dataset: Harbor dataset name (e.g., "aime", "terminal-bench", "swebench-verified")
+        version: Dataset version (e.g., "1.0", "2.0")
+        max_eval_instances: Limit number of tasks to run
+        resource_config: Resource configuration for Ray
+        apply_chat_template: Whether to apply chat template (not used by Harbor)
+        wandb_tags: Tags for W&B logging
+        generation_params: Generation parameters (not used by Harbor)
+        agent: Harbor agent type ("claude-code", "terminus-2", etc.)
+        n_concurrent: Number of parallel trials
+        env: Environment type ("local", "daytona", "e2b", "modal")
+
+    Returns:
+        ExecutorStep configured for Harbor evaluation
+
+    Examples:
+        # AIME evaluation
+        evaluate_harbor("claude-opus-4", None, "aime", "1.0")
+
+        # Terminal-Bench
+        evaluate_harbor("qwen2.5-7b", "gs://.../model", "terminal-bench", "2.0")
+
+        # SWE-bench Verified
+        evaluate_harbor("claude-opus-4", None, "swebench-verified", "1.0", max_eval_instances=10)
+    """
+
+    # Harbor config goes in engine_kwargs
+    engine_kwargs = {
+        "harbor_config": {
+            "dataset": dataset,
+            "version": version,
+            "agent": agent,
+            "n_concurrent": n_concurrent,
+            "env": env,
+            "agent_kwargs": agent_kwargs or {},
+        }
+    }
+
+    # When model_path is set, the evaluator launches a fray sub-job for vLLM serving
+    # with the correct resources. The outer executor step runs on CPU.
+    dispatch_resources = ResourceConfig.with_cpu() if model_path else resource_config
+    return ExecutorStep(
+        name=f"evaluation/harbor/{model_name}-{dataset}-{version}",
+        fn=remote(evaluate, resources=dispatch_resources, pip_dependency_groups=["harbor"]),
+        config=EvaluationConfig(
+            evaluator="harbor",
+            model_name=model_name,
+            model_path=model_path,
+            evaluation_path=this_output_path(),
+            evals=[],  # Harbor uses dataset directly, not evals
+            max_eval_instances=max_eval_instances,
+            launch_with_ray=True,
+            discover_latest_checkpoint=False,
+            engine_kwargs=engine_kwargs,
+            resource_config=resource_config,
+            apply_chat_template=apply_chat_template,
+            wandb_tags=wandb_tags,
+            generation_params=generation_params,
+        ),
+    )
+
+
+def evaluate_evalchemy(
+    model_name: str,
+    model_path: str,
+    evals: Sequence[EvalTaskConfig],
+    max_eval_instances: int | None = None,
+    engine_kwargs: dict | None = None,
+    generation_params: dict | None = None,
+    resource_config: ResourceConfig | None = None,
+    apply_chat_template: bool = False,
+    wandb_tags: list[str] | None = None,
+    discover_latest_checkpoint: bool = True,
+    base_eval_run_name: str | None = None,
+) -> ExecutorStep:
+    """
+    Create an ExecutorStep to evaluate the model using Evalchemy.
+
+    Args:
+        model_name (str): Name of the model.
+        model_path (str): Path to the model.
+        evals (Sequence[EvalTaskConfig]): Evaluations to run with Evalchemy.
+        max_eval_instances (int | None): Maximum number of evaluation instances to run.
+        engine_kwargs (dict | None): Additional engine kwargs for vLLM.
+        generation_params (dict | None): Generation parameters including:
+            - temperature: float (e.g., 0.7)
+            - top_p: float (e.g., 1.0)
+            - max_gen_toks: int (e.g., 32768)
+            - seeds: list[int] for multiple runs with different seeds
+        resource_config (ResourceConfig | None): Resource configuration for the job.
+        apply_chat_template (bool): Whether to apply chat template.
+        wandb_tags (list[str] | None): Tags to add to the WandB run.
+        discover_latest_checkpoint (bool): Whether to discover the latest checkpoint.
+    """
+    # Include task names and seed in the step name to ensure different runs get different output paths
+    task_names = "_".join(sorted(e.name for e in evals))
+    seed = generation_params.get("seed") if generation_params else None
+    seed_suffix = f"_seed{seed}" if seed is not None else ""
+    return ExecutorStep(
+        name=f"evaluation/evalchemy/{model_name}/{task_names}{seed_suffix}",
+        fn=evaluate,
+        config=EvaluationConfig(
+            evaluator="evalchemy",
+            model_name=model_name,
+            model_path=model_path,
+            evaluation_path=this_output_path(),
+            evals=evals,
+            max_eval_instances=max_eval_instances,
+            launch_with_ray=True,
+            discover_latest_checkpoint=discover_latest_checkpoint,
+            engine_kwargs=engine_kwargs,
+            generation_params=generation_params,
+            resource_config=resource_config,
+            apply_chat_template=apply_chat_template,
+            wandb_tags=wandb_tags,
+            base_eval_run_name=base_eval_run_name,
+        ),
+    )
+
+
+def default_evalchemy_eval(
+    step: ExecutorStep | InputName | str,
+    resource_config: ResourceConfig = ResourceConfig.with_tpu("v5p-8"),
+    evals: Sequence[EvalTaskConfig] | None = None,
+    max_eval_instances: int | None = None,
+    engine_kwargs: dict | None = None,
+    generation_params: dict | None = None,
+    apply_chat_template: bool = False,
+    discover_latest_checkpoint: bool = True,
+    base_eval_run_name: str | None = None,
+) -> ExecutorStep:
+    """
+    Create an ExecutorStep to evaluate the model using Evalchemy reasoning benchmarks.
+
+    Args:
+        step (ExecutorStep | InputName | str): Step to evaluate.
+        resource_config (ResourceConfig): Resource configuration (defaults to v5p-8 TPU).
+        evals (list[EvalTaskConfig] | None): List of evals to run. Defaults to EVALCHEMY_CORE_TASKS.
+        max_eval_instances (int | None): Maximum number of evaluation instances to run.
+        engine_kwargs (dict | None): Additional vLLM engine kwargs (optional for evalchemy).
+        generation_params (dict | None): Generation parameters including:
+            - temperature: float (e.g., 0.7)
+            - top_p: float (e.g., 1.0)
+            - max_gen_toks: int (e.g., 32768)
+            - seed: int for reproducibility
+        apply_chat_template (bool): Whether to apply chat template.
+        discover_latest_checkpoint (bool): Whether to discover the latest checkpoint.
+    """
+    name, model_step_path = extract_model_name_and_path(step)
+
+    # If base_eval_run_name is provided, use it for the output path name
+    if base_eval_run_name:
+        # When step is a raw string (e.g. a GCS path), search it directly for a step number.
+        # Otherwise, use the extracted name which already incorporates the path structure.
+        path_str = step if isinstance(step, str) else name
+        step_match = re.search(r"step-(\d+)", path_str)
+        step_suffix = f"-step{step_match.group(1)}" if step_match else ""
+        name = f"{base_eval_run_name}{step_suffix}"
+
+    logger.info(f"Creating Evalchemy evaluation step for {name}")
+
+    if evals is None:
+        evals = EVALCHEMY_CORE_TASKS
+
+    logger.info(f"Running Evalchemy evals on the following tasks: {evals}")
+
+    return evaluate_evalchemy(
+        name,
+        model_step_path,
+        evals,
+        max_eval_instances=max_eval_instances,
+        engine_kwargs=engine_kwargs or {},  # Pass empty dict to avoid warning
+        generation_params=generation_params,
+        resource_config=resource_config,
+        apply_chat_template=apply_chat_template,
+        discover_latest_checkpoint=discover_latest_checkpoint,
+        base_eval_run_name=base_eval_run_name,
+    )
+
+
+def compile_evalchemy_results(
+    steps: list[ExecutorStep],
+    seeds: list[int] | None = None,
+    base_eval_run_name: str | None = None,
+    model_path: str | None = None,
+    task_name: str | None = None,
+) -> ExecutorStep:
+    """
+    Compile results from multiple Evalchemy evaluation steps into aggregated metrics.
+
+    Takes a list of ExecutorSteps for evalchemy tasks and compiles the results into a
+    single DataFrame, then logs averaged results to wandb.
+
+    Args:
+        steps: List of ExecutorSteps from evalchemy evaluations (one per seed).
+        seeds: List of seeds used for the evaluations (for wandb config).
+
+    Returns:
+        ExecutorStep that compiles and logs aggregated results.
+    """
+    # Create input paths from steps
+    input_paths = [step.cd("results.json") for step in steps]
+    output_path = OutputName("compiled_results")
+
+    # Build compile step name matching the individual run hierarchy:
+    #   individual: evaluation/evalchemy/{model_id}/AIME24_seed42
+    #   compiled:   evaluation/evalchemy/{model_id}/compile_AIME24_avg5seeds
+    if base_eval_run_name:
+        step_match = re.search(r"step-(\d+)", model_path or "")
+        step_suffix = f"-step{step_match.group(1)}" if step_match else ""
+        model_id = f"{base_eval_run_name}{step_suffix}"
+    elif model_path:
+        model_id = _infer_model_name_for_path(model_path)
+    else:
+        model_id = "unknown"
+
+    num_seeds = len(seeds) if seeds else len(steps)
+    task_suffix = f"_{task_name}" if task_name else ""
+    compile_step_name = f"evaluation/evalchemy/{model_id}/compile{task_suffix}_avg{num_seeds}seeds"
+
+    return ExecutorStep(
+        name=compile_step_name,
+        fn=compile_evalchemy_results_fn,
+        config={
+            "input_paths": input_paths,
+            "output_path": output_path,
+            "seeds": seeds or [],
+            "base_eval_run_name": base_eval_run_name,
+            "model_path": model_path,
+            "task_name": task_name,
+        },
+        description="Compile results from multiple evalchemy evaluation steps",
+    )
+
+
+def build_evalchemy_eval_steps(
+    checkpoints: dict[str | None, list[str]],
+    task_seed_groups: list[tuple[list[EvalTaskConfig], list[int]]],
+    base_generation_params: dict,
+    resource_config: ResourceConfig,
+    engine_kwargs: dict | None = None,
+    apply_chat_template: bool = True,
+    discover_latest_checkpoint: bool = False,
+) -> tuple[list[ExecutorStep], list[ExecutorStep]]:
+    """Build evaluation and compilation steps for an evalchemy experiment.
+
+    Creates one evaluation step per (checkpoint, task, seed) combination, plus
+    compilation steps that aggregate results across seeds for each (checkpoint, task).
+
+    Args:
+        checkpoints: Mapping from base_eval_run_name to list of checkpoint paths.
+            Use None as key to auto-generate names from paths.
+        task_seed_groups: List of (tasks, seeds) tuples. Each task in a group
+            is evaluated with all seeds in that group.
+        base_generation_params: Generation parameters (temperature, top_p, max_gen_toks)
+            shared across all runs. Per-seed params are generated by adding "seed": N.
+        resource_config: TPU/GPU resource configuration for each eval job.
+        engine_kwargs: vLLM engine kwargs (tensor_parallel_size, max_num_seqs, etc.).
+        apply_chat_template: Whether to apply chat template.
+        discover_latest_checkpoint: Whether to auto-discover latest checkpoint.
+
+    Returns:
+        Tuple of (eval_steps, compile_steps).
+    """
+    eval_steps: list[ExecutorStep] = []
+    compile_steps: list[ExecutorStep] = []
+
+    for base_eval_run_name, checkpoint_paths in checkpoints.items():
+        for checkpoint in checkpoint_paths:
+            task_seed_pairs: list[tuple[EvalTaskConfig, list[int]]] = []
+            for tasks, seeds in task_seed_groups:
+                task_seed_pairs += [(t, seeds) for t in tasks]
+
+            for task, seeds in task_seed_pairs:
+                task_steps: list[ExecutorStep] = []
+                for seed in seeds:
+                    generation_params = {**base_generation_params, "seed": seed}
+                    step = default_evalchemy_eval(
+                        step=checkpoint,
+                        resource_config=resource_config,
+                        evals=[task],
+                        engine_kwargs=engine_kwargs,
+                        generation_params=generation_params,
+                        apply_chat_template=apply_chat_template,
+                        discover_latest_checkpoint=discover_latest_checkpoint,
+                        base_eval_run_name=base_eval_run_name,
+                    )
+                    task_steps.append(step)
+                    eval_steps.append(step)
+
+                if len(seeds) > 1:
+                    compile_step = compile_evalchemy_results(
+                        task_steps,
+                        seeds=seeds,
+                        base_eval_run_name=base_eval_run_name,
+                        model_path=checkpoint,
+                        task_name=task.name,
+                    )
+                    compile_steps.append(compile_step)
+
+    return eval_steps, compile_steps
+
+
+def run_evalchemy_experiment(
+    checkpoints: dict[str | None, list[str]],
+    task_seed_groups: list[tuple[list[EvalTaskConfig], list[int]]],
+    base_generation_params: dict,
+    resource_config: ResourceConfig,
+    engine_kwargs: dict | None = None,
+    apply_chat_template: bool = True,
+    discover_latest_checkpoint: bool = False,
+    max_parallel_jobs: int | None = None,
+) -> None:
+    """Run a complete evalchemy evaluation experiment.
+
+    Builds eval and compile steps, then executes them via executor_main
+    with optional batching for parallel job limits.
+
+    Args:
+        checkpoints: Mapping from base_eval_run_name to list of checkpoint paths.
+        task_seed_groups: List of (tasks, seeds) tuples.
+        base_generation_params: Shared generation parameters.
+        resource_config: TPU/GPU resource configuration.
+        engine_kwargs: vLLM engine kwargs.
+        apply_chat_template: Whether to apply chat template.
+        discover_latest_checkpoint: Whether to auto-discover latest checkpoint.
+        max_parallel_jobs: Maximum eval jobs to run concurrently. None for no limit.
+    """
+    eval_steps, compile_steps = build_evalchemy_eval_steps(
+        checkpoints=checkpoints,
+        task_seed_groups=task_seed_groups,
+        base_generation_params=base_generation_params,
+        resource_config=resource_config,
+        engine_kwargs=engine_kwargs,
+        apply_chat_template=apply_chat_template,
+        discover_latest_checkpoint=discover_latest_checkpoint,
+    )
+
+    # Run eval steps in batches to limit parallelism.
+    # Each executor_main call runs up to max_parallel_jobs eval steps concurrently.
+    # Already-completed steps are automatically skipped via status files on disk.
+    if max_parallel_jobs is not None:
+        for i in range(0, len(eval_steps), max_parallel_jobs):
+            batch = eval_steps[i : i + max_parallel_jobs]
+            executor_main(steps=batch)
+    else:
+        executor_main(steps=eval_steps)
+
+    # Run compile steps separately. Their eval-step dependencies have already
+    # succeeded, so the executor skips them and only runs the compile steps.
+    if compile_steps:
+        executor_main(steps=compile_steps)

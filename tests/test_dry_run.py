@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 import logging
 import os
@@ -37,6 +26,7 @@ os.environ["RAY_LOCAL_CLUSTER"] = "1"
 def test_run_dry_runs(config_file, monkeypatch):
     """Test the dry runs of experiment scripts"""
     script = config_file
+    monkeypatch.setenv("WANDB_MODE", "disabled")
     # first get this script path
     # Check if the script contains the skip marker
     with open(script, "r") as file:
@@ -61,7 +51,7 @@ def test_run_dry_runs(config_file, monkeypatch):
                 pytest.skip(f"Skipping {script} (requires GCS access)")
             raise
         except OSError as e:
-            # Hugging Face sometimes surfaces gated repo access as OSError
+            # Hugging Face surfaces gated-repo and connectivity errors as OSError
             msg = str(e)
             lower_msg = msg.lower()
             if (
@@ -69,8 +59,9 @@ def test_run_dry_runs(config_file, monkeypatch):
                 or "access to model" in lower_msg
                 or "401 client error" in lower_msg
                 or "you must have access" in lower_msg
+                or "couldn't connect" in lower_msg
             ):
-                pytest.skip(f"Skipping {script} (requires access to a gated Hugging Face repo): {e}")
+                pytest.skip(f"Skipping {script} (requires HuggingFace access): {e}")
             raise
         except SystemExit as e:
             # Some scripts may call `sys.exit()`, so we catch it to treat `exit(0)` as success

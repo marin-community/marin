@@ -34,7 +34,7 @@ This breaks when the server uses a chat template (e.g., `<|user|>{prompt}<|assis
 
 ### Core Approach
 
-**Consolidate inference utilities into `inference_ctx.py`**: Move `InferenceContext` and add methods for tokenization and rollout construction.
+**Consolidate inference utilities into [`lib/marin/src/marin/rl/environments/inference_ctx/base.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/environments/inference_ctx/base.py)**: Move `InferenceContext` and add methods for tokenization and rollout construction.
 
 **Key principle**: Provide methods on `InferenceContext` that encapsulate chat template logic, so environments can't accidentally bypass it.
 
@@ -58,7 +58,7 @@ rollout = inference_ctx.create_rollout_from_choice(
 
 ### Core Methods
 
-Add to `InferenceContext` class in `lib/marin/src/marin/rl/inference_ctx.py`:
+Add to `InferenceContext` class in [`lib/marin/src/marin/rl/environments/inference_ctx/base.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/environments/inference_ctx/base.py):
 
 ```python
 def tokenize_prompt(self, prompt: str) -> np.ndarray:
@@ -128,8 +128,8 @@ def create_rollout_from_choice(
 
 ### Module Consolidation
 
-Rename `lib/marin/src/marin/rl/types.py` → split into:
-- `inference_ctx.py` - `InferenceContext`, `InferenceChoice`, `InferenceResponse`, utility functions
+Rename [`lib/marin/src/marin/rl/types.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/types.py) → split into:
+- `environments/inference_ctx/` - `InferenceContext`, `InferenceChoice`, `InferenceResponse`, utility functions
 - `types.py` - `Rollout`, `RolloutGroup`, `RolloutBatch`, `TrainingBatch` (training-focused types)
 
 **Why separate**: Inference concerns (API interaction, tokenization) are distinct from training types (rollout batching, data structures).
@@ -165,6 +165,6 @@ No breaking changes. All modifications are additions to `InferenceContext` class
 ## See Also
 
 - GitHub Issue: https://github.com/marin-community/marin/issues/1744
-- `lib/marin/src/marin/rl/inference_ctx.py` - Consolidated inference utilities (lines 38-192)
-- `lib/marin/src/marin/rl/types.py` - Training-focused types (Rollout, RolloutBatch)
-- `lib/marin/src/marin/rl/environments/prime_intellect_env.py` - Fixed at line 141
+- [`lib/marin/src/marin/rl/environments/inference_ctx/base.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/environments/inference_ctx/base.py) - Consolidated inference utilities (lines 38-192)
+- [`lib/marin/src/marin/rl/types.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/types.py) - Training-focused types (Rollout, RolloutBatch)
+- [`lib/marin/src/marin/rl/environments/prime_intellect_env.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/environments/prime_intellect_env.py) - Fixed at line 141

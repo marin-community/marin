@@ -76,7 +76,7 @@ NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 mixture_sft_config = SimpleSFTConfig(
     resources=ResourceConfig.with_tpu("v5p-64", slice_count=2),
     tokenizer=qwen2_5_32b_instruct_tokenizer,
-    model_name_or_path="Qwen/Qwen2.5-32B-Instruct",
+    initialize_from_hf="Qwen/Qwen2.5-32B-Instruct",
     train_batch_size=TRAIN_BATCH_SIZE,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=8e-5,
@@ -92,7 +92,6 @@ mixture_sft_config = SimpleSFTConfig(
 mixture_config = lm_mixture_data_config(
     tokenized_datasets,
     mixture_weights,
-    permutation_type="feistel",
     shuffle=True,
     missing_weights_are_validation=True,
     mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)

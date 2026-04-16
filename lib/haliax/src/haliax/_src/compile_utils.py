@@ -1,7 +1,6 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
-
 
 # This whole file is copied from Equinox.
 # (c) 2023, Google LLC. and/or Patrick Kidger. Apache 2.0 licensed.

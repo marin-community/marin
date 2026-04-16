@@ -17,10 +17,11 @@ Start by importing the necessary modules:
 
 ```python
 # Import a tokenized dataset configuration from options available in Marin
-from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
+from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 
 # Import training utilities and configuration classes
-from experiments.defaults import SimpleTrainConfig, default_train
+from experiments.defaults import default_train
+from experiments.simple_train_config import SimpleTrainConfig
 
 # Import model architecture definitions
 from levanter.models.llama import LlamaConfig
@@ -28,11 +29,14 @@ from levanter.models.llama import LlamaConfig
 # Import the executor framework for running experiments
 from marin.execution.executor import executor_main
 
+# Import evaluation task configuration
+from marin.evaluation.evaluation_config import EvalTaskConfig
+
 # Import logging utilities
 import logging
 ```
 
-- [`dclm_mixture_config_llama3`](https://github.com/marin-community/marin/blob/25c0f04438d0875e36a4627a5742b8b5a94c5ada/experiments/dclm/tokenize_dclm.py#L50): A predefined dataset configuration for the DCLM mixture, this can be replaced with any tokenized dataset in Marin of the `lm_mixture_data_config` type (e.g. [Dolma](https://github.com/marin-community/marin/blob/main/experiments/dolma/exp442_dolma.py) or [Nemotron](https://github.com/marin-community/marin/blob/main/experiments/exp934_hq_vs_pt.py))
+- [`dclm_mixture_config_llama3`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/dclm.py): A predefined dataset configuration for the DCLM mixture, this can be replaced with any tokenized dataset in Marin of the `lm_mixture_data_config` type (e.g. [Dolma](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/dolma.py) or [Nemotron](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/nemotron.py))
 - [`SimpleTrainConfig`][experiments.simple_train_config.SimpleTrainConfig]
 - [`default_train`][experiments.defaults.default_train]: A utility function that creates a training pipeline
 - [`LlamaConfig`][levanter.models.llama.LlamaConfig]: A dataclass that defines the model architecture from [Levanter](https://github.com/stanford-crfm/levanter)
@@ -60,6 +64,8 @@ Set up your training configuration by calculating the number of training steps a
 
 === "GPU"
     ```python
+    from fray.cluster import ResourceConfig
+
     # Calculate training steps based on desired token count
     NUM_TRAIN_TOKENS = int(30e9)  # Example: 30 billion tokens
     BATCH_SIZE = 256
@@ -67,7 +73,7 @@ Set up your training configuration by calculating the number of training steps a
     NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)
 
     training_config = SimpleTrainConfig(
-        resources=GpuConfig(gpu_count=4),           # Hardware configuration: 4 GPUs
+        resources=ResourceConfig.with_gpu("H100", count=4), # Hardware configuration: 4 GPUs
         train_batch_size=BATCH_SIZE,                # Sequences processed per step
         num_train_steps=NUM_TRAIN_STEPS,            # Total optimization steps
         learning_rate=3e-3,                         # Peak learning rate
@@ -79,6 +85,8 @@ Set up your training configuration by calculating the number of training steps a
     ```
 === "TPU"
     ```python
+    from fray.cluster import ResourceConfig
+
     # Calculate training steps based on desired token count
     NUM_TRAIN_TOKENS = int(30e9)  # Example: 30 billion tokens
     BATCH_SIZE = 256
@@ -86,16 +94,18 @@ Set up your training configuration by calculating the number of training steps a
     NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)
 
     training_config = SimpleTrainConfig(
-        resources=TpuPodConfig(tpu_type="v4-128"),  # Hardware configuration: 128 v4 TPU cores
-        train_batch_size=BATCH_SIZE,                # Sequences processed per step
-        num_train_steps=NUM_TRAIN_STEPS,            # Total optimization steps
-        learning_rate=3e-3,                         # Peak learning rate
-        weight_decay=0.033,                         # L2 regularization
-        min_lr_ratio=0.1,                           # Minimum learning rate ratio (for decay)
-        warmup=5000,                                # Steps for learning rate warmup
-        z_loss_weight=1e-4,                         # Optional stabilization technique
+        resources=ResourceConfig.with_tpu("v4-128"),  # Hardware configuration: 128 v4 TPU cores
+        train_batch_size=BATCH_SIZE,                  # Sequences processed per step
+        num_train_steps=NUM_TRAIN_STEPS,              # Total optimization steps
+        learning_rate=3e-3,                           # Peak learning rate
+        weight_decay=0.033,                           # L2 regularization
+        min_lr_ratio=0.1,                             # Minimum learning rate ratio (for decay)
+        warmup=5000,                                  # Steps for learning rate warmup
+        z_loss_weight=1e-4,                           # Optional stabilization technique
     )
     ```
+
+If you hit HBM OOM while scaling model size, batch size, or sequence length, see [Making Things Fit in HBM](../references/hbm-optimization.md) for a practical tuning checklist.
 
 ## Creating the Training Pipeline
 
@@ -109,7 +119,7 @@ model = default_train(
     model_config=model_config,              # Model architecture
     train_config=training_config,           # Training hyperparameters
     tags=["${YOUR_TAG1}", "${YOUR_TAG2}"],  # Tags for experiment tracking
-    eval_harness_tasks = [EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"), EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot")] # Evaluation Tasks to run on the checkpoint
+    eval_harness_tasks = [EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"), EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot")],  # Evaluation Tasks to run on the checkpoint
 )
 
 # Set up the experiment execution
@@ -139,7 +149,7 @@ The `default_train` function creates a training pipeline that:
 To train the model with experiment tracking:
 
 ```bash
-python marin/run/ray_run.py --env_vars WANDB_API_KEY ${YOUR_WANDB_API_KEY} -- python experiments/${YOUR_EXPERIMENT_SCRIPT}.py
+uv run lib/marin/src/marin/run/ray_run.py --env_vars WANDB_API_KEY ${YOUR_WANDB_API_KEY} -- python experiments/${YOUR_EXPERIMENT_SCRIPT}.py
 ```
 
 Following Marin's guidelines, name your experiment script `experiments/exp{GITHUB_ISSUE_NUMBER}_{DESCRIPTOR}.py`, where `GITHUB_ISSUE_NUMBER` is the issue number for your experiment and `DESCRIPTOR` is a brief description.
@@ -155,12 +165,12 @@ The run will be named based on the name you provided.
 
 For a complete example of training a DCLM 1B/1x model, see the implementation in:
 
-- Code: [experiments/howto/exp1077_reproduce_dclm_1b1x.py](https://github.com/marin-community/marin/blob/main/experiments/howto/exp1077_reproduce_dclm_1b1x.py)
+- Code: [experiments/tutorials/exp1077_reproduce_dclm_1b1x.py](https://github.com/marin-community/marin/blob/main/experiments/tutorials/exp1077_reproduce_dclm_1b1x.py)
 - WandB: [Dashboard](https://wandb.ai/marin-community/marin/runs/dclm_1b_1x_how_to-58c8f0)
 
 This trains on the DCLM baseline mix with the same config as described in the original DCLM paper for 1X the compute optimal number of tokens!
 
 For a larger scale example of training a DCLM 7B/1x model, see the implementation in:
 
-- Code: [experiments/howto/exp1078_reproduce_dclm_7b1x.py](https://github.com/marin-community/marin/blob/main/experiments/howto/exp1078_reproduce_dclm_7b1x.py)
+- Code: [experiments/tutorials/exp1078_reproduce_dclm_7b1x.py](https://github.com/marin-community/marin/blob/main/experiments/tutorials/exp1078_reproduce_dclm_7b1x.py)
 - WandB: [Dashboard](https://wandb.ai/marin-community/marin/runs/dclm_7b_1x_how_to-fefaab)

@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 A wrapper for submitting and monitoring Marin jobs on SLURM clusters.
@@ -56,8 +45,10 @@ import sys
 import tempfile
 import time
 
-import wandb
 from huggingface_hub import HfFolder
+
+import wandb
+from rigging.log_setup import configure_logging
 
 # Setup logger
 logger = logging.getLogger("slurm")
@@ -84,11 +75,6 @@ DEFAULT_SLURM_ARGS = {
     "ntasks-per-node": "1",
     "cpus-per-task": "64",
 }
-
-
-def parse_pip_requirements(line: str) -> list[str]:
-    pattern = r"(?:\[[^\]]*\]|[^,])+"
-    return re.findall(pattern, line)
 
 
 def generate_pythonpath(base_dir="submodules"):
@@ -319,5 +305,6 @@ def main():
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    configure_logging(level=logging.INFO)
     main()

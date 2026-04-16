@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
@@ -8,85 +8,170 @@ import functools
 import json
 import logging
 import os
+import random
 import shutil
 import tempfile
+import time
 import urllib.parse
 import warnings
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Generic, Optional, Tuple, Type, TypeVar, Union, cast, Callable
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
 
 import draccus
 import equinox as eqx
-import fsspec
+import haliax
+from rigging.filesystem import url_to_fs
 import huggingface_hub
 import humanfriendly
 import jax
 import jax.numpy as jnp
-from jax._src.mesh import get_concrete_mesh
 import mergedeep
 import numpy as np
+import requests
 import transformers.utils.hub
 from fsspec import AbstractFileSystem
-from fsspec.asyn import get_loop, sync as fsspec_sync
+from fsspec.asyn import get_loop
+from fsspec.asyn import sync as fsspec_sync
+from haliax import Axis
 from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
 from haliax.jax_utils import is_jax_array_like
-from haliax.state_dict import StateDict
-from huggingface_hub import HfApi, hf_hub_download, repo_exists, snapshot_download
+from haliax.partitioning import ResourceMapping
+from haliax.state_dict import StateDict, from_torch_compatible_state_dict, save_state_dict
+from huggingface_hub import HfApi, hf_hub_download, repo_exists, snapshot_download, ModelInfo
+from huggingface_hub.errors import HfHubHTTPError
 from huggingface_hub.file_download import repo_folder_name
-from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError, RepositoryNotFoundError
+from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
+from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
 from tqdm_loggable.auto import tqdm
-
-import haliax
-from haliax import Axis
-from haliax.partitioning import ResourceMapping
-from haliax.state_dict import from_torch_compatible_state_dict, save_state_dict
 
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
 from levanter.models.asr_model import ASRMixin
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.cloud_utils import temp_dir_before_upload
+from levanter.tokenizers import MarinTokenizer
 from levanter.utils.hf_utils import HfTokenizer
-from levanter.utils.jax_utils import best_effort_sharding, use_cpu_device, sync_global_devices
+from levanter.utils.jax_utils import best_effort_sharding, sync_global_devices, use_cpu_device
 from levanter.utils.json_utils import ConfigJSONEncoder
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.py_utils import dataclass_with_default_init
 
-
 silence_transformer_nag()
-from transformers import (  # noqa: E402
+from transformers import (  # noqa: E402  # noqa: E402
     AutoConfig,
     AutoModel,
     AutoModelForCausalLM,
-    AutoProcessor,
     AutoTokenizer,
-    FeatureExtractionMixin,
+    PreTrainedTokenizerBase,
 )
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
-from transformers import (  # noqa: E402
-    PreTrainedTokenizer,
-    PreTrainedTokenizerBase,
-    PreTrainedTokenizerFast,
-    ProcessorMixin,
-)
 from transformers.dynamic_module_utils import get_class_from_dynamic_module  # noqa: E402
 from transformers.models.auto.auto_factory import _get_model_class  # noqa: E402
 
+if TYPE_CHECKING:
+    from transformers import FeatureExtractionMixin, ProcessorMixin
 
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
 
 logger = logging.getLogger(__name__)
 
 
+def _convert_to_hf_url(model_id: str, revision: Optional[str] = None) -> str:
+    """Convert a HuggingFace model ID to an hf:// URL for fsspec streaming.
+
+    Args:
+        model_id: HuggingFace model ID like "meta-llama/Llama-2-7b"
+        revision: Optional git revision (branch, tag, or commit hash)
+
+    Returns:
+        An hf:// URL like "hf://meta-llama/Llama-2-7b" or "hf://meta-llama/Llama-2-7b@main"
+    """
+    if revision:
+        return f"hf://{model_id}@{revision}"
+    return f"hf://{model_id}"
+
+
+def _is_hf_model_id(path: str) -> bool:
+    """Check if a path looks like a HuggingFace model ID (not a URL or local path)."""
+    # If it contains "://", it's already a URL
+    if "://" in path:
+        return False
+    # If it starts with "/" or "./" or "../", it's a local path
+    if path.startswith("/") or path.startswith("./") or path.startswith("../"):
+        return False
+    # If it exists as a local directory, it's a local path
+    if os.path.isdir(path):
+        return False
+    # Otherwise, assume it's an HF model ID
+    return True
+
+
 PYTORCH_MODEL = "pytorch_model.bin"
 SAFE_TENSORS_MODEL = "model.safetensors"
 PYTORCH_WEIGHTS_INDEX_NAME = "pytorch_model.bin.index.json"
 SAFE_TENSORS_INDEX_NAME = "model.safetensors.index.json"
+
+GenerationConfigDict = dict[str, int | list[int]]
+
+
+def build_generation_config(
+    tokenizer: "PreTrainedTokenizerBase",
+    eos_token_ids: list[int] | None,
+) -> GenerationConfigDict | None:
+    """Build a validated generation_config dict from explicit EOS token IDs.
+
+    The returned dict is suitable for writing as ``generation_config.json``
+    alongside an HF checkpoint.  It tells inference tools like vLLM which
+    tokens should stop generation (e.g. both ``<|end_of_text|>`` and
+    ``<|eot_id|>`` for chat models).
+
+    Normalization guarantees:
+    - Output ``eos_token_id`` is always sorted and deduplicated.
+    - The tokenizer's own ``eos_token_id`` is auto-added if not already present.
+
+    Args:
+        tokenizer: The tokenizer that will be saved with the checkpoint.
+        eos_token_ids: Explicit list of EOS token IDs, or ``None`` to skip.
+
+    Returns:
+        A config dict ready for JSON serialization, or ``None`` if
+        *eos_token_ids* is ``None``.
+
+    Raises:
+        ValueError: If the list is empty, contains non-ints, or contains
+            IDs outside the tokenizer's vocabulary range.
+    """
+    if eos_token_ids is None:
+        return None
+
+    if not eos_token_ids:
+        raise ValueError("hf_generation_eos_token_ids must be non-empty when set")
+
+    vocab_size = len(tokenizer)
+    for tid in eos_token_ids:
+        if not isinstance(tid, int):
+            raise ValueError(f"hf_generation_eos_token_ids contains non-int: {tid!r}")
+        if not (0 <= tid < vocab_size):
+            raise ValueError(f"Token ID {tid} out of range [0, {vocab_size})")
+
+    ids = set(eos_token_ids)
+
+    tok_eos = tokenizer.eos_token_id
+    if tok_eos is None:
+        logger.warning("Tokenizer has no eos_token_id; generation config will use only the provided IDs")
+    elif tok_eos not in ids:
+        logger.info("Auto-adding tokenizer eos_token_id=%d to generation config", tok_eos)
+        ids.add(tok_eos)
+
+    gen_config: GenerationConfigDict = {"eos_token_id": sorted(ids)}
+    if tokenizer.bos_token_id is not None:
+        gen_config["bos_token_id"] = tokenizer.bos_token_id
+    return gen_config
 
 
 @dataclass(frozen=True)
@@ -230,7 +315,7 @@ def _load_torch(path, dtype, fs: AbstractFileSystem | None = None):
 def _load_safe_tensors(path, dtype, fs: AbstractFileSystem | None = None):
     """Stream a safetensors shard from remote storage and return JAX arrays."""
     if fs is None:
-        fs, stripped = fsspec.core.url_to_fs(path, asynchronous=True)
+        fs, stripped = url_to_fs(path, asynchronous=True)
         path = stripped
     else:
         try:
@@ -308,10 +393,10 @@ class HFCheckpointConverter(Generic[LevConfig]):
     HfConfigClass: Type
     "The HFConfig class to use. If None is provided, will be inferred from the reference_checkpoint"
 
-    tokenizer: PreTrainedTokenizerFast | PreTrainedTokenizer
-    "The tokenizer to use. If None, will be inferred from the reference_checkpoint"
+    tokenizer: Any
+    "The tokenizer to use. May be an HF tokenizer, a MarinTokenizer, or similar. If None, will be inferred from the reference_checkpoint."
 
-    feature_extractor: Optional[FeatureExtractionMixin] = None
+    feature_extractor: Optional["FeatureExtractionMixin"] = None
     "The non-text preprocessor to use for multi-modality."
 
     config_overrides: Optional[dict] = None
@@ -329,8 +414,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         LevConfigClass: Type[LevConfig],
         reference_checkpoint: Optional[Union[RepoRef, str]] = None,
         HfConfigClass: Optional[Union[str, Type]] = None,
-        tokenizer: Optional[Union[str, PreTrainedTokenizer, PreTrainedTokenizerFast]] = None,
-        feature_extractor: Optional[FeatureExtractionMixin] = None,
+        tokenizer: Optional[Any] = None,
+        feature_extractor: Optional["FeatureExtractionMixin"] = None,
         config_overrides: Optional[dict] = None,
         trust_remote_code: bool = False,
         ignore_prefix: Optional[str] = None,
@@ -381,7 +466,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         self,
         reference_checkpoint: Optional[Union[RepoRef, str]] = None,
         tokenizer: Optional[Union[str, PreTrainedTokenizerBase]] = None,
-        feature_extractor: Optional[FeatureExtractionMixin] = None,
+        feature_extractor: Optional["FeatureExtractionMixin"] = None,
         trust_remote_code: Optional[bool] = None,
     ) -> "HFCheckpointConverter":
         replacements: dict = {}
@@ -430,14 +515,15 @@ class HFCheckpointConverter(Generic[LevConfig]):
             f"(adding {num_to_add} dummy tokens) to match model vocab size."
         )
 
-        # Add dummy tokens to the tokenizer
+        # Add dummy tokens to the tokenizer. MarinTokenizer is read-only,
+        # so we convert to an HF tokenizer which supports add_tokens.
         dummy_tokens = [f"<|padding_{i}|>" for i in range(num_to_add)]
-        self.tokenizer.add_tokens(dummy_tokens)
+        tokenizer = self.tokenizer
+        if isinstance(tokenizer, MarinTokenizer):
+            tokenizer = tokenizer.as_hf_tokenizer()
+        tokenizer.add_tokens(dummy_tokens)
 
-        # Return a new converter with the modified tokenizer
-        # Note: We modify self.tokenizer in place, but since the Vocab property is cached,
-        # we need to return a new converter to get a fresh Vocab
-        return dataclasses.replace(self, tokenizer=self.tokenizer)  # type: ignore
+        return dataclasses.replace(self, tokenizer=tokenizer)  # type: ignore
 
     def with_config_overrides(self, config_overrides: dict, merge: bool = True) -> "HFCheckpointConverter":
         if self.config_overrides is not None and merge:
@@ -469,9 +555,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         return clss
 
     @staticmethod
-    def _infer_tokenizer(
-        tokenizer, ref, trust_remote_code: bool = False
-    ) -> Union[PreTrainedTokenizer, PreTrainedTokenizerFast]:
+    def _infer_tokenizer(tokenizer, ref, trust_remote_code: bool = False) -> Any:
         if tokenizer is None:
             if ref is None:
                 raise ValueError("Must provide either tokenizer or reference_checkpoint")
@@ -485,11 +569,6 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 revision=rev,
                 trust_remote_code=trust_remote_code,
             )
-        else:
-            pass
-
-        assert isinstance(tokenizer, (PreTrainedTokenizer, PreTrainedTokenizerFast))
-
         return tokenizer
 
     @cached_property
@@ -560,7 +639,11 @@ class HFCheckpointConverter(Generic[LevConfig]):
         return ref.model_name_or_path, ref.revision
 
     def load_state_dict(self, ref: Optional[Union[str, RepoRef]] = None, dtype: Optional[jnp.dtype] = None) -> dict:
-        """Load a state dict from either HF Hub or a GCS path"""
+        """Load a state dict from either HF Hub or a GCS path.
+
+        HuggingFace model IDs are converted to hf:// URLs and streamed directly
+        without caching to local disk.
+        """
         if ref is None:
             ref = self.reference_checkpoint
         if ref is None:
@@ -572,6 +655,12 @@ class HFCheckpointConverter(Generic[LevConfig]):
             if rev is not None:
                 raise ValueError("Revisions not supported for explicit URLs")
             return self._load_from_remote(id, dtype)
+
+        # Convert HF model IDs to hf:// URLs and stream directly
+        if _is_hf_model_id(id):
+            hf_url = _convert_to_hf_url(id, rev)
+            logger.info(f"Loading from HuggingFace Hub: {hf_url}")
+            return self._load_from_remote(hf_url, dtype)
 
         for index_file in [SAFE_TENSORS_INDEX_NAME, PYTORCH_WEIGHTS_INDEX_NAME]:
             try:
@@ -635,7 +724,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         final_state_dict = {}
 
         fs: AbstractFileSystem
-        fs, path = fsspec.core.url_to_fs(url)
+        fs, path = url_to_fs(url)
 
         shard_files, loader = self._locate_shard_files(fs, path)
 
@@ -757,9 +846,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     )
                     lev_model = lev_model.resize_vocab(tokenizer_Vocab.size)
                 else:
-                    logger.info(
-                        f"Leaving model vocab size unchanged."
-                    )
+                    logger.info("Leaving model vocab size unchanged.")
 
             lev_model = haliax.shard_with_axis_mapping(lev_model, axis_mapping)
 
@@ -787,10 +874,13 @@ class HFCheckpointConverter(Generic[LevConfig]):
         dict_config = config.to_dict()
 
         try:
-            for k in KEYS_TO_COPY_FROM_BASE_CONFIG:
-                attr = getattr(self.default_hf_config, k, None)
-                if attr is not None:
-                    dict_config[k] = attr
+            base_config = self.default_hf_config
+        except ValueError:
+            # Training-from-scratch runs may intentionally omit a reference checkpoint. In that case, we can't pull
+            # metadata like `architectures` from an upstream config; the config produced by `to_hf_config()` is still
+            # sufficient for most built-in architectures.
+            base_config = None
+            logger.warning("No reference checkpoint set; skipping base HF config metadata copy.")
         except Exception as e:  # noqa: BLE001
             if isinstance(e, GatedRepoError) or isinstance(e.__cause__, GatedRepoError):
                 warnings.warn("Could not copy keys from base config because the repo is gated. Making assumptions.")
@@ -799,8 +889,15 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     "AutoConfig": self.HfConfigClass.__qualname__,
                 }
                 dict_config["architectures"] = [self.HFAutoModelClass(AutoModelForCausalLM).__name__]
+                base_config = None
             else:
                 raise
+
+        if base_config is not None:
+            for k in KEYS_TO_COPY_FROM_BASE_CONFIG:
+                attr = getattr(base_config, k, None)
+                if attr is not None:
+                    dict_config[k] = attr
 
         if self.tokenizer:
             tokenizer_dependent_config = {}
@@ -834,6 +931,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
         save_feature_extractor: bool = False,
         dtype: Optional[jnp.dtype] = None,
+        generation_config: Optional[GenerationConfigDict] = None,
         **hf_upload_kwargs,
     ):
         """
@@ -999,7 +1097,10 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
             if save_tokenizer:
                 logger.info("Saving tokenizer")
-                self.tokenizer.save_pretrained(local_path)
+                tokenizer = self.tokenizer
+                if isinstance(tokenizer, MarinTokenizer):
+                    tokenizer = tokenizer.as_hf_tokenizer()
+                tokenizer.save_pretrained(local_path)
 
             if save_feature_extractor and self.feature_extractor is not None:
                 logger.info("Saving feature extractor")
@@ -1007,6 +1108,13 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
             with open(os.path.join(local_path, "config.json"), "w") as f:
                 json.dump(dict_config, f, cls=ConfigJSONEncoder)
+
+            if generation_config is not None:
+                logger.info(
+                    "Writing generation_config.json with eos_token_id=%s", generation_config.get("eos_token_id")
+                )
+                with open(os.path.join(local_path, "generation_config.json"), "w") as f:
+                    json.dump(generation_config, f)
 
             if index is not None:
                 with open(os.path.join(local_path, SAFE_TENSORS_INDEX_NAME), "w") as f:
@@ -1102,6 +1210,7 @@ def save_hf_checkpoint_callback(
     converter: HFCheckpointConverter,
     upload_to_hf: Union[bool, str, RepoRef] = False,
     save_dtype: Optional[jnp.dtype] = None,
+    generation_config: Optional[GenerationConfigDict] = None,
     **hf_upload_kwargs,
 ):
     """
@@ -1129,25 +1238,78 @@ def save_hf_checkpoint_callback(
             os.path.join(base_path, f"step-{step.step}"),
             upload_to_hf=upload_to_hf,
             dtype=save_dtype,
+            generation_config=generation_config,
             **my_upload_kwargs,
         )
 
     return cb
 
 
+T = TypeVar("T")
+
+
+def _hf_hub_retry(fn: Callable[[], T], *, action: str, max_attempts: int = 8, max_sleep_seconds: float = 60.0) -> T:
+    """Retry HuggingFace Hub operations that fail transiently (e.g. 5xx/429/timeouts).
+
+    Args:
+        fn: Callable to execute.
+        action: Human-readable description of what we're doing (used for logs).
+        max_attempts: Maximum number of attempts.
+        max_sleep_seconds: Maximum sleep between retries.
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            if attempt >= max_attempts or not _is_retryable_hf_exception(exc):
+                raise
+
+            base_sleep_seconds = min(max_sleep_seconds, 2.0**attempt)
+            sleep_seconds = base_sleep_seconds * (0.5 + random.random())  # [0.5, 1.5) jitter
+            logger.warning(
+                "HuggingFace Hub request failed while trying to %s. Retrying in %.1fs (%d/%d). Error: %s",
+                action,
+                sleep_seconds,
+                attempt,
+                max_attempts,
+                exc,
+            )
+            time.sleep(sleep_seconds)
+
+    raise RuntimeError(f"Unreachable: failed to {action} after {max_attempts} attempts.")
+
+
+def _is_retryable_hf_exception(exc: Exception) -> bool:
+    if isinstance(exc, HfHubHTTPError):
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        return status_code in {408, 429} or (status_code is not None and 500 <= status_code < 600)
+
+    return isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+
+
 def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> HfTokenizer:
     """Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec"""
     with _patch_hf_hub_download():
-        return AutoTokenizer.from_pretrained(
-            model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
+        return _hf_hub_retry(
+            lambda: AutoTokenizer.from_pretrained(
+                model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
+            ),
+            action=f"load tokenizer {model_name_or_path!r}",
         )
 
 
-def load_processor(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> ProcessorMixin:
+def load_processor(
+    model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True
+) -> "ProcessorMixin":
     """Like AutoProcessor.from_pretrained, but works with gs:// paths or anything on fsspec"""
+    from transformers import AutoProcessor
+
     with _patch_hf_hub_download():
-        return AutoProcessor.from_pretrained(
-            model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
+        return _hf_hub_retry(
+            lambda: AutoProcessor.from_pretrained(
+                model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
+            ),
+            action=f"load processor {model_name_or_path!r}",
         )
 
 
@@ -1320,16 +1482,6 @@ def _shard_best_effort(array_or_slice, dtype) -> jax.Array:
     return jax.make_array_from_callback(tuple(shape), sharding, get_slice)
 
 
-def _is_hf_hub_model(ref: RepoRef):
-    api = HfApi()
-
-    try:
-        api.model_info(repo_id=ref.model_name_or_path)
-        return True
-    except RepositoryNotFoundError:
-        return False
-
-
 @contextlib.contextmanager
 def _patch_hf_hub_download():
     """
@@ -1357,7 +1509,7 @@ def _patch_hf_hub_download():
                 revision = "main"
 
             if repo_id and filename and _is_url_like(repo_id):
-                fs, path = fsspec.core.url_to_fs(repo_id)
+                fs, path = url_to_fs(repo_id)
                 remote_path = os.path.join(path, filename)
                 # local_path = os.path.join(tmpdir, filename)
                 local_path = os.path.join(
@@ -1387,9 +1539,21 @@ def _patch_hf_hub_download():
 
         huggingface_hub.utils._validators.validate_repo_id = custom_validate_repo_id
 
+        # transformers calls  model_info in _patch_mistral_regex to check if model is a base Mistral model
+        original_model_info = huggingface_hub.hf_api.model_info
+
+        def custom_model_info(repo_id, *args, **kwargs) -> ModelInfo:
+            if _is_url_like(repo_id):
+                # `tags=None` makes is_base_mistral return False, skipping the problematic code path
+                return ModelInfo(id="monkeypatched", tags=None)
+            return original_model_info(repo_id, *args, **kwargs)
+
+        huggingface_hub.hf_api.model_info = custom_model_info
+
         try:
             yield custom_hf_hub_download
         finally:
             # Restore the original implementation
             transformers.utils.hub.hf_hub_download = original_hf_hub_download
             huggingface_hub.utils._validators.validate_repo_id = original_validate_repo_id
+            huggingface_hub.hf_api.model_info = original_model_info

@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Configuration helpers, tokenizer, worker runners, and rollout utilities for integration tests."""
 
@@ -46,14 +35,19 @@ from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 from optax import softmax_cross_entropy_with_integer_labels
-from transformers import AutoTokenizer
+from levanter.tokenizers import load_tokenizer
 
+from fray.v2 import current_client
+from marin.rl.curriculum import Curriculum
+from marin.rl.runtime import RLRuntimeHandles, WeightTransferRuntime
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig
 from marin.rl.rollout_worker import RolloutWorker, find_open_port
+from marin.rl.run_state import RLRunState
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
+from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
 from marin.rl.weight_transfer.base import WeightTransferMode
 
 logger = logging.getLogger(__name__)
@@ -63,6 +57,35 @@ try:
 except ImportError:
     logger.warning("vLLM is not installed, so we will not be able to use vLLM inference context.")
     SamplingParams = None
+
+
+def create_test_runtime(curriculum_config, weight_transfer_config: WeightTransferConfig) -> RLRuntimeHandles:
+    """Create runtime handles for integration tests using the current v2 client."""
+    client = current_client()
+
+    curriculum_handle = client.create_actor(
+        Curriculum,
+        curriculum_config,
+        name=f"test-curriculum-{uuid.uuid4().hex[:8]}",
+    )
+
+    run_state_handle = client.create_actor(
+        RLRunState,
+        name=f"test-run-state-{uuid.uuid4().hex[:8]}",
+    )
+
+    arrow_coordinator = None
+    if weight_transfer_config.mode == WeightTransferMode.ARROW_FLIGHT:
+        arrow_coordinator = client.create_actor(
+            ArrowFlightCoordinator,
+            name=weight_transfer_config.coordinator_name or f"test-wt-coord-{uuid.uuid4().hex[:8]}",
+        )
+
+    return RLRuntimeHandles(
+        curriculum=curriculum_handle,
+        run_state=run_state_handle,
+        weight_transfer=WeightTransferRuntime(arrow_flight_coordinator=arrow_coordinator),
+    )
 
 
 class WaitResult(Enum):
@@ -233,7 +256,7 @@ def create_qwen_config():
 
 
 def create_qwen_tokenizer():
-    return AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
+    return load_tokenizer("Qwen/Qwen3-0.6B")
 
 
 def create_vllm_inference_config():
@@ -248,6 +271,8 @@ def create_vllm_inference_config():
             max_tokens=16,
             logprobs=1,
             stop=None,
+            # Workaround for vllm-project/tpu-inference#1386: default top_k forces greedy sampling
+            top_k=4096,
         ),
     )
 
@@ -265,9 +290,12 @@ def create_test_curriculum_config(actor_name: str = "test_curriculum"):
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats", "seed": 42},
                 ),
-                sampling_params=SamplingParams(temperature=1.0, n_prompts=4, n_generations_per_prompt=4, max_tokens=32),
+                sampling_params=SamplingParams(
+                    temperature=1.0, n_prompts=4, n_generations_per_prompt=4, max_output_tokens=32
+                ),
             )
         },
+        max_seq_len=64,
         eval_frequency=100,
         eval_n_examples=4,
         micro_eval_frequency=10,
@@ -546,20 +574,21 @@ class ThreadedWorkerRunner(ABC):
 class RolloutWorkerRunner(ThreadedWorkerRunner):
     """Manages running an inference worker in a separate thread with metric tracking."""
 
-    def __init__(self, rollout_worker_config):
+    def __init__(self, rollout_worker_config, runtime: RLRuntimeHandles | None = None):
         super().__init__(rollout_worker_config)
         self.rollout_worker_config = rollout_worker_config
+        self._runtime = runtime
 
         # Metrics
         self.rollouts_generated = 0
         self.weight_transfers = 0
 
     @classmethod
-    def from_job(cls, job):
+    def from_job(cls, job, runtime: RLRuntimeHandles | None = None):
         """Create runner from RLJob."""
 
         _, rollout_config = job.to_worker_configs()
-        return cls(rollout_config)
+        return cls(rollout_config, runtime=runtime)
 
     def _track_rollout_generation(self):
         """Called when rollout is generated."""
@@ -568,8 +597,13 @@ class RolloutWorkerRunner(ThreadedWorkerRunner):
     def _create_and_run_worker(self):
         """Create and run the rollout worker with tracking hooks."""
         disable_noisy_loggers()
+        runtime = self._runtime or create_test_runtime(
+            self.rollout_worker_config.curriculum_config,
+            self.rollout_worker_config.weight_transfer,
+        )
         self.worker = RolloutWorker(
             config=self.rollout_worker_config,
+            runtime=runtime,
         )
 
         _sync_weights_original = self.worker._sync_weights
@@ -604,9 +638,10 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
 
     worker: TrainWorker
 
-    def __init__(self, training_worker_config):
+    def __init__(self, training_worker_config, runtime: RLRuntimeHandles | None = None):
         super().__init__(training_worker_config)
         self.training_worker_config = training_worker_config
+        self._runtime = runtime
 
         self.steps_completed = 0
         self.losses = []
@@ -615,11 +650,11 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
         self.all_steps_seen = []
 
     @classmethod
-    def from_job(cls, job):
+    def from_job(cls, job, runtime: RLRuntimeHandles | None = None):
         """Create runner from RLJob."""
 
         train_config, _ = job.to_worker_configs()
-        return cls(train_config)
+        return cls(train_config, runtime=runtime)
 
     def _track_training_step(self):
         """Called after each training step."""
@@ -628,7 +663,11 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
     def _create_and_run_worker(self):
         """Create and run the training worker with tracking hooks."""
         disable_noisy_loggers()
-        self.worker = TrainWorker(config=self.training_worker_config)
+        runtime = self._runtime or create_test_runtime(
+            self.training_worker_config.curriculum_config,
+            self.training_worker_config.weight_transfer,
+        )
+        self.worker = TrainWorker(config=self.training_worker_config, runtime=runtime)
 
         self.reference_model = self.trained_model = jax.device_get(self.worker.reference_model)
 

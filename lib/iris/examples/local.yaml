@@ -1,0 +1,29 @@
+# Iris local configuration for development testing
+# Usage: iris --cluster=local cluster start --local
+# Usage with zephyr: --backend=iris --cluster=lib/iris/examples/local.yaml
+# Will be converted to local mode by iris cluster start --local
+
+platform:
+  local:
+
+controller:
+  local:
+    port: 0  # auto-assign
+
+worker_provider: {}
+
+scale_groups:
+  cpu:
+    num_vms: 1
+    resources:
+      cpu: 16
+      ram: 32GB
+      disk: 100GB
+      device_type: cpu
+      device_variant: cpu
+      capacity_type: on-demand
+    buffer_slices: 0
+    max_slices: 4  # Allow up to 4 local workers
+    slice_template:
+      num_vms: 1
+      local:

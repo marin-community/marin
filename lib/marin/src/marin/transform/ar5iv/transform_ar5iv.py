@@ -1,26 +1,11 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 ar5iv/transform_ar5iv.py
 
 Performs HTML->Text/MD conversion using the specified tools over a ar5iv dump save in DOLMA format.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=200 --memory=2GB --cluster=us-central2 \
-    lib/marin/src/marin/transform/ar5iv/transform_ar5iv.py \
-    --input_path gs://path/to/input --output_path gs://path/to/output ...
 """
 
 import logging
@@ -47,9 +32,9 @@ from marin.transform.ar5iv.transform import (
 )
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
-from zephyr import Backend, Dataset, load_jsonl
+from zephyr import Dataset, ZephyrContext, load_jsonl
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -186,4 +171,5 @@ def process_ar5iv_dump(cfg: Ar5ivExtractionConfig) -> None:
         )
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    Backend.execute(pipeline)
+    ctx = ZephyrContext(name="transform-ar5iv-v2")
+    ctx.execute(pipeline)

@@ -35,6 +35,42 @@ Coordination between multiple pipelines is handled via lease files. This
 prevents duplicate execution if, for example, 2 Executor pipelines share common
 ancestor steps.
 
+## Mirrored inputs
+
+Some datasets live in a specific regional bucket (e.g.
+`gs://marin-us-central2/documents/stackexchange/...`) but experiments may run
+from any region.  The `mirrored()` wrapper marks an input path for
+**cross-region mirroring** so that the executor copies the data to the local
+marin prefix before the step runs.
+
+```python
+from marin.execution.executor import mirrored, versioned
+
+step = ExecutorStep(
+    name="train",
+    fn=my_training_fn,
+    config=TrainConfig(
+        dataset=mirrored(versioned("documents/stackexchange/v1"), budget_gb=50),
+    ),
+)
+```
+
+At config instantiation time, `mirrored()` rewrites the path to use the
+`mirror://` protocol.  When the step's function opens the path via `fsspec`,
+the `MirrorFileSystem` transparently copies data from whichever regional bucket
+has it into the local marin prefix, respecting the per-path transfer budget.
+
+**Key details:**
+
+- `budget_gb` (default 10) caps how much data (in GB) a single step may copy
+  cross-region.  The budget is enforced via the `mirror_budget` context manager
+  from `rigging.filesystem`.
+- Paths that already exist in the local prefix are not re-copied.
+- `mirrored()` can wrap plain strings or `VersionedValue` / `InputName`
+  references.
+- To adjust the global mirror budget default, set the `MARIN_MIRROR_BUDGET_GB`
+  environment variable before the process starts.
+
 ## Ray
 
 Recall that a step's function can either be a normal Python function or in most realistic cases,
@@ -47,9 +83,9 @@ Ray packages up the code from the local directory and ships it off to the approp
 The environment will have the following packages installed:
 - **Default packages**: installed on the Ray cluster (`dependencies` in
   [`pyproject.toml`](https://github.com/marin-community/marin/blob/main/pyproject.toml)), which include fsspec, draccus, etc.
-- **Step-specific packages**: each `ExecutorStep` can specify
-  `pip_dependency_groups`, a list of either (i) a key from
-  `project.optional-dependencies` dictionary (e.g., `rl`), or (2) a
+- **Step-specific packages**: remote steps can specify
+  `pip_dependency_groups` via the `remote()` wrapper, a list of either (i) a key from
+  `project.optional-dependencies` in [`lib/marin/pyproject.toml`](https://github.com/marin-community/marin/blob/main/lib/marin/pyproject.toml) (e.g., `rl`), or (2) a
   specific pip package.  This allows each step to have its own environment and
   not interfere with other steps.
 
@@ -60,9 +96,8 @@ one can do:
 ```python
 number_of_restarts = ExecutorStep(
     name=...,
-    fn=...,
+    fn=remote(my_fn, pip_dependency_groups=["rl", "google-cloud-logging"]),
     config=...,
-    pip_dependency_groups=["rl", "google-cloud-logging"],
 )
 ```
 
@@ -70,13 +105,12 @@ Finally, to launch an experiment, use [`ray_run.py`](https://github.com/marin-co
 launches jobs to the Ray cluster:
 
 ```bash
-python marin/run/ray_run.py -- python experiments/hello_world.py
+uv run lib/marin/src/marin/run/ray_run.py -- python experiments/tutorials/hello_world.py
 ```
 
 This script ensure that:
 - All the relevant libraries (specified above) are installed.
 - The working directory is set appropriately.
-- Any subpaths under submodules are appended to PYTHONPATH, which is useful
-  when [co-developing with another submodule](../tutorials/co-develop.md) (e.g., levanter).
+- Any subpaths under submodules are appended to PYTHONPATH.
 
-> **New:** Agent-friendly recipes are now available in `docs/recipes/`. See [add_dataset.md](../recipes/add_dataset.md) for a guide to dataset schema inspection and addition.
+> Agents can use the `add-dataset` skill for a guide to dataset schema inspection and addition.

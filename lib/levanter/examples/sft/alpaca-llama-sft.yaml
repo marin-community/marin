@@ -43,6 +43,5 @@ supervised_data:
 # Additional settings
 tokenizer: "allenai/OLMo-1B"
 max_tune_length: 2048
-epoch: 0
 
 initialize_from_hf: false

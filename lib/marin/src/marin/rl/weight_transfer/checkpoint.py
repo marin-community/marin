@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 GCS checkpoint-based weight transfer implementation.
@@ -25,9 +14,9 @@ import os
 import threading
 from collections import deque
 
-import fsspec
 import jax
 import levanter.checkpoint as levanter_checkpoint
+from rigging.filesystem import url_to_fs
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree
@@ -46,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 def _rm_thread(path: str) -> None:
     try:
-        fs, _ = fsspec.core.url_to_fs(path)
+        fs, _ = url_to_fs(path)
         fs.rm(path, recursive=True)
     except Exception as e:
         logger.error(f"Failed to delete old checkpoint at {path}: {e}", exc_info=True)
@@ -80,7 +69,7 @@ class GCSCheckpointServer(WeightTransferServer):
                 old_path = os.path.join(self.config.checkpoint_dir, f"step_{old_weight_id}")
                 if jax.process_index() == 0:  # Only delete from coordinator
                     logger.info(f"Cleaning up old checkpoint at weight_id {old_weight_id} ({old_path})...")
-                    fs, _ = fsspec.core.url_to_fs(old_path)
+                    fs, _ = url_to_fs(old_path)
                     # Dispatch deletion to a separate thread to avoid blocking
                     if fs.exists(old_path):
                         threading.Thread(target=_rm_thread, args=(old_path,), daemon=True).start()
@@ -125,7 +114,7 @@ class GCSCheckpointClient(WeightTransferClient):
         self.weight_step = -1
         self.metrics = WeightTransferClientMetrics()
 
-    def receive_weights(self, old_model: PyTree) -> WeightUpdate | None:
+    def receive_weights(self, old_model: PyTree | None) -> WeightUpdate | None:
         """Load latest checkpoint using Levanter's checkpoint system."""
         self.metrics.total_polls += 1
         result = self._find_latest_checkpoint()
@@ -135,6 +124,13 @@ class GCSCheckpointClient(WeightTransferClient):
             return None
 
         latest_checkpoint, weight_step = result
+
+        if old_model is None:
+            raise ValueError(
+                "For GCSCheckpoint server, old_model must be provided. \
+                TODO to implement state dict only mode. \
+                If you want state dict transfer, please use Arrow Flight."
+            )
 
         try:
             if weight_step == self.weight_step:
@@ -157,12 +153,12 @@ class GCSCheckpointClient(WeightTransferClient):
 
         self.metrics.successful_receives += 1
 
-        return WeightUpdate(model=params, weight_id=weight_step)
+        return WeightUpdate(model=params, state_dict=None, weight_id=weight_step)
 
     def _find_latest_checkpoint(self) -> tuple[str, int] | None:
         """Find the latest checkpoint in the checkpoint directory."""
         logger.info(f"Search for new checkpoints in {self.config.checkpoint_dir}...")
-        fs, path_in_fs = fsspec.core.url_to_fs(self.config.checkpoint_dir, use_listings_cache=False)
+        fs, path_in_fs = url_to_fs(self.config.checkpoint_dir, use_listings_cache=False)
         if not fs.exists(path_in_fs):
             return None
 

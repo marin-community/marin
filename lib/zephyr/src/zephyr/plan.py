@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Physical execution plan for zephyr pipelines.
 
@@ -22,23 +11,28 @@ knowledge of logical operation types.
 from __future__ import annotations
 
 import heapq
+import inspect
 import logging
 import os
 import zlib
-from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from itertools import groupby, islice
-from typing import TYPE_CHECKING, Any
+from typing import Any, Protocol
 
-import fsspec
 import msgspec
-from fray.job import JobContext
+from iris.env_resources import TaskResources as _TaskResources
+from rigging.filesystem import url_to_fs
+
+from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
 
 from zephyr.dataset import (
+    Dataset,
+    FileEntry,
     FilterOp,
     FlatMapOp,
+    GlobSource,
     GroupByOp,
     JoinOp,
     LoadFileOp,
@@ -47,25 +41,34 @@ from zephyr.dataset import (
     ReduceOp,
     ReshardOp,
     SelectOp,
+    ShardInfo,
     TakePerShardOp,
     WindowOp,
     WriteOp,
+    resolve_glob,
 )
+from zephyr.expr import Expr
 from zephyr.readers import InputFileSpec
-
-if TYPE_CHECKING:
-    from zephyr.dataset import Dataset
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
-# Default number of items per output chunk during streaming
-DEFAULT_CHUNK_SIZE = 100_000
 
-# Default number of parallel chunks when splitting files for intra-shard parallelism
-DEFAULT_INTRA_SHARD_PARALLELISM = 1
+# ---------------------------------------------------------------------------
+# Shard protocol
+# ---------------------------------------------------------------------------
 
-# Size of micro-batches yielded from parallel chunk workers to reduce overhead
-DEFAULT_MICRO_BATCH_SIZE = 1024
+
+class Shard(Protocol):
+    """Protocol for a shard of data assigned to a single worker.
+
+    Implementations:
+    - ListShard: backed by iterable references (source data, non-scatter)
+    - ScatterShard: backed by scatter Parquet files with predicate pushdown
+    """
+
+    def __iter__(self) -> Iterator: ...
+    def get_iterators(self) -> Iterator[Iterator]: ...
 
 
 @dataclass
@@ -89,10 +92,12 @@ class Map:
         fn: Composed function that transforms an iterator to an iterator
         requires_full_shard: True if any composed op needs full shard context
             (e.g., MapShardOp). When True, chunk parallelism is disabled.
+        needs_shard_context: True if fn expects (stream, shard_info: ShardInfo).
     """
 
     fn: Callable[[Iterator], Iterator]
     requires_full_shard: bool = False
+    needs_shard_context: bool = False
 
 
 @dataclass
@@ -104,8 +109,8 @@ class Write:
     skip_existing: bool = False
     # Writer-specific parameters
     levanter_metadata: dict | None = None
+    levanter_batch_size: int | None = None
     schema: Any = None  # For parquet
-    batch_size: int = 1000  # For parquet
 
 
 @dataclass
@@ -114,6 +119,8 @@ class Scatter:
 
     key_fn: Callable[[Any], Any]  # item → key
     num_output_shards: int
+    sort_fn: Callable[[Any], Any] | None = None  # Optional secondary sort within each group
+    combiner_fn: Callable | None = None  # Optional local pre-aggregation per key
 
 
 @dataclass
@@ -122,6 +129,7 @@ class Reduce:
 
     key_fn: Callable[[Any], Any]
     reducer_fn: Callable[[Any, Iterator], Any]
+    sort_fn: Callable[[Any], Any] | None = None  # Must match Scatter's sort_fn
 
 
 @dataclass
@@ -146,18 +154,7 @@ class Join:
     right_plan: PhysicalPlan | None = None
 
 
-@dataclass
-class ForkChunks:
-    """Fork stream into N parallel chunk streams.
-
-    Child operations are applied in parallel, and merged as available.
-    """
-
-    target_chunks: int = DEFAULT_INTRA_SHARD_PARALLELISM
-    parallel_ops: list = field(default_factory=list)  # list[PhysicalOp]
-
-
-PhysicalOp = Map | Write | Scatter | Reduce | Fold | Reshard | Join | ForkChunks
+PhysicalOp = Map | Write | Scatter | Reduce | Fold | Reshard | Join
 
 
 class StageType(StrEnum):
@@ -183,9 +180,19 @@ def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
         yield from fn(item)
 
 
-def _reduce_gen(shard: Any, key_fn: Callable, reducer_fn: Callable) -> Iterator:
-    for key, items_iter in _merge_sorted_chunks(shard, key_fn):
-        yield reducer_fn(key, items_iter)
+def _reduce_gen(
+    shard: Any,
+    key_fn: Callable,
+    reducer_fn: Callable,
+    sort_fn: Callable | None = None,
+    external_sort_dir: str | None = None,
+) -> Iterator:
+    is_gen = inspect.isgeneratorfunction(reducer_fn)
+    for key, items_iter in _merge_sorted_chunks(shard, key_fn, sort_fn, external_sort_dir=external_sort_dir):
+        if is_gen:
+            yield from reducer_fn(key, items_iter)
+        else:
+            yield reducer_fn(key, items_iter)
 
 
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
@@ -198,7 +205,11 @@ def _load_file_gen(stream: Iterator) -> Iterator:
     from zephyr.readers import load_file
 
     for spec in stream:
-        yield from load_file(spec)
+        try:
+            yield from load_file(spec)
+        except Exception as e:
+            e.add_note(f"While loading from {spec}")
+            raise
 
 
 def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
@@ -208,10 +219,11 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
         operations: List of fusible logical ops (MapOp, FilterOp, LoadFileOp, etc.)
 
     Returns:
-        A function that transforms an iterator to an iterator
+        A function that transforms an iterator to an iterator.
+        For MapShardOp, also passes shard_idx and total_shards as ShardInfo.
     """
 
-    def pipeline(stream: Iterator) -> Iterator:
+    def pipeline(stream: Iterator, *, shard_idx: int = 0, total_shards: int = 1) -> Iterator:
         for op in operations:
             if isinstance(op, LoadFileOp):
                 stream = _load_file_gen(stream)
@@ -222,7 +234,7 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
             elif isinstance(op, FlatMapOp):
                 stream = _flatmap_gen(stream, op.fn)
             elif isinstance(op, MapShardOp):
-                stream = op.fn(stream)
+                stream = op.fn(stream, ShardInfo(shard_idx=shard_idx, total_shards=total_shards))
             elif isinstance(op, TakePerShardOp):
                 stream = islice(stream, op.n)
             elif isinstance(op, WindowOp):
@@ -272,6 +284,23 @@ class PhysicalStage:
     stage_type: StageType = StageType.WORKER
     output_shards: int | None = None
 
+    def stage_name(self, max_length: int | None = None) -> str:
+        """Generate a descriptive name from operations.
+
+        Args:
+            max_length: Maximum length of the name (truncates with "..." if exceeded).
+                        None means no limit. Must be >= 3 if specified.
+
+        Returns:
+            Name like "Map → Filter → Write" or "Map → Filter → ..." if truncated
+        """
+        assert max_length is None or max_length >= 3, "max_length must be at least 3"
+        op_names = [type(op).__name__ for op in self.operations]
+        name = " → ".join(op_names)
+        if max_length is not None and len(name) > max_length:
+            return name[: max_length - 3] + "..."
+        return name
+
 
 @dataclass
 class PhysicalPlan:
@@ -301,22 +330,6 @@ class PhysicalPlan:
         return len(self.source_items)
 
 
-@dataclass(frozen=True)
-class ExecutionHint:
-    """Hints for pipeline execution.
-
-    Attributes:
-        chunk_size: Number of items per output chunk during streaming. Use -1 for
-            1 chunk per shard.
-        intra_shard_parallelism: Controls parallel processing of chunks within
-            a shard. Set to -1 (default) for auto (parallel when chunks > 1),
-            0 to disable, or N to limit max parallel chunks per shard.
-    """
-
-    chunk_size: int = DEFAULT_CHUNK_SIZE
-    intra_shard_parallelism: int = -1
-
-
 @dataclass
 class FusionState:
     """Incremental state for fusing logical operations into physical stages."""
@@ -326,40 +339,21 @@ class FusionState:
     pending_fusible: list = field(default_factory=list)
     output_shards: int | None = None
     stage_type: StageType = StageType.WORKER
-    hints: ExecutionHint = field(default_factory=ExecutionHint)
 
     def flush_pending(self) -> None:
-        """Convert pending fusible ops to a physical Map or ForkChunks.
-
-        When the first op is LoadFileOp and parallelism is enabled, creates ForkChunks
-        for parallel chunk processing.
-        """
+        """Convert pending fusible ops to a physical Map."""
         if not self.pending_fusible:
             return
 
-        has_load_file = isinstance(self.pending_fusible[0], LoadFileOp)
         requires_full_shard = any(isinstance(op, MapShardOp) for op in self.pending_fusible)
-
-        # Create ForkChunks for file pipelines with parallelism enabled
-        if has_load_file and self.hints.intra_shard_parallelism != 0 and not requires_full_shard:
-            user_ops = self.pending_fusible[1:]  # Exclude LoadFileOp, ForkChunks handles file loading
-            target_chunks = (
-                self.hints.intra_shard_parallelism
-                if self.hints.intra_shard_parallelism > 0
-                else DEFAULT_INTRA_SHARD_PARALLELISM
+        needs_shard_context = requires_full_shard
+        self.current_ops.append(
+            Map(
+                fn=compose_map(self.pending_fusible[:]),
+                requires_full_shard=requires_full_shard,
+                needs_shard_context=needs_shard_context,
             )
-            parallel_ops = [Map(fn=compose_map(user_ops), requires_full_shard=False)] if user_ops else []
-            logger.info("Creating ForkChunks with %d parallel ops, %d target chunks", len(parallel_ops), target_chunks)
-            self.current_ops.append(ForkChunks(target_chunks=target_chunks, parallel_ops=parallel_ops))
-        else:
-            # Regular Map
-            self.current_ops.append(
-                Map(
-                    fn=compose_map(self.pending_fusible[:]),
-                    requires_full_shard=requires_full_shard,
-                )
-            )
-
+        )
         self.pending_fusible = []
 
     def add_op(
@@ -401,7 +395,7 @@ class FusionState:
         return self.stages
 
 
-def _fuse_operations(operations: list, hints: ExecutionHint | None = None) -> list[PhysicalStage]:
+def _fuse_operations(operations: list) -> list[PhysicalStage]:
     """Fuse logical operations into physical stages.
 
     Transforms logical ops into physical ops:
@@ -412,12 +406,8 @@ def _fuse_operations(operations: list, hints: ExecutionHint | None = None) -> li
     - ReshardOp → Reshard
     - JoinOp → Join (with pre-computed right_plan)
 
-    When a stage starts with LoadFileOp and parallelism is enabled, the leading Maps
-    are wrapped in ForkChunks for parallel chunk processing.
-
     Args:
         operations: List of logical operations
-        hints: Execution hints (used for pre-computing join right plans)
 
     Returns:
         List of PhysicalStages with physical operations and execution metadata
@@ -425,10 +415,7 @@ def _fuse_operations(operations: list, hints: ExecutionHint | None = None) -> li
     if not operations:
         return []
 
-    if hints is None:
-        hints = ExecutionHint()
-
-    state = FusionState(hints=hints)
+    state = FusionState()
 
     for op in operations:
         if isinstance(op, WriteOp):
@@ -438,19 +425,24 @@ def _fuse_operations(operations: list, hints: ExecutionHint | None = None) -> li
                     writer_type=op.writer_type,
                     skip_existing=op.skip_existing,
                     levanter_metadata=op.levanter_metadata,
+                    levanter_batch_size=op.levanter_batch_size,
                     schema=op.schema,
-                    batch_size=op.batch_size,
                 )
             )
 
         elif isinstance(op, GroupByOp):
             num_shards = op.num_output_shards if op.num_output_shards is not None else -1
             state.add_op(
-                Scatter(key_fn=op.key_fn, num_output_shards=num_shards),
+                Scatter(
+                    key_fn=op.key_fn,
+                    num_output_shards=num_shards,
+                    sort_fn=op.sort_fn,
+                    combiner_fn=op.combiner_fn,
+                ),
                 output_shards=num_shards if num_shards > 0 else None,
             )
             state.end_stage()
-            state.add_op(Reduce(key_fn=op.key_fn, reducer_fn=op.reducer_fn))
+            state.add_op(Reduce(key_fn=op.key_fn, reducer_fn=op.reducer_fn, sort_fn=op.sort_fn))
 
         elif isinstance(op, ReduceOp):
             state.add_op(Fold(fn=op.local_reducer))
@@ -465,7 +457,7 @@ def _fuse_operations(operations: list, hints: ExecutionHint | None = None) -> li
             state.end_stage()
 
         elif isinstance(op, JoinOp):
-            right_plan = compute_plan(op.right_dataset, hints)
+            right_plan = compute_plan(op.right_dataset)
             state.add_op(
                 Join(
                     fn=compose_join(op.left_key_fn, op.right_key_fn, op.combiner_fn, op.join_type),
@@ -481,21 +473,21 @@ def _fuse_operations(operations: list, hints: ExecutionHint | None = None) -> li
 
 
 def _compute_file_pushdown(
-    paths: list[str],
+    files: list[FileEntry],
     load_op: LoadFileOp,
     operations: list,
 ) -> tuple[list[SourceItem], list]:
     """Create source items for file pipeline with pushdown optimizations applied.
 
     Args:
-        paths: List of file paths to load
+        files: List of FileEntry objects (path + size from bulk listing)
         load_op: The LoadFileOp specifying format and default columns
         operations: Full operations list (first op is LoadFileOp)
 
     Returns:
         Tuple of (source_items, remaining_operations), where filter/select have been pushed down.
     """
-    filter_expr = None
+    filter_expr: Expr | None = None
     select_columns = load_op.columns
     ops_to_skip: set[int] = set()
 
@@ -511,7 +503,7 @@ def _compute_file_pushdown(
             ops_to_skip.add(i)
         elif isinstance(op, FilterOp) and op.expr is None:
             continue  # Lambda filter, can't push down
-        elif isinstance(op, (MapOp, FlatMapOp)):
+        elif isinstance(op, (MapOp | FlatMapOp)):
             break  # Transform ops stop pushdown
         else:
             break
@@ -521,13 +513,13 @@ def _compute_file_pushdown(
         SourceItem(
             shard_idx=i,
             data=InputFileSpec(
-                path=path,
+                path=entry.path,
                 format=load_op.format,
                 columns=select_columns,
                 filter_expr=filter_expr,
             ),
         )
-        for i, path in enumerate(paths)
+        for i, entry in enumerate(files)
     ]
 
     # Build final operations list: LoadFileOp + remaining ops
@@ -536,38 +528,37 @@ def _compute_file_pushdown(
     return source_items, final_ops
 
 
-def compute_plan(dataset: Dataset, hints: ExecutionHint = ExecutionHint()) -> PhysicalPlan:
+def compute_plan(dataset: Dataset) -> PhysicalPlan:
     """Compute physical execution plan from logical dataset."""
     operations = list(dataset.operations)
+    source = dataset.source
 
-    if operations and isinstance(operations[0], LoadFileOp):
+    # Resolve lazy glob sources into concrete FileEntry objects (with sizes).
+    if isinstance(source, GlobSource):
+        file_entries = resolve_glob(source)
+        if operations and isinstance(operations[0], LoadFileOp):
+            source_items, operations = _compute_file_pushdown(
+                file_entries,
+                operations[0],
+                operations[1:],
+            )
+        else:
+            # from_files() without load_file() — source items are plain paths
+            source_items = [SourceItem(shard_idx=i, data=entry.path) for i, entry in enumerate(file_entries)]
+    elif operations and isinstance(operations[0], LoadFileOp):
+        # Non-glob source (e.g. from_list of paths) — wrap as FileEntry without sizes
+        entries = [FileEntry(spec=InputFileSpec(path=p), size=0) for p in source]
         source_items, operations = _compute_file_pushdown(
-            list(dataset.source),
+            entries,
             operations[0],
             operations[1:],
         )
     else:
-        source_list = list(dataset.source)
+        source_list = list(source)
         source_items = [SourceItem(shard_idx=i, data=item) for i, item in enumerate(source_list)]
 
-    stages = _fuse_operations(operations, hints)
+    stages = _fuse_operations(operations)
     return PhysicalPlan(source_items=source_items, stages=stages)
-
-
-@dataclass
-class ChunkHeader:
-    """Metadata for a chunk being streamed from a worker."""
-
-    shard_idx: int
-    count: int
-
-
-@dataclass
-class Chunk:
-    """A single chunk of data with count metadata."""
-
-    count: int
-    data: Any  # The actual ref or raw data
 
 
 def deterministic_hash(obj: object) -> int:
@@ -613,186 +604,62 @@ def make_windows(
         yield window
 
 
-def _stream_chunks(items: Iterator, shard_idx: int, chunk_size: int) -> Iterator[ChunkHeader | list[Any]]:
-    """Stream chunks from an iterator, yielding header/data pairs."""
-    chunk: list = []
-    for item in items:
-        chunk.append(item)
-        if chunk_size > 0 and len(chunk) >= chunk_size:
-            header = ChunkHeader(shard_idx=shard_idx, count=len(chunk))
-            yield header
-            yield chunk
-            chunk = []
-    # Yield final partial chunk
-    if chunk:
-        header = ChunkHeader(shard_idx=shard_idx, count=len(chunk))
-        yield header
-        yield chunk
-
-
-def _group_items_by_hash(
-    items: Iterable,
-    key_fn: Callable,
-    num_output_shards: int,
-    chunk_size: int,
-) -> dict[int, list[Chunk]]:
-    """Group items by hash of key into num_output_shards target shards with sorted chunks.
-
-    Args:
-        items: Items to group
-        key_fn: Function to extract grouping key from item
-        num_output_shards: Number of output shards to distribute across
-        chunk_size: Number of items per chunk
-
-    Returns:
-        Dict mapping shard index to list of chunks for that shard
-    """
-    output_chunks: dict[int, list[Chunk]] = defaultdict(list)
-    output_tmp: dict[int, list] = defaultdict(list)
-
-    for item in items:
-        key = key_fn(item)
-        target_shard = deterministic_hash(key) % num_output_shards
-        output_tmp[target_shard].append(item)
-        if chunk_size > 0 and len(output_tmp[target_shard]) >= chunk_size:
-            sorted_items = sorted(output_tmp[target_shard], key=key_fn)
-            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=sorted_items))
-            output_tmp[target_shard] = []
-
-    # Add all remaining chunks
-    for target_shard, shard_items in output_tmp.items():
-        if shard_items:
-            sorted_items = sorted(shard_items, key=key_fn)
-            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=sorted_items))
-
-    return output_chunks
-
-
-def _merge_sorted_chunks(shard, key_fn: Callable) -> Iterator[tuple[object, Iterator]]:
+def _merge_sorted_chunks(
+    shard: Shard, key_fn: Callable, sort_fn: Callable | None = None, external_sort_dir: str | None = None
+) -> Iterator[tuple[object, Iterator]]:
     """Merge sorted chunks using k-way merge, yielding (key, items_iterator) groups.
 
-    Each chunk is assumed to be sorted by key. This function performs a k-way merge
-    across all chunks and groups consecutive items with the same key.
+    Each chunk is assumed to be sorted by key (and optionally by sort_fn within key).
+    This function performs a k-way merge across all chunks and groups consecutive
+    items with the same key.
 
     Args:
         shard: Shard containing sorted chunks (iterable of chunk lists)
-        key_fn: Function to extract key from item
+        key_fn: Function to extract grouping key from item
+        sort_fn: Optional secondary sort key. When provided, the merge uses
+            (key_fn, sort_fn) for ordering but still groups by key_fn alone.
 
     Yields:
         Tuples of (key, iterator_of_items) for each unique key
     """
-    chunk_iterators = []
-    for chunk_data in shard.iter_chunks():
-        chunk_iterators.append(iter(chunk_data))
+    # Merge by composite key when sort_fn is provided, but group by key_fn only.
+    # Rebind to captured_sort_fn so pyrefly narrows the type inside the closure.
+    if sort_fn is not None:
+        captured_sort_fn = sort_fn
 
-    # Use heapq.merge to k-way merge sorted streams
-    merged_stream = heapq.merge(*chunk_iterators, key=key_fn)
-    yield from groupby(merged_stream, key=key_fn)
+        def merge_key(item):
+            return (key_fn(item), captured_sort_fn(item))
 
-
-def _compute_chunk_specs(spec, target_chunks: int) -> list:
-    """Compute chunk specs for a file."""
-    from zephyr.readers import open_file
-
-    if target_chunks <= 1 or not isinstance(spec, InputFileSpec) or not spec.path.endswith((".parquet", ".vortex")):
-        return [spec]
-
-    if spec.path.endswith(".parquet"):
-        import pyarrow.parquet as pq
-
-        with open_file(spec.path, "rb") as f:
-            parquet_file = pq.ParquetFile(f)
-            num_rows = parquet_file.metadata.num_rows
     else:
-        import vortex
+        merge_key = key_fn
 
-        f = vortex.open(spec.path)
-        num_rows = f.to_dataset().count_rows()
+    # Check if external sort is needed BEFORE materializing all iterators.
+    # ScatterShard can decide using manifest stats (no file opens needed).
+    from zephyr.shuffle import ScatterShard
 
-    row_ranges = []
-    rows_per_chunk = num_rows // target_chunks
-    for i in range(target_chunks):
-        start = i * rows_per_chunk
-        end = (i + 1) * rows_per_chunk
-        row_ranges.append((start, end))
+    use_external = (
+        external_sort_dir is not None
+        and isinstance(shard, ScatterShard)
+        and shard.needs_external_sort(_TaskResources.from_environment().memory_bytes)
+    )
 
-    row_ranges[-1] = (row_ranges[-1][0], num_rows)
-
-    return [
-        InputFileSpec(
-            path=spec.path,
-            format=spec.format,
-            columns=spec.columns,
-            row_start=start,
-            row_end=end,
-            filter_expr=spec.filter_expr,
+    if use_external:
+        logger.info(
+            "External sort triggered for shard with %d iterators, spilling to %s",
+            sum(it.chunk_count for it in shard.iterators),
+            external_sort_dir,
         )
-        for start, end in row_ranges
-    ]
-
-
-def _merge_chunk_streams(exec_ctx, futures: list):
-    active = {id(f): f for f in futures}
-
-    while active:
-        ready, _ = exec_ctx.wait(list(active.values()), num_returns=1)
-        for gen in ready:
-            try:
-                items = exec_ctx.get(next(gen))
-                yield from items
-            except StopIteration:
-                del active[id(gen)]
-
-
-def _execute_fork_join(
-    exec_ctx,
-    source_stream,
-    parallel_ops: list[PhysicalOp],
-    target_chunks: int,
-):
-    """Execute ops in parallel across chunks, merging results."""
-    from zephyr.readers import load_file
-
-    source_items = list(source_stream)
-
-    logger.info("Source items: %s", source_items)
-
-    # For each source item, compute chunk specs
-    all_chunk_specs = []
-    for item in source_items:
-        if isinstance(item, InputFileSpec):
-            chunk_specs = _compute_chunk_specs(item, target_chunks)
-            all_chunk_specs.extend(chunk_specs)
-        else:
-            all_chunk_specs.append(item)
-
-    logger.info("All chunk specs: %s", all_chunk_specs)
-
-    def process_chunk(chunk_spec):
-        if isinstance(chunk_spec, InputFileSpec):
-            stream = load_file(chunk_spec)
-        else:
-            stream = iter([chunk_spec])
-        for op in parallel_ops:
-            assert isinstance(op, Map)
-            stream = op.fn(stream)
-
-        # batch into micro-chunks to reduce overhead
-        micro_chunks = []
-        for item in stream:
-            micro_chunks.append(item)
-            if len(micro_chunks) >= DEFAULT_MICRO_BATCH_SIZE:
-                yield micro_chunks
-                micro_chunks = []
-        if micro_chunks:
-            yield micro_chunks
-
-    if len(all_chunk_specs) == 1:
-        for batch in process_chunk(all_chunk_specs[0]):
-            yield from batch
+        # Pass lazy generator — external_sort_merge consumes in batches without opening all files
+        merged_stream = external_sort_merge(shard.get_iterators(), merge_key, external_sort_dir)
     else:
-        futures = [exec_ctx.run(process_chunk, spec) for spec in all_chunk_specs]
-        yield from _merge_chunk_streams(exec_ctx, futures)
+        chunk_iterators = list(shard.get_iterators())
+        logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
+        if external_sort_dir is not None and len(chunk_iterators) > EXTERNAL_SORT_FAN_IN:
+            # Fallback: stats unavailable, use fan_in threshold
+            merged_stream = external_sort_merge(iter(chunk_iterators), merge_key, external_sort_dir)
+        else:
+            merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
+    yield from groupby(merged_stream, key=key_fn)
 
 
 def _sorted_merge_join(
@@ -816,9 +683,8 @@ def _sorted_merge_join(
     Yields:
         Joined items according to join_type
     """
-    # Materialize left stream and tag both streams
-    left_items = list(left_stream)
-    left_tagged = (("left", left_key_fn(item), item) for item in left_items)
+    # Tag both streams with their side for the merged iteration
+    left_tagged = (("left", left_key_fn(item), item) for item in left_stream)
     right_tagged = (("right", right_key_fn(item), item) for item in right_stream)
 
     # Merge both sorted streams by key
@@ -852,49 +718,54 @@ class StageContext:
     Encapsulates all the metadata and auxiliary data needed to process a shard.
 
     Attributes:
-        shard: The shard data to process (iterable, typically a Shard object)
+        shard: The shard data to process
         shard_idx: Index of this shard
         total_shards: Total number of shards
-        chunk_size: Number of items per output chunk
         aux_shards: Auxiliary shards for joins, keyed by op index
-        execution_context: Execution context for put/get/run/wait operations (for ForkChunks)
     """
 
-    shard: Any  # Shard object (avoids circular import)
+    shard: Iterable[Any]
     shard_idx: int
     total_shards: int
-    chunk_size: int
-    aux_shards: dict[int, list[Any]] = field(default_factory=dict)
-    execution_context: JobContext = None
+    aux_shards: dict[int, Iterable[Any]] = field(default_factory=dict)
 
-    def get_right_shard(self, op_index: int) -> Any:
+    def get_right_shard(self, op_index: int) -> Iterable[Any]:
         """Get right shard for join at given op index.
 
         Raises:
             ValueError: If no right shard is provided for the join
         """
-        shards = self.aux_shards.get(op_index, [])
-        if len(shards) != 1:
-            raise ValueError(f"Expected exactly 1 right shard for join at op index {op_index}, got {len(shards)}")
-        return shards[0]
+        shard = self.aux_shards.get(op_index)
+        if shard is None:
+            raise ValueError(f"Expected exactly 1 right shard for join at op index {op_index}, got 0")
+        return shard
 
 
 def run_stage(
     ctx: StageContext,
     ops: list[PhysicalOp],
-) -> Iterator[ChunkHeader | list[Any]]:
-    """Execute a stage's physical ops in a single pass.
+    external_sort_dir: str | None = None,
+) -> Iterator:
+    """Execute a stage's physical ops in a single pass, yielding plain items.
 
     This is the single worker function that backends call to execute physical ops.
     It only knows about physical op types (Map, Write, etc.) - not logical ops.
+
+    All chunking, batching, and scatter routing is handled by the IO layer
+    (the caller). For scatter stages, this yields the pre-scatter item stream;
+    the caller extracts the Scatter op and passes its params to the writer.
 
     Args:
         ctx: Stage execution context providing shard data and metadata
         ops: List of physical operations to execute in sequence
 
     Yields:
-        ChunkHeader followed by list of items for each chunk produced
+        Pipeline items. The caller handles IO batching and scatter routing.
     """
+
+    configure_logging(level=logging.INFO)
+
+    from zephyr import counters
     from zephyr.writers import write_binary_file, write_jsonl_file, write_levanter_cache, write_parquet_file
 
     stream: Iterator = iter(ctx.shard)
@@ -904,23 +775,16 @@ def run_stage(
         op = ops[op_index]
 
         if isinstance(op, Map):
-            stream = op.fn(stream)
+            if op.needs_shard_context:
+                stream = op.fn(stream, shard_idx=ctx.shard_idx, total_shards=ctx.total_shards)
+            else:
+                stream = op.fn(stream)
             op_index += 1
-        elif isinstance(op, ForkChunks):
-            # Execute chunk parallelism with contained parallel_ops
-            stream = _execute_fork_join(
-                ctx.execution_context,
-                stream,
-                op.parallel_ops,
-                op.target_chunks,
-            )
-            op_index += 1
-
         elif isinstance(op, Write):
             output_path = op.output_pattern(ctx.shard_idx, ctx.total_shards)
 
             if op.skip_existing:
-                fs = fsspec.core.url_to_fs(output_path)[0]
+                fs = url_to_fs(output_path)[0]
                 if op.writer_type == "levanter_cache":
                     test_path = os.path.join(output_path, ".success")
                 else:
@@ -928,51 +792,54 @@ def run_stage(
 
                 if fs.exists(test_path):
                     logger.info(f"Skipping write, output exists: {output_path}")
-                    yield from _stream_chunks(iter([output_path]), ctx.shard_idx, ctx.chunk_size)
+                    counters.increment("zephyr/partitions_skipped")
+                    yield output_path
                     return
 
             # Write based on type
             if op.writer_type == "jsonl":
                 result = write_jsonl_file(stream, output_path)["path"]
             elif op.writer_type == "parquet":
-                result = write_parquet_file(stream, output_path, op.schema, op.batch_size)["path"]
+                result = write_parquet_file(stream, output_path, schema=op.schema)["path"]
             elif op.writer_type == "levanter_cache":
                 metadata = op.levanter_metadata if op.levanter_metadata is not None else {}
-                result = write_levanter_cache(stream, output_path, metadata)["path"]
+                kwargs: dict[str, Any] = {"metadata": metadata}
+                if op.levanter_batch_size is not None:
+                    kwargs["batch_size"] = op.levanter_batch_size
+                result = write_levanter_cache(stream, output_path, **kwargs)["path"]
             elif op.writer_type == "binary":
                 result = write_binary_file(stream, output_path)["path"]
             elif op.writer_type == "vortex":
                 from zephyr.writers import write_vortex_file
 
-                result = write_vortex_file(stream, output_path)["path"]
+                result = write_vortex_file(stream, output_path, schema=op.schema)["path"]
             else:
                 raise ValueError(f"Unknown writer_type: {op.writer_type}")
 
-            yield from _stream_chunks(iter([result]), ctx.shard_idx, ctx.chunk_size)
+            yield result
             return
 
         elif isinstance(op, Scatter):
-            # Hash items to output shards
-            num_output_shards = op.num_output_shards if op.num_output_shards > 0 else ctx.total_shards
-            output_chunks = _group_items_by_hash(stream, op.key_fn, num_output_shards, ctx.chunk_size)
-
-            # Yield chunks for each output shard
-            for shard_idx in range(num_output_shards):
-                if output_chunks[shard_idx]:
-                    for chunk in output_chunks[shard_idx]:
-                        header = ChunkHeader(shard_idx=shard_idx, count=chunk.count)
-                        yield header
-                        yield chunk.data
-                else:
-                    # Yield empty chunk so controller knows this shard exists
-                    header = ChunkHeader(shard_idx=shard_idx, count=0)
-                    yield header
-                    yield []
+            # Scatter routing is handled by the IO writer, not run_stage.
+            # Yield the pre-scatter item stream; the caller extracts the
+            # Scatter op and passes its params to the writer.
+            yield from stream
             return
 
         elif isinstance(op, Reduce):
-            # Merge sorted chunks and reduce per key
-            stream = _reduce_gen(ctx.shard, op.key_fn, op.reducer_fn)
+            # Build ScatterShard from scatter manifest if needed,
+            # then merge sorted chunks and reduce per key.
+            from zephyr.execution import ScatterShard, _build_scatter_shard_from_manifest
+
+            shard = ctx.shard
+            if not isinstance(shard, ScatterShard):
+                # Shard contains a single manifest path — read it to build ScatterShard
+                paths = list(shard)
+                assert len(paths) == 1, f"Expected single scatter manifest path, got {len(paths)}"
+                shard = _build_scatter_shard_from_manifest(paths[0], ctx.shard_idx)
+            stream = _reduce_gen(
+                shard, op.key_fn, op.reducer_fn, sort_fn=op.sort_fn, external_sort_dir=external_sort_dir
+            )
             op_index += 1
 
         elif isinstance(op, Fold):
@@ -990,5 +857,5 @@ def run_stage(
             stream = op.fn(stream, iter(right_shard))
             op_index += 1
 
-    # Yield remaining items as chunks
-    yield from _stream_chunks(stream, ctx.shard_idx, ctx.chunk_size)
+    # Yield remaining items directly — caller handles batching for IO
+    yield from stream

@@ -1,0 +1,170 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""WorkerService RPC implementation using Connect RPC."""
+
+import logging
+import time
+from typing import Protocol
+
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from connectrpc.request import RequestContext
+
+from iris.chaos import chaos
+from iris.cluster.process_status import get_process_status as _get_process_status
+from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
+from iris.cluster.worker.worker_types import TaskInfo
+from iris.rpc import job_pb2
+from iris.rpc import worker_pb2
+from iris.rpc.errors import rpc_error_handler
+from rigging.timing import Timer
+
+logger = logging.getLogger(__name__)
+
+
+class TaskProvider(Protocol):
+    """Protocol for task management operations.
+
+    Returns TaskInfo (read-only view) to decouple service layer from TaskAttempt internals.
+    """
+
+    def submit_task(self, request: job_pb2.RunTaskRequest) -> str: ...
+    def get_task(self, task_id: str, attempt_id: int = -1) -> TaskInfo | None: ...
+    def list_tasks(self) -> list[TaskInfo]: ...
+    def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
+    def handle_heartbeat(self, request: job_pb2.HeartbeatRequest) -> job_pb2.HeartbeatResponse: ...
+    def profile_task(
+        self, task_id: str, duration_seconds: int, profile_type: job_pb2.ProfileType, attempt_id: int | None = None
+    ) -> bytes: ...
+    def exec_in_container(
+        self, task_id: str, command: list[str], timeout_seconds: int = 60
+    ) -> worker_pb2.Worker.ExecInContainerResponse: ...
+
+
+class WorkerServiceImpl:
+    """Implementation of WorkerService RPC interface."""
+
+    def __init__(
+        self,
+        provider: TaskProvider,
+    ):
+        self._provider = provider
+        self._timer = Timer()
+
+    def get_task_status(
+        self,
+        request: worker_pb2.Worker.GetTaskStatusRequest,
+        _ctx: RequestContext,
+    ) -> job_pb2.TaskStatus:
+        """Get status of a task."""
+        task = self._provider.get_task(request.task_id)
+        if not task:
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+
+        return task.to_proto()
+
+    def list_tasks(
+        self,
+        _request: worker_pb2.Worker.ListTasksRequest,
+        _ctx: RequestContext,
+    ) -> worker_pb2.Worker.ListTasksResponse:
+        """List all tasks on this worker."""
+        tasks = self._provider.list_tasks()
+        return worker_pb2.Worker.ListTasksResponse(
+            tasks=[task.to_proto() for task in tasks],
+        )
+
+    def health_check(
+        self,
+        _request: job_pb2.Empty,
+        _ctx: RequestContext,
+    ) -> worker_pb2.Worker.HealthResponse:
+        """Report worker health."""
+        tasks = self._provider.list_tasks()
+        running = sum(1 for t in tasks if t.status == job_pb2.TASK_STATE_RUNNING)
+
+        response = worker_pb2.Worker.HealthResponse(
+            healthy=True,
+            running_tasks=running,
+        )
+        response.uptime.milliseconds = self._timer.elapsed_ms()
+        return response
+
+    def heartbeat(
+        self,
+        request: job_pb2.HeartbeatRequest,
+        _ctx: RequestContext,
+    ) -> job_pb2.HeartbeatResponse:
+        """Handle controller-initiated heartbeat.
+
+        Processes tasks_to_run and tasks_to_kill, then returns current state.
+        """
+        with rpc_error_handler("heartbeat"):
+            # Chaos injection for testing heartbeat failures and delays
+            if rule := chaos("worker.heartbeat"):
+                if rule.delay_seconds > 0:
+                    time.sleep(rule.delay_seconds)
+                if rule.error:
+                    raise rule.error
+                # If no error specified, raise generic RuntimeError
+                if not rule.delay_seconds:
+                    raise RuntimeError("chaos: worker.heartbeat")
+
+            # Delegate to worker for reconciliation
+            return self._provider.handle_heartbeat(request)
+
+    def get_process_status(
+        self,
+        request: job_pb2.GetProcessStatusRequest,
+        _ctx: RequestContext,
+    ) -> job_pb2.GetProcessStatusResponse:
+        """Return local process info (logs are in the central LogService)."""
+        return _get_process_status(self._timer)
+
+    def profile_task(
+        self,
+        request: job_pb2.ProfileTaskRequest,
+        _ctx: RequestContext,
+    ) -> job_pb2.ProfileTaskResponse:
+        """Profile a running task or the worker process itself.
+
+        The target field determines what to profile:
+        - /system/process: the worker process itself
+        - /job/.../task/N:A: a specific task attempt (delegated to TaskProvider)
+        """
+        with rpc_error_handler("profile_task"):
+            try:
+                if not request.HasField("profile_type"):
+                    raise ValueError("profile_type is required")
+
+                duration = request.duration_seconds or 10
+
+                # /system/process: profile the worker process itself using py-spy/memray
+                if is_system_target(request.target):
+                    data = profile_local_process(duration, request.profile_type)
+                    return job_pb2.ProfileTaskResponse(profile_data=data)
+
+                # Task target: parse optional :attempt_id and delegate to the container handle
+                target = parse_profile_target(request.target)
+                data = self._provider.profile_task(
+                    target.task_id.to_wire(),
+                    duration_seconds=duration,
+                    profile_type=request.profile_type,
+                    attempt_id=target.attempt_id,
+                )
+                return job_pb2.ProfileTaskResponse(profile_data=data)
+            except Exception as e:
+                return job_pb2.ProfileTaskResponse(error=str(e))
+
+    def exec_in_container(
+        self,
+        request: worker_pb2.Worker.ExecInContainerRequest,
+        _ctx: RequestContext,
+    ) -> worker_pb2.Worker.ExecInContainerResponse:
+        """Execute a command in a running task's container."""
+        with rpc_error_handler("exec_in_container"):
+            if not request.command:
+                raise ConnectError(Code.INVALID_ARGUMENT, "command is required")
+            timeout_seconds = request.timeout_seconds if request.timeout_seconds != 0 else 60
+            return self._provider.exec_in_container(request.task_id, list(request.command), timeout_seconds)

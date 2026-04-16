@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Weight transfer management.
@@ -54,6 +43,7 @@ def create_weight_transfer_server(
     config: WeightTransferConfig,
     mesh: Mesh | None = None,
     axis_mapping: ResourceMapping | None = None,
+    coordinator_handle=None,
 ) -> WeightTransferServer:
     """Factory function to create appropriate transfer server for Levanter models.
 
@@ -61,15 +51,14 @@ def create_weight_transfer_server(
         config: Weight transfer configuration
         mesh: JAX mesh for distributed computation (optional)
         axis_mapping: Levanter axis mapping for sharding (optional)
-
-    Returns:
-        WeightTransferServer instance
+        coordinator_handle: Pre-created actor handle for the coordinator.
+            If provided, the server uses it directly instead of discovering via fray v1.
     """
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
         return JAXTransferServer(config, mesh, axis_mapping)
 
     elif config.mode == WeightTransferMode.ARROW_FLIGHT:
-        return ArrowFlightServer(config, mesh, axis_mapping)
+        return ArrowFlightServer(config, mesh, axis_mapping, coordinator_handle=coordinator_handle)
 
     # Default to GCS checkpoint mode
     return GCSCheckpointServer(
@@ -83,6 +72,7 @@ def create_weight_transfer_client(
     config: WeightTransferConfig,
     mesh: Mesh | None = None,
     axis_mapping: ResourceMapping | None = None,
+    coordinator_handle=None,
 ) -> WeightTransferClient:
     """Factory function to create appropriate transfer client for Levanter models.
 
@@ -90,15 +80,14 @@ def create_weight_transfer_client(
         config: Weight transfer configuration
         mesh: JAX mesh for distributed computation (optional)
         axis_mapping: Levanter axis mapping for sharding (optional)
-
-    Returns:
-        WeightTransferClient instance
+        coordinator_handle: Pre-created actor handle for the coordinator.
+            If provided, the client uses it directly instead of discovering via fray v1.
     """
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
         return JAXTransferClient(config, mesh, axis_mapping)
 
     elif config.mode == WeightTransferMode.ARROW_FLIGHT:
-        return ArrowFlightClient(config, mesh, axis_mapping)
+        return ArrowFlightClient(config, mesh, axis_mapping, coordinator_handle=coordinator_handle)
 
     # Default to GCS checkpoint mode
     return GCSCheckpointClient(
@@ -126,5 +115,4 @@ __all__ = [
     "WeightUpdate",
     "create_weight_transfer_client",
     "create_weight_transfer_server",
-    "get_or_create_actor",
 ]

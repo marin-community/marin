@@ -1,22 +1,28 @@
 data:
-  configs:
-    owt:
-      train_urls:
-      - gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz
-      validation_urls:
-      - gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz
-    wikitext:
-      id: dlwh/wikitext_103_detokenized
-    tulu:
-      id: allenai/tulu-3-sft-mixture
-      format:
-        type: chat
   train_weights:
     owt: 0.6
     wikitext: 0.3
     tulu: 0.1
   tokenizer: stanford-crfm/marin-tokenizer
   cache_dir: gs://marin-us-central2/scratch/dlwh/marin_small_fast_mix
+  components:
+    owt:
+      source:
+        type: url
+        train_urls:
+        - gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz
+        validation_urls:
+        - gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz
+    wikitext:
+      source:
+        type: hf
+        id: dlwh/wikitext_103_detokenized
+    tulu:
+      format:
+        type: chat
+      source:
+        type: hf
+        id: allenai/tulu-3-sft-mixture
 model:
   type: gpt2
   hidden_dim: 768

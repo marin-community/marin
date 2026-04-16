@@ -1,0 +1,71 @@
+# Iris smoke-test configuration (GCP)
+# Usage: iris --cluster=smoke-gcp cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
+
+platform:
+  label_prefix: smoke-ci
+  gcp:
+    project_id: hai-gcp-models
+
+defaults:
+  ssh:
+    auth_mode: SSH_AUTH_MODE_OS_LOGIN
+    impersonate_service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+  autoscaler:
+    evaluation_interval:
+      milliseconds: 10000
+    scale_up_delay:
+      milliseconds: 60000
+    scale_down_delay:
+      milliseconds: 300000
+  worker:
+    docker_image: ghcr.io/marin-community/iris-worker:latest
+    default_task_image: ghcr.io/marin-community/iris-task:latest
+    port: 10001
+
+storage:
+  # Default for standalone use; start-smoke overrides via marin_temp_bucket().
+  remote_state_dir: gs://marin-us-central2/iris/smoke/state
+
+worker_provider: {}
+
+controller:
+  image: ghcr.io/marin-community/iris-controller:latest
+  gcp:
+    service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+    zone: europe-west4-b
+    machine_type: e2-standard-4
+    port: 10000
+
+tpu_pools:
+  v5e-smoke:
+    family: v5e
+    zones: [europe-west4-b, us-west4-a]
+    base_priority: 100
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: v2-alpha-tpuv5-lite
+    sizes:
+      16: { buffer_slices: 1, max_slices: 4 }
+
+scale_groups:
+  # Low-priority fallback CPU VM group for on-demand scheduling tests.
+  # Intentionally not default: selected only when jobs constrain preemptible=false.
+  cpu_vm_e2_standard_4_ondemand:
+    zones: [europe-west4-b]
+    num_vms: 1
+    resources:
+      cpu: 4
+      ram: 16GB
+      disk: 100GB
+      device_type: cpu
+      capacity_type: on-demand
+    buffer_slices: 0
+    max_slices: 2
+    priority: 1000
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        mode: GCP_SLICE_MODE_VM
+        machine_type: e2-standard-4

@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Integration test for Llama-3.2-1B with math curriculum."""
 
@@ -28,7 +17,8 @@ from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
-from transformers import AutoConfig, AutoTokenizer
+from levanter.tokenizers import load_tokenizer
+from transformers import AutoConfig
 
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
@@ -41,7 +31,7 @@ from tests.rl.integration.config import (
     create_test_rollout_storage_config,
 )
 
-pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping integration tests on CI environment")
+pytestmark = pytest.mark.skipif(os.environ.get("CI") is not None, reason="Skipping integration tests on CI environment")
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +41,7 @@ MAX_TOKENS = 16
 
 def get_stop_tokens(tokenizer_name: str):
     """Get stop tokens from tokenizer."""
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    tokenizer = load_tokenizer(tokenizer_name)
     return [tokenizer.eos_token_id]
 
 
@@ -144,7 +134,7 @@ def test_llama_math_integration(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=opt_config,
-            rl_loss=RLOOLoss(kl_coef=0.01, clip_epsilon=0.2),
+            rl_loss=RLOOLoss(kl_coef=0.01, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
             replay_buffer=ReplayBufferConfig(
                 capacity=2048,
                 alpha=3.0,

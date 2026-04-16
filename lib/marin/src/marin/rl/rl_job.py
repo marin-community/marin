@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Unified RL job interface for configuring and running RL training.
@@ -23,29 +12,29 @@ import dataclasses
 import hashlib
 import json
 import logging
-import os
 import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v2 import JobHandle
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from levanter.trainer import TrainerConfig
 from marin.rl.curriculum import CurriculumConfig
-from marin.rl.environments.inference_ctx import LevanterInferenceContextConfig, vLLMInferenceContextConfig
+from marin.rl.environments.inference_ctx import (
+    LevanterInferenceContextConfig,
+    vLLMInferenceContextConfig,
+)
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
-from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
-from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
+from marin.rl.rollout_worker import RolloutWorkerConfig, RolloutTrackerConfig
+from marin.rl.train_worker import TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
-from marin.training.training import _add_run_env_variables
 from marin.utilities.json_encoder import CustomJsonEncoder
-from marin.utils import remove_tpu_lockfile_on_exit
-from transformers import AutoTokenizer, PreTrainedTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -66,11 +55,23 @@ class RunConfig:
     num_train_slices: int = 1
     """Number of TPU slices for training worker"""
 
+    train_ram: str | None = None
+    """Optional host-RAM request override for training workers (e.g. ``"300g"``)."""
+
+    inference_ram: str | None = None
+    """Optional host-RAM request override for rollout/inference workers."""
+
+    regions: list[str] | None = None
+    """Concrete region(s) to use for all RL worker jobs."""
+
+    zone: str | None = None
+    """Concrete zone to use for all RL worker jobs."""
+
     max_retries_failure: int = 3
-    """Maximum retries on worker failure"""
+    """Maximum retries on worker failure (task code crashes, OOM, etc.)"""
 
     max_retries_preemption: int = 100
-    """Maximum retries on preemption"""
+    """Maximum retries on preemption (spot TPU lost, worker node died)"""
 
 
 @dataclass
@@ -90,9 +91,9 @@ class TrainParams:
     )
 
 
-def make_tokenizer(tokenizer: str | PreTrainedTokenizer) -> PreTrainedTokenizer:
+def make_tokenizer(tokenizer: str | MarinTokenizer) -> MarinTokenizer:
     if isinstance(tokenizer, str):
-        return AutoTokenizer.from_pretrained(tokenizer)
+        return load_tokenizer(tokenizer)
     return tokenizer
 
 
@@ -104,11 +105,15 @@ class RLJobConfig:
     trainer: TrainerConfig
     train_params: TrainParams
     curriculum: CurriculumConfig
-    tokenizer: str | PreTrainedTokenizer
+    tokenizer: str | MarinTokenizer
 
     inference_type: Literal["levanter", "vllm"]
 
     seed: int = 42
+
+    vocab_size: int | None = None
+    """Vocab size for model construction. Should match the checkpoint's vocab dimension.
+    If None, falls back to tokenizer.vocab_size."""
 
     # Model & initialization (with defaults)
     initial_checkpoint: str | None = None
@@ -124,15 +129,39 @@ class RLJobConfig:
 
     # Deployment configuration
     run_config: RunConfig | None = None
-    """Configuration for TPU pod deployment. If None, uses simple Ray actors."""
+    """Configuration for TPU pod deployment."""
 
     # Inference server (auto-configured by default)
     inference_config: InferenceServerConfig | vLLMInferenceContextConfig | None = None
     """Configuration for inference context."""
 
+    system_prompt: str | None = None
+    """System prompt to use for inference."""
+
+    inflight_weight_updates: bool = False
+    """Whether to use inflight weight updates."""
+
     # Logging
     run_id: str = field(default_factory=lambda: f"rl-{uuid.uuid4().hex[:8]}")
+    instance_id: str | None = None
+    """Volatile instance identifier, unique per coordinator invocation.
+
+    Used for Iris child job names and hosted actor names so retries after
+    preemption do not collide with dead children from previous attempts.
+    When ``None``, defaults to :pyattr:`run_id` (legacy single-name behaviour).
+    """
     log_freq: int = 10
+
+    rollout_tracker: RolloutTrackerConfig | None = None
+    """Tracker configuration for rollout workers. Uses a standalone tracker to avoid JAX deadlocks."""
+
+    pip_dependency_groups: list[str] = field(default_factory=list)
+    """Extra pip dependency groups to include for all workers."""
+
+    @property
+    def resolved_instance_id(self) -> str:
+        """Return the volatile instance id, falling back to run_id."""
+        return self.instance_id if self.instance_id is not None else self.run_id
 
     def with_on_policy_training(self) -> "RLJobConfig":
         """Configure for on-policy training.
@@ -176,72 +205,22 @@ class RLJob:
     def __init__(self, config: RLJobConfig):
         self.config = config
 
-    # Helper, as Ray doesn't accept method instances
     @staticmethod
     def make_step_fn():
-        return lambda config: RLJob(config).run()
+        return lambda config: RLJob(config).run(config.run_id)
 
-    def run(self, name: str):
-        """Run with TPU pod deployment."""
-        run_config = self.config.run_config
-        train_worker_config, rollout_worker_config = self.to_worker_configs()
+    def run(self, name: str) -> JobHandle:
+        """Submit the RL job via the v2 orchestration layer.
 
-        # Setup environment
-        env = {"EQX_ON_ERROR": "nan"}
-        env = _add_run_env_variables(env)
+        Submits a single coordinator job that creates all shared actors
+        and child jobs (trainer + rollout workers). The coordinator runs
+        inside the cluster with proper job hierarchy.
+        """
+        from marin.rl.orchestration import submit_rl_job
 
-        # Create resource configs
-        inference_tpu_type = run_config.inference_tpu_type or run_config.train_tpu_type
-        train_resources = ResourceConfig.with_tpu(run_config.train_tpu_type)
-        rollout_resources = ResourceConfig.with_tpu(inference_tpu_type)
-
-        def train_worker_task():
-            with remove_tpu_lockfile_on_exit():
-                logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-                worker = TrainWorker(config=train_worker_config)
-                worker.train()
-
-        def inference_worker_task():
-            with remove_tpu_lockfile_on_exit():
-                logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-                # inject a different seed for each worker
-
-                process_id = os.getpid()
-                config = dataclasses.replace(
-                    rollout_worker_config,
-                    seed=rollout_worker_config.seed + process_id,
-                    run_id=f"{rollout_worker_config.run_id}-{process_id}",
-                )
-
-                worker = RolloutWorker(config=config)
-                worker.run()
-
-        cluster = current_cluster()
-        jobs = []
-        jobs.append(
-            cluster.launch(
-                JobRequest(
-                    name=f"rl-train-{name}-train",
-                    resources=train_resources,
-                    entrypoint=Entrypoint.from_callable(train_worker_task),
-                    environment=EnvironmentConfig.create(env_vars=env),
-                )
-            )
-        )
-
-        for i in range(run_config.num_rollout_workers):
-            jobs.append(
-                cluster.launch(
-                    JobRequest(
-                        name=f"rl-train-{name}-rollout-{i}",
-                        resources=rollout_resources,
-                        entrypoint=Entrypoint.from_callable(inference_worker_task),
-                        environment=EnvironmentConfig.create(env_vars=env),
-                    )
-                )
-            )
-
-        return cluster.wait(jobs, raise_on_failure=True)
+        handle = submit_rl_job(self.config)
+        handle.wait(raise_on_failure=True)
+        return handle
 
     def to_worker_configs(self) -> tuple[TrainWorkerConfig, RolloutWorkerConfig]:
         """Export worker configurations for inspection/testing.
@@ -258,8 +237,8 @@ class RLJob:
             total_seqs = lesson.sampling_params.n_generations_per_prompt
             max_seqs = max(max_seqs, total_seqs)
 
-        max_tokens = self.config.curriculum.max_tokens
-        assert max_tokens > 0, "Max tokens must be positive across curriculum lessons."
+        max_seq_len = self.config.curriculum.max_seq_len
+        assert max_seq_len > 0, "Max seq len must be positive across curriculum lessons."
 
         # create a unique name for the weight-transfer coordinator based on our config hash
         # this ensures we get the same name across multiple calls
@@ -281,19 +260,19 @@ class RLJob:
                 temperature=1.0,
                 service=InferenceEngineConfig(
                     max_seqs=max_seqs,
-                    max_seq_len=max_tokens,
+                    max_seq_len=max_seq_len,
                     page_size=128,
                     hbm_utilization=0.5,
                 ),
                 port=0,
             )
             logger.info(
-                "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_tokens=%d", max_seqs, max_tokens
+                "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_seq_len=%d", max_seqs, max_seq_len
             )
             inference_config = LevanterInferenceContextConfig(
+                mesh=self.config.trainer.device_mesh,
                 inference_server_config=inference_server_config,
                 tokenizer=tokenizer,
-                mesh=self.config.trainer.device_mesh,
                 axis_mapping=self.config.trainer.compute_axis_mapping,
             )
         else:
@@ -311,6 +290,7 @@ class RLJob:
             tokenizer=tokenizer,
             replay_buffer=self.config.train_params.replay_buffer,
             initial_checkpoint=self.config.initial_checkpoint,
+            vocab_size=self.config.vocab_size,
             run_id=self.config.run_id,
             curriculum_config=self.config.curriculum,
             seed=self.config.seed,
@@ -325,12 +305,16 @@ class RLJob:
             log_freq=self.config.log_freq,
             max_rollouts=None,  # Run indefinitely by default
             initial_checkpoint=self.config.initial_checkpoint,
+            vocab_size=self.config.vocab_size,
             weight_transfer=weight_transfer_config,
             rollout_storage=self.config.rollout_storage,
             run_id=self.config.run_id,
             seed=self.config.seed + 1000,
             inference_type=self.config.inference_type,
             inference_config=inference_config,
+            system_prompt=self.config.system_prompt,
+            inflight_weight_updates=self.config.inflight_weight_updates,
+            tracker_config=self.config.rollout_tracker,
         )
 
         return train_worker_config, rollout_worker_config

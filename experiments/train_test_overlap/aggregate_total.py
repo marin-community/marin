@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """aggregate_total.py
 
@@ -32,10 +21,10 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
-import fsspec
+from rigging.filesystem import open_url
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.utils import fsspec_glob
-from zephyr import Backend, Dataset, load_file, load_jsonl
+from zephyr import Dataset, ZephyrContext, load_file, load_jsonl
 
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
 
@@ -74,7 +63,8 @@ def _compute_dataset_sizes(dataset_steps: list[ExecutorStep]) -> dict[str, int]:
     def count_dir(path: str) -> int:
         pattern = os.path.join(path.rstrip("/"), "**", "*.jsonl*")
         pipeline = Dataset.from_files(pattern, empty_glob_ok=True).flat_map(load_file).map(lambda _: 1).reduce(sum)
-        results = Backend.execute(pipeline)
+        ctx = ZephyrContext(name="overlap-size")
+        results = ctx.execute(pipeline)
         return results[0]
 
     size_map: dict[str, int] = {}
@@ -214,7 +204,8 @@ def aggregate_single_dataset(
             }
 
     intermediate_dir = os.path.join(cfg.output_path, ".intermediate", training_name)
-    intermediate_paths = Backend.execute(
+    ctx = ZephyrContext(name="overlap-aggregate")
+    intermediate_paths = ctx.execute(
         Dataset.from_list(shard_paths)
         .flat_map(extract_overlap_records)
         .write_jsonl(f"{intermediate_dir}/overlap-{{shard:05d}}.jsonl.gz", skip_existing=True)
@@ -332,7 +323,7 @@ def aggregate_total(cfg: AggregateConfig):
 
     # Write consolidated summary CSV (all datasets + union)
     summary_path = os.path.join(cfg.output_path, "summary.csv")
-    with fsspec.open(summary_path, "wt") as f:
+    with open_url(summary_path, "wt") as f:
         writer = csv.writer(f)
         writer.writerow(["training_dataset", "ngram", "total_examples", "contaminated", "fraction"])
 
@@ -354,7 +345,7 @@ def aggregate_total(cfg: AggregateConfig):
 
     # Write overlap matrix CSV (evaluation x training datasets)
     matrix_path = os.path.join(cfg.output_path, "overlap_matrix.csv")
-    with fsspec.open(matrix_path, "wt") as f:
+    with open_url(matrix_path, "wt") as f:
         writer = csv.writer(f)
 
         # Header: training datasets as columns + union

@@ -5,31 +5,30 @@ on:
     branches:
       - main
   pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 
 jobs:
-  itest:
+  marin-itest:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
 
-    strategy:
-      matrix:
-        python-version: [ "3.12" ]
-
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+        uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -37,21 +36,64 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --all-packages --extra=cpu
+        # `--no-default-groups` keeps uv from also installing every workspace package's
+        # dev/docs/test groups (e.g. `levanter[docs,test,dev]`), which saves multiple
+        # minutes and avoids re-downloading CUDA wheels unnecessarily on cold caches.
+        run: uv sync --all-packages --extra=cpu --extra=dedup --no-default-groups --group dev
 
       - name: Check df -h
         run: df -h
 
-      - name: Give Ray tmp space
-        run: sudo mkdir -p /mnt/ray && sudo chmod 777 /mnt/ray
+      - name: Start local Iris cluster
+        run: |
+          uv run iris --config lib/iris/examples/test.yaml \
+            cluster start --local > /tmp/iris-cluster.log 2>&1 &
+          CLUSTER_PID=$!
+          echo "CLUSTER_PID=$CLUSTER_PID" >> "$GITHUB_ENV"
 
-      - name: Run the quickstart script
-        shell: bash -l {0}
-        # N.B. You _must not_ use `uv run` here, as that triggers weird behavior from Ray
-        # https://github.com/ray-project/ray/issues/54344
-        run: .venv/bin/python tests/integration_test.py
+          # Wait for controller to print its URL
+          for i in $(seq 1 120); do
+            if grep -q "Controller started at" /tmp/iris-cluster.log 2>/dev/null; then
+              URL=$(grep "Controller started at" /tmp/iris-cluster.log | head -1 | sed -n 's/.*Controller started at //p')
+              echo "IRIS_CONTROLLER_URL=$URL" >> "$GITHUB_ENV"
+              echo "Cluster ready at $URL"
+              break
+            fi
+            sleep 1
+          done
+
+          if [ -z "${URL:-}" ]; then
+            echo "Cluster failed to start within timeout"
+            cat /tmp/iris-cluster.log
+            exit 1
+          fi
+
+      - name: Run iris integration tests
+        run: |
+          uv run pytest tests/integration/iris/ \
+            --controller-url "$IRIS_CONTROLLER_URL" \
+            -v -s --log-cli-level=INFO --tb=short --timeout=600 \
+            -o "addopts=" \
+            -x
+        env:
+          WANDB_MODE: disabled
+          WANDB_API_KEY: ""
+          JAX_TRACEBACK_FILTERING: off
+
+      - name: Run full marin integration pipeline
+        run: |
+          timeout 600 uv run pytest tests/test_integration_test.py \
+            -m integration -o "addopts=" --timeout=600 -v -s
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          WANDB_MODE: disabled
+          WANDB_API_KEY: ""
           JAX_TRACEBACK_FILTERING: off
-          WANDB_MODE: offline
-          RAY_TMPDIR: /mnt/ray/
+
+      - name: Stop cluster
+        if: always()
+        run: kill $CLUSTER_PID 2>/dev/null || true
+
+      - name: Show cluster logs on failure
+        if: failure()
+        run: cat /tmp/iris-cluster.log || true

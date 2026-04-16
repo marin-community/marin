@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Convert HuggingFace datasets to evaluation and decontamination formats.
@@ -19,20 +8,6 @@ Processes HuggingFace datasets (QA, multiple choice, etc.) and converts them to:
 - Evaluation format: prompt/response pairs for perplexity evaluation
 - Decontamination format: text field for Dolma decontamination pipeline
 
-Example Usage:
-uv run zephyr --backend=sync \
-    lib/marin/src/marin/transform/huggingface/dataset_to_eval.py \
-    --dataset_name cais/mmlu \
-    --subsets all \
-    --splits train \
-    --input_path gs://bucket/raw/cais/mmlu \
-    --hf_path cais/mmlu \
-    --output_path gs://bucket/evaluation/mmlu \
-    --output_format evaluation \
-    --prompt_key question \
-    --options_key choices \
-    --answer_idx_key answer \
-    --answer_labels A B C D
 """
 
 import logging
@@ -47,7 +22,7 @@ from datasets import get_dataset_config_names, load_dataset
 from google.cloud import storage
 from marin.core.data import QAExample, QAExampleMetadata
 from marin.utilities.dataclass_utils import asdict_without_nones
-from zephyr import Backend, Dataset
+from zephyr import Dataset, ZephyrContext
 
 logger = logging.getLogger(__name__)
 
@@ -600,7 +575,8 @@ def hf_dataset_to_jsonl(cfg: DatasetConversionConfig) -> None:
             .write_jsonl(output_pattern)  # Compression auto-detected from .gz extension
         )
 
-        Backend.execute(pipeline)
+        ctx = ZephyrContext(name="dataset-to-eval")
+        ctx.execute(pipeline)
         logger.info(f"Wrote to {output_pattern}")
 
 

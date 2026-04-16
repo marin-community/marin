@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -11,14 +11,15 @@ from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
 import equinox as eqx
-import fsspec
 import haliax as hax
+from rigging.filesystem import open_url
 import haliax.haxtyping as ht
 import jax
 import jax.numpy as jnp
 import numpy as np
 from haliax import NamedArray
 from haliax.jax_utils import is_jax_array_like
+from haliax.partitioning import ResourceMapping
 
 import levanter.tracker
 from levanter.inference.jit_scheduler import (
@@ -476,13 +477,6 @@ def _prefill_kernel(
     return gen_state, outputs
 
 
-def _stop_tokens_from_work(work: PrefillWork, idx: int) -> ht.i32[NamedArray, "stop_seq position"] | None:  # type: ignore[name-defined]
-    stop_tokens = work.seq_params.stop_tokens
-    if stop_tokens is None:
-        return None
-    return stop_tokens["seq", idx]
-
-
 def _seq_params_from_work(work: PrefillWork, idx: int) -> SeqDecodingParams:
     def select(x):
         if isinstance(x, NamedArray):
@@ -659,7 +653,6 @@ def _handle_clones(
     return gen_state, outputs
 
 
-# @hax.named_jit(donate_args=(True, False, False))
 @functools.partial(jax.jit, static_argnums=(3, 4), donate_argnames=("gen_state",))
 def _run_generation_loop(
     gen_state: GenState,
@@ -809,6 +802,7 @@ class InferenceEngine:
         model: LmHeadModel,
         tokenizer,
         config: InferenceEngineConfig,
+        axis_resources: ResourceMapping | None = None,
     ) -> "InferenceEngine":
         """Build an engine using a EngineConfig for sizing knobs."""
         if config.max_pages is None:
@@ -820,7 +814,9 @@ class InferenceEngine:
         assert config.max_pages is not None
 
         table = PageTable.init(config.max_pages, config.max_seqs, config.page_size, max_pages_per_seq)
-        cache = hax.named_jit(model.initial_cache)(table.spec(), dtype=config.compute_dtype)
+        cache = hax.named_jit(model.initial_cache, axis_resources=axis_resources)(
+            table.spec(), dtype=config.compute_dtype
+        )
         decode_state = DecodeState.init(
             table,
             max_stop_seqs=config.max_stop_seqs,
@@ -1201,9 +1197,9 @@ class InferenceEngine:
             self.config.imputed_max_tokens_per_round,
             self.config.max_rounds,
         )
-        with fsspec.open(os.path.join(path, "gen_loop.jaxpr.txt.gz"), "w", compression="infer") as f:
+        with open_url(os.path.join(path, "gen_loop.jaxpr.txt.gz"), "w", compression="infer") as f:
             f.write(str(traced.jaxpr))
-        with fsspec.open(os.path.join(path, "gen_loop.hlo.txt.gz"), "w", compression="infer") as f:
+        with open_url(os.path.join(path, "gen_loop.hlo.txt.gz"), "w", compression="infer") as f:
             f.write(traced.lower().as_text())
 
         def _create_dummy_work():
@@ -1238,9 +1234,9 @@ class InferenceEngine:
             eqx.filter_eval_shape(_create_dummy_work),
             self.config.max_seqs_in_prefill,
         )
-        with fsspec.open(os.path.join(path, "run_prefill.jaxpr.txt.gz"), "w", compression="infer") as f:
+        with open_url(os.path.join(path, "run_prefill.jaxpr.txt.gz"), "w", compression="infer") as f:
             f.write(str(prefill_traced.jaxpr))
-        with fsspec.open(os.path.join(path, "run_prefill.hlo.txt.gz"), "w", compression="infer") as f:
+        with open_url(os.path.join(path, "run_prefill.hlo.txt.gz"), "w", compression="infer") as f:
             f.write(prefill_traced.lower().as_text())
 
         if log_artifacts:

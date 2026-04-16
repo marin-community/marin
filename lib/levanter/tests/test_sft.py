@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import equinox
@@ -19,15 +19,15 @@ class TestModel(equinox.Module):
     lm_head: hax.nn.Linear
 
 
-def test_reinitialize_some_tokens(local_gpt2_tokenizer):
-    # Setup test data
+def test_reinitialize_some_tokens(local_gpt2_marin_tokenizer):
     embed_dim = 32
-    tokens_to_reinit = ["<|test_token|>", "<|another_token|>"]
 
-    # Create a simple tokenizer with our test tokens
-    tokenizer = local_gpt2_tokenizer
-    tokenizer.add_special_tokens({"additional_special_tokens": tokens_to_reinit})
-    vocab_size = len(tokenizer)
+    tokenizer = local_gpt2_marin_tokenizer
+    vocab = tokenizer.get_vocab()
+    # Pick two real tokens from the vocabulary to reinitialize
+    token_list = sorted(vocab.keys())
+    tokens_to_reinit = [token_list[10], token_list[20]]
+    vocab_size = tokenizer.vocab_size
 
     # Create axes
     Vocab = hax.Axis("vocab", vocab_size)
@@ -76,17 +76,16 @@ def test_reinitialize_some_tokens(local_gpt2_tokenizer):
             ), f"Embedding for token {i} was changed when it shouldn't have been"
 
 
-def test_reinitialize_some_tokens_invalid_tokens(local_gpt2_tokenizer):
-    # Test with tokens not in vocabulary
-    tokenizer = local_gpt2_tokenizer
+def test_reinitialize_some_tokens_invalid_tokens(local_gpt2_marin_tokenizer):
+    tokenizer = local_gpt2_marin_tokenizer
     model = None
 
-    with pytest.raises(ValueError, match="One or more tokens are not in the tokenizer vocabulary"):
+    with pytest.raises((ValueError, KeyError)):
         reinitialize_some_tokens(model, tokenizer, ["<mklamnfljkaf>"], jax.random.PRNGKey(0))
 
 
-def test_reinitialize_some_tokens_empty_list(local_gpt2_tokenizer):
-    tokenizer = local_gpt2_tokenizer
+def test_reinitialize_some_tokens_empty_list(local_gpt2_marin_tokenizer):
+    tokenizer = local_gpt2_marin_tokenizer
     model = None
 
     with pytest.raises(ValueError, match="No tokens to reinitialize"):

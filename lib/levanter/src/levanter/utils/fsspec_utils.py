@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import glob
@@ -6,18 +6,18 @@ import os
 
 import braceexpand
 import fsspec
-from fsspec.asyn import AsyncFileSystem
+from rigging.filesystem import url_to_fs
 
 
 def exists(url, **kwargs) -> bool:
     """Check if a file exists on a remote filesystem."""
-    fs, path = fsspec.core.url_to_fs(url, **kwargs)
+    fs, path = url_to_fs(url, **kwargs)
     return fs.exists(path)
 
 
 def mkdirs(path):
     """Create a directory and any necessary parent directories."""
-    fs, path = fsspec.core.url_to_fs(path)
+    fs, path = url_to_fs(path)
     fs.makedirs(path, exist_ok=True)
 
 
@@ -31,7 +31,7 @@ def expand_glob(url):
     ['s3://bucket/2023/a.json', 's3://bucket/2024/b.json', ...]
     """
     for candidate in braceexpand.braceexpand(url):
-        fs, path = fsspec.core.url_to_fs(candidate)
+        fs, path = url_to_fs(candidate)
 
         if glob.has_magic(path):
             proto = fs.protocol if isinstance(fs.protocol, str) else fs.protocol[0]
@@ -44,19 +44,9 @@ def expand_glob(url):
 def remove(url, *, recursive=False, **kwargs):
     """Remove a file from a remote filesystem."""
     # TODO: better to use a STS deletion policy or job for this one.
-    fs, path = fsspec.core.url_to_fs(url, **kwargs)
+    fs, path = url_to_fs(url, **kwargs)
 
     fs.rm(path, recursive=recursive)
-
-
-async def async_remove(url, *, recursive=False, **kwargs):
-    """Remove a file from a remote filesystem."""
-    fs, path = fsspec.core.url_to_fs(url, **kwargs)
-
-    if isinstance(fs, AsyncFileSystem):
-        return await fs._rm(path, recursive=recursive)
-    else:
-        fs.rm(path, recursive=recursive)
 
 
 def join_path(lhs, rhs):

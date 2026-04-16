@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
@@ -7,6 +7,7 @@ from typing import Optional
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 import jmp
 
 import haliax
@@ -18,10 +19,10 @@ import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data import DataLoader
-from levanter.data.text import LMMixtureDatasetConfig, SingleDatasetLMConfigBase
-from levanter.eval import TaggedEvaluator, eval_model
+from levanter.data.text import LmDataConfig
+from levanter.eval import LossFnOutput, TaggedEvaluator, eval_model
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, compute_next_token_loss
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
@@ -36,7 +37,7 @@ class EvalLmConfig:
     checkpoint_path: Optional[str] = None
     hf_checkpoint: Optional[RepoRef] = None
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
-    data: SingleDatasetLMConfigBase | LMMixtureDatasetConfig = field(default_factory=SingleDatasetLMConfigBase)
+    data: LmDataConfig = field(default_factory=LmDataConfig)
     max_eval_length: int = 2048
     model: LmConfig = field(default_factory=LlamaConfig)
 
@@ -45,8 +46,6 @@ class EvalLmConfig:
     log_entropy: bool = False
     log_top2_gap: bool = False
     log_param_stats: bool = False
-
-    local_model_dir: str = "/opt/gcsfuse_mount/models"
 
 
 def main(config: EvalLmConfig):
@@ -80,11 +79,7 @@ def main(config: EvalLmConfig):
     if config.checkpoint_path is not None and config.hf_checkpoint is not None:
         raise ValueError("Must specify either checkpoint_path or hf_checkpoint, not both")
 
-    with config.trainer.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
-        evaluator = TaggedEvaluator(
-            Batch, datasets, tokenizer, max_examples_per_dataset=max_examples, axis_mapping=compute_axis_mapping
-        )
-
+    with config.trainer.use_device_mesh():
         key = jax.random.PRNGKey(0)
 
         vocab_size = len(tokenizer)
@@ -94,20 +89,36 @@ def main(config: EvalLmConfig):
 
         mp: jmp.Policy = config.trainer.mp
 
-        @hax.named_jit
-        def compute_loss(model: LmHeadModel, example: LmExample):
-            with hax.axis_mapping(compute_axis_mapping):
-                model = inference_mode(model, True)
-                model = mp.cast_to_compute(model)
-                return compute_next_token_loss(model, example, key=None)
+        def eval_loss_fn(model: LmHeadModel, batch: LmExample) -> LossFnOutput:
+            model = inference_mode(model, True)
+            model = mp.cast_to_compute(model)
+            per_pos_loss = model.compute_next_token_loss(batch, reduction=None, reduction_axis=()).array
+            per_pos_weight = batch.loss_weight.array
+            per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
+            return per_pos_loss, per_pos_weight, per_pos_token_id
 
+        evaluator = TaggedEvaluator(
+            EvalBatch=Batch,
+            tagged_eval_sets=datasets,
+            loss_fn=eval_loss_fn,
+            tokenizer=tokenizer,
+            axis_mapping=compute_axis_mapping,
+            max_examples_per_dataset=max_examples,
+        )
+
+        @hax.named_jit(axis_resources=compute_axis_mapping)
+        def compute_loss(model: LmHeadModel, example: LmExample):
+            model = inference_mode(model, True)
+            model = mp.cast_to_compute(model)
+            return model.compute_next_token_loss(example, key=None)
+
+        @hax.named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
             model = mp.cast_to_compute(model)
-            with hax.axis_mapping(compute_axis_mapping):
-                activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
-                head = model.get_lm_head()
-                logits = hax.dot(activations, head, axis=model.Embed)
-                return logits
+            activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
+            head = model.get_lm_head()
+            logits = hax.dot(activations, head, axis=model.Embed)
+            return logits
 
         # initialize the model
         if config.checkpoint_path is not None:
@@ -127,7 +138,10 @@ def main(config: EvalLmConfig):
             converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
             converter = converter.replaced(reference_checkpoint=config.hf_checkpoint, tokenizer=tokenizer)
             model = converter.load_pretrained(
-                model_config.model_type, ref=config.hf_checkpoint, dtype=mp.compute_dtype
+                model_config.model_type,
+                ref=config.hf_checkpoint,
+                axis_mapping=parameter_axis_mapping,
+                dtype=mp.compute_dtype,
             )
         else:
             assert False, "Should not get here"
@@ -143,7 +157,9 @@ def main(config: EvalLmConfig):
             for name, dataset in config.data.validation_sets(Pos).items():
                 if config.trainer.max_eval_batches is not None:
                     dataset = dataset.take(config.trainer.max_eval_batches * config.trainer.eval_batch_size)
-                loader = DataLoader(dataset, batch_size=config.trainer.eval_batch_size)
+                loader = DataLoader(
+                    dataset, batch_size=config.trainer.eval_batch_size, axis_resources=compute_axis_mapping
+                )
                 entropy_hist = levanter.analysis.compute_entropy_histogram(
                     model,
                     Vocab,
@@ -163,20 +179,22 @@ def main(config: EvalLmConfig):
             for name, dataset in config.data.validation_sets(Pos).items():
                 if config.trainer.max_eval_batches is not None:
                     dataset = dataset.take(config.trainer.max_eval_batches * config.trainer.eval_batch_size)
-                    loader = DataLoader(dataset, batch_size=config.trainer.eval_batch_size)
-                    top2_gap_hist = levanter.analysis.compute_top2_gap_histogram(
-                        model,
-                        Vocab,
-                        compute_logits,
-                        loader,
-                    )
+                loader = DataLoader(
+                    dataset, batch_size=config.trainer.eval_batch_size, axis_resources=compute_axis_mapping
+                )
+                top2_gap_hist = levanter.analysis.compute_top2_gap_histogram(
+                    model,
+                    Vocab,
+                    compute_logits,
+                    loader,
+                )
 
-                    levanter.tracker.log(
-                        {
-                            f"analysis/{name}/top2_gap": top2_gap_hist,
-                        },
-                        step=0,
-                    )
+                levanter.tracker.log(
+                    {
+                        f"analysis/{name}/top2_gap": top2_gap_hist,
+                    },
+                    step=0,
+                )
 
         if config.log_param_stats:
             logger.info("Computing param stats...")

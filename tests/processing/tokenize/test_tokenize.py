@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 import asyncio
 
@@ -21,7 +10,16 @@ from levanter.data.mixture import MixtureDataset
 from levanter.data.text import TextLmDatasetFormat
 from levanter.store.cache import CacheLedger, TreeCache
 from marin.execution import InputName
-from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfig, tokenize
+from marin.processing.tokenize.tokenize import (
+    MIN_GROUP_BYTES,
+    HfTokenizeConfig,
+    TokenizeConfig,
+    _bundle_files_by_size,
+    _compute_target_group_bytes,
+    tokenize,
+)
+from zephyr.dataset import FileEntry
+from zephyr.readers import InputFileSpec
 
 # Dummy values for other required TokenizeConfig fields
 DUMMY_CACHE_PATH = "/dummy/cache"
@@ -124,6 +122,58 @@ def test_mixed_paths_one_invalid_inputname():
     assert "gs://bucket/data/test/file2.jsonl" in str(excinfo.value)
 
 
+@pytest.mark.parametrize(
+    "total_bytes, max_workers, expected",
+    [
+        # Normal: 100 GB across 100 workers → 1 GB per group
+        (100_000_000_000, 100, 1_000_000_000),
+        # Floor kicks in: 1 GB across 100 workers → would be 10 MB, but MIN_GROUP_BYTES = 100 MB
+        (1_000_000_000, 100, MIN_GROUP_BYTES),
+        # Single worker: entire dataset in one group
+        (50_000_000_000, 1, 50_000_000_000),
+        # Tiny dataset: floor still applies
+        (10_000_000, 4096, MIN_GROUP_BYTES),
+        # Exact division
+        (4_000_000_000, 4, 1_000_000_000),
+    ],
+)
+def test_compute_target_group_bytes(total_bytes, max_workers, expected):
+    assert _compute_target_group_bytes(total_bytes, max_workers) == expected
+
+
+def _fe(path: str, size: int) -> FileEntry:
+    return FileEntry(spec=InputFileSpec(path=path), size=size)
+
+
+def test_bundle_files_produces_expected_groups():
+    """Auto-computed grouping should produce approximately max_workers groups."""
+    files = [_fe(f"file_{i}.jsonl", 500_000_000) for i in range(20)]
+    total_bytes = sum(f.size for f in files)  # 10 GB total
+    max_workers = 4
+    target = _compute_target_group_bytes(total_bytes, max_workers)  # 2.5 GB per group
+
+    groups = list(_bundle_files_by_size(files, target))
+    # _bundle_files_by_size yields a group when adding the next file would reach
+    # the target (uses >=). With target=2.5 GB and 500 MB files, each group fits
+    # 4 files (2 GB < 2.5 GB), yielding 5 groups.
+    assert len(groups) == 5
+    for group in groups:
+        assert len(group) == 4
+
+
+def test_bundle_files_single_large_file():
+    """A single file larger than target_group_bytes gets its own group."""
+    files = [
+        _fe("big.jsonl", 5_000_000_000),
+        _fe("small1.jsonl", 100_000_000),
+        _fe("small2.jsonl", 100_000_000),
+    ]
+    target = 1_000_000_000  # 1 GB
+    groups = list(_bundle_files_by_size(files, target))
+    assert groups[0] == ["big.jsonl"]
+    assert groups[1] == ["small1.jsonl", "small2.jsonl"]
+
+
 @pytest.mark.slow
 def test_tokenize_full_pipeline_integration(tmp_path):
     """Integration test for the full tokenization pipeline."""
@@ -132,7 +182,6 @@ def test_tokenize_full_pipeline_integration(tmp_path):
         cache_path=str(tmp_path / "cache"),
         tokenizer="gpt2",
         sample_count=100,
-        window_size_bytes=1_000_000,
         format=TextLmDatasetFormat(),
     )
 

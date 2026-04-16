@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Transform any HuggingFace dataset to OpenAI messages format.
@@ -36,10 +25,11 @@ from typing import Any
 import datasets
 import draccus
 import fsspec
+from rigging.filesystem import url_to_fs
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.execution import unwrap_versioned_value
 from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
-from zephyr import Backend, Dataset, load_jsonl, write_jsonl_file
+from zephyr import Dataset, ZephyrContext, load_jsonl, write_jsonl_file
 
 from .adapters import TransformAdapter
 
@@ -191,7 +181,7 @@ def create_shard_output_directory(output_filename: str) -> str:
     Returns:
         str: The path to the directory containing the shards.
     """
-    _, path = fsspec.core.url_to_fs(output_filename)
+    _, path = url_to_fs(output_filename)
     protocol = fsspec.core.split_protocol(output_filename)[0]
     path_without_suffix = Path(path)
     while path_without_suffix.suffix:
@@ -327,7 +317,7 @@ def process_shard_task(task: ShardTask) -> dict:
     output_filename = _shard_filename(task.output_path, task.shard_idx)
 
     # If output already exists, skip the work to let Zephyr resume cleanly without sentinels.
-    fs, _ = fsspec.core.url_to_fs(output_filename)
+    fs, _ = url_to_fs(output_filename)
     if fs.exists(output_filename):
         logging.info(
             f"Skipping subset={subset_name} split={task.split} shard={task.shard_idx} "
@@ -407,7 +397,8 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
         .map(process_shard_task)
         .write_jsonl(f"{metrics_path}/{{shard:05d}}-transform.jsonl", skip_existing=True)
     )
-    metric_files = Backend.execute(pipeline)
+    ctx = ZephyrContext(name="transform-conversation")
+    metric_files = ctx.execute(pipeline).results
 
     # Log summary by subset/split
     by_subset_split = defaultdict(list)

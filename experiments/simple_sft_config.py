@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
 
@@ -42,15 +31,11 @@ def compute_per_device_parallelism(
     num_devices = resources.chip_count()
 
     if microbatch_size % num_devices != 0:
-        raise ValueError(
-            f"microbatch_size ({microbatch_size}) must be divisible by "
-            f"num_devices ({num_devices})"
-        )
+        raise ValueError(f"microbatch_size ({microbatch_size}) must be divisible by " f"num_devices ({num_devices})")
 
     if global_batch_size % microbatch_size != 0:
         raise ValueError(
-            f"global_batch_size ({global_batch_size}) must be divisible by "
-            f"microbatch_size ({microbatch_size})"
+            f"global_batch_size ({global_batch_size}) must be divisible by " f"microbatch_size ({microbatch_size})"
         )
 
     per_device_parallelism = microbatch_size // num_devices
@@ -92,11 +77,13 @@ class SimpleSFTConfig:
     tokenizer: str | None = None
     """Tokenizer to use for training."""
 
-    model_name_or_path: str | None = None
-    """Path to the pretrained HF model checkpoint to initialize from"""
+    initialize_from_hf: str | None = None
+    """HF model name or path to initialize from (e.g., 'meta-llama/Llama-3.1-8B').
+    Mutually exclusive with initialize_from_checkpoint_path."""
 
     initialize_from_checkpoint_path: str | None = None
-    """Path to a levanter checkpoint to initialize from."""
+    """Path to a levanter checkpoint to initialize from.
+    Mutually exclusive with initialize_from_hf."""
 
     max_seq_len: int = 4096
     """Maximum sequence length for training."""
@@ -130,11 +117,16 @@ class SimpleSFTConfig:
     steps_per_eval: int = 1000
     """How often to run validation losses."""
 
-    steps_per_checkpoint: int = 1000
-    """How often to save checkpoints."""
+    steps_per_checkpoint: int | None = None
+    """How often to keep a permanent checkpoint. None (default) keeps only the final
+    checkpoint; rolling temporary checkpoints are still written for resumption."""
 
     steps_per_hf_export: int = 500
     """How often to save HuggingFace checkpoints."""
+
+    hf_generation_eos_token_ids: list[int] | None = None
+    """EOS token IDs to write to generation_config.json. None means no generation config.
+    For chat models, include the turn-boundary token (e.g. [128001, 128009])."""
 
     # Mixture-specific parameters
     mixture_block_size: int = 2048
@@ -149,11 +141,6 @@ class SimpleSFTConfig:
     # Other parameters
     seed: int = 0
     """Random seed for training."""
-
-    initialize_from_hf: bool | None = None
-    """Whether to initialize from HuggingFace model.
-    If false, we will load a levanter checkpoint. None defaults to True if
-    model_name_or_path is set and initialize_from_checkpoint_path is not set."""
 
     node_count: int = 1
     """Number of TPU slices for training."""
@@ -170,7 +157,7 @@ class SimpleSFTConfig:
 
     per_device_parallelism: int = -1
     """How many examples to process in parallel on each device. -1 (default) means
-    train_batch_size/num_devices (no gradient accumulation). Set to a smaller value
+    train_batch_size/num_devices (no gradient accumulation). Set to a positive value
     to enable gradient accumulation. For example, with 8 devices, batch_size=32, and
     per_device_parallelism=1, you get gradient accumulation of 4."""
 

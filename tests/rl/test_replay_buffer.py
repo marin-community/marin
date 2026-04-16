@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Test rollout storage and replay buffer functionality."""
 
@@ -84,6 +73,9 @@ def create_test_batch(
             response_logprobs=response_logprobs,
             token_rewards=token_rewards,
             episode_reward=episode_reward,
+            temperature=1.0,
+            top_k=None,
+            is_truncated=False,
             metadata=batch_metadata,
         )
         rollouts.append(rollout)
@@ -115,6 +107,7 @@ def test_replay_buffer():
         max_samples=-1,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )
@@ -131,7 +124,7 @@ def test_replay_buffer():
     # Convert to training batch to verify format
     training_batch = rollouts_to_training_batch(sampled_rollouts)
     assert training_batch is not None
-    assert training_batch.input_ids.shape == {"batch": 4, "position": 32}
+    assert training_batch.input_ids.shape == {"batch": 4, "position": 16}
 
     # Test data loader
     data_loader = ReplayDataLoader(rollout_reader=reader, replay_buffer=replay_buffer, rollout_fetch_interval=0.1)
@@ -166,6 +159,7 @@ def test_replay_buffer_recency_bias():
         max_samples=-1,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )
@@ -201,6 +195,7 @@ def test_replay_buffer_capacity_eviction():
         max_samples=-1,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )
@@ -228,6 +223,7 @@ def test_replay_buffer_max_resamples():
         max_samples=3,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )
@@ -266,6 +262,7 @@ def test_replay_buffer_max_resamples_disabled():
         max_samples=-1,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )
@@ -300,6 +297,7 @@ def test_replay_buffer_max_resamples_multiple_envs():
         max_samples=2,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )
@@ -340,6 +338,7 @@ def test_replay_buffer_weight_step_filtering():
         max_samples=-1,
         max_rollout_step_delay=30,
         max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )
@@ -402,6 +401,7 @@ def test_replay_buffer_rollout_delay_progressive():
         max_samples=-1,
         max_rollout_step_delay=10,
         max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )
@@ -452,6 +452,7 @@ def test_is_rollout_fresh():
         max_samples=-1,
         max_rollout_step_delay=10,
         max_rollout_timestamp_delay=100.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )

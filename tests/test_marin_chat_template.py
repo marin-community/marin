@@ -1,17 +1,7 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
+import tempfile
 from collections.abc import Sequence
 
 import pytest
@@ -22,15 +12,26 @@ from experiments.create_marin_tokenizer import (
     run_all_tests,
 )
 from levanter.data.text import ChatProcessor
+from levanter.tokenizers import load_tokenizer
 
 
 @pytest.fixture()
-def fresh_marin_tokenizer():
+def hf_marin_tokenizer():
+    """The raw HF PreTrainedTokenizer -- for tests that exercise HF-specific APIs."""
     try:
         base = load_llama3_tokenizer()
     except Exception as exc:
         pytest.skip(f"Could not load llama3 tokenizer: {exc}", allow_module_level=True)
     return create_marin_tokenizer(base)
+
+
+@pytest.fixture()
+def fresh_marin_tokenizer(hf_marin_tokenizer):
+    """MarinTokenizer wrapping the custom marin tokenizer -- for ChatProcessor tests."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        hf_marin_tokenizer.save_pretrained(tmpdir)
+        load_tokenizer.cache_clear()
+        yield load_tokenizer(tmpdir)
 
 
 def decode_sequence(tokenizer, tensor: Sequence[int]) -> str:
@@ -74,9 +75,8 @@ def test_marin_chat_template_handles_tool_calls(fresh_marin_tokenizer):
     assert result[0]["assistant_masks"].sum() > 0
 
 
-def test_marin_tokenizer_integration_checks(fresh_marin_tokenizer):
-    tokenizer = fresh_marin_tokenizer
-    run_all_tests(tokenizer)
+def test_marin_tokenizer_integration_checks(hf_marin_tokenizer):
+    run_all_tests(hf_marin_tokenizer)
 
 
 def test_marin_chat_template_ipython_output(fresh_marin_tokenizer):

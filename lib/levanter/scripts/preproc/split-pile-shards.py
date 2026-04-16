@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -6,8 +6,8 @@ import os
 import sys
 from pathlib import Path
 
-import fsspec
 import tqdm
+from rigging.filesystem import open_url
 
 
 OUT_PATH = "gs://levanter-data/pile-domains"
@@ -46,7 +46,7 @@ def process_file(input_file_path):
     base_file = Path(input_file_path).stem
     compressors = {}
 
-    with fsspec.open(input_file_path, "r", compression="infer") as text_stream:
+    with open_url(input_file_path, "r", compression="infer") as text_stream:
         for line in tqdm.tqdm(text_stream):
             if not line.strip():
                 continue  # Skip empty lines
@@ -60,7 +60,7 @@ def process_file(input_file_path):
             # Check if compressor exists for this category, if not create it
             if category not in compressors:
                 # output_file = open(output_file_path, 'wb')
-                output_file = fsspec.open(str(output_file_path), "wb", compression="infer").open()
+                output_file = open_url(str(output_file_path), "wb", compression="infer").open()
                 print("opened", output_file_path)
                 compressors[category] = output_file
 

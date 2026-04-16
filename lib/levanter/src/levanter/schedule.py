@@ -1,11 +1,10 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import typing
 import warnings
 from dataclasses import dataclass
 from typing import Sequence, TypeVar
-
 
 T = TypeVar("T")
 
@@ -35,18 +34,6 @@ def value_at_step(schedule_or_t: Sequence[ScheduleStep[T]] | T, step: int) -> T:
             return step_.value
 
     raise ValueError(f"Step {step} isn't after any of the schedule steps.")
-
-
-def validate_schedule_sorted(schedule: Sequence[ScheduleStep[T]]):
-    if len(schedule) == 0:
-        raise ValueError("Schedule must have at least one step.")
-    if schedule[0].start != 0:
-        raise ValueError("Schedule must start at step 0.")
-
-    for i in range(1, len(schedule)):
-        # the last step can be -1 to indicate that the value should be held indefinitely
-        if schedule[i].start < schedule[i - 1].start:
-            raise ValueError(f"Schedule is not sorted at index {i}")
 
 
 def distinct_values(schedule: Sequence[ScheduleStep[T]] | T) -> set[T]:

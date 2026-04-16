@@ -1,21 +1,7 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 import re
-import subprocess
-
-from bs4 import BeautifulSoup
 
 
 # remove citations
@@ -40,34 +26,3 @@ def clean_text(text):
 
 
 # convert html to md
-def html2md(html):
-    # get title
-    soup = BeautifulSoup(html, "html.parser")
-    doc_title = soup.title.string
-    # get headers
-    headers = [(tag.text, tag.name) for tag in soup.find_all(["h2", "h3", "h4"])]
-    headers_dict = {}
-    for header in headers:
-        if header[0] not in headers_dict:
-            headers_dict[header[0]] = []
-            prefix = {"h2": "##", "h3": "###", "h4": "####"}[header[1]]
-            headers_dict[header[0]].append(prefix)
-    # generate plain text with pandoc
-    cmd = "pandoc --from html --to plain --wrap=none"
-    text = str(subprocess.check_output(cmd, input=html, text=True, shell=True))
-    # clean text
-    text = clean_text(text)
-    # apply headers
-    lines = text.split("\n")
-    markdown_lines = []
-    for line in lines:
-        if line.strip() in headers_dict:
-            title = line.strip()
-            if headers_dict[title]:
-                markdown_lines.append(headers_dict[title][0] + " " + title)
-                headers_dict[title].pop(0)
-        else:
-            markdown_lines.append(line)
-    # create final doc
-    doc = f"# {doc_title}\n\n" + ("\n".join(markdown_lines))
-    return doc

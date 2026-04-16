@@ -17,7 +17,7 @@
 Updated chat template for Qwen3 that has {% generation %} tags inserted (required by Levanter).
 """
 
-QWEN_3_CHAT_TEMPLATE = r"""{%- if tools %}
+QWEN_3_CHAT_TEMPLATE = r"""{%- if tools is defined and tools %}
     {{- '<|im_start|>system\n' }}
     {%- if messages[0].role == 'system' %}
         {{- messages[0].content + '\n\n' }}

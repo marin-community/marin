@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 transform.py
@@ -25,15 +14,14 @@ Usage:
 import hashlib
 import json
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-import draccus
-import fsspec
+from rigging.log_setup import configure_logging
+from rigging.filesystem import open_url
 from marin.core.runtime import cached_or_construct_output
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+configure_logging(level=logging.INFO)
 logger = logging.getLogger("fasttext-to-dolma")
 
 
@@ -71,8 +59,8 @@ def convert_fasttext_to_dolma_format(input_path: str, output_path: str, source: 
         bool: True if the conversion was successful.
     """
     with (
-        fsspec.open(input_path, "rt") as f,
-        fsspec.open(output_path, "wt", compression="gzip") as output_jsonl_gz,
+        open_url(input_path, "rt") as f,
+        open_url(output_path, "wt", compression="gzip") as output_jsonl_gz,
     ):
         for line_number, line in enumerate(f):
             # Split the line to separate the fasttext label and text and remove trailing newline
@@ -108,14 +96,3 @@ class TransformFasttextToDolmaConfig:
     input_path: str
     output_path: str
     source: str
-
-
-@draccus.wrap()
-def fasttext_to_dolma_format(cfg: TransformFasttextToDolmaConfig):
-    # Currently Executor framework passes in directory names, but we are converting a singular
-    # Fasttext file to Dolma format, so in the case that the output path is a directory, we need to
-    # append the output filename to it.
-    if not cfg.output_path.endswith(".jsonl.gz"):
-        cfg.output_path = os.path.join(cfg.output_path, "text.jsonl.gz")
-
-    convert_fasttext_to_dolma_format(cfg.input_path, cfg.output_path, cfg.source)

@@ -2,9 +2,15 @@
 requires = ["uv_build>=0.7.19,<0.10.0"]
 build-backend = "uv_build"
 
+# Explicit module-name override because the dist name (marin-levanter) no
+# longer matches the import name (levanter); uv_build's default would look
+# for src/marin_levanter/ which doesn't exist.
+[tool.uv.build-backend]
+module-name = "levanter"
+
 [project]
-name = "levanter"
-version = "1.2"
+name = "marin-levanter"
+version = "0.99"
 description = "Scalable Training for Foundation Models with Named Tensors and JAX"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -28,13 +34,16 @@ classifiers = [
 ]
 
 dependencies = [
-    "haliax>=1.4.dev450",
+    "marin-haliax",
     "equinox>=0.11.7,!=0.12.0",
-    "jax==0.6.2",
-    "fray",
-    "zephyr",
+    "jax>=0.8.0",
+    "marin-fray",
+    "marin-rigging",
+    "marin-zephyr",
+    "einops",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
+    "kitoken>=0.10.2",
     "transformers>=4.57.1,<5.0",
     "optax>=0.1.9",
     "wandb>=0.17.8",
@@ -44,13 +53,13 @@ dependencies = [
     "datasets>=3.1.0,<5.0",
     "gcsfs>=2024.2,<2026",
     "braceexpand>=0.1.7",
+    "chex>=0.1.86",
     "jmp>=0.0.3",
     "fsspec[http]>=2024.2,<2026",
     "tensorstore>=0.1.73",
     "pytimeparse>=1.1.8",
     "humanfriendly==10.0",
     "safetensors[numpy]>=0.4.2,<0.7.0",
-    "matplotlib>=3.7.0",
     "tblib>=1.7.0,<4.0.0",
     "dataclasses-json~=0.6.4",
     "ray[default]==2.53.0",
@@ -62,8 +71,7 @@ dependencies = [
     "lenses",
     "jinja2",  # needed for apply_chat_template
     "protobuf>=6,<7",  # ensure TB/XProf compatibility; avoid 7+ due to ray
-  # "lm-eval==0.4.2",
-  # "lm-eval @ git+https://github.com/dlwh/lm-evaluation-harness.git@no_torch"
+    "immutabledict",
 ]
 
 [project.urls]
@@ -71,8 +79,8 @@ Homepage = "https://github.com/stanford-crfm/levanter"
 "Bug Tracker" = "https://github.com/stanford-crfm/levanter/issues"
 
 [project.optional-dependencies]
-gpu = ["jax[cuda12]==0.6.2"]
-tpu = ["jax[tpu]==0.6.2"]
+gpu = ["jax[cuda12]>=0.8.0"]
+tpu = ["jax[tpu]>=0.8.0"]
 torch_test = [
   "torch>=2.7.0",
   "peft>=0.12.0",
@@ -94,6 +102,14 @@ lm_eval = [
   "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
 ]
 
+kernels = [
+    "tokamax",
+]
+
+kitoken = [
+    "kitoken>=0.10.2",
+]
+
 gcp = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
@@ -108,12 +124,14 @@ test = [
   "pytest-asyncio",
   "soundfile",
   "librosa>=0.11.0",
-  "numba>=0.63.1",
   "tensorboardX>=2.6",
   "chex>=0.1.86",
   "httpx>=0.28.1",
   "pytest-profiling>=1.8.1",
+  "pytest-xdist",
   "trackio>=0.5.0",
+  # need this or else the resolver gets a bad version
+  "numba>=0.62.1"
 ]
 
 docs = [
@@ -132,13 +150,16 @@ dev = [
   "pygments",
   "click>=8.0.0",
   "prompt_toolkit>=3.0.0",
+  "matplotlib>=3.7.0",
 ]
 
 
 
 
 [tool.uv]
-default-groups = ["test", "docs", "dev"]
+find-links = [
+  "https://github.com/marin-community/kitoken/releases/expanded_assets/kitoken-0.10.2-a3012f4",
+]
 conflicts = [
   [
     { extra = "gpu" },
@@ -168,11 +189,22 @@ mypy_path = ["src"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
+addopts = "-n auto"
 pythonpath = ["src", "tests"]
+filterwarnings = [
+    "ignore:Transparent hugepages are not enabled\\..*:UserWarning:jax._src.cloud_tpu_init",
+    "ignore:Read the `app_url` setting from the appropriate Settings object\\.:DeprecationWarning:wandb.analytics.sentry",
+    "ignore:websockets\\.legacy is deprecated.*:DeprecationWarning:websockets.legacy",
+    "ignore:websockets\\.server\\.WebSocketServerProtocol is deprecated:DeprecationWarning:uvicorn.protocols.websockets.websockets_impl",
+    "ignore:'HTTP_422_UNPROCESSABLE_ENTITY' is deprecated\\. Use 'HTTP_422_UNPROCESSABLE_CONTENT' instead\\.:DeprecationWarning:gradio.routes",
+    "ignore:Passing 'msg' argument to Task\\.cancel\\(\\) is deprecated since Python 3\\.11, and scheduled for removal in Python 3\\.14\\.:DeprecationWarning",
+    "ignore:Passing 'msg' argument to Future\\.cancel\\(\\) is deprecated since Python 3\\.11, and scheduled for removal in Python 3\\.14\\.:DeprecationWarning",
+]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "entry: marks tests as entry point tests (deselect with '-m \"not entry\"')",
     "ray: marks tests that require Ray (deselect with '-m \"not ray\"')",
     "torch: mark tests that use Torch (deselect with '-m \"not torch\"')",
+    "tpu: mark tests that require TPU (deselect with '-m \"not tpu\"')",
 ]
 asyncio_default_fixture_loop_scope = "function"

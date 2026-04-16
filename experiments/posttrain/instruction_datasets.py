@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Instruction datasets are streamed from Hugging Face and transformed into OpenAI messages
@@ -1032,6 +1021,66 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="teetone/qwen3_4b_openthoughts3_math53K_instill_n1_valredundancy1_round1",
         subsets=[],
         splits=["train"],
+    ),
+    # nvidia/OpenMathReasoning - CoT split (Chain of Thought reasoning)
+    "nvidia/OpenMathReasoning/cot": InstructionDatasetConfig(
+        hf_dataset_id="nvidia/OpenMathReasoning",
+        revision="d3d0866",
+        adapter=instruction_response_adapter(
+            instruction_column="problem",
+            response_column="generated_solution",
+        ),
+        metadata_columns=[
+            "expected_answer",
+            "problem_source",
+            "problem_type",
+            "generation_model",
+            "inference_mode",
+            "pass_rate_72b_tir",
+            "used_in_kaggle",
+        ],
+        name="nvidia/OpenMathReasoning/cot",
+        splits=["cot"],
+    ),
+    # nvidia/OpenMathReasoning - TIR split (Tool-Integrated Reasoning)
+    "nvidia/OpenMathReasoning/tir": InstructionDatasetConfig(
+        hf_dataset_id="nvidia/OpenMathReasoning",
+        revision="d3d0866",
+        adapter=instruction_response_adapter(
+            instruction_column="problem",
+            response_column="generated_solution",
+        ),
+        metadata_columns=[
+            "expected_answer",
+            "problem_source",
+            "problem_type",
+            "generation_model",
+            "inference_mode",
+            "pass_rate_72b_tir",
+            "used_in_kaggle",
+        ],
+        name="nvidia/OpenMathReasoning/tir",
+        splits=["tir"],
+    ),
+    # nvidia/OpenMathReasoning - genselect split (curated subset)
+    "nvidia/OpenMathReasoning/genselect": InstructionDatasetConfig(
+        hf_dataset_id="nvidia/OpenMathReasoning",
+        revision="d3d0866",
+        adapter=instruction_response_adapter(
+            instruction_column="problem",
+            response_column="generated_solution",
+        ),
+        metadata_columns=[
+            "expected_answer",
+            "problem_source",
+            "problem_type",
+            "generation_model",
+            "inference_mode",
+            "pass_rate_72b_tir",
+            "used_in_kaggle",
+        ],
+        name="nvidia/OpenMathReasoning/genselect",
+        splits=["genselect"],
     ),
 }
 

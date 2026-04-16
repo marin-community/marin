@@ -5,50 +5,47 @@ requires-python = ">=3.11,<3.13"
 
 [project]
 name = "marin"
-version = "0.1.0"
+version = "0.99"
 
 requires-python = ">=3.11"
 dependencies = [
     "braceexpand",
     "cryptography>=45",
-    "datasets",
-    "ddsketch",
+    "datasets<4.0.0",
     "deepdiff",
     "draccus>=0.11.5",
-    "dupekit",
     "fasteners>=0.19",
-    "fasttext",
     "flask",
+    "marin-fray",
+    "marin-rigging",
     "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "jax==0.6.2",
-    "haliax",
-    "levanter[serve]",
-    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+    "marin-haliax",
+    "jax==0.8.0",  # vllm-tpu currently requires this exact version
+    "jaxopt>=0.8.3",
+    "marin-levanter[serve]",
     "lxml[html_clean]",
-    "lz4",
     "markdownify==0.12.1",
-    "zephyr",
-    "fray",
     "multiprocess==0.70.16",
     "numpy",
     "openai",
-    "pandas",
+    "pandas>=2.0",
+    "plotly",
     "pyarrow>=22",
     "ray==2.53.0",
     "regex",
     "requests",
+    "resiliparse>=0.17.2",
     "s3fs>=2024",
     "toml",
-    "torch>=2.7.0",
     "tqdm",
     "tqdm-loggable",
     "wandb",
     "warcio",
-    "resiliparse>=0.17.2",
+    "marin-zephyr",
 ]
 
 [project.license]
@@ -65,12 +62,14 @@ test = [
     # need this for integration tests
     "pip",
     "openai-responses",
+    # for scaling law plotting tests
+    "plotly",
 ]
 lint = [
     "ruff==0.14.3",
     "black==25.9.0",
     "mypy>=1.4.1",
-    "pyrefly==0.40.0",
+    "pyrefly>=0.42.0",
     "types-PyYAML",
     "types-requests",
     "types-six",
@@ -89,7 +88,7 @@ docs = [
     "mkdocs-include-markdown-plugin>=7.1.5",
 ]
 
-math = ["pylatexenc", "sympy"]
+math = ["pylatexenc", "sympy>=1.12.1,<1.14"]
 
 metrics = ["google-cloud-logging"]
 
@@ -110,41 +109,97 @@ conflicts = [
         { extra = "gpu" },
         { extra = "cpu" },
     ],
+    [
+        { extra = "vllm" },
+        { extra = "cpu" },
+    ],
+    [
+        { extra = "vllm" },
+        { extra = "cuda12" },
+    ],
 ]
 
 
 [project.optional-dependencies]
 
-gpu = ["jax[cuda12]==0.6.2", "torch>=2.7.0"]
+gpu = ["jax[cuda12]==0.8.0", "torch==2.9.0", "torchvision==0.24.0"]
+tpu = ["jax[tpu]==0.8.0", "torch==2.9.0", "torchvision==0.24.0"]
 
-tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
-
-cpu = ["jax==0.6.2", "torch>=2.7.0"]
+cpu = [
+  "jax==0.8.0",
+  "torch==2.9.0",
+  # Linux x86_64
+  "torchvision==0.24.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  # Windows x86_64 (AMD64)
+  "torchvision==0.24.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  # Linux aarch64, macOS arm64: PyPI default wheel
+  "torchvision==0.24.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+]
 
 rl = [
     "prime",
-    "sympy",
+    "sympy>=1.12.1,<1.14",
     "verifiers==0.1.5",
 ]
 
 eval = [
-    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+    "lm-eval[math,api]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
 ]
+
+# Evalchemy for reasoning-focused LLM evaluations (AIME, MATH500, HumanEval+, etc.)
+# Note: Evalchemy is cloned and run at runtime by the EvalchemyEvaluator rather than
+# being installed as a pip dependency, due to local file dependencies in evalchemy's
+# pyproject.toml that don't work with pip git installs.
+# The evaluator clones from commit 6ed674159b37f740f2353a86f596f49f6ac13c19 (2025-01-08)
+evalchemy = [
+    # Core dependencies needed to run evalchemy
+    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+    "sympy>=1.12.1,<1.14",
+    "antlr4-python3-runtime==4.11",
+    "bespokelabs-curator",  # Required by evalchemy's curator_lm module
+    "sqlalchemy",  # Required by evalchemy's database models
+    # For code evals
+    "fire",
+]
+
+vizier = [
+    "google-vizier[jax]",
+]
+
+vllm =[
+    "vllm-tpu==0.13.2.post6",
+    "triton==3.5.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
+]
+
+harbor = [
+    "harbor>=0.1.42",
+]
+
+dedup = [
+    "dupekit",
+]
+
+math = ["pylatexenc", "sympy"]
 
 [[tool.uv.index]]
 name = "marin-resiliparse"
 url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
 
 [tool.uv.sources]
-torch = [
+torchvision = [
     # Default to the CPU index for TPU/CPU builds
-    { index = "pytorch-cpu", extra="cpu" },
-    { index = "pytorch-cpu", extra="tpu" },
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cpu", extra = "tpu" },
     # GPU index only when --extra gpu
     { index = "pytorch-cu128", extra = "gpu" },
 ]
 resiliparse = { index = "marin-resiliparse" }
-
+# Use CUDA PyTorch for --extra=gpu on Linux, CPU PyTorch for TPU/CPU builds
+torch = [
+    { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cpu", extra = "tpu" },
+]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

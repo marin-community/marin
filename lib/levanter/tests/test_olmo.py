@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import tempfile
@@ -101,10 +101,9 @@ def test_olmo2_mlp(num_kv_heads):
     config = _get_olmo2_config(num_kv_heads=num_kv_heads)
     key = random.PRNGKey(0)
 
-    # Direct reference to Olmo2MLP instead of going through model_type
-    from levanter.models.olmo import Olmo2MLP
+    from levanter.models.llama import LlamaMlp
 
-    mlp = Olmo2MLP.init(config.Embed, config.Mlp, config.activation_function, key=key, use_bias=config.use_bias)
+    mlp = LlamaMlp.init(config.Embed, config.Mlp, config.activation_function, key=key, use_bias=config.use_bias)
 
     x, _ = _get_random_inputs(config)
     out = mlp(x)

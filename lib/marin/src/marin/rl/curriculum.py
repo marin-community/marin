@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Adaptive curriculum learning system for RL training.
@@ -26,9 +15,8 @@ import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-import fsspec
 import numpy as np
-from fray.job import get_default_job_ctx
+from rigging.filesystem import url_to_fs
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
 
@@ -79,10 +67,21 @@ class SamplingParams:
     """Parameters for sampling rollouts from an environment."""
 
     temperature: float = 1.0
+    top_k: int | None = None
     n_prompts: int = 8
     n_generations_per_prompt: int = 4
-    max_tokens: int = 256
+    max_output_tokens: int = 512
     stop_tokens: list[int] | None = None
+
+    def __post_init__(self):
+        if self.temperature < 1e-4:
+            logger.warning(
+                "SamplingParams.temperature is very low (%f). Greedy decoding is generally "
+                "not useful for RL training as it limits exploration.",
+                self.temperature,
+            )
+        if self.top_k == 1:
+            logger.warning("SamplingParams.top_k is 1. Greedy decoding is generally not useful for RL training.")
 
 
 @dataclass
@@ -121,14 +120,20 @@ class CurriculumConfig:
     lessons: dict[str, LessonConfig]
     """Dictionary mapping lesson names to lesson configurations."""
 
+    max_seq_len: int
+    """Maximum total sequence length (prompt + response) for training batches."""
+
     eval_frequency: int = 100
-    """How often to run full evaluation across all lessons (in rollout worker steps)."""
+    """How often to run full evaluation across all lessons (in completed trainer steps)."""
 
     eval_n_examples: int = 64
     """Number of examples to use for each lesson during full evaluation."""
 
-    micro_eval_frequency: int = 10
-    """How often to run micro-evaluation on the current lesson (in rollout worker steps)."""
+    micro_eval_frequency: int | None = 10
+    """How often to run micro-evaluation on the current lesson (in rollout worker steps).
+
+    Set to `None` to disable micro-evaluation explicitly.
+    """
 
     micro_eval_n_examples: int = 4
     """Number of examples for micro-evaluation (keep small for speed)."""
@@ -146,9 +151,9 @@ class CurriculumConfig:
     """How often to checkpoint curriculum state (in training steps)."""
 
     @property
-    def max_tokens(self) -> int:
-        """Maximum tokens across all lessons in the curriculum."""
-        return max(lesson.sampling_params.max_tokens for lesson in self.lessons.values())
+    def max_output_tokens(self) -> int:
+        """Maximum output tokens across all lessons in the curriculum."""
+        return max(lesson.sampling_params.max_output_tokens for lesson in self.lessons.values())
 
 
 def _validate_dependencies(lesson_configs: dict[str, LessonConfig]):
@@ -533,7 +538,7 @@ class Curriculum:
 
         logger.info("Saving curriculum checkpoint to %s/%s at step %d", checkpoint_dir, filename, self.current_step)
 
-        fs, _ = fsspec.core.url_to_fs(checkpoint_dir)
+        fs, _ = url_to_fs(checkpoint_dir)
         fs.makedirs(checkpoint_dir, exist_ok=True)
         checkpoint_path = os.path.join(checkpoint_dir, filename)
 
@@ -573,7 +578,7 @@ class Curriculum:
             checkpoint_dir: Directory containing the checkpoint.
             filename: Name of the checkpoint file to load (default pattern).
         """
-        fs, _ = fsspec.core.url_to_fs(checkpoint_dir)
+        fs, _ = url_to_fs(checkpoint_dir)
         checkpoint_path = os.path.join(checkpoint_dir, filename)
 
         if not fs.exists(checkpoint_path):
@@ -602,17 +607,3 @@ class Curriculum:
         self.current_step = checkpoint_data["current_step"]
 
         logger.info("Restored curriculum checkpoint from %s at step %d", checkpoint_path, self.current_step)
-
-
-def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: str | None = None):
-    job_ctx = get_default_job_ctx()
-    actor = job_ctx.create_actor(Curriculum, actor_name=config.actor_name, actor_args=(config,), preemptible=False)
-
-    # Auto-restore from checkpoint if path provided
-    if checkpoint_path:
-        try:
-            actor.restore_checkpoint.call(checkpoint_path)
-        except Exception as e:
-            logger.warning(f"Failed to restore curriculum checkpoint from {checkpoint_path}: {e}, starting fresh")
-
-    return actor

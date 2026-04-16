@@ -1,19 +1,7 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import functools
 import io
 import logging
 import os
@@ -24,11 +12,12 @@ from urllib.parse import urlparse
 import fsspec
 import humanfriendly
 from fsspec.implementations.local import LocalFileSystem
+from rigging.filesystem import open_url
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 from huggingface_hub import create_commit, upload_folder
 from tqdm_loggable.auto import tqdm
 
 from marin.execution import ExecutorStep, InputName
-from marin.utilities.fn_utils import with_retries
 from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
@@ -232,16 +221,22 @@ def _actually_upload_to_hf(config: UploadToHfConfig):
                 )
 
 
-@functools.wraps(upload_folder)
-@with_retries()
 def retrying_upload_folder(*args, **kwargs):
-    return upload_folder(*args, **kwargs)
+    return retry_with_backoff(
+        lambda: upload_folder(*args, **kwargs),
+        max_attempts=3,
+        backoff=ExponentialBackoff(initial=2.0, maximum=30.0, factor=2.0),
+        operation="upload_folder",
+    )
 
 
-@functools.wraps(create_commit)
-@with_retries()
 def retrying_create_commit(*args, **kwargs):
-    return create_commit(*args, **kwargs)
+    return retry_with_backoff(
+        lambda: create_commit(*args, **kwargs),
+        max_attempts=3,
+        backoff=ExponentialBackoff(initial=2.0, maximum=30.0, factor=2.0),
+        operation="create_commit",
+    )
 
 
 def _wrap_in_buffered_base(fileobj):
@@ -271,7 +266,7 @@ if __name__ == "__main__":
         )
 
     # also test memory fs
-    with fsspec.open("memory://foo/bar/test.txt", "w") as f:
+    with open_url("memory://foo/bar/test.txt", "w") as f:
         f.write("Hello, world!!!!!\nadad :-)")
 
     _actually_upload_to_hf(

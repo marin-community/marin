@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Mock environment for testing RL training without external dependencies."""
 
@@ -21,7 +10,7 @@ from typing import Any, ClassVar, Protocol
 
 import jax
 import numpy as np
-from transformers import PreTrainedTokenizer
+from levanter.tokenizers import MarinTokenizer
 
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import RolloutGroup
@@ -217,7 +206,7 @@ class SequentialDigitsTask:
 
         return examples
 
-    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer: PreTrainedTokenizer) -> float:
+    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer: MarinTokenizer) -> float:
         """Compute reward based on sequential digit quality.
 
         Reward structure:
@@ -291,7 +280,9 @@ class MockEnv(MarinEnv):
         prng_key,
         mode: str = "train",
         max_tokens: int | None = None,
+        top_k: int | None = None,
         stop: list[str] | None = None,
+        system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample examples, generate responses, and create rollouts."""
         # Select dataset
@@ -332,7 +323,12 @@ class MockEnv(MarinEnv):
                 reward = self.task.compute_reward(true_answer, choice.message.content, tokenizer=inference_ctx.tokenizer)
 
                 rollout = inference_ctx.create_rollout_from_choice(
-                    prompt, choice, env_name=f"mock_env:{self.task_type}", env_example_id=hash(prompt), reward=reward
+                    prompt,
+                    choice,
+                    env_name=f"mock_env:{self.task_type}",
+                    env_example_id=hash(prompt),
+                    reward=reward,
+                    temperature=temperature,
                 )
 
                 group.append(rollout)

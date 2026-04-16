@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 validate.py
@@ -21,11 +10,6 @@ Given an input path to a top-level `documents/` directory on GCS, runs a Zephyr 
 validates all documents, computes dataset statistics, and writes a `metadata.json` file
 to the same directory.
 
-Run with:
-    uv run zephyr --backend=ray --max-parallelism=1000 --memory=4GB --cluster=us-central2 \
-        lib/marin/src/marin/validate/validate.py \
-        --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart \
-        --num_examples_to_sample 1024
 """
 
 import json
@@ -33,11 +17,10 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import draccus
-import fsspec
 import numpy as np
+from rigging.filesystem import open_url
 from marin.utilities.validation_utils import compute_global_mean_std, summarize_document
-from zephyr import Dataset, load_jsonl
-from zephyr.backends import Backend
+from zephyr import Dataset, ZephyrContext, load_jsonl
 
 
 @dataclass
@@ -148,7 +131,7 @@ def aggregate_and_write_metadata(shard_metadata_iter: Iterator[list[dict]], outp
         "examples": examples,
     }
 
-    with fsspec.open(output_path, "wt") as f:
+    with open_url(output_path, "wt") as f:
         json.dump(metadata, f, indent=2)
 
     return {
@@ -164,14 +147,15 @@ def main(cfg: ValidationConfig) -> None:
     pipeline = (
         Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
         .flat_map(load_jsonl)
-        .map_shard(lambda docs: validate_shard(docs, cfg.num_examples_to_sample))
+        .map_shard(lambda docs, _: validate_shard(docs, cfg.num_examples_to_sample))
         .reduce(
             local_reducer=list,
             global_reducer=lambda shards: aggregate_and_write_metadata(shards, f"{cfg.input_path}/metadata.json"),
         )
     )
 
-    result = list(Backend.execute(pipeline))
+    ctx = ZephyrContext(name="validate")
+    result = ctx.execute(pipeline).results
     print(f"Validation complete: {result[0]}")
 
 
