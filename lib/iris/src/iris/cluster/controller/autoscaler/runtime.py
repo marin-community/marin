@@ -31,12 +31,7 @@ from iris.cluster.controller.autoscaler.models import (
     ScalingAction,
     ScalingDecision,
 )
-from iris.cluster.controller.autoscaler.operations import (
-    restart_worker as restart_worker_operation,
-)
-from iris.cluster.controller.autoscaler.operations import (
-    terminate_slices_for_workers as terminate_slices_for_workers_operation,
-)
+from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
 from iris.cluster.controller.autoscaler.planning import ScalePlan, build_scale_plan
 from iris.cluster.controller.autoscaler.recovery import (
     load_autoscaler_checkpoint,
@@ -251,6 +246,7 @@ class Autoscaler:
         group: ScalingGroup,
         slice_id: str,
         workers: list[RemoteWorkerHandle] | None = None,
+        timestamp: Timestamp | None = None,
     ) -> None:
         """Execute side effects from a slice lifecycle transition."""
         for kind in effects:
@@ -259,9 +255,9 @@ class Autoscaler:
             elif kind == SliceSideEffectKind.DEREGISTER_WORKERS:
                 self._unregister_slice_workers(slice_id)
             elif kind == SliceSideEffectKind.RECORD_GROUP_FAILURE:
-                group.record_failure()
+                group.record_failure(timestamp)
             elif kind == SliceSideEffectKind.TERMINATE_SLICE:
-                group.scale_down(slice_id)
+                self._async_terminate_slice(group, slice_id)
 
     def evaluate(
         self,
@@ -539,8 +535,38 @@ class Autoscaler:
 
     def restart_worker(self, worker_id: str) -> None:
         """Restart a worker with a fresh bootstrap script using the latest image."""
+        if self._db is None:
+            raise ValueError("No DB configured — cannot look up worker")
 
-        restart_worker_operation(self._groups, self._db, worker_id, self._per_group_worker_config)
+        with self._db.read_snapshot() as snapshot:
+            rows = snapshot.raw(
+                "SELECT slice_id, scale_group FROM workers WHERE worker_id = ? AND slice_id != ''",
+                params=(worker_id,),
+            )
+        if not rows:
+            raise ValueError(f"Worker {worker_id} not found in workers table (or has no slice_id)")
+        row = rows[0]
+
+        group = self._groups.get(row.scale_group)
+        if group is None:
+            raise ValueError(f"Scale group {row.scale_group} not found for worker {worker_id}")
+
+        slice_handle = group.get_slice(row.slice_id)
+        if slice_handle is None:
+            raise ValueError(f"Slice {row.slice_id} not found in group {row.scale_group}")
+
+        workers = slice_handle.describe().workers
+        handle = next((w for w in workers if w.worker_id == worker_id), None)
+        if handle is None:
+            raise ValueError(f"Worker {worker_id} not found in slice {row.slice_id}")
+
+        worker_config = self._per_group_worker_config(group)
+        if worker_config is None:
+            raise ValueError("No base worker config — cannot build bootstrap script")
+
+        worker_config.worker_id = worker_id
+        worker_config.slice_id = row.slice_id
+        handle.restart_worker(build_worker_bootstrap_script(worker_config))
 
     def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
         """Restore tracked worker state from a snapshot. Called before loops start."""
@@ -632,31 +658,83 @@ class Autoscaler:
         Returns sibling worker IDs that should be failed immediately because
         their slices are being torn down.
         """
-        result = terminate_slices_for_workers_operation(
-            groups=self._groups,
-            worker_ids=worker_ids,
-            unregister_slice_workers=self._unregister_slice_workers,
-            log_action=self._log_action,
-            timestamp=Timestamp.now(),
-            short_lived_slice_threshold=SHORT_LIVED_SLICE_THRESHOLD,
-        )
-        for request in result.termination_requests:
+        if not worker_ids:
+            return []
 
-            def _terminate(
-                stop_event,
-                target_group: ScalingGroup = request.group,
-                target_slice_id: str = request.slice_id,
-                target_handle: SliceHandle = request.handle,
-            ) -> None:
-                del stop_event
-                self._terminate_slice_handle(target_group, target_slice_id, target_handle)
+        timestamp = Timestamp.now()
+        primary_workers = set(worker_ids)
+        sibling_worker_ids: set[str] = set()
+        slices_seen: set[str] = set()
 
-            self._threads.spawn(
-                target=_terminate,
-                name=f"slice-terminate-{request.slice_id}",
+        for worker_id in primary_workers:
+            slice_id, group = self._find_slice_for_worker(worker_id)
+            if not slice_id or group is None:
+                logger.debug("Worker %s not found in any managed slice", worker_id)
+                continue
+            if slice_id in slices_seen:
+                continue
+            slices_seen.add(slice_id)
+
+            slice_worker_ids = group.get_slice_worker_ids(slice_id)
+            sibling_worker_ids.update(wid for wid in slice_worker_ids if wid not in primary_workers)
+            failed_workers = sorted(primary_workers & set(slice_worker_ids))
+
+            logger.info("Workers %s triggered slice termination for %s", failed_workers, slice_id)
+            self._log_action(
+                "worker_failed",
+                group.name,
+                slice_id=slice_id,
+                reason=f"workers failed: {', '.join(failed_workers)}",
             )
 
-        return result.sibling_worker_ids
+            # Compute short-lived status for backoff tracking
+            slice_handle = group.get_slice(slice_id)
+            is_short_lived = False
+            age_ms = 0
+            if slice_handle is not None:
+                age_ms = timestamp.epoch_ms() - slice_handle.created_at.epoch_ms()
+                is_short_lived = Duration.from_ms(age_ms) < SHORT_LIVED_SLICE_THRESHOLD
 
-    def _terminate_slice_handle(self, group: ScalingGroup, slice_id: str, handle: SliceHandle) -> None:
-        group._terminate_slice_handle(handle, context="cleaning up anyway")
+            result = group.dispatch(
+                slice_id,
+                SliceEvent.WORKER_FAILURE_REPORTED,
+                {"failed_workers": failed_workers, "is_short_lived": is_short_lived},
+                now=timestamp,
+            )
+            if result:
+                self._execute_side_effects(result.side_effects, group, slice_id, timestamp=timestamp)
+                if is_short_lived:
+                    self._log_action(
+                        "backoff_triggered",
+                        group.name,
+                        slice_id=slice_id,
+                        reason=f"short-lived slice (age={age_ms}ms)",
+                    )
+            else:
+                # Slice not tracked by state machine (already removed); clean up directly
+                handle = group.detach_slice(slice_id)
+                self._unregister_slice_workers(slice_id, worker_ids=slice_worker_ids)
+                if handle is not None:
+                    self._spawn_terminate(group, handle)
+
+        return sorted(sibling_worker_ids)
+
+    def _find_slice_for_worker(self, worker_id: str) -> tuple[str | None, ScalingGroup | None]:
+        for group in self._groups.values():
+            slice_id = group.find_slice_for_worker(worker_id)
+            if slice_id is not None:
+                return slice_id, group
+        return None, None
+
+    def _async_terminate_slice(self, group: ScalingGroup, slice_id: str) -> None:
+        """Detach a slice from tracking and terminate it asynchronously."""
+        handle = group.detach_slice(slice_id)
+        if handle is not None:
+            self._spawn_terminate(group, handle)
+
+    def _spawn_terminate(self, group: ScalingGroup, handle: SliceHandle) -> None:
+        def _do_terminate(stop_event, g: ScalingGroup = group, h: SliceHandle = handle) -> None:
+            del stop_event
+            g._terminate_slice_handle(h, context="lifecycle teardown")
+
+        self._threads.spawn(target=_do_terminate, name=f"slice-terminate-{handle.slice_id}")
