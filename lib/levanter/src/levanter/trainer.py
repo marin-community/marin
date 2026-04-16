@@ -59,7 +59,7 @@ from levanter.checkpoint import CheckpointerConfig, is_checkpoint_path, load_che
 from levanter.config import JsonAtom
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.loader import _round_to_nearest_multiple
-from levanter.distributed import DistributedConfig, RayConfig
+from levanter.distributed import DistributedConfig
 from levanter.grad_accum import microbatched
 from levanter.metrics import Metric, auto_metric_from_name, unwrap_metrics
 from levanter.optim.model_averaging import ModelAveragingConfig
@@ -866,7 +866,6 @@ class TrainerConfig:
     jax_compilation_cache_dir: Optional[str] = None
 
     distributed: DistributedConfig = DistributedConfig()
-    ray: RayConfig = field(default_factory=RayConfig)
 
     # whether or not to require an accelerator (e.g. TPU or GPU).
     # default depends on the platform: on macos False, else True
@@ -918,8 +917,6 @@ class TrainerConfig:
         id = self._maybe_set_id()
         levanter.utils.logging.init_logging(self.log_dir, f"{id}.log")
         _initialize_global_tracker(self.tracker, id)
-
-        self.ray.initialize()
 
         if self.require_accelerator is None:
             self.require_accelerator = not sys.platform.startswith("darwin")
