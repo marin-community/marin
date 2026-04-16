@@ -169,7 +169,7 @@ scale_groups:
     priority: 500
     resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
     buffer_slices: 0
-    max_slices: 4
+    max_slices: 6
     slice_template:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
