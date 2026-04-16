@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import json
 import tempfile
 
 import equinox as eqx
+import fsspec
 import haliax as hax
 import haliax.nn as hnn
 import jax
@@ -163,6 +165,28 @@ def test_merge_lora():
     # light tolerances for TPU
     assert_trees_all_close(merged.fold(input), loraized.fold(input), rtol=1e-3, atol=3e-3)
     assert_trees_all_close(merged.fold(input), module.fold(input), rtol=1e-3, atol=3e-3)
+
+
+def test_save_peft_pretrained_supports_url_like_paths():
+    class Module(eqx.Module):
+        first: hnn.Linear
+
+        def __call__(self, x):
+            return self.first(x)
+
+    module = Module(first=hnn.Linear.init(In, Out, key=jax.random.PRNGKey(0)))
+    loraized = loraize(module, LoraConfig(r=4, target_modules=["first"]), key=jax.random.PRNGKey(1))
+    export_path = "memory://levanter-test-lora-export"
+
+    save_peft_pretrained(loraized, LoraConfig(r=4, target_modules=["first"]), "hf://toy/base", export_path)
+
+    with fsspec.open(f"{export_path}/adapter_config.json", "rt") as f:
+        config = json.load(f)
+
+    assert config["base_model_name_or_path"] == "hf://toy/base"
+    assert config["peft_type"] == "LORA"
+    with fsspec.open(f"{export_path}/adapter_model.safetensors", "rb") as f:
+        assert f.read()
 
 
 @skip_if_module_missing("peft")

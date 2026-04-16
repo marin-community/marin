@@ -134,6 +134,8 @@ class RLJobConfig:
     )
     weight_transfer: WeightTransferConfig = field(default_factory=WeightTransferConfig)
     run_manifest_path: str | None = None
+    adapter_artifacts_path: str | None = None
+    merged_hf_export_path: str | None = None
 
     # Deployment configuration
     run_config: RunConfig | None = None
@@ -312,6 +314,8 @@ class RLJob:
                 if self.config.run_manifest_path is not None
                 else join_path(self.config.trainer.checkpointer.base_path, RUN_MANIFEST_FILENAME)
             ),
+            adapter_artifacts_path=self.config.adapter_artifacts_path,
+            merged_hf_export_path=self.config.merged_hf_export_path,
             curriculum_config=self.config.curriculum,
             inference_type=self.config.inference_type,
             rollout_policy_format=self.config.rollout_policy_format,
