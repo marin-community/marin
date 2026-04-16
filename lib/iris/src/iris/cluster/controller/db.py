@@ -660,23 +660,29 @@ class ControllerDB:
         VACUUM at boot.  This is a single-pass operation against the
         already-written backup file -- no redundant copy is required.
 
-        Only the page-copy step acquires ``self._lock``; the destination-side
-        PRAGMAs operate on the freshly-written backup file and do not need
-        the source write lock.  Keeping those PRAGMAs inside the lock would
-        stall the mainloop for the duration of ``incremental_vacuum`` on a
-        multi-GB file.
+        The backup runs through a dedicated read-only source connection,
+        so writers on ``self._conn`` proceed concurrently under SQLite's
+        WAL semantics -- no controller-level lock is held for the
+        duration of the copy.  Batched page copying (``pages=500``)
+        yields between steps so a sustained write stream cannot starve
+        the backup.
         """
         destination.parent.mkdir(parents=True, exist_ok=True)
-        dest = sqlite3.connect(str(destination))
+        src = sqlite3.connect(str(self._db_path), check_same_thread=False)
         try:
-            with self._lock:
-                self._conn.backup(dest)
-            dest.execute("PRAGMA journal_mode = DELETE")
-            dest.execute("PRAGMA auto_vacuum = INCREMENTAL")
-            dest.execute("PRAGMA incremental_vacuum")
-            dest.commit()
+            self._configure(src)
+            src.execute("PRAGMA query_only = ON")
+            dest = sqlite3.connect(str(destination))
+            try:
+                src.backup(dest, pages=500, sleep=0)
+                dest.execute("PRAGMA journal_mode = DELETE")
+                dest.execute("PRAGMA auto_vacuum = INCREMENTAL")
+                dest.execute("PRAGMA incremental_vacuum")
+                dest.commit()
+            finally:
+                dest.close()
         finally:
-            dest.close()
+            src.close()
 
     @staticmethod
     def _sidecar_paths(path: Path) -> tuple[Path, Path]:

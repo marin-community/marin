@@ -2369,17 +2369,20 @@ class Controller:
         return result
 
     def begin_checkpoint(self) -> tuple[str, CheckpointResult]:
-        """Pause loops and write a consistent SQLite checkpoint copy."""
+        """Write a consistent SQLite checkpoint copy.
+
+        The backup runs through a dedicated read-only source connection
+        (see ``ControllerDB.backup_to``), so writers proceed concurrently
+        under WAL semantics. Heartbeat rounds apply their updates as
+        atomic batches, so each SQLite snapshot already captures a
+        consistent state without needing the heartbeat lock.
+        """
         if self._config.dry_run:
             logger.info("[DRY-RUN] Skipping checkpoint write")
             return ("dry-run", CheckpointResult(created_at=Timestamp.now(), job_count=0, task_count=0, worker_count=0))
         self._checkpoint_paused.set()
         try:
-            # Hold the heartbeat lock only for the SQLite backup (consistent
-            # snapshot). Compression and GCS upload run outside the lock so
-            # heartbeat processing is not blocked for 5-30s.
-            with self._heartbeat_lock:
-                backup = backup_databases(self._db)
+            backup = backup_databases(self._db)
             try:
                 path, result = upload_checkpoint(self._db, backup, self._config.remote_state_dir)
             finally:
