@@ -960,7 +960,13 @@ WORKER_TASK_HISTORY = Table(
             python_type=WorkerId,
             decoder=decode_worker_id,
         ),
-        Column("task_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column(
+            "task_id",
+            "TEXT",
+            "NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE",
+            python_type=str,
+            decoder=str,
+        ),
         Column(
             "assigned_at_ms",
             "INTEGER",
