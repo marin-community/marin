@@ -27,9 +27,10 @@ from iris.cluster.controller.autoscaler.models import (
     DemandEntry,
     GroupRoutingStatus,
     RoutingDecision,
+    SliceLifecycleState,
     UnmetDemand,
 )
-from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
+from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
 from iris.rpc import config_pb2
 from rigging.timing import Timestamp
 

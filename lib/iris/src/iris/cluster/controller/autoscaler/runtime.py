@@ -47,6 +47,11 @@ from iris.cluster.controller.autoscaler.recovery import (
 )
 from iris.cluster.controller.autoscaler.routing import job_feasibility, route_demand
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build_worker_config_for_group
+from iris.cluster.controller.autoscaler.slice_lifecycle import (
+    SliceEvent,
+    SliceSideEffectKind,
+    TransitionResult,
+)
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
@@ -238,6 +243,24 @@ class Autoscaler:
         )
         return action
 
+    def _execute_side_effects(
+        self,
+        result: TransitionResult,
+        group: ScalingGroup,
+        workers: list[RemoteWorkerHandle],
+        slice_id: str,
+    ) -> None:
+        """Execute side effects from a slice lifecycle transition."""
+        for effect in result.side_effects:
+            if effect.kind == SliceSideEffectKind.REGISTER_WORKERS:
+                self._register_slice_workers(workers, slice_id, group.name)
+            elif effect.kind == SliceSideEffectKind.DEREGISTER_WORKERS:
+                self._unregister_slice_workers(slice_id)
+            elif effect.kind == SliceSideEffectKind.RECORD_GROUP_FAILURE:
+                group.record_failure()
+            elif effect.kind == SliceSideEffectKind.TERMINATE_SLICE:
+                group.scale_down(slice_id)
+
     def evaluate(
         self,
         demand_entries: list[DemandEntry],
@@ -411,41 +434,55 @@ class Autoscaler:
 
                 if status.state == CloudSliceState.READY:
                     worker_ids = [w.worker_id for w in status.workers]
-                    group.mark_slice_ready(slice_id, worker_ids)
-                    self._register_slice_workers(status.workers, slice_id, group.name)
-                    self._log_action(
-                        "slice_ready",
-                        group.name,
+                    result = group.dispatch(
                         slice_id,
-                        reason=f"bootstrap completed ({len(worker_ids)} workers)",
+                        SliceEvent.CLOUD_STATE_READY,
+                        {"worker_ids": worker_ids},
+                        now=timestamp,
                     )
+                    if result:
+                        self._execute_side_effects(result, group, status.workers, slice_id)
+                        self._log_action(
+                            "slice_ready",
+                            group.name,
+                            slice_id,
+                            reason=f"bootstrap completed ({len(worker_ids)} workers)",
+                        )
                 elif status.state == CloudSliceState.FAILED:
-                    group.mark_slice_failed(slice_id, error_message=status.error_message)
-                    group.scale_down(slice_id)
-                    self._unregister_slice_workers(slice_id)
-                    group.record_failure()
-                    reason = status.error_message if status.error_message else "bootstrap failed"
-                    self._log_action(
-                        "slice_failed",
-                        group.name,
+                    result = group.dispatch(
                         slice_id,
-                        reason=reason,
-                        status="failed",
+                        SliceEvent.CLOUD_STATE_FAILED,
+                        {"error_message": status.error_message},
+                        now=timestamp,
                     )
-                elif status.state == CloudSliceState.UNKNOWN:
-                    age = Duration.from_ms(timestamp.epoch_ms() - handle.created_at.epoch_ms())
-                    if age >= self._unresolvable_timeout:
-                        group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
-                        group.scale_down(slice_id)
-                        self._unregister_slice_workers(slice_id)
-                        group.record_failure()
+                    if result:
+                        self._execute_side_effects(result, group, [], slice_id)
+                        reason = status.error_message if status.error_message else "bootstrap failed"
                         self._log_action(
                             "slice_failed",
                             group.name,
                             slice_id,
-                            reason=f"TPU unresolvable for {age}",
+                            reason=reason,
                             status="failed",
                         )
+                elif status.state == CloudSliceState.UNKNOWN:
+                    age = Duration.from_ms(timestamp.epoch_ms() - handle.created_at.epoch_ms())
+                    if age >= self._unresolvable_timeout:
+                        result = group.dispatch(
+                            slice_id,
+                            SliceEvent.CLOUD_STATE_UNKNOWN_TIMEOUT,
+                            {"error_message": f"TPU unresolvable for {age}"},
+                            now=timestamp,
+                        )
+                        if result:
+                            self._execute_side_effects(result, group, [], slice_id)
+                            self._log_action(
+                                "slice_failed",
+                                group.name,
+                                slice_id,
+                                reason=f"TPU unresolvable for {age}",
+                                status="failed",
+                            )
                     else:
                         logger.debug(
                             "Slice %s UNKNOWN (age %s < timeout %s); will retry",
