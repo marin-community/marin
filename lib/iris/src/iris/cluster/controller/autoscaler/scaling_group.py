@@ -16,7 +16,7 @@ import logging
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from enum import Enum, StrEnum
+from enum import Enum
 
 from rigging.timing import Deadline, Duration, Timestamp, TokenBucket
 
@@ -31,6 +31,12 @@ from iris.cluster.constraints import (
     evaluate_constraint,
     is_cpu_device_type_constraint,
 )
+from iris.cluster.controller.autoscaler.models import SliceLifecycleState, SliceState
+from iris.cluster.controller.autoscaler.slice_lifecycle import (
+    SliceEvent,
+    TransitionResult,
+    dispatch_slice_event,
+)
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import Labels, QuotaExhaustedError, SliceHandle
@@ -43,29 +49,6 @@ from iris.rpc import config_pb2, job_pb2, time_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
-
-
-class SliceLifecycleState(StrEnum):
-    """Lifecycle state for a slice (VM group) in the autoscaler.
-
-    These states represent the dominant state of a slice based on its constituent VMs.
-    String values are lowercase names for use as dictionary keys and proto map keys.
-
-    States:
-    - REQUESTING: Scale-up operation in progress (tracked at ScalingGroup level)
-    - BOOTING: At least one VM is booting (VM_STATE_BOOTING)
-    - INITIALIZING: At least one VM is initializing (VM_STATE_INITIALIZING)
-    - READY: All VMs are ready (VM_STATE_READY)
-    - FAILED: At least one VM has failed (VM_STATE_FAILED or VM_STATE_PREEMPTED)
-
-    Note: These are slice-level aggregate states, not direct VM states.
-    """
-
-    REQUESTING = "requesting"
-    BOOTING = "booting"
-    INITIALIZING = "initializing"
-    READY = "ready"
-    FAILED = "failed"
 
 
 class GroupAvailability(Enum):
@@ -107,22 +90,6 @@ DEFAULT_BACKOFF_MAX = Duration.from_minutes(15)
 DEFAULT_BACKOFF_FACTOR = 2.0
 DEFAULT_IDLE_THRESHOLD = Duration.from_minutes(10)
 DEFAULT_QUOTA_TIMEOUT = Duration.from_minutes(5)
-
-
-@dataclass
-class SliceState:
-    """Per-slice state tracked by ScalingGroup.
-
-    Consolidates the slice handle with its associated tracking state
-    (idle timeout, lifecycle) into a single structure.
-    lifecycle and worker_ids are populated eagerly by the bootstrap thread.
-    """
-
-    handle: SliceHandle
-    last_active: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
-    lifecycle: SliceLifecycleState = SliceLifecycleState.BOOTING
-    worker_ids: list[str] = field(default_factory=list)
-    error_message: str = ""
 
 
 def prepare_slice_config(
@@ -553,6 +520,31 @@ class ScalingGroup:
                 registered,
                 error_message,
             )
+
+    def dispatch(
+        self,
+        slice_id: str,
+        event: SliceEvent,
+        context: dict[str, object] | None = None,
+        *,
+        now: Timestamp | None = None,
+    ) -> TransitionResult | None:
+        """Apply a lifecycle event to a slice via the state machine.
+
+        Validates the transition, updates state under lock, computes side effects,
+        and logs the transition to the DB audit trail. Returns None if the
+        transition is invalid (unknown slice or no matching transition).
+        """
+        return dispatch_slice_event(
+            slices=self._slices,
+            lock=self._slices_lock,
+            slice_id=slice_id,
+            event=event,
+            context=context,
+            now=now,
+            db=self._db,
+            group_name=self.name,
+        )
 
     def reconcile(self) -> None:
         """Discover and adopt existing slices from the cloud.

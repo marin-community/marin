@@ -10,10 +10,9 @@ VM group management, and state tracking - not on implementation details.
 import logging
 
 import pytest
+from iris.cluster.controller.autoscaler.models import SliceLifecycleState, SliceState
 from iris.cluster.controller.autoscaler.scaling_group import (
     ScalingGroup,
-    SliceLifecycleState,
-    SliceState,
     _zones_from_config,
 )
 from iris.cluster.providers.types import (
