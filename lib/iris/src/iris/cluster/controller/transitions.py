@@ -120,9 +120,13 @@ memory from tasks.peak_memory_mb once a task is done; retaining per-sample
 rows forever bloats the DB (~85% of task_resource_history on prod is for
 terminal tasks) and amplifies writer contention during heartbeat batches."""
 
-TASK_RESOURCE_HISTORY_DELETE_CHUNK = 5000
-"""Maximum ids per DELETE in prune_task_resource_history — bounds how long
-the writer lock is held per chunk so other RPCs can interleave."""
+TASK_RESOURCE_HISTORY_DELETE_CHUNK = 1000
+"""Maximum task_ids per DELETE in prune_task_resource_history. Each chunk
+is its own write transaction so the writer lock releases between chunks.
+Sweep on a 1M-row prod checkpoint: chunk=1000 gives p95 ~400ms / max 1.3s
+writer hold; chunk=5000 gives p95 1.6s / max 1.7s. The background loop
+runs every 10 min so total wall-time is irrelevant — bounding worst-case
+writer hold is what matters for concurrent RPCs."""
 
 DIRECT_PROVIDER_PROMOTION_RATE = 128
 """Token bucket capacity for task promotion (pods per minute).
@@ -2806,20 +2810,22 @@ class ControllerTransitions:
         ttl_cutoff_ms = now_ms - TASK_RESOURCE_HISTORY_TERMINAL_TTL.to_ms()
         terminal_placeholders = ",".join("?" for _ in TERMINAL_TASK_STATES)
 
-        evicted_terminal = 0
-        with self._db.transaction() as cur:
+        with self._db.read_snapshot() as snap:
             terminal_ids = [
                 str(r["task_id"])
-                for r in cur.execute(
+                for r in snap.fetchall(
                     f"SELECT task_id FROM tasks "
                     f"WHERE state IN ({terminal_placeholders}) "
                     f"AND finished_at_ms IS NOT NULL AND finished_at_ms < ?",
                     (*TERMINAL_TASK_STATES, ttl_cutoff_ms),
-                ).fetchall()
+                )
             ]
-            for chunk_start in range(0, len(terminal_ids), TASK_RESOURCE_HISTORY_DELETE_CHUNK):
-                chunk = terminal_ids[chunk_start : chunk_start + TASK_RESOURCE_HISTORY_DELETE_CHUNK]
-                ph = ",".join("?" * len(chunk))
+
+        evicted_terminal = 0
+        for chunk_start in range(0, len(terminal_ids), TASK_RESOURCE_HISTORY_DELETE_CHUNK):
+            chunk = terminal_ids[chunk_start : chunk_start + TASK_RESOURCE_HISTORY_DELETE_CHUNK]
+            ph = ",".join("?" * len(chunk))
+            with self._db.transaction() as cur:
                 cur.execute(f"DELETE FROM task_resource_history WHERE task_id IN ({ph})", tuple(chunk))
                 evicted_terminal += cur.rowcount
 
