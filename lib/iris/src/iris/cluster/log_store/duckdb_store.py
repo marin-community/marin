@@ -105,8 +105,13 @@ _TAIL_SEQ_MARGIN = 10
 # cumulative on-disk data. Older segments remain retrievable by subsequent
 # reads with a moving cursor. This prevents a pathological filter from
 # pulling the full local retention through DuckDB in one shot.
-_MAX_PARQUETS_PER_READ = 5
-_MAX_PARQUET_BYTES_PER_READ = 500 * 1024 * 1024
+#
+# Raised from 5/500MB after an outage where dashboard reads showed zero rows
+# because target keys lived in segments older than the cap. Combined with
+# the newest-first early-stop loop in `_run_read_locked`, realistic tail
+# reads stay well under 500ms p95 even when the filter matches many files.
+_MAX_PARQUETS_PER_READ = 25
+_MAX_PARQUET_BYTES_PER_READ = 2_500 * 1024 * 1024
 
 
 def _prefix_upper_bound(prefix: str) -> str | None:
@@ -955,6 +960,12 @@ class DuckDBLogStore:
         last max_lines * _TAIL_SEQ_MARGIN entries and retry if too sparse.
         Row-group pruning on `seq` lets DuckDB skip whole files.
 
+        Tail early-stop: when the fast path doesn't apply or misses, walk the
+        capped working set newest-first (RAM buffers, then parquet segments)
+        and break once max_lines rows have been collected. Segment seq ranges
+        are disjoint so the top-N rows by seq are guaranteed to come from the
+        newest source that contributes any match.
+
         Working set cap: at most _MAX_PARQUETS_PER_READ newest segments and
         _MAX_PARQUET_BYTES_PER_READ cumulative bytes. Callers with stale
         cursors will make forward progress across successive reads.
@@ -981,13 +992,12 @@ class DuckDBLogStore:
         # Register each RAM table individually so DuckDB scans them via
         # zero-copy Arrow, avoiding a pa.concat_tables() copy.
         with self._pool.checkout(ram_tables) as (conn, ram_names):
-            source = _build_union_source(parquet_files, ram_names)
-
             # Seq-bounded fast path: only useful for filtered tail reads
             # where `key` row-group stats can't already prune (i.e. regex
             # / prefix scans, which is the `include_key_in_select` path).
             # Exact-key tails are already pruned by row-group `key` stats.
             if tail and max_lines > 0 and include_key_in_select:
+                source = _build_union_source(parquet_files, ram_names)
                 seq_lower = max(0, current_max_seq - max_lines * _TAIL_SEQ_MARGIN)
                 bounded_where = f"{where_clause} AND seq > {seq_lower}"
                 sql = f"SELECT {select_cols} FROM ({source}) WHERE {bounded_where} {order} {limit}"
@@ -995,6 +1005,25 @@ class DuckDBLogStore:
                 if len(rows) >= max_lines:
                     return rows
 
+            if tail and max_lines > 0:
+                # Early-stop: iterate newest→oldest, break once LIMIT filled.
+                # RAM tables hold seqs strictly greater than any parquet, so
+                # they come first. Parquet files are in ascending min_seq.
+                collected: list[tuple] = []
+                if ram_names:
+                    ram_source = _build_union_source([], ram_names)
+                    sql = f"SELECT {select_cols} FROM ({ram_source}) WHERE {where_clause} {order} LIMIT {max_lines}"
+                    collected.extend(conn.execute(sql, params).fetchall())
+                for path in reversed(parquet_files):
+                    if len(collected) >= max_lines:
+                        break
+                    remaining = max_lines - len(collected)
+                    seg_source = _build_union_source([path], [])
+                    sql = f"SELECT {select_cols} FROM ({seg_source}) WHERE {where_clause} {order} LIMIT {remaining}"
+                    collected.extend(conn.execute(sql, params).fetchall())
+                return collected
+
+            source = _build_union_source(parquet_files, ram_names)
             sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
             return conn.execute(sql, params).fetchall()
 
