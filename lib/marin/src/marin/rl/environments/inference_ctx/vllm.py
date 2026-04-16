@@ -16,7 +16,7 @@ from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.completion_usage import CompletionUsage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob, TopLogprob
-from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext, PromptLike
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
 from marin.rl.environments.inference_ctx.render import Llama3Renderer, Qwen3Renderer, Renderer, Message
 from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
@@ -194,7 +194,12 @@ class vLLMInferenceContext(BaseInferenceContext):
             kv_cache_metrics=inference_config.kv_cache_metrics,
         )
 
-    def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
+    def tokenize_prompt(
+        self,
+        prompt: PromptLike,
+        choice: Choice | None = None,
+        system_prompt: str | None = None,
+    ) -> np.ndarray:
         """Tokenize the prompt with the choice's prompt token IDs.
 
         NOTE(chris): This is a hack to get the prompt token IDs the same since
@@ -202,6 +207,9 @@ class vLLMInferenceContext(BaseInferenceContext):
         This is a known issue documented here:
         https://github.com/vllm-project/vllm/issues/27486
         """
+        del prompt, system_prompt
+        if choice is None:
+            raise ValueError("vLLMInferenceContext.tokenize_prompt requires a choice with prompt_token_ids")
         return np.array(choice.prompt_token_ids, dtype=np.int32)
 
     def response_tokens_from_choice(self, choice: Choice) -> np.ndarray:
@@ -319,7 +327,7 @@ class vLLMInferenceContext(BaseInferenceContext):
 
     def batch_completions(
         self,
-        prompts: list[str] | list[list[dict]],
+        prompts: list[PromptLike],
         temperature: float,
         n: int,
         max_tokens: int | None = None,
@@ -354,19 +362,15 @@ class vLLMInferenceContext(BaseInferenceContext):
 
         # Convert prompts to message lists if they aren't already
         message_lists: list[list[Message]] = []
-        if prompts and isinstance(prompts[0], list):
-            # Prompts are already message lists with few-shot examples
-            message_lists = prompts  # type: ignore
-        elif system_prompt:
-            # Plain string prompts with system prompt
-            assert all(isinstance(p, str) for p in prompts), "prompts must be strings when system_prompt is provided"
-            message_lists = [
-                [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}] for prompt in prompts  # type: ignore
-            ]
-        else:
-            # Plain string prompts without system prompt
-            assert all(isinstance(p, str) for p in prompts), "prompts must be strings when no system_prompt is provided"
-            message_lists = [[{"role": "user", "content": prompt}] for prompt in prompts]  # type: ignore
+        for prompt in prompts:
+            if isinstance(prompt, list):
+                message_list = [dict(message) for message in prompt]
+            elif system_prompt:
+                message_list = [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
+            else:
+                message_list = [{"role": "user", "content": prompt}]
+
+            message_lists.append(message_list)
 
         # Render messages to token IDs using the appropriate renderer
         prompt_token_ids = []
