@@ -111,9 +111,11 @@ def create_cats_rollout_batch(
             prompt_tokens=individual_prompt,
             response_tokens=individual_response,
             response_logprobs=individual_logprobs,
+            response_loss_mask=np.ones(len(individual_response), dtype=np.float32),
             token_rewards=token_rewards,
             episode_reward=episode_reward,
             decoding=DecodingConfig(temperature=1.0).as_trace(),
+            is_truncated=False,
             metadata=RolloutMetadata(
                 worker_id=worker_id,
                 timestamp=time.time(),
@@ -302,9 +304,11 @@ def create_sequential_digits_rollout_batch(
             prompt_tokens=individual_prompt,
             response_tokens=individual_response,
             response_logprobs=individual_logprobs,
+            response_loss_mask=np.ones(len(individual_response), dtype=np.float32),
             token_rewards=token_rewards,
             episode_reward=episode_reward,
             decoding=DecodingConfig(temperature=1.0).as_trace(),
+            is_truncated=False,
             metadata=RolloutMetadata(
                 worker_id=worker_id,
                 timestamp=time.time(),

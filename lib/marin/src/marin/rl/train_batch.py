@@ -49,25 +49,29 @@ def convert_rollout_to_training_format(
     """
     input_tokens = np.concatenate([rollout.prompt_tokens, rollout.response_tokens])
     position_ids = np.arange(len(input_tokens), dtype=np.int32)
+    response_loss_mask = rollout.response_loss_mask.astype(np.float32)
 
-    # Loss mask (only on response tokens)
+    # Loss mask (only on response tokens selected by the rollout)
     loss_mask = np.concatenate(
         [
             np.zeros(len(rollout.prompt_tokens), dtype=np.float32),
-            np.ones(len(rollout.response_tokens), dtype=np.float32),
+            response_loss_mask,
         ]
     )
 
-    # Loss weights (advantage for all response tokens)
+    # Loss weights (advantage for response tokens selected by the rollout)
     loss_weight = np.concatenate(
         [
             np.zeros(len(rollout.prompt_tokens), dtype=np.float32),
-            np.full(len(rollout.response_tokens), advantage, dtype=np.float32),
+            response_loss_mask * np.float32(advantage),
         ]
     )
 
     policy_logprob = np.concatenate(
-        [np.zeros(len(rollout.prompt_tokens), dtype=np.float32), rollout.response_logprobs.astype(np.float32)]
+        [
+            np.zeros(len(rollout.prompt_tokens), dtype=np.float32),
+            rollout.response_logprobs.astype(np.float32) * response_loss_mask,
+        ]
     )
 
     max_seq_len = max_tokens

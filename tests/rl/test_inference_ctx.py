@@ -307,6 +307,7 @@ def test_create_rollout_from_choice_end_to_end(inference_ctx, llama3_tokenizer):
     # Verify token rewards
     assert len(rollout.token_rewards) == len(expected_response_tokens)
     np.testing.assert_array_equal(rollout.token_rewards, np.full(len(expected_response_tokens), reward))
+    np.testing.assert_array_equal(rollout.response_loss_mask, np.ones(len(expected_response_tokens), dtype=np.float32))
 
 
 def _test_levanter_context(tokenizer, dummy_server, client) -> LevanterInferenceContext:
