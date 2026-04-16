@@ -47,7 +47,6 @@ from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build
 from iris.cluster.controller.autoscaler.slice_lifecycle import (
     SliceEvent,
     SliceSideEffectKind,
-    TransitionResult,
 )
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
@@ -248,20 +247,20 @@ class Autoscaler:
 
     def _execute_side_effects(
         self,
-        result: TransitionResult,
+        effects: list[SliceSideEffectKind],
         group: ScalingGroup,
-        workers: list[RemoteWorkerHandle],
         slice_id: str,
+        workers: list[RemoteWorkerHandle] | None = None,
     ) -> None:
         """Execute side effects from a slice lifecycle transition."""
-        for effect in result.side_effects:
-            if effect.kind == SliceSideEffectKind.REGISTER_WORKERS:
-                self._register_slice_workers(workers, slice_id, group.name)
-            elif effect.kind == SliceSideEffectKind.DEREGISTER_WORKERS:
+        for kind in effects:
+            if kind == SliceSideEffectKind.REGISTER_WORKERS:
+                self._register_slice_workers(workers or [], slice_id, group.name)
+            elif kind == SliceSideEffectKind.DEREGISTER_WORKERS:
                 self._unregister_slice_workers(slice_id)
-            elif effect.kind == SliceSideEffectKind.RECORD_GROUP_FAILURE:
+            elif kind == SliceSideEffectKind.RECORD_GROUP_FAILURE:
                 group.record_failure()
-            elif effect.kind == SliceSideEffectKind.TERMINATE_SLICE:
+            elif kind == SliceSideEffectKind.TERMINATE_SLICE:
                 group.scale_down(slice_id)
 
     def evaluate(
@@ -444,7 +443,7 @@ class Autoscaler:
                         now=timestamp,
                     )
                     if result:
-                        self._execute_side_effects(result, group, status.workers, slice_id)
+                        self._execute_side_effects(result.side_effects, group, slice_id, workers=status.workers)
                         self._log_action(
                             "slice_ready",
                             group.name,
@@ -459,7 +458,7 @@ class Autoscaler:
                         now=timestamp,
                     )
                     if result:
-                        self._execute_side_effects(result, group, [], slice_id)
+                        self._execute_side_effects(result.side_effects, group, slice_id)
                         reason = status.error_message if status.error_message else "bootstrap failed"
                         self._log_action(
                             "slice_failed",
@@ -478,7 +477,7 @@ class Autoscaler:
                             now=timestamp,
                         )
                         if result:
-                            self._execute_side_effects(result, group, [], slice_id)
+                            self._execute_side_effects(result.side_effects, group, slice_id)
                             self._log_action(
                                 "slice_failed",
                                 group.name,
