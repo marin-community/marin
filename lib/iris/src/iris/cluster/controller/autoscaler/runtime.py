@@ -498,25 +498,54 @@ class Autoscaler:
     def restart_worker(self, worker_id: str) -> None:
         """Restart a worker with a fresh bootstrap script using the latest image.
 
-        Uses the worker registry (populated when the slice transitioned to READY)
-        as the source of truth. No need to re-describe the slice or look up in
-        _slices — the RemoteWorkerHandle is cached on the tracked worker.
+        Looks up the slice/scale-group from the workers DB row, then asks the
+        platform directly for the slice handle. This avoids depending on
+        _slices (which may not yet contain the slice if `complete_scale_up`
+        hasn't run) or _worker_registry (which is only populated when refresh
+        observes the slice as READY).
         """
-        tracked = self._worker_registry.tracked_worker(worker_id)
-        if tracked is None:
-            raise ValueError(f"Worker {worker_id} not registered (slice may be terminating)")
+        if self._db is None:
+            raise ValueError("No DB configured — cannot look up worker")
 
-        group = self._groups.get(tracked.scale_group)
+        with self._db.read_snapshot() as snapshot:
+            rows = snapshot.raw(
+                "SELECT slice_id, scale_group FROM workers WHERE worker_id = ? AND slice_id != ''",
+                params=(worker_id,),
+            )
+        if not rows:
+            raise ValueError(f"Worker {worker_id} not found in workers table (or has no slice_id)")
+        row = rows[0]
+
+        group = self._groups.get(row.scale_group)
         if group is None:
-            raise ValueError(f"Scale group {tracked.scale_group} not found for worker {worker_id}")
+            raise ValueError(f"Scale group {row.scale_group} not found for worker {worker_id}")
+
+        # Try _slices first (fast path); fall back to a platform query for
+        # slices created via _do_scale_up that haven't yet hit complete_scale_up().
+        slice_handle = group.get_slice(row.slice_id)
+        if slice_handle is None:
+            zone = group.zone
+            zones = [zone] if zone else []
+            labels = {group._labels.iris_scale_group: group.name}
+            for handle in self._platform.list_slices(zones, labels):
+                if handle.slice_id == row.slice_id:
+                    slice_handle = handle
+                    break
+        if slice_handle is None:
+            raise ValueError(f"Slice {row.slice_id} not found for worker {worker_id}")
+
+        workers = slice_handle.describe().workers
+        handle = next((w for w in workers if w.worker_id == worker_id), None)
+        if handle is None:
+            raise ValueError(f"Worker {worker_id} not found in slice {row.slice_id}")
 
         worker_config = self._per_group_worker_config(group)
         if worker_config is None:
             raise ValueError("No base worker config — cannot build bootstrap script")
 
         worker_config.worker_id = worker_id
-        worker_config.slice_id = tracked.slice_id
-        tracked.handle.restart_worker(build_worker_bootstrap_script(worker_config))
+        worker_config.slice_id = row.slice_id
+        handle.restart_worker(build_worker_bootstrap_script(worker_config))
 
     def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
         """Restore tracked worker state from a snapshot. Called before loops start."""
