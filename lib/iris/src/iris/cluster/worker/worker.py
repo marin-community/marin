@@ -4,7 +4,6 @@
 """Unified worker managing all components and lifecycle."""
 
 import logging
-import queue
 import threading
 import time
 from collections.abc import Callable
@@ -123,49 +122,6 @@ def worker_config_from_proto(
     )
 
 
-class TaskStateReporter:
-    """Pushes task state transitions to the controller via UpdateTaskStatus.
-
-    The worker enqueues a WorkerTaskStatus on every TaskAttempt state transition.
-    A background thread drains the queue and forwards the events to the controller.
-    The drain coalesces everything queued at the moment of send into one RPC, but
-    there is no batching window, no bounded queue, and no retry — failures are
-    logged and dropped. The controller's poll loop is the safety net that picks
-    up missed transitions, so we keep this path stupid simple.
-    """
-
-    def __init__(self, controller_client: ControllerServiceClientSync, worker_id: str):
-        self._queue: queue.Queue[job_pb2.WorkerTaskStatus] = queue.Queue()
-        self._controller_client = controller_client
-        self._worker_id = worker_id
-
-    def report(self, status: job_pb2.WorkerTaskStatus) -> None:
-        self._queue.put(status)
-
-    def run(self, stop_event: threading.Event) -> None:
-        while not stop_event.is_set():
-            try:
-                first = self._queue.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            updates = [first]
-            while True:
-                try:
-                    updates.append(self._queue.get_nowait())
-                except queue.Empty:
-                    break
-            try:
-                self._controller_client.update_task_status(
-                    controller_pb2.Controller.UpdateTaskStatusRequest(
-                        worker_id=self._worker_id,
-                        updates=updates,
-                    )
-                )
-            except Exception as e:
-                # Poll loop will reconcile the missed transitions.
-                logger.warning("UpdateTaskStatus push failed (%d updates dropped): %s", len(updates), e)
-
-
 class Worker:
     """Unified worker managing all components and lifecycle."""
 
@@ -254,7 +210,6 @@ class Worker:
             worker_id = infer_worker_id(hardware)
         self._worker_id: str | None = worker_id
         self._controller_client: ControllerServiceClientSync | None = None
-        self._state_reporter: TaskStateReporter | None = None
 
         # Heartbeat tracking for timeout detection
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
@@ -465,11 +420,7 @@ class Worker:
                 if worker_id != self._worker_id:
                     self._worker_id = worker_id
                     self._attach_log_handler()
-                self._start_state_reporter(stop_event)
-                try:
-                    self._serve(stop_event)
-                finally:
-                    self._stop_state_reporter()
+                self._serve(stop_event)
         except Exception:
             logger.exception("Worker lifecycle crashed")
             raise
@@ -549,36 +500,20 @@ class Worker:
             self._log_pusher.close()
             self._log_pusher = None
 
-    def _start_state_reporter(self, stop_event: threading.Event) -> None:
-        """Start the background TaskStateReporter thread after registration."""
-        if not self._controller_client or not self._worker_id:
-            return
-        reporter = TaskStateReporter(
-            controller_client=self._controller_client,
-            worker_id=self._worker_id,
-        )
-        self._state_reporter = reporter
-        self._threads.spawn(
-            target=reporter.run,
-            name="task-state-reporter",
-        )
-
-    def _stop_state_reporter(self) -> None:
-        """Stop the TaskStateReporter thread."""
-        self._state_reporter = None
-
     def _make_state_change_callback(self, attempt: TaskAttempt) -> Callable[[job_pb2.TaskState], None]:
-        """Build a closure that enqueues a WorkerTaskStatus when a task transitions state."""
+        """Build a closure that pushes a WorkerTaskStatus to the controller on transition.
+
+        Runs synchronously on the TaskAttempt's own thread. RPC failures are
+        dropped — the controller's poll loop reconciles missed transitions.
+        """
 
         def _on_state_change(new_state: job_pb2.TaskState) -> None:
-            reporter = self._state_reporter
-            if reporter is None:
+            client = self._controller_client
+            if client is None or not self._worker_id:
                 return
-            # Map PENDING to BUILDING for controller's benefit (same as heartbeat path)
             reported_state = new_state
             if reported_state == job_pb2.TASK_STATE_PENDING:
                 reported_state = job_pb2.TASK_STATE_BUILDING
-
             entry = job_pb2.WorkerTaskStatus(
                 task_id=attempt.task_id.to_wire(),
                 attempt_id=attempt.attempt_id,
@@ -598,7 +533,15 @@ class Worker:
             )
             if usage.ByteSize() > 0:
                 entry.resource_usage.CopyFrom(usage)
-            reporter.report(entry)
+            try:
+                client.update_task_status(
+                    controller_pb2.Controller.UpdateTaskStatusRequest(
+                        worker_id=self._worker_id,
+                        updates=[entry],
+                    )
+                )
+            except Exception as e:
+                logger.warning("UpdateTaskStatus push failed for %s: %s", attempt.task_id, e)
 
         return _on_state_change
 
