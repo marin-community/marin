@@ -24,6 +24,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.types import BlockFoldable
+from levanter.utils.py_utils import dataclass_replace
 
 
 silence_transformer_nag()
@@ -269,10 +270,10 @@ class QwenLMHeadModel(LmHeadModel[QwenConfig], ModuleWithStateDictSerialization)
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
         if self.lm_head is not None:
             new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-            new_lm_head = dataclasses.replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
-            return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
+            new_lm_head = dataclass_replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
+            return dataclass_replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
         else:
-            return dataclasses.replace(self, embeddings=new_embeddings)
+            return dataclass_replace(self, embeddings=new_embeddings)
 
     @classmethod
     def init(cls, Vocab: Axis, config: QwenConfig, *, key) -> "QwenLMHeadModel":

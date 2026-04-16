@@ -176,6 +176,7 @@ def axis_spec_to_tuple(axis_spec: AxisSelection) -> tuple[AxisSelector, ...]:
 
 
 @overload
+# pyrefly: ignore[inconsistent-overload]  # vendored haliax @overload resolution
 def concat_axes(a1: ShapeDict, a2: AxisSpec) -> ShapeDict:
     pass
 
@@ -186,11 +187,13 @@ def concat_axes(a1: Sequence[Axis], a2: AxisSpec) -> tuple[Axis, ...]:
 
 
 @overload
+# pyrefly: ignore[inconsistent-overload]  # vendored haliax @overload resolution
 def concat_axes(a1: AxisSpec, a2: AxisSpec) -> AxisSpec:
     pass
 
 
 @overload
+# pyrefly: ignore[inconsistent-overload]  # vendored haliax @overload resolution
 def concat_axes(a1: AxisSelection, a2: AxisSelection) -> AxisSelection:
     pass
 

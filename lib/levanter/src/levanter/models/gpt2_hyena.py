@@ -24,6 +24,7 @@ from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Embeddings, Gpt2Mlp
 from levanter.models.hyena import HyenaConfig, HyenaOperator
 from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.utils.py_utils import dataclass_replace
 
 
 @LmConfig.register_subclass("gpt2_hyena")
@@ -63,7 +64,7 @@ class Gpt2HyenaConfig(LmConfig):
 
     def __post_init__(self):
         if self.hyena.max_seq_len != self.max_seq_len:
-            object.__setattr__(self, "hyena", dataclasses.replace(self.hyena, max_seq_len=self.max_seq_len))
+            object.__setattr__(self, "hyena", dataclass_replace(self.hyena, max_seq_len=self.max_seq_len))
 
     def flops_per_token(self, vocab_size: int, context_length: int) -> Optional[float]:
         # TODO: implement
@@ -190,7 +191,7 @@ class Gpt2HyenaModel(LmHeadModel[Gpt2HyenaConfig]):
 
     def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "Gpt2HyenaModel":
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=key)
-        return dataclasses.replace(self, embeddings=new_embeddings)
+        return dataclass_replace(self, embeddings=new_embeddings)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
         return {"backbone": None, "embeddings": None}

@@ -373,12 +373,15 @@ class NamedArray(metaclass=NamedArrayMeta):
             return tuple(result)
 
     @overload
+    # pyrefly: ignore[inconsistent-overload]  # vendored haliax @overload resolution
     def resolve_axis(self, axis: AxisSelector) -> Axis: ...
 
     @overload
+    # pyrefly: ignore[inconsistent-overload]  # vendored haliax @overload resolution
     def resolve_axis(self, axis: tuple[AxisSelector, ...]) -> tuple[Axis, ...]: ...
 
     @overload
+    # pyrefly: ignore[inconsistent-overload]  # vendored haliax @overload resolution
     def resolve_axis(self, axis: PartialShapeDict) -> ShapeDict: ...
 
     @overload
@@ -776,6 +779,7 @@ class NamedArray(metaclass=NamedArrayMeta):
     def __le__(self, other) -> "NamedArray":  # pragma: no cover
         return haliax.less_equal(self, other)
 
+    # pyrefly: ignore[bad-override]  # NamedArray.__eq__ returns NamedArray (broadcasted mask), not bool — numpy convention
     def __eq__(self, other):  # pragma: no cover
         # special case because Jax sometimes call == on
         # types when they're in PyTrees
@@ -787,6 +791,7 @@ class NamedArray(metaclass=NamedArrayMeta):
 
         return haliax.equal(self, other)
 
+    # pyrefly: ignore[bad-override]  # NamedArray.__ne__ returns NamedArray (broadcasted mask), not bool — numpy convention
     def __ne__(self, other):  # pragma: no cover
         return haliax.not_equal(self, other)
 

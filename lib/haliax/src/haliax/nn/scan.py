@@ -109,6 +109,7 @@ class BlockFoldable(Protocol[M]):
     ) -> Callable[Concatenate[CarryT, P], CarryT]: ...
 
     @overload
+    # pyrefly: ignore[inconsistent-overload]  # vendored haliax @overload resolution
     def fold_via(
         self, fn: Callable[[M, CarryT], CarryT], *, unroll: int | bool | None = None
     ) -> Callable[[CarryT], CarryT]: ...
@@ -118,11 +119,13 @@ class BlockFoldable(Protocol[M]):
     ) -> Callable[Concatenate[CarryT, P], CarryT]: ...
 
     @overload
+    # pyrefly: ignore[inconsistent-overload]  # vendored haliax @overload resolution
     def scan_via(
         self, fn: ScanFunction[M, CarryT, P, OutputT_co], *, unroll: int | bool | None = None
     ) -> Callable[Concatenate[CarryT, P], tuple[CarryT, OutputT_co]]: ...
 
     @overload
+    # pyrefly: ignore[inconsistent-overload]  # vendored haliax @overload resolution
     def scan_via(
         self,
         fn: Callable[[M, CarryT], tuple[CarryT, OutputT_co]],

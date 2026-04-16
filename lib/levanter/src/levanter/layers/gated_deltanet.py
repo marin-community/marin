@@ -29,6 +29,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import dataclasses
+
+from levanter.utils.py_utils import dataclass_replace
 from typing import Optional, Tuple, cast
 
 import equinox as eqx
@@ -874,15 +876,15 @@ class GatedDeltaNet(eqx.Module):
         new_conv_weight = jnp.asarray(state["conv_weight"], dtype=jnp.float32)
         new_A_log = jnp.asarray(state["A_log"], dtype=jnp.float32)
         new_dt_bias = jnp.asarray(state["dt_bias"], dtype=jnp.float32)
-        new_o_norm = dataclasses.replace(
+        new_o_norm = dataclass_replace(
             self.o_norm, weight=hax.named(jnp.asarray(state["o_norm.weight"], dtype=jnp.float32), (cfg.VHeadDim.name,))
         )
         out_w = jnp.asarray(state["out_proj.weight"], dtype=jnp.float32)  # (embed, v_heads, v_head_dim)
-        new_out_proj = dataclasses.replace(
+        new_out_proj = dataclass_replace(
             self.out_proj, weight=hax.named(out_w, (cfg.Embed.name, cfg.VHeads.name, cfg.VHeadDim.name))
         )
 
-        return dataclasses.replace(
+        return dataclass_replace(
             self,
             in_proj_qkvz=new_in_proj_qkvz,
             in_proj_ba=new_in_proj_ba,

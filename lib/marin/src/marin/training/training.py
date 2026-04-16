@@ -6,7 +6,7 @@ import importlib
 import logging
 import os
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from collections.abc import Callable
 from typing import TypeVar
 
@@ -25,6 +25,7 @@ from mergedeep import mergedeep
 
 from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
 from marin.training.run_environment import add_run_env_variables
+from levanter.utils.py_utils import dataclass_replace
 
 logger = logging.getLogger(__name__)
 
@@ -104,20 +105,20 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
     if pod_config.output_path is None:
         return pod_config
 
-    trainer = replace(
+    trainer = dataclass_replace(
         pod_config.train_config.trainer,
-        checkpointer=replace(
+        checkpointer=dataclass_replace(
             pod_config.train_config.trainer.checkpointer,
             base_path=os.path.join(pod_config.output_path, DEFAULT_CHECKPOINTS_PATH),
         ),
     )
 
-    config = replace(
+    config = dataclass_replace(
         pod_config.train_config,
         trainer=trainer,
         hf_save_path=os.path.join(pod_config.output_path, DEFAULT_HF_CHECKPOINTS_PATH),
     )
-    return replace(pod_config, train_config=config)
+    return dataclass_replace(pod_config, train_config=config)
 
 
 def _suppress_ray_config(config: TrainConfigT) -> TrainConfigT:
@@ -126,18 +127,18 @@ def _suppress_ray_config(config: TrainConfigT) -> TrainConfigT:
     """
     if config.trainer.ray.auto_start_cluster:
         logger.info("Ray cluster is set to auto-start, but that's not what we want for Marin. Disabling.")
-        return replace(
+        return dataclass_replace(
             config,
-            trainer=replace(
+            trainer=dataclass_replace(
                 config.trainer,
-                ray=replace(config.trainer.ray, auto_start_cluster=False, start_workers=False),
+                ray=dataclass_replace(config.trainer.ray, auto_start_cluster=False, start_workers=False),
             ),
         )
     elif config.trainer.ray.start_workers:
         logger.info("Ray cluster is set to start workers, but that's not what we want for Marin. Disabling.")
-        return replace(
+        return dataclass_replace(
             config,
-            trainer=replace(config.trainer, ray=replace(config.trainer.ray, start_workers=False)),
+            trainer=dataclass_replace(config.trainer, ray=dataclass_replace(config.trainer.ray, start_workers=False)),
         )
     return config
 
@@ -146,8 +147,8 @@ def _maybe_override_auto_build_caches(config: TrainConfigT, auto_build: bool) ->
     data = config.data
     if data.auto_build_caches != auto_build:
         logger.info("Overriding auto_build_caches to %s", auto_build)
-        data = dataclasses.replace(data, auto_build_caches=auto_build)
-        config = replace(config, data=data)
+        data = dataclasses.dataclass_replace(data, auto_build_caches=auto_build)
+        config = dataclass_replace(config, data=data)
     return config
 
 
@@ -178,14 +179,15 @@ def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
         logger.warning(f"Run ID not set. Using default: {run_id}")
 
     append_id_to_checkpoints = not config.impute_run_id_from_output_path
-    checkpointer_config = replace(
+    checkpointer_config = dataclass_replace(
         config.train_config.trainer.checkpointer, append_run_id_to_base_path=append_id_to_checkpoints
     )
 
-    inner_config = replace(
-        config.train_config, trainer=replace(config.train_config.trainer, id=run_id, checkpointer=checkpointer_config)
+    inner_config = dataclass_replace(
+        config.train_config,
+        trainer=dataclass_replace(config.train_config.trainer, id=run_id, checkpointer=checkpointer_config),
     )
-    return replace(config, train_config=inner_config)
+    return dataclass_replace(config, train_config=inner_config)
 
 
 def _normalize_jax_compilation_cache_dir(path: str) -> str:
@@ -259,8 +261,8 @@ def _prepare_training_run(
 
     # disable accelerator requirement when running without GPU/TPU resources
     if config.resources.device.kind == "cpu":
-        trainer = replace(train_config.trainer, require_accelerator=False)
-        train_config = replace(train_config, trainer=trainer)
+        trainer = dataclass_replace(train_config.trainer, require_accelerator=False)
+        train_config = dataclass_replace(train_config, trainer=trainer)
 
     if not isinstance(config.resources.device, CpuConfig):
         _doublecheck_paths(config)

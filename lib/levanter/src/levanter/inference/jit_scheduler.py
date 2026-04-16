@@ -22,6 +22,7 @@ from levanter.inference.utils import (
     masked_set,
     purge,
 )
+from levanter.utils.py_utils import dataclass_replace
 
 
 class PackedSequence(eqx.Module):
@@ -145,7 +146,7 @@ class SequenceTable(eqx.Module):
                 hax.full_like(table.page_indices["seq", slot], INVALID)
             )
             used_mask = table.used_mask.at["seq", slot].set(True)
-            return dataclasses.replace(
+            return dataclass_replace(
                 table,
                 seq_lens=seq_lens,
                 clone_sources=clone_sources,
@@ -174,7 +175,7 @@ class SequenceTable(eqx.Module):
         )
         page_indices_arr = self.page_indices.at["seq", slot_id].set(indices_row)
         used_mask = self.used_mask.at["seq", slot_id].set(True)
-        return dataclasses.replace(
+        return dataclass_replace(
             self,
             seq_lens=seq_lens,
             clone_sources=clone_sources,
@@ -185,7 +186,7 @@ class SequenceTable(eqx.Module):
 
     def set_clone_source(self, slot_id: int, clone_source: jnp.ndarray | int) -> "SequenceTable":
         clone_sources = self.clone_sources.at["seq", slot_id].set(clone_source)
-        return dataclasses.replace(self, clone_sources=clone_sources)
+        return dataclass_replace(self, clone_sources=clone_sources)
 
     def clear_slots(self, mask: ht.bool_[NamedArray, "seq"]) -> "SequenceTable":  # type: ignore[name-defined]
         new_seq_lens = hax.where(mask, INVALID, self.seq_lens)
@@ -354,7 +355,7 @@ class SequenceTable(eqx.Module):
         )
 
         kv_pages = self.kv_pages.at["seq", safe_updated].set(page_indices["seq", safe_updated])
-        new_sequences = dataclasses.replace(self, seq_lens=new_lens, page_indices=page_indices, kv_pages=kv_pages)
+        new_sequences = dataclass_replace(self, seq_lens=new_lens, page_indices=page_indices, kv_pages=kv_pages)
         new_page_table = dataclasses.replace(page_table, page_ref_counts=page_ref_counts)
 
         return new_sequences, new_page_table, batch_info
@@ -523,7 +524,7 @@ class SequenceTable(eqx.Module):
         used_mask = self.used_mask.at["seq", dst_seq_id].set(True)
 
         kv_pages = self.kv_pages.at["seq", dst_seq_id].set(page_indices["seq", dst_seq_id])
-        sequences = dataclasses.replace(
+        sequences = dataclass_replace(
             self,
             seq_lens=seq_lens,
             page_indices=page_indices,
@@ -538,7 +539,7 @@ class SequenceTable(eqx.Module):
         size = jnp.array(self.page_size, dtype=jnp.int32)
         next_page = ((cur + size - 1) // size) * size
         new_seq_lens = self.seq_lens.at["seq", seq_id].set(next_page)
-        return dataclasses.replace(self, seq_lens=new_seq_lens)
+        return dataclass_replace(self, seq_lens=new_seq_lens)
 
 
 class DecodeState(eqx.Module):
@@ -661,7 +662,7 @@ class DecodeState(eqx.Module):
         mask = self.finished
         finished = hax.zeros_like(self.finished)
         new_sequences = self.sequences.clear_slots(mask)
-        return dataclasses.replace(self, sequences=new_sequences, finished=finished)
+        return dataclass_replace(self, sequences=new_sequences, finished=finished)
 
     def prng_key_for(self, slot_id: int, pos_id: int) -> jaxtyping.PRNGKeyArray:
         """
@@ -673,11 +674,11 @@ class DecodeState(eqx.Module):
 
     def reserve_slot(self, slot_id: int | jnp.ndarray | None = None) -> tuple["DecodeState", int]:
         sequences, slot = self.sequences.reserve_slot(slot_id)
-        return dataclasses.replace(self, sequences=sequences), slot
+        return dataclass_replace(self, sequences=sequences), slot
 
     def release_slot(self, slot_id: int) -> "DecodeState":
         sequences = self.sequences.release_slot(slot_id)
-        return dataclasses.replace(self, sequences=sequences)
+        return dataclass_replace(self, sequences=sequences)
 
     def allocate_for_seq(
         self,
@@ -687,19 +688,19 @@ class DecodeState(eqx.Module):
         sequences, page_table, batch_info = self.sequences.allocate_for_seq(
             self.page_table, token_slot_ids, token_pos_ids
         )
-        return dataclasses.replace(self, sequences=sequences, page_table=page_table), batch_info
+        return dataclass_replace(self, sequences=sequences, page_table=page_table), batch_info
 
     def free_pages(self, seq_id: int) -> "DecodeState":
         sequences, page_table = self.sequences.free_pages(self.page_table, seq_id)
-        return dataclasses.replace(self, sequences=sequences, page_table=page_table)
+        return dataclass_replace(self, sequences=sequences, page_table=page_table)
 
     def free_pages_for_finished(self, finished_mask: jnp.ndarray) -> "DecodeState":
         sequences, page_table = self.sequences.free_pages_for_finished(self.page_table, finished_mask)
-        return dataclasses.replace(self, sequences=sequences, page_table=page_table)
+        return dataclass_replace(self, sequences=sequences, page_table=page_table)
 
     def bump_seq_len_to_next_page(self, seq_id: int) -> "DecodeState":
         sequences = self.sequences.bump_seq_len_to_next_page(seq_id)
-        return dataclasses.replace(self, sequences=sequences)
+        return dataclass_replace(self, sequences=sequences)
 
     def prng_keys_for(self, slot_ids: ht.i32[NamedArray, "position"], pos_ids: ht.i32[NamedArray, "position"]) -> jaxtyping.PRNGKeyArray:  # type: ignore[name-defined]
         """
@@ -719,17 +720,17 @@ class DecodeState(eqx.Module):
     ) -> "DecodeState":
         """Forward ``enqueue_tokens`` to the underlying ``TokenQueue`` and return an updated ``DecodeState``."""
         new_tqueue = self.tqueue.enqueue_tokens(new_tokens, new_slot_ids, new_pos_ids, num_new_tokens)
-        return dataclasses.replace(self, tqueue=new_tqueue)
+        return dataclass_replace(self, tqueue=new_tqueue)
 
     def purge_queue_of_slot(self, slot_id: hax.NamedArray | int) -> "DecodeState":
         """Forward ``purge_queue_of_slot`` to ``TokenQueue`` and return an updated ``DecodeState``."""
         new_tqueue = self.tqueue.purge_queue_of_slot(slot_id)
-        return dataclasses.replace(self, tqueue=new_tqueue)
+        return dataclass_replace(self, tqueue=new_tqueue)
 
     def pack_next_sequence(self, max_tokens: int) -> tuple["DecodeState", PackedSequence]:  # type: ignore[name-defined]
         """Forward ``pack_next_sequence`` to ``TokenQueue`` and return updated ``DecodeState`` plus the ``PackedSequence``."""
         new_tqueue, packed = self.tqueue.pack_next_sequence(max_tokens)
-        return dataclasses.replace(self, tqueue=new_tqueue), packed
+        return dataclass_replace(self, tqueue=new_tqueue), packed
 
     @eqx.filter_jit
     def discharge_clone(
@@ -755,15 +756,15 @@ class DecodeState(eqx.Module):
 
         new_map = jax.lax.fori_loop(0, num_targets, body, clone_map)
         table = self.sequences
-        new_sequences = dataclasses.replace(table, clone_sources=new_map)
-        return dataclasses.replace(self, sequences=new_sequences)
+        new_sequences = dataclass_replace(table, clone_sources=new_map)
+        return dataclass_replace(self, sequences=new_sequences)
 
     def clone_pages_from(self, src, dest) -> "DecodeState":
         """
         Clone kv_pages from src slot to dest slot.
         """
         sequences, page_table = self.sequences.clone_pages_from(self.page_table, src, dest)
-        return dataclasses.replace(self, sequences=sequences, page_table=page_table)
+        return dataclass_replace(self, sequences=sequences, page_table=page_table)
 
     @property
     def empty_queue_space(self) -> jnp.ndarray:
@@ -822,7 +823,7 @@ class DecodeState(eqx.Module):
             page_indices=page_indices,
         )
 
-        new_state = dataclasses.replace(
+        new_state = dataclass_replace(
             self,
             sequences=new_sequences,
             tokens=new_tokens,
@@ -836,7 +837,7 @@ class DecodeState(eqx.Module):
         )
 
         if seq_params is not None:
-            new_state = dataclasses.replace(
+            new_state = dataclass_replace(
                 new_state,
                 max_num_tokens=new_state.max_num_tokens.at["seq", local_slot_id].set(seq_params.max_num_tokens),
                 temperature=new_state.temperature.at["seq", local_slot_id].set(seq_params.temperature),
@@ -851,7 +852,7 @@ class DecodeState(eqx.Module):
                     # this is fine, just fill this sequence with the pad token
                     assert stops is not None  # make mypy happy
                     new_stop_tokens = stops.at["seq", local_slot_id].set(INVALID)
-                    new_state = dataclasses.replace(new_state, stop_tokens=new_stop_tokens)
+                    new_state = dataclass_replace(new_state, stop_tokens=new_stop_tokens)
                 case (stops, seq_stops):
                     # too fancy, but we allow for different stop sequences per sequence etc.
                     # Probably better to do this in python outside of the jit loop
@@ -864,7 +865,7 @@ class DecodeState(eqx.Module):
                         seq_stops
                     )
                     new_stops = stops.at["seq", local_slot_id].set(this_row_full)
-                    new_state = dataclasses.replace(new_state, stop_tokens=new_stops)
+                    new_state = dataclass_replace(new_state, stop_tokens=new_stops)
 
         return new_state
 
@@ -935,9 +936,9 @@ class DecodeState(eqx.Module):
         # Enqueue tokens and their corresponding position ids into the queue
         new_tqueue = self.tqueue.enqueue_tokens(new_tokens, local_slot_ids, pos_ids, num_new_tokens_to_queue)
 
-        new_sequences = dataclasses.replace(sequences, seq_lens=counts)
+        new_sequences = dataclass_replace(sequences, seq_lens=counts)
 
-        return dataclasses.replace(
+        return dataclass_replace(
             self, tokens=tokens, logprobs=logprobs, sequences=new_sequences, tqueue=new_tqueue, finished=fins
         )
 
@@ -1045,7 +1046,7 @@ class TokenQueue(eqx.Module):
             num_new_tokens,
         )
 
-        return dataclasses.replace(
+        return dataclass_replace(
             self,
             queued_tokens=new_q_tokens,
             queued_slot_ids=new_q_slot_ids,
@@ -1080,7 +1081,7 @@ class TokenQueue(eqx.Module):
         new_q_slot_ids = filler_slot_ids
         new_q_pos_ids = filler_pos_ids
 
-        new_scheduler = dataclasses.replace(
+        new_scheduler = dataclass_replace(
             self,
             queued_tokens=new_q_tokens,
             queued_slot_ids=new_q_slot_ids,
@@ -1123,7 +1124,7 @@ class TokenQueue(eqx.Module):
         new_pos_ids = purge(self.queued_pos_ids, is_slot_id)
         new_queued = hax.sum(new_slot_ids != INVALID).scalar()
 
-        return dataclasses.replace(
+        return dataclass_replace(
             self,
             queued_tokens=new_tokens,
             queued_slot_ids=new_slot_ids,
@@ -1204,7 +1205,7 @@ class _DecodeOutputs(eqx.Module):
             new_lp_buf = None
         # Keep finished flags monotonic (once finished, always finished)
         new_finished = self.finished | finished_snapshot
-        return dataclasses.replace(
+        return dataclass_replace(
             self,
             tokens=new_tok_buf,
             slot_ids=new_sid_buf,

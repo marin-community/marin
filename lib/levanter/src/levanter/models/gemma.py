@@ -29,6 +29,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.types import BlockFoldable
+from levanter.utils.py_utils import dataclass_replace
 
 silence_transformer_nag()
 from transformers import Gemma2Config as HfGemma2Config  # noqa: E402
@@ -435,10 +436,10 @@ class GemmaLMHeadModel(LmHeadModel[GemmaConfig], ModuleWithStateDictSerializatio
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
         if self.lm_head is not None:
             new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-            new_lm_head = dataclasses.replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
-            return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
+            new_lm_head = dataclass_replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
+            return dataclass_replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
         else:
-            return dataclasses.replace(self, embeddings=new_embeddings)
+            return dataclass_replace(self, embeddings=new_embeddings)
 
     def _state_dict_key_map(self) -> dict[str, str | None]:
         """Map from Levanter model names to HF."""
@@ -766,10 +767,10 @@ class Gemma2LMHeadModel(LmHeadModel[Gemma2Config], ModuleWithStateDictSerializat
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
         if self.lm_head is not None:
             new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-            new_lm_head = dataclasses.replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
-            return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
+            new_lm_head = dataclass_replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
+            return dataclass_replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
         else:
-            return dataclasses.replace(self, embeddings=new_embeddings)
+            return dataclass_replace(self, embeddings=new_embeddings)
 
     def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"transformer": "model", "embeddings": None}
@@ -806,10 +807,11 @@ class Gemma3Config(Gemma2Config):
     @property
     def local_rope(self) -> RotaryEmbeddingsConfig:
         """Local RoPE config used for Gemma-3's alternating local attention."""
-        return dataclasses.replace(self.rope, theta=self.rope_local_base_freq)
+        return dataclass_replace(self.rope, theta=self.rope_local_base_freq)
 
     # ---------- Convenience ----------
     @property  # type: ignore[override]
+    # pyrefly: ignore[bad-override]  # narrows parent's Gemma2LMHeadModel to Gemma3LMHeadModel
     def model_type(self):  # noqa: D401
         return Gemma3LMHeadModel
 
@@ -988,10 +990,10 @@ class Gemma3LMHeadModel(LmHeadModel[Gemma3Config], ModuleWithStateDictSerializat
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
         if self.lm_head is not None:
             new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-            new_lm_head = dataclasses.replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
-            return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
+            new_lm_head = dataclass_replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
+            return dataclass_replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
         else:
-            return dataclasses.replace(self, embeddings=new_embeddings)
+            return dataclass_replace(self, embeddings=new_embeddings)
 
     def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"transformer": "model", "embeddings": None}

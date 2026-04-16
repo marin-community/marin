@@ -21,6 +21,7 @@ from levanter.optim.model_averaging import ModelAveraging, ModelAveragingConfig
 from levanter.utils.jax_utils import is_inexact_arrayish
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import FilterTree
+from levanter.utils.py_utils import dataclass_replace
 
 M = TypeVar("M", bound=PyTree)
 S = TypeVar("S")
@@ -159,7 +160,7 @@ class TrainerState(eqx.Module, Generic[M]):
             ma = None
 
         return (
-            dataclasses.replace(
+            dataclass_replace(
                 self, model=model, opt_state=opt_state, model_averaging=ma, step=self.step + 1, training_key=key
             ),
             updates,

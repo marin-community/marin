@@ -1,7 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Type, Union
 
@@ -24,6 +23,7 @@ from levanter.models.lm_model import LmConfig
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
+from levanter.utils.py_utils import dataclass_replace
 
 
 silence_transformer_nag()
@@ -314,7 +314,7 @@ class Gpt2Embeddings(ModuleWithStateDictSerialization, eqx.Module):
 
     def resize_embeddings(self, new_size: int, key: Optional[PRNGKeyArray] = None):
         new_token_embeddings = self.token_embeddings.resize_embeddings(new_size, key=key)
-        return dataclasses.replace(self, Vocab=self.Vocab.resize(new_size), token_embeddings=new_token_embeddings)
+        return dataclass_replace(self, Vocab=self.Vocab.resize(new_size), token_embeddings=new_token_embeddings)
 
 
 class Gpt2LMHeadModel(LmWithHfSerializationMixin[Gpt2Config]):
@@ -362,7 +362,7 @@ class Gpt2LMHeadModel(LmWithHfSerializationMixin[Gpt2Config]):
 
     def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "Gpt2LMHeadModel":
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=key)
-        return dataclasses.replace(self, embeddings=new_embeddings)
+        return dataclass_replace(self, embeddings=new_embeddings)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
         return {"transformer": None, "embeddings": None}

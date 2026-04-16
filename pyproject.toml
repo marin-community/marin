@@ -188,6 +188,7 @@ bad-argument-count = false
 # unbound-name, not-iterable, bad-index, bad-context-manager: re-enabled in PR-1
 # invalid-annotation, not-a-type, invalid-type-var, invalid-variance,
 # invalid-inheritance: re-enabled in PR-0
+# bad-specialization, inconsistent-overload: cleared in PR-2 (helper + per-site)
 
 [tool.hatch.metadata]
 allow-direct-references = true

@@ -3,7 +3,6 @@
 
 """Cache implementations for paged attention."""
 
-import dataclasses
 import functools
 from typing import Generic, Iterable, Iterator, Self, TypeVar
 
@@ -16,6 +15,7 @@ from haliax.jax_utils import named_call
 from jax import lax
 
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.utils.py_utils import dataclass_replace
 
 
 class PageCache(eqx.Module):
@@ -60,7 +60,7 @@ class KvPageCache(PageCache):
     def reset(self) -> "KvPageCache":
         """Return a reset version of this cache."""
         reset_pages = jnp.zeros_like(self.kv_pages.array)
-        return dataclasses.replace(self, kv_pages=NamedArray(reset_pages, self.kv_pages.axes))
+        return dataclass_replace(self, kv_pages=NamedArray(reset_pages, self.kv_pages.axes))
 
     @named_call
     def update(
@@ -89,7 +89,7 @@ class KvPageCache(PageCache):
             K,
         )
         updated = NamedArray(updated, self.kv_pages.axes)
-        return dataclasses.replace(self, kv_pages=updated)
+        return dataclass_replace(self, kv_pages=updated)
 
     def copy_page(self, src_page: int, dst_page: int) -> "KvPageCache":
         """Copy the entire contents of page ``src_page`` into ``dst_page``.
@@ -97,7 +97,7 @@ class KvPageCache(PageCache):
         This is used when creating clones that should have an identical last partial page, but mapped to a fresh page.
         """
         new_k = self.kv_pages.at["page", dst_page].set(self.kv_pages["page", src_page])
-        return dataclasses.replace(self, kv_pages=new_k)
+        return dataclass_replace(self, kv_pages=new_k)
 
 
 PageCacheT = TypeVar("PageCacheT", bound=PageCache)

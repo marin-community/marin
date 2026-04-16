@@ -3,6 +3,7 @@
 
 import base64
 import contextlib
+import dataclasses
 import datetime
 import decimal
 import enum
@@ -12,6 +13,21 @@ import pathlib
 import sys
 import uuid
 from dataclasses import asdict, dataclass, is_dataclass
+from typing import TypeVar
+
+_ReplaceT = TypeVar("_ReplaceT")
+
+
+def dataclass_replace(obj: _ReplaceT, /, **changes) -> _ReplaceT:
+    """Like ``dataclasses.replace`` but preserves the input type.
+
+    ``dataclasses.replace`` is typed with a ``DataclassInstance``-bounded
+    TypeVar, which pyrefly cannot specialize through ``Self`` on an
+    ``eqx.Module`` / dataclass subclass. This thin wrapper keeps the
+    caller's concrete type (including ``Self``) without the bound.
+    """
+    # pyrefly: ignore[bad-specialization]
+    return dataclasses.replace(obj, **changes)
 
 
 def logical_cpu_core_count() -> int:

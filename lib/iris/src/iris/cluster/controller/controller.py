@@ -694,6 +694,7 @@ def _inject_reservation_taints(
         if claim is not None:
             modified_attrs = dict(worker.attributes)
             modified_attrs[RESERVATION_TAINT_KEY] = AttributeValue(claim.job_id)
+            # pyrefly: ignore[bad-specialization]  # WorkerSnapshot is a Protocol; runtime impls are dataclasses
             claimed.append(replace(worker, attributes=modified_attrs))
         else:
             unclaimed.append(worker)
