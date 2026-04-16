@@ -86,7 +86,7 @@ from iris.cluster.controller.schema import (
     WorkerRow,
     tasks_with_attempts,
 )
-from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints
+from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.query import execute_raw_query
 from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
@@ -900,6 +900,10 @@ class AutoscalerProtocol(Protocol):
         """Get autoscaler status."""
         ...
 
+    def get_pending_hints(self) -> dict[str, PendingHint]:
+        """Get cached pending-hint dict keyed by job id."""
+        ...
+
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
         """Get info for a specific VM."""
         ...
@@ -1044,10 +1048,10 @@ class ControllerServiceImpl:
         autoscaler = self._controller.autoscaler
         if autoscaler is None:
             return {}
-        status = autoscaler.get_status()
-        if not status.HasField("last_routing_decision"):
-            return {}
-        return build_job_pending_hints(status.last_routing_decision)
+        # Autoscaler caches the hint dict per evaluate() cycle; this avoids
+        # rebuilding the full AutoscalerStatus proto on every GetJobStatus
+        # RPC (#4844).
+        return autoscaler.get_pending_hints()
 
     def _authorize_job_owner(self, job_id: JobName) -> None:
         """Raise PERMISSION_DENIED if the authenticated user doesn't own this job.
