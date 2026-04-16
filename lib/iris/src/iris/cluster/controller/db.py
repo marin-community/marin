@@ -13,10 +13,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace as dc_replace
 from pathlib import Path
 from threading import Lock, RLock
-from typing import Any
+from typing import Any, Protocol
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.schema import decode_timestamp_ms, decode_worker_id
+from iris.cluster.controller.schema import EndpointRow, decode_timestamp_ms, decode_worker_id
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId
 from iris.rpc import job_pb2
 from rigging.timing import Deadline, Duration, Timestamp
@@ -219,6 +219,25 @@ class EndpointQuery:
     limit: int | None = None
 
 
+class EndpointRegistryProtocol(Protocol):
+    """Structural type for the endpoints registry exposed on ``ControllerDB``.
+
+    Defined here (rather than importing the concrete ``EndpointRegistry``)
+    because ``endpoint_registry`` imports ``EndpointQuery`` / ``TransactionCursor``
+    from this module, creating a real module-level cycle. Per iris conventions
+    (``AGENTS.md``: avoid ``TYPE_CHECKING``; prefer a Protocol at the boundary).
+    """
+
+    def query(self, query: EndpointQuery = ...) -> list[EndpointRow]: ...
+    def resolve(self, name: str) -> EndpointRow | None: ...
+    def get(self, endpoint_id: str) -> EndpointRow | None: ...
+    def all(self) -> list[EndpointRow]: ...
+    def add(self, cur: TransactionCursor, endpoint: EndpointRow) -> bool: ...
+    def remove(self, cur: TransactionCursor, endpoint_id: str) -> EndpointRow | None: ...
+    def remove_by_task(self, cur: TransactionCursor, task_id: JobName) -> list[str]: ...
+    def remove_by_job_ids(self, cur: TransactionCursor, job_ids: Sequence[JobName]) -> list[str]: ...
+
+
 def _decode_attribute_rows(rows: Sequence[Any]) -> dict[WorkerId, dict[str, AttributeValue]]:
     attrs_by_worker: dict[WorkerId, dict[str, AttributeValue]] = {}
     for row in rows:
@@ -331,7 +350,7 @@ class ControllerDB:
         logger.info("EndpointRegistry initialized in %.2fs", time.monotonic() - t0)
 
     @property
-    def endpoints(self) -> EndpointRegistry:  # noqa: F821
+    def endpoints(self) -> EndpointRegistryProtocol:
         """Process-local cache for the ``endpoints`` table; authoritative for reads."""
         return self._endpoint_registry
 

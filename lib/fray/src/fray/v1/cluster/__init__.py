@@ -123,7 +123,6 @@ __all__ = [
     "JobRequest",
     "LocalCluster",
     "ResourceConfig",
-    "TPUConfig",
     "TpuConfig",
     "TpuType",
     "create_cluster",

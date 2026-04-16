@@ -49,10 +49,10 @@ class InputDatasetFormat(str, Enum):
     |  what's the car's speed ?" }]     |  time taken. Answer is 375/3 = 125 kmph" |
     """
 
-    SINGLE_COLUMN_MULTI_TURN: str = "messages"
-    INSTRUCTION_RESPONSE: str = "instruction_response"
-    INSTRUCT_COLUMN_RESPONSE: str = "instruct_column_response"
-    INSTRUCT_MSG_RESPONSE: str = "instruct_msg_response"
+    SINGLE_COLUMN_MULTI_TURN = "messages"
+    INSTRUCTION_RESPONSE = "instruction_response"
+    INSTRUCT_COLUMN_RESPONSE = "instruct_column_response"
+    INSTRUCT_MSG_RESPONSE = "instruct_msg_response"
 
 
 @dataclass
@@ -91,7 +91,7 @@ class TransformAdapter:
     def transform_conversation_to_openai_format(
         self,
         row: dict[str, Any],
-    ) -> list[OpenAIChatMessage]:
+    ) -> list[OpenAIChatMessage] | None:
         if self.dataset_format == InputDatasetFormat.INSTRUCTION_RESPONSE:
             messages = []
             instruction = row[self.instruction_column]
@@ -107,6 +107,8 @@ class TransformAdapter:
                     if completion[self.filter_on_key] > best_metric:
                         best_metric = completion[self.filter_on_key]
                         best_completion = completion
+                if best_completion is None:
+                    return None
                 response = best_completion[self.content_key]
             messages.append(OpenAIChatMessage(role="user", content=instruction))
             messages.append(OpenAIChatMessage(role="assistant", content=response))

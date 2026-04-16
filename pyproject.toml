@@ -163,9 +163,6 @@ missing-attribute = false
 
 # Additional error types with >10 occurrences that are hard to fix systematically:
 
-# Deprecated APIs (19 occurrences) - would require code changes across multiple files
-deprecated = false
-
 # Unknown name errors (17 occurrences) - often from dynamic code or missing stubs
 unknown-name = false
 

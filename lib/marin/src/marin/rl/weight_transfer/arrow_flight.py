@@ -264,9 +264,8 @@ class ArrowFlightCoordinator:
             param_names=param_names,
         )
         logger.info(f"Updated server: weight_id={weight_id}, params={len(param_names)}, servers={len(server_locations)}")
-        return 123
 
-    def fetch_server(self) -> ServerInfo:
+    def fetch_server(self) -> ServerInfo | None:
         return self._server_info
 
 
@@ -292,6 +291,8 @@ class MarinFlightServer(flight.FlightServerBase):
 
     def do_get(self, context, ticket):
         """Serve weight data to inference workers."""
+        # Propagate typed FlightUnavailableError without rewrapping — callers
+        # distinguish "no weights yet" (retry) from internal server errors.
         try:
             ticket_data = ticket.ticket.decode("utf-8")
 
@@ -305,12 +306,17 @@ class MarinFlightServer(flight.FlightServerBase):
             with self._lock:
                 if weight_id != self._latest_weight_id:
                     logger.debug(f"Requested weight_id {weight_id} stale, returning {self._latest_weight_id}")
+                    if self._latest_weight_id is None:
+                        raise flight.FlightUnavailableError("No weights available yet")
                     weight_id = self._latest_weight_id
 
                 (schema, batches) = self._weights_store[weight_id][param_name]
 
             return flight.RecordBatchStream(pa.RecordBatchReader.from_batches(schema, batches))
 
+        except flight.FlightUnavailableError:
+            # Typed "retry me" signal; do not rewrap as Internal.
+            raise
         except Exception as e:
             logger.error(f"Error in do_get: {e}")
             raise flight.FlightInternalError(f"Failed to get weights: {e}") from e
