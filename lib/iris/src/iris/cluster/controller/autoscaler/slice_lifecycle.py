@@ -25,8 +25,6 @@ SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
 
 
 class SliceEvent(StrEnum):
-    PLATFORM_CALL_SUCCEEDED = "platform_call_succeeded"
-    PLATFORM_CALL_FAILED = "platform_call_failed"
     CLOUD_STATE_INITIALIZING = "cloud_state_initializing"
     CLOUD_STATE_READY = "cloud_state_ready"
     CLOUD_STATE_FAILED = "cloud_state_failed"
@@ -39,7 +37,6 @@ class SliceEvent(StrEnum):
 # slice was short-lived). IDLE_TIMEOUT is a healthy scaledown and never counts.
 BACKOFF_TRIGGERS: frozenset[SliceEvent] = frozenset(
     {
-        SliceEvent.PLATFORM_CALL_FAILED,
         SliceEvent.CLOUD_STATE_FAILED,
         SliceEvent.CLOUD_STATE_UNKNOWN_TIMEOUT,
         SliceEvent.WORKER_FAILURE_REPORTED,
@@ -51,15 +48,12 @@ class Transition(NamedTuple):
     to_state: SliceLifecycleState
 
 
-_R, _B, _I, _RDY, _F = (
-    SliceLifecycleState.REQUESTING,
+_B, _I, _RDY, _F = (
     SliceLifecycleState.BOOTING,
     SliceLifecycleState.INITIALIZING,
     SliceLifecycleState.READY,
     SliceLifecycleState.FAILED,
 )
-_SUCCEEDED = SliceEvent.PLATFORM_CALL_SUCCEEDED
-_P_FAILED = SliceEvent.PLATFORM_CALL_FAILED
 _C_INIT = SliceEvent.CLOUD_STATE_INITIALIZING
 _C_READY = SliceEvent.CLOUD_STATE_READY
 _C_FAILED = SliceEvent.CLOUD_STATE_FAILED
@@ -68,8 +62,6 @@ _W_FAILED = SliceEvent.WORKER_FAILURE_REPORTED
 _IDLE = SliceEvent.IDLE_TIMEOUT
 
 TRANSITIONS: dict[tuple[SliceLifecycleState, SliceEvent], Transition] = {
-    (_R, _SUCCEEDED):   Transition(_B),
-    (_R, _P_FAILED):    Transition(_F),
     (_B, _C_INIT):      Transition(_I),
     (_B, _C_READY):     Transition(_RDY),
     (_B, _C_FAILED):    Transition(_F),
