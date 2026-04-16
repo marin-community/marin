@@ -96,13 +96,13 @@ def test_max_chunk_rows_per_shard(tmp_path):
 
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=num_shards)
 
-    shard0 = ScatterReader.from_sidecars(scatter_paths, 0)
-    shard1 = ScatterReader.from_sidecars(scatter_paths, 1)
+    big_shard = ScatterReader.from_sidecars(scatter_paths, _target(3, num_shards))
+    small_shard = ScatterReader.from_sidecars(scatter_paths, _target(0, num_shards))
 
-    assert shard0.max_chunk_rows == 500
-    assert shard1.max_chunk_rows == 2, (
-        f"shard1 max_chunk_rows={shard1.max_chunk_rows}, expected 2; "
-        "contamination from shard0's large chunk would show 500"
+    assert big_shard.max_chunk_rows == 500
+    assert small_shard.max_chunk_rows == 2, (
+        f"small_shard max_chunk_rows={small_shard.max_chunk_rows}, expected 2; "
+        "contamination from the large chunk would show 500"
     )
 
 
