@@ -19,15 +19,18 @@ from typing import Literal
 
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
+from levanter.adaptor.lora import LoraConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from levanter.trainer import TrainerConfig
+from levanter.utils.fsspec_utils import join_path
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.environments.inference_ctx import (
     LevanterInferenceContextConfig,
     vLLMInferenceContextConfig,
 )
+from marin.rl.lora_manifest import RUN_MANIFEST_FILENAME, RolloutPolicyFormat
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
@@ -37,6 +40,8 @@ from marin.rl.weight_transfer import WeightTransferConfig
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger(__name__)
+
+ROLLOUT_POLICY_FORMAT: RolloutPolicyFormat = "merged"
 
 
 @dataclass
@@ -80,6 +85,7 @@ class TrainParams:
 
     optimizer: OptimizerConfig
     rl_loss: "RLLossModule"
+    lora: LoraConfig | None = None
     replay_buffer: ReplayBufferConfig = field(
         default_factory=lambda: ReplayBufferConfig(
             capacity=4096,
@@ -108,6 +114,7 @@ class RLJobConfig:
     tokenizer: str | MarinTokenizer
 
     inference_type: Literal["levanter", "vllm"]
+    rollout_policy_format: RolloutPolicyFormat = ROLLOUT_POLICY_FORMAT
 
     seed: int = 42
 
@@ -126,6 +133,9 @@ class RLJobConfig:
         )
     )
     weight_transfer: WeightTransferConfig = field(default_factory=WeightTransferConfig)
+    run_manifest_path: str | None = None
+    adapter_artifacts_path: str | None = None
+    merged_hf_export_path: str | None = None
 
     # Deployment configuration
     run_config: RunConfig | None = None
@@ -204,6 +214,12 @@ def build_worker_configs(config: RLJobConfig) -> tuple[TrainWorkerConfig, Rollou
     can call it without importing :class:`~marin.rl.rl_job.RLJob`, which would
     re-introduce the rl_job <-> orchestration import cycle.
     """
+    if config.rollout_policy_format != "merged":
+        raise ValueError(
+            "rollout_policy_format='adapter' is not implemented yet; "
+            "use rollout_policy_format='merged' for the current RL runtime"
+        )
+
     # Create tokenizer
     tokenizer = make_tokenizer(config.tokenizer)
 
@@ -263,12 +279,22 @@ def build_worker_configs(config: RLJobConfig) -> tuple[TrainWorkerConfig, Rollou
         trainer=config.trainer,
         optimizer=config.train_params.optimizer,
         loss=config.train_params.rl_loss,
+        lora=config.train_params.lora,
         tokenizer=tokenizer,
         replay_buffer=config.train_params.replay_buffer,
         initial_checkpoint=config.initial_checkpoint,
         vocab_size=config.vocab_size,
         run_id=config.run_id,
+        run_manifest_path=(
+            config.run_manifest_path
+            if config.run_manifest_path is not None
+            else join_path(config.trainer.checkpointer.expanded_path(f"{config.run_id}-train"), RUN_MANIFEST_FILENAME)
+        ),
+        adapter_artifacts_path=config.adapter_artifacts_path,
+        merged_hf_export_path=config.merged_hf_export_path,
         curriculum_config=config.curriculum,
+        inference_type=config.inference_type,
+        rollout_policy_format=config.rollout_policy_format,
         seed=config.seed,
     )
 
@@ -291,6 +317,7 @@ def build_worker_configs(config: RLJobConfig) -> tuple[TrainWorkerConfig, Rollou
         system_prompt=config.system_prompt,
         inflight_weight_updates=config.inflight_weight_updates,
         tracker_config=config.rollout_tracker,
+        rollout_policy_format=config.rollout_policy_format,
     )
 
     return train_worker_config, rollout_worker_config

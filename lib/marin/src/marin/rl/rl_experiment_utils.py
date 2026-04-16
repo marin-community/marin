@@ -12,6 +12,7 @@ import jmp
 from fray.types import ResourceConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.adaptor.lora import LoraConfig
 from levanter.layers.attention import AttentionBackend
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
@@ -29,6 +30,7 @@ from marin.rl.environments.inference_ctx import (
     VLLMFallbackSamplingConfig,
     vLLMInferenceContextConfig,
 )
+from marin.rl.lora_manifest import RUN_MANIFEST_FILENAME, RolloutPolicyFormat
 from marin.rl.placement import marin_prefix_for_region, resolve_launcher_region, singleton_region_list
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
@@ -76,6 +78,8 @@ class RLExperimentConfig:
     model_config: ModelConfig
     rl_loss: RLLossModule
     experiment_name_suffix: str
+    lora: LoraConfig | None = None
+    rollout_policy_format: RolloutPolicyFormat = "merged"
 
     # trainer params
     train_batch_size: int = 1024
@@ -256,6 +260,7 @@ def _build_rl_job_config(
     tags = [*config.tags, config.model_config.name.split("/")[-1]]
     checkpoints_path = join_path(output_path, "checkpoints")
     rollout_storage_path = join_path(output_path, "rollouts")
+    run_manifest_path = join_path(output_path, RUN_MANIFEST_FILENAME)
 
     trainer_config = TrainerConfig(
         tracker=WandbConfig(
@@ -313,6 +318,7 @@ def _build_rl_job_config(
         train_params=TrainParams(
             optimizer=opt_config,
             rl_loss=config.rl_loss,
+            lora=config.lora,
             replay_buffer=ReplayBufferConfig(
                 capacity=config.replay_buffer_capacity,
                 alpha=config.replay_buffer_alpha,
@@ -323,6 +329,7 @@ def _build_rl_job_config(
         curriculum=curriculum_config,
         tokenizer=model_path,
         inference_type="vllm",
+        rollout_policy_format=config.rollout_policy_format,
         inference_config=vLLMInferenceContextConfig(
             engine=_build_vllm_engine_config(config, model_path),
             fallback_sampling=_build_vllm_fallback_sampling_config(config),
@@ -330,6 +337,7 @@ def _build_rl_job_config(
         initial_checkpoint=model_path,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
+        run_manifest_path=run_manifest_path,
         run_id=name,
         log_freq=1,
         run_config=RunConfig(
