@@ -16,6 +16,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 from collections.abc import Sequence
 
@@ -479,54 +480,25 @@ class ScalingGroup:
             self._pending_scale_ups = max(0, self._pending_scale_ups - 1)
 
     def mark_slice_ready(self, slice_id: str, worker_ids: list[str], timestamp: Timestamp | None = None) -> None:
-        """Mark a slice as READY with its worker IDs. Called after successful bootstrap.
+        """Mark a slice as READY with its worker IDs.
 
-        Initializes last_active to prevent the slice from appearing idle since epoch(0),
-        which would make it immediately eligible for scaledown.
+        Thin wrapper around dispatch() for test convenience and the
+        scale_down_if_idle path which doesn't use dispatch yet.
         """
         timestamp = timestamp or Timestamp.now()
-        with self._slices_lock:
-            state = self._slices.get(slice_id)
-            if state is not None:
-                state.lifecycle = SliceLifecycleState.READY
-                state.worker_ids = worker_ids
-                state.last_active = timestamp
-        if state is not None:
-            self._db_upsert_slice(slice_id, state)
-            logger.info(
-                "slice ready group=%s slice=%s n_workers=%d worker_ids=%s",
-                self._config.name,
-                slice_id,
-                len(worker_ids),
-                worker_ids,
-            )
+        result = self.dispatch(slice_id, SliceEvent.CLOUD_STATE_READY, {"worker_ids": worker_ids}, now=timestamp)
+        if result is not None:
+            self._db_upsert_slice(slice_id, self._slices[slice_id])
 
     def mark_slice_failed(self, slice_id: str, error_message: str = "") -> None:
-        """Mark a slice as FAILED. Called when bootstrap fails."""
-        with self._slices_lock:
-            state = self._slices.get(slice_id)
-            if state is not None:
-                state.lifecycle = SliceLifecycleState.FAILED
-                state.error_message = error_message
-                registered = list(state.worker_ids)
-            else:
-                registered = []
-        if state is not None:
-            self._db_upsert_slice(slice_id, state)
-            logger.warning(
-                "slice failed group=%s slice=%s n_registered=%d registered=%s error=%s",
-                self._config.name,
-                slice_id,
-                len(registered),
-                registered,
-                error_message,
-            )
+        """Mark a slice as FAILED. Thin wrapper around dispatch()."""
+        self.dispatch(slice_id, SliceEvent.CLOUD_STATE_FAILED, {"error_message": error_message})
 
     def dispatch(
         self,
         slice_id: str,
         event: SliceEvent,
-        context: dict[str, object] | None = None,
+        context: dict[str, Any] | None = None,
         *,
         now: Timestamp | None = None,
     ) -> TransitionResult | None:

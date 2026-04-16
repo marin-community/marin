@@ -135,7 +135,7 @@ def terminate_slices_for_workers(
         # Execute side effects
         if result is not None:
             for effect in result.side_effects:
-                if effect.kind == SliceSideEffectKind.RECORD_GROUP_FAILURE:
+                if effect == SliceSideEffectKind.RECORD_GROUP_FAILURE:
                     group.record_failure(timestamp)
                     log_action(
                         "backoff_triggered",

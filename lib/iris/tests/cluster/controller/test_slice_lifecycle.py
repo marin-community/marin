@@ -46,7 +46,7 @@ def test_booting_to_ready():
     assert result.new_state == SliceLifecycleState.READY
     assert result.event == SliceEvent.CLOUD_STATE_READY
     assert slices["slice-001"].lifecycle == SliceLifecycleState.READY
-    effect_kinds = [e.kind for e in result.side_effects]
+    effect_kinds = result.side_effects
     assert SliceSideEffectKind.REGISTER_WORKERS in effect_kinds
 
 
@@ -76,7 +76,7 @@ def test_initializing_to_ready():
     )
     assert result is not None
     assert result.new_state == SliceLifecycleState.READY
-    assert any(e.kind == SliceSideEffectKind.REGISTER_WORKERS for e in result.side_effects)
+    assert SliceSideEffectKind.REGISTER_WORKERS in result.side_effects
 
 
 def test_booting_to_failed_on_cloud_failure():
@@ -91,7 +91,7 @@ def test_booting_to_failed_on_cloud_failure():
     )
     assert result is not None
     assert result.new_state == SliceLifecycleState.FAILED
-    effect_kinds = [e.kind for e in result.side_effects]
+    effect_kinds = result.side_effects
     assert SliceSideEffectKind.DEREGISTER_WORKERS in effect_kinds
     assert SliceSideEffectKind.TERMINATE_SLICE in effect_kinds
     assert SliceSideEffectKind.RECORD_GROUP_FAILURE not in effect_kinds
@@ -108,7 +108,7 @@ def test_failed_on_cloud_failure_short_lived_triggers_backoff():
         now=Timestamp.from_ms(1000),
     )
     assert result is not None
-    effect_kinds = [e.kind for e in result.side_effects]
+    effect_kinds = result.side_effects
     assert SliceSideEffectKind.RECORD_GROUP_FAILURE in effect_kinds
 
 
@@ -123,7 +123,7 @@ def test_unknown_timeout():
     )
     assert result is not None
     assert result.new_state == SliceLifecycleState.FAILED
-    effect_kinds = [e.kind for e in result.side_effects]
+    effect_kinds = result.side_effects
     assert SliceSideEffectKind.TERMINATE_SLICE in effect_kinds
 
 
@@ -142,7 +142,7 @@ def test_ready_to_failed_on_worker_failure():
     )
     assert result is not None
     assert result.new_state == SliceLifecycleState.FAILED
-    effect_kinds = [e.kind for e in result.side_effects]
+    effect_kinds = result.side_effects
     assert SliceSideEffectKind.DEREGISTER_WORKERS in effect_kinds
     assert SliceSideEffectKind.TERMINATE_SLICE in effect_kinds
 
@@ -161,7 +161,7 @@ def test_ready_to_failed_on_idle_timeout():
     )
     assert result is not None
     assert result.new_state == SliceLifecycleState.FAILED
-    effect_kinds = [e.kind for e in result.side_effects]
+    effect_kinds = result.side_effects
     assert SliceSideEffectKind.DEREGISTER_WORKERS in effect_kinds
     assert SliceSideEffectKind.TERMINATE_SLICE in effect_kinds
 
@@ -191,7 +191,7 @@ def test_requesting_to_failed_on_platform_error():
     )
     assert result is not None
     assert result.new_state == SliceLifecycleState.FAILED
-    assert any(e.kind == SliceSideEffectKind.RECORD_GROUP_FAILURE for e in result.side_effects)
+    assert SliceSideEffectKind.RECORD_GROUP_FAILURE in result.side_effects
 
 
 def test_invalid_transition_returns_none():
@@ -262,3 +262,21 @@ def test_result_contains_timestamp():
     )
     assert result is not None
     assert result.timestamp == ts
+
+
+def test_ready_transition_sets_last_active_and_worker_ids():
+    """Transitioning to READY must set last_active to prevent immediate scaledown."""
+    slices, lock = _make_slices(lifecycle=SliceLifecycleState.BOOTING)
+    ts = Timestamp.from_ms(5000)
+    result = dispatch_slice_event(
+        slices,
+        lock,
+        "slice-001",
+        SliceEvent.CLOUD_STATE_READY,
+        {"worker_ids": ["w1", "w2"]},
+        now=ts,
+    )
+    assert result is not None
+    state = slices["slice-001"]
+    assert state.last_active == ts
+    assert state.worker_ids == ["w1", "w2"]

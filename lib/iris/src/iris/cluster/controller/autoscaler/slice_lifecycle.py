@@ -6,7 +6,7 @@ import json
 import logging
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, NamedTuple
 
@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 
 
 class SliceEvent(StrEnum):
-    PLATFORM_CALL_STARTED = "platform_call_started"
     PLATFORM_CALL_SUCCEEDED = "platform_call_succeeded"
     PLATFORM_CALL_FAILED = "platform_call_failed"
     CLOUD_STATE_INITIALIZING = "cloud_state_initializing"
@@ -27,7 +26,6 @@ class SliceEvent(StrEnum):
     CLOUD_STATE_UNKNOWN_TIMEOUT = "cloud_state_unknown_timeout"
     WORKER_FAILURE_REPORTED = "worker_failure_reported"
     IDLE_TIMEOUT = "idle_timeout"
-    TEARDOWN_COMPLETE = "teardown_complete"
 
 
 class SliceSideEffectKind(StrEnum):
@@ -38,112 +36,85 @@ class SliceSideEffectKind(StrEnum):
 
 
 @dataclass(frozen=True)
-class SliceSideEffect:
-    kind: SliceSideEffectKind
-    context: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
 class TransitionResult:
     slice_id: str
     prior_state: SliceLifecycleState
     new_state: SliceLifecycleState
     event: SliceEvent
-    side_effects: list[SliceSideEffect]
+    side_effects: list[SliceSideEffectKind]
     timestamp: Timestamp
-
-
-class InvalidTransitionError(Exception):
-    pass
 
 
 class SliceTransition(NamedTuple):
     to_state: SliceLifecycleState
-    side_effects: Callable[[SliceState, dict[str, Any]], list[SliceSideEffect]] | None = None
+    side_effects: Callable[[dict[str, Any]], list[SliceSideEffectKind]] | None = None
 
 
 # ---------------------------------------------------------------------------
-# Side-effect computation functions
+# Side-effect computation functions (pure — only read ctx, not slice state)
 # ---------------------------------------------------------------------------
 
-REQUESTING = SliceLifecycleState.REQUESTING
-BOOTING = SliceLifecycleState.BOOTING
-INITIALIZING = SliceLifecycleState.INITIALIZING
-READY = SliceLifecycleState.READY
-FAILED = SliceLifecycleState.FAILED
-
-PLATFORM_CALL_SUCCEEDED = SliceEvent.PLATFORM_CALL_SUCCEEDED
-PLATFORM_CALL_FAILED = SliceEvent.PLATFORM_CALL_FAILED
-CLOUD_STATE_INITIALIZING = SliceEvent.CLOUD_STATE_INITIALIZING
-CLOUD_STATE_READY = SliceEvent.CLOUD_STATE_READY
-CLOUD_STATE_FAILED = SliceEvent.CLOUD_STATE_FAILED
-CLOUD_STATE_UNKNOWN_TIMEOUT = SliceEvent.CLOUD_STATE_UNKNOWN_TIMEOUT
-WORKER_FAILURE_REPORTED = SliceEvent.WORKER_FAILURE_REPORTED
-IDLE_TIMEOUT = SliceEvent.IDLE_TIMEOUT
+_TEARDOWN_EFFECTS: list[SliceSideEffectKind] = [
+    SliceSideEffectKind.DEREGISTER_WORKERS,
+    SliceSideEffectKind.TERMINATE_SLICE,
+]
 
 
-def _on_ready(state: SliceState, ctx: dict[str, Any]) -> list[SliceSideEffect]:
-    return [SliceSideEffect(SliceSideEffectKind.REGISTER_WORKERS, {"worker_ids": ctx["worker_ids"]})]
+def _on_ready(ctx: dict[str, Any]) -> list[SliceSideEffectKind]:
+    return [SliceSideEffectKind.REGISTER_WORKERS]
 
 
-def _on_bootstrap_failed(state: SliceState, ctx: dict[str, Any]) -> list[SliceSideEffect]:
-    effects: list[SliceSideEffect] = [
-        SliceSideEffect(SliceSideEffectKind.DEREGISTER_WORKERS),
-        SliceSideEffect(SliceSideEffectKind.TERMINATE_SLICE),
-    ]
+def _on_failure_with_teardown(ctx: dict[str, Any]) -> list[SliceSideEffectKind]:
+    effects = list(_TEARDOWN_EFFECTS)
     if ctx.get("is_short_lived"):
-        effects.append(SliceSideEffect(SliceSideEffectKind.RECORD_GROUP_FAILURE))
+        effects.append(SliceSideEffectKind.RECORD_GROUP_FAILURE)
     return effects
 
 
-def _on_timeout(state: SliceState, ctx: dict[str, Any]) -> list[SliceSideEffect]:
-    return _on_bootstrap_failed(state, ctx)
+def _on_creation_failed(ctx: dict[str, Any]) -> list[SliceSideEffectKind]:
+    return [SliceSideEffectKind.RECORD_GROUP_FAILURE]
 
 
-def _on_creation_failed(state: SliceState, ctx: dict[str, Any]) -> list[SliceSideEffect]:
-    return [SliceSideEffect(SliceSideEffectKind.RECORD_GROUP_FAILURE)]
-
-
-def _on_worker_failure(state: SliceState, ctx: dict[str, Any]) -> list[SliceSideEffect]:
-    effects: list[SliceSideEffect] = [
-        SliceSideEffect(SliceSideEffectKind.DEREGISTER_WORKERS),
-        SliceSideEffect(SliceSideEffectKind.TERMINATE_SLICE),
-    ]
-    if ctx.get("is_short_lived"):
-        effects.append(SliceSideEffect(SliceSideEffectKind.RECORD_GROUP_FAILURE))
-    return effects
-
-
-def _on_idle_teardown(state: SliceState, ctx: dict[str, Any]) -> list[SliceSideEffect]:
-    return [
-        SliceSideEffect(SliceSideEffectKind.DEREGISTER_WORKERS),
-        SliceSideEffect(SliceSideEffectKind.TERMINATE_SLICE),
-    ]
+def _on_idle_teardown(ctx: dict[str, Any]) -> list[SliceSideEffectKind]:
+    return list(_TEARDOWN_EFFECTS)
 
 
 # ---------------------------------------------------------------------------
 # Transition table
 # ---------------------------------------------------------------------------
 
+# Aliases for concise table entries
+_R, _B, _I, _RDY, _F = (
+    SliceLifecycleState.REQUESTING,
+    SliceLifecycleState.BOOTING,
+    SliceLifecycleState.INITIALIZING,
+    SliceLifecycleState.READY,
+    SliceLifecycleState.FAILED,
+)
+_SUCCEEDED = SliceEvent.PLATFORM_CALL_SUCCEEDED
+_P_FAILED = SliceEvent.PLATFORM_CALL_FAILED
+_C_INIT = SliceEvent.CLOUD_STATE_INITIALIZING
+_C_READY = SliceEvent.CLOUD_STATE_READY
+_C_FAILED = SliceEvent.CLOUD_STATE_FAILED
+_C_TIMEOUT = SliceEvent.CLOUD_STATE_UNKNOWN_TIMEOUT
+_W_FAILED = SliceEvent.WORKER_FAILURE_REPORTED
+_IDLE = SliceEvent.IDLE_TIMEOUT
+
 TRANSITIONS: dict[tuple[SliceLifecycleState, SliceEvent], SliceTransition] = {
-    # REQUESTING -> BOOTING (platform call succeeded)
-    (REQUESTING, PLATFORM_CALL_SUCCEEDED): SliceTransition(BOOTING),
-    (REQUESTING, PLATFORM_CALL_FAILED): SliceTransition(FAILED, _on_creation_failed),
-    # BOOTING -> INITIALIZING, READY, or FAILED
-    (BOOTING, CLOUD_STATE_INITIALIZING): SliceTransition(INITIALIZING),
-    (BOOTING, CLOUD_STATE_READY): SliceTransition(READY, _on_ready),
-    (BOOTING, CLOUD_STATE_FAILED): SliceTransition(FAILED, _on_bootstrap_failed),
-    (BOOTING, CLOUD_STATE_UNKNOWN_TIMEOUT): SliceTransition(FAILED, _on_timeout),
-    (BOOTING, WORKER_FAILURE_REPORTED): SliceTransition(FAILED, _on_worker_failure),
-    # INITIALIZING -> READY or FAILED
-    (INITIALIZING, CLOUD_STATE_READY): SliceTransition(READY, _on_ready),
-    (INITIALIZING, CLOUD_STATE_FAILED): SliceTransition(FAILED, _on_bootstrap_failed),
-    (INITIALIZING, CLOUD_STATE_UNKNOWN_TIMEOUT): SliceTransition(FAILED, _on_timeout),
-    (INITIALIZING, WORKER_FAILURE_REPORTED): SliceTransition(FAILED, _on_worker_failure),
-    # READY -> FAILED (worker failure or idle teardown)
-    (READY, WORKER_FAILURE_REPORTED): SliceTransition(FAILED, _on_worker_failure),
-    (READY, IDLE_TIMEOUT): SliceTransition(FAILED, _on_idle_teardown),
-}
+    (_R, _SUCCEEDED):   SliceTransition(_B),
+    (_R, _P_FAILED):    SliceTransition(_F, _on_creation_failed),
+    (_B, _C_INIT):      SliceTransition(_I),
+    (_B, _C_READY):     SliceTransition(_RDY, _on_ready),
+    (_B, _C_FAILED):    SliceTransition(_F, _on_failure_with_teardown),
+    (_B, _C_TIMEOUT):   SliceTransition(_F, _on_failure_with_teardown),
+    (_B, _W_FAILED):    SliceTransition(_F, _on_failure_with_teardown),
+    (_I, _C_READY):     SliceTransition(_RDY, _on_ready),
+    (_I, _C_FAILED):    SliceTransition(_F, _on_failure_with_teardown),
+    (_I, _C_TIMEOUT):   SliceTransition(_F, _on_failure_with_teardown),
+    (_I, _W_FAILED):    SliceTransition(_F, _on_failure_with_teardown),
+    (_RDY, _W_FAILED):  SliceTransition(_F, _on_failure_with_teardown),
+    (_RDY, _IDLE):      SliceTransition(_F, _on_idle_teardown),
+}  # fmt: skip
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +134,7 @@ def dispatch_slice_event(
     group_name: str = "",
 ) -> TransitionResult | None:
     """Apply a lifecycle event to a slice, returning the transition result or None if invalid."""
-    context = context or {}
+    ctx = context or {}
     if now is None:
         now = Timestamp.now()
 
@@ -187,9 +158,14 @@ def dispatch_slice_event(
         prior_state = state.lifecycle
         state.lifecycle = transition.to_state
 
-    side_effects = transition.side_effects(state, context) if transition.side_effects else []
+        # Set last_active on READY transition to prevent immediate scaledown
+        if transition.to_state == SliceLifecycleState.READY:
+            state.last_active = now
+            state.worker_ids = ctx.get("worker_ids", [])
 
-    _log_transition(db, group_name, slice_id, prior_state, transition.to_state, event, context, now)
+    side_effects = transition.side_effects(ctx) if transition.side_effects else []
+
+    _log_transition(db, group_name, slice_id, prior_state, transition.to_state, event, ctx, now)
 
     logger.info(
         "slice transition: %s %s → %s (event=%s, effects=%s)",
@@ -197,7 +173,7 @@ def dispatch_slice_event(
         prior_state,
         transition.to_state,
         event,
-        [e.kind.value for e in side_effects],
+        [e.value for e in side_effects],
     )
 
     return TransitionResult(
