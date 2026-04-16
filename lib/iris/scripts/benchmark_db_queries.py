@@ -121,10 +121,20 @@ def clone_db(source: ControllerDB) -> ControllerDB:
     clone_path = clone_dir / ControllerDB.DB_FILENAME
     conn = sqlite3.connect(str(clone_path))
     conn.execute("ATTACH DATABASE ? AS src", (str(source.db_path),))
-    # Copy schema + data for each table
-    for table in _CLONE_TABLES:
-        conn.execute(f"CREATE TABLE {table} AS SELECT * FROM src.{table}")
-    # Copy indexes from source schema
+
+    # Use the source's real CREATE TABLE DDL — CREATE TABLE AS SELECT drops
+    # UNIQUE/PRIMARY KEY/CHECK constraints, which breaks UPSERT paths like
+    # register_worker's INSERT ... ON CONFLICT.
+    clone_tables = set(_CLONE_TABLES)
+    table_ddl = conn.execute("SELECT name, sql FROM src.sqlite_master WHERE type='table' AND sql IS NOT NULL").fetchall()
+    for name, sql in table_ddl:
+        if name not in clone_tables:
+            continue
+        conn.execute(sql)
+        conn.execute(f"INSERT INTO {name} SELECT * FROM src.{name}")
+
+    # Copy indexes from source schema (skip autoindexes — those come from
+    # UNIQUE/PK constraints already in the CREATE TABLE).
     rows = conn.execute("SELECT sql FROM src.sqlite_master WHERE type='index' AND sql IS NOT NULL").fetchall()
     for row in rows:
         try:
@@ -138,6 +148,7 @@ def clone_db(source: ControllerDB) -> ControllerDB:
             conn.execute(row[0])
         except sqlite3.OperationalError:
             pass
+    conn.commit()
     conn.execute("DETACH DATABASE src")
     conn.execute("ANALYZE")
     conn.close()
@@ -1216,6 +1227,261 @@ def _bench_register_worker(write_db: ControllerDB, write_txns: ControllerTransit
         hb_thread.join(timeout=10.0)
 
 
+def _build_heartbeat_requests(db: ControllerDB) -> list[HeartbeatApplyRequest]:
+    """Build a heartbeat batch shaped like a live provider-sync round:
+    one HeartbeatApplyRequest per active worker, with one RUNNING
+    resource-usage update per task currently assigned to that worker.
+    """
+    workers = healthy_active_workers_with_attributes(db)
+    active_states = tuple(ACTIVE_TASK_STATES)
+    snapshot_proto = job_pb2.WorkerResourceSnapshot()
+    usage = job_pb2.ResourceUsage(cpu_millicores=1000, memory_mb=1024)
+    requests: list[HeartbeatApplyRequest] = []
+    for w in workers:
+        wid = str(w.worker_id)
+        rows = db.fetchall(
+            "SELECT task_id, current_attempt_id FROM tasks " "WHERE current_worker_id = ? AND state IN (?, ?, ?)",
+            (wid, *active_states),
+        )
+        updates = [
+            TaskUpdate(
+                task_id=JobName.from_wire(str(r["task_id"])),
+                attempt_id=int(r["current_attempt_id"]),
+                new_state=job_pb2.TASK_STATE_RUNNING,
+                resource_usage=usage,
+            )
+            for r in rows
+        ]
+        requests.append(
+            HeartbeatApplyRequest(
+                worker_id=WorkerId(wid),
+                worker_resource_snapshot=snapshot_proto,
+                updates=updates,
+            )
+        )
+    return requests
+
+
+def _build_failure_batch(db: ControllerDB, n: int) -> list[tuple[DispatchBatch, str]]:
+    rows = db.fetchall(
+        "SELECT worker_id, address FROM workers WHERE active = 1 LIMIT ?",
+        (n,),
+    )
+    return [
+        (
+            DispatchBatch(
+                worker_id=WorkerId(str(r["worker_id"])),
+                worker_address=str(r["address"]) if r["address"] is not None else None,
+                running_tasks=[],
+            ),
+            "benchmark: simulated provider-sync failure",
+        )
+        for r in rows
+    ]
+
+
+def _print_latency_distribution(name: str, latencies: list[float]) -> None:
+    if not latencies:
+        print(f"  {name:60s}  (no samples)")
+        return
+    latencies.sort()
+    p50 = latencies[len(latencies) // 2]
+    p95 = latencies[int(len(latencies) * 0.95)]
+    p99 = latencies[int(len(latencies) * 0.99)]
+    max_ms = latencies[-1]
+    _results.append((name, p50, p95, len(latencies)))
+    print(
+        f"  {name:60s}  n={len(latencies):3d}  "
+        f"p50={p50:7.1f}ms  p95={p95:8.1f}ms  p99={p99:8.1f}ms  max={max_ms:8.1f}ms"
+    )
+
+
+def _run_apply_under_contention(
+    *,
+    name: str,
+    write_db: ControllerDB,
+    write_txns: ControllerTransitions,
+    heartbeat_requests: list[HeartbeatApplyRequest],
+    fail_threads: int = 0,
+    fail_n: int = 50,
+    fail_chunk: int = 50,
+    fail_interval_s: float = 2.0,
+    register_threads: int = 0,
+    register_burst: int = 100,
+    endpoint_threads: int = 0,
+    checkpoint_thread: bool = False,
+    synchronous_normal: bool = False,
+    duration_s: float = 8.0,
+) -> None:
+    """Run apply_heartbeats_batch repeatedly on a victim thread while
+    configurable write storms hammer the same clone DB. Report p50/p95/p99/max
+    of the victim's per-call latency.
+    """
+    if synchronous_normal:
+        # PRAGMA synchronous can't be changed mid-connection once a tx has run,
+        # so issue it on a fresh raw connection to the clone file. It persists
+        # for that connection only; our ControllerDB connection is unaffected,
+        # which is the point — prod can't change synchronous mid-flight either.
+        _raw = sqlite3.connect(str(write_db.db_path))
+        _raw.execute("PRAGMA synchronous=NORMAL")
+        _raw.close()
+
+    endpoint_tasks_rows = write_db.fetchall(
+        "SELECT task_id FROM tasks WHERE state IN (1,2,3,9) AND current_attempt_id IS NOT NULL LIMIT 200"
+    )
+    endpoint_tasks = [JobName.from_wire(str(r["task_id"])) for r in endpoint_tasks_rows]
+
+    stop = threading.Event()
+    victim_latencies: list[float] = []
+    errors: list[BaseException] = []
+
+    def _victim():
+        try:
+            while not stop.is_set():
+                t0 = time.perf_counter()
+                write_txns.apply_heartbeats_batch(heartbeat_requests)
+                victim_latencies.append((time.perf_counter() - t0) * 1000)
+        except BaseException as e:
+            errors.append(e)
+
+    def _fail_storm():
+        try:
+            while not stop.is_set():
+                failures = _build_failure_batch(write_db, fail_n)
+                if failures:
+                    write_txns.fail_heartbeats_batch(failures, force_remove=True, chunk_size=fail_chunk)
+                stop.wait(fail_interval_s)
+        except BaseException as e:
+            errors.append(e)
+
+    def _register_storm():
+        try:
+            meta = _build_sample_worker_metadata()
+            while not stop.is_set():
+                base = f"bench-contend-{uuid.uuid4().hex[:8]}"
+                for i in range(register_burst):
+                    write_txns.register_worker(
+                        worker_id=WorkerId(f"{base}-{i}"),
+                        address=f"tcp://{base}-{i}:1234",
+                        metadata=meta,
+                        ts=Timestamp.now(),
+                        slice_id="",
+                        scale_group="bench",
+                    )
+                    if stop.is_set():
+                        break
+        except BaseException as e:
+            errors.append(e)
+
+    def _endpoint_storm():
+        try:
+            i = 0
+            while not stop.is_set():
+                t = endpoint_tasks[i % len(endpoint_tasks)]
+                write_txns.add_endpoint(_make_endpoint(t))
+                i += 1
+        except BaseException as e:
+            errors.append(e)
+
+    def _checkpoint_loop():
+        try:
+            while not stop.is_set():
+                try:
+                    write_db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except sqlite3.OperationalError:
+                    pass
+                stop.wait(1.0)
+        except BaseException as e:
+            errors.append(e)
+
+    threads: list[threading.Thread] = [threading.Thread(target=_victim, name="victim")]
+    for _ in range(fail_threads):
+        threads.append(threading.Thread(target=_fail_storm, name="fail"))
+    for _ in range(register_threads):
+        threads.append(threading.Thread(target=_register_storm, name="register"))
+    for _ in range(endpoint_threads):
+        threads.append(threading.Thread(target=_endpoint_storm, name="endpoint"))
+    if checkpoint_thread:
+        threads.append(threading.Thread(target=_checkpoint_loop, name="checkpoint"))
+
+    for t in threads:
+        t.start()
+    time.sleep(duration_s)
+    stop.set()
+    for t in threads:
+        t.join(timeout=30.0)
+
+    if errors:
+        print(f"  {name}: background thread error: {errors[0]!r}")
+    _print_latency_distribution(name, victim_latencies)
+
+
+def benchmark_apply_contention(db: ControllerDB) -> None:
+    """Reproduce the production 'apply results' multi-second tail by running
+    apply_heartbeats_batch as the victim under concurrent write storms.
+    """
+    heartbeat_requests = _build_heartbeat_requests(db)
+    total_tasks = sum(len(r.updates) for r in heartbeat_requests)
+    print(f"  (victim heartbeat batch: {len(heartbeat_requests)} workers, {total_tasks} tasks)")
+
+    if not heartbeat_requests:
+        print("  (skipped, no workers)")
+        return
+
+    scenarios = [
+        dict(name="apply @ baseline (no contention)"),
+        dict(name="apply + 1x fail_heartbeats_batch", fail_threads=1),
+        dict(name="apply + 1x register_worker burst", register_threads=1),
+        dict(name="apply + 1x add_endpoint storm", endpoint_threads=1),
+        dict(
+            name="apply + prod-mix (fail + register + endpoint)",
+            fail_threads=1,
+            register_threads=1,
+            endpoint_threads=1,
+        ),
+        dict(
+            name="apply + heavy storm (2f/2r/2e, chunk=200, 0.5s)",
+            fail_threads=2,
+            fail_chunk=200,
+            fail_interval_s=0.5,
+            register_threads=2,
+            endpoint_threads=2,
+        ),
+        dict(
+            name="apply + heavy + forced WAL checkpoints",
+            fail_threads=2,
+            fail_chunk=200,
+            fail_interval_s=0.5,
+            register_threads=2,
+            endpoint_threads=2,
+            checkpoint_thread=True,
+        ),
+        dict(
+            name="apply + heavy + synchronous=NORMAL",
+            fail_threads=2,
+            fail_chunk=200,
+            fail_interval_s=0.5,
+            register_threads=2,
+            endpoint_threads=2,
+            synchronous_normal=True,
+        ),
+    ]
+
+    write_db = clone_db(db)
+    write_txns = ControllerTransitions(write_db)
+    try:
+        for scenario in scenarios:
+            _run_apply_under_contention(
+                write_db=write_db,
+                write_txns=write_txns,
+                heartbeat_requests=heartbeat_requests,
+                **scenario,
+            )
+    finally:
+        write_db.close()
+        shutil.rmtree(write_db._db_dir, ignore_errors=True)
+
+
 def print_summary() -> None:
     print("\n" + "=" * 80)
     print(f"  {'Query':50s}  {'p50':>10s}  {'p95':>10s}  {'n':>5s}")
@@ -1263,7 +1529,7 @@ def _ensure_db(db_path: Path | None) -> Path:
 @click.option(
     "--only",
     "only_group",
-    type=click.Choice(["scheduling", "dashboard", "heartbeat", "endpoints"]),
+    type=click.Choice(["scheduling", "dashboard", "heartbeat", "endpoints", "apply_contention"]),
     help="Run only this group",
 )
 @click.option("--no-analyze", is_flag=True, help="Skip ANALYZE to test unoptimized query plans")
@@ -1309,6 +1575,11 @@ def main(db_path: Path | None, only_group: str | None, no_analyze: bool, fresh: 
     if only_group is None or only_group == "endpoints":
         print("[endpoints]")
         benchmark_endpoints(db)
+        print()
+
+    if only_group == "apply_contention":
+        print("[apply_contention]")
+        benchmark_apply_contention(db)
 
     print_summary()
     db.close()

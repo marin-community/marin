@@ -11,6 +11,7 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
     TASK_RESOURCE_HISTORY_RETENTION,
+    TASK_RESOURCE_HISTORY_TERMINAL_TTL,
 )
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2, controller_pb2
@@ -176,6 +177,64 @@ def test_prune_noop_below_threshold(state):
     deleted = state.prune_task_resource_history()
     assert deleted == 0
     assert _count_history_rows(state, task_id) == TASK_RESOURCE_HISTORY_RETENTION
+
+
+def _force_terminal(state: ControllerTransitions, task_id: JobName, finished_age_ms: int) -> None:
+    """Mark a task as SUCCEEDED with finished_at_ms set to `finished_age_ms`
+    in the past. Bypasses the state machine — we only need the row shape."""
+    now_ms = Timestamp.now().epoch_ms()
+    state._db.execute(
+        "UPDATE tasks SET state = ?, finished_at_ms = ? WHERE task_id = ?",
+        (job_pb2.TASK_STATE_SUCCEEDED, now_ms - finished_age_ms, task_id.to_wire()),
+    )
+
+
+def test_prune_evicts_terminal_task_history_past_ttl(state):
+    """Tasks terminal for longer than the TTL have all history removed."""
+    _, task_id = _setup_running_task(state)
+    _send_resource_heartbeat(state, task_id, cpu=1, mem=1)
+    _send_resource_heartbeat(state, task_id, cpu=2, mem=2)
+    assert _count_history_rows(state, task_id) == 2
+
+    _force_terminal(state, task_id, finished_age_ms=TASK_RESOURCE_HISTORY_TERMINAL_TTL.to_ms() * 2)
+
+    deleted = state.prune_task_resource_history()
+    assert deleted == 2
+    assert _count_history_rows(state, task_id) == 0
+
+
+def test_prune_keeps_terminal_task_history_within_ttl(state):
+    """Recently-terminal tasks (within TTL) keep their history."""
+    _, task_id = _setup_running_task(state)
+    _send_resource_heartbeat(state, task_id, cpu=1, mem=1)
+    _send_resource_heartbeat(state, task_id, cpu=2, mem=2)
+
+    # Terminal at half the TTL — must survive.
+    _force_terminal(state, task_id, finished_age_ms=TASK_RESOURCE_HISTORY_TERMINAL_TTL.to_ms() // 2)
+
+    deleted = state.prune_task_resource_history()
+    assert deleted == 0
+    assert _count_history_rows(state, task_id) == 2
+
+
+def test_prune_keeps_running_task_history_regardless_of_finished_at(state):
+    """TTL eviction gates on terminal state, not just finished_at_ms — a RUNNING
+    task with a stale finished_at_ms (shouldn't happen, but guard against it)
+    must not be evicted."""
+    _, task_id = _setup_running_task(state)
+    _send_resource_heartbeat(state, task_id, cpu=1, mem=1)
+
+    # Stale finished_at_ms but state still RUNNING.
+    now_ms = Timestamp.now().epoch_ms()
+    stale_ms = now_ms - TASK_RESOURCE_HISTORY_TERMINAL_TTL.to_ms() * 2
+    state._db.execute(
+        "UPDATE tasks SET finished_at_ms = ? WHERE task_id = ?",
+        (stale_ms, task_id.to_wire()),
+    )
+
+    deleted = state.prune_task_resource_history()
+    assert deleted == 0
+    assert _count_history_rows(state, task_id) == 1
 
 
 def test_cascade_delete_on_job_removal(state):
