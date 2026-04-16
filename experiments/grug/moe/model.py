@@ -457,7 +457,8 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
-    routed_weight: jax.Array | None  # learnable scalar, or None if fixed
+    routed_weight: jax.Array | None  # learnable scalar, or None if weight is 1.0
+    fixed_routed_weight: float = eqx.field(default=1.0, static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
@@ -468,8 +469,11 @@ class Block(eqx.Module):
                 cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
             )
         learnable_weight = None
+        fixed_weight = 1.0
         if cfg.routed_weight == "learnable":
             learnable_weight = jnp.array(1.0)
+        elif isinstance(cfg.routed_weight, (int, float)):
+            fixed_weight = float(cfg.routed_weight)
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
@@ -479,6 +483,7 @@ class Block(eqx.Module):
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
             routed_weight=learnable_weight,
+            fixed_routed_weight=fixed_weight,
         )
 
     @named_call
@@ -494,8 +499,8 @@ class Block(eqx.Module):
         # Apply routed weight: x = x + shared_out + λ * routed_out
         if self.routed_weight is not None:
             routed_out = self.routed_weight * routed_out
-        elif self.cfg.routed_weight != "learnable" and self.cfg.routed_weight != 1.0:
-            routed_out = self.cfg.routed_weight * routed_out
+        elif self.fixed_routed_weight != 1.0:
+            routed_out = self.fixed_routed_weight * routed_out
         mlp_out = routed_out
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
