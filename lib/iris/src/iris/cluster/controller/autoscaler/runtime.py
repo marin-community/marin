@@ -455,13 +455,12 @@ class Autoscaler:
         for group in self._groups.values():
             target_capacity = min(group.current_demand + group.buffer_slices, group.max_slices)
             ready_before = group.ready_slice_count()
-            scaled_down_handles = group.scale_down_if_idle(worker_status_map, target_capacity, timestamp)
-            for handle in scaled_down_handles:
-                self._unregister_slice_workers(handle.slice_id)
+            for result in group.scale_down_if_idle(worker_status_map, target_capacity, timestamp):
+                self._handle_transition(result, group)
                 self._log_action(
                     "scale_down",
                     group.name,
-                    slice_id=handle.slice_id,
+                    slice_id=result.slice_id,
                     reason=f"idle slice (target={target_capacity}, ready={ready_before})",
                 )
 
