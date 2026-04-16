@@ -46,3 +46,6 @@ def migrate(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_worker_task_history_worker "
         "ON worker_task_history(worker_id, assigned_at_ms DESC)"
     )
+    # Probed on task delete by the new FK cascade; without it each delete
+    # scans the full history table.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_worker_task_history_task " "ON worker_task_history(task_id)")
