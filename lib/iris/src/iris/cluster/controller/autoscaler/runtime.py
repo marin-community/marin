@@ -46,7 +46,7 @@ from iris.cluster.controller.autoscaler.routing import job_feasibility, route_de
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build_worker_config_for_group
 from iris.cluster.controller.autoscaler.slice_lifecycle import (
     SliceEvent,
-    SliceSideEffectKind,
+    TransitionResult,
     cloud_state_to_event,
 )
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
@@ -236,24 +236,27 @@ class Autoscaler:
         )
         return action
 
-    def _execute_side_effects(
-        self,
-        effects: list[SliceSideEffectKind],
-        group: ScalingGroup,
-        slice_id: str,
-        workers: list[RemoteWorkerHandle] | None = None,
-        timestamp: Timestamp | None = None,
-    ) -> None:
-        """Execute side effects from a slice lifecycle transition."""
-        for kind in effects:
-            if kind == SliceSideEffectKind.REGISTER_WORKERS:
-                self._register_slice_workers(workers or [], slice_id, group.name)
-            elif kind == SliceSideEffectKind.DEREGISTER_WORKERS:
-                self._unregister_slice_workers(slice_id)
-            elif kind == SliceSideEffectKind.RECORD_GROUP_FAILURE:
-                group.record_failure(timestamp)
-            elif kind == SliceSideEffectKind.TERMINATE_SLICE:
-                self._async_terminate_slice(group, slice_id)
+    def _handle_transition(self, result: TransitionResult, group: ScalingGroup) -> None:
+        """Apply caller-side concerns (worker registry, async terminate) after a slice transition.
+
+        Group failure cascades and slice detachment happen atomically inside
+        ScalingGroup.dispatch(); this only handles state outside the group.
+        """
+        if not result.applied:
+            return
+        if result.new_state == SliceLifecycleState.READY:
+            self._register_slice_workers(result.registered_workers, result.slice_id, group.name)
+        elif result.new_state == SliceLifecycleState.FAILED:
+            self._unregister_slice_workers(result.slice_id)
+            if result.detached_handle is not None:
+                self._spawn_terminate(group, result.detached_handle)
+            if result.triggered_backoff:
+                self._log_action(
+                    "backoff_triggered",
+                    group.name,
+                    slice_id=result.slice_id,
+                    reason=f"short-lived slice failure (event={result.event})",
+                )
 
     def evaluate(
         self,
@@ -430,20 +433,22 @@ class Autoscaler:
                 if event is None:
                     continue
 
-                worker_ids = [w.worker_id for w in status.workers]
                 result = group.dispatch(
-                    slice_id, event, {"worker_ids": worker_ids, "error_message": status.error_message}, now=timestamp
+                    slice_id,
+                    event,
+                    {"workers": status.workers, "error_message": status.error_message},
+                    now=timestamp,
                 )
-                self._execute_side_effects(result.side_effects, group, slice_id, workers=status.workers)
+                self._handle_transition(result, group)
 
                 if result.new_state == SliceLifecycleState.READY:
                     self._log_action(
                         "slice_ready",
                         group.name,
                         slice_id,
-                        reason=f"bootstrap completed ({len(worker_ids)} workers)",
+                        reason=f"bootstrap completed ({len(status.workers)} workers)",
                     )
-                elif result.new_state == SliceLifecycleState.FAILED:
+                elif result.new_state == SliceLifecycleState.FAILED and result.applied:
                     reason = status.error_message or f"slice failed (event={event})"
                     self._log_action("slice_failed", group.name, slice_id, reason=reason, status="failed")
 
@@ -648,7 +653,7 @@ class Autoscaler:
             result = group.dispatch(
                 slice_id, SliceEvent.WORKER_FAILURE_REPORTED, {"failed_workers": failed_workers}, now=timestamp
             )
-            self._execute_side_effects(result.side_effects, group, slice_id, timestamp=timestamp)
+            self._handle_transition(result, group)
 
             if not result.applied:
                 # Slice not tracked by state machine (already removed); clean up directly
@@ -665,12 +670,6 @@ class Autoscaler:
             if slice_id is not None:
                 return slice_id, group
         return None, None
-
-    def _async_terminate_slice(self, group: ScalingGroup, slice_id: str) -> None:
-        """Detach a slice from tracking and terminate it asynchronously."""
-        handle = group.detach_slice(slice_id)
-        if handle is not None:
-            self._spawn_terminate(group, handle)
 
     def _spawn_terminate(self, group: ScalingGroup, handle: SliceHandle) -> None:
         def _do_terminate(stop_event, g: ScalingGroup = group, h: SliceHandle = handle) -> None:
