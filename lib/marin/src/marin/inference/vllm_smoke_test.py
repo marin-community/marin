@@ -7,12 +7,9 @@ import sys
 import time
 import traceback
 from typing import Literal
-from urllib.parse import urlparse
-
 import requests
 from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
 from marin.utils import remove_tpu_lockfile_on_exit
 
@@ -28,21 +25,15 @@ def run_one_query(
     port: int | None,
     use_completions: bool,
 ) -> str:
-    parsed = urlparse(model_name_or_path)
-    is_object_store = parsed.scheme in {"gs", "s3"}
     engine_kwargs: dict = {}
     if load_format is not None:
         engine_kwargs["load_format"] = load_format
     if max_model_len is not None:
         engine_kwargs["max_model_len"] = max_model_len
 
-    if is_object_store:
-        model = ModelConfig(name="smoke-test-model", path=model_name_or_path, engine_kwargs=engine_kwargs)
-    else:
-        model = ModelConfig(name=model_name_or_path, path=None, engine_kwargs=engine_kwargs)
-
     env = VllmEnvironment(
-        model=model,
+        path=model_name_or_path,
+        engine_kwargs=engine_kwargs,
         host="127.0.0.1",
         port=port,
         timeout_seconds=3600,

@@ -30,40 +30,6 @@ class LMEvaluationHarnessEvaluator(Evaluator):
 
     CACHE_PATH: str = "/tmp/lm-eval"
     RESULTS_PATH: str = os.path.join(CACHE_PATH, "eleuther_results")
-    TOKENIZER_FILENAMES: tuple[str, ...] = (
-        "tokenizer_config.json",
-        "tokenizer.json",
-        "tokenizer.model",
-        "special_tokens_map.json",
-        "added_tokens.json",
-        "merges.txt",
-        "vocab.json",
-        "config.json",
-    )
-
-    @classmethod
-    @contextmanager
-    def _stage_remote_tokenizer_dir(cls, remote_dir: str) -> Iterator[str | None]:
-        # context manager so this deletes even with ray's process pooling
-        with tempfile.TemporaryDirectory(prefix="marin-tokenizer-") as local_dir:
-            copied_any = False
-            for filename in cls.TOKENIZER_FILENAMES:
-                remote_path = f"{remote_dir.rstrip('/')}/{filename}"
-                if not is_remote_path(remote_path):
-                    continue
-                fs, fs_path = url_to_fs(remote_path)
-                if not fs.exists(fs_path):
-                    continue
-                local_path = os.path.join(local_dir, filename)
-                with open_url(remote_path, "rb") as src:
-                    data = src.read()
-                with open(local_path, "wb") as dst:
-                    dst.write(data)
-                copied_any = True
-            if not copied_any:
-                yield None
-                return
-            yield local_dir
 
     def get_runtime_env(self) -> dict:
         """

@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 import glob
 import logging
 import os
@@ -20,8 +19,6 @@ from urllib.parse import urlparse
 
 import requests
 from rigging.filesystem import marin_prefix
-
-from marin.evaluation.evaluators.evaluator import ModelConfig
 
 logger = logging.getLogger(__name__)
 DEFAULT_VLLM_TPU_DOCKER_IMAGE: str = "vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e"
@@ -64,11 +61,20 @@ class VllmServerHandle:
         raise RuntimeError("Unable to infer vLLM server mode from handle state.")
 
 
-def resolve_model_name_or_path(model: ModelConfig) -> tuple[str, ModelConfig]:
-    """Resolve the `model` argument to pass to vLLM."""
-    model = _maybe_enable_streaming(model)
-    model_name_or_path = model.path if model.path is not None else model.name
-    return model_name_or_path, model
+def _resolve_engine_kwargs(path: str, engine_kwargs: dict) -> dict:
+    """Return `engine_kwargs` with object-store streaming enabled by default.
+
+    When the model lives in an object store (gs://, s3://) and the caller has
+    not set `load_format`, default to the non-sharded runai streamer for
+    maximum compatibility.
+    """
+    if not _is_object_store_path(path):
+        return engine_kwargs
+    if "load_format" in engine_kwargs:
+        return engine_kwargs
+    # `runai_streamer_sharded` only works for checkpoints already sharded into
+    # `model-rank-*-part-*.safetensors`; the non-sharded streamer is a safer default.
+    return {**engine_kwargs, "load_format": "runai_streamer"}
 
 
 def _tail_file(path: str, max_lines: int) -> str:
@@ -260,22 +266,6 @@ def _is_object_store_path(path: str) -> bool:
     return parsed.scheme in {"gs", "s3"}
 
 
-def _maybe_enable_streaming(model: ModelConfig) -> ModelConfig:
-    if model.path is None:
-        return model
-    if not _is_object_store_path(model.path):
-        return model
-    if "load_format" in model.engine_kwargs:
-        return model
-
-    engine_kwargs = dict(model.engine_kwargs)
-    # Default to the non-sharded streamer for maximum compatibility.
-    # `runai_streamer_sharded` only works for checkpoints that are already sharded
-    # into `model-rank-*-part-*.safetensors`.
-    engine_kwargs["load_format"] = "runai_streamer"
-    return dataclasses.replace(model, engine_kwargs=engine_kwargs)
-
-
 def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     args: list[str] = []
     load_format = engine_kwargs.get("load_format")
@@ -345,12 +335,17 @@ def _get_first_model_id(server_url: str) -> str:
 
 
 class VllmEnvironment:
-    """Manage vLLM server lifecycle and lm-eval configuration."""
+    """Manage vLLM server lifecycle for a given model path + engine kwargs.
+
+    Low-level plumbing over `vllm serve`. Prefer `marin.inference.vllm_launcher.VllmLauncher`
+    which wraps this and yields a `RunningModel` — the OpenAI-HTTP handoff type.
+    """
 
     def __init__(
         self,
-        model: ModelConfig,
         *,
+        path: str,
+        engine_kwargs: dict | None = None,
         mode: Literal["native", "docker"] | None = None,
         host: str = "127.0.0.1",
         port: int | None = None,
@@ -359,14 +354,15 @@ class VllmEnvironment:
         docker_run_args: list[str] | None = None,
         extra_args: list[str] | None = None,
     ) -> None:
-        self.model_name_or_path, self.model = resolve_model_name_or_path(model)
+        self.model_name_or_path = path
+        self.engine_kwargs = _resolve_engine_kwargs(path, dict(engine_kwargs or {}))
         self.mode = resolve_vllm_mode(mode)
         self.host = host
         self.port = port
         self.timeout_seconds = timeout_seconds
         self.docker_image = docker_image
         self.docker_run_args = docker_run_args
-        self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
+        self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.engine_kwargs), *(extra_args or [])]
         self._backend = _resolve_vllm_backend(
             self.mode,
             docker_image=self.docker_image,
