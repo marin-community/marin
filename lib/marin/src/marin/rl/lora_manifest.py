@@ -16,6 +16,7 @@ from marin.utils import fsspec_mkdirs
 
 RolloutPolicyFormat = Literal["merged", "adapter"]
 ReferenceMode = Literal["base"]
+MANIFEST_VERSION = 1
 RUN_MANIFEST_FILENAME = "rl_run_manifest.json"
 
 
@@ -50,7 +51,7 @@ def build_rl_run_manifest(
 ) -> RLRunManifest:
     """Build the run manifest recorded alongside LoRA RL training artifacts."""
     return RLRunManifest(
-        manifest_version=1,
+        manifest_version=MANIFEST_VERSION,
         initial_checkpoint=initial_checkpoint,
         model_config_type=f"{type(model_config).__module__}.{type(model_config).__qualname__}",
         model_config_fingerprint=config_fingerprint(model_config),
@@ -67,3 +68,15 @@ def write_rl_run_manifest(path: str, manifest: RLRunManifest) -> None:
     fsspec_mkdirs(os.path.dirname(path), exist_ok=True)
     with fsspec.open(path, "wt") as f:
         json.dump(dataclasses.asdict(manifest), f, indent=2, sort_keys=True, cls=CustomJsonEncoder)
+
+
+def read_rl_run_manifest(path: str) -> RLRunManifest:
+    """Read a manifest file describing the LoRA RL run configuration."""
+    with fsspec.open(path, "rt") as f:
+        data = json.load(f)
+
+    lora_config = data.get("lora_config")
+    if lora_config is not None:
+        data["lora_config"] = LoraConfig(**lora_config)
+
+    return RLRunManifest(**data)

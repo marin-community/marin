@@ -236,13 +236,6 @@ class RLJob:
         Returns:
             Tuple of (TrainWorkerConfig, RolloutWorkerConfig)
         """
-        if self.config.train_params.lora is not None:
-            raise ValueError(
-                "LoRA RL rollout serving is not implemented yet; "
-                "trainer-side LoRA support lands in this PR, but rollout workers still require "
-                "merged full-model transfers from the trainer"
-            )
-
         if self.config.rollout_policy_format != "merged":
             raise ValueError(
                 "rollout_policy_format='adapter' is not implemented yet; "
