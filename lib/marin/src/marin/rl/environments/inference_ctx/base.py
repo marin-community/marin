@@ -14,11 +14,28 @@ from typing import Any
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
 from marin.rl.decoding import DecodingConfig
+from marin.rl.environments.inference_ctx.openai_compat import OpenAICompatClient
 from marin.rl.types import Rollout
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice
 
 logger = logging.getLogger(__name__)
+
+PromptMessage = dict[str, object]
+PromptLike = str | list[PromptMessage]
+
+
+def prompt_to_messages(prompt: PromptLike, system_prompt: str | None = None) -> list[PromptMessage]:
+    """Normalize plain-string or chat-message prompts to a message list."""
+    if isinstance(prompt, str):
+        messages: list[PromptMessage] = [{"role": "user", "content": prompt}]
+    else:
+        messages = [dict(message) for message in prompt]
+
+    if system_prompt is None:
+        return messages
+
+    return [{"role": "system", "content": system_prompt}, *messages]
 
 
 class BaseInferenceContext:
@@ -38,9 +55,13 @@ class BaseInferenceContext:
         """Return the concrete decoding config this backend will apply."""
         return decoding
 
+    def openai_client(self) -> OpenAICompatClient:
+        """Return an AsyncOpenAI-compatible client for verifier environments."""
+        return OpenAICompatClient(self)
+
     def batch_completions(
         self,
-        prompts: list[str] | list[list[dict]],
+        prompts: list[PromptLike],
         n: int,
         decoding: DecodingConfig,
         system_prompt: str | None = None,
@@ -48,9 +69,14 @@ class BaseInferenceContext:
         """Batch completions from the inference server."""
         raise NotImplementedError
 
-    def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
+    def tokenize_prompt(
+        self,
+        prompt: PromptLike,
+        choice: Choice | None = None,
+        system_prompt: str | None = None,
+    ) -> np.ndarray:
         """Tokenize with chat template matching server behavior."""
-        messages = [{"role": "user", "content": prompt}]
+        messages = prompt_to_messages(prompt, system_prompt)
         try:
             tokens = self.tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
         except Exception as e:
@@ -58,7 +84,8 @@ class BaseInferenceContext:
             prompt_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
             tokens = self.tokenizer.encode(prompt_text, add_special_tokens=True)
             if not tokens:
-                raise ValueError(f"Failed to tokenize: {prompt[:100]}...") from None
+                prompt_preview = prompt[:100] if isinstance(prompt, str) else repr(messages)[:100]
+                raise ValueError(f"Failed to tokenize: {prompt_preview}...") from None
 
         return np.array(tokens, dtype=np.int32)
 
@@ -94,7 +121,7 @@ class BaseInferenceContext:
 
     def create_rollout_from_choice(
         self,
-        prompt: str,
+        prompt: PromptLike,
         choice: Choice,
         env_name: str,
         env_example_id: str,
