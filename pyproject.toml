@@ -125,8 +125,19 @@ search-path = [
     "lib/zephyr/src",
     "lib/fray/src",
     "lib/iris/src",
+    # Project-local stub packages. Currently holds a minimal jaxtyping shim
+    # so that `Float[Array, "..."]` etc. resolve without pulling in
+    # jaxtyping's runtime shape DSL.
+    "stubs",
 ]
 disable-search-path-heuristics = true
+
+# Third-party imports live in the project's uv-managed venv. Pointing pyrefly
+# at this explicit path (rather than interpreter query) lets numpy/pandas/
+# requests/click/pydantic/etc. resolve via their shipped py.typed metadata.
+# Untyped libs (jax, equinox, optax, ray, …) still fall through to
+# missing-import, which is deliberately boundary-suppressed below.
+site-package-path = [".venv/lib/python3.11/site-packages"]
 
 # Prevent pyrefly from querying the Python interpreter for site-packages
 # which would auto-detect workspace members as site packages and exclude them
@@ -148,34 +159,34 @@ project-excludes = [
     "**/venv/**",
 ]
 
-# Disable specific error codes that are primarily noise from missing type stubs
-# These can be gradually enabled as the codebase improves
 [tool.pyrefly.errors]
-# Missing imports (824 occurrences) - third-party libs without stubs
+
+# `missing-import` is a deliberate *boundary* suppression, not a "we gave up"
+# disable. Even after adding site-packages to `site-package-path` above and
+# shipping a project-local `jaxtyping` stub under `stubs/`, the ML/infra
+# stack used in Marin ships without type information in:
+#   jax (incl. jax.experimental, jax.sharding, jax.numpy, jax.tree_util),
+#   equinox, optax, ray, flax, chex, jmp, tensorstore,
+#   vllm, lm_eval, connectrpc (proto-generated), draccus, cloudpickle,
+#   humanfriendly, tqdm_loggable, dupekit, harbor, trackio, mergedeep,
+#   fsspec (partial), transformers (partial), google.* (partial).
+# Writing local stubs for each is high cost / low signal (surface area of
+# `jax` + `equinox` alone dwarfs Marin's own typed API). Per-site
+# `# pyrefly: ignore[missing-import]` would mean ~1.2k comments for zero
+# additional information beyond this list. We therefore keep the category
+# disabled globally and revisit whenever the upstream `py.typed` story
+# changes.
 missing-import = false
 
-# Unexpected keyword arguments (47 occurrences) - dynamic configs from transformers, dataclasses
+# PR-3 scope removed these categories:
+#   missing-attribute (was false)  → re-enabled, residual items baselined
+#   unknown-name (was false)       → re-enabled, residual items baselined
+#   missing-module-attribute       → cleared + re-enabled in PR-3
+
+# Untouched-for-now: keep disabled until cluster B (PR-4) triages them.
 unexpected-keyword = false
-
-# Missing attributes (315 occurrences) - often from untyped libraries like ray, jax, etc.
-# These are mostly false positives from libraries without complete type stubs
-missing-attribute = false
-
-# Additional error types with >10 occurrences that are hard to fix systematically:
-
-# Unknown name errors (17 occurrences) - often from dynamic code or missing stubs
-unknown-name = false
-
-# No matching overload (16 occurrences) - complex overload resolution issues
 no-matching-overload = false
-
-# Library/stub-related noise - disable to focus on real issues:
-
-# Bad argument type (638 occurrences) - mostly third-party library stub issues
-# Common culprits: smart_open, Flax API, JAX/numpy arrays
 bad-argument-type = false
-
-# Missing/bad argument count (99 occurrences) - Flax API positional/keyword confusion
 missing-argument = false
 bad-argument-count = false
 
@@ -189,6 +200,7 @@ bad-argument-count = false
 # invalid-annotation, not-a-type, invalid-type-var, invalid-variance,
 # invalid-inheritance: re-enabled in PR-0
 # bad-specialization, inconsistent-overload: cleared in PR-2 (helper + per-site)
+# missing-attribute, unknown-name, missing-module-attribute: re-enabled in PR-3
 
 [tool.hatch.metadata]
 allow-direct-references = true
