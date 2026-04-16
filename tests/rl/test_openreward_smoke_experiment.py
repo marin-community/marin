@@ -75,7 +75,7 @@ def test_build_openreward_curriculum_reuses_train_manifest_for_eval():
 
     assert curriculum.actor_name == "curriculum-run-123"
     assert curriculum.eval_frequency == 3
-    assert lesson.env_config.env_class == "marin.rl.environments.openreward_env.OpenRewardEnv"
+    assert lesson.env_config.env_class == "marin.rl.integrations.openreward.env.OpenRewardEnv"
     assert lesson.env_config.env_args["train_manifest_path"] == "/tmp/train-manifest.json"
     assert lesson.env_config.env_args["eval_manifest_path"] == "/tmp/train-manifest.json"
     assert lesson.env_config.env_args["base_url"] == "https://openreward.example"

@@ -3,7 +3,7 @@
 
 """Tests for environment loading from EnvConfig."""
 
-from marin.rl.openreward import (
+from marin.rl.integrations.openreward import (
     OpenRewardPromptBlock,
     OpenRewardPromptBlockType,
     OpenRewardTaskManifest,
@@ -14,7 +14,7 @@ from marin.rl.openreward import (
 from marin.rl.environments import EnvConfig, load_environment_from_spec
 from marin.rl.environments.math_env import MathEnv
 from marin.rl.environments.mock_env import MockEnv
-from marin.rl.environments.openreward_env import OpenRewardEnv
+from marin.rl.integrations.openreward.env import OpenRewardEnv
 
 
 def test_load_mock_environment():
@@ -71,7 +71,7 @@ def test_load_openreward_environment(tmp_path):
     manifest_path = tmp_path / "train-openreward-manifest.json"
     save_openreward_task_manifest(manifest, str(manifest_path))
     config = EnvConfig(
-        env_class="marin.rl.environments.openreward_env.OpenRewardEnv",
+        env_class="marin.rl.integrations.openreward.env.OpenRewardEnv",
         env_args={"train_manifest_path": str(manifest_path)},
     )
 

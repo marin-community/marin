@@ -9,9 +9,9 @@ from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
 
-from marin.rl.environments.openreward_env import OpenRewardEnv
+from marin.rl.integrations.openreward.env import OpenRewardEnv
 from marin.rl.environments.inference_ctx.render import Qwen3Renderer
-from marin.rl.openreward import (
+from marin.rl.integrations.openreward import (
     OpenRewardPromptBlock,
     OpenRewardPromptBlockType,
     OpenRewardTaskManifest,
@@ -252,7 +252,7 @@ def test_openreward_env_sample_executes_single_terminal_tool(monkeypatch, tmp_pa
     monkeypatch.setenv("OPENAI_API_KEY", "secret")
 
     monkeypatch.setattr(
-        "marin.rl.environments.openreward_env.load_openreward_client",
+        "marin.rl.integrations.openreward.env.load_openreward_client",
         lambda: lambda api_key=None, base_url=None: FakeOpenRewardClient(environment, calls, api_key, base_url),
     )
 
@@ -295,7 +295,7 @@ def test_openreward_env_parse_failures_become_zero_reward(monkeypatch, tmp_path)
     inference_ctx = FakeInferenceContext(["Final answer: 4"])
 
     monkeypatch.setattr(
-        "marin.rl.environments.openreward_env.load_openreward_client",
+        "marin.rl.integrations.openreward.env.load_openreward_client",
         lambda: lambda api_key=None, base_url=None: FakeOpenRewardClient(environment, {}, api_key, base_url),
     )
 
@@ -322,7 +322,7 @@ def test_openreward_env_unfinished_tool_results_are_invalid(monkeypatch, tmp_pat
     inference_ctx = FakeInferenceContext(['<tool_call>{"name":"submit_answer","arguments":{"answer":"4"}}</tool_call>'])
 
     monkeypatch.setattr(
-        "marin.rl.environments.openreward_env.load_openreward_client",
+        "marin.rl.integrations.openreward.env.load_openreward_client",
         lambda: lambda api_key=None, base_url=None: FakeOpenRewardClient(environment, {}, api_key, base_url),
     )
 
@@ -349,7 +349,7 @@ def test_openreward_env_invalid_tool_argument_errors_are_invalid(monkeypatch, tm
     inference_ctx = FakeInferenceContext(['<tool_call>{"name":"submit_answer","arguments":{"answer":"4"}}</tool_call>'])
 
     monkeypatch.setattr(
-        "marin.rl.environments.openreward_env.load_openreward_client",
+        "marin.rl.integrations.openreward.env.load_openreward_client",
         lambda: lambda api_key=None, base_url=None: FakeOpenRewardClient(environment, {}, api_key, base_url),
     )
 
@@ -376,7 +376,7 @@ def test_openreward_env_raises_runtime_failures(monkeypatch, tmp_path):
     inference_ctx = FakeInferenceContext(['<tool_call>{"name":"submit_answer","arguments":{"answer":"4"}}</tool_call>'])
 
     monkeypatch.setattr(
-        "marin.rl.environments.openreward_env.load_openreward_client",
+        "marin.rl.integrations.openreward.env.load_openreward_client",
         lambda: lambda api_key=None, base_url=None: FakeOpenRewardClient(environment, {}, api_key, base_url),
     )
 
@@ -398,7 +398,7 @@ def test_openreward_env_rejects_image_prompts(monkeypatch, tmp_path):
     inference_ctx = FakeInferenceContext(['<tool_call>{"name":"submit_answer","arguments":{"answer":"4"}}</tool_call>'])
 
     monkeypatch.setattr(
-        "marin.rl.environments.openreward_env.load_openreward_client",
+        "marin.rl.integrations.openreward.env.load_openreward_client",
         lambda: lambda api_key=None, base_url=None: FakeOpenRewardClient(environment, {}, api_key, base_url),
     )
 
