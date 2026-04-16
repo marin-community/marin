@@ -30,7 +30,7 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
-from levanter.distributed import DistributedConfig, RayConfig
+from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
@@ -218,7 +218,6 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
             require_accelerator=False,
             use_explicit_mesh_axes=True,
             distributed=DistributedConfig(initialize_jax_distributed=False),
-            ray=RayConfig(auto_start_cluster=False),
             log_dir=variant_tmp / "logs",
             checkpointer=CheckpointerConfig(base_path=str(variant_tmp / "checkpoints")),
         )

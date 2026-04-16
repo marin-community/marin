@@ -8,7 +8,6 @@ from unittest.mock import patch
 import pytest
 from fray.v2 import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.distributed import RayConfig
 from levanter.main import train_lm
 from levanter.trainer import TrainerConfig
 
@@ -24,7 +23,6 @@ def trainer_config():
     return TrainerConfig(
         id="test-run",
         checkpointer=CheckpointerConfig(),
-        ray=RayConfig(),
     )
 
 

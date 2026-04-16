@@ -12,7 +12,6 @@ import jmp
 from levanter.utils.mesh import MeshConfig
 import pytest
 from levanter.checkpoint import CheckpointerConfig
-from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -107,7 +106,6 @@ def test_llama_math_integration(tmp_path):
             save_interval=datetime.timedelta(seconds=600),
         ),
         mesh=MeshConfig(axes={"model": 2}),
-        ray=RayConfig(auto_start_cluster=False),
     )
 
     # Create optimizer config
