@@ -55,6 +55,36 @@ class InputDatasetFormat(str, Enum):
     INSTRUCT_MSG_RESPONSE: str = "instruct_msg_response"
 
 
+MessagePostprocessFn = Callable[[list[OpenAIChatMessage], dict[str, Any]], list[OpenAIChatMessage]]
+RowIdFn = Callable[[dict[str, Any], list[dict[str, Any]]], str]
+
+_OPTIONAL_SIGNATURE_FIELDS = frozenset({"message_postprocess_fn", "row_id_fn"})
+
+
+def _canonicalize_signature_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _canonicalize_signature_value(v) for k, v in sorted(value.items())}
+    if isinstance(value, list):
+        return [_canonicalize_signature_value(x) for x in value]
+    if callable(value):
+        return f"{value.__module__}.{value.__qualname__}"
+    return value
+
+
+def transform_adapter_signature(adapter: "TransformAdapter") -> dict[str, Any]:
+    """Return a stable, JSON-serializable signature for a transform adapter.
+
+    Newly added optional trace hooks are omitted when unset so existing dataset output hashes
+    remain stable.
+    """
+    adapter_dict = dataclasses.asdict(adapter)
+    adapter_dict["dataset_format"] = adapter_dict["dataset_format"].value
+    adapter_dict = {
+        key: value for key, value in adapter_dict.items() if not (key in _OPTIONAL_SIGNATURE_FIELDS and value is None)
+    }
+    return _canonicalize_signature_value(adapter_dict)
+
+
 @dataclass
 class TransformAdapter:
     dataset_format: InputDatasetFormat = InputDatasetFormat.INSTRUCTION_RESPONSE
@@ -87,6 +117,8 @@ class TransformAdapter:
     metadata_remap: dict[str, str] = field(default_factory=dict)
     replacements: dict[str, str] | None = None
     extra_metadata_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    message_postprocess_fn: MessagePostprocessFn | None = None
+    row_id_fn: RowIdFn | None = None
 
     def transform_conversation_to_openai_format(
         self,

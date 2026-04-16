@@ -126,10 +126,10 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
         logger.warning(f"{source} returning no valid messages")
         return None
 
-    transformed_row_messages = [message.model_dump() for message in transformed_row_messages]
+    if adapter.message_postprocess_fn:
+        transformed_row_messages = adapter.message_postprocess_fn(transformed_row_messages, row)
 
-    # Create a unique ID for the row based on the text
-    row_idx = generate_hash_from_messages(transformed_row_messages)
+    transformed_row_messages = [message.model_dump() for message in transformed_row_messages]
     metadata_columns = unwrap_versioned_value(cfg.metadata_columns)
     metadata_remap = adapter.metadata_remap or {}
     replacements = adapter.replacements if adapter.replacements is not None else DEFAULT_TEXT_REPLACEMENTS
@@ -154,6 +154,13 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
         transformed_row_messages = [_normalize_tool_structures(message) for message in transformed_row_messages]
     else:
         transformed_row_messages = [_normalize_tool_structures(message) for message in transformed_row_messages]
+
+    if adapter.row_id_fn:
+        row_idx = adapter.row_id_fn(row, transformed_row_messages)
+    else:
+        # Create a unique ID for the row based on the transformed text.
+        row_idx = generate_hash_from_messages(transformed_row_messages)
+
     if adapter.extra_metadata_fn:
         extra_from_fn = adapter.extra_metadata_fn(row)
         if extra_from_fn:
