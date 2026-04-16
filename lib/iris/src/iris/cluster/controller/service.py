@@ -2618,26 +2618,18 @@ class ControllerServiceImpl:
 
         Converts the proto updates into TaskUpdate dataclasses and applies
         them through the same ControllerTransitions.apply_heartbeat() path
-        used by the poll-based heartbeat. Returns any tasks the controller
-        wants the worker to stop.
+        used by the poll-based heartbeat. Stop decisions are delivered via
+        the StopTasks RPC, not piggy-backed on the response.
         """
         updates = task_updates_from_proto(request.updates)
-
-        tasks_to_stop: list[str] = []
         if updates:
-            worker_id = WorkerId(request.worker_id)
-            result = self._transitions.apply_heartbeat(
+            self._transitions.apply_heartbeat(
                 HeartbeatApplyRequest(
-                    worker_id=worker_id,
+                    worker_id=WorkerId(request.worker_id),
                     worker_resource_snapshot=None,
                     updates=updates,
                 )
             )
-            if result.tasks_to_kill:
-                tasks_to_stop = [tid.to_wire() for tid in result.tasks_to_kill]
-            # Wake the controller so it can act on any state changes promptly
+            # Wake the controller so it can act on any state changes promptly.
             self._controller.wake()
-
-        return controller_pb2.Controller.UpdateTaskStatusResponse(
-            tasks_to_stop=tasks_to_stop,
-        )
+        return controller_pb2.Controller.UpdateTaskStatusResponse()

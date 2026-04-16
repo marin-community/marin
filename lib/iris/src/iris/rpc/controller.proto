@@ -516,7 +516,6 @@ message Controller {
     repeated iris.job.WorkerTaskStatus updates = 2;
   }
   message UpdateTaskStatusResponse {
-    repeated string tasks_to_stop = 1;
   }
 
   // --- Scheduler State ---

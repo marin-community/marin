@@ -123,91 +123,47 @@ def worker_config_from_proto(
     )
 
 
-# Maximum queued updates before we start dropping the oldest entries.
-# The poll heartbeat acts as a safety net, so bounded loss is acceptable.
-_MAX_PENDING_UPDATES = 1000
-
-
-def _drain_queue(q: queue.Queue[job_pb2.WorkerTaskStatus], timeout: float) -> list[job_pb2.WorkerTaskStatus]:
-    """Block up to *timeout* for the first item, then drain all remaining items without blocking."""
-    items: list[job_pb2.WorkerTaskStatus] = []
-    try:
-        items.append(q.get(timeout=timeout))
-    except queue.Empty:
-        return items
-    # Drain everything else that's already queued
-    while True:
-        try:
-            items.append(q.get_nowait())
-        except queue.Empty:
-            break
-    return items
-
-
 class TaskStateReporter:
-    """Batches task state transitions and pushes them to the controller via UpdateTaskStatus.
+    """Pushes task state transitions to the controller via UpdateTaskStatus.
 
-    Runs as a background thread. The worker enqueues WorkerTaskStatus protos on
-    every state transition (via TaskAttempt.on_state_change). The reporter drains
-    the queue in batches and sends them to the controller. On transient failure,
-    items are re-enqueued for retry with exponential backoff.
+    The worker enqueues a WorkerTaskStatus on every TaskAttempt state transition.
+    A background thread drains the queue and forwards the events to the controller.
+    The drain coalesces everything queued at the moment of send into one RPC, but
+    there is no batching window, no bounded queue, and no retry — failures are
+    logged and dropped. The controller's poll loop is the safety net that picks
+    up missed transitions, so we keep this path stupid simple.
     """
 
-    def __init__(
-        self,
-        controller_client: ControllerServiceClientSync,
-        worker_id: str,
-        batch_interval: float = 0.5,
-    ):
-        self._queue: queue.Queue[job_pb2.WorkerTaskStatus] = queue.Queue(maxsize=_MAX_PENDING_UPDATES)
+    def __init__(self, controller_client: ControllerServiceClientSync, worker_id: str):
+        self._queue: queue.Queue[job_pb2.WorkerTaskStatus] = queue.Queue()
         self._controller_client = controller_client
         self._worker_id = worker_id
-        self._batch_interval = batch_interval
-        self._stop_callback: Callable[[str], None] | None = None
 
     def report(self, status: job_pb2.WorkerTaskStatus) -> None:
-        """Enqueue a task status update. Drops oldest if queue is full."""
-        try:
-            self._queue.put_nowait(status)
-        except queue.Full:
-            # Drop the oldest entry to make room; the poll loop will catch up.
-            try:
-                self._queue.get_nowait()
-            except queue.Empty:
-                pass
-            try:
-                self._queue.put_nowait(status)
-            except queue.Full:
-                pass
+        self._queue.put(status)
 
     def run(self, stop_event: threading.Event) -> None:
-        """Main loop: drain queue, batch, push to controller."""
-        backoff = ExponentialBackoff(initial=0.5, maximum=30.0)
         while not stop_event.is_set():
-            items = _drain_queue(self._queue, timeout=self._batch_interval)
-            if not items:
-                continue
-
-            request = controller_pb2.Controller.UpdateTaskStatusRequest(
-                worker_id=self._worker_id,
-                updates=items,
-            )
             try:
-                response = self._controller_client.update_task_status(request)
-                backoff.reset()
-                if response.tasks_to_stop and self._stop_callback:
-                    for task_id in response.tasks_to_stop:
-                        self._stop_callback(task_id)
+                first = self._queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            updates = [first]
+            while True:
+                try:
+                    updates.append(self._queue.get_nowait())
+                except queue.Empty:
+                    break
+            try:
+                self._controller_client.update_task_status(
+                    controller_pb2.Controller.UpdateTaskStatusRequest(
+                        worker_id=self._worker_id,
+                        updates=updates,
+                    )
+                )
             except Exception as e:
-                logger.warning("Failed to push task status to controller: %s", e)
-                # Re-enqueue items for retry (drop if queue is full)
-                for item in items:
-                    try:
-                        self._queue.put_nowait(item)
-                    except queue.Full:
-                        break
-                wait_time = backoff.next_interval()
-                stop_event.wait(wait_time)
+                # Poll loop will reconcile the missed transitions.
+                logger.warning("UpdateTaskStatus push failed (%d updates dropped): %s", len(updates), e)
 
 
 class Worker:
@@ -601,7 +557,6 @@ class Worker:
             controller_client=self._controller_client,
             worker_id=self._worker_id,
         )
-        reporter._stop_callback = self._kill_task_by_id
         self._state_reporter = reporter
         self._threads.spawn(
             target=reporter.run,
@@ -611,12 +566,6 @@ class Worker:
     def _stop_state_reporter(self) -> None:
         """Stop the TaskStateReporter thread."""
         self._state_reporter = None
-
-    def _kill_task_by_id(self, task_id: str) -> None:
-        """Kill a task by ID. Used as callback from TaskStateReporter."""
-        current = self._get_current_attempt(task_id)
-        if current and current.status not in self._TERMINAL_STATES:
-            self._kill_task_attempt(task_id, current.attempt_id, async_kill=True)
 
     def _make_state_change_callback(self, attempt: TaskAttempt) -> Callable[[job_pb2.TaskState], None]:
         """Build a closure that enqueues a WorkerTaskStatus when a task transitions state."""
