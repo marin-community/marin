@@ -226,61 +226,6 @@ def test_launch_job_replaces_finished_job_by_default(service, state):
     assert job.state == job_pb2.JOB_STATE_PENDING
 
 
-def test_launch_job_concurrent_same_name_races_on_insert(service, monkeypatch):
-    """Two concurrent LaunchJob calls for the same job_id race past the
-    existence check and the second INSERT fails with UNIQUE constraint.
-
-    Reproduces production error:
-        RPC LaunchJob failed: UNIQUE constraint failed: jobs.job_id
-
-    Root cause: _read_job (existence check) runs in a separate read
-    snapshot from submit_job's write transaction. Nothing ensures atomicity
-    between the two, so two concurrent callers both read "no existing job"
-    and both proceed to INSERT.
-    """
-    import threading
-    from concurrent.futures import ThreadPoolExecutor
-
-    from iris.cluster.controller import service as service_module
-
-    original_read_job = service_module._read_job
-    barrier = threading.Barrier(2, timeout=10)
-
-    def _read_job_with_barrier(db, job_id):
-        result = original_read_job(db, job_id)
-        # Force both launch_job callers to finish the existence check
-        # before either proceeds into submit_job.
-        barrier.wait()
-        return result
-
-    monkeypatch.setattr(service_module, "_read_job", _read_job_with_barrier)
-
-    def _launch():
-        return service.launch_job(make_job_request("race-job"), None)
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(_launch), pool.submit(_launch)]
-        results = []
-        errors = []
-        for fut in futures:
-            try:
-                results.append(fut.result())
-            except Exception as e:
-                errors.append(e)
-
-    # Bug: one of the two calls surfaces the UNIQUE constraint error.
-    # In-process we see the raw sqlite3.IntegrityError; in production the
-    # RPC interceptor wraps this as ConnectError(Code.INTERNAL, ...), which
-    # matches the log line
-    #   "RPC LaunchJob failed ...: UNIQUE constraint failed: jobs.job_id".
-    import sqlite3
-
-    assert len(errors) == 1, f"expected one failure, got results={results} errors={errors}"
-    err = errors[0]
-    assert isinstance(err, sqlite3.IntegrityError)
-    assert "UNIQUE constraint failed: jobs.job_id" in str(err)
-
-
 def test_launch_job_error_policy_prevents_replacement(service, state):
     """Verify EXISTING_JOB_POLICY_ERROR prevents replacing finished jobs."""
     request = make_job_request("no-replace-job")
