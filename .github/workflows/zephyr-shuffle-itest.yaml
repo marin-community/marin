@@ -159,7 +159,7 @@ jobs:
             | grep "RESULT:" || echo "No RESULT lines found"
 
       - name: Capture failure diagnostics
-        if: failure()
+        if: failure() || cancelled()
         shell: bash -l {0}
         run: |
           JOB_ID="${{ steps.submit.outputs.job_id }}"

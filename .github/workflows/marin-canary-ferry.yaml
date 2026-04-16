@@ -234,8 +234,42 @@ jobs:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-      - name: Notify Slack on failure
-        if: (failure() || cancelled()) && github.event_name == 'schedule'
+      # Upload Claude's Slack message (if it was written) so the separate
+      # notify-slack job can pick it up. We run Slack notify in a separate
+      # job because a job-level timeout can force-kill this runner before
+      # in-job steps after Claude triage ever execute — see
+      # https://github.com/marin-community/marin/actions/runs/24498461666.
+      - name: Upload Slack message
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slack-message
+          path: slack_message.md
+          retention-days: 1
+          if-no-files-found: ignore
+
+      - name: Remove OS Login SSH key
+        if: always()
+        run: |
+          gcloud compute os-login ssh-keys remove \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --key-file ~/.ssh/google_compute_engine.pub || true
+
+  # Separate job so Slack always fires, even if the main job is force-killed
+  # after its grace window. `needs.canary-ferry.result` reflects the main job
+  # outcome; failure()/cancelled() context functions only see this job's steps.
+  notify-slack:
+    needs: canary-ferry
+    if: always() && (needs.canary-ferry.result == 'failure' || needs.canary-ferry.result == 'cancelled') && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Slack message
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: slack-message
+
+      - name: Notify Slack
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           FALLBACK_TEXT: ":red_circle: *TPU Canary failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -247,10 +281,3 @@ jobs:
           fi
           PAYLOAD=$(python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))" <<< "$TEXT")
           curl -sf -X POST -H 'Content-Type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL"
-
-      - name: Remove OS Login SSH key
-        if: always()
-        run: |
-          gcloud compute os-login ssh-keys remove \
-            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
-            --key-file ~/.ssh/google_compute_engine.pub || true
