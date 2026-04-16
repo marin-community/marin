@@ -94,7 +94,7 @@ from iris.cluster.controller.transitions import (
     TASK_RESOURCE_HISTORY_RETENTION,
     ControllerTransitions,
     HeartbeatApplyRequest,
-    TaskUpdate,
+    task_updates_from_proto,
 )
 from iris.cluster.controller.provider import ProviderError
 from iris.cluster.log_store import build_log_source, worker_log_key
@@ -2621,21 +2621,7 @@ class ControllerServiceImpl:
         used by the poll-based heartbeat. Returns any tasks the controller
         wants the worker to stop.
         """
-        updates: list[TaskUpdate] = []
-        for entry in request.updates:
-            if entry.state in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING):
-                continue
-            updates.append(
-                TaskUpdate(
-                    task_id=JobName.from_wire(entry.task_id),
-                    attempt_id=entry.attempt_id,
-                    new_state=entry.state,
-                    error=entry.error or None,
-                    exit_code=entry.exit_code if entry.exit_code != 0 else None,
-                    resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
-                    container_id=entry.container_id or None,
-                )
-            )
+        updates = task_updates_from_proto(request.updates)
 
         tasks_to_stop: list[str] = []
         if updates:

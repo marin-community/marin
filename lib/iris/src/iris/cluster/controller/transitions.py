@@ -187,6 +187,30 @@ class TaskUpdate:
     container_id: str | None = None
 
 
+def task_updates_from_proto(entries) -> list[TaskUpdate]:
+    """Convert worker-reported WorkerTaskStatus protos into TaskUpdates.
+
+    Skips UNSPECIFIED/PENDING — the controller is only interested in
+    transitions to BUILDING or beyond.
+    """
+    updates: list[TaskUpdate] = []
+    for entry in entries:
+        if entry.state in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING):
+            continue
+        updates.append(
+            TaskUpdate(
+                task_id=JobName.from_wire(entry.task_id),
+                attempt_id=entry.attempt_id,
+                new_state=entry.state,
+                error=entry.error or None,
+                exit_code=entry.exit_code if entry.HasField("exit_code") else None,
+                resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
+                container_id=entry.container_id or None,
+            )
+        )
+    return updates
+
+
 @dataclass(frozen=True)
 class HeartbeatApplyRequest:
     """Batch of worker heartbeat updates applied atomically."""

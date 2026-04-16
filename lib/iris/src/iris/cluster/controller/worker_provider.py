@@ -17,8 +17,9 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     RunningTaskEntry,
     TaskUpdate,
+    task_updates_from_proto,
 )
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2
 from iris.rpc import worker_pb2
 from iris.rpc.worker_connect import WorkerServiceClient
@@ -102,25 +103,10 @@ def _apply_request_from_response(
     response: job_pb2.HeartbeatResponse,
 ) -> HeartbeatApplyRequest:
     """Convert a HeartbeatResponse proto to a HeartbeatApplyRequest."""
-    updates: list[TaskUpdate] = []
-    for entry in response.tasks:
-        if entry.state in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING):
-            continue
-        updates.append(
-            TaskUpdate(
-                task_id=JobName.from_wire(entry.task_id),
-                attempt_id=entry.attempt_id,
-                new_state=entry.state,
-                error=entry.error or None,
-                exit_code=entry.exit_code if entry.HasField("exit_code") else None,
-                resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
-                container_id=entry.container_id or None,
-            )
-        )
     return HeartbeatApplyRequest(
         worker_id=worker_id,
         worker_resource_snapshot=(response.resource_snapshot if response.resource_snapshot.ByteSize() > 0 else None),
-        updates=updates,
+        updates=task_updates_from_proto(response.tasks),
     )
 
 
@@ -336,22 +322,7 @@ class WorkerProvider:
             stub = self.stub_factory.get_stub(address)
             request = worker_pb2.Worker.PollTasksRequest(expected_tasks=expected)
             response = stub.poll_tasks(request)
-            updates: list[TaskUpdate] = []
-            for entry in response.tasks:
-                if entry.state in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING):
-                    continue
-                updates.append(
-                    TaskUpdate(
-                        task_id=JobName.from_wire(entry.task_id),
-                        attempt_id=entry.attempt_id,
-                        new_state=entry.state,
-                        error=entry.error or None,
-                        exit_code=entry.exit_code if entry.HasField("exit_code") else None,
-                        resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
-                        container_id=entry.container_id or None,
-                    )
-                )
-            return (wid, updates, None)
+            return (wid, task_updates_from_proto(response.tasks), None)
 
         futures = {self._pool.submit(_poll_one, wid): wid for wid in running}
         for future in futures:
