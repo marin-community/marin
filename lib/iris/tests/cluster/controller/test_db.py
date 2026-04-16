@@ -213,6 +213,52 @@ def test_read_snapshot_pool_returns_connections(db: ControllerDB) -> None:
     assert db._read_pool.qsize() == pool_size
 
 
+def test_backup_to_does_not_block_concurrent_writes(tmp_path: Path) -> None:
+    """backup_to uses a separate read-only source connection, so writers on
+    self._conn must proceed under WAL semantics while the backup runs."""
+    db = ControllerDB(db_dir=tmp_path)
+    _create_simple_table(db)
+
+    # Seed enough rows that the backup takes at least a few page-copy steps,
+    # giving the writer thread a real chance to interleave.
+    with db.transaction() as cur:
+        for i in range(2000):
+            cur.execute("INSERT INTO kv (key, value) VALUES (?, ?)", (f"seed-{i}", "x" * 256))
+
+    backup_dir = tmp_path / "backup"
+    backup_dir.mkdir()
+
+    writes_completed = 0
+    writer_exc: BaseException | None = None
+    stop = threading.Event()
+
+    def writer() -> None:
+        nonlocal writes_completed, writer_exc
+        try:
+            i = 0
+            while not stop.is_set():
+                with db.transaction() as cur:
+                    cur.execute("INSERT INTO kv (key, value) VALUES (?, ?)", (f"live-{i}", "y"))
+                writes_completed += 1
+                i += 1
+        except BaseException as e:
+            writer_exc = e
+
+    t = threading.Thread(target=writer, daemon=True)
+    t.start()
+    try:
+        db.backup_to(backup_dir / "controller.sqlite3")
+    finally:
+        stop.set()
+        t.join(timeout=5)
+
+    assert writer_exc is None, f"writer crashed: {writer_exc!r}"
+    # The writer must have made forward progress during the backup; if the
+    # backup path had re-acquired self._lock we'd expect zero writes here.
+    assert writes_completed > 0
+    db.close()
+
+
 def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
     """replace_from() must re-attach the auth DB so auth tables remain accessible."""
     db = ControllerDB(db_dir=tmp_path)
