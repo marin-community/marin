@@ -960,7 +960,13 @@ WORKER_TASK_HISTORY = Table(
             python_type=WorkerId,
             decoder=decode_worker_id,
         ),
-        Column("task_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column(
+            "task_id",
+            "TEXT",
+            "NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE",
+            python_type=str,
+            decoder=str,
+        ),
         Column(
             "assigned_at_ms",
             "INTEGER",
@@ -973,6 +979,9 @@ WORKER_TASK_HISTORY = Table(
     indexes=(
         "CREATE INDEX IF NOT EXISTS idx_worker_task_history_worker"
         " ON worker_task_history(worker_id, assigned_at_ms DESC)",
+        # Probed on task delete by the new FK cascade; without it each delete
+        # scans the full history table.
+        "CREATE INDEX IF NOT EXISTS idx_worker_task_history_task" " ON worker_task_history(task_id)",
     ),
 )
 
