@@ -44,7 +44,13 @@ def test_build_worker_bootstrap_script_configures_ar_auth() -> None:
     script = build_worker_bootstrap_script(cfg)
 
     assert f'if echo "{ar_image}" | grep -q -- "-docker.pkg.dev/"' in script
-    assert 'sudo gcloud auth configure-docker "$AR_HOST" -q || true' in script
+    assert "if [ -x /snap/bin/gcloud ]; then" in script
+    assert 'echo "[iris-init] Waiting for gcloud before configuring docker auth (attempt $attempt/60)"' in script
+    assert 'echo "[iris-init] Configuring docker auth for $AR_HOST (attempt $attempt/60)"' in script
+    assert 'echo "[iris-init] Docker pull failed (attempt $attempt/5)"' in script
+    assert 'echo "[iris-init] ERROR: Failed to configure docker auth for $AR_HOST after 60 attempts"' in script
+    assert "sleep 2" in script
+    assert "sleep 5" in script
 
 
 def test_build_worker_bootstrap_script_requires_controller_address() -> None:
@@ -154,7 +160,16 @@ def test_build_controller_bootstrap_script_from_config_rewrites_ghcr_to_ar() -> 
         "Pulling image: europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-controller:latest"
         in script
     )
-    assert 'sudo gcloud auth configure-docker "$AR_HOST" -q || true' in script
+    assert "if [ -x /snap/bin/gcloud ]; then" in script
+    assert (
+        'echo "[iris-controller] [3/5] Waiting for gcloud before configuring docker auth (attempt $attempt/60)"'
+        in script
+    )
+    assert 'echo "[iris-controller] [3/5] Configuring docker auth for $AR_HOST (attempt $attempt/60)"' in script
+    assert 'echo "[iris-controller] [4/5] Docker pull failed (attempt $attempt/5)"' in script
+    assert (
+        'echo "[iris-controller] [3/5] ERROR: Failed to configure docker auth for $AR_HOST after 60 attempts"' in script
+    )
 
 
 # --- GcpWorkerProvider.resolve_image() tests ---

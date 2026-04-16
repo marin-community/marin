@@ -145,6 +145,54 @@ sudo sysctl -w net.core.somaxconn=4096
 # Create cache directory
 sudo mkdir -p {{ cache_dir }}
 
+find_gcloud() {
+    if command -v gcloud > /dev/null 2>&1; then
+        command -v gcloud
+        return 0
+    fi
+    if [ -x /snap/bin/gcloud ]; then
+        echo /snap/bin/gcloud
+        return 0
+    fi
+    return 1
+}
+
+configure_docker_auth_with_retries() {
+    local AR_HOST="$1"
+    local gcloud_bin=""
+    for attempt in $(seq 1 60); do
+        gcloud_bin=$(find_gcloud || true)
+        if [ -z "$gcloud_bin" ]; then
+            echo "[iris-init] Waiting for gcloud before configuring docker auth (attempt $attempt/60)"
+            sleep 2
+            continue
+        fi
+        echo "[iris-init] Configuring docker auth for $AR_HOST (attempt $attempt/60)"
+        if sudo "$gcloud_bin" auth configure-docker "$AR_HOST" -q; then
+            return 0
+        fi
+        echo "[iris-init] gcloud auth configure-docker failed for $AR_HOST (attempt $attempt/60)"
+        sleep 2
+    done
+    echo "[iris-init] ERROR: Failed to configure docker auth for $AR_HOST after 60 attempts"
+    return 1
+}
+
+pull_docker_image_with_retries() {
+    local image="$1"
+    for attempt in $(seq 1 5); do
+        if sudo docker pull "$image"; then
+            return 0
+        fi
+        echo "[iris-init] Docker pull failed (attempt $attempt/5)"
+        if [ "$attempt" -lt 5 ]; then
+            sleep 5
+        fi
+    done
+    echo "[iris-init] ERROR: Failed to pull image after 5 attempts: $image"
+    return 1
+}
+
 echo "[iris-init] Phase: docker_pull"
 echo "[iris-init] Pulling image: {{ docker_image }}"
 
@@ -152,15 +200,10 @@ echo "[iris-init] Pulling image: {{ docker_image }}"
 # Must run under sudo because `sudo docker pull` uses root's docker config.
 if echo "{{ docker_image }}" | grep -q -- "-docker.pkg.dev/"; then
     AR_HOST=$(echo "{{ docker_image }}" | cut -d/ -f1)
-    echo "[iris-init] Configuring docker auth for $AR_HOST"
-    if command -v gcloud &> /dev/null; then
-        sudo gcloud auth configure-docker "$AR_HOST" -q || true
-    else
-        echo "[iris-init] Warning: gcloud not found; AR pull may fail without prior auth"
-    fi
+    configure_docker_auth_with_retries "$AR_HOST"
 fi
 
-sudo docker pull {{ docker_image }}
+pull_docker_image_with_retries "{{ docker_image }}"
 
 echo "[iris-init] Phase: config_setup"
 sudo mkdir -p /etc/iris
@@ -315,6 +358,54 @@ fi
 sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
 sudo sysctl -w net.ipv4.tcp_tw_reuse=1
 
+find_gcloud() {
+    if command -v gcloud > /dev/null 2>&1; then
+        command -v gcloud
+        return 0
+    fi
+    if [ -x /snap/bin/gcloud ]; then
+        echo /snap/bin/gcloud
+        return 0
+    fi
+    return 1
+}
+
+configure_docker_auth_with_retries() {
+    local AR_HOST="$1"
+    local gcloud_bin=""
+    for attempt in $(seq 1 60); do
+        gcloud_bin=$(find_gcloud || true)
+        if [ -z "$gcloud_bin" ]; then
+            echo "[iris-controller] [3/5] Waiting for gcloud before configuring docker auth (attempt $attempt/60)"
+            sleep 2
+            continue
+        fi
+        echo "[iris-controller] [3/5] Configuring docker auth for $AR_HOST (attempt $attempt/60)"
+        if sudo "$gcloud_bin" auth configure-docker "$AR_HOST" -q; then
+            return 0
+        fi
+        echo "[iris-controller] [3/5] gcloud auth configure-docker failed for $AR_HOST (attempt $attempt/60)"
+        sleep 2
+    done
+    echo "[iris-controller] [3/5] ERROR: Failed to configure docker auth for $AR_HOST after 60 attempts"
+    return 1
+}
+
+pull_docker_image_with_retries() {
+    local image="$1"
+    for attempt in $(seq 1 5); do
+        if sudo docker pull "$image"; then
+            return 0
+        fi
+        echo "[iris-controller] [4/5] Docker pull failed (attempt $attempt/5)"
+        if [ "$attempt" -lt 5 ]; then
+            sleep 5
+        fi
+    done
+    echo "[iris-controller] [4/5] ERROR: Failed to pull image after 5 attempts: $image"
+    return 1
+}
+
 echo "[iris-controller] [3/5] Pulling image: {{ docker_image }}"
 echo "[iris-controller]       This may take several minutes for large images..."
 
@@ -322,15 +413,10 @@ echo "[iris-controller]       This may take several minutes for large images..."
 # Must run under sudo because `sudo docker pull` uses root's docker config.
 if echo "{{ docker_image }}" | grep -q -- "-docker.pkg.dev/"; then
     AR_HOST=$(echo "{{ docker_image }}" | cut -d/ -f1)
-    echo "[iris-controller] [3/5] Configuring docker auth for $AR_HOST"
-    if command -v gcloud &> /dev/null; then
-        sudo gcloud auth configure-docker "$AR_HOST" -q || true
-    else
-        echo "[iris-controller] [3/5] Warning: gcloud not found; AR pull may fail without prior auth"
-    fi
+    configure_docker_auth_with_retries "$AR_HOST"
 fi
 
-if sudo docker pull {{ docker_image }}; then
+if pull_docker_image_with_retries "{{ docker_image }}"; then
     echo "[iris-controller] [4/5] Image pull complete"
 else
     echo "[iris-controller] [4/5] ERROR: Image pull failed"
