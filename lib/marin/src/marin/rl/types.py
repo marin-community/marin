@@ -63,6 +63,9 @@ class Rollout(eqx.Module):
     response_logprobs: np.ndarray
     """Array of (response_length,) log probabilities for each generated token."""
 
+    response_loss_mask: np.ndarray
+    """Array of (response_length,) mask values indicating which response tokens receive loss."""
+
     token_rewards: np.ndarray
     """The reward assigned to each generated token."""
 
@@ -83,6 +86,13 @@ class Rollout(eqx.Module):
 
     correctness_reward: float | None = None
     """The reward for the correctness of the response."""
+
+    def __post_init__(self):
+        if len(self.response_loss_mask) != len(self.response_tokens):
+            raise ValueError(
+                "response_loss_mask length must match response_tokens length, "
+                f"got {len(self.response_loss_mask)} and {len(self.response_tokens)}"
+            )
 
 
 class RolloutGroup(eqx.Module):
@@ -112,7 +122,7 @@ class TrainingBatch(eqx.Module):
     input_ids: ht.Int[NamedArray, "batch position"]
     position_ids: ht.Int[NamedArray, "batch position"]
     loss_weights: ht.Float[NamedArray, "batch position"]
-    loss_masks: ht.Int[NamedArray, "batch position"]
+    loss_masks: ht.Float[NamedArray, "batch position"]
     policy_logprobs: ht.Float[NamedArray, "batch position"]
     temperature: ht.Float[NamedArray, "batch"]  # noqa: F821
     top_k: ht.Int[NamedArray, "batch"]  # noqa: F821

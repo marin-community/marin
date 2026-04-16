@@ -145,6 +145,7 @@ class BaseInferenceContext:
             logger.error(f"Prompt tokenization failed for {env_example_id}")
 
         token_rewards = np.full(len(response_tokens), reward, dtype=np.float32)
+        response_loss_mask = np.ones(len(response_tokens), dtype=np.float32)
         is_truncated = choice.finish_reason == "length"
 
         return Rollout(
@@ -153,6 +154,7 @@ class BaseInferenceContext:
             prompt_tokens=prompt_tokens,
             response_tokens=response_tokens,
             response_logprobs=response_logprobs,
+            response_loss_mask=response_loss_mask,
             token_rewards=token_rewards,
             episode_reward=float(reward),
             correctness_reward=correctness_reward,
