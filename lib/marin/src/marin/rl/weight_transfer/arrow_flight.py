@@ -291,6 +291,8 @@ class MarinFlightServer(flight.FlightServerBase):
 
     def do_get(self, context, ticket):
         """Serve weight data to inference workers."""
+        # Propagate typed FlightUnavailableError without rewrapping — callers
+        # distinguish "no weights yet" (retry) from internal server errors.
         try:
             ticket_data = ticket.ticket.decode("utf-8")
 
@@ -312,6 +314,9 @@ class MarinFlightServer(flight.FlightServerBase):
 
             return flight.RecordBatchStream(pa.RecordBatchReader.from_batches(schema, batches))
 
+        except flight.FlightUnavailableError:
+            # Typed "retry me" signal; do not rewrap as Internal.
+            raise
         except Exception as e:
             logger.error(f"Error in do_get: {e}")
             raise flight.FlightInternalError(f"Failed to get weights: {e}") from e
