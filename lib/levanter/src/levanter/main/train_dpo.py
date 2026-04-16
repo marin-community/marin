@@ -18,7 +18,7 @@ import levanter
 import levanter.callbacks
 from levanter import callbacks
 from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config
+from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config, converter_from_hf_compat_config
 from levanter.data.dataset import AsyncDataset
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import (
@@ -250,20 +250,18 @@ def main(config: TrainDpoConfig):
             raise ValueError("Cannot specify both initialize_from_hf and initialize_from")
 
         assert isinstance(config.model, HFCompatConfig)
-        converter = config.model.hf_checkpoint_converter()
+        converter = converter_from_hf_compat_config(
+            config.model,
+            tokenizer=tokenizer,
+            reference_checkpoint=config.initialize_from_hf if isinstance(config.initialize_from_hf, str) else None,
+        )
         if hasattr(tokenizer, "vocab") and tokenizer.vocab != converter.tokenizer.vocab:
             logger.warning("The tokenizers appear to be different. You may want to check this.")
-
-        if isinstance(config.initialize_from_hf, str):
-            converter = converter.replaced(reference_checkpoint=config.initialize_from_hf, tokenizer=tokenizer)
-        else:
-            converter = converter.replaced(tokenizer=tokenizer)
 
         if config.use_hf_model_config:
             config.model = converter.config_from_hf_config(converter.default_hf_config)
     elif isinstance(config.model, HFCompatConfig):
-        converter = config.model.hf_checkpoint_converter()
-        converter = converter.replaced(tokenizer=tokenizer)
+        converter = converter_from_hf_compat_config(config.model, tokenizer=tokenizer)
     else:
         converter = None
 

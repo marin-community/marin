@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import csv
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 import fsspec
@@ -272,7 +272,9 @@ def main() -> None:
     _plot_tv_heatmap(ax_heatmap, avg_phase_tv, labels)
 
     handles, legend_labels = ax_phase0.get_legend_handles_labels()
-    fig.legend(handles, legend_labels, loc="upper center", ncol=3, frameon=False, fontsize=13.5, bbox_to_anchor=(0.5, 0.962))
+    fig.legend(
+        handles, legend_labels, loc="upper center", ncol=3, frameon=False, fontsize=13.5, bbox_to_anchor=(0.5, 0.962)
+    )
     fig.suptitle("GRP Penalty Raw-Optimum Comparison", fontsize=24, fontweight="bold", y=0.99)
     fig.text(
         0.5,
@@ -291,12 +293,10 @@ def main() -> None:
         if summary.validated_bpb is not None:
             validated = f"{summary.validated_bpb:.6f} (gap +{summary.validated_bpb - summary.raw_predicted_bpb:.6f})"
         summary_lines.append(
-            (
-                f"{summary.display_name}\n"
-                f"  raw pred: {summary.raw_predicted_bpb:.6f}    validated: {validated}\n"
-                f"  nearest support: {summary.nearest_observed_run_name} @ {summary.nearest_observed_bpb:.6f}"
-                f"    TV={summary.nearest_observed_tv:.3f}    params={summary.total_param_count}"
-            )
+            f"{summary.display_name}\n"
+            f"  raw pred: {summary.raw_predicted_bpb:.6f}    validated: {validated}\n"
+            f"  nearest support: {summary.nearest_observed_run_name} @ {summary.nearest_observed_bpb:.6f}"
+            f"    TV={summary.nearest_observed_tv:.3f}    params={summary.total_param_count}"
         )
     summary_lines.append(
         "TV reading:\n"

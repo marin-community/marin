@@ -12,8 +12,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from marin.speedrun.speedrun import get_step_times_from_wandb
-
 from experiments.domain_phase_mix.launch_two_phase_many_run_00097_fixed_subset_study import (
     WANDB_ENTITY,
     WANDB_PROJECT,
@@ -29,6 +27,12 @@ OUTPUT_JSON = SCRIPT_DIR / "qsplit240_520m_pilot_summary.json"
 PROJECTED_FULL_SWARM_RUNS = 240
 
 
+def _get_step_times_from_wandb(*, run_id: str, entity: str, project: str) -> list[float]:
+    from marin.speedrun.speedrun import get_step_times_from_wandb
+
+    return get_step_times_from_wandb(run_id=run_id, entity=entity, project=project)
+
+
 def active_compute_hours_for_run(
     run_id: str,
     *,
@@ -36,7 +40,7 @@ def active_compute_hours_for_run(
     wandb_project: str = WANDB_PROJECT,
 ) -> float:
     """Return active compute hours for one W&B run."""
-    return float(sum(get_step_times_from_wandb(run_id=run_id, entity=wandb_entity, project=wandb_project)) / 3600.0)
+    return float(sum(_get_step_times_from_wandb(run_id=run_id, entity=wandb_entity, project=wandb_project)) / 3600.0)
 
 
 def _rank_series(values: pd.Series) -> pd.Series:

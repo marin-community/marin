@@ -73,6 +73,11 @@ PLOT_BPB_ONLY_PATH = SCRIPT_DIR / "two_phase_many_grp_power_family_penalty_raw_b
 PLOT_BPB_TV_PATH = SCRIPT_DIR / "two_phase_many_grp_power_family_penalty_raw_bpb_and_tv.png"
 PLOT_PHASE_MOVEMENT_PATH = SCRIPT_DIR / "two_phase_many_grp_power_family_penalty_raw_phase_movements.png"
 PLOT_BPB_PHASE_MOVEMENT_PATH = SCRIPT_DIR / "two_phase_many_grp_power_family_penalty_raw_bpb_and_phase_movements.png"
+PLOT_BPB_PHASE_MOVEMENT_WITH_REGMIX_PATH = (
+    SCRIPT_DIR / "two_phase_many_grp_power_family_penalty_raw_bpb_and_phase_movements_with_regmix.png"
+)
+PLOT_BPB_ONLY_WITH_REGMIX_PATH = SCRIPT_DIR / "two_phase_many_grp_power_family_penalty_raw_bpb_with_regmix.png"
+REGMIX_CURVE_POINTS_CSV = SCRIPT_DIR / "two_phase_many_regmix_raw_curve_points.csv"
 TWO_PHASE_MANY_ALL_CSV = SCRIPT_DIR / "two_phase_many_all_60m_1p2b.csv"
 
 VARIANT_NAME = "power_family_penalty"
@@ -91,6 +96,10 @@ BASELINE_BPB_LINE_SPECS = (
     ("baseline_stratified", "Uniform (stratified)", "#6C6F7D"),
 )
 PROPORTIONAL_BPB_LINE_SPEC = (BASELINE_BPB_LINE_SPECS[1],)
+REGMIX_VALIDATED_COLOR = "#7F3C8D"
+REGMIX_PREDICTED_COLOR = "#5B3F95"
+BPB_PANEL_TOP_WITH_REGMIX = 1.1
+BPB_PANEL_TOP_WITH_REGMIX_PREDICTED = 1.2
 
 
 def _format_bpb_label(value: float) -> str:
@@ -313,6 +322,7 @@ def _plot_bpb_panel(
     cmap,
     baseline_bpbs: dict[str, float] | None = None,
     baseline_line_specs: tuple[tuple[str, str, str], ...] = BASELINE_BPB_LINE_SPECS,
+    regmix_validated: pd.DataFrame | None = None,
 ) -> None:
     ax_bpb.plot(
         frame["subset_size"],
@@ -385,6 +395,17 @@ def _plot_bpb_panel(
                     "alpha": 0.85,
                 },
             )
+    if regmix_validated is not None and not regmix_validated.empty:
+        ax_bpb.plot(
+            regmix_validated["subset_size"],
+            regmix_validated["actual_validated_bpb"],
+            color=REGMIX_VALIDATED_COLOR,
+            marker="s",
+            markersize=6,
+            linewidth=1.8,
+            linestyle="-.",
+            label="RegMix validated BPB",
+        )
 
 
 def _plot(frame: pd.DataFrame) -> None:
@@ -500,6 +521,25 @@ def _phase_movement_frame(frame: pd.DataFrame) -> pd.DataFrame:
         )
         previous_weights = weights
     return pd.DataFrame(movements)
+
+
+def _regmix_validated_frame() -> pd.DataFrame:
+    frame = pd.read_csv(
+        REGMIX_CURVE_POINTS_CSV,
+        usecols=["subset_size", "actual_validated_bpb"],
+    )
+    return frame.loc[frame["actual_validated_bpb"].notna()].sort_values("subset_size").reset_index(drop=True)
+
+
+def _regmix_curve_frame() -> pd.DataFrame:
+    return (
+        pd.read_csv(
+            REGMIX_CURVE_POINTS_CSV,
+            usecols=["subset_size", "predicted_optimum_value", "actual_validated_bpb"],
+        )
+        .sort_values("subset_size")
+        .reset_index(drop=True)
+    )
 
 
 def _plot_bpb_and_tv(frame: pd.DataFrame) -> None:
@@ -674,6 +714,221 @@ def _plot_bpb_and_phase_movements(frame: pd.DataFrame) -> None:
     plt.close(fig)
 
 
+def _plot_bpb_and_phase_movements_with_regmix(frame: pd.DataFrame) -> None:
+    cmap = plt.colormaps["RdYlGn_r"]
+    movement_frame = _phase_movement_frame(frame)
+    baseline_bpbs = _baseline_bpbs()
+    regmix_validated = _regmix_validated_frame()
+    plot_frame = frame.copy()
+    off_chart_grp = plot_frame.loc[plot_frame["actual_validated_bpb"] > BPB_PANEL_TOP_WITH_REGMIX].copy()
+    if not off_chart_grp.empty:
+        plot_frame.loc[off_chart_grp.index, "actual_validated_bpb"] = np.nan
+    fig, (ax_bpb, ax_move) = plt.subplots(
+        2,
+        1,
+        figsize=(10.2, 7.5),
+        dpi=180,
+        sharex=True,
+        constrained_layout=True,
+        gridspec_kw={"height_ratios": [1.45, 1.15], "hspace": 0.08},
+    )
+    _plot_bpb_panel(
+        ax_bpb,
+        plot_frame,
+        cmap=cmap,
+        baseline_bpbs=baseline_bpbs,
+        baseline_line_specs=PROPORTIONAL_BPB_LINE_SPEC,
+        regmix_validated=regmix_validated,
+    )
+    ax_bpb.set_ylim(top=BPB_PANEL_TOP_WITH_REGMIX)
+    if not off_chart_grp.empty:
+        first_row = off_chart_grp.sort_values("subset_size").iloc[0]
+        ax_bpb.annotate(
+            f"{_format_bpb_label(float(first_row['actual_validated_bpb']))} (off chart)",
+            (float(first_row["subset_size"]), BPB_PANEL_TOP_WITH_REGMIX),
+            textcoords="offset points",
+            xytext=(0, 16),
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            color=cmap(0.88),
+            clip_on=False,
+            arrowprops={
+                "arrowstyle": "-|>",
+                "color": cmap(0.88),
+                "lw": 1.2,
+                "shrinkA": 0,
+                "shrinkB": 0,
+            },
+            bbox={
+                "boxstyle": "round,pad=0.18",
+                "facecolor": "white",
+                "edgecolor": "none",
+                "alpha": 0.9,
+            },
+        )
+    ax_move.plot(
+        movement_frame["subset_size"],
+        movement_frame["phase0_tv_vs_prev"],
+        color=cmap(0.24),
+        marker="o",
+        linewidth=2.2,
+        label=r"Phase 0 TV movement: $\frac{1}{2}\|w_0^{(k)} - w_0^{(k^-)}\|_1$",
+    )
+    ax_move.plot(
+        movement_frame["subset_size"],
+        movement_frame["phase1_tv_vs_prev"],
+        color=cmap(0.76),
+        marker="D",
+        linewidth=2.2,
+        label=r"Phase 1 TV movement: $\frac{1}{2}\|w_1^{(k)} - w_1^{(k^-)}\|_1$",
+    )
+    ax_move.axhline(0.0, color="0.55", linewidth=1.0, linestyle=":")
+
+    ax_bpb.set_title("Two-phase many-domain: GRP convergence (power-family penalty raw optimum)")
+    ax_bpb.set_ylabel("Predicted BPB")
+    ax_move.set_ylabel("Phase TV")
+    ax_move.set_xlabel("Observed runs used for fitting")
+    ax_move.set_xticks(movement_frame["subset_size"].tolist())
+    ax_move.set_xlim(int(movement_frame["subset_size"].min()), int(movement_frame["subset_size"].max()))
+    ax_move.margins(y=0.08)
+
+    ax_bpb.grid(True, alpha=0.25)
+    bpb_handles = ax_bpb.get_lines()
+    bpb_labels = [handle.get_label() for handle in bpb_handles if not handle.get_label().startswith("_")]
+    if bpb_handles:
+        ax_bpb.legend(bpb_handles, bpb_labels, loc="upper right", frameon=True, ncol=2)
+
+    proportional_bpb = baseline_bpbs["baseline_proportional"]
+    ax_bpb.annotate(
+        f"Proportional: {_format_bpb_label(proportional_bpb)}",
+        (int(frame["subset_size"].max()), proportional_bpb),
+        textcoords="offset points",
+        xytext=(-6, 8),
+        ha="right",
+        fontsize=8,
+        color="#4C78A8",
+        bbox={
+            "boxstyle": "round,pad=0.18",
+            "facecolor": "white",
+            "edgecolor": "none",
+            "alpha": 0.85,
+        },
+    )
+
+    ax_move.grid(True, alpha=0.25)
+    move_handles = ax_move.get_lines()
+    move_labels = [handle.get_label() for handle in move_handles if not handle.get_label().startswith("_")]
+    if move_handles:
+        ax_move.legend(
+            move_handles,
+            move_labels,
+            loc="upper right",
+            bbox_to_anchor=(0.995, 1.05),
+            ncol=1,
+            frameon=True,
+            alignment="right",
+        )
+
+    fig.savefig(PLOT_BPB_PHASE_MOVEMENT_WITH_REGMIX_PATH, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_bpb_with_regmix(frame: pd.DataFrame) -> None:
+    cmap = plt.colormaps["RdYlGn_r"]
+    baseline_bpbs = _baseline_bpbs()
+    regmix_frame = _regmix_curve_frame()
+    regmix_validated = regmix_frame.loc[regmix_frame["actual_validated_bpb"].notna()].copy()
+    plot_frame = frame.copy()
+    off_chart_grp = plot_frame.loc[plot_frame["actual_validated_bpb"] > BPB_PANEL_TOP_WITH_REGMIX_PREDICTED].copy()
+    if not off_chart_grp.empty:
+        plot_frame.loc[off_chart_grp.index, "actual_validated_bpb"] = np.nan
+
+    fig, ax_bpb = plt.subplots(
+        1,
+        1,
+        figsize=(10.2, 4.7),
+        dpi=180,
+        constrained_layout=True,
+    )
+    _plot_bpb_panel(
+        ax_bpb,
+        plot_frame,
+        cmap=cmap,
+        baseline_bpbs=baseline_bpbs,
+        baseline_line_specs=PROPORTIONAL_BPB_LINE_SPEC,
+        regmix_validated=regmix_validated,
+    )
+    ax_bpb.plot(
+        regmix_frame["subset_size"],
+        regmix_frame["predicted_optimum_value"],
+        color=REGMIX_PREDICTED_COLOR,
+        marker="^",
+        linewidth=2.0,
+        linestyle=":",
+        label="RegMix predicted BPB",
+    )
+    ax_bpb.set_ylim(top=BPB_PANEL_TOP_WITH_REGMIX_PREDICTED)
+    if not off_chart_grp.empty:
+        first_row = off_chart_grp.sort_values("subset_size").iloc[0]
+        ax_bpb.annotate(
+            f"{_format_bpb_label(float(first_row['actual_validated_bpb']))} (off chart)",
+            (float(first_row["subset_size"]), BPB_PANEL_TOP_WITH_REGMIX_PREDICTED),
+            textcoords="offset points",
+            xytext=(0, 16),
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            color=cmap(0.88),
+            clip_on=False,
+            arrowprops={
+                "arrowstyle": "-|>",
+                "color": cmap(0.88),
+                "lw": 1.2,
+                "shrinkA": 0,
+                "shrinkB": 0,
+            },
+            bbox={
+                "boxstyle": "round,pad=0.18",
+                "facecolor": "white",
+                "edgecolor": "none",
+                "alpha": 0.9,
+            },
+        )
+
+    ax_bpb.set_title("Two-phase many-domain: GRP convergence (power-family penalty raw optimum)")
+    ax_bpb.set_ylabel("Predicted BPB")
+    ax_bpb.set_xlabel("Observed runs used for fitting")
+    ax_bpb.set_xticks(frame["subset_size"].tolist())
+    ax_bpb.set_xlim(int(frame["subset_size"].min()), int(frame["subset_size"].max()))
+    ax_bpb.grid(True, alpha=0.25)
+
+    proportional_bpb = baseline_bpbs["baseline_proportional"]
+    ax_bpb.annotate(
+        f"Proportional: {_format_bpb_label(proportional_bpb)}",
+        (int(frame["subset_size"].max()), proportional_bpb),
+        textcoords="offset points",
+        xytext=(-6, 8),
+        ha="right",
+        fontsize=8,
+        color="#4C78A8",
+        bbox={
+            "boxstyle": "round,pad=0.18",
+            "facecolor": "white",
+            "edgecolor": "none",
+            "alpha": 0.85,
+        },
+    )
+
+    bpb_handles = ax_bpb.get_lines()
+    bpb_labels = [handle.get_label() for handle in bpb_handles if not handle.get_label().startswith("_")]
+    if bpb_handles:
+        ax_bpb.legend(bpb_handles, bpb_labels, loc="upper right", frameon=True, ncol=2)
+
+    fig.savefig(PLOT_BPB_ONLY_WITH_REGMIX_PATH, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -705,6 +960,8 @@ def main() -> None:
     _plot_bpb_and_tv(frame)
     _plot_phase_movements(frame)
     _plot_bpb_and_phase_movements(frame)
+    _plot_bpb_and_phase_movements_with_regmix(frame)
+    _plot_bpb_with_regmix(frame)
     SUMMARY_JSON.write_text(
         json.dumps(
             {
@@ -716,6 +973,8 @@ def main() -> None:
                 "plot_bpb_and_tv": str(PLOT_BPB_TV_PATH),
                 "plot_phase_movements": str(PLOT_PHASE_MOVEMENT_PATH),
                 "plot_bpb_and_phase_movements": str(PLOT_BPB_PHASE_MOVEMENT_PATH),
+                "plot_bpb_and_phase_movements_with_regmix": str(PLOT_BPB_PHASE_MOVEMENT_WITH_REGMIX_PATH),
+                "plot_bpb_with_regmix": str(PLOT_BPB_ONLY_WITH_REGMIX_PATH),
                 "best_observed_bpb": best_observed_bpb,
                 "rows": frame.replace({np.nan: None}).to_dict(orient="records"),
             },

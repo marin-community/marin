@@ -4,8 +4,10 @@
 import os
 
 from fsspec import AbstractFileSystem
+from huggingface_hub.errors import HfHubHTTPError
+import requests
 
-from levanter.compat.hf_checkpoints import _patch_hf_hub_download, load_tokenizer
+from levanter.compat.hf_checkpoints import _is_retryable_hf_exception, _patch_hf_hub_download, load_tokenizer
 from levanter.utils.hf_utils import byte_length_of_token
 from test_utils import skip_if_hf_model_not_accessible
 
@@ -39,6 +41,21 @@ def test_model_info_patch_for_fsspec_urls():
         result = huggingface_hub.hf_api.model_info("memory://some/path")
         assert result.id == "monkeypatched"
         assert result.tags is None
+
+
+def test_wrapped_hf_429_is_retryable():
+    response = requests.Response()
+    response.status_code = 429
+
+    try:
+        raise OSError("There was a specific connection error") from HfHubHTTPError(
+            "429 Client Error: Too Many Requests",
+            response=response,
+        )
+    except OSError as exc:
+        wrapped_error = exc
+
+    assert _is_retryable_hf_exception(wrapped_error)
 
 
 @skip_if_hf_model_not_accessible("NousResearch/Llama-2-7b-hf")

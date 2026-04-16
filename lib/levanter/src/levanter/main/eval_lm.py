@@ -17,7 +17,7 @@ from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
 from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, converter_from_hf_compat_config
 from levanter.data import DataLoader
 from levanter.data.text import LmDataConfig
 from levanter.eval import LossFnOutput, TaggedEvaluator, eval_model
@@ -135,8 +135,11 @@ def main(config: EvalLmConfig):
             model_config = config.model
             if not hasattr(model_config, "hf_checkpoint_converter"):
                 raise ValueError("Model config does not have an HF checkpoint converter. Can't load HF checkpoint.")
-            converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
-            converter = converter.replaced(reference_checkpoint=config.hf_checkpoint, tokenizer=tokenizer)
+            converter: HFCheckpointConverter = converter_from_hf_compat_config(
+                model_config,
+                tokenizer=tokenizer,
+                reference_checkpoint=config.hf_checkpoint,
+            )
             model = converter.load_pretrained(
                 model_config.model_type,
                 ref=config.hf_checkpoint,

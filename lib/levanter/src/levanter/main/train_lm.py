@@ -22,7 +22,12 @@ from levanter import callbacks
 from levanter.data import AsyncDataset
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config, save_hf_checkpoint_callback
+from levanter.compat.hf_checkpoints import (
+    HFCompatConfig,
+    build_generation_config,
+    converter_from_hf_compat_config,
+    save_hf_checkpoint_callback,
+)
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
@@ -104,14 +109,13 @@ def main(config: TrainLmConfig):
             raise ValueError("Cannot specify both initialize_from_hf and initialize_from")
 
         assert isinstance(config.model, HFCompatConfig)
-        converter = config.model.hf_checkpoint_converter()
+        converter = converter_from_hf_compat_config(
+            config.model,
+            tokenizer=tokenizer,
+            reference_checkpoint=config.initialize_from_hf if isinstance(config.initialize_from_hf, str) else None,
+        )
         if hasattr(tokenizer, "vocab") and tokenizer.vocab != converter.tokenizer.vocab:
             logger.warning("The tokenizers appear to be different. You may want to check this.")
-
-        if isinstance(config.initialize_from_hf, str):
-            converter = converter.replaced(reference_checkpoint=config.initialize_from_hf, tokenizer=tokenizer)
-        else:
-            converter = converter.replaced(tokenizer=tokenizer)
 
         if config.pad_tokenizer_to_match_model:
             converter = converter.with_tokenizer_padded_to_match_model()
@@ -121,8 +125,7 @@ def main(config: TrainLmConfig):
             # NB: gross mutability
             config.model = converter.config_from_hf_config(converter.default_hf_config)
     elif isinstance(config.model, HFCompatConfig):
-        converter = config.model.hf_checkpoint_converter()
-        converter = converter.replaced(tokenizer=tokenizer)
+        converter = converter_from_hf_compat_config(config.model, tokenizer=tokenizer)
         if config.pad_tokenizer_to_match_model:
             converter = converter.with_tokenizer_padded_to_match_model()
     else:

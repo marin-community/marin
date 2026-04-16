@@ -15,6 +15,7 @@ from functools import cache
 from typing import cast
 
 import fsspec
+from fsspec import AbstractFileSystem
 from fray.cluster import ResourceConfig
 from levanter.main.train_lm import LmConfig
 from levanter.optim import MuonHConfig
@@ -147,6 +148,19 @@ def _checkpoint_root_from_metadata_path(metadata_path: str) -> tuple[str, int] |
     return checkpoint_root, step
 
 
+def _checkpoint_path_from_metadata_path(metadata_path: str) -> tuple[str, int] | None:
+    match = CHECKPOINT_STEP_PATTERN.search(metadata_path)
+    if match is None:
+        return None
+    return metadata_path.removesuffix("/metadata.json"), int(match.group(1))
+
+
+def _is_committed_checkpoint_metadata(fs: AbstractFileSystem, metadata_path: str) -> bool:
+    with fs.open(metadata_path, "rb") as metadata_file:
+        metadata = json.load(metadata_file)
+    return not metadata.get("is_temporary", False)
+
+
 def normalize_tpu_regions(tpu_regions: str | Sequence[str]) -> tuple[str, ...]:
     """Normalize a region spec into a stable tuple without duplicates."""
     raw_regions: Sequence[str]
@@ -197,12 +211,43 @@ def resolve_latest_checkpoint_root(
         fs, _, _ = fsspec.get_fs_token_paths(pattern)
         for match in fs.glob(pattern):
             full_match = match if str(match).startswith("gs://") else f"gs://{match}"
+            if not _is_committed_checkpoint_metadata(fs, full_match):
+                continue
             resolved = _checkpoint_root_from_metadata_path(full_match)
             if resolved is None:
                 continue
             checkpoint_root, step = resolved
             if best_checkpoint is None or step > best_checkpoint[0]:
                 best_checkpoint = (step, checkpoint_root)
+
+    if best_checkpoint is None:
+        return None
+    return best_checkpoint[1]
+
+
+def resolve_latest_checkpoint_path(
+    *,
+    experiment_name_prefix: str,
+    run_name: str,
+    checkpoint_regions: str | Sequence[str] = DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
+) -> str | None:
+    """Resolve the highest-step concrete checkpoint directory for a run."""
+    best_checkpoint: tuple[int, str] | None = None
+    for region in normalize_tpu_regions(checkpoint_regions):
+        pattern = (
+            f"gs://marin-{region}/checkpoints/{experiment_name_prefix}/{run_name}-*/{CHECKPOINT_STEP_METADATA_GLOB}"
+        )
+        fs, _, _ = fsspec.get_fs_token_paths(pattern)
+        for match in fs.glob(pattern):
+            full_match = match if str(match).startswith("gs://") else f"gs://{match}"
+            if not _is_committed_checkpoint_metadata(fs, full_match):
+                continue
+            resolved = _checkpoint_path_from_metadata_path(full_match)
+            if resolved is None:
+                continue
+            checkpoint_path, step = resolved
+            if best_checkpoint is None or step > best_checkpoint[0]:
+                best_checkpoint = (step, checkpoint_path)
 
     if best_checkpoint is None:
         return None
@@ -492,13 +537,13 @@ def build_qsplit240_replay_launch_artifacts(
     for spec in run_specs:
         train_kwargs: dict[str, object] = {}
         if resume_latest_checkpoints:
-            latest_checkpoint_root = resolve_latest_checkpoint_root(
+            latest_checkpoint_path = resolve_latest_checkpoint_path(
                 experiment_name_prefix=name_prefix,
                 run_name=spec.run_name,
                 checkpoint_regions=tpu_regions,
             )
-            if latest_checkpoint_root is not None:
-                train_kwargs["initialize_from_checkpoint_path"] = mirror_path(latest_checkpoint_root)
+            if latest_checkpoint_path is not None:
+                train_kwargs["initialize_from_checkpoint_path"] = mirror_path(latest_checkpoint_path)
                 train_kwargs["reset_data_loader_on_init"] = False
         training_step = experiment.create_training_step(
             weight_config=WeightConfig(run_id=spec.run_id, phase_weights=spec.phase_weights),

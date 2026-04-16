@@ -20,6 +20,7 @@ import logging
 import math
 import os
 from dataclasses import replace
+from typing import Any
 
 from levanter.models.llama import LlamaConfig
 from levanter.models.olmo3 import Olmo3Config
@@ -29,15 +30,30 @@ from experiments.llama import llama3_tokenizer_vocab_size, llama_1_4b, llama_300
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
-from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger(__name__)
 
-AUTHOR = Author(
-    name="Calvin Xu",
-    affiliation="Stanford University",
-    url="https://github.com/calvinxu",
-)
+
+def _speedrun_author() -> Any:
+    from marin.speedrun.speedrun import Author
+
+    return Author(
+        name="Calvin Xu",
+        affiliation="Stanford University",
+        url="https://github.com/calvinxu",
+    )
+
+
+def _default_speedrun(name: str, config: Any) -> list[Any]:
+    from marin.speedrun.speedrun import default_speedrun
+
+    return default_speedrun(name, config)
+
+
+def _speedrun_config(**kwargs: Any) -> Any:
+    from marin.speedrun.speedrun import SpeedrunConfig
+
+    return SpeedrunConfig(**kwargs)
 
 
 # =============================================================================
@@ -322,7 +338,7 @@ def get_num_train_steps(total_tokens: int, batch_size: int, seq_len: int) -> int
     return total_tokens // tokens_per_step
 
 
-def build_olmo3_proxy_config() -> tuple[str, SpeedrunConfig]:
+def build_olmo3_proxy_config() -> tuple[str, Any]:
     """
     Build OLMo3 30M proxy configuration.
 
@@ -374,8 +390,8 @@ def build_olmo3_proxy_config() -> tuple[str, SpeedrunConfig]:
     logger.info(f"  Tokens to train: {total_tokens:,}")
     logger.info(f"  Training steps: {num_train_steps:,}")
 
-    config = SpeedrunConfig(
-        author=AUTHOR,
+    config = _speedrun_config(
+        author=_speedrun_author(),
         description="OLMo3 ~30M proxy model for swarm data mixing (3B tokens, 5x Chinchilla, MuonH)",
         model_config=model_config,
         train_config=train_config,
@@ -384,7 +400,7 @@ def build_olmo3_proxy_config() -> tuple[str, SpeedrunConfig]:
     return "olmo3_30m_proxy_3B_muonh_1", config
 
 
-def build_regmix_proxy_config() -> tuple[str, SpeedrunConfig]:
+def build_regmix_proxy_config() -> tuple[str, Any]:
     """
     Build RegMix 1M proxy configuration.
 
@@ -436,8 +452,8 @@ def build_regmix_proxy_config() -> tuple[str, SpeedrunConfig]:
     logger.info(f"  Tokens to train: {total_tokens:,}")
     logger.info(f"  Training steps: {num_train_steps:,}")
 
-    config = SpeedrunConfig(
-        author=AUTHOR,
+    config = _speedrun_config(
+        author=_speedrun_author(),
         description="RegMix ~1M non-embedding param proxy model (1B tokens, MuonH)",
         model_config=model_config,
         train_config=train_config,
@@ -446,7 +462,7 @@ def build_regmix_proxy_config() -> tuple[str, SpeedrunConfig]:
     return "regmix_1m_proxy_1B_muonh_1", config
 
 
-def build_regmix_60m_proxy_config() -> tuple[str, SpeedrunConfig]:
+def build_regmix_60m_proxy_config() -> tuple[str, Any]:
     """
     Build RegMix 60M proxy configuration.
 
@@ -498,8 +514,8 @@ def build_regmix_60m_proxy_config() -> tuple[str, SpeedrunConfig]:
     logger.info(f"  Tokens to train: {total_tokens:,}")
     logger.info(f"  Training steps: {num_train_steps:,}")
 
-    config = SpeedrunConfig(
-        author=AUTHOR,
+    config = _speedrun_config(
+        author=_speedrun_author(),
         description="RegMix ~60M non-embedding param proxy model (1B tokens, MuonH)",
         model_config=model_config,
         train_config=train_config,
@@ -521,7 +537,7 @@ BASE_LEARNING_RATE = 0.02
 BASE_ADAM_LR = 0.008
 
 
-def build_olmo3_proxy_batch_sweep(batch_size: int) -> tuple[str, SpeedrunConfig]:
+def build_olmo3_proxy_batch_sweep(batch_size: int) -> tuple[str, Any]:
     """
     Build OLMo3 30M proxy config with specified batch size.
 
@@ -576,8 +592,8 @@ def build_olmo3_proxy_batch_sweep(batch_size: int) -> tuple[str, SpeedrunConfig]
     logger.info(f"  Adam LR: {adam_lr:.4f}")
     logger.info(f"  Warmup steps: {warmup_steps}")
 
-    config = SpeedrunConfig(
-        author=AUTHOR,
+    config = _speedrun_config(
+        author=_speedrun_author(),
         description=f"OLMo3 ~30M proxy batch sweep (bs={batch_size}, lr={learning_rate:.4f})",
         model_config=model_config,
         train_config=train_config,
@@ -586,7 +602,7 @@ def build_olmo3_proxy_batch_sweep(batch_size: int) -> tuple[str, SpeedrunConfig]
     return f"olmo3_30m_proxy_bs{batch_size}", config
 
 
-def build_regmix_1m_batch_sweep(batch_size: int) -> tuple[str, SpeedrunConfig]:
+def build_regmix_1m_batch_sweep(batch_size: int) -> tuple[str, Any]:
     """
     Build RegMix 1M proxy config with specified batch size.
 
@@ -641,8 +657,8 @@ def build_regmix_1m_batch_sweep(batch_size: int) -> tuple[str, SpeedrunConfig]:
     logger.info(f"  Adam LR: {adam_lr:.4f}")
     logger.info(f"  Warmup steps: {warmup_steps}")
 
-    config = SpeedrunConfig(
-        author=AUTHOR,
+    config = _speedrun_config(
+        author=_speedrun_author(),
         description=f"RegMix ~1M proxy batch sweep (bs={batch_size}, lr={learning_rate:.4f})",
         model_config=model_config,
         train_config=train_config,
@@ -651,7 +667,7 @@ def build_regmix_1m_batch_sweep(batch_size: int) -> tuple[str, SpeedrunConfig]:
     return f"regmix_1m_proxy_bs{batch_size}", config
 
 
-def build_regmix_60m_batch_sweep(batch_size: int) -> tuple[str, SpeedrunConfig]:
+def build_regmix_60m_batch_sweep(batch_size: int) -> tuple[str, Any]:
     """
     Build RegMix 60M proxy config with specified batch size.
 
@@ -706,8 +722,8 @@ def build_regmix_60m_batch_sweep(batch_size: int) -> tuple[str, SpeedrunConfig]:
     logger.info(f"  Adam LR: {adam_lr:.4f}")
     logger.info(f"  Warmup steps: {warmup_steps}")
 
-    config = SpeedrunConfig(
-        author=AUTHOR,
+    config = _speedrun_config(
+        author=_speedrun_author(),
         description=f"RegMix ~60M proxy batch sweep (bs={batch_size}, lr={learning_rate:.4f})",
         model_config=model_config,
         train_config=train_config,
@@ -744,9 +760,9 @@ def main():
 
     # Create training steps
     steps = []
-    steps.extend(default_speedrun(olmo3_name, olmo3_config))
-    steps.extend(default_speedrun(regmix_1m_name, regmix_1m_config))
-    steps.extend(default_speedrun(regmix_60m_name, regmix_60m_config))
+    steps.extend(_default_speedrun(olmo3_name, olmo3_config))
+    steps.extend(_default_speedrun(regmix_1m_name, regmix_1m_config))
+    steps.extend(_default_speedrun(regmix_60m_name, regmix_60m_config))
 
     executor_main(steps=steps, description="Proxy model training runs for data mixture optimization (OLMo3 + RegMix)")
 
@@ -809,19 +825,19 @@ def main_batch_sweep():
     for bs in batch_sizes:
         name, config = build_olmo3_proxy_batch_sweep(bs)
         config.print_run_info()
-        steps.extend(default_speedrun(name, config))
+        steps.extend(_default_speedrun(name, config))
 
     # RegMix 1M sweep
     for bs in batch_sizes:
         name, config = build_regmix_1m_batch_sweep(bs)
         config.print_run_info()
-        steps.extend(default_speedrun(name, config))
+        steps.extend(_default_speedrun(name, config))
 
     # RegMix 60M sweep
     for bs in batch_sizes:
         name, config = build_regmix_60m_batch_sweep(bs)
         config.print_run_info()
-        steps.extend(default_speedrun(name, config))
+        steps.extend(_default_speedrun(name, config))
 
     executor_main(steps=steps, description="Proxy model batch size sweep (OLMo3 30M, RegMix 1M, RegMix 60M)")
 

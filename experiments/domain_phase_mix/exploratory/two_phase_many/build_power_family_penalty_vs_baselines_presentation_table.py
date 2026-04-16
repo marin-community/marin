@@ -38,7 +38,9 @@ DISPLAY_ROW_LABELS = {
 
 METRIC_DISPLAY_NAMES = {
     "eval/uncheatable_eval/bpb": "Uncheatable Eval",
+    "eval/uncheatable_eval/macro_bpb": "Uncheatable Eval Macro",
     "eval/paloma/bpb": "Paloma",
+    "eval/paloma/macro_bpb": "Paloma Macro",
     "lm_eval/piqa_5shot/bpb": "PIQA",
     "lm_eval/socialiqa_5shot/choice_logprob": "Social IQA CLP",
     "lm_eval/hellaswag_5shot/bpb": "HellaSwag",
@@ -61,7 +63,12 @@ METRIC_DISPLAY_NAMES = {
 
 LOWER_IS_BETTER_KINDS = {"bpb", "perplexity"}
 HIGHER_IS_BETTER_KINDS = {"acc", "acc_norm", "choice_logprob"}
-TOP_LEVEL_EVAL_METRICS = ["eval/uncheatable_eval/bpb", "eval/paloma/bpb"]
+TOP_LEVEL_EVAL_METRICS = [
+    "eval/uncheatable_eval/bpb",
+    "eval/paloma/bpb",
+    "eval/uncheatable_eval/macro_bpb",
+    "eval/paloma/macro_bpb",
+]
 TOKEN_DISPLAY_NAMES = {
     "ao3": "AO3",
     "bbc": "BBC",

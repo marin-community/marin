@@ -1,0 +1,34 @@
+{
+  "attempt_count": 24,
+  "live_jobs_by_state": {
+    "running": 13
+  },
+  "live_watch_count": 13,
+  "logical_run_count": 575,
+  "logical_runs_by_family": {
+    "grp_penalty_raw_optima_300m_6b": 3,
+    "grp_power_family_penalty_no_l2_subset_optima": 9,
+    "olmix_loglinear_subset_optima": 9,
+    "qsplit240_300m_6b": 240,
+    "regmix_raw_subset_optima": 9,
+    "run00097_300m_6b_fixed_subset": 10,
+    "stratified_300m_6b": 1,
+    "two_phase_many_60m_export": 294
+  },
+  "logical_runs_by_status": {
+    "completed": 554,
+    "planned": 6,
+    "running": 15
+  },
+  "qsplit240_300m_active_recovery_runs": [
+    "run_00119",
+    "run_00149",
+    "run_00209"
+  ],
+  "qsplit240_300m_incomplete_runs": [
+    "run_00119",
+    "run_00149",
+    "run_00209"
+  ],
+  "qsplit240_300m_unrecovered_missing_runs": []
+}

@@ -36,6 +36,9 @@ GENERICFAMILY_PENALTY_RAW_OPTIMA_SOURCE_EXPERIMENT = (
 BENCHMARK_BEST_CSV = (
     Path(__file__).resolve().parent / "exploratory" / "two_phase_many" / "grp_penalty_calibration_variants_best.csv"
 )
+NO_L2_RETUNE_BEST_CSV = (
+    Path(__file__).resolve().parent / "exploratory" / "two_phase_many" / "grp_power_family_penalty_no_l2_retune_best.csv"
+)
 _EMBEDDED_BEST_ROWS: dict[str, dict[str, str]] = {
     "power_family_penalty": {
         "variant": "power_family_penalty",
@@ -106,6 +109,28 @@ _EMBEDDED_BEST_ROWS: dict[str, dict[str, str]] = {
         "cv_rawopt_nearest_tv": "0.5207328687986771",
         "objective": "0.019182378205923722",
     },
+    "power_family_penalty_no_l2": {
+        "variant": "power_family_penalty_no_l2",
+        "stage": "refine",
+        "success": "True",
+        "message": "Optimization terminated successfully.",
+        "eta": "5.222440513840459",
+        "lam": "7.04928339546768e-06",
+        "reg": "0.0",
+        "beta": "0.1967681464478872",
+        "a_broad_text": "0.48485414608456984",
+        "a_tech_code": "0.04843166940506106",
+        "a_reasoning": "1.0344800333570379",
+        "tau_broad_text": "3.0915710553505598",
+        "tau_tech_code": "8.0",
+        "tau_reasoning": "4.860956465592155",
+        "cv_rmse": "0.00872034786579222",
+        "cv_foldmean_regret_at_1": "0.0020820379257202593",
+        "lower_tail_optimism": "0.002776860539141558",
+        "cv_depopt_best8": "0.05627328049308757",
+        "cv_rawopt_nearest_tv": "0.5528221602935263",
+        "objective": "0.021368429683893034",
+    },
 }
 
 
@@ -116,6 +141,7 @@ class GenericFamilyPenaltyRawOptimumVariantSpec:
     variant_name: str
     run_name: str
     run_id: int
+    surrogate_variant_name: str | None = None
 
 
 GENERICFAMILY_PENALTY_RAW_OPTIMUM_VARIANT_SPECS: tuple[GenericFamilyPenaltyRawOptimumVariantSpec, ...] = (
@@ -134,9 +160,17 @@ GENERICFAMILY_PENALTY_RAW_OPTIMUM_VARIANT_SPECS: tuple[GenericFamilyPenaltyRawOp
         run_name="baseline_genericfamily_power_boxcox_family_penalty_raw_optimum",
         run_id=414,
     ),
+    GenericFamilyPenaltyRawOptimumVariantSpec(
+        variant_name="power_family_penalty_no_l2",
+        run_name="baseline_genericfamily_power_family_penalty_no_l2_raw_optimum",
+        run_id=415,
+        surrogate_variant_name="power_family_penalty",
+    ),
 )
 GENERICFAMILY_PENALTY_RAW_OPTIMUM_DEFAULT_VARIANTS: tuple[str, ...] = tuple(
-    spec.variant_name for spec in GENERICFAMILY_PENALTY_RAW_OPTIMUM_VARIANT_SPECS
+    spec.variant_name
+    for spec in GENERICFAMILY_PENALTY_RAW_OPTIMUM_VARIANT_SPECS
+    if spec.variant_name != "power_family_penalty_no_l2"
 )
 _RAW_OPTIMUM_VARIANT_SPECS_BY_NAME = {
     spec.variant_name: spec for spec in GENERICFAMILY_PENALTY_RAW_OPTIMUM_VARIANT_SPECS
@@ -203,6 +237,9 @@ def _load_best_rows() -> dict[str, dict[str, str]]:
     if BENCHMARK_BEST_CSV.exists():
         with BENCHMARK_BEST_CSV.open() as handle:
             rows.update({row["variant"]: row for row in csv.DictReader(handle)})
+    if NO_L2_RETUNE_BEST_CSV.exists():
+        with NO_L2_RETUNE_BEST_CSV.open() as handle:
+            rows.update({row["variant"]: row for row in csv.DictReader(handle)})
     return rows
 
 
@@ -238,10 +275,11 @@ def genericfamily_penalty_raw_optimum_summary(
     row = _load_best_rows()[variant_name]
     packet = load_generic_family_packet(target=OBJECTIVE_METRIC)
     params = _extract_params(row)
+    surrogate_variant_name = spec.surrogate_variant_name or variant_name
     model = build_penalty_calibration_surrogate(
         packet,
         params=params,
-        variant_name=variant_name,
+        variant_name=surrogate_variant_name,
     ).fit(packet.base.w, packet.base.y)
     raw_result, phase0, phase1 = optimize_penalty_calibration_model(packet, model, seed=0)
     weights = np.stack([phase0, phase1], axis=0)

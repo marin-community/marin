@@ -678,6 +678,14 @@ def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
     return fsspec.open(url, mode, **kwargs)
 
 
+def resolve_mirror_url(url: str) -> str:
+    """Resolve a ``mirror://`` URL to a concrete local URL, copying on demand."""
+    fs, path = fsspec.core.url_to_fs(url)
+    if not isinstance(fs, MirrorFileSystem):
+        return url
+    return fs.resolve_url(path)
+
+
 def filesystem(protocol: str, **kwargs: Any) -> Any:
     """Like ``fsspec.filesystem`` but wraps GCS filesystems in a cross-region guard."""
     fs = fsspec.filesystem(protocol, **kwargs)
@@ -835,6 +843,10 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
 
         self._copy_to_local(source_prefix, path)
         return local_url
+
+    def resolve_url(self, path: str) -> str:
+        """Resolve a mirror path or URL to a concrete local URL."""
+        return self._resolve_path(self._strip_protocol(path))
 
     # -- fsspec interface: info/ls/exists -------------------------------------
 

@@ -33,7 +33,7 @@ from experiments.domain_phase_mix.qsplit240_replay import (
     DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
     mirror_path,
     normalize_tpu_regions,
-    resolve_latest_checkpoint_root,
+    resolve_latest_checkpoint_path,
     resolve_qsplit240_eval_cache_path_for_regions,
 )
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
@@ -154,13 +154,13 @@ def main() -> None:
 
     train_kwargs: dict[str, object] = {}
     if args.resume_latest_checkpoints:
-        latest_checkpoint_root = resolve_latest_checkpoint_root(
+        latest_checkpoint_path = resolve_latest_checkpoint_path(
             experiment_name_prefix=name_prefix,
             run_name=STRATIFIED_RUN_NAME,
             checkpoint_regions=tpu_regions,
         )
-        if latest_checkpoint_root is not None:
-            train_kwargs["initialize_from_checkpoint_path"] = mirror_path(latest_checkpoint_root)
+        if latest_checkpoint_path is not None:
+            train_kwargs["initialize_from_checkpoint_path"] = mirror_path(latest_checkpoint_path)
             train_kwargs["reset_data_loader_on_init"] = False
 
     experiment = create_two_phase_dolma3_dolmino_top_level_experiment(

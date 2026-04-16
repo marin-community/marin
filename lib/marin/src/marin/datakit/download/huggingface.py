@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 
 import huggingface_hub
 from fray.v2 import ResourceConfig
-from huggingface_hub import HfFileSystem
 from rigging.filesystem import open_url, url_to_fs
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version

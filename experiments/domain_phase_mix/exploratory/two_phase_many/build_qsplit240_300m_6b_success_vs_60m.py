@@ -17,7 +17,6 @@ import fsspec
 import pandas as pd
 from scipy import stats
 
-from experiments.domain_phase_mix.exploratory.two_phase_many.plot_run00125_vs_run00018_weights import RUN_NAMES
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import STRATIFIED_RUN_NAME
 from experiments.domain_phase_mix.two_phase_many_observed_runs import (
     CORE_BASELINE_RUN_NAMES,
@@ -30,8 +29,12 @@ OUTPUT_CSV = SCRIPT_DIR / "qsplit240_300m_6b_completed_vs_60m.csv"
 OUTPUT_SUMMARY_JSON = SCRIPT_DIR / "qsplit240_300m_6b_completed_vs_60m_summary.json"
 OBJECTIVE_METRIC = "eval/uncheatable_eval/bpb"
 QSPLIT240_300M_CHECKPOINT_PREFIX = "marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_qsplit240_300m_6b"
-STRATIFIED_60M_CHECKPOINT_PREFIX = "marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_stratified_60m_1p2b"
-STRATIFIED_300M_CHECKPOINT_PREFIX = "marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_stratified_300m_6b"
+STRATIFIED_60M_CHECKPOINT_PREFIX = (
+    "marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_stratified_60m_1p2b"
+)
+STRATIFIED_300M_CHECKPOINT_PREFIX = (
+    "marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_stratified_300m_6b"
+)
 CHECKPOINT_PREFIXES_300M_6B = (
     QSPLIT240_300M_CHECKPOINT_PREFIX,
     STRATIFIED_300M_CHECKPOINT_PREFIX,
@@ -167,7 +170,9 @@ def _summary(frame: pd.DataFrame) -> dict[str, object]:
 
     best_300m = frame.loc[frame["bpb_300m_6b"].idxmin()]
     best_60m = frame.loc[frame["bpb_60m"].idxmin()]
-    pending_run_names = [run_name for run_name in RUN_NAMES if run_name not in set(frame["run_name"])]
+    reference_run_names = {run.run_name for run in load_original_qsplit240_with_core_baselines()}
+    reference_run_names.add(STRATIFIED_RUN_NAME)
+    pending_run_names = sorted(reference_run_names - set(frame["run_name"]))
 
     return {
         "objective_metric": OBJECTIVE_METRIC,

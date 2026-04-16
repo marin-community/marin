@@ -11,6 +11,14 @@ from marin.execution.executor import InputName
 
 # Wandb project name for evaluations. Controlled via WANDB_PROJECT env var.
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
+_LEVANTER_TASK_KWARG_ALIASES = {
+    "doc_to_target": "doct_to_target",
+}
+_SUPPORTED_LEVANTER_TASK_KWARGS = frozenset(TaskConfig.__dataclass_fields__) - {
+    "task",
+    "task_alias",
+    "num_fewshot",
+}
 
 
 @dataclass(frozen=True)
@@ -118,6 +126,7 @@ class EvaluationConfig:
     This field is not read at runtime. It exists so Executor can see an
     `InputName` and block the evaluation step on a cache-population step.
     """
+
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
     """Convert Marin eval task configs into Levanter task configs."""

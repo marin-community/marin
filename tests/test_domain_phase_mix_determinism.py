@@ -3,6 +3,7 @@
 
 import json
 from dataclasses import replace
+from io import BytesIO
 from types import SimpleNamespace
 
 import numpy as np
@@ -31,6 +32,18 @@ from experiments.domain_phase_mix import (
 from experiments.domain_phase_mix import (
     launch_two_phase_many_genericfamily_no_penalty_baseline as genericfamily_no_penalty_launch,
     launch_two_phase_many_genericfamily_penalty_raw_optima_300m_6b as genericfamily_penalty_raw_optima_300m_launch,
+)
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_regmix_raw_subset_optima as regmix_raw_subset_optima_launch,
+)
+import experiments.domain_phase_mix.launch_two_phase_many_genericfamily_power_family_penalty_no_l2_raw_subset_optima as grp_no_l2_raw_subset_optima_launch  # noqa: E501
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_qsplit240_300m_6b_parity_rerun as qsplit240_300m_parity_rerun,
+    launch_two_phase_many_run_00097_300m_6b_parity_rerun as run00097_300m_parity_rerun,
+)
+
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_olmix_loglinear_subset_optima as olmix_loglinear_subset_optima_launch,
 )
 import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3 as qsplit240_seedpanel
 import experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline as stratified_baseline_launch
@@ -107,6 +120,9 @@ from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b import
     select_run_specs_for_shard,
     shard_execution_name_prefix,
 )
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b_parity_rerun import (
+    build_run_specs as build_qsplit240_300m_parity_rerun_specs,
+)
 from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot import (
     BATCH_SIZE as QSPLIT240_1_2B_BATCH_SIZE,
     DEFAULT_PANEL as QSPLIT240_1_2B_DEFAULT_PANEL,
@@ -158,6 +174,10 @@ from experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_fixed_
     MODEL_FAMILY as REGMIX300M_6B_MODEL_FAMILY,
     build_run_specs as build_regmix300m_6b_run_specs,
 )
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_parity_rerun import (
+    _eval_model_name as run00097_300m_parity_eval_model_name,
+    build_run_specs as build_run_00097_300m_parity_rerun_specs,
+)
 from experiments.domain_phase_mix.launch_two_phase_many_run_00097_mmlu_sl_verb_rerun import (
     build_run_specs as build_run_00097_mmlu_sl_verb_rerun_specs,
 )
@@ -197,6 +217,18 @@ from experiments.domain_phase_mix.two_phase_many_olmix_loglinear import (
     OLMIX_LOGLINEAR_PHASE_WEIGHTS,
     OLMIX_LOGLINEAR_RUN_NAME,
     OLMIX_LOGLINEAR_SOURCE_EXPERIMENT,
+)
+from experiments.domain_phase_mix.two_phase_many_regmix_raw_subset_optima import (
+    REGMIX_RAW_SUBSET_OPTIMA_SUBSET_SIZES,
+    regmix_raw_subset_optima_summaries,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_power_family_penalty_no_l2_raw_subset_optima import (
+    GENERICFAMILY_POWER_FAMILY_PENALTY_NO_L2_RAW_SUBSET_OPTIMA_SUBSET_SIZES,
+    genericfamily_power_family_penalty_no_l2_raw_subset_optima_summaries,
+)
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_subset_optima import (
+    OLMIX_LOGLINEAR_SUBSET_OPTIMA_SUBSET_SIZES,
+    olmix_loglinear_subset_optima_summaries,
 )
 from experiments.domain_phase_mix.two_phase_many_power_ridge_single import (
     POWER_RIDGE_SINGLE_OBJECTIVE_METRIC,
@@ -469,6 +501,33 @@ def test_run_00097_300m_6b_fixed_subset_study_builds_expected_manifest_and_weigh
     assert all(spec.phase_weights == RUN_00097_PHASE_WEIGHTS for spec in run_specs)
 
 
+def test_run_00097_300m_parity_rerun_builds_expected_manifest():
+    run_specs = build_run_00097_300m_parity_rerun_specs()
+
+    assert len(run_specs) == 10
+    assert [spec.run_id for spec in run_specs] == list(range(10))
+    assert {spec.cohort for spec in run_specs} == {"seed_sweep"}
+    assert [spec.trainer_seed for spec in run_specs] == list(range(SEED_SWEEP_START, SEED_SWEEP_START + 10))
+    assert all(spec.data_seed is None for spec in run_specs)
+    assert all(
+        spec.source_experiment == "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset"
+        for spec in run_specs
+    )
+    assert all(spec.checkpoint_root is None for spec in run_specs)
+    assert {spec.num_train_steps for spec in run_specs} == {22_888}
+
+
+def test_run_00097_300m_parity_rerun_namespaces_eval_model_names():
+    eval_model_name = run00097_300m_parity_eval_model_name(
+        name_prefix="pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_parity_rerun",
+        run_name="regmix300m_6b_trainer_seed_10000",
+    )
+
+    assert eval_model_name.startswith("pinlin_calvin_xu__data_mixture__ngd3dm2_run00097_300m_6b_parity_rerun__")
+    assert eval_model_name.endswith("regmix300m_6b_trainer_seed_10000")
+    assert eval_model_name != "regmix300m_6b_trainer_seed_10000"
+
+
 def test_run_00097_mmlu_sl_verb_rerun_builds_expected_manifest():
     run_specs = build_run_00097_mmlu_sl_verb_rerun_specs()
 
@@ -621,6 +680,44 @@ def test_qsplit240_300m_6b_builds_expected_manifest_and_weights():
     assert all(spec.phase_weights == observed_by_name[spec.run_name].phase_weights for spec in run_specs)
 
 
+def test_qsplit240_300m_parity_rerun_builds_expected_manifest():
+    run_specs = build_qsplit240_300m_parity_rerun_specs(panel="baselines3")
+
+    assert len(run_specs) == 3
+    assert [spec.run_name for spec in run_specs] == [
+        "baseline_proportional",
+        "baseline_unimax",
+        "baseline_olmix_loglinear_uncheatable_bpb",
+    ]
+    assert {spec.cohort for spec in run_specs} == {"original_swarm_300m_parity_rerun"}
+    assert {spec.source_experiment for spec in run_specs} == {qsplit240_300m.NAME}
+    assert {spec.num_train_steps for spec in run_specs} == {QSPLIT240_300M_6B_NUM_TRAIN_STEPS}
+    assert all(spec.checkpoint_root is None for spec in run_specs)
+
+
+def test_qsplit240_300m_parity_rerun_resolve_checkpoint_roots_skips_unfinished(monkeypatch):
+    run_specs = build_qsplit240_300m_parity_rerun_specs(panel="baselines3")
+
+    def fake_resolve_completed_checkpoint_root(*, run_name: str, **_: object) -> str | None:
+        if run_name == "baseline_unimax":
+            return None
+        return f"gs://unit-test/checkpoints/{run_name}"
+
+    monkeypatch.setattr(
+        qsplit240_300m_parity_rerun,
+        "resolve_completed_checkpoint_root",
+        fake_resolve_completed_checkpoint_root,
+    )
+
+    resolved = qsplit240_300m_parity_rerun.resolve_checkpoint_roots(run_specs, checkpoint_regions=("us-east5",))
+
+    assert [spec.run_name for spec in resolved] == [
+        "baseline_proportional",
+        "baseline_olmix_loglinear_uncheatable_bpb",
+    ]
+    assert all(spec.checkpoint_root is not None for spec in resolved)
+
+
 def test_genericfamily_penalty_raw_optimum_300m_builds_expected_manifest_and_weights():
     run_specs = genericfamily_penalty_raw_optima_300m_launch.build_run_specs(variants=("power_family_penalty",))
 
@@ -643,6 +740,50 @@ def test_genericfamily_penalty_raw_optimum_300m_builds_expected_manifest_and_wei
     )
     assert abs(sum(run_spec.phase_weights["phase_0"].values()) - 1.0) < 1e-12
     assert abs(sum(run_spec.phase_weights["phase_1"].values()) - 1.0) < 1e-12
+
+
+def test_regmix_raw_subset_optima_cover_full_convergence_schedule():
+    summaries = regmix_raw_subset_optima_summaries()
+
+    assert regmix_raw_subset_optima_launch.parse_subset_sizes("all") == REGMIX_RAW_SUBSET_OPTIMA_SUBSET_SIZES
+    assert tuple(summary.subset_size for summary in summaries) == REGMIX_RAW_SUBSET_OPTIMA_SUBSET_SIZES
+    assert summaries[0].run_id == 450
+    assert summaries[-1].run_id == 458
+    assert summaries[0].run_name == "baseline_regmix_raw_optimum_k020_uncheatable_bpb"
+    assert summaries[-1].run_name == "baseline_regmix_raw_optimum_k242_uncheatable_bpb"
+    assert all(abs(sum(summary.phase_weights["phase_0"].values()) - 1.0) < 1e-12 for summary in summaries)
+    assert all(abs(sum(summary.phase_weights["phase_1"].values()) - 1.0) < 1e-12 for summary in summaries)
+
+
+def test_grp_no_l2_raw_subset_optima_cover_full_convergence_schedule():
+    summaries = genericfamily_power_family_penalty_no_l2_raw_subset_optima_summaries()
+
+    assert (
+        grp_no_l2_raw_subset_optima_launch.parse_subset_sizes("all")
+        == GENERICFAMILY_POWER_FAMILY_PENALTY_NO_L2_RAW_SUBSET_OPTIMA_SUBSET_SIZES
+    )
+    assert tuple(summary.subset_size for summary in summaries) == (
+        GENERICFAMILY_POWER_FAMILY_PENALTY_NO_L2_RAW_SUBSET_OPTIMA_SUBSET_SIZES
+    )
+    assert summaries[0].run_id == 470
+    assert summaries[-1].run_id == 478
+    assert summaries[0].run_name == "baseline_genericfamily_power_family_penalty_no_l2_raw_optimum_k020_uncheatable_bpb"
+    assert summaries[-1].run_name == "baseline_genericfamily_power_family_penalty_no_l2_raw_optimum_k242_uncheatable_bpb"
+    assert all(abs(sum(summary.phase_weights["phase_0"].values()) - 1.0) < 1e-12 for summary in summaries)
+    assert all(abs(sum(summary.phase_weights["phase_1"].values()) - 1.0) < 1e-12 for summary in summaries)
+
+
+def test_olmix_loglinear_subset_optima_cover_full_convergence_schedule():
+    summaries = olmix_loglinear_subset_optima_summaries()
+
+    assert olmix_loglinear_subset_optima_launch.parse_subset_sizes("all") == OLMIX_LOGLINEAR_SUBSET_OPTIMA_SUBSET_SIZES
+    assert tuple(summary.subset_size for summary in summaries) == OLMIX_LOGLINEAR_SUBSET_OPTIMA_SUBSET_SIZES
+    assert summaries[0].run_id == 460
+    assert summaries[-1].run_id == 468
+    assert summaries[0].run_name == "baseline_olmix_loglinear_optimum_k020_uncheatable_bpb"
+    assert summaries[-1].run_name == "baseline_olmix_loglinear_optimum_k242_uncheatable_bpb"
+    assert all(abs(sum(summary.phase_weights["phase_0"].values()) - 1.0) < 1e-12 for summary in summaries)
+    assert all(abs(sum(summary.phase_weights["phase_1"].values()) - 1.0) < 1e-12 for summary in summaries)
 
 
 def test_load_original_qsplit240_named_panel_returns_expected_runs():
@@ -724,6 +865,64 @@ def test_qsplit240_300m_6b_training_step_blocks_on_eval_dataset_cache():
 
     deps = collect_dependencies_and_version(dependent_step.config)
     assert cache_step in deps.dependencies
+
+
+def test_qsplit240_300m_parity_rerun_main_wires_cache_and_max_concurrent(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(
+        qsplit240_300m_parity_rerun,
+        "resolve_checkpoint_roots",
+        lambda run_specs, checkpoint_regions=("us-east5",): [
+            replace(spec, checkpoint_root=f"gs://unit-test/checkpoints/{spec.run_name}") for spec in run_specs
+        ],
+    )
+    monkeypatch.setattr(
+        qsplit240_300m_parity_rerun,
+        "evaluate_levanter_lm_evaluation_harness",
+        lambda **kwargs: SimpleNamespace(name=kwargs["model_name"]),
+    )
+    monkeypatch.setattr(
+        qsplit240_300m_parity_rerun,
+        "output_path_of",
+        lambda step, filename=None: (
+            f"gs://unit-test/{step.name}" if filename is None else f"gs://unit-test/{step.name}/{filename}"
+        ),
+    )
+    monkeypatch.setattr(
+        qsplit240_300m_parity_rerun,
+        "create_run_manifest_step",
+        lambda **_: SimpleNamespace(name="run_manifest"),
+    )
+    monkeypatch.setattr(
+        qsplit240_300m_parity_rerun,
+        "create_cache_eval_datasets_step",
+        lambda **_: SimpleNamespace(name="cache_eval_datasets"),
+    )
+
+    def fake_executor_main(config=None, *, steps, description):
+        captured["config"] = config
+        captured["steps"] = steps
+        captured["description"] = description
+
+    monkeypatch.setattr(qsplit240_300m_parity_rerun, "executor_main", fake_executor_main)
+    monkeypatch.setattr(
+        qsplit240_300m_parity_rerun,
+        "build_run_specs",
+        lambda panel="all": build_qsplit240_300m_parity_rerun_specs(panel="baselines3"),
+    )
+    monkeypatch.setattr(
+        qsplit240_300m_parity_rerun.sys,
+        "argv",
+        ["launcher", "--panel", "baselines3", "--max-concurrent", "5", "--shard-count", "3", "--shard-index", "1"],
+    )
+
+    qsplit240_300m_parity_rerun.main()
+
+    assert captured["config"].max_concurrent == 5
+    assert len(captured["steps"]) == 4
+    assert "shard_02of03" in captured["description"]
 
 
 def test_qsplit240_520m_pilot_builds_expected_manifest_and_weights():
@@ -1885,6 +2084,9 @@ def test_resolve_latest_checkpoint_root_picks_highest_step_across_regions(monkey
                 ],
             }.get(pattern, [])
 
+        def open(self, path: str, mode: str = "rb") -> BytesIO:
+            return BytesIO(b'{"is_temporary": false}')
+
     monkeypatch.setattr(qsplit240_replay.fsspec, "get_fs_token_paths", lambda pattern: (FakeFs(), None, None))
 
     checkpoint_root = qsplit240_replay.resolve_latest_checkpoint_root(
@@ -1894,6 +2096,55 @@ def test_resolve_latest_checkpoint_root_picks_highest_step_across_regions(monkey
     )
 
     assert checkpoint_root == "gs://marin-us-central1/checkpoints/unit/prefix/run_00125-central"
+
+
+def test_resolve_latest_checkpoint_path_picks_concrete_step_across_regions(monkeypatch):
+    class FakeFs:
+        def glob(self, pattern: str) -> list[str]:
+            return {
+                "gs://marin-us-east5/checkpoints/unit/prefix/run_00125-*/checkpoints/step-*/metadata.json": [
+                    "marin-us-east5/checkpoints/unit/prefix/run_00125-east/checkpoints/step-4000/metadata.json",
+                ],
+                "gs://marin-us-central1/checkpoints/unit/prefix/run_00125-*/checkpoints/step-*/metadata.json": [
+                    "gs://marin-us-central1/checkpoints/unit/prefix/run_00125-central/checkpoints/step-6000/metadata.json",
+                ],
+            }.get(pattern, [])
+
+        def open(self, path: str, mode: str = "rb") -> BytesIO:
+            return BytesIO(b'{"is_temporary": false}')
+
+    monkeypatch.setattr(qsplit240_replay.fsspec, "get_fs_token_paths", lambda pattern: (FakeFs(), None, None))
+
+    checkpoint_path = qsplit240_replay.resolve_latest_checkpoint_path(
+        experiment_name_prefix="unit/prefix",
+        run_name="run_00125",
+        checkpoint_regions=("us-east5", "us-central1"),
+    )
+
+    assert checkpoint_path == "gs://marin-us-central1/checkpoints/unit/prefix/run_00125-central/checkpoints/step-6000"
+
+
+def test_resolve_latest_checkpoint_path_skips_temporary_metadata(monkeypatch):
+    class FakeFs:
+        def glob(self, pattern: str) -> list[str]:
+            return [
+                "gs://marin-us-east5/checkpoints/unit/prefix/run_00125-temp/checkpoints/step-8000/metadata.json",
+                "gs://marin-us-east5/checkpoints/unit/prefix/run_00125-committed/checkpoints/step-6000/metadata.json",
+            ]
+
+        def open(self, path: str, mode: str = "rb") -> BytesIO:
+            is_temporary = "temp" in path
+            return BytesIO(json.dumps({"is_temporary": is_temporary}).encode())
+
+    monkeypatch.setattr(qsplit240_replay.fsspec, "get_fs_token_paths", lambda pattern: (FakeFs(), None, None))
+
+    checkpoint_path = qsplit240_replay.resolve_latest_checkpoint_path(
+        experiment_name_prefix="unit/prefix",
+        run_name="run_00125",
+        checkpoint_regions=("us-east5",),
+    )
+
+    assert checkpoint_path == "gs://marin-us-east5/checkpoints/unit/prefix/run_00125-committed/checkpoints/step-6000"
 
 
 def test_mirror_path_rebases_marin_bucket_urls_to_bucket_relative_paths():
@@ -2095,6 +2346,64 @@ def test_run00097_olmo_base_easy_overlap_rerun_main_wires_cache_and_max_concurre
     assert len(captured["steps"]) == 9
     assert "run_00097 OLMoBaseEval-overlap rerun" in captured["description"]
     assert run00097_olmo_base_easy_overlap_rerun.DEFAULT_MAX_CONCURRENT == 10
+
+
+def test_run00097_300m_parity_rerun_main_wires_cache_and_max_concurrent(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(
+        run00097_300m_parity_rerun,
+        "resolve_checkpoint_roots",
+        lambda run_specs, checkpoint_regions=("us-east5",): [
+            replace(spec, checkpoint_root=f"gs://unit-test/checkpoints/{spec.run_name}") for spec in run_specs
+        ],
+    )
+    monkeypatch.setattr(
+        run00097_300m_parity_rerun,
+        "evaluate_levanter_lm_evaluation_harness",
+        lambda **kwargs: SimpleNamespace(name=kwargs["model_name"]),
+    )
+    monkeypatch.setattr(
+        run00097_300m_parity_rerun,
+        "output_path_of",
+        lambda step, filename=None: (
+            f"gs://unit-test/{step.name}" if filename is None else f"gs://unit-test/{step.name}/{filename}"
+        ),
+    )
+    monkeypatch.setattr(
+        run00097_300m_parity_rerun,
+        "create_run_manifest_step",
+        lambda **_: SimpleNamespace(name="run_manifest"),
+    )
+    monkeypatch.setattr(
+        run00097_300m_parity_rerun,
+        "create_cache_eval_datasets_step",
+        lambda **_: SimpleNamespace(name="cache_eval_datasets"),
+    )
+
+    def fake_executor_main(config=None, *, steps, description):
+        captured["config"] = config
+        captured["steps"] = steps
+        captured["description"] = description
+
+    monkeypatch.setattr(run00097_300m_parity_rerun, "executor_main", fake_executor_main)
+    monkeypatch.setattr(
+        run00097_300m_parity_rerun,
+        "build_run_specs",
+        lambda: build_run_00097_300m_parity_rerun_specs()[:6],
+    )
+    monkeypatch.setattr(
+        run00097_300m_parity_rerun.sys,
+        "argv",
+        ["launcher", "--max-concurrent", "4"],
+    )
+
+    run00097_300m_parity_rerun.main()
+
+    assert captured["config"].max_concurrent == 4
+    assert len(captured["steps"]) == 9
+    assert "run_00097 300M parity rerun" in captured["description"]
 
 
 def test_genericfamily_subset_optimum_run_name_formats_subset_size():

@@ -11,6 +11,7 @@ from rigging.filesystem import (
     TransferBudget,
     TransferBudgetExceeded,
     _mirror_remote_prefixes,
+    resolve_mirror_url,
 )
 
 
@@ -66,6 +67,16 @@ def test_read_copies_from_remote(mirror_fs, mirror_env):
     local_path = os.path.join(str(mirror_env["local_dir"]), "models/ckpt.bin")
     with open(local_path, "rb") as f:
         assert f.read() == b"remote-data"
+
+
+def test_resolve_url_copies_from_remote(mirror_fs, mirror_env):
+    _write_file(mirror_env["remote1"], "tokenized/cache/input_ids/offsets", b"offsets")
+
+    resolved = mirror_fs.resolve_url("mirror://tokenized/cache/input_ids/offsets")
+
+    assert resolved == os.path.join(str(mirror_env["local_dir"]), "tokenized/cache/input_ids/offsets")
+    with open(resolved, "rb") as f:
+        assert f.read() == b"offsets"
 
 
 def test_file_not_found_raises(mirror_fs):
@@ -236,3 +247,25 @@ def test_mirror_filesystem_init_skips_gcs_on_s3_prefix(monkeypatch):
     fs = MirrorFileSystem()
     assert fs._local_prefix == "s3://marin-na/marin"
     assert fs._remote_prefixes == []
+
+
+def test_resolve_mirror_url_uses_registered_filesystem(monkeypatch):
+    fs = MirrorFileSystem.__new__(MirrorFileSystem)
+    fsspec.AbstractFileSystem.__init__(fs)
+
+    def fake_resolve_url(path: str) -> str:
+        assert path == "tokenized/cache/input_ids/offsets"
+        return "gs://marin-us-east5/tokenized/cache/input_ids/offsets"
+
+    fs.resolve_url = fake_resolve_url  # type: ignore[method-assign]
+
+    monkeypatch.setattr(
+        fsspec.core,
+        "url_to_fs",
+        lambda url, **kwargs: (fs, "tokenized/cache/input_ids/offsets"),
+    )
+
+    assert (
+        resolve_mirror_url("mirror://tokenized/cache/input_ids/offsets")
+        == "gs://marin-us-east5/tokenized/cache/input_ids/offsets"
+    )

@@ -43,7 +43,7 @@ from haliax import NamedArray
 from jax.sharding import PartitionSpec
 
 import levanter.tracker
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, converter_from_hf_compat_config, load_tokenizer
 from levanter.data.packing import (
     PromptCompletion,
     greedy_pack_prompt_completions,
@@ -418,6 +418,16 @@ def get_padding_count_from_batch(batch: LmExample, pad_token_id: int) -> tuple[i
     return padding_count, total_tokens
 
 
+def _effective_pad_token_id(tokenizer: MarinTokenizer) -> int:
+    """Return a padding token ID without mutating the tokenizer."""
+    if tokenizer.pad_token_id is not None:
+        return tokenizer.pad_token_id
+    if tokenizer.eos_token_id is not None:
+        logger.warning("No pad token set. Using eos token as the effective pad token.")
+        return tokenizer.eos_token_id
+    raise ValueError("Tokenizer must define either pad_token_id or eos_token_id for lm-eval harness padding.")
+
+
 class LevanterHarnessLM(TemplateLM):
     """
     Levanter implementation of the LM Eval Harness TemplateLM interface.
@@ -589,9 +599,7 @@ class LevanterHarnessLM(TemplateLM):
         Downstream tasks should attempt to use loglikelihood instead of other
         LM calls whenever possible.
         """
-        if self.tokenizer.pad_token_id is None:
-            logger.warning("No pad token set. Setting to eos token.")
-            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        pad_token_id = _effective_pad_token_id(self.tokenizer)
 
         current_task = getattr(self, "_current_task", "loglikelihood_task")
         for request in requests:
@@ -607,7 +615,13 @@ class LevanterHarnessLM(TemplateLM):
                 }
             )
 
-        packed = _pack_requests(requests, self.tokenizer, self.EvalPos, self.leader.max_packed_segments)
+        packed = _pack_requests(
+            requests,
+            self.tokenizer,
+            self.EvalPos,
+            self.leader.max_packed_segments,
+            pad_token_id=pad_token_id,
+        )
         packed_iterator = stack_batches(iter(packed), self.EvalPos, self.EvalBatch)
         packed_iterator = BackgroundIterator(packed_iterator, max_capacity=1024)
 
@@ -630,7 +644,7 @@ class LevanterHarnessLM(TemplateLM):
                 batch, self.leader.max_packed_segments * self.EvalBatch.size
             )
 
-            padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
+            padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token_id)
             batch = jax.device_put(batch)
 
             batch = jax.device_put(batch)
@@ -773,9 +787,7 @@ class LevanterHarnessLM(TemplateLM):
         # Implement simple generation using InferenceEngine.
         # requests: list[Instance] where args[0] = prompt, args[1] may be stop strings (list[str])
         # kwargs may include max_gen_toks, temperature, n (n_generations), seed
-        if self.tokenizer.pad_token_id is None:
-            logger.warning("No pad token set. Setting to eos token.")
-            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        _effective_pad_token_id(self.tokenizer)
 
         # Require a model with paged decode support
         if not hasattr(self.leader.model, "initial_cache") or not hasattr(self.leader.model, "decode"):
@@ -1527,8 +1539,11 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
         # initialize the model
         if config.checkpoint_is_hf:
             model_config = config.model
-            converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
-            converter = converter.replaced(reference_checkpoint=config.checkpoint_path, tokenizer=tokenizer)
+            converter: HFCheckpointConverter = converter_from_hf_compat_config(
+                model_config,
+                tokenizer=tokenizer,
+                reference_checkpoint=config.checkpoint_path,
+            )
             model = converter.load_pretrained(
                 model_config.model_type,
                 ref=config.checkpoint_path,
@@ -1718,8 +1733,21 @@ def _adjust_config(task_dict, fewshot_random_seed=0):
     return adjusted_task_dict
 
 
+def _encode_batch_texts(tokenizer, texts: list[str]) -> list[list[int]]:
+    """Tokenize a batch of plain strings without adding special tokens.
+
+    Levanter's tokenizer wrapper exposes ``encode_batch`` directly, but some evaluation paths pass a plain
+    ``transformers.PreTrainedTokenizerFast`` instead. The HF tokenizer API supports batched calls via ``__call__``.
+    """
+    if hasattr(tokenizer, "encode_batch"):
+        return tokenizer.encode_batch(texts, add_special_tokens=False)
+
+    encodings = tokenizer(texts, add_special_tokens=False, truncation=False, padding=False)
+    return list(encodings["input_ids"])
+
+
 def _iterate_tokenized_requests(
-    requests: list[Instance], tokenizer: MarinTokenizer, max_length: int, batch_size: int
+    requests: list[Instance], tokenizer, max_length: int, batch_size: int
 ) -> Iterator[PromptCompletion]:
     """
     Tokenize the requests and yield them as PromptCompletions, for packing into LmExamples.
@@ -1737,8 +1765,8 @@ def _iterate_tokenized_requests(
         combined_batch = [combined_texts[i] for i in batch_indices]
         context_batch = [contexts[i] for i in batch_indices]
         # Tokenize batched inputs
-        combined_encodings = {"input_ids": tokenizer.encode_batch(combined_batch)}
-        context_encodings = {"input_ids": tokenizer.encode_batch(context_batch)}
+        combined_encodings = {"input_ids": _encode_batch_texts(tokenizer, combined_batch)}
+        context_encodings = {"input_ids": _encode_batch_texts(tokenizer, context_batch)}
 
         for off in range(len(batch_indices)):
             i = batch_indices[off]
@@ -1763,6 +1791,8 @@ def _pack_requests(
     tokenizer: MarinTokenizer,
     Pos: hax.Axis,
     max_pack_size: int,
+    *,
+    pad_token_id: int | None = None,
 ) -> list[LmExample]:
     packed_iterator = _iterate_tokenized_requests(requests, tokenizer, Pos.size, batch_size=128)
     # TODO: use a better packing algorithm?
@@ -1770,7 +1800,7 @@ def _pack_requests(
         Pos,
         packed_iterator,
         max_segments_per_example=max_pack_size,
-        pad_token=tokenizer.pad_token_id,
+        pad_token=_effective_pad_token_id(tokenizer) if pad_token_id is None else pad_token_id,
     )
 
 

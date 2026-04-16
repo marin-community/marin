@@ -16,7 +16,12 @@ from haliax.partitioning import round_axis_for_partitioning
 import levanter
 from levanter.callbacks import profile_ctx
 from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_tokenizer
+from levanter.compat.hf_checkpoints import (
+    HFCheckpointConverter,
+    RepoRef,
+    converter_from_hf_compat_config,
+    load_tokenizer,
+)
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.utils import INVALID
@@ -87,9 +92,10 @@ def _load_model(config: SampleLmConfig, Vocab: Axis, *, key) -> LmHeadModel:
         return model
     else:
         assert hasattr(config.model, "hf_checkpoint_converter"), "model config lacks HF loader"
-        converter: HFCheckpointConverter = config.model.hf_checkpoint_converter()
-        converter = converter.replaced(
-            reference_checkpoint=config.hf_checkpoint, tokenizer=load_tokenizer(config.tokenizer)
+        converter: HFCheckpointConverter = converter_from_hf_compat_config(
+            config.model,
+            tokenizer=load_tokenizer(config.tokenizer),
+            reference_checkpoint=config.hf_checkpoint,
         )
         model = converter.load_pretrained(
             config.model.model_type,

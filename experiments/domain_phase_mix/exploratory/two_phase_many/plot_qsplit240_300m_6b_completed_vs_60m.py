@@ -5,7 +5,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["matplotlib", "numpy", "pandas"]
 # ///
-"""Plot rank differences between completed 300M/6B runs and the 60M swarm."""
+"""Plot completed 300M/6B vs 60M rank differences."""
 
 from __future__ import annotations
 
@@ -27,57 +27,147 @@ ROOT = Path(__file__).resolve().parent
 INPUT_CSV = ROOT / "qsplit240_300m_6b_completed_vs_60m.csv"
 INPUT_SUMMARY_JSON = ROOT / "qsplit240_300m_6b_completed_vs_60m_summary.json"
 OUTPUT_PNG = ROOT / "qsplit240_300m_6b_completed_vs_60m_rank_shift.png"
+OUTPUT_SELECTED_CSV = ROOT / "qsplit240_300m_6b_completed_vs_60m_rank_shift_selected.csv"
 
-TOP_MOVER_COUNT = 8
-ANNOTATED_RUNS = {
-    "run_00018",
-    "run_00125",
-    "baseline_stratified",
-    "baseline_unimax",
-    "baseline_proportional",
+TOP_MIXTURE_COUNT = 8
+BASELINE_LABELS = {
+    "baseline_stratified": "Uniform",
+    "baseline_unimax": "UniMax",
+    "baseline_proportional": "Proportional",
 }
+PENDING_REFERENCE_ROWS = (
+    {
+        "run_name": "baseline_olmix_loglinear_uncheatable_bpb",
+        "label": "Olmix",
+        "bpb_60m": 1.068716,
+    },
+    {
+        "run_name": "baseline_genericfamily_power_family_penalty_raw_optimum",
+        "label": "GRP (Power-Family Penalty)",
+        "bpb_60m": 1.036191,
+    },
+)
+ANNOTATION_OFFSET_POINTS = (4, -4)
+POSITIVE_COLOR = "#1a9850"
+NEGATIVE_COLOR = "#d73027"
+NEUTRAL_COLOR = "#4d4d4d"
 
 
 def _display_label(run_name: str) -> str:
+    if run_name in BASELINE_LABELS:
+        return BASELINE_LABELS[run_name]
     if run_name.startswith("run_"):
         return run_name.replace("run_", "mix_", 1)
     return run_name
 
 
-def _selected_movers(frame: pd.DataFrame) -> pd.DataFrame:
-    upward = frame.nlargest(TOP_MOVER_COUNT, "rank_shift")
-    downward = frame.nsmallest(TOP_MOVER_COUNT, "rank_shift")
-    movers = (
-        pd.concat([upward, downward], ignore_index=True)
-        .drop_duplicates(subset=["run_name"])
-        .sort_values("rank_shift")
-        .reset_index(drop=True)
+def _selected_rows(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    baselines = frame[frame["run_name"].isin(BASELINE_LABELS)].copy()
+    mixtures = frame[frame["run_name"].str.startswith("run_")].copy()
+    mixtures = mixtures.sort_values("rank_60m_within_completed").head(TOP_MIXTURE_COUNT).copy()
+    selected = pd.concat([baselines, mixtures], ignore_index=True)
+    selected["label"] = selected["run_name"].map(_display_label)
+    selected["group"] = np.where(selected["run_name"].isin(BASELINE_LABELS), "Baseline", "Best 60M mixture")
+    selected = selected.sort_values(["group", "rank_60m_within_completed"]).reset_index(drop=True)
+
+    pending = pd.DataFrame(PENDING_REFERENCE_ROWS)
+    pending["rank_60m_if_included"] = pending["bpb_60m"].apply(lambda value: int((frame["bpb_60m"] < value).sum() + 1))
+    return selected, pending
+
+
+def _bar_colors(rank_shift: pd.Series) -> list[str]:
+    colors: list[str] = []
+    for value in rank_shift:
+        if value > 0:
+            colors.append(POSITIVE_COLOR)
+        elif value < 0:
+            colors.append(NEGATIVE_COLOR)
+        else:
+            colors.append(NEUTRAL_COLOR)
+    return colors
+
+
+def _plot_scatter(ax: plt.Axes, frame: pd.DataFrame, selected: pd.DataFrame) -> None:
+    cmap = plt.get_cmap("RdYlGn_r")
+    norm = Normalize(vmin=frame["bpb_300m_6b"].min(), vmax=frame["bpb_300m_6b"].max())
+    scatter = ax.scatter(
+        frame["rank_60m_within_completed"],
+        frame["rank_300m_6b"],
+        c=frame["bpb_300m_6b"],
+        cmap=cmap,
+        norm=norm,
+        s=44,
+        alpha=0.9,
+        edgecolors="none",
     )
-    return movers
+    max_rank = int(frame[["rank_60m_within_completed", "rank_300m_6b"]].to_numpy().max())
+    ax.plot([1, max_rank], [1, max_rank], linestyle="--", color="0.45", linewidth=1.2)
+    ax.set_xlim(0, max_rank + 3)
+    ax.set_ylim(max_rank + 3, 0)
+    ax.set_xlabel("60M rank within completed set")
+    ax.set_ylabel("300M/6B rank within completed set")
+    ax.set_title("Completed-mixture rank comparison")
+    ax.grid(alpha=0.18, linewidth=0.6)
 
-
-def _annotated_points(frame: pd.DataFrame) -> pd.DataFrame:
-    top_300m = frame.nsmallest(5, "rank_300m_6b")
-    top_60m = frame.nsmallest(5, "rank_60m_within_completed")
-    annotated = (
-        pd.concat(
-            [
-                frame[frame["run_name"].isin(ANNOTATED_RUNS)],
-                top_300m,
-                top_60m,
-            ],
-            ignore_index=True,
+    annotated = selected.sort_values(["rank_300m_6b", "rank_60m_within_completed"])
+    for _, row in annotated.iterrows():
+        ax.annotate(
+            row["label"],
+            (row["rank_60m_within_completed"], row["rank_300m_6b"]),
+            xytext=ANNOTATION_OFFSET_POINTS,
+            textcoords="offset points",
+            fontsize=8,
+            alpha=0.92,
         )
-        .drop_duplicates(subset=["run_name"])
-        .sort_values(["rank_300m_6b", "rank_60m_within_completed"])
-        .reset_index(drop=True)
+
+    cbar = plt.colorbar(scatter, ax=ax, fraction=0.046, pad=0.02)
+    cbar.set_label("300M/6B BPB")
+
+
+def _plot_selected_bars(ax: plt.Axes, selected: pd.DataFrame, pending: pd.DataFrame) -> None:
+    movers = selected.sort_values("rank_shift").reset_index(drop=True)
+    ax.barh(movers["label"], movers["rank_shift"], color=_bar_colors(movers["rank_shift"]), alpha=0.9)
+    ax.axvline(0, color="0.4", linewidth=1.0)
+    ax.set_xlabel("Rank shift = 60M rank - 300M/6B rank")
+    ax.set_title("Baselines + best 60M mixtures")
+    ax.grid(axis="x", alpha=0.18, linewidth=0.6)
+
+    xmax = max(abs(float(movers["rank_shift"].min())), abs(float(movers["rank_shift"].max())))
+    ax.set_xlim(-xmax - 6, xmax + 14)
+
+    for _, row in movers.iterrows():
+        x = float(row["rank_shift"])
+        alignment = "left" if x >= 0 else "right"
+        x_text = x + 1.0 if x >= 0 else x - 1.0
+        ax.text(
+            x_text,
+            row["label"],
+            f"{int(row['rank_300m_6b'])}",
+            va="center",
+            ha=alignment,
+            fontsize=8,
+            color="0.25",
+        )
+
+    pending_note = ", ".join(
+        f"{row['label']} (60M rank {int(row['rank_60m_if_included'])})" for _, row in pending.iterrows()
     )
-    return annotated
+    ax.text(
+        0.03,
+        0.03,
+        f"Pending 300M reruns: {pending_note}",
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=8.5,
+        bbox={"boxstyle": "round,pad=0.3", "facecolor": "white", "alpha": 0.9, "edgecolor": "0.8"},
+    )
 
 
 def main() -> None:
     frame = pd.read_csv(INPUT_CSV)
     summary = json.loads(INPUT_SUMMARY_JSON.read_text())
+    selected, pending = _selected_rows(frame)
 
     fig, (ax_scatter, ax_movers) = plt.subplots(
         1,
@@ -87,47 +177,8 @@ def main() -> None:
         constrained_layout=True,
     )
 
-    cmap = plt.get_cmap("RdYlGn_r")
-    bpb_norm = Normalize(vmin=frame["bpb_300m_6b"].min(), vmax=frame["bpb_300m_6b"].max())
-    scatter = ax_scatter.scatter(
-        frame["rank_60m_within_completed"],
-        frame["rank_300m_6b"],
-        c=frame["bpb_300m_6b"],
-        cmap=cmap,
-        norm=bpb_norm,
-        s=44,
-        alpha=0.9,
-        edgecolors="none",
-    )
-    max_rank = int(frame[["rank_60m_within_completed", "rank_300m_6b"]].to_numpy().max())
-    ax_scatter.plot([1, max_rank], [1, max_rank], linestyle="--", color="0.45", linewidth=1.2)
-    ax_scatter.set_xlim(0, max_rank + 3)
-    ax_scatter.set_ylim(max_rank + 3, 0)
-    ax_scatter.set_xlabel("60M rank within completed set")
-    ax_scatter.set_ylabel("300M/6B rank within completed set")
-    ax_scatter.set_title("Completed-mixture rank comparison")
-    ax_scatter.grid(alpha=0.18, linewidth=0.6)
-
-    for _, row in _annotated_points(frame).iterrows():
-        ax_scatter.annotate(
-            _display_label(str(row["run_name"])),
-            (row["rank_60m_within_completed"], row["rank_300m_6b"]),
-            xytext=(4, -4),
-            textcoords="offset points",
-            fontsize=8,
-            alpha=0.92,
-        )
-
-    cbar = fig.colorbar(scatter, ax=ax_scatter, fraction=0.046, pad=0.02)
-    cbar.set_label("300M/6B BPB")
-
-    movers = _selected_movers(frame)
-    mover_colors = np.where(movers["rank_shift"] >= 0, "#1a9850", "#d73027")
-    ax_movers.barh(movers["run_name"].map(lambda value: _display_label(str(value))), movers["rank_shift"], color=mover_colors, alpha=0.9)
-    ax_movers.axvline(0, color="0.4", linewidth=1.0)
-    ax_movers.set_xlabel("Rank shift = 60M rank - 300M/6B rank")
-    ax_movers.set_title("Largest movers")
-    ax_movers.grid(axis="x", alpha=0.18, linewidth=0.6)
+    _plot_scatter(ax_scatter, frame, selected)
+    _plot_selected_bars(ax_movers, selected, pending)
 
     fig.suptitle(
         (
@@ -137,9 +188,41 @@ def main() -> None:
         ),
         fontsize=13,
     )
-
     fig.savefig(OUTPUT_PNG, dpi=220, bbox_inches="tight")
+
+    pending_out = pending.assign(
+        group="Pending 300M rerun",
+        rank_300m_6b=np.nan,
+        rank_shift=np.nan,
+        bpb_300m_6b=np.nan,
+    )
+    selected_out = selected[
+        [
+            "run_name",
+            "label",
+            "group",
+            "bpb_60m",
+            "bpb_300m_6b",
+            "rank_60m_within_completed",
+            "rank_300m_6b",
+            "rank_shift",
+        ]
+    ].copy()
+    pending_out = pending_out[
+        [
+            "run_name",
+            "label",
+            "group",
+            "bpb_60m",
+            "bpb_300m_6b",
+            "rank_60m_if_included",
+            "rank_300m_6b",
+            "rank_shift",
+        ]
+    ].rename(columns={"rank_60m_if_included": "rank_60m_within_completed"})
+    pd.concat([selected_out, pending_out], ignore_index=True).to_csv(OUTPUT_SELECTED_CSV, index=False)
     print(f"Wrote {OUTPUT_PNG}")
+    print(f"Wrote {OUTPUT_SELECTED_CSV}")
 
 
 if __name__ == "__main__":

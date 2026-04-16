@@ -308,7 +308,6 @@ def _allowed_regions_for_step(
 
 def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
     from fray.v2.client import current_client
-    from fray.v2.iris_backend import FrayIrisClient
     from iris.rpc import config_pb2
 
     try:
@@ -543,7 +542,6 @@ def _component_tpu_pins(
 
 def _iris_backend_is_active() -> bool:
     from fray.v2.client import current_client
-    from fray.v2.iris_backend import FrayIrisClient
 
     try:
         client = current_client()

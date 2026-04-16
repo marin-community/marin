@@ -7,6 +7,8 @@
   "plot_bpb_and_tv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/two_phase_many_grp_power_family_penalty_raw_bpb_and_tv.png",
   "plot_phase_movements": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/two_phase_many_grp_power_family_penalty_raw_phase_movements.png",
   "plot_bpb_and_phase_movements": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/two_phase_many_grp_power_family_penalty_raw_bpb_and_phase_movements.png",
+  "plot_bpb_and_phase_movements_with_regmix": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/two_phase_many_grp_power_family_penalty_raw_bpb_and_phase_movements_with_regmix.png",
+  "plot_bpb_with_regmix": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/two_phase_many_grp_power_family_penalty_raw_bpb_with_regmix.png",
   "best_observed_bpb": 1.0571987628936768,
   "rows": [
     {

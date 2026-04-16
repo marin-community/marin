@@ -20,7 +20,6 @@ import pandas as pd
 from experiments.domain_phase_mix.mmlu_sl_verb_rerun_common import resolve_unique_checkpoint_root
 from experiments.defaults import _truncate_wandb_name
 from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
-from marin.speedrun.speedrun import get_step_times_from_wandb
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +62,12 @@ PRESERVED_MANIFEST_METADATA_KEYS = (
     "num_train_steps",
 )
 CHECKPOINT_EVAL_METRICS_PATH = "checkpoints/eval_metrics.jsonl"
+
+
+def _get_step_times_from_wandb(*, run_id: str, entity: str, project: str) -> list[float]:
+    from marin.speedrun.speedrun import get_step_times_from_wandb
+
+    return get_step_times_from_wandb(run_id=run_id, entity=entity, project=project)
 
 
 @dataclass(frozen=True)
@@ -753,7 +758,7 @@ def _fetch_active_compute_hours(
     wandb_entity: str,
     wandb_project: str,
 ) -> float:
-    return float(sum(get_step_times_from_wandb(run_id=run_id, entity=wandb_entity, project=wandb_project)) / 3600.0)
+    return float(sum(_get_step_times_from_wandb(run_id=run_id, entity=wandb_entity, project=wandb_project)) / 3600.0)
 
 
 def _active_compute_hours_summary(

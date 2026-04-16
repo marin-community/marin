@@ -16,7 +16,7 @@ from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
 from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, converter_from_hf_compat_config
 from levanter.data import DataLoader
 from levanter.data.text import LmDataConfig
 from levanter.models.llama import LlamaConfig
@@ -104,8 +104,11 @@ def main(config: VizLmConfig):
         # initialize the model
         if config.checkpoint_is_hf:
             model_config = config.model
-            converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
-            converter = converter.replaced(reference_checkpoint=config.checkpoint_path, tokenizer=tokenizer)
+            converter: HFCheckpointConverter = converter_from_hf_compat_config(
+                model_config,
+                tokenizer=tokenizer,
+                reference_checkpoint=config.checkpoint_path,
+            )
             model = converter.load_pretrained(
                 model_config.model_type,
                 ref=config.checkpoint_path,
@@ -123,8 +126,11 @@ def main(config: VizLmConfig):
         if config.comparison_model_path is not None:
             if config.comparison_is_hf:
                 model_config = config.model
-                converter = model_config.hf_checkpoint_converter()
-                converter = converter.replaced(reference_checkpoint=config.comparison_model_path, tokenizer=tokenizer)
+                converter = converter_from_hf_compat_config(
+                    model_config,
+                    tokenizer=tokenizer,
+                    reference_checkpoint=config.comparison_model_path,
+                )
                 comparison_model = converter.load_pretrained(
                     model_config.model_type,
                     ref=config.comparison_model_path,

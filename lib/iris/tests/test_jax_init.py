@@ -13,7 +13,7 @@ pytest.importorskip("jax")
 from iris.actor.resolver import ResolveResult, ResolvedEndpoint
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
-from iris.runtime.jax_init import _poll_for_coordinator, initialize_jax
+from iris.runtime.jax_init import _poll_for_coordinator, _scoped_endpoint_name, initialize_jax
 
 
 @dataclass
@@ -48,9 +48,9 @@ class FakeContext:
     resolver: FakeResolver = field(default_factory=FakeResolver)
 
 
-def _make_job_info(task_index: int = 0, num_tasks: int = 1) -> JobInfo:
+def _make_job_info(task_index: int = 0, num_tasks: int = 1, job_id: str = "/testuser/testjob") -> JobInfo:
     """Create a JobInfo with the given task_index and num_tasks."""
-    job_name = JobName.from_string(f"/testuser/testjob/{task_index}")
+    job_name = JobName.from_string(f"{job_id}/{task_index}")
     return JobInfo(
         task_id=job_name,
         num_tasks=num_tasks,
@@ -81,20 +81,31 @@ def test_initialize_jax_single_task(
 
 
 @pytest.mark.parametrize("env_key,env_val", [("PJRT_DEVICE", "TPU"), ("JAX_PLATFORMS", "tpu")])
+@patch("iris.runtime.jax_init.atexit")
 @patch("jax.distributed.initialize")
+@patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
-def test_initialize_jax_tpu_is_noop(
+def test_initialize_jax_tpu_uses_iris_coordinator(
     mock_get_job_info: MagicMock,
+    mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
+    mock_atexit: MagicMock,
     env_key: str,
     env_val: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """On TPU, initialize_jax is a no-op — TPU runtime handles distributed init."""
+    """TPU Iris jobs still initialize JAX distributed for async checkpointing."""
     monkeypatch.setenv(env_key, env_val)
+    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=2)
+    fake_ctx = FakeContext()
+    mock_iris_ctx.return_value = fake_ctx
+
     initialize_jax()
-    mock_jax_init.assert_not_called()
-    mock_get_job_info.assert_not_called()
+
+    endpoint_name = _scoped_endpoint_name(mock_get_job_info.return_value, "jax_coordinator")
+    assert fake_ctx.registry.registered == [(endpoint_name, "10.0.0.1:8476")]
+    mock_jax_init.assert_called_once_with("10.0.0.1:8476", 2, 0)
+    mock_atexit.register.assert_called_once_with(fake_ctx.registry.unregister, "endpoint-1")
 
 
 @patch("iris.runtime.jax_init.atexit")
@@ -133,7 +144,8 @@ def test_initialize_jax_task0_registers(
 
     initialize_jax(port=9999)
 
-    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:9999")]
+    endpoint_name = _scoped_endpoint_name(mock_get_job_info.return_value, "jax_coordinator")
+    assert fake_ctx.registry.registered == [(endpoint_name, "10.0.0.1:9999")]
     mock_jax_init.assert_called_once_with("10.0.0.1:9999", 4, 0)
     mock_atexit.register.assert_called_once_with(fake_ctx.registry.unregister, "endpoint-1")
 
@@ -157,8 +169,22 @@ def test_initialize_jax_task0_uses_iris_port(
 
     initialize_jax(port=9999)
 
-    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:12345")]
+    endpoint_name = _scoped_endpoint_name(info, "jax_coordinator")
+    assert fake_ctx.registry.registered == [(endpoint_name, "10.0.0.1:12345")]
     mock_jax_init.assert_called_once_with("10.0.0.1:12345", 2, 0)
+
+
+def test_scoped_endpoint_name_uses_child_job_id() -> None:
+    """Concurrent child jobs under the same root must not share JAX endpoints."""
+    first = _make_job_info(task_index=0, num_tasks=4, job_id="/testuser/root/child-a")
+    second = _make_job_info(task_index=0, num_tasks=4, job_id="/testuser/root/child-b")
+
+    first_endpoint = _scoped_endpoint_name(first, "jax_coordinator")
+    second_endpoint = _scoped_endpoint_name(second, "jax_coordinator")
+
+    assert first_endpoint.startswith("jax_coordinator_testuser-")
+    assert second_endpoint.startswith("jax_coordinator_testuser-")
+    assert first_endpoint != second_endpoint
 
 
 @patch("jax.distributed.initialize")

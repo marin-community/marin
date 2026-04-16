@@ -5,10 +5,6 @@ from collections.abc import Sequence
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
-_LEVANTER_TASK_KWARG_ALIASES = {
-    "doc_to_target": "doct_to_target",
-}
-_SUPPORTED_LEVANTER_TASK_KWARGS = frozenset(TaskConfig.__dataclass_fields__) - {"task", "task_alias", "num_fewshot"}
 MMLU_SL_VERB_DOC_TO_CHOICE = "{{['A. ' + choices[0], 'B. ' + choices[1], " "'C. ' + choices[2], 'D. ' + choices[3]]}}"
 
 # tasks to run (corresponding to lm_eval_harness tasks)
