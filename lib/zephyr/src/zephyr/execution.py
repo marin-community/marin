@@ -1163,7 +1163,13 @@ class ZephyrWorker:
             # Unpack task and config
             task, attempt, config = response
 
-            logger.info("[%s] Executing task for shard %d (attempt %d)", self._worker_id, task.shard_idx, attempt)
+            logger.info(
+                "[%s] Executing task for stage %s shard %d (attempt %d)",
+                self._worker_id,
+                task.stage_name,
+                task.shard_idx,
+                attempt,
+            )
             try:
                 t_0 = time.monotonic()
                 result, task_counters = self._execute_shard(task, config)
