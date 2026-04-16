@@ -83,11 +83,13 @@ BASE_GENERATION_PARAMS = {
 # A v6e-8 slice is one 8-chip host; tp=4 uses half of the available chips.
 # max_num_seqs: Batch size for parallel generation
 BATCH_SIZE = 256
-ENGINE_KWARGS = {
-    "tensor_parallel_size": 4,  # v6e-8 has 8 chips, but 4 is the largest tensor-parallel degree compatible with 28 heads
-    "max_num_seqs": BATCH_SIZE,  # For vLLM: Enable batched generation for better throughput
-    "batch_size": BATCH_SIZE,  # For lm-eval: Submit all requests at once for batched inference
+# vLLM server flags — go into ModelDeployment.engine_kwargs.
+DEPLOYMENT_KWARGS = {
+    "tensor_parallel_size": 4,  # v6e-8 has 8 chips, but 4 is the largest TP degree compatible with 28 heads
+    "max_num_seqs": BATCH_SIZE,
 }
+# lm-eval / evalchemy CLI batch size — separate from the vLLM server's max_num_seqs.
+BATCH_SIZE_ARG = str(BATCH_SIZE)
 
 # =============================================================================
 # Parallel Job Limit
@@ -108,7 +110,8 @@ if __name__ == "__main__":
         task_seed_groups=TASK_SEED_GROUPS,
         base_generation_params=BASE_GENERATION_PARAMS,
         resource_config=ResourceConfig.with_tpu("v6e-8"),
-        engine_kwargs=ENGINE_KWARGS,
+        deployment_kwargs=DEPLOYMENT_KWARGS,
+        batch_size=BATCH_SIZE_ARG,
         apply_chat_template=True,
         discover_latest_checkpoint=DISCOVER_LATEST_CHECKPOINT,
         max_parallel_jobs=MAX_PARALLEL_JOBS,
