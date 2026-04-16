@@ -26,7 +26,6 @@ from collections.abc import Sequence
 from iris.cluster.constraints import Constraint
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import (
-    CloudSliceState,
     QuotaExhaustedError,
     RemoteWorkerHandle,
     SliceHandle,
@@ -35,6 +34,7 @@ from iris.cluster.controller.autoscaler.models import (
     DemandEntry,
     ScalingAction,
     ScalingDecision,
+    SliceLifecycleState,
 )
 from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
 from iris.cluster.controller.autoscaler.planning import ScalePlan, build_scale_plan
@@ -47,6 +47,7 @@ from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build
 from iris.cluster.controller.autoscaler.slice_lifecycle import (
     SliceEvent,
     SliceSideEffectKind,
+    cloud_state_to_event,
 )
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
@@ -60,10 +61,6 @@ from rigging.timing import Duration, Timestamp
 logger = logging.getLogger(__name__)
 
 
-# Slices that die within this time of creation trigger backoff (preemption detection)
-SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
-
-# After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
 DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
 
 
@@ -429,64 +426,26 @@ class Autoscaler:
                     logger.warning("Failed to poll slice %s: %s", slice_id, e)
                     continue
 
-                if status.state == CloudSliceState.READY:
-                    worker_ids = [w.worker_id for w in status.workers]
-                    result = group.dispatch(
+                event = cloud_state_to_event(status.state, handle.created_at, timestamp, self._unresolvable_timeout)
+                if event is None:
+                    continue
+
+                worker_ids = [w.worker_id for w in status.workers]
+                result = group.dispatch(
+                    slice_id, event, {"worker_ids": worker_ids, "error_message": status.error_message}, now=timestamp
+                )
+                self._execute_side_effects(result.side_effects, group, slice_id, workers=status.workers)
+
+                if result.new_state == SliceLifecycleState.READY:
+                    self._log_action(
+                        "slice_ready",
+                        group.name,
                         slice_id,
-                        SliceEvent.CLOUD_STATE_READY,
-                        {"worker_ids": worker_ids},
-                        now=timestamp,
+                        reason=f"bootstrap completed ({len(worker_ids)} workers)",
                     )
-                    if result:
-                        self._execute_side_effects(result.side_effects, group, slice_id, workers=status.workers)
-                        self._log_action(
-                            "slice_ready",
-                            group.name,
-                            slice_id,
-                            reason=f"bootstrap completed ({len(worker_ids)} workers)",
-                        )
-                elif status.state == CloudSliceState.FAILED:
-                    result = group.dispatch(
-                        slice_id,
-                        SliceEvent.CLOUD_STATE_FAILED,
-                        {"error_message": status.error_message},
-                        now=timestamp,
-                    )
-                    if result:
-                        self._execute_side_effects(result.side_effects, group, slice_id)
-                        reason = status.error_message if status.error_message else "bootstrap failed"
-                        self._log_action(
-                            "slice_failed",
-                            group.name,
-                            slice_id,
-                            reason=reason,
-                            status="failed",
-                        )
-                elif status.state == CloudSliceState.UNKNOWN:
-                    age = Duration.from_ms(timestamp.epoch_ms() - handle.created_at.epoch_ms())
-                    if age >= self._unresolvable_timeout:
-                        result = group.dispatch(
-                            slice_id,
-                            SliceEvent.CLOUD_STATE_UNKNOWN_TIMEOUT,
-                            {"error_message": f"TPU unresolvable for {age}"},
-                            now=timestamp,
-                        )
-                        if result:
-                            self._execute_side_effects(result.side_effects, group, slice_id)
-                            self._log_action(
-                                "slice_failed",
-                                group.name,
-                                slice_id,
-                                reason=f"TPU unresolvable for {age}",
-                                status="failed",
-                            )
-                    else:
-                        logger.debug(
-                            "Slice %s UNKNOWN (age %s < timeout %s); will retry",
-                            slice_id,
-                            age,
-                            self._unresolvable_timeout,
-                        )
+                elif result.new_state == SliceLifecycleState.FAILED:
+                    reason = status.error_message or f"slice failed (event={event})"
+                    self._log_action("slice_failed", group.name, slice_id, reason=reason, status="failed")
 
         for group in self._groups.values():
             target_capacity = min(group.current_demand + group.buffer_slices, group.max_slices)
@@ -686,30 +645,12 @@ class Autoscaler:
                 reason=f"workers failed: {', '.join(failed_workers)}",
             )
 
-            # Compute short-lived status for backoff tracking
-            slice_handle = group.get_slice(slice_id)
-            is_short_lived = False
-            age_ms = 0
-            if slice_handle is not None:
-                age_ms = timestamp.epoch_ms() - slice_handle.created_at.epoch_ms()
-                is_short_lived = Duration.from_ms(age_ms) < SHORT_LIVED_SLICE_THRESHOLD
-
             result = group.dispatch(
-                slice_id,
-                SliceEvent.WORKER_FAILURE_REPORTED,
-                {"failed_workers": failed_workers, "is_short_lived": is_short_lived},
-                now=timestamp,
+                slice_id, SliceEvent.WORKER_FAILURE_REPORTED, {"failed_workers": failed_workers}, now=timestamp
             )
-            if result:
-                self._execute_side_effects(result.side_effects, group, slice_id, timestamp=timestamp)
-                if is_short_lived:
-                    self._log_action(
-                        "backoff_triggered",
-                        group.name,
-                        slice_id=slice_id,
-                        reason=f"short-lived slice (age={age_ms}ms)",
-                    )
-            else:
+            self._execute_side_effects(result.side_effects, group, slice_id, timestamp=timestamp)
+
+            if not result.applied:
                 # Slice not tracked by state machine (already removed); clean up directly
                 handle = group.detach_slice(slice_id)
                 self._unregister_slice_workers(slice_id, worker_ids=slice_worker_ids)
