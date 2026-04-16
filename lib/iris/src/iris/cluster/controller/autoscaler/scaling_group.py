@@ -866,17 +866,21 @@ class ScalingGroup:
         worker_status_map: WorkerStatusMap,
         target_capacity: int,
         timestamp: Timestamp,
-    ) -> list[SliceHandle]:
+    ) -> list[TransitionResult]:
         """Scale down idle slices that exceed target capacity.
 
+        Dispatches IDLE_TIMEOUT through the state machine for each eligible
+        slice so that all slice teardowns go through the same path. Returns
+        the list of applied TransitionResults so the caller can execute
+        side-effect work (unregister workers, async terminate the handle).
+
         Terminates multiple idle slices in a single call, rate-limited by a
-        token bucket (matching the scale-up rate limiter).  This replaces the
-        old behaviour of terminating at most one slice per 5-minute cooldown.
+        token bucket.
 
         Steps:
         1. Update slice activity based on worker idle status
         2. Check if we're over target capacity (using ready + pending)
-        3. Find eligible idle slices and terminate them (up to the token budget)
+        3. Find eligible idle slices and dispatch IDLE_TIMEOUT (up to the token budget)
 
         Args:
             worker_status_map: Map of worker_id to worker status
@@ -884,9 +888,8 @@ class ScalingGroup:
             timestamp: Current timestamp for idle calculation
 
         Returns:
-            List of terminated slice handles (may be empty).
+            List of applied TransitionResults for terminated slices.
         """
-        # Update activity tracking
         self.update_slice_activity(worker_status_map, timestamp)
 
         # Use ready + pending for capacity check to prevent churn during boot
@@ -894,21 +897,15 @@ class ScalingGroup:
         ready = counts[SliceLifecycleState.READY]
         pending = counts[SliceLifecycleState.BOOTING] + counts[SliceLifecycleState.INITIALIZING]
 
-        # Don't scale down if total capacity (ready + pending) is at or below target
         if ready + pending <= target_capacity:
             return []
-
-        # Don't scale down ready slices if we're still waiting for pending
         if ready <= target_capacity:
             return []
 
-        terminated: list[SliceHandle] = []
-
-        # Find idle slices and verify they're still idle before termination
+        results: list[TransitionResult] = []
         idle_slices = self.get_idle_slices(timestamp)
         for slice_state in idle_slices:
-            # Stop once we've scaled down to the target
-            if ready - len(terminated) <= target_capacity:
+            if ready - len(results) <= target_capacity:
                 break
 
             # Verify idle before acquiring a rate-limit token so that
@@ -917,18 +914,15 @@ class ScalingGroup:
                 continue
 
             if not self.acquire_scale_down_token(timestamp):
-                if terminated:
+                if results:
                     logger.info(
                         "Scale group %s: scale down rate-limited after %d terminations",
                         self.name,
-                        len(terminated),
+                        len(results),
                     )
                 break
 
-            with self._slices_lock:
-                state = self._slices.get(slice_state.handle.slice_id)
-            last_active = state.last_active if state else Timestamp.from_ms(0)
-            never_active = last_active.epoch_ms() == 0
+            last_active = slice_state.last_active
             idle_duration = Duration.from_ms(timestamp.epoch_ms() - last_active.epoch_ms())
             logger.info(
                 "Scale group %s: scaling down slice %s "
@@ -936,16 +930,17 @@ class ScalingGroup:
                 self.name,
                 slice_state.handle.slice_id,
                 idle_duration.to_ms(),
-                never_active,
+                last_active.epoch_ms() == 0,
                 ready,
                 self.num_vms,
                 pending,
                 target_capacity,
             )
-            self.scale_down(slice_state.handle.slice_id, timestamp)
-            terminated.append(slice_state.handle)
+            result = self.dispatch(slice_state.handle.slice_id, SliceEvent.IDLE_TIMEOUT, now=timestamp)
+            if result.applied:
+                results.append(result)
 
-        return terminated
+        return results
 
     def _verify_slice_idle(self, state: SliceState, worker_status_map: WorkerStatusMap) -> bool:
         """Verify all workers in a slice are idle before termination.
