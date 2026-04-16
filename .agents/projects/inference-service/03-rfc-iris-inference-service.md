@@ -1,5 +1,8 @@
 # RFC 3: Iris Inference Service
 
+> [!WARNING]
+> 🚧 WIP: this RFC is not ready for review yet. 🚧
+
 This RFC assumes:
 - eval clients already target the contract in [`01-rfc-evals-over-openai-http.md`](./01-rfc-evals-over-openai-http.md)
 - engines already satisfy that contract, with Levanter-specific work tracked in [`02-rfc-levanter-http-parity.md`](./02-rfc-levanter-http-parity.md)
