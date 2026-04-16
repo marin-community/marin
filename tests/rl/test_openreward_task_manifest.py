@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from marin.rl.openreward import (
+from marin.rl.integrations.openreward import (
     OpenRewardPromptBlockType,
     build_openreward_task_manifest,
     load_openreward_task_manifest,
@@ -178,7 +178,7 @@ def test_prepare_openreward_task_manifest_uses_client_factory(monkeypatch):
             del exc_type, exc, traceback
 
     monkeypatch.setattr(
-        "marin.rl.openreward.task_manifest.load_openreward_client",
+        "marin.rl.integrations.openreward.manifest.load_openreward_client",
         lambda: FakeOpenReward,
     )
 

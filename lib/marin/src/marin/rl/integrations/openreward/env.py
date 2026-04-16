@@ -12,13 +12,13 @@ import numpy as np
 
 from marin.rl.environments.base import MarinEnv, extract_seed
 from marin.rl.environments.inference_ctx import BaseInferenceContext, ToolSpec
-from marin.rl.openreward import (
+from marin.rl.integrations.openreward.client import load_openreward_client
+from marin.rl.integrations.openreward.manifest import load_openreward_task_manifest
+from marin.rl.integrations.openreward.models import (
     OpenRewardPromptBlockType,
     OpenRewardTaskManifest,
     OpenRewardTaskManifestEntry,
     OpenRewardToolSpec,
-    load_openreward_client,
-    load_openreward_task_manifest,
 )
 from marin.rl.types import RolloutGroup
 from marin.training.run_environment import resolve_required_env_vars
