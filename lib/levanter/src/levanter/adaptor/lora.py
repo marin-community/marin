@@ -48,6 +48,7 @@ import json
 import logging
 import os
 import re
+import urllib.parse
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Literal, Optional, Tuple, TypeVar, Union
 
@@ -497,7 +498,8 @@ def save_peft_pretrained(
             as a repo name + branch
         upload_kwargs: kwargs to pass to the upload function
     """
-    os.makedirs(path, exist_ok=True)
+    if urllib.parse.urlparse(path).scheme == "":
+        os.makedirs(path, exist_ok=True)
     base_ref = str(base_model_name_or_path) if base_model_name_or_path is not None else None
     if prefix is None:
         prefix = _default_peft_state_dict_prefix(lora_model)
