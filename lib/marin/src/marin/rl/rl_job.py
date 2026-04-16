@@ -14,9 +14,9 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, cast
 
-from fray.v2 import JobHandle
+from fray.v2 import JobHandle, ResourceConfig
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.lm_model import LmConfig
@@ -41,37 +41,25 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RunConfig:
-    """Configuration for deploying RL workers on TPU pods."""
+    """Configuration for deploying RL workers."""
 
-    train_tpu_type: str
-    """TPU type for training workers (e.g., 'v5litepod-4')"""
+    train_resources: ResourceConfig
+    """Resource request for the trainer worker job."""
+
+    rollout_resources: ResourceConfig
+    """Resource request shared by rollout worker jobs."""
 
     num_rollout_workers: int = 4
     """Number of rollout workers to launch"""
-
-    inference_tpu_type: str | None = None
-    """TPU type for inference workers. Defaults to train_tpu_type if not specified."""
-
-    num_train_slices: int = 1
-    """Number of TPU slices for training worker"""
-
-    train_ram: str | None = None
-    """Optional host-RAM request override for training workers (e.g. ``"300g"``)."""
-
-    inference_ram: str | None = None
-    """Optional host-RAM request override for rollout/inference workers."""
-
-    regions: list[str] | None = None
-    """Concrete region(s) to use for all RL worker jobs."""
-
-    zone: str | None = None
-    """Concrete zone to use for all RL worker jobs."""
-
     max_retries_failure: int = 3
     """Maximum retries on worker failure (task code crashes, OOM, etc.)"""
 
     max_retries_preemption: int = 100
-    """Maximum retries on preemption (spot TPU lost, worker node died)"""
+    """Maximum retries on preemption (spot worker lost, worker node died)"""
+
+    def __post_init__(self) -> None:
+        if self.num_rollout_workers <= 0:
+            raise ValueError("num_rollout_workers must be positive")
 
 
 @dataclass
@@ -95,6 +83,21 @@ def make_tokenizer(tokenizer: str | MarinTokenizer) -> MarinTokenizer:
     if isinstance(tokenizer, str):
         return load_tokenizer(tokenizer)
     return tokenizer
+
+
+def _align_vllm_device_kind(
+    inference_config: vLLMInferenceContextConfig,
+    run_config: RunConfig | None,
+) -> vLLMInferenceContextConfig:
+    if run_config is None:
+        return inference_config
+
+    rollout_device_kind = run_config.rollout_resources.device.kind
+    if rollout_device_kind not in {"gpu", "tpu"}:
+        raise ValueError("vLLM inference requires rollout_resources with GPU or TPU accelerators")
+    if inference_config.device_kind == rollout_device_kind:
+        return inference_config
+    return dataclasses.replace(inference_config, device_kind=cast(Literal["gpu", "tpu"], rollout_device_kind))
 
 
 @dataclass
@@ -129,7 +132,7 @@ class RLJobConfig:
 
     # Deployment configuration
     run_config: RunConfig | None = None
-    """Configuration for TPU pod deployment."""
+    """Configuration for worker deployment."""
 
     # Inference server (auto-configured by default)
     inference_config: InferenceServerConfig | vLLMInferenceContextConfig | None = None
@@ -278,6 +281,8 @@ class RLJob:
         else:
             assert self.config.inference_config is not None, "Inference config must be provided for vllm inference"
             inference_config = self.config.inference_config
+            if self.config.inference_type == "vllm" and isinstance(inference_config, vLLMInferenceContextConfig):
+                inference_config = _align_vllm_device_kind(inference_config, self.config.run_config)
 
         # Create train worker config
         train_worker_config = TrainWorkerConfig(

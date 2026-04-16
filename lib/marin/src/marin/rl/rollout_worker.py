@@ -20,7 +20,7 @@ import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, cast
 
 import equinox as eqx
 import haliax as hax
@@ -31,10 +31,9 @@ import wandb
 from jax.experimental import multihost_utils
 from levanter.inference.openai import InferenceServer
 from levanter.models.lm_model import LmConfig
+from levanter.tokenizers import MarinTokenizer
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import barrier_sync
-from levanter.tokenizers import MarinTokenizer
-from typing import Literal
 
 from levanter.utils.mesh import MeshConfig
 from marin.rl.curriculum import CurriculumConfig
@@ -354,6 +353,9 @@ def create_inference_context(
             inference_config=inference_config,
         )
     elif inference_type == "vllm" and inflight_weight_updates:
+        inference_config = cast(vLLMInferenceContextConfig, inference_config)
+        if inference_config.device_kind == "gpu":
+            raise ValueError("GPU vLLM rollout inference does not yet support inflight_weight_updates")
         inference_config = prepare_vllm_inference_config_for_inflight(inference_config)
         return AsyncvLLMInferenceContext(
             inference_config=inference_config,

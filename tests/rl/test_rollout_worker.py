@@ -245,6 +245,24 @@ def test_create_inference_context_uses_local_metadata_for_remote_inflight_vllm(m
     assert captured["config"].kv_cache_metrics is True
 
 
+def test_create_inference_context_rejects_gpu_inflight_vllm():
+    with pytest.raises(ValueError, match="does not yet support inflight_weight_updates"):
+        create_inference_context(
+            "vllm",
+            vLLMInferenceContextConfig(
+                model_name="test-model",
+                canonical_model_name="meta-llama/Llama-3.1-8B-Instruct",
+                max_model_len=2048,
+                tensor_parallel_size=4,
+                gpu_memory_utilization=0.9,
+                kv_cache_metrics=True,
+                device_kind="gpu",
+                sampling_params=VLLMSamplingConfig(),
+            ),
+            inflight_weight_updates=True,
+        )
+
+
 @pytest.mark.parametrize(
     ("current_train_step", "last_eval_train_step", "eval_frequency", "worker_index", "expected"),
     [
