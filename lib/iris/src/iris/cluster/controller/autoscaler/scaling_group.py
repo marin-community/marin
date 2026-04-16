@@ -555,14 +555,15 @@ class ScalingGroup:
         if triggered_backoff:
             self._db_update_group()
 
-        self._log_transition(slice_id, prior, transition.to_state, event, ctx, now, triggered_backoff)
         logger.info(
-            "slice transition: %s %s → %s (event=%s, backoff=%s)",
+            "slice transition group=%s slice=%s %s → %s event=%s backoff=%s error=%s",
+            self.name,
             slice_id,
-            prior,
-            transition.to_state,
-            event,
+            prior.value,
+            transition.to_state.value,
+            event.value,
             triggered_backoff,
+            ctx.get("error_message", ""),
         )
 
         return TransitionResult(
@@ -583,27 +584,6 @@ class ScalingGroup:
         backoff_duration = self._backoff_initial * (self._backoff_factor ** (self._consecutive_failures - 1))
         backoff_duration = min(backoff_duration, self._backoff_max)
         self._backoff_until = Deadline.after(now, backoff_duration)
-
-    def _log_transition(
-        self,
-        slice_id: str,
-        prior: SliceLifecycleState,
-        new: SliceLifecycleState,
-        event: SliceEvent,
-        context: dict[str, Any],
-        now: Timestamp,
-        triggered_backoff: bool,
-    ) -> None:
-        if self._db is None:
-            return
-        safe_ctx = {k: v for k, v in context.items() if isinstance(v, (str, int, float, bool, list, type(None)))}
-        safe_ctx["triggered_backoff"] = triggered_backoff
-        self._db.execute(
-            "INSERT INTO slice_transitions"
-            " (group_name, slice_id, timestamp_ms, event, from_state, to_state, context_json)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (self.name, slice_id, now.epoch_ms(), event.value, prior.value, new.value, json.dumps(safe_ctx)),
-        )
 
     def reconcile(self) -> None:
         """Discover and adopt existing slices from the cloud.
