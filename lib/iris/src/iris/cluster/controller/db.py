@@ -659,18 +659,24 @@ class ControllerDB:
         checkpoint start in incremental mode without needing a full
         VACUUM at boot.  This is a single-pass operation against the
         already-written backup file -- no redundant copy is required.
+
+        Only the page-copy step acquires ``self._lock``; the destination-side
+        PRAGMAs operate on the freshly-written backup file and do not need
+        the source write lock.  Keeping those PRAGMAs inside the lock would
+        stall the mainloop for the duration of ``incremental_vacuum`` on a
+        multi-GB file.
         """
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock:
-            dest = sqlite3.connect(str(destination))
-            try:
+        dest = sqlite3.connect(str(destination))
+        try:
+            with self._lock:
                 self._conn.backup(dest)
-                dest.execute("PRAGMA journal_mode = DELETE")
-                dest.execute("PRAGMA auto_vacuum = INCREMENTAL")
-                dest.execute("PRAGMA incremental_vacuum")
-                dest.commit()
-            finally:
-                dest.close()
+            dest.execute("PRAGMA journal_mode = DELETE")
+            dest.execute("PRAGMA auto_vacuum = INCREMENTAL")
+            dest.execute("PRAGMA incremental_vacuum")
+            dest.commit()
+        finally:
+            dest.close()
 
     @staticmethod
     def _sidecar_paths(path: Path) -> tuple[Path, Path]:

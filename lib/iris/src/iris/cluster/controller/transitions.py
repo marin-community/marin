@@ -102,7 +102,7 @@ WORKER_TASK_HISTORY_RETENTION = 500
 WORKER_RESOURCE_HISTORY_RETENTION = 500
 """Maximum worker_resource_history rows retained per worker."""
 
-TASK_RESOURCE_HISTORY_RETENTION = 200
+TASK_RESOURCE_HISTORY_RETENTION = 50
 """Maximum task_resource_history rows retained per (task_id, attempt_id).
 Logarithmic downsampling triggers at 2x this value."""
 
@@ -2768,7 +2768,7 @@ class ControllerTransitions:
             for row in overflows:
                 tid, aid = row["task_id"], row["attempt_id"]
                 # Load all IDs into Python for index-based thinning.
-                # Bounded by 2*N + heartbeats-per-prune-cycle (~460 rows max at N=200).
+                # Bounded by 2*N + heartbeats-per-prune-cycle (~160 rows max at N=50).
                 all_ids = [
                     r["id"]
                     for r in cur.execute(
