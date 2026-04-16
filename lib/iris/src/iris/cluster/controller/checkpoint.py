@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import sqlite3
+import subprocess
 import tempfile
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
@@ -331,34 +333,6 @@ def _find_latest_checkpoint_dir(remote_state_dir: str) -> str | None:
     return _reconstruct_uri(remote_state_dir, latest_path)
 
 
-def _pick_remote(zst_path: str, plain_path: str) -> tuple[str | None, bool]:
-    """Return (remote_path, is_compressed) preferring the .zst variant."""
-    fs, fs_path = fsspec.core.url_to_fs(zst_path)
-    if fs.exists(fs_path):
-        return zst_path, True
-    fs2, fs_path2 = fsspec.core.url_to_fs(plain_path)
-    if fs2.exists(fs_path2):
-        return plain_path, False
-    return None, False
-
-
-def _download_one(remote: str, local: Path, *, compressed: bool) -> None:
-    """Download a single file, decompressing if needed. Uses atomic rename."""
-    if compressed:
-        tmp_zst = local.with_suffix(".download.zst.tmp")
-        _fsspec_copy(remote, str(tmp_zst))
-        tmp_plain = local.with_suffix(".download.tmp")
-        try:
-            _decompress_zstd(tmp_zst, tmp_plain)
-        finally:
-            tmp_zst.unlink(missing_ok=True)
-        tmp_plain.rename(local)
-    else:
-        tmp_path = local.with_suffix(".download.tmp")
-        _fsspec_copy(remote, str(tmp_path))
-        tmp_path.rename(local)
-
-
 def prune_old_checkpoints(
     remote_state_dir: str,
     max_age: Duration = DEFAULT_PRUNE_AGE,
@@ -388,21 +362,46 @@ def prune_old_checkpoints(
     return pruned
 
 
+def _sync_dir(source_dir: str, local_dir: Path) -> None:
+    """Mirror the immediate file contents of *source_dir* into *local_dir*.
+
+    ``gs://`` sources use ``gcloud storage rsync`` when the CLI is available
+    (parallel, skip-if-current transfers). Other schemes fall back to a
+    per-file fsspec copy with atomic rename.
+    """
+    local_dir.mkdir(parents=True, exist_ok=True)
+
+    if source_dir.startswith("gs://") and shutil.which("gcloud") is not None:
+        subprocess.check_call(
+            ["gcloud", "storage", "rsync", source_dir.rstrip("/") + "/", str(local_dir) + "/"],
+            stdout=subprocess.DEVNULL,
+        )
+        return
+
+    fs, fs_path = fsspec.core.url_to_fs(source_dir)
+    if not fs.exists(fs_path):
+        return
+    for entry in fs.ls(fs_path, detail=False):
+        basename = entry.rstrip("/").rsplit("/", 1)[-1]
+        dest = local_dir / basename
+        tmp = dest.with_suffix(dest.suffix + ".download.tmp")
+        _fsspec_copy(entry, str(tmp))
+        tmp.rename(dest)
+
+
 def download_checkpoint_to_local(
     remote_state_dir: str,
     local_db_dir: Path,
     checkpoint_dir: str | None = None,
 ) -> bool:
-    """Download a remote checkpoint directory to a local db_dir.
+    """Sync a remote checkpoint directory to ``local_db_dir``.
 
-    Looks for controller.sqlite3(.zst), auth.sqlite3(.zst), and
-    profiles.sqlite3(.zst) in the checkpoint directory. Compressed files are preferred; uncompressed
-    files are accepted as a fallback.
+    If ``checkpoint_dir`` is not provided, finds the most recent timestamped
+    checkpoint under ``{remote_state_dir}/controller-state/``. After the sync,
+    any ``.zst`` file is decompressed to its sibling so the resulting layout
+    matches what ControllerDB expects.
 
-    If ``checkpoint_dir`` is not provided, finds the most recent
-    timestamped checkpoint under ``remote_state_dir/controller-state/``.
-
-    Returns True if a checkpoint was downloaded, False if none found.
+    Returns True if the sync produced a usable ``controller.sqlite3``.
     """
     if checkpoint_dir:
         source_dir = checkpoint_dir.rstrip("/")
@@ -413,37 +412,14 @@ def download_checkpoint_to_local(
             return False
         source_dir = found
 
-    # Prefer compressed (.zst), fall back to uncompressed for old checkpoints
-    main_zst = f"{source_dir}/{ControllerDB.DB_FILENAME}.zst"
-    main_plain = f"{source_dir}/{ControllerDB.DB_FILENAME}"
-    main_source, compressed = _pick_remote(main_zst, main_plain)
-    if main_source is None:
-        logger.info("No remote checkpoint at %s, starting fresh", source_dir)
+    _sync_dir(source_dir, local_db_dir)
+    for zst_path in list(local_db_dir.glob("*.zst")):
+        _decompress_zstd(zst_path, zst_path.with_suffix(""))
+        zst_path.unlink()
+
+    if not (local_db_dir / ControllerDB.DB_FILENAME).exists():
+        logger.info("No checkpoint at %s, starting fresh", source_dir)
         return False
 
-    local_db_dir.mkdir(parents=True, exist_ok=True)
-
-    # Download main DB
-    local_main = local_db_dir / ControllerDB.DB_FILENAME
-    _download_one(main_source, local_main, compressed=compressed)
-    logger.info("Downloaded checkpoint from %s to %s", main_source, local_main)
-
-    # Download auth DB if available
-    auth_zst = f"{source_dir}/{ControllerDB.AUTH_DB_FILENAME}.zst"
-    auth_plain = f"{source_dir}/{ControllerDB.AUTH_DB_FILENAME}"
-    auth_source, auth_compressed = _pick_remote(auth_zst, auth_plain)
-    if auth_source is not None:
-        local_auth = local_db_dir / ControllerDB.AUTH_DB_FILENAME
-        _download_one(auth_source, local_auth, compressed=auth_compressed)
-        logger.info("Downloaded auth checkpoint from %s to %s", auth_source, local_auth)
-
-    # Download profiles DB if available
-    profiles_zst = f"{source_dir}/{ControllerDB.PROFILES_DB_FILENAME}.zst"
-    profiles_plain = f"{source_dir}/{ControllerDB.PROFILES_DB_FILENAME}"
-    profiles_source, profiles_compressed = _pick_remote(profiles_zst, profiles_plain)
-    if profiles_source is not None:
-        local_profiles = local_db_dir / ControllerDB.PROFILES_DB_FILENAME
-        _download_one(profiles_source, local_profiles, compressed=profiles_compressed)
-        logger.info("Downloaded profiles checkpoint from %s to %s", profiles_source, local_profiles)
-
+    logger.info("Synced checkpoint %s to %s", source_dir, local_db_dir)
     return True
