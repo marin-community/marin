@@ -1128,11 +1128,16 @@ class Controller:
 
         # Rate-limits periodic (best-effort) checkpoint writes.
         # None when checkpoint_interval is not configured.
+        # mark_run() seeds the last-run time so the first checkpoint fires
+        # one interval after boot rather than immediately — avoids a
+        # checkpoint storm right when the controller comes up.
         self._periodic_checkpoint_limiter: RateLimiter | None = (
             RateLimiter(interval_seconds=config.checkpoint_interval.to_seconds())
             if config.checkpoint_interval is not None
             else None
         )
+        if self._periodic_checkpoint_limiter is not None:
+            self._periodic_checkpoint_limiter.mark_run()
 
     def wake(self) -> None:
         """Signal the scheduling loop to run immediately and reset backoff.
