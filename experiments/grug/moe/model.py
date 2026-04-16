@@ -178,14 +178,17 @@ class CausalSelfAttention(eqx.Module):
         k = rms_norm(k)
         if use_partial_key_offset:
             # Partial RoPE: only rotate the first half of head dims.
+            # Concatenate rotated and stationary halves to avoid sharding issues
+            # with .at[].set() on model-sharded arrays.
             half = head_dim // 2
             q_rot, k_rot = apply_rotary_embedding(
                 q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
             )
-            q = q.at[..., :half].set(q_rot)
-            k = k.at[..., :half].set(k_rot)
+            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
             # Shift stationary key dims forward by one position (enables 1-layer induction).
-            k = k.at[:, 1:, :, half:].set(k[:, :-1, :, half:])
+            k_stationary = k[..., half:]
+            k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
+            k = jnp.concatenate([k_rot, k_shifted], axis=-1)
         else:
             q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
