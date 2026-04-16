@@ -1,7 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Type
 
@@ -24,6 +23,7 @@ from levanter.models.asr_model import ASRConfig, ASRMixin
 from levanter.models.lm_model import LmConfig
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
+from levanter.utils.py_utils import dataclass_replace
 
 
 silence_transformer_nag()
@@ -354,7 +354,7 @@ class WhisperEncoder(ModuleWithStateDictSerialization):
 
     def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "WhisperDecoder":
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=key)
-        return dataclasses.replace(self, embeddings=new_embeddings)
+        return dataclass_replace(self, embeddings=new_embeddings)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
         return {"transformer": None}
@@ -392,7 +392,7 @@ class WhisperDecoderEmbeddings(eqx.Module):
 
     def resize_embeddings(self, new_size: int, key: Optional[PRNGKeyArray] = None):
         new_token_embeddings = self.token_embeddings.resize_embeddings(new_size, key=key)
-        return dataclasses.replace(self, Vocab=self.Vocab.resize(new_size), token_embeddings=new_token_embeddings)
+        return dataclass_replace(self, Vocab=self.Vocab.resize(new_size), token_embeddings=new_token_embeddings)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
         return {"token_embeddings": "embed_tokens", "position_embeddings": "embed_positions"}
@@ -450,7 +450,7 @@ class WhisperDecoder(ModuleWithStateDictSerialization):
 
     def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "WhisperDecoder":
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=key)
-        return dataclasses.replace(self, embeddings=new_embeddings)
+        return dataclass_replace(self, embeddings=new_embeddings)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
         return {"transformer": None, "embeddings": None}
@@ -474,7 +474,7 @@ class WhisperModel(eqx.Module, ModelWithHfSerializationMixin[WhisperConfig]):
 
     def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "WhisperModel":
         new_decoder = self.decoder.resize_vocab(new_size, key)
-        return dataclasses.replace(self, decoder=new_decoder)
+        return dataclass_replace(self, decoder=new_decoder)
 
     @classmethod
     def init(cls, Vocab: Axis, config: WhisperConfig, *, key) -> "WhisperModel":

@@ -20,6 +20,7 @@ from levanter.trainer import TrainerConfig
 from marin.execution.artifact import PathMetadata
 from levanter.utils.fsspec_utils import join_path
 from levanter.utils.mesh import MeshConfig
+from levanter.utils.py_utils import dataclass_replace
 
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, InputName, output_path_of, this_output_path
 from marin.execution.remote import remote
@@ -211,7 +212,7 @@ def _build_rl_job_config(
     )
     model_config_cls = model_config_class.from_hf_config(converter.default_hf_config)
 
-    model_config = dataclasses.replace(
+    model_config = dataclass_replace(
         model_config_cls,
         max_seq_len=config.max_input_tokens + config.max_output_tokens,
         tokenizer=model_path,

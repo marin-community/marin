@@ -65,10 +65,12 @@ class LinearStandardParam(AbstractLinearReparam):
         return 1 / math.sqrt(hax.axis_size(In))
 
     @property
+    # pyrefly: ignore[bad-override]  # concrete property for AbstractLinearReparam abstract method
     def active_scale(self):
         return 1
 
     @property
+    # pyrefly: ignore[bad-override]  # concrete property for AbstractLinearReparam abstract method
     def lr_scale(self):
         return 1
 
@@ -85,10 +87,12 @@ class InputLinearMup(AbstractLinearReparam):
         return 1
 
     @property
+    # pyrefly: ignore[bad-override]  # concrete property for AbstractLinearReparam abstract method
     def active_scale(self):
         return 1
 
     @property
+    # pyrefly: ignore[bad-override]  # concrete property for AbstractLinearReparam abstract method
     def lr_scale(self):
         return 1
 
@@ -105,10 +109,12 @@ class HiddenLinearMup(AbstractLinearReparam):
         return 1 / math.sqrt(hax.axis_size(In))
 
     @property
+    # pyrefly: ignore[bad-override]  # concrete property for AbstractLinearReparam abstract method
     def active_scale(self):
         return 1
 
     @property
+    # pyrefly: ignore[bad-override]  # concrete property for AbstractLinearReparam abstract method
     def lr_scale(self):
         return 1 / hax.axis_size(self.In)
 
@@ -125,10 +131,12 @@ class OutputLinearMup(AbstractLinearReparam):
         return 1
 
     @property
+    # pyrefly: ignore[bad-override]  # concrete property for AbstractLinearReparam abstract method
     def active_scale(self):
         return 1 / hax.axis_size(self.In)
 
     @property
+    # pyrefly: ignore[bad-override]  # concrete property for AbstractLinearReparam abstract method
     def lr_scale(self):
         return 1
 
@@ -159,14 +167,17 @@ class EmbeddingStandardParam(AbstractEmbeddingReparam):
         return 1 / hax.axis_size(Out)
 
     @property
+    # pyrefly: ignore[bad-override]  # concrete property for AbstractEmbeddingReparam abstract method
     def active_scale(self):
         return 1
 
     @property
+    # pyrefly: ignore[bad-override]  # concrete property for AbstractEmbeddingReparam abstract method
     def lr_scale(self):
         return 1
 
     @property
+    # pyrefly: ignore[bad-override]  # concrete property for AbstractEmbeddingReparam abstract method
     def unembed_active_scale(self):
         return 1
 
@@ -184,14 +195,17 @@ class EmbeddingMup(AbstractEmbeddingReparam):
         return 1
 
     @property
+    # pyrefly: ignore[bad-override]  # concrete property for AbstractEmbeddingReparam abstract method
     def active_scale(self):
         return 1
 
     @property
+    # pyrefly: ignore[bad-override]  # concrete property for AbstractEmbeddingReparam abstract method
     def lr_scale(self):
         return 1
 
     @property
+    # pyrefly: ignore[bad-override]  # concrete property for AbstractEmbeddingReparam abstract method
     def unembed_active_scale(self):
         return 1 / hax.axis_size(self.Embed)
 

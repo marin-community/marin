@@ -565,10 +565,12 @@ class ArrowFlightServer(WeightTransferServer):
             logger.debug(f"Shutting down Arrow Flight server at {flight_server._location}...")
             threading.Thread(target=flight_server.shutdown, daemon=True).start()
 
+    # pyrefly: ignore[bad-override]  # narrows base get_metrics() -> dict to WeightTransferServerMetrics
     def get_metrics(self) -> WeightTransferServerMetrics:
         """Get transfer metrics."""
         return self.metrics
 
+    # pyrefly: ignore[bad-override]  # narrows base Mapping[str, object] return to dict[str, object]
     def get_debug_snapshot(self) -> Mapping[str, object]:
         latest_metrics = dataclasses.asdict(self.metrics)
         latest_metrics["transfer_bytes_mib"] = round(self.metrics.transfer_bytes / _BYTES_PER_MIB, 2)

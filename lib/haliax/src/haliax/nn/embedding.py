@@ -27,6 +27,7 @@ class Embedding(eqx.Module, ReparamEnabled):
     _reparam_cls: type[AbstractEmbeddingReparam] = eqx.field(static=True, default=EmbeddingStandardParam)
 
     @property
+    # pyrefly: ignore[bad-override]  # Embedding.reparam implements AbstractVar as concrete property
     def reparam(self) -> AbstractEmbeddingReparam:
         return self._reparam_cls(self.Embed, self.Vocab)
 

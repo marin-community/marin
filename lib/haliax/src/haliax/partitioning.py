@@ -584,6 +584,7 @@ def fsdp(fn: F, parameter_mapping: ResourceMapping, compute_mapping: ResourceMap
 
 
 @typing.overload
+# pyrefly: ignore[inconsistent-overload]  # vendored haliax @overload resolution
 def fsdp(parameter_mapping: ResourceMapping, compute_mapping: ResourceMapping) -> typing.Callable[[F], F]: ...
 
 

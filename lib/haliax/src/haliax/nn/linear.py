@@ -46,6 +46,7 @@ class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
     _reparam_cls: type[AbstractLinearReparam] = eqx.field(static=True, default=LinearStandardParam)
 
     @property
+    # pyrefly: ignore[bad-override]  # Linear.reparam implements AbstractVar as concrete property
     def reparam(self) -> AbstractLinearReparam:
         return self._reparam_cls(self.In, self.Out)
 
@@ -155,6 +156,7 @@ class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
 
     def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
         # weight can be None for certain filtering things like LoRA
+        # pyrefly: ignore[bad-specialization]  # dataclasses.replace(Self) - DataclassInstance bound blocks Self specialization
         scaled = dataclasses.replace(
             self, weight=self.weight * self.reparam.active_scale if self.weight is not None else None
         )
