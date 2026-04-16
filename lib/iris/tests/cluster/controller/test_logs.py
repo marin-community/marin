@@ -734,7 +734,8 @@ def test_read_caps_to_newest_segments(tmp_path: Path):
     store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
     try:
         for batch in range(num_segments):
-            # Match marker lives only in the oldest segment (batch 0).
+            # Match marker lives only in the oldest segment (batch 0), which
+            # is outside the newest-_MAX_PARQUETS_PER_READ window.
             entries = [
                 _make_entry(f"{'MATCH' if batch == 0 else 'nomatch'}-b{batch}-{i}", epoch_ms=batch * 1000 + i)
                 for i in range(10)
