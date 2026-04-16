@@ -655,9 +655,7 @@ class TestScalingGroupVmGroupStateCounts:
             (vm_pb2.VM_STATE_READY, SliceLifecycleState.READY),
             (vm_pb2.VM_STATE_BOOTING, SliceLifecycleState.BOOTING),
             # INITIALIZING is an Iris lifecycle concept not present at the cloud level.
-            # The Platform adapter maps unknown cloud states to BOOTING. INITIALIZING
-            # will come from WorkerVm lifecycle tracking in a future task.
-            (vm_pb2.VM_STATE_FAILED, SliceLifecycleState.FAILED),
+            # The Platform adapter maps unknown cloud states to BOOTING.
         ],
     )
     def test_counts_vm_groups_by_state(
@@ -673,9 +671,6 @@ class TestScalingGroupVmGroupStateCounts:
         group.reconcile()
         if expected_state == SliceLifecycleState.READY:
             _mark_discovered_ready(group, discovered)
-        elif expected_state == SliceLifecycleState.FAILED:
-            _mark_discovered_failed(group, discovered)
-        # BOOTING is the default lifecycle state after reconcile
 
         counts = group.slice_state_counts()
 
@@ -684,8 +679,8 @@ class TestScalingGroupVmGroupStateCounts:
             if state != expected_state:
                 assert counts[state] == 0
 
-    def test_failed_takes_precedence(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """A VM group with any failed VM is counted as failed."""
+    def test_failed_slice_detached_atomically(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """FAILED transition removes the slice from tracking; counts reflect that."""
         discovered = [
             make_fake_slice_handle(
                 "slice-001",
@@ -698,9 +693,9 @@ class TestScalingGroupVmGroupStateCounts:
         _mark_discovered_failed(group, discovered)
 
         counts = group.slice_state_counts()
-
-        assert counts[SliceLifecycleState.FAILED] == 1
-        assert counts[SliceLifecycleState.READY] == 0
+        # FAILED is terminal-and-detached; the slice is gone from tracking.
+        assert counts[SliceLifecycleState.FAILED] == 0
+        assert group.slice_count() == 0
 
     def test_unobserved_slices_counted_as_booting(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Slices that haven't been marked ready or failed are counted as BOOTING."""
@@ -1164,17 +1159,19 @@ class TestDispatchLockDiscipline:
             assert state.lifecycle == SliceLifecycleState.READY
             assert state.worker_ids == addresses
 
-    def test_dispatch_failed_atomic(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """lifecycle is set to FAILED while holding the lock."""
+    def test_dispatch_failed_detaches_atomically(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """FAILED transition detaches the slice from tracking and returns its handle."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
         handle = _tracked_scale_up(group)
 
-        group.dispatch(handle.slice_id, SliceEvent.CLOUD_STATE_FAILED)
+        result = group.dispatch(handle.slice_id, SliceEvent.CLOUD_STATE_FAILED)
 
+        assert result.applied
+        assert result.new_state == SliceLifecycleState.FAILED
+        assert result.detached_handle is handle
         with group._slices_lock:
-            state = group._slices[handle.slice_id]
-            assert state.lifecycle == SliceLifecycleState.FAILED
+            assert handle.slice_id not in group._slices
 
     def test_dispatch_ready_nonexistent_is_noop(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """dispatch CLOUD_STATE_READY on a nonexistent slice does not raise."""

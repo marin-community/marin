@@ -34,9 +34,12 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.controller.autoscaler.models import SliceLifecycleState, SliceState
 from iris.cluster.controller.autoscaler.slice_lifecycle import (
+    BACKOFF_TRIGGERS,
+    NOOP,
+    SHORT_LIVED_SLICE_THRESHOLD,
     SliceEvent,
     TransitionResult,
-    dispatch_slice_event,
+    TRANSITIONS,
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.providers.protocols import WorkerInfraProvider
@@ -486,24 +489,120 @@ class ScalingGroup:
         *,
         now: Timestamp | None = None,
     ) -> TransitionResult:
-        """Apply a lifecycle event to a slice via the state machine.
+        """Apply a lifecycle event to a slice atomically with cross-machine cascades.
 
-        Returns a TransitionResult. If the transition is invalid (unknown slice
-        or no matching transition), returns a NOOP result with applied=False.
+        Mutates both slice state AND group failure state under one lock so that:
+          - short-lived slice failures bump consecutive_failures and extend
+            backoff_until atomically with the FAILED transition
+          - terminal failures detach the slice and return its handle for the
+            caller to async-terminate
+
+        Returns NOOP (applied=False) for unknown slice or invalid transition.
         """
-        result = dispatch_slice_event(
-            slices=self._slices,
-            lock=self._slices_lock,
-            slice_id=slice_id,
-            event=event,
-            context=context,
-            now=now,
-            db=self._db,
-            group_name=self.name,
-        )
-        if result.applied and slice_id in self._slices:
+        ctx = context or {}
+        now = now or Timestamp.now()
+
+        with self._slices_lock:
+            state = self._slices.get(slice_id)
+            if state is None:
+                logger.warning("slice event for unknown slice %s (event=%s)", slice_id, event)
+                return NOOP
+
+            transition = TRANSITIONS.get((state.lifecycle, event))
+            if transition is None:
+                logger.warning(
+                    "no transition for slice %s in state %s on event %s",
+                    slice_id,
+                    state.lifecycle,
+                    event,
+                )
+                return NOOP
+
+            prior = state.lifecycle
+            state.lifecycle = transition.to_state
+
+            detached_handle: SliceHandle | None = None
+            registered_workers: list = []
+            triggered_backoff = False
+
+            if transition.to_state == SliceLifecycleState.READY:
+                workers = ctx.get("workers", [])
+                state.last_active = now
+                state.worker_ids = ctx.get("worker_ids") or [w.worker_id for w in workers]
+                registered_workers = list(workers)
+
+            elif transition.to_state == SliceLifecycleState.FAILED:
+                error_message = ctx.get("error_message", "")
+                if error_message:
+                    state.error_message = error_message
+                detached_handle = state.handle
+                age = Duration.from_ms(now.epoch_ms() - state.handle.created_at.epoch_ms())
+                short_lived = age < SHORT_LIVED_SLICE_THRESHOLD
+                if event in BACKOFF_TRIGGERS and short_lived:
+                    self._apply_failure_locked(now)
+                    triggered_backoff = True
+                # Remove the slice from tracking; caller is responsible for
+                # terminating the cloud handle and unregistering workers.
+                self._slices.pop(slice_id, None)
+                self._last_scale_down = now
+
+        # Outside the lock: persist and log.
+        if transition.to_state == SliceLifecycleState.FAILED:
+            self._db_remove_slice(slice_id)
+        elif slice_id in self._slices:
             self._db_upsert_slice(slice_id, self._slices[slice_id])
-        return result
+        if triggered_backoff:
+            self._db_update_group()
+
+        self._log_transition(slice_id, prior, transition.to_state, event, ctx, now, triggered_backoff)
+        logger.info(
+            "slice transition: %s %s → %s (event=%s, backoff=%s)",
+            slice_id,
+            prior,
+            transition.to_state,
+            event,
+            triggered_backoff,
+        )
+
+        return TransitionResult(
+            slice_id=slice_id,
+            prior_state=prior,
+            new_state=transition.to_state,
+            event=event,
+            applied=True,
+            timestamp=now,
+            detached_handle=detached_handle,
+            registered_workers=registered_workers,
+            triggered_backoff=triggered_backoff,
+        )
+
+    def _apply_failure_locked(self, now: Timestamp) -> None:
+        """Mutate group failure state. Caller must hold _slices_lock."""
+        self._consecutive_failures += 1
+        backoff_duration = self._backoff_initial * (self._backoff_factor ** (self._consecutive_failures - 1))
+        backoff_duration = min(backoff_duration, self._backoff_max)
+        self._backoff_until = Deadline.after(now, backoff_duration)
+
+    def _log_transition(
+        self,
+        slice_id: str,
+        prior: SliceLifecycleState,
+        new: SliceLifecycleState,
+        event: SliceEvent,
+        context: dict[str, Any],
+        now: Timestamp,
+        triggered_backoff: bool,
+    ) -> None:
+        if self._db is None:
+            return
+        safe_ctx = {k: v for k, v in context.items() if isinstance(v, (str, int, float, bool, list, type(None)))}
+        safe_ctx["triggered_backoff"] = triggered_backoff
+        self._db.execute(
+            "INSERT INTO slice_transitions"
+            " (group_name, slice_id, timestamp_ms, event, from_state, to_state, context_json)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (self.name, slice_id, now.epoch_ms(), event.value, prior.value, new.value, json.dumps(safe_ctx)),
+        )
 
     def reconcile(self) -> None:
         """Discover and adopt existing slices from the cloud.
@@ -923,22 +1022,15 @@ class ScalingGroup:
         self._db_update_group()
 
     def record_failure(self, timestamp: Timestamp | None = None) -> None:
-        """Record a scale-up failure and apply exponential backoff.
+        """Record a scale-up failure (e.g. platform.create_slice exception).
 
-        Each consecutive failure doubles the backoff time, up to a maximum.
+        Used by the autoscaler when a slice never makes it into _slices and
+        therefore can't go through the slice state machine. Slice-lifecycle
+        cascades use _apply_failure_locked directly under the dispatch lock.
         """
         timestamp = timestamp or Timestamp.now()
-        self._consecutive_failures += 1
-
-        backoff_duration = self._backoff_initial * (self._backoff_factor ** (self._consecutive_failures - 1))
-        backoff_duration = min(backoff_duration, self._backoff_max)
-        self._backoff_until = Deadline.after(timestamp, backoff_duration)
-        self._db_update_group()
-
-    def reset_backoff(self) -> None:
-        """Reset backoff state (typically after successful operation)."""
-        self._consecutive_failures = 0
-        self._backoff_until = None
+        with self._slices_lock:
+            self._apply_failure_locked(timestamp)
         self._db_update_group()
 
     def slice_state_counts(self) -> dict[SliceLifecycleState, int]:
