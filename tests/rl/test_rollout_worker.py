@@ -244,6 +244,75 @@ def test_create_inference_context_uses_local_metadata_for_remote_inflight_vllm(m
     assert captured["config"].kv_cache_metrics is True
 
 
+def test_load_environment_prepares_once_before_caching(monkeypatch):
+    class _FakeEnv:
+        def __init__(self):
+            self.prepare_calls = 0
+
+        def prepare(self) -> None:
+            self.prepare_calls += 1
+
+    env = _FakeEnv()
+    monkeypatch.setattr("marin.rl.rollout_worker.load_environment_from_spec", lambda _config: env)
+
+    worker = object.__new__(RolloutWorker)
+    worker._environments = {}
+    worker.config = SimpleNamespace(
+        curriculum_config=SimpleNamespace(
+            lessons={"lesson-a": SimpleNamespace(env_config=object())},
+        )
+    )
+
+    loaded_env = worker._load_environment("lesson-a")
+    cached_env = worker._load_environment("lesson-a")
+
+    assert loaded_env is env
+    assert cached_env is env
+    assert env.prepare_calls == 1
+
+
+def test_load_environment_does_not_cache_failed_prepare(monkeypatch):
+    class _FailingEnv:
+        def __init__(self):
+            self.prepare_calls = 0
+
+        def prepare(self) -> None:
+            self.prepare_calls += 1
+            raise RuntimeError("prepare failed")
+
+    class _HealthyEnv:
+        def __init__(self):
+            self.prepare_calls = 0
+
+        def prepare(self) -> None:
+            self.prepare_calls += 1
+
+    failing_env = _FailingEnv()
+    healthy_env = _HealthyEnv()
+    created_envs = iter([failing_env, healthy_env])
+    monkeypatch.setattr("marin.rl.rollout_worker.load_environment_from_spec", lambda _config: next(created_envs))
+
+    worker = object.__new__(RolloutWorker)
+    worker._environments = {}
+    worker.config = SimpleNamespace(
+        curriculum_config=SimpleNamespace(
+            lessons={"lesson-a": SimpleNamespace(env_config=object())},
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="prepare failed"):
+        worker._load_environment("lesson-a")
+
+    recovered_env = worker._load_environment("lesson-a")
+    cached_env = worker._load_environment("lesson-a")
+
+    assert recovered_env is healthy_env
+    assert cached_env is healthy_env
+    assert worker._environments["lesson-a"] is healthy_env
+    assert failing_env.prepare_calls == 1
+    assert healthy_env.prepare_calls == 1
+
+
 @pytest.mark.parametrize(
     ("current_train_step", "last_eval_train_step", "eval_frequency", "worker_index", "expected"),
     [
