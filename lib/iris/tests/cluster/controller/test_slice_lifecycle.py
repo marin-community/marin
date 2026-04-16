@@ -41,7 +41,7 @@ def test_booting_to_ready():
         {"worker_ids": ["w1", "w2"]},
         now=Timestamp.from_ms(1000),
     )
-    assert result is not None
+    assert result.applied
     assert result.prior_state == SliceLifecycleState.BOOTING
     assert result.new_state == SliceLifecycleState.READY
     assert result.event == SliceEvent.CLOUD_STATE_READY
@@ -59,7 +59,7 @@ def test_booting_to_initializing():
         SliceEvent.CLOUD_STATE_INITIALIZING,
         now=Timestamp.from_ms(1000),
     )
-    assert result is not None
+    assert result.applied
     assert result.new_state == SliceLifecycleState.INITIALIZING
     assert result.side_effects == []
 
@@ -74,42 +74,60 @@ def test_initializing_to_ready():
         {"worker_ids": ["w1"]},
         now=Timestamp.from_ms(1000),
     )
-    assert result is not None
+    assert result.applied
     assert result.new_state == SliceLifecycleState.READY
     assert SliceSideEffectKind.REGISTER_WORKERS in result.side_effects
 
 
 def test_booting_to_failed_on_cloud_failure():
     slices, lock = _make_slices(lifecycle=SliceLifecycleState.BOOTING)
+    # Fail well past SHORT_LIVED_SLICE_THRESHOLD so no backoff
     result = dispatch_slice_event(
         slices,
         lock,
         "slice-001",
         SliceEvent.CLOUD_STATE_FAILED,
         {"error_message": "VM crashed"},
-        now=Timestamp.from_ms(1000),
+        now=Timestamp.from_ms(1_600_000),
     )
-    assert result is not None
+    assert result.applied
     assert result.new_state == SliceLifecycleState.FAILED
-    effect_kinds = result.side_effects
-    assert SliceSideEffectKind.DEREGISTER_WORKERS in effect_kinds
-    assert SliceSideEffectKind.TERMINATE_SLICE in effect_kinds
-    assert SliceSideEffectKind.RECORD_GROUP_FAILURE not in effect_kinds
+    assert SliceSideEffectKind.DEREGISTER_WORKERS in result.side_effects
+    assert SliceSideEffectKind.TERMINATE_SLICE in result.side_effects
+    assert SliceSideEffectKind.RECORD_GROUP_FAILURE not in result.side_effects
 
 
-def test_failed_on_cloud_failure_short_lived_triggers_backoff():
+def test_short_lived_slice_failure_triggers_backoff():
+    """Slice that fails within SHORT_LIVED_SLICE_THRESHOLD of creation triggers RECORD_GROUP_FAILURE."""
     slices, lock = _make_slices(lifecycle=SliceLifecycleState.BOOTING)
+    # Default handle created_at is 1_000_000ms; fail 60s later (well within 5min threshold)
     result = dispatch_slice_event(
         slices,
         lock,
         "slice-001",
         SliceEvent.CLOUD_STATE_FAILED,
-        {"error_message": "preempted", "is_short_lived": True},
-        now=Timestamp.from_ms(1000),
+        {"error_message": "preempted"},
+        now=Timestamp.from_ms(1_060_000),
     )
-    assert result is not None
-    effect_kinds = result.side_effects
-    assert SliceSideEffectKind.RECORD_GROUP_FAILURE in effect_kinds
+    assert result.applied
+    assert SliceSideEffectKind.RECORD_GROUP_FAILURE in result.side_effects
+
+
+def test_long_lived_slice_failure_no_backoff():
+    """Slice that fails after SHORT_LIVED_SLICE_THRESHOLD does NOT trigger RECORD_GROUP_FAILURE."""
+    slices, lock = _make_slices(lifecycle=SliceLifecycleState.BOOTING)
+    # Default handle created_at is 1_000_000ms; fail 10min later (past 5min threshold)
+    result = dispatch_slice_event(
+        slices,
+        lock,
+        "slice-001",
+        SliceEvent.CLOUD_STATE_FAILED,
+        {"error_message": "crashed"},
+        now=Timestamp.from_ms(1_600_000),
+    )
+    assert result.applied
+    assert SliceSideEffectKind.RECORD_GROUP_FAILURE not in result.side_effects
+    assert SliceSideEffectKind.TERMINATE_SLICE in result.side_effects
 
 
 def test_unknown_timeout():
@@ -121,7 +139,7 @@ def test_unknown_timeout():
         SliceEvent.CLOUD_STATE_UNKNOWN_TIMEOUT,
         now=Timestamp.from_ms(1000),
     )
-    assert result is not None
+    assert result.applied
     assert result.new_state == SliceLifecycleState.FAILED
     effect_kinds = result.side_effects
     assert SliceSideEffectKind.TERMINATE_SLICE in effect_kinds
@@ -140,7 +158,7 @@ def test_ready_to_failed_on_worker_failure():
         {"failed_workers": ["w1"]},
         now=Timestamp.from_ms(1000),
     )
-    assert result is not None
+    assert result.applied
     assert result.new_state == SliceLifecycleState.FAILED
     effect_kinds = result.side_effects
     assert SliceSideEffectKind.DEREGISTER_WORKERS in effect_kinds
@@ -159,7 +177,7 @@ def test_ready_to_failed_on_idle_timeout():
         SliceEvent.IDLE_TIMEOUT,
         now=Timestamp.from_ms(1000),
     )
-    assert result is not None
+    assert result.applied
     assert result.new_state == SliceLifecycleState.FAILED
     effect_kinds = result.side_effects
     assert SliceSideEffectKind.DEREGISTER_WORKERS in effect_kinds
@@ -175,7 +193,7 @@ def test_requesting_to_booting():
         SliceEvent.PLATFORM_CALL_SUCCEEDED,
         now=Timestamp.from_ms(1000),
     )
-    assert result is not None
+    assert result.applied
     assert result.new_state == SliceLifecycleState.BOOTING
     assert result.side_effects == []
 
@@ -189,7 +207,7 @@ def test_requesting_to_failed_on_platform_error():
         SliceEvent.PLATFORM_CALL_FAILED,
         now=Timestamp.from_ms(1000),
     )
-    assert result is not None
+    assert result.applied
     assert result.new_state == SliceLifecycleState.FAILED
     assert SliceSideEffectKind.RECORD_GROUP_FAILURE in result.side_effects
 
@@ -204,7 +222,7 @@ def test_invalid_transition_returns_none():
         SliceEvent.CLOUD_STATE_INITIALIZING,
         now=Timestamp.from_ms(1000),
     )
-    assert result is None
+    assert not result.applied
     assert slices["slice-001"].lifecycle == SliceLifecycleState.READY
 
 
@@ -218,7 +236,7 @@ def test_unknown_slice_returns_none():
         {"worker_ids": ["w1"]},
         now=Timestamp.from_ms(1000),
     )
-    assert result is None
+    assert not result.applied
 
 
 def test_failed_is_terminal():
@@ -233,7 +251,7 @@ def test_failed_is_terminal():
             {"worker_ids": ["w1"]},
             now=Timestamp.from_ms(1000),
         )
-        assert result is None, f"FAILED + {event} should not have a transition"
+        assert not result.applied, f"FAILED + {event} should not produce an applied transition"
 
 
 def test_transition_table_exhaustiveness():
@@ -260,7 +278,7 @@ def test_result_contains_timestamp():
         {"worker_ids": ["w1"]},
         now=ts,
     )
-    assert result is not None
+    assert result.applied
     assert result.timestamp == ts
 
 
@@ -276,7 +294,7 @@ def test_ready_transition_sets_last_active_and_worker_ids():
         {"worker_ids": ["w1", "w2"]},
         now=ts,
     )
-    assert result is not None
+    assert result.applied
     state = slices["slice-001"]
     assert state.last_active == ts
     assert state.worker_ids == ["w1", "w2"]

@@ -15,6 +15,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     ScalingGroup,
     _zones_from_config,
 )
+from iris.cluster.controller.autoscaler.slice_lifecycle import SliceEvent
 from iris.cluster.providers.types import (
     CloudSliceState,
     CloudWorkerState,
@@ -57,13 +58,13 @@ def _mark_discovered_ready(
     """Mark discovered slices as READY with their worker IDs."""
     for handle in handles:
         worker_ids = [vm.worker_id for vm in handle.describe().workers]
-        group.mark_slice_ready(handle.slice_id, worker_ids, timestamp=timestamp)
+        group.dispatch(handle.slice_id, SliceEvent.CLOUD_STATE_READY, {"worker_ids": worker_ids}, now=timestamp)
 
 
 def _mark_discovered_failed(group: ScalingGroup, handles: list[FakeSliceHandle]) -> None:
     """Mark discovered slices as FAILED."""
     for handle in handles:
-        group.mark_slice_failed(handle.slice_id)
+        group.dispatch(handle.slice_id, SliceEvent.CLOUD_STATE_FAILED)
 
 
 def _get_worker_id(handle: FakeSliceHandle) -> str:
@@ -748,7 +749,7 @@ class TestScalingGroupAvailability:
         group.reconcile()
         for h in discovered:
             worker_ids = [w.worker_id for w in h.describe().workers]
-            group.mark_slice_ready(h.slice_id, worker_ids)
+            group.dispatch(h.slice_id, SliceEvent.CLOUD_STATE_READY, {"worker_ids": worker_ids})
 
         state = group.availability()
         assert state.status == GroupAvailability.AT_MAX_SLICES
@@ -788,7 +789,7 @@ class TestScalingGroupAvailability:
         group.reconcile()
         for h in discovered:
             worker_ids = [w.worker_id for w in h.describe().workers]
-            group.mark_slice_ready(h.slice_id, worker_ids)
+            group.dispatch(h.slice_id, SliceEvent.CLOUD_STATE_READY, {"worker_ids": worker_ids})
 
         assert group.can_accept_demand() is False
 
@@ -943,7 +944,7 @@ class TestScalingGroupAvailability:
 
         # Once the slice is READY, AT_MAX_SLICES takes precedence over cooldown
         worker_ids = [w.worker_id for w in handle.describe().workers]
-        group.mark_slice_ready(handle.slice_id, worker_ids)
+        group.dispatch(handle.slice_id, SliceEvent.CLOUD_STATE_READY, {"worker_ids": worker_ids})
         state = group.availability(Timestamp.from_ms(1_003_000))
         assert state.status == GroupAvailability.AT_MAX_SLICES
 
@@ -995,7 +996,7 @@ class TestVerifySliceIdle:
         ts = Timestamp.from_ms(1000000)
         handle = _tracked_scale_up(group, timestamp=ts)
         worker_ids = [vm.worker_id for vm in handle.describe().workers]
-        group.mark_slice_ready(handle.slice_id, worker_ids)
+        group.dispatch(handle.slice_id, SliceEvent.CLOUD_STATE_READY, {"worker_ids": worker_ids})
         state = _get_slice_state(group, handle)
 
         # Get worker ID from mock
@@ -1140,10 +1141,10 @@ class TestPrepareSliceConfigGpuCount:
         assert cpu_slice.gpu_count == 0
 
 
-class TestMarkSliceLockDiscipline:
-    """Tests that mark_slice_ready/mark_slice_failed hold the lock during mutation."""
+class TestDispatchLockDiscipline:
+    """Tests that dispatch() holds the lock during mutation."""
 
-    def test_mark_slice_ready_atomic(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_dispatch_ready_atomic(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """lifecycle and worker_ids are set while holding the lock."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
@@ -1155,7 +1156,7 @@ class TestMarkSliceLockDiscipline:
         assert state.worker_ids == []
 
         addresses = ["10.0.0.1", "10.0.0.2"]
-        group.mark_slice_ready(handle.slice_id, addresses)
+        group.dispatch(handle.slice_id, SliceEvent.CLOUD_STATE_READY, {"worker_ids": addresses})
 
         # All fields should be set atomically
         with group._slices_lock:
@@ -1163,29 +1164,31 @@ class TestMarkSliceLockDiscipline:
             assert state.lifecycle == SliceLifecycleState.READY
             assert state.worker_ids == addresses
 
-    def test_mark_slice_failed_atomic(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_dispatch_failed_atomic(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """lifecycle is set to FAILED while holding the lock."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
         handle = _tracked_scale_up(group)
 
-        group.mark_slice_failed(handle.slice_id)
+        group.dispatch(handle.slice_id, SliceEvent.CLOUD_STATE_FAILED)
 
         with group._slices_lock:
             state = group._slices[handle.slice_id]
             assert state.lifecycle == SliceLifecycleState.FAILED
 
-    def test_mark_slice_ready_nonexistent_is_noop(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """mark_slice_ready on a nonexistent slice does not raise."""
+    def test_dispatch_ready_nonexistent_is_noop(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """dispatch CLOUD_STATE_READY on a nonexistent slice does not raise."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
-        group.mark_slice_ready("nonexistent", ["10.0.0.1"])
+        result = group.dispatch("nonexistent", SliceEvent.CLOUD_STATE_READY, {"worker_ids": ["10.0.0.1"]})
+        assert not result.applied
 
-    def test_mark_slice_failed_nonexistent_is_noop(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """mark_slice_failed on a nonexistent slice does not raise."""
+    def test_dispatch_failed_nonexistent_is_noop(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """dispatch CLOUD_STATE_FAILED on a nonexistent slice does not raise."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
-        group.mark_slice_failed("nonexistent")
+        result = group.dispatch("nonexistent", SliceEvent.CLOUD_STATE_FAILED)
+        assert not result.applied
 
 
 def test_slice_state_to_proto_uses_worker_ids_as_vm_ids():
@@ -1378,7 +1381,7 @@ class TestMultiVmSliceIdleScaleDown:
 
         handle = _tracked_scale_up(group)
         worker_ids = [f"10.0.0.{i}" for i in range(4)]
-        group.mark_slice_ready(handle.slice_id, worker_ids)
+        group.dispatch(handle.slice_id, SliceEvent.CLOUD_STATE_READY, {"worker_ids": worker_ids})
         state = _get_slice_state(group, handle)
 
         # Only 2 of 4 workers in status map, both idle
@@ -1397,7 +1400,7 @@ class TestMultiVmSliceIdleScaleDown:
 
         handle = _tracked_scale_up(group)
         worker_ids = [f"10.0.0.{i}" for i in range(4)]
-        group.mark_slice_ready(handle.slice_id, worker_ids)
+        group.dispatch(handle.slice_id, SliceEvent.CLOUD_STATE_READY, {"worker_ids": worker_ids})
         state = _get_slice_state(group, handle)
 
         assert not group._verify_slice_idle(state, {})

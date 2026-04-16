@@ -18,6 +18,7 @@ from iris.cluster.controller.autoscaler import DEFAULT_UNRESOLVABLE_TIMEOUT, Aut
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.routing import route_demand
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
+from iris.cluster.controller.autoscaler.slice_lifecycle import SliceEvent
 from iris.cluster.providers.types import (
     CloudSliceState,
     QuotaExhaustedError,
@@ -1264,7 +1265,7 @@ class TestGpuScaleGroupBugs:
 
         # Mark the slice as READY (simulates bootstrap completion)
         worker_ids = [w.worker_id for w in handle.describe().workers]
-        group.mark_slice_ready(handle.slice_id, worker_ids)
+        group.dispatch(handle.slice_id, SliceEvent.CLOUD_STATE_READY, {"worker_ids": worker_ids})
 
         # last_active should be initialized to at least the ready time
         with group._slices_lock:

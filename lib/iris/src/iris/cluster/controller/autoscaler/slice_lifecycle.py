@@ -6,15 +6,17 @@ import json
 import logging
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, NamedTuple
 
 from iris.cluster.controller.autoscaler.models import SliceLifecycleState, SliceState
 from iris.cluster.controller.db import ControllerDB
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+
+SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
 
 
 class SliceEvent(StrEnum):
@@ -35,23 +37,37 @@ class SliceSideEffectKind(StrEnum):
     TERMINATE_SLICE = "terminate_slice"
 
 
+_EMPTY_EFFECTS: list[SliceSideEffectKind] = []
+
+
 @dataclass(frozen=True)
 class TransitionResult:
     slice_id: str
     prior_state: SliceLifecycleState
     new_state: SliceLifecycleState
     event: SliceEvent
-    side_effects: list[SliceSideEffectKind]
-    timestamp: Timestamp
+    side_effects: list[SliceSideEffectKind] = field(default_factory=list)
+    timestamp: Timestamp = field(default_factory=Timestamp.now)
+    applied: bool = True
+
+
+# Sentinel for "no transition happened" — callers don't need to check for None
+NOOP = TransitionResult(
+    slice_id="",
+    prior_state=SliceLifecycleState.FAILED,
+    new_state=SliceLifecycleState.FAILED,
+    event=SliceEvent.CLOUD_STATE_FAILED,
+    applied=False,
+)
 
 
 class SliceTransition(NamedTuple):
     to_state: SliceLifecycleState
-    side_effects: Callable[[dict[str, Any]], list[SliceSideEffectKind]] | None = None
+    side_effects: Callable[[SliceState, Timestamp], list[SliceSideEffectKind]] | None = None
 
 
 # ---------------------------------------------------------------------------
-# Side-effect computation functions (pure — only read ctx, not slice state)
+# Side-effect computation functions
 # ---------------------------------------------------------------------------
 
 _TEARDOWN_EFFECTS: list[SliceSideEffectKind] = [
@@ -60,22 +76,23 @@ _TEARDOWN_EFFECTS: list[SliceSideEffectKind] = [
 ]
 
 
-def _on_ready(ctx: dict[str, Any]) -> list[SliceSideEffectKind]:
+def _on_ready(state: SliceState, now: Timestamp) -> list[SliceSideEffectKind]:
     return [SliceSideEffectKind.REGISTER_WORKERS]
 
 
-def _on_failure_with_teardown(ctx: dict[str, Any]) -> list[SliceSideEffectKind]:
+def _on_failure_with_teardown(state: SliceState, now: Timestamp) -> list[SliceSideEffectKind]:
     effects = list(_TEARDOWN_EFFECTS)
-    if ctx.get("is_short_lived"):
+    age = Duration.from_ms(now.epoch_ms() - state.handle.created_at.epoch_ms())
+    if age < SHORT_LIVED_SLICE_THRESHOLD:
         effects.append(SliceSideEffectKind.RECORD_GROUP_FAILURE)
     return effects
 
 
-def _on_creation_failed(ctx: dict[str, Any]) -> list[SliceSideEffectKind]:
+def _on_creation_failed(state: SliceState, now: Timestamp) -> list[SliceSideEffectKind]:
     return [SliceSideEffectKind.RECORD_GROUP_FAILURE]
 
 
-def _on_idle_teardown(ctx: dict[str, Any]) -> list[SliceSideEffectKind]:
+def _on_idle_teardown(state: SliceState, now: Timestamp) -> list[SliceSideEffectKind]:
     return list(_TEARDOWN_EFFECTS)
 
 
@@ -83,7 +100,6 @@ def _on_idle_teardown(ctx: dict[str, Any]) -> list[SliceSideEffectKind]:
 # Transition table
 # ---------------------------------------------------------------------------
 
-# Aliases for concise table entries
 _R, _B, _I, _RDY, _F = (
     SliceLifecycleState.REQUESTING,
     SliceLifecycleState.BOOTING,
@@ -118,6 +134,39 @@ TRANSITIONS: dict[tuple[SliceLifecycleState, SliceEvent], SliceTransition] = {
 
 
 # ---------------------------------------------------------------------------
+# Cloud state → event mapping
+# ---------------------------------------------------------------------------
+
+from iris.cluster.providers.types import CloudSliceState  # noqa: E402
+
+
+def cloud_state_to_event(
+    cloud_state: CloudSliceState,
+    handle_created_at: Timestamp,
+    now: Timestamp,
+    unresolvable_timeout: Duration,
+) -> SliceEvent | None:
+    """Map a cloud slice state to a lifecycle event, or None to skip (e.g. UNKNOWN within timeout)."""
+    if cloud_state == CloudSliceState.READY:
+        return SliceEvent.CLOUD_STATE_READY
+    if cloud_state == CloudSliceState.FAILED:
+        return SliceEvent.CLOUD_STATE_FAILED
+    if cloud_state in (CloudSliceState.BOOTSTRAPPING, CloudSliceState.CREATING):
+        return SliceEvent.CLOUD_STATE_INITIALIZING
+    if cloud_state == CloudSliceState.UNKNOWN:
+        age = Duration.from_ms(now.epoch_ms() - handle_created_at.epoch_ms())
+        if age >= unresolvable_timeout:
+            return SliceEvent.CLOUD_STATE_UNKNOWN_TIMEOUT
+        logger.debug(
+            "Slice UNKNOWN (age %s < timeout %s); will retry",
+            age,
+            unresolvable_timeout,
+        )
+        return None
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
@@ -132,8 +181,8 @@ def dispatch_slice_event(
     now: Timestamp | None = None,
     db: ControllerDB | None = None,
     group_name: str = "",
-) -> TransitionResult | None:
-    """Apply a lifecycle event to a slice, returning the transition result or None if invalid."""
+) -> TransitionResult:
+    """Apply a lifecycle event to a slice. Returns NOOP if the transition is invalid."""
     ctx = context or {}
     if now is None:
         now = Timestamp.now()
@@ -142,7 +191,7 @@ def dispatch_slice_event(
         state = slices.get(slice_id)
         if state is None:
             logger.warning("slice event for unknown slice %s (event=%s)", slice_id, event)
-            return None
+            return NOOP
 
         key = (state.lifecycle, event)
         transition = TRANSITIONS.get(key)
@@ -153,17 +202,17 @@ def dispatch_slice_event(
                 state.lifecycle,
                 event,
             )
-            return None
+            return NOOP
 
         prior_state = state.lifecycle
         state.lifecycle = transition.to_state
 
-        # Set last_active on READY transition to prevent immediate scaledown
         if transition.to_state == SliceLifecycleState.READY:
             state.last_active = now
             state.worker_ids = ctx.get("worker_ids", [])
 
-    side_effects = transition.side_effects(ctx) if transition.side_effects else []
+        # Compute side effects while we still hold the lock (reads state.handle.created_at)
+        side_effects = transition.side_effects(state, now) if transition.side_effects else _EMPTY_EFFECTS
 
     _log_transition(db, group_name, slice_id, prior_state, transition.to_state, event, ctx, now)
 
@@ -198,7 +247,6 @@ def _log_transition(
 ) -> None:
     if db is None:
         return
-    # Filter context to JSON-serializable values for the audit log
     safe_ctx = {k: v for k, v in context.items() if isinstance(v, (str, int, float, bool, list, type(None)))}
     db.execute(
         "INSERT INTO slice_transitions"

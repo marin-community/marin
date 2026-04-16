@@ -478,21 +478,6 @@ class ScalingGroup:
         with self._slices_lock:
             self._pending_scale_ups = max(0, self._pending_scale_ups - 1)
 
-    def mark_slice_ready(self, slice_id: str, worker_ids: list[str], timestamp: Timestamp | None = None) -> None:
-        """Mark a slice as READY with its worker IDs.
-
-        Thin wrapper around dispatch() for test convenience and the
-        scale_down_if_idle path which doesn't use dispatch yet.
-        """
-        timestamp = timestamp or Timestamp.now()
-        result = self.dispatch(slice_id, SliceEvent.CLOUD_STATE_READY, {"worker_ids": worker_ids}, now=timestamp)
-        if result is not None:
-            self._db_upsert_slice(slice_id, self._slices[slice_id])
-
-    def mark_slice_failed(self, slice_id: str, error_message: str = "") -> None:
-        """Mark a slice as FAILED. Thin wrapper around dispatch()."""
-        self.dispatch(slice_id, SliceEvent.CLOUD_STATE_FAILED, {"error_message": error_message})
-
     def dispatch(
         self,
         slice_id: str,
@@ -500,14 +485,13 @@ class ScalingGroup:
         context: dict[str, Any] | None = None,
         *,
         now: Timestamp | None = None,
-    ) -> TransitionResult | None:
+    ) -> TransitionResult:
         """Apply a lifecycle event to a slice via the state machine.
 
-        Validates the transition, updates state under lock, computes side effects,
-        and logs the transition to the DB audit trail. Returns None if the
-        transition is invalid (unknown slice or no matching transition).
+        Returns a TransitionResult. If the transition is invalid (unknown slice
+        or no matching transition), returns a NOOP result with applied=False.
         """
-        return dispatch_slice_event(
+        result = dispatch_slice_event(
             slices=self._slices,
             lock=self._slices_lock,
             slice_id=slice_id,
@@ -517,6 +501,9 @@ class ScalingGroup:
             db=self._db,
             group_name=self.name,
         )
+        if result.applied and slice_id in self._slices:
+            self._db_upsert_slice(slice_id, self._slices[slice_id])
+        return result
 
     def reconcile(self) -> None:
         """Discover and adopt existing slices from the cloud.
