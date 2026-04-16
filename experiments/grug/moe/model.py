@@ -73,6 +73,9 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    # Multiplier for router_bias init std. 0 = zeros (default).
+    # Nonzero values use truncated_normal(0, router_bias_init_mult * initializer_std).
+    router_bias_init_mult: float = 0.0
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -319,7 +322,7 @@ class MoEMLP(eqx.Module):
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        k_router, k_gate, k_up, k_down = random.split(key, 4)
+        k_router, k_gate, k_up, k_down, k_bias = random.split(key, 5)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
@@ -336,7 +339,11 @@ class MoEMLP(eqx.Module):
 
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
-            router_bias=jnp.zeros((e,)),
+            router_bias=(
+                _init_weight(k_bias, (e,), cfg.router_bias_init_mult * cfg.initializer_std)
+                if cfg.router_bias_init_mult > 0
+                else jnp.zeros((e,))
+            ),
             w_gate_up=reshard(w_gate_up, P("expert", "data", "model")),
             w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
             cfg=cfg,
