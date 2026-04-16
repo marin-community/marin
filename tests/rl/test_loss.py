@@ -13,11 +13,14 @@ def create_test_rollout(
     env_name: str = "test_env",
     episode_reward: float = 1.0,
     unique_id: int = 12345,
+    response_loss_mask: np.ndarray | None = None,
 ) -> Rollout:
     """Create a test rollout with predictable token values."""
     prompt_tokens = np.full(prompt_len, unique_id, dtype=np.int32)
     response_tokens = np.arange(response_len, dtype=np.int32) + 1000
     response_logprobs = np.full(response_len, -0.5, dtype=np.float32)
+    if response_loss_mask is None:
+        response_loss_mask = np.ones(response_len, dtype=np.float32)
     token_rewards = np.full(response_len, 0.1, dtype=np.float32)
 
     return Rollout(
@@ -26,6 +29,7 @@ def create_test_rollout(
         prompt_tokens=prompt_tokens,
         response_tokens=response_tokens,
         response_logprobs=response_logprobs,
+        response_loss_mask=response_loss_mask,
         token_rewards=token_rewards,
         episode_reward=episode_reward,
         temperature=1.0,
@@ -141,3 +145,22 @@ def test_rloo_loss_needs_reference_model_only_when_kl_enabled():
 def test_rloo_loss_rejects_missing_reference_model_when_kl_enabled():
     with pytest.raises(ValueError, match="reference_model is required"):
         RLOOLoss(kl_coef=0.01).create_loss_fn(reference_model=None, train_model=None)
+
+
+def test_ppo_objective_stays_finite_with_sparse_masks():
+    importance_sampling_ratio = np.array([[1.0, 1.0, 1.0, 1.2, 0.0, 0.8]], dtype=np.float32)
+    loss_weights = np.array([[0.0, 0.0, 0.0, 0.5, 0.0, 1.0]], dtype=np.float32)
+    loss_masks = np.array([[0.0, 0.0, 0.0, 1.0, 0.0, 1.0]], dtype=np.float32)
+
+    loss, metadata = compute_ppo_loss_objective(
+        importance_sampling_ratio,
+        loss_weights,
+        loss_masks,
+        clip_epsilon_low=0.2,
+        clip_epsilon_high=0.2,
+        max_output_tokens=loss_masks.shape[-1],
+        trainer_inference_importance_sampling_ratio=None,
+    )
+
+    assert np.isfinite(loss)
+    assert set(metadata) == {"loss_max_over_batch", "loss_std_over_batch"}
