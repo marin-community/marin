@@ -134,7 +134,7 @@ If you want to wire `OpenRewardEnv` into another curriculum manually, this is th
 from marin.rl.environments import EnvConfig
 
 env_config = EnvConfig(
-    env_class="marin.rl.environments.openreward_env.OpenRewardEnv",
+    env_class="marin.rl.integrations.openreward.env.OpenRewardEnv",
     env_args={
         "train_manifest_path": "/tmp/openreward-train.json",
         "eval_manifest_path": "/tmp/openreward-eval.json",

@@ -96,7 +96,7 @@ def build_openreward_curriculum(
             "openreward": LessonConfig(
                 lesson_id="openreward",
                 env_config=EnvConfig(
-                    env_class="marin.rl.environments.openreward_env.OpenRewardEnv",
+                    env_class="marin.rl.integrations.openreward.env.OpenRewardEnv",
                     env_args={
                         "train_manifest_path": train_manifest_path,
                         "eval_manifest_path": resolved_eval_manifest_path,
