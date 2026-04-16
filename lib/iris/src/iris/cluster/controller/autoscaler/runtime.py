@@ -47,7 +47,7 @@ from iris.cluster.controller.autoscaler.recovery import (
 )
 from iris.cluster.controller.autoscaler.routing import job_feasibility, route_demand
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
-from iris.cluster.controller.autoscaler.status import routing_decision_to_proto
+from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.types import WorkerStatusMap
@@ -117,6 +117,13 @@ class Autoscaler:
         # Most recent routing decision (for status API)
         self._last_scale_plan: ScalePlan | None = None
         self._last_evaluation: Timestamp = Timestamp.from_ms(0)
+
+        # Derived views of _last_scale_plan, built lazily and invalidated by
+        # evaluate(). Dashboard polls (GetJobStatus, ListJobs) hit these on
+        # every pending job; building them per request was the bottleneck
+        # described in #4844.
+        self._last_routing_decision_proto: vm_pb2.RoutingDecision | None = None
+        self._last_pending_hints: dict[str, PendingHint] | None = None
 
         # Thread management
         self._threads = threads if threads is not None else get_thread_container()
@@ -246,6 +253,8 @@ class Autoscaler:
         routing_decision = route_demand(list(self._groups.values()), demand_entries, ts)
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
         self._last_scale_plan = scale_plan
+        self._last_routing_decision_proto = None
+        self._last_pending_hints = None
 
         if routing_decision.unmet_entries:
             logger.debug(
@@ -555,6 +564,32 @@ class Autoscaler:
         result = job_feasibility(self._groups.values(), constraints, replicas=replicas)
         return result.reason
 
+    def get_last_routing_decision_proto(self) -> vm_pb2.RoutingDecision | None:
+        """Return the last routing decision as a proto, lazily built and cached.
+
+        The routing decision only changes in evaluate(); intermediate callers
+        (GetJobStatus, ListJobs) reuse the cached proto without paying the
+        per-entry conversion cost.
+        """
+        if self._last_scale_plan is None:
+            return None
+        if self._last_routing_decision_proto is None:
+            self._last_routing_decision_proto = routing_decision_to_proto(
+                self._last_scale_plan.routing_decision,
+                group_to_launch=self._last_scale_plan.launch_counts(),
+            )
+        return self._last_routing_decision_proto
+
+    def get_pending_hints(self) -> dict[str, PendingHint]:
+        """Return autoscaler pending hints keyed by job id.
+
+        Cached per evaluate() cycle so repeated GetJobStatus calls don't
+        rebuild the hint dict (see #4844).
+        """
+        if self._last_pending_hints is None:
+            self._last_pending_hints = build_job_pending_hints(self.get_last_routing_decision_proto())
+        return self._last_pending_hints
+
     def get_status(self) -> vm_pb2.AutoscalerStatus:
         """Build status for the status API."""
         status = vm_pb2.AutoscalerStatus(
@@ -563,13 +598,9 @@ class Autoscaler:
             last_evaluation=timestamp_to_proto(self._last_evaluation),
             recent_actions=list(self._action_log),
         )
-        if self._last_scale_plan is not None:
-            status.last_routing_decision.CopyFrom(
-                routing_decision_to_proto(
-                    self._last_scale_plan.routing_decision,
-                    group_to_launch=self._last_scale_plan.launch_counts(),
-                )
-            )
+        routing_proto = self.get_last_routing_decision_proto()
+        if routing_proto is not None:
+            status.last_routing_decision.CopyFrom(routing_proto)
         return status
 
     def get_group(self, name: str) -> ScalingGroup | None:

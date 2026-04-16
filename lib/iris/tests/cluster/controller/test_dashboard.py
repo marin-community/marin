@@ -14,6 +14,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from iris.cluster.bundle import BundleStore
+from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.log_server.server import LogServiceImpl
@@ -532,6 +533,7 @@ def test_get_autoscaler_status_returns_disabled_when_no_autoscaler(client):
 def mock_autoscaler():
     """Create a mock autoscaler that returns a status proto."""
     autoscaler = Mock()
+    autoscaler.get_pending_hints.return_value = {}
     autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
         groups=[
             vm_pb2.ScaleGroupStatus(
@@ -642,15 +644,13 @@ def test_pending_reason_uses_autoscaler_hint_for_scale_up(
     """Pending jobs surface autoscaler scale-up wait hints in job/detail APIs."""
     submit_job(state, "pending-scale", job_request)
 
-    task_id = JobName.root("test-user", "pending-scale").task(0).to_wire()
-    mock_autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
-        last_routing_decision=vm_pb2.RoutingDecision(
-            group_to_launch={"tpu_v5e_32": 1},
-            routed_entries={
-                "tpu_v5e_32": vm_pb2.DemandEntryStatusList(entries=[vm_pb2.DemandEntryStatus(task_ids=[task_id])])
-            },
+    job_wire = JobName.root("test-user", "pending-scale").to_wire()
+    mock_autoscaler.get_pending_hints.return_value = {
+        job_wire: PendingHint(
+            message="Waiting for worker scale-up in scale group 'tpu_v5e_32' (1 slice(s) requested)",
+            is_scaling_up=True,
         )
-    )
+    }
 
     # GetJobStatus intentionally does not append the autoscaler hint — it
     # was the dominant hot path in a live CPU profile (35% of wall time
@@ -693,16 +693,14 @@ def test_pending_reason_uses_passive_autoscaler_hint_over_scheduler(
         ],
     )
     submit_job(state, "diag-constraint", request)
-    task_id = JobName.root("test-user", "diag-constraint").task(0).to_wire()
+    job_wire = JobName.root("test-user", "diag-constraint").to_wire()
 
-    mock_autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
-        last_routing_decision=vm_pb2.RoutingDecision(
-            group_to_launch={"tpu_v5e_32": 0},
-            routed_entries={
-                "tpu_v5e_32": vm_pb2.DemandEntryStatusList(entries=[vm_pb2.DemandEntryStatus(task_ids=[task_id])])
-            },
+    mock_autoscaler.get_pending_hints.return_value = {
+        job_wire: PendingHint(
+            message="Waiting for workers in scale group 'tpu_v5e_32' to become ready",
+            is_scaling_up=False,
         )
-    )
+    }
 
     # GetJobStatus no longer appends the autoscaler hint (see
     # test_pending_reason_uses_autoscaler_hint_for_scale_up for rationale).
@@ -723,16 +721,14 @@ def test_list_jobs_shows_passive_autoscaler_wait_hint(
 ):
     """ListJobs should show passive autoscaler wait hints for pending jobs."""
     submit_job(state, "pending-no-launch", job_request)
-    task_id = JobName.root("test-user", "pending-no-launch").task(0).to_wire()
+    job_wire = JobName.root("test-user", "pending-no-launch").to_wire()
 
-    mock_autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
-        last_routing_decision=vm_pb2.RoutingDecision(
-            group_to_launch={"tpu_v5e_32": 0},
-            routed_entries={
-                "tpu_v5e_32": vm_pb2.DemandEntryStatusList(entries=[vm_pb2.DemandEntryStatus(task_ids=[task_id])])
-            },
+    mock_autoscaler.get_pending_hints.return_value = {
+        job_wire: PendingHint(
+            message="Waiting for workers in scale group 'tpu_v5e_32' to become ready",
+            is_scaling_up=False,
         )
-    )
+    }
 
     jobs_resp = rpc_post(client_with_autoscaler, "ListJobs")
     listed = [

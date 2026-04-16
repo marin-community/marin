@@ -645,6 +645,33 @@ class TestAutoscalerStatusReporting:
         assert status.HasField("last_routing_decision")
         assert "test-group" in status.last_routing_decision.routed_entries
 
+    def test_pending_hints_and_routing_proto_are_cached_between_evaluates(self):
+        """Dashboard polls reuse one proto + hint dict per evaluate() (#4844).
+
+        get_job_status calls this per pending job on every dashboard refresh.
+        Rebuilding the status proto each time was measurably slow on busy
+        clusters; repeated calls should return the same cached objects, and a
+        new evaluate() must invalidate the cache.
+        """
+        config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
+        group = ScalingGroup(config, make_mock_platform())
+        autoscaler = make_autoscaler({"test-group": group})
+
+        autoscaler.evaluate(make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8"))
+
+        # Cached: repeated reads return the same objects without rebuilding.
+        proto_first = autoscaler.get_last_routing_decision_proto()
+        hints_first = autoscaler.get_pending_hints()
+        assert proto_first is autoscaler.get_last_routing_decision_proto()
+        assert hints_first is autoscaler.get_pending_hints()
+        # get_status() reuses the same cached routing-decision proto.
+        assert autoscaler.get_status().last_routing_decision == proto_first
+
+        # Invalidated on next evaluate().
+        autoscaler.evaluate(make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5p-8"))
+        assert autoscaler.get_last_routing_decision_proto() is not proto_first
+        assert autoscaler.get_pending_hints() is not hints_first
+
 
 class TestAutoscalerBootstrapLogs:
     """Tests for bootstrap log reporting."""
