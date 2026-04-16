@@ -294,7 +294,12 @@ class _FakeStub:
     def __init__(self, response: job_pb2.HeartbeatResponse):
         self._response = response
 
-    def heartbeat(self, request: job_pb2.HeartbeatRequest) -> job_pb2.HeartbeatResponse:
+    async def heartbeat(
+        self,
+        request: job_pb2.HeartbeatRequest,
+        *,
+        timeout_ms: int | None = None,
+    ) -> job_pb2.HeartbeatResponse:
         return self._response
 
 
@@ -302,7 +307,12 @@ class _RaisingStub:
     def __init__(self, exc: Exception):
         self._exc = exc
 
-    def heartbeat(self, request: job_pb2.HeartbeatRequest) -> job_pb2.HeartbeatResponse:
+    async def heartbeat(
+        self,
+        request: job_pb2.HeartbeatRequest,
+        *,
+        timeout_ms: int | None = None,
+    ) -> job_pb2.HeartbeatResponse:
         raise self._exc
 
 
@@ -353,7 +363,7 @@ def test_handle_failed_heartbeats_logs_diagnostics(tmp_path, worker_metadata, ca
     controller.stop()
 
 
-def test_rpc_worker_stub_factory_uses_longer_default_timeout(monkeypatch):
+def test_rpc_worker_stub_factory_default_timeout(monkeypatch):
     captured: dict[str, object] = {}
 
     class _RecordingClient:
@@ -364,13 +374,13 @@ def test_rpc_worker_stub_factory_uses_longer_default_timeout(monkeypatch):
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr(worker_provider_module, "WorkerServiceClientSync", _RecordingClient)
+    monkeypatch.setattr(worker_provider_module, "WorkerServiceClient", _RecordingClient)
 
     factory = RpcWorkerStubFactory()
     factory.get_stub("host:8080")
 
     assert captured["address"] == "http://host:8080"
-    assert captured["timeout_ms"] == 30_000
+    assert captured["timeout_ms"] == 10_000
 
     factory.close()
 
