@@ -652,11 +652,15 @@ def test_pending_reason_uses_autoscaler_hint_for_scale_up(
         )
     )
 
+    # GetJobStatus intentionally does not append the autoscaler hint — it
+    # was the dominant hot path in a live CPU profile (35% of wall time
+    # spent rebuilding / serializing the routing table per RPC). ListJobs
+    # still includes the hint since it's only computed once per page.
     job_resp = rpc_post(
         client_with_autoscaler, "GetJobStatus", {"jobId": JobName.root("test-user", "pending-scale").to_wire()}
     )
     pending_reason = job_resp.get("job", {}).get("pendingReason", "")
-    assert "Waiting for worker scale-up in scale group 'tpu_v5e_32'" in pending_reason
+    assert "Waiting for worker scale-up in scale group 'tpu_v5e_32'" not in pending_reason
 
     jobs_resp = rpc_post(client_with_autoscaler, "ListJobs")
     listed = [
@@ -700,12 +704,15 @@ def test_pending_reason_uses_passive_autoscaler_hint_over_scheduler(
         )
     )
 
+    # GetJobStatus no longer appends the autoscaler hint (see
+    # test_pending_reason_uses_autoscaler_hint_for_scale_up for rationale).
+    # It still surfaces the scheduler diagnostic.
     job_resp = rpc_post(
         client_with_autoscaler, "GetJobStatus", {"jobId": JobName.root("test-user", "diag-constraint").to_wire()}
     )
     pending_reason = job_resp.get("job", {}).get("pendingReason", "")
     assert pending_reason
-    assert "Waiting for workers in scale group 'tpu_v5e_32' to become ready" in pending_reason
+    assert "Waiting for workers in scale group 'tpu_v5e_32' to become ready" not in pending_reason
 
 
 def test_list_jobs_shows_passive_autoscaler_wait_hint(

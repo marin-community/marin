@@ -767,6 +767,9 @@ TASKS = Table(
         # Migration 0020
         "CREATE INDEX IF NOT EXISTS idx_tasks_current_worker"
         " ON tasks(current_worker_id) WHERE current_worker_id IS NOT NULL",
+        # Migration 0034: covers _task_summaries_for_jobs GROUP BY + SUM.
+        "CREATE INDEX IF NOT EXISTS idx_tasks_job_state_counts"
+        " ON tasks(job_id, state, failure_count, preemption_count)",
     ),
 )
 
