@@ -79,6 +79,39 @@ from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.jax_utils import join_key, key_iterator, leaf_key_paths
 from levanter.utils.logging import silence_transformer_nag
 
+# DEBUGSTART — debug_accum_tpu_type experiment J2: LoRA factor trace
+# Forward-only instrumentation per senior engineer feedback. Backward via
+# trainer.py's existing sentinel-grad trace (trainer.py _train_step).
+_DBG_LORA_FACTOR_TRACE = bool(int(os.environ.get("MARIN_DEBUG_LORA_FACTOR_TRACE", "0")))
+
+# Sentinel substrings: if a LoRA module's debug_name contains any of these,
+# log its forward factor z. Matches module *type* (e.g., q_proj in any layer).
+_DBG_SENTINELS = ("q_proj", "gate_proj", "o_proj")
+
+if _DBG_LORA_FACTOR_TRACE:
+    import jax.numpy as _dbg_jnp
+
+    def _dbg_name_matches_sentinel(debug_name: str) -> bool:
+        return any(s in debug_name for s in _DBG_SENTINELS)
+
+    def _dbg_log_forward_factor(z, *, debug_name: str):
+        """Print checksum of z (forward factor) via jax.debug.print.
+
+        debug_name is the stable path from _loraize (e.g., 'transformer.stacked.self_attn.q_proj').
+        Vmapped scan layers share one name — jax.debug.print fires once per scan iteration.
+        """
+        arr = z.array
+        jax.debug.print(
+            "DEBUGJ LORA_FWD name={n} l2={l} sum={s}",
+            n=debug_name,
+            l=_dbg_jnp.sqrt(_dbg_jnp.sum(_dbg_jnp.square(arr.astype(_dbg_jnp.float32)))),
+            s=_dbg_jnp.sum(arr.astype(_dbg_jnp.float32)),
+        )
+        return z
+
+
+# DEBUGEND
+
 
 silence_transformer_nag()
 from transformers import PreTrainedTokenizerBase  # noqa: E402
@@ -153,6 +186,9 @@ class LowRankLinear(eqx.Module):
     lora_B: hnn.Linear
     dropout: hnn.Dropout
     scale: float = eqx.field(static=True)
+    # DEBUGSTART — debug_accum_tpu_type experiment J2: stable module name for trace filtering
+    debug_name: str = eqx.field(static=True, default="")
+    # DEBUGEND
 
     def __call__(self, x, key=None):
         if key is None and self.dropout.is_active:
@@ -162,11 +198,25 @@ class LowRankLinear(eqx.Module):
             )
         x = self.dropout(x, key=key)
         z = self.lora_A(x)
+        # DEBUGSTART — debug_accum_tpu_type experiment J2: log forward factor z for sentinels only
+        if _DBG_LORA_FACTOR_TRACE and _dbg_name_matches_sentinel(self.debug_name):
+            z = _dbg_log_forward_factor(z, debug_name=self.debug_name)
+        # DEBUGEND
         z = self.lora_B(z)
         return z * self.scale
 
     @staticmethod
-    def init(In: hax.Axis, Out: Axis, r: int, alpha: float, dropout_prob: float, *, key, zero_init_b: bool = False):
+    def init(
+        In: hax.Axis,
+        Out: Axis,
+        r: int,
+        alpha: float,
+        dropout_prob: float,
+        *,
+        key,
+        zero_init_b: bool = False,
+        debug_name: str = "",
+    ):
         """
         Initializes a LowRankLinear module.
 
@@ -174,6 +224,7 @@ class LowRankLinear(eqx.Module):
             zero_init_b: If True, zero-initialize the B matrix so the adapter starts as identity
                 (W + alpha/r * 0 * A = W). This is the standard PEFT convention and is critical
                 for DPO where policy must match reference at initialization.
+            debug_name: DEBUGSTART — stable path from _loraize for sentinel trace filtering. DEBUGEND
         """
         _R = hax.Axis(LORA_R, r)
         key_A, key_B = jax.random.split(key)
@@ -188,7 +239,7 @@ class LowRankLinear(eqx.Module):
             lora_B = hnn.Linear.init(_R, Out, key=key_B, use_bias=False, out_first=True)
         dropout = hnn.Dropout(dropout_prob)
 
-        return LowRankLinear(lora_A, lora_B, dropout, alpha / r)
+        return LowRankLinear(lora_A, lora_B, dropout, alpha / r, debug_name=debug_name)
 
     def merge(self) -> hax.NamedArray:
         return hax.dot(self.lora_A.weight, self.lora_B.weight, axis=LORA_R) * self.scale
@@ -216,11 +267,29 @@ class LoraLinear(ModuleWithStateDictSerialization):
         return dataclasses.replace(self.wrapped, weight=weight)
 
     @staticmethod
-    def init(wrapped: hnn.Linear, r: int, alpha: float, dropout: float = 0.0, *, key, zero_init_b: bool = False):
+    def init(
+        wrapped: hnn.Linear,
+        r: int,
+        alpha: float,
+        dropout: float = 0.0,
+        *,
+        key,
+        zero_init_b: bool = False,
+        debug_name: str = "",
+    ):
         """
         Initializes a LoraLinear module.
         """
-        lora = LowRankLinear.init(wrapped.In, wrapped.Out, r, alpha, dropout, key=key, zero_init_b=zero_init_b)
+        lora = LowRankLinear.init(
+            wrapped.In,
+            wrapped.Out,
+            r,
+            alpha,
+            dropout,
+            key=key,
+            zero_init_b=zero_init_b,
+            debug_name=debug_name,  # DEBUGSTART/DEBUGEND — experiment J2
+        )
         return LoraLinear(wrapped, lora)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
@@ -321,7 +390,13 @@ def _loraize(model: M, config: LoraConfig, key: jax.random.PRNGKey, prefix: str,
             my_key = next(key_iter)
             batched_key = shaped_rng_split(my_key, [axis.size for axis in batch_dims])
             return _batchify_ctor(LoraLinear.init)(
-                module, config.r, config.alpha, config.dropout, key=batched_key, zero_init_b=config.zero_init_b
+                module,
+                config.r,
+                config.alpha,
+                config.dropout,
+                key=batched_key,
+                zero_init_b=config.zero_init_b,
+                debug_name=key_path,  # DEBUGSTART/DEBUGEND — experiment J2 stable name
             )
         else:
             return module

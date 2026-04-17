@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import logging as _debug_logging
 from functools import partial
 from typing import Optional, cast
 
@@ -16,6 +17,14 @@ from .tuned_block_sizes import (
     infer_xla_b_block_size,
     infer_xla_v_block_size,
 )
+
+# DEBUGSTART — debug_accum_tpu_type experiment G: log CE block sizes
+_xla_ce_debug_logger = _debug_logging.getLogger("debug.xla_ce_block_sizes")
+_XLA_CE_BLOCK_SIZES_LOGGED = False
+# DEBUGEND
+# DEBUGSTART — debug_accum_tpu_type experiment R2: env-based block-size override logging
+_XLA_CE_ENV_OVERRIDE_LOGGED = False
+# DEBUGEND
 
 _XLA_MAX_TILE_WORDS = 2**31 - 1
 
@@ -445,6 +454,36 @@ def linear_softmax_cross_entropy_loss_xla(
     precision: jax.lax.PrecisionLike = None,
     return_argmax: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
+    # DEBUGSTART — debug_accum_tpu_type experiment R2: force explicit CE block sizes via env
+    global _XLA_CE_ENV_OVERRIDE_LOGGED
+    if block_sizes is None:
+        import os as _dbg_os
+        import sys as _dbg_sys
+
+        _env_b = _dbg_os.environ.get("MARIN_DEBUG_CE_B_BLOCK_SIZE", "")
+        _env_v = _dbg_os.environ.get("MARIN_DEBUG_CE_V_BLOCK_SIZE", "")
+        if _env_b and _env_v:
+            block_sizes = BlockSizes(b_block_size=int(_env_b), v_block_size=int(_env_v))
+            if not _XLA_CE_ENV_OVERRIDE_LOGGED:
+                print(
+                    f"DEBUGCE_OVERRIDE: env override taken "
+                    f"MARIN_DEBUG_CE_B_BLOCK_SIZE={_env_b} MARIN_DEBUG_CE_V_BLOCK_SIZE={_env_v} "
+                    f"-> BlockSizes(b_block_size={int(_env_b)}, v_block_size={int(_env_v)})",
+                    file=_dbg_sys.stderr,
+                    flush=True,
+                )
+                _XLA_CE_ENV_OVERRIDE_LOGGED = True
+        elif _env_b or _env_v:
+            if not _XLA_CE_ENV_OVERRIDE_LOGGED:
+                print(
+                    f"DEBUGCE_OVERRIDE: partial env override IGNORED (need BOTH vars) "
+                    f"MARIN_DEBUG_CE_B_BLOCK_SIZE={_env_b!r} MARIN_DEBUG_CE_V_BLOCK_SIZE={_env_v!r}",
+                    file=_dbg_sys.stderr,
+                    flush=True,
+                )
+                _XLA_CE_ENV_OVERRIDE_LOGGED = True
+    # DEBUGEND
+
     if block_sizes is None:
         v_block_size = infer_xla_v_block_size(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
         b_block_size = _resolve_xla_batch_block_size(
@@ -463,6 +502,29 @@ def linear_softmax_cross_entropy_loss_xla(
     else:
         v_block_size = block_sizes.v_block_size
         b_block_size = _resolve_xla_batch_block_size(x.shape[0], v_block_size, block_sizes.b_block_size, strict=True)
+
+    # DEBUGSTART — debug_accum_tpu_type experiment G: log CE block sizes
+    global _XLA_CE_BLOCK_SIZES_LOGGED
+    if not _XLA_CE_BLOCK_SIZES_LOGGED:
+        _v_padded = w.shape[1] + ((-w.shape[1]) % v_block_size)
+        _num_v_blocks = _v_padded // v_block_size
+        _num_b_blocks = x.shape[0] // b_block_size if b_block_size > 0 else 0
+        _devices = jax.devices()
+        _device_kind = _devices[0].device_kind if _devices else "unknown"
+        import sys
+
+        print(
+            f"DEBUGCE XLA CE block sizes resolved: device_kind={_device_kind} "
+            f"x.shape={x.shape} w.shape={w.shape} "
+            f"v_block_size={v_block_size} b_block_size={b_block_size} "
+            f"num_v_blocks={_num_v_blocks} num_b_blocks={_num_b_blocks} "
+            f"explicit_block_sizes={block_sizes is not None}",
+            file=sys.stderr,
+            flush=True,
+        )
+        _XLA_CE_BLOCK_SIZES_LOGGED = True
+    # DEBUGEND
+
     if v_block_size >= w.shape[1]:
         return linear_softmax_cross_entropy_loss_reference(
             x,

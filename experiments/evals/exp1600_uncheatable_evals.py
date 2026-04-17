@@ -19,7 +19,7 @@ from functools import lru_cache
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from marin.datakit.download.uncheatable_eval import make_uncheatable_eval_step
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of
+from marin.execution.executor import ExecutorStep, executor_main, mirrored, output_path_of
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep, mixture_for_evaluation
 
@@ -59,12 +59,26 @@ uncheatable_eval = make_uncheatable_eval_step()
 def uncheatable_eval_tokenized(
     *, base_path="tokenized/", tokenizer: str = llama3_tokenizer, uncheatable_eval_raw: ExecutorStep = uncheatable_eval
 ) -> dict[str, TokenizerStep]:
+    """Return tokenize steps for the Uncheatable Eval validation set.
+
+    When ``uncheatable_eval_raw`` is the default global step, source paths are wrapped with
+    ``mirrored()`` so DPO/LM validation pipelines can run from any GCS region without re-
+    downloading the GitHub dumps (the raw data was already materialized in us-central2 under
+    ``raw/uncheatable-eval/latest_43d8c7f4``). Custom overrides fall back to the ``.cd()``
+    dependency path so the executor still enforces the raw-download step.
+    """
+    use_mirror = uncheatable_eval_raw is uncheatable_eval
+
     uncheatable_eval_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset in ACTIVE_DATASETS:
         path_part = ALL_UNCHEATABLE_EVAL_DATASETS[dataset]
+        if use_mirror:
+            source = mirrored(f"raw/uncheatable-eval/latest_43d8c7f4/{path_part}", budget_gb=1)
+        else:
+            source = uncheatable_eval_raw.cd(f"{path_part}")
         uncheatable_eval_steps[os.path.join("uncheatable_eval", dataset)] = default_tokenize(
             name=os.path.join("uncheatable_eval", dataset),
-            dataset=uncheatable_eval_raw.cd(f"{path_part}"),
+            dataset=source,
             tokenizer=tokenizer,
             is_validation=True,
         )

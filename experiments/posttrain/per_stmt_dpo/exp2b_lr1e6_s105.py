@@ -1,0 +1,8 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+"""Exp 2b: DPO base (continual), 3 statements, lr=1e-6, 105 steps (1 epoch)."""
+import os
+from experiments.posttrain.per_stmt_dpo.common import run_exp2b
+
+if __name__ == "__main__":
+    run_exp2b(lr=1e-6, steps=105, tpu=os.environ.get("TPU_TYPE", "v6e-8"))

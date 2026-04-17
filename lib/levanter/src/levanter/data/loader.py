@@ -450,6 +450,30 @@ class DataLoaderIterator(Iterator[Ex]):
             global_indices_for_this_batch = [global_offset + i for i in distinct_local_indices_this_batch]
             global_indices_for_each_batch.append(global_indices_for_this_batch)
 
+            # DEBUGSTART — debug_accum_tpu_type experiment J: log first N batches' indices
+            try:
+                import hashlib as _dbg_hashlib
+                import os as _dbg_os
+
+                if int(_dbg_os.environ.get("MARIN_DEBUG_LOG_BATCH_INDICES", "0")):
+                    _dbg_step = batch.index
+                    if _dbg_step < 5:  # only first 5 batches
+                        _dbg_sorted = sorted(global_indices_for_this_batch)
+                        _dbg_sha = _dbg_hashlib.sha256(",".join(str(i) for i in _dbg_sorted).encode()).hexdigest()[:16]
+                        _dbg_head = _dbg_sorted[:8]
+                        _dbg_tail = _dbg_sorted[-4:]
+                        import sys as _dbg_sys
+
+                        print(
+                            f"DEBUGJ BATCH step={_dbg_step} n={len(_dbg_sorted)} "
+                            f"head={_dbg_head} tail={_dbg_tail} sha256={_dbg_sha}",
+                            file=_dbg_sys.stderr,
+                            flush=True,
+                        )
+            except Exception:
+                pass
+            # DEBUGEND
+
         # flattened view so we can load all the data at once
         indices_for_this_batch_of_batches: list[int] = [
             i for indices in global_indices_for_each_batch for i in indices

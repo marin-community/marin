@@ -438,6 +438,30 @@ def _reference_eval_cache_identity(config: TrainDpoConfig) -> dict[str, Any]:
     raise TypeError(f"Unsupported reference configuration: {type(config.reference).__name__}")
 
 
+def _resolved_lora_hparams(adapter: LoraAdaptationConfig) -> dict[str, Any]:
+    if adapter.target_modules is None:
+        target_modules_mode = "all_linear"
+    elif isinstance(adapter.target_modules, str):
+        target_modules_mode = "regex"
+    else:
+        target_modules_mode = "suffix_list"
+
+    exclude_modules_resolved = adapter.exclude_modules if adapter.exclude_modules is not None else ["lm_head"]
+
+    return {
+        "type": "lora",
+        "r": adapter.r,
+        "alpha": adapter.alpha,
+        "alpha_over_r": adapter.alpha / adapter.r,
+        "dropout": adapter.dropout,
+        "zero_init_b": adapter.zero_init_b,
+        "target_modules": adapter.target_modules,
+        "target_modules_mode": target_modules_mode,
+        "exclude_modules_raw": adapter.exclude_modules,
+        "exclude_modules_resolved": exclude_modules_resolved,
+    }
+
+
 def _build_validation_specs(config: PreferenceLmDataConfig, Pos: Axis) -> dict[str, ValidationDatasetSpec]:
     validation_specs: dict[str, ValidationDatasetSpec] = {}
     val_caches = config.build_caches("validation")
@@ -545,6 +569,17 @@ def _install_separate_reference_export_hooks(
 
 
 def main(config: TrainDpoConfig):
+    # DEBUGSTART — debug_accum_tpu_type: verify debug env vars reached this worker
+    import os as _dbg_os
+    import sys as _dbg_sys
+
+    _dbg_keys = ["MARIN_DEBUG_LORA_FACTOR_TRACE", "MARIN_DEBUG_LOG_BATCH_INDICES", "MARIN_DEBUG_LOG_STEP_TRACE"]
+    print(
+        "DEBUGJ WORKER_ENV " + " ".join(f"{k}={_dbg_os.environ.get(k, '<unset>')}" for k in _dbg_keys),
+        file=_dbg_sys.stderr,
+        flush=True,
+    )
+    # DEBUGEND
     _validate_dpo_config(config)
 
     tokenizer = config.data.the_tokenizer
@@ -559,6 +594,8 @@ def main(config: TrainDpoConfig):
         config = dataclasses.replace(config, model=model_context.model)
 
     levanter.initialize(config)
+    if isinstance(config.adapter, LoraAdaptationConfig):
+        levanter.tracker.log_hyperparameters({"lora": _resolved_lora_hparams(config.adapter)})
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
     reference_provider: AdapterBaseReferenceModelProvider | None = None
 

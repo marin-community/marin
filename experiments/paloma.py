@@ -13,7 +13,7 @@ from marin.datakit.download.huggingface import DownloadConfig as HfDownloadConfi
 
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, mirrored, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
 
@@ -63,15 +63,28 @@ def paloma_tokenized(
 ) -> dict[str, TokenizerStep]:
     """
     Returns a dictionary of steps to tokenize the Paloma eval sets. Keys are the subset names (with `paloma/` prefix)
+
+    When ``paloma_raw`` is the default global ``paloma`` step, the source paths are wrapped with
+    ``mirrored()`` so that DPO/LM validation pipelines can run from any GCS region without
+    re-downloading the HF raw files (the raw download was already materialized in us-central1).
+    If a caller passes a custom ``paloma_raw``, the old ``.cd()`` dependency path is used so the
+    executor still enforces the raw-download step.
     """
     # avoid cyclic dependency
     from experiments.defaults import default_tokenize
 
+    use_mirror = paloma_raw is paloma
+
     paloma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, path_part in PALOMA_DATASETS_TO_DIR.items():
+        if use_mirror:
+            # Known-good materialized path: raw/paloma-fc6827/65cd6fc/<subset>/val/val*.jsonl.gz
+            source = mirrored(f"raw/paloma-fc6827/65cd6fc/{path_part}/val/val*.jsonl.gz", budget_gb=1)
+        else:
+            source = paloma_raw.cd(f"{path_part}/val/val*.jsonl.gz")
         paloma_steps[os.path.join("paloma", dataset)] = default_tokenize(
             name=os.path.join("paloma", dataset),
-            dataset=paloma_raw.cd(f"{path_part}/val/val*.jsonl.gz"),
+            dataset=source,
             tokenizer=tokenizer,
             is_validation=True,
         )

@@ -697,6 +697,106 @@ class Trainer:
         new_state, updates = state.take_step(grads, obj_fun=obj_fun, loss=loss, key=new_key)
         new_state = hax.shard(new_state, self.parameter_axis_mapping)
 
+        # DEBUGSTART — debug_accum_tpu_type experiment J: trace grads/updates/params
+        import os as _dbg_os
+
+        if int(_dbg_os.environ.get("MARIN_DEBUG_LOG_STEP_TRACE", "0")):
+            from levanter.trainer_state import trainables_only as _dbg_trainables_only
+
+            def _dbg_collect_arrays(tree):
+                """Flatten to list of (path_str, jax.Array) for all array leaves."""
+                from jax.tree_util import tree_flatten_with_path, keystr
+
+                leaves_with_paths = tree_flatten_with_path(tree)[0]
+                out = []
+                for path, leaf in leaves_with_paths:
+                    arr = leaf.array if isinstance(leaf, hax.NamedArray) else leaf
+                    if hasattr(arr, "shape") and hasattr(arr, "dtype"):
+                        out.append((keystr(path), arr))
+                return out
+
+            def _dbg_reduce(arrays):
+                if not arrays:
+                    return jnp.float32(0.0), jnp.float32(0.0)
+                l2_sq = sum(jnp.sum(jnp.square(a.astype(jnp.float32))) for _, a in arrays)
+                csum = sum(jnp.sum(a.astype(jnp.float32)) for _, a in arrays)
+                return jnp.sqrt(l2_sq), csum
+
+            _dbg_train_grads = _dbg_trainables_only(grads, state.is_trainable)
+            _dbg_train_updates = _dbg_trainables_only(updates, state.is_trainable)
+            _dbg_train_params = _dbg_trainables_only(new_state.model, state.is_trainable)
+
+            _dbg_g_arrs = _dbg_collect_arrays(_dbg_train_grads)
+            _dbg_u_arrs = _dbg_collect_arrays(_dbg_train_updates)
+            _dbg_p_arrs = _dbg_collect_arrays(_dbg_train_params)
+
+            _dbg_g_l2, _dbg_g_sum = _dbg_reduce(_dbg_g_arrs)
+            _dbg_u_l2, _dbg_u_sum = _dbg_reduce(_dbg_u_arrs)
+            _dbg_p_l2, _dbg_p_sum = _dbg_reduce(_dbg_p_arrs)
+
+            _dbg_ga = [(p, a) for p, a in _dbg_g_arrs if "lora_A" in p]
+            _dbg_gb = [(p, a) for p, a in _dbg_g_arrs if "lora_B" in p]
+            _dbg_pa = [(p, a) for p, a in _dbg_p_arrs if "lora_A" in p]
+            _dbg_pb = [(p, a) for p, a in _dbg_p_arrs if "lora_B" in p]
+
+            _dbg_ga_l2, _dbg_ga_sum = _dbg_reduce(_dbg_ga)
+            _dbg_gb_l2, _dbg_gb_sum = _dbg_reduce(_dbg_gb)
+            _dbg_pa_l2, _dbg_pa_sum = _dbg_reduce(_dbg_pa)
+            _dbg_pb_l2, _dbg_pb_sum = _dbg_reduce(_dbg_pb)
+
+            # sentinel paths (first match each)
+            _dbg_sentinel_patterns = [
+                ("q_proj.lora.lora_A", "q_proj.lora.lora_B"),
+                ("gate_proj.lora.lora_A", "gate_proj.lora.lora_B"),
+                ("o_proj.lora.lora_A", "o_proj.lora.lora_B"),
+            ]
+            _dbg_sentinel_vals = {}
+            for pat_a, pat_b in _dbg_sentinel_patterns:
+                for tag, pat in [("grad_A", pat_a), ("grad_B", pat_b)]:
+                    for p, a in _dbg_g_arrs:
+                        if pat in p:
+                            _dbg_sentinel_vals[f"{tag}@{pat}:l2"] = jnp.sqrt(
+                                jnp.sum(jnp.square(a.astype(jnp.float32)))
+                            )
+                            _dbg_sentinel_vals[f"{tag}@{pat}:sum"] = jnp.sum(a.astype(jnp.float32))
+                            break
+                for tag, pat in [("param_A", pat_a), ("param_B", pat_b)]:
+                    for p, a in _dbg_p_arrs:
+                        if pat in p:
+                            _dbg_sentinel_vals[f"{tag}@{pat}:l2"] = jnp.sqrt(
+                                jnp.sum(jnp.square(a.astype(jnp.float32)))
+                            )
+                            _dbg_sentinel_vals[f"{tag}@{pat}:sum"] = jnp.sum(a.astype(jnp.float32))
+                            break
+
+            jax.debug.print(
+                "DEBUGJ TRACE step={s} loss={l} "
+                "grad_l2={gl} grad_sum={gs} "
+                "upd_l2={ul} upd_sum={us} "
+                "param_l2={pl} param_sum={ps} "
+                "gA_l2={gal} gA_sum={gas} gB_l2={gbl} gB_sum={gbs} "
+                "pA_l2={pal} pA_sum={pas} pB_l2={pbl} pB_sum={pbs}",
+                s=state.step,
+                l=loss,
+                gl=_dbg_g_l2,
+                gs=_dbg_g_sum,
+                ul=_dbg_u_l2,
+                us=_dbg_u_sum,
+                pl=_dbg_p_l2,
+                ps=_dbg_p_sum,
+                gal=_dbg_ga_l2,
+                gas=_dbg_ga_sum,
+                gbl=_dbg_gb_l2,
+                gbs=_dbg_gb_sum,
+                pal=_dbg_pa_l2,
+                pas=_dbg_pa_sum,
+                pbl=_dbg_pb_l2,
+                pbs=_dbg_pb_sum,
+            )
+            for _dbg_k, _dbg_v in _dbg_sentinel_vals.items():
+                jax.debug.print("DEBUGJ SENTINEL step={s} key={k} val={v}", s=state.step, k=_dbg_k, v=_dbg_v)
+        # DEBUGEND
+
         hook_infos = None
         if not _no_hooks:
             with hax.axis_mapping(self.parameter_axis_mapping):
