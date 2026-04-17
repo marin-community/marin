@@ -975,7 +975,7 @@ def run_transfer_validation_sweep():
     # TODO: Remove this filter — temporary hack to run a subset of steps
     # _skip = ("-negative-control", "-positive-control", *[f"-learning_rate-{i}" for i in range(TRANSFER_NUM_POINTS)])
     # all_steps = [s for s in all_steps if not any(s.name.endswith(k) for k in _skip)]
-    # all_steps = [s for s in all_steps if "-beta2-" in s.name]
+    all_steps = [s for s in all_steps if "-beta2-" in s.name]
 
     executor_main(steps=all_steps, description=f"DNA Bolinas transfer validation {version}")
 
