@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections import deque
 from collections.abc import Callable, Iterable
 
 from connectrpc.interceptor import Interceptor
+from rigging.timing import ExponentialBackoff
 
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
@@ -31,9 +33,11 @@ MAX_LOG_BUFFER_SIZE = 10_000
 """Global cap on buffered entries across all keys. Older entries are
 dropped first when the cap is exceeded."""
 
-# Backoff after a retryable send failure; keeps us from hot-looping when
-# the log server is unreachable. Independent of ``flush_interval``.
-_SEND_FAILURE_BACKOFF_SEC = 1.0
+# Exponential backoff bounds between send failures. Prevents the drain
+# loop from hot-spinning when the log server is unreachable. Reset after
+# any successful batch send.
+_BACKOFF_INITIAL_SEC = 0.5
+_BACKOFF_MAX_SEC = 30.0
 
 
 class LogPusher:
@@ -95,6 +99,9 @@ class LogPusher:
         self._client: LogServiceClientSync | None = None
         if self._resolver is None:
             self._client = self._build_client(self._server_url)
+
+        # Owned by the drain thread; reset after any successful send.
+        self._backoff = ExponentialBackoff(initial=_BACKOFF_INITIAL_SEC, maximum=_BACKOFF_MAX_SEC, factor=2.0)
 
         self._thread = threading.Thread(target=self._run, name="log-pusher", daemon=True)
         self._thread.start()
@@ -203,6 +210,7 @@ class LogPusher:
 
             failed = self._send_batch(batch)
             if not failed:
+                self._backoff.reset()
                 continue
 
             with self._cond:
@@ -212,7 +220,19 @@ class LogPusher:
                     # unreachable server. Unsent entries are left in the
                     # buffers and lost on process exit.
                     return
-                self._cond.wait(timeout=_SEND_FAILURE_BACKOFF_SEC)
+            # Sleep on the backoff clock. Push-triggered notifies would
+            # re-wake us immediately and defeat the backoff, so we loop
+            # on _cond.wait until the deadline passes — only ``close()``
+            # can (correctly) shortcut by setting ``_closed``.
+            deadline = time.monotonic() + self._backoff.next_interval()
+            with self._cond:
+                while not self._closed:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self._cond.wait(timeout=remaining)
+                if self._closed:
+                    return
 
     def _send_batch(
         self,
