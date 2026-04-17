@@ -62,15 +62,16 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Set up OS Login SSH key
+      - name: Install SSH key
+        env:
+          SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
+          SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
         run: |
           mkdir -p ~/.ssh
-          ssh-keygen -t rsa -b 4096 -f ~/.ssh/google_compute_engine -N "" -q -C "gha-${{ github.run_id }}-${{ github.run_attempt }}"
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
+          printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
           chmod 600 ~/.ssh/google_compute_engine
-          gcloud compute os-login ssh-keys add \
-            --key-file ~/.ssh/google_compute_engine.pub \
-            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
-            --ttl=6h
+          chmod 644 ~/.ssh/google_compute_engine.pub
 
       - name: Submit canary ferry
         id: submit
@@ -257,13 +258,6 @@ jobs:
           path: slack_message.md
           retention-days: 1
           if-no-files-found: ignore
-
-      - name: Remove OS Login SSH key
-        if: always()
-        run: |
-          gcloud compute os-login ssh-keys remove \
-            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
-            --key-file ~/.ssh/google_compute_engine.pub || true
 
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. `needs.canary-ferry.result` reflects the main job
