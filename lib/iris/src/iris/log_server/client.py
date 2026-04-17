@@ -179,13 +179,18 @@ class LogPusher:
     # ------------------------------------------------------------------
 
     def _run(self) -> None:
-        """Drain loop: wait for buffered entries, send them, retry failures with backoff."""
-        while True:
+        """Drain loop: wait for buffered entries, send them, retry failures with backoff.
+
+        Close semantics: on ``close()`` the drain thread performs exactly
+        one best-effort send pass over whatever is buffered, then exits.
+        A second attempt against a presumably-dead server on close would
+        just delay shutdown by the RPC timeout.
+        """
+        while not self._closed:
             with self._cond:
                 while not self._closed and not self._queue:
                     self._cond.wait(timeout=self._flush_interval)
                 if not self._queue:
-                    # _closed must be True here; nothing left to flush.
                     return
                 items = self._take_queue_locked()
 
@@ -196,17 +201,11 @@ class LogPusher:
 
             with self._cond:
                 self._rebuffer_at_head_locked(unsent)
-                if self._closed:
-                    # Best-effort on close: don't loop forever against an
-                    # unreachable server. Unsent entries are left in the
-                    # queue and lost on process exit.
-                    return
             # Sleep on the backoff clock. Push-triggered notifies would
             # re-wake us immediately and defeat the backoff, so we loop
-            # on _cond.wait until the deadline passes — only ``close()``
-            # can (correctly) shortcut by setting ``_closed``. If close
-            # wins the race, the next iteration of the outer loop sees
-            # ``_closed`` and returns.
+            # on _cond.wait until the deadline passes. ``close()`` breaks
+            # the wait via ``_closed``; the outer ``while not self._closed``
+            # then terminates the drain loop.
             deadline = time.monotonic() + self._backoff.next_interval()
             with self._cond:
                 while not self._closed:
