@@ -179,22 +179,9 @@ message Controller {
   }
 
   message ListJobsRequest {
-    // Preferred typed query shape. When set, legacy fields are ignored.
+    reserved 1, 2, 3, 4, 5, 6, 7;
+    reserved offset, limit, sort_field, sort_direction, name_filter, state_filter, parent_job_id;
     JobQuery query = 9;
-
-    // DEPRECATED: legacy flat query fields kept for rolling compatibility
-    // with older clients (e.g. iris.cluster.client.remote_client, CLI).
-    // The server normalizes these into `query` once at ingestion; do not
-    // read them elsewhere. Remove together with the normalization shim
-    // tracked in https://github.com/marin-community/marin/issues/4573
-    // (~2 weeks after the JobQuery rollout).
-    int32 offset = 1;
-    int32 limit = 2;
-    JobSortField sort_field = 3;
-    SortDirection sort_direction = 4;
-    string name_filter = 5;
-    string state_filter = 6;
-    string parent_job_id = 7;
   }
 
   message ListJobsResponse {

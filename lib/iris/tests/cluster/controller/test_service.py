@@ -813,7 +813,7 @@ def test_list_jobs_sql_pagination(service):
         service.launch_job(make_job_request(f"job-{i}"), None)
 
     # Request page of 2
-    request = controller_pb2.Controller.ListJobsRequest(offset=0, limit=2)
+    request = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(offset=0, limit=2))
     response = service.list_jobs(request, None)
 
     assert len(response.jobs) == 2
@@ -821,7 +821,7 @@ def test_list_jobs_sql_pagination(service):
     assert response.has_more is True
 
     # Second page
-    request2 = controller_pb2.Controller.ListJobsRequest(offset=2, limit=2)
+    request2 = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(offset=2, limit=2))
     response2 = service.list_jobs(request2, None)
 
     assert len(response2.jobs) == 2
@@ -834,7 +834,7 @@ def test_list_jobs_sql_pagination(service):
     assert page1_ids.isdisjoint(page2_ids)
 
     # Last page
-    request3 = controller_pb2.Controller.ListJobsRequest(offset=4, limit=2)
+    request3 = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(offset=4, limit=2))
     response3 = service.list_jobs(request3, None)
 
     assert len(response3.jobs) == 1
@@ -850,7 +850,9 @@ def test_list_jobs_state_filter(service):
     )
 
     # Filter to killed only
-    request = controller_pb2.Controller.ListJobsRequest(state_filter="killed", limit=10)
+    request = controller_pb2.Controller.ListJobsRequest(
+        query=controller_pb2.Controller.JobQuery(state_filter="killed", limit=10)
+    )
     response = service.list_jobs(request, None)
 
     assert len(response.jobs) == 1
@@ -862,7 +864,7 @@ def test_list_jobs_name_filter(service):
     service.launch_job(make_job_request("alpha-job"), None)
     service.launch_job(make_job_request("beta-job"), None)
 
-    request = controller_pb2.Controller.ListJobsRequest(name_filter="alpha")
+    request = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(name_filter="alpha"))
     response = service.list_jobs(request, None)
 
     assert len(response.jobs) == 1
@@ -926,14 +928,6 @@ def test_list_jobs_job_query_roots_and_children(service, state):
         None,
     )
     assert [job.job_id for job in children_response.jobs] == [child_id.to_wire()]
-
-    # Legacy flat parent_job_id field (no JobQuery sub-message) must also
-    # filter to children only — see issue #4705.
-    legacy_children_response = service.list_jobs(
-        controller_pb2.Controller.ListJobsRequest(parent_job_id=parent_id.to_wire()),
-        None,
-    )
-    assert [job.job_id for job in legacy_children_response.jobs] == [child_id.to_wire()]
 
 
 # =============================================================================
