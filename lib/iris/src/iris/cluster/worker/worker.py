@@ -460,61 +460,57 @@ class Worker:
 
         return None
 
-    def _resolve_log_service(self) -> str | None:
+    def _resolve_log_service(self, _server_url: str) -> str:
         """Resolve the LogService address via the /system/log-server endpoint.
 
-        Called before registration, so the controller may not yet be reachable.
-        Treats RPC errors and missing endpoints the same: log a warning and
-        return None so the caller can skip remote log attachment without
-        crashing the lifecycle thread.
+        Passed to ``LogPusher`` as its resolver. Raises on any failure so the
+        pusher treats the attempt as unresolved and keeps the cached client
+        slot empty; the next push will retry. The ``_server_url`` argument is
+        ignored — it only exists to satisfy the resolver signature — so
+        callers can tag the pusher with any symbolic name.
         """
-        if not self._controller_client:
-            return None
-        try:
-            resp = self._controller_client.list_endpoints(
-                controller_pb2.Controller.ListEndpointsRequest(
-                    prefix="/system/log-server",
-                    exact=True,
-                ),
-            )
-        except Exception as e:
-            logger.warning("Failed to resolve /system/log-server: %s", e)
-            return None
+        assert self._controller_client is not None, "controller client must exist before log resolution"
+        resp = self._controller_client.list_endpoints(
+            controller_pb2.Controller.ListEndpointsRequest(
+                prefix="/system/log-server",
+                exact=True,
+            ),
+        )
         if not resp.endpoints:
-            logger.warning("No /system/log-server endpoint registered on controller")
-            return None
-        addr = resp.endpoints[0].address
-        logger.info("Resolved /system/log-server -> %s", addr)
-        return addr
+            raise ConnectionError("No /system/log-server endpoint registered on controller")
+        return resp.endpoints[0].address
 
     def _attach_log_handler(self) -> None:
-        """Create LogPusher and attach RemoteLogHandler under ``worker_log_key``.
+        """Attach ``RemoteLogHandler`` under ``worker_log_key(self._worker_id)``.
 
-        Always tears down any existing handler first so each lifecycle cycle
-        re-resolves /system/log-server (picking up log-server failover) and
-        rebuilds the LogPusher against the fresh address.
-
-        Skipped when ``self._worker_id`` is not yet known locally — in that
-        (rare) case the controller will assign an id during ``_register`` and
-        the lifecycle loop re-calls this method with the canonical id.
+        Idempotent: if a pusher already exists, just rename the handler's
+        key. ``LogPusher`` self-heals via its resolver across log-server
+        failovers, so there's no teardown-and-rebuild across lifecycle
+        iterations. Skipped when ``self._worker_id`` is not yet known
+        locally — in that case the controller assigns one during
+        ``_register`` and the lifecycle loop re-calls this method.
         """
-        self._detach_log_handler()
         if not self._worker_id:
             return
-        log_addr = self._resolve_log_service()
-        if not log_addr:
-            return
-        log_interceptors = ()
-        if self._config.auth_token:
-            log_interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
-        self._log_pusher = LogPusher(log_addr, interceptors=log_interceptors)
-        self._log_handler = RemoteLogHandler(
-            self._log_pusher,
-            key=worker_log_key(self._worker_id),
-        )
-        self._log_handler.setLevel(logging.INFO)
-        self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
-        logging.getLogger().addHandler(self._log_handler)
+        key = worker_log_key(self._worker_id)
+
+        if self._log_pusher is None:
+            log_interceptors = ()
+            if self._config.auth_token:
+                log_interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
+            self._log_pusher = LogPusher(
+                "iris://system/log-server",
+                interceptors=log_interceptors,
+                resolver=self._resolve_log_service,
+            )
+
+        if self._log_handler is None:
+            self._log_handler = RemoteLogHandler(self._log_pusher, key=key)
+            self._log_handler.setLevel(logging.INFO)
+            self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+            logging.getLogger().addHandler(self._log_handler)
+        else:
+            self._log_handler.key = key
 
     def _detach_log_handler(self) -> None:
         """Remove and close the current RemoteLogHandler and LogPusher if any."""

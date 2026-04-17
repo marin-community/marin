@@ -7,7 +7,10 @@ import logging
 import threading
 
 import pytest
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 
+from iris.log_server import client as client_mod
 from iris.log_server.client import LogPusher, RemoteLogHandler
 from iris.rpc import logging_pb2
 
@@ -231,3 +234,157 @@ def test_close_waits_for_inflight_send():
     assert close_done.wait(timeout=5.0), "close() never completed"
     t.join(timeout=1.0)
     assert not client_closed_during_send, "client was destroyed while _send was in flight"
+
+
+# ---------------------------------------------------------------------------
+# Resolver-based LogPusher (self-healing on log-server failover)
+# ---------------------------------------------------------------------------
+
+
+class _FakeLogServiceClient:
+    """Records pushes and can be seeded with errors to raise."""
+
+    def __init__(self, address, **_kwargs):
+        self.address = address
+        self.pushes: list[logging_pb2.PushLogsRequest] = []
+        self.errors: list[Exception] = []
+        self.closed = False
+
+    def push_logs(self, request):
+        if self.errors:
+            raise self.errors.pop(0)
+        self.pushes.append(request)
+        return logging_pb2.PushLogsResponse()
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def tracked_log_service_client(monkeypatch):
+    """Patch LogServiceClientSync to track every constructed instance."""
+    created: list[_FakeLogServiceClient] = []
+
+    def factory(address, timeout_ms=10_000, interceptors=()):
+        c = _FakeLogServiceClient(address, timeout_ms=timeout_ms, interceptors=interceptors)
+        created.append(c)
+        return c
+
+    monkeypatch.setattr(client_mod, "LogServiceClientSync", factory)
+    return created
+
+
+def _entry(data="line"):
+    e = logging_pb2.LogEntry(source="test", data=data, level=logging_pb2.LOG_LEVEL_INFO)
+    e.timestamp.epoch_ms = 1
+    return e
+
+
+def test_resolver_called_lazily_and_cached(tracked_log_service_client):
+    calls = []
+
+    def resolver(url):
+        calls.append(url)
+        return "http://resolved:1"
+
+    pusher = LogPusher("iris://system/log-server", batch_size=1, resolver=resolver)
+    try:
+        # No resolution yet — pusher is deferred.
+        assert calls == []
+        assert tracked_log_service_client == []
+
+        pusher.push("k", [_entry("a")])
+        assert calls == ["iris://system/log-server"]
+        assert len(tracked_log_service_client) == 1
+
+        # Second push reuses cached client.
+        pusher.push("k", [_entry("b")])
+        assert calls == ["iris://system/log-server"]
+        assert len(tracked_log_service_client) == 1
+        assert len(tracked_log_service_client[0].pushes) == 2
+    finally:
+        pusher.close()
+
+
+def test_retryable_error_invalidates_and_reresolves(tracked_log_service_client):
+    addresses = iter(["http://a:1", "http://b:2"])
+
+    def resolver(_url):
+        return next(addresses)
+
+    pusher = LogPusher("iris://system/log-server", batch_size=1, resolver=resolver)
+    try:
+        pusher.push("k", [_entry("a")])
+        assert tracked_log_service_client[0].address == "http://a:1"
+
+        # Next push: UNAVAILABLE on the cached client → invalidate.
+        tracked_log_service_client[0].errors.append(ConnectError(Code.UNAVAILABLE, "gone"))
+        pusher.push("k", [_entry("b")])
+        assert tracked_log_service_client[0].closed is True
+
+        # Next push triggers re-resolve + new client.
+        pusher.push("k", [_entry("c")])
+        assert len(tracked_log_service_client) == 2
+        assert tracked_log_service_client[1].address == "http://b:2"
+        assert len(tracked_log_service_client[1].pushes) == 1
+    finally:
+        pusher.close()
+
+
+def test_non_retryable_error_does_not_invalidate(tracked_log_service_client):
+    pusher = LogPusher("iris://system/log-server", batch_size=1, resolver=lambda _url: "http://a:1")
+    try:
+        pusher.push("k", [_entry("a")])
+        assert len(tracked_log_service_client) == 1
+
+        # NOT_FOUND is not retryable — pusher keeps its cached client.
+        tracked_log_service_client[0].errors.append(ConnectError(Code.NOT_FOUND, "missing"))
+        pusher.push("k", [_entry("b")])
+
+        assert len(tracked_log_service_client) == 1
+        assert tracked_log_service_client[0].closed is False
+    finally:
+        pusher.close()
+
+
+def test_resolver_raising_is_retried_on_next_push(tracked_log_service_client):
+    attempts = []
+
+    def resolver(_url):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise ConnectionError("controller down")
+        return "http://good:1"
+
+    pusher = LogPusher("iris://system/log-server", batch_size=1, resolver=resolver)
+    try:
+        # First push: resolver raises. Entry is lost (best-effort) but
+        # pusher stays healthy — no cached client to invalidate.
+        pusher.push("k", [_entry("a")])
+        assert len(attempts) == 1
+        assert tracked_log_service_client == []
+
+        # Second push: resolver succeeds this time.
+        pusher.push("k", [_entry("b")])
+        assert len(attempts) == 2
+        assert len(tracked_log_service_client) == 1
+        assert len(tracked_log_service_client[0].pushes) == 1
+    finally:
+        pusher.close()
+
+
+def test_static_url_pusher_unchanged(tracked_log_service_client):
+    """Without a resolver the pusher builds its client eagerly — legacy behavior."""
+    pusher = LogPusher("http://h:1", batch_size=1)
+    try:
+        # Eager construction at __init__ time.
+        assert len(tracked_log_service_client) == 1
+        assert tracked_log_service_client[0].address == "http://h:1"
+
+        # Retryable error does NOT invalidate — there's nothing to re-resolve to.
+        tracked_log_service_client[0].errors.append(ConnectError(Code.UNAVAILABLE, "gone"))
+        pusher.push("k", [_entry("a")])
+        assert tracked_log_service_client[0].closed is False
+        assert len(tracked_log_service_client) == 1
+    finally:
+        pusher.close()

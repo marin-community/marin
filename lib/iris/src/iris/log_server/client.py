@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from connectrpc.interceptor import Interceptor
 
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
+from iris.rpc.errors import is_retryable_error
 from iris.rpc.logging_connect import LogServiceClientSync
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,18 @@ class LogPusher:
 
     Entries are buffered per-key and flushed when either ``batch_size``
     entries accumulate or ``flush_interval`` seconds elapse.
+
+    Endpoint resolution:
+        If ``resolver`` is None, ``server_url`` is used as a direct http
+        address and the RPC client is built eagerly.
+
+        If ``resolver`` is set, ``server_url`` is passed to it on each
+        resolution to obtain the actual http address — e.g. the worker
+        passes ``server_url="iris://system/log-server"`` with a resolver
+        that calls the controller's ``list_endpoints``. The underlying
+        client is built lazily on first push. On a retryable RPC error
+        (UNAVAILABLE / INTERNAL / DEADLINE_EXCEEDED) the cached client
+        is invalidated and the next push re-invokes the resolver.
     """
 
     def __init__(
@@ -39,8 +52,14 @@ class LogPusher:
         batch_size: int = 1000,
         flush_interval: float = 5.0,
         interceptors: Iterable[Interceptor] = (),
+        *,
+        resolver: Callable[[str], str] | None = None,
     ) -> None:
-        self._client = LogServiceClientSync(address=server_url, timeout_ms=timeout_ms, interceptors=tuple(interceptors))
+        self._server_url = server_url
+        self._resolver = resolver
+        self._timeout_ms = timeout_ms
+        self._interceptors = tuple(interceptors)
+
         self._batch_size = batch_size
         self._flush_interval = flush_interval
         self._buffers: dict[str, list[logging_pb2.LogEntry]] = {}
@@ -49,8 +68,53 @@ class LogPusher:
         self._send_lock = threading.Lock()
         self._closed = False
 
+        # Without a resolver, build the client eagerly so we fail fast on
+        # bad URLs. With a resolver, defer construction until first push —
+        # the controller may not be reachable at construction time.
+        self._client: LogServiceClientSync | None = None
+        if self._resolver is None:
+            self._client = self._build_client(self._server_url)
+
         self._flush_timer: threading.Timer | None = None
         self._schedule_flush()
+
+    def _build_client(self, address: str) -> LogServiceClientSync:
+        return LogServiceClientSync(
+            address=address,
+            timeout_ms=self._timeout_ms,
+            interceptors=self._interceptors,
+        )
+
+    def _get_client(self) -> LogServiceClientSync:
+        """Return the cached RPC client, resolving + constructing on demand.
+
+        Must be called under ``_send_lock`` so invalidation is race-free
+        against other senders.
+        """
+        if self._client is not None:
+            return self._client
+        assert self._resolver is not None  # cleared only by _invalidate
+        address = self._resolver(self._server_url)
+        if not address:
+            raise ConnectionError(f"LogPusher resolver returned empty address for {self._server_url!r}")
+        self._client = self._build_client(address)
+        logger.info("LogPusher resolved %s -> %s", self._server_url, address)
+        return self._client
+
+    def _invalidate(self, reason: str) -> None:
+        """Drop the cached RPC client so the next send re-resolves.
+
+        Must be called under ``_send_lock``. No-op when no resolver is
+        configured (a static-URL pusher has nothing to re-resolve to).
+        """
+        if self._resolver is None or self._client is None:
+            return
+        logger.warning("LogPusher: invalidating cached endpoint for %s (%s)", self._server_url, reason)
+        try:
+            self._client.close()
+        except Exception:
+            logger.debug("LogPusher _invalidate: cached client close raised", exc_info=True)
+        self._client = None
 
     def _schedule_flush(self) -> None:
         if self._closed:
@@ -90,9 +154,12 @@ class LogPusher:
             if self._closed:
                 return
             try:
-                self._client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
-            except Exception:
+                client = self._get_client()
+                client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
+            except Exception as exc:
                 logger.debug("Failed to push %d log entries for key %s", len(entries), key, exc_info=True)
+                if is_retryable_error(exc):
+                    self._invalidate(str(exc))
 
     def flush(self) -> None:
         """Force-flush all buffered entries."""
@@ -104,7 +171,9 @@ class LogPusher:
         self.flush()
         with self._send_lock:
             self._closed = True
-        self._client.close()
+            if self._client is not None:
+                self._client.close()
+                self._client = None
 
 
 class LogServiceProxy:
