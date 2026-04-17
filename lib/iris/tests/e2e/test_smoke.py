@@ -326,9 +326,12 @@ def test_dashboard_job_expand_nested(smoke_cluster, smoke_page, smoke_screenshot
     child_row = smoke_page.locator("tr", has_text="tree-child").first
     child_row.get_by_role("button").filter(has_text="▶").click()
 
+    # Clicking ▶ triggers a lazy fetch for grandchildren — slower than the
+    # initial job-detail render (which is already cached), so allow extra
+    # time for cloud-mode RPC round-trips.
     smoke_page.wait_for_function(
         "() => document.body.textContent.includes('tree-grandchild')",
-        timeout=10000,
+        timeout=30000,
     )
     smoke_screenshot("job-expand-nested-after", "Job detail page with tree-child expanded showing tree-grandchild")
 
