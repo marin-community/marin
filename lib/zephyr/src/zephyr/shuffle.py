@@ -84,10 +84,12 @@ class ListShard:
 # ---------------------------------------------------------------------------
 
 _SCATTER_META_SUFFIX = ".scatter_meta"
-_SCATTER_MANIFEST_NAME = "scatter_metadata"
 _SCATTER_DATA_SUFFIX = ".shuffle"
 
-_SCATTER_META_READ_CONCURRENCY = 256
+# Number of parallel sidecar reads each reducer issues when building its
+# ScatterReader. Sidecars are small JSON files (a few KB) and reads are
+# GCS GET-bound, so a modest pool keeps latency low without thrashing.
+_SIDECAR_READ_CONCURRENCY = 32
 # Number of items sampled from the first flush to estimate avg_item_bytes.
 _SCATTER_SAMPLE_SIZE = 100
 # Fraction of total memory budgeted for read-side decompression buffers.
@@ -118,48 +120,29 @@ def _write_scatter_meta(data_path: str, sidecar: dict) -> None:
             f.write(payload)
 
 
-# Per-worker caches for sidecar + manifest reads.
-_scatter_meta_cache: dict[str, dict] = {}
-_scatter_manifest_cache: dict[str, list[dict]] = {}
+def _read_sidecars_parallel(scatter_paths: list[str]) -> list[tuple[str, dict]]:
+    """Read every ``.scatter_meta`` sidecar concurrently, preserving input order.
 
+    Each reducer calls this to build its ``ScatterReader`` directly from the
+    per-mapper sidecars, without going through a coordinator-written manifest.
 
-def _read_scatter_meta(data_path: str) -> dict:
-    meta_path = _scatter_meta_path(data_path)
-    if meta_path not in _scatter_meta_cache:
-        with open_url(meta_path, "r") as f:
-            _scatter_meta_cache[meta_path] = json.loads(f.read())
-    return _scatter_meta_cache[meta_path]
-
-
-def _read_scatter_manifest(manifest_path: str) -> list[dict]:
-    if manifest_path not in _scatter_manifest_cache:
-        with open_url(manifest_path, "r") as f:
-            _scatter_manifest_cache[manifest_path] = json.loads(f.read())
-    return _scatter_manifest_cache[manifest_path]
-
-
-def _write_scatter_manifest(scatter_paths: list[str], output_path: str) -> None:
-    """Aggregate ``.scatter_meta`` sidecars into a single manifest.
-
-    Sidecar reads run in parallel since each is an independent GCS GET.
+    TODO(rav): each reducer subprocess re-reads every sidecar even though only
+    one shard's byte ranges are used. A worker-level sidecar cache (or a shared
+    read across colocated reducers) would avoid the redundant GCS GETs when
+    many reducers run on the same host.
     """
 
     def _read_entry(path: str) -> tuple[str, dict]:
-        meta = _read_scatter_meta(path)
-        return path, {"path": path, **meta}
+        meta_path = _scatter_meta_path(path)
+        with open_url(meta_path, "r") as f:
+            return path, json.loads(f.read())
 
     results: dict[str, dict] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=_SCATTER_META_READ_CONCURRENCY) as pool:
-        for path, entry in pool.map(_read_entry, scatter_paths):
-            results[path] = entry
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
+        for path, meta in pool.map(_read_entry, scatter_paths):
+            results[path] = meta
 
-    entries = [results[path] for path in scatter_paths]
-
-    ensure_parent_dir(output_path)
-    payload = json.dumps(entries)
-    with log_time(f"Writing scatter manifest ({len(entries)} files) to {output_path}"):
-        with open_url(output_path, "w") as f:
-            f.write(payload)
+    return [(path, results[path]) for path in scatter_paths]
 
 
 # ---------------------------------------------------------------------------
@@ -228,9 +211,6 @@ def _iter_chunk(fs: Any, fs_path: str, offset: int, length: int) -> Iterator:
 class ScatterReader:
     """All scatter chunks for one target shard, across all source files.
 
-    Replaces the former ScatterShard dataclass + ScatterFileIterator assembly
-    + ``_build_scatter_shard_from_manifest`` builder function.
-
     Construct via :meth:`from_manifest` for production use, or pass fields
     directly for testing.
     """
@@ -246,9 +226,14 @@ class ScatterReader:
         self.avg_item_bytes: float = avg_item_bytes
 
     @classmethod
-    def from_manifest(cls, manifest_path: str, target_shard: int) -> ScatterReader:
-        """Build a ScatterReader for one target shard from the consolidated manifest."""
-        entries = _read_scatter_manifest(manifest_path)
+    def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> ScatterReader:
+        """Build a ScatterReader by reading per-mapper sidecars directly.
+
+        Each reducer reads every mapper's ``.scatter_meta`` sidecar in parallel
+        and filters for its own ``target_shard``. No coordinator-written manifest
+        is needed, which eliminates a serialization bottleneck when there are
+        thousands of mappers.
+        """
         shard_key = str(target_shard)
 
         iterators: list[ScatterFileIterator] = []
@@ -256,24 +241,27 @@ class ScatterReader:
         weighted_bytes = 0.0
         total_chunks_for_avg = 0
 
-        with log_time(f"Building ScatterReader for target shard {target_shard} from manifest ({len(entries)} files)"):
-            for entry in entries:
-                shards = entry.get("shards", {})
+        with log_time(
+            f"Building ScatterReader for target shard {target_shard} "
+            f"from {len(scatter_paths)} sidecars (concurrency={_SIDECAR_READ_CONCURRENCY})"
+        ):
+            for path, meta in _read_sidecars_parallel(scatter_paths):
+                shards = meta.get("shards", {})
                 ranges = shards.get(shard_key)
                 if not ranges:
                     continue
 
                 iterators.append(
                     ScatterFileIterator(
-                        path=entry["path"],
+                        path=path,
                         chunks=tuple((int(off), int(length)) for off, length in ranges),
                     )
                 )
 
-                per_shard_max = entry.get("max_chunk_rows", {})
+                per_shard_max = meta.get("max_chunk_rows", {})
                 max_rows = max(max_rows, per_shard_max.get(shard_key, 0))
 
-                ab = entry.get("avg_item_bytes", 0.0)
+                ab = meta.get("avg_item_bytes", 0.0)
                 if ab > 0:
                     count = len(ranges)
                     weighted_bytes += ab * count
@@ -318,15 +306,6 @@ class ScatterReader:
         # items in the worst case (e.g. if downstream materialises chunks).
         estimated = total_chunks * self.max_chunk_rows * self.avg_item_bytes
         return estimated > memory_limit * memory_fraction
-
-
-# Backward-compatible alias so plan.py isinstance checks still work.
-ScatterShard = ScatterReader
-
-
-def _build_scatter_shard_from_manifest(manifest_path: str, target_shard: int) -> ScatterReader:
-    """Build a ScatterReader for one target shard from the consolidated manifest."""
-    return ScatterReader.from_manifest(manifest_path, target_shard)
 
 
 # ---------------------------------------------------------------------------

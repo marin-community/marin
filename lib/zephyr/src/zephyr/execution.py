@@ -112,12 +112,8 @@ from zephyr.shuffle import (  # noqa: E402
     ListShard,
     MemChunk,
     ScatterReader,  # noqa: F401 — re-exported for plan.py and external callers
-    ScatterShard,  # noqa: F401 — backward-compat alias for ScatterReader
     ScatterWriter,  # noqa: F401 — re-exported for external callers
-    _build_scatter_shard_from_manifest,  # noqa: F401 — re-exported for plan.py
     _write_scatter,
-    _write_scatter_manifest,
-    _SCATTER_MANIFEST_NAME,
 )
 
 # ---------------------------------------------------------------------------
@@ -1296,25 +1292,23 @@ def _regroup_result_refs(
     """Regroup worker output refs by output shard index without loading data.
 
     Non-scatter: each worker's ListShard maps to its own index (identity).
-    Scatter: writes a consolidated scatter manifest combining all sidecar
-    metadata into a single file, then gives each reducer a shard containing
-    just the manifest path.
+    Scatter: passes the list of scatter data-file paths to every reducer.
+    Each reducer reads the per-mapper ``.scatter_meta`` sidecars in parallel
+    to build its own ``ScatterReader`` without coordinator-side consolidation.
     """
     num_output = max(max(result_refs.keys(), default=0) + 1, input_shard_count)
     if output_shard_count is not None:
         num_output = max(num_output, output_shard_count)
 
     if is_scatter:
-        # Collect all scatter file paths from all workers
+        # Collect all scatter file paths from all workers. The coordinator
+        # does NOT read the sidecars or write a consolidated manifest —
+        # reducers do their own parallel sidecar reads.
         all_paths: list[str] = []
         for result in result_refs.values():
             all_paths.extend(result.shard)
 
-        # Write consolidated manifest and point reducers at it
-        manifest_path = f"{scatter_manifest_dir}/{_SCATTER_MANIFEST_NAME}"
-        _write_scatter_manifest(all_paths, manifest_path)
-        shared_refs = MemChunk(items=[manifest_path])
-
+        shared_refs = MemChunk(items=all_paths)
         return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
 
     # Non-scatter: each result's shard maps to its own index

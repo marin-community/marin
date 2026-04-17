@@ -81,7 +81,8 @@ packages = ["src/iris"]
 
 [tool.pytest.ini_options]
 timeout = 10
-addopts = "-n auto --durations=25 -m 'not slow and not docker' -v"
+timeout_method = "thread"
+addopts = "-n auto --durations=25 -m 'not slow and not docker and not e2e' -v"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "docker: marks tests requiring Docker runtime (slow, needs daemon)",

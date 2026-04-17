@@ -630,6 +630,16 @@ class Controller(_message.Message):
         USERS_FIELD_NUMBER: _ClassVar[int]
         users: _containers.RepeatedCompositeFieldContainer[Controller.GetUserBudgetResponse]
         def __init__(self, users: _Optional[_Iterable[_Union[Controller.GetUserBudgetResponse, _Mapping]]] = ...) -> None: ...
+    class UpdateTaskStatusRequest(_message.Message):
+        __slots__ = ("worker_id", "updates")
+        WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+        UPDATES_FIELD_NUMBER: _ClassVar[int]
+        worker_id: str
+        updates: _containers.RepeatedCompositeFieldContainer[_job_pb2.WorkerTaskStatus]
+        def __init__(self, worker_id: _Optional[str] = ..., updates: _Optional[_Iterable[_Union[_job_pb2.WorkerTaskStatus, _Mapping]]] = ...) -> None: ...
+    class UpdateTaskStatusResponse(_message.Message):
+        __slots__ = ()
+        def __init__(self) -> None: ...
     class GetSchedulerStateRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
