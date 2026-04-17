@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
+from iris.managed_thread import thread_container_scope
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
     Constraint,
@@ -110,6 +111,17 @@ class FakeProvider:
 
     def close(self) -> None:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _isolated_thread_container():
+    """Install a per-test ThreadContainer so Controller-spawned threads are
+    stopped at test end. Without this, tests that construct a Controller but
+    never call ``.stop()`` leak the uvicorn log-server thread and hit the 5s
+    leak-detection wait in the top-level ``_thread_cleanup`` fixture.
+    """
+    with thread_container_scope(name="controller-test"):
+        yield
 
 
 @pytest.fixture
