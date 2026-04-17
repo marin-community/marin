@@ -111,7 +111,9 @@ class PickleDiskChunk:
 from zephyr.shuffle import (  # noqa: E402
     ListShard,
     MemChunk,
-    ScatterShard,  # noqa: F401 — re-exported for plan.py and external callers
+    ScatterReader,  # noqa: F401 — re-exported for plan.py and external callers
+    ScatterShard,  # noqa: F401 — backward-compat alias for ScatterReader
+    ScatterWriter,  # noqa: F401 — re-exported for external callers
     _build_scatter_shard_from_manifest,  # noqa: F401 — re-exported for plan.py
     _write_scatter,
     _write_scatter_manifest,

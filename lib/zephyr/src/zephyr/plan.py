@@ -25,7 +25,7 @@ import msgspec
 from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import url_to_fs
 
-from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
+from zephyr.external_sort import external_sort_merge
 
 from zephyr.dataset import (
     Dataset,
@@ -635,7 +635,7 @@ def _merge_sorted_chunks(
 
     # Check if external sort is needed BEFORE materializing all iterators.
     # ScatterShard can decide using manifest stats (no file opens needed).
-    from zephyr.shuffle import ScatterShard
+    from zephyr.shuffle import ScatterShard  # ScatterShard is an alias for ScatterReader
 
     use_external = (
         external_sort_dir is not None
@@ -648,10 +648,8 @@ def _merge_sorted_chunks(
 
         memory_limit = _TaskResources.from_environment().memory_bytes
         # Per-iterator memory ~= compressed bytes for one chunk held by
-        # cat_file. Use uncompressed (max_chunk_rows * avg_item_bytes) as a
-        # conservative upper bound — scatter writes ASCII-ish data with
-        # mediocre zstd ratio.
-        per_iter_bytes = int(shard.max_chunk_rows * shard.avg_item_bytes)
+        # cat_file. Use the actual max compressed chunk size from the sidecar.
+        per_iter_bytes = shard.max_compressed_chunk_bytes
         fan_in = compute_fan_in(per_iter_bytes, memory_limit)
         write_batch_size = compute_write_batch_size(shard.avg_item_bytes)
         logger.info(
@@ -674,11 +672,7 @@ def _merge_sorted_chunks(
     else:
         chunk_iterators = list(shard.get_iterators())
         logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
-        if external_sort_dir is not None and len(chunk_iterators) > EXTERNAL_SORT_FAN_IN:
-            # Fallback: stats unavailable, use the hard-cap fan-in.
-            merged_stream = external_sort_merge(iter(chunk_iterators), merge_key, external_sort_dir)
-        else:
-            merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
+        merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
     yield from groupby(merged_stream, key=key_fn)
 
 
