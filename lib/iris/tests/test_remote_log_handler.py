@@ -183,22 +183,23 @@ def test_overflow_drops_oldest(tracked_log_service_client, caplog):
         flush_interval=999.0,
         max_buffer_size=3,
     )
+    # The pusher's own logger is detached from the root (to avoid
+    # re-entry via RemoteLogHandler); attach caplog's handler directly.
+    client_logger = logging.getLogger("iris.log_server.client")
+    client_logger.addHandler(caplog.handler)
+    client_logger.setLevel(logging.WARNING)
     try:
-        with caplog.at_level(logging.WARNING, logger="iris.log_server.client"):
-            entries = [
-                logging_pb2.LogEntry(source="test", data=str(i), level=logging_pb2.LOG_LEVEL_INFO) for i in range(5)
-            ]
-            pusher.push("k", entries)
+        entries = [logging_pb2.LogEntry(source="test", data=str(i), level=logging_pb2.LOG_LEVEL_INFO) for i in range(5)]
+        pusher.push("k", entries)
         pusher.flush()
         pusher.close()
         datas = [e.data for p in tracked_log_service_client[0].pushes for e in p.entries]
         # Oldest 2 dropped; "2","3","4" survive in order.
         assert datas == ["2", "3", "4"]
         assert any("buffer overflow" in r.message for r in caplog.records)
-    except Exception:
-        # Best-effort cleanup for test failures.
+    finally:
+        client_logger.removeHandler(caplog.handler)
         pusher.close()
-        raise
 
 
 def test_retryable_failure_rebuffers_at_head(monkeypatch):

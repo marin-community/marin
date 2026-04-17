@@ -13,6 +13,7 @@ RemoteLogHandler: Python logging.Handler that formats records and pushes
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 from collections import deque
@@ -26,7 +27,20 @@ from iris.rpc import logging_pb2
 from iris.rpc.errors import is_retryable_error
 from iris.rpc.logging_connect import LogServiceClientSync
 
+# Detached from the root logger: ``RemoteLogHandler`` lives on the root
+# logger and calls ``LogPusher.push``, so if our own diagnostics reached
+# the root they'd be enqueued right back into the pusher — a re-entrant
+# loop that silently amplifies during failure storms. We send to stderr
+# directly and set ``propagate = False`` so nothing here can feed the
+# handler we serve.
 logger = logging.getLogger(__name__)
+logger.propagate = False
+if not logger.handlers:
+    _stderr_handler = logging.StreamHandler(sys.stderr)
+    _stderr_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logger.addHandler(_stderr_handler)
+    if logger.level == logging.NOTSET:
+        logger.setLevel(logging.INFO)
 
 
 MAX_LOG_BUFFER_SIZE = 10_000
@@ -205,7 +219,9 @@ class LogPusher:
             # Sleep on the backoff clock. Push-triggered notifies would
             # re-wake us immediately and defeat the backoff, so we loop
             # on _cond.wait until the deadline passes — only ``close()``
-            # can (correctly) shortcut by setting ``_closed``.
+            # can (correctly) shortcut by setting ``_closed``. If close
+            # wins the race, the next iteration of the outer loop sees
+            # ``_closed`` and returns.
             deadline = time.monotonic() + self._backoff.next_interval()
             with self._cond:
                 while not self._closed:
@@ -213,8 +229,6 @@ class LogPusher:
                     if remaining <= 0:
                         break
                     self._cond.wait(timeout=remaining)
-                if self._closed:
-                    return
 
     def _send_items(
         self,
