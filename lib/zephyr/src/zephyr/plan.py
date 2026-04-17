@@ -25,7 +25,7 @@ import msgspec
 from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import url_to_fs
 
-from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
+from zephyr.external_sort import external_sort_merge
 
 from zephyr.dataset import (
     Dataset,
@@ -64,7 +64,7 @@ class Shard(Protocol):
 
     Implementations:
     - ListShard: backed by iterable references (source data, non-scatter)
-    - ScatterShard: backed by scatter Parquet files with predicate pushdown
+    - ScatterShard: backed by scatter zstd-chunk files with byte-range sidecar
     """
 
     def __iter__(self) -> Iterator: ...
@@ -635,7 +635,7 @@ def _merge_sorted_chunks(
 
     # Check if external sort is needed BEFORE materializing all iterators.
     # ScatterShard can decide using manifest stats (no file opens needed).
-    from zephyr.shuffle import ScatterShard
+    from zephyr.shuffle import ScatterShard  # ScatterShard is an alias for ScatterReader
 
     use_external = (
         external_sort_dir is not None
@@ -644,21 +644,35 @@ def _merge_sorted_chunks(
     )
 
     if use_external:
+        from zephyr.external_sort import compute_fan_in, compute_write_batch_size
+
+        memory_limit = _TaskResources.from_environment().memory_bytes
+        # Per-iterator memory ~= compressed bytes for one chunk held by
+        # cat_file. Use the actual max compressed chunk size from the sidecar.
+        per_iter_bytes = shard.max_compressed_chunk_bytes
+        fan_in = compute_fan_in(per_iter_bytes, memory_limit)
+        write_batch_size = compute_write_batch_size(shard.avg_item_bytes)
         logger.info(
-            "External sort triggered for shard with %d iterators, spilling to %s",
+            "External sort triggered for shard with %d iterators, "
+            "fan_in=%d (per_iter≈%dKB), write_batch_size=%d, spilling to %s",
             sum(it.chunk_count for it in shard.iterators),
+            fan_in,
+            per_iter_bytes // 1024,
+            write_batch_size,
             external_sort_dir,
         )
         # Pass lazy generator — external_sort_merge consumes in batches without opening all files
-        merged_stream = external_sort_merge(shard.get_iterators(), merge_key, external_sort_dir)
+        merged_stream = external_sort_merge(
+            shard.get_iterators(),
+            merge_key,
+            external_sort_dir,
+            fan_in=fan_in,
+            write_batch_size=write_batch_size,
+        )
     else:
         chunk_iterators = list(shard.get_iterators())
         logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
-        if external_sort_dir is not None and len(chunk_iterators) > EXTERNAL_SORT_FAN_IN:
-            # Fallback: stats unavailable, use fan_in threshold
-            merged_stream = external_sort_merge(iter(chunk_iterators), merge_key, external_sort_dir)
-        else:
-            merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
+        merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
     yield from groupby(merged_stream, key=key_fn)
 
 

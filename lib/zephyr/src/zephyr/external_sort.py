@@ -7,9 +7,11 @@ Used by the reduce stage when the number of sorted chunk iterators exceeds
 ``EXTERNAL_SORT_FAN_IN``, to avoid opening O(k) scanners simultaneously and
 exhausting worker memory.
 
-Pass 1: batch the k iterators into groups of EXTERNAL_SORT_FAN_IN, merge each
-group with heapq.merge, and spill items to a run file under
-``{external_sort_dir}/run-{i:04d}.spill`` via :class:`SpillWriter`.
+Pass 1: batch the k iterators into groups of ``fan_in`` (defaulting to
+``EXTERNAL_SORT_FAN_IN`` but typically lowered via :func:`compute_fan_in` to
+fit the worker's memory budget), merge each group with ``heapq.merge``, and
+spill items to a run file under ``{external_sort_dir}/run-{i:04d}.spill`` via
+:class:`SpillWriter`.
 
 Pass 2: heapq.merge over the (much smaller) set of run file iterators.  Each
 iterator streams chunks from its spill file via :class:`SpillReader`; the read
@@ -31,18 +33,62 @@ from zephyr.spill import SpillReader, SpillWriter
 
 logger = logging.getLogger(__name__)
 
-# Maximum simultaneous chunk iterators per pass-1 batch.
+# Hard cap on simultaneous chunk iterators per pass-1 batch. Used as the
+# default when the caller cannot estimate per-iterator memory; otherwise
+# ``compute_fan_in`` lowers it to fit within the worker's memory budget.
 EXTERNAL_SORT_FAN_IN = 500
 
-# Items buffered before handing to the SpillWriter. Larger values amortize
-# per-chunk overhead in the spill format.
+# Fraction of worker memory budgeted for the open chunk iterators during a
+# pass-1 merge batch.
+_FAN_IN_MEMORY_FRACTION = 0.5
+
+# Floor on fan-in. Below 2, pass-1 just rewrites each chunk to its own run
+# file with no merging — pass-2 still produces correct output but the extra
+# round-trip is wasteful, so we keep at least a small merge fan-in.
+_FAN_IN_FLOOR = 4
+
+# Default item count per write into the SpillWriter in pass-1. Large enough
+# for good compression + low per-call overhead. For large items (e.g. 1 MB
+# each) the caller should pass a smaller ``write_batch_size`` via
+# :func:`compute_write_batch_size` so the in-memory ``pending`` buffer stays
+# bounded by bytes rather than count.
 _WRITE_BATCH_SIZE = 10_000
+
+# Target bytes for the in-memory pass-1 spill buffer.
+_WRITE_BATCH_TARGET_BYTES = 64 * 1024 * 1024
 
 # Target bytes per spill chunk in pass-1 runs.
 _ROW_GROUP_BYTES = 8 * 1024 * 1024
 
 # Fraction of container memory budgeted for pass-2 read buffers.
 _READ_MEMORY_FRACTION = 0.25
+
+
+def compute_fan_in(per_iterator_bytes: int, memory_limit: int) -> int:
+    """Pick a pass-1 fan-in that fits within the memory budget.
+
+    ``per_iterator_bytes`` is the caller's estimate of memory held per open
+    chunk iterator (typically compressed chunk bytes plus a small decoded
+    buffer). Returns at least ``_FAN_IN_FLOOR`` and at most
+    ``EXTERNAL_SORT_FAN_IN``.
+    """
+    if per_iterator_bytes <= 0 or memory_limit <= 0:
+        return EXTERNAL_SORT_FAN_IN
+    budget = int(memory_limit * _FAN_IN_MEMORY_FRACTION)
+    fan_in = budget // per_iterator_bytes
+    fan_in = max(_FAN_IN_FLOOR, fan_in)
+    return min(fan_in, EXTERNAL_SORT_FAN_IN)
+
+
+def compute_write_batch_size(avg_item_bytes: float) -> int:
+    """Pick a pass-1 pending-buffer size sized to a byte budget.
+
+    Caps at the ``_WRITE_BATCH_SIZE`` default when items are small.
+    """
+    if avg_item_bytes <= 0:
+        return _WRITE_BATCH_SIZE
+    by_bytes = int(_WRITE_BATCH_TARGET_BYTES // avg_item_bytes)
+    return max(1, min(by_bytes, _WRITE_BATCH_SIZE))
 
 
 def _safe_read_batch_size(n_runs: int, sample_run_path: str) -> int:
@@ -87,16 +133,25 @@ def external_sort_merge(
     chunk_iterators_gen: Iterator[Iterator],  # lazy — consumed in batches
     merge_key: Callable,
     external_sort_dir: str,
+    fan_in: int = EXTERNAL_SORT_FAN_IN,
+    write_batch_size: int = _WRITE_BATCH_SIZE,
 ) -> Iterator:
     """Merge ``chunk_iterators_gen`` via a two-pass external sort.
 
     Args:
         chunk_iterators_gen: Lazy iterator of sorted iterators (one per scatter chunk).
-            Consumed in batches of EXTERNAL_SORT_FAN_IN to avoid opening all file
+            Consumed in batches of ``fan_in`` to avoid opening all file
             handles simultaneously.
         merge_key: Key function passed to heapq.merge.
         external_sort_dir: GCS prefix for spill files, e.g.
             ``gs://bucket/.../stage1-external-sort/shard-0042``.
+        fan_in: Maximum number of chunk iterators to merge in one pass-1
+            batch. Defaults to ``EXTERNAL_SORT_FAN_IN``; callers should pass
+            a value computed by :func:`compute_fan_in` to bound memory.
+        write_batch_size: Item count threshold for the pass-1 ``pending``
+            buffer. Callers should pass a value from
+            :func:`compute_write_batch_size` to keep the buffer bounded by
+            bytes rather than item count.
 
     Yields:
         Items in merged sort order.
@@ -109,8 +164,10 @@ def external_sort_merge(
     spill_fs, spill_dir = url_to_fs(external_sort_dir)
     spill_fs.makedirs(spill_dir, exist_ok=True)
 
+    logger.info("External sort: pass-1 fan_in=%d, write_batch_size=%d", fan_in, write_batch_size)
+
     while True:
-        batch = list(islice(chunk_iterators_gen, EXTERNAL_SORT_FAN_IN))
+        batch = list(islice(chunk_iterators_gen, fan_in))
         if not batch:
             break
         run_path = f"{external_sort_dir}/run-{batch_idx:04d}.spill"
@@ -119,7 +176,7 @@ def external_sort_merge(
         with SpillWriter(run_path, row_group_bytes=_ROW_GROUP_BYTES) as writer:
             for item in heapq.merge(*batch, key=merge_key):
                 pending.append(item)
-                if len(pending) >= _WRITE_BATCH_SIZE:
+                if len(pending) >= write_batch_size:
                     writer.write(pending)
                     item_count += len(pending)
                     pending = []
