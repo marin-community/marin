@@ -211,9 +211,6 @@ def _iter_chunk(fs: Any, fs_path: str, offset: int, length: int) -> Iterator:
 class ScatterReader:
     """All scatter chunks for one target shard, across all source files.
 
-    Replaces the former ScatterShard dataclass + ScatterFileIterator assembly
-    + ``_build_scatter_shard_from_manifest`` builder function.
-
     Construct via :meth:`from_manifest` for production use, or pass fields
     directly for testing.
     """
@@ -309,10 +306,6 @@ class ScatterReader:
         # items in the worst case (e.g. if downstream materialises chunks).
         estimated = total_chunks * self.max_chunk_rows * self.avg_item_bytes
         return estimated > memory_limit * memory_fraction
-
-
-# Backward-compatible alias so plan.py isinstance checks still work.
-ScatterShard = ScatterReader
 
 
 # ---------------------------------------------------------------------------
