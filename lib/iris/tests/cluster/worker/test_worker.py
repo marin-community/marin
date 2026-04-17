@@ -7,7 +7,6 @@ import hashlib
 import socket
 import time
 import zipfile
-from typing import ClassVar
 from unittest.mock import Mock
 
 import pytest
@@ -663,32 +662,28 @@ def test_port_binding_failure(mock_bundle_store, tmp_path):
 
 
 # ============================================================================
-# Remote log handler attach tests (regression for #4794)
+# Remote log handler attach tests
 # ============================================================================
 
 
-def _log_server_endpoints(address: str):
-    from iris.rpc import controller_pb2
+class _FakeLogClient:
+    """Stand-in for IrisLogClient exposing the methods worker touches."""
 
-    return controller_pb2.Controller.ListEndpointsResponse(
-        endpoints=[
-            controller_pb2.Controller.Endpoint(
-                endpoint_id="/system/log-server",
-                name="/system/log-server",
-                address=address,
-            )
-        ]
-    )
+    def __init__(self) -> None:
+        self.handlers: list[object] = []
+        self.closed = False
 
+    def as_logging_handler(self, key, *, level=None, formatter=None):
 
-class _RecordingPusher:
-    """Records server_url so tests can observe LogPusher re-creation."""
+        from iris.log_server.client import RemoteLogHandler
 
-    instances: ClassVar[list["_RecordingPusher"]] = []
-
-    def __init__(self, server_url, **_kwargs):
-        self.server_url = server_url
-        _RecordingPusher.instances.append(self)
+        handler = RemoteLogHandler(self, key=key)
+        if level is not None:
+            handler.setLevel(level)
+        if formatter is not None:
+            handler.setFormatter(formatter)
+        self.handlers.append(handler)
+        return handler
 
     def push(self, key, entries):
         pass
@@ -697,84 +692,79 @@ class _RecordingPusher:
         pass
 
     def close(self):
-        pass
+        self.closed = True
 
 
-@pytest.fixture
-def recording_log_pusher(monkeypatch):
-    """Swap iris.log_server.client.LogPusher for a recorder that tracks constructions."""
-    from iris.cluster.worker import worker as worker_module
-
-    _RecordingPusher.instances = []
-    monkeypatch.setattr(worker_module, "LogPusher", _RecordingPusher)
-    yield _RecordingPusher
-
-
-def test_attach_log_handler_uses_worker_log_key_before_register(
-    mock_bundle_store, mock_runtime, tmp_path, recording_log_pusher
-):
-    """Worker known locally (e.g. via slice_id) attaches under worker_log_key
-    *before* register so pre-register failures ship remote logs."""
-    from iris.cluster.log_store import worker_log_key
+def _worker_with_fake_log_client(tmp_path, worker_id: str | None):
+    from iris.cluster.log_store import worker_log_key as _wlk  # noqa: F401
 
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
-        worker_id="w-1",
+        worker_id=worker_id,
     )
+    return config
+
+
+def test_attach_log_handler_uses_worker_log_key(mock_bundle_store, mock_runtime, tmp_path):
+    """A worker with a locally-known id attaches under worker_log_key(id)."""
+    from iris.cluster.log_store import worker_log_key
+
+    config = _worker_with_fake_log_client(tmp_path, worker_id="w-1")
     worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
-    worker._controller_client = Mock(list_endpoints=Mock(return_value=_log_server_endpoints("http://log:9000")))
+    fake = _FakeLogClient()
+    worker._log_client = fake
 
     try:
         worker._attach_log_handler()
         assert worker._log_handler is not None
         assert worker._log_handler.key == worker_log_key("w-1")
+        assert len(fake.handlers) == 1
     finally:
         worker._detach_log_handler()
 
 
-def test_attach_log_handler_tolerates_resolve_failure(mock_bundle_store, mock_runtime, tmp_path, recording_log_pusher):
-    """A ListEndpoints RPC failure must not crash the lifecycle thread."""
-    config = WorkerConfig(
-        port=0,
-        port_range=(50000, 50100),
-        cache_dir=tmp_path / "cache",
-        default_task_image="mock-image",
-        worker_id="w-1",
-    )
+def test_attach_log_handler_no_op_without_worker_id(mock_bundle_store, mock_runtime, tmp_path):
+    """Without a worker_id the attach is a no-op — the lifecycle retries after register."""
+    config = _worker_with_fake_log_client(tmp_path, worker_id=None)
     worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
-    worker._controller_client = Mock(list_endpoints=Mock(side_effect=ConnectionError("controller down")))
+    fake = _FakeLogClient()
+    worker._log_client = fake
 
     worker._attach_log_handler()
     assert worker._log_handler is None
-    assert worker._log_pusher is None
-    assert recording_log_pusher.instances == []
+    assert fake.handlers == []
 
 
-def test_attach_log_handler_rebuilds_pusher_on_reattach(mock_bundle_store, mock_runtime, tmp_path, recording_log_pusher):
-    """Repeated attach must tear down the old LogPusher so log-server failover
-    is picked up — protects against the regression Codex flagged."""
-    config = WorkerConfig(
-        port=0,
-        port_range=(50000, 50100),
-        cache_dir=tmp_path / "cache",
-        default_task_image="mock-image",
-        worker_id="w-1",
-    )
+def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runtime, tmp_path):
+    """Re-attach under a new worker_id renames the existing handler's key in place
+    instead of rebuilding — the IrisLogClient owns the RPC connection across
+    lifecycle iterations, so there is no connection to rebuild."""
+    from iris.cluster.log_store import worker_log_key
+
+    config = _worker_with_fake_log_client(tmp_path, worker_id="w-1")
     worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
-    addrs = iter(["http://log-a:9000", "http://log-b:9000"])
-    worker._controller_client = Mock(list_endpoints=Mock(side_effect=lambda _req: _log_server_endpoints(next(addrs))))
+    fake = _FakeLogClient()
+    worker._log_client = fake
 
     try:
         worker._attach_log_handler()
+        first_handler = worker._log_handler
+        assert first_handler is not None
+
+        # Re-attach with same id → identity preserved.
         worker._attach_log_handler()
-        assert [p.server_url for p in recording_log_pusher.instances] == [
-            "http://log-a:9000",
-            "http://log-b:9000",
-        ]
-        assert worker._log_pusher is recording_log_pusher.instances[-1]
+        assert worker._log_handler is first_handler
+        assert len(fake.handlers) == 1
+
+        # Re-attach under a different worker_id → same handler, renamed key.
+        worker._worker_id = "w-2"
+        worker._attach_log_handler()
+        assert worker._log_handler is first_handler
+        assert first_handler.key == worker_log_key("w-2")
+        assert len(fake.handlers) == 1
     finally:
         worker._detach_log_handler()
 

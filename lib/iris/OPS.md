@@ -210,6 +210,43 @@ Only delete the specific bad node. If multiple nodes fail simultaneously or the 
 
 State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/` (code packages), `controller-state/` (SQLite checkpoints), `logs/` (Parquet).
 
+### Log Parquet (offline analysis)
+
+Log store (see `log_store/duckdb_store.py`) rotates RAM buffers → local Parquet → GCS. Files named `logs_{min_seq:019d}.parquet` sort chronologically by lex order.
+
+- Location: `gs://marin-us-central2/iris/marin/state/logs/logs_*.parquet` (~100 MB per file)
+- Schema: `seq int64, key string, source string, data string, epoch_ms int64, level int32`
+- `key` = full hierarchical `<job_id>/<task_ordinal>:<attempt>` — no URL encoding, `=` and other chars are preserved verbatim.
+- `epoch_ms` is UTC ms epoch. Always convert via `datetime.fromtimestamp(ms/1000, tz=UTC)` — off-by-a-day errors eat hours.
+- Controller-local retention: newest 50 segments / 5 GB (`DEFAULT_MAX_LOCAL_SEGMENTS`, `DEFAULT_MAX_LOCAL_BYTES`). Older files live only on GCS. Single-read cap: 25 newest segments / 2.5 GB (`_MAX_PARQUETS_PER_READ`, `_MAX_PARQUET_BYTES_PER_READ`), scanned newest-first with early-stop on LIMIT. Segment pruning uses row-group min/max on `seq` and `key` (`_segment_overlaps_prefix`).
+
+**Workflow: always `gcloud storage cp` first, then query with DuckDB.** Never point DuckDB at `gs://` URLs directly — the `httpfs` extension is unreliable across corp proxies and re-reads the whole file per query. Copy once, then run as many queries as you want.
+
+```bash
+# 1) Pick files by upload time — a file at T covers [prev_file.T, T]
+gcloud storage ls -l gs://marin-us-central2/iris/marin/state/logs/ | awk '$2 >= "2026-04-17T01" && $2 < "2026-04-17T08"'
+
+# 2) Copy the window locally (don't pull the whole bucket)
+mkdir -p /tmp/irislogs && cd /tmp/irislogs
+gcloud storage cp gs://marin-us-central2/iris/marin/state/logs/logs_00000000005{67542991,76149111,84347324,92138561}.parquet \
+                  gs://marin-us-central2/iris/marin/state/logs/logs_0000000000600341567.parquet .
+
+# 3) Query with DuckDB over the local glob
+uv run --with duckdb python -c "
+import duckdb
+con = duckdb.connect()
+print(con.execute('''
+  SELECT regexp_extract(filename, 'logs_(\\d+)', 1) f, count(*) n
+  FROM read_parquet('/tmp/irislogs/logs_*.parquet', filename=true)
+  WHERE key LIKE '/user/job-name/%'
+  GROUP BY f ORDER BY f
+''').fetchall())
+"
+```
+
+- `iris job logs <job_id>` (FetchLogs RPC) is the first tool to try — it reads from both the in-memory buffer and controller-local parquets. If it returns nothing but parquet has rows, the job's data has aged past the 25-segment / 2.5 GB read cap, or lives only on GCS; go straight to `gcloud storage cp` + DuckDB.
+- The `logs` table exposed via `iris query` is **always empty** (not a live view). Log data only lives in RAM buffers + parquet.
+
 ### GCP Gotchas
 
 - **Quota is the primary scaling bottleneck.** The autoscaler backs off exponentially per scale group. Check with `iris rpc controller get-autoscaler-status`.

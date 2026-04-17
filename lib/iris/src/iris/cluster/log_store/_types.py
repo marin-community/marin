@@ -57,7 +57,7 @@ class LogStoreProtocol(Protocol):
     def append_batch(self, items: list[tuple[str, list]]) -> None: ...
 
 
-class LogPusherProtocol(Protocol):
+class LogClientProtocol(Protocol):
     """Minimal interface for pushing log entries to the LogService."""
 
     def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None: ...

@@ -39,7 +39,7 @@ from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
 from iris.cluster.log_store._types import task_log_key
-from iris.log_server.client import LogPusher
+from iris.log_server.client import IrisLogClient
 from iris.logging import str_to_log_level
 from rigging.log_setup import parse_log_level
 from iris.rpc import logging_pb2
@@ -202,7 +202,7 @@ class TaskAttempt:
         default_task_image: str | None,
         resolve_image: Callable[[str], str] | None,
         port_allocator: PortAllocator,
-        log_pusher: LogPusher | None,
+        log_pusher: IrisLogClient | None,
         poll_interval_seconds: float = 5.0,
         *,
         container_handle: ContainerHandle | None = None,
@@ -290,7 +290,7 @@ class TaskAttempt:
         cls,
         discovered: DiscoveredContainer,
         container_handle: ContainerHandle,
-        log_pusher: LogPusher | None,
+        log_pusher: IrisLogClient | None,
         port_allocator: PortAllocator,
         poll_interval_seconds: float = 5.0,
     ) -> "TaskAttempt":

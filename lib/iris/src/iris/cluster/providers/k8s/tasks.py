@@ -25,7 +25,7 @@ from pathlib import Path
 
 from iris.cluster.controller.transitions import ClusterCapacity, DirectProviderSyncResult, SchedulingEvent
 from iris.cluster.controller.transitions import DirectProviderBatch, RunningTaskEntry, TaskUpdate
-from iris.cluster.log_store._types import LogPusherProtocol, TaskAttempt, task_log_key
+from iris.cluster.log_store._types import LogClientProtocol, TaskAttempt, task_log_key
 from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
@@ -879,7 +879,7 @@ class LogCollector:
     def __init__(
         self,
         kubectl: K8sService,
-        log_pusher: LogPusherProtocol,
+        log_pusher: LogClientProtocol,
         concurrency: int = 8,
         poll_interval: float = 15.0,
         limit_bytes: int | None = _DEFAULT_LIMIT_BYTES,
@@ -1065,7 +1065,7 @@ class K8sTaskProvider:
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
-    log_pusher: LogPusherProtocol | None = None
+    log_pusher: LogClientProtocol | None = None
     poll_concurrency: int = 32
     log_poll_interval: float = 15.0
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)

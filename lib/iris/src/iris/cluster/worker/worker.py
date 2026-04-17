@@ -15,7 +15,7 @@ import uvicorn
 from iris.chaos import chaos
 from iris.cluster.log_store import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
-from iris.log_server.client import LogPusher, RemoteLogHandler
+from iris.log_server.client import IrisLogClient, RemoteLogHandler
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
 from iris.cluster.types import JobName, TaskAttempt as TaskAttemptId
 from iris.cluster.bundle import BundleStore
@@ -43,6 +43,7 @@ from iris.rpc import controller_pb2
 from iris.rpc import worker_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.logging_connect import LogServiceClientSync
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
@@ -180,14 +181,12 @@ class Worker:
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
-        # LogPusher and RemoteLogHandler are created before registration so
-        # pre-register failures (container bring-up, disk/health probes,
-        # registration rejection) leave remote logs. Attachment relies on
-        # ``self._worker_id`` having been resolved locally (IRIS_WORKER_ID,
-        # slice_id + TPU index, or GCE instance name); the rare case where
-        # the controller assigns the id is handled by re-attaching post-
-        # register.
-        self._log_pusher: LogPusher | None = None
+        # IrisLogClient is constructed in start() once the controller client
+        # exists. A single instance owns log-service resolution, push, and
+        # failure-driven re-resolution. The handler is attached once the
+        # worker_id is known (locally-inferred or assigned by controller);
+        # renaming the handler's key across re-registers is a property assign.
+        self._log_client: IrisLogClient | None = None
         self._log_handler: RemoteLogHandler | None = None
 
         self._service = WorkerServiceImpl(self)
@@ -253,6 +252,11 @@ class Worker:
                 interceptors=interceptors,
             )
 
+            # Single IrisLogClient — resolves the log server lazily via the
+            # controller's list_endpoints RPC, caches the connection, and
+            # re-resolves whenever a push/fetch hits a retryable error.
+            self._log_client = IrisLogClient(self._build_log_service_client)
+
             # Start lifecycle thread: register + serve + reset loop
             self._threads.spawn(target=self._run_lifecycle, name="worker-lifecycle")
 
@@ -304,7 +308,7 @@ class Worker:
             attempt = TaskAttempt.adopt(
                 discovered=container,
                 container_handle=handle,
-                log_pusher=self._log_pusher,
+                log_pusher=self._log_client,
                 port_allocator=self._port_allocator,
                 poll_interval_seconds=self._config.poll_interval.to_seconds(),
             )
@@ -375,8 +379,9 @@ class Worker:
         if self._controller_client:
             self._controller_client.close()
         self._detach_log_handler()
-        if self._log_pusher is not None:
-            self._log_pusher.close()
+        if self._log_client is not None:
+            self._log_client.close()
+            self._log_client = None
         self._bundle_store.close()
 
     def _run_lifecycle(self, stop_event: threading.Event) -> None:
@@ -385,11 +390,12 @@ class Worker:
         This loop runs continuously until shutdown. On each iteration:
         1. Reset worker state (kill all containers)
         2. Attach the remote log handler so pre-registration log lines ship
-           to the central log server (and a refreshed /system/log-server
-           endpoint is picked up after any log-server failover)
+           to the central log server. The underlying IrisLogClient handles
+           log-server failover transparently, so no teardown is needed
+           across iterations — only the handler's key is resynced.
         3. Register with controller (retry until accepted)
         4. If the controller assigned a worker_id we didn't know locally,
-           re-attach the handler under the canonical key
+           update the handler's key to match.
         5. Serve (wait for heartbeats from controller)
         6. If heartbeat timeout expires, return to step 1
 
@@ -460,71 +466,58 @@ class Worker:
 
         return None
 
-    def _resolve_log_service(self) -> str | None:
-        """Resolve the LogService address via the /system/log-server endpoint.
+    def _build_log_service_client(self) -> LogServiceClientSync:
+        """Resolver for IrisLogClient: build a LogServiceClientSync fresh from
+        the controller's current /system/log-server endpoint.
 
-        Called before registration, so the controller may not yet be reachable.
-        Treats RPC errors and missing endpoints the same: log a warning and
-        return None so the caller can skip remote log attachment without
-        crashing the lifecycle thread.
+        Called lazily by IrisLogClient on first use and whenever a retryable
+        RPC error invalidates the cached connection. Auth interceptors mirror
+        the controller client's so both honor the same token.
         """
-        if not self._controller_client:
-            return None
-        try:
-            resp = self._controller_client.list_endpoints(
-                controller_pb2.Controller.ListEndpointsRequest(
-                    prefix="/system/log-server",
-                    exact=True,
-                ),
-            )
-        except Exception as e:
-            logger.warning("Failed to resolve /system/log-server: %s", e)
-            return None
+        assert self._controller_client is not None, "controller client must exist before log resolution"
+        resp = self._controller_client.list_endpoints(
+            controller_pb2.Controller.ListEndpointsRequest(
+                prefix="/system/log-server",
+                exact=True,
+            ),
+        )
         if not resp.endpoints:
-            logger.warning("No /system/log-server endpoint registered on controller")
-            return None
+            raise ConnectionError("No /system/log-server endpoint registered on controller")
         addr = resp.endpoints[0].address
-        logger.info("Resolved /system/log-server -> %s", addr)
-        return addr
+        interceptors = ()
+        if self._config.auth_token:
+            interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
+        return LogServiceClientSync(address=addr, timeout_ms=10_000, interceptors=interceptors)
 
     def _attach_log_handler(self) -> None:
-        """Create LogPusher and attach RemoteLogHandler under ``worker_log_key``.
+        """Attach a RemoteLogHandler under ``worker_log_key(self._worker_id)``.
 
-        Always tears down any existing handler first so each lifecycle cycle
-        re-resolves /system/log-server (picking up log-server failover) and
-        rebuilds the LogPusher against the fresh address.
-
-        Skipped when ``self._worker_id`` is not yet known locally — in that
-        (rare) case the controller will assign an id during ``_register`` and
-        the lifecycle loop re-calls this method with the canonical id.
+        Idempotent: if a handler already exists, update its key in place
+        rather than tearing it down. The IrisLogClient keeps its cached
+        RPC client across key changes, so no reconnect is needed.
         """
-        self._detach_log_handler()
-        if not self._worker_id:
+        if not self._worker_id or self._log_client is None:
             return
-        log_addr = self._resolve_log_service()
-        if not log_addr:
+        key = worker_log_key(self._worker_id)
+        if self._log_handler is not None:
+            self._log_handler.key = key
             return
-        log_interceptors = ()
-        if self._config.auth_token:
-            log_interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
-        self._log_pusher = LogPusher(log_addr, interceptors=log_interceptors)
-        self._log_handler = RemoteLogHandler(
-            self._log_pusher,
-            key=worker_log_key(self._worker_id),
+        self._log_handler = self._log_client.as_logging_handler(
+            key,
+            formatter=logging.Formatter("%(asctime)s %(name)s %(message)s"),
         )
-        self._log_handler.setLevel(logging.INFO)
-        self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger().addHandler(self._log_handler)
 
     def _detach_log_handler(self) -> None:
-        """Remove and close the current RemoteLogHandler and LogPusher if any."""
+        """Remove and close the current RemoteLogHandler if any.
+
+        Does not close the IrisLogClient — it is owned by start()/stop()
+        and survives across lifecycle iterations.
+        """
         if self._log_handler is not None:
             logging.getLogger().removeHandler(self._log_handler)
             self._log_handler.close()
             self._log_handler = None
-        if self._log_pusher is not None:
-            self._log_pusher.close()
-            self._log_pusher = None
 
     def _resolve_address(self) -> str:
         """Resolve the address to advertise to the controller."""
@@ -675,7 +668,7 @@ class Worker:
             default_task_image=self._config.default_task_image,
             resolve_image=self._config.resolve_image,
             port_allocator=self._port_allocator,
-            log_pusher=self._log_pusher,
+            log_pusher=self._log_client,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )
 

@@ -104,7 +104,9 @@ from iris.cluster.controller.transitions import (
 )
 from iris.cluster.log_store import CONTROLLER_LOG_KEY
 from iris.cluster.providers.types import find_free_port, resolve_external_host
-from iris.log_server.client import LogPusher, LogServiceProxy, RemoteLogHandler
+from iris.log_server.client import IrisLogClient
+from iris.log_server.proxy import LogServiceProxy
+from iris.rpc.logging_connect import LogServiceClientSync
 from iris.log_server.main import build_log_server_asgi
 from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider
@@ -1057,17 +1059,29 @@ class Controller:
         log_client_interceptors = _log_client_interceptors(config)
         self._remote_log_service = LogServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
 
+        # The controller's log endpoint is fixed for the process lifetime
+        # (in-process uvicorn or configured subprocess), so the resolver is a
+        # constant factory. Retryable failures still invalidate and rebuild
+        # the cached RPC client.
+        def _build_log_service_client() -> LogServiceClientSync:
+            return LogServiceClientSync(
+                address=self._log_service_address,
+                timeout_ms=10_000,
+                interceptors=log_client_interceptors,
+            )
+
         # Providers that collect logs outside the worker process push directly
         # to the log server via RPC.
         if isinstance(self._provider, K8sTaskProvider):
-            self._provider.log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
+            self._provider.log_pusher = IrisLogClient(_build_log_service_client)
 
         # Controller process logs ship to the log server via RemoteLogHandler.
-        self._log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
-        self._log_handler = RemoteLogHandler(self._log_pusher, key=CONTROLLER_LOG_KEY)
-
-        self._log_handler.setLevel(logging.DEBUG)
-        self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+        self._log_client = IrisLogClient(_build_log_service_client)
+        self._log_handler = self._log_client.as_logging_handler(
+            CONTROLLER_LOG_KEY,
+            level=logging.DEBUG,
+            formatter=logging.Formatter("%(asctime)s %(name)s %(message)s"),
+        )
         logging.getLogger("iris").addHandler(self._log_handler)
 
         self._transitions = ControllerTransitions(
@@ -1280,7 +1294,7 @@ class Controller:
         # from late log records hitting a closed store or connection.
         logging.getLogger("iris").removeHandler(self._log_handler)
         self._log_handler.close()
-        self._log_pusher.close()
+        self._log_client.close()
         self._remote_log_service.close()
         if self._log_service:
             self._log_service.close()

@@ -22,6 +22,7 @@ from iris.rpc import logging_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.log_server.client import IrisLogClient
 from iris.rpc.logging_connect import LogServiceClientSync
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
 from iris.time_proto import duration_to_proto
@@ -68,11 +69,21 @@ class RemoteClusterClient:
             timeout_ms=timeout_ms,
             interceptors=interceptors,
         )
-        self._log_client = LogServiceClientSync(
-            address=controller_address,
-            timeout_ms=timeout_ms,
-            interceptors=interceptors,
-        )
+
+        # FetchLogs is proxied by the controller, so the endpoint is the
+        # controller address itself. IrisLogClient still buys us
+        # invalidate-and-retry on connection hiccups and a future path for
+        # pointing directly at the log server.
+        _log_interceptors = tuple(interceptors)
+
+        def _build_log_service_client() -> LogServiceClientSync:
+            return LogServiceClientSync(
+                address=controller_address,
+                timeout_ms=timeout_ms,
+                interceptors=_log_interceptors,
+            )
+
+        self._log_client = IrisLogClient(_build_log_service_client)
 
     def submit_job(
         self,
@@ -440,11 +451,7 @@ class RemoteClusterClient:
             min_level=min_level,
             tail=tail,
         )
-
-        def _call():
-            return self._log_client.fetch_logs(request)
-
-        return call_with_retry(f"fetch_logs({source})", _call)
+        return self._log_client.fetch(request)
 
     def get_autoscaler_status(self) -> controller_pb2.Controller.GetAutoscalerStatusResponse:
         """Get autoscaler status including recent actions and group states.
