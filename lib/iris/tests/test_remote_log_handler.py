@@ -104,136 +104,134 @@ def test_no_deadlock_on_push_failure():
     assert finished, "RemoteLogHandler deadlocked on push failure"
 
 
-def test_log_pusher_buffers_and_flushes():
-    """LogPusher buffers entries and flushes on flush() call."""
-    sent: list[tuple[str, int]] = []
+def _wait_for(predicate, timeout: float = 5.0) -> None:
+    """Poll ``predicate`` for up to ``timeout`` seconds. Assert on timeout."""
+    import time as _time
 
-    class RecordingPusher(LogPusher):
-        """Override _send to record without RPC."""
-
-        def __init__(self):
-            # Skip real __init__ to avoid RPC client setup.
-            self._batch_size = 1000
-            self._flush_interval = 999.0
-            self._buffers: dict[str, list[logging_pb2.LogEntry]] = {}
-            self._lock = threading.Lock()
-            self._send_lock = threading.Lock()
-            self._closed = False
-            self._flush_timer = None
-
-        def _send(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-            sent.append((key, len(entries)))
-
-    pusher = RecordingPusher()
-
-    entry = logging_pb2.LogEntry(source="test", data="line1")
-    pusher.push("key-a", [entry])
-    pusher.push("key-a", [entry, entry])
-    pusher.push("key-b", [entry])
-
-    assert len(sent) == 0  # Still buffered
-
-    pusher.flush()
-
-    assert ("key-a", 3) in sent
-    assert ("key-b", 1) in sent
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        if predicate():
+            return
+        _time.sleep(0.01)
+    raise AssertionError(f"predicate {predicate!r} never became true within {timeout}s")
 
 
-def test_log_pusher_flushes_at_batch_size():
-    """LogPusher flushes automatically when batch_size is reached."""
-    sent: list[tuple[str, int]] = []
+def test_log_pusher_buffers_and_flushes_on_demand(tracked_log_service_client):
+    """Entries buffered below batch_size are drained on flush()."""
+    pusher = LogPusher(
+        "http://h:1",
+        batch_size=1000,
+        flush_interval=999.0,  # don't rely on periodic wake
+    )
+    try:
+        entry = logging_pb2.LogEntry(source="test", data="line1")
+        pusher.push("key-a", [entry, entry, entry])
+        pusher.push("key-b", [entry])
+        pusher.flush()
+        _wait_for(lambda: len(tracked_log_service_client[0].pushes) >= 2)
 
-    class RecordingPusher(LogPusher):
-        def __init__(self):
-            self._batch_size = 2
-            self._flush_interval = 999.0
-            self._buffers: dict[str, list[logging_pb2.LogEntry]] = {}
-            self._lock = threading.Lock()
-            self._send_lock = threading.Lock()
-            self._closed = False
-            self._flush_timer = None
-
-        def _send(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-            sent.append((key, len(entries)))
-
-    pusher = RecordingPusher()
-    entry = logging_pb2.LogEntry(source="test", data="line")
-
-    pusher.push("k", [entry])
-    assert len(sent) == 0
-
-    pusher.push("k", [entry])  # Hits batch_size=2
-    assert len(sent) == 1
-    assert sent[0] == ("k", 2)
-
-
-def test_close_waits_for_inflight_send():
-    """close() must not destroy the client while _send() is in flight.
-
-    Simulates a slow RPC by blocking inside _send. close() must wait for it
-    to finish before closing the client. Without the _send_lock this would
-    close the client while the send is still running.
-    """
-    send_entered = threading.Event()
-    send_may_proceed = threading.Event()
-    client_closed_during_send = False
-
-    class SlowPusher(LogPusher):
-        def __init__(self):
-            self._batch_size = 1000
-            self._flush_interval = 0.01  # fast timer to trigger the race
-            self._buffers: dict[str, list[logging_pb2.LogEntry]] = {}
-            self._lock = threading.Lock()
-            self._send_lock = threading.Lock()
-            self._closed = False
-            self._flush_timer = None
-            self._client_alive = True
-            self._schedule_flush()
-
-        def _send(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-            nonlocal client_closed_during_send
-            with self._send_lock:
-                if self._closed:
-                    return
-                send_entered.set()
-                send_may_proceed.wait(timeout=5.0)
-                if not self._client_alive:
-                    client_closed_during_send = True
-
-        def close(self) -> None:
-            if self._flush_timer is not None:
-                self._flush_timer.cancel()
-            self.flush()
-            with self._send_lock:
-                self._closed = True
-            self._client_alive = False
-
-    pusher = SlowPusher()
-    entry = logging_pb2.LogEntry(source="test", data="line")
-    pusher.push("k", [entry])
-
-    # Wait for the periodic flush timer to trigger _send
-    assert send_entered.wait(timeout=5.0), "timer-triggered _send never started"
-
-    # Now call close() from another thread — it should block on _send_lock
-    close_done = threading.Event()
-
-    def do_close():
+        totals = {p.key: len(p.entries) for p in tracked_log_service_client[0].pushes}
+        assert totals == {"key-a": 3, "key-b": 1}
+    finally:
         pusher.close()
-        close_done.set()
 
-    t = threading.Thread(target=do_close)
-    t.start()
 
-    # Give close() a moment to potentially race ahead (it shouldn't)
-    assert not close_done.wait(timeout=0.1), "close() returned before send finished"
+def test_log_pusher_flushes_at_batch_size(tracked_log_service_client):
+    """Reaching batch_size wakes the drain thread without waiting for a timer."""
+    pusher = LogPusher(
+        "http://h:1",
+        batch_size=2,
+        flush_interval=999.0,  # isolate the batch-size-triggered send
+    )
+    try:
+        entry = logging_pb2.LogEntry(source="test", data="line")
+        pusher.push("k", [entry])
+        # One entry is below batch_size — nothing should ship yet.
+        # Small sleep lets any bogus wake happen (test will still catch).
+        import time as _time
 
-    # Let the send complete
-    send_may_proceed.set()
+        _time.sleep(0.05)
+        assert tracked_log_service_client[0].pushes == []
 
-    assert close_done.wait(timeout=5.0), "close() never completed"
-    t.join(timeout=1.0)
-    assert not client_closed_during_send, "client was destroyed while _send was in flight"
+        pusher.push("k", [entry])
+        _wait_for(lambda: len(tracked_log_service_client[0].pushes) == 1)
+        assert tracked_log_service_client[0].pushes[0].key == "k"
+        assert len(tracked_log_service_client[0].pushes[0].entries) == 2
+    finally:
+        pusher.close()
+
+
+def test_close_drains_pending_entries(tracked_log_service_client):
+    """close() must drain buffered entries before returning."""
+    pusher = LogPusher(
+        "http://h:1",
+        batch_size=1000,
+        flush_interval=999.0,
+    )
+    entry = logging_pb2.LogEntry(source="test", data="line")
+    pusher.push("k", [entry, entry])
+    pusher.close()
+    # Drain thread must have sent the pending batch before close() returned.
+    assert len(tracked_log_service_client[0].pushes) == 1
+    assert len(tracked_log_service_client[0].pushes[0].entries) == 2
+
+
+def test_overflow_drops_oldest(tracked_log_service_client, caplog):
+    """Exceeding max_buffer_size drops oldest entries across keys."""
+    pusher = LogPusher(
+        "http://h:1",
+        batch_size=1000,  # large — don't ship mid-test
+        flush_interval=999.0,
+        max_buffer_size=3,
+    )
+    try:
+        with caplog.at_level(logging.WARNING, logger="iris.log_server.client"):
+            entries = [
+                logging_pb2.LogEntry(source="test", data=str(i), level=logging_pb2.LOG_LEVEL_INFO) for i in range(5)
+            ]
+            pusher.push("k", entries)
+        pusher.flush()
+        pusher.close()
+        datas = [e.data for p in tracked_log_service_client[0].pushes for e in p.entries]
+        # Oldest 2 dropped; "2","3","4" survive in order.
+        assert datas == ["2", "3", "4"]
+        assert any("buffer overflow" in r.message for r in caplog.records)
+    except Exception:
+        # Best-effort cleanup for test failures.
+        pusher.close()
+        raise
+
+
+def test_retryable_failure_rebuffers_at_head(monkeypatch):
+    """On a retryable send failure the batch is re-buffered at the head and
+    drained on the next successful attempt."""
+    created: list[_FakeLogServiceClient] = []
+
+    def factory(address, timeout_ms=10_000, interceptors=()):
+        c = _FakeLogServiceClient(address, timeout_ms=timeout_ms, interceptors=interceptors)
+        if not created:
+            c.errors = [ConnectError(Code.UNAVAILABLE, "gone") for _ in range(3)]
+        created.append(c)
+        return c
+
+    monkeypatch.setattr(client_mod, "LogServiceClientSync", factory)
+
+    addresses = iter(["http://a:1", "http://b:2"])
+    pusher = LogPusher(
+        "/system/log-server",
+        batch_size=1,
+        flush_interval=999.0,
+        resolver=lambda _url: next(addresses),
+    )
+    try:
+        pusher.push("k", [logging_pb2.LogEntry(source="test", data="a", level=logging_pb2.LOG_LEVEL_INFO)])
+        # Wait for the drain thread to fail on client #0 and re-resolve to #1.
+        _wait_for(lambda: len(created) == 2)
+        _wait_for(lambda: len(created[1].pushes) == 1)
+        assert created[0].closed is True
+        assert created[1].pushes[0].entries[0].data == "a"
+    finally:
+        pusher.close()
 
 
 # ---------------------------------------------------------------------------
@@ -289,101 +287,111 @@ def test_resolver_called_lazily_and_cached(tracked_log_service_client):
 
     pusher = LogPusher("iris://system/log-server", batch_size=1, resolver=resolver)
     try:
-        # No resolution yet — pusher is deferred.
+        # Drain thread hasn't needed a client yet.
         assert calls == []
         assert tracked_log_service_client == []
 
         pusher.push("k", [_entry("a")])
+        _wait_for(lambda: len(tracked_log_service_client) == 1)
         assert calls == ["iris://system/log-server"]
-        assert len(tracked_log_service_client) == 1
 
-        # Second push reuses cached client.
         pusher.push("k", [_entry("b")])
+        _wait_for(lambda: len(tracked_log_service_client[0].pushes) == 2)
         assert calls == ["iris://system/log-server"]
         assert len(tracked_log_service_client) == 1
-        assert len(tracked_log_service_client[0].pushes) == 2
     finally:
         pusher.close()
 
 
 def test_retryable_error_invalidates_and_reresolves(tracked_log_service_client):
     addresses = iter(["http://a:1", "http://b:2"])
-
-    def resolver(_url):
-        return next(addresses)
-
-    pusher = LogPusher("iris://system/log-server", batch_size=1, resolver=resolver)
+    pusher = LogPusher("iris://system/log-server", batch_size=1, resolver=lambda _url: next(addresses))
     try:
         pusher.push("k", [_entry("a")])
+        _wait_for(lambda: len(tracked_log_service_client) == 1 and tracked_log_service_client[0].pushes)
         assert tracked_log_service_client[0].address == "http://a:1"
 
-        # Next push: UNAVAILABLE on the cached client → invalidate.
+        # Seed the cached client with a retryable failure; next send
+        # invalidates, re-resolves to #b, and delivers.
         tracked_log_service_client[0].errors.append(ConnectError(Code.UNAVAILABLE, "gone"))
         pusher.push("k", [_entry("b")])
+        _wait_for(lambda: len(tracked_log_service_client) == 2)
         assert tracked_log_service_client[0].closed is True
-
-        # Next push triggers re-resolve + new client.
-        pusher.push("k", [_entry("c")])
-        assert len(tracked_log_service_client) == 2
         assert tracked_log_service_client[1].address == "http://b:2"
-        assert len(tracked_log_service_client[1].pushes) == 1
+        _wait_for(lambda: len(tracked_log_service_client[1].pushes) == 1)
     finally:
         pusher.close()
 
 
-def test_non_retryable_error_does_not_invalidate(tracked_log_service_client):
+def test_non_retryable_error_rebuffers_without_invalidating(tracked_log_service_client):
+    """Non-retryable errors re-buffer the entry (no drops) but keep the cached
+    client — the next attempt retries on the same endpoint."""
     pusher = LogPusher("iris://system/log-server", batch_size=1, resolver=lambda _url: "http://a:1")
     try:
         pusher.push("k", [_entry("a")])
-        assert len(tracked_log_service_client) == 1
+        _wait_for(lambda: len(tracked_log_service_client) == 1 and tracked_log_service_client[0].pushes)
 
-        # NOT_FOUND is not retryable — pusher keeps its cached client.
+        # Seed one NOT_FOUND: the entry is re-buffered and then delivered on
+        # the next attempt against the same (not invalidated) client.
         tracked_log_service_client[0].errors.append(ConnectError(Code.NOT_FOUND, "missing"))
         pusher.push("k", [_entry("b")])
+        _wait_for(lambda: len(tracked_log_service_client[0].errors) == 0)
+        _wait_for(lambda: len(tracked_log_service_client[0].pushes) == 2)
 
         assert len(tracked_log_service_client) == 1
         assert tracked_log_service_client[0].closed is False
+        assert [p.entries[0].data for p in tracked_log_service_client[0].pushes] == ["a", "b"]
     finally:
         pusher.close()
 
 
-def test_resolver_raising_is_retried_on_next_push(tracked_log_service_client):
+def test_resolver_raising_is_retried(tracked_log_service_client):
+    """A resolver failure re-buffers the pending entries; the next
+    successful resolution drains them."""
     attempts = []
+    lock = threading.Lock()
 
     def resolver(_url):
-        attempts.append(1)
-        if len(attempts) == 1:
+        with lock:
+            attempts.append(1)
+            n = len(attempts)
+        if n == 1:
             raise ConnectionError("controller down")
         return "http://good:1"
 
-    pusher = LogPusher("iris://system/log-server", batch_size=1, resolver=resolver)
+    pusher = LogPusher(
+        "iris://system/log-server",
+        batch_size=1,
+        flush_interval=0.1,
+        resolver=resolver,
+    )
     try:
-        # First push: resolver raises. Entry is lost (best-effort) but
-        # pusher stays healthy — no cached client to invalidate.
         pusher.push("k", [_entry("a")])
-        assert len(attempts) == 1
-        assert tracked_log_service_client == []
-
-        # Second push: resolver succeeds this time.
-        pusher.push("k", [_entry("b")])
-        assert len(attempts) == 2
-        assert len(tracked_log_service_client) == 1
-        assert len(tracked_log_service_client[0].pushes) == 1
+        # First attempt raises, backoff, second attempt succeeds.
+        _wait_for(lambda: len(tracked_log_service_client) == 1, timeout=10.0)
+        _wait_for(lambda: len(tracked_log_service_client[0].pushes) == 1)
+        with lock:
+            assert len(attempts) >= 2
     finally:
         pusher.close()
 
 
-def test_static_url_pusher_unchanged(tracked_log_service_client):
-    """Without a resolver the pusher builds its client eagerly — legacy behavior."""
-    pusher = LogPusher("http://h:1", batch_size=1)
+def test_static_url_pusher_retries_without_invalidating(tracked_log_service_client):
+    """Without a resolver, retryable failures re-buffer and retry on the same client."""
+    pusher = LogPusher(
+        "http://h:1",
+        batch_size=1,
+        flush_interval=0.1,
+    )
     try:
-        # Eager construction at __init__ time.
         assert len(tracked_log_service_client) == 1
         assert tracked_log_service_client[0].address == "http://h:1"
 
-        # Retryable error does NOT invalidate — there's nothing to re-resolve to.
+        # One UNAVAILABLE, then success on retry.
         tracked_log_service_client[0].errors.append(ConnectError(Code.UNAVAILABLE, "gone"))
         pusher.push("k", [_entry("a")])
+        _wait_for(lambda: len(tracked_log_service_client[0].pushes) == 1)
+        # Same client — no resolver means no re-resolution.
         assert tracked_log_service_client[0].closed is False
         assert len(tracked_log_service_client) == 1
     finally:

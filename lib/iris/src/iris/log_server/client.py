@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import deque
 from collections.abc import Callable, Iterable
 
 from connectrpc.interceptor import Interceptor
@@ -26,23 +27,41 @@ from iris.rpc.logging_connect import LogServiceClientSync
 logger = logging.getLogger(__name__)
 
 
-class LogPusher:
-    """Buffered client for pushing log entries to a remote LogService.
+MAX_LOG_BUFFER_SIZE = 10_000
+"""Global cap on buffered entries across all keys. Older entries are
+dropped first when the cap is exceeded."""
 
-    Entries are buffered per-key and flushed when either ``batch_size``
-    entries accumulate or ``flush_interval`` seconds elapse.
+# Backoff after a retryable send failure; keeps us from hot-looping when
+# the log server is unreachable. Independent of ``flush_interval``.
+_SEND_FAILURE_BACKOFF_SEC = 1.0
+
+
+class LogPusher:
+    """Buffered non-blocking client for pushing log entries to a remote LogService.
+
+    ``push`` always returns immediately — entries land in an in-memory
+    deque and a dedicated background thread drains them to the LogService
+    in batches. The thread:
+
+    - sleeps on a condition variable, waking whenever ``batch_size``
+      entries accumulate, ``flush()`` is called, or after
+      ``flush_interval`` seconds (whichever fires first);
+    - on any send failure, re-buffers the batch at the head of the key's
+      deque and backs off briefly before retrying. Retryable errors
+      additionally invalidate the cached RPC client so the next attempt
+      re-resolves the endpoint;
+    - when total buffered entries exceed ``MAX_LOG_BUFFER_SIZE``, drops
+      the oldest entries across keys. This is the only path that discards
+      log entries — send failures never drop.
 
     Endpoint resolution:
         If ``resolver`` is None, ``server_url`` is used as a direct http
         address and the RPC client is built eagerly.
 
         If ``resolver`` is set, ``server_url`` is passed to it on each
-        resolution to obtain the actual http address — e.g. the worker
-        passes ``server_url="iris://system/log-server"`` with a resolver
-        that calls the controller's ``list_endpoints``. The underlying
-        client is built lazily on first push. On a retryable RPC error
-        (UNAVAILABLE / INTERNAL / DEADLINE_EXCEEDED) the cached client
-        is invalidated and the next push re-invokes the resolver.
+        resolution to obtain the actual http address. The client is built
+        lazily and invalidated on retryable failures; the next send will
+        re-invoke the resolver.
     """
 
     def __init__(
@@ -54,29 +73,182 @@ class LogPusher:
         interceptors: Iterable[Interceptor] = (),
         *,
         resolver: Callable[[str], str] | None = None,
+        max_buffer_size: int = MAX_LOG_BUFFER_SIZE,
     ) -> None:
         self._server_url = server_url
         self._resolver = resolver
         self._timeout_ms = timeout_ms
         self._interceptors = tuple(interceptors)
-
         self._batch_size = batch_size
         self._flush_interval = flush_interval
-        self._buffers: dict[str, list[logging_pb2.LogEntry]] = {}
-        self._lock = threading.Lock()
-        # Serializes RPC sends so close() can wait for in-flight flushes.
-        self._send_lock = threading.Lock()
+        self._max_buffer_size = max_buffer_size
+
+        # Buffers and all shared state are guarded by _cond. The drain
+        # thread is the only owner of _client, so no separate client lock.
+        self._cond = threading.Condition()
+        self._buffers: dict[str, deque[logging_pb2.LogEntry]] = {}
+        self._buffered = 0
         self._closed = False
 
         # Without a resolver, build the client eagerly so we fail fast on
-        # bad URLs. With a resolver, defer construction until first push —
-        # the controller may not be reachable at construction time.
+        # bad URLs. With a resolver, defer until the drain thread needs it.
         self._client: LogServiceClientSync | None = None
         if self._resolver is None:
             self._client = self._build_client(self._server_url)
 
-        self._flush_timer: threading.Timer | None = None
-        self._schedule_flush()
+        self._thread = threading.Thread(target=self._run, name="log-pusher", daemon=True)
+        self._thread.start()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
+        """Append ``entries`` to ``key``'s buffer. Never blocks the caller."""
+        if not entries:
+            return
+        with self._cond:
+            if self._closed:
+                return
+            buf = self._buffers.setdefault(key, deque())
+            buf.extend(entries)
+            self._buffered += len(entries)
+            self._trim_oldest_locked()
+            if self._buffered >= self._batch_size:
+                self._cond.notify()
+
+    def flush(self) -> None:
+        """Poke the drain thread to send whatever is buffered now.
+
+        Non-blocking. For draining on shutdown, use ``close``.
+        """
+        with self._cond:
+            if self._buffered > 0:
+                self._cond.notify()
+
+    def close(self) -> None:
+        """Stop the drain thread after one best-effort drain, close the RPC client."""
+        with self._cond:
+            if self._closed:
+                return
+            self._closed = True
+            self._cond.notify()
+        # Join the drain thread; it will send what it can and exit.
+        self._thread.join(timeout=max(self._flush_interval * 2, 10.0))
+        if self._client is not None:
+            try:
+                self._client.close()
+            except Exception:
+                logger.debug("LogPusher close: cached client close raised", exc_info=True)
+            self._client = None
+
+    # ------------------------------------------------------------------
+    # Internal — buffer management (callers hold ``_cond``)
+    # ------------------------------------------------------------------
+
+    def _trim_oldest_locked(self) -> None:
+        """Drop oldest entries across keys until under ``_max_buffer_size``."""
+        dropped = 0
+        while self._buffered > self._max_buffer_size:
+            for buf in self._buffers.values():
+                if buf:
+                    buf.popleft()
+                    self._buffered -= 1
+                    dropped += 1
+                    break
+            else:
+                # All buffers empty somehow — nothing left to drop.
+                break
+        if dropped:
+            logger.warning(
+                "LogPusher buffer overflow: dropped %d oldest entries (cap=%d)",
+                dropped,
+                self._max_buffer_size,
+            )
+
+    def _take_batch_locked(self) -> list[tuple[str, list[logging_pb2.LogEntry]]]:
+        """Drain all buffered entries into a (key, entries) list."""
+        batch = [(k, list(v)) for k, v in self._buffers.items() if v]
+        for v in self._buffers.values():
+            v.clear()
+        self._buffered = 0
+        return batch
+
+    def _rebuffer_at_head_locked(
+        self,
+        failed: list[tuple[str, list[logging_pb2.LogEntry]]],
+    ) -> None:
+        """Put unsent entries back at the head of their key's deque."""
+        for key, entries in failed:
+            buf = self._buffers.setdefault(key, deque())
+            for e in reversed(entries):
+                buf.appendleft(e)
+                self._buffered += 1
+        self._trim_oldest_locked()
+
+    # ------------------------------------------------------------------
+    # Internal — drain thread
+    # ------------------------------------------------------------------
+
+    def _run(self) -> None:
+        """Drain loop: wait for buffered entries, send them, retry failures with backoff."""
+        while True:
+            with self._cond:
+                while not self._closed and self._buffered == 0:
+                    self._cond.wait(timeout=self._flush_interval)
+                if self._buffered == 0:
+                    # _closed must be True here; nothing left to flush.
+                    return
+                batch = self._take_batch_locked()
+
+            failed = self._send_batch(batch)
+            if not failed:
+                continue
+
+            with self._cond:
+                self._rebuffer_at_head_locked(failed)
+                if self._closed:
+                    # Best-effort on close: don't loop forever against an
+                    # unreachable server. Unsent entries are left in the
+                    # buffers and lost on process exit.
+                    return
+                self._cond.wait(timeout=_SEND_FAILURE_BACKOFF_SEC)
+
+    def _send_batch(
+        self,
+        batch: list[tuple[str, list[logging_pb2.LogEntry]]],
+    ) -> list[tuple[str, list[logging_pb2.LogEntry]]]:
+        """Send each (key, entries); return entries that still need delivery.
+
+        Every failure — resolver error, retryable RPC error, or
+        non-retryable RPC error — re-buffers the offending batch (and
+        everything after it) so no log entries are silently dropped.
+        Retryable errors additionally invalidate the cached client so the
+        next attempt re-resolves the endpoint; non-retryable errors keep
+        the client but still retry (the caller bounds memory via
+        ``MAX_LOG_BUFFER_SIZE``).
+        """
+        for i, (key, entries) in enumerate(batch):
+            try:
+                client = self._get_client()
+            except Exception as exc:
+                logger.warning("LogPusher: endpoint resolution failed: %s", exc)
+                return list(batch[i:])
+            try:
+                client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
+            except Exception as exc:
+                retryable = is_retryable_error(exc)
+                logger.warning(
+                    "LogPusher: send failure for key=%s (%d entries, retryable=%s): %s",
+                    key,
+                    len(entries),
+                    retryable,
+                    exc,
+                )
+                if retryable:
+                    self._invalidate(str(exc))
+                return list(batch[i:])
+        return []
 
     def _build_client(self, address: str) -> LogServiceClientSync:
         return LogServiceClientSync(
@@ -86,14 +258,10 @@ class LogPusher:
         )
 
     def _get_client(self) -> LogServiceClientSync:
-        """Return the cached RPC client, resolving + constructing on demand.
-
-        Must be called under ``_send_lock`` so invalidation is race-free
-        against other senders.
-        """
+        """Return the cached RPC client, resolving on demand. Drain-thread only."""
         if self._client is not None:
             return self._client
-        assert self._resolver is not None  # cleared only by _invalidate
+        assert self._resolver is not None
         address = self._resolver(self._server_url)
         if not address:
             raise ConnectionError(f"LogPusher resolver returned empty address for {self._server_url!r}")
@@ -102,78 +270,15 @@ class LogPusher:
         return self._client
 
     def _invalidate(self, reason: str) -> None:
-        """Drop the cached RPC client so the next send re-resolves.
-
-        Must be called under ``_send_lock``. No-op when no resolver is
-        configured (a static-URL pusher has nothing to re-resolve to).
-        """
+        """Drop the cached RPC client so the next send re-resolves. Drain-thread only."""
         if self._resolver is None or self._client is None:
             return
-        logger.warning("LogPusher: invalidating cached endpoint for %s (%s)", self._server_url, reason)
+        logger.info("LogPusher: invalidating cached endpoint for %s (%s)", self._server_url, reason)
         try:
             self._client.close()
         except Exception:
             logger.debug("LogPusher _invalidate: cached client close raised", exc_info=True)
         self._client = None
-
-    def _schedule_flush(self) -> None:
-        if self._closed:
-            return
-        self._flush_timer = threading.Timer(self._flush_interval, self._periodic_flush)
-        self._flush_timer.daemon = True
-        self._flush_timer.start()
-
-    def _periodic_flush(self) -> None:
-        self._flush_all()
-        self._schedule_flush()
-
-    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-        if not entries:
-            return
-        to_send: list[logging_pb2.LogEntry] | None = None
-        with self._lock:
-            buf = self._buffers.get(key)
-            if buf is None:
-                buf = []
-                self._buffers[key] = buf
-            buf.extend(entries)
-            if len(buf) >= self._batch_size:
-                to_send = self._buffers.pop(key, None)
-        if to_send:
-            self._send(key, to_send)
-
-    def _flush_all(self) -> None:
-        with self._lock:
-            snapshot = self._buffers
-            self._buffers = {}
-        for key, entries in snapshot.items():
-            self._send(key, entries)
-
-    def _send(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-        with self._send_lock:
-            if self._closed:
-                return
-            try:
-                client = self._get_client()
-                client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
-            except Exception as exc:
-                logger.debug("Failed to push %d log entries for key %s", len(entries), key, exc_info=True)
-                if is_retryable_error(exc):
-                    self._invalidate(str(exc))
-
-    def flush(self) -> None:
-        """Force-flush all buffered entries."""
-        self._flush_all()
-
-    def close(self) -> None:
-        if self._flush_timer is not None:
-            self._flush_timer.cancel()
-        self.flush()
-        with self._send_lock:
-            self._closed = True
-            if self._client is not None:
-                self._client.close()
-                self._client = None
 
 
 class LogServiceProxy:
