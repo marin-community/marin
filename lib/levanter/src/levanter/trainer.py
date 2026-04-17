@@ -795,6 +795,45 @@ class Trainer:
             )
             for _dbg_k, _dbg_v in _dbg_sentinel_vals.items():
                 jax.debug.print("DEBUGJ SENTINEL step={s} key={k} val={v}", s=state.step, k=_dbg_k, v=_dbg_v)
+
+            # DEBUGSTART — debug_accum_tpu_type Exp Z1: per-element grad slice dump
+            # Goal: compare post-all-reduce gradient values at specific indices
+            # between v5p-8 (data=4) and v6e-8 (data=8) to localize where the
+            # collective-width divergence lives. Prints 5 fixed-index elements
+            # per target LoRA module. Gated by MARIN_DEBUG_DUMP_GRAD_VALUES=1.
+            if int(_dbg_os.environ.get("MARIN_DEBUG_DUMP_GRAD_VALUES", "0")):
+                _dbg_z1_patterns = [
+                    "q_proj.lora.lora_B",  # fully replicated
+                    "k_proj.lora.lora_B",  # fully replicated
+                    "v_proj.lora.lora_B",  # fully replicated
+                    "o_proj.lora.lora_B",  # sharded on data (embed)
+                    "gate_proj.lora.lora_B",  # replicated via model=1
+                    "up_proj.lora.lora_B",  # replicated via model=1
+                    "down_proj.lora.lora_B",  # sharded on data (embed)
+                ]
+                for _dbg_z1_pat in _dbg_z1_patterns:
+                    for _dbg_z1_p, _dbg_z1_a in _dbg_g_arrs:
+                        if _dbg_z1_pat in _dbg_z1_p:
+                            _dbg_z1_flat = _dbg_z1_a.reshape(-1).astype(jnp.float32)
+                            _dbg_z1_n = int(_dbg_z1_flat.shape[0])
+                            _dbg_z1_idxs = [
+                                0,
+                                _dbg_z1_n // 4,
+                                _dbg_z1_n // 2,
+                                3 * _dbg_z1_n // 4,
+                                _dbg_z1_n - 1,
+                            ]
+                            for _dbg_z1_i in _dbg_z1_idxs:
+                                jax.debug.print(
+                                    "DEBUGJ GRAD_VAL step={s} path={p} n={n} idx={i} val={v}",
+                                    s=state.step,
+                                    p=_dbg_z1_pat,
+                                    n=_dbg_z1_n,
+                                    i=_dbg_z1_i,
+                                    v=_dbg_z1_flat[_dbg_z1_i],
+                                )
+                            break
+            # DEBUGEND Z1
         # DEBUGEND
 
         hook_infos = None

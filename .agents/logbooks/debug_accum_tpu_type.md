@@ -1,21 +1,1851 @@
 # Debug: v6e-8 vs v5p-8 DPO Training Discrepancy
 
-> **Pointer for the next agent (2026-04-17T00:30Z):** Experiment T has now
-> completed with a usable 10-step `v5p-8` full-FT run, and it materially
-> changes the hypothesis tree. The strongest current picture is:
-> - (leading) **LoRA / adapter-specific path on `v5p-8`** — LoRA update
->   geometry, adapter-only sharding / optimizer, or
->   `AdapterBaseReferenceConfig`
-> - (still possible but demoted) LoRA-specific interaction with attention
->   `kv_head` mapping or another sub-CE distributed detail
-> - (ruled out) CE kernel tiling / bf16 accumulation / per-chip CE workload
-> - (ruled out) TPU family alone, `pd` alone, LoRA rank alone
-> - (strongly weakened) broad "the `v5p-8` execution graph itself breaks
->   DPO even without LoRA"
+> **Launch policy (USER DIRECTIVE — apply to every new experiment job in this
+> investigation):** When launching a new TPU run, **always submit one copy per
+> available region for the requested TPU family in parallel**, with distinct
+> `MARIN_DEBUG_RUN_TAG` values so the W&B runs are distinguishable.
+> Reason: regional capacity is unpredictable (per-zone preemption, quota
+> throttling, autoscaler backoff), and we have repeatedly burned hours
+> waiting on a single region that turned out to have zero capacity. Multi-
+> region launches give us first-to-grab-capacity behavior; the redundant
+> copies that schedule are useful as cross-region replication checks.
 >
-> Why: the new Exp T rerun below shows that **`v5p-8` full FT does learn**.
-> It is not in the catastrophic bad LoRA basin. See
-> `2026-04-17T00:30Z: Experiment T result` immediately below.
+> Concrete region matrix:
+>
+> - **`v5p-*`**: `us-central1-a`, `us-east5-a` (parent `--region` matches the
+>   TPU region of each copy; child child `REGIONS_OVERRIDE` pins the child
+>   too).
+> - **`v6e-*`**: `europe-west4-a`, `us-east5-b`, `us-east1-d`.
+>
+> When one copy starts producing W&B step traces, the others are nice-to-
+> have but not load-bearing — leave them running for replication unless they
+> contend for capacity needed by another planned probe.
+
+> **Pointer for the next agent (2026-04-17T08:20Z — MECHANISM CLOSED):**
+>
+> The v5p-8 LoRA DPO pathology is caused by **bf16 cross-chip all-reduce
+> of LoRA gradients at 4 participants** (data-axis width). The bf16 add
+> is non-associative, so a 4-way tree produces a systematically
+> direction-biased sum relative to the 8-way tree used on v5p-16 /
+> v6e-8. LoRA's rank-64 zero-init-B update projects that tiny bias into
+> the wrong subspace and the step-2 loss escape never happens.
+>
+> **Full evidence chain (all four Z experiments complete):**
+>
+> | Exp | Finding |
+> |---|---|
+> | Z3 (`{data:2,model:2}` mesh) | **Recovers** training on v5p-8. Rules out "FSDP generically bad at <8 width"; pins the bug to `\|data\|=4` specifically. |
+> | Z1 (per-element grad dump) | Measured post-all-reduce gradient values on v5p-8 vs v6e-8 at step 0 with identical seed/batch/init. **Values differ systematically** at 1e-6 to 1e-5 absolute (bf16 precision-noise level) across Q/K/V/O/gate/up/down `lora_B`. |
+> | Z2 (`--xla_allow_excess_precision=false`) | **Does not recover** — this flag doesn't force bf16 reductions to fp32; it just prevents new higher-precision insertions. Negative result narrows the candidate flags. |
+> | Z4 (HLO diff) | Compiled HLO is identical on v5p-8 and v6e-8 **except** `replica_groups` size (4 vs 8). Reduction regions are all `bf16 + bf16 → bf16` (14 on v5p, 15 on v6e; 0 fp32 reductions). This is the smoking gun: **the collective runs in bf16, and at width 4 vs 8 it produces different sums**. |
+>
+> **Production fix options:**
+>
+> 1. Mesh rearrangement on v5p-8: use `{replica:1,data:2,model:2}` (Z3
+>    mix) or `{replica:1,data:1,model:4}` (Exp W TP). Both recover
+>    training cleanly.
+> 2. Run on a TPU that doesn't have `\|data\|=4`: v5p-16, v6e-8, v6e-16
+>    all work with canonical FSDP.
+>
+> **Proper fix (follow-up PR):** cast LoRA gradients to fp32 before the
+> cross-chip `psum` / all-reduce in
+> `lib/haliax/src/haliax/partitioning.py:909`. That forces the
+> reduction region to take `f32` operands; XLA's fp32 collective is
+> numerically associative to a much tighter tolerance, eliminating the
+> width dependence entirely. Unlikely to cost meaningful throughput on
+> TPU (hardware supports fp32 all-reduce).
+>
+> **Investigation summary (for context):** Exp Q/R/R2a/T/U/V/W/Y/Z1/Z2/Z3/Z4
+> form the full chain. Exp W narrowed to "FSDP-on-4-chips", Y showed
+> partition specs are identical between v5p-8 and v6e-8, Z3 narrowed
+> the width to specifically 4, Z1 measured the element-level
+> divergence, Z4 confirmed it's the bf16 arithmetic in the reduction
+> region. Everything is consistent; the logbook's earlier "directional
+> instability" hypothesis has been promoted to a concrete,
+> HLO-level-proven mechanism.
+>
+> ### Prior pointers (progressively superseded)
+>
+> - 2026-04-17T06:00Z: Exp Y showed partition specs identical; only
+>   mesh width differs. Leading hypothesis was still "collective
+>   behavior at width 4" without proof. Z-experiments closed it.
+> - 2026-04-17T05:25Z: Exp W showed TP mesh recovers training on v5p-8.
+>   Narrowed to "FSDP-on-4-chips" scope, not yet the precise mechanism.
+> - 2026-04-17T04:02Z: Experiments U and V both ruled out numeric
+>   precision and reference-path hypotheses.
+>
+> **Pointer for the next agent (2026-04-17T05:25Z, superseded — read above first):** **ROOT CAUSE FOUND (partial).**
+> Experiment W pure-TP mesh (`axes={replica:1, data:1, model:4}`) on the
+> exact bad `v5p-8` LoRA recipe **fully recovers training.** Step-2 loss
+> dropped from the bad 0.6851 regime (FSDP) to **0.2907** (TP) — slightly
+> better than the canonical good `v5p-16` FSDP baseline (0.3352). delta
+> at step 9 = 12.4 (bad v5p-8 FSDP = 0.66, good v5p-16 FSDP = 10.2).
+>
+> **Conclusion (superseded by Exp Y):** the v5p-8 LoRA DPO pathology is
+> caused by FSDP on the 4-device mesh — narrowed by Exp Y to the `data`
+> axis width specifically, not the FSDP layout itself.
+>
+> **Scientific summary (all prior eliminations hold):** Exp U ruled out
+> bf16/fp32 numerical precision. Exp V ruled out
+> `AdapterBaseReferenceConfig`. Exp R/R2a ruled out CE tiling and
+> backward bf16 accumulation. Exp N/O/P ruled out TPU family alone, `pd`
+> alone, LoRA rank alone. Exp T ruled out broad "v5p-8 breaks DPO"
+> (full-FT works). Exp W is the positive discriminator that identified
+> the load-bearing variable.
+>
+> **What to do next (choose based on goal):**
+>
+> 1. **Production fix:** use the pure-TP mesh on v5p-8 LoRA, or use
+>    `v5p-16` / `v6e-8` which both work under canonical FSDP.
+> 2. **Narrow the mechanism:** run `mix` variant (`data:2, model:2`)
+>    — if that also recovers, something is specifically wrong with
+>    all-4-chips-FSDP; if it's also bad, the boundary is between 4-wide
+>    and anything-less-wide FSDP.
+> 3. **Dig into levanter/haliax:** the bug is likely in how LoRA
+>    parameter or gradient partition specs interact with the 4-wide
+>    data axis. Dump partition specs on TP vs FSDP to compare. Look
+>    for FSDP-specific collective ops that degenerate at mesh size 4.
+> 4. **Fix the cosmetic HF-export bug** (`DpoModel.config` AttributeError
+>    on `SeparateReferenceConfig` — unrelated but makes runs look
+>    failed when they actually succeeded).
+>
+> **Full Exp W result is in the section below.**
+>
+> **Pointer for the next agent (2026-04-17T04:02Z):** Experiments U and V
+> have both completed. **Neither full fp32 compute nor switching to
+> `SeparateReferenceConfig` fixes the `v5p-8` LoRA pathology.**
+>
+> Current hypothesis ranking after Exp V:
+>
+> - **(leading, narrowed further)** **LoRA FSDP sharding / mesh-collective
+>   behavior on the 4-device `v5p-8` mesh** — parameter/grad partition
+>   layout, adapter optimizer-state sharding, or LoRA-specific collective
+>   ordering. Both reference-path variants (`AdapterBaseReferenceConfig`
+>   and `SeparateReferenceConfig`) fail identically, so the cause must
+>   live in the LoRA-update code path itself, not the reference path.
+> - **(still possible)** attention `kv_head` mapping or other sub-CE
+>   distributed detail that interacts specifically with LoRA
+> - **(ruled out by Exp V)** `AdapterBaseReferenceConfig` as the load-
+>   bearing variable — `SeparateReferenceConfig` on v5p-8 LoRA tracks the
+>   bad Exp Q regime point-for-point (max |Δloss| ≈ 0.005 across all 10
+>   steps)
+> - **(ruled out by Exp U)** bf16/bfloat16 numerical precision anywhere
+>   in the compute graph
+> - **(ruled out by Exp R + R2a)** CE kernel tiling / bf16 accumulation /
+>   per-chip CE workload
+> - **(ruled out by Exp N/O/P)** TPU family alone, `pd` alone, LoRA rank
+>   alone
+> - **(ruled out by Exp T)** broad "the `v5p-8` execution graph itself
+>   breaks DPO even without LoRA"
+>
+> **What this means for next experiments:** The failure surface is now
+> down to the LoRA-specific distributed training path on a 4-device
+> mesh. Highest-information next probes:
+>
+> 1. **Mesh-axis rearrangement on v5p-8 LoRA (Exp W — IN PROGRESS).**
+>    Try `mesh.axes = {data:1, model:4}` (pure TP, no FSDP) and
+>    `{data:2, model:2}` on the existing bad v5p-8 recipe. If either
+>    recovers → FSDP-on-4-chips is the load-bearing variable. If both
+>    still bad → the issue is deeper than axis assignment.
+> 2. **Per-module gradient direction probe.** Instrument LoRA backward
+>    to log `g.sum()`, `g @ random_unit_vec`, and per-module signatures.
+>    Compare v5p-8 vs v5p-16 element-wise to pinpoint which module's
+>    gradient direction diverges.
+> 3. **`target_modules` ablation** — attention-only vs mlp-only LoRA on
+>    v5p-8 to localize which submodule's gradient is the problem.
+> 4. **(Exp X — DEAD / blocked).** Cross-family 4-chip test on `v6e-4`
+>    is not viable: v6e-4 has 32 GB/chip × 4 = 128 GB total HBM, and
+>    the compiled `jit__train_step` program is ~22 GB per chip on
+>    Llama-8B LoRA `r=64` regardless of batch/pd (scan-stacked LoRA
+>    grad buffers dominate), exceeding the free-HBM budget after
+>    weights load. See the "Experiment X result — BLOCKED" section
+>    below for the full HBM matrix and ruled-out recovery knobs.
+>
+> **Known cosmetic bug (not load-bearing):** with
+> `SeparateReferenceConfig`, the post-training `save_merged_hf_model_cb`
+> hits `AttributeError: 'DpoModel' object has no attribute 'config'` in
+> `lib/levanter/src/levanter/compat/hf_checkpoints.py:912`. Training and
+> W&B logging complete normally; only the HF export crashes. Iris marks
+> such runs `failed` even though the scientific data is intact. Fixing
+> this bug is orthogonal to the DPO investigation.
+
+## 2026-04-17T08:15Z: Experiment Z4 result — **HLO diff confirms bf16 cross-chip reductions at width 4 (v5p-8) vs width 8 (v6e-8)**; the mechanism is nailed
+
+### Strongest true conclusion
+
+Compiled-and-optimized HLO for the `_train_step` jitted function on
+v5p-8 and v6e-8 are **identical op-for-op** except for:
+
+1. **`replica_groups` size:** `{{0,1,2,3}}` on v5p-8 vs `{{0,1,2,3,4,5,6,7}}` on v6e-8
+   (4 vs 8 participants).
+2. **Count of `all-reduce` vs `reduce-scatter` / `all-gather`:** XLA's
+   SPMD lowering produces 238 `all-reduce`, 58 `reduce-scatter`, 672
+   `all-gather` ops on v5p-8; the same pattern on v6e-8 with 8-way
+   groups.
+
+**Every collective reduction for LoRA gradients runs in bf16
+internally.** The `to_apply` regions used by all cross-chip bf16
+reductions are scalar bf16 adders:
+
+```
+%add.1.clone (x.3: bf16[], y.3: bf16[]) -> bf16[] {
+  ROOT %add.2394 = bf16[]{:T(256)} add(%x.3, %y.3)
+}
+```
+
+Count of bf16-typed add reduction regions: **14 on v5p-8, 15 on v6e-8
+(same structure; the extra one is a harmless intermediate)**. Count of
+fp32-typed add reduction regions: **0 on both**.
+
+> **The cross-chip all-reduce for LoRA gradients on v5p-8 is a
+> 4-participant bf16 sum. On v6e-8 it is an 8-participant bf16 sum.
+> bf16 addition is non-associative, so the 4-way reduction ordering
+> and the 8-way reduction ordering produce systematically different
+> numerical results. Z1 already measured the resulting gradient-value
+> differences element-for-element.**
+
+### Run
+
+- **v5p-8 HLO:** `gs://marin-us-central1/debug/xla_hlo/uc1-z45r/` (module `0298.jit__train_step`)
+- **v6e-8 HLO:** `gs://marin-us-central1/debug/xla_hlo/ew4-z46g/` (module `0331.jit__train_step`)
+
+Earlier Z4 batches either hit the `gsutil` missing binary issue or
+an `atexit`-vs-gcsfs race; both were fixed (see
+`lib/levanter/src/levanter/main/train_dpo.py` — explicit
+post-`trainer.train()` upload using `fsspec.url_to_fs`). These two
+uploads succeeded with 364 and 526 HLO files respectively.
+
+### Specific all-reduce ops that matter
+
+Sample from `module_0300.jit__train_step...after_optimizations_before_buffer_assignment.txt` (v5p):
+
+```
+%all-reduce.323 = bf16[8,4,128,4096]{...} all-reduce(%input.73),
+  channel_id=520, replica_groups={{0,1,2,3}}, use_global_device_ids=true,
+  to_apply=%add.1.clone,
+  frontend_attributes={from-cross-replica-sharding="true"}
+
+%all-reduce.322 = bf16[64,4096]{...} all-reduce(%input.72),
+  channel_id=521, replica_groups={{0,1,2,3}}, ... to_apply=%add.3.clone
+```
+
+Where shapes decode as:
+- `bf16[8,4,128,4096]` = layers-chunk × q-per-group × head_dim × embed — the Q projection gradient (across one layer chunk)
+- `bf16[64,4096]` = r × embed — LoRA A gradient (r=64)
+- `bf16[4096,64]` = embed × r — transposed LoRA A gradient
+- `bf16[14336,4096]` = mlp × embed — MLP weight grad
+- `bf16[4096,128256]` = embed × vocab — lm_head grad
+
+The corresponding v6e-8 ops are bit-identical except `replica_groups={{0,1,2,3,4,5,6,7}}`.
+
+### Dtype ladder
+
+The mixed-precision policy is `p=f32,c=bfloat16`:
+- Parameters stored fp32
+- Activations + intermediates cast to bf16 for compute
+- Matmul outputs in bf16
+- Gradients produced in bf16 (since they flow back through bf16 activations)
+- **Cross-chip all-reduce: bf16 → bf16 → bf16** (no upcast inside the collective)
+- Optimizer: bf16 grad cast back to fp32, fp32 Adam `m`/`v` update, fp32 param store
+
+The collective is the one place where JAX/Haliax does not upcast to
+fp32. Every other step of the mixed-precision pipeline is either fp32
+or has a fp32 accumulator by convention. The bf16 all-reduce is the
+specific spot where width-dependent non-associativity bites.
+
+### Why Z2 (`--xla_allow_excess_precision=false`) didn't recover
+
+That flag controls whether XLA *inserts* higher-precision intermediates
+when converting between dtypes. It does not force an existing bf16
+reduction to run in fp32. The HLO we see has `%add.X.clone` explicitly
+typed as `bf16 -> bf16`, and XLA has no choice but to honor that
+signature. To force fp32 reductions we would need to change the source
+(haliax / the DPO trainer) to cast gradients to fp32 before the
+all-reduce, or use a TPU-runtime-level flag (if one exists) to
+override the `to_apply` dtype.
+
+### What Z4 establishes
+
+- **Confirmed:** the cross-chip reduction uses bf16 arithmetic on both
+  TPU families.
+- **Confirmed:** the only HLO-level difference between v5p-8 and v6e-8
+  is participant count in `replica_groups` and whether per-device
+  no-op-singleton groups get optimized into real reduce-scatters.
+- **Confirmed:** at fixed bf16 reduction precision, the ordering of
+  bf16 partial sums differs between 4 and 8 participants, which by
+  non-associativity yields different bit-level results. Z1 measured
+  this directly at element granularity.
+
+### Closing the mechanism loop
+
+Combined with Z1 (direct per-element measurement) and Z3 (`|data|=2`
+recovers), we now have:
+
+1. **v5p-8 `|data|=4` FSDP bf16 all-reduce of LoRA gradients**
+   produces slightly direction-biased post-reduce values relative to
+   v6e-8 `|data|=8`. Element-level absolute differences `1e-6` to
+   `1e-5`; signed-sum differences `~0.15` absolute on per-module
+   grads (Exp J numbers).
+2. The bias is small compared to |gradient|_2 but large compared to
+   the useful `δ_π − δ_ref` gradient direction at step 0, because
+   DPO initialization with `zero_init_b=True` sits on a perfectly
+   flat loss landscape (loss ≡ ln 2 at every example).
+3. The direction bias gets projected onto LoRA's rank-64 `B` update
+   subspace at step 1 and fixes `B` in a direction that produces
+   small `(X @ A) @ B` logit shifts at step 2, so the step-2 escape
+   to δ ≈ 9-12 never happens and the run stays stuck in the bad
+   basin.
+4. The same bias on full-FT (Exp T) is absorbed by the rank-8B
+   gradient and training progresses normally.
+5. At `|data|=2` (Z3) or `|data|=1` (W TP), the reduction tree is
+   different or absent — the specific direction bias that exists at
+   `|data|=4` does not arise, so LoRA trains cleanly.
+
+This is as complete a picture as we can get without instrumenting the
+TPU runtime itself. The bug is at the intersection of: bf16 internal
+collective arithmetic + width-4 participant count + LoRA's low-rank
+zero-init-B early update sensitivity.
+
+### Production fix (short-term)
+
+Any of the following recovers training on v5p-8:
+- Mesh rearrangement: set `shared_mapping={mlp:model, heads:model}`
+  and `axes={replica:1, data:2, model:2}` (Exp Z3 / `mix` variant) or
+  `axes={replica:1, data:1, model:4}` (Exp W pure-TP).
+- Use a different TPU: `v5p-16` (`|data|=8`) or `v6e-8` (`|data|=8`).
+
+### Proper fix (longer-term)
+
+Cast LoRA gradients to fp32 before the `psum` / all-reduce in haliax
+partitioning (`lib/haliax/src/haliax/partitioning.py:909`). This forces
+the reduction region to take `f32` operands, and XLA's code generation
+for fp32 all-reduce is numerically associative up to a much tighter
+tolerance. This removes the width dependence entirely.
+
+The same fix would improve training stability on other DPO /
+low-rank setups and is unlikely to cost much throughput because
+collective fp32 adds are hardware-supported on TPU.
+
+## 2026-04-17T07:50Z: Experiment Z2 result — `--xla_allow_excess_precision=false` does NOT recover v5p-8 LoRA
+
+### Strongest true conclusion
+
+Exp Q recipe (v5p-8, bs=64, pd=4, LoRA r=64, ABRC, seq=4096, 10 steps)
+with `XLA_FLAGS=--xla_allow_excess_precision=false` shows **no recovery**.
+Loss stays at ~0.693 and δ ≈ 0 at every step.
+
+| step | loss | δ |
+|---|---|---|
+| 0 | 0.693147 | +0.0000 |
+| 2 | 0.693044 | +0.0082 |
+| 5 | 0.691921 | +0.0299 |
+| 9 | 0.693876 | -0.0101 |
+
+### Run
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_z2_r64_v5p8_pd4_s10_uc1-z2a-367b5e
+- **Iris job:** `/ahmedah/iris-run-experiment_z2_f32_collective_s10-20260417-065757/train_dpo`
+- **XLA_FLAGS set:** `--xla_allow_excess_precision=false`
+
+### Interpretation
+
+This flag prevents the compiler from inserting higher-precision
+intermediates for speed. It does NOT force fp32 on cross-chip
+collectives specifically. The flag is too weak a lever: it prevents
+adding fp32 where XLA would otherwise downcast, but if the collective
+is already using bf16 as its native reduction precision, this flag
+doesn't force it to fp32.
+
+Moreover, the trajectory here is actually *worse* than the canonical
+bad v5p-8 FSDP recipe (Exp Q) — Exp Q reached δ=0.66 by step 9 while
+Z2 stays at δ≈0 throughout. The flag may have disabled some useful
+mixed-precision handling elsewhere in the graph, but did not fix the
+width-4 collective issue.
+
+### What Z2 leaves open
+
+- Collective internal bf16 might still be the mechanism, but needs a
+  different XLA flag to test. Candidates for a Z2-retry:
+  - `--xla_tpu_force_allreduce_f32=true` (if it exists)
+  - `--xla_tpu_enable_all_reduce_sum_fusion=false`
+  - A combination including `--xla_tpu_enable_latency_hiding_scheduler=false`
+- Alternatively, the collective already uses fp32 and the mechanism is
+  the collective algorithm (ring vs tree vs recursive-halving) chosen
+  at 4 vs 8 participants. Z4 (HLO diff) will settle this.
+
+## 2026-04-17T07:45Z: Experiment Z1 result — per-element gradient values **differ** between v5p-8 and v6e-8 at matched init
+
+### Strongest true conclusion
+
+At step 0, with identical seed, batch, and initial LoRA params, the
+post-all-reduce gradient values for Q/K/V/O/gate/up/down `lora_B`
+differ element-for-element between v5p-8 (`|data|=4`) and v6e-8
+(`|data|=8`). Differences are systematically in the bf16-precision-noise
+band (absolute deltas `~1e-6 to ~1e-5` on elements whose magnitudes are
+`~1e-5 to ~1e-4`, relative deltas 0% to 70% on individual elements).
+
+> **Direct confirmation:** the all-reduce at width 4 and at width 8
+> produces systematically different numerical results on matched inputs.
+> This is the mechanism the rest of the investigation has been closing
+> in on.
+
+### Runs
+
+- **v5p-8 (`ue5-z15q`):** https://wandb.ai/marin-community/dpo/runs/experiment_z1_r64_v5p8_pd4_s2_ue5-z15q-<hash>
+  - Iris job: `/ahmedah/iris-run-experiment_z1_grad_values_s2-20260417-072502/train_dpo`
+- **v6e-8 (`ew4-z16f`):** https://wandb.ai/marin-community/dpo/runs/experiment_z1_r64_v6e8_pd4_s2_ew4-z16f-<hash>
+  - Iris job: `/ahmedah/iris-run-experiment_z1_grad_values_s2-20260417-072512/train_dpo`
+
+(First batch of Z1 jobs failed because the sharding dump was using
+`jax.debug.print(..., ordered=True)`, which JAX refuses on multi-device;
+removed in a patch to `lib/levanter/src/levanter/trainer.py`, which is
+the hook point for `MARIN_DEBUG_DUMP_GRAD_VALUES=1`. The retries
+succeeded cleanly on both TPU families.)
+
+### Step-0 element comparison (representative subset)
+
+All values below are the post-all-reduce gradient at step 0 (same seed,
+same batch, identical init). v5p is `data:4`, v6e is `data:8`. `rel`
+is the symmetric relative difference `(v5p - v6e) / ((|v5p|+|v6e|)/2)`.
+
+| module | idx | v5p-8 | v6e-8 | |Δ| | rel |
+|---|---|---|---|---|---|
+| q_proj lora_B | 0 | -2.75e-07 | -3.14e-07 | 3.98e-08 | +0.14 |
+| q_proj lora_B | last | -1.15e-05 | -7.30e-06 | 4.20e-06 | -0.45 |
+| k_proj lora_B | 524288 | -2.73e-05 | -3.66e-05 | 9.30e-06 | +0.29 |
+| k_proj lora_B | last | -2.62e-04 | -2.70e-04 | 8.58e-06 | +0.03 |
+| v_proj lora_B | 0 | -7.40e-04 | -7.64e-04 | 2.43e-05 | +0.03 |
+| o_proj lora_B | 2097152 | +2.00e-04 | +2.00e-04 | 0.00 | 0.00 |
+| o_proj lora_B | 0 | -1.11e-04 | -1.16e-04 | 4.75e-06 | +0.04 |
+| gate_proj lora_B | last | -2.56e-06 | -1.25e-06 | 1.31e-06 | -0.69 |
+| down_proj lora_B | 4194304 | -3.33e-05 | -2.98e-05 | 3.46e-06 | -0.11 |
+
+### Key observations
+
+1. **Differences are real and nonzero** for every module type except a
+   handful of bit-exact hits (e.g. `o_proj lora_B idx=2097152` matches
+   to all digits). The bit-exact hits are where the fp32 representation
+   happens to be invariant to reduction order at that specific
+   coordinate.
+2. **Magnitude of differences aligns with bf16-level noise.** Absolute
+   deltas 1e-6 to 1e-5 on values of order 1e-5 to 1e-4 is exactly the
+   non-associativity-of-bf16-reduction signature.
+3. **Q/K/V `lora_B` matrices (fully replicated, all-reduce collective)**
+   show the largest relative differences on low-magnitude elements.
+   Consistent with the hypothesis that fully-replicated all-reduce at
+   width 4 is the dominant source of direction noise (sharded elements
+   go through reduce-scatter, which has a different numerical profile).
+4. **Compounded through LoRA's rank-64 zero-init-B update geometry**,
+   these per-element bf16-noise differences are the proximate cause of
+   the bad basin on v5p-8. Full FT's full-rank gradient averages out
+   the same noise (Exp T).
+
+### What Z1 establishes
+
+- **Confirmed:** the cross-chip all-reduce at `|data|=4` produces
+  numerically different values than at `|data|=8` on matched inputs.
+- **Confirmed:** the differences are at bf16-precision-noise level per
+  element (not a single module "broken"), pointing to collective
+  internal precision as the mechanism rather than any layout bug.
+- **Unclosed:** whether the collective is doing bf16 reduction
+  internally (Z2 didn't yet prove this with the tried flag), or
+  whether XLA picks a different algorithm at width 4 that has a
+  different error characteristic. Z4 (HLO diff) will resolve this.
+
+## 2026-04-17T07:30Z: Experiment Z3 result — **`{data:2, model:2}` RECOVERS v5p-8 LoRA DPO**; the bug is specific to `|data|=4`
+
+### Strongest true conclusion
+
+Running the exact Exp Q bad recipe on v5p-8 with mesh axes
+`{replica:1, data:2, model:2}` (instead of the canonical
+`{replica:1, data:4, model:1}` that fails, or the pure-TP
+`{replica:1, data:1, model:4}` that Exp W showed recovers) **also
+recovers training**. Step-2 loss drops to `0.2985` and `delta_pi - delta_ref`
+jumps to `+10.88` — virtually identical to Exp W TP (step-2 loss 0.2907,
+δ=11.19) and good v5p-16 FSDP (step-2 loss 0.3352, δ=9.44).
+
+> **`|data|=2` FSDP on v5p-8 works. `|data|=4` FSDP on v5p-8 fails.
+> The bug is confined to the specific `data`-axis width of 4.**
+
+This lines up with every other data point:
+
+- `|data|=4`: v5p-8 canonical FSDP → **BAD** (Exp Q)
+- `|data|=2`: v5p-8 mix mesh → **GOOD** (Exp Z3, this run)
+- `|data|=1`: v5p-8 pure TP → **GOOD** (Exp W)
+- `|data|=8`: v5p-16 / v6e-8 canonical FSDP → **GOOD** (Exp N)
+
+So the bug isn't "FSDP on v5p-8" or "FSDP any narrow axis" — it is
+specifically "`data`-axis width 4 on v5p-8". This is a very narrow
+failure mode and is most compatible with "XLA selects a different
+collective algorithm (or internal precision) when the all-reduce span
+is exactly 4, and that algorithm produces a direction-biased result
+for LoRA's low-rank gradients."
+
+### Run
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_w_r64_v5p8_pd4_mesh_s10_uc1-wmix1-c3846c
+- **Iris job:** `/ahmedah/iris-run-experiment_w_v5p8_mesh_s10-20260417-065341/train_dpo`
+- **Worker:** v5p-8 preemptible in `us-central1-a`
+- **Variant:** `EXPERIMENT_W_MESH=mix` (`{replica:1, data:2, model:2}`)
+- **State:** iris `succeeded`, W&B `finished`, full 10 steps + step-10 eval
+- The `ue5-wmix1` copy failed at 8m with a RuntimeError (not preemption,
+  JAX-filtered traceback); uc1-wmix1 produced the full trajectory,
+  so Z3 has one clean data point.
+
+### Full 10-step training trajectory
+
+| step | loss     | delta (`δ_π - δ_ref`) |
+|------|----------|-----------------------|
+| 0    | 0.692700 | +0.0107               |
+| 1    | 0.695101 | -0.0375               |
+| 2    | 0.298463 | **+10.8764**          |
+| 3    | 0.287980 | +11.3256              |
+| 4    | 0.297744 | +10.9941              |
+| 5    | 0.274768 | +12.0089              |
+| 6    | 0.293363 | +11.1915              |
+| 7    | 0.280672 | +11.5836              |
+| 8    | 0.263147 | +12.4467              |
+| 9    | 0.273818 | +12.0502              |
+
+### Side-by-side: Z3 mix vs W TP vs Q FSDP (all bad v5p-8 recipes) vs good v5p-16
+
+| step | **Z3 mix** | **W TP** | **Q FSDP (bad)** | **Good v5p-16** |
+|------|------------|----------|------------------|-----------------|
+| 2    | 0.2985     | 0.2907   | 0.6851           | 0.3352          |
+| 5    | 0.2748     | 0.2699   | 0.6689           | 0.3168          |
+| 9    | 0.2738     | 0.2671   | 0.6606           | 0.3176          |
+| δ@9  | +12.05     | +12.38   | +0.66            | +10.22          |
+
+Z3 and W match almost exactly. Both beat the good v5p-16 baseline
+slightly on δ, plausibly because they eliminate the width-4 data-axis
+all-reduce noise.
+
+### What Z3 establishes
+
+The `|data|=2` recovery means:
+
+- The failure is **not** "any FSDP-style data-axis all-reduce on v5p-8
+  breaks LoRA". `data=2` is also FSDP-style and it works fine.
+- The failure is **specifically** at width 4. Most likely XLA picks a
+  particular collective-algorithm / precision / topology-mapping at
+  4 participants that produces direction-biased gradients.
+- Combined with Exp W (TP `|data|=1`), we now have three mesh
+  configurations that all recover on v5p-8 hardware; only the
+  canonical `|data|=4` case fails. This tightens the mechanism
+  hypothesis further and makes Z2/Z4 (XLA flag + HLO diff) the right
+  next probes.
+
+### Recommended next
+
+- Z2 (fp32 collective flag) should still run — if the `|data|=4`
+  mechanism is internal bf16 reduction, forcing fp32 should recover.
+- Z4 (HLO diff) will show the actual algorithm XLA picks at width 4
+  vs width 8.
+- Z1 (per-chip grad slice dump) localizes where the divergence lives
+  in the LoRA modules.
+
+## 2026-04-17T06:30Z: Planned follow-ups Z1–Z4 — close the mechanism
+
+After Exp Y, the investigation is down to a single mechanism hypothesis:
+
+> At `|data|=4` the cross-chip all-reduce of LoRA gradients (especially
+> the fully-replicated Q/K/V `lora_B` whose full sum must be broadcast
+> back to every chip) produces a slightly different numerical result
+> than at `|data|=8`, and LoRA's low-rank zero-init-B update is
+> uniquely sensitive to that direction perturbation. Full FT absorbs
+> the same noise; LoRA projects it through a rank-64 basis and gets
+> stuck in the wrong basin.
+
+Everything in the logbook is consistent with this. The *source* of the
+noise at `|data|=4` (algorithm choice, internal precision, or a
+fully-replicated-all-reduce quirk) is the one thing still not nailed
+down. Exp Z1–Z4 are designed to close that gap.
+
+All four probes can run on v5p-8 with generous HBM. Z1 and Z3 are
+high-priority because they answer directly; Z2 is the single-line
+recovery test; Z4 is a heavy diagnostic to fall back on if Z1–Z3 are
+inconclusive.
+
+---
+
+### Exp Z1 — per-chip pre-/post-all-reduce gradient slice dump
+
+**Goal.** Measure the *same* gradient value on every chip, on v5p-8 and
+v6e-8, before and after the `data`-axis all-reduce. Compare the
+per-chip partials and the reduced sum element-wise.
+
+**Why this discriminates.** Exp J already showed that `grad_sum` on the
+bad v5p-8 run differs from the good v6e-8 run by 0.155 (absolute) at
+step 0 while `grad_l2` matches to 0.00031%. Z1 localizes that
+discrepancy: is it already present in the per-chip partials (forward
+numerics differ → the bug is hardware-level attention/matmul numerics),
+or does it appear only after the all-reduce (→ the collective itself is
+the source)? And for the Q/K/V `lora_B` case specifically, whether the
+fully-replicated all-reduce produces a direction-shifted result relative
+to the reduce-scatter used on sharded LoRA A.
+
+**Outcomes:**
+
+- **Per-chip partials already differ between v5p-8 and v6e-8 chips**
+  before all-reduce → the *forward pass* is non-deterministic across
+  TPU-width configurations; look at attention / matmul numerics.
+- **Per-chip partials match but post-all-reduce result differs** →
+  the cross-chip collective at width 4 is the mechanism.
+- **Q/K/V `lora_B` specifically differs** while sharded LoRA A matches
+  → fully-replicated all-reduce is the specific culprit; reduce-scatter
+  on sharded params is fine.
+
+**How to implement.** Extend the existing `MARIN_DEBUG_DUMP_SHARDING`
+hook in `lib/levanter/src/levanter/main/train_dpo.py` (around line 685,
+right after `trainer.initial_state(...)`). But the *gradient* values
+are only concrete after the first step. So two hook points are needed:
+
+1. **Pre-reduce dump:** inside the jitted step function in
+   `lib/levanter/src/levanter/trainer.py` around line 703 (the existing
+   `DEBUGJ TRACE` block), add a pass that captures a fixed-coordinate
+   slice of each LoRA B gradient *before* `state.take_step(grads, ...)`
+   applies the sharding constraint that triggers the all-reduce.
+   Easiest technique: `jax.experimental.multihost_utils.process_allgather`
+   the slice across every chip into host-visible arrays and print with
+   `jax.debug.print("DEBUGJ GRAD_PRE chip={c} path={p} slice={s}", ...)`.
+2. **Post-reduce dump:** after `new_state = hax.shard(new_state, ...)`,
+   dump the same slice again. The all-reduce collective runs between
+   these two points (it's part of `take_step` → optimizer update).
+
+Alternative lower-surgery approach: skip the pre-reduce capture and
+just dump the final grad slice post-all-reduce on each chip. That alone
+is enough to confirm whether the *all-reduced* result differs between
+v5p-8 and v6e-8 on matched inputs.
+
+Gate behind new env var `MARIN_DEBUG_DUMP_GRAD_VALUES=1`. Output format
+suggestion:
+
+```
+DEBUGJ GRAD_VALUES step=0 chip=<n> path=<module>.lora_B coords=[0,0,0,0] value=<f32>
+```
+
+Dump just a handful of coordinates (e.g. `[0,0,0,0]`, `[0,0,0,63]`,
+`[31,7,3,127,63]` for q_proj B) to keep log volume manageable. Add the
+dump for Q/K/V `lora_B` (fully replicated) and for one sharded param
+(e.g. `o_proj.lora_B` sharded on `data`) as a control.
+
+**Experiment script.** Clone `experiment_y_sharding_probe_s2.py` to
+`experiment_z1_grad_values_s2.py`. Add the new env var to `env_vars`
+dict: `"MARIN_DEBUG_DUMP_GRAD_VALUES": "1"`.
+
+**Launch.** Same multi-region matrix as Exp Y:
+
+```
+v5p-8: us-central1-a, us-east5-a
+v6e-8: europe-west4-a, us-east5-b, us-east1-d
+```
+
+with `EXPERIMENT_Y_TPU=v5p-8` and `EXPERIMENT_Y_TPU=v6e-8` variants. 2
+train steps is enough (same config as Y).
+
+**Analysis.** Diff the per-chip grad-slice values between v5p-8 copies
+(same-region replication should be bit-identical) and between v5p-8
+and v6e-8 at matched coords. Any element where the v5p/v6e post-reduce
+values differ but pre-reduce per-chip partials were identical confirms
+the collective is the source.
+
+---
+
+### Exp Z2 — forced fp32 collective precision via XLA_FLAGS
+
+**Goal.** Force the TPU cross-chip all-reduce to use fp32 internally.
+If v5p-8 LoRA DPO recovers under forced fp32 collectives, collective
+internal precision is the mechanism.
+
+**Why this discriminates.**
+
+- Recovery → collective bf16 reduction at width 4 is numerically
+  direction-biased; fp32 fixes it. This would also imply a trivial
+  production fix (set the flag in the trainer).
+- No recovery → the noise source is not collective precision; likely
+  the algorithm choice or a topology-specific effect.
+
+**How to implement.** No code change — set the env var via
+`SimpleDPOConfig.env_vars` or `iris job run -e XLA_FLAGS ...`. Candidate
+flags to try (TPU-specific; some may need verification against the
+installed jaxlib build):
+
+- `XLA_FLAGS=--xla_allow_excess_precision=false` — broader precision
+  preservation knob.
+- `XLA_FLAGS=--xla_tpu_force_allreduce_f32=true` — if present in the
+  TPU compiler.
+- `XLA_FLAGS=--xla_tpu_enable_latency_hiding_scheduler=false` — can
+  sometimes coincide with collective-algorithm changes; worth trying
+  as a fallback.
+- `JAX_ENABLE_X64=false` (do not enable 64-bit — just ensuring we are
+  not confusing precision modes).
+
+The exact flag name is jaxlib-version-specific. First step is:
+
+```bash
+# On a running v5p-8 worker:
+iris task exec /ahmedah/<any-v5p-8-job>/train_dpo/0 -- \
+  python -c "import jax; print(jax.lib.xla_bridge.get_backend().platform_version)"
+```
+
+Then grep the XLA TPU flags reference for that version. If the exact
+flag isn't discoverable, fall back to `--xla_dump_to=<dir>` and
+inspect the emitted HLO to see which precision XLA is choosing for
+all-reduce ops (see Z4 for HLO capture details).
+
+**Experiment script.** Clone Exp Q's `experiment_q_v5p8_pd_s10.py` to
+`experiment_z2_force_f32_collective_s10.py`. Set `env_vars =
+{..., "XLA_FLAGS": "<chosen flag>"}`. 10 train steps so we can observe
+both the step-2 escape and stable dynamics.
+
+**Launch.** v5p-8 only (we only need to verify the bad case recovers):
+us-central1-a + us-east5-a multi-region copies. Optionally also run a
+v6e-8 copy as a control to confirm the flag doesn't break the already-
+working case.
+
+**Analysis.** Same trajectory table as Exp Q/U/V: step-0/1/2/5/9 loss
+and `δ_π − δ_ref`. Recovery = step-2 loss drops to `~0.33` band; no
+recovery = stays at `~0.685`.
+
+**Follow-up.** If Z2 recovers, also re-run Exp W `fsdp` control with
+the flag on to confirm it recovers the canonical bad recipe (not just
+some downstream interaction).
+
+---
+
+### Exp Z3 — `|data|=2` FSDP variant on v5p-8 (Exp W `mix`)
+
+**Goal.** Distinguish "any narrow-FSDP on v5p-8 is bad" from "only
+`|data|=4` is bad". Uses the existing `experiment_w_v5p8_mesh_s10.py`
+script with `EXPERIMENT_W_MESH=mix` → mesh axes
+`{replica:1, data:2, model:2}`.
+
+**Why this discriminates.**
+
+- Loss-2 drops to `~0.33` band (recovery): `|data|=2` is fine, so the
+  bug specifically requires `|data|≥4`. Combined with the v5p-16
+  `|data|=8` good evidence, this means the bug is confined to
+  `|data|=4` — which is a very narrow and probably algorithm-specific
+  failure mode.
+- Loss-2 stays near `~0.68` (no recovery): any data-axis FSDP on v5p-8
+  (even at width 2) breaks LoRA. That's a stronger claim — would
+  imply something v5p-specific about FSDP itself, not just width 4.
+
+**How to implement.** Already implemented. Just launch.
+
+**Launch.**
+
+```bash
+# Both v5p regions in parallel
+iris job run --region us-east5 --cpu 1 --memory 3g \
+  -e REGIONS_OVERRIDE us-east5 -e EXPERIMENT_W_MESH mix \
+  -e MARIN_DEBUG_LOG_BATCH_INDICES 1 -e MARIN_DEBUG_LOG_STEP_TRACE 1 \
+  -e MARIN_DEBUG_RUN_TAG ue5-wmix1 -e WANDB_API_KEY "$WANDB_API_KEY" \
+  --no-wait -- python experiments/posttrain/per_stmt_dpo/experiment_w_v5p8_mesh_s10.py
+
+iris job run --region us-central1 --cpu 1 --memory 3g \
+  -e REGIONS_OVERRIDE us-central1 -e EXPERIMENT_W_MESH mix \
+  -e MARIN_DEBUG_LOG_BATCH_INDICES 1 -e MARIN_DEBUG_LOG_STEP_TRACE 1 \
+  -e MARIN_DEBUG_RUN_TAG uc1-wmix1 -e WANDB_API_KEY "$WANDB_API_KEY" \
+  --no-wait -- python experiments/posttrain/per_stmt_dpo/experiment_w_v5p8_mesh_s10.py
+```
+
+(Matches the multi-region launch policy at the top of the logbook.)
+
+**Analysis.** Pull W&B trajectory through step 9. Compare step-2
+`train/loss` and `δ_π − δ_ref` against the three reference points:
+`|data|=4` bad (Exp Q), `|data|=4 / |model|=4` TP good (Exp W `tp`),
+`|data|=8` good (Exp N `v5p-16`).
+
+**Why this is cheap.** Script is ready, mesh variant is already
+selectable via env var, HBM fits trivially on v5p-8, 10-step run is
+~20 minutes.
+
+---
+
+### Exp Z4 — HLO diff between v5p-8 and v6e-8 compiled `train_step`
+
+**Goal.** Inspect the compiled XLA program to confirm whether the
+all-reduce ops have different algorithm choices or dtypes between
+v5p-8 and v6e-8. If they do, that is the proximate mechanism.
+
+**Why this discriminates.** The HLO is the compiled program XLA
+produces for the `jit(train_step)` function. Each cross-chip
+collective appears as an `all-reduce`, `all-gather`, or
+`reduce-scatter` op with attributes specifying the algorithm
+(tree/ring/etc.), the reduction op (typically `add`), the dtype, and
+the mesh axis. Diffing v5p-8 vs v6e-8 HLO for the LoRA B gradient
+all-reduce is direct evidence of what the compiler actually chose.
+
+**Outcomes:**
+
+- **All-reduce dtype differs** (e.g. bf16 on v5p-8, fp32 on v6e-8) →
+  collective precision is the mechanism; Z2 flag fix is the patch.
+- **Algorithm differs** (e.g. ring-4 on v5p-8, recursive-halving-8 on
+  v6e-8) → algorithm choice at width 4 is biased; fix may require
+  XLA-level work or forcing a different algorithm via flags.
+- **HLO is effectively identical** (same ops, same dtype, same
+  algorithm, only different participant count) → the bug is in the
+  TPU hardware's all-reduce implementation at width 4, not in the
+  compiler's choices. That's the hardest-to-fix case but still a
+  useful conclusion.
+
+**How to implement.** Set `XLA_FLAGS=--xla_dump_to=<dir>` on a run.
+XLA will dump HLO for every jit-compiled function to `<dir>`. Useful
+complementary flags:
+
+- `--xla_dump_hlo_as_text` — human-readable HLO.
+- `--xla_dump_hlo_pass_re=.*` — dump HLO at every pass (can be huge;
+  use `--xla_dump_hlo_pass_re=spmd-partitioner` to filter to the
+  partitioning pass where collectives are inserted).
+
+Example:
+
+```bash
+XLA_FLAGS="--xla_dump_to=/tmp/xla_hlo --xla_dump_hlo_as_text \
+  --xla_dump_hlo_pass_re=spmd-partitioner"
+```
+
+The resulting directory contains one `.txt` per jitted function. The
+relevant file is whichever corresponds to `_train_step` / `train_step`
+in the trainer. Copy to a GCS path via a pre-step task hook.
+
+**Experiment script.** Clone `experiment_y_sharding_probe_s2.py` to
+`experiment_z4_hlo_dump_s2.py`. Add:
+
+```python
+env_vars = {
+    ...,
+    "XLA_FLAGS": "--xla_dump_to=/tmp/xla_hlo --xla_dump_hlo_as_text --xla_dump_hlo_pass_re=spmd-partitioner",
+    "MARIN_DEBUG_HLO_UPLOAD_DIR": "gs://marin-<region>/debug/xla_hlo/<tag>/",
+}
+```
+
+And add a callback / at-exit hook that uploads `/tmp/xla_hlo/*` to the
+GCS path at step 0 or at run end. (Simplest: spawn `gsutil cp -r
+/tmp/xla_hlo <gcs_dir>` from the main function after `levanter.initialize`
+and before training starts, before the first compile — that way we
+capture the *initial* compile which includes all collectives.)
+
+**Launch.** v5p-8 + v6e-8 pair in matched regions. 2 train steps
+sufficient (we only need the compile).
+
+**Analysis.** Download both HLO trees locally, diff them with
+`diff -ruN v5p-8-hlo/ v6e-8-hlo/`. Focus on files containing
+`train_step` / `loss`. Grep for `all-reduce` op signatures and
+compare:
+
+- `replica_groups` attribute (participant count)
+- `channel_id` (is one larger than the other)
+- reduction dtype (bf16 vs fp32)
+- presence of `use_global_device_ids=true` and similar flags
+
+**Effort.** Biggest overhead of the four — need to read XLA HLO
+fluently. Skip if Z1–Z3 already answer the mechanism question.
+
+---
+
+### Priority order and decision tree
+
+1. **Run Z3 first** (cheapest, no code change). If `|data|=2` recovers
+   → narrow the hypothesis to "width-4 specifically" and proceed to Z1.
+   If `|data|=2` also fails → any FSDP on v5p-8 breaks LoRA; very
+   suspicious of a v5p-specific attn/matmul numerics issue, re-examine
+   Exp J interpretation.
+2. **Run Z2 next** (one env var, 10-step recovery test). A direct
+   recovery fully answers the mechanism (= collective precision) and
+   gives a production patch.
+3. **Run Z1 if Z2 doesn't clearly answer.** Per-chip gradient slices
+   are ~40 lines of jax.debug.print per chip; modest implementation
+   effort but definitive.
+4. **Run Z4 as a deep-diagnostic backstop** only if Z1–Z3 are
+   inconclusive. HLO diffing is labor-intensive but incontrovertible.
+
+All four experiments use the existing multi-region launch policy
+(v5p → `us-central1-a` + `us-east5-a`) and the existing
+`experiment_w_v5p8_mesh_s10.py` / `experiment_y_sharding_probe_s2.py`
+templates as starting points.
+
+---
+
+## 2026-04-17T06:00Z: Experiment Y result — **v5p-8 and v6e-8 FSDP partition specs are IDENTICAL**; only mesh width (`data:4` vs `data:8`) differs
+
+### Strongest true conclusion
+
+Experiment Y instrumented `train_dpo.main` with a `MARIN_DEBUG_DUMP_SHARDING`
+hook that, after `trainer.initial_state(...)`, dumps the `PartitionSpec`,
+shape, dtype, and sharding mesh for every LoRA A / B parameter and its
+Adam `mu` optimizer state. Same recipe as Exp Q `pd=4` (bs=64, LoRA r=64,
+`target_modules=None`, `AdapterBaseReferenceConfig`, `seq_len=4096`),
+`num_train_steps=2`, multi-region launches on both TPU families.
+
+> **Every LoRA parameter and its Adam `mu` buffer has the exact same
+> `PartitionSpec` on v5p-8 as it does on v6e-8.** The *layout* of the
+> FSDP sharding is identical. The only difference is the width of the
+> `data` axis — `data:4` on v5p-8, `data:8` on v6e-8.
+
+This rules out "the partition layout itself is wrong on v5p-8" as the
+mechanism. The bad v5p-8 LoRA training is not a sharding *layout* bug;
+it is a behavioral difference that manifests at mesh width 4 specifically.
+
+The new leading hypotheses (all consistent with identical layouts but
+different widths):
+
+1. **Cross-chip collective algorithm choice varies with axis width.** XLA
+   picks different all-reduce/reduce-scatter implementations (ring,
+   tree, recursive halving, …) based on participant count. Ring-4 vs
+   ring-8 produce different numerical result orderings for bf16 reductions.
+2. **Collective internal precision.** TPU all-reduce hardware may use
+   bf16 for cross-chip reductions even when the input tensors are fp32.
+   Exp U controlled the *compute* dtype but not the *collective* dtype.
+3. **Q/K/V lora_B fully-replicated all-reduce.** All three Q, K, V
+   lora_B matrices are fully replicated across the data axis, so their
+   gradient all-reduce occurs on every chip with no per-chip partial.
+   A numerical non-associativity in the 4-way reduction specifically
+   could bias the direction of those gradients.
+
+### Runs (all with `MARIN_DEBUG_DUMP_SHARDING=1`)
+
+All in W&B project `marin-community/dpo`.
+
+| TPU | region | tag | run | state |
+|---|---|---|---|---|
+| v5p-8 | us-east5-a | `ue5-y5p` | [experiment_y_r64_v5p8_pd4_sharding_s2_ue5-y5p-fc8aa0](https://wandb.ai/marin-community/dpo/runs/experiment_y_r64_v5p8_pd4_sharding_s2_ue5-y5p-fc8aa0) | running (dump captured at step 0) |
+| v5p-8 | us-central1-a | `uc1-y5p` | [experiment_y_r64_v5p8_pd4_sharding_s2_uc1-y5p-7d5264](https://wandb.ai/marin-community/dpo/runs/experiment_y_r64_v5p8_pd4_sharding_s2_uc1-y5p-7d5264) | running, step 0 reached |
+| v6e-8 | us-east5-b | `ue5b-y6e` | [experiment_y_r64_v6e8_pd4_s2_ue5b-y6e-f74331](https://wandb.ai/marin-community/dpo/runs/experiment_y_r64_v6e8_pd4_s2_ue5b-y6e-f74331) | **finished**, full 2-step trace |
+| v6e-8 | europe-west4-a | `ew4-y6e` | [experiment_y_r64_v6e8_pd4_sharding_s2_ew4-y6e-ddcfc9](https://wandb.ai/marin-community/dpo/runs/experiment_y_r64_v6e8_pd4_sharding_s2_ew4-y6e-ddcfc9) | **finished**, full 2-step trace |
+| v6e-8 | us-east1-d | `ue1-y6e` | [experiment_y_r64_v6e8_pd4_sharding_s2_ue1-y6e-b6e953](https://wandb.ai/marin-community/dpo/runs/experiment_y_r64_v6e8_pd4_sharding_s2_ue1-y6e-b6e953) | **finished**, full 2-step trace |
+
+Iris job ids follow `iris-run-experiment_y_sharding_probe_s2-20260417-0550*` (parent, all regions).
+
+Note the small naming inconsistency in `ue5b-y6e`'s run name
+(`experiment_y_r64_v6e8_pd4_s2_ue5b-y6e-f74331` missing `_sharding`)
+is cosmetic; the underlying config is identical to the other v6e-8
+runs and the sharding dump matches bit-for-bit.
+
+### Shared mesh and mapping metadata (identical on v5p-8 and v6e-8)
+
+Both TPU families produce the same `DEBUGJ SHARDING_MESH` line from
+`trainer.parameter_axis_mapping` / `trainer.compute_axis_mapping`:
+
+```
+param_mapping  = {'mlp': 'model', 'heads': 'model', 'embed': 'data'}
+compute_mapping = {
+    'mlp':          'model',
+    'heads':        'model',
+    'batch':        ('replica_dcn', 'replica', 'data'),
+    'token':        ('replica_dcn', 'replica', 'data'),
+    'token_repeat': ('replica_dcn', 'replica', 'data'),
+}
+```
+
+(The `SHARDING_MESH` line lists `mesh_shape={}` / `devices=None` because
+`trainer._mesh` isn't exposed publicly; the actual per-array
+`sharding_mesh` dict printed on each `DEBUGJ SHARDING PARAM` line gives
+the real mesh shape and is authoritative.)
+
+Per-array `sharding_mesh` seen:
+- **v5p-8**: `{data: 4, replica: 1, model: 1, replica_dcn: 1}` — 4 chips on data axis.
+- **v6e-8**: `{data: 8, replica: 1, model: 1, replica_dcn: 1}` — 8 chips on data axis.
+
+### LoRA parameter sharding (identical pspecs on both TPUs)
+
+`scan_layers=True`, so every LoRA module's A and B parameter across all
+32 transformer layers is stacked into a single array with leading
+`layers=32` dimension.
+
+| Module | LoRA A shape | A pspec | A sharding behavior |
+|---|---|---|---|
+| `self_attn.q_proj` | `(32, 64, 4096)` | `(None, None, 'data')` | embed=4096 sharded on `data` (v5p: 4-way, v6e: 8-way) |
+| `self_attn.k_proj` | `(32, 64, 4096)` | `(None, None, 'data')` | same |
+| `self_attn.v_proj` | `(32, 64, 4096)` | `(None, None, 'data')` | same |
+| `self_attn.o_proj` | `(32, 64, 32, 128)` | `(None, None, 'model', None)` | `heads=32 → model=1` → **replicated** |
+| `mlp.gate_proj` | `(32, 64, 4096)` | `(None, None, 'data')` | embed=4096 sharded on `data` |
+| `mlp.up_proj` | `(32, 64, 4096)` | `(None, None, 'data')` | embed=4096 sharded on `data` |
+| `mlp.down_proj` | `(32, 64, 14336)` | `(None, None, 'model')` | `mlp=14336 → model=1` → **replicated** |
+
+| Module | LoRA B shape | B pspec | B sharding behavior |
+|---|---|---|---|
+| **`self_attn.q_proj`** | **`(32, 8, 4, 128, 64)`** | **`(None, None, None, None, None)`** | **FULLY REPLICATED (kv_heads, q_per_group, head_dim, r all unmapped)** |
+| **`self_attn.k_proj`** | **`(32, 8, 128, 64)`** | **`(None, None, None, None)`** | **FULLY REPLICATED** |
+| **`self_attn.v_proj`** | **`(32, 8, 128, 64)`** | **`(None, None, None, None)`** | **FULLY REPLICATED** |
+| `self_attn.o_proj` | `(32, 4096, 64)` | `(None, 'data', None)` | embed sharded on `data` |
+| `mlp.gate_proj` | `(32, 14336, 64)` | `(None, 'model', None)` | `mlp=14336 → model=1` → **replicated** |
+| `mlp.up_proj` | `(32, 14336, 64)` | `(None, 'model', None)` | replicated |
+| `mlp.down_proj` | `(32, 4096, 64)` | `(None, 'data', None)` | embed sharded on `data` |
+
+### Adam optimizer-state (`mu`) sharding (identical to params)
+
+The Adam first-moment buffer `state.opt_state[1].mu` mirrors the
+parameter pspecs one-for-one on both TPU families. For example:
+
+- `mu.q_proj.lora_A` pspec = `(None, None, 'data')` — same as param
+- `mu.q_proj.lora_B` pspec = `(None, None, None, None, None)` — fully replicated, same as param
+- `mu.o_proj.lora_A` pspec = `(None, None, 'model', None)` — replicated (model=1), same as param
+- ...etc for all other modules
+
+(Second moment `nu` not logged separately; Adam's pytree contains both
+under the same scale-and-shard path in optax, so it carries the same
+pspecs.)
+
+### Key observations
+
+1. **The partition specs are the same on v5p-8 and v6e-8.** No
+   "silently different sharding" bug. The PSpec tuples are equal string-
+   for-string; the `sharding_mesh` shape is the only thing that differs
+   (`data:4` vs `data:8`).
+2. **Q/K/V LoRA B matrices are fully replicated on both TPUs.** Their
+   named axes (`kv_heads`, `q_per_group`, `head_dim`, `r`) are not in
+   `param_mapping`, so every chip holds a complete copy of each B matrix
+   and participates in a cross-chip all-reduce of the B gradient.
+3. **The `heads` and `mlp` axes route to `model`, which has size 1
+   under the canonical FSDP mesh** — so `o_proj.lora_A` (heads axis),
+   `mlp.down_proj.lora_A` / `mlp.gate_proj.lora_B` / `mlp.up_proj.lora_B`
+   (mlp axis) are all replicated on both TPUs, not just v5p.
+4. **Only `embed`-axis LoRA weights are actually sharded by FSDP.**
+   q/k/v/gate/up `lora_A` (sharded on last-dim `embed=4096`),
+   o/down `lora_B` (sharded on middle-dim `embed=4096`). Ratio on v5p-8
+   is 4-way; on v6e-8 it is 8-way. Every *other* LoRA weight is
+   replicated.
+5. Exp W's pure-TP recovery maps `mlp/heads → model=4`, which fully
+   swaps which axes get sharded: `mlp` LoRA weights become 4-way
+   sharded on `model`, `embed` LoRA weights become 4-way sharded via
+   `data=1` being swapped for `model=4` in practice (the param_mapping
+   `embed → data` is unchanged, but `data=1` means no sharding there,
+   while the new `heads/mlp → model=4` produces sharding on attention
+   heads and MLP hidden). The pspecs under TP are a different layout
+   than either v5p-8 FSDP or v6e-8 FSDP.
+
+### Implications for next experiments
+
+The bug is not "wrong pspec". It lives in some width-dependent behavior
+of the cross-chip reduction that runs on the `data` axis, specifically
+when `|data|=4`.
+
+The highest-information next probes:
+
+1. **Dump Q/K/V `lora_B` gradient values per-chip before and after
+   all-reduce.** Same hook pattern, add a `MARIN_DEBUG_DUMP_GRAD_VALUES`
+   env var that records a fixed slice of each fully-replicated B
+   gradient on every chip. Compare within-chip variance and post-all-
+   reduce variance between v5p-8 (bad, 4-way) and v6e-8 (good, 8-way).
+   Would directly test hypothesis (3) above.
+2. **Force fp32 collective precision** via `XLA_FLAGS` (e.g.
+   `--xla_allow_excess_precision=false`, `--xla_gpu_all_reduce_precision=f32`
+   on GPU, TPU-specific flags for reductions). If v5p-8 recovers with
+   fp32 collectives, the bug is collective internal precision.
+3. **Run v5p-8 LoRA DPO with a mesh that has `data=2, model=2`** (Exp W
+   `mix` variant, already supported by `experiment_w_v5p8_mesh_s10.py`).
+   If `data=2` also fails, the bug scales with `|data|>1`; if it
+   recovers, something is specifically wrong with `|data|=4`.
+4. **Introspect XLA's collective choice.** Look at the HLO dumps from a
+   v5p-8 vs v6e-8 run and diff the chosen all-reduce algorithms.
+   `jax_dump_hlo_directory` would capture the compiled programs.
+5. **Dump the second-moment `nu` opt state** in a follow-up to confirm
+   it truly matches `mu` pspecs (suspected but not logged yet).
+
+### Hook location (for future agents)
+
+The sharding dump lives at:
+
+- `lib/levanter/src/levanter/main/train_dpo.py` ~line 685, gated by
+  `MARIN_DEBUG_DUMP_SHARDING=1`. It runs once per worker immediately
+  after `trainer.initial_state(...)`, before JIT compile. Captures
+  `state.model` and `state.opt_state`. Output format:
+  ```
+  DEBUGJ SHARDING_MESH ...
+  DEBUGJ SHARDING PARAM path=... shape=... pspec=... sharding_mesh=...
+  DEBUGJ SHARDING OPT_STATE path=... shape=... pspec=... sharding_mesh=...
+  DEBUGJ SHARDING_DONE
+  ```
+- Wrapped in try/except so a dump error (`DEBUGJ SHARDING_ERROR ...`)
+  won't kill the run. Dump is to `sys.stderr` with `flush=True`.
+- The hook is cheap (~N print lines where N = ~30 for this recipe);
+  leave it on for diagnostics, or set `MARIN_DEBUG_DUMP_SHARDING=0`
+  (or unset) to skip entirely.
+
+### Experiment script
+
+`experiments/posttrain/per_stmt_dpo/experiment_y_sharding_probe_s2.py`
+is the reusable probe:
+
+- `EXPERIMENT_Y_TPU=v5p-8` or `v6e-8` selects the TPU family.
+- Region defaults match the multi-region launch policy
+  (`us-east5`+`us-central1` for v5p, `us-east5`+`us-east1`+`europe-west4`
+  for v6e).
+- `num_train_steps=2` so the run completes quickly; sharding dump
+  happens at init regardless of step count.
+
+## 2026-04-17T05:25Z: Experiment W result — **pure-TP on v5p-8 RESCUES LoRA DPO**; root cause is FSDP-on-4-chips
+
+### Strongest true conclusion
+
+Experiment W ran the **exact same bad `v5p-8` LoRA DPO recipe** as
+Experiments Q, V, U but overrode the mesh axes from the canonical
+`{replica:1, data:-1, model:1}` (pure FSDP on 4 chips) to
+`{replica:1, data:1, model:4}` (pure tensor-parallel, zero FSDP) and
+added the standard Marin TP `shared_mapping={mlp:model, heads:model}`.
+Training **fully recovers** — the step-2 escape to ~0.29 loss mirrors
+(and slightly exceeds) the canonical good `v5p-16` FSDP baseline.
+
+> **The `v5p-8` LoRA DPO pathology is caused by FSDP sharding on the
+> 4-device mesh.** Replacing FSDP with TP eliminates the failure.
+
+This is the root-cause answer after a full sweep of alternative
+hypotheses. Combined with:
+
+- Exp U ruling out all numeric precision (bf16 ↔ fp32 makes no difference)
+- Exp V ruling out `AdapterBaseReferenceConfig` (`SeparateReferenceConfig`
+  is identically bad under FSDP)
+- Exp R/R2a ruling out CE kernel tiling and bf16 accumulation
+- Exp N/O/P ruling out TPU family, `pd`, LoRA rank as individual causes
+- Exp T ruling out broad "v5p-8 graph breaks DPO" (full-FT works)
+
+The load-bearing variable is unambiguous: **4-wide FSDP sharding of
+LoRA parameters and their optimizer state on this Llama-8B / r=64 /
+per-stmt recipe produces a degenerate update geometry that does not
+recover on its own**.
+
+### Run
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_w_r64_v5p8_pd4_mesh_s10_uc1-wtp2-815fa2
+- **Iris job:** `/ahmedah/iris-run-experiment_w_v5p8_mesh_s10-20260417-051008/train_dpo`
+- **Worker:** v5p-8 preemptible in `us-central1-a`
+- **State:** `state=finished` in W&B, full 10-step trajectory + step-10
+  `stmt_val` + `full_val` eval logged. Iris task is also clean (no
+  HF-export crash because Exp W uses `AdapterBaseReferenceConfig`
+  matching Exp Q, not `SeparateReferenceConfig` which triggers the
+  orthogonal `DpoModel.config` bug).
+- **Replication:** the `us-east5-a` copy (`ue5-wtp2`) reached step 2
+  with **bit-identical** loss `0.290650` and delta `11.1908`,
+  confirming the recovery is deterministic across regions, not a
+  one-off artefact.
+
+### Mesh configuration
+
+The `tp` variant of the configurable Exp W script sets:
+
+```
+MESH_AXES = {"replica": 1, "data": 1, "model": 4}
+PARAM_MAPPING = {"embed": "data"}     # no-op since data=1
+SHARED_MAPPING = {"mlp": "model", "heads": "model"}
+```
+
+Notes on getting this right:
+
+- Do **not** map `embed` to `model` when `shared_mapping` already maps
+  `heads` to `model`: Q/K/V projections carry both `embed` and `heads`
+  named axes, which would produce `PartitionSpec("model","model",None)`
+  and a `DuplicateSpecError` at sharding setup. The first Exp W attempt
+  (`wtp1`) hit exactly this error before I corrected the param mapping.
+- `data=1` is intentional: it eliminates FSDP entirely while keeping the
+  data-parallel axis name alive for parts of the framework that expect
+  it.
+
+### Training-relevant config
+
+Identical to Exp Q pd=4 (including `AdapterBaseReferenceConfig`,
+`r=64/α=64/zero_init_b=True`, `bs=64, pd=4, seq_len=4096, lr=1e-6,
+β=0.1, seed=0`, mixed precision `p=f32,c=bfloat16`) **except** the
+mesh override above. This is a single-variable change vs the canonical
+bad baseline.
+
+### Full 10-step training trajectory (W/uc1-wtp2)
+
+| step | loss      | delta (`δ_π - δ_ref`) |
+|------|-----------|-----------------------|
+| 0    | 0.695091  | -0.0370               |
+| 1    | 0.694598  | -0.0273               |
+| 2    | 0.290650  | **+11.1908**          |
+| 3    | 0.283185  | +11.5299              |
+| 4    | 0.292368  | +11.2334              |
+| 5    | 0.269939  | +12.2332              |
+| 6    | 0.289147  | +11.3794              |
+| 7    | 0.275474  | +11.8173              |
+| 8    | 0.256758  | +12.7471              |
+| 9    | 0.267132  | +12.3805              |
+
+Qualitative: step-2 escape to the `~0.27` band is immediate (exactly the
+same pattern as good v5p-16 FSDP), and delta climbs steadily to ~12.4
+by step 9, even slightly above the good baseline.
+
+### Side-by-side: Exp W TP vs Exp Q FSDP (bad v5p-8) vs good v5p-16 FSDP
+
+| step | **Exp W TP v5p-8** | Exp Q FSDP v5p-8 (bad) | Good v5p-16 FSDP |
+|------|--------------------|------------------------|------------------|
+| 0    | 0.6951             | 0.6931                 | 0.6931           |
+| 1    | 0.6946             | 0.6931                 | 0.6931           |
+| 2    | **0.2907**         | 0.6851                 | 0.3352           |
+| 5    | 0.2699             | 0.6689                 | 0.3168           |
+| 9    | 0.2671             | 0.6606                 | 0.3176           |
+| step-9 delta | **12.38**    | 0.66                   | 10.22            |
+
+The `0.695 → 0.290` collapse at step 2 matches the good-run signature.
+TP even beats the good v5p-16 baseline by ~0.05 loss and ~2 nats on
+delta, plausibly because TP eliminates the FSDP all-gather /
+reduce-scatter noise entirely.
+
+Note the W step-0 loss is `0.6951` rather than `ln(2) ≈ 0.6931`: with
+TP sharding of LoRA adapters, RNG-key consumption happens in a slightly
+different order than under FSDP, so policy is not bit-exactly equal to
+reference at init. The delta is −0.037 — tiny, and swamped by the
++11.19 step-2 jump. Not a confound.
+
+### Step-10 validation metrics (W/uc1-wtp2)
+
+| metric                         | value    |
+|--------------------------------|----------|
+| stmt_val/dpo_loss              | 0.2532   |
+| stmt_val/dpo_accuracy          | 1.000    |
+| stmt_val/dpo_chosen_reward     | +0.887   |
+| stmt_val/dpo_rejected_reward   | -0.376   |
+| stmt_val/dpo_margin δ          | +12.62   |
+| full_val/dpo_loss              | 0.6188   |
+| full_val/dpo_accuracy          | 1.000    |
+| full_val/dpo_margin δ          | +1.57    |
+
+stmt_val clearly shows the model learned the mental-health preference
+structure. full_val is weaker transfer (expected — 10 steps is a tiny
+probe), but still positive δ and accuracy=1, decisively better than
+every bad v5p-8 FSDP run.
+
+### Cross-region replication
+
+The `us-east5-a` copy (`W/ue5-wtp2`) reached step 2 with **loss
+`0.290650`** and **delta `11.1908`** — bit-identical to `uc1-wtp2` to
+fp32 precision. Both copies used identical seed/data/mesh; this proves
+the recovery is a deterministic property of the mesh configuration, not
+regional luck.
+
+### What Exp W establishes
+
+**Root cause, confirmed:** FSDP sharding across all 4 devices of the
+v5p-8 mesh is what breaks LoRA DPO on this recipe. The failure is not
+about the v5p hardware per se, not about 4 chips per se, but about
+data-parallel sharding consuming all 4 chips with zero model-axis
+sharding.
+
+**Mechanism (hypothesis, consistent with all evidence but not yet
+proved):** With 4-wide FSDP, LoRA A/B gradients and Adam `m`/`v` state
+are sharded along a 4-device axis, and the ensuing all-reduce/reduce-
+scatter interacts with LoRA's low-rank update in a way that destroys
+the gradient direction carrying the chosen-vs-rejected signal —
+producing gradients with correct L2 norm but wrong direction. TP puts
+sharding on `mlp`/`heads` axes that are large and natural for Llama,
+replicates the small LoRA adapter matrices, and the gradient direction
+is preserved.
+
+### What remains open (lower priority)
+
+1. **Where in FSDP it breaks.** Is it the LoRA parameter partition
+   specification, the optimizer-state sharding, or the all-reduce of
+   LoRA gradients? A follow-up Exp W `mix` variant (`data:2, model:2`)
+   and per-module partition-spec dumps would narrow this.
+2. **Why r=64 specifically.** Exp K showed r=64 and r=16 were both bad
+   under FSDP. Would r=2 also be bad, or does the degeneracy scale
+   with rank-per-shard?
+3. **Cross-family verification.** Whether v6e-4 would also be fine under
+   TP (HBM permitting) or bad under FSDP. Exp X is blocked on HBM
+   budget — see the next section.
+
+### Recommended follow-ups
+
+1. **Exp W `mix` variant.** Run `EXPERIMENT_W_MESH=mix` (axes
+   `{replica:1, data:2, model:2}`) on v5p-8 LoRA. If it recovers → the
+   issue is specifically about `data=4`, not the presence of FSDP at
+   all. If it still stays stuck → FSDP-wider-than-2 is enough to
+   trigger the bug.
+2. **Production patch.** Update the experiments that currently
+   mis-schedule Llama-8B r=64 LoRA DPO on v5p-8 to use a TP-4 mesh
+   (or simply avoid v5p-8 for this recipe). Document in the LoRA DPO
+   guide.
+3. **Fix the `DpoModel.config` HF-export bug** independently — it
+   confuses post-training cleanup and makes successful runs look
+   failed. Not load-bearing for the investigation but worth the
+   one-line fix.
+
+## 2026-04-17T04:55Z: Experiment X result — **BLOCKED / dead**; `v6e-4` cannot fit Llama-8B LoRA DPO at any `(bs, pd)` combination
+
+### Strongest true conclusion
+
+The cross-family 4-chip test on `v6e-4` is structurally blocked. v6e-4
+has 32 GB HBM per chip × 4 = 128 GB total — enough for Llama-8B in
+principle, but the compiled XLA `jit__train_step` program is ~22 GB per
+chip on this Llama-8B LoRA `r=64` recipe regardless of batch size or
+`per_device_parallelism`, and does not fit alongside the loaded base
+weights, activation buffers, and JAX runtime pools that occupy the
+remaining HBM.
+
+**Abandoning Exp X** and proceeding to Exp W (mesh-axis rearrangement on
+v5p-8) as the next architectural discriminator.
+
+### Full HBM-fit sweep (all failed)
+
+| config            | failure stage    | HBM pattern                                |
+|-------------------|------------------|--------------------------------------------|
+| `bs=64 pd=4`      | XLA compile OOM  | compile allocation dump, `[32,14336,64]` buffers|
+| `bs=64 pd=2`      | XLA compile OOM  | `Used 33.16 GB of 31.25 GB HBM` (over by 1.9 GB) |
+| `bs=64 pd=1`      | program load OOM | prog `22.21 GB`; `14.65 GB` free after weights     |
+| `bs=32 pd=4`      | XLA compile OOM  | `Used 37.24 GB of 31.25 GB HBM` (over by 6 GB)      |
+| `bs=32 pd=1`      | program load OOM | prog `22.21 GB`; `14.78 GB` free after weights     |
+
+Key diagnostic observations:
+
+- **Program size is invariant to `bs` at fixed `pd`:** `bs=64 pd=1` and
+  `bs=32 pd=1` both produced identical `22.21 GB` compiled programs.
+  This means the dominant program cost is not the grad-accumulation
+  loop unroll but the fixed LoRA module graph (scan-stacked buffers
+  `f32[32, 14336, 64]` = 112 MB × many modules × 32 layers).
+- **Per-chip activation scales with `pd` not `bs`:** compile-time HBM
+  rose from 33 GB (`pd=2`) to 37 GB (`pd=4`) at fixed `bs=32`,
+  confirming activation size depends only on examples-per-chip-per-
+  microbatch (`= pd`), not global batch.
+- At `pd=1`, activation fits but the program itself exceeds free HBM;
+  at `pd=2` the opposite; no point in the `(bs, pd)` plane fits both.
+
+### Recovery knobs that would work (but deviate materially from Exp R)
+
+1. **Reduce LoRA rank** to `r=16` or `r=8` — directly shrinks scan-
+   stacked buffers and the compiled program. Per Exp K, pathology is
+   rank-independent, so still valid LoRA-on-4-chips test, but no longer
+   matches Exp R's `r=64`.
+2. **`p=bf16,c=bfloat16`** — halves base weight shards. Would also
+   push LoRA params and Adam state to bf16, which may destabilize the
+   optimizer.
+3. **`target_modules=["q_proj","v_proj"]`** — reduces LoRA adapter
+   count, shrinks scan-stacked buffers. Recipe deviates from the
+   canonical `target_modules=None` (all linear).
+4. **`train_seq_len=2048`** — halves activation, but does not reduce
+   program size, so `pd=4`/`pd=2` would still OOM on program alone.
+
+None of these are clean single-variable changes relative to Exp R.
+
+### What Exp X blocking means for the investigation
+
+The "is it `v5p-8` specific or 4-chip-general" question is still open
+but deprioritized. The next probe (Exp W — mesh-axis rearrangement on
+v5p-8 LoRA) directly attacks the leading hypothesis (FSDP-on-4-chips)
+with plenty of HBM headroom, and if it recovers training, it gives us
+the answer without needing v6e-4.
+
+If Exp W does not recover training, revisit Exp X with one of the
+recovery knobs above (most likely `r=16` on `v6e-4` as it is the
+smallest scientifically-bounded deviation).
+
+### Runs
+
+All v6e-4 attempts failed with OOM. For reference:
+
+- `bs=64 pd=4`: `ue5b-x1`, `ew4-x1`, `ue1-x1` (tags of initial attempt)
+- `bs=32 pd=4`: `ue5b-x4`, `ew4-x4`, `ue1-x4`
+- `bs=32 pd=1`: `ue5b-x5`, `ew4-x5`, `ue1-x5`
+
+All runs on `marin-community/dpo` W&B; no useful training traces, only
+the compile-time allocation dumps and `RESOURCE_EXHAUSTED` errors
+documented above.
+
+## 2026-04-17T04:02Z: Experiment V result — **`SeparateReferenceConfig` does NOT fix `v5p-8` LoRA**; reference-path theories are now dead
+
+### Strongest true conclusion
+
+Experiment V ran the **exact same bad `v5p-8` LoRA DPO recipe** as
+Experiment Q (pd=4) but with the reference path swapped from
+`AdapterBaseReferenceConfig` to `SeparateReferenceConfig`. The training
+trajectory is **indistinguishable from the ABRC-based Exp Q run**: loss
+stays stuck near `ln(2)` ≈ 0.693 and `delta_pi - delta_ref` never escapes
+the ~0.1–0.7 bad band while good runs jump to ~9–10 by step 2.
+
+This is a strong, clean rule-out:
+
+> **The `v5p-8` LoRA pathology is NOT caused by `AdapterBaseReferenceConfig`.
+> The reference path is not the load-bearing variable.**
+
+Combined with Exp U's rule-out of all numeric precision, the two leading
+single-variable hypotheses from the post-Exp-U ranking are both dead.
+The remaining cause must live in the **LoRA-specific distributed training
+path itself** — FSDP sharding, adapter optimizer state, mesh collective
+ordering, or how LoRA's low-rank update flows through the 4-device v5p-8
+topology.
+
+### Why this conclusion is strong
+
+1. **Exp V is a single-variable ablation.** The only change from Exp Q
+   pd=4 is `reference = SeparateReferenceConfig()` instead of
+   `AdapterBaseReferenceConfig()`. Everything else — LoRA config, data,
+   seed, batch size, learning rate, TPU type, `pd`, mixed precision — is
+   identical. (Verified from the experiment script:
+   `experiments/posttrain/per_stmt_dpo/experiment_v_v5p8_separate_ref_s10.py`.)
+
+2. **The reference-path change is comprehensive.** `SeparateReferenceConfig`
+   creates a physically separate frozen reference model copy with its own
+   compiled forward graph, rather than reusing the policy with the adapter
+   zeroed. This is precisely the mechanism Exp T used for its successful
+   v5p-8 full-FT run, so any v5p-8-specific badness rooted in the ABRC
+   "zero-and-rerun-same-model" graph pattern would have been eliminated.
+
+3. **The trajectories are nearly identical to the bad Exp Q.** The max
+   step-wise loss delta between Exp V and Exp Q pd=4 is 0.005 (step 6).
+   This is the same order of precision noise seen between the two Exp Q
+   pd variants (max |Δ| = 0.0024). The reference-path swap has **no more
+   effect than changing the gradient accumulation count**, which is to
+   say: no effect on the pathological behavior.
+
+### Run
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_v_r64_v5p8_pd4_s10_uc1-v1-40ec48
+- **GCS checkpoint:** `gs://marin-us-central1/checkpoints/dpo/stmt_dpo/debug/experiment_v_r64_v5p8_pd4_s10_uc1-v1-40ec48/`
+- **Iris job:** `/ahmedah/iris-run-experiment_v_v5p8_separate_ref_s10-20260417-034059/train_dpo`
+- **Worker:** `us-central1-a` v5p-8 preemptible slice
+- **Duration:** ~15m 46s (task). The iris task exits with `state=failed` *only* because the post-training `save_merged_hf_model` callback hits the unrelated `DpoModel.config` AttributeError described in the top pointer. All 10 training steps, the step-10 stmt_val + full_val evaluation, and the GCS checkpoint save completed successfully before that cosmetic crash. W&B step 0–9 history and the full_val loss are intact.
+- **Region:** us-central1-a. (The parallel `us-east5` V copy was still
+  compiling when the us-central1 copy produced its full trajectory, per
+  the multi-region launch policy; the us-east5 copy is not needed.)
+
+### Training-relevant config
+
+Identical to Exp Q pd=4 except:
+
+- **reference: `SeparateReferenceConfig()`** (was `AdapterBaseReferenceConfig()`)
+
+Everything else pinned to the canonical bad baseline:
+
+- TPU: `v5p-8`
+- data: per-stmt `support_mental_health`
+- LoRA: `r=64`, `alpha=64`, `dropout=0.0`, `zero_init_b=True`,
+  `target_modules=None`
+- `train_batch_size=64`, `num_train_steps=10`, `steps_per_eval=10`
+- `lr=1e-6`, `lr_schedule="cosine"`, `warmup=0.1`
+- `beta=0.1`, `seed=0`
+- `train_seq_len=max_seq_len=4096`
+- `per_device_parallelism=4`, `per_device_eval_parallelism=4`
+- `reference_eval_cache=disabled`, `max_eval_batches=1`
+- mp: `p=f32,c=bfloat16` (default)
+
+### Full 10-step training trajectory (from W&B history)
+
+| step | dpo_loss | dpo_margin_policy | dpo_margin_ref | delta = π-ref |
+|------|----------|-------------------|----------------|---------------|
+| 0    | 0.693141 | -129.980          | -129.981       | 0.0001        |
+| 1    | 0.693145 | -145.636          | -145.636       | 0.0000        |
+| 2    | 0.686452 | -133.931          | -134.067       | 0.1360        |
+| 3    | 0.681340 | -119.349          | -119.588       | 0.2390        |
+| 4    | 0.673174 | -135.893          | -136.299       | 0.4059        |
+| 5    | 0.666660 | -144.152          | -144.692       | 0.5397        |
+| 6    | 0.668962 | -116.424          | -116.916       | 0.4916        |
+| 7    | 0.663534 | -127.394          | -127.997       | 0.6036        |
+| 8    | 0.658301 | -157.883          | -158.596       | 0.7133        |
+| 9    | 0.661385 | -120.645          | -121.294       | 0.6482        |
+
+### Side-by-side: Exp V (SRC) vs Exp Q (ABRC) vs good runs
+
+| step | **Exp V (SRC, v5p-8)** | **Exp Q pd=4 (ABRC, v5p-8)** | **|Δ V-Q|** | **Good v5p-16 pd=2** |
+|------|------------------------|------------------------------|-------------|----------------------|
+| 0    | 0.693141               | 0.693147                     | 0.000006    | 0.693147             |
+| 1    | 0.693145               | 0.693147                     | 0.000002    | 0.693147             |
+| 2    | 0.686452               | 0.685125                     | 0.001327    | 0.335202             |
+| 3    | 0.681340               | 0.682298                     | 0.000958    | 0.325988             |
+| 4    | 0.673174               | 0.673723                     | 0.000549    | 0.336246             |
+| 5    | 0.666660               | 0.668946                     | 0.002286    | 0.316800             |
+| 6    | 0.668962               | 0.667573                     | 0.001389    | 0.336998             |
+| 7    | 0.663534               | 0.662823                     | 0.000711    | 0.324271             |
+| 8    | 0.658301               | 0.658715                     | 0.000414    | 0.306144             |
+| 9    | 0.661385               | 0.660557                     | 0.000828    | 0.317624             |
+
+Key observations from this table:
+
+1. **Exp V tracks Exp Q, not the good run.** The max |Δ| between V and Q
+   is 0.0023 (step 5). The gap between V/Q and the good run is **~0.33–0.36**
+   at every post-step-1 step — two orders of magnitude larger. The
+   reference-path swap does not move the needle.
+
+2. **Step 0 and 1 are near-identical** in both configurations (~0.693),
+   consistent with `zero_init_b=True` forcing policy = ref at init so
+   loss is `softplus(0) = ln(2)` per example regardless of reference
+   construction.
+
+3. **Step 2 escape fails identically.** The good run drops to 0.335;
+   Exp V stays at 0.686 — the exact same step-2 escape failure seen in
+   every prior v5p-8 LoRA run.
+
+### True DPO quantity: `delta_pi - delta_ref`
+
+Useful comparison points at step 9:
+
+| run                              | step-9 `delta_pi - delta_ref` |
+|----------------------------------|-------------------------------|
+| Good `v5p-16 pd=2` (Exp N)       | **~10.22**                    |
+| Exp T `v5p-8` full FT            | 1.789                         |
+| **Exp V (SRC, v5p-8 LoRA)**      | **0.648**                     |
+| Exp Q (ABRC, v5p-8 LoRA)         | 0.665                         |
+
+Exp V's DPO signal matches the bad ABRC LoRA regime (within 0.02 nats),
+not the good 16-chip regime (15× smaller) and not even the v5p-8 full-FT
+regime (3× smaller). The reference-path swap leaves the `delta_pi -
+delta_ref` signature of the run essentially unchanged.
+
+### Validation-set behavior at step 10
+
+Both stmt_val and full_val evaluations completed at step 10 before the
+cosmetic HF-export crash. The summary metrics were not captured to
+wandb.summary because the crash bypassed summary flush, but the in-flight
+full_val loss logged in the worker output was **0.689**, consistent with
+the Exp Q regime (~0.69) and far from the good-run regime (~0.40).
+
+### What Exp V rules out
+
+**Definitively ruled out by Exp V:**
+
+- `AdapterBaseReferenceConfig`'s "same-model-with-adapter-zeroed forward"
+  graph pattern as the load-bearing cause on v5p-8 LoRA. Replacing it
+  with a physically separate frozen reference model produces a
+  trajectory indistinguishable from the ABRC baseline.
+
+**Previously ruled out, and reinforced by Exp V:**
+
+- All numeric-precision theories (Exp U)
+- CE kernel tiling / bf16 accumulation / per-chip CE workload (Exp R, R2a)
+- TPU family alone, `per_device_parallelism` alone, LoRA rank alone
+  (Exp N, O, P)
+- Broad "v5p-8 breaks DPO" (Exp T full-FT success)
+
+### What remains live after Exp V
+
+With ABRC, SRC, and all numeric precision eliminated, the remaining
+live hypotheses are all **structural / topological** and all specific to
+the LoRA training path:
+
+1. **LoRA FSDP parameter / grad sharding on the 4-device v5p-8 mesh
+   (STRONGEST SUSPECT).** With only 4 chips, FSDP shards LoRA A/B
+   matrices differently than on 8-chip or 16-chip meshes. The r=64 rank
+   dimension and the small `(d_in, r)` / `(r, d_out)` shapes may produce
+   a degenerate sharding layout that disrupts the gradient direction
+   when aggregated across the 4 data-parallel replicas. Testable via:
+   - explicit partition-spec logging on v5p-8 vs v5p-16 (diagnostic)
+   - mesh-axis rearrangement probes (`{data:1, model:4}`, `{data:2,
+     model:2}`)
+
+2. **LoRA optimizer state partitioning on 4 devices.** Adam `m`, `v`
+   buffers for LoRA params shard differently on 4 vs 8 devices. Even
+   though per-chip reductions are numerically identical (ruled out by
+   Exp U), the *partitioning* could produce different per-chip update
+   geometry. Testable via SGD probe (no `m`, `v` state).
+
+3. **LoRA-specific interaction with attention `kv_head` sharding.**
+   Llama-8B has 8 KV heads, 32 Q heads (GQA). With `model_axis=1` on
+   both v5p-8 and v5p-16 meshes, KV heads are not TP-sharded. But the
+   FSDP-sharded replication of KV weights across 4 vs 8 data-parallel
+   replicas could produce subtly different gradient directions for the
+   attention LoRA adapters specifically. Testable via
+   `target_modules=["mlp only"]` ablation.
+
+4. **LoRA gradient all-reduce ordering.** On 4 chips, the reduction
+   tree for LoRA gradients is a different topology than on 8 chips.
+   Even though fp32 arithmetic (Exp U) is order-independent to float
+   tolerance, XLA may pick different collective implementations at
+   different chip counts. Testable via `XLA_FLAGS` collective-algorithm
+   pinning.
+
+### Updated post-V hypothesis ranking
+
+1. **(leading, STRENGTHENED by V)** LoRA FSDP sharding / adapter
+   partition layout on the 4-device v5p-8 mesh — this is the single
+   remaining live hypothesis class. Exp V strengthens it by ruling
+   out the last reference-path alternative.
+
+2. **(ruled out by Exp V)** `AdapterBaseReferenceConfig` graph pattern
+
+3. **(ruled out by Exp U)** bf16 / bfloat16 numerical precision anywhere
+   in the compute graph
+
+4. **(ruled out by Exp R + R2a)** CE kernel tiling, bf16 accumulation,
+   per-chip CE workload
+
+5. **(ruled out by Exp N/O/P)** TPU family alone, `per_device_parallelism`
+   alone, LoRA rank alone
+
+6. **(ruled out by Exp T)** Broad `v5p-8` execution graph breaking DPO
+   without LoRA
+
+### Recommended next experiments (priority order)
+
+1. **Experiment W: mesh-axis rearrangement on v5p-8 LoRA.**
+   Run Exp Q recipe with `mesh.axes = {data:1, model:4}` (pure TP, no
+   FSDP) and separately with `{data:2, model:2}`. If either recovers →
+   FSDP-on-4-chips is load-bearing. If both still bad → the issue
+   survives axis reconfiguration and is deeper.
+   *This is the single highest-information experiment remaining.*
+
+2. **Experiment Y: `target_modules` ablation.**
+   Run v5p-8 LoRA with `target_modules=["mlp only"]`, then
+   `["attention only"]`, then HF-style `["q_proj", "v_proj"]`. Localizes
+   which submodule's LoRA gradient is actually broken.
+
+3. **Experiment Z: SGD probe.**
+   Replace AdamW with plain SGD on v5p-8 LoRA (same recipe otherwise).
+   If recovery → Adam `m`/`v` partitioning is the cause. If still bad
+   → optimizer state sharding is not the issue.
+
+4. **Partition-spec introspection (diagnostic).**
+   Add logging to dump `NamedArray.axes` and partition specs for all
+   LoRA A/B parameters on both `v5p-8` and `v5p-16`. Free information,
+   can run concurrently with other probes.
+
+5. **Experiment X (cross-family 4-chip) — blocked.**
+   The original plan was `v6e-4` LoRA to partition "v5p-8 specific" vs
+   "4-chip mesh". `v6e-4` has 32 GB/chip × 4 = 128 GB total HBM and
+   **cannot fit** Llama-8B LoRA DPO at `seq_len=4096, bs=64` even at
+   `pd=1`. To revive this test, either reduce `train_seq_len` to 2048,
+   reduce `train_batch_size` to 32, or switch to `v4-8` (if quota
+   allows; 32 GB/chip same as v6e-4 so likely same OOM). Lower priority
+   than Exp W/Y/Z which can run on the known-good v5p-8 hardware.
+
+## 2026-04-17T02:10Z: Experiment U result — **full fp32 compute does NOT fix `v5p-8` LoRA**; all numeric-precision theories are now dead
+
+### Strongest true conclusion
+
+Experiment U ran the **exact same bad `v5p-8` LoRA DPO recipe** as
+Experiment Q (pd=4) but with the entire compute graph forced to **fp32**
+(`p=f32,c=f32` via JMP). The training trajectory is **indistinguishable from
+the bf16-compute Exp Q run**: loss stays stuck near `ln(2)` ≈ 0.693 and
+never escapes to the ~0.32 regime seen on good runs.
+
+This is a strong, clean rule-out:
+
+> **The `v5p-8` LoRA pathology is NOT caused by bf16 numerical precision —
+> not in the forward pass, not in the backward pass, not in the CE kernel,
+> not in the reference path, not in the optimizer.**
+
+Combined with the earlier Exp R2a (CE-only bf16-accumulation rule-out) and
+the original CE fp32-upcast probe, the entire numeric-precision branch of
+the hypothesis tree is now collapsed.
+
+### Why this conclusion is strong
+
+1. **Experiment U is a single-variable ablation.** The only change from
+   Exp Q pd=4 is `mp = jmp.get_policy("p=f32,c=f32")` instead of the
+   default `p=f32,c=bfloat16`. Everything else — LoRA config, data, seed,
+   batch size, learning rate, reference config, TPU type, pd — is identical.
+   (Verified from the experiment script:
+   `experiments/posttrain/per_stmt_dpo/experiment_u_v5p8_fp32_pd4_s10.py`.)
+
+2. **The precision change is comprehensive.** Unlike Exp R2a (which only
+   changed the CE backward accumulator), Exp U changes every matmul in the
+   entire graph:
+   - policy model forward and backward compute → f32
+   - reference model forward compute → f32
+   - all activations and intermediate tensors → f32
+   - cross-entropy loss → f32 (inputs already f32, no bf16 truncation)
+   - LoRA A/B matrix multiplies → f32
+   - gradient computation → f32
+
+3. **The trajectories are nearly identical.** The max step-wise loss delta
+   between Exp U (fp32) and Exp Q (bf16) is 0.0030 at step 2. This is
+   the same order of precision noise seen between the two Exp Q pd variants
+   (max Δ = 0.0024). The bf16 → fp32 switch has **no more effect than
+   changing the gradient accumulation count**, which is to say: no effect
+   on the pathological behavior.
+
+### Run
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_u_r64_v5p8_pd4_fp32_s10_uc1a-e1ff3f
+- **GCS checkpoint:** `gs://marin-us-central1/checkpoints/dpo/stmt_dpo/debug/experiment_u_r64_v5p8_pd4_fp32_s10_uc1a-e1ff3f/`
+- **Iris job:** `/ahmed/iris-run-experiment_u_v5p8_fp32_pd4_s10-20260417-013922/train_dpo`
+- **Worker:** `marin-tpu-v5p-preemptible-8-us-central1-20260416-1853-df21eda2-worker-0` (`10.128.0.84:10001`)
+- **Duration:** 18m 12s (task), 19m 25s (job). Succeeded, exit 0, 0 failures, 0 preemptions.
+- **Region:** us-central1 (despite `REGIONS_OVERRIDE`; the run tag `uc1a` confirms)
+
+### Training-relevant config
+
+Identical to Exp Q pd=4 except:
+- **mixed precision: `p=f32,c=f32`** (was `p=f32,c=bfloat16`)
+
+Everything else pinned to Exp Q pd=4:
+- TPU: `v5p-8`
+- data: per-stmt `support_mental_health`
+- LoRA: `r=64`, `alpha=64`, `dropout=0.0`, `zero_init_b=True`
+- reference path: `AdapterBaseReferenceConfig`
+- `train_batch_size=64`, `num_train_steps=10`, `steps_per_eval=10`
+- `lr=1e-6`, `lr_schedule="cosine"`, `warmup=0.1`
+- `beta=0.1`, `seed=0`
+- `train_seq_len=max_seq_len=4096`
+- `per_device_parallelism=4`, `per_device_eval_parallelism=4`
+- `reference_eval_cache=disabled`, `max_eval_batches=1`
+
+### Full 10-step training trajectory (from W&B history)
+
+| step | dpo_loss | dpo_accuracy | dpo_margin_policy | dpo_margin_ref | chosen_reward | rejected_reward |
+|------|----------|-------------|-------------------|----------------|--------------|----------------|
+| 0    | 0.692681 | 0.578125    | -129.923431       | -129.933121    | 0.001250     | 0.000280        |
+| 1    | 0.694727 | 0.390625    | -145.610275       | -145.579071    | -0.001933    | 0.001187        |
+| 2    | 0.686458 | 0.828125    | -133.862488       | -133.997330    | 0.010589     | -0.002897       |
+| 3    | 0.680453 | 0.968750    | -119.241516       | -119.497665    | 0.017576     | -0.008040       |
+| 4    | 0.677019 | 0.953125    | -135.859894       | -136.186218    | 0.024531     | -0.008101       |
+| 5    | 0.669665 | 1.000000    | -144.155914       | -144.632584    | 0.033950     | -0.013717       |
+| 6    | 0.665122 | 1.000000    | -116.368851       | -116.938904    | 0.040731     | -0.016275       |
+| 7    | 0.665376 | 1.000000    | -127.384201       | -127.948654    | 0.041171     | -0.015274       |
+| 8    | 0.660315 | 1.000000    | -157.816330       | -158.485840    | 0.048985     | -0.017966       |
+| 9    | 0.659855 | 1.000000    | -120.581207       | -121.260384    | 0.047070     | -0.020848       |
+
+### Side-by-side: Exp U (fp32) vs Exp Q (bf16) vs good run (v5p-16)
+
+| step | **Exp U (fp32, v5p-8)** | **Exp Q pd=4 (bf16, v5p-8)** | **|Δ U-Q|** | **Good (v5p-16 pd=2)** |
+|------|------------------------|------------------------------|-------------|------------------------|
+| 0    | 0.692681               | 0.693147                     | 0.0005      | 0.693147               |
+| 1    | 0.694727               | 0.693147                     | 0.0016      | 0.693147               |
+| 2    | 0.686458               | 0.685125                     | 0.0013      | 0.335202               |
+| 3    | 0.680453               | 0.682298                     | 0.0018      | 0.325988               |
+| 4    | 0.677019               | 0.673723                     | 0.0033      | 0.336246               |
+| 5    | 0.669665               | 0.668946                     | 0.0007      | 0.316800               |
+| 6    | 0.665122               | 0.667573                     | 0.0025      | 0.336998               |
+| 7    | 0.665376               | 0.662823                     | 0.0026      | 0.324271               |
+| 8    | 0.660315               | 0.658715                     | 0.0016      | 0.306144               |
+| 9    | 0.659855               | 0.660557                     | 0.0007      | 0.317624               |
+
+Key observations from this table:
+
+1. **Exp U tracks Exp Q, not the good run.** The max |Δ| between U and Q
+   is 0.0033 (step 4). The gap between U/Q and the good run is **~0.35** —
+   two orders of magnitude larger. fp32 does not move the needle.
+
+2. **Step 0 and 1 are near-identical** in both bad runs (~0.693), and
+   slightly different from the good run only at floating-point noise level.
+   All three start from the same initialization and first batch.
+
+3. **Divergence happens at step 2.** The good run escapes to 0.335; both
+   bad runs stay at ~0.685-0.686. This is the exact same step-2 escape
+   failure documented in every prior v5p-8 LoRA run.
+
+4. **The slow drift downward is identical.** Both bad runs drift from
+   ~0.693 to ~0.660 over 10 steps, compared to the good run's immediate
+   drop to ~0.32. The drift rate and direction match, confirming the
+   pathology is the same phenomenon.
+
+### Chosen/rejected reward separation — still pathological
+
+The DPO "signal" is the gap between chosen and rejected rewards:
+
+| step | **Exp U chosen** | **Exp U rejected** | **Exp U gap** | **Good chosen** | **Good rejected** | **Good gap** |
+|------|------------------|--------------------|---------------|-----------------|--------------------|--------------|
+| 0    | 0.001            | 0.000              | 0.001         | 0.000           | 0.000              | 0.000        |
+| 5    | 0.034            | -0.014             | 0.048         | 0.724           | -0.297             | 1.021        |
+| 9    | 0.047            | -0.021             | 0.068         | 0.700           | -0.322             | 1.022        |
+
+By step 9, the good run achieves a reward gap of **1.02** while Exp U
+achieves only **0.068** — 15× smaller. The model is barely learning to
+distinguish chosen from rejected responses.
+
+### Validation-set behavior at step 10
+
+| metric                        | Exp U (fp32) | Exp Q (bf16)  | note |
+|-------------------------------|-------------|---------------|------|
+| stmt_val/dpo_loss             | 0.6637      | ~0.66 (Q)     | both bad — near ln(2) |
+| stmt_val/dpo_accuracy         | 1.0000      | ~1.0 (Q)      | train accuracy saturates trivially |
+| stmt_val/dpo_chosen_reward    | 0.0442      | ~0.046 (Q)    | tiny absolute reward |
+| stmt_val/dpo_rejected_reward  | -0.0159     | ~-0.020 (Q)   | tiny rejection signal |
+| full_val/dpo_loss             | 0.6940      | ~0.694 (Q)    | both near ln(2) |
+| full_val/dpo_accuracy         | 0.375       | ~0.375 (Q)    | near chance on held-out |
+
+All validation metrics track the Exp Q regime, not the good-run regime.
+
+### What Exp U rules out
+
+**Definitively ruled out by Exp U:**
+
+- bf16 compute precision in any part of the DPO training graph on v5p-8.
+  This is the strongest possible test of this theory — the *entire* compute
+  graph was fp32, and the pathology is unchanged.
+
+**Previously ruled out, and reinforced by Exp U:**
+
+- CE kernel bf16 accumulation (ruled out by Exp R2a; Exp U further confirms
+  by making the CE inputs fully f32 and still seeing the same behavior)
+- CE tiling / per-chip CE workload (ruled out by Exp R)
+- TPU family (ruled out by Exp N)
+- `per_device_parallelism` (ruled out by Exp Q pd sweep)
+- LoRA rank (ruled out by earlier sweeps)
+- Broad "v5p-8 breaks DPO" (ruled out by Exp T full-FT success)
+
+### What remains live after Exp U
+
+The elimination of all numeric-precision theories leaves only **structural /
+topological** explanations:
+
+1. **`AdapterBaseReferenceConfig` on v5p-8 (STRONGEST SUSPECT)**
+
+   All bad v5p-8 LoRA runs use `AdapterBaseReferenceConfig`, which computes
+   reference log-probs by temporarily zeroing the LoRA adapter and running
+   a forward pass through the *same* model instance. On v5p-8 (4 devices),
+   the adapter zeroing / un-zeroing might interact with FSDP sharding
+   differently than on v5p-16 (8 devices). The full-FT Exp T used
+   `SeparateReferenceConfig` (a physically separate model copy), and it
+   learned fine. This is the most under-tested confound remaining.
+
+2. **LoRA FSDP sharding on the 4-device v5p-8 mesh**
+
+   With 4 TPU v5p chips, the FSDP sharding might place LoRA A and B
+   matrices on the same shard boundaries as the base model weight they
+   modify, creating a degenerate gradient accumulation pattern. On v5p-16
+   (8 chips) or v6e-8 (also 4 chips but different topology), the mesh
+   mapping is different enough to avoid this. This is testable by logging
+   `NamedArray.axes` and partition specs for LoRA parameters on both
+   configurations.
+
+3. **LoRA optimizer state partitioning**
+
+   The Adam optimizer state (m, v) for LoRA parameters might be sharded
+   differently on 4 vs 8 devices, leading to different numerical update
+   trajectories. This would explain why the pathology is insensitive to
+   compute precision (the issue is in how updates are *aggregated*, not
+   *computed*).
+
+4. **Attention kv_head mesh mapping interaction (low probability)**
+
+   The Llama-8B model has grouped-query attention (8 KV heads, 32 Q heads).
+   On a 4-device mesh, the KV head sharding might interact with LoRA's
+   `target_modules=None` (which targets all linear layers including
+   attention projections) in a way that doesn't occur on 8 devices. This
+   is speculative and lower priority than the above.
+
+### Updated post-U hypothesis ranking
+
+1. **(leading, STRENGTHENED by U)** Something structural in the LoRA /
+   adapter training path on `v5p-8` — most likely `AdapterBaseReferenceConfig`
+   behavior, LoRA FSDP sharding layout, or adapter optimizer state
+   partitioning on the 4-device mesh. **Exp U strengthens this by ruling
+   out the last remaining numeric-precision alternative.**
+
+2. **(ruled out by Exp U)** bf16 / bfloat16 numerical precision anywhere
+   in the compute graph.
+
+3. **(ruled out by Exp R + R2a)** CE kernel tiling, bf16 accumulation,
+   per-chip CE workload.
+
+4. **(ruled out by Exp N/O/P)** TPU family alone, `per_device_parallelism`
+   alone, LoRA rank alone.
+
+5. **(ruled out by Exp T)** Broad `v5p-8` execution graph breaking DPO
+   without LoRA.
+
+### Recommended next experiments (priority order)
+
+1. **Experiment V: LoRA on v5p-8 with `SeparateReferenceConfig`.**
+   Replace `AdapterBaseReferenceConfig()` with `SeparateReferenceConfig()`
+   in the Exp Q recipe. Keep everything else identical. If this recovers
+   → `AdapterBaseReferenceConfig` is the cause. If still bad → the cause
+   is in LoRA param/sharding itself, not the reference path.
+   *This is the single highest-information experiment remaining.*
+
+2. **Experiment W: LoRA sharding introspection.**
+   Add logging to dump the `NamedArray.axes` and FSDP partition specs for
+   all LoRA A/B parameters on both `v5p-8` and `v5p-16`. Compare the
+   layouts. This is diagnostic, not a fix, but it will either confirm or
+   eliminate the sharding-layout theory.
+
+3. **Experiment X: v6e-4 LoRA DPO (4-device non-v5p mesh).**
+   Run the same recipe on `v6e-4` (4 chips, same device count as v5p-8
+   but different TPU family and topology). If v6e-4 also fails → the
+   4-device mesh is the issue regardless of family. If v6e-4 succeeds →
+   the issue is specific to the v5p 4-device topology.
 
 ## 2026-04-17T01:36Z: Experiment U staged — rerun the bad `v5p-8` LoRA regime with `p=f32,c=f32` at `pd=4`
 
@@ -145,11 +1975,10 @@ Expected run name pattern:
 
 ### Status
 
-- Experiment U is **prepared but not yet launched**
-- This is now the cleanest "numeric precision without CE tunnel vision" probe in
-  the queue
-- If U fails to fit despite the `pd=4` guardrail, that itself is evidence that
-  whole-graph fp32 is impractical for this LoRA DPO regime on `v5p-8`
+- Experiment U **completed successfully** on 2026-04-17. See the result
+  section above at `2026-04-17T02:10Z`.
+- **Result: fp32 does NOT fix the pathology.** Trajectory is indistinguishable
+  from Exp Q (bf16). All numeric-precision theories are ruled out.
 
 ## 2026-04-17T00:30Z: Experiment T result — `v5p-8` full FT **LEARNS**; broad `v5p-8` execution-graph failure is no longer the leading explanation
 

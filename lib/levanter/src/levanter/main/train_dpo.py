@@ -573,7 +573,63 @@ def main(config: TrainDpoConfig):
     import os as _dbg_os
     import sys as _dbg_sys
 
-    _dbg_keys = ["MARIN_DEBUG_LORA_FACTOR_TRACE", "MARIN_DEBUG_LOG_BATCH_INDICES", "MARIN_DEBUG_LOG_STEP_TRACE"]
+    _dbg_keys = [
+        "MARIN_DEBUG_LORA_FACTOR_TRACE",
+        "MARIN_DEBUG_LOG_BATCH_INDICES",
+        "MARIN_DEBUG_LOG_STEP_TRACE",
+        "MARIN_DEBUG_DUMP_SHARDING",
+        "MARIN_DEBUG_DUMP_GRAD_VALUES",
+        "MARIN_DEBUG_HLO_UPLOAD_DIR",
+        "XLA_FLAGS",
+    ]
+
+    # DEBUGSTART — debug_accum_tpu_type Exp Z4: HLO upload hook
+    # When MARIN_DEBUG_HLO_UPLOAD_DIR=<gcs-path> is set, register an atexit
+    # handler that uploads /tmp/xla_hlo/ (produced by XLA_FLAGS=--xla_dump_to=/tmp/xla_hlo)
+    # to the provided GCS path before the worker exits. Assumes gsutil is on PATH,
+    # which it is on all Marin TPU worker images.
+    if _dbg_os.environ.get("MARIN_DEBUG_HLO_UPLOAD_DIR"):
+
+        def _dbg_upload_hlo():
+            upload_dir = _dbg_os.environ.get("MARIN_DEBUG_HLO_UPLOAD_DIR", "")
+            if not upload_dir:
+                return
+            try:
+                _dbg_os.makedirs("/tmp/xla_hlo", exist_ok=True)
+                import fsspec as _dbg_fsspec
+
+                fs, dest_path = _dbg_fsspec.core.url_to_fs(upload_dir)
+                _dbg_count = 0
+                _dbg_total_bytes = 0
+                for fname in _dbg_os.listdir("/tmp/xla_hlo"):
+                    local_path = _dbg_os.path.join("/tmp/xla_hlo", fname)
+                    if not _dbg_os.path.isfile(local_path):
+                        continue
+                    dest = dest_path.rstrip("/") + "/" + fname
+                    with open(local_path, "rb") as src:
+                        with fs.open(dest, "wb") as dst:
+                            data = src.read()
+                            dst.write(data)
+                            _dbg_total_bytes += len(data)
+                    _dbg_count += 1
+                print(
+                    f"DEBUGJ HLO_UPLOAD uploaded={_dbg_count} bytes={_dbg_total_bytes} dest={upload_dir}",
+                    file=_dbg_sys.stderr,
+                    flush=True,
+                )
+            except Exception as _dbg_e:
+                print(
+                    f"DEBUGJ HLO_UPLOAD_ERROR {type(_dbg_e).__name__}: {_dbg_e}",
+                    file=_dbg_sys.stderr,
+                    flush=True,
+                )
+
+        # Intentionally NOT using atexit — gcsfs async pool is torn down before
+        # atexit fires on TPU workers, causing "cannot schedule new futures after
+        # shutdown". Instead, the global `_dbg_upload_hlo` is exposed and called
+        # explicitly just after trainer.train() completes below.
+        globals()["_dbg_upload_hlo"] = _dbg_upload_hlo
+    # DEBUGEND Z4
     print(
         "DEBUGJ WORKER_ENV " + " ".join(f"{k}={_dbg_os.environ.get(k, '<unset>')}" for k in _dbg_keys),
         file=_dbg_sys.stderr,
@@ -683,6 +739,60 @@ def main(config: TrainDpoConfig):
             trainable_filter = config.adapter.trainable_filter(initial_policy_model)
 
         state = trainer.initial_state(training_key, model=initial_model, is_trainable=trainable_filter)
+
+        # DEBUGSTART — debug_accum_tpu_type Exp Y: dump sharding specs for LoRA params
+        # at init (once per worker, before training). Runs outside jit so sharding
+        # and mesh objects are concrete. Captures the partition layout of every LoRA
+        # A/B matrix and its corresponding opt state, so we can diff v5p-8 vs v6e-8.
+        if int(_dbg_os.environ.get("MARIN_DEBUG_DUMP_SHARDING", "0")):
+            try:
+                from jax.tree_util import keystr as _dbg_keystr
+                from jax.tree_util import tree_flatten_with_path as _dbg_tree_flatten_with_path
+                import haliax as _dbg_hax
+
+                _dbg_mesh = getattr(trainer, "_mesh", None) or getattr(trainer, "mesh", None)
+                _dbg_mesh_shape = dict(_dbg_mesh.shape) if _dbg_mesh is not None else {}
+                _dbg_mesh_devices = _dbg_mesh.devices.size if _dbg_mesh is not None else None
+                _dbg_param_mapping = dict(getattr(trainer, "parameter_axis_mapping", {}) or {})
+                _dbg_compute_mapping = dict(getattr(trainer, "compute_axis_mapping", {}) or {})
+                print(
+                    f"DEBUGJ SHARDING_MESH mesh_shape={_dbg_mesh_shape} devices={_dbg_mesh_devices} "
+                    f"param_mapping={_dbg_param_mapping} compute_mapping={_dbg_compute_mapping}",
+                    file=_dbg_sys.stderr,
+                    flush=True,
+                )
+
+                def _dbg_dump_tree(label, tree):
+                    for path, leaf in _dbg_tree_flatten_with_path(tree)[0]:
+                        path_str = _dbg_keystr(path)
+                        if "lora_A" not in path_str and "lora_B" not in path_str:
+                            continue
+                        arr = leaf.array if isinstance(leaf, _dbg_hax.NamedArray) else leaf
+                        if not hasattr(arr, "shape"):
+                            continue
+                        sharding = getattr(arr, "sharding", None)
+                        spec = getattr(sharding, "spec", None)
+                        s_mesh = getattr(sharding, "mesh", None)
+                        s_mesh_shape = dict(s_mesh.shape) if s_mesh is not None else {}
+                        named_axes = None
+                        if isinstance(leaf, _dbg_hax.NamedArray):
+                            named_axes = [(ax.name, ax.size) for ax in leaf.axes]
+                        print(
+                            f"DEBUGJ SHARDING {label} path={path_str} "
+                            f"shape={tuple(arr.shape)} dtype={arr.dtype} "
+                            f"named_axes={named_axes} pspec={spec} "
+                            f"sharding_mesh={s_mesh_shape}",
+                            file=_dbg_sys.stderr,
+                            flush=True,
+                        )
+
+                _dbg_dump_tree("PARAM", state.model)
+                if hasattr(state, "opt_state"):
+                    _dbg_dump_tree("OPT_STATE", state.opt_state)
+                print("DEBUGJ SHARDING_DONE", file=_dbg_sys.stderr, flush=True)
+            except Exception as _dbg_e:
+                print(f"DEBUGJ SHARDING_ERROR {type(_dbg_e).__name__}: {_dbg_e}", file=_dbg_sys.stderr, flush=True)
+        # DEBUGEND
 
         if int(state.step) == 0:
             if config.initialize_from_hf:
@@ -915,6 +1025,20 @@ def main(config: TrainDpoConfig):
                 callback(initial_eval_info, force=True)
 
         trainer.train(state, train_loader)
+
+        # DEBUGSTART — debug_accum_tpu_type Exp Z4: upload HLO dump to GCS
+        # right after training completes, while gcsfs async pool is still alive
+        # (atexit fires too late).
+        if _dbg_os.environ.get("MARIN_DEBUG_HLO_UPLOAD_DIR") and "_dbg_upload_hlo" in globals():
+            try:
+                globals()["_dbg_upload_hlo"]()
+            except Exception as _dbg_e:
+                print(
+                    f"DEBUGJ HLO_UPLOAD_POST_TRAIN_ERROR {type(_dbg_e).__name__}: {_dbg_e}",
+                    file=_dbg_sys.stderr,
+                    flush=True,
+                )
+        # DEBUGEND Z4
 
         if trainer.config.checkpointer is not None:
             checkpointer = trainer.config.checkpointer.create(trainer.run_id)
