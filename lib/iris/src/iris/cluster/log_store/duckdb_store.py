@@ -190,21 +190,6 @@ def _recover_max_seq(log_dir: Path) -> int:
     return max_seen + 1 if max_seen >= 0 else 1
 
 
-def _prefix_upper_bound(prefix: str) -> str | None:
-    """Return the exclusive upper bound for a prefix range, or None if unbounded.
-
-    All strings starting with ``prefix`` satisfy ``prefix <= s < upper``.
-    This lets DuckDB use range predicates on Parquet row-group statistics
-    instead of regexp_matches, which isn't pushed down through parameterized queries.
-    """
-    if not prefix:
-        return None
-    last = ord(prefix[-1])
-    if last >= 0x10FFFF:
-        return None
-    return prefix[:-1] + chr(last + 1)
-
-
 def _build_buffer_table(buffer: list[tuple]) -> pa.Table:
     """Convert a list of row tuples into a pyarrow Table with the log schema."""
     if not buffer:
@@ -1079,35 +1064,27 @@ def _regex_literal_prefix(pattern: str) -> str:
 def _regex_query(pattern: str, cursor: int) -> tuple[list[str], dict]:
     """Build WHERE clauses for a regex pattern.
 
-    Extracts a literal prefix for Parquet range pushdown. If the pattern
-    is purely a prefix (literal text followed only by ``.*``), range
-    predicates alone suffice. Otherwise ``regexp_matches()`` is added.
+    Emits ``prefix(key, $prefix_lo)`` on the literal leading portion so DuckDB
+    prunes parquet row groups via min/max stats. If the pattern has a
+    non-trivial suffix (e.g. ``\\d+:.*``), adds ``regexp_matches()`` as a
+    residual filter — the prefix still gets pushed down, the regex only runs
+    on surviving rows.
     """
     literal_prefix = _regex_literal_prefix(pattern)
-
-    # Pure-prefix pattern: "some/prefix/.*" — the literal prefix covers
-    # everything and the trailing .* matches any suffix.
     suffix = pattern[len(literal_prefix) :]
     is_pure_prefix = suffix in (".*", "")
 
-    if is_pure_prefix and literal_prefix:
-        where_parts = ["key >= $prefix_lo", "seq > $cursor"]
-        params: dict = {"prefix_lo": literal_prefix, "cursor": cursor}
-        upper = _prefix_upper_bound(literal_prefix)
-        if upper is not None:
-            where_parts.append("key < $prefix_hi")
-            params["prefix_hi"] = upper
-        return where_parts, params
+    where_parts = ["seq > $cursor"]
+    params: dict = {"cursor": cursor}
 
-    where_parts = ["regexp_matches(key, $key_pattern)", "seq > $cursor"]
-    params = {"key_pattern": pattern, "cursor": cursor}
     if literal_prefix:
-        upper = _prefix_upper_bound(literal_prefix)
-        where_parts.append("key >= $prefix_lo")
+        where_parts.append("prefix(key, $prefix_lo)")
         params["prefix_lo"] = literal_prefix
-        if upper is not None:
-            where_parts.append("key < $prefix_hi")
-            params["prefix_hi"] = upper
+
+    if not is_pure_prefix:
+        where_parts.append("regexp_matches(key, $key_pattern)")
+        params["key_pattern"] = pattern
+
     return where_parts, params
 
 
