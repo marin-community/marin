@@ -674,8 +674,8 @@ def _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime):
         def push(self, key, entries):
             pass
 
-        def flush(self):
-            pass
+        def flush(self, timeout=None):
+            return True
 
         def close(self):
             pass

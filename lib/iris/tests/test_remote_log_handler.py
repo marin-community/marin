@@ -27,8 +27,8 @@ class FakeLogPusher:
         if self._fail:
             raise ConnectionError("server unavailable")
 
-    def flush(self) -> None:
-        pass
+    def flush(self, timeout: float | None = None) -> bool:
+        return True
 
     def close(self) -> None:
         pass

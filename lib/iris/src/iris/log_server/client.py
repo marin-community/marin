@@ -20,12 +20,13 @@ from collections import deque
 from collections.abc import Callable, Iterable
 
 from connectrpc.interceptor import Interceptor
-from rigging.timing import ExponentialBackoff
+from rigging.timing import ExponentialBackoff, RateLimiter
 
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
 from iris.rpc.errors import is_retryable_error
 from iris.rpc.logging_connect import LogServiceClientSync
+
 
 # Detached from the root logger: ``RemoteLogHandler`` lives on the root
 # logger and calls ``LogPusher.push``, so if our own diagnostics reached
@@ -33,14 +34,42 @@ from iris.rpc.logging_connect import LogServiceClientSync
 # loop that silently amplifies during failure storms. We send to stderr
 # directly and set ``propagate = False`` so nothing here can feed the
 # handler we serve.
+class _QuietStreamHandler(logging.StreamHandler):
+    """StreamHandler that drops emit failures silently.
+
+    This logger only carries LogPusher's own diagnostics. The drain thread
+    is a daemon that outlives pytest's stderr capture (and interpreter
+    shutdown), so any emit failure is a dead-stream symptom of teardown,
+    not a LogPusher bug we could react to. Swallowing avoids the cascade
+    of "--- Logging error ---" tracebacks during test teardown.
+    """
+
+    def handleError(self, record: logging.LogRecord) -> None:
+        pass
+
+
 logger = logging.getLogger(__name__)
 logger.propagate = False
 if not logger.handlers:
-    _stderr_handler = logging.StreamHandler(sys.stderr)
+    _stderr_handler = _QuietStreamHandler(sys.stderr)
     _stderr_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
     logger.addHandler(_stderr_handler)
     if logger.level == logging.NOTSET:
         logger.setLevel(logging.INFO)
+
+
+def _format_exc_summary(exc: BaseException) -> str:
+    """Collapse a ConnectError-style exception to ``ClassName(CODE)``.
+
+    The raw str(ConnectError) repeats the endpoint URL that's already
+    visible from configuration and log context; a short summary keeps the
+    drain-thread diagnostics readable during failure storms.
+    """
+    code = getattr(exc, "code", None)
+    code_name = getattr(code, "name", None) or getattr(code, "value", None)
+    if code_name is not None:
+        return f"{type(exc).__name__}({code_name})"
+    return f"{type(exc).__name__}: {exc}"
 
 
 MAX_LOG_BUFFER_SIZE = 10_000
@@ -52,6 +81,11 @@ dropped first when the cap is exceeded."""
 # any successful batch send.
 _BACKOFF_INITIAL_SEC = 0.5
 _BACKOFF_MAX_SEC = 30.0
+
+# Minimum seconds between overflow warnings. Without throttling, every push
+# to a full buffer emits its own warning — with the RemoteLogHandler pushing
+# one entry per record, that is one stderr line per log record indefinitely.
+_OVERFLOW_LOG_INTERVAL_SEC = 5.0
 
 
 class LogPusher:
@@ -112,6 +146,12 @@ class LogPusher:
 
         # Owned by the drain thread; reset after any successful send.
         self._backoff = ExponentialBackoff(initial=_BACKOFF_INITIAL_SEC, maximum=_BACKOFF_MAX_SEC, factor=2.0)
+
+        # Overflow-warning throttle state (guarded by _cond). Accumulates
+        # dropped counts and flushes a single aggregated warning at most
+        # once per _OVERFLOW_LOG_INTERVAL_SEC.
+        self._overflow_dropped_pending = 0
+        self._overflow_log_limiter = RateLimiter(interval_seconds=_OVERFLOW_LOG_INTERVAL_SEC)
 
         self._thread = threading.Thread(target=self._run, name="log-pusher", daemon=True)
         self._thread.start()
@@ -202,11 +242,14 @@ class LogPusher:
                 max_dropped_seq = seq
             dropped += 1
         if dropped:
-            logger.warning(
-                "LogPusher buffer overflow: dropped %d oldest entries (cap=%d)",
-                dropped,
-                self._max_buffer_size,
-            )
+            self._overflow_dropped_pending += dropped
+            if self._overflow_log_limiter.should_run():
+                logger.warning(
+                    "LogPusher buffer overflow: dropped %d oldest entries (cap=%d)",
+                    self._overflow_dropped_pending,
+                    self._max_buffer_size,
+                )
+                self._overflow_dropped_pending = 0
             if max_dropped_seq > self._processed_seq:
                 self._processed_seq = max_dropped_seq
                 self._cond.notify_all()
@@ -291,7 +334,7 @@ class LogPusher:
             try:
                 client = self._get_client()
             except Exception as exc:
-                logger.warning("LogPusher: endpoint resolution failed: %s", exc)
+                logger.warning("LogPusher: endpoint resolution failed: %s", _format_exc_summary(exc))
                 return max_sent_seq, [p for p in items if p[1] not in sent_keys]
             try:
                 entries = [e for _s, e in seq_entries]
@@ -302,15 +345,16 @@ class LogPusher:
                         max_sent_seq = seq
             except Exception as exc:
                 retryable = is_retryable_error(exc)
+                summary = _format_exc_summary(exc)
                 logger.warning(
                     "LogPusher: send failure for key=%s (%d entries, retryable=%s): %s",
                     key,
                     len(seq_entries),
                     retryable,
-                    exc,
+                    summary,
                 )
                 if retryable:
-                    self._invalidate(str(exc))
+                    self._invalidate(summary)
                 return max_sent_seq, [p for p in items if p[1] not in sent_keys]
         return max_sent_seq, []
 
@@ -416,7 +460,7 @@ class RemoteLogHandler(logging.Handler):
             self.handleError(record)
 
     def flush(self) -> None:
-        self._pusher.flush()
+        self._pusher.flush(timeout=0.5)
 
     def close(self) -> None:
         self._closed = True
