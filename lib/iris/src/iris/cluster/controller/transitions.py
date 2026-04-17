@@ -45,6 +45,7 @@ from iris.cluster.controller.schema import (
     JobDetailRow,
     WorkerDetailRow,
 )
+from iris.cluster.controller.worker_health import HealthSignal
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
@@ -235,6 +236,11 @@ class TxResult:
     tasks_to_kill: set[JobName] = field(default_factory=set)
     task_kill_workers: dict[JobName, WorkerId] = field(default_factory=dict)
     has_real_dispatch: bool = False
+    # Worker-level failure signals observed while applying this transaction
+    # (e.g. a task transitioning to WORKER_FAILED on worker W). The controller
+    # forwards these to the WorkerHealthTracker after commit. Kept out of the
+    # DB because reaping runs entirely in-memory.
+    worker_observations: list[tuple[WorkerId, HealthSignal]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -1767,6 +1773,7 @@ class ControllerTransitions:
         task_kill_workers: dict[JobName, WorkerId] = {}
         cascaded_jobs: set[JobName] = set()
         jobs_to_recompute: set[JobName] = set()
+        worker_observations: list[tuple[WorkerId, HealthSignal]] = []
         # Cache job_config rows keyed by job_id wire format.
         job_config_cache: dict[str, dict | None] = {}
 
@@ -1868,6 +1875,8 @@ class ControllerTransitions:
                     failure_count += 1
                 if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state in EXECUTING_TASK_STATES:
                     preemption_count += 1
+                    if worker_id is not None:
+                        worker_observations.append((WorkerId(str(worker_id)), HealthSignal.TASK_WORKER_FAILED))
                 if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state == job_pb2.TASK_STATE_ASSIGNED:
                     task_state = job_pb2.TASK_STATE_PENDING
                     terminal_ms = None
@@ -1998,7 +2007,11 @@ class ControllerTransitions:
                 actions.append(("job_terminated", job_id.to_wire(), {}))
             self._record_transaction(cur, "apply_task_updates", actions)
 
-        return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
+        return TxResult(
+            tasks_to_kill=tasks_to_kill,
+            task_kill_workers=task_kill_workers,
+            worker_observations=worker_observations,
+        )
 
     def apply_task_updates(self, req: HeartbeatApplyRequest) -> TxResult:
         """Apply a batch of worker task updates atomically."""
@@ -2116,13 +2129,18 @@ class ControllerTransitions:
                 results[req_idx] = HeartbeatApplyResult(
                     tasks_to_kill=tx_result.tasks_to_kill,
                     action=HeartbeatAction.OK,
+                    worker_observations=tx_result.worker_observations,
                 )
 
         return results
 
     def apply_heartbeat(self, req: HeartbeatApplyRequest) -> HeartbeatApplyResult:
         result = self.apply_task_updates(req)
-        return HeartbeatApplyResult(tasks_to_kill=result.tasks_to_kill, action=HeartbeatAction.OK)
+        return HeartbeatApplyResult(
+            tasks_to_kill=result.tasks_to_kill,
+            action=HeartbeatAction.OK,
+            worker_observations=result.worker_observations,
+        )
 
     def _remove_failed_worker(
         self,
@@ -2234,14 +2252,20 @@ class ControllerTransitions:
         now_ms = now_ms or Timestamp.now().epoch_ms()
         last_heartbeat_ms = row["last_heartbeat_ms"]
         last_heartbeat_age_ms = None if last_heartbeat_ms is None else max(0, now_ms - int(last_heartbeat_ms))
+        # Counter is retained for observability (dashboard, status RPCs). Termination
+        # is driven by the in-memory WorkerHealthTracker + reaper thread, not by this
+        # counter. force_remove is the explicit immediate-kill path used by the reaper
+        # and by slice-sibling cleanup.
         failures = int(row["consecutive_failures"]) + 1
         cur.execute(
-            "UPDATE workers SET consecutive_failures = ?, healthy = CASE WHEN ? >= ? THEN 0 ELSE healthy END "
-            "WHERE worker_id = ?",
-            (failures, failures, self._heartbeat_failure_threshold, str(worker_id)),
+            "UPDATE workers SET consecutive_failures = ? WHERE worker_id = ?",
+            (failures, str(worker_id)),
         )
-        should_remove = force_remove or failures >= self._heartbeat_failure_threshold
-        if should_remove:
+        if force_remove:
+            cur.execute(
+                "UPDATE workers SET healthy = 0 WHERE worker_id = ?",
+                (str(worker_id),),
+            )
             removal = self._remove_failed_worker(cur, worker_id, error, now_ms=now_ms)
             tasks_to_kill.update(removal.tasks_to_kill)
             task_kill_workers.update(removal.task_kill_workers)
@@ -2250,11 +2274,11 @@ class ControllerTransitions:
                 enqueue_run_dispatch(cur, str(worker_id), req.SerializeToString(), now_ms)
             for task_id in drained_dispatch.tasks_to_kill:
                 enqueue_kill_dispatch(cur, str(worker_id), task_id, now_ms)
-        action = HeartbeatAction.WORKER_FAILED if should_remove else HeartbeatAction.TRANSIENT_FAILURE
+        action = HeartbeatAction.WORKER_FAILED if force_remove else HeartbeatAction.TRANSIENT_FAILURE
         return HeartbeatFailureResult(
             tasks_to_kill=tasks_to_kill,
             task_kill_workers=task_kill_workers,
-            worker_removed=should_remove,
+            worker_removed=force_remove,
             action=action,
             consecutive_failures=failures,
             failure_threshold=self._heartbeat_failure_threshold,

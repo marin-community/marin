@@ -32,7 +32,6 @@ from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
-    HEARTBEAT_FAILURE_THRESHOLD,
     HeartbeatAction,
     HeartbeatApplyRequest,
     MAX_REPLICAS_PER_JOB,
@@ -2006,9 +2005,11 @@ def test_requeued_task_maintains_priority_position(state):
 
 
 def test_fail_heartbeat_clears_dispatch_when_worker_fails(state):
-    """Dispatch buffer is cleared when worker hits failure threshold.
+    """Dispatch buffer is cleared when the reaper force-removes a worker.
 
-    When consecutive heartbeat failures hit the threshold:
+    Worker termination is now driven by the reaper thread (via
+    force_remove=True) rather than an inline threshold check. When a worker
+    is force-removed:
     1. Worker is marked unhealthy
     2. Running tasks transition to WORKER_FAILED
     3. Pending dispatch buffer is cleared (not orphaned)
@@ -2038,11 +2039,9 @@ def test_fail_heartbeat_clears_dispatch_when_worker_fails(state):
     assert not queued_run
     assert not queued_kill
 
-    # Simulate repeated failures up to threshold
-    state.set_worker_consecutive_failures_for_test(worker_id, HEARTBEAT_FAILURE_THRESHOLD - 1)
-
-    # This fail_heartbeat should trigger worker failure
-    state.fail_heartbeat(snapshot, "Connection refused")
+    # Simulate the reaper force-removing the worker (what happens when the
+    # health tracker crosses threshold).
+    state.record_heartbeat_failure(worker_id, "Connection refused", snapshot, force_remove=True)
 
     # Verify worker is now unhealthy
     worker = _query_worker(state, worker_id)

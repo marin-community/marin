@@ -111,35 +111,38 @@ def test_complete_heartbeat_success(state, worker_metadata):
     assert worker.healthy
 
 
-def test_fail_heartbeat_below_threshold(state, worker_metadata):
-    """RPC failure below threshold returns TRANSIENT_FAILURE, worker stays alive."""
+def test_fail_heartbeat_records_transient_failure(state, worker_metadata):
+    """RPC failure without force_remove returns TRANSIENT_FAILURE and bumps counter.
+
+    Repeated failures no longer trip inline removal — the reaper thread owns
+    termination, driven by the in-memory health tracker.
+    """
     _register_worker(state, "worker1", worker_metadata)
     snapshot = _make_snapshot("worker1")
 
-    action = state.fail_heartbeat(snapshot, "connection refused")
-    assert action == HeartbeatAction.TRANSIENT_FAILURE
-
-    with state._db.snapshot() as q:
-        worker = WORKER_DETAIL_PROJECTION.decode_one(
-            q.fetchall("SELECT * FROM workers WHERE worker_id = ? LIMIT 1", ("worker1",)),
-        )
-    assert worker is not None
-    assert worker.consecutive_failures == 1
-
-
-def test_fail_heartbeat_at_threshold(tmp_path, worker_metadata):
-    """RPC failures at threshold return WORKER_FAILED and prune the worker."""
-    db = ControllerDB(db_dir=tmp_path)
-    state = ControllerTransitions(db=db, heartbeat_failure_threshold=3)
-    _register_worker(state, "worker1", worker_metadata)
-    snapshot = _make_snapshot("worker1")
-
-    for _i in range(2):
-        action = state.fail_heartbeat(snapshot, "timeout")
+    for expected_failures in range(1, 25):
+        action = state.fail_heartbeat(snapshot, "connection refused")
         assert action == HeartbeatAction.TRANSIENT_FAILURE
+        with state._db.snapshot() as q:
+            worker = WORKER_DETAIL_PROJECTION.decode_one(
+                q.fetchall("SELECT * FROM workers WHERE worker_id = ? LIMIT 1", ("worker1",)),
+            )
+        assert worker is not None
+        assert worker.healthy
+        assert worker.consecutive_failures == expected_failures
 
-    action = state.fail_heartbeat(snapshot, "timeout")
-    assert action == HeartbeatAction.WORKER_FAILED
+
+def test_force_remove_prunes_worker(state, worker_metadata):
+    """force_remove=True is the explicit kill path the reaper uses."""
+    _register_worker(state, "worker1", worker_metadata)
+    snapshot = _make_snapshot("worker1")
+
+    state.record_heartbeat_failure(
+        WorkerId("worker1"),
+        "health score exceeded threshold",
+        snapshot,
+        force_remove=True,
+    )
 
     with state._db.snapshot() as q:
         assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("worker1",)) is None
@@ -161,14 +164,12 @@ def test_complete_heartbeat_unhealthy_worker_increments_failures(state, worker_m
         assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("worker1",)) is not None
 
 
-def test_unhealthy_worker_cascades_to_tasks(tmp_path):
-    """An unhealthy worker's running tasks are marked WORKER_FAILED after threshold.
-
-    complete_heartbeat resets consecutive_failures before checking health, so we
-    use heartbeat_failure_threshold=1 to trigger removal on the first unhealthy report.
-    """
+def test_fail_workers_batch_cascades_to_running_tasks(tmp_path):
+    """When the reaper force-fails a worker via fail_workers_batch, its running
+    tasks cascade to TASK_STATE_WORKER_FAILED. This is the primitive the
+    reaper uses when the health tracker crosses threshold."""
     db = ControllerDB(db_dir=tmp_path)
-    state = ControllerTransitions(db=db, heartbeat_failure_threshold=1)
+    state = ControllerTransitions(db=db)
     worker_metadata = job_pb2.WorkerMetadata(
         hostname="test-host",
         ip_address="192.168.1.1",
@@ -203,20 +204,8 @@ def test_unhealthy_worker_cascades_to_tasks(tmp_path):
         )
     )
 
-    snapshot = _make_snapshot("worker1", running_tasks=[RunningTaskEntry(task_id, 0)])
-    response = job_pb2.HeartbeatResponse(
-        worker_healthy=False,
-        health_error="tempfile write failed",
-        tasks=[
-            job_pb2.WorkerTaskStatus(
-                task_id=task_id.to_wire(),
-                attempt_id=0,
-                state=job_pb2.TASK_STATE_RUNNING,
-            )
-        ],
-    )
-    result = state.complete_heartbeat(snapshot, response)
-    assert result.action == HeartbeatAction.WORKER_FAILED
+    result = state.fail_workers_batch(["worker1"], reason="health score exceeded threshold")
+    assert [wid for wid, _ in result.removed_workers] == [WorkerId("worker1")]
 
     with state._db.snapshot() as q:
         task = TASK_DETAIL_PROJECTION.decode_one(
