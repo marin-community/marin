@@ -128,6 +128,11 @@ def run_controller_serve(
     logger.info("Controller local state dir: %s (dry_run=%s)", local_state_dir, dry_run)
 
     heartbeat_failure_threshold = cluster_config.controller.heartbeat_failure_threshold or HEARTBEAT_FAILURE_THRESHOLD
+    use_split_heartbeat = (
+        cluster_config.controller.use_split_heartbeat
+        if cluster_config.controller.HasField("use_split_heartbeat")
+        else True
+    )
 
     # --- Restore or reuse local DB ---
     local_state_dir.mkdir(parents=True, exist_ok=True)
@@ -247,6 +252,7 @@ def run_controller_serve(
             auth=auth,
             dry_run=dry_run,
             log_service_address=log_service_address,
+            use_split_heartbeat=use_split_heartbeat,
         )
 
         controller = Controller(

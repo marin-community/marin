@@ -65,6 +65,39 @@ message Worker {
     string stderr = 3;
     string error = 4;               // Non-empty if exec setup failed
   }
+
+  // --- Heartbeat Refactor: New focused RPCs ---
+
+  message PingRequest {}
+  message PingResponse {
+    iris.job.WorkerResourceSnapshot resource_snapshot = 1;
+    bool healthy = 2;
+    string health_error = 3;
+  }
+
+  message StartTasksRequest {
+    repeated iris.job.RunTaskRequest tasks = 1;
+  }
+  message StartTasksResponse {
+    repeated TaskAck acks = 1;
+  }
+  message TaskAck {
+    string task_id = 1;
+    bool accepted = 2;
+    string error = 3;
+  }
+
+  message StopTasksRequest {
+    repeated string task_ids = 1;
+  }
+  message StopTasksResponse {}
+
+  message PollTasksRequest {
+    repeated iris.job.WorkerTaskStatus expected_tasks = 1;
+  }
+  message PollTasksResponse {
+    repeated iris.job.WorkerTaskStatus tasks = 1;
+  }
 }
 
 // ============================================================================
@@ -83,4 +116,10 @@ service WorkerService {
 
   // Exec in container
   rpc ExecInContainer(Worker.ExecInContainerRequest) returns (Worker.ExecInContainerResponse);
+
+  // --- Heartbeat Refactor: New focused RPCs ---
+  rpc Ping(Worker.PingRequest) returns (Worker.PingResponse);
+  rpc StartTasks(Worker.StartTasksRequest) returns (Worker.StartTasksResponse);
+  rpc StopTasks(Worker.StopTasksRequest) returns (Worker.StopTasksResponse);
+  rpc PollTasks(Worker.PollTasksRequest) returns (Worker.PollTasksResponse);
 }

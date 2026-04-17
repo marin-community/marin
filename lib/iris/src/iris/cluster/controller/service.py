@@ -90,7 +90,12 @@ from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.query import execute_raw_query
 from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
-from iris.cluster.controller.transitions import ControllerTransitions, TASK_RESOURCE_HISTORY_RETENTION
+from iris.cluster.controller.transitions import (
+    TASK_RESOURCE_HISTORY_RETENTION,
+    ControllerTransitions,
+    HeartbeatApplyRequest,
+    task_updates_from_proto,
+)
 from iris.cluster.controller.provider import ProviderError
 from iris.cluster.log_store import build_log_source, worker_log_key
 from iris.cluster.process_status import get_process_status
@@ -2601,3 +2606,30 @@ class ControllerServiceImpl:
             total_pending=total_pending,
             total_running=len(running_protos),
         )
+
+    # --- Worker Push ---
+
+    def update_task_status(
+        self,
+        request: controller_pb2.Controller.UpdateTaskStatusRequest,
+        _ctx: Any,
+    ) -> controller_pb2.Controller.UpdateTaskStatusResponse:
+        """Worker pushes task state transitions to controller.
+
+        Converts the proto updates into TaskUpdate dataclasses and applies
+        them through the same ControllerTransitions.apply_heartbeat() path
+        used by the poll-based heartbeat. Stop decisions are delivered via
+        the StopTasks RPC, not piggy-backed on the response.
+        """
+        updates = task_updates_from_proto(request.updates)
+        if updates:
+            self._transitions.apply_heartbeat(
+                HeartbeatApplyRequest(
+                    worker_id=WorkerId(request.worker_id),
+                    worker_resource_snapshot=None,
+                    updates=updates,
+                )
+            )
+            # Wake the controller so it can act on any state changes promptly.
+            self._controller.wake()
+        return controller_pb2.Controller.UpdateTaskStatusResponse()

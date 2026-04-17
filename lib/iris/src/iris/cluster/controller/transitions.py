@@ -13,7 +13,7 @@ from collections import defaultdict
 import json
 import logging
 from dataclasses import dataclass, field
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any, NamedTuple
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
@@ -187,6 +187,30 @@ class TaskUpdate:
     container_id: str | None = None
 
 
+def task_updates_from_proto(entries) -> list[TaskUpdate]:
+    """Convert worker-reported WorkerTaskStatus protos into TaskUpdates.
+
+    Skips UNSPECIFIED/PENDING — the controller is only interested in
+    transitions to BUILDING or beyond.
+    """
+    updates: list[TaskUpdate] = []
+    for entry in entries:
+        if entry.state in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING):
+            continue
+        updates.append(
+            TaskUpdate(
+                task_id=JobName.from_wire(entry.task_id),
+                attempt_id=entry.attempt_id,
+                new_state=entry.state,
+                error=entry.error or None,
+                exit_code=entry.exit_code if entry.HasField("exit_code") else None,
+                resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
+                container_id=entry.container_id or None,
+            )
+        )
+    return updates
+
+
 @dataclass(frozen=True)
 class HeartbeatApplyRequest:
     """Batch of worker heartbeat updates applied atomically."""
@@ -219,6 +243,7 @@ class AssignmentResult(TxResult):
 
     accepted: list[Assignment] = field(default_factory=list)
     rejected: list[Assignment] = field(default_factory=list)
+    start_requests: list[tuple[WorkerId, str, job_pb2.RunTaskRequest]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -1550,10 +1575,16 @@ class ControllerTransitions:
         )
         return WorkerRegistrationResult(worker_id=worker_id)
 
-    def queue_assignments(self, assignments: list[Assignment]) -> AssignmentResult:
-        """Commit assignments and enqueue dispatches in one transaction."""
+    def queue_assignments(self, assignments: list[Assignment], *, direct_dispatch: bool = False) -> AssignmentResult:
+        """Commit assignments and enqueue dispatches in one transaction.
+
+        When direct_dispatch=True, collects (worker_id, address, RunTaskRequest)
+        tuples in start_requests instead of writing to the dispatch_queue table.
+        The caller is responsible for sending StartTasks RPCs.
+        """
         accepted: list[Assignment] = []
         rejected: list[Assignment] = []
+        start_requests: list[tuple[WorkerId, str, job_pb2.RunTaskRequest]] = []
         has_real_dispatch = False
         with self._db.transaction() as cur:
             now_ms = Timestamp.now().epoch_ms()
@@ -1640,7 +1671,10 @@ class ControllerTransitions:
                         constraints=[c.to_proto() for c in constraints_from_json(job.constraints_json)],
                         task_image=job.task_image,
                     )
-                    enqueue_run_dispatch(cur, str(assignment.worker_id), run_request.SerializeToString(), now_ms)
+                    if direct_dispatch:
+                        start_requests.append((assignment.worker_id, str(worker_row["address"]), run_request))
+                    else:
+                        enqueue_run_dispatch(cur, str(assignment.worker_id), run_request.SerializeToString(), now_ms)
                     has_real_dispatch = True
                 cur.execute(
                     "INSERT INTO worker_task_history(worker_id, task_id, assigned_at_ms) VALUES (?, ?, ?)",
@@ -1658,7 +1692,11 @@ class ControllerTransitions:
                 actions = [("assignment_queued", a.task_id.to_wire(), {"worker_id": str(a.worker_id)}) for a in accepted]
                 self._record_transaction(cur, "queue_assignments", actions)
         return AssignmentResult(
-            tasks_to_kill=set(), has_real_dispatch=has_real_dispatch, accepted=accepted, rejected=rejected
+            tasks_to_kill=set(),
+            has_real_dispatch=has_real_dispatch,
+            accepted=accepted,
+            rejected=rejected,
+            start_requests=start_requests,
         )
 
     def _update_worker_health(self, cur: TransactionCursor, req: HeartbeatApplyRequest, now_ms: int) -> bool:
@@ -2999,6 +3037,78 @@ class ControllerTransitions:
             self._db.optimize()
 
         return result
+
+    # =========================================================================
+    # Split Heartbeat Helpers
+    # =========================================================================
+
+    def touch_worker_liveness(self, worker_ids: Sequence[WorkerId]) -> None:
+        """Cheap liveness bump: update last_heartbeat_ms without rewriting resources."""
+        if not worker_ids:
+            return
+        now_ms = Timestamp.now().epoch_ms()
+        with self._db.transaction() as cur:
+            cur.executemany(
+                "UPDATE workers SET last_heartbeat_ms = ? WHERE worker_id = ?",
+                [(now_ms, str(wid)) for wid in worker_ids],
+            )
+
+    def update_worker_ping_success(self, worker_id: WorkerId, resource_snapshot: job_pb2.WorkerResourceSnapshot) -> None:
+        """Update worker timestamp and resource snapshot from a successful ping.
+
+        Does not reset consecutive_failures — the ping loop tracks failures in-memory.
+        """
+        snapshot_bytes = resource_snapshot.SerializeToString()
+        now_ms = Timestamp.now().epoch_ms()
+        with self._db.transaction() as cur:
+            cur.execute(
+                "UPDATE workers SET last_heartbeat_ms = ?, resource_snapshot_proto = ? WHERE worker_id = ?",
+                (now_ms, snapshot_bytes, str(worker_id)),
+            )
+            cur.execute(
+                "INSERT INTO worker_resource_history(worker_id, snapshot_proto, timestamp_ms) VALUES (?, ?, ?)",
+                (str(worker_id), snapshot_bytes, now_ms),
+            )
+
+    def get_running_tasks_for_poll(
+        self,
+    ) -> tuple[dict[WorkerId, list[RunningTaskEntry]], dict[WorkerId, str]]:
+        """Snapshot running tasks and worker addresses for PollTasks RPCs.
+
+        Returns (running_by_worker, worker_addresses) where running_by_worker
+        maps worker_id to its list of running task entries and worker_addresses
+        maps worker_id to its RPC address.
+        """
+        with self._db.read_snapshot() as snap:
+            worker_rows = snap.fetchall("SELECT worker_id, address FROM workers WHERE active = 1 AND healthy = 1")
+            worker_addresses: dict[WorkerId, str] = {}
+            worker_ids: list[str] = []
+            for row in worker_rows:
+                wid = WorkerId(str(row["worker_id"]))
+                worker_addresses[wid] = str(row["address"])
+                worker_ids.append(str(row["worker_id"]))
+
+            if not worker_ids:
+                return {}, {}
+
+            placeholders = ",".join("?" for _ in worker_ids)
+            task_rows = snap.fetchall(
+                f"SELECT t.task_id, t.current_attempt_id, t.current_worker_id "
+                f"FROM tasks t "
+                f"WHERE t.current_worker_id IN ({placeholders}) AND t.state IN (?, ?, ?) "
+                f"ORDER BY t.task_id ASC",
+                (*worker_ids, *ACTIVE_TASK_STATES),
+            )
+
+        running: dict[WorkerId, list[RunningTaskEntry]] = {}
+        for row in task_rows:
+            wid = WorkerId(str(row["current_worker_id"]))
+            entry = RunningTaskEntry(
+                task_id=JobName.from_wire(str(row["task_id"])),
+                attempt_id=int(row["current_attempt_id"]),
+            )
+            running.setdefault(wid, []).append(entry)
+        return running, worker_addresses
 
     # =========================================================================
     # Heartbeat Dispatch API
