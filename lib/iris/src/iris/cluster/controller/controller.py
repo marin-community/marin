@@ -185,7 +185,8 @@ class _SyncFailureAccumulator:
     """Mutable accumulator for tracking failures during provider sync."""
 
     fail_count: int = 0
-    failed_workers: list[str] = field(default_factory=list)
+    transient_failed_workers: list[str] = field(default_factory=list)
+    terminal_failed_workers: list[str] = field(default_factory=list)
     all_tasks_to_kill: set[JobName] = field(default_factory=set)
     all_task_kill_workers: dict[JobName, WorkerId] = field(default_factory=dict)
 
@@ -2184,7 +2185,8 @@ class Controller:
         self._log_sync_health_summary(
             batch_count=len(batches),
             fail_count=acc.fail_count,
-            failed_workers=acc.failed_workers,
+            transient_failed_workers=acc.transient_failed_workers,
+            terminal_failed_workers=acc.terminal_failed_workers,
             elapsed_ms=round_timer.elapsed_ms(),
         )
 
@@ -2248,12 +2250,12 @@ class Controller:
             )
             if result.action == HeartbeatAction.WORKER_FAILED:
                 acc.fail_count += 1
-                acc.failed_workers.append(batch.worker_id)
+                acc.terminal_failed_workers.append(batch.worker_id)
                 self._provider.on_worker_failed(batch.worker_id, batch.worker_address)
                 primary_failed_workers.append(str(batch.worker_id))
             elif result.action == HeartbeatAction.TRANSIENT_FAILURE:
                 acc.fail_count += 1
-                acc.failed_workers.append(batch.worker_id)
+                acc.transient_failed_workers.append(batch.worker_id)
         return primary_failed_workers
 
     def _handle_sibling_worker_failures(
@@ -2278,7 +2280,7 @@ class Controller:
             self._provider.on_worker_failed(wid, addr)
         if sibling_failures.removed_workers:
             acc.fail_count += len(sibling_failures.removed_workers)
-            acc.failed_workers.extend(wid for wid, _ in sibling_failures.removed_workers)
+            acc.terminal_failed_workers.extend(wid for wid, _ in sibling_failures.removed_workers)
             logger.info(
                 "Failed %d sibling workers from slices: %s",
                 len(sibling_failures.removed_workers),
@@ -2289,17 +2291,34 @@ class Controller:
         self,
         batch_count: int,
         fail_count: int,
-        failed_workers: list[str],
+        transient_failed_workers: list[str],
+        terminal_failed_workers: list[str],
         elapsed_ms: int,
     ) -> None:
         """Log provider sync timing and periodic cluster health summary."""
         level = logging.WARNING if elapsed_ms > _SLOW_HEARTBEAT_MS else logging.DEBUG
-        fmt = "Provider sync: %d workers, %d failed, %dms"
-        args: list[object] = [batch_count, fail_count, elapsed_ms]
-        if failed_workers:
-            fmt += " failed=[%s]"
-            args.append(", ".join(failed_workers))
-        logger.log(level, fmt, *args)
+        logger.log(
+            level,
+            "Provider sync: %d workers, %d failed (%d transient, %d terminal), %dms",
+            batch_count,
+            fail_count,
+            len(transient_failed_workers),
+            len(terminal_failed_workers),
+            elapsed_ms,
+        )
+        if transient_failed_workers:
+            logger.log(
+                level,
+                "Provider sync transient failures (%d): [%s]",
+                len(transient_failed_workers),
+                ", ".join(transient_failed_workers),
+            )
+        if terminal_failed_workers:
+            logger.warning(
+                "Provider sync terminal failures (%d): [%s]",
+                len(terminal_failed_workers),
+                ", ".join(terminal_failed_workers),
+            )
 
         self._heartbeat_iteration += 1
         if _HEALTH_SUMMARY_INTERVAL.should_run():
