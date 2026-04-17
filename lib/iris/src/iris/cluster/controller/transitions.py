@@ -13,7 +13,7 @@ from collections import defaultdict
 import json
 import logging
 from dataclasses import dataclass, field
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any, NamedTuple
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
@@ -3041,6 +3041,17 @@ class ControllerTransitions:
     # =========================================================================
     # Split Heartbeat Helpers
     # =========================================================================
+
+    def touch_worker_liveness(self, worker_ids: Sequence[WorkerId]) -> None:
+        """Cheap liveness bump: update last_heartbeat_ms without rewriting resources."""
+        if not worker_ids:
+            return
+        now_ms = Timestamp.now().epoch_ms()
+        with self._db.transaction() as cur:
+            cur.executemany(
+                "UPDATE workers SET last_heartbeat_ms = ? WHERE worker_id = ?",
+                [(now_ms, str(wid)) for wid in worker_ids],
+            )
 
     def update_worker_ping_success(self, worker_id: WorkerId, resource_snapshot: job_pb2.WorkerResourceSnapshot) -> None:
         """Update worker timestamp and resource snapshot from a successful ping.

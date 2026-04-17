@@ -2236,9 +2236,13 @@ class Controller:
         worker. This is safe: fail_workers_batch, on_worker_failed, and
         terminate_slices_for_workers are all idempotent.
         """
-        limiter = RateLimiter(interval_seconds=self._config.heartbeat_interval.to_seconds())
+        ping_interval_s = self._config.heartbeat_interval.to_seconds()
+        limiter = RateLimiter(interval_seconds=ping_interval_s)
         ping_failures: dict[str, int] = {}
         threshold = self._config.heartbeat_failure_threshold
+        # Refresh resource snapshots every ~60s; other cycles just note liveness.
+        resource_update_every = max(1, round(60.0 / ping_interval_s))
+        cycle = 0
 
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
@@ -2249,8 +2253,11 @@ class Controller:
                 self._reap_stale_workers()
                 workers = self._get_active_worker_addresses()
                 results = self._provider.ping_workers(workers)
+                update_resources = cycle % resource_update_every == 0
+                cycle += 1
 
                 dead_workers: list[str] = []
+                liveness_ids: list[WorkerId] = []
                 for result in results:
                     wid_str = str(result.worker_id)
                     if result.error is not None:
@@ -2264,8 +2271,13 @@ class Controller:
                             )
                     else:
                         ping_failures.pop(wid_str, None)
-                        if result.resource_snapshot:
+                        if update_resources and result.resource_snapshot:
                             self._transitions.update_worker_ping_success(result.worker_id, result.resource_snapshot)
+                        else:
+                            liveness_ids.append(result.worker_id)
+
+                if liveness_ids:
+                    self._transitions.touch_worker_liveness(liveness_ids)
 
                 if dead_workers:
                     failure_result = self._transitions.fail_workers_batch(
@@ -2302,10 +2314,10 @@ class Controller:
     def _run_poll_loop(self, stop_event: threading.Event) -> None:
         """Periodic full-state reconciliation for split heartbeat mode.
 
-        Polls all workers via PollTasks every 30s and feeds results into the
+        Polls all workers via PollTasks every 60s and feeds results into the
         task-updater queue for batched application.
         """
-        limiter = RateLimiter(interval_seconds=30.0)
+        limiter = RateLimiter(interval_seconds=60.0)
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
                 break
