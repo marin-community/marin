@@ -19,12 +19,13 @@ import os
 import re
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 import dupekit
 from fray.v2 import ResourceConfig
+from pydantic import BaseModel
 from rigging.filesystem import url_to_fs
 from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
@@ -57,13 +58,12 @@ class DedupMode(StrEnum):
     EXACT = "exact"
 
 
-@dataclass
-class NormalizeSubdirResult:
+class NormalizeSubdirResult(BaseModel):
     """Per-subdirectory outcome of :func:`normalize_to_parquet`.
 
     Attributes:
         main_output_dir: Directory containing the main output Parquet files for this subdir.
-        dup_output_dir: Optional directory containing the duplicate side output Parquet files for this subdir.
+        dup_output_dir: Directory containing the duplicate side output Parquet files for this subdir.
         counters: Aggregated zephyr counters.
     """
 
@@ -72,15 +72,25 @@ class NormalizeSubdirResult:
     counters: dict[str, int]
 
 
-@dataclass
-class NormalizeResult:
+class NormalizeResult(BaseModel):
     """Full outcome of :func:`normalize_to_parquet`, one entry per subdir.
 
     Persisted as the step's ``.artifact`` so counters and output paths are
-    available to downstream consumers without re-running the pipeline.
+    available to downstream consumers without re-running the pipeline. Load
+    via ``Artifact.load(step, NormalizeResult)``.
     """
 
-    subdirs: list[NormalizeSubdirResult] = field(default_factory=list)
+    subdirs: list[NormalizeSubdirResult] = []
+
+    @property
+    def main_output_dirs(self) -> list[str]:
+        """Main-output directories across all subdirectories."""
+        return [s.main_output_dir for s in self.subdirs]
+
+    @property
+    def dup_output_dirs(self) -> list[str]:
+        """Duplicate side-output directories across all subdirectories."""
+        return [s.dup_output_dir for s in self.subdirs]
 
 
 def generate_id(text: str) -> str:
