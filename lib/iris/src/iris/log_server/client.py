@@ -55,30 +55,15 @@ _BACKOFF_MAX_SEC = 30.0
 
 
 class LogPusher:
-    """Buffered non-blocking client for pushing log entries to a remote LogService.
+    """Non-blocking buffered client for pushing log entries to a remote LogService.
 
-    ``push`` always returns immediately — entries land in an in-memory
-    deque and a dedicated background thread drains them to the LogService
-    in batches. The thread:
+    ``push`` appends to an in-memory queue; a background thread drains it
+    in per-key batches. Send failures re-buffer and back off exponentially
+    — only the ``MAX_LOG_BUFFER_SIZE`` overflow path drops entries.
 
-    - sleeps on a condition variable, waking whenever ``batch_size``
-      entries accumulate, ``flush()`` is called, or after
-      ``flush_interval`` seconds (whichever fires first);
-    - on any send failure, re-buffers the batch at the head of the key's
-      deque and backs off briefly before retrying. Retryable errors
-      additionally invalidate the cached RPC client so the next attempt
-      re-resolves the endpoint;
-    - when total buffered entries exceed ``MAX_LOG_BUFFER_SIZE``, drops
-      the oldest entries across keys. This is the only path that discards
-      log entries — send failures never drop.
-
-    Endpoint resolution:
-        ``server_url`` is passed to ``resolver`` (default: identity) on
-        every resolution to obtain the actual http address. The RPC client
-        is built on first send and invalidated on any failure, so the next
-        send re-invokes the resolver. For static URLs this is a rebuild
-        against the same address, which still heals a stuck TCP
-        connection.
+    ``server_url`` is passed to ``resolver`` (default: identity) to obtain
+    the actual http address. Retryable failures invalidate the cached RPC
+    client so the next send re-resolves.
     """
 
     def __init__(

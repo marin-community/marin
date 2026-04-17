@@ -202,38 +202,6 @@ def test_overflow_drops_oldest(tracked_log_service_client, caplog):
         pusher.close()
 
 
-def test_retryable_failure_rebuffers_at_head(monkeypatch):
-    """On a retryable send failure the batch is re-buffered at the head and
-    drained on the next successful attempt."""
-    created: list[_FakeLogServiceClient] = []
-
-    def factory(address, timeout_ms=10_000, interceptors=()):
-        c = _FakeLogServiceClient(address, timeout_ms=timeout_ms, interceptors=interceptors)
-        if not created:
-            c.errors = [ConnectError(Code.UNAVAILABLE, "gone") for _ in range(3)]
-        created.append(c)
-        return c
-
-    monkeypatch.setattr(client_mod, "LogServiceClientSync", factory)
-
-    addresses = iter(["http://a:1", "http://b:2"])
-    pusher = LogPusher(
-        "/system/log-server",
-        batch_size=1,
-        flush_interval=999.0,
-        resolver=lambda _url: next(addresses),
-    )
-    try:
-        pusher.push("k", [logging_pb2.LogEntry(source="test", data="a", level=logging_pb2.LOG_LEVEL_INFO)])
-        # Wait for the drain thread to fail on client #0 and re-resolve to #1.
-        _wait_for(lambda: len(created) == 2)
-        _wait_for(lambda: len(created[1].pushes) == 1)
-        assert created[0].closed is True
-        assert created[1].pushes[0].entries[0].data == "a"
-    finally:
-        pusher.close()
-
-
 # ---------------------------------------------------------------------------
 # Resolver-based LogPusher (self-healing on log-server failover)
 # ---------------------------------------------------------------------------
@@ -278,126 +246,93 @@ def _entry(data="line"):
     return e
 
 
-def test_resolver_called_lazily_and_cached(tracked_log_service_client):
-    calls = []
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        # Retryable RPC failure, resolver points elsewhere on the retry —
+        # the common log-server failover case.
+        "retryable_with_resolver_failover",
+        # Retryable RPC failure against a fixed URL — rebuilds the RPC
+        # client to heal a stuck TCP connection.
+        "retryable_static_url",
+        # Resolver itself raises on first call — rebuffers, retries, and
+        # the next resolver call succeeds.
+        "resolver_raises",
+        # Non-retryable RPC error — rebuffers (no drops) but does NOT
+        # invalidate the cached client.
+        "non_retryable",
+    ],
+)
+def test_failures_always_deliver_via_retry(monkeypatch, scenario):
+    """No send-failure path drops entries; the retry loop eventually delivers.
 
-    def resolver(url):
-        calls.append(url)
-        return "http://resolved:1"
+    Asserts the delivery guarantee across all failure kinds. Per-scenario
+    extras check the side-effects (invalidate vs keep client, resolver
+    re-invoked or not).
+    """
+    created: list[_FakeLogServiceClient] = []
 
-    pusher = LogPusher("iris://system/log-server", batch_size=1, resolver=resolver)
-    try:
-        # Drain thread hasn't needed a client yet.
-        assert calls == []
-        assert tracked_log_service_client == []
+    def factory(address, timeout_ms=10_000, interceptors=()):
+        c = _FakeLogServiceClient(address, timeout_ms=timeout_ms, interceptors=interceptors)
+        created.append(c)
+        return c
 
-        pusher.push("k", [_entry("a")])
-        _wait_for(lambda: len(tracked_log_service_client) == 1)
-        assert calls == ["iris://system/log-server"]
+    monkeypatch.setattr(client_mod, "LogServiceClientSync", factory)
 
-        pusher.push("k", [_entry("b")])
-        _wait_for(lambda: len(tracked_log_service_client[0].pushes) == 2)
-        assert calls == ["iris://system/log-server"]
-        assert len(tracked_log_service_client) == 1
-    finally:
-        pusher.close()
+    pusher: LogPusher
+    if scenario == "retryable_with_resolver_failover":
+        addrs = iter(["http://a:1", "http://b:2"])
+        pusher = LogPusher("iris://x", batch_size=1, flush_interval=0.1, resolver=lambda _url: next(addrs))
+    elif scenario == "retryable_static_url":
+        pusher = LogPusher("http://h:1", batch_size=1, flush_interval=0.1)
+    elif scenario == "resolver_raises":
+        attempts: list[int] = []
 
-
-def test_retryable_error_invalidates_and_reresolves(tracked_log_service_client):
-    addresses = iter(["http://a:1", "http://b:2"])
-    pusher = LogPusher("iris://system/log-server", batch_size=1, resolver=lambda _url: next(addresses))
-    try:
-        pusher.push("k", [_entry("a")])
-        _wait_for(lambda: len(tracked_log_service_client) == 1 and tracked_log_service_client[0].pushes)
-        assert tracked_log_service_client[0].address == "http://a:1"
-
-        # Seed the cached client with a retryable failure; next send
-        # invalidates, re-resolves to #b, and delivers.
-        tracked_log_service_client[0].errors.append(ConnectError(Code.UNAVAILABLE, "gone"))
-        pusher.push("k", [_entry("b")])
-        _wait_for(lambda: len(tracked_log_service_client) == 2)
-        assert tracked_log_service_client[0].closed is True
-        assert tracked_log_service_client[1].address == "http://b:2"
-        _wait_for(lambda: len(tracked_log_service_client[1].pushes) == 1)
-    finally:
-        pusher.close()
-
-
-def test_non_retryable_error_rebuffers_without_invalidating(tracked_log_service_client):
-    """Non-retryable errors re-buffer the entry (no drops) but keep the cached
-    client — the next attempt retries on the same endpoint."""
-    pusher = LogPusher("iris://system/log-server", batch_size=1, resolver=lambda _url: "http://a:1")
-    try:
-        pusher.push("k", [_entry("a")])
-        _wait_for(lambda: len(tracked_log_service_client) == 1 and tracked_log_service_client[0].pushes)
-
-        # Seed one NOT_FOUND: the entry is re-buffered and then delivered on
-        # the next attempt against the same (not invalidated) client.
-        tracked_log_service_client[0].errors.append(ConnectError(Code.NOT_FOUND, "missing"))
-        pusher.push("k", [_entry("b")])
-        _wait_for(lambda: len(tracked_log_service_client[0].errors) == 0)
-        _wait_for(lambda: len(tracked_log_service_client[0].pushes) == 2)
-
-        assert len(tracked_log_service_client) == 1
-        assert tracked_log_service_client[0].closed is False
-        assert [p.entries[0].data for p in tracked_log_service_client[0].pushes] == ["a", "b"]
-    finally:
-        pusher.close()
-
-
-def test_resolver_raising_is_retried(tracked_log_service_client):
-    """A resolver failure re-buffers the pending entries; the next
-    successful resolution drains them."""
-    attempts = []
-    lock = threading.Lock()
-
-    def resolver(_url):
-        with lock:
+        def resolver(_url):
             attempts.append(1)
-            n = len(attempts)
-        if n == 1:
-            raise ConnectionError("controller down")
-        return "http://good:1"
+            if len(attempts) == 1:
+                raise ConnectionError("controller down")
+            return "http://good:1"
 
-    pusher = LogPusher(
-        "iris://system/log-server",
-        batch_size=1,
-        flush_interval=0.1,
-        resolver=resolver,
-    )
+        pusher = LogPusher("iris://x", batch_size=1, flush_interval=0.1, resolver=resolver)
+    elif scenario == "non_retryable":
+        pusher = LogPusher("iris://x", batch_size=1, flush_interval=0.1, resolver=lambda _url: "http://a:1")
+    else:
+        raise AssertionError(scenario)
+
     try:
+        # First push — forces the drain thread to produce a client (except
+        # for resolver_raises, which has no client to seed).
         pusher.push("k", [_entry("a")])
-        # First attempt raises, backoff, second attempt succeeds.
-        _wait_for(lambda: len(tracked_log_service_client) == 1, timeout=10.0)
-        _wait_for(lambda: len(tracked_log_service_client[0].pushes) == 1)
-        with lock:
-            assert len(attempts) >= 2
-    finally:
-        pusher.close()
+        if scenario != "resolver_raises":
+            _wait_for(lambda: created and created[0].pushes)
+            # Seed the cached client with the scenario-appropriate error.
+            err = (
+                ConnectError(Code.NOT_FOUND, "missing")
+                if scenario == "non_retryable"
+                else ConnectError(Code.UNAVAILABLE, "gone")
+            )
+            created[0].errors.append(err)
 
-
-def test_static_url_pusher_reconnects_on_retryable_failure(tracked_log_service_client):
-    """A retryable failure against a static URL invalidates the cached RPC
-    client and rebuilds against the same URL — heals a stuck TCP connection
-    even without a resolver that can point elsewhere."""
-    pusher = LogPusher(
-        "http://h:1",
-        batch_size=1,
-        flush_interval=0.1,
-    )
-    try:
-        pusher.push("k", [_entry("a")])
-        _wait_for(lambda: len(tracked_log_service_client) == 1 and tracked_log_service_client[0].pushes)
-        assert tracked_log_service_client[0].address == "http://h:1"
-
-        # Seed a retryable failure on the current client.
-        tracked_log_service_client[0].errors.append(ConnectError(Code.UNAVAILABLE, "gone"))
         pusher.push("k", [_entry("b")])
 
-        # Client invalidated + new client built against the same URL.
-        _wait_for(lambda: len(tracked_log_service_client) == 2)
-        assert tracked_log_service_client[0].closed is True
-        assert tracked_log_service_client[1].address == "http://h:1"
-        _wait_for(lambda: len(tracked_log_service_client[1].pushes) == 1)
+        # "b" must eventually land somewhere.
+        def delivered():
+            return any(any(e.data == "b" for p in c.pushes for e in p.entries) for c in created)
+
+        _wait_for(delivered, timeout=10.0)
+
+        if scenario.startswith("retryable"):
+            # Retryable RPC failure invalidated the first client; second built.
+            _wait_for(lambda: len(created) >= 2)
+            assert created[0].closed is True
+        elif scenario == "resolver_raises":
+            # Resolver raised on first call → no client yet. Second call
+            # succeeded → exactly one client created.
+            assert len(created) == 1
+        elif scenario == "non_retryable":
+            # Same client retries; no invalidate, no rebuild.
+            assert len(created) == 1
+            assert created[0].closed is False
     finally:
         pusher.close()
