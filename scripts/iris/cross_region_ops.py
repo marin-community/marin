@@ -38,6 +38,75 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 GS_RE = re.compile(r"gs://[^\s'\"`]+")
 
+# Extensions that typically carry bulk bytes. A single cross-region read of one
+# of these is orders of magnitude more expensive than a small JSON/config file.
+LARGE_EXTS = frozenset(
+    {
+        ".safetensors",
+        ".bin",
+        ".pt",
+        ".pth",
+        ".ckpt",
+        ".parquet",
+        ".arrow",
+        ".tfrecord",
+        ".tfrecords",
+        ".npz",
+        ".npy",
+        ".tar",
+        ".tgz",
+        ".zip",
+        ".msgpack",
+        ".h5",
+        ".gguf",
+        ".bag",
+    }
+)
+# Compressed record streams — individually moderate but usually many per job.
+MEDIUM_EXTS = frozenset({".jsonl.gz", ".json.gz", ".jsonl.zst", ".jsonl.xz", ".jsonl", ".csv.gz"})
+SMALL_EXTS = frozenset({".json", ".yaml", ".yml", ".txt", ".log", ".md", ".toml", ".csv", ".cfg", ".ini"})
+
+
+def _extension(path: str) -> str:
+    name = path.rsplit("/", 1)[-1].lower()
+    # Two-suffix forms (.jsonl.gz etc.) checked before the single-suffix fallback.
+    for ext in MEDIUM_EXTS:
+        if name.endswith(ext):
+            return ext
+    if "." not in name:
+        return ""
+    tail = name.rsplit(".", 1)[-1]
+    # A real extension is short and alphanumeric — reject directory names like
+    # "grug-train-9.00e-18-truncated-1_16-382154" that happen to contain a dot.
+    if 1 <= len(tail) <= 12 and tail.isalnum():
+        return "." + tail
+    return ""
+
+
+def classify_size_tier(path: str) -> str:
+    ext = _extension(path)
+    if ext in LARGE_EXTS:
+        return "large"
+    if ext in MEDIUM_EXTS:
+        return "medium"
+    if ext in SMALL_EXTS:
+        return "small"
+    lower = path.lower()
+    # Path patterns that override a missing/ambiguous extension.
+    if "compilation-cache" in lower or "cache_ledger" in lower:
+        return "small"
+    if "/checkpoints/" in lower or "/hf/step-" in lower or "model-" in lower or "optimizer" in lower:
+        return "large"
+    if "/documents/" in lower or "/tokenized/" in lower or "/data/" in lower:
+        return "medium"
+    return "unknown"
+
+
+def extract_user(task_id: str) -> str:
+    # task ids are formatted like "/<user>/...".
+    parts = task_id.split("/", 2)
+    return parts[1] if len(parts) > 1 and parts[1] else "<unknown>"
+
 
 @dataclass(frozen=True)
 class TimeWindow:
@@ -81,6 +150,12 @@ def normalize_region(region: str | None) -> str | None:
     region = region.lower()
     if region == "eu-west4":
         return "europe-west4"
+    # `marin-tmp-us-east5` is physically in us-east5; drop the tmp- prefix so
+    # same-region access to a tmp bucket doesn't show up as cross-region.
+    if region.startswith("tmp-"):
+        region = region[len("tmp-") :]
+        if region == "eu-west4":
+            return "europe-west4"
     return region
 
 
@@ -300,9 +375,25 @@ def analyze(
     bucket_counts = Counter()
     job_counts = Counter()
     task_counts = Counter()
+    user_counts = Counter()
+    size_tier_counts = Counter()
+    cross_region_size_tier_counts = Counter()
+    cross_region_extension_counts = Counter()
     unmatched_tasks = Counter()
     unknown_buckets = Counter()
     samples: list[dict] = []
+    # Per-user sample buffer: keep a small, diverse slice for each user so a
+    # single loud user can't crowd everyone else out of the report.
+    user_samples: dict[str, list[dict]] = {}
+    # Dedup identical (task, attempt, path, ms) rows — the same log line
+    # frequently appears twice in the parquet stream.
+    seen_sample_keys: set[tuple] = set()
+    # Collect a wider pool per user so we can rank by tier priority at the end
+    # (large ≫ medium ≫ small ≫ unknown) rather than just taking whatever
+    # arrived first in reverse-chron order.
+    per_user_sample_cap = 10
+    per_user_sample_pool = 40
+    tier_priority = {"large": 0, "medium": 1, "unknown": 2, "small": 3}
 
     logging.info(f"Querying {len(parquet_paths)} parquet files for logs with gs:// paths")
     con = duckdb.connect()
@@ -341,9 +432,16 @@ def analyze(
         op_type = classify_op(data)
         op_type_counts[op_type] += len(paths)
 
+        user = extract_user(task_id)
         line_cross_region = False
         for path in paths:
-            bucket_name = path.split("/", 3)[2]
+            parts = path.split("/", 3)
+            bucket_name = parts[2] if len(parts) > 2 else ""
+            if not bucket_name:
+                unknown_buckets["<empty>"] += 1
+                continue
+            size_tier = classify_size_tier(path)
+            size_tier_counts[size_tier] += 1
             region = bucket_region(bucket_name, bucket_cache)
             if region is None:
                 unknown_buckets[bucket_name] += 1
@@ -352,26 +450,42 @@ def analyze(
                 line_cross_region = True
                 cross_region_path_mentions += 1
                 cross_region_op_type_counts[op_type] += 1
+                cross_region_size_tier_counts[size_tier] += 1
+                cross_region_extension_counts[_extension(path) or "<no-ext>"] += 1
                 pair_counts[f"{worker_region}->{region}"] += 1
                 bucket_counts[bucket_name.rstrip(":")] += 1
                 job_counts[task_id.rsplit("/", 1)[0]] += 1
                 task_counts[task_id] += 1
+                user_counts[user] += 1
+
+                sample_key = (task_id, attempt_id, path, epoch_ms)
+                if sample_key in seen_sample_keys:
+                    continue
+                seen_sample_keys.add(sample_key)
+                sample = {
+                    "timestamp_ms": epoch_ms,
+                    "user": user,
+                    "task_id": task_id,
+                    "attempt_id": attempt_id,
+                    "worker_region": worker_region,
+                    "bucket_region": region,
+                    "bucket": bucket_name.rstrip(":"),
+                    "path": path,
+                    "op_type": op_type,
+                    "size_tier": size_tier,
+                    "data": data,
+                }
                 if len(samples) < 50:
-                    samples.append(
-                        {
-                            "timestamp_ms": epoch_ms,
-                            "task_id": task_id,
-                            "attempt_id": attempt_id,
-                            "worker_region": worker_region,
-                            "bucket_region": region,
-                            "bucket": bucket_name.rstrip(":"),
-                            "path": path,
-                            "op_type": op_type,
-                            "data": data,
-                        }
-                    )
+                    samples.append(sample)
+                bucket = user_samples.setdefault(user, [])
+                if len(bucket) < per_user_sample_pool:
+                    bucket.append(sample)
         if line_cross_region:
             cross_region_lines += 1
+
+    for u, pool in user_samples.items():
+        pool.sort(key=lambda s: (tier_priority.get(s["size_tier"], 99), -s["timestamp_ms"]))
+        user_samples[u] = pool[:per_user_sample_cap]
 
     logging.info("Analysis complete:")
     logging.info(f"  Total log lines with gs:// paths: {total_lines}")
@@ -394,13 +508,18 @@ def analyze(
         "cross_region_path_mentions": cross_region_path_mentions,
         "all_op_type_counts": dict(op_type_counts),
         "cross_region_op_type_counts": dict(cross_region_op_type_counts),
+        "all_size_tier_counts": dict(size_tier_counts),
+        "cross_region_size_tier_counts": dict(cross_region_size_tier_counts),
+        "cross_region_extensions": dict(cross_region_extension_counts.most_common(30)),
         "cross_region_region_pairs": dict(pair_counts.most_common()),
         "cross_region_buckets": dict(bucket_counts.most_common(50)),
         "cross_region_jobs": dict(job_counts.most_common(50)),
         "cross_region_tasks": dict(task_counts.most_common(50)),
+        "cross_region_users": dict(user_counts.most_common()),
         "unmatched_tasks_top25": dict(unmatched_tasks.most_common(25)),
         "unknown_buckets_top25": dict(unknown_buckets.most_common(25)),
         "samples": samples,
+        "samples_by_user": user_samples,
     }
 
 
@@ -451,6 +570,42 @@ def write_markdown(summary: dict, path: Path) -> None:
         )
     )
 
+    lines.append("\n## Size tier mix (path mentions)\n")
+    lines.append(
+        "_Heuristic: `large` = model/checkpoint shards (safetensors/bin/parquet/…); "
+        "`medium` = compressed record streams (jsonl.gz, …); `small` = config/log/metadata; "
+        "path patterns like `checkpoints/` or `compilation-cache` override when no extension is present._\n"
+    )
+    lines.append(
+        _md_table(
+            ["Tier", "All", "Cross-region"],
+            [
+                [
+                    tier,
+                    summary["all_size_tier_counts"].get(tier, 0),
+                    summary["cross_region_size_tier_counts"].get(tier, 0),
+                ]
+                for tier in ("large", "medium", "small", "unknown")
+            ],
+        )
+    )
+
+    lines.append("\n## Top cross-region extensions\n")
+    lines.append(
+        _md_table(
+            ["Extension", "Mentions"],
+            [[k, v] for k, v in list(summary["cross_region_extensions"].items())[:20]],
+        )
+    )
+
+    lines.append("\n## Cross-region by user\n")
+    lines.append(
+        _md_table(
+            ["User", "Mentions"],
+            [[k, v] for k, v in list(summary["cross_region_users"].items())[:25]],
+        )
+    )
+
     lines.append("\n## Top region pairs (source → destination)\n")
     lines.append(
         _md_table(
@@ -492,16 +647,38 @@ def write_markdown(summary: dict, path: Path) -> None:
             )
         )
 
-    samples = summary.get("samples") or []
-    if samples:
-        lines.append("\n## Sample log lines (up to 20)\n")
-        for s in samples[:20]:
-            ts = _fmt_ms(s["timestamp_ms"])
-            lines.append(
-                f"- `{ts}` `{s['worker_region']} → {s['bucket_region']}` "
-                f"`{s['op_type']}` `{s['task_id']}#{s['attempt_id']}` `{s['path']}`"
-            )
-        lines.append("")
+    samples_by_user = summary.get("samples_by_user") or {}
+    if samples_by_user:
+        lines.append("\n## Sample log lines by user\n")
+        # Order users by how many cross-region mentions they racked up so the
+        # worst offenders show up first.
+        user_order = [u for u, _ in summary.get("cross_region_users", {}).items() if u in samples_by_user]
+        for u in samples_by_user:
+            if u not in user_order:
+                user_order.append(u)
+        for user in user_order:
+            user_samples = samples_by_user[user]
+            if not user_samples:
+                continue
+            lines.append(f"### `{user}` ({summary['cross_region_users'].get(user, len(user_samples))} mentions)\n")
+            rows = []
+            for s in user_samples:
+                ts = _fmt_ms(s["timestamp_ms"]).split("+")[0]
+                # Bold the cross-region path so it's obvious what the wrong-region ref is.
+                # Collapse pipes and newlines so markdown table rendering survives log output.
+                data = s["data"].replace(s["path"], f"**{s['path']}**", 1)
+                data = data.replace("|", "\\|").replace("\n", " ")
+                rows.append(
+                    [
+                        ts,
+                        f"`{s['worker_region']} → {s['bucket_region']}`",
+                        f"`{s['op_type']}/{s['size_tier']}`",
+                        f"`{s['task_id']}` (attempt {s['attempt_id']})",
+                        data,
+                    ]
+                )
+            lines.append(_md_table(["Time", "Regions", "Op/Tier", "Task", "Log"], rows))
+            lines.append("")
 
     path.write_text("\n".join(lines))
 
@@ -518,6 +695,12 @@ def write_csv(summary: dict, path: Path) -> None:
             writer.writerow(["job", key, value])
         for key, value in summary["cross_region_tasks"].items():
             writer.writerow(["task", key, value])
+        for key, value in summary["cross_region_users"].items():
+            writer.writerow(["user", key, value])
+        for key, value in summary["cross_region_size_tier_counts"].items():
+            writer.writerow(["size_tier", key, value])
+        for key, value in summary["cross_region_extensions"].items():
+            writer.writerow(["extension", key, value])
 
 
 @click.command(help=__doc__)
