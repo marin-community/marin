@@ -253,8 +253,13 @@ class Autoscaler:
         routing_decision = route_demand(list(self._groups.values()), demand_entries, ts)
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
         self._last_scale_plan = scale_plan
-        self._last_routing_decision_proto = None
-        self._last_pending_hints = None
+        # Build cached views eagerly here so dashboard/service RPCs never pay
+        # the conversion cost on the hot path (#4844).
+        self._last_routing_decision_proto = routing_decision_to_proto(
+            routing_decision,
+            group_to_launch=scale_plan.launch_counts(),
+        )
+        self._last_pending_hints = build_job_pending_hints(self._last_routing_decision_proto)
 
         if routing_decision.unmet_entries:
             logger.debug(
@@ -565,29 +570,23 @@ class Autoscaler:
         return result.reason
 
     def get_last_routing_decision_proto(self) -> vm_pb2.RoutingDecision | None:
-        """Return the last routing decision as a proto, lazily built and cached.
+        """Return the last routing decision as a proto.
 
-        The routing decision only changes in evaluate(); intermediate callers
-        (GetJobStatus, ListJobs) reuse the cached proto without paying the
-        per-entry conversion cost.
+        Populated by evaluate() so dashboard/service callers (GetJobStatus,
+        ListJobs) never pay the per-entry conversion cost on the hot path
+        (#4844). Returns None before the first evaluate() cycle.
         """
-        if self._last_scale_plan is None:
-            return None
-        if self._last_routing_decision_proto is None:
-            self._last_routing_decision_proto = routing_decision_to_proto(
-                self._last_scale_plan.routing_decision,
-                group_to_launch=self._last_scale_plan.launch_counts(),
-            )
         return self._last_routing_decision_proto
 
     def get_pending_hints(self) -> dict[str, PendingHint]:
         """Return autoscaler pending hints keyed by job id.
 
-        Cached per evaluate() cycle so repeated GetJobStatus calls don't
-        rebuild the hint dict (see #4844).
+        Populated by evaluate(); the service never triggers a live rebuild.
+        Returns an empty dict before the first evaluate() cycle or if no
+        hints are cached yet (#4844).
         """
         if self._last_pending_hints is None:
-            self._last_pending_hints = build_job_pending_hints(self.get_last_routing_decision_proto())
+            return {}
         return self._last_pending_hints
 
     def get_status(self) -> vm_pb2.AutoscalerStatus:
