@@ -30,6 +30,8 @@ from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b import
     MODEL_FAMILY,
     NUM_TRAIN_STEPS,
     QSPLIT240_300M_EVAL_TASKS,
+    TARGET_BUDGET,
+    TARGET_BUDGET_MULTIPLIER,
 )
 from experiments.domain_phase_mix.launch_two_phase_many_run_00097_fixed_subset_study import (
     WANDB_ENTITY,
@@ -87,6 +89,8 @@ def build_run_specs(*, variants: tuple[str, ...] | None = None) -> list[Qsplit24
             candidate_run_name=summary.run_name,
             candidate_source_experiment=raw_optima.GENERICFAMILY_PENALTY_RAW_OPTIMA_SOURCE_EXPERIMENT,
             experiment_budget=EXPERIMENT_BUDGET,
+            target_budget=TARGET_BUDGET,
+            target_budget_multiplier=TARGET_BUDGET_MULTIPLIER,
             num_train_steps=NUM_TRAIN_STEPS,
             phase_weights=summary.phase_weights,
         )
@@ -106,6 +110,7 @@ def create_experiment(
     return qsplit240_replay.create_qsplit240_replay_experiment(
         name=name,
         experiment_budget=EXPERIMENT_BUDGET,
+        target_budget=TARGET_BUDGET,
         batch_size=BATCH_SIZE,
         seq_len=SEQ_LEN,
         model_config=regmix_300m_proxy,
@@ -166,6 +171,8 @@ def main() -> None:
         experiment_name=args.name_prefix,
         model_family=MODEL_FAMILY,
         experiment_budget=EXPERIMENT_BUDGET,
+        target_budget=TARGET_BUDGET,
+        target_budget_multiplier=TARGET_BUDGET_MULTIPLIER,
         num_train_steps=NUM_TRAIN_STEPS,
         eval_tasks=QSPLIT240_300M_EVAL_TASKS,
         run_specs=run_specs,

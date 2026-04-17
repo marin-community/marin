@@ -24,6 +24,11 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
+from experiments.domain_phase_mix.exploratory.two_phase_many.convergence_plot_style import (
+    BEST_OBSERVED_BPB_COLOR,
+    PREDICTED_LINESTYLE,
+    model_bpb_color,
+)
 from experiments.domain_phase_mix.exploratory.general_scaling_models import DatasetSpec
 from experiments.domain_phase_mix.exploratory.two_phase_many.benchmark_dsre_ceq import _fit_olmix_loglinear
 from experiments.domain_phase_mix.exploratory.two_phase_many.dataset_metadata import (
@@ -364,6 +369,7 @@ def _plot_model_convergence(
 ) -> None:
     frame = curves[curves["model_name"] == model_name].sort_values("subset_size")
     cmap = plt.colormaps["RdYlGn_r"]
+    model_color = model_bpb_color(model_name)
     fig, (ax_bpb, ax_regret, ax_move) = plt.subplots(
         3,
         1,
@@ -377,15 +383,15 @@ def _plot_model_convergence(
     ax_bpb.plot(
         frame["subset_size"],
         frame["predicted_bpb"],
-        color=cmap(0.18),
+        color=model_color,
         marker="o",
         linewidth=2.2,
-        linestyle="-",
+        linestyle=PREDICTED_LINESTYLE,
         label="Predicted BPB",
     )
     ax_bpb.axhline(
         best_observed_bpb,
-        color=cmap(0.55),
+        color=BEST_OBSERVED_BPB_COLOR,
         linewidth=1.8,
         linestyle=":",
         label=f"Best observed BPB ({best_observed_bpb:.4f})",

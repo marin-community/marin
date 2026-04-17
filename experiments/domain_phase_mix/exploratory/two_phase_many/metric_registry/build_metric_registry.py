@@ -216,11 +216,25 @@ def _read_checkpoint_eval_metrics(checkpoint_root: str) -> dict[str, float]:
         raise ValueError(f"{metrics_path} is empty")
 
     payload = json.loads(lines[-1])
-    return {
+    metrics = {
         key: float(value)
         for key, value in payload.items()
         if key.startswith(METRIC_PREFIXES) and isinstance(value, int | float)
     }
+    tracker_metrics_path = checkpoint_root.rstrip("/") + "/tracker_metrics.jsonl"
+    try:
+        with fsspec.open(tracker_metrics_path, "rt") as f:
+            tracker_lines = [line.strip() for line in f if line.strip()]
+    except FileNotFoundError:
+        tracker_lines = []
+    if tracker_lines:
+        tracker_payload = json.loads(tracker_lines[-1])
+        summary = tracker_payload.get("summary", {})
+        if isinstance(summary, dict):
+            for key, value in summary.items():
+                if key.startswith(METRIC_PREFIXES) and isinstance(value, int | float):
+                    metrics.setdefault(key, float(value))
+    return metrics
 
 
 def _hydrate_checkpoint_eval_metrics(frame: pd.DataFrame) -> pd.DataFrame:

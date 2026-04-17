@@ -50,7 +50,9 @@ import experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline as
 import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b as qsplit240_300m
 import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot as qsplit240_1_2b_pilot
 import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot as qsplit240_520m_pilot
+import experiments.domain_phase_mix.launch_two_phase_many_strong_tier_scaling_study as strong_tier_scaling_study_launch
 import experiments.domain_phase_mix.qsplit240_replay as qsplit240_replay
+import experiments.domain_phase_mix.scaling_study_recipes as scaling_study_recipes
 from experiments.domain_phase_mix import (
     launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3_mmlu_sl_verb_rerun as qsplit240_seedpanel_slverb_rerun,
 )
@@ -204,7 +206,15 @@ from experiments.domain_phase_mix.two_phase_starcoder_determinism_wsd import (
     default_sweep_config,
     resolve_wsd_schedule,
 )
-from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy, regmix_300m_muonh_base, regmix_300m_proxy
+from experiments.domain_phase_mix.proxy_sweep import (
+    REGMIX_130M_CHINCHILLA_BUDGET,
+    REGMIX_300M_CHINCHILLA_BUDGET,
+    regmix_130m_muonh_base,
+    regmix_130m_proxy,
+    regmix_60m_proxy,
+    regmix_300m_muonh_base,
+    regmix_300m_proxy,
+)
 from experiments.domain_phase_mix.proxy_sweep import (
     REGMIX_1_2B_CHINCHILLA_BUDGET,
     regmix_1_2b_muonh_base,
@@ -668,6 +678,8 @@ def test_qsplit240_300m_6b_builds_expected_manifest_and_weights():
     assert run_specs[-1].run_name == "run_00239"
     assert {spec.model_family for spec in run_specs} == {QSPLIT240_300M_6B_MODEL_FAMILY}
     assert {spec.experiment_budget for spec in run_specs} == {QSPLIT240_300M_6B_BUDGET}
+    assert {spec.target_budget for spec in run_specs} == {qsplit240_replay.DEFAULT_TARGET_BUDGET}
+    assert {spec.target_budget_multiplier for spec in run_specs} == {qsplit240_replay.DEFAULT_TARGET_BUDGET_MULTIPLIER}
     assert {spec.num_train_steps for spec in run_specs} == {QSPLIT240_300M_6B_NUM_TRAIN_STEPS}
     assert all(spec.trainer_seed is None for spec in run_specs)
     assert all(spec.data_seed == spec.run_id for spec in run_specs)
@@ -728,6 +740,8 @@ def test_genericfamily_penalty_raw_optimum_300m_builds_expected_manifest_and_wei
     assert run_spec.cohort == "grp_penalty_raw_optimum_300m_6b"
     assert run_spec.model_family == QSPLIT240_300M_6B_MODEL_FAMILY
     assert run_spec.experiment_budget == QSPLIT240_300M_6B_BUDGET
+    assert run_spec.target_budget == qsplit240_replay.DEFAULT_TARGET_BUDGET
+    assert run_spec.target_budget_multiplier == qsplit240_replay.DEFAULT_TARGET_BUDGET_MULTIPLIER
     assert run_spec.num_train_steps == QSPLIT240_300M_6B_NUM_TRAIN_STEPS
     assert run_spec.trainer_seed is None
     assert run_spec.data_seed == 0
@@ -803,6 +817,7 @@ def test_qsplit240_300m_6b_experiment_uses_expected_model_resources_and_tasks():
     assert experiment.model_config is regmix_300m_proxy
     assert experiment.num_train_steps == QSPLIT240_300M_6B_NUM_TRAIN_STEPS
     assert experiment.experiment_budget == QSPLIT240_300M_6B_NUM_TRAIN_STEPS * experiment.tokens_per_step
+    assert experiment.target_budget == qsplit240_replay.DEFAULT_TARGET_BUDGET
     assert experiment.optimizer_config.learning_rate == pytest.approx(regmix_300m_muonh_base.learning_rate)
     assert experiment.optimizer_config.adam_lr == pytest.approx(regmix_300m_muonh_base.adam_lr)
     assert experiment.optimizer_config.momentum == pytest.approx(regmix_300m_muonh_base.momentum)
@@ -936,6 +951,8 @@ def test_qsplit240_520m_pilot_builds_expected_manifest_and_weights():
     assert {spec.cohort for spec in run_specs} == {"original_swarm_520m_chinchilla_pilot"}
     assert {spec.model_family for spec in run_specs} == {QSPLIT240_520M_MODEL_FAMILY}
     assert {spec.experiment_budget for spec in run_specs} == {QSPLIT240_520M_BUDGET}
+    assert {spec.target_budget for spec in run_specs} == {qsplit240_replay.DEFAULT_TARGET_BUDGET}
+    assert {spec.target_budget_multiplier for spec in run_specs} == {qsplit240_replay.DEFAULT_TARGET_BUDGET_MULTIPLIER}
     assert {spec.num_train_steps for spec in run_specs} == {QSPLIT240_520M_NUM_TRAIN_STEPS}
     assert QSPLIT240_520M_NUM_TRAIN_STEPS == REGMIX_520M_CHINCHILLA_BUDGET // (QSPLIT240_520M_BATCH_SIZE * 2048)
     assert all(spec.candidate_run_name == spec.run_name for spec in run_specs)
@@ -968,6 +985,7 @@ def test_qsplit240_520m_pilot_experiment_uses_expected_model_resources_region_an
     assert experiment.seq_len == qsplit240_520m_pilot.SEQ_LEN
     assert experiment.num_train_steps == QSPLIT240_520M_NUM_TRAIN_STEPS
     assert experiment.experiment_budget == QSPLIT240_520M_NUM_TRAIN_STEPS * experiment.tokens_per_step
+    assert experiment.target_budget == qsplit240_replay.DEFAULT_TARGET_BUDGET
     assert experiment.optimizer_config.learning_rate == pytest.approx(regmix_520m_muonh_base.learning_rate)
     assert experiment.optimizer_config.adam_lr == pytest.approx(regmix_520m_muonh_base.adam_lr)
     assert experiment.optimizer_config.momentum == pytest.approx(regmix_520m_muonh_base.momentum)
@@ -995,6 +1013,8 @@ def test_qsplit240_1_2b_pilot_builds_expected_manifest_and_weights():
     assert {spec.cohort for spec in run_specs} == {"original_swarm_1_2b_chinchilla_pilot"}
     assert {spec.model_family for spec in run_specs} == {QSPLIT240_1_2B_MODEL_FAMILY}
     assert {spec.experiment_budget for spec in run_specs} == {QSPLIT240_1_2B_BUDGET}
+    assert {spec.target_budget for spec in run_specs} == {qsplit240_replay.DEFAULT_TARGET_BUDGET}
+    assert {spec.target_budget_multiplier for spec in run_specs} == {qsplit240_replay.DEFAULT_TARGET_BUDGET_MULTIPLIER}
     assert {spec.num_train_steps for spec in run_specs} == {QSPLIT240_1_2B_NUM_TRAIN_STEPS}
     assert QSPLIT240_1_2B_NUM_TRAIN_STEPS == REGMIX_1_2B_CHINCHILLA_BUDGET // (QSPLIT240_1_2B_BATCH_SIZE * 2048)
     assert all(spec.candidate_run_name == spec.run_name for spec in run_specs)
@@ -1027,6 +1047,7 @@ def test_qsplit240_1_2b_pilot_experiment_uses_expected_model_resources_region_an
     assert experiment.seq_len == qsplit240_1_2b_pilot.SEQ_LEN
     assert experiment.num_train_steps == QSPLIT240_1_2B_NUM_TRAIN_STEPS
     assert experiment.experiment_budget == QSPLIT240_1_2B_NUM_TRAIN_STEPS * experiment.tokens_per_step
+    assert experiment.target_budget == qsplit240_replay.DEFAULT_TARGET_BUDGET
     assert experiment.optimizer_config.learning_rate == pytest.approx(regmix_1_2b_muonh_base.learning_rate)
     assert experiment.optimizer_config.adam_lr == pytest.approx(regmix_1_2b_muonh_base.adam_lr)
     assert experiment.optimizer_config.momentum == pytest.approx(regmix_1_2b_muonh_base.momentum)
@@ -1051,8 +1072,23 @@ def test_stratified_weight_config_is_uniform_across_domains_and_phases():
     assert weight_config.run_id == 3
 
 
+def test_regmix_130m_proxy_matches_expected_domain_mix_defaults():
+    assert regmix_130m_proxy.max_seq_len == 2048
+    assert regmix_130m_proxy.tie_word_embeddings is True
+    assert regmix_130m_proxy.scan_layers is True
+    assert regmix_130m_proxy.gradient_checkpointing is True
+    assert REGMIX_130M_CHINCHILLA_BUDGET == 2_600_000_000
+    assert regmix_130m_muonh_base.learning_rate == pytest.approx(0.02)
+    assert regmix_130m_muonh_base.adam_lr == pytest.approx(0.008)
+    assert regmix_130m_muonh_base.momentum == pytest.approx(0.95)
+    assert regmix_130m_muonh_base.max_grad_norm == pytest.approx(1.0)
+
+
 def test_stratified_scale_specs_match_expected_model_and_resource_defaults():
     spec_60m = stratified_baseline_launch.resolve_scale_spec(stratified_baseline_launch.StratifiedScale.REGMIX_60M_1P2B)
+    spec_130m = stratified_baseline_launch.resolve_scale_spec(
+        stratified_baseline_launch.StratifiedScale.REGMIX_130M_2P6B
+    )
     spec_300m = stratified_baseline_launch.resolve_scale_spec(stratified_baseline_launch.StratifiedScale.REGMIX_300M_6B)
     spec_520m = stratified_baseline_launch.resolve_scale_spec(
         stratified_baseline_launch.StratifiedScale.REGMIX_520M_10P4B
@@ -1063,7 +1099,13 @@ def test_stratified_scale_specs_match_expected_model_and_resource_defaults():
     assert spec_60m.experiment_budget == 1_200_000_000
     assert spec_60m.tpu_type == "v5p-8"
     assert spec_60m.tpu_regions == ("us-east5", "us-central1")
+    assert spec_130m.model_config is regmix_130m_proxy
+    assert spec_130m.experiment_budget == REGMIX_130M_CHINCHILLA_BUDGET
+    assert spec_130m.optimizer_config is regmix_130m_muonh_base
+    assert spec_130m.tpu_type == "v5p-8"
+    assert spec_130m.tpu_regions == ("us-east5", "us-central1")
     assert spec_300m.model_config is regmix_300m_proxy
+    assert spec_300m.experiment_budget == REGMIX_300M_CHINCHILLA_BUDGET
     assert spec_300m.optimizer_config is regmix_300m_muonh_base
     assert spec_300m.tpu_regions == ("us-east5", "us-central1")
     assert spec_520m.model_config is regmix_520m_proxy
@@ -1076,15 +1118,54 @@ def test_stratified_scale_specs_match_expected_model_and_resource_defaults():
     assert spec_1_2b.tpu_zone is None
 
 
+def test_stratified_launch_artifacts_record_explicit_scaled_budgets():
+    spec = stratified_baseline_launch.resolve_scale_spec(stratified_baseline_launch.StratifiedScale.REGMIX_130M_2P6B)
+    experiment_budget = spec.experiment_budget_for_multiplier(0.5)
+    target_budget = spec.target_budget_for_multiplier(0.5)
+    artifacts = stratified_baseline_launch.build_launch_artifacts(
+        scale=stratified_baseline_launch.StratifiedScale.REGMIX_130M_2P6B,
+        name_prefix="unit-test/stratified_130m_0p5x",
+        experiment_budget=experiment_budget,
+        target_budget=target_budget,
+        target_budget_multiplier=0.5,
+        tpu_type=spec.tpu_type,
+        tpu_regions=spec.tpu_regions,
+        tpu_zone=spec.tpu_zone,
+        eval_datasets_cache_path=stratified_baseline_launch.EVAL_DATASETS_CACHE_PATH,
+        resume_latest_checkpoints=False,
+        cohort="unit_test_stratified_130m_0p5x",
+    )
+
+    assert artifacts.run_spec.cohort == "unit_test_stratified_130m_0p5x"
+    assert artifacts.run_spec.model_family == spec.model_family
+    assert artifacts.run_spec.experiment_budget == 1_300_000_000
+    assert artifacts.run_spec.target_budget == scaling_study_recipes.scaled_budget(
+        scaling_study_recipes.BASE_TARGET_BUDGET,
+        0.5,
+    )
+    assert artifacts.run_spec.target_budget_multiplier == pytest.approx(0.5)
+    assert artifacts.run_spec.num_train_steps == 4_959
+    assert artifacts.training_step.name.endswith("unit-test/stratified_130m_0p5x/baseline_stratified")
+
+
 def test_stratified_baseline_main_builds_selected_scale_in_ci_without_launching(monkeypatch):
     captured: dict[str, object] = {}
 
     monkeypatch.setenv("CI", "1")
 
-    def fail_executor_main(*args, **kwargs):
-        raise AssertionError("executor_main should not run in CI for the stratified baseline launcher")
-
-    monkeypatch.setattr(stratified_baseline_launch, "executor_main", fail_executor_main)
+    monkeypatch.setattr(
+        stratified_baseline_launch,
+        "build_launch_artifacts",
+        lambda **kwargs: (
+            captured.update({"build_kwargs": kwargs})
+            or SimpleNamespace(
+                run_spec=SimpleNamespace(run_name=STRATIFIED_RUN_NAME),
+                run_manifest_step="manifest",
+                training_step="train",
+                steps=["manifest", "train"],
+            )
+        ),
+    )
     monkeypatch.setattr(
         stratified_baseline_launch.sys,
         "argv",
@@ -1105,6 +1186,69 @@ def test_stratified_baseline_main_builds_selected_scale_in_ci_without_launching(
     captured["run_name"] = STRATIFIED_RUN_NAME
 
     assert captured["run_name"] == "baseline_stratified"
+    assert captured["build_kwargs"]["scale"] == stratified_baseline_launch.StratifiedScale.REGMIX_520M_10P4B
+    assert captured["build_kwargs"]["experiment_budget"] == REGMIX_520M_CHINCHILLA_BUDGET
+    assert captured["build_kwargs"]["target_budget_multiplier"] == pytest.approx(1.0)
+
+
+def test_strong_tier_scaling_study_cells_match_expected_reuse_and_run_counts():
+    cells = scaling_study_recipes.build_strong_tier_cells()
+    qsplit_path = scaling_study_recipes.ScalingStudyPath.QSPLIT_REPRESENTATIVE12
+    stratified_path = scaling_study_recipes.ScalingStudyPath.STRATIFIED
+    holdout_status = scaling_study_recipes.ScalingStudyCellStatus.HOLDOUT_ONLY
+    qsplit_cells = [cell for cell in cells if cell.path == qsplit_path]
+    stratified_cells = [cell for cell in cells if cell.path == stratified_path]
+    holdout_cells = [cell for cell in cells if cell.status == holdout_status]
+    new_cells = scaling_study_recipes.new_submission_cells(cells)
+
+    assert len(qsplit_cells) == 9
+    assert len(stratified_cells) == 9
+    assert len(holdout_cells) == 2
+    assert scaling_study_recipes.count_new_submission_runs(cells) == 91
+    assert len(new_cells) == 14
+    assert sum(cell.run_count for cell in new_cells if cell.path == qsplit_path) == 84
+    assert sum(cell.run_count for cell in new_cells if cell.path == stratified_path) == 7
+    assert {
+        (cell.scale, cell.target_budget_multiplier)
+        for cell in cells
+        if cell.status == scaling_study_recipes.ScalingStudyCellStatus.REUSED
+    } == {
+        (scaling_study_recipes.ScalingStudyScale.REGMIX_300M_6B, 1.0),
+        (scaling_study_recipes.ScalingStudyScale.REGMIX_520M_10P4B, 1.0),
+    }
+
+
+def test_strong_tier_scaling_study_main_builds_graph_in_ci_without_launching(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.setenv("CI", "1")
+    monkeypatch.setattr(
+        strong_tier_scaling_study_launch,
+        "build_launch_steps",
+        lambda **kwargs: (
+            [SimpleNamespace(status="new", run_count=91)],
+            ["study_manifest", "qsplit_cell", "stratified_cell"],
+        ),
+    )
+
+    def fail_executor_main(*args, **kwargs):
+        raise AssertionError("executor_main should not run in CI for the strong-tier launcher")
+
+    monkeypatch.setattr(strong_tier_scaling_study_launch, "executor_main", fail_executor_main)
+    monkeypatch.setattr(
+        strong_tier_scaling_study_launch,
+        "count_new_submission_runs",
+        lambda cells=None: (captured.update({"cells": cells}) or 91),
+    )
+    monkeypatch.setattr(
+        strong_tier_scaling_study_launch.sys,
+        "argv",
+        ["launcher", "--max-concurrent", "91"],
+    )
+
+    strong_tier_scaling_study_launch.main()
+
+    assert captured["cells"] == [SimpleNamespace(status="new", run_count=91)]
 
 
 def test_qsplit240_mmlu_sl_verb_rerun_builds_expected_manifest():

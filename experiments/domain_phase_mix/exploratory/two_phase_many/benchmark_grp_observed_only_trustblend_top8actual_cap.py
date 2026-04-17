@@ -22,6 +22,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from experiments.domain_phase_mix.exploratory.two_phase_many.convergence_plot_style import (
+    BEST_OBSERVED_BPB_COLOR,
+    GRP_COLOR,
+    PREDICTED_LINESTYLE,
+    VALIDATED_LINESTYLE,
+)
 from experiments.domain_phase_mix.exploratory.two_phase_many.dataset_metadata import (
     load_two_phase_many_candidate_summary_spec,
 )
@@ -242,15 +248,16 @@ def _plot(frame: pd.DataFrame) -> None:
     ax_bpb.plot(
         frame["subset_size"],
         frame["predicted_optimum_value"],
-        color=cmap(0.18),
+        color=GRP_COLOR,
         marker="o",
         linewidth=2.2,
+        linestyle=PREDICTED_LINESTYLE,
         label="Predicted deployment BPB",
     )
     ax_bpb.plot(
         frame["subset_size"],
         frame["subset_best_observed_bpb"],
-        color="#4C78A8",
+        color=BEST_OBSERVED_BPB_COLOR,
         marker="P",
         linewidth=1.8,
         linestyle=":",
@@ -261,11 +268,11 @@ def _plot(frame: pd.DataFrame) -> None:
         ax_bpb.plot(
             validated["subset_size"],
             validated["actual_validated_bpb"],
-            color=cmap(0.82),
+            color=GRP_COLOR,
             marker="X",
             markersize=8,
             linewidth=1.8,
-            linestyle="--",
+            linestyle=VALIDATED_LINESTYLE,
             label="Realized validated BPB",
         )
         for row in validated.itertuples(index=False):
@@ -276,7 +283,7 @@ def _plot(frame: pd.DataFrame) -> None:
                 xytext=(0, 7),
                 ha="center",
                 fontsize=8,
-                color=cmap(0.86),
+                color=GRP_COLOR,
             )
     ax_regret.plot(
         frame["subset_size"],

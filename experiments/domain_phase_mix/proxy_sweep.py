@@ -26,7 +26,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.olmo3 import Olmo3Config
 from levanter.optim import MuonHConfig
 
-from experiments.llama import llama3_tokenizer_vocab_size, llama_1_4b, llama_300m, llama_600m
+from experiments.llama import llama3_tokenizer_vocab_size, llama_1_4b, llama_150m, llama_300m, llama_600m
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
@@ -214,6 +214,38 @@ regmix_60m_proxy = LlamaConfig(
     gradient_checkpointing=True,  # Larger model, enable checkpointing
     scan_layers=True,
 )
+
+
+# 130M proxy study config:
+# - Reuse the repo's standard LLaMA-family 150M geometry as the canonical
+#   130M rung, matching the historical MuonH sweep naming and hyperparameters.
+# - Match the domain-mix proxy setup with 2048 context, tied embeddings,
+#   scanning, and checkpointing enabled for v5p-8 runs.
+regmix_130m_proxy = replace(
+    llama_150m,
+    max_seq_len=2048,
+    tie_word_embeddings=True,
+    scan_layers=True,
+    gradient_checkpointing=True,
+)
+
+
+regmix_130m_muonh_base = MuonHConfig(
+    learning_rate=0.02,
+    adam_lr=0.008,
+    min_lr_ratio=0,
+    momentum=0.95,
+    beta1=0.9,
+    beta2=0.98,
+    epsilon=1e-15,
+    muon_epsilon=1e-5,
+    max_grad_norm=1,
+    warmup=1000,
+)
+
+
+REGMIX_130M_CHINCHILLA_BUDGET = 2_600_000_000
+REGMIX_300M_CHINCHILLA_BUDGET = 6_000_000_000
 
 
 # 300M proxy study config:

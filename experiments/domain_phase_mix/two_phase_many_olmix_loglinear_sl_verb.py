@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Literal
 
 import fsspec
 import numpy as np
@@ -33,6 +34,8 @@ FIT_START_SEED = 0
 FIT_N_STARTS = 48
 SOLVE_SEED = 0
 SOLVE_RANDOM_STARTS = 8
+OLMIX_SOLVE_METHODS = ("lbfgsb", "cvxpy")
+OlmixSolveMethod = Literal["lbfgsb", "cvxpy"]
 
 
 @dataclass(frozen=True)
@@ -211,22 +214,7 @@ def _weighted_multiclass_kl(weights: np.ndarray, natural_proportions: np.ndarray
     return float(phase_fractions @ np.sum(q * (np.log(q) - np.log(p[None, :])), axis=1))
 
 
-def _old_olmix_logits(domain_names: list[str], phase_names: list[str]) -> np.ndarray:
-    if any(phase_name not in OLMIX_LOGLINEAR_PHASE_WEIGHTS for phase_name in phase_names):
-        raise KeyError("phase mismatch")
-    for phase_name in phase_names:
-        if any(domain_name not in OLMIX_LOGLINEAR_PHASE_WEIGHTS[phase_name] for domain_name in domain_names):
-            raise KeyError("domain mismatch")
-    return np.array(
-        [
-            [np.log(max(OLMIX_LOGLINEAR_PHASE_WEIGHTS[phase_name][domain_name], 1e-9)) for domain_name in domain_names]
-            for phase_name in phase_names
-        ],
-        dtype=float,
-    )
-
-
-def solve_olmix_loglinear_schedule(
+def _solve_olmix_loglinear_schedule_lbfgsb(
     fit: OlmixLoglinearFit,
     *,
     natural_proportions: np.ndarray,
@@ -237,7 +225,7 @@ def solve_olmix_loglinear_schedule(
     seed: int = SOLVE_SEED,
     random_starts: int = SOLVE_RANDOM_STARTS,
 ) -> tuple[dict[str, dict[str, float]], float, float]:
-    """Solve the KL-regularized Olmix schedule under a multiclass proportional prior."""
+    """Solve the KL-regularized Olmix schedule with multistart L-BFGS-B."""
     rng = np.random.default_rng(seed)
     n_phases = len(phase_names)
     n_domains = len(domain_names)
@@ -284,6 +272,135 @@ def solve_olmix_loglinear_schedule(
         predicted_negated_objective,
         float(best_result.fun),
     )
+
+
+def _solve_olmix_loglinear_schedule_cvxpy(
+    fit: OlmixLoglinearFit,
+    *,
+    natural_proportions: np.ndarray,
+    phase_fractions: np.ndarray,
+    phase_names: list[str],
+    domain_names: list[str],
+    lambda_kl: float = OLMIX_LOGLINEAR_KL_LAMBDA,
+) -> tuple[dict[str, dict[str, float]], float, float]:
+    """Solve the KL-regularized Olmix schedule directly on the phase simplices."""
+    try:
+        import cvxpy as cp
+    except ImportError as exc:
+        raise ImportError("cvxpy is required for solver='cvxpy'. Run with `uv run --with cvxpy ...`.") from exc
+
+    n_phases = len(phase_names)
+    n_domains = len(domain_names)
+    coefficients = np.asarray(fit.coefficients, dtype=float)
+    expected_size = n_phases * n_domains
+    if coefficients.shape != (expected_size,):
+        raise ValueError(
+            f"Expected {expected_size} Olmix coefficients for {n_phases} phases x {n_domains} domains, "
+            f"got {coefficients.shape}"
+        )
+
+    natural = np.asarray(natural_proportions, dtype=float)
+    natural = np.clip(natural, 1e-12, None)
+    natural = natural / natural.sum()
+    phase_weights = cp.Variable((n_phases, n_domains))
+    phase_coefficients = coefficients.reshape(n_phases, n_domains)
+    linear_term = cp.sum(cp.multiply(phase_coefficients, phase_weights))
+    predicted_objective = float(np.exp(fit.log_c)) + cp.exp(linear_term)
+    kl = cp.sum(
+        [
+            float(phase_fractions[phase_idx]) * cp.sum(cp.rel_entr(phase_weights[phase_idx], natural))
+            for phase_idx in range(n_phases)
+        ]
+    )
+    objective = cp.Minimize(predicted_objective + float(lambda_kl) * kl)
+    constraints = [phase_weights >= 0, cp.sum(phase_weights, axis=1) == 1]
+    problem = cp.Problem(objective, constraints)
+
+    installed = tuple(cp.installed_solvers())
+    solver_errors: list[str] = []
+    for solver_name in ("ECOS", "SCS"):
+        if solver_name not in installed:
+            continue
+        try:
+            problem.solve(solver=solver_name, warm_start=True, verbose=False)
+        except Exception as exc:  # pragma: no cover - diagnostic path
+            solver_errors.append(f"{solver_name}: {exc}")
+            continue
+        if problem.status in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
+            break
+        solver_errors.append(f"{solver_name}: status={problem.status}")
+    else:
+        attempts = solver_errors or ["none"]
+        raise RuntimeError(f"Olmix exact cvxpy solve failed. Installed solvers={installed}; attempts={attempts}")
+
+    if phase_weights.value is None:
+        raise RuntimeError("Olmix exact cvxpy solve produced no phase weights")
+
+    solved_weights = np.asarray(phase_weights.value, dtype=float)
+    solved_weights = np.clip(solved_weights, 0.0, None)
+    solved_weights = solved_weights / solved_weights.sum(axis=1, keepdims=True)
+    predicted_value = float(fit.predict(solved_weights[None, :, :])[0])
+    regularized_objective = predicted_value + float(lambda_kl) * _weighted_multiclass_kl(
+        solved_weights,
+        natural,
+        np.asarray(phase_fractions, dtype=float),
+    )
+    return (
+        _phase_weights_from_matrix(solved_weights, phase_names=phase_names, domain_names=domain_names),
+        predicted_value,
+        regularized_objective,
+    )
+
+
+def _old_olmix_logits(domain_names: list[str], phase_names: list[str]) -> np.ndarray:
+    if any(phase_name not in OLMIX_LOGLINEAR_PHASE_WEIGHTS for phase_name in phase_names):
+        raise KeyError("phase mismatch")
+    for phase_name in phase_names:
+        if any(domain_name not in OLMIX_LOGLINEAR_PHASE_WEIGHTS[phase_name] for domain_name in domain_names):
+            raise KeyError("domain mismatch")
+    return np.array(
+        [
+            [np.log(max(OLMIX_LOGLINEAR_PHASE_WEIGHTS[phase_name][domain_name], 1e-9)) for domain_name in domain_names]
+            for phase_name in phase_names
+        ],
+        dtype=float,
+    )
+
+
+def solve_olmix_loglinear_schedule(
+    fit: OlmixLoglinearFit,
+    *,
+    natural_proportions: np.ndarray,
+    phase_fractions: np.ndarray,
+    phase_names: list[str],
+    domain_names: list[str],
+    lambda_kl: float = OLMIX_LOGLINEAR_KL_LAMBDA,
+    seed: int = SOLVE_SEED,
+    random_starts: int = SOLVE_RANDOM_STARTS,
+    solver: OlmixSolveMethod = "lbfgsb",
+) -> tuple[dict[str, dict[str, float]], float, float]:
+    """Solve the KL-regularized Olmix schedule under a multiclass proportional prior."""
+    if solver == "lbfgsb":
+        return _solve_olmix_loglinear_schedule_lbfgsb(
+            fit,
+            natural_proportions=natural_proportions,
+            phase_fractions=phase_fractions,
+            phase_names=phase_names,
+            domain_names=domain_names,
+            lambda_kl=lambda_kl,
+            seed=seed,
+            random_starts=random_starts,
+        )
+    if solver == "cvxpy":
+        return _solve_olmix_loglinear_schedule_cvxpy(
+            fit,
+            natural_proportions=natural_proportions,
+            phase_fractions=phase_fractions,
+            phase_names=phase_names,
+            domain_names=domain_names,
+            lambda_kl=lambda_kl,
+        )
+    raise ValueError(f"Unsupported Olmix solve method: {solver}. Expected one of {OLMIX_SOLVE_METHODS}")
 
 
 def fit_olmix_sl_verb_from_frame(

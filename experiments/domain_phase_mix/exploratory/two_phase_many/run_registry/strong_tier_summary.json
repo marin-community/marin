@@ -1,0 +1,33 @@
+{
+  "child_job_count": 91,
+  "child_jobs_by_state": {
+    "JOB_STATE_PENDING": 87,
+    "JOB_STATE_RUNNING": 4
+  },
+  "child_jobs_by_tpu_variant": {
+    "v5p-32": 26,
+    "v5p-8": 65
+  },
+  "holdout_run_count": 4,
+  "logical_run_count": 121,
+  "logical_runs_by_family": {
+    "strong_tier_qsplit_baselines3_holdout": 3,
+    "strong_tier_qsplit_representative12": 108,
+    "strong_tier_stratified": 9,
+    "strong_tier_stratified_holdout": 1
+  },
+  "logical_runs_by_scale": {
+    "130m_2p6b": 39,
+    "1_2b_24b": 4,
+    "300m_6b": 39,
+    "520m_10p4b": 39
+  },
+  "new_run_count": 91,
+  "new_runs_by_scale": {
+    "130m_2p6b": 39,
+    "300m_6b": 26,
+    "520m_10p4b": 26
+  },
+  "parent_job_id": "/calvinxu/dm-strong-tier-scaling-study-20260415-235849",
+  "reused_run_count": 26
+}

@@ -20,6 +20,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from experiments.domain_phase_mix.exploratory.two_phase_many.convergence_plot_style import (
+    BEST_OBSERVED_BPB_COLOR,
+    GRP_COLOR,
+    PREDICTED_LINESTYLE,
+)
 from experiments.domain_phase_mix.exploratory.two_phase_many.dataset_metadata import (
     load_two_phase_many_candidate_summary_spec,
 )
@@ -151,14 +156,15 @@ def _plot(frame: pd.DataFrame, *, best_observed_bpb: float) -> None:
     ax_bpb.plot(
         frame["subset_size"],
         frame["predicted_optimum_value"],
-        color=cmap(0.18),
+        color=GRP_COLOR,
         marker="o",
         linewidth=2.2,
+        linestyle=PREDICTED_LINESTYLE,
         label="Observed-hull predicted BPB",
     )
     ax_bpb.axhline(
         best_observed_bpb,
-        color=cmap(0.55),
+        color=BEST_OBSERVED_BPB_COLOR,
         linewidth=1.8,
         linestyle=":",
         label=f"Best observed BPB ({best_observed_bpb:.4f})",

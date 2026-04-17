@@ -64,7 +64,7 @@
     },
     {
       "subset_size": 60,
-      "predicted_optimum_value": 1.0545763162287467,
+      "predicted_optimum_value": 1.0545799136668865,
       "subset_best_observed_run_name": "run_00200",
       "subset_best_observed_bpb": 1.0687605142593384,
       "fullswarm_chosen_run_name": "run_00125",
@@ -72,27 +72,27 @@
       "fullswarm_regret_at_1": 0.0,
       "nearest_observed_run_name": "run_00200",
       "nearest_observed_value": 1.0687605142593384,
-      "nearest_observed_tv_distance": 0.22258550030655427,
-      "optimum_move_mean_phase_tv_vs_prev": 0.1554599388842418,
-      "tuning_objective": 0.010603150821997264,
-      "tuning_cv_rmse": 0.010270377119464685,
+      "nearest_observed_tv_distance": 0.22257716106578931,
+      "optimum_move_mean_phase_tv_vs_prev": 0.15539115229572603,
+      "tuning_objective": 0.010603150821930368,
+      "tuning_cv_rmse": 0.010270377149909112,
       "tuning_cv_regret_at_1": 0.0,
       "tuning_cv_foldmean_regret_at_1": 0.0004888534545898438,
-      "tuning_lower_tail_optimism": 0.0006166620596061742,
+      "tuning_lower_tail_optimism": 0.0006166619985835305,
       "deployment_delta": 0.05,
-      "deployment_gain_budget": 0.01075923057405453,
-      "deployment_raw_predicted_optimum_value": 0.9877578342193412,
-      "deployment_hull_predicted_optimum_value": 1.0634871444608789,
-      "phase0_broad_text": 0.6934987851179186,
-      "phase0_tech_code": 0.2594181260857871,
-      "phase0_reasoning": 0.04708308879629279,
-      "phase1_broad_text": 0.6900116704381827,
-      "phase1_tech_code": 0.2826199221373738,
-      "phase1_reasoning": 0.027368407424442118
+      "deployment_gain_budget": 0.010759230604498956,
+      "deployment_raw_predicted_optimum_value": 0.9877577400395591,
+      "deployment_hull_predicted_optimum_value": 1.063487157358113,
+      "phase0_broad_text": 0.6934828295595565,
+      "phase0_tech_code": 0.259474593781955,
+      "phase0_reasoning": 0.047042576658487045,
+      "phase1_broad_text": 0.6899584260632713,
+      "phase1_tech_code": 0.28271776295619283,
+      "phase1_reasoning": 0.02732381098053438
     },
     {
       "subset_size": 80,
-      "predicted_optimum_value": 1.0392340368658515,
+      "predicted_optimum_value": 1.039892362037049,
       "subset_best_observed_run_name": "run_00200",
       "subset_best_observed_bpb": 1.0687605142593384,
       "fullswarm_chosen_run_name": "run_00125",
@@ -100,27 +100,27 @@
       "fullswarm_regret_at_1": 0.0,
       "nearest_observed_run_name": "baseline_unimax",
       "nearest_observed_value": 1.0834295749664309,
-      "nearest_observed_tv_distance": 0.2656709846037605,
-      "optimum_move_mean_phase_tv_vs_prev": 0.21685581813632385,
-      "tuning_objective": 0.011183041860421525,
-      "tuning_cv_rmse": 0.009806213989148042,
+      "nearest_observed_tv_distance": 0.25429868454740134,
+      "optimum_move_mean_phase_tv_vs_prev": 0.22194405543595597,
+      "tuning_objective": 0.011073268501945292,
+      "tuning_cv_rmse": 0.009640323711254927,
       "tuning_cv_regret_at_1": 0.0,
-      "tuning_cv_foldmean_regret_at_1": 0.005552673339843795,
-      "tuning_lower_tail_optimism": 0.002198388408562587,
-      "deployment_delta": 0.15000000000000002,
-      "deployment_gain_budget": 0.015358887328991837,
-      "deployment_raw_predicted_optimum_value": 1.0028193112220571,
-      "deployment_hull_predicted_optimum_value": 1.0544613412697394,
-      "phase0_broad_text": 0.7612436986030416,
-      "phase0_tech_code": 0.20660520295868962,
-      "phase0_reasoning": 0.03215109843826745,
-      "phase1_broad_text": 0.7703931241754576,
-      "phase1_tech_code": 0.2132230126077743,
-      "phase1_reasoning": 0.01638386321676645
+      "tuning_cv_foldmean_regret_at_1": 0.005086159706115767,
+      "tuning_lower_tail_optimism": 0.0023572736107691505,
+      "deployment_delta": 0.1625,
+      "deployment_gain_budget": 0.014726483417370696,
+      "deployment_raw_predicted_optimum_value": 1.0058599290235122,
+      "deployment_hull_predicted_optimum_value": 1.0543295369682741,
+      "phase0_broad_text": 0.7707643737965397,
+      "phase0_tech_code": 0.19992351826893923,
+      "phase0_reasoning": 0.02931210793451966,
+      "phase1_broad_text": 0.7777830667453142,
+      "phase1_tech_code": 0.20451871964896767,
+      "phase1_reasoning": 0.017698213605716516
     },
     {
       "subset_size": 100,
-      "predicted_optimum_value": 1.0429864417370034,
+      "predicted_optimum_value": 1.041474594946306,
       "subset_best_observed_run_name": "run_00200",
       "subset_best_observed_bpb": 1.0687605142593384,
       "fullswarm_chosen_run_name": "run_00125",
@@ -128,27 +128,27 @@
       "fullswarm_regret_at_1": 0.0,
       "nearest_observed_run_name": "baseline_unimax",
       "nearest_observed_value": 1.0834295749664309,
-      "nearest_observed_tv_distance": 0.25517261897397847,
-      "optimum_move_mean_phase_tv_vs_prev": 0.04855007761456067,
-      "tuning_objective": 0.012357646527335418,
-      "tuning_cv_rmse": 0.010424430058293094,
+      "nearest_observed_tv_distance": 0.2572784855584262,
+      "optimum_move_mean_phase_tv_vs_prev": 0.07213247269243211,
+      "tuning_objective": 0.011841245777574456,
+      "tuning_cv_rmse": 0.00998232271206032,
       "tuning_cv_regret_at_1": 0.023841023445129395,
       "tuning_cv_foldmean_regret_at_1": 0.0005489349365234375,
-      "tuning_lower_tail_optimism": 0.003811539444432303,
-      "deployment_delta": 0.08750000000000001,
-      "deployment_gain_budget": 0.010973364994816532,
-      "deployment_raw_predicted_optimum_value": 0.9922480325553841,
-      "deployment_hull_predicted_optimum_value": 1.0538817266589753,
-      "phase0_broad_text": 0.7926235760814728,
-      "phase0_tech_code": 0.17371502189867766,
-      "phase0_reasoning": 0.033661402019847964,
-      "phase1_broad_text": 0.7834937427119583,
-      "phase1_tech_code": 0.19997715433526897,
-      "phase1_reasoning": 0.0165291029527709
+      "tuning_lower_tail_optimism": 0.003662952637375927,
+      "deployment_delta": 0.07500000000000001,
+      "deployment_gain_budget": 0.010531257648583758,
+      "deployment_raw_predicted_optimum_value": 0.9871930996366481,
+      "deployment_hull_predicted_optimum_value": 1.0517151244300358,
+      "phase0_broad_text": 0.7831849337583775,
+      "phase0_tech_code": 0.18378904995299516,
+      "phase0_reasoning": 0.03302601628862575,
+      "phase1_broad_text": 0.7810582676552101,
+      "phase1_tech_code": 0.20276860276317596,
+      "phase1_reasoning": 0.016173129581612128
     },
     {
       "subset_size": 140,
-      "predicted_optimum_value": 1.0429906658989845,
+      "predicted_optimum_value": 1.0446561574543365,
       "subset_best_observed_run_name": "run_00200",
       "subset_best_observed_bpb": 1.0687605142593384,
       "fullswarm_chosen_run_name": "run_00125",
@@ -156,55 +156,55 @@
       "fullswarm_regret_at_1": 0.0,
       "nearest_observed_run_name": "baseline_unimax",
       "nearest_observed_value": 1.0834295749664309,
-      "nearest_observed_tv_distance": 0.261915090042139,
-      "optimum_move_mean_phase_tv_vs_prev": 0.17573292309400596,
-      "tuning_objective": 0.011118194056169123,
-      "tuning_cv_rmse": 0.009964239423858523,
+      "nearest_observed_tv_distance": 0.26830209927656956,
+      "optimum_move_mean_phase_tv_vs_prev": 0.06830931809631649,
+      "tuning_objective": 0.010661737019649837,
+      "tuning_cv_rmse": 0.009692197373433785,
       "tuning_cv_regret_at_1": 0.0,
-      "tuning_cv_foldmean_regret_at_1": 0.002035713195800826,
-      "tuning_lower_tail_optimism": 0.002104337945041115,
-      "deployment_delta": 0.17500000000000002,
-      "deployment_gain_budget": 0.01199995261965935,
-      "deployment_raw_predicted_optimum_value": 1.0090641096661255,
-      "deployment_hull_predicted_optimum_value": 1.05477823118941,
-      "phase0_broad_text": 0.7406738725298261,
-      "phase0_tech_code": 0.221150162677165,
-      "phase0_reasoning": 0.03817596479300709,
-      "phase1_broad_text": 0.7691713720749251,
-      "phase1_tech_code": 0.22093052320767576,
-      "phase1_reasoning": 0.00989810471739742
+      "tuning_cv_foldmean_regret_at_1": 0.0020977020263672763,
+      "tuning_lower_tail_optimism": 0.0017293090897953739,
+      "deployment_delta": 0.125,
+      "deployment_gain_budget": 0.011789899399801062,
+      "deployment_raw_predicted_optimum_value": 1.0028593543413469,
+      "deployment_hull_predicted_optimum_value": 1.0562441592729404,
+      "phase0_broad_text": 0.771507553478216,
+      "phase0_tech_code": 0.19602984741850932,
+      "phase0_reasoning": 0.032462599103273454,
+      "phase1_broad_text": 0.7754499159507585,
+      "phase1_tech_code": 0.20994598258272504,
+      "phase1_reasoning": 0.014604101466514911
     },
     {
       "subset_size": 180,
-      "predicted_optimum_value": 1.047362113148331,
+      "predicted_optimum_value": 1.044343862148538,
       "subset_best_observed_run_name": "run_00200",
       "subset_best_observed_bpb": 1.0687605142593384,
       "fullswarm_chosen_run_name": "run_00125",
       "fullswarm_chosen_value": 1.0571987628936768,
       "fullswarm_regret_at_1": 0.0,
-      "nearest_observed_run_name": "run_00200",
-      "nearest_observed_value": 1.0687605142593384,
-      "nearest_observed_tv_distance": 0.28536892389485047,
-      "optimum_move_mean_phase_tv_vs_prev": 0.11412156989149533,
-      "tuning_objective": 0.010502502462232824,
-      "tuning_cv_rmse": 0.009761213934546237,
+      "nearest_observed_run_name": "run_00178",
+      "nearest_observed_value": 1.0749270915985107,
+      "nearest_observed_tv_distance": 0.27548406252249236,
+      "optimum_move_mean_phase_tv_vs_prev": 0.20505330713687117,
+      "tuning_objective": 0.011080326157011143,
+      "tuning_cv_rmse": 0.00954637531258464,
       "tuning_cv_regret_at_1": 0.0,
-      "tuning_cv_foldmean_regret_at_1": 0.0,
-      "tuning_lower_tail_optimism": 0.0014825770553731725,
-      "deployment_delta": 0.1,
-      "deployment_gain_budget": 0.009761213934546237,
-      "deployment_raw_predicted_optimum_value": 1.003754821970107,
-      "deployment_hull_predicted_optimum_value": 1.056208610099632,
-      "phase0_broad_text": 0.669763655198312,
-      "phase0_tech_code": 0.2818921038853586,
-      "phase0_reasoning": 0.04834424091632768,
-      "phase1_broad_text": 0.7286987321048396,
-      "phase1_tech_code": 0.25967337688506215,
-      "phase1_reasoning": 0.011627891010096588
+      "tuning_cv_foldmean_regret_at_1": 0.0005043268203735352,
+      "tuning_lower_tail_optimism": 0.003017469006815654,
+      "deployment_delta": 0.1375,
+      "deployment_gain_budget": 0.010050702132958176,
+      "deployment_raw_predicted_optimum_value": 1.0077239950509074,
+      "deployment_hull_predicted_optimum_value": 1.0536370025736082,
+      "phase0_broad_text": 0.6900991017022626,
+      "phase0_tech_code": 0.2616260151443811,
+      "phase0_reasoning": 0.048274883153354646,
+      "phase1_broad_text": 0.740353623446127,
+      "phase1_tech_code": 0.24742971340706968,
+      "phase1_reasoning": 0.01221666314680199
     },
     {
       "subset_size": 220,
-      "predicted_optimum_value": 1.0401407525992101,
+      "predicted_optimum_value": 1.0418439472221164,
       "subset_best_observed_run_name": "run_00125",
       "subset_best_observed_bpb": 1.0571987628936768,
       "fullswarm_chosen_run_name": "run_00125",
@@ -212,27 +212,27 @@
       "fullswarm_regret_at_1": 0.0,
       "nearest_observed_run_name": "run_00125",
       "nearest_observed_value": 1.0571987628936768,
-      "nearest_observed_tv_distance": 0.22839921362235938,
-      "optimum_move_mean_phase_tv_vs_prev": 0.21519251540603573,
-      "tuning_objective": 0.010095406100000133,
-      "tuning_cv_rmse": 0.008852524157171115,
+      "nearest_observed_tv_distance": 0.25785624621706277,
+      "optimum_move_mean_phase_tv_vs_prev": 0.1980788162417921,
+      "tuning_objective": 0.009808099508550045,
+      "tuning_cv_rmse": 0.008811363084844905,
       "tuning_cv_regret_at_1": 0.0,
-      "tuning_cv_foldmean_regret_at_1": 0.0009238004684447798,
-      "tuning_lower_tail_optimism": 0.002393383838813557,
-      "deployment_delta": 0.125,
-      "deployment_gain_budget": 0.009776324625615895,
-      "deployment_raw_predicted_optimum_value": 1.005738232684814,
-      "deployment_hull_predicted_optimum_value": 1.0496014540220397,
-      "phase0_broad_text": 0.7542464767201651,
-      "phase0_tech_code": 0.2156978024636823,
-      "phase0_reasoning": 0.030055720816151005,
-      "phase1_broad_text": 0.7614577416234489,
-      "phase1_tech_code": 0.22588591349503306,
-      "phase1_reasoning": 0.012656344881516207
+      "tuning_cv_foldmean_regret_at_1": 0.0007091283798217329,
+      "tuning_lower_tail_optimism": 0.001922560009428109,
+      "deployment_delta": 0.1375,
+      "deployment_gain_budget": 0.009520491464666637,
+      "deployment_raw_predicted_optimum_value": 1.0087124147437263,
+      "deployment_hull_predicted_optimum_value": 1.051080449335363,
+      "phase0_broad_text": 0.7812333203846379,
+      "phase0_tech_code": 0.1861306394057139,
+      "phase0_reasoning": 0.0326360402096465,
+      "phase1_broad_text": 0.745453201131887,
+      "phase1_tech_code": 0.2435455331742543,
+      "phase1_reasoning": 0.011001265693856944
     },
     {
-      "subset_size": 241,
-      "predicted_optimum_value": 1.0388180442640236,
+      "subset_size": 242,
+      "predicted_optimum_value": 1.0421246780678428,
       "subset_best_observed_run_name": "run_00125",
       "subset_best_observed_bpb": 1.0571987628936768,
       "fullswarm_chosen_run_name": "run_00125",
@@ -240,23 +240,23 @@
       "fullswarm_regret_at_1": 0.0,
       "nearest_observed_run_name": "run_00125",
       "nearest_observed_value": 1.0571987628936768,
-      "nearest_observed_tv_distance": 0.24616556254417546,
+      "nearest_observed_tv_distance": 0.22682944881427472,
       "optimum_move_mean_phase_tv_vs_prev": null,
-      "tuning_objective": 0.009921696925466761,
-      "tuning_cv_rmse": 0.008566348959451894,
+      "tuning_objective": 0.009685421748677937,
+      "tuning_cv_rmse": 0.008536703074484973,
       "tuning_cv_regret_at_1": 0.0,
-      "tuning_cv_foldmean_regret_at_1": 0.0030789136886596236,
-      "tuning_lower_tail_optimism": 0.002402804563163771,
-      "deployment_delta": 0.15000000000000002,
-      "deployment_gain_budget": 0.011645262648111518,
-      "deployment_raw_predicted_optimum_value": 1.004206611036287,
-      "deployment_hull_predicted_optimum_value": 1.0504449584295195,
-      "phase0_broad_text": 0.7745965253652927,
-      "phase0_tech_code": 0.19918615394267153,
-      "phase0_reasoning": 0.026217320692034377,
-      "phase1_broad_text": 0.7696437593333542,
-      "phase1_tech_code": 0.21819052638420114,
-      "phase1_reasoning": 0.012165714282443193
+      "tuning_cv_foldmean_regret_at_1": 0.0,
+      "tuning_lower_tail_optimism": 0.0022974373483859263,
+      "deployment_delta": 0.1,
+      "deployment_gain_budget": 0.008536703074484973,
+      "deployment_raw_predicted_optimum_value": 0.9990440175201208,
+      "deployment_hull_predicted_optimum_value": 1.0502807251676638,
+      "phase0_broad_text": 0.8085487008554099,
+      "phase0_tech_code": 0.16676250817854943,
+      "phase0_reasoning": 0.024688790966038942,
+      "phase1_broad_text": 0.7614908236359619,
+      "phase1_tech_code": 0.22491028912000732,
+      "phase1_reasoning": 0.01359888724402918
     }
   ],
   "detailed_rows": [
@@ -618,1247 +618,1247 @@
     },
     {
       "subset_size": 60,
-      "tuning_objective": 0.010603150821997264,
-      "tuning_cv_rmse": 0.010270377119464685,
+      "tuning_objective": 0.010603150821930368,
+      "tuning_cv_rmse": 0.010270377149909112,
       "tuning_cv_regret_at_1": 0.0,
       "tuning_cv_foldmean_regret_at_1": 0.0004888534545898438,
-      "tuning_lower_tail_optimism": 0.0006166620596061742,
+      "tuning_lower_tail_optimism": 0.0006166619985835305,
       "tuning_success": true,
       "tuning_message": "Optimization terminated successfully.",
       "tuned_params": {
-        "alpha": 0.014296864173836108,
-        "eta": 5.306028651887042,
-        "lam": 0.12217288366641267,
-        "tau": 2.176641707035124,
+        "alpha": 0.014296864087307059,
+        "eta": 5.306028658632537,
+        "lam": 0.1221728821746375,
+        "tau": 2.1766417072018034,
         "reg": 1.0,
-        "beta": 0.7928452967059428,
-        "a_broad_text": 0.45480459493215347,
-        "a_tech_code": 0.3663040678579405,
-        "a_reasoning": 0.3652062048934798
+        "beta": 0.7928452735155589,
+        "a_broad_text": 0.45480459492655917,
+        "a_tech_code": 0.36630406421076117,
+        "a_reasoning": 0.36520621500708017
       },
-      "predicted_optimum_value": 1.0545763162287467,
+      "predicted_optimum_value": 1.0545799136668865,
       "deployment_delta": 0.05,
-      "deployment_realized_gain": 0.008910828232132184,
-      "deployment_gain_budget": 0.01075923057405453,
-      "deployment_raw_predicted_optimum_value": 0.9877578342193412,
-      "deployment_hull_predicted_optimum_value": 1.0634871444608789,
+      "deployment_realized_gain": 0.00890724369122653,
+      "deployment_gain_budget": 0.010759230604498956,
+      "deployment_raw_predicted_optimum_value": 0.9877577400395591,
+      "deployment_hull_predicted_optimum_value": 1.063487157358113,
       "fullswarm_chosen_run_name": "run_00125",
       "fullswarm_chosen_value": 1.0571987628936768,
       "fullswarm_regret_at_1": 0.0,
       "observed_best_run_name": "run_00125",
       "observed_best_value": 1.0571987628936768,
-      "gap_below_observed_best": -0.002622446664930056,
+      "gap_below_observed_best": -0.002618849226790232,
       "nearest_observed_run_name": "run_00200",
       "nearest_observed_value": 1.0687605142593384,
-      "nearest_observed_tv_distance": 0.22258550030655427,
-      "optimum_move_mean_phase_tv_vs_prev": 0.1554599388842418,
+      "nearest_observed_tv_distance": 0.22257716106578931,
+      "optimum_move_mean_phase_tv_vs_prev": 0.15539115229572603,
       "optimizer_success": true,
       "optimizer_message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
-      "phase0_max_weight": 0.07564550448019154,
-      "phase1_max_weight": 0.15979503232430162,
+      "phase0_max_weight": 0.0756331916720866,
+      "phase1_max_weight": 0.1598199692835393,
       "phase0_support_below_1e4": 0,
       "phase1_support_below_1e4": 0,
       "phase0_top_domains": [
         {
           "domain": "dolma3_stack_edu",
-          "weight": 0.07564550448019154,
+          "weight": 0.0756331916720866,
           "epochs": 37.74227737450908
         },
         {
           "domain": "dolmino_stack_edu_fim",
-          "weight": 0.07084265177152098,
+          "weight": 0.07092315723323948,
           "epochs": 37.795271818473694
         },
         {
           "domain": "dolmino_stem_heavy_crawl",
-          "weight": 0.053451592381148785,
+          "weight": 0.05350060071087214,
           "epochs": 970.5382455026493
         },
         {
           "domain": "dolma3_arxiv",
-          "weight": 0.05331498566931558,
+          "weight": 0.05330718538171329,
           "epochs": 179.19910529113503
         },
         {
           "domain": "dolma3_cc/games_low",
-          "weight": 0.05111039110217583,
+          "weight": 0.051131049836783724,
           "epochs": 59.7347460899691
         },
         {
           "domain": "dolma3_cc/literature_high",
-          "weight": 0.046773624163873456,
+          "weight": 0.04676387444038518,
           "epochs": 19.58710774619373
         },
         {
           "domain": "dolma3_cc/electronics_and_hardware_high",
-          "weight": 0.04295734624157413,
+          "weight": 0.042983608462603205,
           "epochs": 38.16894468066769
         },
         {
           "domain": "dolma3_cc/entertainment_high",
-          "weight": 0.041086797368775935,
+          "weight": 0.04109108351995228,
           "epochs": 11.950864467363925
         }
       ],
       "phase1_top_domains": [
         {
           "domain": "dolma3_stack_edu",
-          "weight": 0.15979503232430162,
+          "weight": 0.1598199692835393,
           "epochs": 9.435569343627268
         },
         {
           "domain": "dolma3_cc/history_and_geography_high",
-          "weight": 0.0735523080874428,
+          "weight": 0.0735706795828684,
           "epochs": 9.36289418043849
         },
         {
           "domain": "dolma3_cc/industrial_high",
-          "weight": 0.05859468045547104,
+          "weight": 0.058691243558047716,
           "epochs": 15.489138104598315
         },
         {
           "domain": "dolmino_olmocr_pdfs_hq",
-          "weight": 0.056206755418724386,
+          "weight": 0.055884149622877674,
           "epochs": 6.143866322527333
         },
         {
           "domain": "dolma3_cc/electronics_and_hardware_low",
-          "weight": 0.044189132041788454,
+          "weight": 0.04421162952441405,
           "epochs": 20.301075152506677
         },
         {
           "domain": "dolmino_stack_edu_fim",
-          "weight": 0.04417689201370259,
+          "weight": 0.04413747704808592,
           "epochs": 9.448817954618422
         },
         {
           "domain": "dolma3_cc/literature_high",
-          "weight": 0.043368789354813746,
+          "weight": 0.0434148050621184,
           "epochs": 4.896776936548431
         },
         {
           "domain": "dolma3_cc/entertainment_low",
-          "weight": 0.03632523002674855,
+          "weight": 0.036365355175398933,
           "epochs": 8.209985673244033
         }
       ],
       "family_shares": {
-        "phase0_broad_text": 0.6934987851179186,
-        "phase0_tech_code": 0.2594181260857871,
-        "phase0_reasoning": 0.04708308879629279,
-        "phase1_broad_text": 0.6900116704381827,
-        "phase1_tech_code": 0.2826199221373738,
-        "phase1_reasoning": 0.027368407424442118
+        "phase0_broad_text": 0.6934828295595565,
+        "phase0_tech_code": 0.259474593781955,
+        "phase0_reasoning": 0.047042576658487045,
+        "phase1_broad_text": 0.6899584260632713,
+        "phase1_tech_code": 0.28271776295619283,
+        "phase1_reasoning": 0.02732381098053438
       },
       "hull_anchor_count": 8,
       "hull_anchor_summaries": [
         {
           "run_name": "run_00200",
           "actual_value": 1.0687605142593384,
-          "coefficient": 0.5888753576829393
+          "coefficient": 0.5890800301624605
         },
         {
           "run_name": "run_00155",
           "actual_value": 1.0921894311904907,
-          "coefficient": 0.264022622814022
+          "coefficient": 0.26447498604112
         },
         {
           "run_name": "run_00233",
           "actual_value": 1.090378999710083,
-          "coefficient": 0.10056138502220671
+          "coefficient": 0.10095776303528987
         },
         {
           "run_name": "run_00201",
           "actual_value": 1.0943256616592407,
-          "coefficient": 0.04647884970851349
+          "coefficient": 0.04541442665113309
         },
         {
           "run_name": "run_00159",
           "actual_value": 1.0941680669784546,
-          "coefficient": 5.8308087079534154e-05
+          "coefficient": 6.850755734266585e-05
         },
         {
           "run_name": "run_00024",
           "actual_value": 1.0965946912765503,
-          "coefficient": 2.1972199926867705e-06
+          "coefficient": 2.659958474840837e-06
         },
         {
           "run_name": "run_00191",
           "actual_value": 1.0926721096038818,
-          "coefficient": 1.279464161421874e-06
+          "coefficient": 1.6265924481738604e-06
         },
         {
           "run_name": "run_00213",
           "actual_value": 1.0797784328460691,
-          "coefficient": 1.0848197127487924e-12
+          "coefficient": 1.7309529567562369e-12
         }
       ]
     },
     {
       "subset_size": 80,
-      "tuning_objective": 0.011183041860421525,
-      "tuning_cv_rmse": 0.009806213989148042,
+      "tuning_objective": 0.011073268501945292,
+      "tuning_cv_rmse": 0.009640323711254927,
       "tuning_cv_regret_at_1": 0.0,
-      "tuning_cv_foldmean_regret_at_1": 0.005552673339843795,
-      "tuning_lower_tail_optimism": 0.002198388408562587,
+      "tuning_cv_foldmean_regret_at_1": 0.005086159706115767,
+      "tuning_lower_tail_optimism": 0.0023572736107691505,
       "tuning_success": true,
       "tuning_message": "Optimization terminated successfully.",
       "tuned_params": {
-        "alpha": 0.0747285758064059,
-        "eta": 7.3592381226653165,
-        "lam": 0.1223617463207773,
-        "tau": 2.398803929454462,
-        "reg": 0.04294527147406427,
-        "beta": 0.7126981730748623,
-        "a_broad_text": 0.5896928963502348,
-        "a_tech_code": 0.08077839148829363,
-        "a_reasoning": 0.02
+        "alpha": 0.0020686593999375705,
+        "eta": 6.193417818337678,
+        "lam": 0.1977540503080479,
+        "tau": 2.5386678900823925,
+        "reg": 0.0028559851646390967,
+        "beta": 0.5711584058407762,
+        "a_broad_text": 0.6240350253667694,
+        "a_tech_code": 0.02,
+        "a_reasoning": 0.8060698414324309
       },
-      "predicted_optimum_value": 1.0392340368658515,
-      "deployment_delta": 0.15000000000000002,
-      "deployment_realized_gain": 0.015227304403887976,
-      "deployment_gain_budget": 0.015358887328991837,
-      "deployment_raw_predicted_optimum_value": 1.0028193112220571,
-      "deployment_hull_predicted_optimum_value": 1.0544613412697394,
+      "predicted_optimum_value": 1.039892362037049,
+      "deployment_delta": 0.1625,
+      "deployment_realized_gain": 0.014437174931225094,
+      "deployment_gain_budget": 0.014726483417370696,
+      "deployment_raw_predicted_optimum_value": 1.0058599290235122,
+      "deployment_hull_predicted_optimum_value": 1.0543295369682741,
       "fullswarm_chosen_run_name": "run_00125",
       "fullswarm_chosen_value": 1.0571987628936768,
       "fullswarm_regret_at_1": 0.0,
       "observed_best_run_name": "run_00125",
       "observed_best_value": 1.0571987628936768,
-      "gap_below_observed_best": -0.017964726027825284,
+      "gap_below_observed_best": -0.017306400856627713,
       "nearest_observed_run_name": "baseline_unimax",
       "nearest_observed_value": 1.0834295749664309,
-      "nearest_observed_tv_distance": 0.2656709846037605,
-      "optimum_move_mean_phase_tv_vs_prev": 0.21685581813632385,
+      "nearest_observed_tv_distance": 0.25429868454740134,
+      "optimum_move_mean_phase_tv_vs_prev": 0.22194405543595597,
       "optimizer_success": true,
       "optimizer_message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
-      "phase0_max_weight": 0.07480495745317878,
-      "phase1_max_weight": 0.10348896606895895,
+      "phase0_max_weight": 0.07307018203060811,
+      "phase1_max_weight": 0.09649676398529938,
       "phase0_support_below_1e4": 0,
       "phase1_support_below_1e4": 0,
       "phase0_top_domains": [
         {
           "domain": "dolmino_common_crawl_hq",
-          "weight": 0.07480495745317878,
+          "weight": 0.07307018203060811,
           "epochs": 3.840467273603789
         },
         {
           "domain": "dolma3_stack_edu",
-          "weight": 0.07215216214136268,
+          "weight": 0.07083395024489919,
           "epochs": 37.74227737450908
         },
         {
           "domain": "dolmino_stack_edu_fim",
-          "weight": 0.06768599876087089,
+          "weight": 0.06613457494943258,
           "epochs": 37.795271818473694
         },
         {
           "domain": "dolmino_synth_qa",
-          "weight": 0.05894482735725477,
+          "weight": 0.055683419019117504,
           "epochs": 9.599003736283514
         },
         {
           "domain": "dolmino_olmocr_pdfs_hq",
-          "weight": 0.04998205596486579,
+          "weight": 0.0535107834089571,
           "epochs": 24.575465290109335
         },
         {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "weight": 0.051284513364833036,
+          "epochs": 20.82045050777392
+        },
+        {
           "domain": "dolma3_cc/entertainment_high",
-          "weight": 0.04620699391004126,
+          "weight": 0.04355399656242706,
           "epochs": 11.950864467363925
         },
         {
           "domain": "dolma3_cc/finance_and_business_high",
-          "weight": 0.041710233135296336,
+          "weight": 0.040329894149557566,
           "epochs": 9.30235819120812
-        },
-        {
-          "domain": "dolma3_cc/literature_high",
-          "weight": 0.037327366920094404,
-          "epochs": 19.58710774619373
         }
       ],
       "phase1_top_domains": [
         {
           "domain": "dolma3_stack_edu",
-          "weight": 0.10348896606895895,
+          "weight": 0.09649676398529938,
           "epochs": 9.435569343627268
         },
         {
           "domain": "dolmino_common_crawl_hq",
-          "weight": 0.07625882776683898,
+          "weight": 0.07385688178902891,
           "epochs": 0.960116818400947
         },
         {
-          "domain": "dolmino_olmocr_pdfs_hq",
-          "weight": 0.057812976901956525,
-          "epochs": 6.143866322527333
-        },
-        {
           "domain": "dolma3_cc/history_and_geography_high",
-          "weight": 0.051479951551941884,
+          "weight": 0.05386616238156778,
           "epochs": 9.36289418043849
         },
         {
-          "domain": "dolmino_stack_edu_fim",
-          "weight": 0.04987968069664412,
-          "epochs": 9.448817954618422
-        },
-        {
-          "domain": "dolmino_synth_qa",
-          "weight": 0.04807484577726777,
-          "epochs": 2.399750934070878
-        },
-        {
-          "domain": "dolma3_cc/industrial_high",
-          "weight": 0.0443701548968609,
-          "epochs": 15.489138104598315
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "weight": 0.050679113627417643,
+          "epochs": 6.143866322527333
         },
         {
           "domain": "dolma3_cc/science_math_and_technology_high",
-          "weight": 0.041364956347477395,
+          "weight": 0.04663679531087231,
           "epochs": 5.205112626943478
+        },
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "weight": 0.0463480719417176,
+          "epochs": 9.448817954618422
+        },
+        {
+          "domain": "dolma3_cc/industrial_high",
+          "weight": 0.044990898773409296,
+          "epochs": 15.489138104598315
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "weight": 0.043843237225925875,
+          "epochs": 2.399750934070878
         }
       ],
       "family_shares": {
-        "phase0_broad_text": 0.7612436986030416,
-        "phase0_tech_code": 0.20660520295868962,
-        "phase0_reasoning": 0.03215109843826745,
-        "phase1_broad_text": 0.7703931241754576,
-        "phase1_tech_code": 0.2132230126077743,
-        "phase1_reasoning": 0.01638386321676645
+        "phase0_broad_text": 0.7707643737965397,
+        "phase0_tech_code": 0.19992351826893923,
+        "phase0_reasoning": 0.02931210793451966,
+        "phase1_broad_text": 0.7777830667453142,
+        "phase1_tech_code": 0.20451871964896767,
+        "phase1_reasoning": 0.017698213605716516
       },
       "hull_anchor_count": 8,
       "hull_anchor_summaries": [
         {
           "run_name": "baseline_proportional",
           "actual_value": 1.0918354988098145,
-          "coefficient": 0.4326760694827768
+          "coefficient": 0.4300300495806135
         },
         {
           "run_name": "run_00200",
           "actual_value": 1.0687605142593384,
-          "coefficient": 0.32005853296753545
+          "coefficient": 0.30666052999478705
         },
         {
           "run_name": "run_00155",
           "actual_value": 1.0921894311904907,
-          "coefficient": 0.1906710812919954
-        },
-        {
-          "run_name": "run_00223",
-          "actual_value": 1.0901886224746704,
-          "coefficient": 0.05624025258957253
+          "coefficient": 0.1722317931060117
         },
         {
           "run_name": "run_00233",
           "actual_value": 1.090378999710083,
-          "coefficient": 0.00034745877624877775
+          "coefficient": 0.052286860469675775
         },
         {
-          "run_name": "run_00158",
-          "actual_value": 1.0859878063201904,
-          "coefficient": 3.5206057591044905e-06
+          "run_name": "run_00223",
+          "actual_value": 1.0901886224746704,
+          "coefficient": 0.03438640057822589
         },
         {
           "run_name": "run_00078",
           "actual_value": 1.0926015377044678,
-          "coefficient": 3.084285768371432e-06
+          "coefficient": 0.0043706320015970265
+        },
+        {
+          "run_name": "run_00158",
+          "actual_value": 1.0859878063201904,
+          "coefficient": 2.366049094698819e-05
         },
         {
           "run_name": "run_00213",
           "actual_value": 1.0797784328460691,
-          "coefficient": 3.4361751869987367e-13
+          "coefficient": 1.0073778142007628e-05
         }
       ]
     },
     {
       "subset_size": 100,
-      "tuning_objective": 0.012357646527335418,
-      "tuning_cv_rmse": 0.010424430058293094,
+      "tuning_objective": 0.011841245777574456,
+      "tuning_cv_rmse": 0.00998232271206032,
       "tuning_cv_regret_at_1": 0.023841023445129395,
       "tuning_cv_foldmean_regret_at_1": 0.0005489349365234375,
-      "tuning_lower_tail_optimism": 0.003811539444432303,
+      "tuning_lower_tail_optimism": 0.003662952637375927,
       "tuning_success": true,
       "tuning_message": "Optimization terminated successfully.",
       "tuned_params": {
-        "alpha": 2980.9579870417283,
-        "eta": 7.664899139738197,
-        "lam": 0.19968583004397764,
-        "tau": 2.4752843779154223,
-        "reg": 0.00045495128431944856,
-        "beta": 0.9643832104976149,
-        "a_broad_text": 0.599148775238701,
-        "a_tech_code": 0.02,
-        "a_reasoning": 0.18467216716158327
+        "alpha": 0.00033546262790251185,
+        "eta": 6.310216997619935,
+        "lam": 0.04835548679186415,
+        "tau": 2.518621029628716,
+        "reg": 0.10234899339051212,
+        "beta": 0.7400107499718813,
+        "a_broad_text": 0.5337235266505524,
+        "a_tech_code": 0.19111094159956352,
+        "a_reasoning": 0.10911638510139801
       },
-      "predicted_optimum_value": 1.0429864417370034,
-      "deployment_delta": 0.08750000000000001,
-      "deployment_realized_gain": 0.010895284921971893,
-      "deployment_gain_budget": 0.010973364994816532,
-      "deployment_raw_predicted_optimum_value": 0.9922480325553841,
-      "deployment_hull_predicted_optimum_value": 1.0538817266589753,
+      "predicted_optimum_value": 1.041474594946306,
+      "deployment_delta": 0.07500000000000001,
+      "deployment_realized_gain": 0.010240529483729777,
+      "deployment_gain_budget": 0.010531257648583758,
+      "deployment_raw_predicted_optimum_value": 0.9871930996366481,
+      "deployment_hull_predicted_optimum_value": 1.0517151244300358,
       "fullswarm_chosen_run_name": "run_00125",
       "fullswarm_chosen_value": 1.0571987628936768,
       "fullswarm_regret_at_1": 0.0,
       "observed_best_run_name": "run_00125",
       "observed_best_value": 1.0571987628936768,
-      "gap_below_observed_best": -0.014212321156673369,
+      "gap_below_observed_best": -0.01572416794737075,
       "nearest_observed_run_name": "baseline_unimax",
       "nearest_observed_value": 1.0834295749664309,
-      "nearest_observed_tv_distance": 0.25517261897397847,
-      "optimum_move_mean_phase_tv_vs_prev": 0.04855007761456067,
+      "nearest_observed_tv_distance": 0.2572784855584262,
+      "optimum_move_mean_phase_tv_vs_prev": 0.07213247269243211,
       "optimizer_success": true,
       "optimizer_message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
-      "phase0_max_weight": 0.0794248612429551,
-      "phase1_max_weight": 0.09883091423776245,
+      "phase0_max_weight": 0.07803167821394584,
+      "phase1_max_weight": 0.1008733656366036,
       "phase0_support_below_1e4": 0,
       "phase1_support_below_1e4": 0,
       "phase0_top_domains": [
         {
           "domain": "dolmino_common_crawl_hq",
-          "weight": 0.0794248612429551,
+          "weight": 0.07803167821394584,
           "epochs": 3.840467273603789
         },
         {
-          "domain": "dolmino_synth_qa",
-          "weight": 0.0583932433242912,
-          "epochs": 9.599003736283514
-        },
-        {
           "domain": "dolma3_stack_edu",
-          "weight": 0.05549211993494175,
+          "weight": 0.06100612308206675,
           "epochs": 37.74227737450908
         },
         {
-          "domain": "dolmino_olmocr_pdfs_hq",
-          "weight": 0.05062423659975515,
-          "epochs": 24.575465290109335
-        },
-        {
-          "domain": "dolma3_cc/entertainment_high",
-          "weight": 0.04945990126334863,
-          "epochs": 11.950864467363925
+          "domain": "dolmino_synth_qa",
+          "weight": 0.05528386556532432,
+          "epochs": 9.599003736283514
         },
         {
           "domain": "dolmino_stack_edu_fim",
-          "weight": 0.04720264923892286,
+          "weight": 0.049752828633035553,
           "epochs": 37.795271818473694
         },
         {
+          "domain": "dolma3_cc/entertainment_high",
+          "weight": 0.04922736651339938,
+          "epochs": 11.950864467363925
+        },
+        {
           "domain": "dolma3_cc/finance_and_business_high",
-          "weight": 0.04446649767466735,
+          "weight": 0.04428569685445395,
           "epochs": 9.30235819120812
         },
         {
           "domain": "dolma3_cc/literature_high",
-          "weight": 0.039870410993535575,
+          "weight": 0.04120365828948637,
           "epochs": 19.58710774619373
+        },
+        {
+          "domain": "dolma3_cc/electronics_and_hardware_high",
+          "weight": 0.03412198000181324,
+          "epochs": 38.16894468066769
         }
       ],
       "phase1_top_domains": [
         {
           "domain": "dolma3_stack_edu",
-          "weight": 0.09883091423776245,
+          "weight": 0.1008733656366036,
           "epochs": 9.435569343627268
         },
         {
           "domain": "dolmino_common_crawl_hq",
-          "weight": 0.08205404113466862,
+          "weight": 0.07961160283151426,
           "epochs": 0.960116818400947
         },
         {
           "domain": "dolmino_olmocr_pdfs_hq",
-          "weight": 0.060616435081609424,
+          "weight": 0.05587748897181036,
           "epochs": 6.143866322527333
         },
         {
-          "domain": "dolmino_synth_qa",
-          "weight": 0.04964406592264685,
-          "epochs": 2.399750934070878
-        },
-        {
           "domain": "dolma3_cc/history_and_geography_high",
-          "weight": 0.046592414780937084,
+          "weight": 0.04925220201392676,
           "epochs": 9.36289418043849
         },
         {
+          "domain": "dolmino_synth_qa",
+          "weight": 0.04516834333479973,
+          "epochs": 2.399750934070878
+        },
+        {
+          "domain": "dolma3_cc/industrial_high",
+          "weight": 0.042062963654880964,
+          "epochs": 15.489138104598315
+        },
+        {
           "domain": "dolma3_cc/finance_and_business_high",
-          "weight": 0.042030668558346265,
+          "weight": 0.04146181145869549,
           "epochs": 2.3255895478020294
         },
         {
           "domain": "dolmino_stack_edu_fim",
-          "weight": 0.04062900550091782,
+          "weight": 0.038327811148944436,
           "epochs": 9.448817954618422
-        },
-        {
-          "domain": "dolma3_cc/industrial_high",
-          "weight": 0.040437952873036476,
-          "epochs": 15.489138104598315
         }
       ],
       "family_shares": {
-        "phase0_broad_text": 0.7926235760814728,
-        "phase0_tech_code": 0.17371502189867766,
-        "phase0_reasoning": 0.033661402019847964,
-        "phase1_broad_text": 0.7834937427119583,
-        "phase1_tech_code": 0.19997715433526897,
-        "phase1_reasoning": 0.0165291029527709
+        "phase0_broad_text": 0.7831849337583775,
+        "phase0_tech_code": 0.18378904995299516,
+        "phase0_reasoning": 0.03302601628862575,
+        "phase1_broad_text": 0.7810582676552101,
+        "phase1_tech_code": 0.20276860276317596,
+        "phase1_reasoning": 0.016173129581612128
       },
       "hull_anchor_count": 8,
       "hull_anchor_summaries": [
         {
           "run_name": "baseline_proportional",
           "actual_value": 1.0918354988098145,
-          "coefficient": 0.4281626427362487
+          "coefficient": 0.40920051870249274
         },
         {
           "run_name": "run_00200",
           "actual_value": 1.0687605142593384,
-          "coefficient": 0.31655335264003936
+          "coefficient": 0.3345014843562966
         },
         {
           "run_name": "run_00155",
           "actual_value": 1.0921894311904907,
-          "coefficient": 0.18563044148643595
+          "coefficient": 0.18684346125746626
         },
         {
           "run_name": "run_00223",
           "actual_value": 1.0901886224746704,
-          "coefficient": 0.06670136978246355
-        },
-        {
-          "run_name": "run_00233",
-          "actual_value": 1.090378999710083,
-          "coefficient": 0.0026781749962765866
+          "coefficient": 0.056537247154975864
         },
         {
           "run_name": "run_00078",
           "actual_value": 1.0926015377044678,
-          "coefficient": 0.00021004876258082775
+          "coefficient": 0.012638007942561704
+        },
+        {
+          "run_name": "run_00233",
+          "actual_value": 1.090378999710083,
+          "coefficient": 0.00026951122695561
         },
         {
           "run_name": "run_00213",
           "actual_value": 1.0797784328460691,
-          "coefficient": 6.1315587239107e-05
+          "coefficient": 9.394272712773623e-06
         },
         {
           "run_name": "run_00158",
           "actual_value": 1.0859878063201904,
-          "coefficient": 2.6540087159405643e-06
+          "coefficient": 3.7508653842369387e-07
         }
       ]
     },
     {
       "subset_size": 140,
-      "tuning_objective": 0.011118194056169123,
-      "tuning_cv_rmse": 0.009964239423858523,
+      "tuning_objective": 0.010661737019649837,
+      "tuning_cv_rmse": 0.009692197373433785,
       "tuning_cv_regret_at_1": 0.0,
-      "tuning_cv_foldmean_regret_at_1": 0.002035713195800826,
-      "tuning_lower_tail_optimism": 0.002104337945041115,
+      "tuning_cv_foldmean_regret_at_1": 0.0020977020263672763,
+      "tuning_lower_tail_optimism": 0.0017293090897953739,
       "tuning_success": true,
       "tuning_message": "Optimization terminated successfully.",
       "tuned_params": {
-        "alpha": 0.00033546262790251185,
-        "eta": 4.574492675353669,
-        "lam": 0.20853911429652477,
-        "tau": 2.4181666170557556,
-        "reg": 0.004094291327405471,
-        "beta": 0.3126541799511911,
-        "a_broad_text": 0.5815200474716201,
+        "alpha": 0.07951950805165099,
+        "eta": 3.5713157968500404,
+        "lam": 0.4784018898504892,
+        "tau": 2.1088854668646873,
+        "reg": 0.006202185726466695,
+        "beta": 0.36149032940016373,
+        "a_broad_text": 0.6709461798020332,
         "a_tech_code": 0.02,
-        "a_reasoning": 0.4337509988095089
+        "a_reasoning": 0.5307435124779389
       },
-      "predicted_optimum_value": 1.0429906658989845,
-      "deployment_delta": 0.17500000000000002,
-      "deployment_realized_gain": 0.011787565290425572,
-      "deployment_gain_budget": 0.01199995261965935,
-      "deployment_raw_predicted_optimum_value": 1.0090641096661255,
-      "deployment_hull_predicted_optimum_value": 1.05477823118941,
+      "predicted_optimum_value": 1.0446561574543365,
+      "deployment_delta": 0.125,
+      "deployment_realized_gain": 0.011588001818603866,
+      "deployment_gain_budget": 0.011789899399801062,
+      "deployment_raw_predicted_optimum_value": 1.0028593543413469,
+      "deployment_hull_predicted_optimum_value": 1.0562441592729404,
       "fullswarm_chosen_run_name": "run_00125",
       "fullswarm_chosen_value": 1.0571987628936768,
       "fullswarm_regret_at_1": 0.0,
       "observed_best_run_name": "run_00125",
       "observed_best_value": 1.0571987628936768,
-      "gap_below_observed_best": -0.014208096994692276,
+      "gap_below_observed_best": -0.01254260543934027,
       "nearest_observed_run_name": "baseline_unimax",
       "nearest_observed_value": 1.0834295749664309,
-      "nearest_observed_tv_distance": 0.261915090042139,
-      "optimum_move_mean_phase_tv_vs_prev": 0.17573292309400596,
+      "nearest_observed_tv_distance": 0.26830209927656956,
+      "optimum_move_mean_phase_tv_vs_prev": 0.06830931809631649,
       "optimizer_success": true,
       "optimizer_message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
-      "phase0_max_weight": 0.09167035877997276,
-      "phase1_max_weight": 0.10658460054678918,
+      "phase0_max_weight": 0.07160980165994461,
+      "phase1_max_weight": 0.10545938440115878,
       "phase0_support_below_1e4": 0,
       "phase1_support_below_1e4": 0,
       "phase0_top_domains": [
         {
-          "domain": "dolmino_stack_edu_fim",
-          "weight": 0.09167035877997276,
-          "epochs": 37.795271818473694
-        },
-        {
-          "domain": "dolma3_cc/literature_high",
-          "weight": 0.0840040506513994,
-          "epochs": 19.58710774619373
-        },
-        {
-          "domain": "dolma3_stack_edu",
-          "weight": 0.06288573556027792,
-          "epochs": 37.74227737450908
-        },
-        {
           "domain": "dolmino_common_crawl_hq",
-          "weight": 0.05036943962102512,
+          "weight": 0.07160980165994461,
           "epochs": 3.840467273603789
         },
         {
+          "domain": "dolmino_stack_edu_fim",
+          "weight": 0.06141244311029258,
+          "epochs": 37.795271818473694
+        },
+        {
+          "domain": "dolma3_stack_edu",
+          "weight": 0.061162100153641624,
+          "epochs": 37.74227737450908
+        },
+        {
+          "domain": "dolma3_cc/literature_high",
+          "weight": 0.060254723051474994,
+          "epochs": 19.58710774619373
+        },
+        {
           "domain": "dolma3_cc/entertainment_high",
-          "weight": 0.04017438702380223,
+          "weight": 0.04838076812105417,
           "epochs": 11.950864467363925
         },
         {
-          "domain": "dolma3_cc/industrial_high",
-          "weight": 0.04005140930688724,
-          "epochs": 61.956552418393265
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "weight": 0.042485972409237883,
+          "epochs": 24.575465290109335
         },
         {
-          "domain": "dolma3_cc/science_math_and_technology_high",
-          "weight": 0.03935080583187635,
-          "epochs": 20.82045050777392
+          "domain": "dolma3_cc/finance_and_business_high",
+          "weight": 0.04204108960785069,
+          "epochs": 9.30235819120812
         },
         {
-          "domain": "dolma3_cc/electronics_and_hardware_high",
-          "weight": 0.034185573395834126,
-          "epochs": 38.16894468066769
+          "domain": "dolmino_synth_qa",
+          "weight": 0.03825736617457871,
+          "epochs": 9.599003736283514
         }
       ],
       "phase1_top_domains": [
         {
           "domain": "dolma3_stack_edu",
-          "weight": 0.10658460054678918,
+          "weight": 0.10545938440115878,
           "epochs": 9.435569343627268
         },
         {
+          "domain": "dolmino_common_crawl_hq",
+          "weight": 0.07253575797673723,
+          "epochs": 0.960116818400947
+        },
+        {
+          "domain": "dolma3_cc/industrial_high",
+          "weight": 0.05675395221988104,
+          "epochs": 15.489138104598315
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "weight": 0.053773205843441724,
+          "epochs": 6.143866322527333
+        },
+        {
+          "domain": "dolma3_cc/history_and_geography_high",
+          "weight": 0.05311972549959491,
+          "epochs": 9.36289418043849
+        },
+        {
           "domain": "dolma3_cc/literature_high",
-          "weight": 0.0633512703282121,
+          "weight": 0.04594149947366552,
           "epochs": 4.896776936548431
         },
         {
           "domain": "dolmino_stack_edu_fim",
-          "weight": 0.05985075448754676,
+          "weight": 0.040096770655548716,
           "epochs": 9.448817954618422
         },
         {
-          "domain": "dolmino_synth_qa",
-          "weight": 0.05146133970780144,
-          "epochs": 2.399750934070878
-        },
-        {
-          "domain": "dolma3_cc/history_and_geography_high",
-          "weight": 0.04931166360264267,
-          "epochs": 9.36289418043849
-        },
-        {
-          "domain": "dolmino_olmocr_pdfs_hq",
-          "weight": 0.04497772169506587,
-          "epochs": 6.143866322527333
-        },
-        {
-          "domain": "dolma3_cc/health_high",
-          "weight": 0.04095603762072296,
-          "epochs": 2.905002284880049
-        },
-        {
           "domain": "dolma3_cc/science_math_and_technology_high",
-          "weight": 0.04075950879663354,
+          "weight": 0.039386868072728426,
           "epochs": 5.205112626943478
         }
       ],
       "family_shares": {
-        "phase0_broad_text": 0.7406738725298261,
-        "phase0_tech_code": 0.221150162677165,
-        "phase0_reasoning": 0.03817596479300709,
-        "phase1_broad_text": 0.7691713720749251,
-        "phase1_tech_code": 0.22093052320767576,
-        "phase1_reasoning": 0.00989810471739742
+        "phase0_broad_text": 0.771507553478216,
+        "phase0_tech_code": 0.19602984741850932,
+        "phase0_reasoning": 0.032462599103273454,
+        "phase1_broad_text": 0.7754499159507585,
+        "phase1_tech_code": 0.20994598258272504,
+        "phase1_reasoning": 0.014604101466514911
       },
       "hull_anchor_count": 8,
       "hull_anchor_summaries": [
         {
-          "run_name": "run_00178",
-          "actual_value": 1.0749270915985107,
-          "coefficient": 0.4137103004797688
+          "run_name": "baseline_proportional",
+          "actual_value": 1.0918354988098145,
+          "coefficient": 0.3973609168788419
         },
         {
           "run_name": "run_00200",
           "actual_value": 1.0687605142593384,
-          "coefficient": 0.3804231817770104
+          "coefficient": 0.3448517409652349
         },
         {
-          "run_name": "baseline_proportional",
-          "actual_value": 1.0918354988098145,
-          "coefficient": 0.20582581958162494
+          "run_name": "run_00155",
+          "actual_value": 1.0921894311904907,
+          "coefficient": 0.25775651634752655
         },
         {
           "run_name": "run_00223",
           "actual_value": 1.0901886224746704,
-          "coefficient": 1.6915691839704923e-05
-        },
-        {
-          "run_name": "run_00233",
-          "actual_value": 1.090378999710083,
-          "coefficient": 1.570751536477776e-05
-        },
-        {
-          "run_name": "run_00081",
-          "actual_value": 1.0920329093933103,
-          "coefficient": 5.6296751993242036e-06
-        },
-        {
-          "run_name": "run_00158",
-          "actual_value": 1.0859878063201904,
-          "coefficient": 2.445279192030139e-06
+          "coefficient": 1.6103013317330438e-05
         },
         {
           "run_name": "run_00213",
           "actual_value": 1.0797784328460691,
-          "coefficient": 1.0489249816450791e-22
+          "coefficient": 7.5700050544537e-06
+        },
+        {
+          "run_name": "run_00081",
+          "actual_value": 1.0920329093933103,
+          "coefficient": 5.89433839745266e-06
+        },
+        {
+          "run_name": "run_00158",
+          "actual_value": 1.0859878063201904,
+          "coefficient": 1.2402335185202295e-06
+        },
+        {
+          "run_name": "run_00233",
+          "actual_value": 1.090378999710083,
+          "coefficient": 1.8218108966814116e-08
         }
       ]
     },
     {
       "subset_size": 180,
-      "tuning_objective": 0.010502502462232824,
-      "tuning_cv_rmse": 0.009761213934546237,
+      "tuning_objective": 0.011080326157011143,
+      "tuning_cv_rmse": 0.00954637531258464,
       "tuning_cv_regret_at_1": 0.0,
-      "tuning_cv_foldmean_regret_at_1": 0.0,
-      "tuning_lower_tail_optimism": 0.0014825770553731725,
+      "tuning_cv_foldmean_regret_at_1": 0.0005043268203735352,
+      "tuning_lower_tail_optimism": 0.003017469006815654,
       "tuning_success": true,
       "tuning_message": "Optimization terminated successfully.",
       "tuned_params": {
-        "alpha": 0.057482841472654984,
-        "eta": 6.180410814424728,
-        "lam": 0.06694695711412915,
-        "tau": 2.4532685972507413,
-        "reg": 1.0,
-        "beta": 0.6297386148803115,
-        "a_broad_text": 0.5954586008921273,
-        "a_tech_code": 0.19713854099757913,
-        "a_reasoning": 0.08589814162832085
+        "alpha": 138.33797645878738,
+        "eta": 6.08664875799742,
+        "lam": 0.007745261662402742,
+        "tau": 2.719416267114411,
+        "reg": 0.0033221910254412593,
+        "beta": 0.46996025367436245,
+        "a_broad_text": 0.6058829771465504,
+        "a_tech_code": 0.02,
+        "a_reasoning": 0.02
       },
-      "predicted_optimum_value": 1.047362113148331,
-      "deployment_delta": 0.1,
-      "deployment_realized_gain": 0.008846496951300908,
-      "deployment_gain_budget": 0.009761213934546237,
-      "deployment_raw_predicted_optimum_value": 1.003754821970107,
-      "deployment_hull_predicted_optimum_value": 1.056208610099632,
+      "predicted_optimum_value": 1.044343862148538,
+      "deployment_delta": 0.1375,
+      "deployment_realized_gain": 0.009293140425070234,
+      "deployment_gain_budget": 0.010050702132958176,
+      "deployment_raw_predicted_optimum_value": 1.0077239950509074,
+      "deployment_hull_predicted_optimum_value": 1.0536370025736082,
       "fullswarm_chosen_run_name": "run_00125",
       "fullswarm_chosen_value": 1.0571987628936768,
       "fullswarm_regret_at_1": 0.0,
       "observed_best_run_name": "run_00125",
       "observed_best_value": 1.0571987628936768,
-      "gap_below_observed_best": -0.009836649745345705,
-      "nearest_observed_run_name": "run_00200",
-      "nearest_observed_value": 1.0687605142593384,
-      "nearest_observed_tv_distance": 0.28536892389485047,
-      "optimum_move_mean_phase_tv_vs_prev": 0.11412156989149533,
+      "gap_below_observed_best": -0.012854900745138842,
+      "nearest_observed_run_name": "run_00178",
+      "nearest_observed_value": 1.0749270915985107,
+      "nearest_observed_tv_distance": 0.27548406252249236,
+      "optimum_move_mean_phase_tv_vs_prev": 0.20505330713687117,
       "optimizer_success": true,
       "optimizer_message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
-      "phase0_max_weight": 0.11736132051709597,
-      "phase1_max_weight": 0.13513590585695967,
+      "phase0_max_weight": 0.11705857328307825,
+      "phase1_max_weight": 0.1295621186013942,
       "phase0_support_below_1e4": 0,
       "phase1_support_below_1e4": 0,
       "phase0_top_domains": [
         {
           "domain": "dolmino_stack_edu_fim",
-          "weight": 0.11736132051709597,
+          "weight": 0.11705857328307825,
           "epochs": 37.795271818473694
         },
         {
           "domain": "dolma3_stack_edu",
-          "weight": 0.08213598500670541,
+          "weight": 0.06310056757371427,
           "epochs": 37.74227737450908
         },
         {
           "domain": "dolma3_cc/literature_high",
-          "weight": 0.06473305013371934,
+          "weight": 0.06204716503702769,
           "epochs": 19.58710774619373
         },
         {
           "domain": "dolma3_cc/industrial_high",
-          "weight": 0.04367499064335125,
+          "weight": 0.0423818652229127,
           "epochs": 61.956552418393265
         },
         {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "weight": 0.04098952638260141,
+          "epochs": 32.927653530162544
+        },
+        {
           "domain": "dolma3_cc/electronics_and_hardware_high",
-          "weight": 0.043011488819987884,
+          "weight": 0.04058067760556731,
           "epochs": 38.16894468066769
         },
         {
           "domain": "dolma3_arxiv",
-          "weight": 0.041476385242426084,
+          "weight": 0.037570580007531384,
           "epochs": 179.19910529113503
         },
         {
-          "domain": "dolma3_cc/games_low",
-          "weight": 0.03836631713525954,
-          "epochs": 59.7347460899691
-        },
-        {
-          "domain": "dolma3_cc/entertainment_high",
-          "weight": 0.03613055667879383,
-          "epochs": 11.950864467363925
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "weight": 0.035065090723980355,
+          "epochs": 20.82045050777392
         }
       ],
       "phase1_top_domains": [
         {
           "domain": "dolma3_stack_edu",
-          "weight": 0.13513590585695967,
+          "weight": 0.1295621186013942,
           "epochs": 9.435569343627268
         },
         {
-          "domain": "dolmino_stack_edu_fim",
-          "weight": 0.06454934403010618,
-          "epochs": 9.448817954618422
-        },
-        {
-          "domain": "dolma3_cc/history_and_geography_high",
-          "weight": 0.06268004576785106,
-          "epochs": 9.36289418043849
-        },
-        {
-          "domain": "dolmino_synth_qa",
-          "weight": 0.043262950831528445,
-          "epochs": 2.399750934070878
-        },
-        {
           "domain": "dolma3_cc/literature_high",
-          "weight": 0.04307529271915408,
+          "weight": 0.0616457985003428,
           "epochs": 4.896776936548431
         },
         {
+          "domain": "dolma3_cc/history_and_geography_high",
+          "weight": 0.0593340608217298,
+          "epochs": 9.36289418043849
+        },
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "weight": 0.058684020644714695,
+          "epochs": 9.448817954618422
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "weight": 0.05146627363249286,
+          "epochs": 2.399750934070878
+        },
+        {
           "domain": "dolmino_olmocr_pdfs_hq",
-          "weight": 0.04188711977329146,
+          "weight": 0.04512895602762537,
           "epochs": 6.143866322527333
         },
         {
           "domain": "dolma3_cc/health_high",
-          "weight": 0.04057571018411365,
+          "weight": 0.0402079975980927,
           "epochs": 2.905002284880049
         },
         {
           "domain": "dolma3_cc/electronics_and_hardware_low",
-          "weight": 0.03792222124516849,
+          "weight": 0.034925193169237104,
           "epochs": 20.301075152506677
         }
       ],
       "family_shares": {
-        "phase0_broad_text": 0.669763655198312,
-        "phase0_tech_code": 0.2818921038853586,
-        "phase0_reasoning": 0.04834424091632768,
-        "phase1_broad_text": 0.7286987321048396,
-        "phase1_tech_code": 0.25967337688506215,
-        "phase1_reasoning": 0.011627891010096588
+        "phase0_broad_text": 0.6900991017022626,
+        "phase0_tech_code": 0.2616260151443811,
+        "phase0_reasoning": 0.048274883153354646,
+        "phase1_broad_text": 0.740353623446127,
+        "phase1_tech_code": 0.24742971340706968,
+        "phase1_reasoning": 0.01221666314680199
       },
       "hull_anchor_count": 8,
       "hull_anchor_summaries": [
         {
-          "run_name": "run_00200",
-          "actual_value": 1.0687605142593384,
-          "coefficient": 0.5006968248729079
-        },
-        {
           "run_name": "run_00178",
           "actual_value": 1.0749270915985107,
-          "coefficient": 0.49926232814411126
+          "coefficient": 0.5292558457125317
+        },
+        {
+          "run_name": "run_00200",
+          "actual_value": 1.0687605142593384,
+          "coefficient": 0.47062859105364674
         },
         {
           "run_name": "run_00213",
           "actual_value": 1.0797784328460691,
-          "coefficient": 2.7888186523448994e-05
-        },
-        {
-          "run_name": "run_00223",
-          "actual_value": 1.0901886224746704,
-          "coefficient": 7.601832605636971e-06
+          "coefficient": 5.9868431341783245e-05
         },
         {
           "run_name": "run_00152",
           "actual_value": 1.0874489545822144,
-          "coefficient": 4.674937527859797e-06
+          "coefficient": 4.9026286301697784e-05
         },
         {
           "run_name": "run_00074",
           "actual_value": 1.089533448219299,
-          "coefficient": 4.771701732438346e-07
-        },
-        {
-          "run_name": "run_00016",
-          "actual_value": 1.0847774744033811,
-          "coefficient": 2.0485613828996938e-07
+          "coefficient": 2.4107919748569875e-06
         },
         {
           "run_name": "run_00158",
           "actual_value": 1.0859878063201904,
-          "coefficient": 1.2391855102878721e-14
+          "coefficient": 2.204202861719259e-06
+        },
+        {
+          "run_name": "run_00016",
+          "actual_value": 1.0847774744033811,
+          "coefficient": 2.053521340474833e-06
+        },
+        {
+          "run_name": "run_00223",
+          "actual_value": 1.0901886224746704,
+          "coefficient": 1.109091594734761e-15
         }
       ]
     },
     {
       "subset_size": 220,
-      "tuning_objective": 0.010095406100000133,
-      "tuning_cv_rmse": 0.008852524157171115,
+      "tuning_objective": 0.009808099508550045,
+      "tuning_cv_rmse": 0.008811363084844905,
       "tuning_cv_regret_at_1": 0.0,
-      "tuning_cv_foldmean_regret_at_1": 0.0009238004684447798,
-      "tuning_lower_tail_optimism": 0.002393383838813557,
+      "tuning_cv_foldmean_regret_at_1": 0.0007091283798217329,
+      "tuning_lower_tail_optimism": 0.001922560009428109,
       "tuning_success": true,
       "tuning_message": "Optimization terminated successfully.",
       "tuned_params": {
-        "alpha": 130.3890589986922,
-        "eta": 5.713554049073946,
-        "lam": 0.09357566992457513,
-        "tau": 2.816926401170726,
-        "reg": 0.005480614580381164,
-        "beta": 0.4993796101356651,
-        "a_broad_text": 0.7255553702419612,
+        "alpha": 191.73517531650032,
+        "eta": 6.0231237681976255,
+        "lam": 6.14421235332821e-06,
+        "tau": 2.8532718187311286,
+        "reg": 0.005447235050604987,
+        "beta": 0.24879648878269522,
+        "a_broad_text": 0.6241115613827414,
         "a_tech_code": 0.02,
-        "a_reasoning": 0.5755677395106991
+        "a_reasoning": 0.5001262508472621
       },
-      "predicted_optimum_value": 1.0401407525992101,
-      "deployment_delta": 0.125,
-      "deployment_realized_gain": 0.00946070142282962,
-      "deployment_gain_budget": 0.009776324625615895,
-      "deployment_raw_predicted_optimum_value": 1.005738232684814,
-      "deployment_hull_predicted_optimum_value": 1.0496014540220397,
+      "predicted_optimum_value": 1.0418439472221164,
+      "deployment_delta": 0.1375,
+      "deployment_realized_gain": 0.009236502113246559,
+      "deployment_gain_budget": 0.009520491464666637,
+      "deployment_raw_predicted_optimum_value": 1.0087124147437263,
+      "deployment_hull_predicted_optimum_value": 1.051080449335363,
       "fullswarm_chosen_run_name": "run_00125",
       "fullswarm_chosen_value": 1.0571987628936768,
       "fullswarm_regret_at_1": 0.0,
       "observed_best_run_name": "run_00125",
       "observed_best_value": 1.0571987628936768,
-      "gap_below_observed_best": -0.01705801029446663,
+      "gap_below_observed_best": -0.015354815671560385,
       "nearest_observed_run_name": "run_00125",
       "nearest_observed_value": 1.0571987628936768,
-      "nearest_observed_tv_distance": 0.22839921362235938,
-      "optimum_move_mean_phase_tv_vs_prev": 0.21519251540603573,
+      "nearest_observed_tv_distance": 0.25785624621706277,
+      "optimum_move_mean_phase_tv_vs_prev": 0.1980788162417921,
       "optimizer_success": true,
       "optimizer_message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
-      "phase0_max_weight": 0.07743159683170794,
-      "phase1_max_weight": 0.0858990239096499,
+      "phase0_max_weight": 0.07675738234544009,
+      "phase1_max_weight": 0.1013868473942992,
       "phase0_support_below_1e4": 0,
       "phase1_support_below_1e4": 0,
       "phase0_top_domains": [
         {
-          "domain": "dolma3_stack_edu",
-          "weight": 0.07743159683170794,
-          "epochs": 37.74227737450908
-        },
-        {
           "domain": "dolmino_synth_qa",
-          "weight": 0.07481325959522511,
+          "weight": 0.07675738234544009,
           "epochs": 9.599003736283514
         },
         {
-          "domain": "dolmino_stack_edu_fim",
-          "weight": 0.05186597370505657,
-          "epochs": 37.795271818473694
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "weight": 0.054832150255226635,
+          "epochs": 20.82045050777392
         },
         {
-          "domain": "dolmino_olmocr_pdfs_hq",
-          "weight": 0.049687410458283135,
-          "epochs": 24.575465290109335
-        },
-        {
-          "domain": "dolma3_cc/electronics_and_hardware_high",
-          "weight": 0.0436118102738673,
-          "epochs": 38.16894468066769
+          "domain": "dolma3_stack_edu",
+          "weight": 0.05406084248976315,
+          "epochs": 37.74227737450908
         },
         {
           "domain": "dolma3_cc/finance_and_business_high",
-          "weight": 0.04250186109556284,
+          "weight": 0.0536867129204771,
           "epochs": 9.30235819120812
         },
         {
           "domain": "dolmino_common_crawl_hq",
-          "weight": 0.042337264279193515,
+          "weight": 0.0477367969006077,
           "epochs": 3.840467273603789
         },
         {
           "domain": "dolma3_cc/literature_high",
-          "weight": 0.0406342072433743,
+          "weight": 0.04242962787139951,
           "epochs": 19.58710774619373
+        },
+        {
+          "domain": "dolma3_cc/electronics_and_hardware_high",
+          "weight": 0.0422741645028905,
+          "epochs": 38.16894468066769
+        },
+        {
+          "domain": "dolma3_arxiv",
+          "weight": 0.03873235538226179,
+          "epochs": 179.19910529113503
         }
       ],
       "phase1_top_domains": [
         {
           "domain": "dolma3_stack_edu",
-          "weight": 0.0858990239096499,
+          "weight": 0.1013868473942992,
           "epochs": 9.435569343627268
         },
         {
-          "domain": "dolma3_cc/science_math_and_technology_high",
-          "weight": 0.06777725309804267,
-          "epochs": 5.205112626943478
-        },
-        {
           "domain": "dolmino_stack_edu_fim",
-          "weight": 0.06454173717760125,
+          "weight": 0.07843206252147683,
           "epochs": 9.448817954618422
         },
         {
+          "domain": "dolma3_cc/literature_high",
+          "weight": 0.06222472189426184,
+          "epochs": 4.896776936548431
+        },
+        {
           "domain": "dolma3_cc/history_and_geography_high",
-          "weight": 0.06367909147214582,
+          "weight": 0.05536551861011243,
           "epochs": 9.36289418043849
         },
         {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "weight": 0.054997242388168666,
+          "epochs": 5.205112626943478
+        },
+        {
           "domain": "dolmino_olmocr_pdfs_hq",
-          "weight": 0.05230883535840905,
+          "weight": 0.05351112215432019,
           "epochs": 6.143866322527333
         },
         {
           "domain": "dolma3_cc/electronics_and_hardware_low",
-          "weight": 0.04804643018752573,
+          "weight": 0.04518265659239558,
           "epochs": 20.301075152506677
         },
         {
-          "domain": "dolma3_cc/entertainment_low",
-          "weight": 0.04275522333804223,
-          "epochs": 8.209985673244033
-        },
-        {
           "domain": "dolma3_cc/health_high",
-          "weight": 0.04104468004604858,
+          "weight": 0.040631496381640604,
           "epochs": 2.905002284880049
         }
       ],
       "family_shares": {
-        "phase0_broad_text": 0.7542464767201651,
-        "phase0_tech_code": 0.2156978024636823,
-        "phase0_reasoning": 0.030055720816151005,
-        "phase1_broad_text": 0.7614577416234489,
-        "phase1_tech_code": 0.22588591349503306,
-        "phase1_reasoning": 0.012656344881516207
+        "phase0_broad_text": 0.7812333203846379,
+        "phase0_tech_code": 0.1861306394057139,
+        "phase0_reasoning": 0.0326360402096465,
+        "phase1_broad_text": 0.745453201131887,
+        "phase1_tech_code": 0.2435455331742543,
+        "phase1_reasoning": 0.011001265693856944
       },
       "hull_anchor_count": 8,
       "hull_anchor_summaries": [
         {
           "run_name": "run_00125",
           "actual_value": 1.0571987628936768,
-          "coefficient": 0.49834037824913063
+          "coefficient": 0.4350669554656796
         },
         {
           "run_name": "run_00200",
           "actual_value": 1.0687605142593384,
-          "coefficient": 0.2731525379192028
-        },
-        {
-          "run_name": "baseline_unimax",
-          "actual_value": 1.0834295749664309,
-          "coefficient": 0.11744924125797702
+          "coefficient": 0.28641963648287144
         },
         {
           "run_name": "run_00178",
           "actual_value": 1.0749270915985107,
-          "coefficient": 0.11102350390541939
+          "coefficient": 0.15609024716834666
         },
         {
-          "run_name": "run_00213",
-          "actual_value": 1.0797784328460691,
-          "coefficient": 1.761135489882438e-05
+          "run_name": "baseline_unimax",
+          "actual_value": 1.0834295749664309,
+          "coefficient": 0.12238697907405305
         },
         {
           "run_name": "run_00168",
           "actual_value": 1.069382905960083,
-          "coefficient": 1.1867014232248492e-05
-        },
-        {
-          "run_name": "run_00016",
-          "actual_value": 1.0847774744033811,
-          "coefficient": 4.85616827451483e-06
+          "coefficient": 1.595645413793962e-05
         },
         {
           "run_name": "run_00158",
           "actual_value": 1.0859878063201904,
-          "coefficient": 4.130864529138571e-09
+          "coefficient": 1.0512753889579817e-05
+        },
+        {
+          "run_name": "run_00213",
+          "actual_value": 1.0797784328460691,
+          "coefficient": 5.180164211818644e-06
+        },
+        {
+          "run_name": "run_00016",
+          "actual_value": 1.0847774744033811,
+          "coefficient": 4.5324368098877846e-06
         }
       ]
     },
     {
-      "subset_size": 241,
-      "tuning_objective": 0.009921696925466761,
-      "tuning_cv_rmse": 0.008566348959451894,
+      "subset_size": 242,
+      "tuning_objective": 0.009685421748677937,
+      "tuning_cv_rmse": 0.008536703074484973,
       "tuning_cv_regret_at_1": 0.0,
-      "tuning_cv_foldmean_regret_at_1": 0.0030789136886596236,
-      "tuning_lower_tail_optimism": 0.002402804563163771,
+      "tuning_cv_foldmean_regret_at_1": 0.0,
+      "tuning_lower_tail_optimism": 0.0022974373483859263,
       "tuning_success": true,
       "tuning_message": "Optimization terminated successfully.",
       "tuned_params": {
-        "alpha": 71.13804889574939,
-        "eta": 6.374248125582019,
-        "lam": 0.04720152662166261,
-        "tau": 1.88323865849839,
-        "reg": 0.0035313393029799897,
-        "beta": 0.55706623083417,
-        "a_broad_text": 0.5530954460831177,
+        "alpha": 2980.9579870417283,
+        "eta": 6.017069418431188,
+        "lam": 6.14421235332821e-06,
+        "tau": 2.3488493456007715,
+        "reg": 0.0036515020612254007,
+        "beta": 0.32962028420165934,
+        "a_broad_text": 0.6798113306906852,
         "a_tech_code": 0.02,
-        "a_reasoning": 0.34945050798931643
+        "a_reasoning": 0.49545160374432234
       },
-      "predicted_optimum_value": 1.0388180442640236,
-      "deployment_delta": 0.15000000000000002,
-      "deployment_realized_gain": 0.011626914165495883,
-      "deployment_gain_budget": 0.011645262648111518,
-      "deployment_raw_predicted_optimum_value": 1.004206611036287,
-      "deployment_hull_predicted_optimum_value": 1.0504449584295195,
+      "predicted_optimum_value": 1.0421246780678428,
+      "deployment_delta": 0.1,
+      "deployment_realized_gain": 0.008156047099820984,
+      "deployment_gain_budget": 0.008536703074484973,
+      "deployment_raw_predicted_optimum_value": 0.9990440175201208,
+      "deployment_hull_predicted_optimum_value": 1.0502807251676638,
       "fullswarm_chosen_run_name": "run_00125",
       "fullswarm_chosen_value": 1.0571987628936768,
       "fullswarm_regret_at_1": 0.0,
       "observed_best_run_name": "run_00125",
       "observed_best_value": 1.0571987628936768,
-      "gap_below_observed_best": -0.01838071862965318,
+      "gap_below_observed_best": -0.015074084825833944,
       "nearest_observed_run_name": "run_00125",
       "nearest_observed_value": 1.0571987628936768,
-      "nearest_observed_tv_distance": 0.24616556254417546,
+      "nearest_observed_tv_distance": 0.22682944881427472,
       "optimum_move_mean_phase_tv_vs_prev": null,
       "optimizer_success": true,
       "optimizer_message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
-      "phase0_max_weight": 0.06573997790021786,
-      "phase1_max_weight": 0.09337485165242465,
+      "phase0_max_weight": 0.06938471897191482,
+      "phase1_max_weight": 0.0862902559044913,
       "phase0_support_below_1e4": 0,
       "phase1_support_below_1e4": 0,
       "phase0_top_domains": [
         {
           "domain": "dolmino_synth_qa",
-          "weight": 0.06573997790021786,
+          "weight": 0.06938471897191482,
           "epochs": 9.599003736283514
         },
         {
-          "domain": "dolma3_stack_edu",
-          "weight": 0.05860779295407778,
-          "epochs": 37.74227737450908
-        },
-        {
-          "domain": "dolma3_cc/science_math_and_technology_high",
-          "weight": 0.05508346154752641,
-          "epochs": 20.82045050777392
-        },
-        {
-          "domain": "dolmino_stack_edu_fim",
-          "weight": 0.05202027571774682,
-          "epochs": 37.795271818473694
-        },
-        {
           "domain": "dolma3_cc/literature_high",
-          "weight": 0.050448853112570406,
+          "weight": 0.06210901911903617,
           "epochs": 19.58710774619373
         },
         {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "weight": 0.0619472319548188,
+          "epochs": 20.82045050777392
+        },
+        {
+          "domain": "dolma3_stack_edu",
+          "weight": 0.05706542366530855,
+          "epochs": 37.74227737450908
+        },
+        {
           "domain": "dolma3_cc/finance_and_business_high",
-          "weight": 0.045003554481773594,
+          "weight": 0.05548681784903585,
           "epochs": 9.30235819120812
         },
         {
           "domain": "dolmino_common_crawl_hq",
-          "weight": 0.04260032598027003,
+          "weight": 0.044641010391918486,
           "epochs": 3.840467273603789
         },
         {
+          "domain": "dolma3_cc/electronics_and_hardware_high",
+          "weight": 0.04350826779492498,
+          "epochs": 38.16894468066769
+        },
+        {
           "domain": "dolmino_olmocr_pdfs_hq",
-          "weight": 0.042470427498955694,
+          "weight": 0.036857391201668664,
           "epochs": 24.575465290109335
         }
       ],
       "phase1_top_domains": [
         {
           "domain": "dolma3_stack_edu",
-          "weight": 0.09337485165242465,
+          "weight": 0.0862902559044913,
           "epochs": 9.435569343627268
         },
         {
-          "domain": "dolma3_cc/science_math_and_technology_high",
-          "weight": 0.069066470078565,
-          "epochs": 5.205112626943478
-        },
-        {
           "domain": "dolmino_stack_edu_fim",
-          "weight": 0.061136147855648255,
+          "weight": 0.06768291939191218,
           "epochs": 9.448817954618422
         },
         {
           "domain": "dolma3_cc/history_and_geography_high",
-          "weight": 0.060658841776749434,
+          "weight": 0.06421337739008962,
           "epochs": 9.36289418043849
         },
         {
-          "domain": "dolma3_cc/literature_high",
-          "weight": 0.048189041793718745,
-          "epochs": 4.896776936548431
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "weight": 0.05718364807900386,
+          "epochs": 5.205112626943478
         },
         {
           "domain": "dolma3_cc/electronics_and_hardware_low",
-          "weight": 0.04399493826965579,
+          "weight": 0.04798461057373537,
           "epochs": 20.301075152506677
         },
         {
+          "domain": "dolma3_cc/entertainment_low",
+          "weight": 0.04335391766405398,
+          "epochs": 8.209985673244033
+        },
+        {
           "domain": "dolmino_olmocr_pdfs_hq",
-          "weight": 0.04361731527394036,
+          "weight": 0.043059445114293576,
           "epochs": 6.143866322527333
         },
         {
-          "domain": "dolma3_cc/entertainment_low",
-          "weight": 0.04201924428256387,
-          "epochs": 8.209985673244033
+          "domain": "dolma3_cc/health_high",
+          "weight": 0.04210851615065192,
+          "epochs": 2.905002284880049
         }
       ],
       "family_shares": {
-        "phase0_broad_text": 0.7745965253652927,
-        "phase0_tech_code": 0.19918615394267153,
-        "phase0_reasoning": 0.026217320692034377,
-        "phase1_broad_text": 0.7696437593333542,
-        "phase1_tech_code": 0.21819052638420114,
-        "phase1_reasoning": 0.012165714282443193
+        "phase0_broad_text": 0.8085487008554099,
+        "phase0_tech_code": 0.16676250817854943,
+        "phase0_reasoning": 0.024688790966038942,
+        "phase1_broad_text": 0.7614908236359619,
+        "phase1_tech_code": 0.22491028912000732,
+        "phase1_reasoning": 0.01359888724402918
       },
       "hull_anchor_count": 8,
       "hull_anchor_summaries": [
         {
           "run_name": "run_00125",
           "actual_value": 1.0571987628936768,
-          "coefficient": 0.4945256168152667
-        },
-        {
-          "run_name": "baseline_unimax",
-          "actual_value": 1.0834295749664309,
-          "coefficient": 0.25360144295387427
+          "coefficient": 0.5068323828173724
         },
         {
           "run_name": "run_00200",
           "actual_value": 1.0687605142593384,
-          "coefficient": 0.2251959747406826
+          "coefficient": 0.24012940603132293
+        },
+        {
+          "run_name": "baseline_unimax",
+          "actual_value": 1.0834295749664309,
+          "coefficient": 0.20838278106242375
         },
         {
           "run_name": "run_00178",
           "actual_value": 1.0749270915985107,
-          "coefficient": 0.026675508876677845
-        },
-        {
-          "run_name": "run_00158",
-          "actual_value": 1.0859878063201904,
-          "coefficient": 1.37255580641166e-06
+          "coefficient": 0.044625480549128856
         },
         {
           "run_name": "run_00213",
           "actual_value": 1.0797784328460691,
-          "coefficient": 5.442801476175318e-08
+          "coefficient": 1.6816604207142736e-05
+        },
+        {
+          "run_name": "baseline_stratified",
+          "actual_value": 1.078909158706665,
+          "coefficient": 9.04574626656179e-06
         },
         {
           "run_name": "run_00016",
           "actual_value": 1.0847774744033811,
-          "coefficient": 2.8401926050000568e-08
+          "coefficient": 4.0871269039392055e-06
         },
         {
           "run_name": "run_00168",
           "actual_value": 1.069382905960083,
-          "coefficient": 1.227751503100892e-09
+          "coefficient": 6.237439713799866e-11
         }
       ]
     }

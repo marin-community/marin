@@ -20,6 +20,14 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 
+from experiments.domain_phase_mix.exploratory.two_phase_many.convergence_plot_style import (
+    BEST_OBSERVED_BPB_COLOR,
+    PROPORTIONAL_BPB_COLOR,
+    PREDICTED_LINESTYLE,
+    REGMIX_COLOR,
+    VALIDATED_LINESTYLE,
+)
+
 OBJECTIVE_METRIC = "eval/uncheatable_eval/bpb"
 BPB_LABEL_DECIMALS = 3
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -28,7 +36,6 @@ PLOT_BPB_TV_PATH = SCRIPT_DIR / "two_phase_many_regmix_raw_bpb_and_tv.png"
 PLOT_BPB_PHASE_MOVEMENT_PATH = SCRIPT_DIR / "two_phase_many_regmix_raw_bpb_and_phase_movements.png"
 TWO_PHASE_MANY_ALL_CSV = SCRIPT_DIR / "two_phase_many_all_60m_1p2b.csv"
 PROPORTIONAL_RUN_NAME = "baseline_proportional"
-PROPORTIONAL_COLOR = "#4C78A8"
 
 
 def _format_bpb_label(value: float) -> str:
@@ -47,15 +54,16 @@ def _plot_bpb_panel(ax_bpb: plt.Axes, frame: pd.DataFrame, *, proportional_bpb: 
     ax_bpb.plot(
         frame["subset_size"],
         frame["predicted_optimum_value"],
-        color=cmap(0.18),
+        color=REGMIX_COLOR,
         marker="o",
         linewidth=2.2,
+        linestyle=PREDICTED_LINESTYLE,
         label="Predicted BPB",
     )
     ax_bpb.plot(
         frame["subset_size"],
         frame["subset_best_observed_bpb"],
-        color=PROPORTIONAL_COLOR,
+        color=BEST_OBSERVED_BPB_COLOR,
         marker="P",
         linewidth=1.8,
         linestyle=":",
@@ -63,7 +71,7 @@ def _plot_bpb_panel(ax_bpb: plt.Axes, frame: pd.DataFrame, *, proportional_bpb: 
     )
     ax_bpb.axhline(
         proportional_bpb,
-        color=PROPORTIONAL_COLOR,
+        color=PROPORTIONAL_BPB_COLOR,
         linewidth=1.5,
         linestyle="--",
         alpha=0.95,
@@ -77,7 +85,7 @@ def _plot_bpb_panel(ax_bpb: plt.Axes, frame: pd.DataFrame, *, proportional_bpb: 
         xytext=(-6, 8),
         ha="right",
         fontsize=8,
-        color=PROPORTIONAL_COLOR,
+        color=PROPORTIONAL_BPB_COLOR,
         bbox={
             "boxstyle": "round,pad=0.18",
             "facecolor": "white",
@@ -91,11 +99,11 @@ def _plot_bpb_panel(ax_bpb: plt.Axes, frame: pd.DataFrame, *, proportional_bpb: 
     ax_bpb.plot(
         validated["subset_size"],
         validated["actual_validated_bpb"],
-        color=cmap(0.86),
+        color=REGMIX_COLOR,
         marker="X",
         markersize=8,
         linewidth=1.8,
-        linestyle="--",
+        linestyle=VALIDATED_LINESTYLE,
         label="Validated BPB",
     )
     validated_sizes = validated["subset_size"].to_numpy(dtype=float)
@@ -121,7 +129,7 @@ def _plot_bpb_panel(ax_bpb: plt.Axes, frame: pd.DataFrame, *, proportional_bpb: 
             xytext=(x_offset, y_offset),
             ha="center",
             fontsize=8,
-            color=cmap(0.88),
+            color=REGMIX_COLOR,
             bbox={
                 "boxstyle": "round,pad=0.18",
                 "facecolor": "white",

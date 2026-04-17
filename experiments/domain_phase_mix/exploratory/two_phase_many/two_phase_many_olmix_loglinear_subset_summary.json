@@ -112,9 +112,9 @@
         }
       },
       "optimum_move_mean_phase_tv_vs_prev": null,
-      "actual_validated_bpb": null,
-      "validated_prediction_error": null,
-      "validated_regret_at_1": null
+      "actual_validated_bpb": 1.396655559539795,
+      "validated_prediction_error": 1.1295268749736471,
+      "validated_regret_at_1": 0.33945679664611816
     },
     {
       "subset_size": 40,
@@ -224,9 +224,9 @@
         }
       },
       "optimum_move_mean_phase_tv_vs_prev": 0.8096939209008741,
-      "actual_validated_bpb": null,
-      "validated_prediction_error": null,
-      "validated_regret_at_1": null
+      "actual_validated_bpb": 1.3776689767837524,
+      "validated_prediction_error": 0.4380611916700353,
+      "validated_regret_at_1": 0.3204702138900757
     },
     {
       "subset_size": 60,
@@ -336,9 +336,9 @@
         }
       },
       "optimum_move_mean_phase_tv_vs_prev": 0.6072378275945245,
-      "actual_validated_bpb": null,
-      "validated_prediction_error": null,
-      "validated_regret_at_1": null
+      "actual_validated_bpb": 1.6577861309051514,
+      "validated_prediction_error": 0.7926282813264948,
+      "validated_regret_at_1": 0.6005873680114746
     },
     {
       "subset_size": 80,
@@ -448,9 +448,9 @@
         }
       },
       "optimum_move_mean_phase_tv_vs_prev": 0.2566797321434813,
-      "actual_validated_bpb": null,
-      "validated_prediction_error": null,
-      "validated_regret_at_1": null
+      "actual_validated_bpb": 2.4094440937042236,
+      "validated_prediction_error": 1.6918474992901982,
+      "validated_regret_at_1": 1.3522453308105469
     },
     {
       "subset_size": 100,
@@ -560,9 +560,9 @@
         }
       },
       "optimum_move_mean_phase_tv_vs_prev": 0.2500482408511729,
-      "actual_validated_bpb": null,
-      "validated_prediction_error": null,
-      "validated_regret_at_1": null
+      "actual_validated_bpb": 2.7397072315216064,
+      "validated_prediction_error": 1.9333096103473193,
+      "validated_regret_at_1": 1.6825084686279297
     },
     {
       "subset_size": 140,
@@ -672,9 +672,9 @@
         }
       },
       "optimum_move_mean_phase_tv_vs_prev": 0.6164679771106404,
-      "actual_validated_bpb": null,
-      "validated_prediction_error": null,
-      "validated_regret_at_1": null
+      "actual_validated_bpb": 1.0672856569290161,
+      "validated_prediction_error": -0.012646712458728837,
+      "validated_regret_at_1": 0.010086894035339355
     },
     {
       "subset_size": 180,
@@ -784,9 +784,9 @@
         }
       },
       "optimum_move_mean_phase_tv_vs_prev": 0.037481225112325836,
-      "actual_validated_bpb": null,
-      "validated_prediction_error": null,
-      "validated_regret_at_1": null
+      "actual_validated_bpb": 1.0671730041503906,
+      "validated_prediction_error": -0.011004135260171077,
+      "validated_regret_at_1": 0.009974241256713867
     },
     {
       "subset_size": 220,
@@ -896,9 +896,9 @@
         }
       },
       "optimum_move_mean_phase_tv_vs_prev": 0.44053035962244935,
-      "actual_validated_bpb": null,
-      "validated_prediction_error": null,
-      "validated_regret_at_1": null
+      "actual_validated_bpb": 2.331575870513916,
+      "validated_prediction_error": 1.4500075684223066,
+      "validated_regret_at_1": 1.2743771076202393
     },
     {
       "subset_size": 242,
@@ -1008,9 +1008,9 @@
         }
       },
       "optimum_move_mean_phase_tv_vs_prev": 0.11357224778761892,
-      "actual_validated_bpb": null,
-      "validated_prediction_error": null,
-      "validated_regret_at_1": null
+      "actual_validated_bpb": 2.534581422805786,
+      "validated_prediction_error": 1.7273942455822375,
+      "validated_regret_at_1": 1.4773826599121094
     }
   ]
 }

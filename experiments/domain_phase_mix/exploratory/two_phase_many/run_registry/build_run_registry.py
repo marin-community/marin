@@ -3,7 +3,7 @@
 
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["fsspec", "pandas"]
+# dependencies = ["fsspec", "pandas", "torch"]
 # ///
 """Build a canonical two-phase-many run registry.
 
@@ -49,6 +49,16 @@ from experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_fixed_
 from experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_fixed_subset_study import (
     build_run_specs as build_run00097_300m_fixed_subset_run_specs,
 )
+from experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline import (
+    build_run_spec as build_stratified_run_spec,
+)
+from experiments.domain_phase_mix.qsplit240_replay import build_qsplit240_replay_run_specs
+from experiments.domain_phase_mix.scaling_study_recipes import (
+    ScalingStudyCell,
+    ScalingStudyCellStatus,
+    ScalingStudyPath,
+    build_strong_tier_cells,
+)
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import STRATIFIED_RUN_ID, STRATIFIED_RUN_NAME
 from experiments.domain_phase_mix.two_phase_many_genericfamily_penalty_raw_optima_baselines import (
     genericfamily_penalty_raw_optimum_summaries,
@@ -58,6 +68,10 @@ from experiments.domain_phase_mix.two_phase_many_genericfamily_power_family_pena
 )
 from experiments.domain_phase_mix.two_phase_many_genericfamily_power_family_penalty_no_l2_raw_subset_optima import (
     genericfamily_power_family_penalty_no_l2_raw_subset_optima_summaries,
+)
+from experiments.domain_phase_mix.two_phase_many_metric_objective_raw_optima import (
+    METRIC_OBJECTIVE_RAW_OPTIMA_SOURCE_EXPERIMENT,
+    metric_objective_raw_optimum_summaries,
 )
 from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_subset_optima import (
     OLMIX_LOGLINEAR_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
@@ -73,6 +87,7 @@ TWO_PHASE_MANY_DIR = SCRIPT_DIR.parent
 OUTPUT_LOGICAL_RUNS_CSV = SCRIPT_DIR / "logical_runs.csv"
 OUTPUT_ATTEMPTS_CSV = SCRIPT_DIR / "run_attempts.csv"
 OUTPUT_LIVE_WATCHLIST_CSV = SCRIPT_DIR / "live_watchlist.csv"
+OUTPUT_STRONG_TIER_CHILD_JOBS_CSV = SCRIPT_DIR / "strong_tier_child_jobs.csv"
 OUTPUT_SUMMARY_JSON = SCRIPT_DIR / "summary.json"
 README_PATH = SCRIPT_DIR / "README.md"
 SCRATCH_DIR = Path(__file__).resolve().parents[5] / "scratch"
@@ -90,6 +105,7 @@ DEFAULT_QSPLIT300M_SHARD_COUNT = 8
 OBJECTIVE_METRIC = "eval/uncheatable_eval/bpb"
 RUN_NAME_PATTERN = re.compile(r"run_\d{5}$")
 DEFAULT_LIVE_STATUS_TIMEOUT = 10
+STRONG_TIER_PARENT_JOB_ID = "/calvinxu/dm-strong-tier-scaling-study-20260415-235849"
 
 
 @dataclass(frozen=True)
@@ -184,6 +200,14 @@ FAMILY_METADATA = {
         objective_metric=OBJECTIVE_METRIC,
         resubmit_supported=True,
     ),
+    "grp_no_l2_metric_objective_raw_optima": FamilyMetadata(
+        family="grp_no_l2_metric_objective_raw_optima",
+        scale="60m_1p2b",
+        launcher_module="experiments.domain_phase_mix.launch_two_phase_many_metric_objective_raw_optima",
+        resubmit_scope="run",
+        objective_metric=OBJECTIVE_METRIC,
+        resubmit_supported=True,
+    ),
     "regmix_raw_subset_optima": FamilyMetadata(
         family="regmix_raw_subset_optima",
         scale="60m_1p2b",
@@ -208,6 +232,38 @@ FAMILY_METADATA = {
         objective_metric=OBJECTIVE_METRIC,
         resubmit_supported=True,
     ),
+    "strong_tier_qsplit_representative12": FamilyMetadata(
+        family="strong_tier_qsplit_representative12",
+        scale="mixed",
+        launcher_module="experiments.domain_phase_mix.launch_two_phase_many_strong_tier_scaling_study",
+        resubmit_scope="cell",
+        objective_metric=OBJECTIVE_METRIC,
+        resubmit_supported=True,
+    ),
+    "strong_tier_stratified": FamilyMetadata(
+        family="strong_tier_stratified",
+        scale="mixed",
+        launcher_module="experiments.domain_phase_mix.launch_two_phase_many_strong_tier_scaling_study",
+        resubmit_scope="cell",
+        objective_metric=OBJECTIVE_METRIC,
+        resubmit_supported=True,
+    ),
+    "strong_tier_qsplit_baselines3_holdout": FamilyMetadata(
+        family="strong_tier_qsplit_baselines3_holdout",
+        scale="1_2b_24b",
+        launcher_module="experiments.domain_phase_mix.launch_two_phase_many_strong_tier_scaling_study",
+        resubmit_scope="cell",
+        objective_metric=OBJECTIVE_METRIC,
+        resubmit_supported=True,
+    ),
+    "strong_tier_stratified_holdout": FamilyMetadata(
+        family="strong_tier_stratified_holdout",
+        scale="1_2b_24b",
+        launcher_module="experiments.domain_phase_mix.launch_two_phase_many_strong_tier_scaling_study",
+        resubmit_scope="cell",
+        objective_metric=OBJECTIVE_METRIC,
+        resubmit_supported=True,
+    ),
 }
 
 TRACKED_LIVE_JOBS = (
@@ -229,15 +285,6 @@ TRACKED_LIVE_JOBS = (
         resubmit_hint=(
             "--panel baselines3 --shard-count 3 --shard-index 2 --max-concurrent 1 "
             "--tpu-type v5p-8 --tpu-region us-east5 --tpu-zone us-east5-a"
-        ),
-    ),
-    LiveJobSpec(
-        job_id="/calvinxu/dm-olmix-loglinear-subset-optima-20260414-174548",
-        label="olmix-subset",
-        family="olmix_loglinear_subset_optima",
-        launcher_module="experiments.domain_phase_mix.launch_two_phase_many_olmix_loglinear_subset_optima",
-        resubmit_hint=(
-            "--subset-sizes all --max-concurrent 4 " "--tpu-type v5p-8 --tpu-region us-east5 --tpu-zone us-east5-a"
         ),
     ),
     LiveJobSpec(
@@ -290,6 +337,13 @@ TRACKED_LIVE_JOBS = (
         family="stratified_1_2b",
         launcher_module="experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline",
         resubmit_hint="--scale 1_2b_24b",
+    ),
+    LiveJobSpec(
+        job_id=STRONG_TIER_PARENT_JOB_ID,
+        label="strong-tier-scaling-study",
+        family="strong_tier_scaling_study",
+        launcher_module="experiments.domain_phase_mix.launch_two_phase_many_strong_tier_scaling_study",
+        resubmit_hint="--max-concurrent 91",
     ),
 )
 
@@ -344,6 +398,14 @@ def _read_optional_jsonl_last_record(path: str) -> dict[str, Any] | None:
     return json.loads(lines[-1])
 
 
+def _read_optional_tracker_summary(path: str) -> dict[str, Any] | None:
+    record = _read_optional_jsonl_last_record(path)
+    if record is None:
+        return None
+    summary = record.get("summary")
+    return summary if isinstance(summary, dict) else None
+
+
 def _status_updated(fs: fsspec.AbstractFileSystem, path: str) -> str | None:
     try:
         info = fs.info(path)
@@ -377,6 +439,7 @@ def _scan_checkpoint_attempts(
     run_name: str,
     run_id: int | None,
     objective_metric: str,
+    registry_id: str | None = None,
 ) -> list[dict[str, Any]]:
     attempts: list[dict[str, Any]] = []
     for region in CHECKPOINT_REGIONS:
@@ -388,9 +451,15 @@ def _scan_checkpoint_attempts(
             with fsspec.open(status_path, "r") as handle:
                 executor_status = handle.read().strip()
             metrics_payload = _read_optional_jsonl_last_record(f"{checkpoint_root}/checkpoints/eval_metrics.jsonl")
+            tracker_summary = _read_optional_tracker_summary(f"{checkpoint_root}/tracker_metrics.jsonl")
+            objective_metric_value = None
+            if metrics_payload is not None and isinstance(metrics_payload.get(objective_metric), int | float):
+                objective_metric_value = float(metrics_payload[objective_metric])
+            elif tracker_summary is not None and isinstance(tracker_summary.get(objective_metric), int | float):
+                objective_metric_value = float(tracker_summary[objective_metric])
             attempts.append(
                 {
-                    "registry_id": f"{family}:{run_name}",
+                    "registry_id": registry_id or f"{family}:{run_name}",
                     "family": family,
                     "source_experiment": source_experiment,
                     "run_name": run_name,
@@ -403,11 +472,7 @@ def _scan_checkpoint_attempts(
                     "status_updated": _status_updated(fs, status_path),
                     "has_eval_metrics": metrics_payload is not None,
                     "objective_metric": objective_metric,
-                    "objective_metric_value": (
-                        float(metrics_payload[objective_metric])
-                        if metrics_payload is not None and isinstance(metrics_payload.get(objective_metric), int | float)
-                        else None
-                    ),
+                    "objective_metric_value": objective_metric_value,
                 }
             )
     return attempts
@@ -713,6 +778,54 @@ def _olmix_subset_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     )
 
 
+def _metric_objective_raw_optima_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    family = "grp_no_l2_metric_objective_raw_optima"
+    metadata = FAMILY_METADATA[family]
+    summaries = [summary.__dict__ for summary in metric_objective_raw_optimum_summaries()]
+    logical_rows: list[dict[str, Any]] = []
+    all_attempts: list[dict[str, Any]] = []
+    for summary in summaries:
+        attempts = _scan_checkpoint_attempts(
+            family=family,
+            source_experiment=METRIC_OBJECTIVE_RAW_OPTIMA_SOURCE_EXPERIMENT,
+            run_name=str(summary["run_name"]),
+            run_id=int(summary["run_id"]),
+            objective_metric=str(summary["metric_key"]),
+        )
+        all_attempts.extend(attempts)
+        canonical = _canonical_attempt(attempts)
+        logical_rows.append(
+            {
+                "registry_id": f"{family}:{summary['run_name']}",
+                "family": family,
+                "scale": metadata.scale,
+                "source_experiment": METRIC_OBJECTIVE_RAW_OPTIMA_SOURCE_EXPERIMENT,
+                "run_id": int(summary["run_id"]),
+                "run_name": str(summary["run_name"]),
+                "wandb_run_id": None if canonical is None else canonical["wandb_run_id"],
+                "checkpoint_root": None if canonical is None else canonical["checkpoint_root"],
+                "objective_metric": str(summary["metric_key"]),
+                "objective_metric_value": None if canonical is None else canonical["objective_metric_value"],
+                "canonical_attempt_root": None if canonical is None else canonical["attempt_root"],
+                "attempt_count": len(attempts),
+                "successful_attempt_count": sum(1 for attempt in attempts if attempt["executor_status"] == "SUCCESS"),
+                "launcher_module": metadata.launcher_module,
+                "resubmit_supported": metadata.resubmit_supported,
+                "resubmit_scope": metadata.resubmit_scope,
+                "resubmit_selector": f"--slugs {summary['slug']}",
+                "resubmit_hint": (
+                    f"--slugs {summary['slug']} "
+                    "--max-concurrent 1 --tpu-type v5p-8 --tpu-region us-east5 --tpu-zone us-east5-a"
+                ),
+                "logical_status": (
+                    "planned" if canonical is None else _normalize_logical_status(str(canonical["executor_status"]))
+                ),
+                "source_status": None if canonical is None else canonical["executor_status"],
+            }
+        )
+    return pd.DataFrame(logical_rows), all_attempts
+
+
 def _regmix_subset_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     summaries = [summary.__dict__ for summary in regmix_raw_subset_optima_summaries()]
     return _family_rows_from_attempt_scan(
@@ -727,6 +840,131 @@ def _regmix_subset_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
             ),
         ),
     )
+
+
+def _strong_tier_family(cell: ScalingStudyCell) -> str:
+    if cell.path == ScalingStudyPath.QSPLIT_REPRESENTATIVE12:
+        return "strong_tier_qsplit_representative12"
+    if cell.path == ScalingStudyPath.STRATIFIED:
+        return "strong_tier_stratified"
+    if cell.path == ScalingStudyPath.QSPLIT_BASELINES3_HOLDOUT:
+        return "strong_tier_qsplit_baselines3_holdout"
+    if cell.path == ScalingStudyPath.STRATIFIED_HOLDOUT:
+        return "strong_tier_stratified_holdout"
+    raise ValueError(f"Unsupported strong-tier cell path: {cell.path!r}")
+
+
+def _strong_tier_resubmit_hint(cell: ScalingStudyCell) -> tuple[str, str]:
+    selector = f"path={cell.path.value},name_prefix={cell.name_prefix}"
+    hint = (
+        "uv run --with torch python "
+        "experiments/domain_phase_mix/exploratory/two_phase_many/run_registry/../../../../../scratch/"
+        "20260416-0023_relaunch_strong_tier_cell.py "
+        f"--path {cell.path.value} "
+        f"--name-prefix {cell.name_prefix}"
+    )
+    return selector, hint
+
+
+def _strong_tier_qsplit_run_specs(cell: ScalingStudyCell) -> list[dict[str, Any]]:
+    return [
+        spec.__dict__
+        for spec in build_qsplit240_replay_run_specs(
+            cohort=cell.cohort,
+            model_family=cell.model_family,
+            experiment_budget=cell.experiment_budget,
+            target_budget=cell.target_budget,
+            target_budget_multiplier=cell.target_budget_multiplier,
+            num_train_steps=cell.num_train_steps,
+            panel=cell.panel or "",
+        )
+    ]
+
+
+def _strong_tier_stratified_run_spec(cell: ScalingStudyCell) -> dict[str, Any]:
+    return build_stratified_run_spec(
+        scale=cell.scale,
+        experiment_budget=cell.experiment_budget,
+        target_budget=cell.target_budget,
+        target_budget_multiplier=cell.target_budget_multiplier,
+        cohort=cell.cohort,
+    ).__dict__
+
+
+def _strong_tier_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    logical_rows: list[dict[str, Any]] = []
+    all_attempts: list[dict[str, Any]] = []
+    for cell in build_strong_tier_cells():
+        family = _strong_tier_family(cell)
+        metadata = FAMILY_METADATA[family]
+        selector, resubmit_hint = _strong_tier_resubmit_hint(cell)
+        if cell.path in {ScalingStudyPath.QSPLIT_REPRESENTATIVE12, ScalingStudyPath.QSPLIT_BASELINES3_HOLDOUT}:
+            run_specs = _strong_tier_qsplit_run_specs(cell)
+        else:
+            run_specs = [_strong_tier_stratified_run_spec(cell)]
+
+        for run_spec in run_specs:
+            registry_id = f"{family}:{cell.name_prefix}:{run_spec['run_name']}"
+            attempts = _scan_checkpoint_attempts(
+                family=family,
+                source_experiment=cell.name_prefix,
+                run_name=str(run_spec["run_name"]),
+                run_id=int(run_spec["run_id"]),
+                objective_metric=metadata.objective_metric,
+                registry_id=registry_id,
+            )
+            all_attempts.extend(attempts)
+            canonical = _canonical_attempt(attempts)
+            logical_rows.append(
+                {
+                    "registry_id": registry_id,
+                    "family": family,
+                    "scale": cell.scale.value,
+                    "source_experiment": cell.name_prefix,
+                    "source_name_prefix": cell.source_name_prefix,
+                    "run_id": int(run_spec["run_id"]),
+                    "run_name": str(run_spec["run_name"]),
+                    "wandb_run_id": None if canonical is None else canonical["wandb_run_id"],
+                    "checkpoint_root": None if canonical is None else canonical["checkpoint_root"],
+                    "objective_metric": metadata.objective_metric,
+                    "objective_metric_value": None if canonical is None else canonical["objective_metric_value"],
+                    "canonical_attempt_root": None if canonical is None else canonical["attempt_root"],
+                    "attempt_count": len(attempts),
+                    "successful_attempt_count": sum(
+                        1 for attempt in attempts if attempt["executor_status"] == "SUCCESS"
+                    ),
+                    "launcher_module": metadata.launcher_module,
+                    "resubmit_supported": metadata.resubmit_supported,
+                    "resubmit_scope": metadata.resubmit_scope,
+                    "resubmit_selector": selector,
+                    "resubmit_hint": resubmit_hint,
+                    "logical_status": (
+                        "planned" if canonical is None else _normalize_logical_status(str(canonical["executor_status"]))
+                    ),
+                    "source_status": None if canonical is None else canonical["executor_status"],
+                    "study_parent_job_id": STRONG_TIER_PARENT_JOB_ID,
+                    "study_cell_status": cell.status.value,
+                    "study_path": cell.path.value,
+                    "study_cohort": cell.cohort,
+                    "study_panel": cell.panel,
+                    "experiment_budget": cell.experiment_budget,
+                    "target_budget": cell.target_budget,
+                    "target_budget_multiplier": cell.target_budget_multiplier,
+                    "num_train_steps": cell.num_train_steps,
+                    "batch_size": cell.batch_size,
+                    "seq_len": cell.seq_len,
+                    "tpu_type": cell.tpu_type,
+                    "tpu_regions": ",".join(cell.tpu_regions),
+                    "tpu_zone": cell.tpu_zone,
+                    "model_family": cell.model_family,
+                    "candidate_run_name": run_spec.get("candidate_run_name"),
+                    "candidate_source_experiment": run_spec.get("candidate_source_experiment"),
+                    "is_new_submission": cell.status == ScalingStudyCellStatus.NEW,
+                    "is_reused_submission": cell.status == ScalingStudyCellStatus.REUSED,
+                    "is_holdout_only": cell.status == ScalingStudyCellStatus.HOLDOUT_ONLY,
+                }
+            )
+    return pd.DataFrame(logical_rows), all_attempts
 
 
 def _live_job_status(job_id: str, *, timeout: int) -> dict[str, Any]:
@@ -816,6 +1054,113 @@ def _live_watchlist_frame(*, include_live_status: bool, live_status_timeout: int
     return pd.DataFrame(rows)
 
 
+def _child_job_frame(*, include_live_status: bool, live_status_timeout: int) -> pd.DataFrame:
+    if not include_live_status:
+        return pd.DataFrame(
+            columns=[
+                "parent_job_id",
+                "job_id",
+                "state",
+                "submitted_at_epoch_ms",
+                "task_count",
+                "completed_count",
+                "failure_count",
+                "preemption_count",
+                "pending_reason",
+                "tpu_variant",
+                "tpu_count",
+                "run_stem",
+            ]
+        )
+
+    command = [
+        "uv",
+        "run",
+        "iris",
+        "--config",
+        "lib/iris/examples/marin.yaml",
+        "job",
+        "list",
+        "--json",
+        "--prefix",
+        STRONG_TIER_PARENT_JOB_ID,
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=Path(__file__).resolve().parents[5],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=live_status_timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return pd.DataFrame(
+            [
+                {
+                    "parent_job_id": STRONG_TIER_PARENT_JOB_ID,
+                    "job_id": pd.NA,
+                    "state": "timeout",
+                    "submitted_at_epoch_ms": pd.NA,
+                    "task_count": pd.NA,
+                    "completed_count": pd.NA,
+                    "failure_count": pd.NA,
+                    "preemption_count": pd.NA,
+                    "pending_reason": f"iris job list timed out after {live_status_timeout}s",
+                    "tpu_variant": pd.NA,
+                    "tpu_count": pd.NA,
+                    "run_stem": pd.NA,
+                }
+            ]
+        )
+    if result.returncode != 0:
+        return pd.DataFrame(
+            [
+                {
+                    "parent_job_id": STRONG_TIER_PARENT_JOB_ID,
+                    "job_id": pd.NA,
+                    "state": "unavailable",
+                    "submitted_at_epoch_ms": pd.NA,
+                    "task_count": pd.NA,
+                    "completed_count": pd.NA,
+                    "failure_count": pd.NA,
+                    "preemption_count": pd.NA,
+                    "pending_reason": result.stderr.strip() or result.stdout.strip(),
+                    "tpu_variant": pd.NA,
+                    "tpu_count": pd.NA,
+                    "run_stem": pd.NA,
+                }
+            ]
+        )
+
+    payload = json.loads(result.stdout)
+    rows: list[dict[str, Any]] = []
+    for job in payload:
+        if job["job_id"] == STRONG_TIER_PARENT_JOB_ID:
+            continue
+        variant = job.get("resources", {}).get("device", {}).get("tpu", {}).get("variant")
+        count = job.get("resources", {}).get("device", {}).get("tpu", {}).get("count")
+        stem = str(job["job_id"]).rsplit("/", 1)[-1]
+        stem = stem.split("-", 1)[0]
+        rows.append(
+            {
+                "parent_job_id": STRONG_TIER_PARENT_JOB_ID,
+                "job_id": job["job_id"],
+                "state": job["state"],
+                "submitted_at_epoch_ms": job.get("submitted_at", {}).get("epoch_ms"),
+                "task_count": job.get("task_count"),
+                "completed_count": job.get("completed_count"),
+                "failure_count": job.get("failure_count"),
+                "preemption_count": job.get("preemption_count"),
+                "pending_reason": job.get("pending_reason", ""),
+                "tpu_variant": variant,
+                "tpu_count": count,
+                "run_stem": stem,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _write_readme() -> None:
     README_PATH.write_text(
         """# Two-Phase-Many Run Registry
@@ -826,6 +1171,7 @@ Files:
 - `logical_runs.csv`: one row per conceptual run
 - `run_attempts.csv`: one row per discovered checkpoint-backed attempt
 - `live_watchlist.csv`: current parent jobs we are actively babysitting
+- `strong_tier_child_jobs.csv`: raw Iris child-job snapshot for the active strong-tier launch
 - `summary.json`: aggregate counts for quick handoff checks
 
 Design:
@@ -840,6 +1186,7 @@ Backfill policy:
 
 Operational notes:
 - `live_watchlist.csv` is best-effort and slower because each Iris status query establishes a controller tunnel
+- `strong_tier_child_jobs.csv` is a raw operational snapshot; use `logical_runs.csv` for analysis joins
 - for a fast deterministic refresh, use `--no-include-live-status`
 """
     )
@@ -855,7 +1202,14 @@ def build_registry(
         _load_run00097_fixed_subset_rows(),
     ]
     attempts: list[dict[str, Any]] = []
-    for builder in (_penalty300m_rows, _no_l2_subset_rows, _olmix_subset_rows, _regmix_subset_rows):
+    for builder in (
+        _penalty300m_rows,
+        _no_l2_subset_rows,
+        _olmix_subset_rows,
+        _metric_objective_raw_optima_rows,
+        _regmix_subset_rows,
+        _strong_tier_rows,
+    ):
         logical_frame, family_attempts = builder()
         logical_frames.append(logical_frame)
         attempts.extend(family_attempts)
@@ -873,7 +1227,11 @@ def build_registry(
         include_live_status=include_live_status,
         live_status_timeout=live_status_timeout,
     )
-    return logical_runs, run_attempts, live_watchlist
+    strong_tier_child_jobs = _child_job_frame(
+        include_live_status=include_live_status,
+        live_status_timeout=live_status_timeout,
+    )
+    return logical_runs, run_attempts, live_watchlist, strong_tier_child_jobs
 
 
 def _parse_args() -> argparse.Namespace:
@@ -893,11 +1251,17 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _summary(logical_runs: pd.DataFrame, run_attempts: pd.DataFrame, live_watchlist: pd.DataFrame) -> dict[str, Any]:
+def _summary(
+    logical_runs: pd.DataFrame,
+    run_attempts: pd.DataFrame,
+    live_watchlist: pd.DataFrame,
+    strong_tier_child_jobs: pd.DataFrame,
+) -> dict[str, Any]:
     return {
         "logical_run_count": len(logical_runs),
         "attempt_count": len(run_attempts),
         "live_watch_count": len(live_watchlist),
+        "strong_tier_child_job_count": len(strong_tier_child_jobs),
         "logical_runs_by_family": {
             str(key): int(value) for key, value in logical_runs.groupby("family").size().sort_index().items()
         },
@@ -907,6 +1271,12 @@ def _summary(logical_runs: pd.DataFrame, run_attempts: pd.DataFrame, live_watchl
         "live_jobs_by_state": {
             str(key): int(value) for key, value in live_watchlist.groupby("job_state").size().sort_index().items()
         },
+        "strong_tier_child_jobs_by_state": (
+            {str(key): int(value) for key, value in strong_tier_child_jobs.groupby("state").size().sort_index().items()}
+            if not strong_tier_child_jobs.empty
+            else {}
+        ),
+        "strong_tier_new_runs": int(logical_runs.get("is_new_submission", pd.Series(dtype=bool)).fillna(False).sum()),
         "qsplit240_300m_incomplete_runs": sorted(
             logical_runs.loc[
                 (logical_runs["family"] == "qsplit240_300m_6b") & (logical_runs["logical_status"] != "completed"),
@@ -938,7 +1308,7 @@ def _summary(logical_runs: pd.DataFrame, run_attempts: pd.DataFrame, live_watchl
 
 def main() -> None:
     args = _parse_args()
-    logical_runs, run_attempts, live_watchlist = build_registry(
+    logical_runs, run_attempts, live_watchlist, strong_tier_child_jobs = build_registry(
         include_live_status=args.include_live_status,
         live_status_timeout=args.live_status_timeout,
     )
@@ -946,13 +1316,19 @@ def main() -> None:
     logical_runs.to_csv(OUTPUT_LOGICAL_RUNS_CSV, index=False)
     run_attempts.to_csv(OUTPUT_ATTEMPTS_CSV, index=False)
     live_watchlist.to_csv(OUTPUT_LIVE_WATCHLIST_CSV, index=False)
+    strong_tier_child_jobs.to_csv(OUTPUT_STRONG_TIER_CHILD_JOBS_CSV, index=False)
     OUTPUT_SUMMARY_JSON.write_text(
-        json.dumps(_summary(logical_runs, run_attempts, live_watchlist), indent=2, sort_keys=True)
+        json.dumps(
+            _summary(logical_runs, run_attempts, live_watchlist, strong_tier_child_jobs),
+            indent=2,
+            sort_keys=True,
+        )
     )
     _write_readme()
     print(f"Wrote {OUTPUT_LOGICAL_RUNS_CSV}")
     print(f"Wrote {OUTPUT_ATTEMPTS_CSV}")
     print(f"Wrote {OUTPUT_LIVE_WATCHLIST_CSV}")
+    print(f"Wrote {OUTPUT_STRONG_TIER_CHILD_JOBS_CSV}")
     print(f"Wrote {OUTPUT_SUMMARY_JSON}")
     print(f"Wrote {README_PATH}")
 

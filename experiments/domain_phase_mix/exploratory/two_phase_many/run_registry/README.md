@@ -6,6 +6,7 @@ Files:
 - `logical_runs.csv`: one row per conceptual run
 - `run_attempts.csv`: one row per discovered checkpoint-backed attempt
 - `live_watchlist.csv`: current parent jobs we are actively babysitting
+- `strong_tier_child_jobs.csv`: raw Iris child-job snapshot for the active strong-tier launch
 - `summary.json`: aggregate counts for quick handoff checks
 
 Design:
@@ -20,4 +21,5 @@ Backfill policy:
 
 Operational notes:
 - `live_watchlist.csv` is best-effort and slower because each Iris status query establishes a controller tunnel
+- `strong_tier_child_jobs.csv` is a raw operational snapshot; use `logical_runs.csv` for analysis joins
 - for a fast deterministic refresh, use `--no-include-live-status`

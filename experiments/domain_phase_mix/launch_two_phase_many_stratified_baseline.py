@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch a standalone stratified baseline on one scaling-study model size."""
+"""Launch a standalone stratified baseline on one explicit scaling-study cell."""
 
 from __future__ import annotations
 
@@ -10,35 +10,27 @@ import logging
 import os
 import sys
 from dataclasses import dataclass
-from enum import StrEnum
 
 from fray.cluster import ResourceConfig
-from levanter.main.train_lm import LmConfig
-from levanter.optim import MuonHConfig
-from marin.execution.executor import ExecutorMainConfig, executor_main
+from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main
 
 from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b import QSPLIT240_300M_EVAL_TASKS
-from experiments.domain_phase_mix.proxy_sweep import (
-    REGMIX_1_2B_CHINCHILLA_BUDGET,
-    REGMIX_520M_CHINCHILLA_BUDGET,
-    regmix_1_2b_muonh_base,
-    regmix_1_2b_proxy,
-    regmix_300m_muonh_base,
-    regmix_300m_proxy,
-    regmix_520m_muonh_base,
-    regmix_520m_proxy,
-    regmix_60m_proxy,
-)
 from experiments.domain_phase_mix.qsplit240_replay import (
-    DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
+    DEFAULT_TARGET_BUDGET_MULTIPLIER,
+    Qsplit240ReplayRunSpec,
+    create_run_manifest_step,
     mirror_path,
     normalize_tpu_regions,
     resolve_latest_checkpoint_path,
     resolve_qsplit240_eval_cache_path_for_regions,
 )
+from experiments.domain_phase_mix.scaling_study_recipes import (
+    ScalingStudyScale as StratifiedScale,
+    resolve_scale_spec,
+)
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
-    EXPERIMENT_BUDGET as REGMIX_60M_1P2B_BUDGET,
     STRATIFIED_RUN_NAME,
+    STRATIFIED_RUN_ID,
     create_stratified_weight_config,
     create_two_phase_dolma3_dolmino_top_level_experiment,
 )
@@ -49,76 +41,17 @@ EVAL_DATASETS_CACHE_PATH = "gs://marin-us-central1/raw/eval-datasets/qsplit240-3
 DEFAULT_RESUME_LATEST_CHECKPOINTS = True
 
 
-class StratifiedScale(StrEnum):
-    """Supported scaling-study ladders for the standalone stratified baseline."""
-
-    REGMIX_60M_1P2B = "60m_1p2b"
-    REGMIX_300M_6B = "300m_6b"
-    REGMIX_520M_10P4B = "520m_10p4b"
-    REGMIX_1_2B_24B = "1_2b_24b"
-
-
 @dataclass(frozen=True)
-class StratifiedScaleSpec:
-    """Resolved training recipe for one stratified baseline launch."""
+class StratifiedLaunchArtifacts:
+    """Resolved manifest and training steps for one stratified launch."""
 
-    scale: StratifiedScale
-    name_prefix: str
-    experiment_budget: int
-    model_config: LmConfig
-    optimizer_config: MuonHConfig | None
-    tpu_type: str
-    tpu_regions: tuple[str, ...]
-    tpu_zone: str | None
+    run_spec: Qsplit240ReplayRunSpec
+    run_manifest_step: ExecutorStep
+    training_step: ExecutorStep
 
-
-SCALE_SPECS = {
-    StratifiedScale.REGMIX_60M_1P2B: StratifiedScaleSpec(
-        scale=StratifiedScale.REGMIX_60M_1P2B,
-        name_prefix="pinlin_calvin_xu/data_mixture/ngd3dm2_stratified_60m_1p2b",
-        experiment_budget=REGMIX_60M_1P2B_BUDGET,
-        model_config=regmix_60m_proxy,
-        optimizer_config=None,
-        tpu_type="v5p-8",
-        tpu_regions=DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
-        tpu_zone=None,
-    ),
-    StratifiedScale.REGMIX_300M_6B: StratifiedScaleSpec(
-        scale=StratifiedScale.REGMIX_300M_6B,
-        name_prefix="pinlin_calvin_xu/data_mixture/ngd3dm2_stratified_300m_6b",
-        experiment_budget=6_000_000_000,
-        model_config=regmix_300m_proxy,
-        optimizer_config=regmix_300m_muonh_base,
-        tpu_type="v5p-8",
-        tpu_regions=DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
-        tpu_zone=None,
-    ),
-    StratifiedScale.REGMIX_520M_10P4B: StratifiedScaleSpec(
-        scale=StratifiedScale.REGMIX_520M_10P4B,
-        name_prefix="pinlin_calvin_xu/data_mixture/ngd3dm2_stratified_520m_10p4b",
-        experiment_budget=REGMIX_520M_CHINCHILLA_BUDGET,
-        model_config=regmix_520m_proxy,
-        optimizer_config=regmix_520m_muonh_base,
-        tpu_type="v5p-32",
-        tpu_regions=DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
-        tpu_zone=None,
-    ),
-    StratifiedScale.REGMIX_1_2B_24B: StratifiedScaleSpec(
-        scale=StratifiedScale.REGMIX_1_2B_24B,
-        name_prefix="pinlin_calvin_xu/data_mixture/ngd3dm2_stratified_1_2b_24b",
-        experiment_budget=REGMIX_1_2B_CHINCHILLA_BUDGET,
-        model_config=regmix_1_2b_proxy,
-        optimizer_config=regmix_1_2b_muonh_base,
-        tpu_type="v5p-64",
-        tpu_regions=DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
-        tpu_zone=None,
-    ),
-}
-
-
-def resolve_scale_spec(scale: StratifiedScale) -> StratifiedScaleSpec:
-    """Return the canonical launch recipe for one supported scale."""
-    return SCALE_SPECS[scale]
+    @property
+    def steps(self) -> list[object]:
+        return [self.run_manifest_step, self.training_step]
 
 
 def _parse_args() -> tuple[argparse.Namespace, list[str]]:
@@ -129,6 +62,9 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--tpu-regions")
     parser.add_argument("--tpu-region")
     parser.add_argument("--tpu-zone")
+    parser.add_argument("--experiment-budget", type=int)
+    parser.add_argument("--target-budget", type=int)
+    parser.add_argument("--target-budget-multiplier", type=float, default=DEFAULT_TARGET_BUDGET_MULTIPLIER)
     parser.add_argument("--eval-datasets-cache-path", default=EVAL_DATASETS_CACHE_PATH)
     parser.add_argument(
         "--resume-latest-checkpoints",
@@ -138,22 +74,62 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     return parser.parse_known_args()
 
 
-def main() -> None:
-    args, remaining = _parse_args()
-    sys.argv = [sys.argv[0], *remaining]
+def build_run_spec(
+    *,
+    scale: StratifiedScale,
+    experiment_budget: int,
+    target_budget: int,
+    target_budget_multiplier: float,
+    cohort: str | None = None,
+) -> Qsplit240ReplayRunSpec:
+    """Build a manifest entry for one stratified baseline launch."""
+    spec = resolve_scale_spec(scale)
+    weight_config = create_stratified_weight_config()
+    return Qsplit240ReplayRunSpec(
+        run_id=STRATIFIED_RUN_ID,
+        run_name=STRATIFIED_RUN_NAME,
+        cohort=cohort or f"baseline_stratified_{scale.value}",
+        model_family=spec.model_family,
+        trainer_seed=None,
+        data_seed=STRATIFIED_RUN_ID,
+        simulated_epoch_subset_seed=None,
+        candidate_run_id=STRATIFIED_RUN_ID,
+        candidate_run_name=STRATIFIED_RUN_NAME,
+        candidate_source_experiment=spec.stratified_name_prefix,
+        experiment_budget=experiment_budget,
+        target_budget=target_budget,
+        target_budget_multiplier=target_budget_multiplier,
+        num_train_steps=experiment_budget // (spec.batch_size * spec.seq_len),
+        phase_weights=weight_config.phase_weights,
+    )
 
-    spec = resolve_scale_spec(args.scale)
-    name_prefix = args.name_prefix or spec.name_prefix
-    tpu_type = args.tpu_type or spec.tpu_type
-    tpu_regions = normalize_tpu_regions(args.tpu_region or args.tpu_regions or spec.tpu_regions)
-    tpu_zone = args.tpu_zone or spec.tpu_zone
 
-    if os.getenv("CI") is not None:
-        logger.info("Skipping stratified baseline launch in CI environment for scale %s", spec.scale)
-        return
+def build_launch_artifacts(
+    *,
+    scale: StratifiedScale,
+    name_prefix: str,
+    experiment_budget: int,
+    target_budget: int,
+    target_budget_multiplier: float,
+    tpu_type: str,
+    tpu_regions: tuple[str, ...],
+    tpu_zone: str | None,
+    eval_datasets_cache_path: str,
+    resume_latest_checkpoints: bool,
+    cohort: str | None = None,
+) -> StratifiedLaunchArtifacts:
+    """Resolve the stratified manifest and training step without launching."""
+    spec = resolve_scale_spec(scale)
+    run_spec = build_run_spec(
+        scale=scale,
+        experiment_budget=experiment_budget,
+        target_budget=target_budget,
+        target_budget_multiplier=target_budget_multiplier,
+        cohort=cohort,
+    )
 
     train_kwargs: dict[str, object] = {}
-    if args.resume_latest_checkpoints:
+    if resume_latest_checkpoints:
         latest_checkpoint_path = resolve_latest_checkpoint_path(
             experiment_name_prefix=name_prefix,
             run_name=STRATIFIED_RUN_NAME,
@@ -165,16 +141,28 @@ def main() -> None:
 
     experiment = create_two_phase_dolma3_dolmino_top_level_experiment(
         name=name_prefix,
-        experiment_budget=spec.experiment_budget,
+        experiment_budget=experiment_budget,
+        target_budget=target_budget,
         model_config=spec.model_config,
         optimizer_config=spec.optimizer_config,
         resources=ResourceConfig.with_tpu(tpu_type, regions=list(tpu_regions), zone=tpu_zone),
         eval_harness_tasks=QSPLIT240_300M_EVAL_TASKS,
         eval_datasets_cache_path=resolve_qsplit240_eval_cache_path_for_regions(
             tpu_regions,
-            args.eval_datasets_cache_path,
+            eval_datasets_cache_path,
         ),
         runtime_cache_region=tpu_regions if len(tpu_regions) > 1 else tpu_regions[0],
+    )
+    run_manifest_step = create_run_manifest_step(
+        step_name_prefix=name_prefix,
+        experiment_name=name_prefix,
+        model_family=spec.model_family,
+        experiment_budget=experiment_budget,
+        target_budget=target_budget,
+        target_budget_multiplier=target_budget_multiplier,
+        num_train_steps=run_spec.num_train_steps,
+        eval_tasks=QSPLIT240_300M_EVAL_TASKS,
+        run_specs=[run_spec],
     )
     training_step = experiment.create_training_step(
         weight_config=create_stratified_weight_config(),
@@ -182,17 +170,60 @@ def main() -> None:
         run_name=STRATIFIED_RUN_NAME,
         **train_kwargs,
     )
+    return StratifiedLaunchArtifacts(
+        run_spec=run_spec,
+        run_manifest_step=run_manifest_step,
+        training_step=training_step,
+    )
+
+
+def main() -> None:
+    args, remaining = _parse_args()
+    sys.argv = [sys.argv[0], *remaining]
+
+    spec = resolve_scale_spec(args.scale)
+    name_prefix = args.name_prefix or spec.stratified_name_prefix
+    tpu_type = args.tpu_type or spec.tpu_type
+    tpu_regions = normalize_tpu_regions(args.tpu_region or args.tpu_regions or spec.tpu_regions)
+    tpu_zone = args.tpu_zone or spec.tpu_zone
+    experiment_budget = args.experiment_budget or spec.experiment_budget_for_multiplier(args.target_budget_multiplier)
+    target_budget = args.target_budget or spec.target_budget_for_multiplier(args.target_budget_multiplier)
+    artifacts = build_launch_artifacts(
+        scale=args.scale,
+        name_prefix=name_prefix,
+        experiment_budget=experiment_budget,
+        target_budget=target_budget,
+        target_budget_multiplier=args.target_budget_multiplier,
+        tpu_type=tpu_type,
+        tpu_regions=tpu_regions,
+        tpu_zone=tpu_zone,
+        eval_datasets_cache_path=args.eval_datasets_cache_path,
+        resume_latest_checkpoints=args.resume_latest_checkpoints,
+    )
+    if os.getenv("CI") is not None:
+        logger.info(
+            "Built stratified baseline graph in CI for scale %s with target_budget=%d and multiplier=%.3f; "
+            "skipping executor launch.",
+            spec.scale,
+            target_budget,
+            args.target_budget_multiplier,
+        )
+        return
+
     logger.info(
-        "Launching stratified baseline on %s with budget=%d, tpu=%s, regions=%s, zone=%s",
+        "Launching stratified baseline on %s with budget=%d, target_budget=%d, multiplier=%.3f, "
+        "tpu=%s, regions=%s, zone=%s",
         spec.scale,
-        spec.experiment_budget,
+        experiment_budget,
+        target_budget,
+        args.target_budget_multiplier,
         tpu_type,
         ",".join(tpu_regions),
         tpu_zone,
     )
     executor_main(
         ExecutorMainConfig(max_concurrent=1),
-        steps=[training_step],
+        steps=artifacts.steps,
         description=f"{name_prefix}: {STRATIFIED_RUN_NAME} ({spec.scale})",
     )
 

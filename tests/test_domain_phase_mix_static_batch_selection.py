@@ -3,6 +3,7 @@
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from experiments.domain_phase_mix.exploratory.general_scaling_models import DatasetSpec
 from experiments.domain_phase_mix.exploratory.two_phase_many.dataset_metadata import (
@@ -34,6 +35,11 @@ from experiments.domain_phase_mix.static_batch_selection import (
     run_records_to_dataframe,
     sobol_weight_configs,
     weight_configs_to_tensor,
+)
+from experiments.domain_phase_mix.scaling_study_recipes import (
+    BASE_TARGET_BUDGET,
+    ScalingStudyScale,
+    resolve_scale_spec,
 )
 from experiments.domain_phase_mix.weight_sampler import DirichletSamplingParams, WeightSampler
 
@@ -404,6 +410,40 @@ def test_build_dataset_spec_from_frame_uses_real_epoch_metadata_for_two_phase_ma
     expected_phase_0 = loop.phase_fractions[0] * loop.target_budget / loop.domain_token_counts["dolma3_wikipedia"]
     expected_phase_1 = loop.phase_fractions[1] * loop.target_budget / loop.domain_token_counts["dolma3_wikipedia"]
     np.testing.assert_allclose(spec.epoch_multipliers[:, wikipedia_idx], [expected_phase_0, expected_phase_1])
+
+
+def test_scaling_study_1x_target_budgets_match_across_chinchilla_scales():
+    specs = [
+        resolve_scale_spec(ScalingStudyScale.REGMIX_130M_2P6B),
+        resolve_scale_spec(ScalingStudyScale.REGMIX_300M_6B),
+        resolve_scale_spec(ScalingStudyScale.REGMIX_520M_10P4B),
+        resolve_scale_spec(ScalingStudyScale.REGMIX_1_2B_24B),
+    ]
+    target_budgets = {spec.target_budget_for_multiplier(1.0) for spec in specs}
+
+    assert target_budgets == {BASE_TARGET_BUDGET}
+
+
+def test_scaling_study_target_budget_multipliers_only_change_with_multiplier():
+    spec_130m = resolve_scale_spec(ScalingStudyScale.REGMIX_130M_2P6B)
+    spec_520m = resolve_scale_spec(ScalingStudyScale.REGMIX_520M_10P4B)
+    wikipedia_tokens = build_two_phase_many_loop_config(
+        objective_metric="eval/uncheatable_eval/bpb",
+        name="scaling_study_target_budget_test",
+    ).domain_token_counts["dolma3_wikipedia"]
+    phase_fractions = build_two_phase_many_loop_config(
+        objective_metric="eval/uncheatable_eval/bpb",
+        name="scaling_study_target_budget_test",
+    ).phase_fractions
+
+    epoch_130m_1x = phase_fractions[0] * spec_130m.target_budget_for_multiplier(1.0) / wikipedia_tokens
+    epoch_520m_1x = phase_fractions[0] * spec_520m.target_budget_for_multiplier(1.0) / wikipedia_tokens
+    epoch_130m_half = phase_fractions[0] * spec_130m.target_budget_for_multiplier(0.5) / wikipedia_tokens
+    epoch_520m_double = phase_fractions[0] * spec_520m.target_budget_for_multiplier(2.0) / wikipedia_tokens
+
+    assert epoch_130m_1x == pytest.approx(epoch_520m_1x)
+    assert epoch_130m_half == pytest.approx(epoch_130m_1x * 0.5, abs=1e-9)
+    assert epoch_520m_double == pytest.approx(epoch_520m_1x * 2.0)
 
 
 def test_run_records_to_dataframe_roundtrip_supports_starcoder_metadata():

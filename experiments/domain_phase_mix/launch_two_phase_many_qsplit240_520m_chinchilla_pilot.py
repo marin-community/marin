@@ -24,6 +24,8 @@ from experiments.domain_phase_mix.proxy_sweep import (
     regmix_520m_proxy,
 )
 from experiments.domain_phase_mix.qsplit240_replay import (
+    DEFAULT_TARGET_BUDGET,
+    DEFAULT_TARGET_BUDGET_MULTIPLIER,
     DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
     REPRESENTATIVE12_PANEL,
     build_qsplit240_replay_launch_artifacts,
@@ -38,6 +40,8 @@ logger = logging.getLogger(__name__)
 NAME = "pinlin_calvin_xu/data_mixture/ngd3dm2_qsplit240_520m_chinchilla"
 MODEL_FAMILY = "regmix_520m_proxy"
 EXPERIMENT_BUDGET = REGMIX_520M_CHINCHILLA_BUDGET
+TARGET_BUDGET = DEFAULT_TARGET_BUDGET
+TARGET_BUDGET_MULTIPLIER = DEFAULT_TARGET_BUDGET_MULTIPLIER
 BATCH_SIZE = 256
 SEQ_LEN = 2048
 NUM_TRAIN_STEPS = get_num_train_steps(EXPERIMENT_BUDGET, BATCH_SIZE, SEQ_LEN)
@@ -56,6 +60,8 @@ def build_run_specs(*, panel: str = DEFAULT_PANEL):
         cohort="original_swarm_520m_chinchilla_pilot",
         model_family=MODEL_FAMILY,
         experiment_budget=EXPERIMENT_BUDGET,
+        target_budget=TARGET_BUDGET,
+        target_budget_multiplier=TARGET_BUDGET_MULTIPLIER,
         num_train_steps=NUM_TRAIN_STEPS,
         panel=panel,
     )
@@ -73,6 +79,7 @@ def create_experiment(
     return create_qsplit240_replay_experiment(
         name=name,
         experiment_budget=EXPERIMENT_BUDGET,
+        target_budget=TARGET_BUDGET,
         batch_size=BATCH_SIZE,
         seq_len=SEQ_LEN,
         model_config=regmix_520m_proxy,
@@ -101,6 +108,8 @@ def build_launch_artifacts(
         cohort="original_swarm_520m_chinchilla_pilot",
         model_family=MODEL_FAMILY,
         experiment_budget=EXPERIMENT_BUDGET,
+        target_budget=TARGET_BUDGET,
+        target_budget_multiplier=TARGET_BUDGET_MULTIPLIER,
         num_train_steps=NUM_TRAIN_STEPS,
         batch_size=BATCH_SIZE,
         seq_len=SEQ_LEN,

@@ -36,6 +36,7 @@ from experiments.domain_phase_mix.determinism_analysis import (
     create_manifest_results_step,
 )
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
+    TARGET_BUDGET,
     create_two_phase_dolma3_dolmino_top_level_experiment,
     mirror_marin_path,
 )
@@ -55,6 +56,8 @@ from experiments.domain_phase_mix.two_phase_many_observed_runs import (
 
 DEFAULT_QSPLIT240_EVAL_DATASETS_CACHE_PATH = "gs://marin-us-central1/raw/eval-datasets/qsplit240-300m-6b-expanded-tasks"
 DEFAULT_REGION_AGNOSTIC_TPU_REGIONS = ("us-east5", "us-central1")
+DEFAULT_TARGET_BUDGET = TARGET_BUDGET
+DEFAULT_TARGET_BUDGET_MULTIPLIER = 1.0
 EVAL_DATASETS_CACHE_DEP_ENV_VAR = "MARIN_EVAL_DATASETS_CACHE_DEPENDENCY"
 ALL_PANEL = "all"
 REPRESENTATIVE12_PANEL = "representative12"
@@ -78,6 +81,8 @@ class Qsplit240ReplayRunSpec:
     candidate_run_name: str
     candidate_source_experiment: str
     experiment_budget: int
+    target_budget: int
+    target_budget_multiplier: float
     num_train_steps: int
     phase_weights: dict[str, dict[str, float]]
 
@@ -90,6 +95,8 @@ class SaveRunManifestConfig:
     experiment_name: str
     model_family: str
     experiment_budget: int
+    target_budget: int
+    target_budget_multiplier: float
     num_train_steps: int
     eval_task_aliases: tuple[str, ...]
     run_specs_json: str
@@ -304,6 +311,8 @@ def build_qsplit240_replay_run_specs(
     cohort: str,
     model_family: str,
     experiment_budget: int,
+    target_budget: int,
+    target_budget_multiplier: float,
     num_train_steps: int,
     panel: str = ALL_PANEL,
 ) -> list[Qsplit240ReplayRunSpec]:
@@ -322,6 +331,8 @@ def build_qsplit240_replay_run_specs(
             candidate_run_name=observed.run_name,
             candidate_source_experiment=observed.source_experiment,
             experiment_budget=experiment_budget,
+            target_budget=target_budget,
+            target_budget_multiplier=target_budget_multiplier,
             num_train_steps=num_train_steps,
             phase_weights=observed.phase_weights,
         )
@@ -363,6 +374,8 @@ def save_run_manifest(config: SaveRunManifestConfig) -> None:
         "experiment_name": config.experiment_name,
         "model_family": config.model_family,
         "experiment_budget": config.experiment_budget,
+        "target_budget": config.target_budget,
+        "target_budget_multiplier": config.target_budget_multiplier,
         "num_train_steps": config.num_train_steps,
         "eval_tasks": list(config.eval_task_aliases),
         "n_runs": len(run_specs),
@@ -380,6 +393,8 @@ def create_run_manifest_step(
     experiment_name: str,
     model_family: str,
     experiment_budget: int,
+    target_budget: int,
+    target_budget_multiplier: float,
     num_train_steps: int,
     eval_tasks: tuple[EvalTaskConfig, ...],
     run_specs: list[Qsplit240ReplayRunSpec],
@@ -394,6 +409,8 @@ def create_run_manifest_step(
             experiment_name=experiment_name,
             model_family=model_family,
             experiment_budget=experiment_budget,
+            target_budget=target_budget,
+            target_budget_multiplier=target_budget_multiplier,
             num_train_steps=num_train_steps,
             eval_task_aliases=tuple(task.task_alias for task in eval_tasks),
             run_specs_json=json.dumps([run_spec.__dict__ for run_spec in run_specs], sort_keys=True),
@@ -405,6 +422,7 @@ def create_qsplit240_replay_experiment(
     *,
     name: str,
     experiment_budget: int,
+    target_budget: int,
     batch_size: int,
     seq_len: int,
     model_config: LmConfig,
@@ -429,6 +447,7 @@ def create_qsplit240_replay_experiment(
     return create_two_phase_dolma3_dolmino_top_level_experiment(
         name=name,
         experiment_budget=experiment_budget,
+        target_budget=target_budget,
         batch_size=batch_size,
         seq_len=seq_len,
         model_config=model_config,
@@ -470,6 +489,8 @@ def build_qsplit240_replay_launch_artifacts(
     cohort: str,
     model_family: str,
     experiment_budget: int,
+    target_budget: int,
+    target_budget_multiplier: float,
     num_train_steps: int,
     batch_size: int,
     seq_len: int,
@@ -491,6 +512,7 @@ def build_qsplit240_replay_launch_artifacts(
     experiment = create_qsplit240_replay_experiment(
         name=name_prefix,
         experiment_budget=experiment_budget,
+        target_budget=target_budget,
         batch_size=batch_size,
         seq_len=seq_len,
         model_config=model_config,
@@ -506,6 +528,8 @@ def build_qsplit240_replay_launch_artifacts(
             cohort=cohort,
             model_family=model_family,
             experiment_budget=experiment_budget,
+            target_budget=target_budget,
+            target_budget_multiplier=target_budget_multiplier,
             num_train_steps=num_train_steps,
             panel=panel,
         ),
@@ -523,6 +547,8 @@ def build_qsplit240_replay_launch_artifacts(
         experiment_name=name_prefix,
         model_family=model_family,
         experiment_budget=experiment_budget,
+        target_budget=target_budget,
+        target_budget_multiplier=target_budget_multiplier,
         num_train_steps=num_train_steps,
         eval_tasks=eval_tasks,
         run_specs=run_specs,

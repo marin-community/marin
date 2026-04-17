@@ -50,14 +50,13 @@ from experiments.domain_phase_mix.two_phase_many_genericfamily_retuned_subset_op
     _phase_weights_from_array,
 )
 from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_sl_verb import (
+    OLMIX_SOLVE_METHODS,
     fit_olmix_loglinear_model,
     solve_olmix_loglinear_schedule,
 )
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-CURVE_POINTS_CSV = SCRIPT_DIR / "two_phase_many_olmix_loglinear_subset_curve_points.csv"
-SUMMARY_JSON = SCRIPT_DIR / "two_phase_many_olmix_loglinear_subset_summary.json"
-SUMMARY_MD = SCRIPT_DIR / "two_phase_many_olmix_loglinear_subset.md"
+BASE_STEM = "two_phase_many_olmix_loglinear_subset"
 
 KFOLD_SPLITS = 5
 KFOLD_SEED = 0
@@ -112,17 +111,16 @@ def _lower_tail_optimism(y: np.ndarray, oof_pred: np.ndarray) -> float:
     return float(np.mean(np.maximum(y[tail_idx] - oof_pred[tail_idx], 0.0)))
 
 
-def _solve_fit_optimum(fit, *, phase_names: list[str], domain_names: list[str]) -> tuple[np.ndarray, float, float]:
-    natural_proportions, phase_fractions = _olmix_priors()
-    phase_weights, predicted_objective, regularized_objective = solve_olmix_loglinear_schedule(
-        fit,
-        natural_proportions=natural_proportions,
-        phase_fractions=phase_fractions,
-        phase_names=phase_names,
-        domain_names=domain_names,
+def _output_paths(solver: str) -> tuple[Path, Path, Path]:
+    if solver == "lbfgsb":
+        stem = BASE_STEM
+    else:
+        stem = f"{BASE_STEM}_{solver}"
+    return (
+        SCRIPT_DIR / f"{stem}_curve_points.csv",
+        SCRIPT_DIR / f"{stem}_summary.json",
+        SCRIPT_DIR / f"{stem}.md",
     )
-    weights = _weights_from_phase_weights(phase_weights, domain_names)
-    return weights, float(predicted_objective), float(regularized_objective)
 
 
 def _validated_subset_bpbs() -> dict[int, float]:
@@ -169,7 +167,100 @@ def _apply_realized_validated_bpbs(
     return enriched
 
 
-def _fit_subset_point(subset_size: int) -> dict[str, object]:
+def _rows_with_movements(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    packet = load_generic_family_packet(target=OBJECTIVE_METRIC)
+    prev_weights: np.ndarray | None = None
+    enriched: list[dict[str, object]] = []
+    for row in sorted(rows, key=lambda item: int(item["subset_size"])):
+        current_weights = np.asarray(
+            [
+                [row["phase_weights"]["phase_0"][domain_name] for domain_name in packet.base.domain_names],
+                [row["phase_weights"]["phase_1"][domain_name] for domain_name in packet.base.domain_names],
+            ],
+            dtype=float,
+        )
+        move_tv = None if prev_weights is None else float(_mean_phase_tv_distance(prev_weights, current_weights))
+        enriched_row = dict(row)
+        enriched_row["optimum_move_mean_phase_tv_vs_prev"] = move_tv
+        enriched.append(enriched_row)
+        prev_weights = current_weights
+    return enriched
+
+
+def _load_existing_rows(*, solver: str) -> list[dict[str, object]]:
+    curve_points_csv, summary_json, _ = _output_paths(solver)
+    if summary_json.exists():
+        payload = json.loads(summary_json.read_text())
+        rows = payload.get("rows")
+        if isinstance(rows, list):
+            return rows
+    frame = pd.read_csv(curve_points_csv)
+    if "phase_weights" in frame.columns:
+        frame["phase_weights"] = frame["phase_weights"].map(
+            lambda payload: json.loads(payload) if isinstance(payload, str) and payload else payload
+        )
+    return frame.to_dict(orient="records")
+
+
+def _write_outputs(rows: list[dict[str, object]], *, solver: str) -> None:
+    curve_points_csv, summary_json, summary_md = _output_paths(solver)
+    packet = load_generic_family_packet(target=OBJECTIVE_METRIC)
+    rows = _rows_with_movements(rows)
+    best_observed_bpb = float(np.min(packet.base.y))
+    rows = _apply_realized_validated_bpbs(rows, best_observed_bpb=best_observed_bpb)
+    frame = pd.DataFrame(rows).sort_values("subset_size").reset_index(drop=True)
+    curve_for_csv = frame.copy()
+    curve_for_csv["phase_weights"] = curve_for_csv["phase_weights"].map(json.dumps)
+    curve_for_csv.to_csv(curve_points_csv, index=False)
+    summary_json.write_text(
+        json.dumps(
+            {
+                "objective_metric": OBJECTIVE_METRIC,
+                "variant": f"olmix_loglinear_subset_{solver}",
+                "solver": solver,
+                "curve_points_csv": str(curve_points_csv),
+                "best_observed_bpb": best_observed_bpb,
+                "rows": frame.replace({np.nan: None}).to_dict(orient="records"),
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+    best_row = min(rows, key=lambda row: float(row["predicted_optimum_value"]))
+    lines = [
+        "# Two-phase Many-Domain Olmix Loglinear Subset Optima",
+        "",
+        f"- Objective metric: `{OBJECTIVE_METRIC}`",
+        f"- Solver: `{solver}`",
+        f"- Full packet size: `{len(packet.base.y)}`",
+        "",
+        "## Best Local Optimum",
+        "",
+        f"- Subset size: `{int(best_row['subset_size'])}`",
+        f"- Predicted optimum BPB: `{float(best_row['predicted_optimum_value']):.6f}`",
+        f"- Regularized objective: `{float(best_row['regularized_objective']):.6f}`",
+        f"- Nearest observed TV: `{float(best_row['nearest_observed_tv_distance']):.6f}`",
+        f"- CV RMSE: `{float(best_row['tuning_cv_rmse']):.6f}`",
+        f"- CV Mean Regret@1: `{float(best_row['tuning_cv_foldmean_regret_at_1']):.6f}`",
+        f"- Tail optimism: `{float(best_row['tuning_lower_tail_optimism']):.6f}`",
+        "",
+    ]
+    summary_md.write_text("\n".join(lines))
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--solver", choices=OLMIX_SOLVE_METHODS, default="lbfgsb")
+    parser.add_argument(
+        "--refresh-validated-only",
+        action="store_true",
+        help="Reuse existing subset-fit curve points and only refresh realized validated BPBs from checkpoints.",
+    )
+    return parser.parse_args()
+
+
+def _fit_subset_point(subset_size: int, *, solver: str) -> dict[str, object]:
     _, spec, _ = load_two_phase_many_candidate_summary_spec(
         CSV_PATH,
         objective_metric=OBJECTIVE_METRIC,
@@ -204,11 +295,16 @@ def _fit_subset_point(subset_size: int) -> dict[str, object]:
         chosen = int(np.argmin(pred))
         fold_regrets.append(float(y[te][chosen] - np.min(y[te])))
 
-        fold_weights, raw_pred, _ = _solve_fit_optimum(
+        natural_proportions, phase_fractions = _olmix_priors()
+        phase_weights, raw_pred, _ = solve_olmix_loglinear_schedule(
             fit,
+            natural_proportions=natural_proportions,
+            phase_fractions=phase_fractions,
             phase_names=train_spec.phase_names,
             domain_names=train_spec.domain_names,
+            solver=solver,
         )
+        fold_weights = _weights_from_phase_weights(phase_weights, train_spec.domain_names)
         distances = average_phase_tv_distance(weights[te], fold_weights[None, :, :])
         nearest_count = min(8, len(te))
         nearest_idx = np.argsort(distances)[:nearest_count]
@@ -230,11 +326,16 @@ def _fit_subset_point(subset_size: int) -> dict[str, object]:
     )
 
     full_fit = fit_olmix_loglinear_model(weights, y, seed=KFOLD_SEED)
-    deployment, predicted_optimum_value, regularized_objective = _solve_fit_optimum(
+    natural_proportions, phase_fractions = _olmix_priors()
+    phase_weights, predicted_optimum_value, regularized_objective = solve_olmix_loglinear_schedule(
         full_fit,
+        natural_proportions=natural_proportions,
+        phase_fractions=phase_fractions,
         phase_names=train_spec.phase_names,
         domain_names=train_spec.domain_names,
+        solver=solver,
     )
+    deployment = _weights_from_phase_weights(phase_weights, train_spec.domain_names)
     fullswarm_predictions = np.asarray(full_fit.predict(packet.base.w), dtype=float)
     chosen_idx = int(np.argmin(fullswarm_predictions))
     distances_full = average_phase_tv_distance(packet.base.w, deployment[None, :, :])
@@ -244,8 +345,8 @@ def _fit_subset_point(subset_size: int) -> dict[str, object]:
 
     return {
         "subset_size": subset_size,
-        "predicted_optimum_value": predicted_optimum_value,
-        "regularized_objective": regularized_objective,
+        "predicted_optimum_value": float(predicted_optimum_value),
+        "regularized_objective": float(regularized_objective),
         "subset_best_observed_run_name": subset_best_run_name,
         "subset_best_observed_bpb": subset_best_bpb,
         "fullswarm_chosen_run_name": str(packet.base.frame.iloc[chosen_idx][packet.base.name_col]),
@@ -269,99 +370,11 @@ def _fit_subset_point(subset_size: int) -> dict[str, object]:
     }
 
 
-def _rows_with_movements(rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    packet = load_generic_family_packet(target=OBJECTIVE_METRIC)
-    prev_weights: np.ndarray | None = None
-    enriched: list[dict[str, object]] = []
-    for row in sorted(rows, key=lambda item: int(item["subset_size"])):
-        current_weights = np.asarray(
-            [
-                [row["phase_weights"]["phase_0"][domain_name] for domain_name in packet.base.domain_names],
-                [row["phase_weights"]["phase_1"][domain_name] for domain_name in packet.base.domain_names],
-            ],
-            dtype=float,
-        )
-        move_tv = None if prev_weights is None else float(_mean_phase_tv_distance(prev_weights, current_weights))
-        enriched_row = dict(row)
-        enriched_row["optimum_move_mean_phase_tv_vs_prev"] = move_tv
-        enriched.append(enriched_row)
-        prev_weights = current_weights
-    return enriched
-
-
-def _load_existing_rows() -> list[dict[str, object]]:
-    if SUMMARY_JSON.exists():
-        payload = json.loads(SUMMARY_JSON.read_text())
-        rows = payload.get("rows")
-        if isinstance(rows, list):
-            return rows
-    frame = pd.read_csv(CURVE_POINTS_CSV)
-    if "phase_weights" in frame.columns:
-        frame["phase_weights"] = frame["phase_weights"].map(
-            lambda payload: json.loads(payload) if isinstance(payload, str) and payload else payload
-        )
-    return frame.to_dict(orient="records")
-
-
-def _write_outputs(rows: list[dict[str, object]]) -> None:
-    packet = load_generic_family_packet(target=OBJECTIVE_METRIC)
-    rows = _rows_with_movements(rows)
-    best_observed_bpb = float(np.min(packet.base.y))
-    rows = _apply_realized_validated_bpbs(rows, best_observed_bpb=best_observed_bpb)
-    frame = pd.DataFrame(rows).sort_values("subset_size").reset_index(drop=True)
-    curve_for_csv = frame.copy()
-    curve_for_csv["phase_weights"] = curve_for_csv["phase_weights"].map(json.dumps)
-    curve_for_csv.to_csv(CURVE_POINTS_CSV, index=False)
-    SUMMARY_JSON.write_text(
-        json.dumps(
-            {
-                "objective_metric": OBJECTIVE_METRIC,
-                "variant": "olmix_loglinear_subset",
-                "curve_points_csv": str(CURVE_POINTS_CSV),
-                "best_observed_bpb": best_observed_bpb,
-                "rows": frame.replace({np.nan: None}).to_dict(orient="records"),
-            },
-            indent=2,
-        )
-        + "\n"
-    )
-
-    best_row = min(rows, key=lambda row: float(row["predicted_optimum_value"]))
-    lines = [
-        "# Two-phase Many-Domain Olmix Loglinear Subset Optima",
-        "",
-        f"- Objective metric: `{OBJECTIVE_METRIC}`",
-        f"- Full packet size: `{len(packet.base.y)}`",
-        "",
-        "## Best Local Optimum",
-        "",
-        f"- Subset size: `{int(best_row['subset_size'])}`",
-        f"- Predicted optimum BPB: `{float(best_row['predicted_optimum_value']):.6f}`",
-        f"- Regularized objective: `{float(best_row['regularized_objective']):.6f}`",
-        f"- Nearest observed TV: `{float(best_row['nearest_observed_tv_distance']):.6f}`",
-        f"- CV RMSE: `{float(best_row['tuning_cv_rmse']):.6f}`",
-        f"- CV Mean Regret@1: `{float(best_row['tuning_cv_foldmean_regret_at_1']):.6f}`",
-        f"- Tail optimism: `{float(best_row['tuning_lower_tail_optimism']):.6f}`",
-        "",
-    ]
-    SUMMARY_MD.write_text("\n".join(lines))
-
-
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--refresh-validated-only",
-        action="store_true",
-        help="Reuse existing subset-fit curve points and only refresh realized validated BPBs from checkpoints.",
-    )
-    return parser.parse_args()
-
-
 def main() -> None:
     args = _parse_args()
     packet = load_generic_family_packet(target=OBJECTIVE_METRIC)
     if args.refresh_validated_only:
-        rows = _load_existing_rows()
+        rows = _load_existing_rows(solver=args.solver)
     else:
         subset_sizes = (
             *GENERICFAMILY_OBSERVED_ONLY_TRUSTBLEND_SUBSET_OPTIMA_REPRESENTATIVE_SUBSET_SIZES,
@@ -369,17 +382,19 @@ def main() -> None:
         )
         rows: list[dict[str, object]] = []
         for subset_size in subset_sizes:
-            row = _fit_subset_point(int(subset_size))
+            row = _fit_subset_point(int(subset_size), solver=args.solver)
             rows.append(row)
             print(
                 f"Finished subset_size={int(row['subset_size'])} "
+                f"solver={args.solver} "
                 f"predicted={float(row['predicted_optimum_value']):.6f} "
                 f"nearest_tv={float(row['nearest_observed_tv_distance']):.6f}",
                 flush=True,
             )
-    _write_outputs(rows)
-    print(f"Wrote {CURVE_POINTS_CSV}")
-    print(f"Wrote {SUMMARY_JSON}")
+    curve_points_csv, summary_json, _ = _output_paths(args.solver)
+    _write_outputs(rows, solver=args.solver)
+    print(f"Wrote {curve_points_csv}")
+    print(f"Wrote {summary_json}")
 
 
 if __name__ == "__main__":

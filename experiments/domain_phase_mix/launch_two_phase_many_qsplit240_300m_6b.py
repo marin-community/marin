@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 NAME = "pinlin_calvin_xu/data_mixture/ngd3dm2_qsplit240_300m_6b"
 MODEL_FAMILY = "regmix_300m_proxy"
 EXPERIMENT_BUDGET = 6_000_000_000
+TARGET_BUDGET = qsplit240_replay_common.DEFAULT_TARGET_BUDGET
+TARGET_BUDGET_MULTIPLIER = qsplit240_replay_common.DEFAULT_TARGET_BUDGET_MULTIPLIER
 NUM_TRAIN_STEPS = get_num_train_steps(EXPERIMENT_BUDGET, BATCH_SIZE, SEQ_LEN)
 DEFAULT_MAX_CONCURRENT = 256
 DEFAULT_TPU_REGION = "us-east5"
@@ -66,6 +68,8 @@ def build_run_specs(*, panel: str = DEFAULT_PANEL):
         cohort="original_swarm_300m",
         model_family=MODEL_FAMILY,
         experiment_budget=EXPERIMENT_BUDGET,
+        target_budget=TARGET_BUDGET,
+        target_budget_multiplier=TARGET_BUDGET_MULTIPLIER,
         num_train_steps=NUM_TRAIN_STEPS,
         panel=panel,
     )
@@ -83,6 +87,7 @@ def create_experiment(
     return create_qsplit240_replay_experiment(
         name=name,
         experiment_budget=EXPERIMENT_BUDGET,
+        target_budget=TARGET_BUDGET,
         batch_size=BATCH_SIZE,
         seq_len=SEQ_LEN,
         model_config=regmix_300m_proxy,
@@ -123,6 +128,8 @@ def main() -> None:
         cohort="original_swarm_300m",
         model_family=MODEL_FAMILY,
         experiment_budget=EXPERIMENT_BUDGET,
+        target_budget=TARGET_BUDGET,
+        target_budget_multiplier=TARGET_BUDGET_MULTIPLIER,
         num_train_steps=NUM_TRAIN_STEPS,
         batch_size=BATCH_SIZE,
         seq_len=SEQ_LEN,

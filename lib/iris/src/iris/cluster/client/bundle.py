@@ -38,6 +38,11 @@ DEFAULT_EXCLUDE = re.compile(
     | (^|/)docs/reports(/|$)
     | (^|/)docs/static(/|$)
     | (^|/)tests/snapshots(/|$)
+    | \.png$                         # plot images
+    | \.jpg$
+    | \.jpeg$
+    | \.pkl$                         # data artifacts
+    | \.html$
     """,
     re.VERBOSE,
 )

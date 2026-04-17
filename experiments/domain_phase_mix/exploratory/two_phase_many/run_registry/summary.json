@@ -1,11 +1,12 @@
 {
-  "attempt_count": 24,
+  "attempt_count": 132,
   "live_jobs_by_state": {
-    "running": 13
+    "skipped": 10
   },
-  "live_watch_count": 13,
-  "logical_run_count": 575,
+  "live_watch_count": 10,
+  "logical_run_count": 698,
   "logical_runs_by_family": {
+    "grp_no_l2_metric_objective_raw_optima": 2,
     "grp_penalty_raw_optima_300m_6b": 3,
     "grp_power_family_penalty_no_l2_subset_optima": 9,
     "olmix_loglinear_subset_optima": 9,
@@ -13,22 +14,31 @@
     "regmix_raw_subset_optima": 9,
     "run00097_300m_6b_fixed_subset": 10,
     "stratified_300m_6b": 1,
+    "strong_tier_qsplit_baselines3_holdout": 3,
+    "strong_tier_qsplit_representative12": 108,
+    "strong_tier_stratified": 9,
+    "strong_tier_stratified_holdout": 1,
     "two_phase_many_60m_export": 294
   },
   "logical_runs_by_status": {
-    "completed": 554,
-    "planned": 6,
-    "running": 15
+    "completed": 562,
+    "failed": 6,
+    "missing": 3,
+    "planned": 28,
+    "running": 99
   },
-  "qsplit240_300m_active_recovery_runs": [
-    "run_00119",
-    "run_00149",
-    "run_00209"
-  ],
+  "qsplit240_300m_active_recovery_runs": [],
   "qsplit240_300m_incomplete_runs": [
     "run_00119",
     "run_00149",
     "run_00209"
   ],
-  "qsplit240_300m_unrecovered_missing_runs": []
+  "qsplit240_300m_unrecovered_missing_runs": [
+    "run_00119",
+    "run_00149",
+    "run_00209"
+  ],
+  "strong_tier_child_job_count": 0,
+  "strong_tier_child_jobs_by_state": {},
+  "strong_tier_new_runs": 91
 }
