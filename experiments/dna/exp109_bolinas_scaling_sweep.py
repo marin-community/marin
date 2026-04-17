@@ -17,6 +17,7 @@ Subcommands:
 import logging
 import math
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from functools import lru_cache
@@ -660,8 +661,9 @@ REFERENCE_HPARAMS = ReferenceHparams(
 # DNA-calibrated heuristic: CompletedAdamHHeuristic re-parameterized with the
 # DNA reference sweep's optimal values as the base point. The scaling formulas
 # (completed_adamh.py:162-209) then operate relative to the DNA reference
-# regime (B0=16384, T0=2.5B) rather than the text defaults.
-DNA_TRANSFER_HEURISTIC = CompletedAdamHHeuristic(
+# regime (B0=16384, T0=2.5B) rather than the text defaults. Used by both the
+# transfer validation sweep and the parameter scaling sweep.
+DNA_SCALING_HEURISTIC = CompletedAdamHHeuristic(
     tokenizer=TOKENIZER,
     # Reference point (from Vizier-optimized sweep)
     reference_batch_size=FIXED_BATCH_SIZE,
@@ -679,7 +681,7 @@ DNA_TRANSFER_HEURISTIC = CompletedAdamHHeuristic(
     max_learning_rate=0.03,
     min_beta2=0.5,
     max_beta2=0.9999,
-    # Batch size limits (max_batch_size checked against TRANSFER_BATCH_SIZE below)
+    # Batch size limits — each downstream sweep asserts its own batch size against max_batch_size.
     min_batch_size=8,
     max_batch_size=8192,
 )
@@ -691,12 +693,12 @@ TRANSFER_BATCH_SIZE = 4096
 TRANSFER_NUM_POINTS = 7
 
 assert (
-    TRANSFER_BATCH_SIZE <= DNA_TRANSFER_HEURISTIC.max_batch_size
-), f"TRANSFER_BATCH_SIZE={TRANSFER_BATCH_SIZE} exceeds heuristic max_batch_size={DNA_TRANSFER_HEURISTIC.max_batch_size}"
+    TRANSFER_BATCH_SIZE <= DNA_SCALING_HEURISTIC.max_batch_size
+), f"TRANSFER_BATCH_SIZE={TRANSFER_BATCH_SIZE} exceeds heuristic max_batch_size={DNA_SCALING_HEURISTIC.max_batch_size}"
 
 # Transferred optimizer config: the center of the sweep grid and the positive control.
 # Scales reference-optimal hparams from (B0=16384, T0=2.5B) to (B=4096, T=10B).
-TRANSFER_OPTIMIZER = DNA_TRANSFER_HEURISTIC.build_optimizer_config(TRANSFER_BATCH_SIZE, TRANSFER_TARGET_TOKENS)
+TRANSFER_OPTIMIZER = DNA_SCALING_HEURISTIC.build_optimizer_config(TRANSFER_BATCH_SIZE, TRANSFER_TARGET_TOKENS)
 
 
 # --- Sweep axes ---
@@ -718,8 +720,8 @@ class TransferSweepAxis:
 
 # Feasibility bounds for sweep — derived from heuristic constraints, not hardcoded separately.
 TRANSFER_BOUNDS: dict[str, tuple[float, float]] = {
-    "learning_rate": (1e-5, DNA_TRANSFER_HEURISTIC.max_learning_rate),
-    "beta2": (DNA_TRANSFER_HEURISTIC.min_beta2, DNA_TRANSFER_HEURISTIC.max_beta2),
+    "learning_rate": (1e-5, DNA_SCALING_HEURISTIC.max_learning_rate),
+    "beta2": (DNA_SCALING_HEURISTIC.min_beta2, DNA_SCALING_HEURISTIC.max_beta2),
 }
 
 TRANSFER_SWEEP_AXES = tuple(
@@ -772,9 +774,9 @@ def _print_transfer_preview():
     transferred_fields = ("learning_rate", "adam_lr", "epsilon", "beta2")  # scaled by build_optimizer_config
     swept_fields = {axis.field for axis in TRANSFER_SWEEP_AXES}
 
-    negative_optimizer = DNA_TRANSFER_HEURISTIC.build_optimizer_config(
-        DNA_TRANSFER_HEURISTIC.reference_batch_size,
-        DNA_TRANSFER_HEURISTIC.reference_tokens,
+    negative_optimizer = DNA_SCALING_HEURISTIC.build_optimizer_config(
+        DNA_SCALING_HEURISTIC.reference_batch_size,
+        DNA_SCALING_HEURISTIC.reference_tokens,
     )
 
     print("=" * 70)
@@ -831,7 +833,7 @@ def _periodic_checkpoint(*, keep_every: int, interval_hours: int) -> Checkpointe
 # --- Step builder ---
 
 
-def _build_transfer_train_step(
+def _build_scaled_train_step(
     optimizer: AdamHConfig,
     model_config,
     data_mixture,
@@ -839,10 +841,18 @@ def _build_transfer_train_step(
     run_name: str,
     wandb_group: str,
     tags: tuple[str, ...],
+    batch_size: int,
+    num_train_steps: int,
+    tpu_type: str | Sequence[str],
+    checkpointer: CheckpointerConfig,
+    tpu_regions: Sequence[str] | None = None,
 ) -> ExecutorStep:
-    """Build an ExecutorStep for a single transfer validation run."""
-    num_steps = TRANSFER_TARGET_TOKENS // (TRANSFER_BATCH_SIZE * _model_seq_len())
-    steps_per_eval = num_steps // 10
+    """Build an ExecutorStep for a single scaled (transfer or parameter-scaling) run.
+
+    `tpu_type` may be a list when flexible fallback scheduling is desired;
+    `tpu_regions` restricts scheduling to specific GCP regions.
+    """
+    steps_per_eval = max(1, num_train_steps // 10)
 
     inner = TrainLmConfig(
         data=data_mixture,
@@ -850,11 +860,8 @@ def _build_transfer_train_step(
         train_seq_len=_model_seq_len(),
         z_loss_weight=REFERENCE_HPARAMS.z_loss_weight,
         optimizer=optimizer,
-        # Disabled: broadcast_shard in jax_utils.py uses jax.make_array_from_callback with
-        # the global training mesh, which fails on multi-host TPUs (ValueError: "fully addressable
-        # array"). Fix was in PR#2399 / issue#2417 (marin-community/marin) but never merged.
-        # eval_harness=_dna_eval_harness_config(),
-        # eval_harness_steps=steps_per_eval,
+        eval_harness=_dna_eval_harness_config(),
+        eval_harness_steps=steps_per_eval,
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project=WANDB_PROJECT,
@@ -864,10 +871,10 @@ def _build_transfer_train_step(
                 replicate_path=this_output_path(),
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
-            train_batch_size=TRANSFER_BATCH_SIZE,
-            num_train_steps=num_steps,
+            train_batch_size=batch_size,
+            num_train_steps=num_train_steps,
             steps_per_eval=steps_per_eval,
-            checkpointer=_periodic_checkpoint(keep_every=num_steps // 3, interval_hours=1),
+            checkpointer=checkpointer,
             mesh=MeshConfig(axes={"replica": 1, "data": -1, "model": 1}),
             allow_nondivisible_batch_size=True,
         ),
@@ -875,7 +882,7 @@ def _build_transfer_train_step(
 
     pod_config = TrainLmOnPodConfig(
         train_config=inner,
-        resources=ResourceConfig.with_tpu(TRANSFER_TPU_TYPE),
+        resources=ResourceConfig.with_tpu(tpu_type, regions=tpu_regions),
         output_path=this_output_path(),
     )
 
@@ -892,7 +899,7 @@ def _build_transfer_train_step(
 def run_transfer_validation_sweep():
     """Sweep LR, beta1, beta2 in isolation at full-epoch scale with ~4B model.
 
-    Positive control: transferred optimizer (scaled via DNA_TRANSFER_HEURISTIC).
+    Positive control: transferred optimizer (scaled via DNA_SCALING_HEURISTIC).
     Negative control: heuristic at reference point (unscaled, to validate transfer helps).
     Per-axis sweeps: 7 points centered at transferred value, 3 axes, center deduplicated.
     Total: 1 positive + 1 negative + 18 off-center = 20 runs.
@@ -904,7 +911,7 @@ def run_transfer_validation_sweep():
     version = TRANSFER_VERSION
     mixture = _build_data_mixture()
     model_config = _build_model_config(TRANSFER_HIDDEN_SIZE, REFERENCE_HPARAMS.initializer_range)
-    num_params = model_config.total_trainable_params(DNA_HEURISTIC.vocab_size)
+    num_params = model_config.total_trainable_params(DNA_SCALING_HEURISTIC.vocab_size)
     wandb_group = f"dna-bolinas-transfer-sweep-{version}"
 
     base_tags = (
@@ -917,37 +924,47 @@ def run_transfer_validation_sweep():
         f"tokens={TRANSFER_TARGET_TOKENS}",
         f"bs={TRANSFER_BATCH_SIZE}",
     )
+
+    num_steps = TRANSFER_TARGET_TOKENS // (TRANSFER_BATCH_SIZE * _model_seq_len())
+    checkpointer = _periodic_checkpoint(keep_every=num_steps // 3, interval_hours=1)
+
+    def _make_step(optimizer: AdamHConfig, run_name: str, tags: tuple[str, ...]) -> ExecutorStep:
+        return _build_scaled_train_step(
+            optimizer=optimizer,
+            model_config=model_config,
+            data_mixture=mixture,
+            run_name=run_name,
+            wandb_group=wandb_group,
+            tags=tags,
+            batch_size=TRANSFER_BATCH_SIZE,
+            num_train_steps=num_steps,
+            tpu_type=TRANSFER_TPU_TYPE,
+            checkpointer=checkpointer,
+        )
+
     all_steps: list[ExecutorStep] = []
 
     # Positive control: transferred (scaled) optimizer
-    positive_tags = (*base_tags, "role=positive-control")
     all_steps.append(
-        _build_transfer_train_step(
+        _make_step(
             TRANSFER_OPTIMIZER,
-            model_config,
-            mixture,
-            run_name=f"dna-bolinas-transfer-{version}-positive-control",
-            wandb_group=wandb_group,
-            tags=positive_tags,
+            f"dna-bolinas-transfer-{version}-positive-control",
+            (*base_tags, "role=positive-control"),
         )
     )
 
     # Negative control: heuristic evaluated at its reference point (B0, T0) — i.e. the
     # raw reference-optimal hparams without transfer scaling. If scaling works, the
     # positive control (transferred) should outperform this.
-    negative_optimizer = DNA_TRANSFER_HEURISTIC.build_optimizer_config(
-        DNA_TRANSFER_HEURISTIC.reference_batch_size,
-        DNA_TRANSFER_HEURISTIC.reference_tokens,
+    negative_optimizer = DNA_SCALING_HEURISTIC.build_optimizer_config(
+        DNA_SCALING_HEURISTIC.reference_batch_size,
+        DNA_SCALING_HEURISTIC.reference_tokens,
     )
-    negative_tags = (*base_tags, "role=negative-control")
     all_steps.append(
-        _build_transfer_train_step(
+        _make_step(
             negative_optimizer,
-            model_config,
-            mixture,
-            run_name=f"dna-bolinas-transfer-{version}-negative-control",
-            wandb_group=wandb_group,
-            tags=negative_tags,
+            f"dna-bolinas-transfer-{version}-negative-control",
+            (*base_tags, "role=negative-control"),
         )
     )
 
@@ -960,15 +977,11 @@ def run_transfer_validation_sweep():
                 if value == center:
                     continue  # deduplicated as positive control
                 swept_optimizer = replace(TRANSFER_OPTIMIZER, **{axis.field: value})
-                sweep_tags = (*base_tags, f"axis={axis.field}", f"{axis.field}={value}")
                 all_steps.append(
-                    _build_transfer_train_step(
+                    _make_step(
                         swept_optimizer,
-                        model_config,
-                        mixture,
-                        run_name=f"dna-bolinas-transfer-{version}-{axis.field}-{i}",
-                        wandb_group=wandb_group,
-                        tags=sweep_tags,
+                        f"dna-bolinas-transfer-{version}-{axis.field}-{i}",
+                        (*base_tags, f"axis={axis.field}", f"{axis.field}={value}"),
                     )
                 )
 
@@ -984,10 +997,108 @@ def run_transfer_validation_sweep():
 # Parameter scaling sweep
 # =============================================================================
 
+SCALING_VERSION = "v0.2"
+SCALING_TPU_TYPES: tuple[str, ...] = ("v6e-8",)
+SCALING_TPU_REGIONS: tuple[str, ...] = ("europe-west4",)
+SCALING_BATCH_SIZE = 2048
+SCALING_WARMUP_STEPS = 100
+
+# Total training tokens available: sum of examples across CDS/upstream/downstream mixtures,
+# each example = DNA_BASE_SEQ_LEN + 1 BOS = 256 tokens. Source: exp109 .md.
+SCALING_TRAIN_EXAMPLES = 331_122_738
+
+# 8 model sizes spanning ~46M → ~4.02B params. Centered on 1920 (the transfer validation
+# sweep's 1.12B model) so the scaling study anchors on a hparam-validated regime.
+# Consecutive param ratios: 1.63x, 1.71x, 2.00x, 1.87x, 2.36x, 2.02x, 1.77x.
+# All sizes satisfy hidden_size % hidden_head_ratio (128) == 0, required by CompletedAdamH.
+SCALING_HIDDEN_SIZES: tuple[int, ...] = (640, 768, 896, 1152, 1408, 1920, 2432, 2944)
+
+assert (
+    SCALING_BATCH_SIZE <= DNA_SCALING_HEURISTIC.max_batch_size
+), f"SCALING_BATCH_SIZE={SCALING_BATCH_SIZE} exceeds heuristic max_batch_size={DNA_SCALING_HEURISTIC.max_batch_size}"
+assert TRANSFER_HIDDEN_SIZE in SCALING_HIDDEN_SIZES, "Scaling sweep must include the transfer validation model"
+
+
+def _scaling_target_tokens() -> int:
+    """Total tokens in one pass over the training mixture."""
+    return SCALING_TRAIN_EXAMPLES * _model_seq_len()
+
+
+def _csv_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """Parse a comma-separated env var (stripping whitespace) or return `default`."""
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    return tuple(s.strip() for s in raw.split(","))
+
+
+def _get_scaling_hidden_sizes() -> tuple[int, ...]:
+    """Parse SWEEP_MODEL_INDICES env var (CSV of indices into SCALING_HIDDEN_SIZES) or return all."""
+    raw = _csv_env("SWEEP_MODEL_INDICES", ())
+    if not raw:
+        return SCALING_HIDDEN_SIZES
+    indices = tuple(int(i) for i in raw)
+    n = len(SCALING_HIDDEN_SIZES)
+    invalid = [i for i in indices if not 0 <= i < n]
+    if invalid:
+        raise ValueError(f"Invalid indices {invalid}. Must be in [0, {n})")
+    return tuple(SCALING_HIDDEN_SIZES[i] for i in indices)
+
 
 def run_parameter_scaling_sweep():
-    """IsoFLOP parameter scaling sweep using CompletedAdamH heuristic."""
-    raise NotImplementedError("Parameter scaling sweep not yet implemented")
+    """Parameter scaling sweep: 8 model sizes (46M to 4B) trained for one epoch each.
+
+    Each model uses the AdamH optimizer config produced by DNA_SCALING_HEURISTIC at
+    (SCALING_BATCH_SIZE, target_tokens). No controls — every run is at the transferred
+    optimum for its (B, T). num_train_steps is floored so total tokens consumed never
+    exceed one pass over the mixture.
+    """
+    version = SCALING_VERSION
+    mixture = _build_data_mixture()
+    target_tokens = _scaling_target_tokens()
+    full_num_steps = target_tokens // (SCALING_BATCH_SIZE * _model_seq_len())
+    # WARMUP_MODE=yes: cap each run to SCALING_WARMUP_STEPS. Optimizer is still built at full
+    # target_tokens so the LR schedule endpoint matches production — the run just stops early.
+    num_steps = SCALING_WARMUP_STEPS if _warmup_mode() else full_num_steps
+    optimizer = DNA_SCALING_HEURISTIC.build_optimizer_config(SCALING_BATCH_SIZE, target_tokens)
+    checkpointer = _periodic_checkpoint(keep_every=max(1, num_steps // 3), interval_hours=1)
+    wandb_group = f"dna-bolinas-scaling-sweep-{version}"
+
+    tpu_types = _csv_env("TPU_TYPES", SCALING_TPU_TYPES)
+    tpu_regions = _csv_env("TPU_REGIONS", SCALING_TPU_REGIONS)
+    hidden_sizes = _get_scaling_hidden_sizes()
+    all_steps: list[ExecutorStep] = []
+    for hidden_size in hidden_sizes:
+        model_config = _build_model_config(hidden_size, REFERENCE_HPARAMS.initializer_range)
+        num_params = model_config.total_trainable_params(DNA_SCALING_HEURISTIC.vocab_size)
+        tags = (
+            "sweep",
+            "dna",
+            "bolinas",
+            "scaling",
+            version,
+            f"hidden={hidden_size}",
+            f"params={num_params}",
+            f"tokens={target_tokens}",
+            f"bs={SCALING_BATCH_SIZE}",
+        )
+        all_steps.append(
+            _build_scaled_train_step(
+                optimizer=optimizer,
+                model_config=model_config,
+                data_mixture=mixture,
+                run_name=f"dna-bolinas-scaling-{version}-h{hidden_size}",
+                wandb_group=wandb_group,
+                tags=tags,
+                batch_size=SCALING_BATCH_SIZE,
+                num_train_steps=num_steps,
+                tpu_type=tpu_types,
+                tpu_regions=tpu_regions,
+                checkpointer=checkpointer,
+            )
+        )
+
+    executor_main(steps=all_steps, description=f"DNA Bolinas parameter scaling {version}")
 
 
 # =============================================================================
