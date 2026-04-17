@@ -44,14 +44,6 @@ V4_SPEC = TpuSpec(
     core_options=(8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096),
 )
 
-# Legacy constants kept for callers that reference them directly.
-HBM_PER_CHIP_GIB = V5P_SPEC.hbm_per_chip_gib
-CORES_PER_CHIP = V5P_SPEC.cores_per_chip
-V5P_CORE_OPTIONS = list(V5P_SPEC.core_options)
-V4_HBM_PER_CHIP_GIB = V4_SPEC.hbm_per_chip_gib
-V4_CORES_PER_CHIP = V4_SPEC.cores_per_chip
-V4_CORE_OPTIONS = list(V4_SPEC.core_options)
-
 
 def pick_tpu_type(estimated_memory_bytes: int, spec: TpuSpec) -> str:
     """Select the smallest TPU slice that fits the estimated memory.
