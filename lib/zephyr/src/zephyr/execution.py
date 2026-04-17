@@ -112,7 +112,6 @@ from zephyr.shuffle import (  # noqa: E402
     ListShard,
     MemChunk,
     ScatterReader,  # noqa: F401 — re-exported for plan.py and external callers
-    ScatterShard,  # noqa: F401 — backward-compat alias for ScatterReader
     ScatterWriter,  # noqa: F401 — re-exported for external callers
     _write_scatter,
 )

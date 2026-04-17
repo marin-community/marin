@@ -64,7 +64,7 @@ class Shard(Protocol):
 
     Implementations:
     - ListShard: backed by iterable references (source data, non-scatter)
-    - ScatterShard: backed by scatter zstd-chunk files with byte-range sidecar
+    - ScatterReader: backed by scatter zstd-chunk files with byte-range sidecar
     """
 
     def __iter__(self) -> Iterator: ...
@@ -634,12 +634,12 @@ def _merge_sorted_chunks(
         merge_key = key_fn
 
     # Check if external sort is needed BEFORE materializing all iterators.
-    # ScatterShard can decide using manifest stats (no file opens needed).
-    from zephyr.shuffle import ScatterShard  # ScatterShard is an alias for ScatterReader
+    # ScatterReader can decide using manifest stats (no file opens needed).
+    from zephyr.shuffle import ScatterReader
 
     use_external = (
         external_sort_dir is not None
-        and isinstance(shard, ScatterShard)
+        and isinstance(shard, ScatterReader)
         and shard.needs_external_sort(_TaskResources.from_environment().memory_bytes)
     )
 
@@ -843,14 +843,14 @@ def run_stage(
         elif isinstance(op, Reduce):
             # Build ScatterReader directly from per-mapper sidecars, then
             # merge sorted chunks and reduce per key.
-            from zephyr.execution import ScatterShard
+            from zephyr.execution import ScatterReader
 
             shard = ctx.shard
-            if not isinstance(shard, ScatterShard):
+            if not isinstance(shard, ScatterReader):
                 # Shard contains every mapper's scatter-data path — reducer
                 # reads all sidecars in parallel and filters for its target.
                 scatter_paths = list(shard)
-                shard = ScatterShard.from_sidecars(scatter_paths, ctx.shard_idx)
+                shard = ScatterReader.from_sidecars(scatter_paths, ctx.shard_idx)
             stream = _reduce_gen(
                 shard, op.key_fn, op.reducer_fn, sort_fn=op.sort_fn, external_sort_dir=external_sort_dir
             )

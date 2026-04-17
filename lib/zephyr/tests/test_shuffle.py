@@ -10,7 +10,7 @@ without spinning up a full coordinator.
 from zephyr.plan import deterministic_hash
 from zephyr.shuffle import (
     ScatterFileIterator,
-    ScatterShard,
+    ScatterReader,
     _write_chunk_frame,
     _write_scatter,
 )
@@ -51,7 +51,7 @@ def test_scatter_roundtrip(tmp_path):
 
     recovered = []
     for shard_idx in range(num_shards):
-        shard = ScatterShard.from_sidecars(scatter_paths, shard_idx)
+        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
         recovered.extend(list(shard))
 
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
@@ -64,7 +64,7 @@ def test_scatter_each_shard_gets_correct_items(tmp_path):
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=num_shards)
 
     for shard_idx in range(num_shards):
-        shard = ScatterShard.from_sidecars(scatter_paths, shard_idx)
+        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
         recovered = sorted(list(shard), key=lambda x: x["v"])
         expected = sorted([x for x in items if _target(x["k"], num_shards) == shard_idx], key=lambda x: x["v"])
         assert recovered == expected, f"shard {shard_idx} mismatch"
@@ -76,7 +76,7 @@ def test_scatter_roundtrip_sorted_chunks(tmp_path):
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=2)
 
     for shard_idx in range(2):
-        shard = ScatterShard.from_sidecars(scatter_paths, shard_idx)
+        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
         for chunk_iter in shard.get_iterators():
             chunk = list(chunk_iter)
             keys = [_key(x) for x in chunk]
@@ -96,8 +96,8 @@ def test_max_chunk_rows_per_shard(tmp_path):
 
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=num_shards)
 
-    shard0 = ScatterShard.from_sidecars(scatter_paths, 0)
-    shard1 = ScatterShard.from_sidecars(scatter_paths, 1)
+    shard0 = ScatterReader.from_sidecars(scatter_paths, 0)
+    shard1 = ScatterReader.from_sidecars(scatter_paths, 1)
 
     assert shard0.max_chunk_rows == 500
     assert shard1.max_chunk_rows == 2, (
@@ -112,7 +112,7 @@ def test_max_chunk_rows_per_shard(tmp_path):
 
 
 def test_needs_external_sort_triggers():
-    shard = ScatterShard(
+    shard = ScatterReader(
         iterators=[ScatterFileIterator(path="gs://fake/path.shuffle", chunks=tuple((i, 1) for i in range(1000)))],
         max_chunk_rows=1000,
         avg_item_bytes=1000.0,
@@ -124,12 +124,12 @@ def test_needs_external_sort_triggers():
 def test_needs_external_sort_below_threshold(tmp_path):
     items = [{"k": 0, "v": i} for i in range(5)]
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=1)
-    shard = ScatterShard.from_sidecars(scatter_paths, 0)
+    shard = ScatterReader.from_sidecars(scatter_paths, 0)
     assert not shard.needs_external_sort(memory_limit=32 * 1024**3)
 
 
 def test_needs_external_sort_empty_shard():
-    shard = ScatterShard(iterators=[], max_chunk_rows=100_000, avg_item_bytes=200.0)
+    shard = ScatterReader(iterators=[], max_chunk_rows=100_000, avg_item_bytes=200.0)
     assert not shard.needs_external_sort(memory_limit=32 * 1024**3)
 
 
@@ -141,7 +141,7 @@ def test_needs_external_sort_empty_shard():
 def test_avg_item_bytes_written(tmp_path):
     items = [{"k": 0, "v": i} for i in range(20)]
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=1)
-    shard = ScatterShard.from_sidecars(scatter_paths, 0)
+    shard = ScatterReader.from_sidecars(scatter_paths, 0)
     assert shard.avg_item_bytes > 0
 
 
@@ -162,7 +162,7 @@ def test_scatter_handles_arbitrary_python_objects(tmp_path):
 
     recovered = []
     for shard_idx in range(2):
-        shard = ScatterShard.from_sidecars(scatter_paths, shard_idx)
+        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
         recovered.extend(list(shard))
 
     def _ord(x):
