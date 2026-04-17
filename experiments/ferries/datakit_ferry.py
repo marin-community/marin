@@ -17,7 +17,8 @@ from rigging.timing import log_time
 
 from fray import ResourceConfig
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.normalize import normalize_step
+from marin.datakit.normalize import NormalizeResult, normalize_step
+from marin.execution.artifact import Artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import (
@@ -62,7 +63,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         deps=[normalized],
         hash_attrs={"mode": "fuzzy_document"},
         fn=lambda output_path: dedup_fuzzy_document(
-            input_paths=normalized.output_path,
+            input_paths=Artifact.load(normalized, NormalizeResult).main_output_dirs,
             output_path=output_path,
             max_parallelism=128,
             cc_max_iterations=3,
@@ -75,7 +76,8 @@ def build_steps(run_id: str) -> list[StepSpec]:
         name="datakit-smoke/consolidate",
         deps=[normalized, deduped],
         fn=lambda output_path: consolidate(
-            input_path=normalized.output_path,
+            # This ferry normalizes a single subset, so exactly one main dir.
+            input_path=Artifact.load(normalized, NormalizeResult).main_output_dirs[0],
             output_path=output_path,
             filetype="parquet",
             filters=[
