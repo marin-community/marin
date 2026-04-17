@@ -128,7 +128,7 @@ def test_log_pusher_buffers_and_flushes_on_demand(tracked_log_service_client):
         pusher.push("key-a", [entry, entry, entry])
         pusher.push("key-b", [entry])
         pusher.flush()
-        _wait_for(lambda: len(tracked_log_service_client[0].pushes) >= 2)
+        _wait_for(lambda: len(tracked_log_service_client) == 1 and len(tracked_log_service_client[0].pushes) >= 2)
 
         totals = {p.key: len(p.entries) for p in tracked_log_service_client[0].pushes}
         assert totals == {"key-a": 3, "key-b": 1}
@@ -147,14 +147,13 @@ def test_log_pusher_flushes_at_batch_size(tracked_log_service_client):
         entry = logging_pb2.LogEntry(source="test", data="line")
         pusher.push("k", [entry])
         # One entry is below batch_size — nothing should ship yet.
-        # Small sleep lets any bogus wake happen (test will still catch).
         import time as _time
 
         _time.sleep(0.05)
-        assert tracked_log_service_client[0].pushes == []
+        assert tracked_log_service_client == [] or tracked_log_service_client[0].pushes == []
 
         pusher.push("k", [entry])
-        _wait_for(lambda: len(tracked_log_service_client[0].pushes) == 1)
+        _wait_for(lambda: len(tracked_log_service_client) == 1 and len(tracked_log_service_client[0].pushes) == 1)
         assert tracked_log_service_client[0].pushes[0].key == "k"
         assert len(tracked_log_service_client[0].pushes[0].entries) == 2
     finally:
@@ -376,23 +375,28 @@ def test_resolver_raising_is_retried(tracked_log_service_client):
         pusher.close()
 
 
-def test_static_url_pusher_retries_without_invalidating(tracked_log_service_client):
-    """Without a resolver, retryable failures re-buffer and retry on the same client."""
+def test_static_url_pusher_reconnects_on_retryable_failure(tracked_log_service_client):
+    """A retryable failure against a static URL invalidates the cached RPC
+    client and rebuilds against the same URL — heals a stuck TCP connection
+    even without a resolver that can point elsewhere."""
     pusher = LogPusher(
         "http://h:1",
         batch_size=1,
         flush_interval=0.1,
     )
     try:
-        assert len(tracked_log_service_client) == 1
+        pusher.push("k", [_entry("a")])
+        _wait_for(lambda: len(tracked_log_service_client) == 1 and tracked_log_service_client[0].pushes)
         assert tracked_log_service_client[0].address == "http://h:1"
 
-        # One UNAVAILABLE, then success on retry.
+        # Seed a retryable failure on the current client.
         tracked_log_service_client[0].errors.append(ConnectError(Code.UNAVAILABLE, "gone"))
-        pusher.push("k", [_entry("a")])
-        _wait_for(lambda: len(tracked_log_service_client[0].pushes) == 1)
-        # Same client — no resolver means no re-resolution.
-        assert tracked_log_service_client[0].closed is False
-        assert len(tracked_log_service_client) == 1
+        pusher.push("k", [_entry("b")])
+
+        # Client invalidated + new client built against the same URL.
+        _wait_for(lambda: len(tracked_log_service_client) == 2)
+        assert tracked_log_service_client[0].closed is True
+        assert tracked_log_service_client[1].address == "http://h:1"
+        _wait_for(lambda: len(tracked_log_service_client[1].pushes) == 1)
     finally:
         pusher.close()

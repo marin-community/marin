@@ -59,13 +59,12 @@ class LogPusher:
       log entries — send failures never drop.
 
     Endpoint resolution:
-        If ``resolver`` is None, ``server_url`` is used as a direct http
-        address and the RPC client is built eagerly.
-
-        If ``resolver`` is set, ``server_url`` is passed to it on each
-        resolution to obtain the actual http address. The client is built
-        lazily and invalidated on retryable failures; the next send will
-        re-invoke the resolver.
+        ``server_url`` is passed to ``resolver`` (default: identity) on
+        every resolution to obtain the actual http address. The RPC client
+        is built on first send and invalidated on any failure, so the next
+        send re-invokes the resolver. For static URLs this is a rebuild
+        against the same address, which still heals a stuck TCP
+        connection.
     """
 
     def __init__(
@@ -80,7 +79,7 @@ class LogPusher:
         max_buffer_size: int = MAX_LOG_BUFFER_SIZE,
     ) -> None:
         self._server_url = server_url
-        self._resolver = resolver
+        self._resolver: Callable[[str], str] = resolver if resolver is not None else (lambda url: url)
         self._timeout_ms = timeout_ms
         self._interceptors = tuple(interceptors)
         self._batch_size = batch_size
@@ -95,11 +94,9 @@ class LogPusher:
         self._queue: deque[tuple[str, logging_pb2.LogEntry]] = deque()
         self._closed = False
 
-        # Without a resolver, build the client eagerly so we fail fast on
-        # bad URLs. With a resolver, defer until the drain thread needs it.
+        # Built lazily by the drain thread on first send; invalidated on
+        # any failure so the next attempt re-resolves.
         self._client: LogServiceClientSync | None = None
-        if self._resolver is None:
-            self._client = self._build_client(self._server_url)
 
         # Owned by the drain thread; reset after any successful send.
         self._backoff = ExponentialBackoff(initial=_BACKOFF_INITIAL_SEC, maximum=_BACKOFF_MAX_SEC, factor=2.0)
@@ -271,7 +268,6 @@ class LogPusher:
         """Return the cached RPC client, resolving on demand. Drain-thread only."""
         if self._client is not None:
             return self._client
-        assert self._resolver is not None
         address = self._resolver(self._server_url)
         if not address:
             raise ConnectionError(f"LogPusher resolver returned empty address for {self._server_url!r}")
@@ -281,7 +277,7 @@ class LogPusher:
 
     def _invalidate(self, reason: str) -> None:
         """Drop the cached RPC client so the next send re-resolves. Drain-thread only."""
-        if self._resolver is None or self._client is None:
+        if self._client is None:
             return
         logger.info("LogPusher: invalidating cached endpoint for %s (%s)", self._server_url, reason)
         try:
