@@ -120,27 +120,22 @@ def _write_scatter_meta(data_path: str, sidecar: dict) -> None:
             f.write(payload)
 
 
-# Per-worker cache for sidecar reads.
-_scatter_meta_cache: dict[str, dict] = {}
-
-
-def _read_scatter_meta(data_path: str) -> dict:
-    meta_path = _scatter_meta_path(data_path)
-    if meta_path not in _scatter_meta_cache:
-        with open_url(meta_path, "r") as f:
-            _scatter_meta_cache[meta_path] = json.loads(f.read())
-    return _scatter_meta_cache[meta_path]
-
-
 def _read_sidecars_parallel(scatter_paths: list[str]) -> list[tuple[str, dict]]:
     """Read every ``.scatter_meta`` sidecar concurrently, preserving input order.
 
     Each reducer calls this to build its ``ScatterReader`` directly from the
     per-mapper sidecars, without going through a coordinator-written manifest.
+
+    TODO(rav): each reducer subprocess re-reads every sidecar even though only
+    one shard's byte ranges are used. A worker-level sidecar cache (or a shared
+    read across colocated reducers) would avoid the redundant GCS GETs when
+    many reducers run on the same host.
     """
 
     def _read_entry(path: str) -> tuple[str, dict]:
-        return path, _read_scatter_meta(path)
+        meta_path = _scatter_meta_path(path)
+        with open_url(meta_path, "r") as f:
+            return path, json.loads(f.read())
 
     results: dict[str, dict] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
