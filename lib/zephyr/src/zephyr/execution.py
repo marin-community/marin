@@ -1512,7 +1512,7 @@ class ZephyrContext:
 
     client: Client | None = None
     max_workers: int | None = None
-    resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
+    resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="4g"))
     coordinator_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="5g"))
     chunk_storage_prefix: str | None = None
     name: str = ""

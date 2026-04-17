@@ -69,7 +69,7 @@ NUM_TRAIN_STEPS = 4000
 # RESOURCES = ResourceConfig.with_tpu("v5p-16")
 # RESOURCES = ResourceConfig.with_tpu("v4-64")
 # RESOURCES = ResourceConfig.with_tpu("v4-32")
-RESOURCES = ResourceConfig.with_tpu("v5p-64")
+RESOURCES = ResourceConfig.with_tpu("v5p-32")
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
