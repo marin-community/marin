@@ -1,0 +1,29 @@
+{
+  "id": "glm-trace-001",
+  "conversations": [
+    {
+      "from": "system",
+      "value": "You are a function calling AI model. You are provided with function signatures within <tools> </tools> XML tags.\n<tools>\n[{\"name\": \"write_file\", \"description\": \"Write content to a file\", \"parameters\": {\"type\": \"object\", \"properties\": {\"path\": {\"type\": \"string\"}, \"content\": {\"type\": \"string\"}}, \"required\": [\"path\", \"content\"]}}]\n</tools>"
+    },
+    {
+      "from": "human",
+      "value": "Write a tiny Python script that prints hello."
+    },
+    {
+      "from": "gpt",
+      "value": "<think>\nI should write the file first.\n</think>\n<tool_call>\n{\"name\": \"write_file\", \"arguments\": {\"path\": \"hello.py\", \"content\": \"print('hello')\\n\"}}\n</tool_call>"
+    },
+    {
+      "from": "tool",
+      "value": "<tool_response>\n{\"tool_call_id\": \"glm-tool-call-001\", \"name\": \"write_file\", \"content\": {\"bytes_written\": 15, \"dirs_created\": false}}\n</tool_response>"
+    },
+    {
+      "from": "gpt",
+      "value": "<think>\nThe file was written successfully.\n</think>\nThe script is ready."
+    }
+  ],
+  "tools": "[{\"name\": \"write_file\", \"description\": \"Write content to a file\", \"parameters\": {\"type\": \"object\", \"properties\": {\"path\": {\"type\": \"string\"}, \"content\": {\"type\": \"string\"}}, \"required\": [\"path\", \"content\"]}}]",
+  "category": "Terminal & Coding",
+  "subcategory": "Terminal Tasks",
+  "task": "Write a tiny Python script that prints hello."
+}
