@@ -543,7 +543,8 @@ def _kill_non_terminal_tasks(
     placeholders = ",".join("?" * len(terminal_states))
     rows = cur.execute(
         "SELECT t.task_id, t.current_attempt_id, t.current_worker_id, "
-        "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json "
+        "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, "
+        "j.is_reservation_holder "
         "FROM tasks t "
         "JOIN jobs j ON j.job_id = t.job_id "
         f"{JOB_CONFIG_JOIN} "
@@ -556,15 +557,24 @@ def _kill_non_terminal_tasks(
         task_id = str(row["task_id"])
         worker_id = row["current_worker_id"]
         task_name = JobName.from_wire(task_id)
-        resources = None
+        is_reservation_holder = bool(int(row["is_reservation_holder"]))
+        decommit_worker: str | None = None
+        decommit_resources = None
         if worker_id is not None:
-            resources = resource_spec_from_scalars(
-                int(row["res_cpu_millicores"]),
-                int(row["res_memory_bytes"]),
-                int(row["res_disk_bytes"]),
-                row["res_device_json"],
-            )
             task_kill_workers[task_name] = WorkerId(str(worker_id))
+            # Reservation holders never commit resources on assignment
+            # (see _assign_task), so they must not decommit on termination —
+            # otherwise we subtract chips that were never added, which floors
+            # committed_* below a co-tenant's legitimate reservation and lets
+            # the scheduler double-book the worker.
+            if not is_reservation_holder:
+                decommit_worker = str(worker_id)
+                decommit_resources = resource_spec_from_scalars(
+                    int(row["res_cpu_millicores"]),
+                    int(row["res_memory_bytes"]),
+                    int(row["res_disk_bytes"]),
+                    row["res_device_json"],
+                )
         _terminate_task(
             cur,
             registry,
@@ -573,8 +583,8 @@ def _kill_non_terminal_tasks(
             job_pb2.TASK_STATE_KILLED,
             reason,
             now_ms,
-            worker_id=str(worker_id) if worker_id is not None else None,
-            resources=resources,
+            worker_id=decommit_worker,
+            resources=decommit_resources,
         )
         tasks_to_kill.add(task_name)
     return tasks_to_kill, task_kill_workers

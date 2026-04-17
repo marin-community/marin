@@ -3544,6 +3544,61 @@ def test_kill_non_terminal_direct_provider_tasks(state):
     assert task_ids[0] in result.tasks_to_kill
 
 
+def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harness):
+    """Finalizing a reservation-holder task must not decommit a co-tenant's resources.
+
+    Regression: ``_kill_non_terminal_tasks`` passed ``resources`` into
+    ``_terminate_task`` unconditionally. Reservation-holder tasks never commit
+    on assignment (see ``_assign_task``), so decommitting them on termination
+    subtracts chips that were never added — on a worker co-tenanted by a real
+    task, this floored ``committed_*`` below the co-tenant's true reservation,
+    letting the scheduler double-book the VM (seen in prod: two v5p-8 jobs on
+    the same 4-chip VM, with the second crashing on ``/dev/vfio/0 busy``).
+    """
+    from iris.cluster.controller.transitions import _kill_non_terminal_tasks
+
+    worker_id = harness.add_worker("w1")
+
+    real_tasks = harness.submit("real-job", replicas=1)
+    harness.dispatch(real_tasks[0], worker_id)
+
+    baseline_cpu = _query_worker(harness.state, worker_id).committed_cpu_millicores
+    baseline_mem = _query_worker(harness.state, worker_id).committed_mem
+    assert baseline_cpu > 0
+
+    holder_tasks = harness.submit("holder-job", replicas=1)
+    holder_job_id = JobName.root("test-user", "holder-job")
+    harness.state._db.execute(
+        "UPDATE jobs SET is_reservation_holder = 1 WHERE job_id = ?",
+        (holder_job_id.to_wire(),),
+    )
+    dispatch_task(harness.state, holder_tasks[0], worker_id)
+
+    # Holder did not consume capacity.
+    assert _query_worker(harness.state, worker_id).committed_cpu_millicores == baseline_cpu
+    assert _query_worker(harness.state, worker_id).committed_mem == baseline_mem
+
+    # Exercise the exact finalization path: _finalize_terminal_job cascades to
+    # the holder sub-job via _kill_non_terminal_tasks. cancel_job has its own
+    # inline gated path and doesn't cover this.
+    with harness.state._db.transaction() as cur:
+        _kill_non_terminal_tasks(
+            cur,
+            harness.state._db.endpoints,
+            holder_job_id.to_wire(),
+            "Job finalized",
+            0,
+        )
+
+    # Holder's termination must not touch the co-tenant's committed counters.
+    assert (
+        _query_worker(harness.state, worker_id).committed_cpu_millicores == baseline_cpu
+    ), "holder finalization leaked committed_cpu_millicores onto co-tenant's reservation"
+    assert (
+        _query_worker(harness.state, worker_id).committed_mem == baseline_mem
+    ), "holder finalization leaked committed_mem onto co-tenant's reservation"
+
+
 def test_max_failures_kills_direct_provider_tasks(state):
     """When a task fails and triggers kill of siblings, direct-provider tasks appear in tasks_to_kill."""
     task_ids = _submit_job_direct(state, "/user/job1", replicas=2, max_retries_failure=0)
