@@ -51,69 +51,59 @@ The variant passes gate 2 if:
 
 ### Effective speedup calculation
 
-Given baseline and variant results at the same compute budget:
+The question: how much faster (in wall-clock time) does the variant reach
+its final loss compared to how long the baseline would need to reach that
+same loss?
+
+The scaling law `loss(C) = 1.6 + A · C^(-0.0941)` has a fixed exponent but
+the coefficient A varies. We recenter A to pass through the baseline's
+actual (budget, loss) point, then invert to find how much compute the
+baseline would need to match the variant's loss. Finally, compare wall-clock
+times.
 
 ```python
-import numpy as np
-
 def effective_speedup(baseline_loss, baseline_tps, variant_loss, variant_tps, budget):
-    """Compute effective wall-clock speedup at the baseline's final loss.
+    """Wall-clock speedup of the variant over the baseline.
 
-    Returns > 1 if the variant is faster to reach the same loss.
+    Returns > 1 if the variant reaches its loss faster in real time.
     """
-    target_loss = baseline_loss
+    L_inf = 1.6
+    alpha = 0.0941
 
-    # Invert scaling law: C needed to reach target_loss
-    # loss(C) = 1.6 + 95.18 * C^(-0.0941) => C = (95.18 / (loss - 1.6))^(1/0.0941)
-    C_baseline = (95.18 / (target_loss - 1.6)) ** (1 / 0.0941)
+    # 1. Fit the scaling law coefficient through the baseline's data point.
+    #    loss = L_inf + A_bl * C^(-alpha)  =>  A_bl = (loss - L_inf) * C^alpha
+    A_bl = (baseline_loss - L_inf) * budget ** alpha
 
-    # The variant achieves variant_loss at the same budget. Fit the same
-    # power-law shape shifted vertically: the variant's curve passes through
-    # (budget, variant_loss) with the same exponent.
-    # variant_loss = 1.6 + A_var * budget^(-0.0941)
-    A_var = (variant_loss - 1.6) / budget ** (-0.0941)
-    C_variant = (A_var / (target_loss - 1.6)) ** (1 / 0.0941)
+    # 2. How much compute would the baseline need to reach variant's loss?
+    C_needed = (A_bl / (variant_loss - L_inf)) ** (1 / alpha)
 
-    # Wall-clock = compute / throughput
-    wall_baseline = C_baseline / baseline_tps
-    wall_variant = C_variant / variant_tps
-    return wall_baseline / wall_variant
+    # 3. Compare wall-clock times:
+    #    baseline_time = C_needed / baseline_tps
+    #    variant_time  = budget / variant_tps
+    return (C_needed / baseline_tps) / (budget / variant_tps)
 ```
 
-### Example: effective speedup at a fixed loss target
+### Example
 
-Suppose at d768 / 1.70e18 FLOPs:
-- **Baseline**: macro_loss = 3.43, tok/s = 200,000
-- **Variant A**: macro_loss = 3.40, tok/s = 180,000 (better loss, 10% slower)
-
-To reach macro_loss = 3.43 (the baseline's final loss), how much compute does
-each method need?
+Suppose at d512 / 2.19e17 FLOPs:
+- **Baseline**: macro_loss = 3.81, tok/s = 405,000
+- **Variant**: macro_loss = 3.79, tok/s = 380,000 (better loss, 6% slower)
 
 ```python
-# Invert the scaling law: C(L) = (95.18 / (L - 1.6))^(1/0.0941)
-target_loss = 3.43
-C_baseline = (95.18 / (target_loss - 1.6)) ** (1 / 0.0941)  # = 1.70e18
+# 1. Fit A through baseline point
+A_bl = (3.81 - 1.6) * (2.19e17) ** 0.0941  # ≈ 94.7
 
-# Variant A reaches 3.40 at 1.70e18 FLOPs. It would have hit 3.43 at some
-# smaller C. Assume the same scaling law shape, shifted by the improvement:
-# variant_loss = 1.6 + A_var * budget^(-0.0941)
-A_var = (3.40 - 1.6) / (1.70e18) ** (-0.0941)
-C_variant = (A_var / (target_loss - 1.6)) ** (1 / 0.0941)
+# 2. Compute baseline needs to reach 3.79
+C_needed = (94.7 / (3.79 - 1.6)) ** (1 / 0.0941)  # > 2.19e17
+
+# 3. Wall-clock comparison
+baseline_time = C_needed / 405_000
+variant_time  = 2.19e17 / 380_000
+speedup = baseline_time / variant_time
 ```
 
-But compute alone isn't wall-clock time — variant A is 10% slower per step.
-The wall-clock to reach the target is `C / tok_per_sec`:
-
-```python
-wall_baseline = C_baseline / 200_000
-wall_variant = C_variant / 180_000
-speedup = wall_baseline / wall_variant
-```
-
-If `speedup > 1`, variant A reaches the target loss faster in real time despite
-being slower per step. Report this as "X% effective speedup (or slowdown) at
-macro_loss = Y". This is the key number for deciding whether to promote a
-change.
+If the quality improvement (needing more baseline compute to match) outweighs
+the throughput cost (variant taking longer per FLOP), speedup > 1.
 
 ## Implementation
 
