@@ -841,16 +841,16 @@ def run_stage(
             return
 
         elif isinstance(op, Reduce):
-            # Build ScatterShard from scatter manifest if needed,
-            # then merge sorted chunks and reduce per key.
-            from zephyr.execution import ScatterShard, _build_scatter_shard_from_manifest
+            # Build ScatterReader directly from per-mapper sidecars, then
+            # merge sorted chunks and reduce per key.
+            from zephyr.execution import ScatterShard
 
             shard = ctx.shard
             if not isinstance(shard, ScatterShard):
-                # Shard contains a single manifest path — read it to build ScatterShard
-                paths = list(shard)
-                assert len(paths) == 1, f"Expected single scatter manifest path, got {len(paths)}"
-                shard = _build_scatter_shard_from_manifest(paths[0], ctx.shard_idx)
+                # Shard contains every mapper's scatter-data path — reducer
+                # reads all sidecars in parallel and filters for its target.
+                scatter_paths = list(shard)
+                shard = ScatterShard.from_sidecars(scatter_paths, ctx.shard_idx)
             stream = _reduce_gen(
                 shard, op.key_fn, op.reducer_fn, sort_fn=op.sort_fn, external_sort_dir=external_sort_dir
             )
