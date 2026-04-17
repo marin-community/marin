@@ -107,6 +107,8 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             # Single subdir (flat jsonl.gz input), so exactly one main dir.
             input_path=Artifact.load(normalize_hq_spec, NormalizeResult).main_output_dirs[0],
             output_path=output_path,
+            # Normalize emits parquet; override the jsonl.gz default.
+            filetype="parquet",
             filters=[
                 FilterConfig(
                     type=FilterType.REMOVE_SPANS,
