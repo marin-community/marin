@@ -1121,6 +1121,7 @@ class Controller:
         # Background loop state
         self._wake_event = threading.Event()
         self._heartbeat_event = threading.Event()
+        self._checkpoint_paused = threading.Event()
         self._server: uvicorn.Server | None = None
         self._scheduling_thread: ManagedThread | None = None
         self._heartbeat_thread: ManagedThread | None = None
@@ -2173,9 +2174,34 @@ class Controller:
             (worker_id, t.task_id): t.attempt_id for (worker_id, _), tasks in by_worker.items() for t in tasks
         }
         jobs = [(worker_id, address, tasks) for (worker_id, address), tasks in by_worker.items()]
+        tasks_by_worker: dict[WorkerId, list[job_pb2.RunTaskRequest]] = {
+            worker_id: tasks for (worker_id, _), tasks in by_worker.items()
+        }
         for worker_id, response, error in self._provider.start_tasks(jobs):
             if error is not None:
+                # The assignment is already committed (task is ASSIGNED against
+                # this worker) but the worker never heard about it, so no poll
+                # or heartbeat can ever surface completion. Fail the attempt so
+                # the task state machine bounces it back to PENDING — see
+                # transitions._apply_task_transition: WORKER_FAILED from ASSIGNED
+                # rolls the task to PENDING without consuming a preemption retry.
                 logger.warning("StartTasks RPC failed for worker %s: %s", worker_id, error)
+                summary = f"StartTasks RPC failed: {error}"
+                self._task_update_queue.put(
+                    HeartbeatApplyRequest(
+                        worker_id=worker_id,
+                        worker_resource_snapshot=None,
+                        updates=[
+                            TaskUpdate(
+                                task_id=JobName.from_wire(t.task_id),
+                                attempt_id=attempt_by_worker_task.get((worker_id, t.task_id), -1),
+                                new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                                error=summary,
+                            )
+                            for t in tasks_by_worker.get(worker_id, [])
+                        ],
+                    )
+                )
                 continue
             assert response is not None
             for ack in response.acks:
