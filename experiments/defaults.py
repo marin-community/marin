@@ -666,6 +666,7 @@ def default_dpo(
     dpo_config: SimpleDPOConfig,
     tags: Sequence[str] = (),
     override_output_path: str | None = None,
+    include_lm_validation: bool = True,
 ) -> ExecutorStep:
     """
     Creates an ExecutorStep for DPO fine-tuning.
@@ -677,6 +678,10 @@ def default_dpo(
         dpo_config: Configuration for the DPO training process.
         tags: Additional tags for WandB logging. Default: ().
         override_output_path: Optional override for executor output path.
+        include_lm_validation: If True (default), attach paloma + uncheatable_eval LM
+            validation sets via ``default_validation_sets``. Set False for short debug
+            runs where the ~20 tokenize dependencies would otherwise force unnecessary
+            CPU work in whatever region the parent lands in.
     """
     if "dpo" not in tags:
         tags = [*tags, "dpo"]
@@ -696,12 +701,15 @@ def default_dpo(
     preference_data = PreferenceLmDataConfig.from_lm_data_config(pretraining_data)
     preference_data = dataclasses.replace(preference_data, permutation_type="feistel")
     dpo_tokenizer_name = unwrap_versioned_value(preference_data.tokenizer)
-    lm_validation_data = lm_mixture_data_config(
-        default_validation_sets(tokenizer=dpo_tokenizer_name),
-        {},
-        missing_weights_are_validation=True,
-        include_raw_paths=False,
-    )
+    if include_lm_validation:
+        lm_validation_data = lm_mixture_data_config(
+            default_validation_sets(tokenizer=dpo_tokenizer_name),
+            {},
+            missing_weights_are_validation=True,
+            include_raw_paths=False,
+        )
+    else:
+        lm_validation_data = None
 
     name = _truncate_wandb_name(name)
 
@@ -747,7 +755,7 @@ def default_dpo(
                 project=dpo_config.wandb_project or "marin",
                 tags=[*tags],
             ),
-            mp=jmp.get_policy("p=f32,c=bfloat16"),
+            mp=dpo_config.mp,
             train_batch_size=dpo_config.train_batch_size,
             num_train_steps=requested_num_train_steps,
             steps_per_eval=requested_steps_per_eval,
@@ -770,6 +778,9 @@ def default_dpo(
             allow_nondivisible_batch_size=True,
             quantization=QuantizationConfig(int8=dpo_config.int8) if dpo_config.int8 else None,
             initialize_from=None,
+            # DEBUGSTART — debug_accum_tpu_type: pass through max_eval_batches
+            max_eval_batches=dpo_config.max_eval_batches,
+            # DEBUGEND
         ),
         initialize_from_checkpoint_path=dpo_config.initialize_from_checkpoint_path,
         initialize_from_hf=dpo_config.model_name_or_path if initialize_from_hf else False,
@@ -802,6 +813,9 @@ def default_dpo(
         output_path=this_output_path(),
         auto_num_epochs=auto_num_epochs,
         auto_validation_runs=auto_validation_runs,
+        # DEBUGSTART — debug_accum_tpu_type: pass experiment env_vars to child TPU job
+        env_vars=dpo_config.env_vars,
+        # DEBUGEND
     )
 
     model_config = unwrap_versioned_value(model_config)

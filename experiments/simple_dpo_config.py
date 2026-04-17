@@ -3,6 +3,7 @@
 
 from dataclasses import dataclass, field
 
+import jmp
 from fray.cluster import ResourceConfig
 from levanter.adaptation import AdaptationConfig, NoAdaptationConfig
 from levanter.callbacks.profiler import ProfilerConfig
@@ -73,6 +74,7 @@ class SimpleDPOConfig:
     hf_generation_eos_token_ids: list[int] | None = None
     """EOS token IDs to write to generation_config.json. None means no generation config.
     For chat models, include the turn-boundary token (e.g. [128001, 128009])."""
+    mp: jmp.Policy = field(default_factory=lambda: jmp.get_policy("p=f32,c=bfloat16"))
 
     per_device_parallelism: int = -1
     per_device_eval_parallelism: int = -1
@@ -85,6 +87,13 @@ class SimpleDPOConfig:
 
     allow_partial_checkpoint: bool = False
     int8: bool = False
+
+    # DEBUGSTART — debug_accum_tpu_type: disable eval for 1-step traces
+    max_eval_batches: int | None = None
+    """If set, cap eval at this many batches. Set to 0 to effectively skip eval."""
+    env_vars: dict | None = None
+    """Env vars to inject into the child TPU training job (e.g., debug flags)."""
+    # DEBUGEND
 
     def __post_init__(self):
         if self.num_train_steps is not None and self.num_train_steps <= 0:
