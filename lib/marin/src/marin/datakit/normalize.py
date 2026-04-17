@@ -14,6 +14,7 @@ own set of partitions sized by ``target_partition_bytes``.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import re
@@ -431,10 +432,16 @@ def normalize_to_parquet(
             counters=dict(outcome.counters),
         )
 
-    # Launch all subdirectory pipelines concurrently
+    # Launch all subdirectory pipelines concurrently. Each worker gets its own
+    # copy of the current context so contextvars set by the caller (notably
+    # fray.v2.set_current_client) reach the ZephyrContext inside; otherwise
+    # the child coordinators fall back to the local Fray backend.
     subdir_results: list[NormalizeSubdirResult] = []
     with ThreadPoolExecutor(max_workers=len(file_groups)) as pool:
-        futures = {pool.submit(_run_subdir, subdir, files): subdir for subdir, files in file_groups.items()}
+        futures: dict = {}
+        for subdir, files in file_groups.items():
+            thread_ctx = contextvars.copy_context()
+            futures[pool.submit(thread_ctx.run, _run_subdir, subdir, files)] = subdir
         for future in as_completed(futures):
             subdir = futures[future]
             subdir_results.append(future.result())  # Propagate exceptions
