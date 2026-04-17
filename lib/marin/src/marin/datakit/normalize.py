@@ -17,19 +17,20 @@ from __future__ import annotations
 import logging
 import os
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
 import dupekit
-from rigging.filesystem import url_to_fs
-from zephyr import counters
-from marin.execution.step_spec import StepSpec
 from fray.v2 import ResourceConfig
-from zephyr import Dataset, ZephyrContext
+from rigging.filesystem import url_to_fs
+from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
+from zephyr.writers import ThreadedBatchWriter
+
+from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 
@@ -61,15 +62,13 @@ class NormalizeSubdirResult:
     """Per-subdirectory outcome of :func:`normalize_to_parquet`.
 
     Attributes:
-        subdir: Relative subdirectory under the input root (``""`` for root).
-        output_files: Absolute paths of the Parquet partitions written.
-        counters: Aggregated zephyr counters from the subdirectory's pipeline
-            run (builtin ``zephyr/records_in``/``records_out`` plus any user
-            counters).
+        main_output_dir: Directory containing the main output Parquet files for this subdir.
+        dup_output_dir: Optional directory containing the duplicate side output Parquet files for this subdir.
+        counters: Aggregated zephyr counters.
     """
 
-    subdir: str
-    output_files: list[str]
+    main_output_dir: str
+    dup_output_dir: str
     counters: dict[str, int]
 
 
@@ -216,6 +215,66 @@ def _make_whitespace_compactor(max_whitespace_run_chars: int) -> Callable[[dict[
     return compact
 
 
+@dataclass
+class MainOutput:
+    """Wraps a unique record destined for the main output shard."""
+
+    data: dict[str, Any]
+
+
+@dataclass
+class ExactDupSideOutput:
+    """Wraps a duplicate record destined for the side (dups) output shard."""
+
+    data: dict[str, Any]
+
+
+def _make_split_writer(
+    output_dir: str,
+) -> Callable[[Iterator[MainOutput | ExactDupSideOutput], ShardInfo], Iterator[dict[str, dict[str, Any]]]]:
+    """Return a ``map_shard`` function that fans records out to main and dup Parquet files.
+
+    Each shard writes two files concurrently via ``ThreadedBatchWriter`` so the
+    producer isn't blocked on I/O. Yields a single manifest per shard containing
+    the ``write_parquet_file`` result (``{"path", "count"}``) for each branch.
+    """
+
+    # TODO (rav): consider whether we want to generalize this in the future.
+
+    def split_writer(
+        records: Iterator[MainOutput | ExactDupSideOutput],
+        shard: ShardInfo,
+    ) -> Iterator[dict[str, dict[str, Any]]]:
+        main_path = f"{output_dir}/outputs/main/part-{shard.shard_idx:05d}-of-{shard.total_shards:05d}.parquet"
+        dup_path = f"{output_dir}/outputs/dups/part-{shard.shard_idx:05d}-of-{shard.total_shards:05d}.parquet"
+
+        # Results are populated by each writer thread. Safe to read only after
+        # the ThreadedBatchWriter context exits (which joins the thread).
+        results: dict[str, dict[str, Any]] = {}
+
+        def write_to(path: str, key: str) -> Callable[[Iterable[dict[str, Any]]], None]:
+            def _fn(items: Iterable[dict[str, Any]]) -> None:
+                results[key] = write_parquet_file(items, output_path=path)
+
+            return _fn
+
+        with (
+            ThreadedBatchWriter(write_to(main_path, "main")) as main_writer,
+            ThreadedBatchWriter(write_to(dup_path, "dup")) as dup_writer,
+        ):
+            for item in records:
+                if isinstance(item, MainOutput):
+                    counters.increment("normalize/unique_records_out")
+                    main_writer.submit(item.data)
+                else:
+                    counters.increment("normalize/duplicate_records_out")
+                    dup_writer.submit(item.data)
+
+        yield results
+
+    return split_writer
+
+
 def _build_pipeline(
     files: list[str],
     output_dir: str,
@@ -228,18 +287,20 @@ def _build_pipeline(
     """Build a single Zephyr pipeline for one subdirectory."""
     normalize_record = _make_normalize_fn(text_field, id_field)
 
-    def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput | ExactDupSideOutput]:
         """Drop adjacent duplicate ids. Items arrive sorted by id via sort_by."""
         prev_id: str | None = None
         for record in items:
             rid = record["id"]
             if rid != prev_id:
                 prev_id = rid
-                yield record
+                yield MainOutput(data=record)
+            else:
+                yield ExactDupSideOutput(data=record)
 
-    def passthrough(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    def passthrough(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput]:
         """Yield items unchanged; used when dedup is disabled."""
-        yield from items
+        yield from (MainOutput(data=item) for item in items)
 
     def has_text(record: dict[str, Any]) -> bool:
         text = record.get(text_field)
@@ -262,10 +323,7 @@ def _build_pipeline(
             sort_by=lambda r: r["id"],
             num_output_shards=num_shards,
         )
-        .write_parquet(
-            f"{output_dir}/part-{{shard:05d}}-of-{{total:05d}}.parquet",
-            skip_existing=True,
-        )
+        .map_shard(_make_split_writer(output_dir))
     )
 
 
@@ -357,8 +415,8 @@ def normalize_to_parquet(
         )
         outcome = ctx.execute(pipeline)
         return NormalizeSubdirResult(
-            subdir=subdir,
-            output_files=list(outcome.results),
+            main_output_dir=os.path.join(output_dir, "outputs/main"),
+            dup_output_dir=os.path.join(output_dir, "outputs/dups"),
             counters=dict(outcome.counters),
         )
 
@@ -372,7 +430,7 @@ def normalize_to_parquet(
             logger.info("Completed normalization for %s", os.path.join(output_path, subdir) if subdir else output_path)
 
     # Sort for deterministic output so re-runs produce stable .artifact contents
-    subdir_results.sort(key=lambda r: r.subdir)
+    subdir_results.sort(key=lambda r: r.main_output_dir)
 
     total_in = sum(r.counters.get("zephyr/records_in", 0) for r in subdir_results)
     total_filtered = sum(r.counters.get("normalize/empty_text_filtered", 0) for r in subdir_results)
