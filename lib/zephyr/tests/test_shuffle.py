@@ -11,10 +11,8 @@ from zephyr.plan import deterministic_hash
 from zephyr.shuffle import (
     ScatterFileIterator,
     ScatterShard,
-    _build_scatter_shard_from_manifest,
     _write_chunk_frame,
     _write_scatter,
-    _write_scatter_manifest,
 )
 
 
@@ -27,7 +25,7 @@ def _target(key, num_shards):
 
 
 def _build_shard(tmp_path, items, num_output_shards=4, source_shard=0):
-    """Write a scatter file and manifest; return (manifest_path, data_paths)."""
+    """Write a scatter file + sidecar; return scatter_paths for direct reducer reads."""
     data_path = str(tmp_path / f"shard-{source_shard:04d}.shuffle")
     list_shard = _write_scatter(
         iter(items),
@@ -36,10 +34,8 @@ def _build_shard(tmp_path, items, num_output_shards=4, source_shard=0):
         key_fn=_key,
         num_output_shards=num_output_shards,
     )
-    data_paths = list(list_shard)
-    manifest_path = str(tmp_path / "scatter_metadata")
-    _write_scatter_manifest(data_paths, manifest_path)
-    return manifest_path, data_paths
+    scatter_paths = list(list_shard)
+    return scatter_paths
 
 
 # ---------------------------------------------------------------------------
@@ -51,11 +47,11 @@ def test_scatter_roundtrip(tmp_path):
     """All items written via scatter are recovered when reading all shards."""
     num_shards = 4
     items = [{"k": i % 4, "v": i} for i in range(40)]
-    manifest_path, _ = _build_shard(tmp_path, items, num_output_shards=num_shards)
+    scatter_paths = _build_shard(tmp_path, items, num_output_shards=num_shards)
 
     recovered = []
     for shard_idx in range(num_shards):
-        shard = _build_scatter_shard_from_manifest(manifest_path, shard_idx)
+        shard = ScatterShard.from_sidecars(scatter_paths, shard_idx)
         recovered.extend(list(shard))
 
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
@@ -65,10 +61,10 @@ def test_scatter_each_shard_gets_correct_items(tmp_path):
     """Items are routed to shards by deterministic_hash(key) % num_shards."""
     num_shards = 4
     items = [{"k": i % 4, "v": i} for i in range(40)]
-    manifest_path, _ = _build_shard(tmp_path, items, num_output_shards=num_shards)
+    scatter_paths = _build_shard(tmp_path, items, num_output_shards=num_shards)
 
     for shard_idx in range(num_shards):
-        shard = _build_scatter_shard_from_manifest(manifest_path, shard_idx)
+        shard = ScatterShard.from_sidecars(scatter_paths, shard_idx)
         recovered = sorted(list(shard), key=lambda x: x["v"])
         expected = sorted([x for x in items if _target(x["k"], num_shards) == shard_idx], key=lambda x: x["v"])
         assert recovered == expected, f"shard {shard_idx} mismatch"
@@ -77,10 +73,10 @@ def test_scatter_each_shard_gets_correct_items(tmp_path):
 def test_scatter_roundtrip_sorted_chunks(tmp_path):
     """Each chunk iterator from get_iterators() yields items sorted by key."""
     items = [{"k": i % 2, "v": i} for i in range(20)]
-    manifest_path, _ = _build_shard(tmp_path, items, num_output_shards=2)
+    scatter_paths = _build_shard(tmp_path, items, num_output_shards=2)
 
     for shard_idx in range(2):
-        shard = _build_scatter_shard_from_manifest(manifest_path, shard_idx)
+        shard = ScatterShard.from_sidecars(scatter_paths, shard_idx)
         for chunk_iter in shard.get_iterators():
             chunk = list(chunk_iter)
             keys = [_key(x) for x in chunk]
@@ -98,10 +94,10 @@ def test_max_chunk_rows_per_shard(tmp_path):
     items = [{"k": 3, "v": i} for i in range(500)]
     items += [{"k": 0, "v": i + 1000} for i in range(2)]
 
-    manifest_path, _ = _build_shard(tmp_path, items, num_output_shards=num_shards)
+    scatter_paths = _build_shard(tmp_path, items, num_output_shards=num_shards)
 
-    shard0 = _build_scatter_shard_from_manifest(manifest_path, 0)
-    shard1 = _build_scatter_shard_from_manifest(manifest_path, 1)
+    shard0 = ScatterShard.from_sidecars(scatter_paths, 0)
+    shard1 = ScatterShard.from_sidecars(scatter_paths, 1)
 
     assert shard0.max_chunk_rows == 500
     assert shard1.max_chunk_rows == 2, (
@@ -127,8 +123,8 @@ def test_needs_external_sort_triggers():
 
 def test_needs_external_sort_below_threshold(tmp_path):
     items = [{"k": 0, "v": i} for i in range(5)]
-    manifest_path, _ = _build_shard(tmp_path, items, num_output_shards=1)
-    shard = _build_scatter_shard_from_manifest(manifest_path, 0)
+    scatter_paths = _build_shard(tmp_path, items, num_output_shards=1)
+    shard = ScatterShard.from_sidecars(scatter_paths, 0)
     assert not shard.needs_external_sort(memory_limit=32 * 1024**3)
 
 
@@ -144,8 +140,8 @@ def test_needs_external_sort_empty_shard():
 
 def test_avg_item_bytes_written(tmp_path):
     items = [{"k": 0, "v": i} for i in range(20)]
-    manifest_path, _ = _build_shard(tmp_path, items, num_output_shards=1)
-    shard = _build_scatter_shard_from_manifest(manifest_path, 0)
+    scatter_paths = _build_shard(tmp_path, items, num_output_shards=1)
+    shard = ScatterShard.from_sidecars(scatter_paths, 0)
     assert shard.avg_item_bytes > 0
 
 
@@ -162,11 +158,11 @@ def test_scatter_handles_arbitrary_python_objects(tmp_path):
         {"k": 1, "v": None},
         {"k": 1, "v": frozenset([6])},
     ]
-    manifest_path, _ = _build_shard(tmp_path, items, num_output_shards=2)
+    scatter_paths = _build_shard(tmp_path, items, num_output_shards=2)
 
     recovered = []
     for shard_idx in range(2):
-        shard = _build_scatter_shard_from_manifest(manifest_path, shard_idx)
+        shard = ScatterShard.from_sidecars(scatter_paths, shard_idx)
         recovered.extend(list(shard))
 
     def _ord(x):
