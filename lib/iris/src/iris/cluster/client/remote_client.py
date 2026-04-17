@@ -70,15 +70,23 @@ class RemoteClusterClient:
             interceptors=interceptors,
         )
 
-        # FetchLogs is proxied by the controller, so the endpoint is the
-        # controller address itself. IrisLogClient still buys us
-        # invalidate-and-retry on connection hiccups and a future path for
-        # pointing directly at the log server.
+        # Log client resolves /system/log-server via the controller and
+        # connects directly to the log server. On connection failure the
+        # IrisLogClient invalidates its cached client and re-resolves, so
+        # log-server failovers are picked up without a reconnect loop here.
         _log_interceptors = tuple(interceptors)
 
         def _build_log_service_client() -> LogServiceClientSync:
+            resp = self._client.list_endpoints(
+                controller_pb2.Controller.ListEndpointsRequest(
+                    prefix="/system/log-server",
+                    exact=True,
+                ),
+            )
+            if not resp.endpoints:
+                raise ConnectionError("No /system/log-server endpoint registered on controller")
             return LogServiceClientSync(
-                address=controller_address,
+                address=resp.endpoints[0].address,
                 timeout_ms=timeout_ms,
                 interceptors=_log_interceptors,
             )
