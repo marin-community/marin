@@ -14,6 +14,7 @@ from datetime import timedelta
 
 import jmp
 from fray.cluster import ResourceConfig
+from fray.v2.types import PriorityBand
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LmDataConfig
@@ -26,7 +27,11 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
 from experiments.defaults import default_validation_sets
-from experiments.grug.moe.heuristic import build_from_heuristic
+from experiments.grug.moe.heuristic import (
+    MoeAdamHHeuristic,
+    build_from_heuristic,
+    compute_flops_per_token,
+)
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.pretraining_datasets import nemotron_mix_block_shuffle
@@ -53,6 +58,8 @@ class GrugMoeLaunchConfig:
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    expert_parallel: int = 1
+    priority_band: PriorityBand | None = None
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
@@ -87,14 +94,14 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
-        mesh=MeshConfig(axes={"expert": 1}),
+        mesh=MeshConfig(axes={"expert": config.expert_parallel}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         checkpointer=CheckpointerConfig(
             base_path=os.path.join(config.output_path, "checkpoints"),
             append_run_id_to_base_path=False,
-            save_interval=timedelta(minutes=10),
-            keep=[{"every": 1000}],
+            save_interval=timedelta(minutes=30),
+            keep=[{"every": 10_000}],
         ),
     )
 
@@ -107,24 +114,47 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         optimizer=config.optimizer,
         trainer=grug_trainer,
         eval=config.eval,
+        priority_band=config.priority_band,
     )
     run_grug(run_config)
 
 
-RESOLVED_RUN_ID = _resolve_run_id("4_10_test_moe")
+RESOLVED_RUN_ID = _resolve_run_id("moe_1e23_d5120_bs2048_ep4_ring")
 
 
-# Baseline: 1e18 compute budget, d1024. Model + optimizer + batch + steps are
-# all derived from `MoeAdamHHeuristic`. To override any of these, swap in
-# an explicit `GrugModelConfig` / `GrugMoeAdamHConfig` below.
-_BASELINE_BUDGET: float = 1e18
-_BASELINE_HIDDEN_DIM: int = 1024
-_BASELINE_TARGET_STEPS: int = 2**14
+# 1e23 compute budget, d5120. Model +
+# optimizer + batch + steps are all derived from `MoeAdamHHeuristic`. To
+# override any of these, swap in an explicit `GrugModelConfig` /
+# `GrugMoeAdamHConfig` below.
+_BASELINE_BUDGET: float = 1e23
+_BASELINE_HIDDEN_DIM: int = 5120
+_BASELINE_TARGET_STEPS: int = 120_000
+_BASELINE_NUM_LAYERS_OVERRIDE: int | None = 48
 _baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_from_heuristic(
     budget=_BASELINE_BUDGET,
     hidden_dim=_BASELINE_HIDDEN_DIM,
     target_steps=_BASELINE_TARGET_STEPS,
 )
+# Match the known-good 1e23 ring EP=4 configuration while keeping the current
+# v4-2048/us-central2 launch wiring.
+_baseline_model = dataclasses.replace(
+    _baseline_model,
+    moe_implementation="ring",
+    use_array_stacked_blocks=True,
+    num_layers=_BASELINE_NUM_LAYERS_OVERRIDE or _baseline_model.num_layers,
+)
+
+# Override the heuristic-derived batch_size (round_up_pow2 only produces powers
+# of two; we want something in between). Recompute the optimizer at the new
+# batch + matching tokens so the LR formula stays consistent.
+_BASELINE_BATCH_OVERRIDE: int | None = 2048
+if _BASELINE_BATCH_OVERRIDE is not None:
+    _heuristic = MoeAdamHHeuristic()
+    _fpt = compute_flops_per_token(_baseline_model)
+    _tokens = _BASELINE_BUDGET / (3 * _fpt)
+    _baseline_batch = _BASELINE_BATCH_OVERRIDE
+    _baseline_steps = max(1, round(_tokens / (_baseline_batch * 4096)))
+    _baseline_optimizer = _heuristic.build_optimizer_config(_baseline_batch, _tokens, _BASELINE_HIDDEN_DIM)
 
 # Public alias for the heuristic-derived baseline GrugModelConfig. Kept
 # because consumers (e.g. experiments/ferries/canary_ferry.py) import it by
@@ -133,7 +163,7 @@ GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _baseline_model
 
 
 baseline_moe = ExecutorStep(
-    name="grug/4_10_baseline_moe",
+    name="grug/moe_1e23_d5120_bs2048_ep4_ring",
     fn=run_grug_moe_trial,
     config=GrugMoeLaunchConfig(
         model=versioned(_baseline_model),
@@ -142,18 +172,20 @@ baseline_moe = ExecutorStep(
         output_path=this_output_path(),
         # Keep run id out of versioning so changing job metadata doesn't create a new output path.
         run_id=RESOLVED_RUN_ID,
-        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+        resources=versioned(ResourceConfig.with_tpu("v4-2048", regions=["us-central2"])),
         steps=versioned(_baseline_steps),
         batch_size=versioned(_baseline_batch),
+        expert_parallel=versioned(4),
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
-            project="marin_moe",
-            tags=["moe"],
+            project="dial_moe",
+            tags=["adamh", "qb", "sharded-qb", "gatednorm", "xsa", "zloss", "eq3e3"],
             group="moe-iter04",
             name=None,
         ),
         optimizer=versioned(_baseline_optimizer),
+        priority_band="production",
         grug_trainer=versioned(
             GrugTrainerConfig(
                 z_loss_weight=1e-4,
@@ -163,7 +195,7 @@ baseline_moe = ExecutorStep(
         ),
         eval=versioned(
             GrugEvalConfig(
-                eval_batch_size=512,
+                eval_batch_size=1024,
                 steps_per_eval=1000,
                 max_eval_batches=8,
                 eval_current=True,
