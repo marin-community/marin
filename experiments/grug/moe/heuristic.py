@@ -102,12 +102,10 @@ class MoeAdamHHeuristic:
     C = 3 * flops_per_token * tokens  (flops_per_token excludes lm_head)
     """
 
-    # --- LR scaling (from empirical fit) ---
+    # --- LR scaling ---
     # adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(tokens_per_batch)
-    # Original fit used sqrt(batch_size) at seq_len=4096; coefficient absorbed
-    # the sqrt(4096) factor so the formula works with tokens_per_batch directly.
-    # Original lr_coeff=1.63 / sqrt(4096) = 0.025469
-    lr_coeff: float = 0.025469
+    # Original (186 runs, R²=0.995) — used for v16 sweep:
+    lr_coeff: float = 0.025469  # 1.63 / sqrt(4096)
     lr_tokens_exp: float = -0.2813
     lr_dim_exp: float = -0.3678
     adamh_ratio: float = 13 / 3
