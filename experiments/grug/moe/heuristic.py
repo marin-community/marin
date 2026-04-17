@@ -43,8 +43,6 @@ from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
 SEQ_LEN: int = 4096
 MIN_BATCH_SIZE: int = 32
 DEFAULT_TARGET_STEPS: int = 2**14
-# Reference tokens_per_batch for the original sweep (32 sequences x 4096 tokens).
-_REF_TOKENS_PER_BATCH: int = MIN_BATCH_SIZE * SEQ_LEN  # 131072
 
 
 def _round_to_power_of_two(x: float) -> int:
@@ -111,12 +109,10 @@ class MoeAdamHHeuristic:
     adamh_ratio: float = 13 / 3
 
     # --- Base hyperparameters ---
-    # Reference point is 32 sequences x 4096 tokens = 131,072 tokens_per_batch.
-    reference_tokens_per_batch: int = _REF_TOKENS_PER_BATCH
-    reference_tokens: float = 1.4e9
-    epsilon_base: float = 1e-15
+    epsilon_coeff: float = 9.676e-18
     beta1: float = 0.9062
     beta2_base: float = 0.999
+    beta2_reference_tpb: int = 131_072  # beta2 = beta2_base^(tpb / beta2_reference_tpb)
 
     # --- Fixed hyperparameters ---
     max_grad_norm: float = 1.0
@@ -141,10 +137,6 @@ class MoeAdamHHeuristic:
     min_beta2: float = 0.95
     max_beta2: float = 0.9999
 
-    def _compute_scaling_ratio(self, tokens_per_batch: int, tokens: float) -> float:
-        """Compute r/r0 = (tpb * T0) / (tpb0 * T)."""
-        return (tokens_per_batch * self.reference_tokens) / (self.reference_tokens_per_batch * tokens)
-
     def _compute_adam_lr(self, tokens_per_batch: int, tokens: float, hidden_dim: int) -> float:
         """adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(tokens_per_batch)"""
         adam_lr = (
@@ -158,13 +150,12 @@ class MoeAdamHHeuristic:
         return min(self.max_learning_rate, self.adamh_ratio * adam_lr)
 
     def _compute_epsilon(self, tokens_per_batch: int, tokens: float) -> float:
-        """epsilon = epsilon0 * sqrt(r0/r)"""
-        ratio = self._compute_scaling_ratio(tokens_per_batch, tokens)
-        return self.epsilon_base * math.sqrt(1.0 / ratio)
+        """epsilon = epsilon_coeff * sqrt(tokens / tokens_per_batch)"""
+        return self.epsilon_coeff * math.sqrt(tokens / tokens_per_batch)
 
     def _compute_beta2(self, tokens_per_batch: int) -> float:
         """beta2 = clip(beta2_0^(tpb/tpb0), min_beta2, max_beta2). Constant token half-life."""
-        exponent = tokens_per_batch / self.reference_tokens_per_batch
+        exponent = tokens_per_batch / self.beta2_reference_tpb
         return max(self.min_beta2, min(self.max_beta2, self.beta2_base**exponent))
 
     def build_optimizer_config(
@@ -219,7 +210,7 @@ class MoeAdamHHeuristic:
                 return k
         return 1
 
-    def build_model_config(self, hidden_size: int) -> GrugModelConfig:
+    def build_model_config(self, hidden_size: int, seq_len: int = SEQ_LEN) -> GrugModelConfig:
         if hidden_size % self.hidden_head_ratio != 0:
             raise ValueError(
                 f"hidden_size ({hidden_size}) must be divisible by hidden_head_ratio ({self.hidden_head_ratio})."
@@ -239,8 +230,8 @@ class MoeAdamHHeuristic:
             num_layers=num_layers,
             num_heads=num_heads,
             num_kv_heads=num_kv_heads,
-            max_seq_len=SEQ_LEN,
-            sliding_window=SEQ_LEN,
+            max_seq_len=seq_len,
+            sliding_window=seq_len,
             initializer_std=0.5 / math.sqrt(hidden_size),
             qk_mult=1.3,
         )
@@ -266,7 +257,7 @@ def build_from_heuristic(
     `GrugMoeAdamHConfig` directly to `GrugMoeLaunchConfig`.
     """
     h = heuristic or MoeAdamHHeuristic()
-    model_cfg = h.build_model_config(hidden_dim)
+    model_cfg = h.build_model_config(hidden_dim, seq_len=seq_len)
     fpt = compute_flops_per_token(model_cfg)
     tokens, batch_size, num_steps = compute_tokens_and_batch(
         budget,
