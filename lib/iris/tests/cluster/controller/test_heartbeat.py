@@ -14,6 +14,7 @@ from iris.cluster.controller.schema import (
     TASK_DETAIL_PROJECTION,
     WORKER_DETAIL_PROJECTION,
 )
+from iris.cluster.controller.store import ControllerStores
 from tests.cluster.controller.conftest import FakeProvider
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -35,7 +36,8 @@ from rigging.timing import Duration, Timestamp
 @pytest.fixture
 def state(tmp_path):
     db = ControllerDB(db_dir=tmp_path)
-    s = ControllerTransitions(db=db)
+    stores = ControllerStores.from_db(db)
+    s = ControllerTransitions(stores=stores)
     yield s
     db.close()
 
@@ -130,7 +132,8 @@ def test_fail_heartbeat_below_threshold(state, worker_metadata):
 def test_fail_heartbeat_at_threshold(tmp_path, worker_metadata):
     """RPC failures at threshold return WORKER_FAILED and prune the worker."""
     db = ControllerDB(db_dir=tmp_path)
-    state = ControllerTransitions(db=db, heartbeat_failure_threshold=3)
+    stores = ControllerStores.from_db(db)
+    state = ControllerTransitions(stores=stores, heartbeat_failure_threshold=3)
     _register_worker(state, "worker1", worker_metadata)
     snapshot = _make_snapshot("worker1")
 
@@ -168,7 +171,8 @@ def test_unhealthy_worker_cascades_to_tasks(tmp_path):
     use heartbeat_failure_threshold=1 to trigger removal on the first unhealthy report.
     """
     db = ControllerDB(db_dir=tmp_path)
-    state = ControllerTransitions(db=db, heartbeat_failure_threshold=1)
+    stores = ControllerStores.from_db(db)
+    state = ControllerTransitions(stores=stores, heartbeat_failure_threshold=1)
     worker_metadata = job_pb2.WorkerMetadata(
         hostname="test-host",
         ip_address="192.168.1.1",

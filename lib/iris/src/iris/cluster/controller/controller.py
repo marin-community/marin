@@ -43,26 +43,23 @@ from iris.cluster.controller.checkpoint import (
     upload_checkpoint,
     write_checkpoint,
 )
-from iris.cluster.controller.db import (
-    ControllerDB,
-    healthy_active_workers_with_attributes,
-    insert_task_profile,
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.store import (
+    ControllerStores,
+    Cursor,
+    JobDetailFilter,
+    WorkerFilter,
     job_scheduling_deadline,
-    running_tasks_by_worker,
     task_row_can_be_scheduled,
-    timed_out_executing_tasks,
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
-    JOB_CONFIG_JOIN,
-    JOB_DETAIL_PROJECTION,
-    JOB_SCHEDULING_PROJECTION,
     TASK_DETAIL_PROJECTION,
+    TASK_DETAIL_SELECT_T,
     TASK_ROW_PROJECTION,
     WORKER_DETAIL_PROJECTION,
     JobDetailRow,
     JobRow,
-    JobSchedulingRow,
     TaskDetailRow,
     TaskRow,
     WorkerDetailRow,
@@ -220,14 +217,14 @@ class _SchedulingOrder:
     user_budget_limits: dict[str, int]
 
 
-def _resource_spec_from_row(job: JobRow | JobSchedulingRow) -> job_pb2.ResourceSpecProto:
-    """Reconstruct a ResourceSpecProto from native job columns."""
+def _resource_spec_from_row(job: JobRow | JobDetailRow) -> job_pb2.ResourceSpecProto:
+    """Reconstruct a ResourceSpecProto from a typed job row."""
     return resource_spec_from_scalars(
-        job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
+        job.resources.cpu_millicores, job.resources.memory_bytes, job.resources.disk_bytes, job.resources.device_json
     )
 
 
-def job_requirements_from_job(job: JobSchedulingRow) -> JobRequirements:
+def job_requirements_from_job(job: JobDetailRow) -> JobRequirements:
     """Convert a job row to scheduler-compatible JobRequirements."""
     return JobRequirements(
         resources=_resource_spec_from_row(job),
@@ -238,7 +235,7 @@ def job_requirements_from_job(job: JobSchedulingRow) -> JobRequirements:
 
 
 def compute_demand_entries(
-    queries: ControllerDB,
+    stores: ControllerStores,
     scheduler: Scheduler | None = None,
     workers: list[WorkerSnapshot] | None = None,
     reservation_claims: dict[WorkerId, ReservationClaim] | None = None,
@@ -265,19 +262,24 @@ def compute_demand_entries(
         ``max(real_pending, holders)``) should be added here.
 
     Args:
-        queries: Controller DB read surface for pending tasks and jobs.
+        stores: Controller stores bundle (provides read surface and store access).
         scheduler: Scheduler for dry-run pass. If None, skips dry-run.
         workers: Available workers for dry-run. If None, skips dry-run.
         reservation_claims: Reservation claims to apply taint injection in the
             dry-run, matching the real scheduling path. If None, no taints applied.
     """
     demand_entries: list[DemandEntry] = []
+    queries = stores.db
 
     # Collect all schedulable pending tasks, grouped by job.
     tasks_by_job: dict[JobName, list[TaskRow]] = defaultdict(list)
     all_schedulable: list[TaskRow] = []
     pending = _schedulable_tasks(queries)
-    job_rows = list(_jobs_by_id(queries, {task.job_id for task in pending}).values()) if pending else []
+    if pending:
+        with stores.read() as _ctx:
+            job_rows = list(_jobs_by_id(stores, _ctx.cur, {task.job_id for task in pending}).values())
+    else:
+        job_rows = []
     jobs_by_id = {job.job_id: job for job in job_rows}
     for task in pending:
         if not task_row_can_be_scheduled(task):
@@ -403,36 +405,20 @@ def _read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClai
     }
 
 
-def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, JobSchedulingRow]:
+def _jobs_by_id(stores: ControllerStores, cur: Cursor, job_ids: set[JobName]) -> dict[JobName, JobDetailRow]:
     if not job_ids:
         return {}
-    wires = [job_id.to_wire() for job_id in job_ids]
-    placeholders = ",".join("?" for _ in wires)
-    with queries.read_snapshot() as snapshot:
-        jobs = JOB_SCHEDULING_PROJECTION.decode(
-            snapshot.fetchall(
-                f"SELECT {JOB_SCHEDULING_PROJECTION.select_clause()} "
-                f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id IN ({placeholders})",
-                tuple(wires),
-            ),
-        )
+    wires = tuple(job_id.to_wire() for job_id in job_ids)
+    jobs = stores.jobs.query(cur, JobDetailFilter(job_ids=wires), detail=True)
     return {job.job_id: job for job in jobs}
 
 
-def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[JobDetailRow]:
+def _jobs_with_reservations(stores: ControllerStores, cur: Cursor, states: tuple[int, ...]) -> list[JobDetailRow]:
     """Fetch only jobs that have reservations, filtering at the SQL level.
 
     Uses the has_reservation column on the jobs table to filter without a JOIN.
     """
-    placeholders = ",".join("?" for _ in states)
-    with queries.read_snapshot() as snapshot:
-        rows = snapshot._fetchall(
-            f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} "
-            f"FROM jobs j {JOB_CONFIG_JOIN} "
-            f"WHERE j.state IN ({placeholders}) AND j.has_reservation = 1",
-            list(states),
-        )
-    return JOB_DETAIL_PROJECTION.decode(rows)
+    return stores.jobs.query(cur, JobDetailFilter(states=frozenset(states), has_reservation=True), detail=True)
 
 
 def _get_running_tasks_with_band_and_value(
@@ -579,7 +565,7 @@ def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -
     with queries.read_snapshot() as snapshot:
         tasks = TASK_DETAIL_PROJECTION.decode(
             snapshot.fetchall(
-                f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} "
+                f"SELECT {TASK_DETAIL_SELECT_T} "
                 f"FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
                 tuple(task_wires),
             ),
@@ -754,7 +740,7 @@ def _find_reservation_ancestor(queries: ControllerDB, job_id: JobName) -> JobNam
     current = job_id.parent
     with queries.read_snapshot() as q:
         while current is not None:
-            row = q.execute_sql(
+            row = q.execute(
                 "SELECT has_reservation FROM jobs WHERE job_id = ?",
                 (current.to_wire(),),
             ).fetchone()
@@ -767,7 +753,7 @@ def _find_reservation_ancestor(queries: ControllerDB, job_id: JobName) -> JobNam
 def _reservation_region_constraints(
     job_id_wire: str,
     claims: dict[WorkerId, ReservationClaim],
-    queries: ControllerDB,
+    stores: ControllerStores,
     existing_constraints: list[Constraint],
 ) -> list[Constraint]:
     """Derive region constraints from claimed reservation workers.
@@ -782,11 +768,12 @@ def _reservation_region_constraints(
         return existing_constraints
 
     claimed_worker_ids = {worker_id for worker_id, claim in claims.items() if claim.job_id == job_id_wire}
-    workers_by_id = {
-        worker.worker_id: worker
-        for worker in healthy_active_workers_with_attributes(queries)
-        if worker.worker_id in claimed_worker_ids
-    }
+    with stores.read() as ctx:
+        workers_by_id = {
+            worker.worker_id: worker
+            for worker in stores.workers.healthy_active_with_attributes(ctx.cur)
+            if worker.worker_id in claimed_worker_ids
+        }
     regions: set[str] = set()
     for worker in workers_by_id.values():
         if worker is None:
@@ -1033,6 +1020,7 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
+        self._stores = ControllerStores.from_db(self._db)
 
         # ThreadContainer must be initialized before the log service setup
         # because _start_local_log_server spawns a uvicorn thread.
@@ -1069,7 +1057,7 @@ class Controller:
         logging.getLogger("iris").addHandler(self._log_handler)
 
         self._transitions = ControllerTransitions(
-            db=self._db,
+            stores=self._stores,
             heartbeat_failure_threshold=config.heartbeat_failure_threshold,
             user_budget_defaults=config.user_budget_defaults,
         )
@@ -1079,7 +1067,7 @@ class Controller:
 
         self._service = ControllerServiceImpl(
             self._transitions,
-            self._db,
+            self._stores,
             controller=self,
             bundle_store=self._bundle_store,
             log_service=self._remote_log_service,
@@ -1471,11 +1459,12 @@ class Controller:
 
     def _profile_all_running_tasks(self) -> None:
         """Capture CPU and memory profiles for every running task and store in the DB."""
-        workers = healthy_active_workers_with_attributes(self._db)
-        if not workers:
-            return
-        workers_by_id = {w.worker_id: w for w in workers}
-        tasks_by_worker = running_tasks_by_worker(self._db, set(workers_by_id.keys()))
+        with self._stores.read() as ctx:
+            workers = self._stores.workers.healthy_active_with_attributes(ctx.cur)
+            if not workers:
+                return
+            workers_by_id = {w.worker_id: w for w in workers}
+            tasks_by_worker = self._stores.tasks.running_tasks_by_worker(ctx.cur, set(workers_by_id.keys()))
 
         profile_targets: list[tuple[JobName, WorkerRow]] = []
         for worker_id, task_ids in tasks_by_worker.items():
@@ -1538,20 +1527,21 @@ class Controller:
             if not resp.profile_data:
                 logger.debug("Empty %s profile for %s", profile_kind, task_id)
                 return
-            insert_task_profile(
-                self._db,
-                task_id=task_id.to_wire(),
-                profile_data=resp.profile_data,
-                captured_at=Timestamp.now(),
-                profile_kind=profile_kind,
-            )
+            with self._stores.transact() as ctx:
+                self._stores.tasks.insert_task_profile(
+                    ctx.cur,
+                    task_id=task_id.to_wire(),
+                    profile_data=resp.profile_data,
+                    captured_at=Timestamp.now(),
+                    profile_kind=profile_kind,
+                )
             logger.debug("Stored %d byte %s profile for %s", len(resp.profile_data), profile_kind, task_id)
         except Exception:
             logger.debug("Profile capture (%s) failed for %s", profile_kind, task_id, exc_info=True)
 
     def _is_reservation_satisfied(
         self,
-        job: JobSchedulingRow,
+        job: JobDetailRow,
         claims: dict[WorkerId, ReservationClaim] | None = None,
     ) -> bool:
         """Check if a job's reservation is fully satisfied.
@@ -1588,13 +1578,11 @@ class Controller:
         if claims is None:
             claims = _read_reservation_claims(self._db)
             persisted = True
-        with self._db.read_snapshot() as snapshot:
-            active_worker_ids = {
-                WorkerId(str(row[0]))
-                for row in snapshot.fetchall("SELECT w.worker_id FROM workers w WHERE w.active = 1")
-            }
-        claimed_job_ids = {JobName.from_wire(claim.job_id) for claim in claims.values()}
-        claimed_jobs = list(_jobs_by_id(self._db, claimed_job_ids).values()) if claimed_job_ids else []
+        with self._stores.read() as ctx:
+            active_workers = self._stores.workers.query(ctx.cur, WorkerFilter(active=True))
+            claimed_job_ids = {JobName.from_wire(claim.job_id) for claim in claims.values()}
+            claimed_jobs = list(_jobs_by_id(self._stores, ctx.cur, claimed_job_ids).values()) if claimed_job_ids else []
+        active_worker_ids = {w.worker_id for w in active_workers}
         jobs_by_id = {job.job_id.to_wire(): job for job in claimed_jobs}
         stale: list[WorkerId] = []
         for worker_id, claim in claims.items():
@@ -1622,15 +1610,16 @@ class Controller:
             persisted = True
         claimed_entries: set[tuple[str, int]] = {(c.job_id, c.entry_idx) for c in claims.values()}
         claimed_worker_ids: set[WorkerId] = set(claims.keys())
-        all_workers = healthy_active_workers_with_attributes(self._db)
-        changed = False
-
         reservable_states = (
             job_pb2.JOB_STATE_PENDING,
             job_pb2.JOB_STATE_BUILDING,
             job_pb2.JOB_STATE_RUNNING,
         )
-        reservation_jobs = _jobs_with_reservations(self._db, reservable_states)
+        with self._stores.read() as ctx:
+            all_workers = self._stores.workers.healthy_active_with_attributes(ctx.cur)
+            reservation_jobs = _jobs_with_reservations(self._stores, ctx.cur, reservable_states)
+        changed = False
+
         for job in reservation_jobs:
             job_wire = job.job_id.to_wire()
             for idx, res_entry in enumerate(reservation_entries_from_json(job.reservation_json)):
@@ -1749,7 +1738,8 @@ class Controller:
         timer = Timer()
         with slow_log(logger, "scheduling state reads", threshold_ms=50):
             pending_tasks = _schedulable_tasks(self._db)
-            workers = healthy_active_workers_with_attributes(self._db)
+            with self._stores.read() as ctx:
+                workers = self._stores.workers.healthy_active_with_attributes(ctx.cur)
         return _SchedulingStateRead(
             pending_tasks=pending_tasks,
             workers=workers,
@@ -1770,7 +1760,8 @@ class Controller:
         tasks_per_job: dict[JobName, int] = defaultdict(int)
         cap = self._config.max_tasks_per_job_per_cycle
         filter_counts: dict[str, int] = defaultdict(int)
-        jobs_by_id = _jobs_by_id(self._db, {task.job_id for task in pending_tasks})
+        with self._stores.read() as ctx:
+            jobs_by_id = _jobs_by_id(self._stores, ctx.cur, {task.job_id for task in pending_tasks})
         for task in pending_tasks:
             if not task_row_can_be_scheduled(task):
                 filter_counts["task_not_schedulable"] += 1
@@ -2025,7 +2016,8 @@ class Controller:
         if now_ms - self._last_timeout_check_ms < self._TIMEOUT_CHECK_INTERVAL_MS:
             return
         self._last_timeout_check_ms = now_ms
-        timed_out = timed_out_executing_tasks(self._db, now)
+        with self._stores.read() as ctx:
+            timed_out = self._stores.tasks.timed_out_executing_tasks(ctx.cur, now)
         if not timed_out:
             return
         for task in timed_out:
@@ -2040,7 +2032,8 @@ class Controller:
         if self._config.dry_run:
             logger.info("[DRY-RUN] Would mark task %s as unschedulable", task.task_id)
             return
-        job = _jobs_by_id(self._db, {task.job_id}).get(task.job_id)
+        with self._stores.read() as ctx:
+            job = _jobs_by_id(self._stores, ctx.cur, {task.job_id}).get(task.job_id)
         if job and job.scheduling_timeout_ms is not None:
             timeout = Duration.from_ms(job.scheduling_timeout_ms)
         else:
@@ -2115,7 +2108,8 @@ class Controller:
         if self._config.dry_run:
             return
         threshold_ms = HEARTBEAT_STALENESS_THRESHOLD.to_ms()
-        workers = healthy_active_workers_with_attributes(self._db)
+        with self._stores.read() as ctx:
+            workers = self._stores.workers.healthy_active_with_attributes(ctx.cur)
         stale = [w for w in workers if w.last_heartbeat.age_ms() > threshold_ms]
         if not stale:
             return
@@ -2322,7 +2316,8 @@ class Controller:
 
         self._heartbeat_iteration += 1
         if _HEALTH_SUMMARY_INTERVAL.should_run():
-            workers = healthy_active_workers_with_attributes(self._db)
+            with self._stores.read() as ctx:
+                workers = self._stores.workers.healthy_active_with_attributes(ctx.cur)
             with self._db.read_snapshot() as snap:
                 active = snap.fetchone("SELECT COUNT(*) FROM jobs j WHERE j.state = ?", (job_pb2.JOB_STATE_RUNNING,))[
                     0
@@ -2350,9 +2345,10 @@ class Controller:
 
         worker_status_map = self._build_worker_status_map()
         self._autoscaler.refresh(worker_status_map)
-        workers = healthy_active_workers_with_attributes(self._db)
+        with self._stores.read() as ctx:
+            workers = self._stores.workers.healthy_active_with_attributes(ctx.cur)
         demand_entries = compute_demand_entries(
-            self._db,
+            self._stores,
             self._scheduler,
             workers,
             reservation_claims=_read_reservation_claims(self._db),
@@ -2368,7 +2364,8 @@ class Controller:
                 decoders={"worker_id": WorkerId},
             )
         worker_ids = {row.worker_id for row in rows}
-        running_by_worker = running_tasks_by_worker(self._db, worker_ids)
+        with self._stores.read() as ctx:
+            running_by_worker = self._stores.tasks.running_tasks_by_worker(ctx.cur, worker_ids)
         for wid in worker_ids:
             result[wid] = WorkerStatus(
                 worker_id=wid,

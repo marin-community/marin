@@ -28,7 +28,7 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
 
-from iris.cluster.controller.db import task_row_can_be_scheduled
+from iris.cluster.controller.store import task_row_can_be_scheduled
 from iris.cluster.controller.schema import WorkerRow
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
@@ -51,6 +51,11 @@ from iris.cluster.types import JobName, WorkerId, is_job_finished
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from rigging.timing import Timestamp
+from tests.cluster.controller._testing import (
+    set_task_state as _set_task_state,
+    set_worker_attribute as _set_worker_attribute,
+    set_worker_health as _set_worker_health,
+)
 from tests.cluster.controller.conftest import (
     FakeProvider,
     hydrate_worker_attributes as _with_attrs,
@@ -405,7 +410,7 @@ def test_claim_skips_unhealthy_worker():
     ctrl = _make_controller()
     _register_worker(ctrl.state, "w1")
     # Mark worker unhealthy
-    ctrl.state.set_worker_health_for_test(WorkerId("w1"), False)
+    _set_worker_health(ctrl.state._db, WorkerId("w1"), healthy=False)
 
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
@@ -903,7 +908,7 @@ def test_region_constraint_injected_from_claimed_workers():
     ctrl = _make_controller()
     w1 = _register_worker(ctrl.state, "w1")
     # Set region attribute on worker
-    ctrl.state.set_worker_attribute_for_test(w1, WellKnownAttribute.REGION, AttributeValue("us-central1"))
+    _set_worker_attribute(ctrl.state._db, w1, WellKnownAttribute.REGION, AttributeValue("us-central1"))
 
     req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
     jid = _submit_job(ctrl.state, "j1", req)
@@ -912,7 +917,7 @@ def test_region_constraint_injected_from_claimed_workers():
     result = _reservation_region_constraints(
         jid.to_wire(),
         ctrl.reservation_claims,
-        ctrl._db,
+        ctrl._stores,
         [],
     )
 
@@ -926,7 +931,7 @@ def test_region_constraint_not_injected_when_already_present():
     """Existing region constraint prevents injection."""
     ctrl = _make_controller()
     w1 = _register_worker(ctrl.state, "w1")
-    ctrl.state.set_worker_attribute_for_test(w1, WellKnownAttribute.REGION, AttributeValue("us-central1"))
+    _set_worker_attribute(ctrl.state._db, w1, WellKnownAttribute.REGION, AttributeValue("us-central1"))
 
     req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
     jid = _submit_job(ctrl.state, "j1", req)
@@ -936,7 +941,7 @@ def test_region_constraint_not_injected_when_already_present():
     result = _reservation_region_constraints(
         jid.to_wire(),
         ctrl.reservation_claims,
-        ctrl._db,
+        ctrl._stores,
         [existing],
     )
 
@@ -956,7 +961,7 @@ def test_region_constraint_not_injected_when_no_region_attr():
     result = _reservation_region_constraints(
         jid.to_wire(),
         ctrl.reservation_claims,
-        ctrl._db,
+        ctrl._stores,
         [],
     )
 
@@ -968,8 +973,8 @@ def test_region_constraint_multiple_regions():
     ctrl = _make_controller()
     w1 = _register_worker(ctrl.state, "w1")
     w2 = _register_worker(ctrl.state, "w2")
-    ctrl.state.set_worker_attribute_for_test(w1, WellKnownAttribute.REGION, AttributeValue("us-central1"))
-    ctrl.state.set_worker_attribute_for_test(w2, WellKnownAttribute.REGION, AttributeValue("us-east1"))
+    _set_worker_attribute(ctrl.state._db, w1, WellKnownAttribute.REGION, AttributeValue("us-central1"))
+    _set_worker_attribute(ctrl.state._db, w2, WellKnownAttribute.REGION, AttributeValue("us-east1"))
 
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry(), _make_reservation_entry()],
@@ -980,7 +985,7 @@ def test_region_constraint_multiple_regions():
     result = _reservation_region_constraints(
         jid.to_wire(),
         ctrl.reservation_claims,
-        ctrl._db,
+        ctrl._stores,
         [],
     )
 
@@ -994,7 +999,7 @@ def test_no_injection_for_non_reservation_job():
     """No claims for this job → constraints returned unchanged."""
     ctrl = _make_controller()
     w1 = _register_worker(ctrl.state, "w1")
-    ctrl.state.set_worker_attribute_for_test(w1, WellKnownAttribute.REGION, AttributeValue("us-central1"))
+    _set_worker_attribute(ctrl.state._db, w1, WellKnownAttribute.REGION, AttributeValue("us-central1"))
 
     # Claim w1 for a different job
     req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
@@ -1004,7 +1009,7 @@ def test_no_injection_for_non_reservation_job():
     result = _reservation_region_constraints(
         "/test-user/unrelated-job",
         ctrl.reservation_claims,
-        ctrl._db,
+        ctrl._stores,
         [],
     )
 
@@ -1525,7 +1530,7 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
     # (loop body never executes, so the old code never reached _cancel_child_jobs).
     parent_task_ref = _query_task(state, parent_task.task_id)
     assert parent_task_ref is not None
-    state.set_task_state_for_test(parent_task.task_id, job_pb2.TASK_STATE_KILLED)
+    _set_task_state(state._db, parent_task.task_id, job_pb2.TASK_STATE_KILLED)
 
     # Fire JobCancelledEvent. All parent tasks are now terminal so the loop
     # skips them. Only the explicit _cancel_child_jobs call at the end of

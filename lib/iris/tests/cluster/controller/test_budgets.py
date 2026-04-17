@@ -6,7 +6,8 @@
 from pathlib import Path
 
 import pytest
-from iris.cluster.controller.db import ControllerDB, UserBudget
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.store import UserBudget
 from rigging.timing import Timestamp
 
 

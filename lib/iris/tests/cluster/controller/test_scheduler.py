@@ -12,9 +12,7 @@ import pytest
 
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
-from iris.cluster.controller.db import (
-    _decode_attribute_rows,
-)
+from iris.cluster.controller.store import _decode_attribute_rows
 from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
@@ -30,6 +28,7 @@ from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 
 from tests.cluster.conftest import eq_constraint, in_constraint
+from ._testing import set_worker_health as _set_worker_health
 from .conftest import (
     building_counts as _building_counts,
     check_task_can_be_scheduled,
@@ -51,7 +50,7 @@ from .conftest import (
 def _job_requirements_from_job(job) -> JobRequirements:
     return JobRequirements(
         resources=resource_spec_from_scalars(
-            job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
+            job.resources.cpu_millicores, job.resources.memory_bytes, job.resources.disk_bytes, job.resources.device_json
         ),
         constraints=constraints_from_json(job.constraints_json),
         is_coscheduled=job.has_coscheduling,
@@ -355,7 +354,7 @@ def test_scheduler_skips_unhealthy_workers(scheduler, state):
     register_worker(state, "w1", "addr1", make_worker_metadata())
     register_worker(state, "w2", "addr2", make_worker_metadata())
     # Mark second worker as unhealthy
-    state.set_worker_health_for_test(WorkerId("w2"), False)
+    _set_worker_health(state._db, WorkerId("w2"), healthy=False)
 
     submit_job(state, "j1", make_job_request())
 

@@ -56,23 +56,24 @@ from iris.rpc.auth import (
     require_identity,
 )
 from iris.cluster.bundle import BundleStore
-from iris.cluster.controller.db import (
-    ACTIVE_TASK_STATES,
-    ControllerDB,
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.store import (
+    ControllerStores,
     EndpointQuery,
     TaskJobSummary,
     UserStats,
     attempt_is_worker_failure,
-    running_tasks_by_worker,
     task_row_can_be_scheduled,
 )
 from iris.cluster.controller.schema import (
+    ACTIVE_TASK_STATES,
     API_KEY_PROJECTION,
     ATTEMPT_PROJECTION,
     JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
     JOB_ROW_PROJECTION,
     TASK_DETAIL_PROJECTION,
+    TASK_DETAIL_SELECT_T,
     TASK_ROW_PROJECTION,
     TXN_ACTION_PROJECTION,
     WORKER_DETAIL_PROJECTION,
@@ -288,7 +289,7 @@ def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskDetailRo
     with db.read_snapshot() as q:
         task = TASK_DETAIL_PROJECTION.decode_one(
             q.fetchall(
-                f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} FROM tasks t WHERE t.task_id = ?",
+                f"SELECT {TASK_DETAIL_SELECT_T} FROM tasks t WHERE t.task_id = ?",
                 (task_wire,),
             )
         )
@@ -328,10 +329,10 @@ def _worker_address(db: ControllerDB, worker_id: WorkerId) -> str | None:
         return str(row[0]) if row else None
 
 
-def _resource_spec_from_job_row(job: Any) -> job_pb2.ResourceSpecProto:
-    """Reconstruct a ResourceSpecProto from native job columns."""
+def _resource_spec_from_job_row(job: JobRow | JobDetailRow) -> job_pb2.ResourceSpecProto:
+    """Reconstruct a ResourceSpecProto from a typed job row."""
     return resource_spec_from_scalars(
-        job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
+        job.resources.cpu_millicores, job.resources.memory_bytes, job.resources.disk_bytes, job.resources.device_json
     )
 
 
@@ -378,7 +379,9 @@ def _reconstruct_launch_job_request(job: JobDetailRow) -> controller_pb2.Control
     req.entrypoint.CopyFrom(proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint))
     req.environment.CopyFrom(proto_from_json(job.environment_json, job_pb2.EnvironmentConfig))
     req.resources.CopyFrom(
-        resource_spec_from_scalars(job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json)
+        resource_spec_from_scalars(
+            job.resources.cpu_millicores, job.resources.memory_bytes, job.resources.disk_bytes, job.resources.device_json
+        )
     )
 
     for c in constraints_from_json(job.constraints_json):
@@ -406,25 +409,26 @@ def _reconstruct_launch_job_request(job: JobDetailRow) -> controller_pb2.Control
 
 def _worker_metadata_to_proto(worker: WorkerDetailRow) -> job_pb2.WorkerMetadata:
     """Reconstruct a WorkerMetadata proto from scalar columns."""
+    wmd = worker.metadata
     md = job_pb2.WorkerMetadata(
-        hostname=worker.md_hostname,
-        ip_address=worker.md_ip_address,
-        cpu_count=worker.md_cpu_count,
-        memory_bytes=worker.md_memory_bytes,
-        disk_bytes=worker.md_disk_bytes,
-        tpu_name=worker.md_tpu_name,
-        tpu_worker_hostnames=worker.md_tpu_worker_hostnames,
-        tpu_worker_id=worker.md_tpu_worker_id,
-        tpu_chips_per_host_bounds=worker.md_tpu_chips_per_host_bounds,
-        gpu_count=worker.md_gpu_count,
-        gpu_name=worker.md_gpu_name,
-        gpu_memory_mb=worker.md_gpu_memory_mb,
-        gce_instance_name=worker.md_gce_instance_name,
-        gce_zone=worker.md_gce_zone,
-        git_hash=worker.md_git_hash,
+        hostname=wmd.hostname,
+        ip_address=wmd.ip_address,
+        cpu_count=wmd.cpu_count,
+        memory_bytes=wmd.memory_bytes,
+        disk_bytes=wmd.disk_bytes,
+        tpu_name=wmd.tpu_name,
+        tpu_worker_hostnames=wmd.tpu_worker_hostnames,
+        tpu_worker_id=wmd.tpu_worker_id,
+        tpu_chips_per_host_bounds=wmd.tpu_chips_per_host_bounds,
+        gpu_count=wmd.gpu_count,
+        gpu_name=wmd.gpu_name,
+        gpu_memory_mb=wmd.gpu_memory_mb,
+        gce_instance_name=wmd.gce_instance_name,
+        gce_zone=wmd.gce_zone,
+        git_hash=wmd.git_hash,
     )
-    if worker.md_device_json and worker.md_device_json != "{}":
-        md.device.CopyFrom(proto_from_json(worker.md_device_json, job_pb2.DeviceConfig))
+    if wmd.device_json and wmd.device_json != "{}":
+        md.device.CopyFrom(proto_from_json(wmd.device_json, job_pb2.DeviceConfig))
     # Populate attributes from the worker_attributes table data stored on the row.
     for key, value in worker.attributes.items():
         av = job_pb2.AttributeValue()
@@ -506,7 +510,7 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskDetailR
     with db.read_snapshot() as q:
         tasks = TASK_DETAIL_PROJECTION.decode(
             q.fetchall(
-                f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} "
+                f"SELECT {TASK_DETAIL_SELECT_T} "
                 "FROM tasks t WHERE t.job_id = ? ORDER BY t.job_id ASC, t.task_index ASC",
                 (job_id.to_wire(),),
             ),
@@ -669,13 +673,13 @@ def _query_jobs(
         select_params.extend([limit, offset])
 
     with db.read_snapshot() as q:
-        rows = q.execute_sql(select_sql, tuple(select_params)).fetchall()
+        rows = q.execute(select_sql, tuple(select_params)).fetchall()
         # Skip the COUNT query when we can infer the total from the result set:
         # first page + short result means we already have everything.
         if offset == 0 and limit > 0 and len(rows) < limit:
             total = len(rows)
         else:
-            total = q.execute_sql(count_sql, tuple(params)).fetchone()[0]
+            total = q.execute(count_sql, tuple(params)).fetchone()[0]
 
     return JOB_ROW_PROJECTION.decode(rows), total
 
@@ -852,7 +856,7 @@ def _tasks_for_worker(db: ControllerDB, worker_id: WorkerId, limit: int = 50) ->
         placeholders = ",".join("?" for _ in task_wires)
         tasks = TASK_DETAIL_PROJECTION.decode(
             q.fetchall(
-                f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} "
+                f"SELECT {TASK_DETAIL_SELECT_T} "
                 f"FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
                 tuple(task_wires),
             ),
@@ -971,7 +975,7 @@ class ControllerServiceImpl:
     def __init__(
         self,
         transitions: ControllerTransitions,
-        db: ControllerDB,
+        stores: ControllerStores,
         controller: ControllerProtocol,
         bundle_store: BundleStore,
         log_service: LogServiceImpl | LogServiceProxy,
@@ -979,7 +983,8 @@ class ControllerServiceImpl:
         system_endpoints: dict[str, str] | None = None,
     ):
         self._transitions = transitions
-        self._db = db
+        self._stores = stores
+        self._db = stores.db
         self._controller = controller
         self._bundle_store = bundle_store
         self._log_service = log_service
@@ -1172,7 +1177,7 @@ class ControllerServiceImpl:
         self._controller.wake()
 
         with self._db.read_snapshot() as q:
-            num_tasks = q.execute_sql("SELECT COUNT(*) FROM tasks WHERE job_id = ?", (job_id.to_wire(),)).fetchone()[0]
+            num_tasks = q.execute("SELECT COUNT(*) FROM tasks WHERE job_id = ?", (job_id.to_wire(),)).fetchone()[0]
         logger.info(f"Job {job_id} submitted with {num_tasks} task(s)")
         return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
 
@@ -1586,7 +1591,10 @@ class ControllerServiceImpl:
             return controller_pb2.Controller.ListWorkersResponse()
         workers = []
         worker_rows = self._worker_roster_cached()
-        running_by_worker = running_tasks_by_worker(self._db, {worker.worker_id for worker in worker_rows})
+        with self._stores.read() as rctx:
+            running_by_worker = self._stores.tasks.running_tasks_by_worker(
+                rctx.cur, {worker.worker_id for worker in worker_rows}
+            )
         for worker in worker_rows:
             workers.append(
                 controller_pb2.Controller.WorkerHealthStatus(
@@ -1679,7 +1687,7 @@ class ControllerServiceImpl:
         if prefix.startswith("/system/"):
             return self._list_system_endpoints(prefix, exact=request.exact)
 
-        endpoints = self._db.endpoints.query(
+        endpoints = self._stores.endpoints.query(
             EndpointQuery(
                 exact_name=prefix if request.exact else None,
                 name_prefix=None if request.exact else prefix,
@@ -1744,7 +1752,11 @@ class ControllerServiceImpl:
 
         # Fetch running task counts per worker for dashboard display
         all_worker_ids = {WorkerId(w.worker_id) for w in workers}
-        running_by_worker = running_tasks_by_worker(self._db, all_worker_ids) if all_worker_ids else {}
+        if all_worker_ids:
+            with self._stores.read() as ctx:
+                running_by_worker = self._stores.tasks.running_tasks_by_worker(ctx.cur, all_worker_ids)
+        else:
+            running_by_worker = {}
 
         # Enrich VmInfo objects with worker information by matching vm_id to worker_id
         for group in status.groups:
@@ -2469,7 +2481,9 @@ class ControllerServiceImpl:
                     decoders={"job_id": JobName.from_wire},
                 )
             for row in rows:
-                job_resources[row.job_id] = _resource_spec_from_job_row(row)
+                job_resources[row.job_id] = resource_spec_from_scalars(
+                    row.res_cpu_millicores, row.res_memory_bytes, row.res_disk_bytes, row.res_device_json
+                )
 
         # Group by effective band, interleaving by user within each band
         BAND_ORDER = [
@@ -2563,7 +2577,9 @@ class ControllerServiceImpl:
             )
         running_protos: list[controller_pb2.Controller.SchedulerRunningTask] = []
         for row in running_rows:
-            res = _resource_spec_from_job_row(row)
+            res = resource_spec_from_scalars(
+                row.res_cpu_millicores, row.res_memory_bytes, row.res_disk_bytes, row.res_device_json
+            )
             eff_band = compute_effective_band(row.priority_band, row.task_id.user, user_spend, budget_limits)
             accel = get_gpu_count(res.device) + get_tpu_count(res.device)
             rv = resource_value(res.cpu_millicores, res.memory_bytes, accel)

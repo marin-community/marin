@@ -286,7 +286,7 @@ class ControllerDashboard:
 
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
-        self._actor_proxy = ActorProxy(self._service._db)
+        self._actor_proxy = ActorProxy(self._service._stores)
 
         @requires_auth
         async def _proxy_actor_rpc(request: Request) -> Response:

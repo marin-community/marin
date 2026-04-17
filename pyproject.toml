@@ -85,6 +85,13 @@ extend-exclude = ["scripts/"]
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]
 ignore = ["F722", "B008", "UP015", "A005", "I001", "E741"]
+# Treat field-factory helpers like `dataclasses.field` so RUF009 doesn't flag
+# their use as dataclass defaults.
+extend-safe-fixes = []
+
+[tool.ruff.lint.flake8-bugbear]
+# Functions that return a `dataclasses.field(...)` and are safe as defaults.
+extend-immutable-calls = ["iris.cluster.controller.schema.pcolumn"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]

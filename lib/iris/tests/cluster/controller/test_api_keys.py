@@ -23,6 +23,7 @@ from iris.rpc.auth import VerifiedIdentity, hash_token
 from rigging.timing import Timestamp
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.store import ControllerStores
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.log_server.server import LogServiceImpl
 from iris.rpc import config_pb2
@@ -39,7 +40,8 @@ def db(tmp_path):
 
 def _make_service(db, auth=None):
     """Create a ControllerServiceImpl with minimal dependencies for API key tests."""
-    state = ControllerTransitions(db=db)
+    stores = ControllerStores.from_db(db)
+    state = ControllerTransitions(stores=stores)
 
     controller_mock = Mock()
     controller_mock.wake = Mock()
@@ -51,7 +53,7 @@ def _make_service(db, auth=None):
 
     return ControllerServiceImpl(
         state,
-        db,
+        stores,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
         log_service=LogServiceImpl(),

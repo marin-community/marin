@@ -18,9 +18,6 @@ from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.log_server.server import LogServiceImpl
-from iris.cluster.controller.db import (
-    healthy_active_workers_with_attributes,
-)
 from iris.cluster.controller.schema import (
     JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
@@ -142,7 +139,10 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
             return None
         req = JobRequirements(
             resources=resource_spec_from_scalars(
-                job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
+                job.resources.cpu_millicores,
+                job.resources.memory_bytes,
+                job.resources.disk_bytes,
+                job.resources.device_json,
             ),
             constraints=constraints_from_json(job.constraints_json),
             is_coscheduled=job.has_coscheduling,
@@ -150,7 +150,8 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
         )
         tasks = _query_tasks_with_attempts(state, job.job_id)
         schedulable_task_id = next((t.task_id for t in tasks if check_task_can_be_scheduled(t)), None)
-        workers = healthy_active_workers_with_attributes(state._db)
+        with state._stores.read() as ctx:
+            workers = state._stores.workers.healthy_active_with_attributes(ctx.cur)
         context = _create_scheduling_context(workers)
         return scheduler.get_job_scheduling_diagnostics(req, context, schedulable_task_id, num_tasks=len(tasks))
 
@@ -170,7 +171,7 @@ def service(state, scheduler, tmp_path):
     log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
-        state._db,
+        state._stores,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
@@ -190,7 +191,7 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
     log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
-        state._db,
+        state._stores,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
@@ -1046,7 +1047,7 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
     log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
         state,
-        state._db,
+        state._stores,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
@@ -1078,7 +1079,7 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path):
     log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
         state,
-        state._db,
+        state._stores,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,

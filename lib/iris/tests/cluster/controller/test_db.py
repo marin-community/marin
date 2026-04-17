@@ -13,6 +13,7 @@ from iris.cluster.controller.db import (
     Row,
     TransactionCursor,
 )
+from iris.cluster.controller.store import ControllerStores
 
 
 @pytest.fixture
@@ -288,10 +289,10 @@ def test_replace_from_reattaches_profiles_db(tmp_path: Path) -> None:
     """replace_from() must re-attach the profiles DB so profile tables remain accessible."""
     from rigging.timing import Timestamp
 
-    from iris.cluster.controller.db import get_task_profiles, insert_task_profile
-
     db = ControllerDB(db_dir=tmp_path)
-    insert_task_profile(db, "task-1", b"profile-data", Timestamp.now())
+    stores = ControllerStores.from_db(db)
+    with stores.transact() as ctx:
+        stores.tasks.insert_task_profile(ctx.cur, "task-1", b"profile-data", Timestamp.now())
 
     backup_dir = tmp_path / "backup"
     backup_dir.mkdir()
@@ -312,7 +313,8 @@ def test_replace_from_reattaches_profiles_db(tmp_path: Path) -> None:
 
     db.replace_from(str(backup_dir))
 
-    profiles = get_task_profiles(db, "task-1")
+    with stores.read() as ctx:
+        profiles = stores.tasks.get_task_profiles(ctx.cur, "task-1")
     assert len(profiles) == 1
     db.close()
 
@@ -494,3 +496,42 @@ def test_backfill_attempt_finished_at_migration(tmp_path: Path) -> None:
     assert out[("/u/E", 0)] == 7200
     assert out[("/u/E", 1)] is None
     conn.close()
+
+
+def test_controller_stores_read_scope(tmp_path: Path) -> None:
+    db = ControllerDB(db_dir=tmp_path)
+    stores = ControllerStores.from_db(db)
+    with stores.read() as ctx:
+        rows = ctx.cur.execute("SELECT 1 AS one").fetchall()
+        assert [tuple(r) for r in rows] == [(1,)]
+        # Read-only store method works inside a read scope.
+        assert ctx.endpoints.query() == []
+
+
+def test_controller_stores_read_rejects_writes(tmp_path: Path) -> None:
+    """A read() scope must refuse any mutation of the underlying database.
+
+    The read pool hands out read-only SQLite connections, so any write issued
+    through ``ctx.cur`` fails with ``OperationalError`` before it can reach
+    disk. This is what lets callers treat ``read()`` as a strictly non-mutating
+    context without auditing every downstream store method they pass the
+    cursor into.
+    """
+    db = ControllerDB(db_dir=tmp_path)
+    stores = ControllerStores.from_db(db)
+
+    # Seed a row via a real write transaction so we have something to mutate.
+    with stores.transact() as ctx:
+        ctx.cur.execute("CREATE TABLE _rollback_probe(id INTEGER PRIMARY KEY, v TEXT)")
+        ctx.cur.execute("INSERT INTO _rollback_probe(id, v) VALUES (1, 'committed')")
+
+    with stores.read() as rctx:
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            rctx.cur.execute("INSERT INTO _rollback_probe(id, v) VALUES (2, 'scratch')")
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            rctx.cur.execute("UPDATE _rollback_probe SET v = 'dirty' WHERE id = 1")
+
+    # Confirm the seed row is untouched.
+    with stores.read() as rctx:
+        rows = [tuple(r) for r in rctx.cur.execute("SELECT id, v FROM _rollback_probe ORDER BY id").fetchall()]
+    assert rows == [(1, "committed")]

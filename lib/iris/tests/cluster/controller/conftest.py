@@ -28,18 +28,18 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
-from iris.cluster.controller.db import (
-    ACTIVE_TASK_STATES,
-    ControllerDB,
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.store import (
+    ControllerStores,
     _decode_attribute_rows,
     task_row_can_be_scheduled,
     task_row_is_finished,
 )
 from iris.cluster.controller.schema import (
+    ACTIVE_TASK_STATES,
     ATTEMPT_PROJECTION,
     JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
-    JOB_SCHEDULING_PROJECTION,
     TASK_DETAIL_PROJECTION,
     WORKER_ROW_PROJECTION,
     JobDetailRow,
@@ -69,6 +69,7 @@ from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
+from tests.cluster.controller._testing import set_task_state
 from tests.cluster.providers.conftest import make_mock_platform
 
 check_task_can_be_scheduled = task_row_can_be_scheduled
@@ -150,7 +151,7 @@ def controller_service(state, log_service, mock_controller, tmp_path) -> Control
     """ControllerServiceImpl with fresh DB, log service, and mock controller."""
     return ControllerServiceImpl(
         state,
-        state._db,
+        state._stores,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
@@ -168,7 +169,8 @@ def make_controller_state(**kwargs):
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
     try:
         db = ControllerDB(db_dir=tmp)
-        yield ControllerTransitions(db=db, **kwargs)
+        stores = ControllerStores.from_db(db)
+        yield ControllerTransitions(stores=stores, **kwargs)
         db.close()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -244,9 +246,9 @@ def query_job(state: ControllerTransitions, job_id: JobName) -> JobDetailRow | N
 
 
 def query_job_row(state: ControllerTransitions, job_id: JobName):
-    """Query a job as a JobSchedulingRow (scheduling projection with resources/constraints)."""
+    """Query a job as a JobDetailRow."""
     with state._db.snapshot() as q:
-        return JOB_SCHEDULING_PROJECTION.decode_one(
+        return JOB_DETAIL_PROJECTION.decode_one(
             q.fetchall(
                 f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ? LIMIT 1",
                 (job_id.to_wire(),),
@@ -545,12 +547,7 @@ def transition_task(
     current_attempt = task.attempts[-1] if task.attempts else None
     worker_id = current_attempt.worker_id if current_attempt is not None else task.current_worker_id
     if worker_id is None:
-        state.set_task_state_for_test(
-            task_id,
-            new_state,
-            error=error,
-            exit_code=exit_code,
-        )
+        set_task_state(state._db, task_id, new_state, error=error, exit_code=exit_code)
         return state
     return state.apply_task_updates(
         HeartbeatApplyRequest(

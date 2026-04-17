@@ -7,15 +7,26 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Any, Generic, Protocol, TypeVar
+from collections.abc import Callable
 
 import json
-
-from iris.cluster.controller.db import ACTIVE_TASK_STATES, QuerySnapshot
+from iris.cluster.controller.schema import ACTIVE_TASK_STATES
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
 T = TypeVar("T")
+
+
+class SnapshotReader(Protocol):
+    """Interface budget functions need from QuerySnapshot."""
+
+    def raw(
+        self,
+        sql: str,
+        params: tuple = ...,
+        decoders: dict[str, Callable] | None = None,
+    ) -> list[Any]: ...
 
 
 def _accel_from_device_json(device_json: str | None) -> int:
@@ -62,7 +73,7 @@ def resource_value(cpu_millicores: int, memory_bytes: int, accelerator_count: in
     return 1000 * accelerator_count + ram_gb + 5 * cpu_cores
 
 
-def compute_user_spend(snapshot: QuerySnapshot) -> dict[str, int]:
+def compute_user_spend(snapshot: SnapshotReader) -> dict[str, int]:
     """Compute per-user budget spend from active tasks.
 
     Joins tasks (in ASSIGNED/BUILDING/RUNNING states) with job_config to get

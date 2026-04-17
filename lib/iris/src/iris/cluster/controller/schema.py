@@ -12,16 +12,35 @@ from __future__ import annotations
 import dataclasses
 import json
 import sqlite3
+import typing
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any, Generic, TypeVar
 
 from iris.cluster.types import JobName, WorkerId
+from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 
 T = TypeVar("T")
 RowDecoder = Callable[[sqlite3.Row], Any]
+
+# Task states that indicate the task is actively running or assigned to a worker.
+ACTIVE_TASK_STATES: frozenset[int] = frozenset(
+    {
+        job_pb2.TASK_STATE_ASSIGNED,
+        job_pb2.TASK_STATE_BUILDING,
+        job_pb2.TASK_STATE_RUNNING,
+    }
+)
+
+# Tasks executing on a worker (subset of ACTIVE_TASK_STATES that excludes ASSIGNED).
+EXECUTING_TASK_STATES: frozenset[int] = frozenset(
+    {
+        job_pb2.TASK_STATE_BUILDING,
+        job_pb2.TASK_STATE_RUNNING,
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +227,7 @@ class Table:
         *column_names: str,
         extra_fields: tuple[ExtraField, ...] = (),
         row_cls: type | None = None,
+        post_decode: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> Projection:
         """Create a typed projection over a subset of columns.
 
@@ -228,7 +248,7 @@ class Table:
                     f"Unknown column {cn!r} in table {self.name!r}. " f"Available: {sorted(self._column_map.keys())}"
                 )
             cols.append(self._column_map[cn])
-        return Projection(self, tuple(cols), extra_fields=extra_fields, row_cls=row_cls)
+        return Projection(self, tuple(cols), extra_fields=extra_fields, row_cls=row_cls, post_decode=post_decode)
 
     def select_clause(self, *column_names: str, prefix: bool = True) -> str:
         """Generate 'alias.col1, alias.col2, ...' for a SELECT.
@@ -327,6 +347,7 @@ class Projection(Generic[T]):
         extra_fields: tuple[ExtraField, ...] = (),
         row_cls: type | None = None,
         column_aliases: tuple[str, ...] | None = None,
+        post_decode: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ):
         self.table = table
         self.columns = columns
@@ -348,8 +369,13 @@ class Projection(Generic[T]):
 
         self._required_columns: tuple[str, ...] = tuple(c.name for c in columns if c.name not in defaults)
 
+        self._post_decode = post_decode
+
         if row_cls is not None:
-            _validate_row_cls(row_cls, columns, extra_fields)
+            # Skip column-level validation when post_decode is provided: the transform
+            # may combine or rename columns, so the 1:1 field-name check does not apply.
+            if post_decode is None:
+                _validate_row_cls(row_cls, columns, extra_fields)
             self._row_cls: type = row_cls
         else:
             self._row_cls = _make_row_class(f"{table.name}_projection", columns, extra_fields)
@@ -419,11 +445,18 @@ class Projection(Generic[T]):
         first_keys = set(first.keys())
         all_present = all(col in first_keys for col in columns)
 
+        post_decode = self._post_decode
+
         if all_present:
             # All columns present -- tight loop, no per-row key checks.
-            result.append(cls(**{name: decoder(first[col]) for name, col, decoder in zipped}))
-            for row in it:
-                result.append(cls(**{name: decoder(row[col]) for name, col, decoder in zipped}))
+            if post_decode is None:
+                result.append(cls(**{name: decoder(first[col]) for name, col, decoder in zipped}))
+                for row in it:
+                    result.append(cls(**{name: decoder(row[col]) for name, col, decoder in zipped}))
+            else:
+                result.append(cls(**post_decode({name: decoder(first[col]) for name, col, decoder in zipped})))
+                for row in it:
+                    result.append(cls(**post_decode({name: decoder(row[col]) for name, col, decoder in zipped})))
         else:
             # Some columns missing -- use default-filling path for every row.
             result.append(self._decode_row(first))
@@ -452,6 +485,8 @@ class Projection(Generic[T]):
             else:
                 field_name, default_val, is_factory = self._defaults[col]
                 values[field_name] = default_val() if is_factory else default_val
+        if self._post_decode is not None:
+            values = self._post_decode(values)
         return self._row_cls(**values)
 
 
@@ -467,6 +502,197 @@ def adhoc_projection(*fields: tuple[str, type]) -> Projection:
     columns = tuple(Column(name=name, sql_type="", python_type=typ, decoder=_identity) for name, typ in fields)
     table = Table(name="_adhoc", alias="", columns=columns)
     return Projection(table, columns)
+
+
+# ---------------------------------------------------------------------------
+# @projection decorator — generates Projection from a dataclass definition
+# ---------------------------------------------------------------------------
+
+
+_PCOLUMN_KEY = "_iris_pcolumn_spec"
+
+
+@dataclass(frozen=True)
+class _PColumnSpec:
+    """Per-field configuration attached via ``pcolumn`` field metadata."""
+
+    column: str | None = None  # db column name override
+    prefix: str | None = None  # nested-dataclass flatten prefix
+    nullable: bool = False  # nested nullable: None when first required col is NULL
+    computed: bool = False  # non-DB field (populated post-hoc)
+
+
+def pcolumn(
+    *,
+    column: str | None = None,
+    prefix: str | None = None,
+    nullable: bool = False,
+    computed: bool = False,
+    default: Any = _MISSING,
+    default_factory: Any = _MISSING,
+) -> Any:
+    """Attach column-mapping metadata to a dataclass field.
+
+    Use inside a class decorated with ``@projection(...)``. The returned object
+    is a ``dataclasses.field`` with extra metadata the decorator reads at class
+    creation time.
+
+    Args:
+        column: Explicit DB column name. Defaults to the field's own name.
+            Use when the dataclass field name should differ from the column,
+            e.g. ``user_id: str = pcolumn(column="id")`` reads ``users.id``.
+        prefix: Flatten a nested dataclass across multiple columns sharing this
+            prefix. The projection looks up ``{prefix}{subfield}`` for each
+            field of the nested type. Example:
+            ``resources: ResourceSpec = pcolumn(prefix="res_")`` with
+            ResourceSpec fields ``cpu, mem`` maps to columns ``res_cpu``,
+            ``res_mem`` and re-packs them into a ``ResourceSpec`` on decode.
+        nullable: For ``prefix=`` fields only. When the first required sub-column
+            is NULL, yield ``None`` for the whole nested value instead of
+            building a partial dataclass. Example: a LEFT JOIN where the nested
+            record may be absent.
+        computed: Non-DB field, populated post-decode by caller. The projection
+            SELECTs nothing for it; the field gets its ``default`` /
+            ``default_factory`` and the caller fills it in later. Use sparingly:
+            once a projection relies on ``computed`` fields, callers must know to
+            fill them. Example: ``attempts: tuple[Attempt, ...] = pcolumn(
+                computed=True, default_factory=tuple)``.
+        default / default_factory: Passthrough to ``dataclasses.field``. When
+            ``default=`` is used the field is filled with that value if the
+            column is absent from the SELECT (useful for partial projections).
+    """
+    spec = _PColumnSpec(column=column, prefix=prefix, nullable=nullable, computed=computed)
+    metadata = {_PCOLUMN_KEY: spec}
+    if default_factory is not _MISSING:
+        return dataclasses.field(default_factory=default_factory, metadata=metadata)
+    if default is not _MISSING:
+        return dataclasses.field(default=default, metadata=metadata)
+    return dataclasses.field(metadata=metadata)
+
+
+def _spec_for_field(f: dataclasses.Field) -> _PColumnSpec:
+    return f.metadata.get(_PCOLUMN_KEY, _PColumnSpec())
+
+
+def _lookup_column(name: str, tables: Sequence[Table]) -> tuple[Column, str]:
+    """Look up a column by name across tables, returning (column, table_alias)."""
+    for t in tables:
+        col = t._column_map.get(name)
+        if col is not None:
+            return col, t.alias
+    searched = ", ".join(t.name for t in tables)
+    raise KeyError(f"Column {name!r} not found in any of: {searched}")
+
+
+def projection(primary: Table, *, extra_tables: Sequence[Table] = ()) -> Callable[[type], type]:
+    """Class decorator that generates a ``Projection`` from a dataclass definition.
+
+    Each dataclass field maps to a DB column of the same name in the primary
+    table (or any table listed in ``extra_tables``). Use ``pcolumn`` to override
+    the column name, attach a prefix for nested-dataclass flattening, or mark a
+    field as ``computed=True`` (populated post-decode, not read from the DB).
+
+    The generated ``Projection`` is attached as ``cls.PROJECTION``. The class
+    itself is returned unchanged; all validation happens at decoration time.
+    """
+    tables: tuple[Table, ...] = (primary, *tuple(extra_tables))
+
+    def decorate(cls: type) -> type:
+        if not dataclasses.is_dataclass(cls):
+            raise TypeError(f"@projection requires a dataclass, got {cls!r}")
+
+        # ``from __future__ import annotations`` stores field.type as strings; resolve.
+        resolved_hints = typing.get_type_hints(cls, globalns=globals(), localns=None)
+
+        columns: list[Column] = []
+        aliases: list[str] = []
+        extra_fields: list[ExtraField] = []
+        # Per-prefix nested-group metadata: (field_name, nested_cls, prefix, nullable, sub_names)
+        nested_groups: list[tuple[str, type, str, bool, tuple[str, ...]]] = []
+        # Fields that are scalar DB columns (not nested, not extra).
+        # Used below only for validation; no per-field bookkeeping needed.
+
+        for f in dataclasses.fields(cls):
+            spec = _spec_for_field(f)
+            if spec.computed:
+                ef_default = f.default if f.default is not dataclasses.MISSING else _MISSING
+                ef_factory = (
+                    f.default_factory if f.default_factory is not dataclasses.MISSING else None  # type: ignore[misc]
+                )
+                extra_fields.append(
+                    ExtraField(
+                        name=f.name,
+                        python_type=f.type if isinstance(f.type, type) else object,
+                        default=ef_default,
+                        default_factory=ef_factory,
+                    )
+                )
+                continue
+
+            if spec.prefix is not None:
+                nested_cls = resolved_hints.get(f.name, f.type)
+                # typing.get_type_hints may return typing.Optional[X] etc. For
+                # a nullable nested group we expect ``Nested | None`` — pick the
+                # non-None arg. For plain cases it is the dataclass itself.
+                origin = typing.get_origin(nested_cls)
+                if origin is not None:
+                    args = [a for a in typing.get_args(nested_cls) if a is not type(None)]
+                    if len(args) == 1:
+                        nested_cls = args[0]
+                if not (isinstance(nested_cls, type) and dataclasses.is_dataclass(nested_cls)):
+                    raise TypeError(
+                        f"{cls.__name__}.{f.name}: pcolumn(prefix=...) requires a dataclass annotation, "
+                        f"got {nested_cls!r}"
+                    )
+                sub_field_names: list[str] = []
+                for sub in dataclasses.fields(nested_cls):
+                    db_name = f"{spec.prefix}{sub.name}"
+                    col, alias = _lookup_column(db_name, tables)
+                    columns.append(col)
+                    aliases.append(alias)
+                    sub_field_names.append(sub.name)
+                nested_groups.append((f.name, nested_cls, spec.prefix, spec.nullable, tuple(sub_field_names)))
+                continue
+
+            # Scalar DB column.
+            db_name = spec.column if spec.column is not None else f.name
+            col, alias = _lookup_column(db_name, tables)
+            columns.append(col)
+            aliases.append(alias)
+
+        column_aliases: tuple[str, ...] | None
+        if len(tables) > 1:
+            column_aliases = tuple(aliases)
+        else:
+            column_aliases = None
+
+        post_decode: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+        if nested_groups:
+
+            def post_decode(kw: dict[str, Any]) -> dict[str, Any]:
+                # Columns land in kw under their python field_name (set by
+                # Projection). For prefixed columns we assume the Column has no
+                # python_name override, so the key equals the raw db column name.
+                for field_name, nested_cls, prefix, nullable, sub_names in nested_groups:
+                    sub_values = {sn: kw.pop(f"{prefix}{sn}") for sn in sub_names}
+                    if nullable and sub_values[sub_names[0]] is None:
+                        kw[field_name] = None
+                    else:
+                        kw[field_name] = nested_cls(**sub_values)
+                return kw
+
+        proj: Projection = Projection(
+            primary,
+            tuple(columns),
+            extra_fields=tuple(extra_fields),
+            row_cls=cls,
+            column_aliases=column_aliases,
+            post_decode=post_decode,
+        )
+        cls.PROJECTION = proj  # type: ignore[attr-defined]
+        return cls
+
+    return decorate
 
 
 def generate_full_ddl(tables: Sequence[Table]) -> str:
@@ -573,13 +799,14 @@ JOBS = Table(
         Column("scheduling_deadline_epoch_ms", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
         Column("error", "TEXT", "", python_type=str | None, decoder=_nullable(str)),
         Column("exit_code", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("num_tasks", "INTEGER", "NOT NULL", python_type=int, decoder=int),
+        Column("num_tasks", "INTEGER", "NOT NULL", python_type=int, decoder=int, default=None),
         Column(
             "is_reservation_holder",
             "INTEGER",
             "NOT NULL CHECK (is_reservation_holder IN (0, 1))",
             python_type=bool,
             decoder=_decode_bool_int,
+            default=None,
         ),
         # Kept on jobs (not just job_config) for fast listing/filtering without JOIN.
         Column("name", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
@@ -623,9 +850,9 @@ JOB_CONFIG = Table(
             "has_reservation", "INTEGER", "NOT NULL DEFAULT 0", python_type=bool, decoder=_decode_bool_int, default=False
         ),
         # Resource spec (was resources_proto)
-        Column("res_cpu_millicores", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
-        Column("res_memory_bytes", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
-        Column("res_disk_bytes", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("res_cpu_millicores", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=None),
+        Column("res_memory_bytes", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=None),
+        Column("res_disk_bytes", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=None),
         Column("res_device_json", "TEXT", "", python_type=str | None, decoder=_nullable(str), default=None),
         # Constraints (was constraints_proto)
         Column("constraints_json", "TEXT", "", python_type=str | None, decoder=_nullable(str), default=None),
@@ -636,7 +863,7 @@ JOB_CONFIG = Table(
             "NOT NULL DEFAULT 0",
             python_type=bool,
             decoder=_decode_bool_int,
-            default=False,
+            default=None,
         ),
         Column("coscheduling_group_by", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
         # Scheduling config
@@ -1396,105 +1623,121 @@ PROFILES_TABLES: tuple[Table, ...] = (TASK_PROFILES,)
 
 
 @dataclass(frozen=True, slots=True)
+class ResourceSpec:
+    """Normalized resource requirements for a job, derived from job_config columns."""
+
+    cpu_millicores: int
+    memory_bytes: int
+    disk_bytes: int
+    device_json: str | None = None
+
+
+@projection(JOB_CONFIG)
+@dataclass(frozen=True, slots=True)
+class JobConfigRow:
+    """Row from the job_config table, returned by JobStore.get_config."""
+
+    job_id: JobName
+    name: str
+    has_reservation: bool
+    resources: ResourceSpec = pcolumn(prefix="res_")
+    constraints_json: str | None = pcolumn()
+    has_coscheduling: bool = pcolumn()
+    coscheduling_group_by: str = pcolumn()
+    scheduling_timeout_ms: int | None = pcolumn()
+    max_task_failures: int = pcolumn()
+    entrypoint_json: str = pcolumn()
+    environment_json: str = pcolumn()
+    bundle_id: str = pcolumn()
+    ports_json: str = pcolumn()
+    max_retries_failure: int = pcolumn()
+    max_retries_preemption: int = pcolumn()
+    timeout_ms: int | None = pcolumn()
+    preemption_policy: int = pcolumn()
+    existing_job_policy: int = pcolumn()
+    priority_band: int = pcolumn()
+    task_image: str = pcolumn()
+    submit_argv_json: str = pcolumn()
+    reservation_json: str | None = pcolumn()
+    fail_if_exists: bool = pcolumn()
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerActiveRow:
+    """Minimal worker row for heartbeat-failure handling."""
+
+    consecutive_failures: int
+    last_heartbeat_ms: int | None
+
+
+@projection(JOBS, extra_tables=(JOB_CONFIG,))
+@dataclass(frozen=True, slots=True)
 class JobRow:
     """Lightweight job row for listings (jobs JOIN job_config, excludes constraints)."""
 
     job_id: JobName
     state: int
-    submitted_at: Timestamp
-    root_submitted_at: Timestamp
-    started_at: Timestamp | None
-    finished_at: Timestamp | None
-    scheduling_deadline_epoch_ms: int | None
-    error: str | None
-    exit_code: int | None
-    num_tasks: int
-    is_reservation_holder: bool
-    has_reservation: bool
-    name: str
-    depth: int
-    res_cpu_millicores: int
-    res_memory_bytes: int
-    res_disk_bytes: int
-    res_device_json: str | None
-    has_coscheduling: bool
-    coscheduling_group_by: str
-    scheduling_timeout_ms: int | None
-    max_task_failures: int
+    submitted_at: Timestamp = pcolumn(column="submitted_at_ms")
+    root_submitted_at: Timestamp = pcolumn(column="root_submitted_at_ms")
+    started_at: Timestamp | None = pcolumn(column="started_at_ms")
+    finished_at: Timestamp | None = pcolumn(column="finished_at_ms")
+    scheduling_deadline_epoch_ms: int | None = pcolumn()
+    error: str | None = pcolumn()
+    exit_code: int | None = pcolumn()
+    num_tasks: int = pcolumn()
+    is_reservation_holder: bool = pcolumn()
+    has_reservation: bool = pcolumn()
+    name: str = pcolumn()
+    depth: int = pcolumn()
+    resources: ResourceSpec = pcolumn(prefix="res_")
+    has_coscheduling: bool = pcolumn()
+    coscheduling_group_by: str = pcolumn()
+    scheduling_timeout_ms: int | None = pcolumn()
+    max_task_failures: int = pcolumn()
 
 
-@dataclass(frozen=True, slots=True)
-class JobSchedulingRow:
-    """Full job row for scheduling — adds constraints over JobRow."""
-
-    job_id: JobName
-    state: int
-    submitted_at: Timestamp
-    root_submitted_at: Timestamp
-    started_at: Timestamp | None
-    finished_at: Timestamp | None
-    scheduling_deadline_epoch_ms: int | None
-    error: str | None
-    exit_code: int | None
-    num_tasks: int
-    is_reservation_holder: bool
-    has_reservation: bool
-    name: str
-    depth: int
-    res_cpu_millicores: int
-    res_memory_bytes: int
-    res_disk_bytes: int
-    res_device_json: str | None
-    constraints_json: str | None
-    has_coscheduling: bool
-    coscheduling_group_by: str
-    scheduling_timeout_ms: int | None
-    max_task_failures: int
-
-
+@projection(JOBS, extra_tables=(JOB_CONFIG,))
 @dataclass(frozen=True, slots=True)
 class JobDetailRow:
-    """Full job detail — superset of JobSchedulingRow, adds dispatch config from job_config."""
+    """Full job detail row — includes resources, constraints, and dispatch config."""
 
     job_id: JobName
     state: int
-    submitted_at: Timestamp
-    root_submitted_at: Timestamp
-    started_at: Timestamp | None
-    finished_at: Timestamp | None
-    scheduling_deadline_epoch_ms: int | None
-    error: str | None
-    exit_code: int | None
-    num_tasks: int
-    is_reservation_holder: bool
-    has_reservation: bool
-    name: str
-    depth: int
-    res_cpu_millicores: int
-    res_memory_bytes: int
-    res_disk_bytes: int
-    res_device_json: str | None
-    constraints_json: str | None
-    has_coscheduling: bool
-    coscheduling_group_by: str
-    scheduling_timeout_ms: int | None
-    max_task_failures: int
-    entrypoint_json: str
-    environment_json: str
-    bundle_id: str
-    ports_json: str
-    max_retries_failure: int
-    max_retries_preemption: int
-    timeout_ms: int | None
-    preemption_policy: int
-    existing_job_policy: int
-    priority_band: int
-    task_image: str
-    submit_argv_json: str
-    reservation_json: str | None
-    fail_if_exists: bool
+    submitted_at: Timestamp = pcolumn(column="submitted_at_ms")
+    root_submitted_at: Timestamp = pcolumn(column="root_submitted_at_ms")
+    started_at: Timestamp | None = pcolumn(column="started_at_ms")
+    finished_at: Timestamp | None = pcolumn(column="finished_at_ms")
+    scheduling_deadline_epoch_ms: int | None = pcolumn()
+    error: str | None = pcolumn()
+    exit_code: int | None = pcolumn()
+    num_tasks: int = pcolumn()
+    is_reservation_holder: bool = pcolumn()
+    has_reservation: bool = pcolumn()
+    name: str = pcolumn()
+    depth: int = pcolumn()
+    resources: ResourceSpec = pcolumn(prefix="res_")
+    constraints_json: str | None = pcolumn()
+    has_coscheduling: bool = pcolumn()
+    coscheduling_group_by: str = pcolumn()
+    scheduling_timeout_ms: int | None = pcolumn()
+    max_task_failures: int = pcolumn()
+    entrypoint_json: str = pcolumn()
+    environment_json: str = pcolumn()
+    bundle_id: str = pcolumn()
+    ports_json: str = pcolumn()
+    max_retries_failure: int = pcolumn()
+    max_retries_preemption: int = pcolumn()
+    timeout_ms: int | None = pcolumn()
+    preemption_policy: int = pcolumn()
+    existing_job_policy: int = pcolumn()
+    priority_band: int = pcolumn()
+    task_image: str = pcolumn()
+    submit_argv_json: str = pcolumn()
+    reservation_json: str | None = pcolumn()
+    fail_if_exists: bool = pcolumn()
 
 
+@projection(TASKS)
 @dataclass(frozen=True, slots=True)
 class TaskRow:
     """Lightweight task row for scheduling."""
@@ -1507,13 +1750,19 @@ class TaskRow:
     preemption_count: int
     max_retries_failure: int
     max_retries_preemption: int
-    submitted_at: Timestamp
+    submitted_at: Timestamp = pcolumn(column="submitted_at_ms")
     priority_band: int = 2
 
 
+@projection(TASKS, extra_tables=(JOBS, JOB_CONFIG))
 @dataclass(frozen=True, slots=True)
 class TaskDetailRow:
-    """Full task detail — superset of TaskRow, adds diagnostics and attempts."""
+    """Full task detail — superset of TaskRow, adds diagnostics and attempts.
+
+    The optional fields below are populated only when a higher projection is requested:
+    - WITH_JOB: is_reservation_holder, num_tasks
+    - WITH_JOB_CONFIG: all of the above plus res_* and timeout_ms/has_coscheduling
+    """
 
     task_id: JobName
     job_id: JobName
@@ -1523,18 +1772,26 @@ class TaskDetailRow:
     preemption_count: int
     max_retries_failure: int
     max_retries_preemption: int
-    submitted_at: Timestamp
-    priority_band: int
-    error: str | None
-    exit_code: int | None
-    started_at: Timestamp | None
-    finished_at: Timestamp | None
-    current_worker_id: WorkerId | None
-    current_worker_address: str | None
-    container_id: str | None = None
-    attempts: tuple = dataclasses.field(default_factory=tuple)
+    submitted_at: Timestamp = pcolumn(column="submitted_at_ms")
+    priority_band: int = pcolumn()
+    error: str | None = pcolumn()
+    exit_code: int | None = pcolumn()
+    started_at: Timestamp | None = pcolumn(column="started_at_ms")
+    finished_at: Timestamp | None = pcolumn(column="finished_at_ms")
+    current_worker_id: WorkerId | None = pcolumn()
+    current_worker_address: str | None = pcolumn()
+    container_id: str | None = pcolumn(default=None)
+    # Populated by WITH_JOB projection and higher.
+    is_reservation_holder: bool | None = pcolumn(default=None)
+    num_tasks: int | None = pcolumn(default=None)
+    # Populated by WITH_JOB_CONFIG projection.
+    resources: ResourceSpec | None = pcolumn(prefix="res_", nullable=True, default=None)
+    has_coscheduling: bool | None = pcolumn(default=None)
+    timeout_ms: int | None = pcolumn(default=None)
+    attempts: tuple = pcolumn(computed=True, default_factory=tuple)
 
 
+@projection(WORKERS)
 @dataclass(frozen=True, slots=True)
 class WorkerRow:
     """Worker row for scheduling and health checks."""
@@ -1544,24 +1801,47 @@ class WorkerRow:
     healthy: bool
     active: bool
     consecutive_failures: int
-    last_heartbeat: Timestamp
-    committed_cpu_millicores: int
-    committed_mem: int
-    committed_gpu: int
-    committed_tpu: int
-    total_cpu_millicores: int
-    total_memory_bytes: int
-    total_gpu_count: int
-    total_tpu_count: int
-    device_type: str
-    device_variant: str
-    attributes: dict = dataclasses.field(default_factory=dict)
-    available_cpu_millicores: int = 0
-    available_memory: int = 0
-    available_gpus: int = 0
-    available_tpus: int = 0
+    last_heartbeat: Timestamp = pcolumn(column="last_heartbeat_ms")
+    committed_cpu_millicores: int = pcolumn()
+    committed_mem: int = pcolumn(column="committed_mem_bytes")
+    committed_gpu: int = pcolumn()
+    committed_tpu: int = pcolumn()
+    total_cpu_millicores: int = pcolumn()
+    total_memory_bytes: int = pcolumn()
+    total_gpu_count: int = pcolumn()
+    total_tpu_count: int = pcolumn()
+    device_type: str = pcolumn()
+    device_variant: str = pcolumn()
+    attributes: dict = pcolumn(computed=True, default_factory=dict)
+    available_cpu_millicores: int = pcolumn(computed=True, default=0)
+    available_memory: int = pcolumn(computed=True, default=0)
+    available_gpus: int = pcolumn(computed=True, default=0)
+    available_tpus: int = pcolumn(computed=True, default=0)
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerMetadataRow:
+    """Worker environment metadata decoded from the flat md_* columns."""
+
+    hostname: str
+    ip_address: str
+    cpu_count: int
+    memory_bytes: int
+    disk_bytes: int
+    tpu_name: str
+    tpu_worker_hostnames: str
+    tpu_worker_id: str
+    tpu_chips_per_host_bounds: str
+    gpu_count: int
+    gpu_name: str
+    gpu_memory_mb: int
+    gce_instance_name: str
+    gce_zone: str
+    git_hash: str
+    device_json: str
+
+
+@projection(WORKERS)
 @dataclass(frozen=True, slots=True)
 class WorkerDetailRow:
     """Full worker detail — superset of WorkerRow, adds metadata scalar columns."""
@@ -1571,40 +1851,26 @@ class WorkerDetailRow:
     healthy: bool
     active: bool
     consecutive_failures: int
-    last_heartbeat: Timestamp
-    committed_cpu_millicores: int
-    committed_mem: int
-    committed_gpu: int
-    committed_tpu: int
-    total_cpu_millicores: int
-    total_memory_bytes: int
-    total_gpu_count: int
-    total_tpu_count: int
-    device_type: str
-    device_variant: str
-    md_hostname: str
-    md_ip_address: str
-    md_cpu_count: int
-    md_memory_bytes: int
-    md_disk_bytes: int
-    md_tpu_name: str
-    md_tpu_worker_hostnames: str
-    md_tpu_worker_id: str
-    md_tpu_chips_per_host_bounds: str
-    md_gpu_count: int
-    md_gpu_name: str
-    md_gpu_memory_mb: int
-    md_gce_instance_name: str
-    md_gce_zone: str
-    md_git_hash: str
-    md_device_json: str
-    attributes: dict = dataclasses.field(default_factory=dict)
-    available_cpu_millicores: int = 0
-    available_memory: int = 0
-    available_gpus: int = 0
-    available_tpus: int = 0
+    last_heartbeat: Timestamp = pcolumn(column="last_heartbeat_ms")
+    committed_cpu_millicores: int = pcolumn()
+    committed_mem: int = pcolumn(column="committed_mem_bytes")
+    committed_gpu: int = pcolumn()
+    committed_tpu: int = pcolumn()
+    total_cpu_millicores: int = pcolumn()
+    total_memory_bytes: int = pcolumn()
+    total_gpu_count: int = pcolumn()
+    total_tpu_count: int = pcolumn()
+    device_type: str = pcolumn()
+    device_variant: str = pcolumn()
+    metadata: WorkerMetadataRow = pcolumn(prefix="md_")
+    attributes: dict = pcolumn(computed=True, default_factory=dict)
+    available_cpu_millicores: int = pcolumn(computed=True, default=0)
+    available_memory: int = pcolumn(computed=True, default=0)
+    available_gpus: int = pcolumn(computed=True, default=0)
+    available_tpus: int = pcolumn(computed=True, default=0)
 
 
+@projection(TASK_ATTEMPTS)
 @dataclass(frozen=True, slots=True)
 class AttemptRow:
     """Task attempt row."""
@@ -1613,13 +1879,14 @@ class AttemptRow:
     attempt_id: int
     worker_id: WorkerId | None
     state: int
-    created_at: Timestamp
-    started_at: Timestamp | None
-    finished_at: Timestamp | None
-    exit_code: int | None
-    error: str | None
+    created_at: Timestamp = pcolumn(column="created_at_ms")
+    started_at: Timestamp | None = pcolumn(column="started_at_ms")
+    finished_at: Timestamp | None = pcolumn(column="finished_at_ms")
+    exit_code: int | None = pcolumn()
+    error: str | None = pcolumn()
 
 
+@projection(ENDPOINTS)
 @dataclass(frozen=True, slots=True)
 class EndpointRow:
     """Registered service endpoint."""
@@ -1628,20 +1895,22 @@ class EndpointRow:
     name: str
     address: str
     task_id: JobName
-    metadata: dict
-    registered_at: Timestamp
+    metadata: dict = pcolumn(column="metadata_json")
+    registered_at: Timestamp = pcolumn(column="registered_at_ms")
 
 
+@projection(TXN_ACTIONS)
 @dataclass(frozen=True, slots=True)
 class TransactionActionRow:
     """Transaction action log entry."""
 
-    timestamp: Timestamp
-    action: str
-    entity_id: str
-    details: dict
+    timestamp: Timestamp = pcolumn(column="created_at_ms")
+    action: str = pcolumn()
+    entity_id: str = pcolumn()
+    details: dict = pcolumn(column="details_json")
 
 
+@projection(AUTH_API_KEYS)
 @dataclass(frozen=True, slots=True)
 class ApiKeyRow:
     """API key record."""
@@ -1651,12 +1920,13 @@ class ApiKeyRow:
     key_prefix: str
     user_id: str
     name: str
-    created_at: Timestamp
-    last_used_at: Timestamp | None = None
-    expires_at: Timestamp | None = None
-    revoked_at: Timestamp | None = None
+    created_at: Timestamp = pcolumn(column="created_at_ms")
+    last_used_at: Timestamp | None = pcolumn(column="last_used_at_ms", default=None)
+    expires_at: Timestamp | None = pcolumn(column="expires_at_ms", default=None)
+    revoked_at: Timestamp | None = pcolumn(column="revoked_at_ms", default=None)
 
 
+@projection(USER_BUDGETS)
 @dataclass(frozen=True, slots=True)
 class UserBudgetRow:
     """User budget record."""
@@ -1664,320 +1934,54 @@ class UserBudgetRow:
     user_id: str
     budget_limit: int
     max_band: int
-    updated_at: Timestamp
+    updated_at: Timestamp = pcolumn(column="updated_at_ms")
 
 
 # ---------------------------------------------------------------------------
 # Projections -- typed column subsets that replace hand-maintained column strings
 # ---------------------------------------------------------------------------
 
-
-def _job_columns(*names: str) -> tuple[tuple[Column, ...], tuple[str, ...]]:
-    """Look up Column objects from JOBS or JOB_CONFIG by name.
-
-    Returns ``(columns, aliases)`` where each alias is the table alias
-    (``j`` or ``jc``) that the column belongs to.  This lets Projection
-    generate correct ``alias.col`` qualifiers for cross-table queries.
-    """
-    cols: list[Column] = []
-    aliases: list[str] = []
-    for n in names:
-        if n in JOBS._column_map:
-            cols.append(JOBS._column_map[n])
-            aliases.append(JOBS.alias)
-        elif n in JOB_CONFIG._column_map:
-            cols.append(JOB_CONFIG._column_map[n])
-            aliases.append(JOB_CONFIG.alias)
-        else:
-            raise KeyError(f"Unknown job column: {n!r}")
-    return tuple(cols), tuple(aliases)
-
-
 # SQL for job queries that need config: JOIN job_config jc ON jc.job_id = j.job_id
 JOB_CONFIG_JOIN = "JOIN job_config jc ON jc.job_id = j.job_id"
 
-# Lightweight job row for listings (excludes constraints).
-_job_row_cols, _job_row_aliases = _job_columns(
-    "job_id",
-    "state",
-    "submitted_at_ms",
-    "root_submitted_at_ms",
-    "started_at_ms",
-    "finished_at_ms",
-    "scheduling_deadline_epoch_ms",
-    "error",
-    "exit_code",
-    "num_tasks",
-    "is_reservation_holder",
-    "has_reservation",
-    "name",
-    "depth",
-    "res_cpu_millicores",
-    "res_memory_bytes",
-    "res_disk_bytes",
-    "res_device_json",
-    "has_coscheduling",
-    "coscheduling_group_by",
-    "scheduling_timeout_ms",
-    "max_task_failures",
-)
-JOB_ROW_PROJECTION = Projection(
-    JOBS,
-    _job_row_cols,
-    row_cls=JobRow,
-    column_aliases=_job_row_aliases,
-)
+JOB_ROW_PROJECTION = JobRow.PROJECTION
 
-# Full job row for scheduling (includes constraints).
-_job_sched_cols, _job_sched_aliases = _job_columns(
-    "job_id",
-    "state",
-    "submitted_at_ms",
-    "root_submitted_at_ms",
-    "started_at_ms",
-    "finished_at_ms",
-    "scheduling_deadline_epoch_ms",
-    "error",
-    "exit_code",
-    "num_tasks",
-    "is_reservation_holder",
-    "has_reservation",
-    "name",
-    "depth",
-    "res_cpu_millicores",
-    "res_memory_bytes",
-    "res_disk_bytes",
-    "res_device_json",
-    "constraints_json",
-    "has_coscheduling",
-    "coscheduling_group_by",
-    "scheduling_timeout_ms",
-    "max_task_failures",
-)
-JOB_SCHEDULING_PROJECTION = Projection(
-    JOBS,
-    _job_sched_cols,
-    row_cls=JobSchedulingRow,
-    column_aliases=_job_sched_aliases,
-)
+WORKER_ROW_PROJECTION = WorkerRow.PROJECTION
 
-# Worker row for scheduling and health checks.
-WORKER_ROW_PROJECTION = WORKERS.projection(
-    "worker_id",
-    "address",
-    "healthy",
-    "active",
-    "consecutive_failures",
-    "last_heartbeat_ms",
-    "committed_cpu_millicores",
-    "committed_mem_bytes",
-    "committed_gpu",
-    "committed_tpu",
-    "total_cpu_millicores",
-    "total_memory_bytes",
-    "total_gpu_count",
-    "total_tpu_count",
-    "device_type",
-    "device_variant",
-    extra_fields=(
-        ExtraField("attributes", dict, default_factory=dict),
-        ExtraField("available_cpu_millicores", int, default=0),
-        ExtraField("available_memory", int, default=0),
-        ExtraField("available_gpus", int, default=0),
-        ExtraField("available_tpus", int, default=0),
-    ),
-    row_cls=WorkerRow,
-)
-
-# Task row for scheduling.
-TASK_ROW_PROJECTION = TASKS.projection(
-    "task_id",
-    "job_id",
-    "state",
-    "current_attempt_id",
-    "failure_count",
-    "preemption_count",
-    "max_retries_failure",
-    "max_retries_preemption",
-    "submitted_at_ms",
-    "priority_band",
-    row_cls=TaskRow,
-)
+TASK_ROW_PROJECTION = TaskRow.PROJECTION
 
 # ---------------------------------------------------------------------------
 # Detail / full-entity projections
 # ---------------------------------------------------------------------------
 
-# Full job detail — superset of JobSchedulingRow, adds dispatch config.
-_job_detail_cols, _job_detail_aliases = _job_columns(
-    "job_id",
-    "state",
-    "submitted_at_ms",
-    "root_submitted_at_ms",
-    "started_at_ms",
-    "finished_at_ms",
-    "scheduling_deadline_epoch_ms",
-    "error",
-    "exit_code",
-    "num_tasks",
-    "is_reservation_holder",
-    "has_reservation",
-    "name",
-    "depth",
-    "res_cpu_millicores",
-    "res_memory_bytes",
-    "res_disk_bytes",
-    "res_device_json",
-    "constraints_json",
-    "has_coscheduling",
-    "coscheduling_group_by",
-    "scheduling_timeout_ms",
-    "max_task_failures",
-    "entrypoint_json",
-    "environment_json",
-    "bundle_id",
-    "ports_json",
-    "max_retries_failure",
-    "max_retries_preemption",
-    "timeout_ms",
-    "preemption_policy",
-    "existing_job_policy",
-    "priority_band",
-    "task_image",
-    "submit_argv_json",
-    "reservation_json",
-    "fail_if_exists",
-)
-JOB_DETAIL_PROJECTION = Projection(
-    JOBS,
-    _job_detail_cols,
-    row_cls=JobDetailRow,
-    column_aliases=_job_detail_aliases,
+JOB_DETAIL_PROJECTION = JobDetailRow.PROJECTION
+
+TASK_DETAIL_PROJECTION = TaskDetailRow.PROJECTION
+
+# SELECT clause for the TaskDetailRow columns that live on the ``tasks`` table only.
+# Used by queries over tasks alone; the projection's own ``select_clause`` spans
+# tasks/jobs/job_config and requires JOINs.
+TASK_DETAIL_SELECT_T = (
+    "t.task_id, t.job_id, t.state, t.current_attempt_id, "
+    "t.failure_count, t.preemption_count, t.max_retries_failure, t.max_retries_preemption, "
+    "t.submitted_at_ms, t.priority_band, t.error, t.exit_code, "
+    "t.started_at_ms, t.finished_at_ms, t.current_worker_id, t.current_worker_address, "
+    "t.container_id"
 )
 
-# Full task detail — superset of TaskRow, adds diagnostics and attempts.
-TASK_DETAIL_PROJECTION = TASKS.projection(
-    "task_id",
-    "job_id",
-    "state",
-    "current_attempt_id",
-    "failure_count",
-    "preemption_count",
-    "max_retries_failure",
-    "max_retries_preemption",
-    "submitted_at_ms",
-    "priority_band",
-    "error",
-    "exit_code",
-    "started_at_ms",
-    "finished_at_ms",
-    "current_worker_id",
-    "current_worker_address",
-    "container_id",
-    extra_fields=(ExtraField("attempts", tuple, default_factory=tuple),),
-    row_cls=TaskDetailRow,
-)
+WORKER_DETAIL_PROJECTION = WorkerDetailRow.PROJECTION
 
-# Full worker detail — superset of WorkerRow, adds metadata scalar columns.
-WORKER_DETAIL_PROJECTION = WORKERS.projection(
-    "worker_id",
-    "address",
-    "healthy",
-    "active",
-    "consecutive_failures",
-    "last_heartbeat_ms",
-    "committed_cpu_millicores",
-    "committed_mem_bytes",
-    "committed_gpu",
-    "committed_tpu",
-    "total_cpu_millicores",
-    "total_memory_bytes",
-    "total_gpu_count",
-    "total_tpu_count",
-    "device_type",
-    "device_variant",
-    "md_hostname",
-    "md_ip_address",
-    "md_cpu_count",
-    "md_memory_bytes",
-    "md_disk_bytes",
-    "md_tpu_name",
-    "md_tpu_worker_hostnames",
-    "md_tpu_worker_id",
-    "md_tpu_chips_per_host_bounds",
-    "md_gpu_count",
-    "md_gpu_name",
-    "md_gpu_memory_mb",
-    "md_gce_instance_name",
-    "md_gce_zone",
-    "md_git_hash",
-    "md_device_json",
-    extra_fields=(
-        ExtraField("attributes", dict, default_factory=dict),
-        ExtraField("available_cpu_millicores", int, default=0),
-        ExtraField("available_memory", int, default=0),
-        ExtraField("available_gpus", int, default=0),
-        ExtraField("available_tpus", int, default=0),
-    ),
-    row_cls=WorkerDetailRow,
-)
+ATTEMPT_PROJECTION = AttemptRow.PROJECTION
 
-# Task attempt row.
-ATTEMPT_PROJECTION = TASK_ATTEMPTS.projection(
-    "task_id",
-    "attempt_id",
-    "worker_id",
-    "state",
-    "created_at_ms",
-    "started_at_ms",
-    "finished_at_ms",
-    "exit_code",
-    "error",
-    row_cls=AttemptRow,
-)
+ENDPOINT_PROJECTION = EndpointRow.PROJECTION
 
-# Endpoint row.
-ENDPOINT_PROJECTION = ENDPOINTS.projection(
-    "endpoint_id",
-    "name",
-    "address",
-    "task_id",
-    "metadata_json",
-    "registered_at_ms",
-    row_cls=EndpointRow,
-)
+TXN_ACTION_PROJECTION = TransactionActionRow.PROJECTION
 
-# Transaction action row.
-TXN_ACTION_PROJECTION = TXN_ACTIONS.projection(
-    "created_at_ms",
-    "action",
-    "entity_id",
-    "details_json",
-    row_cls=TransactionActionRow,
-)
+API_KEY_PROJECTION = ApiKeyRow.PROJECTION
 
-# API key row.
-API_KEY_PROJECTION = AUTH_API_KEYS.projection(
-    "key_id",
-    "key_hash",
-    "key_prefix",
-    "user_id",
-    "name",
-    "created_at_ms",
-    "last_used_at_ms",
-    "expires_at_ms",
-    "revoked_at_ms",
-    row_cls=ApiKeyRow,
-)
+USER_BUDGET_PROJECTION = UserBudgetRow.PROJECTION
 
-# User budget row.
-USER_BUDGET_PROJECTION = USER_BUDGETS.projection(
-    "user_id",
-    "budget_limit",
-    "max_band",
-    "updated_at_ms",
-    row_cls=UserBudgetRow,
-)
+JOB_CONFIG_PROJECTION = JobConfigRow.PROJECTION
 
 
 # ---------------------------------------------------------------------------

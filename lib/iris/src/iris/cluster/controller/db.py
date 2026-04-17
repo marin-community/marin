@@ -8,18 +8,16 @@ from __future__ import annotations
 import logging
 import queue
 import sqlite3
+import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace as dc_replace
 from pathlib import Path
-from threading import Lock, RLock
+from threading import RLock
 from typing import Any
 
-from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.schema import decode_timestamp_ms, decode_worker_id
-from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId
+from iris.cluster.controller.store import UserBudget
 from iris.rpc import job_pb2
-from rigging.timing import Deadline, Duration, Timestamp
+from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +60,7 @@ class QuerySnapshot:
             if self._lock is not None:
                 self._lock.release()
 
-    def execute_sql(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
+    def execute(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
         """Execute raw SQL and return the cursor for result inspection."""
         return self._conn.execute(sql, params)
 
@@ -101,60 +99,6 @@ class QuerySnapshot:
         return rows
 
 
-# ---------------------------------------------------------------------------
-# Shared predicate functions for Task/TaskRow and Worker/WorkerRow.
-# Placed above the class definitions so both full and lightweight models
-# can delegate to the same logic without duplication.
-# ---------------------------------------------------------------------------
-
-
-def task_is_finished(
-    state: int, failure_count: int, max_retries_failure: int, preemption_count: int, max_retries_preemption: int
-) -> bool:
-    """Whether a task has reached a terminal state with no remaining retries."""
-    if state == job_pb2.TASK_STATE_SUCCEEDED:
-        return True
-    if state in (job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_UNSCHEDULABLE):
-        return True
-    if state == job_pb2.TASK_STATE_FAILED:
-        return failure_count > max_retries_failure
-    if state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED):
-        return preemption_count > max_retries_preemption
-    return False
-
-
-def task_row_is_finished(task: Any) -> bool:
-    return task_is_finished(
-        task.state, task.failure_count, task.max_retries_failure, task.preemption_count, task.max_retries_preemption
-    )
-
-
-def task_row_can_be_scheduled(task: Any) -> bool:
-    if task.state != job_pb2.TASK_STATE_PENDING:
-        return False
-    return task.current_attempt_id < 0 or not task_is_finished(
-        task.state, task.failure_count, task.max_retries_failure, task.preemption_count, task.max_retries_preemption
-    )
-
-
-# TERMINAL_TASK_STATES and TERMINAL_JOB_STATES are imported from iris.cluster.types.
-
-ACTIVE_TASK_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.TASK_STATE_ASSIGNED,
-        job_pb2.TASK_STATE_BUILDING,
-        job_pb2.TASK_STATE_RUNNING,
-    }
-)
-
-# Tasks executing on a worker (subset of ACTIVE that excludes ASSIGNED).
-EXECUTING_TASK_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.TASK_STATE_BUILDING,
-        job_pb2.TASK_STATE_RUNNING,
-    }
-)
-
 # Failure states that trigger coscheduled sibling cascades.
 FAILURE_TASK_STATES: frozenset[int] = frozenset(
     {
@@ -165,79 +109,12 @@ FAILURE_TASK_STATES: frozenset[int] = frozenset(
 )
 
 
-# job_is_finished is imported from iris.cluster.types (canonical definition).
-
-
-def job_scheduling_deadline(scheduling_deadline_epoch_ms: int | None) -> Deadline | None:
-    """Compute scheduling deadline from epoch ms."""
-    if scheduling_deadline_epoch_ms is None:
-        return None
-    return Deadline.after(Timestamp.from_ms(scheduling_deadline_epoch_ms), Duration.from_ms(0))
-
-
-def attempt_is_terminal(state: int) -> bool:
-    """Check if an attempt is in a terminal state."""
-    return state in TERMINAL_TASK_STATES
-
-
-def attempt_is_worker_failure(state: int) -> bool:
-    """Check if an attempt is a worker failure or preemption."""
-    return state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED)
-
-
-@dataclass(frozen=True)
-class UserStats:
-    user: str
-    task_state_counts: dict[int, int] = field(default_factory=dict)
-    job_state_counts: dict[int, int] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class TaskJobSummary:
-    job_id: JobName
-    task_count: int = 0
-    completed_count: int = 0
-    failure_count: int = 0
-    preemption_count: int = 0
-    task_state_counts: dict[int, int] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class UserBudget:
-    user_id: str
-    budget_limit: int
-    max_band: int
-    updated_at: Timestamp
-
-
-@dataclass(frozen=True)
-class EndpointQuery:
-    endpoint_ids: tuple[str, ...] = ()
-    name_prefix: str | None = None
-    exact_name: str | None = None
-    task_ids: tuple[JobName, ...] = ()
-    limit: int | None = None
-
-
-def _decode_attribute_rows(rows: Sequence[Any]) -> dict[WorkerId, dict[str, AttributeValue]]:
-    attrs_by_worker: dict[WorkerId, dict[str, AttributeValue]] = {}
-    for row in rows:
-        worker_attrs = attrs_by_worker.setdefault(row.worker_id, {})
-        if row.value_type == "int":
-            worker_attrs[row.key] = AttributeValue(int(row.int_value))
-        elif row.value_type == "float":
-            worker_attrs[row.key] = AttributeValue(float(row.float_value))
-        else:
-            worker_attrs[row.key] = AttributeValue(str(row.str_value or ""))
-    return attrs_by_worker
-
-
 class TransactionCursor:
     """Wraps a raw sqlite3.Cursor for use within controller transactions.
 
     Post-commit hooks registered via :meth:`on_commit` run after the wrapping
     ``ControllerDB.transaction()`` block commits successfully. They are used
-    by caches (e.g. ``EndpointRegistry``) to update in-memory state atomically
+    by caches (e.g. ``EndpointStore``) to update in-memory state atomically
     with the DB write: rollback suppresses the hook so memory never drifts
     from disk.
     """
@@ -316,61 +193,6 @@ class ControllerDB:
         self._read_pool: queue.Queue[sqlite3.Connection] = queue.Queue()
         self._init_read_pool()
         logger.info("Read pool initialized in %.2fs", time.monotonic() - t0)
-        # Lazily populated cache of worker attributes, keyed by worker_id.
-        # Eliminates the per-cycle attribute SQL query from the scheduling hot path.
-        self._attr_cache: dict[WorkerId, dict[str, AttributeValue]] | None = None
-        self._attr_cache_lock = Lock()
-
-        # Write-through in-memory cache over the ``endpoints`` table. Imported
-        # locally to break the ``db -> endpoint_registry -> db`` import cycle;
-        # this is the single exception to "no local imports" (see AGENTS.md).
-        from iris.cluster.controller.endpoint_registry import EndpointRegistry
-
-        t0 = time.monotonic()
-        self._endpoint_registry = EndpointRegistry(self)
-        logger.info("EndpointRegistry initialized in %.2fs", time.monotonic() - t0)
-
-    @property
-    def endpoints(self) -> EndpointRegistry:  # noqa: F821
-        """Process-local cache for the ``endpoints`` table; authoritative for reads."""
-        return self._endpoint_registry
-
-    def _populate_attr_cache(self) -> dict[WorkerId, dict[str, AttributeValue]]:
-        """Load all worker attributes from the DB into the cache.
-
-        Called once on cold start (first access). The caller must NOT hold
-        _attr_cache_lock when calling this, because the DB read can be slow.
-        """
-        with self.read_snapshot() as q:
-            rows = q.raw(
-                "SELECT worker_id, key, value_type, str_value, int_value, float_value FROM worker_attributes",
-            )
-        return _decode_attribute_rows(rows)
-
-    def get_worker_attributes(self) -> dict[WorkerId, dict[str, AttributeValue]]:
-        """Return cached worker attributes, populating from DB on first call."""
-        cache = self._attr_cache
-        if cache is not None:
-            return cache
-        fresh = self._populate_attr_cache()
-        with self._attr_cache_lock:
-            if self._attr_cache is None:
-                self._attr_cache = fresh
-            return self._attr_cache
-
-    def set_worker_attributes(self, worker_id: WorkerId, attrs: dict[str, AttributeValue]) -> None:
-        """Update the cached attributes for a single worker after registration."""
-        with self._attr_cache_lock:
-            if self._attr_cache is None:
-                return
-            self._attr_cache[worker_id] = attrs
-
-    def remove_worker_from_attr_cache(self, worker_id: WorkerId) -> None:
-        """Remove a single worker from the attribute cache."""
-        with self._attr_cache_lock:
-            if self._attr_cache is None:
-                return
-            self._attr_cache.pop(worker_id, None)
 
     def _init_read_pool(self) -> None:
         """Create (or recreate) the read-only connection pool."""
@@ -454,7 +276,7 @@ class ControllerDB:
 
         On successful commit, any hooks registered via ``TransactionCursor.on_commit``
         fire while the write lock is still held — keeping in-memory caches
-        (e.g. ``EndpointRegistry``) in sync with the DB without exposing a
+        (e.g. ``EndpointStore``) in sync with the DB without exposing a
         torn snapshot to concurrent readers.
         """
         with self._lock:
@@ -645,6 +467,20 @@ class ControllerDB:
         cur.execute("UPDATE meta SET value = ? WHERE key = ?", (value, key))
         return value
 
+    def get_counter(self, key: str, cur: TransactionCursor) -> int:
+        """Read an integer counter from meta. Returns 0 if unset."""
+        row = cur.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        if row is None:
+            return 0
+        return int(row[0])
+
+    def set_counter(self, key: str, value: int, cur: TransactionCursor) -> None:
+        """Write an integer counter to meta inside the given transaction."""
+        cur.execute(
+            "INSERT INTO meta(key, value) VALUES (?, ?) " "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+
     def backup_to(self, destination: Path) -> None:
         """Create a hot backup to ``destination`` using SQLite backup API.
 
@@ -751,7 +587,6 @@ class ControllerDB:
             self._conn.execute("ATTACH DATABASE ? AS profiles", (str(self._profiles_db_path),))
             self._init_read_pool()
         self.apply_migrations()
-        self._endpoint_registry._load_all()
 
     # SQL-canonical read access is exposed through ``snapshot()`` and typed table
     # metadata at module scope. Legacy list/get/count helper methods were removed
@@ -804,170 +639,23 @@ class ControllerDB:
         return {row.user_id: row.budget_limit for row in rows}
 
 
-# ---------------------------------------------------------------------------
-# Shared read-only query helpers
-#
-# Pure DB reads that are used by both controller.py and service.py.
-# Each takes a ControllerDB and returns domain objects.
-# ---------------------------------------------------------------------------
+def batch_delete(
+    db: ControllerDB,
+    sql: str,
+    params: tuple[object, ...],
+    stopped: Callable[[], bool],
+    pause_between_s: float,
+) -> int:
+    """Delete rows in batches, sleeping between transactions.
 
-
-def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:
-    """Return the set of currently-running task IDs for each worker.
-
-    Uses the denormalized current_worker_id column instead of joining task_attempts.
+    Returns the total number of rows deleted.
     """
-    if not worker_ids:
-        return {}
-    placeholders = ",".join("?" for _ in worker_ids)
-    with db.read_snapshot() as q:
-        rows = q.raw(
-            f"SELECT t.current_worker_id AS worker_id, t.task_id FROM tasks t "
-            f"WHERE t.current_worker_id IN ({placeholders}) AND t.state IN (?, ?, ?)",
-            (*[str(wid) for wid in worker_ids], *ACTIVE_TASK_STATES),
-            decoders={"worker_id": decode_worker_id, "task_id": JobName.from_wire},
-        )
-    running: dict[WorkerId, set[JobName]] = {wid: set() for wid in worker_ids}
-    for row in rows:
-        running[row.worker_id].add(row.task_id)
-    return running
-
-
-@dataclass(frozen=True, slots=True)
-class TimedOutTask:
-    """A running task that has exceeded its execution timeout."""
-
-    task_id: JobName
-    worker_id: WorkerId | None
-
-
-def timed_out_executing_tasks(db: ControllerDB, now: Timestamp) -> list[TimedOutTask]:
-    """Find executing tasks whose current attempt has exceeded the job's execution timeout.
-
-    Reads the timeout from job_config.timeout_ms. Uses the current attempt's
-    started_at_ms so that retried tasks get a fresh timeout budget per attempt.
-    """
-    now_ms = now.epoch_ms()
-    executing_states = tuple(sorted(EXECUTING_TASK_STATES))
-    placeholders = ",".join("?" for _ in executing_states)
-    with db.read_snapshot() as q:
-        rows = q.raw(
-            f"SELECT t.task_id, t.current_worker_id AS worker_id, "
-            f"ta.started_at_ms AS attempt_started_at_ms, jc.timeout_ms "
-            f"FROM tasks t "
-            f"JOIN job_config jc ON jc.job_id = t.job_id "
-            f"JOIN task_attempts ta ON ta.task_id = t.task_id AND ta.attempt_id = t.current_attempt_id "
-            f"WHERE t.state IN ({placeholders}) "
-            f"AND jc.timeout_ms IS NOT NULL AND jc.timeout_ms > 0 "
-            f"AND ta.started_at_ms IS NOT NULL",
-            (*executing_states,),
-            decoders={
-                "task_id": JobName.from_wire,
-                "worker_id": lambda v: WorkerId(v) if v is not None else None,
-                "attempt_started_at_ms": int,
-                "timeout_ms": int,
-            },
-        )
-    result: list[TimedOutTask] = []
-    for row in rows:
-        if row.attempt_started_at_ms + row.timeout_ms <= now_ms:
-            result.append(TimedOutTask(task_id=row.task_id, worker_id=row.worker_id))
-    return result
-
-
-def tasks_for_job_with_attempts(db: ControllerDB, job_id: JobName) -> list:
-    """Fetch all tasks for a job with their attempt history."""
-    from iris.cluster.controller.schema import ATTEMPT_PROJECTION, TASK_DETAIL_PROJECTION, tasks_with_attempts
-
-    with db.read_snapshot() as q:
-        tasks = TASK_DETAIL_PROJECTION.decode(
-            q.fetchall(
-                "SELECT * FROM tasks WHERE job_id = ? ORDER BY task_index, task_id",
-                (job_id.to_wire(),),
-            ),
-        )
-        if not tasks:
-            return []
-        placeholders = ",".join("?" for _ in tasks)
-        attempts = ATTEMPT_PROJECTION.decode(
-            q.fetchall(
-                f"SELECT * FROM task_attempts WHERE task_id IN ({placeholders}) ORDER BY task_id, attempt_id",
-                tuple(t.task_id.to_wire() for t in tasks),
-            ),
-        )
-    return tasks_with_attempts(tasks, attempts)
-
-
-def _worker_row_select() -> str:
-    """Lazily resolve WORKER_ROW_PROJECTION.select_clause() to break the db -> schema cycle."""
-    from iris.cluster.controller.schema import WORKER_ROW_PROJECTION
-
-    return WORKER_ROW_PROJECTION.select_clause()
-
-
-def healthy_active_workers_with_attributes(db: ControllerDB) -> list:
-    """Fetch all healthy, active workers with their attributes populated.
-
-    Returns WorkerRow (scalar-only) so the scheduling loop avoids loading metadata columns.
-    Uses the in-memory attribute cache to avoid a per-cycle SQL join.
-    """
-    from iris.cluster.controller.schema import WORKER_ROW_PROJECTION
-
-    with db.read_snapshot() as q:
-        workers = WORKER_ROW_PROJECTION.decode(
-            q.fetchall(f"SELECT {_worker_row_select()} FROM workers w WHERE w.healthy = 1 AND w.active = 1"),
-        )
-        if not workers:
-            return []
-    attrs_by_worker = db.get_worker_attributes()
-    return [
-        dc_replace(
-            w,
-            attributes=attrs_by_worker.get(w.worker_id, {}),
-            available_cpu_millicores=w.total_cpu_millicores - w.committed_cpu_millicores,
-            available_memory=w.total_memory_bytes - w.committed_mem,
-            available_gpus=w.total_gpu_count - w.committed_gpu,
-            available_tpus=w.total_tpu_count - w.committed_tpu,
-        )
-        for w in workers
-    ]
-
-
-def insert_task_profile(
-    db: ControllerDB, task_id: str, profile_data: bytes, captured_at: Timestamp, profile_kind: str = "cpu"
-) -> None:
-    """Insert a captured profile snapshot for a task.
-
-    The DB trigger caps profiles at 10 per (task_id, profile_kind), evicting the oldest automatically.
-    """
-    db.execute(
-        "INSERT INTO profiles.task_profiles (task_id, profile_data, captured_at_ms, profile_kind) VALUES (?, ?, ?, ?)",
-        (task_id, profile_data, captured_at.epoch_ms(), profile_kind),
-    )
-
-
-def get_task_profiles(
-    db: ControllerDB, task_id: str, profile_kind: str | None = None
-) -> list[tuple[bytes, Timestamp, str]]:
-    """Return stored profile snapshots for a task, newest first.
-
-    Args:
-        db: Controller database.
-        task_id: Task wire string.
-        profile_kind: If set, filter to this kind (e.g. "cpu", "memory"). Returns all kinds when None.
-    """
-    if profile_kind is not None:
-        query = (
-            "SELECT profile_data, captured_at_ms, profile_kind FROM profiles.task_profiles"
-            " WHERE task_id = ? AND profile_kind = ? ORDER BY id DESC"
-        )
-        params: tuple[str, ...] = (task_id, profile_kind)
-    else:
-        query = (
-            "SELECT profile_data, captured_at_ms, profile_kind FROM profiles.task_profiles"
-            " WHERE task_id = ? ORDER BY id DESC"
-        )
-        params = (task_id,)
-    with db.read_snapshot() as q:
-        rows = q.raw(query, params, decoders={"captured_at_ms": decode_timestamp_ms})
-    return [(row.profile_data, row.captured_at_ms, row.profile_kind) for row in rows]
+    total = 0
+    while not stopped():
+        with db.transaction() as cur:
+            batch = cur.execute(sql, params).rowcount
+        if batch == 0:
+            break
+        total += batch
+        time.sleep(pause_between_s)
+    return total
