@@ -75,9 +75,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     )
     transform_hq_data_step = transform_hq_data_spec.as_executor_step()
 
-    # Normalize the HQ transformed records into the datakit standard layout
-    # (content-hash id + text + preserved columns). Writes main + side-output
-    # dups shards under outputs/{main,dups}/; downstream steps read main.
     normalize_hq_spec = normalize_step(
         name=os.path.join(prefix, "hq-normalized"),
         download=transform_hq_data_spec,
