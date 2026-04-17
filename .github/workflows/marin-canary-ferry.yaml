@@ -62,11 +62,16 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Generate SSH key
+      - name: Install SSH key
+        env:
+          SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
+          SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
         run: |
           mkdir -p ~/.ssh
-          ssh-keygen -t rsa -b 4096 -f ~/.ssh/google_compute_engine -N "" -q -C "gha-${{ github.run_id }}-${{ github.run_attempt }}"
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
+          printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
           chmod 600 ~/.ssh/google_compute_engine
+          chmod 644 ~/.ssh/google_compute_engine.pub
 
       - name: Submit canary ferry
         id: submit
