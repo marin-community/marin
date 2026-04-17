@@ -1201,17 +1201,18 @@ class ControllerServiceImpl:
         )
 
         # Get scheduling diagnostics for pending jobs from cache
-        # (populated each scheduling cycle by the controller).
-        #
-        # The autoscaler pending-hint used to be appended here, but
-        # ``_get_autoscaler_pending_hints`` rebuilds + serializes the full
-        # autoscaler routing table on every call (35%+ of wall-time in a
-        # live CPU profile). Skip it for now; use ListJobs for the richer
-        # pending explanation while we work out a cached hint path.
+        # (populated each scheduling cycle by the controller). The autoscaler
+        # hint dict is cached per evaluate() cycle (#4848), so the lookup here
+        # is a single dict get — we only attach this job's hint, never the
+        # full routing decision.
         pending_reason = ""
         if job.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(job.job_id.to_wire())
             pending_reason = sched_reason or "Pending scheduler feedback"
+            hint = self._get_autoscaler_pending_hints().get(job.job_id.to_wire())
+            if hint is not None:
+                scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
+                pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
         resources = _resource_spec_from_job_row(job)
 
