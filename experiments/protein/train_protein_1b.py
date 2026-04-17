@@ -99,7 +99,7 @@ train_config = SimpleTrainConfig(
     resources=RESOURCES,
     train_batch_size=128,
     num_train_steps=50_000,
-    learning_rate=2.5e-4,
+    learning_rate=3.5e-4,
     weight_decay=0.01,
     warmup=0.1,
     train_seq_len=8192,
@@ -122,7 +122,7 @@ protein_model_1b = default_train(
     # Skip default Paloma validation sets
     use_default_validation=False,
     wandb_group="protein-training",
-    wandb_name="protein-contacts-1b",
+    wandb_name=None,
 )
 
 if __name__ == "__main__":
