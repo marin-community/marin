@@ -119,7 +119,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     run_grug(run_config)
 
 
-RESOLVED_RUN_ID = _resolve_run_id("moe_1e23_d5120_bs2048_ep8_ragged")
+RESOLVED_RUN_ID = _resolve_run_id("moe_1e23_d5120_bs2048_ep4_ring")
 
 
 # 1e23 compute budget, d5120. Model +
@@ -129,18 +129,19 @@ RESOLVED_RUN_ID = _resolve_run_id("moe_1e23_d5120_bs2048_ep8_ragged")
 _BASELINE_BUDGET: float = 1e23
 _BASELINE_HIDDEN_DIM: int = 5120
 _BASELINE_TARGET_STEPS: int = 120_000
+_BASELINE_NUM_LAYERS_OVERRIDE: int | None = 48
 _baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_from_heuristic(
     budget=_BASELINE_BUDGET,
     hidden_dim=_BASELINE_HIDDEN_DIM,
     target_steps=_BASELINE_TARGET_STEPS,
 )
-# Stack MoE blocks via jax.lax.scan to keep XLA compile + peak HBM tractable at
-# the heuristic-derived depth, and force ragged dispatch so the smoke exercises
-# the high-EP path from #4697.
+# Match the known-good 1e23 ring EP=4 configuration while keeping the current
+# v4-2048/us-central2 launch wiring.
 _baseline_model = dataclasses.replace(
     _baseline_model,
-    moe_implementation="ragged_all_to_all",
+    moe_implementation="ring",
     use_array_stacked_blocks=True,
+    num_layers=_BASELINE_NUM_LAYERS_OVERRIDE or _baseline_model.num_layers,
 )
 
 # Override the heuristic-derived batch_size (round_up_pow2 only produces powers
@@ -157,7 +158,7 @@ if _BASELINE_BATCH_OVERRIDE is not None:
 
 
 baseline_moe = ExecutorStep(
-    name="grug/moe_1e23_d5120_bs2048_ep8_ragged",
+    name="grug/moe_1e23_d5120_bs2048_ep4_ring",
     fn=run_grug_moe_trial,
     config=GrugMoeLaunchConfig(
         model=versioned(_baseline_model),
@@ -169,7 +170,7 @@ baseline_moe = ExecutorStep(
         resources=versioned(ResourceConfig.with_tpu("v4-2048", regions=["us-central2"])),
         steps=versioned(_baseline_steps),
         batch_size=versioned(_baseline_batch),
-        expert_parallel=versioned(8),
+        expert_parallel=versioned(4),
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
