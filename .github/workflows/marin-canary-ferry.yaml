@@ -132,6 +132,16 @@ jobs:
       - name: Validate canary metrics
         continue-on-error: ${{ inputs.target_tokens != '' }}
         shell: bash -l {0}
+        # MARIN_PREFIX is required so mirror:// knows which gs://marin-* bucket
+        # counts as "local" — without it the runner falls back to /tmp/marin,
+        # _mirror_remote_prefixes() returns [] (to avoid anonymous-caller 401s
+        # from gcsfs off-GCP), and the read raises FileNotFoundError. The
+        # google-github-actions/auth step above provides the credentials
+        # gcsfs needs to actually scan the remote buckets. Canary lands on v5p
+        # in us-central1 or us-east5; picking us-central1 keeps the hit rate
+        # high and lets mirror:// resolve either region.
+        env:
+          MARIN_PREFIX: gs://marin-us-central1
         run: .venv/bin/python scripts/canary/validate_canary_metrics.py
 
       - name: Summarize TPU canary profile
