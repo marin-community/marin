@@ -43,6 +43,8 @@ from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
 SEQ_LEN: int = 4096
 MIN_BATCH_SIZE: int = 32
 DEFAULT_TARGET_STEPS: int = 2**14
+# Reference tokens_per_batch for the original sweep (32 sequences x 4096 tokens).
+_REF_TOKENS_PER_BATCH: int = MIN_BATCH_SIZE * SEQ_LEN  # 131072
 
 
 def _round_to_power_of_two(x: float) -> int:
@@ -75,16 +77,19 @@ def compute_tokens_and_batch(
     flops_per_token: float,
     target_steps: int = DEFAULT_TARGET_STEPS,
     min_batch_size: int = MIN_BATCH_SIZE,
+    seq_len: int = SEQ_LEN,
 ) -> tuple[float, int, int]:
     """Derive (tokens, batch_size, num_steps) from a compute budget and FLOPs-per-token.
 
-    Uses the module-level `SEQ_LEN` constant (4096) — the whole heuristic is
-    anchored there; see the module docstring.
+    ``seq_len`` controls the sequence length used to convert between batch_size
+    (sequences) and tokens_per_batch (tokens per step). All downstream formulas
+    that depend on batch size use ``tokens_per_batch = batch_size * seq_len``
+    so they work correctly at any sequence length.
     """
     tokens = budget / (3 * flops_per_token)
-    batch_exact = tokens / (target_steps * SEQ_LEN)
+    batch_exact = tokens / (target_steps * seq_len)
     batch_size = max(min_batch_size, _round_to_power_of_two(batch_exact))
-    train_steps = max(1, round(tokens / (batch_size * SEQ_LEN)))
+    train_steps = max(1, round(tokens / (batch_size * seq_len)))
     return tokens, batch_size, train_steps
 
 
@@ -98,19 +103,18 @@ class MoeAdamHHeuristic:
     """
 
     # --- LR scaling (from empirical fit) ---
-    # adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * bs^0.5
-    # Updated (192 runs, R²=0.995):
-    # lr_coeff: float = 1.48
-    # lr_tokens_exp: float = -0.2781
-    # lr_dim_exp: float = -0.3633
-    # Original (186 runs, R²=0.995) — used for v16 sweep:
-    lr_coeff: float = 1.63
+    # adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(tokens_per_batch)
+    # Original fit used sqrt(batch_size) at seq_len=4096; coefficient absorbed
+    # the sqrt(4096) factor so the formula works with tokens_per_batch directly.
+    # Original lr_coeff=1.63 / sqrt(4096) = 0.025469
+    lr_coeff: float = 0.025469
     lr_tokens_exp: float = -0.2813
     lr_dim_exp: float = -0.3678
     adamh_ratio: float = 13 / 3
 
     # --- Base hyperparameters ---
-    reference_batch_size: int = 32
+    # Reference point is 32 sequences x 4096 tokens = 131,072 tokens_per_batch.
+    reference_tokens_per_batch: int = _REF_TOKENS_PER_BATCH
     reference_tokens: float = 1.4e9
     epsilon_base: float = 1e-15
     beta1: float = 0.9062
@@ -139,35 +143,40 @@ class MoeAdamHHeuristic:
     min_beta2: float = 0.95
     max_beta2: float = 0.9999
 
-    def _compute_scaling_ratio(self, batch_size: int, tokens: float) -> float:
-        """Compute r/r0 = (B * T0) / (B0 * T)."""
-        return (batch_size * self.reference_tokens) / (self.reference_batch_size * tokens)
+    def _compute_scaling_ratio(self, tokens_per_batch: int, tokens: float) -> float:
+        """Compute r/r0 = (tpb * T0) / (tpb0 * T)."""
+        return (tokens_per_batch * self.reference_tokens) / (self.reference_tokens_per_batch * tokens)
 
-    def _compute_adam_lr(self, batch_size: int, tokens: float, hidden_dim: int) -> float:
-        """adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * bs^0.5"""
-        adam_lr = self.lr_coeff * (tokens**self.lr_tokens_exp) * (hidden_dim**self.lr_dim_exp) * math.sqrt(batch_size)
+    def _compute_adam_lr(self, tokens_per_batch: int, tokens: float, hidden_dim: int) -> float:
+        """adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(tokens_per_batch)"""
+        adam_lr = (
+            self.lr_coeff * (tokens**self.lr_tokens_exp) * (hidden_dim**self.lr_dim_exp) * math.sqrt(tokens_per_batch)
+        )
         return min(self.max_learning_rate, adam_lr)
 
-    def _compute_learning_rate(self, batch_size: int, tokens: float, hidden_dim: int) -> float:
+    def _compute_learning_rate(self, tokens_per_batch: int, tokens: float, hidden_dim: int) -> float:
         """adamh_lr = (13/3) * adam_lr"""
-        adam_lr = self._compute_adam_lr(batch_size, tokens, hidden_dim)
+        adam_lr = self._compute_adam_lr(tokens_per_batch, tokens, hidden_dim)
         return min(self.max_learning_rate, self.adamh_ratio * adam_lr)
 
-    def _compute_epsilon(self, batch_size: int, tokens: float) -> float:
+    def _compute_epsilon(self, tokens_per_batch: int, tokens: float) -> float:
         """epsilon = epsilon0 * sqrt(r0/r)"""
-        ratio = self._compute_scaling_ratio(batch_size, tokens)
+        ratio = self._compute_scaling_ratio(tokens_per_batch, tokens)
         return self.epsilon_base * math.sqrt(1.0 / ratio)
 
-    def _compute_beta2(self, batch_size: int) -> float:
-        """beta2 = clip(beta2_0^(B/B0), min_beta2, max_beta2). Constant token half-life."""
-        exponent = batch_size / self.reference_batch_size
+    def _compute_beta2(self, tokens_per_batch: int) -> float:
+        """beta2 = clip(beta2_0^(tpb/tpb0), min_beta2, max_beta2). Constant token half-life."""
+        exponent = tokens_per_batch / self.reference_tokens_per_batch
         return max(self.min_beta2, min(self.max_beta2, self.beta2_base**exponent))
 
-    def build_optimizer_config(self, batch_size: int, tokens: float, hidden_dim: int) -> GrugMoeAdamHConfig:
-        lr = self._compute_learning_rate(batch_size, tokens, hidden_dim)
-        adam_lr = self._compute_adam_lr(batch_size, tokens, hidden_dim)
-        epsilon = self._compute_epsilon(batch_size, tokens)
-        beta2 = self._compute_beta2(batch_size)
+    def build_optimizer_config(
+        self, batch_size: int, tokens: float, hidden_dim: int, seq_len: int = SEQ_LEN
+    ) -> GrugMoeAdamHConfig:
+        tokens_per_batch = batch_size * seq_len
+        lr = self._compute_learning_rate(tokens_per_batch, tokens, hidden_dim)
+        adam_lr = self._compute_adam_lr(tokens_per_batch, tokens, hidden_dim)
+        epsilon = self._compute_epsilon(tokens_per_batch, tokens)
+        beta2 = self._compute_beta2(tokens_per_batch)
         return GrugMoeAdamHConfig(
             learning_rate=lr,
             adam_lr=adam_lr,
@@ -249,12 +258,13 @@ def build_from_heuristic(
     heuristic: MoeAdamHHeuristic | None = None,
     target_steps: int = DEFAULT_TARGET_STEPS,
     min_batch_size: int = MIN_BATCH_SIZE,
+    seq_len: int = SEQ_LEN,
 ) -> tuple[GrugModelConfig, GrugMoeAdamHConfig, int, int]:
     """Construct (model, optimizer, batch_size, num_steps) for a compute budget.
 
     Uses `MoeAdamHHeuristic` to size the model (from `hidden_dim`) and to set
-    the AdamH hyperparameters (scaled by batch_size / tokens). Callers who want
-    manual control should continue passing `GrugModelConfig` /
+    the AdamH hyperparameters (scaled by tokens_per_batch = batch_size * seq_len).
+    Callers who want manual control should continue passing `GrugModelConfig` /
     `GrugMoeAdamHConfig` directly to `GrugMoeLaunchConfig`.
     """
     h = heuristic or MoeAdamHHeuristic()
@@ -265,6 +275,7 @@ def build_from_heuristic(
         fpt,
         target_steps=target_steps,
         min_batch_size=min_batch_size,
+        seq_len=seq_len,
     )
-    optimizer_cfg = h.build_optimizer_config(batch_size, tokens, hidden_dim)
+    optimizer_cfg = h.build_optimizer_config(batch_size, tokens, hidden_dim, seq_len=seq_len)
     return model_cfg, optimizer_cfg, batch_size, num_steps

@@ -22,6 +22,7 @@ are in `experiments/grug/moe/README.md` — compare against the table there.
 - `eval/paloma/macro_loss` (final value)
 - `throughput/tokens_per_second` (averaged over the last 100 steps)
 - `throughput/total_tokens` (final value)
+- `run.state` must be `finished` before pulling final metrics
 
 **Baseline scaling law** (L∞ pinned at 1.6):
 
@@ -189,11 +190,11 @@ List your jobs:
 .venv/bin/iris --config lib/iris/examples/marin.yaml job list | grep "$(whoami)"
 ```
 
-Check runs in wandb (match `<PROJECT>` and `<PREFIX>` to `launch.py`):
+Check runs in wandb (match `<PREFIX>` to the run_id pattern in `launch.py`):
 ```python
 import wandb
 api = wandb.Api()
-runs = api.runs('marin-community/<PROJECT>', filters={'displayName': {'$regex': '^<PREFIX>'}}, order='-created_at')
+runs = api.runs('marin-community/marin_moe', filters={'displayName': {'$regex': '^<PREFIX>'}}, order='-created_at')
 for r in runs:
     print(f'{r.name:<50} state={r.state:<10} step={r.summary.get("global_step", "n/a")}')
 ```

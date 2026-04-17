@@ -148,8 +148,8 @@ baseline_moe = ExecutorStep(
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
-            project="dial_moe",
-            tags=["adamh", "qb", "sharded-qb", "gatednorm", "xsa", "zloss", "eq3e3"],
+            project="marin_moe",
+            tags=["moe"],
             group="moe-iter04",
             name=None,
         ),

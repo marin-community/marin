@@ -96,7 +96,7 @@ are the baseline runs that ablation experiments compare against.
 | 2.19e17  | d512     | 6      | **3.8104**  | 8.37e8  | 405,630         | 0.6h          | [moe-v16-compute-opt-d512-2.19e+17](https://wandb.ai/marin-community/dial_moe/runs/moe-v16-compute-opt-d512-2.19e+17) |
 | 1.70e18  | d768     | 8      | **3.4339**  | 2.71e9  | 273,532         | 2.8h          | [moe-v16-compute-opt-d768-1.70e+18](https://wandb.ai/marin-community/dial_moe/runs/moe-v16-compute-opt-d768-1.70e+18) |
 | 9.00e18  | d1024    | 11     | **3.1605**  | 6.63e9  | 175,165         | 10.5h         | [moe-v16-compute-opt-d1024-9.00e+18](https://wandb.ai/marin-community/dial_moe/runs/moe-v16-compute-opt-d1024-9.00e+18) |
-| 3e19     | d1536    | 16     | **3.0066**  | 7.83e9  |                 |               | [isoflop-moe-v16-3e+19-d1536-v2](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+19-d1536-v2) |
+| 2.83e19  | d1280    | 13     | **3.0065**  | 1.24e10 | 128,277         | 26.8h         | [moe-v16-compute-opt-d1280-2.83e+19](https://wandb.ai/marin-community/dial_moe/runs/moe-v16-compute-opt-d1280-2.83e+19) |
 
 ## Promotion criteria
 
@@ -125,6 +125,33 @@ Most promotable changes will land in one of three files:
 Some discretionary factors may influence the promotion decision even when the
 loss criteria are met — for example, impact on training memory footprint,
 inference latency / KV-cache size, serving compatibility, or interaction effects with other promotable changes.
+
+## Large run model sizing
+
+Conservative sizing for large runs using equal compute allocation between
+parameters and tokens (exponent fixed to 0.5):
+
+```
+N*(C) = 0.0543 · C^0.5    (active params, no lm_head)
+T*(C) = 3.290  · C^0.5    (tokens)
+token:active_param ratio = 60.6 (constant across all scales)
+total_params ≈ 8 × active_params  (for E=64, K=4 with shared expert)
+```
+
+These formulas fix the exponent to 0.5 for both N and T (equal scaling),
+fit on v16 isoflop sweep parabola optima. The free-fit exponents
+(N: 0.546, T: 0.464) are slightly param-heavy, but the fixed 0.5 is more
+conservative and easier to reason about.
+
+| Budget | Active params | Total params | Tokens  | Predicted macro | Approx dim | Layers |
+|--------|--------------|-------------|---------|-----------------|------------|--------|
+| 1e21   | 1.7B         | ~14B        | 104B    | 2.606           | d2400      | 24     |
+| 1e22   | 5.4B         | ~43B        | 329B    | 2.410           | d3520      | 35     |
+| 1e23   | 17.2B        | ~137B       | 1.0T    | 2.252           | d5170      | 50     |
+| 1e24   | 54.3B        | ~434B       | 3.3T    | 2.125           | d7590      | 71     |
+| 1e25   | 171.7B       | ~1.4T       | 10.4T   | 2.023           | d11150     | 102    |
+
+Predicted macro uses `loss(C) = 1.6 + 95.18 · C^(-0.0941)`.
 
 ## Files
 
