@@ -106,7 +106,6 @@ _CLONE_TABLES = [
     "txn_actions",
     "meta",
     "schema_migrations",
-    "logs",
 ]
 
 

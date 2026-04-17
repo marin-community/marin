@@ -923,9 +923,6 @@ class ControllerConfig:
     worker_retention: Duration = field(default_factory=lambda: Duration.from_seconds(86400))
     """Delete inactive/unhealthy workers whose last heartbeat exceeds this (default: 24 hours)."""
 
-    log_retention: Duration = field(default_factory=lambda: Duration.from_seconds(7 * 86400))
-    """Delete controller logs older than this (default: 7 days)."""
-
     txn_action_retention: Duration = field(default_factory=lambda: Duration.from_seconds(3 * 86400))
     """Delete txn_actions older than this (default: 3 days)."""
 
@@ -1373,7 +1370,6 @@ class Controller:
                     self._transitions.prune_old_data(
                         job_retention=self._config.job_retention,
                         worker_retention=self._config.worker_retention,
-                        log_retention=self._config.log_retention,
                         txn_action_retention=self._config.txn_action_retention,
                         profile_retention=self._config.profile_retention,
                         stop_event=stop_event,
