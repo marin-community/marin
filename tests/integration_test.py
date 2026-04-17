@@ -217,6 +217,11 @@ def _run_executor(prefix: str, synth_data: str) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Run full marin pipeline on Iris")
     parser.add_argument("--controller-url", required=True)
+    parser.add_argument(
+        "--no-cleanup",
+        action="store_true",
+        help="Leave the run's output directory in place when the test exits (default: remove it).",
+    )
     args = parser.parse_args()
 
     s3_base = os.environ.get("MARIN_CI_S3_PREFIX")
@@ -282,7 +287,10 @@ def main():
         logger.exception("Pipeline failed")
         sys.exit(1)
     finally:
-        cleanup()
+        if args.no_cleanup:
+            logger.info("Skipping cleanup; output directory preserved at: %s", prefix)
+        else:
+            cleanup()
 
 
 if __name__ == "__main__":
