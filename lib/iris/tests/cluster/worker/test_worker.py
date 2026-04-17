@@ -666,18 +666,22 @@ def test_port_binding_failure(mock_bundle_store, tmp_path):
 # ============================================================================
 
 
-def _log_server_endpoints(address: str):
-    from iris.rpc import controller_pb2
+def _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime):
+    """Build a Worker and attach a fake LogPusher (normally built in start())."""
+    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
 
-    return controller_pb2.Controller.ListEndpointsResponse(
-        endpoints=[
-            controller_pb2.Controller.Endpoint(
-                endpoint_id="/system/log-server",
-                name="/system/log-server",
-                address=address,
-            )
-        ]
-    )
+    class _FakePusher:
+        def push(self, key, entries):
+            pass
+
+        def flush(self):
+            pass
+
+        def close(self):
+            pass
+
+    worker._log_pusher = _FakePusher()
+    return worker
 
 
 def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_store, mock_runtime, tmp_path):
@@ -692,8 +696,7 @@ def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_stor
         default_task_image="mock-image",
         worker_id="w-1",
     )
-    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
-    worker._controller_client = Mock(list_endpoints=Mock(return_value=_log_server_endpoints("http://log:9000")))
+    worker = _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime)
 
     try:
         worker._attach_log_handler()
@@ -703,36 +706,22 @@ def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_stor
         worker._detach_log_handler()
 
 
-def test_attach_log_handler_defers_resolution_to_pusher(mock_bundle_store, mock_runtime, tmp_path):
-    """A ListEndpoints RPC failure at attach time must not crash the lifecycle
-    thread. Resolution happens lazily inside LogPusher on the first push, so
-    the handler is attached even if the controller is not yet reachable."""
+def test_attach_log_handler_noop_without_worker_id(mock_bundle_store, mock_runtime, tmp_path):
+    """Before the worker_id is known, attach is a no-op."""
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
-        worker_id="w-1",
     )
-    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
-    worker._controller_client = Mock(list_endpoints=Mock(side_effect=ConnectionError("controller down")))
+    worker = _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime)
 
-    try:
-        worker._attach_log_handler()
-        # Handler attached; pusher exists but has no cached RPC client yet.
-        assert worker._log_handler is not None
-        assert worker._log_pusher is not None
-        # The controller mock was NOT called at attach time — resolution
-        # is deferred to the first send.
-        assert worker._controller_client.list_endpoints.call_count == 0
-    finally:
-        worker._detach_log_handler()
+    worker._attach_log_handler()
+    assert worker._log_handler is None
 
 
 def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runtime, tmp_path):
-    """Re-attach under a new worker_id renames the handler's key in place
-    rather than rebuilding the LogPusher — the pusher owns its own
-    resolve-on-failure loop across lifecycle iterations."""
+    """Re-attach under a new worker_id renames the handler's key in place."""
     from iris.cluster.log_store import worker_log_key
 
     config = WorkerConfig(
@@ -742,26 +731,18 @@ def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runti
         default_task_image="mock-image",
         worker_id="w-1",
     )
-    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
-    worker._controller_client = Mock(list_endpoints=Mock(return_value=_log_server_endpoints("http://log:9000")))
+    worker = _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime)
 
     try:
         worker._attach_log_handler()
-        first_pusher = worker._log_pusher
         first_handler = worker._log_handler
-        assert first_pusher is not None
         assert first_handler is not None
 
-        # Re-attach with same id → identity preserved.
         worker._attach_log_handler()
-        assert worker._log_pusher is first_pusher
         assert worker._log_handler is first_handler
 
-        # Re-attach under a different worker_id → same pusher, same handler,
-        # renamed key.
         worker._worker_id = "w-2"
         worker._attach_log_handler()
-        assert worker._log_pusher is first_pusher
         assert worker._log_handler is first_handler
         assert first_handler.key == worker_log_key("w-2")
     finally:

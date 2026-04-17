@@ -252,6 +252,11 @@ class Worker:
                 timeout_ms=60_000,
                 interceptors=interceptors,
             )
+            self._log_pusher = LogPusher(
+                "/system/log-server",
+                interceptors=interceptors,
+                resolver=self._resolve_log_service,
+            )
 
             # Start lifecycle thread: register + serve + reset loop
             self._threads.spawn(target=self._run_lifecycle, name="worker-lifecycle")
@@ -460,50 +465,21 @@ class Worker:
 
         return None
 
-    def _resolve_log_service(self, _server_url: str) -> str:
-        """Resolve the LogService address via the /system/log-server endpoint.
-
-        Passed to ``LogPusher`` as its resolver. Raises on any failure so the
-        pusher treats the attempt as unresolved and keeps the cached client
-        slot empty; the next push will retry. The ``_server_url`` argument is
-        ignored — it only exists to satisfy the resolver signature — so
-        callers can tag the pusher with any symbolic name.
-        """
+    def _resolve_log_service(self, server_url: str) -> str:
+        """Look up ``server_url`` on the controller's endpoint registry."""
         assert self._controller_client is not None, "controller client must exist before log resolution"
         resp = self._controller_client.list_endpoints(
-            controller_pb2.Controller.ListEndpointsRequest(
-                prefix="/system/log-server",
-                exact=True,
-            ),
+            controller_pb2.Controller.ListEndpointsRequest(prefix=server_url, exact=True),
         )
         if not resp.endpoints:
-            raise ConnectionError("No /system/log-server endpoint registered on controller")
+            raise ConnectionError(f"No {server_url!r} endpoint registered on controller")
         return resp.endpoints[0].address
 
     def _attach_log_handler(self) -> None:
-        """Attach ``RemoteLogHandler`` under ``worker_log_key(self._worker_id)``.
-
-        Idempotent: if a pusher already exists, just rename the handler's
-        key. ``LogPusher`` self-heals via its resolver across log-server
-        failovers, so there's no teardown-and-rebuild across lifecycle
-        iterations. Skipped when ``self._worker_id`` is not yet known
-        locally — in that case the controller assigns one during
-        ``_register`` and the lifecycle loop re-calls this method.
-        """
-        if not self._worker_id:
+        """Attach or rename the remote log handler under ``worker_log_key(self._worker_id)``."""
+        if not self._worker_id or self._log_pusher is None:
             return
         key = worker_log_key(self._worker_id)
-
-        if self._log_pusher is None:
-            log_interceptors = ()
-            if self._config.auth_token:
-                log_interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
-            self._log_pusher = LogPusher(
-                "iris://system/log-server",
-                interceptors=log_interceptors,
-                resolver=self._resolve_log_service,
-            )
-
         if self._log_handler is None:
             self._log_handler = RemoteLogHandler(self._log_pusher, key=key)
             self._log_handler.setLevel(logging.INFO)
