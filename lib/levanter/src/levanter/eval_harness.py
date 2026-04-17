@@ -93,25 +93,25 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
-def _enable_hf_offline_mode_for_eval_cache() -> None:
-    """Force HF dataset loading into cache-only mode after syncing mirrored eval datasets."""
-    os.environ["HF_HUB_OFFLINE"] = "1"
+def _enable_hf_dataset_cache_only_mode() -> None:
+    """Use the local datasets cache after sync while still allowing Hub metadata lookups."""
+    os.environ.pop("HF_HUB_OFFLINE", None)
     os.environ["HF_DATASETS_OFFLINE"] = "1"
 
     try:
         import datasets.config as datasets_config
 
-        datasets_config.HF_HUB_OFFLINE = True
+        datasets_config.HF_HUB_OFFLINE = False
         datasets_config.HF_DATASETS_OFFLINE = True
     except Exception:
-        logger.debug("datasets.config unavailable while enabling offline mode", exc_info=True)
+        logger.debug("datasets.config unavailable while configuring eval cache mode", exc_info=True)
 
     try:
         import huggingface_hub.constants as hub_constants
 
-        hub_constants.HF_HUB_OFFLINE = True
+        hub_constants.HF_HUB_OFFLINE = False
     except Exception:
-        logger.debug("huggingface_hub.constants unavailable while enabling offline mode", exc_info=True)
+        logger.debug("huggingface_hub.constants unavailable while configuring eval cache mode", exc_info=True)
 
 
 def _call_with_retry(
@@ -1175,7 +1175,7 @@ class LmEvalHarnessConfig:
                 log=logger,
             )
             if synced:
-                _enable_hf_offline_mode_for_eval_cache()
+                _enable_hf_dataset_cache_only_mode()
             return synced
         except ImportError:
             logger.warning(

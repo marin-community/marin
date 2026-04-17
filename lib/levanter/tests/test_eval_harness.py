@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import os
 from types import SimpleNamespace
 
 import datasets.config as datasets_config
@@ -18,7 +19,7 @@ from levanter.eval_harness import (
     TaskConfig,
     _LmEvalHarnessWorker,
     _encode_batch_texts,
-    _enable_hf_offline_mode_for_eval_cache,
+    _enable_hf_dataset_cache_only_mode,
     _effective_pad_token_id,
     _iterate_tokenized_requests,
     _make_dummy_batch,
@@ -191,36 +192,38 @@ def test_encode_batch_texts_falls_back_to_hf_call():
     assert _encode_batch_texts(tokenizer, ["ab", "hello"]) == [[2], [5]]
 
 
-def test_enable_hf_offline_mode_for_eval_cache(monkeypatch):
-    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+def test_enable_hf_dataset_cache_only_mode(monkeypatch):
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     monkeypatch.delenv("HF_DATASETS_OFFLINE", raising=False)
-    monkeypatch.setattr(datasets_config, "HF_HUB_OFFLINE", False)
+    monkeypatch.setattr(datasets_config, "HF_HUB_OFFLINE", True)
     monkeypatch.setattr(datasets_config, "HF_DATASETS_OFFLINE", False)
-    monkeypatch.setattr(hub_constants, "HF_HUB_OFFLINE", False)
+    monkeypatch.setattr(hub_constants, "HF_HUB_OFFLINE", True)
 
-    _enable_hf_offline_mode_for_eval_cache()
+    _enable_hf_dataset_cache_only_mode()
 
-    assert datasets_config.HF_HUB_OFFLINE is True
+    assert "HF_HUB_OFFLINE" not in os.environ
+    assert datasets_config.HF_HUB_OFFLINE is False
     assert datasets_config.HF_DATASETS_OFFLINE is True
-    assert hub_constants.HF_HUB_OFFLINE is True
+    assert hub_constants.HF_HUB_OFFLINE is False
 
 
-def test_sync_datasets_from_gcs_enables_offline_mode_on_success(monkeypatch):
+def test_sync_datasets_from_gcs_enables_dataset_cache_only_mode_on_success(monkeypatch):
     import marin.evaluation.eval_dataset_cache as eval_dataset_cache
 
-    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     monkeypatch.delenv("HF_DATASETS_OFFLINE", raising=False)
-    monkeypatch.setattr(datasets_config, "HF_HUB_OFFLINE", False)
+    monkeypatch.setattr(datasets_config, "HF_HUB_OFFLINE", True)
     monkeypatch.setattr(datasets_config, "HF_DATASETS_OFFLINE", False)
-    monkeypatch.setattr(hub_constants, "HF_HUB_OFFLINE", False)
+    monkeypatch.setattr(hub_constants, "HF_HUB_OFFLINE", True)
     monkeypatch.setattr(eval_dataset_cache, "load_eval_datasets_from_gcs", lambda **_: True)
 
     config = LmEvalHarnessConfig(task_spec=[], eval_datasets_cache_path="gs://example/eval-cache")
 
     assert config._sync_datasets_from_gcs() is True
-    assert datasets_config.HF_HUB_OFFLINE is True
+    assert "HF_HUB_OFFLINE" not in os.environ
+    assert datasets_config.HF_HUB_OFFLINE is False
     assert datasets_config.HF_DATASETS_OFFLINE is True
-    assert hub_constants.HF_HUB_OFFLINE is True
+    assert hub_constants.HF_HUB_OFFLINE is False
 
 
 @skip_if_module_missing("lm_eval")
