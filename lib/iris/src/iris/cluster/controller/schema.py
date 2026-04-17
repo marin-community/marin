@@ -1217,20 +1217,6 @@ RESERVATION_CLAIMS = Table(
     ),
 )
 
-LOGS = Table(
-    "logs",
-    "l",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column("key", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("source", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("data", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("epoch_ms", "INTEGER", "NOT NULL", python_type=int, decoder=int),
-        Column("level", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
-    ),
-    indexes=("CREATE INDEX IF NOT EXISTS idx_logs_key ON logs(key, id)",),
-)
-
 # Migration 0005 + 0014 + 0023 (moved to profiles DB)
 TASK_PROFILES = Table(
     "profiles.task_profiles",
@@ -1389,7 +1375,6 @@ MAIN_TABLES: tuple[Table, ...] = (
     SCALING_GROUPS,
     SLICES,
     RESERVATION_CLAIMS,
-    LOGS,
     USER_BUDGETS,
 )
 

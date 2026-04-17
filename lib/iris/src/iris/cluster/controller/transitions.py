@@ -139,19 +139,12 @@ class PruneResult:
 
     jobs_deleted: int = 0
     workers_deleted: int = 0
-    logs_deleted: int = 0
     txn_actions_deleted: int = 0
     profiles_deleted: int = 0
 
     @property
     def total(self) -> int:
-        return (
-            self.jobs_deleted
-            + self.workers_deleted
-            + self.logs_deleted
-            + self.txn_actions_deleted
-            + self.profiles_deleted
-        )
+        return self.jobs_deleted + self.workers_deleted + self.txn_actions_deleted + self.profiles_deleted
 
 
 class HeartbeatAction(enum.Enum):
@@ -2885,7 +2878,6 @@ class ControllerTransitions:
         *,
         job_retention: Duration,
         worker_retention: Duration,
-        log_retention: Duration,
         txn_action_retention: Duration,
         profile_retention: Duration,
         stop_event: threading.Event | None = None,
@@ -2900,7 +2892,6 @@ class ControllerTransitions:
         Args:
             job_retention: Delete terminal jobs whose finished_at is older than this.
             worker_retention: Delete inactive/unhealthy workers whose last heartbeat is older than this.
-            log_retention: Delete log rows older than this.
             txn_action_retention: Delete txn_actions older than this.
             profile_retention: Delete task_profiles older than this.
             stop_event: If set, abort early (e.g. during shutdown).
@@ -2909,7 +2900,6 @@ class ControllerTransitions:
         now_ms = Timestamp.now().epoch_ms()
         job_cutoff_ms = now_ms - job_retention.to_ms()
         worker_cutoff_ms = now_ms - worker_retention.to_ms()
-        log_cutoff_ms = now_ms - log_retention.to_ms()
         txn_cutoff_ms = now_ms - txn_action_retention.to_ms()
 
         terminal_states = tuple(TERMINAL_JOB_STATES)
@@ -2956,15 +2946,7 @@ class ControllerTransitions:
             workers_deleted += 1
             time.sleep(pause_between_s)
 
-        # 3. Logs: batch of 1000 per transaction (no CASCADE, cheap rows)
-        logs_deleted = self._batch_delete(
-            "DELETE FROM logs WHERE rowid IN (SELECT rowid FROM logs WHERE epoch_ms < ? LIMIT 1000)",
-            (log_cutoff_ms,),
-            _stopped,
-            pause_between_s,
-        )
-
-        # 4. txn_actions: batch of 1000 per transaction (no CASCADE)
+        # 3. txn_actions: batch of 1000 per transaction (no CASCADE)
         txn_actions_deleted = self._batch_delete(
             "DELETE FROM txn_actions WHERE rowid IN "
             "(SELECT rowid FROM txn_actions WHERE created_at_ms < ? LIMIT 1000)",
@@ -2973,9 +2955,9 @@ class ControllerTransitions:
             pause_between_s,
         )
 
-        # 5. Task profiles: batch of 1000 per transaction
+        # 4. Task profiles: batch of 1000 per transaction
         profile_cutoff_ms = now_ms - profile_retention.to_ms()
-        # 5a. Delete stale profiles by age.
+        # 4a. Delete stale profiles by age.
         profiles_deleted = self._batch_delete(
             "DELETE FROM profiles.task_profiles WHERE rowid IN "
             "(SELECT rowid FROM profiles.task_profiles WHERE captured_at_ms < ? LIMIT 1000)",
@@ -2983,7 +2965,7 @@ class ControllerTransitions:
             _stopped,
             pause_between_s,
         )
-        # 5b. Delete orphan profiles whose task no longer exists.
+        # 4b. Delete orphan profiles whose task no longer exists.
         profiles_deleted += self._batch_delete(
             "DELETE FROM profiles.task_profiles WHERE rowid IN "
             "(SELECT p.rowid FROM profiles.task_profiles p"
@@ -2997,16 +2979,14 @@ class ControllerTransitions:
         result = PruneResult(
             jobs_deleted=jobs_deleted,
             workers_deleted=workers_deleted,
-            logs_deleted=logs_deleted,
             txn_actions_deleted=txn_actions_deleted,
             profiles_deleted=profiles_deleted,
         )
         if result.total > 0:
             logger.info(
-                "Pruned old data: %d jobs, %d workers, %d logs, %d txn_actions, %d profiles",
+                "Pruned old data: %d jobs, %d workers, %d txn_actions, %d profiles",
                 result.jobs_deleted,
                 result.workers_deleted,
-                result.logs_deleted,
                 result.txn_actions_deleted,
                 result.profiles_deleted,
             )
