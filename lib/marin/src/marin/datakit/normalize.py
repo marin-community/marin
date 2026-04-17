@@ -245,6 +245,7 @@ def _make_split_writer(
         records: Iterator[MainOutput | ExactDupSideOutput],
         shard: ShardInfo,
     ) -> Iterator[dict[str, dict[str, Any]]]:
+        # NOTE: we could add support for split_existing - but we intentionally don't
         main_path = f"{output_dir}/outputs/main/part-{shard.shard_idx:05d}-of-{shard.total_shards:05d}.parquet"
         dup_path = f"{output_dir}/outputs/dups/part-{shard.shard_idx:05d}-of-{shard.total_shards:05d}.parquet"
 
