@@ -87,11 +87,12 @@ class LogPusher:
         self._flush_interval = flush_interval
         self._max_buffer_size = max_buffer_size
 
-        # Buffers and all shared state are guarded by _cond. The drain
-        # thread is the only owner of _client, so no separate client lock.
+        # All shared state is guarded by _cond. The drain thread is the
+        # only owner of _client, so no separate client lock. ``_queue`` is
+        # a single FIFO of (key, entry); the drain thread groups by key
+        # just before sending. Trimming on overflow is one popleft.
         self._cond = threading.Condition()
-        self._buffers: dict[str, deque[logging_pb2.LogEntry]] = {}
-        self._buffered = 0
+        self._queue: deque[tuple[str, logging_pb2.LogEntry]] = deque()
         self._closed = False
 
         # Without a resolver, build the client eagerly so we fail fast on
@@ -111,17 +112,16 @@ class LogPusher:
     # ------------------------------------------------------------------
 
     def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-        """Append ``entries`` to ``key``'s buffer. Never blocks the caller."""
+        """Append ``entries`` to the outbound queue. Never blocks the caller."""
         if not entries:
             return
         with self._cond:
             if self._closed:
                 return
-            buf = self._buffers.setdefault(key, deque())
-            buf.extend(entries)
-            self._buffered += len(entries)
+            for e in entries:
+                self._queue.append((key, e))
             self._trim_oldest_locked()
-            if self._buffered >= self._batch_size:
+            if len(self._queue) >= self._batch_size:
                 self._cond.notify()
 
     def flush(self) -> None:
@@ -130,7 +130,7 @@ class LogPusher:
         Non-blocking. For draining on shutdown, use ``close``.
         """
         with self._cond:
-            if self._buffered > 0:
+            if self._queue:
                 self._cond.notify()
 
     def close(self) -> None:
@@ -154,18 +154,11 @@ class LogPusher:
     # ------------------------------------------------------------------
 
     def _trim_oldest_locked(self) -> None:
-        """Drop oldest entries across keys until under ``_max_buffer_size``."""
+        """Drop oldest entries until under ``_max_buffer_size``."""
         dropped = 0
-        while self._buffered > self._max_buffer_size:
-            for buf in self._buffers.values():
-                if buf:
-                    buf.popleft()
-                    self._buffered -= 1
-                    dropped += 1
-                    break
-            else:
-                # All buffers empty somehow — nothing left to drop.
-                break
+        while len(self._queue) > self._max_buffer_size:
+            self._queue.popleft()
+            dropped += 1
         if dropped:
             logger.warning(
                 "LogPusher buffer overflow: dropped %d oldest entries (cap=%d)",
@@ -173,24 +166,16 @@ class LogPusher:
                 self._max_buffer_size,
             )
 
-    def _take_batch_locked(self) -> list[tuple[str, list[logging_pb2.LogEntry]]]:
-        """Drain all buffered entries into a (key, entries) list."""
-        batch = [(k, list(v)) for k, v in self._buffers.items() if v]
-        for v in self._buffers.values():
-            v.clear()
-        self._buffered = 0
-        return batch
+    def _take_queue_locked(self) -> list[tuple[str, logging_pb2.LogEntry]]:
+        """Drain the entire queue, preserving arrival order."""
+        items = list(self._queue)
+        self._queue.clear()
+        return items
 
-    def _rebuffer_at_head_locked(
-        self,
-        failed: list[tuple[str, list[logging_pb2.LogEntry]]],
-    ) -> None:
-        """Put unsent entries back at the head of their key's deque."""
-        for key, entries in failed:
-            buf = self._buffers.setdefault(key, deque())
-            for e in reversed(entries):
-                buf.appendleft(e)
-                self._buffered += 1
+    def _rebuffer_at_head_locked(self, items: list[tuple[str, logging_pb2.LogEntry]]) -> None:
+        """Put unsent items back at the head of the queue (original order)."""
+        for pair in reversed(items):
+            self._queue.appendleft(pair)
         self._trim_oldest_locked()
 
     # ------------------------------------------------------------------
@@ -201,24 +186,24 @@ class LogPusher:
         """Drain loop: wait for buffered entries, send them, retry failures with backoff."""
         while True:
             with self._cond:
-                while not self._closed and self._buffered == 0:
+                while not self._closed and not self._queue:
                     self._cond.wait(timeout=self._flush_interval)
-                if self._buffered == 0:
+                if not self._queue:
                     # _closed must be True here; nothing left to flush.
                     return
-                batch = self._take_batch_locked()
+                items = self._take_queue_locked()
 
-            failed = self._send_batch(batch)
-            if not failed:
+            unsent = self._send_items(items)
+            if not unsent:
                 self._backoff.reset()
                 continue
 
             with self._cond:
-                self._rebuffer_at_head_locked(failed)
+                self._rebuffer_at_head_locked(unsent)
                 if self._closed:
                     # Best-effort on close: don't loop forever against an
                     # unreachable server. Unsent entries are left in the
-                    # buffers and lost on process exit.
+                    # queue and lost on process exit.
                     return
             # Sleep on the backoff clock. Push-triggered notifies would
             # re-wake us immediately and defeat the backoff, so we loop
@@ -234,28 +219,33 @@ class LogPusher:
                 if self._closed:
                     return
 
-    def _send_batch(
+    def _send_items(
         self,
-        batch: list[tuple[str, list[logging_pb2.LogEntry]]],
-    ) -> list[tuple[str, list[logging_pb2.LogEntry]]]:
-        """Send each (key, entries); return entries that still need delivery.
+        items: list[tuple[str, logging_pb2.LogEntry]],
+    ) -> list[tuple[str, logging_pb2.LogEntry]]:
+        """Group ``items`` by key (stable on first occurrence) and push one
+        RPC per key. On any failure, return every item from that key onward
+        so the caller can re-buffer it at the head of the queue.
 
-        Every failure — resolver error, retryable RPC error, or
-        non-retryable RPC error — re-buffers the offending batch (and
-        everything after it) so no log entries are silently dropped.
-        Retryable errors additionally invalidate the cached client so the
-        next attempt re-resolves the endpoint; non-retryable errors keep
-        the client but still retry (the caller bounds memory via
-        ``MAX_LOG_BUFFER_SIZE``).
+        Every failure mode — resolver error, retryable RPC error, or
+        non-retryable RPC error — re-buffers so no log entries are silently
+        dropped. Retryable errors additionally invalidate the cached client
+        so the next attempt re-resolves the endpoint.
         """
-        for i, (key, entries) in enumerate(batch):
+        groups: dict[str, list[logging_pb2.LogEntry]] = {}
+        for key, entry in items:
+            groups.setdefault(key, []).append(entry)
+
+        sent_keys: set[str] = set()
+        for key, entries in groups.items():
             try:
                 client = self._get_client()
             except Exception as exc:
                 logger.warning("LogPusher: endpoint resolution failed: %s", exc)
-                return list(batch[i:])
+                return [p for p in items if p[0] not in sent_keys]
             try:
                 client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
+                sent_keys.add(key)
             except Exception as exc:
                 retryable = is_retryable_error(exc)
                 logger.warning(
@@ -267,7 +257,7 @@ class LogPusher:
                 )
                 if retryable:
                     self._invalidate(str(exc))
-                return list(batch[i:])
+                return [p for p in items if p[0] not in sent_keys]
         return []
 
     def _build_client(self, address: str) -> LogServiceClientSync:
