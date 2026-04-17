@@ -2169,29 +2169,32 @@ class Controller:
         for worker_id, address, run_request in result.start_requests:
             by_worker.setdefault((worker_id, address), []).append(run_request)
 
-        for (worker_id, address), tasks in by_worker.items():
-            attempt_by_task = {t.task_id: t.attempt_id for t in tasks}
-            try:
-                response = self._provider.start_tasks(worker_id, address, tasks)
-                for ack in response.acks:
-                    if not ack.accepted:
-                        logger.warning("Worker %s rejected task %s: %s", worker_id, ack.task_id, ack.error)
-                        self._task_update_queue.put(
-                            HeartbeatApplyRequest(
-                                worker_id=worker_id,
-                                worker_resource_snapshot=None,
-                                updates=[
-                                    TaskUpdate(
-                                        task_id=JobName.from_wire(ack.task_id),
-                                        attempt_id=attempt_by_task.get(ack.task_id, -1),
-                                        new_state=job_pb2.TASK_STATE_WORKER_FAILED,
-                                        error=f"Worker rejected task: {ack.error}",
-                                    )
-                                ],
-                            )
+        attempt_by_worker_task = {
+            (worker_id, t.task_id): t.attempt_id for (worker_id, _), tasks in by_worker.items() for t in tasks
+        }
+        jobs = [(worker_id, address, tasks) for (worker_id, address), tasks in by_worker.items()]
+        for worker_id, response, error in self._provider.start_tasks(jobs):
+            if error is not None:
+                logger.warning("StartTasks RPC failed for worker %s: %s", worker_id, error)
+                continue
+            assert response is not None
+            for ack in response.acks:
+                if not ack.accepted:
+                    logger.warning("Worker %s rejected task %s: %s", worker_id, ack.task_id, ack.error)
+                    self._task_update_queue.put(
+                        HeartbeatApplyRequest(
+                            worker_id=worker_id,
+                            worker_resource_snapshot=None,
+                            updates=[
+                                TaskUpdate(
+                                    task_id=JobName.from_wire(ack.task_id),
+                                    attempt_id=attempt_by_worker_task.get((worker_id, ack.task_id), -1),
+                                    new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                                    error=f"Worker rejected task: {ack.error}",
+                                )
+                            ],
                         )
-            except Exception as e:
-                logger.warning("StartTasks RPC failed for worker %s: %s", worker_id, e)
+                    )
 
     def _stop_tasks_direct(
         self,
@@ -2212,11 +2215,10 @@ class Controller:
                 continue
             by_worker.setdefault((worker_id, worker.address), []).append(task_id.to_wire())
 
-        for (worker_id, address), wids in by_worker.items():
-            try:
-                self._provider.stop_tasks(worker_id, address, wids)
-            except Exception as e:
-                logger.warning("StopTasks RPC failed for worker %s: %s", worker_id, e)
+        jobs = [(worker_id, address, wids) for (worker_id, address), wids in by_worker.items()]
+        for worker_id, error in self._provider.stop_tasks(jobs):
+            if error is not None:
+                logger.warning("StopTasks RPC failed for worker %s: %s", worker_id, error)
 
     def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
         """Get healthy active workers as (worker_id, address) tuples for ping."""

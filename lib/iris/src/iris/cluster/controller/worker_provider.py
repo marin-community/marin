@@ -249,63 +249,85 @@ class WorkerProvider:
         """Send Ping RPCs to all workers concurrently. Returns per-worker results."""
         if not workers:
             return []
-        return asyncio.run(self._ping_all(workers))
 
-    async def _ping_all(
-        self,
-        workers: list[tuple[WorkerId, str | None]],
-    ) -> list[PingResult]:
-        sem = asyncio.Semaphore(self.parallelism)
-        return await asyncio.gather(*(self._ping_one_safe(sem, wid, addr) for wid, addr in workers))
+        async def _one(sem: asyncio.Semaphore, wid: WorkerId, addr: str | None) -> PingResult:
+            async with sem:
+                if not addr:
+                    return PingResult(worker_id=wid, worker_address=addr, error=f"Worker {wid} has no address")
+                try:
+                    stub = self.stub_factory.get_stub(addr)
+                    response = await stub.ping(worker_pb2.Worker.PingRequest())
+                    if not response.healthy:
+                        return PingResult(
+                            worker_id=wid,
+                            worker_address=addr,
+                            error=f"worker {wid} reported unhealthy: {response.health_error}",
+                        )
+                    return PingResult(
+                        worker_id=wid,
+                        worker_address=addr,
+                        resource_snapshot=(
+                            response.resource_snapshot if response.resource_snapshot.ByteSize() > 0 else None
+                        ),
+                        healthy=response.healthy,
+                        health_error=response.health_error,
+                    )
+                except Exception as e:
+                    return PingResult(worker_id=wid, worker_address=addr, error=str(e))
 
-    async def _ping_one_safe(
-        self,
-        sem: asyncio.Semaphore,
-        worker_id: WorkerId,
-        address: str | None,
-    ) -> PingResult:
-        async with sem:
-            try:
-                return await self._ping_one(worker_id, address)
-            except Exception as e:
-                return PingResult(worker_id=worker_id, worker_address=address, error=str(e))
+        async def _run() -> list[PingResult]:
+            sem = asyncio.Semaphore(self.parallelism)
+            return await asyncio.gather(*(_one(sem, wid, addr) for wid, addr in workers))
 
-    async def _ping_one(self, worker_id: WorkerId, address: str | None) -> PingResult:
-        if not address:
-            raise ProviderError(f"Worker {worker_id} has no address")
-        stub = self.stub_factory.get_stub(address)
-        response = await stub.ping(worker_pb2.Worker.PingRequest())
-        if not response.healthy:
-            raise ProviderError(f"worker {worker_id} reported unhealthy: {response.health_error}")
-        return PingResult(
-            worker_id=worker_id,
-            worker_address=address,
-            resource_snapshot=response.resource_snapshot if response.resource_snapshot.ByteSize() > 0 else None,
-            healthy=response.healthy,
-            health_error=response.health_error,
-        )
+        return asyncio.run(_run())
 
     def start_tasks(
         self,
-        worker_id: WorkerId,
-        address: str,
-        tasks: list[job_pb2.RunTaskRequest],
-    ) -> worker_pb2.Worker.StartTasksResponse:
-        """Send StartTasks RPC to a worker."""
-        stub = self.stub_factory.get_stub(address)
-        request = worker_pb2.Worker.StartTasksRequest(tasks=tasks)
-        return asyncio.run(stub.start_tasks(request))
+        jobs: list[tuple[WorkerId, str, list[job_pb2.RunTaskRequest]]],
+    ) -> list[tuple[WorkerId, worker_pb2.Worker.StartTasksResponse | None, str | None]]:
+        """Send StartTasks RPCs to many workers concurrently."""
+        if not jobs:
+            return []
+
+        async def _one(
+            sem: asyncio.Semaphore, wid: WorkerId, addr: str, tasks: list[job_pb2.RunTaskRequest]
+        ) -> tuple[WorkerId, worker_pb2.Worker.StartTasksResponse | None, str | None]:
+            async with sem:
+                try:
+                    stub = self.stub_factory.get_stub(addr)
+                    response = await stub.start_tasks(worker_pb2.Worker.StartTasksRequest(tasks=tasks))
+                    return (wid, response, None)
+                except Exception as e:
+                    return (wid, None, str(e))
+
+        async def _run() -> list[tuple[WorkerId, worker_pb2.Worker.StartTasksResponse | None, str | None]]:
+            sem = asyncio.Semaphore(self.parallelism)
+            return await asyncio.gather(*(_one(sem, wid, addr, tasks) for wid, addr, tasks in jobs))
+
+        return asyncio.run(_run())
 
     def stop_tasks(
         self,
-        worker_id: WorkerId,
-        address: str,
-        task_ids: list[str],
-    ) -> None:
-        """Send StopTasks RPC to a worker."""
-        stub = self.stub_factory.get_stub(address)
-        request = worker_pb2.Worker.StopTasksRequest(task_ids=task_ids)
-        asyncio.run(stub.stop_tasks(request))
+        jobs: list[tuple[WorkerId, str, list[str]]],
+    ) -> list[tuple[WorkerId, str | None]]:
+        """Send StopTasks RPCs to many workers concurrently."""
+        if not jobs:
+            return []
+
+        async def _one(sem: asyncio.Semaphore, wid: WorkerId, addr: str, ids: list[str]) -> tuple[WorkerId, str | None]:
+            async with sem:
+                try:
+                    stub = self.stub_factory.get_stub(addr)
+                    await stub.stop_tasks(worker_pb2.Worker.StopTasksRequest(task_ids=ids))
+                    return (wid, None)
+                except Exception as e:
+                    return (wid, str(e))
+
+        async def _run() -> list[tuple[WorkerId, str | None]]:
+            sem = asyncio.Semaphore(self.parallelism)
+            return await asyncio.gather(*(_one(sem, wid, addr, ids) for wid, addr, ids in jobs))
+
+        return asyncio.run(_run())
 
     def poll_workers(
         self,
@@ -318,37 +340,28 @@ class WorkerProvider:
         """
         if not running:
             return []
-        return asyncio.run(self._poll_all(running, worker_addresses))
 
-    async def _poll_all(
-        self,
-        running: dict[WorkerId, list[RunningTaskEntry]],
-        worker_addresses: dict[WorkerId, str],
-    ) -> list[tuple[WorkerId, list[TaskUpdate] | None, str | None]]:
-        sem = asyncio.Semaphore(self.parallelism)
-        return await asyncio.gather(
-            *(self._poll_one_safe(sem, wid, running[wid], worker_addresses.get(wid)) for wid in running)
-        )
+        async def _one(
+            sem: asyncio.Semaphore, wid: WorkerId, entries: list[RunningTaskEntry], addr: str | None
+        ) -> tuple[WorkerId, list[TaskUpdate] | None, str | None]:
+            async with sem:
+                if not addr:
+                    return (wid, None, f"Worker {wid} has no address")
+                try:
+                    expected = [
+                        job_pb2.WorkerTaskStatus(task_id=e.task_id.to_wire(), attempt_id=e.attempt_id) for e in entries
+                    ]
+                    stub = self.stub_factory.get_stub(addr)
+                    response = await stub.poll_tasks(worker_pb2.Worker.PollTasksRequest(expected_tasks=expected))
+                    return (wid, task_updates_from_proto(response.tasks), None)
+                except Exception as e:
+                    return (wid, None, str(e))
 
-    async def _poll_one_safe(
-        self,
-        sem: asyncio.Semaphore,
-        worker_id: WorkerId,
-        entries: list[RunningTaskEntry],
-        address: str | None,
-    ) -> tuple[WorkerId, list[TaskUpdate] | None, str | None]:
-        async with sem:
-            if not address:
-                return (worker_id, None, f"Worker {worker_id} has no address")
-            try:
-                expected = [
-                    job_pb2.WorkerTaskStatus(task_id=e.task_id.to_wire(), attempt_id=e.attempt_id) for e in entries
-                ]
-                stub = self.stub_factory.get_stub(address)
-                response = await stub.poll_tasks(worker_pb2.Worker.PollTasksRequest(expected_tasks=expected))
-                return (worker_id, task_updates_from_proto(response.tasks), None)
-            except Exception as e:
-                return (worker_id, None, str(e))
+        async def _run() -> list[tuple[WorkerId, list[TaskUpdate] | None, str | None]]:
+            sem = asyncio.Semaphore(self.parallelism)
+            return await asyncio.gather(*(_one(sem, wid, running[wid], worker_addresses.get(wid)) for wid in running))
+
+        return asyncio.run(_run())
 
     def close(self) -> None:
         self.stub_factory.close()

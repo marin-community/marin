@@ -113,13 +113,13 @@ class FakeProvider:
     def ping_workers(self, workers):
         return []
 
-    def start_tasks(self, worker_id, address, tasks):
+    def start_tasks(self, jobs):
         from iris.rpc import worker_pb2
 
-        return worker_pb2.Worker.StartTasksResponse()
+        return [(wid, worker_pb2.Worker.StartTasksResponse(), None) for wid, _, _ in jobs]
 
-    def stop_tasks(self, worker_id, address, task_ids):
-        return None
+    def stop_tasks(self, jobs):
+        return [(wid, None) for wid, _, _ in jobs]
 
     def poll_workers(self, running, worker_addresses):
         return []
