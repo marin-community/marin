@@ -73,20 +73,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             )
         ),
     )
-    transform_lq_data_spec = StepSpec(
-        name=os.path.join(prefix, "lq-transformed"),
-        hash_attrs={"extract_method": "resiliparse"},
-        fn=lambda output_path: html_to_md(
-            SimpleHtmlToMdConfig(
-                input_path=os.path.join(synth_data, "neg"),
-                output_path=output_path,
-                extract_method="resiliparse",
-                config=ResiliparseConfig(),
-            )
-        ),
-    )
     transform_hq_data_step = transform_hq_data_spec.as_executor_step()
-    transform_lq_data_step = transform_lq_data_spec.as_executor_step()
 
     # Normalize the HQ transformed records into the datakit standard layout
     # (content-hash id + text + preserved columns). Writes main + side-output
@@ -175,7 +162,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     return [
         transform_hq_data_step,
-        transform_lq_data_step,
         normalize_hq_step,
         dedup_exact_paragraph_step,
         consolidate_step,
