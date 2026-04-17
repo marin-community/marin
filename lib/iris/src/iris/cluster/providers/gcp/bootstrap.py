@@ -109,6 +109,72 @@ def render_template(template: str, **variables: str | int) -> str:
 
 
 # ============================================================================
+# Shared shell helpers
+# ============================================================================
+
+# Bash helpers shared by worker and controller bootstrap scripts.
+#
+# The race we're papering over: `gcloud` is provided by a snap/apt package that
+# may not be on PATH yet when the startup script runs, and AR auth/docker pull
+# are both prone to transient failures during image churn. Each bootstrap
+# renders this block with its own ``log_prefix`` so output stays tagged with
+# the caller's conventions.
+DOCKER_HELPERS_TEMPLATE = """
+find_gcloud() {
+    if command -v gcloud > /dev/null 2>&1; then
+        command -v gcloud
+        return 0
+    fi
+    if [ -x /snap/bin/gcloud ]; then
+        echo /snap/bin/gcloud
+        return 0
+    fi
+    return 1
+}
+
+configure_docker_auth_with_retries() {
+    local AR_HOST="$1"
+    local gcloud_bin=""
+    for attempt in $(seq 1 60); do
+        gcloud_bin=$(find_gcloud || true)
+        if [ -z "$gcloud_bin" ]; then
+            echo "{{ log_prefix }} Waiting for gcloud before configuring docker auth (attempt $attempt/60)"
+            sleep 2
+            continue
+        fi
+        echo "{{ log_prefix }} Configuring docker auth for $AR_HOST (attempt $attempt/60)"
+        if sudo "$gcloud_bin" auth configure-docker "$AR_HOST" -q; then
+            return 0
+        fi
+        echo "{{ log_prefix }} gcloud auth configure-docker failed for $AR_HOST (attempt $attempt/60)"
+        sleep 2
+    done
+    echo "{{ log_prefix }} ERROR: Failed to configure docker auth for $AR_HOST after 60 attempts"
+    return 1
+}
+
+pull_docker_image_with_retries() {
+    local image="$1"
+    for attempt in $(seq 1 5); do
+        if sudo docker pull "$image"; then
+            return 0
+        fi
+        echo "{{ log_prefix }} Docker pull failed (attempt $attempt/5)"
+        if [ "$attempt" -lt 5 ]; then
+            sleep 5
+        fi
+    done
+    echo "{{ log_prefix }} ERROR: Failed to pull image after 5 attempts: $image"
+    return 1
+}
+"""
+
+
+def _render_docker_helpers(log_prefix: str) -> str:
+    return render_template(DOCKER_HELPERS_TEMPLATE, log_prefix=log_prefix)
+
+
+# ============================================================================
 # Worker Bootstrap Script
 # ============================================================================
 
@@ -144,55 +210,7 @@ sudo sysctl -w net.core.somaxconn=4096
 
 # Create cache directory
 sudo mkdir -p {{ cache_dir }}
-
-find_gcloud() {
-    if command -v gcloud > /dev/null 2>&1; then
-        command -v gcloud
-        return 0
-    fi
-    if [ -x /snap/bin/gcloud ]; then
-        echo /snap/bin/gcloud
-        return 0
-    fi
-    return 1
-}
-
-configure_docker_auth_with_retries() {
-    local AR_HOST="$1"
-    local gcloud_bin=""
-    for attempt in $(seq 1 60); do
-        gcloud_bin=$(find_gcloud || true)
-        if [ -z "$gcloud_bin" ]; then
-            echo "[iris-init] Waiting for gcloud before configuring docker auth (attempt $attempt/60)"
-            sleep 2
-            continue
-        fi
-        echo "[iris-init] Configuring docker auth for $AR_HOST (attempt $attempt/60)"
-        if sudo "$gcloud_bin" auth configure-docker "$AR_HOST" -q; then
-            return 0
-        fi
-        echo "[iris-init] gcloud auth configure-docker failed for $AR_HOST (attempt $attempt/60)"
-        sleep 2
-    done
-    echo "[iris-init] ERROR: Failed to configure docker auth for $AR_HOST after 60 attempts"
-    return 1
-}
-
-pull_docker_image_with_retries() {
-    local image="$1"
-    for attempt in $(seq 1 5); do
-        if sudo docker pull "$image"; then
-            return 0
-        fi
-        echo "[iris-init] Docker pull failed (attempt $attempt/5)"
-        if [ "$attempt" -lt 5 ]; then
-            sleep 5
-        fi
-    done
-    echo "[iris-init] ERROR: Failed to pull image after 5 attempts: $image"
-    return 1
-}
-
+{{ docker_helpers }}
 echo "[iris-init] Phase: docker_pull"
 echo "[iris-init] Pulling image: {{ docker_image }}"
 
@@ -294,6 +312,7 @@ def build_worker_bootstrap_script(
         docker_image=worker_config.docker_image,
         worker_port=worker_config.port,
         worker_config_json=worker_config_json,
+        docker_helpers=_render_docker_helpers("[iris-init]"),
     )
 
 
@@ -357,55 +376,7 @@ fi
 # Tune network stack for high-connection workloads (#3066).
 sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
 sudo sysctl -w net.ipv4.tcp_tw_reuse=1
-
-find_gcloud() {
-    if command -v gcloud > /dev/null 2>&1; then
-        command -v gcloud
-        return 0
-    fi
-    if [ -x /snap/bin/gcloud ]; then
-        echo /snap/bin/gcloud
-        return 0
-    fi
-    return 1
-}
-
-configure_docker_auth_with_retries() {
-    local AR_HOST="$1"
-    local gcloud_bin=""
-    for attempt in $(seq 1 60); do
-        gcloud_bin=$(find_gcloud || true)
-        if [ -z "$gcloud_bin" ]; then
-            echo "[iris-controller] [3/5] Waiting for gcloud before configuring docker auth (attempt $attempt/60)"
-            sleep 2
-            continue
-        fi
-        echo "[iris-controller] [3/5] Configuring docker auth for $AR_HOST (attempt $attempt/60)"
-        if sudo "$gcloud_bin" auth configure-docker "$AR_HOST" -q; then
-            return 0
-        fi
-        echo "[iris-controller] [3/5] gcloud auth configure-docker failed for $AR_HOST (attempt $attempt/60)"
-        sleep 2
-    done
-    echo "[iris-controller] [3/5] ERROR: Failed to configure docker auth for $AR_HOST after 60 attempts"
-    return 1
-}
-
-pull_docker_image_with_retries() {
-    local image="$1"
-    for attempt in $(seq 1 5); do
-        if sudo docker pull "$image"; then
-            return 0
-        fi
-        echo "[iris-controller] [4/5] Docker pull failed (attempt $attempt/5)"
-        if [ "$attempt" -lt 5 ]; then
-            sleep 5
-        fi
-    done
-    echo "[iris-controller] [4/5] ERROR: Failed to pull image after 5 attempts: $image"
-    return 1
-}
-
+{{ docker_helpers }}
 echo "[iris-controller] [3/5] Pulling image: {{ docker_image }}"
 echo "[iris-controller]       This may take several minutes for large images..."
 
@@ -549,6 +520,7 @@ def build_controller_bootstrap_script(
         config_volume=config_volume,
         config_flag=config_flag,
         fresh_flag="--fresh" if fresh else "",
+        docker_helpers=_render_docker_helpers("[iris-controller]"),
     )
 
 
