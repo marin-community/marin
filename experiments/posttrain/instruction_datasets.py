@@ -38,6 +38,7 @@ Current datasets:
 23. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 24. lm-provers/FineProofs-SFT
 25. lm-provers/FineProofs-SFT/proof-only
+26. lambda/hermes-agent-reasoning-traces
 """
 
 import hashlib
@@ -64,6 +65,10 @@ from marin.transform.conversation.conversation_to_dolma import (
 from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
     transform_hf_dataset,
+)
+from marin.transform.conversation.trace_normalization import (
+    hermes_trace_row_id,
+    normalize_hermes_trace_messages,
 )
 
 from experiments.llama import llama3_tokenizer
@@ -109,6 +114,7 @@ NEMOTRON_V2_SPLITS = [
 ]
 
 NEMOTRON_V1_SPLITS = ["chat", "code", "math", "stem", "tool_calling"]
+HERMES_TRACE_REVISION = "aa7c93605c71578869938359075b1765cf1b26e1"
 
 
 @dataclass(frozen=True)
@@ -321,6 +327,42 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         ),
         metadata_columns=["id", "category", "source"],
         name="teknium/OpenHermes-2.5",
+    ),
+    "lambda/hermes-agent-reasoning-traces/glm-5.1": InstructionDatasetConfig(
+        hf_dataset_id="lambda/hermes-agent-reasoning-traces",
+        revision=HERMES_TRACE_REVISION,
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            system_value="system",
+            content_key="value",
+            message_postprocess_fn=normalize_hermes_trace_messages,
+            row_id_fn=hermes_trace_row_id,
+        ),
+        metadata_columns=["category", "subcategory", "task"],
+        name="lambda/hermes-agent-reasoning-traces/glm-5.1",
+        subsets=["glm-5.1"],
+        splits=["train"],
+    ),
+    "lambda/hermes-agent-reasoning-traces/kimi": InstructionDatasetConfig(
+        hf_dataset_id="lambda/hermes-agent-reasoning-traces",
+        revision=HERMES_TRACE_REVISION,
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            system_value="system",
+            content_key="value",
+            message_postprocess_fn=normalize_hermes_trace_messages,
+            row_id_fn=hermes_trace_row_id,
+        ),
+        metadata_columns=["category", "subcategory", "task"],
+        name="lambda/hermes-agent-reasoning-traces/kimi",
+        subsets=["kimi"],
+        splits=["train"],
     ),
     "allenai/tulu-v2-sft-mixture-olmo-4096": InstructionDatasetConfig(
         hf_dataset_id="allenai/tulu-v2-sft-mixture-olmo-4096",

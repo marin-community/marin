@@ -1,0 +1,58 @@
+{
+  "dataset": "lambda/hermes-agent-reasoning-traces",
+  "config": "glm-5.1",
+  "split": "train",
+  "features": [
+    {
+      "name": "id",
+      "type": {
+        "_type": "Value",
+        "dtype": "string"
+      }
+    },
+    {
+      "name": "conversations",
+      "type": {
+        "_type": "List",
+        "feature": {
+          "from": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "value": {
+            "_type": "Value",
+            "dtype": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "tools",
+      "type": {
+        "_type": "Value",
+        "dtype": "string"
+      }
+    },
+    {
+      "name": "category",
+      "type": {
+        "_type": "Value",
+        "dtype": "string"
+      }
+    },
+    {
+      "name": "subcategory",
+      "type": {
+        "_type": "Value",
+        "dtype": "string"
+      }
+    },
+    {
+      "name": "task",
+      "type": {
+        "_type": "Value",
+        "dtype": "string"
+      }
+    }
+  ]
+}
