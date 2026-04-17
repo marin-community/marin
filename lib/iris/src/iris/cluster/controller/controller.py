@@ -1121,7 +1121,6 @@ class Controller:
         # Background loop state
         self._wake_event = threading.Event()
         self._heartbeat_event = threading.Event()
-        self._checkpoint_paused = threading.Event()
         self._server: uvicorn.Server | None = None
         self._scheduling_thread: ManagedThread | None = None
         self._heartbeat_thread: ManagedThread | None = None
@@ -2273,8 +2272,6 @@ class Controller:
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
                 break
-            if self._checkpoint_paused.is_set():
-                continue
             try:
                 self._reap_stale_workers()
                 workers = self._get_active_worker_addresses()
@@ -2347,8 +2344,6 @@ class Controller:
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
                 break
-            if self._checkpoint_paused.is_set():
-                continue
             try:
                 self._poll_all_workers()
             except Exception:
@@ -2382,9 +2377,6 @@ class Controller:
         single batch. Kill requests resulting from transitions are sent directly.
         """
         while not stop_event.is_set():
-            if self._checkpoint_paused.is_set():
-                stop_event.wait(1.0)
-                continue
             requests = _drain_queue(self._task_update_queue, timeout=1.0)
             if not requests or stop_event.is_set():
                 continue
