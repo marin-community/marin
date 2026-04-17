@@ -467,7 +467,8 @@ class Worker:
 
     def _resolve_log_service(self, server_url: str) -> str:
         """Look up ``server_url`` on the controller's endpoint registry."""
-        assert self._controller_client is not None, "controller client must exist before log resolution"
+        if self._controller_client is None:
+            raise ConnectionError("worker controller client not yet initialized")
         resp = self._controller_client.list_endpoints(
             controller_pb2.Controller.ListEndpointsRequest(prefix=server_url, exact=True),
         )
