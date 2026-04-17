@@ -270,6 +270,8 @@ def _prepare_training_run(
         extras.append("tpu")
     elif isinstance(config.resources.device, GpuConfig):
         extras.append("gpu")
+    if train_config.eval_harness is not None:
+        extras.append("eval")
 
     return config, train_config, env, extras
 
