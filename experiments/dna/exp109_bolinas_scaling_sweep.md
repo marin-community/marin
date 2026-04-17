@@ -137,14 +137,6 @@ Marin (`~/repos/crfm/marin`, branch `eac/dna-bolinas-scaling-sweep` off `dna`). 
 - Subcommands via `if __name__ == "__main__"` switch: `run_{smoke_test,reference_tuning,transfer_validation,parameter_scaling}_sweep`
 - Config generation must be shared between reference sweep and param sweep
 
-Bolinas (`~/repos/oa/bolinas-dna`), base `scripts/exp109_scaling_sweep/`:
-- `reference_sweep.py` — progress by iteration across `initializer_range` and epochs
-- `transfer_validation.py` — loss basin alignment vs Δhparam
-- `parameter_scaling.py` — metrics vs model scale
-- `scaling_analysis.py` — scaling law fits
-
-IMPORTANT: ALL changes go to one of the modules above be default; ask first otherwise.
-
 ### Logging
 
 - `VERSION = "v1.0"` — module-level constant, manually bumped on restart
@@ -174,18 +166,13 @@ Subcommand dispatch uses `SWEEP_COMMAND` env var.  Ask the subcommand to use is 
 - [ ] Bump `VERSION` to `v1.0` before full run
 - [ ] Document error on `vizier._src.service.grpc_util.LocalRpcError: Trial owners/marin/studies/dna-bolinas-ref-v0.6-IR0.0025-E1/trials/1 has state SUCCEEDED. Only trials in state ACTIVE or STOPPING can be completed.` and corresponding fix in `reference_hyperparameter_sweep.py`
 - [ ] Document needing to set crash_on_nan=False, crash_on_inf=False
-- [ ] Rename FIXED_BATCH_SIZE to REFERENCE_BATCH_SIZE (and all dataclass fields related to it)
-- [ ] Note max batch size that worked on v4-32 for 4B model (2944 hidden), 25B tokens (8192? -- 16834 was over)
-- [ ] Bring back in-training evals pending https://discord.com/channels/1354881461060243556/1364827114670657616/1490337486944080042
-- [ ] Check time spent in evals for transfer validation sweep (reduce from 10x per run?)
-- [ ] Document `huggingface_hub.errors.HfHubHTTPError: 429 Client Error: Too Many Requests for url: https://huggingface.co/api/datasets/bolinas-dna/genomes-v5-validation-intervals-v1_255_255/tree/4050939d615b7130799ac9fa74472423fba81eaf/data?recursive=True&expand=False` even w/ just 2 jobs running at once
-- [ ] Fix `TypeError: fused_cross_entropy_loss_and_logsumexp_penalty() got an unexpected keyword argument 'implementation'`
-  - This failed in `/eczech/iris-run-exp109_bolinas_sweep_eval-20260410-031214/train_lm`
-  - See `https://github.com/marin-community/marin/pull/3644#issue-4074042528`
-  - It's unclear why this doesn't seem to be supported on the underlying container images
-- [ ] Debug `PreTrainedTokenizerFast has no attribute encode_batch` in eval script
-  - Full trace on bolinas issue
-- [ ] Make sure to address `load_tokenizer` swap in `eval_harness.py` (from `levanter.tokenizers` now instead of `levanter.compat.hf_checkpoints`)
+- [X] Rename FIXED_BATCH_SIZE to REFERENCE_BATCH_SIZE (and all dataclass fields related to it)
+- [X] Log `TypeError: fused_cross_entropy_loss_and_logsumexp_penalty() got an unexpected keyword argument 'implementation'`
+  - https://github.com/marin-community/marin/issues/4852
+- [X] Log `PreTrainedTokenizerFast has no attribute encode_batch`
+  - https://github.com/marin-community/marin/issues/4678
+  - This was fixed locally in `eval_harness.py` per https://github.com/marin-community/marin/pull/4677/changes
+
 
 ### Misc
 

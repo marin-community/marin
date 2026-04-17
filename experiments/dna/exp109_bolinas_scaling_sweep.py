@@ -98,7 +98,7 @@ SEARCH_SPACE = {
 NUM_LOOPS = 10
 SUGGESTIONS_PER_LOOP = 4
 TARGET_TOKENS = 2_500_000_000  # ~100:1 token-to-param for ~25M
-FIXED_BATCH_SIZE = 16384  # tokens/batch: 16384*256 = 4M (16x reference_hyperparameter_sweep 64*4096=256K)
+REFERENCE_BATCH_SIZE = 16384  # tokens/batch: 16384*256 = 4M (16x reference_hyperparameter_sweep 64*4096=256K)
 METRIC_KEY = "eval/loss"  # TODO: confirm from smoke test tracker_metrics.jsonl
 METRIC_FILE = "tracker_metrics.jsonl"
 METRIC_MODE = "min"
@@ -167,7 +167,7 @@ def _model_seq_len() -> int:
     return dna_effective_seq_len(DNA_BASE_SEQ_LEN, TOKENIZER)
 
 
-def _num_train_steps(target_tokens: int = TARGET_TOKENS, batch_size: int = FIXED_BATCH_SIZE) -> int:
+def _num_train_steps(target_tokens: int = TARGET_TOKENS, batch_size: int = REFERENCE_BATCH_SIZE) -> int:
     return target_tokens // (batch_size * _model_seq_len())
 
 
@@ -177,12 +177,27 @@ def _build_model_config(hidden_size: int, initializer_range: float = 0.02):
     return replace(config, initializer_range=initializer_range)
 
 
+def _tokenize_region() -> str | None:
+    """Parse PIN_TOKENIZE_REGION env var. When set, force tokenize steps to that region.
+
+    When unset, the marin executor infers regions from GCS path dependencies.
+    Set to e.g. "us-east5" when the parent executor lands in a different region
+    from the tokenized artifacts and the inferred-region guard would otherwise
+    hard-fail step resolution.
+    """
+    value = os.getenv("PIN_TOKENIZE_REGION")
+    return value if value else None
+
+
 def _tokenize_dataset(name: str, dataset: str) -> ExecutorStep:
+    region = _tokenize_region()
+    resources = ResourceConfig.with_cpu(regions=[region]) if region else None
     return default_tokenize(
         name=name,
         dataset=dataset,
         tokenizer=TOKENIZER,
         format=DNALmDatasetFormat(lowercase_weight=0.01),
+        resources=resources,
     )
 
 
@@ -304,7 +319,7 @@ def _build_base_train_config(
     placeholder_epsilon = SEARCH_SPACE["epsilon"][0]
     placeholder_max_grad_norm = SEARCH_SPACE["max_grad_norm"][0]
     placeholder_z_loss = SEARCH_SPACE["z_loss_weight"][0]
-    placeholder_steps = TARGET_TOKENS // (FIXED_BATCH_SIZE * _model_seq_len())
+    placeholder_steps = TARGET_TOKENS // (REFERENCE_BATCH_SIZE * _model_seq_len())
 
     inner = TrainLmConfig(
         data=data_mixture,
@@ -328,7 +343,7 @@ def _build_base_train_config(
                 replicate_path=this_output_path(),
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
-            train_batch_size=FIXED_BATCH_SIZE,
+            train_batch_size=REFERENCE_BATCH_SIZE,
             num_train_steps=placeholder_steps,
             steps_per_eval=steps_per_eval,
             checkpointer=checkpointer,
@@ -358,7 +373,7 @@ class DnaVizierTrainConfig:
     base_train_config: TrainLmOnPodConfig
     target_tokens: int
     seq_len: int
-    fixed_batch_size: int
+    batch_size: int
     loop_index: int
     initializer_range: float
     epochs: int
@@ -375,7 +390,7 @@ def run_dna_vizier_train(config: DnaVizierTrainConfig) -> None:
 
     suggestion = suggestions[config.suggestion_index]
     hparams = _extract_adamh_hparams(suggestion)
-    batch_size = config.fixed_batch_size
+    batch_size = config.batch_size
     num_steps = config.target_tokens // (batch_size * config.seq_len)
     trial_id = int(suggestion["trial_id"])
 
@@ -481,7 +496,7 @@ def _build_dna_train_step(
             base_train_config=base_train_config,
             target_tokens=TARGET_TOKENS,
             seq_len=_model_seq_len(),
-            fixed_batch_size=FIXED_BATCH_SIZE,
+            batch_size=REFERENCE_BATCH_SIZE,
             loop_index=loop_index,
             initializer_range=initializer_range,
             epochs=epochs,
@@ -666,7 +681,7 @@ REFERENCE_HPARAMS = ReferenceHparams(
 DNA_SCALING_HEURISTIC = CompletedAdamHHeuristic(
     tokenizer=TOKENIZER,
     # Reference point (from Vizier-optimized sweep)
-    reference_batch_size=FIXED_BATCH_SIZE,
+    reference_batch_size=REFERENCE_BATCH_SIZE,
     reference_tokens=TARGET_TOKENS,
     lr_base=REFERENCE_HPARAMS.lr,
     adam_lr_base=REFERENCE_HPARAMS.adam_lr,
@@ -845,14 +860,13 @@ def _build_scaled_train_step(
     num_train_steps: int,
     tpu_type: str | Sequence[str],
     checkpointer: CheckpointerConfig,
-    tpu_regions: Sequence[str] | None = None,
+    run_eval_harness: bool,
 ) -> ExecutorStep:
     """Build an ExecutorStep for a single scaled (transfer or parameter-scaling) run.
 
-    `tpu_type` may be a list when flexible fallback scheduling is desired;
-    `tpu_regions` restricts scheduling to specific GCP regions.
+    `tpu_type` may be a list when flexible fallback scheduling is desired.
     """
-    steps_per_eval = max(1, num_train_steps // 10)
+    steps_per_eval = max(1, num_train_steps // 32)
 
     inner = TrainLmConfig(
         data=data_mixture,
@@ -860,8 +874,6 @@ def _build_scaled_train_step(
         train_seq_len=_model_seq_len(),
         z_loss_weight=REFERENCE_HPARAMS.z_loss_weight,
         optimizer=optimizer,
-        eval_harness=_dna_eval_harness_config(),
-        eval_harness_steps=steps_per_eval,
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project=WANDB_PROJECT,
@@ -879,10 +891,12 @@ def _build_scaled_train_step(
             allow_nondivisible_batch_size=True,
         ),
     )
+    if run_eval_harness:
+        inner = replace(inner, eval_harness=_dna_eval_harness_config(), eval_harness_steps=steps_per_eval)
 
     pod_config = TrainLmOnPodConfig(
         train_config=inner,
-        resources=ResourceConfig.with_tpu(tpu_type, regions=tpu_regions),
+        resources=ResourceConfig.with_tpu(tpu_type, ram="300g"),
         output_path=this_output_path(),
     )
 
@@ -894,6 +908,19 @@ def _build_scaled_train_step(
 
 
 # --- Sweep orchestration ---
+
+
+def _get_transfer_steps(all_steps: list[ExecutorStep]) -> list[ExecutorStep]:
+    """Parse SWEEP_TRANSFER_INDICES env var (CSV of indices into all_steps) or return all."""
+    raw = _csv_env("SWEEP_TRANSFER_INDICES", ())
+    if not raw:
+        return all_steps
+    indices = tuple(int(i) for i in raw)
+    n = len(all_steps)
+    invalid = [i for i in indices if not 0 <= i < n]
+    if invalid:
+        raise ValueError(f"Invalid indices {invalid}. Must be in [0, {n})")
+    return [all_steps[i] for i in indices]
 
 
 def run_transfer_validation_sweep():
@@ -940,6 +967,7 @@ def run_transfer_validation_sweep():
             num_train_steps=num_steps,
             tpu_type=TRANSFER_TPU_TYPE,
             checkpointer=checkpointer,
+            run_eval_harness=False,
         )
 
     all_steps: list[ExecutorStep] = []
@@ -990,6 +1018,8 @@ def run_transfer_validation_sweep():
     # all_steps = [s for s in all_steps if not any(s.name.endswith(k) for k in _skip)]
     all_steps = [s for s in all_steps if "-beta2-" in s.name]
 
+    all_steps = _get_transfer_steps(all_steps)
+
     executor_main(steps=all_steps, description=f"DNA Bolinas transfer validation {version}")
 
 
@@ -997,10 +1027,9 @@ def run_transfer_validation_sweep():
 # Parameter scaling sweep
 # =============================================================================
 
-SCALING_VERSION = "v0.2"
+SCALING_VERSION = "v0.5"
 SCALING_TPU_TYPES: tuple[str, ...] = ("v6e-8",)
-SCALING_TPU_REGIONS: tuple[str, ...] = ("europe-west4",)
-SCALING_BATCH_SIZE = 2048
+SCALING_BATCH_SIZE = 1536
 SCALING_WARMUP_STEPS = 100
 
 # Total training tokens available: sum of examples across CDS/upstream/downstream mixtures,
@@ -1045,6 +1074,13 @@ def _get_scaling_hidden_sizes() -> tuple[int, ...]:
     return tuple(SCALING_HIDDEN_SIZES[i] for i in indices)
 
 
+def _format_params(n: int) -> str:
+    """Compact param-count label: 46M, 255M, 1B, 4B, etc."""
+    if n >= 1_000_000_000:
+        return f"{round(n / 1e9)}B"
+    return f"{round(n / 1e6)}M"
+
+
 def run_parameter_scaling_sweep():
     """Parameter scaling sweep: 8 model sizes (46M to 4B) trained for one epoch each.
 
@@ -1065,7 +1101,6 @@ def run_parameter_scaling_sweep():
     wandb_group = f"dna-bolinas-scaling-sweep-{version}"
 
     tpu_types = _csv_env("TPU_TYPES", SCALING_TPU_TYPES)
-    tpu_regions = _csv_env("TPU_REGIONS", SCALING_TPU_REGIONS)
     hidden_sizes = _get_scaling_hidden_sizes()
     all_steps: list[ExecutorStep] = []
     for hidden_size in hidden_sizes:
@@ -1087,14 +1122,14 @@ def run_parameter_scaling_sweep():
                 optimizer=optimizer,
                 model_config=model_config,
                 data_mixture=mixture,
-                run_name=f"dna-bolinas-scaling-{version}-h{hidden_size}",
+                run_name=f"dna-bolinas-scaling-{version}-h{hidden_size}-p{_format_params(num_params)}",
                 wandb_group=wandb_group,
                 tags=tags,
                 batch_size=SCALING_BATCH_SIZE,
                 num_train_steps=num_steps,
                 tpu_type=tpu_types,
-                tpu_regions=tpu_regions,
                 checkpointer=checkpointer,
+                run_eval_harness=True,
             )
         )
 
