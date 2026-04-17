@@ -496,14 +496,7 @@ class Autoscaler:
         return self._worker_registry.tracked_worker(worker_id)
 
     def restart_worker(self, worker_id: str) -> None:
-        """Restart a worker with a fresh bootstrap script using the latest image.
-
-        Looks up the slice/scale-group from the workers DB row, then asks the
-        platform directly for the slice handle. This avoids depending on
-        _slices (which may not yet contain the slice if `complete_scale_up`
-        hasn't run) or _worker_registry (which is only populated when refresh
-        observes the slice as READY).
-        """
+        """Restart a worker with a fresh bootstrap script using the latest image."""
         if self._db is None:
             raise ValueError("No DB configured — cannot look up worker")
 
@@ -520,19 +513,9 @@ class Autoscaler:
         if group is None:
             raise ValueError(f"Scale group {row.scale_group} not found for worker {worker_id}")
 
-        # Try _slices first (fast path); fall back to a platform query for
-        # slices created via _do_scale_up that haven't yet hit complete_scale_up().
         slice_handle = group.get_slice(row.slice_id)
         if slice_handle is None:
-            zone = group.zone
-            zones = [zone] if zone else []
-            labels = {group._labels.iris_scale_group: group.name}
-            for handle in self._platform.list_slices(zones, labels):
-                if handle.slice_id == row.slice_id:
-                    slice_handle = handle
-                    break
-        if slice_handle is None:
-            raise ValueError(f"Slice {row.slice_id} not found for worker {worker_id}")
+            raise ValueError(f"Slice {row.slice_id} not found in group {row.scale_group}")
 
         workers = slice_handle.describe().workers
         handle = next((w for w in workers if w.worker_id == worker_id), None)
