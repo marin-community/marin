@@ -314,7 +314,7 @@ def main(
             print("\n[ingest]")
             ingest(store, jobs, tasks, lines)
 
-            parquet_files = list(log_dir.glob("logs_*_*.parquet"))
+            parquet_files = list(log_dir.glob("tmp_*.parquet")) + list(log_dir.glob("log_*.parquet"))
             total_size = sum(f.stat().st_size for f in parquet_files)
             print(f"  {len(parquet_files)} Parquet segments, {total_size / 1024 / 1024:.1f} MB on disk")
 
