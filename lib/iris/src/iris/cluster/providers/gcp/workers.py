@@ -415,6 +415,7 @@ class GcpWorkerProvider:
             labels=dict(config.labels),
             metadata=metadata,
             service_account=gcp.service_account or None,
+            network="default",
         )
 
         logger.info("Creating TPU slice: %s (type=%s, zone=%s)", slice_id, config.accelerator_variant, gcp.zone)
@@ -475,6 +476,7 @@ class GcpWorkerProvider:
             labels=labels,
             metadata=metadata,
             service_account=gcp.service_account or None,
+            network="default",
         )
 
         logger.info(
