@@ -55,11 +55,16 @@ _BACKOFF_MAX_SEC = 30.0
 
 
 class LogPusher:
-    """Non-blocking buffered client for pushing log entries to a remote LogService.
+    """Buffered client for pushing log entries to a remote LogService.
 
-    ``push`` appends to an in-memory queue; a background thread drains it
-    in per-key batches. Send failures re-buffer and back off exponentially
-    — only the ``MAX_LOG_BUFFER_SIZE`` overflow path drops entries.
+    ``push`` is non-blocking: it appends to an in-memory queue and returns.
+    A background thread drains the queue in per-key batches. Send failures
+    re-buffer and back off exponentially — only the ``MAX_LOG_BUFFER_SIZE``
+    overflow path drops entries.
+
+    ``flush`` blocks until every entry enqueued before the call has been
+    processed (sent or overflow-dropped). Use the ``timeout`` argument to
+    bound the wait — by default ``flush`` waits indefinitely.
 
     ``server_url`` is passed to ``resolver`` (default: identity) to obtain
     the actual http address. Retryable failures invalidate the cached RPC
@@ -87,11 +92,19 @@ class LogPusher:
 
         # All shared state is guarded by _cond. The drain thread is the
         # only owner of _client, so no separate client lock. ``_queue`` is
-        # a single FIFO of (key, entry); the drain thread groups by key
-        # just before sending. Trimming on overflow is one popleft.
+        # a single FIFO of (seq, key, entry); the drain thread groups by
+        # key just before sending. Trimming on overflow is one popleft.
+        # ``seq`` is a monotonic per-entry counter used by blocking flush.
         self._cond = threading.Condition()
-        self._queue: deque[tuple[str, logging_pb2.LogEntry]] = deque()
+        self._queue: deque[tuple[int, str, logging_pb2.LogEntry]] = deque()
         self._closed = False
+
+        # Monotonic counters for blocking flush(). ``_pushed_seq`` advances
+        # on every entry enqueued. ``_processed_seq`` advances when the
+        # drain thread acks an entry as either successfully sent or
+        # overflow-dropped — both terminal states from flush's POV.
+        self._pushed_seq = 0
+        self._processed_seq = 0
 
         # Built lazily by the drain thread on first send; invalidated on
         # any failure so the next attempt re-resolves.
@@ -115,27 +128,53 @@ class LogPusher:
             if self._closed:
                 return
             for e in entries:
-                self._queue.append((key, e))
+                self._pushed_seq += 1
+                self._queue.append((self._pushed_seq, key, e))
             self._trim_oldest_locked()
             if len(self._queue) >= self._batch_size:
-                self._cond.notify()
+                self._cond.notify_all()
 
-    def flush(self) -> None:
-        """Poke the drain thread to send whatever is buffered now.
+    def flush(self, timeout: float | None = None) -> bool:
+        """Block until every entry enqueued before this call has been processed.
 
-        Non-blocking. For draining on shutdown, use ``close``.
+        "Processed" means either successfully sent or overflow-dropped —
+        both terminal states. Returns ``True`` if the drain caught up,
+        ``False`` on timeout. ``timeout=None`` waits indefinitely.
+
+        For shutdown drain, prefer ``close`` (best-effort, won't block on
+        a stuck server).
         """
         with self._cond:
-            if self._queue:
-                self._cond.notify()
+            target = self._pushed_seq
+            if target == 0 or self._processed_seq >= target:
+                return True
+            self._cond.notify_all()
+            deadline = (time.monotonic() + timeout) if timeout is not None else None
+            while self._processed_seq < target:
+                if self._closed:
+                    return self._processed_seq >= target
+                if deadline is None:
+                    # Re-check periodically so a wedged drain still surfaces.
+                    self._cond.wait(timeout=1.0)
+                else:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return False
+                    self._cond.wait(timeout=remaining)
+            return True
 
     def close(self) -> None:
-        """Stop the drain thread after one best-effort drain, close the RPC client."""
+        """Stop the drain thread after one best-effort drain, close the RPC client.
+
+        Best-effort: if a send is in flight when ``close()`` returns the
+        join timeout, we still close the cached client. Use ``flush()``
+        first if you need to guarantee final delivery.
+        """
         with self._cond:
             if self._closed:
                 return
             self._closed = True
-            self._cond.notify()
+            self._cond.notify_all()
         # Join the drain thread; it will send what it can and exit.
         self._thread.join(timeout=max(self._flush_interval * 2, 10.0))
         if self._client is not None:
@@ -150,10 +189,17 @@ class LogPusher:
     # ------------------------------------------------------------------
 
     def _trim_oldest_locked(self) -> None:
-        """Drop oldest entries until under ``_max_buffer_size``."""
+        """Drop oldest entries until under ``_max_buffer_size``.
+
+        Dropped entries advance ``_processed_seq`` so blocking ``flush``
+        doesn't wait forever on entries that will never reach the server.
+        """
         dropped = 0
+        max_dropped_seq = 0
         while len(self._queue) > self._max_buffer_size:
-            self._queue.popleft()
+            seq, _key, _entry = self._queue.popleft()
+            if seq > max_dropped_seq:
+                max_dropped_seq = seq
             dropped += 1
         if dropped:
             logger.warning(
@@ -161,17 +207,20 @@ class LogPusher:
                 dropped,
                 self._max_buffer_size,
             )
+            if max_dropped_seq > self._processed_seq:
+                self._processed_seq = max_dropped_seq
+                self._cond.notify_all()
 
-    def _take_queue_locked(self) -> list[tuple[str, logging_pb2.LogEntry]]:
+    def _take_queue_locked(self) -> list[tuple[int, str, logging_pb2.LogEntry]]:
         """Drain the entire queue, preserving arrival order."""
         items = list(self._queue)
         self._queue.clear()
         return items
 
-    def _rebuffer_at_head_locked(self, items: list[tuple[str, logging_pb2.LogEntry]]) -> None:
+    def _rebuffer_at_head_locked(self, items: list[tuple[int, str, logging_pb2.LogEntry]]) -> None:
         """Put unsent items back at the head of the queue (original order)."""
-        for pair in reversed(items):
-            self._queue.appendleft(pair)
+        for triple in reversed(items):
+            self._queue.appendleft(triple)
         self._trim_oldest_locked()
 
     # ------------------------------------------------------------------
@@ -194,7 +243,11 @@ class LogPusher:
                     return
                 items = self._take_queue_locked()
 
-            unsent = self._send_items(items)
+            sent_max_seq, unsent = self._send_items(items)
+            with self._cond:
+                if sent_max_seq > self._processed_seq:
+                    self._processed_seq = sent_max_seq
+                    self._cond.notify_all()
             if not unsent:
                 self._backoff.reset()
                 continue
@@ -216,44 +269,50 @@ class LogPusher:
 
     def _send_items(
         self,
-        items: list[tuple[str, logging_pb2.LogEntry]],
-    ) -> list[tuple[str, logging_pb2.LogEntry]]:
+        items: list[tuple[int, str, logging_pb2.LogEntry]],
+    ) -> tuple[int, list[tuple[int, str, logging_pb2.LogEntry]]]:
         """Group ``items`` by key (stable on first occurrence) and push one
-        RPC per key. On any failure, return every item from that key onward
-        so the caller can re-buffer it at the head of the queue.
+        RPC per key. Returns ``(max_sent_seq, unsent_items)``.
 
+        On any failure, every item from that key onward is returned as
+        unsent so the caller can re-buffer it at the head of the queue.
         Every failure mode — resolver error, retryable RPC error, or
         non-retryable RPC error — re-buffers so no log entries are silently
         dropped. Retryable errors additionally invalidate the cached client
         so the next attempt re-resolves the endpoint.
         """
-        groups: dict[str, list[logging_pb2.LogEntry]] = {}
-        for key, entry in items:
-            groups.setdefault(key, []).append(entry)
+        groups: dict[str, list[tuple[int, logging_pb2.LogEntry]]] = {}
+        for seq, key, entry in items:
+            groups.setdefault(key, []).append((seq, entry))
 
         sent_keys: set[str] = set()
-        for key, entries in groups.items():
+        max_sent_seq = 0
+        for key, seq_entries in groups.items():
             try:
                 client = self._get_client()
             except Exception as exc:
                 logger.warning("LogPusher: endpoint resolution failed: %s", exc)
-                return [p for p in items if p[0] not in sent_keys]
+                return max_sent_seq, [p for p in items if p[1] not in sent_keys]
             try:
+                entries = [e for _s, e in seq_entries]
                 client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
                 sent_keys.add(key)
+                for seq, _e in seq_entries:
+                    if seq > max_sent_seq:
+                        max_sent_seq = seq
             except Exception as exc:
                 retryable = is_retryable_error(exc)
                 logger.warning(
                     "LogPusher: send failure for key=%s (%d entries, retryable=%s): %s",
                     key,
-                    len(entries),
+                    len(seq_entries),
                     retryable,
                     exc,
                 )
                 if retryable:
                     self._invalidate(str(exc))
-                return [p for p in items if p[0] not in sent_keys]
-        return []
+                return max_sent_seq, [p for p in items if p[1] not in sent_keys]
+        return max_sent_seq, []
 
     def _build_client(self, address: str) -> LogServiceClientSync:
         return LogServiceClientSync(

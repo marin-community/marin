@@ -117,7 +117,11 @@ def _wait_for(predicate, timeout: float = 5.0) -> None:
 
 
 def test_log_pusher_buffers_and_flushes_on_demand(tracked_log_service_client):
-    """Entries buffered below batch_size are drained on flush()."""
+    """Entries buffered below batch_size are drained on flush().
+
+    flush() blocks until every entry enqueued before the call has shipped,
+    so the assertions can run immediately without polling.
+    """
     pusher = LogPusher(
         "http://h:1",
         batch_size=1000,
@@ -127,11 +131,58 @@ def test_log_pusher_buffers_and_flushes_on_demand(tracked_log_service_client):
         entry = logging_pb2.LogEntry(source="test", data="line1")
         pusher.push("key-a", [entry, entry, entry])
         pusher.push("key-b", [entry])
-        pusher.flush()
-        _wait_for(lambda: len(tracked_log_service_client) == 1 and len(tracked_log_service_client[0].pushes) >= 2)
+        assert pusher.flush(timeout=5.0)
 
         totals = {p.key: len(p.entries) for p in tracked_log_service_client[0].pushes}
         assert totals == {"key-a": 3, "key-b": 1}
+    finally:
+        pusher.close()
+
+
+def test_log_pusher_flush_is_blocking(tracked_log_service_client):
+    """flush() returns only after every previously-pushed entry has been sent."""
+    pusher = LogPusher(
+        "http://h:1",
+        batch_size=1000,
+        flush_interval=999.0,
+    )
+    try:
+        entry = logging_pb2.LogEntry(source="test", data="line")
+        pusher.push("k", [entry, entry])
+        # No polling — flush must block until shipped.
+        assert pusher.flush(timeout=5.0) is True
+        assert len(tracked_log_service_client[0].pushes) == 1
+        assert len(tracked_log_service_client[0].pushes[0].entries) == 2
+    finally:
+        pusher.close()
+
+
+def test_log_pusher_flush_timeout_returns_false(monkeypatch):
+    """flush(timeout=...) returns False when the drain can't catch up in time.
+
+    Seeds a non-retryable error so the drain rebuffers and enters the
+    backoff window; flush is given less time than the backoff interval.
+    """
+    created: list[_FakeLogServiceClient] = []
+
+    def factory(address, timeout_ms=10_000, interceptors=()):
+        c = _FakeLogServiceClient(address, timeout_ms=timeout_ms, interceptors=interceptors)
+        created.append(c)
+        return c
+
+    monkeypatch.setattr(client_mod, "LogServiceClientSync", factory)
+
+    pusher = LogPusher("http://h:1", batch_size=1, flush_interval=999.0)
+    try:
+        entry = logging_pb2.LogEntry(source="test", data="primer")
+        pusher.push("k", [entry])
+        # Wait for the cached client to exist, then seed a non-retryable
+        # error so the next send rebuffers and the drain enters backoff.
+        assert pusher.flush(timeout=5.0) is True
+        created[0].errors.append(ConnectError(Code.NOT_FOUND, "missing"))
+        pusher.push("k", [logging_pb2.LogEntry(source="test", data="stuck")])
+        # Backoff is 0.5s; a 0.05s flush cannot catch up.
+        assert pusher.flush(timeout=0.05) is False
     finally:
         pusher.close()
 
@@ -305,8 +356,9 @@ def test_failures_always_deliver_via_retry(monkeypatch, scenario):
         # for resolver_raises, which has no client to seed).
         pusher.push("k", [_entry("a")])
         if scenario != "resolver_raises":
-            _wait_for(lambda: created and created[0].pushes)
-            # Seed the cached client with the scenario-appropriate error.
+            # Block until "a" has shipped, so seeding the next error is
+            # race-free with the drain thread's next iteration.
+            assert pusher.flush(timeout=5.0)
             err = (
                 ConnectError(Code.NOT_FOUND, "missing")
                 if scenario == "non_retryable"
@@ -316,15 +368,19 @@ def test_failures_always_deliver_via_retry(monkeypatch, scenario):
 
         pusher.push("k", [_entry("b")])
 
-        # "b" must eventually land somewhere.
+        # Wait deterministically for "b" to be processed (sent or dropped).
+        assert pusher.flush(timeout=10.0)
+
+        # "b" must have landed somewhere — the buffer-overflow path is not
+        # exercised here, so processed implies delivered.
         def delivered():
             return any(any(e.data == "b" for p in c.pushes for e in p.entries) for c in created)
 
-        _wait_for(delivered, timeout=10.0)
+        assert delivered(), "entry 'b' was never delivered to any client"
 
         if scenario.startswith("retryable"):
             # Retryable RPC failure invalidated the first client; second built.
-            _wait_for(lambda: len(created) >= 2)
+            assert len(created) >= 2
             assert created[0].closed is True
         elif scenario == "resolver_raises":
             # Resolver raised on first call → no client yet. Second call
