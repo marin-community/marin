@@ -2280,7 +2280,7 @@ class Controller:
                 cycle += 1
 
                 dead_workers: list[str] = []
-                liveness_ids: list[WorkerId] = []
+                ping_snapshots: dict[WorkerId, job_pb2.WorkerResourceSnapshot | None] = {}
                 for result in results:
                     wid_str = str(result.worker_id)
                     if result.error is not None:
@@ -2294,13 +2294,9 @@ class Controller:
                             )
                     else:
                         ping_failures.pop(wid_str, None)
-                        if update_resources and result.resource_snapshot:
-                            self._transitions.update_worker_ping_success(result.worker_id, result.resource_snapshot)
-                        else:
-                            liveness_ids.append(result.worker_id)
+                        ping_snapshots[result.worker_id] = result.resource_snapshot if update_resources else None
 
-                if liveness_ids:
-                    self._transitions.touch_worker_liveness(liveness_ids)
+                self._transitions.update_worker_pings(ping_snapshots)
 
                 if dead_workers:
                     failure_result = self._transitions.fail_workers_batch(
