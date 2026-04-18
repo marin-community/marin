@@ -355,7 +355,7 @@ def normalize_to_parquet(
             Defaults to 2 CPU / 16GB RAM / 10GB disk, sized for
             ``target_partition_bytes`` of 256MB.  Scale up when increasing
             partition size.
-        max_workers: Maximum number of Zephyr workers per subdirectory pipeline.
+        max_workers: Maximum number of Zephyr workers for the pipeline.
             Defaults to Zephyr's own default (128 for distributed backends).
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
@@ -396,7 +396,10 @@ def normalize_to_parquet(
         dedup_mode,
         max_whitespace_run_chars,
     )
-    ctx = ZephyrContext(name="normalize", resources=resources)
+    ctx_kwargs: dict = {"name": "normalize", "resources": resources}
+    if max_workers is not None:
+        ctx_kwargs["max_workers"] = max_workers
+    ctx = ZephyrContext(**ctx_kwargs)
     outcome = ctx.execute(pipeline)
     counters_dict = dict(outcome.counters)
 
