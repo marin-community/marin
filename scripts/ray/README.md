@@ -171,11 +171,11 @@ uv run scripts/ray/cluster.py clean-tpu-processes [--tpu-type v4-8]
 
 - Submits cleanup job for specified TPU type
 
-#### `open-dashboard`
+#### `dashboard`
 Open Ray dashboard with port forwarding.
 
 ```bash
-uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml open-dashboard
+uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml dashboard
 ```
 
 #### `auth`
@@ -193,12 +193,6 @@ If you want to override the Secret Manager secret:
 
 ```bash
 uv run scripts/ray/cluster.py --cluster us-central2 auth --secret RAY_AUTH_TOKEN
-```
-
-You can also install the token locally with:
-
-```bash
-make get_ray_auth_token
 ```
 
 #### Ray token auth environment
@@ -241,7 +235,7 @@ uv run scripts/ray/cluster.py --cluster us-central1 get-status
 uv run scripts/ray/cluster.py --cluster us-central1 submit-job "python my_script.py"
 
 # Monitor in dashboard
-uv run scripts/ray/cluster.py --cluster us-central1 open-dashboard
+uv run scripts/ray/cluster.py --cluster us-central1 dashboard
 
 # Stop cluster
 uv run scripts/ray/cluster.py --cluster us-central1 stop-cluster

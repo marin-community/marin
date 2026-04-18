@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """ManagedThread and ThreadContainer for structured thread lifecycle management.
@@ -50,7 +50,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from typing import Any
 
-from iris.time_utils import Deadline, Duration
+from rigging.timing import Deadline, Duration
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +218,21 @@ class ThreadContainer:
             self._children.append(child)
         return child
 
+    def detach_child(self, child: "ThreadContainer") -> bool:
+        """Remove a child container from this parent's hierarchy.
+
+        After detaching, the child's threads will NOT be stopped when this
+        parent is stopped. The caller takes ownership of the child's lifecycle.
+
+        Returns True if the child was found and removed.
+        """
+        with self._lock:
+            try:
+                self._children.remove(child)
+                return True
+            except ValueError:
+                return False
+
     def remove(self, thread: ManagedThread) -> None:
         """Remove a thread from this container.
 
@@ -250,15 +265,24 @@ class ThreadContainer:
         return alive
 
     def wait(self) -> None:
-        """Block until all threads have exited."""
-        with self._lock:
-            children = list(self._children)
-            threads = list(self._threads)
+        """Block until all threads have exited.
 
-        for child in children:
-            child.wait()
-        for thread in threads:
-            thread.join()
+        Re-snapshots after each join round to catch threads spawned by
+        threads that were already running (e.g. a scale-up thread that
+        spawns a bootstrap thread).
+        """
+        while True:
+            with self._lock:
+                children = list(self._children)
+                threads = list(self._threads)
+
+            if not children and not threads:
+                break
+
+            for child in children:
+                child.wait()
+            for thread in threads:
+                thread.join()
 
     def stop(self, timeout: Duration = Duration.from_seconds(5.0)) -> None:
         """Stop children first, then own threads, then executors.

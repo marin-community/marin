@@ -47,13 +47,7 @@ port-forwarding on `localhost`, but you still need the token.
 
 This is the easiest flow:
 
-1. Install the default token locally (or re-run `make dev_setup`):
-    ```bash
-    make get_ray_auth_token
-    ```
-    If this fails because the Secret Manager secret doesn’t exist yet, someone needs to create it once (see
-    `infra/README.md`).
-2. Authenticate to the cluster dashboard:
+1. Authenticate to the cluster dashboard (this will fetch and cache the token automatically):
     ```bash
     # Starts SSH port-forwarding, copies the token to clipboard, and opens the dashboard.
     uv run scripts/ray/cluster.py --cluster us-central2 auth
@@ -103,7 +97,7 @@ launching tasks -- see [test_integration_test.py](https://github.com/marin-commu
 ```bash
 # [Terminal 2] Submit a Ray Job (specified via a Python script)
 #   =>> Will output a Job ID like `raysubmit_pAJM8vKfHPhiyHBa`
-uv run lib/marin/src/marin/run/ray_run.py --no_wait --env_vars WANDB_API_KEY=${WANDB_API_KEY} -- python experiments/hello_world.py
+uv run lib/marin/src/marin/run/ray_run.py --no_wait --env_vars WANDB_API_KEY=${WANDB_API_KEY} -- python experiments/tutorials/hello_world.py
 
 # Get Job Status
 uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml list-jobs
@@ -111,6 +105,11 @@ uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml list-jobs
 # Kill / Stop Job (if necessary / error / bug)
 uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml stop-job raysubmit_pAJM8vKfHPhiyHBa
 ```
+
+## Forking External Packages
+
+See [Forking Policy](forking-policy.md) for our requirements on maintaining
+forked dependencies under `marin-community/`.
 
 ## Precommit
 

@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -13,12 +13,12 @@ from lenses import lens
 
 import haliax as hax
 
-from levanter.utils.hf_utils import HfTokenizer
+from levanter.tokenizers import MarinTokenizer
 
 
 def reinitialize_some_tokens(
     model,
-    tokenizer: HfTokenizer,
+    tokenizer: MarinTokenizer,
     tokens_to_reinit: list[str],
     key,
     donate: bool = False,

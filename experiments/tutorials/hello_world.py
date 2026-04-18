@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -12,11 +12,11 @@ import logging
 import os
 from dataclasses import dataclass
 
-import fsspec
+from rigging.filesystem import open_url
 
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,7 @@ def generate_data(config: GenerateDataConfig):
 
     # Write to file
     numbers_path = os.path.join(config.output_path, "numbers.json")
-    with fsspec.open(numbers_path, "w") as f:
+    with open_url(numbers_path, "w") as f:
         json.dump(numbers, f)
 
 
@@ -51,7 +51,7 @@ def compute_stats(config: ComputeStatsConfig):
     """Compute the sum of numbers in the input file and write it to the output file."""
     # Read from file
     numbers_path = os.path.join(config.input_path, "numbers.json")
-    with fsspec.open(numbers_path) as f:
+    with open_url(numbers_path) as f:
         numbers = json.load(f)
 
     # Compute statistics
@@ -61,7 +61,7 @@ def compute_stats(config: ComputeStatsConfig):
         "max": max(numbers),
     }
     stats_path = os.path.join(config.output_path, "stats.json")
-    with fsspec.open(stats_path, "w") as f:
+    with open_url(stats_path, "w") as f:
         json.dump(stats, f)
 
 

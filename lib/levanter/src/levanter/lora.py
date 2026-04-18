@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -76,6 +76,8 @@ from levanter.utils.logging import silence_transformer_nag
 
 silence_transformer_nag()
 from transformers import PreTrainedTokenizerBase  # noqa: E402
+
+from levanter.tokenizers import MarinTokenizer  # noqa: E402
 
 
 logger = logging.getLogger(__name__)
@@ -320,7 +322,7 @@ def save_peft_pretrained(
     config: LoraConfig,
     base_model_name_or_path,
     path: str,
-    tokenizer: Optional[PreTrainedTokenizerBase] = None,
+    tokenizer: Optional[PreTrainedTokenizerBase | MarinTokenizer] = None,
     *,
     prefix: Optional[str] = DEFAULT_DICT_PREFIX,
     upload_to: Optional[Union[bool, str, RepoRef]] = None,
@@ -349,6 +351,8 @@ def save_peft_pretrained(
             json.dump(hf_config, f)
 
         if tokenizer is not None:
+            if isinstance(tokenizer, MarinTokenizer):
+                tokenizer = tokenizer.as_hf_tokenizer()
             tokenizer.save_pretrained(local_path)
 
         if upload_to is True:
@@ -363,7 +367,7 @@ def save_peft_checkpoint_callback(
     base_path,
     config: LoraConfig,
     base_model_name_or_path,
-    tokenizer: Optional[PreTrainedTokenizerBase] = None,
+    tokenizer: Optional[PreTrainedTokenizerBase | MarinTokenizer] = None,
     upload_to_hf: Optional[Union[bool, str, RepoRef]] = False,
     **hf_upload_kwargs,
 ):

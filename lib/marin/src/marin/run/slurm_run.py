@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -48,6 +48,7 @@ import time
 from huggingface_hub import HfFolder
 
 import wandb
+from rigging.log_setup import configure_logging
 
 # Setup logger
 logger = logging.getLogger("slurm")
@@ -304,5 +305,6 @@ def main():
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    configure_logging(level=logging.INFO)
     main()

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Ray backend for fray v2 Client protocol."""
@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 import uuid
 from typing import Any, cast
@@ -16,11 +17,19 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.actor import (
+    ActorContext,
+    ActorFuture,
+    ActorGroup,
+    ActorHandle,
+    HostedActor,
+    _reset_current_actor,
+    _set_current_actor,
+)
 from fray.v2.ray_backend.deps import build_python_path, build_runtime_env_for_packages
 from fray.v2.ray_backend.tpu import run_on_pod_ray
 from fray.v2.types import (
-    CpuConfig,
+    ActorConfig,
     GpuConfig,
     JobRequest,
     JobStatus,
@@ -163,22 +172,22 @@ def build_runtime_env(request: JobRequest) -> dict:
 
     env_vars = dict(environment.env_vars)
     extras = list(environment.extras)
+    skip_runtime_extras = os.environ.get("MARIN_SKIP_RUNTIME_EXTRAS", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    ) or env_vars.get("MARIN_SKIP_RUNTIME_EXTRAS", "").lower() in ("1", "true", "yes")
 
-    if isinstance(request.resources.device, CpuConfig):
-        if "JAX_PLATFORMS" in env_vars and env_vars["JAX_PLATFORMS"] != "cpu":
-            logger.warning(
-                "Found existing JAX_PLATFORMS=%s, overriding for CPU only job.",
-                env_vars["JAX_PLATFORMS"],
-            )
-        env_vars["JAX_PLATFORMS"] = "cpu"
-    elif isinstance(request.resources.device, TpuConfig):
-        if "tpu" not in extras:
-            extras.append("tpu")
-        env_vars["JAX_PLATFORMS"] = ""
-    elif isinstance(request.resources.device, GpuConfig):
-        if "gpu" not in extras:
-            extras.append("gpu")
-        env_vars["JAX_PLATFORMS"] = ""
+    if not skip_runtime_extras:
+        if isinstance(request.resources.device, TpuConfig):
+            if "tpu" not in extras:
+                extras.append("tpu")
+        elif isinstance(request.resources.device, GpuConfig):
+            if "gpu" not in extras:
+                extras.append("gpu")
+
+    for key, value in request.resources.device.default_env_vars().items():
+        env_vars.setdefault(key, value)
 
     if os.environ.get("MARIN_CI_DISABLE_RUNTIME_ENVS", "").lower() in ("1", "true") or os.environ.get(
         "PYTEST_CURRENT_TEST"
@@ -199,8 +208,14 @@ def build_runtime_env(request: JobRequest) -> dict:
             pip_packages=list(environment.pip_packages),
             env_vars=env_vars,
         )
-        runtime_env["working_dir"] = environment.workspace
-        runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
+        import re
+
+        from iris.cluster.client.bundle import create_workspace_dir  # lazy: avoid PyPI iris conflict on workers
+
+        runtime_env["working_dir"] = create_workspace_dir(
+            environment.workspace,
+            exclude=re.compile(r"^(tests|docs)(/|$)|\.pack$"),
+        )
         runtime_env["config"] = {"setup_timeout_seconds": 1800}
     else:
         python_path = build_python_path(submodules_dir=os.path.join(environment.workspace, "submodules"))
@@ -245,8 +260,15 @@ class RayClient:
                 pass
         return self._address
 
-    def submit(self, request: JobRequest) -> RayJobHandle:
-        """Submit a job, routing to TPU/binary/callable based on device type."""
+    def submit(self, request: JobRequest, adopt_existing: bool = True) -> RayJobHandle:
+        """Submit a job, routing to TPU/binary/callable based on device type.
+
+        Args:
+            request: The job request to submit.
+            adopt_existing: If True (default), return existing job handle when name conflicts.
+                          RayClient currently doesn't enforce unique names, so this
+                          parameter has no effect but is included for API compatibility.
+        """
         logger.info("Submitting job: %s", request.name)
 
         if isinstance(request.resources.device, TpuConfig):
@@ -302,7 +324,7 @@ class RayClient:
         else:
             num_gpus = 0
 
-        remote_fn = ray.remote(num_gpus=num_gpus)(entrypoint.callable)
+        remote_fn = ray.remote(num_gpus=num_gpus, max_retries=compute_ray_retry_count(request))(entrypoint.callable)
         ref = remote_fn.options(runtime_env=runtime_env).remote(*entrypoint.args, **entrypoint.kwargs)
         job_id = f"ray-callable-{request.name}-{uuid.uuid4().hex[:8]}"
         return RayJobHandle(job_id, ref=ref)
@@ -326,16 +348,33 @@ class RayClient:
         topo = get_tpu_topology(device.variant)
         replicas = request.replicas or 1
         num_slices = max(1, replicas // topo.vm_count)
+        # Only propagate env_vars to TPU workers. Other runtime_env keys (pip, py_modules,
+        # etc.) reference local temp files that don't exist on the run_on_pod_ray worker node.
+        tpu_runtime_env = {"env_vars": runtime_env["env_vars"]} if "env_vars" in runtime_env else {}
         object_ref = run_on_pod_ray.remote(
             remote_fn,
             tpu_type=device.variant,
             num_slices=num_slices,
             max_retries_preemption=request.max_retries_preemption,
             max_retries_failure=request.max_retries_failure,
+            runtime_env=tpu_runtime_env,
         )
 
         job_id = f"ray-tpu-{request.name}-{uuid.uuid4().hex[:8]}"
         return RayJobHandle(job_id, ref=object_ref)
+
+    def host_actor(
+        self,
+        actor_class: type,
+        *args: Any,
+        name: str,
+        actor_config: ActorConfig = ActorConfig(),
+        **kwargs: Any,
+    ) -> HostedActor:
+        """Ray cannot host actors in-process; falls back to a single-actor group."""
+        group = self.create_actor_group(actor_class, *args, name=name, count=1, actor_config=actor_config, **kwargs)
+        handle = group.wait_ready()[0]
+        return HostedActor(handle, stop=group.shutdown)
 
     def create_actor(
         self,
@@ -343,10 +382,13 @@ class RayClient:
         *args: Any,
         name: str,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> RayActorHandle:
         """Create a single Ray actor and return a handle immediately."""
-        group = self.create_actor_group(actor_class, *args, name=name, count=1, resources=resources, **kwargs)
+        group = self.create_actor_group(
+            actor_class, *args, name=name, count=1, resources=resources, actor_config=actor_config, **kwargs
+        )
         return group.wait_ready()[0]  # type: ignore[return-value]
 
     def create_actor_group(
@@ -356,20 +398,22 @@ class RayClient:
         name: str,
         count: int,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorGroup:
         """Create N Ray actors named "{name}-0", "{name}-1", ...
 
-        Uses _RayActorHost to wrap actors, enabling them to access their
+        Uses _RayActorHostBase to wrap actors, enabling them to access their
         own handle via current_actor().handle during __init__.
         """
-        ray_options = _actor_ray_options(resources)
+        ray_options = _actor_ray_options(resources, actor_config)
         # Don't specify runtime_env - let actors inherit from parent job
         # This prevents rebuilding packages that are already available
         handles: list[RayActorHandle] = []
         for i in range(count):
             actor_name = f"{name}-{i}"
-            actor_ref = _RayActorHost.options(name=actor_name, **ray_options).remote(
+            host_cls = _get_named_actor_cls(actor_name)
+            actor_ref = host_cls.options(name=actor_name, **ray_options).remote(
                 actor_class, actor_name, i, name, args, kwargs
             )
             handles.append(RayActorHandle(actor_ref))
@@ -379,15 +423,14 @@ class RayClient:
         logger.info("RayClient shutdown (namespace=%s)", self._namespace)
 
 
-def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
+def _actor_ray_options(resources: ResourceConfig, actor_config: ActorConfig = ActorConfig()) -> dict[str, Any]:
     """Build ray.remote().options() kwargs for an actor.
 
-    Maps ResourceConfig fields to Ray scheduling parameters so that
-    actors reserve the right amount of CPU/memory and get spread
-    across nodes instead of piling onto one.
+    Maps ResourceConfig and ActorConfig fields to Ray scheduling parameters so
+    that actors reserve the right amount of CPU/memory and get spread across
+    nodes instead of piling onto one.
 
     preemptible=False pins the actor to the head node via a custom resource.
-    max_concurrency>1 enables concurrent method calls (threaded actor).
     """
     options: dict[str, Any] = {
         "num_cpus": resources.cpu,
@@ -397,13 +440,25 @@ def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
         options["memory"] = humanfriendly.parse_size(resources.ram, binary=True)
     if not resources.preemptible:
         options["resources"] = {"head_node": 0.0001}
-    if resources.max_concurrency > 1:
-        options["max_concurrency"] = resources.max_concurrency
+    else:
+        # Preemptible actors should be restarted automatically by Ray when their
+        # node is preempted. Without this, the actor dies permanently and the
+        # pool degrades over time (see marin#2943).
+        options["max_restarts"] = -1
+    # Explicit max_restarts takes precedence over the preemptible default.
+    # Useful for actors like coordinators that are preemptible (not pinned to
+    # head node) but should NOT auto-restart because they require remote
+    # initialization beyond __init__.
+    if actor_config.max_restarts is not None:
+        options["max_restarts"] = actor_config.max_restarts
+    if actor_config.max_task_retries is not None:
+        options["max_task_retries"] = actor_config.max_task_retries
+    if actor_config.max_concurrency > 1:
+        options["max_concurrency"] = actor_config.max_concurrency
     return options
 
 
-@ray.remote(enable_task_events=False)
-class _RayActorHost:
+class _RayActorHostBase:
     """Wrapper that sets up ActorContext before creating the real actor.
 
     This enables actors to access their own handle via current_actor().handle
@@ -411,6 +466,17 @@ class _RayActorHost:
 
     Uses _proxy_call for method dispatch since Ray doesn't support __getattr__
     for dynamic method lookup on actor handles.
+
+    Not decorated with @ray.remote directly — use _get_named_actor_host() to
+    obtain a Ray remote class whose name matches the wrapped actor class,
+    so that `ps` shows e.g. ``ray::my_workers`` instead of ``ray::_RayActorHost``.
+
+    The ``shutdown_event`` on ``ActorContext`` lets actors self-terminate on
+    Ray: the wrapped actor sets it when done (e.g. after receiving SHUTDOWN
+    from a coordinator), and a watchdog thread calls ``exit_actor()`` to
+    cleanly terminate the process.  ``_exit_when_idle`` (called by
+    ``RayActorGroup.shutdown()``) is a safety net for actors that never
+    set the event themselves.
     """
 
     def __init__(
@@ -422,34 +488,66 @@ class _RayActorHost:
         args: tuple,
         kwargs: dict,
     ):
-        # Ensure the root logger is configured in this worker process so that
-        # library code using logging.getLogger(__name__).info() is visible.
-        # Ray forwards stdout/stderr to the driver, but Python's root logger
-        # defaults to WARNING in fresh processes.
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s %(levelname)s %(name)s:%(lineno)d %(message)s",
-            force=True,
-        )
+        from rigging.log_setup import configure_logging
 
-        # Create handle by name - will resolve via ray.get_actor() when used
+        configure_logging(level=logging.INFO)
+
+        self._shutdown_event = threading.Event()
         handle = RayActorHandle(actor_name)
-        ctx = ActorContext(handle=handle, index=actor_index, group_name=group_name)
+        ctx = ActorContext(handle=handle, index=actor_index, group_name=group_name, shutdown_event=self._shutdown_event)
         token = _set_current_actor(ctx)
         try:
             self._instance = actor_class(*args, **kwargs)
         finally:
             _reset_current_actor(token)
 
+        # Watchdog: when the actor sets shutdown_event, exit the actor
+        # process.  This lets actors self-terminate (e.g. workers after
+        # receiving SHUTDOWN) without waiting for external _exit_when_idle.
+        threading.Thread(
+            target=self._watch_shutdown,
+            daemon=True,
+            name=f"ray-shutdown-{actor_name}",
+        ).start()
+
+    def _watch_shutdown(self) -> None:
+        self._shutdown_event.wait()
+        ray.actor.exit_actor()
+
+    def _exit_when_idle(self, timeout_s: float = 5.0) -> None:
+        """Safety net for actors that never set ``shutdown_event``.
+
+        Waits up to *timeout_s* for the event, then exits unconditionally.
+        Called by ``RayActorGroup.shutdown()`` fire-and-forget.
+        """
+        self._shutdown_event.wait(timeout=timeout_s)
+        ray.actor.exit_actor()
+
     def _proxy_call(self, method_name: str, args: tuple, kwargs: dict) -> Any:
         """Proxy method calls to the wrapped actor instance."""
         return getattr(self._instance, method_name)(*args, **kwargs)
 
 
+_named_actor_host_cache: dict[str, type] = {}
+
+
+def _get_named_actor_cls(actor_class_name: str) -> type:
+    """Return a Ray remote class named after the wrapped actor class.
+
+    Dynamically creates a subclass of _RayActorHostBase whose __name__ is
+    ``actor_class_name``, then wraps it with ``ray.remote``.  Results are
+    cached so each distinct name only triggers one ``ray.remote()`` call.
+    """
+    if actor_class_name not in _named_actor_host_cache:
+        cls = type(actor_class_name, (_RayActorHostBase,), {})
+        _named_actor_host_cache[actor_class_name] = ray.remote(enable_task_events=False)(cls)
+    return _named_actor_host_cache[actor_class_name]
+
+
 class RayActorHandle:
     """Handle to a Ray actor. Supports both direct ref and name-based lazy resolution.
 
-    All fray v2 Ray actors are wrapped by _RayActorHost, so method calls go through
+    All fray v2 Ray actors are wrapped by _RayActorHostBase, so method calls go through
     _proxy_call to reach the wrapped instance.
     """
 
@@ -490,7 +588,7 @@ class RayActorHandle:
 
 
 class RayProxyMethod:
-    """Wraps a method call that goes through _RayActorHost._proxy_call."""
+    """Wraps a method call that goes through _RayActorHostBase._proxy_call."""
 
     def __init__(self, ray_handle: ray.actor.ActorHandle, method_name: str):
         self._ray_handle = ray_handle
@@ -499,6 +597,10 @@ class RayProxyMethod:
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
         object_ref = self._ray_handle._proxy_call.remote(self._method_name, args, kwargs)
         return RayActorFuture(object_ref)
+
+    def submit(self, *args: Any, **kwargs: Any) -> ActorFuture:
+        """Long-running operation path. Same as remote() for Ray backend."""
+        return self.remote(*args, **kwargs)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         object_ref = self._ray_handle._proxy_call.remote(self._method_name, args, kwargs)
@@ -541,10 +643,30 @@ class RayActorGroup:
         self._yielded = True
         return self._handles
 
-    def shutdown(self) -> None:
-        """Kill all Ray actors."""
+    def is_done(self) -> bool:
+        """Ray actors managed by Zephyr don't have an independent job lifecycle."""
+        return False
+
+    def shutdown(self, graceful_timeout_s: float = 30.0) -> None:
+        """Terminate all Ray actors.
+
+        Calls ``_exit_when_idle`` on each actor, which waits for
+        ``shutdown_event`` (already set by actors that self-terminated,
+        e.g. workers after receiving SHUTDOWN) then calls ``exit_actor()``.
+        Actors that are already dead are silently skipped.
+
+        Does **not** use ``ray.kill()`` or ``__ray_terminate__``:
+        ``ray.kill()`` races with task completion callbacks in Ray's C++
+        task_manager, triggering a fatal assertion (ray-project/ray#54260),
+        and ``__ray_terminate__`` interacts badly with ``max_task_retries``
+        causing a restart+retry storm on already-dead actors.
+        """
         for handle in self._handles:
             try:
-                ray.kill(handle._actor_ref)
-            except Exception as e:
-                logger.warning("Failed to kill Ray actor: %s", e)
+                # Fire-and-forget: _exit_when_idle calls exit_actor() which
+                # kills the process mid-task, so the ref never resolves cleanly.
+                # max_task_retries=0 prevents Ray from retrying the exit task
+                # on a restarted actor (which would cause a restart+retry storm).
+                handle._resolve()._exit_when_idle.options(max_task_retries=0).remote()
+            except Exception:
+                pass  # actor already dead

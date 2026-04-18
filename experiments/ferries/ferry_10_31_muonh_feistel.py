@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """MuonH + Feistel Ferry incorporating shuffle-failure fixes and Kaiyue When's

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for vortex file format support."""
@@ -27,7 +27,7 @@ def vortex_file(tmp_path):
 def sync_ctx():
     """ZephyrContext fixture for vortex tests."""
     client = LocalClient()
-    ctx = ZephyrContext(client=client, num_workers=2, resources=ResourceConfig(cpu=1, ram="512m"), name="test-vortex")
+    ctx = ZephyrContext(client=client, max_workers=2, resources=ResourceConfig(cpu=1, ram="512m"), name="test-vortex")
     yield ctx
     ctx.shutdown()
 
@@ -56,6 +56,15 @@ class TestVortexReader:
         write_vortex_file([], str(empty_path))
 
         records = list(load_vortex(str(empty_path)))
+        assert records == []
+
+    def test_load_vortex_empty_file_with_column_projection(self, tmp_path):
+        """Test loading an empty vortex file with column projection."""
+        empty_path = tmp_path / "empty.vortex"
+        write_vortex_file([], str(empty_path))
+
+        spec = InputFileSpec(path=str(empty_path), columns=["id", "attributes"])
+        records = list(load_vortex(spec))
         assert records == []
 
 
@@ -110,7 +119,7 @@ class TestVortexPipeline:
             .write_vortex(output_pattern)
         )
 
-        results = list(sync_ctx.execute(ds))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 1
 
         # Verify output
@@ -124,7 +133,7 @@ class TestVortexPipeline:
 
         ds = Dataset.from_files(str(vortex_file)).load_file().filter(lambda r: r["id"] < 10).write_jsonl(output_pattern)
 
-        results = list(sync_ctx.execute(ds))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 1
 
     def test_vortex_to_parquet_conversion(self, sync_ctx, vortex_file, tmp_path):
@@ -133,7 +142,7 @@ class TestVortexPipeline:
 
         ds = Dataset.from_files(str(vortex_file)).load_vortex().write_parquet(output_pattern)
 
-        results = list(sync_ctx.execute(ds))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 1
 
         # Verify parquet output
@@ -155,7 +164,7 @@ class TestVortexPipeline:
 
         ds = Dataset.from_files(str(parquet_path)).load_parquet().write_vortex(output_pattern)
 
-        results = list(sync_ctx.execute(ds))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 1
 
         # Verify vortex output
@@ -170,7 +179,7 @@ class TestVortexFilterPushdown:
         """Test filter pushdown with expression."""
         ds = Dataset.from_files(str(vortex_file)).load_vortex().filter(col("score") > 500)
 
-        results = list(sync_ctx.execute(ds))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 49  # scores 510, 520, ..., 990
         assert all(r["score"] > 500 for r in results)
 
@@ -178,6 +187,6 @@ class TestVortexFilterPushdown:
         """Test column selection pushdown."""
         ds = Dataset.from_files(str(vortex_file)).load_vortex().select("id", "score")
 
-        results = list(sync_ctx.execute(ds))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 100
         assert set(results[0].keys()) == {"id", "score"}

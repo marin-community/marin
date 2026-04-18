@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
@@ -6,6 +6,8 @@ import os
 import tempfile
 import typing
 import warnings
+import json
+import hashlib
 from dataclasses import dataclass
 from typing import Any, List, Optional, Union
 
@@ -30,6 +32,9 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 WandbRun = Union["wandb.sdk.wandb_run.Run", "wandb.sdk.lib.disabled.RunDisabled"]
+
+
+_WANDB_ARTIFACT_NAME_MAX_LENGTH = 128
 
 
 class WandbTracker(Tracker):
@@ -97,18 +102,23 @@ class WandbTracker(Tracker):
         self.run.summary.update(_convert_value_to_loggable_rec(metrics))
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
-        self.run.log_artifact(artifact_path, name=name, type=type)
+        artifact_name = name if name is not None else _default_wandb_artifact_name(artifact_path)
+        self.run.log_artifact(
+            artifact_path,
+            name=_truncate_wandb_artifact_name(artifact_name),
+            type=type,
+        )
 
     def finish(self):
         logger.info("Finishing wandb run...")
-        self._write_replicate_file()
+        # Finish wandb first to ensure all metrics are synced to the summary
         self.run.finish()
+        # Then write the replicate file with the complete summary
+        self._write_replicate_file()
 
     def _write_replicate_file(self):
         if self._replicate_path is None:
             return
-
-        import json
 
         import fsspec
 
@@ -119,9 +129,45 @@ class WandbTracker(Tracker):
         with fs.open(metrics_file, "w") as f:
             record = {
                 "config": _convert_value_to_loggable_rec(dict(self.run.config)),
-                "summary": _convert_value_to_loggable_rec(dict(self.run.summary)),
+                "summary": _convert_value_to_loggable_rec(_summary_for_replicate(self.run)),
             }
             f.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+
+
+def _summary_for_replicate(run: WandbRun) -> dict[str, Any]:
+    """Read final W&B summary in a way that survives `run.finish()`."""
+    # run.summary can be stale before finish(); _final_summary has the fully flushed values
+    final_summary = getattr(run, "_final_summary", None)
+    if final_summary is None:
+        return dict(run.summary)
+
+    summary: dict[str, Any] = {}
+    for item in final_summary.item:
+        path: list[str] = list(item.nested_key)
+        if item.key:
+            path.append(item.key)
+        if not path:
+            continue
+
+        try:
+            value = json.loads(item.value_json)
+        except (TypeError, json.JSONDecodeError):
+            value = item.value_json
+
+        _set_nested(summary, path, value)
+
+    return summary
+
+
+def _set_nested(target: dict[str, Any], path: list[str], value: Any) -> None:
+    cur = target
+    for key in path[:-1]:
+        next_val = cur.get(key)
+        if not isinstance(next_val, dict):
+            next_val = {}
+            cur[key] = next_val
+        cur = next_val
+    cur[path[-1]] = value
 
 
 def _convert_value_to_loggable_rec(value: Any):
@@ -323,3 +369,28 @@ class WandbConfig(TrackerConfig):
                 raise e
 
         return git_sha
+
+
+def _truncate_wandb_artifact_name(name: Optional[str]) -> Optional[str]:
+    """Truncate artifact names to keep within WandB's artifact-name limit."""
+    if name is None:
+        return None
+    if len(name) <= _WANDB_ARTIFACT_NAME_MAX_LENGTH:
+        return name
+    # Keep names stable and unique across different long inputs by keeping a short hash suffix.
+    hash_suffix = hashlib.sha256(name.encode("utf-8")).hexdigest()[:7]
+    max_truncated_prefix_len = _WANDB_ARTIFACT_NAME_MAX_LENGTH - len(hash_suffix) - 1
+    truncated = f"{name[:max_truncated_prefix_len]}-{hash_suffix}"
+    logger.warning(
+        "Wandb artifact name exceeds %d characters and will be truncated: %s -> %s",
+        _WANDB_ARTIFACT_NAME_MAX_LENGTH,
+        name,
+        truncated,
+    )
+    return truncated
+
+
+def _default_wandb_artifact_name(artifact_path: Any) -> str:
+    path = os.fspath(artifact_path)
+    basename = os.path.basename(path.rstrip("/\\"))
+    return basename or "artifact"

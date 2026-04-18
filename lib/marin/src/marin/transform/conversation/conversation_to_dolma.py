@@ -1,14 +1,9 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
 Transform conversation format to Dolma format.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
-    lib/marin/src/marin/transform/conversation/conversation_to_dolma.py \
-    --input_path gs://marin-us-central2/conversations/ \
-    --output_path gs://marin-data/processed/conversations/dolma-v1.0/
 """
 
 import dataclasses
@@ -46,8 +41,8 @@ def process_dataset(config: ConversationToDolmaConfig):
         .map(transform_conversation_to_dolma)
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    with ZephyrContext(name="conversation-to-dolma") as ctx:
-        ctx.execute(pipeline)
+    ctx = ZephyrContext(name="conversation-to-dolma")
+    ctx.execute(pipeline)
 
 
 # Alias for other callers

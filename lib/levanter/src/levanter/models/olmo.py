@@ -1,9 +1,9 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Type, Union
+from typing import Dict, Optional, Type, Union
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -27,6 +27,7 @@ from levanter.layers.attention import (
     dot_product_attention,
 )
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
+from levanter.models.llama import LlamaMlp
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
@@ -258,38 +259,6 @@ class Olmo2Config(HFCompatConfig):
         )
 
 
-class Olmo2MLP(eqx.Module):
-    """Multi-layer Perceptron for Olmo2
-    Similar to LlamaMlp, adds an up-proj that multiplies with activated gate_proj before down-proj.
-    """
-
-    gate_proj: hnn.Linear  # projection from Embed to Mlp
-    up_proj: hnn.Linear  # projection from Embed to Mlp
-    down_proj: hnn.Linear  # projection from Mlp to Embed
-    act: Callable = eqx.field(static=True)
-
-    @staticmethod
-    def init(
-        Embed: Axis, Mlp: Axis, activation_fn: Union[ActivationFunctionEnum, Callable], *, key, use_bias: bool = False
-    ) -> "Olmo2MLP":
-        k_fc, k_up_proj, k_down_proj = jrandom.split(key, 3)
-        gate_proj = hnn.Linear.init(Out=Mlp, In=Embed, key=k_fc, use_bias=use_bias, out_first=True)
-        up_proj = hnn.Linear.init(Out=Mlp, In=Embed, key=k_up_proj, use_bias=use_bias, out_first=True)
-        down_proj = hnn.Linear.init(Out=Embed, In=Mlp, key=k_down_proj, use_bias=use_bias, out_first=True)
-        if isinstance(activation_fn, ActivationFunctionEnum):
-            activation_fn = activation_fn.to_fn()
-        return Olmo2MLP(gate_proj, up_proj, down_proj, activation_fn)
-
-    @named_call
-    def __call__(self, x: NamedArray, *, key=None) -> NamedArray:
-        k_gate, k_up, k_down = maybe_rng_split(key, 3)
-        hidden_states = self.gate_proj(x, key=k_gate)
-        hidden_states = self.act(hidden_states)
-        hidden_states = hidden_states * self.up_proj(x, key=k_up)
-        outputs = self.down_proj(hidden_states, key=k_down)
-        return outputs
-
-
 class Olmo2Attention(ModuleWithStateDictSerialization, Attention):
     use_flash_attention: Optional[bool] = eqx.field(static=True, default=None)
     attention_dropout: float = eqx.field(static=True, default=0.0)
@@ -393,7 +362,7 @@ class Olmo2Attention(ModuleWithStateDictSerialization, Attention):
 class Olmo2DecoderLayer(ModuleWithStateDictSerialization, eqx.Module):
     config: Olmo2Config = eqx.field(static=True)
     self_attn: Olmo2Attention
-    mlp: Olmo2MLP
+    mlp: LlamaMlp
     post_attention_layernorm: hnn.RmsNorm
     post_feedforward_layernorm: hnn.RmsNorm
 
@@ -402,7 +371,7 @@ class Olmo2DecoderLayer(ModuleWithStateDictSerialization, eqx.Module):
         k_attn, k_mlp = jrandom.split(key, 2)
 
         attn = Olmo2Attention.init(config, key=k_attn)
-        mlp = Olmo2MLP.init(
+        mlp = LlamaMlp.init(
             config.Embed,
             config.Mlp,
             config.activation_function,

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -18,7 +18,7 @@ from levanter.data.text import (
 )
 from levanter.store.cache import CacheOptions
 
-from marin.download.huggingface.download_hf import (
+from marin.datakit.download.huggingface import (
     DownloadConfig as HfDownloadConfig,
     download_hf as hf_download_logic,
 )
@@ -28,7 +28,7 @@ from marin.processing.tokenize.tokenize import TokenizeConfigBase
 logger = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class PretokenizedCacheDownloadConfig(TokenizeConfigBase):
     """Configuration for downloading a pre-existing Levanter cache from Hugging Face."""
 

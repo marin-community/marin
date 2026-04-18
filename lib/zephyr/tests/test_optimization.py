@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for operation fusion optimization via compute_plan."""
@@ -97,8 +97,8 @@ def test_fused_execution_with_batch():
         .window(2)  # [[6, 8], [10, 12]]
     )
 
-    with ZephyrContext(name="test_fusion") as ctx:
-        result = list(ctx.execute(ds))
+    ctx = ZephyrContext(name="test_fusion")
+    result = ctx.execute(ds).results
     assert result == [[6, 8], [10, 12]]
 
 

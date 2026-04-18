@@ -1,44 +1,31 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
-
-from marin.execution.executor import ExecutorStep, InputName, executor_main
-from marin.processing.classification.deduplication.dedup_commons import DedupConfig, DedupMode, deduplicate
-
-from experiments.pretraining_datasets.simple import downloads
-
-logger = logging.getLogger(__name__)
+from rigging.log_setup import configure_logging
+from rigging.filesystem import marin_prefix
+from marin.execution.step_runner import StepRunner
+from marin.execution.step_spec import StepSpec
+from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
 
 
-def build_dedup_step(dataset: InputName, max_parallelism: int) -> ExecutorStep:
-    """
-    Builds a deduplication step for the given dataset.
-
-    Args:
-        dataset: The input dataset to deduplicate.
-        max_parallelism: Maximum parallelism for Zephyr tasks.
-    """
-    config = DedupConfig(
-        input_paths=dataset,
-        mode=DedupMode.FUZZY_DOCUMENT,
-        processes=max_parallelism,
+def build_steps() -> list[StepSpec]:
+    raw = StepSpec(
+        name="raw/fineweb-edu-sample-10bt",
+        # TODO: allow to override via relative override path in StepSpec
+        override_output_path=f"{marin_prefix()}/raw/fineweb-edu-87f0914",
     )
-
-    return ExecutorStep(
-        name=f"dedup_{dataset.name}",
-        fn=deduplicate,
-        config=config,
-        description=f"Run dedupe on {dataset.name}",
+    dedup = StepSpec(
+        name="dedup_sample/10BT",
+        deps=[raw],
+        fn=lambda op: dedup_fuzzy_document(
+            input_paths=raw.output_path + "/sample/10BT",
+            output_path=op,
+            max_parallelism=1024,
+        ),
     )
+    return [raw, dedup]
 
-
-STEPS = [
-    build_dedup_step(downloads["fineweb_edu_sample_10bt"], max_parallelism=1024),
-]
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    executor_main(
-        steps=STEPS,
-    )
+    configure_logging()
+    StepRunner().run(build_steps())

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from marin.scaling_laws.isoflop_analysis import (
@@ -12,12 +12,17 @@ from marin.scaling_laws.isoflop_analysis import (
     ModelConfiguration,
     QuadraticFitCoeffs,
     ScalingFit,
-    ScalingRecipe,
+    ScalingHeuristic,
     fit_scaling_laws,
     predict_optimal_config,
     round_flops_to_bucket,
 )
 from marin.scaling_laws.tpu_utils import (
+    TpuSpec,
+    V4_SPEC,
+    V5P_SPEC,
+    pick_tpu_type,
+    pick_v4_type,
     pick_v5p_type,
 )
 from marin.scaling_laws.scaling_plots import (
@@ -28,11 +33,11 @@ from marin.scaling_laws.scaling_plots import (
 )
 
 __all__ = [
-    # Constants
     "DEFAULT_BUDGETS",
     "DEFAULT_EVAL_METRIC_KEY",
     "DEFAULT_SEQ_LEN",
-    # Data classes and Protocols
+    "V4_SPEC",
+    "V5P_SPEC",
     "CandidateConfig",
     "FitScalingLawsResult",
     "IsoFlopRecord",
@@ -40,11 +45,13 @@ __all__ = [
     "ModelConfiguration",
     "QuadraticFitCoeffs",
     "ScalingFit",
-    "ScalingRecipe",
-    # Functions
+    "ScalingHeuristic",
+    "TpuSpec",
     "create_isoflop_plot",
     "create_scaling_plot",
     "fit_scaling_laws",
+    "pick_tpu_type",
+    "pick_v4_type",
     "pick_v5p_type",
     "predict_optimal_config",
     "round_flops_to_bucket",

@@ -1,0 +1,97 @@
+@import '@fontsource-variable/noto-sans';
+@import '@fontsource-variable/noto-sans-mono';
+
+@import 'tailwindcss';
+
+@config '../../tailwind.config.ts';
+
+/* ── Light palette (default) ─────────────────────────────── */
+/* Colors sourced from the shared palettes in types/status.ts:
+ *   Categorical ............. accent, purple, orange
+ *   Diverging pos→neg ....... success (green end), danger (negative end)
+ *   Diverging hot→cold ...... warning, accent-hover / accent-subtle / accent-border
+ */
+:root {
+  --c-surface:              #ffffff;
+  --c-surface-raised:       #f8f9fb;
+  --c-surface-sunken:       #F0F2F5;  /* diverging neutral */
+  --c-surface-border:       #e2e5e9;
+  --c-surface-border-subtle:#eef0f3;
+
+  --c-text:                 #1a1d23;
+  --c-text-secondary:       #5c6370;
+  --c-text-muted:           #9ca3af;
+
+  /* Categorical[0] #1877F2 + hot→cold blues */
+  --c-accent:               #1877F2;
+  --c-accent-hover:         #083E89;
+  --c-accent-subtle:        #CDE5FF;
+  --c-accent-border:        #76B6FF;
+
+  /* Diverging pos→neg green end */
+  --c-status-success:        #2A9142;
+  --c-status-success-bg:     #CBF9D7;
+  --c-status-success-border: #A3E6B5;
+
+  /* Hot→cold warm end for warning */
+  --c-status-warning:        #EB630E;
+  --c-status-warning-bg:     #FFF2A6;
+  --c-status-warning-border: #FFB973;
+
+  /* True red for danger */
+  --c-status-danger:         #D31E3C;
+  --c-status-danger-bg:      #FDE8EC;
+  --c-status-danger-border:  #F9B3BF;
+
+  /* Categorical[2] #5A24C7, border from categorical[6] #AB76FF */
+  --c-status-purple:         #5A24C7;
+  --c-status-purple-bg:      #f0e8ff;
+  --c-status-purple-border:  #AB76FF;
+
+  /* Categorical[1] #F0701A */
+  --c-status-orange:         #F0701A;
+  --c-status-orange-bg:      #fff0e5;
+  --c-status-orange-border:  #FFB973;
+}
+
+/* ── Dark palette ────────────────────────────────────────── */
+.dark {
+  --c-surface:              #0f1117;
+  --c-surface-raised:       #181a22;
+  --c-surface-sunken:       #0b0d12;
+  --c-surface-border:       #2a2d36;
+  --c-surface-border-subtle:#1f2129;
+
+  --c-text:                 #e4e6eb;
+  --c-text-secondary:       #9ca3af;
+  --c-text-muted:           #6b7280;
+
+  /* Hot→cold blues (lighter for dark bg readability) */
+  --c-accent:               #76B6FF;
+  --c-accent-hover:         #CDE5FF;
+  --c-accent-subtle:        #07316D;
+  --c-accent-border:        #083E89;
+
+  /* Diverging pos→neg green (lighter text, darker bg) */
+  --c-status-success:        #A3E6B5;
+  --c-status-success-bg:     #1D632E;
+  --c-status-success-border: #2A9142;
+
+  /* Hot→cold warm end — warning is milder, danger is hotter */
+  --c-status-warning:        #FFB973;
+  --c-status-warning-bg:     #783301;
+  --c-status-warning-border: #EB630E;
+  --c-status-danger:         #F87171;
+  --c-status-danger-bg:      #450a0a;
+  --c-status-danger-border:  #991b1b;
+
+  /* Categorical purple (lighter text, darker bg) */
+  --c-status-purple:         #AB76FF;
+  --c-status-purple-bg:      #22085F;
+  --c-status-purple-border:  #5A24C7;
+
+  /* Categorical orange (lighter text, darker bg) */
+  --c-status-orange:         #FFB973;
+  --c-status-orange-bg:      #783301;
+  --c-status-orange-border:  #F0701A;
+}

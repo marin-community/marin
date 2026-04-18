@@ -1,12 +1,10 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
 import logging
 import os
-import random
-import re
-import time
+import subprocess
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import fields, is_dataclass
@@ -17,7 +15,8 @@ import braceexpand
 import datasets
 import fsspec
 import requests
-import transformers
+from rigging.filesystem import url_to_fs
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 from huggingface_hub.utils import HfHubHTTPError
 
 logger = logging.getLogger(__name__)
@@ -36,34 +35,8 @@ def fsspec_exists(file_path):
     """
 
     # Use fsspec to check if the file exists
-    fs = fsspec.core.url_to_fs(file_path)[0]
+    fs = url_to_fs(file_path)[0]
     return fs.exists(file_path)
-
-
-def fsspec_rm(path: str):
-    """
-    Check if a file/directory exists in a fsspec filesystem. If it exists, remove it (recursively).
-
-    Args:
-        path (str): The path of the file
-
-    Returns:
-        bool: True if the file exists, False otherwise.
-    """
-
-    # Use fsspec to check if the file exists
-    fs = fsspec.core.url_to_fs(path)[0]
-    if fs.exists(path):
-        try:
-            fs.rm(path, recursive=True)
-        except FileNotFoundError as e:
-            print(f"Error removing the file: {e}. Likely caused by the race condition and file is already removed.")
-
-        # TODO (@siddk) - I think you don't need the finally?
-        finally:
-            return True  # noqa: B012
-
-    return False
 
 
 def fsspec_glob(file_path):
@@ -80,7 +53,7 @@ def fsspec_glob(file_path):
     """
 
     # Use fsspec to get a list of files
-    fs = fsspec.core.url_to_fs(file_path)[0]
+    fs = url_to_fs(file_path)[0]
     protocol = fsspec.core.split_protocol(file_path)[0]
 
     def join_protocol(file):
@@ -106,79 +79,16 @@ def fsspec_mkdirs(dir_path, exist_ok=True):
     """
 
     # Use fsspec to create the directory
-    fs = fsspec.core.url_to_fs(dir_path)[0]
+    fs = url_to_fs(dir_path)[0]
     fs.makedirs(dir_path, exist_ok=exist_ok)
-
-
-def fsspec_get_curr_subdirectories(dir_path):
-    """
-    Get all subdirectories under this current directory only. Does not return the parent directory.
-
-    Args:
-        dir_path (str): The path of the directory
-
-    Returns:
-        list: A list of subdirectories.
-    """
-    fs, _ = fsspec.core.url_to_fs(dir_path)
-    protocol = fsspec.core.split_protocol(dir_path)[0]
-
-    # List only immediate subdirectories
-    subdirectories = fs.ls(dir_path, detail=True)
-
-    def join_protocol(path):
-        return f"{protocol}://{path}" if protocol else path
-
-    subdirectories = [join_protocol(subdir["name"]) for subdir in subdirectories if subdir["type"] == "directory"]
-    return subdirectories
-
-
-def fsspec_dir_only_contains_files(dir_path):
-    """
-    Check if a directory only contains files in a fsspec filesystem.
-    """
-    fs, _ = fsspec.core.url_to_fs(dir_path)
-    ls_res = fs.ls(dir_path, detail=True)
-    if len(ls_res) == 0:
-        return False
-    return all(item["type"] == "file" for item in ls_res)
-
-
-def fsspec_get_atomic_directories(dir_path):
-    """
-    Get all directories under this directory that only contains files within them
-    """
-    subdirectories = []
-
-    if fsspec_isdir(dir_path):
-        for subdir in fsspec_get_curr_subdirectories(dir_path):
-            if fsspec_dir_only_contains_files(subdir):
-                subdirectories.append(subdir)
-            else:
-                subdirectories.extend(fsspec_get_atomic_directories(subdir))
-
-    return subdirectories
 
 
 def fsspec_isdir(dir_path):
     """
     Check if a path is a directory in fsspec filesystem.
     """
-    fs, _ = fsspec.core.url_to_fs(dir_path)
+    fs, _ = url_to_fs(dir_path)
     return fs.isdir(dir_path)
-
-
-def fsspec_cpdir(dir_path: str, target_path: str) -> None:
-    """
-    Recursively copies all contents of dir_path to target_path.
-
-    Args:
-        dir_path (str): The path of the directory to copy.
-        target_path (str): The target path.
-    """
-
-    fs = fsspec.core.get_fs_token_paths(target_path, mode="wb")[0]
-    fs.put(os.path.join(dir_path, "*"), target_path, recursive=True)
 
 
 _HF_RETRY_KEYWORDS = (
@@ -209,14 +119,6 @@ def _hf_should_retry(exc: Exception) -> bool:
     return any(keyword in message for keyword in _HF_RETRY_KEYWORDS)
 
 
-def _hf_sleep_with_jitter(delay: float, max_delay: float) -> tuple[float, float]:
-    jitter = random.uniform(0.5, 1.5)
-    sleep_seconds = min(delay * jitter, max_delay)
-    time.sleep(sleep_seconds)
-    next_delay = min(delay * 2, max_delay)
-    return sleep_seconds, next_delay
-
-
 def call_with_hf_backoff(
     fn: Callable[[], T],
     *,
@@ -224,32 +126,15 @@ def call_with_hf_backoff(
     max_attempts: int = 6,
     initial_delay: float = 2.0,
     max_delay: float = 60.0,
-    logger: logging.Logger | None = None,
 ) -> T:
     """Call ``fn`` with exponential backoff tuned for HF rate limits."""
-
-    log_obj = logger or logging.getLogger(__name__)
-    delay = initial_delay
-
-    for attempt in range(1, max_attempts + 1):
-        try:
-            return fn()
-        except Exception as exc:  # pragma: no cover - network failure
-            retryable = _hf_should_retry(exc)
-            if not retryable or attempt == max_attempts:
-                raise
-
-            sleep_seconds, delay = _hf_sleep_with_jitter(delay, max_delay)
-            log_obj.warning(
-                "HF request failed for %s (attempt %s/%s): %s. Retrying in %.1fs",
-                context,
-                attempt,
-                max_attempts,
-                exc,
-                sleep_seconds,
-            )
-
-    raise RuntimeError(f"Exceeded max attempts ({max_attempts}) for HF request: {context}")
+    return retry_with_backoff(
+        fn,
+        retryable=_hf_should_retry,
+        max_attempts=max_attempts,
+        backoff=ExponentialBackoff(initial=initial_delay, maximum=max_delay, factor=2.0, jitter=0.25),
+        operation=context,
+    )
 
 
 def load_dataset_with_backoff(
@@ -258,7 +143,6 @@ def load_dataset_with_backoff(
     max_attempts: int = 6,
     initial_delay: float = 2.0,
     max_delay: float = 120.0,
-    logger: logging.Logger | None = None,
     **dataset_kwargs: Any,
 ):
     return call_with_hf_backoff(
@@ -267,86 +151,52 @@ def load_dataset_with_backoff(
         max_attempts=max_attempts,
         initial_delay=initial_delay,
         max_delay=max_delay,
-        logger=logger,
     )
 
 
 def load_tokenizer_with_backoff(
     tokenizer_name: str,
     *,
-    tokenizer_kwargs: dict[str, Any] | None = None,
     context: str | None = None,
     max_attempts: int = 6,
     initial_delay: float = 2.0,
     max_delay: float = 60.0,
-    logger: logging.Logger | None = None,
 ):
-    kwargs = tokenizer_kwargs or {}
+    from levanter.tokenizers import load_tokenizer
+
     load_context = context or f"tokenizer={tokenizer_name}"
     return call_with_hf_backoff(
-        lambda: transformers.AutoTokenizer.from_pretrained(tokenizer_name, **kwargs),
+        lambda: load_tokenizer(tokenizer_name),
         context=load_context,
         max_attempts=max_attempts,
         initial_delay=initial_delay,
         max_delay=max_delay,
-        logger=logger,
     )
 
 
 def fsspec_size(file_path: str) -> int:
     """Get file size (in bytes) of a file on an `fsspec` filesystem."""
-    fs = fsspec.core.url_to_fs(file_path)[0]
+    fs = url_to_fs(file_path)[0]
 
     return fs.size(file_path)
 
 
 def fsspec_mtime(file_path: str) -> datetime:
     """Get file modification time (in seconds since epoch) of a file on an `fsspec` filesystem."""
-    fs = fsspec.core.url_to_fs(file_path)[0]
+    fs = url_to_fs(file_path)[0]
 
     return fs.modified(file_path)
 
 
-def validate_marin_gcp_path(path: str) -> str:
+def is_path_like(path: str) -> bool:
+    """Return True if path is a URL (gs://, s3://, etc.) or an existing local path.
+
+    Use this to distinguish file paths from HuggingFace dataset/model identifiers.
     """
-    Validate the given path according to the marin GCP convention.
-
-    This function ensures that the provided path follows the required format for
-    GCS paths in a specific bucket structure. The expected format is either:
-    gs://marin-$REGION/scratch//* (any structure after scratch)
-    or
-    gs://marin-$REGION/(documents|attributes|filtered)/$EXPERIMENT/$DATASET/$VERSION/
-
-    Parameters:
-    path (str): The GCS path to validate.
-
-    Returns:
-    str: The original path if it's valid.
-
-    Raises:
-    ValueError: If the path doesn't match the expected format.
-                The error message provides details on the correct structure.
-
-    Example:
-    >>> validate_marin_gcp_path("gs://marin-us-central1/documents/exp1/dataset1/v1/")
-    'gs://marin-us-central1/documents/exp1/dataset1/v1/'
-    >>> validate_marin_gcp_path("gs://marin-us-central1/attributes/exp1/dataset1/v1/")
-    'gs://marin-us-central1/attributes/exp1/dataset1/v1/'
-    >>> validate_marin_gcp_path("gs://marin-us-central1/filtered/exp1/dataset1/v1/")
-    'gs://marin-us-central1/filtered/exp1/dataset1/v1/'
-    >>> validate_marin_gcp_path("gs://marin-us-central1/scratch/documents/exp1/dataset1/v1/")
-    'gs://marin-us-central1/scratch/documents/exp1/dataset1/v1/'
-    >>> validate_marin_gcp_path("gs://marin-us-central1/scratch/decontamination/decontamination_demo.jsonl.gz")
-    'gs://marin-us-central1/scratch/decontamination/decontamination_demo.jsonl.gz'
-    """
-    pattern = r"^gs://marin-[^/]+/(scratch/.+|(documents|attributes|filtered)/[^/]+/[^/]+/[^/]+(/.*)?$)"
-    if not re.match(pattern, path):
-        raise ValueError(
-            "Invalid path format. It should follow either:\n"
-            "1. gs://marin-$REGION/scratch/* (any structure after scratch)\n"
-            "2. gs://marin-$REGION/{documents|attributes|filtered}/$EXPERIMENT/$DATASET/$VERSION/"
-        )
-    return path
+    protocol, _ = fsspec.core.split_protocol(path)
+    if protocol is not None:
+        return True
+    return os.path.exists(path)
 
 
 def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None, old_extension=None):
@@ -369,7 +219,9 @@ def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None,
     rel_path = os.path.relpath(file_path, base_in_path)
 
     # Construct the output file path
-    # TODO: if old_extension is not None, but new_extension is None, raise an error or warning?
+    if old_extension and not new_extension:
+        raise ValueError("old_extension requires new_extension to be set")
+
     if new_extension:
         if old_extension:
             rel_path = rel_path[: rel_path.rfind(old_extension)] + new_extension
@@ -425,11 +277,9 @@ def _hacky_remove_tpu_lockfile():
     except FileNotFoundError:
         pass
     except PermissionError:
-        try:
-            os.system("sudo rm -f /tmp/libtpu_lockfile")
-        except Exception:
-            logger.error("Failed to remove lockfile")
-            pass
+        result = subprocess.run(["sudo", "rm", "-f", "/tmp/libtpu_lockfile"], capture_output=True)
+        if result.returncode != 0:
+            logger.error("Failed to remove lockfile: %s", result.stderr.decode(errors="replace"))
 
 
 def get_directory_friendly_name(name: str) -> str:

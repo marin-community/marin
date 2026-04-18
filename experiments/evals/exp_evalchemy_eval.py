@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -104,8 +104,7 @@ BASE_GENERATION_PARAMS = {
 # =============================================================================
 # tensor_parallel_size: Number of TPU chips to use for tensor parallelism
 # max_num_seqs: Batch size for parallel generation
-# RESOURCE = ResourceConfig.with_tpu("v5p-8")  # v5p-8 has 4 chips
-RESOURCE = ResourceConfig.with_tpu("v4-8")  # v4-8 has 4 chips
+RESOURCE = ResourceConfig.with_tpu("v5p-8")  # v5p-8 has 4 chips
 BATCH_SIZE = 256
 ENGINE_KWARGS = {
     "tensor_parallel_size": 4,

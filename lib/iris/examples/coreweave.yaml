@@ -1,0 +1,116 @@
+# Iris development cluster configuration for CoreWeave CKS.
+#
+# Architecture: KubernetesProvider dispatches task pods directly to the k8s API.
+# No worker daemons are needed. CoreWeave NodePool autoscaling provisions nodes
+# on demand; when pods are deleted, NodePools scale to zero automatically.
+# CPU nodes are kept always-on (buffer_slices=2) for monitoring software.
+#
+# Workflow:
+#
+#   1. Set S3 object storage credentials (required for s3:// storage URIs):
+#        export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
+#        export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
+#      These are created in the Cloudflare dashboard under R2 > Manage R2 API Tokens.
+#      `iris cluster start` creates a K8s Secret from these env vars automatically.
+#
+#   2. Start the cluster (creates RBAC, shared NodePools, ConfigMap, Deployment, Service):
+#        iris --config=lib/iris/examples/coreweave.yaml cluster start
+#
+#   3. Use the Iris CLI:
+#        iris --config=lib/iris/examples/coreweave.yaml cluster status
+#        iris --config=lib/iris/examples/coreweave.yaml cluster dashboard
+#
+# This config file is used by:
+#   - The CLI on the operator's laptop (for `cluster start`, `cluster status`, job submission)
+#   - The controller and workers inside the cluster (mounted as ConfigMap at /etc/iris/config.yaml)
+#
+# To use a local kubeconfig (e.g. from CoreWeave Console > Tokens > Download):
+#   Set platform.coreweave.kubeconfig_path below, or:
+#   export KUBECONFIG=~/.kube/coreweave-iris
+
+platform:
+  label_prefix: coreweave
+  coreweave:
+    region: US-WEST-04A
+    namespace: iris
+    kubeconfig_path: ~/.kube/coreweave-iris
+    object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+
+storage:
+  remote_state_dir: s3://marin-na/iris/coreweave/state
+
+kubernetes_provider:
+  namespace: iris
+  default_image: ghcr.io/marin-community/iris-task:latest
+  host_network: true              # Required for NCCL/IB multi-host traffic
+  cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal GPU nodes
+  controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
+
+controller:
+  image: ghcr.io/marin-community/iris-controller:latest
+  coreweave:
+    port: 10000
+    service_name: iris-controller-svc
+    scale_group: cpu-erapids
+
+defaults:
+  autoscaler:
+    evaluation_interval:
+      milliseconds: 10000
+    scale_up_delay:
+      milliseconds: 60000
+    scale_down_delay:
+      milliseconds: 300000
+    startup_grace_period:
+      milliseconds: 2400000    # 40 min — covers autoscaler node provisioning + Pod startup
+  task_env:
+    MARIN_PREFIX: s3://marin-na/marin
+  worker:
+    docker_image: ghcr.io/marin-community/iris-worker:latest
+    port: 10001
+    cache_dir: /mnt/local/iris-cache
+    runtime: kubernetes
+    default_task_image: ghcr.io/marin-community/iris-task:latest
+
+scale_groups:
+  cpu-erapids:
+    num_vms: 1
+    resources:
+      cpu: 64
+      ram: 256GB
+      disk: 1TB
+      device_type: cpu
+      capacity_type: on-demand
+    worker:
+      attributes:
+        pool: cpu-erapids
+    buffer_slices: 1
+    max_slices: 4
+    priority: 50
+    slice_template:
+      num_vms: 1
+      coreweave:
+        region: US-WEST-04A
+        instance_type: cd-gp-i64-erapids
+
+  h100-8x:
+    num_vms: 1
+    resources:
+      cpu: 128
+      ram: 2048GB
+      disk: 1TB
+      device_type: gpu
+      device_variant: H100
+      device_count: 8
+      capacity_type: on-demand
+    worker:
+      attributes:
+        pool: h100-8x
+    buffer_slices: 0
+    max_slices: 8
+    priority: 100
+    slice_template:
+      num_vms: 1
+      coreweave:
+        region: US-WEST-04A
+        instance_type: gd-8xh100ib-i128

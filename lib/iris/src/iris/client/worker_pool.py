@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """WorkerPool for task dispatch.
@@ -48,7 +48,7 @@ from iris.client.client import IrisClient, Job, iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import EnvironmentSpec, Entrypoint, JobName, ResourceSpec
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.time_utils import Duration, ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +139,7 @@ def worker_job_entrypoint(pool_id: str) -> None:
     """Job entrypoint that starts a TaskExecutor actor.
 
     This function runs inside each task of the co-scheduled worker pool job.
-    It uses IRIS_JOB_ID (task name) from the environment to determine which
+    It uses IRIS_TASK_ID (task identity) from the environment to determine which
     worker index this task represents.
 
     Args:
@@ -224,7 +224,7 @@ class WorkerDispatcher:
                 self._actor_client = ActorClient(
                     resolver=self._resolver,
                     name=self.state.worker_name,
-                    resolve_timeout=self._timeout,
+                    call_timeout=self._timeout,
                 )
 
             task = self._get_task()
@@ -247,7 +247,7 @@ class WorkerDispatcher:
             self._actor_client = ActorClient(
                 resolver=self._resolver,
                 name=self.state.worker_name,
-                resolve_timeout=self._timeout,
+                call_timeout=self._timeout,
             )
             logger.info("Worker %s discovered at %s", self.state.worker_id, endpoint.url)
         else:

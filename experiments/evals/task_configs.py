@@ -1,9 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Sequence
-
-from levanter.eval_harness import TaskConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
@@ -535,20 +533,6 @@ MULTILINGUAL_LM_EVAL_LOGPROB_TASKS = (
 )
 
 MULTILINGUAL_LM_EVAL_GENERATIVE_TASKS = MGSM_MULTILINGUAL_TASKS
-
-
-def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
-    """
-    Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects.
-    """
-    return [
-        TaskConfig(
-            task=task.name,
-            num_fewshot=task.num_fewshot,
-            task_alias=task.task_alias,
-        )
-        for task in tasks
-    ]
 
 
 def convert_to_task_metrics(tasks: Sequence[EvalTaskConfig], metric: str) -> list[str]:

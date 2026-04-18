@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """aggregate_total.py
@@ -21,7 +21,7 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
-import fsspec
+from rigging.filesystem import open_url
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.utils import fsspec_glob
 from zephyr import Dataset, ZephyrContext, load_file, load_jsonl
@@ -63,8 +63,8 @@ def _compute_dataset_sizes(dataset_steps: list[ExecutorStep]) -> dict[str, int]:
     def count_dir(path: str) -> int:
         pattern = os.path.join(path.rstrip("/"), "**", "*.jsonl*")
         pipeline = Dataset.from_files(pattern, empty_glob_ok=True).flat_map(load_file).map(lambda _: 1).reduce(sum)
-        with ZephyrContext(name="overlap-size") as ctx:
-            results = ctx.execute(pipeline)
+        ctx = ZephyrContext(name="overlap-size")
+        results = ctx.execute(pipeline)
         return results[0]
 
     size_map: dict[str, int] = {}
@@ -204,12 +204,12 @@ def aggregate_single_dataset(
             }
 
     intermediate_dir = os.path.join(cfg.output_path, ".intermediate", training_name)
-    with ZephyrContext(name="overlap-aggregate") as ctx:
-        intermediate_paths = ctx.execute(
-            Dataset.from_list(shard_paths)
-            .flat_map(extract_overlap_records)
-            .write_jsonl(f"{intermediate_dir}/overlap-{{shard:05d}}.jsonl.gz", skip_existing=True)
-        )
+    ctx = ZephyrContext(name="overlap-aggregate")
+    intermediate_paths = ctx.execute(
+        Dataset.from_list(shard_paths)
+        .flat_map(extract_overlap_records)
+        .write_jsonl(f"{intermediate_dir}/overlap-{{shard:05d}}.jsonl.gz", skip_existing=True)
+    )
 
     logger.info(f"Wrote {len(intermediate_paths)} intermediate files to {intermediate_dir}")
 
@@ -323,7 +323,7 @@ def aggregate_total(cfg: AggregateConfig):
 
     # Write consolidated summary CSV (all datasets + union)
     summary_path = os.path.join(cfg.output_path, "summary.csv")
-    with fsspec.open(summary_path, "wt") as f:
+    with open_url(summary_path, "wt") as f:
         writer = csv.writer(f)
         writer.writerow(["training_dataset", "ngram", "total_examples", "contaminated", "fraction"])
 
@@ -345,7 +345,7 @@ def aggregate_total(cfg: AggregateConfig):
 
     # Write overlap matrix CSV (evaluation x training datasets)
     matrix_path = os.path.join(cfg.output_path, "overlap_matrix.csv")
-    with fsspec.open(matrix_path, "wt") as f:
+    with open_url(matrix_path, "wt") as f:
         writer = csv.writer(f)
 
         # Header: training datasets as columns + union

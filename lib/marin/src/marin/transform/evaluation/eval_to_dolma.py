@@ -1,15 +1,10 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Given a directory of evaluation files, convert them to Dolma format.
 
 The Dolma format is a JSONL file with a "text" field.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
-    lib/marin/src/marin/transform/evaluation/eval_to_dolma.py \
-    --input_path gs://marin-us-central2/raw/evaluation/ \
-    --output_path gs://marin-data/processed/evaluation/dolma
 """
 
 from dataclasses import dataclass
@@ -45,8 +40,8 @@ def convert_eval_to_dolma(cfg: ConvertEvalToDolmaConfig):
         .map(map_row)
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    with ZephyrContext(name="eval-to-dolma") as ctx:
-        ctx.execute(pipeline)
+    ctx = ZephyrContext(name="eval-to-dolma")
+    ctx.execute(pipeline)
 
 
 if __name__ == "__main__":

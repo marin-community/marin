@@ -1,10 +1,14 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Core types and resolver implementations for the actor system."""
 
 from dataclasses import dataclass, field
 from typing import Protocol
+
+# Header used by ActorProxy to route requests to the correct actor endpoint.
+# Shared constant between ProxyResolver (client-side) and ActorProxy (server-side).
+ACTOR_ENDPOINT_HEADER = "x-iris-actor-endpoint"
 
 
 @dataclass
@@ -46,7 +50,6 @@ class Resolver(Protocol):
 
     Implementations:
     - FixedResolver: Static endpoint mapping
-    - GcsResolver: Discovers via GCS VM metadata
     - ClusterResolver: Resolves via cluster controller (lives in iris.client)
     """
 
@@ -75,93 +78,31 @@ class FixedResolver:
         return ResolveResult(name=name, endpoints=endpoints)
 
 
-class GcsApi(Protocol):
-    def list_instances(self, project: str, zone: str) -> list[dict]: ...
+class ProxyResolver:
+    """Resolver that routes actor calls through the controller's actor proxy.
 
+    Instead of resolving to the actor's direct address, returns the controller
+    URL so all RPCs go through the proxy. The proxy uses the
+    ``X-Iris-Actor-Endpoint`` header to resolve the actual actor endpoint.
 
-class RealGcsApi:
-    def list_instances(self, project: str, zone: str) -> list[dict]:
-        from google.cloud import compute_v1
+    The caller passes the full actor name as registered in the endpoint registry
+    (e.g. ``/user/job/coordinator/actor-0``).
 
-        client = compute_v1.InstancesClient()
-        instances = []
-        for instance in client.list(project=project, zone=zone):
-            metadata = {}
-            if instance.metadata and instance.metadata.items:
-                for item in instance.metadata.items:
-                    metadata[item.key] = item.value
-
-            internal_ip = None
-            if instance.network_interfaces:
-                internal_ip = instance.network_interfaces[0].network_i_p
-
-            instances.append(
-                {
-                    "name": instance.name,
-                    "internal_ip": internal_ip,
-                    "metadata": metadata,
-                    "status": instance.status,
-                }
-            )
-        return instances
-
-
-class MockGcsApi:
-    def __init__(self, instances: list[dict] | None = None):
-        self._instances = instances or []
-
-    def set_instances(self, instances: list[dict]) -> None:
-        self._instances = instances
-
-    def list_instances(self, project: str, zone: str) -> list[dict]:
-        return self._instances
-
-
-class GcsResolver:
-    """Resolver using GCS VM instance metadata tags.
-
-    Discovers actor endpoints by querying GCP VM instance metadata. Unlike
-    ClusterResolver, this does NOT do namespace prefixing. Use this for
-    static VM-based deployments where namespace isolation is not needed.
-
-    Instances must have metadata tags: `iris_actor_<name>` = port number.
-    Only RUNNING instances are considered.
+    Args:
+        controller_url: Controller URL (e.g., ``http://localhost:8080``)
     """
 
-    ACTOR_PREFIX = "iris_actor_"
-
-    def __init__(
-        self,
-        project: str,
-        zone: str,
-        api: GcsApi | None = None,
-    ):
-        self._project = project
-        self._zone = zone
-        self._api = api or RealGcsApi()
+    def __init__(self, controller_url: str):
+        self._controller_url = controller_url.rstrip("/")
 
     def resolve(self, name: str) -> ResolveResult:
-        endpoints = []
-
-        instances = self._api.list_instances(self._project, self._zone)
-
-        for instance in instances:
-            if instance.get("status") != "RUNNING":
-                continue
-
-            metadata = instance.get("metadata", {})
-
-            actor_key = f"{self.ACTOR_PREFIX}{name}"
-            if actor_key in metadata:
-                port = metadata[actor_key]
-                ip = instance.get("internal_ip")
-                if ip:
-                    endpoints.append(
-                        ResolvedEndpoint(
-                            url=f"http://{ip}:{port}",
-                            actor_id=f"gcs-{instance['name']}-{name}",
-                            metadata={"instance": instance["name"]},
-                        )
-                    )
-
-        return ResolveResult(name=name, endpoints=endpoints)
+        return ResolveResult(
+            name=name,
+            endpoints=[
+                ResolvedEndpoint(
+                    url=self._controller_url,
+                    actor_id=f"proxy-{name}",
+                    metadata={ACTOR_ENDPOINT_HEADER: name},
+                )
+            ],
+        )

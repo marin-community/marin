@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run screenshot-dashboard.py then ask Claude Code to review all screenshots at once.
+# Capture dashboard screenshots via e2e tests then ask Claude Code to review them.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -8,7 +8,7 @@ OUTPUT_DIR="${1:-$(mktemp -d)}"
 
 echo "=== Capturing dashboard screenshots to $OUTPUT_DIR ==="
 cd "$REPO_ROOT"
-uv run lib/iris/scripts/screenshot-dashboard.py --output-dir "$OUTPUT_DIR"
+IRIS_SCREENSHOT_DIR="$OUTPUT_DIR" uv run pytest lib/iris/tests/e2e/test_dashboard.py -x -o "addopts="
 
 echo ""
 echo "=== Reviewing screenshots ==="

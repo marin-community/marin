@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import atexit
@@ -29,8 +29,8 @@ from typing import (
 )
 
 import equinox as eqx
-import fsspec
 import haliax as hax
+from rigging.filesystem import open_url
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -53,6 +53,7 @@ import levanter.tracker
 import levanter.tracker.wandb
 import levanter.utils.logging
 from levanter.callbacks import Callback, CBInfo, JitCallback, LambdaCallback, StepInfo
+from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
 from levanter.config import JsonAtom
@@ -276,10 +277,17 @@ class Trainer:
         self.config = config
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
-        if isinstance(config.tracker, Sequence):
-            self.tracker = levanter.tracker.CompositeTracker([c.init(self.run_id) for c in config.tracker])
-        else:
-            self.tracker = config.tracker.init(self.run_id)
+
+        # Use existing global tracker if available (e.g., from levanter.initialize()),
+        # otherwise create a new one. This avoids calling wandb.init() twice.
+        try:
+            self.tracker = levanter.tracker.current_tracker()
+        except RuntimeError:
+            # No global tracker set, create one
+            if isinstance(config.tracker, Sequence):
+                self.tracker = levanter.tracker.CompositeTracker([c.init(self.run_id) for c in config.tracker])
+            else:
+                self.tracker = config.tracker.init(self.run_id)
 
         self._cmanagers = []
 
@@ -474,13 +482,15 @@ class Trainer:
         hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks)
 
         with capture_time() as step_time:
-            if hooks_this_time:
-                result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs)
-                # force the loss so timing numbers are accurate. laziness isn't going to help here (i think?)
-            else:
-                result = self._maybe_save_jaxpr(
-                    "train_step_hooks", self._jit_train_step_fn_no_hook, state, batch, batch_kwargs
-                )
+            # Annotation scoped to the compiled step only (not hooks/logging below) so
+            # that GPU host-side step_num timing matches TPU device-side "Steps" semantics.
+            with jax.profiler.StepTraceAnnotation("train", step_num=int(state.step)):
+                if hooks_this_time:
+                    result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs)
+                else:
+                    result = self._maybe_save_jaxpr(
+                        "train_step_hooks", self._jit_train_step_fn_no_hook, state, batch, batch_kwargs
+                    )
 
             loss = result.loss.item()
 
@@ -508,6 +518,7 @@ class Trainer:
         Generator that yields training steps and runs hooks.
         """
         iter_data = iter(train_loader)
+        is_first_step = True
 
         while int(state.step) < self.num_train_steps:
             with capture_time() as loading_time:
@@ -516,8 +527,19 @@ class Trainer:
                 except StopIteration:
                     logger.info("Reached end of training data loader")
                     break
+
+            if is_first_step:
+                logger.info(
+                    "First batch loaded in %.1fs, starting first train step (includes JIT compilation)...",
+                    loading_time(),
+                )
+
             info = self.train_step(state, example)
             state = info.state
+
+            if is_first_step:
+                logger.info("First train step completed in %.1fs (step %d)", info.step_duration, info.step)
+                is_first_step = False
 
             levanter.tracker.log({"throughput/loading_time": loading_time()}, step=info.step)
 
@@ -558,27 +580,25 @@ class Trainer:
         self.add_hook(levanter.callbacks.log_step_info(self.config.num_train_steps), every=1)
         # engine.add_hook(callbacks.log_memory_usage(), every=1)
         checkpointer = self.config.checkpointer.create(self.run_id)
-        self.add_hook(checkpointer.on_step, every=1)  # checkpointer manages its own frequency
+
+        def checkpoint_hook(info, force=False):
+            checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
+
+        self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 
         # Add watch callback if configured
         if self.config.watch.is_enabled:
             self.add_hook(self.config.watch.build(), every=self.config.watch.interval)
 
-        if self.config.profiler:
-            profile_path = self.config.log_dir / self.run_id / "profiler"
-            total_prof_steps = self.config.profiler_num_steps
-            if total_prof_steps + self.config.profiler_start_step > self.config.num_train_steps:
-                logger.warning(
-                    f"Adjusting profiler_total_steps from {total_prof_steps} to"
-                    f" {self.config.num_train_steps - self.config.profiler_start_step}"
-                )
-                total_prof_steps = self.config.num_train_steps - self.config.profiler_start_step
+        profiler = self.config.profiler
+        total_prof_steps = profiler.resolve_num_profile_steps(num_train_steps=self.config.num_train_steps)
+        if profiler.is_enabled and total_prof_steps > 0:
             self.add_hook(
                 callbacks.profile(
-                    str(profile_path),
-                    self.config.profiler_start_step,
+                    str(self.config.log_dir / self.run_id / "profiler"),
+                    profiler.start_step,
                     total_prof_steps,
-                    self.config.profiler_perfetto_link,
+                    profiler.perfetto_link,
                 ),
                 every=1,
             )
@@ -605,17 +625,21 @@ class Trainer:
                 every=self.config.steps_per_eval,
             )
 
-    def data_loader(self, dataset: AsyncDataset[X], batch: Optional[hax.Axis] = None) -> DataLoader[X]:
+    def data_loader(self, dataset: AsyncDataset[X], batch: Optional[hax.Axis | int] = None) -> DataLoader[X]:
         """Creates a data loader for the given dataset and batch axis.
 
         Args:
             dataset (AsyncDataset): the dataset to load
-            batch (Optional[hax.Axis]): the batch axis. If None, uses the trainer batch axis (and schedule, if applicable)
+            batch: Optional batch axis or integer batch size. If None, uses the trainer batch axis
+                (and schedule, if applicable).
 
         Returns:
             DataLoader: the data loader
         """
-        if batch is not None:
+        if isinstance(batch, int):
+            batch_name = self.config.batch_axis_name
+            batch_size = batch
+        elif batch is not None:
             batch_name = batch.name
             batch_size = batch.size
         else:
@@ -726,10 +750,10 @@ class Trainer:
         artifact_path = dir / name
 
         if isinstance(artifact, str):
-            with fsspec.open(str(artifact_path), "w", compression="infer") as f:
+            with open_url(str(artifact_path), "w", compression="infer") as f:
                 f.write(artifact)
         else:
-            with fsspec.open(str(artifact_path), "wb", compression="infer") as f:
+            with open_url(str(artifact_path), "wb", compression="infer") as f:
                 f.write(artifact)
 
         self.tracker.log_artifact(artifact_path, name=name, type=type)
@@ -737,13 +761,19 @@ class Trainer:
     def _maybe_save_jaxpr(self, name: str, fn, *args, **kwargs):
         logged = False
         if self.config.log_jaxprs and name not in self._logged_jaxprs:
-            jaxpr, _, _ = eqx.filter_make_jaxpr(fn)(*args, **kwargs)
+            logger.info("Tracing %s for jaxpr...", name)
+            with capture_time() as t:
+                jaxpr, _, _ = eqx.filter_make_jaxpr(fn)(*args, **kwargs)
+            logger.info("Traced %s in %.1fs", name, t())
             pretty = jaxpr.pretty_print(name_stack=True, use_color=False)
             self.write_artifact(f"{name}.jaxpr.txt.gz", pretty, type="jaxpr")
             logged = True
 
         if self.config.log_xla_hlo and name not in self._logged_jaxprs:
-            hlo = fn.lower(*args, **kwargs).as_text("stablehlo")
+            logger.info("Lowering %s to HLO...", name)
+            with capture_time() as t:
+                hlo = fn.lower(*args, **kwargs).as_text("stablehlo")
+            logger.info("Lowered %s in %.1fs", name, t())
             self.write_artifact(f"{name}.hlo.txt", hlo, type="hlo")
             logged = True
 
@@ -775,12 +805,7 @@ class TrainerConfig:
 
     tracker: TrackerConfig | Tuple[TrackerConfig, ...] = field(default_factory=WandbConfig)
     watch: WatchConfig = WatchConfig()
-
-    # TODO: refactor callbacks
-    profiler: bool = False
-    profiler_start_step: int = 5
-    profiler_num_steps: int = 100
-    profiler_perfetto_link: bool = False
+    profiler: ProfilerConfig = ProfilerConfig()
 
     log_jaxprs: bool = True
     """Whether to log the jaxpr of the training step. This is useful for debugging and understanding the model."""
@@ -1070,8 +1095,7 @@ class AllConfig(Protocol):
 
 
 def initialize(config: TrainerConfig | AllConfig):
-    """Initializes jax, logging, setting the run name/id in the process. Also initializes tracking and saves config
-    as hyperparameters and an artifact"""
+    """Initializes jax and logging, then initializes tracking and logs config hyperparameters."""
     if isinstance(config, TrainerConfig):
         trainer_config = config
     else:

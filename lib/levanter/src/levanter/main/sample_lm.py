@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 import logging
 import time
@@ -77,7 +77,12 @@ def _load_model(config: SampleLmConfig, Vocab: Axis, *, key) -> LmHeadModel:
     if config.checkpoint_path is not None:
         with use_cpu_device():
             model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-            model = load_checkpoint(model, config.checkpoint_path, subpath="model")
+            model = load_checkpoint(
+                model,
+                config.checkpoint_path,
+                subpath="model",
+                axis_mapping=config.trainer.parameter_axis_mapping,
+            )
             model = mp.cast_to_compute(model)
         return model
     else:
@@ -87,7 +92,10 @@ def _load_model(config: SampleLmConfig, Vocab: Axis, *, key) -> LmHeadModel:
             reference_checkpoint=config.hf_checkpoint, tokenizer=load_tokenizer(config.tokenizer)
         )
         model = converter.load_pretrained(
-            config.model.model_type, ref=config.hf_checkpoint, dtype=config.trainer.mp.compute_dtype
+            config.model.model_type,
+            ref=config.hf_checkpoint,
+            axis_mapping=config.trainer.parameter_axis_mapping,
+            dtype=config.trainer.mp.compute_dtype,
         )
         return model  # type: ignore[return-value]
 
@@ -108,7 +116,7 @@ def main(config: SampleLmConfig):
     key = jrandom.PRNGKey(config.seed)
 
     # NB: we use the compute_axis_mapping b/c we're doing inference
-    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+    with config.trainer.use_device_mesh():
         vocab_size = len(tokenizer)
         Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), config.trainer.compute_axis_mapping)
         model = _load_model(config, Vocab, key=key)
@@ -122,7 +130,12 @@ def main(config: SampleLmConfig):
         prompt_ids = tokenizer(prompts, add_special_tokens=False)["input_ids"]
 
         # Initialize a reusable generation service with capacity from config
-        service = InferenceEngine.from_model_with_config(model=model, tokenizer=tokenizer, config=config.engine)
+        service = InferenceEngine.from_model_with_config(
+            model=model,
+            tokenizer=tokenizer,
+            config=config.engine,
+            axis_resources=config.trainer.compute_axis_mapping,
+        )
 
         if config.log_kernel_jaxprs_path:
             service.write_kernel_jaxprs(config.log_kernel_jaxprs_path)

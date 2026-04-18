@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
@@ -256,15 +256,16 @@ class DataLoaderIterator(Iterator[Ex]):
     def __next__(self):
         time_start = time.time()
         batch = next(self._batches)
-        time_mid = time.time()
-
-        time_end = time.time()
-        time_batch = time_end - time_mid
-        if (time_end - time_start) > 0.5:
-            if time_batch > 0.1:
-                logger.info(f"Prefetch wasn't fast enough: {time_end - time_start:.3f}. {time_batch:.3f} in batchify")
-            else:
-                logger.info(f"Prefetch wasn't fast enough: {time_end - time_start:.3f}.")
+        elapsed = time.time() - time_start
+        if elapsed > 0.5:
+            qsize = self._batches.qsize() if isinstance(self._batches, BackgroundIterator) else "N/A"
+            logger.warning(
+                "Data loader stalled %.3fs. queue_size=%s prefetch_size=%d max_buffered=%s",
+                elapsed,
+                qsize,
+                self.dl.prefetch_size,
+                self.dl.max_buffered_batches,
+            )
         return batch
 
     def __del__(self):

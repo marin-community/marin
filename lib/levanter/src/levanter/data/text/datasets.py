@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
@@ -13,7 +13,6 @@ from functools import cached_property
 from typing import Literal, TypeAlias, TypeVar
 
 import equinox as eqx
-import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -34,6 +33,10 @@ from levanter.data.sharded_datasource import (
     WrappedHFDataSource,
 )
 from levanter.data.text.cache import build_lm_dataset_cache, load_lm_dataset_cache
+from levanter.data.text.examples import (
+    GrugLmExample,
+    named_lm_example_from_grug,
+)
 from levanter.data.text.formats import (
     ChatLmDatasetFormat,
     LmDatasetFormatBase,
@@ -47,9 +50,8 @@ from levanter.store.cache import CacheOptions, TreeCache
 from levanter.store.jagged_array import JaggedArrayStore
 from levanter.store.tree_store import TreeStore
 from levanter.utils import fsspec_utils
-from levanter.utils.hf_utils import HfTokenizer
+from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 from levanter.utils.jax_utils import key_iterator
-from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.utils.logging import silence_transformer_nag
 
 
@@ -104,7 +106,31 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
         return out
 
 
-class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
+def _single_cpu_sharding() -> jax.sharding.SingleDeviceSharding:
+    return jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
+
+
+class NamedLmDataset(MappedAsyncDataset[GrugLmExample, LmExample]):
+    """Adapter that wraps unnamed examples into Levanter's NamedArray-based LmExample."""
+
+    def __init__(self, dataset: AsyncDataset[GrugLmExample], Pos: Axis):
+        self.dataset = dataset
+        self.Pos = Pos
+        sharding = _single_cpu_sharding()
+
+        @functools.partial(eqx.filter_jit)
+        def _to_named(example: GrugLmExample) -> LmExample:
+            out = named_lm_example_from_grug(example, Pos)
+            out = jax.lax.with_sharding_constraint(out, sharding)
+            return out
+
+        super().__init__(dataset, _to_named)
+
+    async def async_len(self) -> int:
+        return await self.dataset.async_len()
+
+
+class CausalLmDataset(MappedAsyncDataset[np.ndarray, GrugLmExample]):
     def __init__(
         self,
         dataset: AsyncDataset[np.ndarray],
@@ -118,12 +144,11 @@ class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
         self.eos_id = eos_id
         self.block_cross_document_attention = block_cross_document_attention
 
-        sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
+        sharding = _single_cpu_sharding()
 
         @functools.partial(eqx.filter_jit)
-        def _create_lm_example(tokens):
-            tokens = hax.named(tokens, self.Pos)
-            example = LmExample.causal(
+        def _create_lm_example(tokens: jax.Array) -> GrugLmExample:
+            example = GrugLmExample.causal(
                 tokens=tokens,
                 eos_id=eos_id,
                 block_cross_document_attention=block_cross_document_attention,
@@ -143,9 +168,9 @@ def _identity_loss_weight(loss_weight: np.ndarray) -> np.ndarray:
     return loss_weight
 
 
-class PrebuiltLmDataset(MappedAsyncDataset[dict, LmExample]):
+class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
     """
-    A dataset that maps prebuilt cache entries to LmExample instances.
+    A dataset that maps prebuilt cache entries to GrugLmExample instances.
     """
 
     def __init__(
@@ -167,14 +192,13 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, LmExample]):
         self.loss_weights_key = loss_weights_key
         self.loss_weight_transform = loss_weight_transform or _identity_loss_weight
 
-        sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
+        sharding = _single_cpu_sharding()
 
         if loss_weights_key is None:
 
             @functools.partial(eqx.filter_jit)
-            def _create_lm_example(tokens):
-                tokens = hax.named(tokens, self.Pos)
-                example = LmExample.causal(
+            def _create_lm_example(tokens: jax.Array) -> GrugLmExample:
+                example = GrugLmExample.causal(
                     tokens=tokens,
                     eos_id=eos_id,
                     block_cross_document_attention=block_cross_document_attention,
@@ -182,16 +206,14 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, LmExample]):
                 example = jax.lax.with_sharding_constraint(example, sharding)
                 return example
 
-            def _map(example: dict) -> LmExample:
+            def _map(example: dict) -> GrugLmExample:
                 return _create_lm_example(example[input_ids_key])
 
         else:
 
             @functools.partial(eqx.filter_jit)
-            def _create_lm_example(tokens, loss_weight):
-                tokens = hax.named(tokens, self.Pos)
-                loss_weight = hax.named(loss_weight, self.Pos)
-                example = LmExample.causal(
+            def _create_lm_example(tokens: jax.Array, loss_weight: jax.Array) -> GrugLmExample:
+                example = GrugLmExample.causal(
                     tokens=tokens,
                     loss_weight=loss_weight,
                     eos_id=eos_id,
@@ -200,7 +222,7 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, LmExample]):
                 example = jax.lax.with_sharding_constraint(example, sharding)
                 return example
 
-            def _map(example: dict) -> LmExample:
+            def _map(example: dict) -> GrugLmExample:
                 loss_weight = example[loss_weights_key]
                 loss_weight = self.loss_weight_transform(loss_weight)
                 return _create_lm_example(example[input_ids_key], loss_weight)
@@ -223,7 +245,7 @@ class LmDatasetSourceConfigBase(ChoiceRegistry):
         raise NotImplementedError
 
     def load_cache(
-        self, split, tokenizer: HfTokenizer, override_cache_dir: str | None = None, enforce_eos=True
+        self, split, tokenizer: MarinTokenizer, override_cache_dir: str | None = None, enforce_eos=True
     ) -> TreeCache[dict]:
         base_cache = override_cache_dir if override_cache_dir is not None else self.cache_dir
         if base_cache is None:
@@ -318,9 +340,9 @@ class DatasetComponent(DatasetComponentBase):
 @DatasetComponentBase.register_subclass("direct")
 @dataclass(frozen=True)
 class DirectDatasetComponent(DatasetComponentBase):
-    """A programmatic dataset component that supplies AsyncDataset[LmExample] instances directly."""
+    """A programmatic dataset component that supplies AsyncDataset examples directly."""
 
-    datasets: Mapping[str, AsyncDataset[LmExample]]
+    datasets: Mapping[str, AsyncDataset[GrugLmExample]]
     tags: list[str] | None = None
 
 
@@ -335,7 +357,7 @@ def _effective_pack(component: DatasetComponent) -> bool | int | Literal["pad"]:
     return False
 
 
-class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], LmExample]):
+class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
     """Packed version of token dataset using GreedyPrepackedDataset."""
 
     def __init__(
@@ -355,18 +377,18 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], LmExample]):
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
 
-        sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
+        sharding = _single_cpu_sharding()
 
         @functools.partial(eqx.filter_jit)
-        def _create_lm_example(e: tuple[dict, dict]) -> LmExample:
+        def _create_lm_example(e: tuple[dict, dict]) -> GrugLmExample:
             example, seg_ids = e
-            tokens = hax.named(example["input_ids"], self.Pos)
-            loss_weight = hax.ones_like(tokens)
-            seg_ids_named = hax.named(seg_ids["input_ids"], self.Pos)
-            out = LmExample.causal(
+            tokens = example["input_ids"]
+            loss_weight = jnp.ones_like(tokens, dtype=jnp.float32)
+            seg_ids_raw = seg_ids["input_ids"]
+            out = GrugLmExample.causal(
                 tokens=tokens,
                 loss_weight=loss_weight,
-                segment_ids=seg_ids_named,
+                segment_ids=seg_ids_raw,
                 block_cross_document_attention=block_cross_document_attention,
             )
             out = jax.lax.with_sharding_constraint(out, sharding)
@@ -375,7 +397,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], LmExample]):
         super().__init__(self.packed, _create_lm_example)
 
 
-class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict], LmExample]):
+class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict], GrugLmExample]):
     """
     A dataset that yields multiturn chat examples from a cache of processed chat data.
     """
@@ -398,27 +420,27 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
 
-        sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
+        sharding = _single_cpu_sharding()
         self.mask_user_turns = mask_user_turns
 
         @functools.partial(eqx.filter_jit)
-        def _create_lm_example(e: tuple[ProcessedChatDict, ProcessedChatDict]) -> LmExample:
+        def _create_lm_example(e: tuple[ProcessedChatDict, ProcessedChatDict]) -> GrugLmExample:
             example, seg_ids = e
-            tokens = hax.named(example["input_ids"], self.Pos)
+            tokens = example["input_ids"]
 
             if mask_user_turns:
                 mask = example["assistant_masks"]
                 mask = jnp.roll(mask, -1, axis=-1)
-                loss_weight = hax.named(mask, self.Pos)
+                loss_weight = mask.astype(jnp.float32)
             else:
                 loss_weight = None
 
-            seg_ids_named = hax.named(seg_ids["input_ids"], self.Pos)
+            seg_ids_raw = seg_ids["input_ids"]
 
-            out = LmExample.causal(
+            out = GrugLmExample.causal(
                 tokens=tokens,
                 loss_weight=loss_weight,
-                segment_ids=seg_ids_named,
+                segment_ids=seg_ids_raw,
                 block_cross_document_attention=block_cross_document_attention,
             )
             out = jax.lax.with_sharding_constraint(out, sharding)
@@ -434,7 +456,7 @@ def dataset_for_component(
     *,
     eos_id: int | None,
     block_cross_document_attention: bool,
-) -> AsyncDataset[LmExample]:
+) -> AsyncDataset[GrugLmExample]:
     pack = _effective_pack(component)
     fmt = component.format
     if isinstance(fmt, TextLmDatasetFormat):
@@ -517,6 +539,15 @@ def _split_into_trainval_sets(
 
 
 @dataclass(frozen=True)
+class BlockShuffleConfig:
+    """Configuration for hierarchical block shuffling."""
+
+    io_block_size: int
+    window_blocks: int
+    perm_type: Literal["feistel", "linear"] = "feistel"
+
+
+@dataclass(frozen=True)
 class LmDataConfig:
     """Unified LM data config built from components."""
 
@@ -536,9 +567,14 @@ class LmDataConfig:
 
     chat_template: str | None = None  # If set, use this template for chat datasets. Otherwise, use the tokenizer's.
 
-    shuffle: bool | int = False
-    """whether to shuffle the dataset. True means shuffle the whole dataset, False means don't shuffle.
-    If you want to shuffle in eras, set this to the era length"""
+    shuffle: bool | int | BlockShuffleConfig = False
+    """Shuffle policy.
+
+    - `True`: full permutation shuffle
+    - `False`: no shuffle
+    - positive `int`: era shuffle with this era length
+    - `BlockShuffleConfig`: hierarchical block shuffle
+    """
     permutation_type: Literal["feistel", "linear"] | None = None
     """
     Type of permutation to use for shuffle.
@@ -594,11 +630,11 @@ class LmDataConfig:
             ), "max_train_batches/num_validation_sequences and simulated data budget cannot all be set"
 
     @cached_property
-    def the_tokenizer(self) -> HfTokenizer:
+    def the_tokenizer(self) -> MarinTokenizer:
         if self.tokenizer == "passthrough":
             return PassthroughTokenizer(self.vocab_size)
         else:
-            return load_tokenizer(self.tokenizer)
+            return load_marin_tokenizer(self.tokenizer)
 
     def _has_nonzero_weight(self, name: str) -> bool:
         weights = self.train_weights
@@ -609,7 +645,7 @@ class LmDataConfig:
         return any(w.get(name, 0) > 0 for _, w in weights)
 
     def build_token_datasets(self, caches: Mapping[str, TreeCache[dict]], Pos: Axis, *, split: str):
-        datasets: dict[str, AsyncDataset[LmExample]] = {}
+        datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
         for name, component in self.components.items():
             if split == "train" and not self._has_nonzero_weight(name):
                 continue
@@ -643,6 +679,12 @@ class LmDataConfig:
 
         return datasets
 
+    @staticmethod
+    def _position_axis(seq_len: int) -> Axis:
+        if seq_len <= 0:
+            raise ValueError(f"seq_len must be positive, got {seq_len}")
+        return Axis("position", seq_len)
+
     def train_set(
         self,
         Pos: Axis,
@@ -663,7 +705,7 @@ class LmDataConfig:
             key=mix_key,
             block_size=self.mixture_block_size,
         )
-        return mixture
+        return NamedLmDataset(mixture, Pos)
 
     def train_sets(
         self,
@@ -671,7 +713,7 @@ class LmDataConfig:
         *,
         initial_batch_size: int | None = None,
         key: PRNGKeyArray,
-    ) -> Mapping[str, AsyncDataset[LmExample]]:
+    ) -> Mapping[str, AsyncDataset[GrugLmExample]]:
         doc_caches = self.build_caches("train")
         datasets = self.build_token_datasets(doc_caches, Pos, split="train")
 
@@ -686,21 +728,29 @@ class LmDataConfig:
         if key is None:
             key = jax.random.PRNGKey(0)
 
+        shuffle_cfg = self.shuffle
         perm_type = self.permutation_type
-        if perm_type is None and self.shuffle is not False:
+        if perm_type is None and shuffle_cfg is not False and not isinstance(shuffle_cfg, BlockShuffleConfig):
             logger.warning(
                 "Defaulting to linear permutation for shuffling. This will change to Feistel in the future."
             )
             perm_type = "linear"
 
         def shuffle_ds(ds, k):
-            if self.shuffle is True:
+            if isinstance(shuffle_cfg, BlockShuffleConfig):
+                ds = ds.block_shuffle(
+                    io_block_size=shuffle_cfg.io_block_size,
+                    window_blocks=shuffle_cfg.window_blocks,
+                    key=k,
+                    perm_type=shuffle_cfg.perm_type,
+                )
+            elif shuffle_cfg is True:
                 ds = ds.shuffle(k, perm_type=perm_type)
-            elif isinstance(self.shuffle, int) and self.shuffle > 0:
-                ds = ds.era_shuffle(self.shuffle, key=k, perm_type=perm_type)
+            elif isinstance(shuffle_cfg, int) and not isinstance(shuffle_cfg, bool) and shuffle_cfg > 0:
+                ds = ds.era_shuffle(shuffle_cfg, key=k, perm_type=perm_type)
             return ds
 
-        if self.shuffle:
+        if shuffle_cfg:
             key_iter = key_iterator(key)
             datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
 
@@ -712,7 +762,7 @@ class LmDataConfig:
             )
         if self.experiment_budget is not None and self.target_budget is not None:
             simulated_data_ratio = self.experiment_budget / self.target_budget
-            sliced_datasets: dict[str, AsyncDataset[LmExample]] = {}
+            sliced_datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
             for name, ds in datasets.items():
                 true_length_of_dataset = len(ds.as_sync_dataset())
                 simulated_length_of_dataset = int(true_length_of_dataset * simulated_data_ratio)
@@ -734,7 +784,21 @@ class LmDataConfig:
 
         return datasets
 
-    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
+    def train_grug_sets(
+        self,
+        *,
+        seq_len: int,
+        initial_batch_size: int | None = None,
+        key: PRNGKeyArray,
+    ) -> Mapping[str, AsyncDataset[GrugLmExample]]:
+        """Build train datasets that emit array-first [GrugLmExample][]."""
+        return self.train_sets(
+            self._position_axis(seq_len),
+            initial_batch_size=initial_batch_size,
+            key=key,
+        )
+
+    def _validation_datasets_unwrapped(self, Pos: Axis) -> dict[str, AsyncDataset[GrugLmExample]]:
         doc_caches = self.build_caches("validation")
         validation_datasets = self.build_token_datasets(doc_caches, Pos, split="validation")
 
@@ -749,6 +813,15 @@ class LmDataConfig:
                 validation_datasets[name] = val_ds
 
         return validation_datasets
+
+    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
+        validation_datasets = self._validation_datasets_unwrapped(Pos)
+        return {name: NamedLmDataset(ds, Pos) for name, ds in validation_datasets.items()}
+
+    def validation_grug_sets(self, *, seq_len: int) -> Mapping[str, AsyncDataset[GrugLmExample]]:
+        """Build validation datasets that emit array-first [GrugLmExample][]."""
+        Pos = self._position_axis(seq_len)
+        return self._validation_datasets_unwrapped(Pos)
 
     def build_caches(self, split: str) -> dict[str, TreeCache[dict]]:
         caches: dict[str, TreeCache[dict]] = {}
@@ -821,8 +894,24 @@ class LmDataConfig:
             tagged.append((ds, tags))
         return tagged
 
+    def tagged_eval_grug_sets(self, *, seq_len: int) -> list[tuple[AsyncDataset[GrugLmExample], list[str]]]:
+        """Build tagged validation datasets for array-first evaluators."""
+        eval_sets = self.validation_grug_sets(seq_len=seq_len)
+        tagged = []
+        for name, ds in eval_sets.items():
+            tags = (self.components[name].tags or []) + [name]
+            tagged.append((ds, tags))
+        return tagged
+
 
 LMMixtureDatasetConfig: TypeAlias = LmDataConfig
+
+
+def _get_token_key_for_component(component: DatasetComponentBase) -> str:
+    """Get the appropriate token key based on component format."""
+    if isinstance(component, DatasetComponent):
+        return component.format.token_data_key
+    return "input_ids"
 
 
 def count_corpus_sizes(
@@ -832,7 +921,7 @@ def count_corpus_sizes(
 ) -> dict:
     stats = {}
     train_caches = config.build_caches("train")
-    Pos = hax.Axis("position", seq_len)
+    Pos = Axis("position", seq_len)
 
     weights: dict[str, float]
     if isinstance(config.train_weights, list):
@@ -845,10 +934,12 @@ def count_corpus_sizes(
 
     for name, cache in train_caches.items():
         metric_prefix = f"{prefix}train/{name}/"
-        stats[f"{metric_prefix}total_tokens"] = cache.store.tree["input_ids"].data_size
-        stats[f"{metric_prefix}total_docs"] = cache.store.tree["input_ids"].num_rows
+        component = config.components[name]
+        token_key = _get_token_key_for_component(component)
+        stats[f"{metric_prefix}total_tokens"] = cache.store.tree[token_key].data_size
+        stats[f"{metric_prefix}total_docs"] = cache.store.tree[token_key].num_rows
         train_set = dataset_for_component(
-            config.components[name],
+            component,
             Pos,
             cache,
             eos_id=None,
@@ -856,7 +947,7 @@ def count_corpus_sizes(
         )
         train_seqs = len(train_set.as_sync_dataset())
         stats[f"{metric_prefix}total_seqs"] = train_seqs
-        padding_fraction = 1 - (cache.store.tree["input_ids"].data_size / (train_seqs * seq_len))
+        padding_fraction = 1 - (cache.store.tree[token_key].data_size / (train_seqs * seq_len))
         if padding_fraction < 0:
             stats[f"{metric_prefix}truncation_fraction"] = -padding_fraction
         else:
@@ -870,10 +961,12 @@ def count_corpus_sizes(
     validation_caches = config.build_caches("validation")
     for name, cache in validation_caches.items():
         metric_prefix = f"{prefix}validation/{name}/"
-        stats[f"{metric_prefix}total_tokens"] = cache.store.tree["input_ids"].data_size
-        stats[f"{metric_prefix}total_docs"] = cache.store.tree["input_ids"].num_rows
+        component = config.components[name]
+        token_key = _get_token_key_for_component(component)
+        stats[f"{metric_prefix}total_tokens"] = cache.store.tree[token_key].data_size
+        stats[f"{metric_prefix}total_docs"] = cache.store.tree[token_key].num_rows
         validation_set = dataset_for_component(
-            config.components[name],
+            component,
             Pos,
             cache,
             eos_id=None,

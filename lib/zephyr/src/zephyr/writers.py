@@ -1,43 +1,92 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Writers for common output formats."""
 
 from __future__ import annotations
 
+import queue
+import tempfile
+import threading
+import uuid
+from collections.abc import Callable, Iterable
+from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 import itertools
-import json
 import os
-from collections.abc import Iterable
-from contextlib import contextmanager
 from typing import Any
 
-import fsspec
+import pyarrow as pa
+from rigging.filesystem import open_url, url_to_fs
 import msgspec
 import logging
+from zephyr import counters
 
 logger = logging.getLogger(__name__)
+
+# 64 MB write blocks — controls S3 multipart upload part size.
+_WRITE_BLOCK_SIZE = 64 * 1024 * 1024
+
+# Default target buffer size for writer batching. Writers accumulate
+# micro-batches until accumulated nbytes reaches this threshold, then yield
+# a single concatenated table.
+DEFAULT_TARGET_BUFFER_BYTES = 64 * 1024 * 1024  # 64 MB
+
+# Number of records converted to PyArrow at a time. Small enough that
+# ``pa.Table.from_pylist`` is fast; large enough to amortise per-call overhead.
+_MICRO_BATCH_SIZE = 8
+
+# Fixed batch size for Levanter cache writes (2^14).
+_LEVANTER_BATCH_SIZE = 16384
+
+# Number of items per intermediate chunk for pickle and scatter writes.
+# Used by both _write_pickle_chunks (execution.py) and _write_parquet_scatter (shuffle.py).
+INTERMEDIATE_CHUNK_SIZE = 100_000
+
+
+def unique_temp_path(output_path: str) -> str:
+    """Return a unique temporary path derived from ``output_path``.
+
+    Appends ``.tmp.<uuid>`` to avoid collisions when multiple writers target the
+    same output path (e.g. during network-partition induced worker races).
+    """
+    return f"{output_path}.tmp.{uuid.uuid4().hex}"
 
 
 @contextmanager
 def atomic_rename(output_path: str) -> Iterable[str]:
-    """Context manager for atomic write-and-rename.
+    """Context manager for atomic write-and-rename with UUID collision avoidance.
 
-    Yields a temporary path to write to. On successful exit, atomically renames
-    the temp file to the final path. On failure, cleans up the temp file.
+    Yields a unique temporary path to write to. On successful exit, atomically
+    renames the temp file to the final path. On failure, cleans up the temp file.
+
+    For S3-compatible stores, writes to a local temp directory first, then uploads
+    via fs.put() to avoid server-side multipart copy which is unreliable on some
+    providers (e.g. Cloudflare R2).
 
     Example:
         with atomic_rename("output.jsonl.gz") as tmp_path:
             write_data(tmp_path)
         # File is now at output.jsonl.gz
     """
-    temp_path = f"{output_path}.tmp"
-    fs = fsspec.core.url_to_fs(output_path)[0]
+    if output_path.startswith("s3://"):
+        fs, resolved_path = url_to_fs(output_path)
+        with tempfile.TemporaryDirectory() as local_tmp_dir:
+            local_path = os.path.join(local_tmp_dir, "output")
+            yield local_path
+            if os.path.isdir(local_path):
+                # Trailing slash prevents fsspec from nesting under an extra
+                # "output/" level when the destination already exists.
+                fs.put(local_path + "/", resolved_path, recursive=True)
+            else:
+                fs.put(local_path, resolved_path)
+        return
+
+    temp_path = unique_temp_path(output_path)
+    fs = url_to_fs(output_path)[0]
 
     try:
         yield temp_path
-        # not so atomic if on a remote FS and recursive, but ...
         fs.mv(temp_path, output_path, recursive=True)
     except Exception:
         # Try to cleanup if something went wrong
@@ -54,13 +103,32 @@ def ensure_parent_dir(path: str) -> None:
     # Use os.path.dirname for local paths, otherwise use fsspec
     if "://" in path:
         output_dir = path.rsplit("/", 1)[0]
-        fs, dir_path = fsspec.core.url_to_fs(output_dir)
-        if not fs.exists(dir_path):
-            fs.mkdirs(dir_path, exist_ok=True)
+        fs, dir_path = url_to_fs(output_dir)
+        # mkdirs(exist_ok=True) handles the already-exists case internally;
+        # a separate fs.exists() check would add a redundant network round-trip.
+        fs.mkdirs(dir_path, exist_ok=True)
     else:
         output_dir = os.path.dirname(path)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
+
+
+@contextmanager
+def _open_write_stream(fs, resolved_path: str, output_path: str):
+    """Open a binary write stream with compression inferred from ``output_path``."""
+    if output_path.endswith(".zst"):
+        import zstandard as zstd
+
+        cctx = zstd.ZstdCompressor(level=2, threads=1)
+        with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE) as raw_f:
+            with cctx.stream_writer(raw_f) as f:
+                yield f
+    elif output_path.endswith(".gz"):
+        with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE, compression="gzip") as f:
+            yield f
+    else:
+        with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
+            yield f
 
 
 def write_jsonl_file(records: Iterable, output_path: str) -> dict:
@@ -71,159 +139,19 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
     encoder = msgspec.json.Encoder()
 
     with atomic_rename(output_path) as temp_path:
-        if output_path.endswith(".zst"):
-            import zstandard as zstd
-
-            cctx = zstd.ZstdCompressor(level=2, threads=1)
-            with fsspec.open(temp_path, "wb", block_size=64 * 1024 * 1024) as raw_f:
-                with cctx.stream_writer(raw_f) as f:
-                    for record in records:
-                        f.write(encoder.encode(record) + b"\n")
-                        count += 1
-        elif output_path.endswith(".gz"):
-            with fsspec.open(temp_path, "wb", compression="gzip", compresslevel=1, block_size=64 * 1024 * 1024) as f:
-                for record in records:
-                    f.write(encoder.encode(record) + b"\n")
-                    count += 1
-        else:
-            with fsspec.open(temp_path, "wb", block_size=64 * 1024 * 1024) as f:
-                for record in records:
-                    f.write(encoder.encode(record) + b"\n")
-                    count += 1
-
-    return {"path": output_path, "count": count}
-
-
-def infer_parquet_type(value):
-    """Recursively infer PyArrow type from a Python value."""
-    import pyarrow as pa
-
-    if isinstance(value, bool):
-        # Check bool before int since bool is a subclass of int
-        return pa.bool_()
-    elif isinstance(value, str):
-        return pa.string()
-    elif isinstance(value, int):
-        return pa.int64()
-    elif isinstance(value, float):
-        return pa.float64()
-    elif isinstance(value, dict):
-        nested_fields = []
-        for k, v in value.items():
-            nested_fields.append((k, infer_parquet_type(v)))
-        return pa.struct(nested_fields)
-    elif isinstance(value, list):
-        # Simple list of strings for now
-        return pa.list_(pa.string())
-    else:
-        return pa.string()
-
-
-def infer_parquet_schema(record: dict[str, Any] | Any):
-    """Infer PyArrow schema from a dictionary record."""
-    import pyarrow as pa
-
-    if is_dataclass(record):
-        record = asdict(record)
-
-    fields = []
-    for key, value in record.items():
-        fields.append((key, infer_parquet_type(value)))
-
-    return pa.schema(fields)
-
-
-def write_parquet_file(
-    records: Iterable, output_path: str, schema: object | None = None, batch_size: int = 1000
-) -> dict:
-    """Write records to a Parquet file.
-
-    Args:
-        records: Records to write (iterable of dicts)
-        output_path: Path to output file
-        schema: PyArrow schema (optional, will be inferred from first record if None)
-        batch_size: Number of records per batch (default: 1000)
-
-    Returns:
-        Dict with metadata: {"path": output_path, "count": num_records}
-    """
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
-    ensure_parent_dir(output_path)
-
-    record_iter = iter(records)
-
-    first_record = None
-    try:
-        first_record = next(record_iter)
-    except StopIteration:
-        # Empty dataset case - write directly without temp file
-        actual_schema = schema or pa.schema([])
-        table = pa.Table.from_pylist([], schema=actual_schema)
-        pq.write_table(table, output_path)
-        return {"path": output_path, "count": 0}
-
-    actual_schema = schema or infer_parquet_schema(first_record)
-    maybe_map_to_dict = asdict if is_dataclass(first_record) else (lambda x: x)
-
-    count = 1
-    with atomic_rename(output_path) as temp_path:
-        with pq.ParquetWriter(temp_path, actual_schema) as writer:
-            batch = [maybe_map_to_dict(first_record)]
-            for record in record_iter:
-                batch.append(maybe_map_to_dict(record))
+        fs, resolved_temp = url_to_fs(temp_path)
+        with _open_write_stream(fs, resolved_temp, output_path) as f:
+            for record in records:
+                f.write(encoder.encode(record) + b"\n")
                 count += 1
-                if len(batch) >= batch_size:
-                    table = pa.Table.from_pylist(batch, schema=actual_schema)
-                    writer.write_table(table)
-                    batch = []
-
-            if batch:
-                table = pa.Table.from_pylist(batch, schema=actual_schema)
-                writer.write_table(table)
+                counters.increment("zephyr/records_out")
 
     return {"path": output_path, "count": count}
 
 
-def write_vortex_file(records: Iterable, output_path: str) -> dict:
-    """Write records to a Vortex file.
-
-    Args:
-        records: Records to write (iterable of dicts)
-        output_path: Path to output .vortex file
-
-    Returns:
-        Dict with metadata: {"path": output_path, "count": num_records}
-    """
-    import pyarrow as pa
-    import vortex
-
-    ensure_parent_dir(output_path)
-
-    record_iter = iter(records)
-
-    try:
-        first_record = next(record_iter)
-    except StopIteration:
-        # Empty case - write empty vortex file
-        empty_table = pa.Table.from_pylist([])
-        with atomic_rename(output_path) as temp_path:
-            vortex.io.write(empty_table, temp_path)
-        return {"path": output_path, "count": 0}
-
-    # Accumulate all records and write
-    all_records = [first_record]
-    for record in record_iter:
-        all_records.append(record)
-
-    count = len(all_records)
-    table = pa.Table.from_pylist(all_records)
-
-    with atomic_rename(output_path) as temp_path:
-        vortex.io.write(table, temp_path)
-
-    return {"path": output_path, "count": count}
+def infer_arrow_schema(records: list[dict[str, Any]]) -> Any:
+    """Infer a PyArrow schema from a batch of record dicts"""
+    return pa.Table.from_pylist(records).schema
 
 
 def batchify(batch: Iterable, n: int = 1024) -> Iterable:
@@ -232,121 +160,274 @@ def batchify(batch: Iterable, n: int = 1024) -> Iterable:
         yield batch
 
 
-def _get_existing_row_count(tmp_path: str, exemplar: dict[str, Any]) -> int:
-    """Read the number of rows already written in a partial .tmp cache directory.
+def _accumulate_tables(
+    records: Iterable,
+    *,
+    schema: pa.Schema | None = None,
+    target_bytes: int = DEFAULT_TARGET_BUFFER_BYTES,
+) -> Iterable[pa.Table]:
+    """Yield PyArrow tables of approximately ``target_bytes`` each.
 
-    Returns 0 if the path doesn't exist, has no data, or can't be read.
+    Converts records to PyArrow in micro-batches of ``_MICRO_BATCH_SIZE``,
+    tracks byte size incrementally, and yields a single ``concat_tables``
+    result each time the threshold is reached.
     """
-    fs = fsspec.core.url_to_fs(tmp_path)[0]
-    if not fs.exists(tmp_path):
-        return 0
-    try:
-        from levanter.store.tree_store import TreeStore
+    chunks: list[pa.Table] = []
+    bytesize = 0
+    convert: Callable | None = None
 
-        store = TreeStore.open(exemplar, tmp_path, mode="r", cache_metadata=False)
-        return len(store)
-    except Exception:
-        logger.debug("Could not read existing rows from %s, starting fresh", tmp_path, exc_info=True)
-        return 0
+    for micro_batch in batchify(records, n=_MICRO_BATCH_SIZE):
+        if convert is None:
+            convert = asdict if is_dataclass(micro_batch[0]) else (lambda x: x)
+        dicts = [convert(r) for r in micro_batch]
+        if schema is None:
+            # NOTE: the _MICRO_BATCH_SIZE is fairly small, here we hope it's enough to infer "real" schema
+            schema = infer_arrow_schema(dicts)
+        table = pa.Table.from_pylist(dicts, schema=schema)
+        chunks.append(table)
+        bytesize += table.nbytes
+        if bytesize >= target_bytes:
+            yield pa.concat_tables(chunks)
+            chunks = []
+            bytesize = 0
+
+    if chunks:
+        yield pa.concat_tables(chunks)
 
 
-def _promote_tmp_cache(fs, tmp_path: str, output_path: str) -> None:
-    """Promote a temporary cache directory to the final output path.
+def write_parquet_file(
+    records: Iterable,
+    output_path: str,
+    *,
+    schema: pa.Schema | None = None,
+    target_buffer_bytes: int = DEFAULT_TARGET_BUFFER_BYTES,
+) -> dict:
+    """Write records to a Parquet file.
 
-    If a previous output exists, move it aside first and restore it on failure.
+    Args:
+        records: Records to write (iterable of dicts)
+        output_path: Path to output file
+        schema: PyArrow schema (optional, will be inferred from first batch if None)
+        target_buffer_bytes: Target buffer size in bytes for accumulating records
+            before flushing to the writer.
+
+    Returns:
+        Dict with metadata: {"path": output_path, "count": num_records}
     """
-    backup_path = None
-    if fs.exists(output_path):
-        backup_path = f"{output_path}.bak"
-        if fs.exists(backup_path):
-            fs.rm(backup_path, recursive=True)
-        fs.mv(output_path, backup_path, recursive=True)
+    import pyarrow.parquet as pq
 
-    try:
-        fs.mv(tmp_path, output_path, recursive=True)
-    except Exception:
-        if backup_path is not None and fs.exists(backup_path):
+    ensure_parent_dir(output_path)
+    count = 0
+
+    with atomic_rename(output_path) as temp_path:
+        writer: pq.ParquetWriter | None = None
+        try:
+            for table in _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes):
+                if writer is None:
+                    writer = pq.ParquetWriter(temp_path, table.schema)
+                writer.write_table(table)
+                count += len(table)
+                counters.increment("zephyr/records_out", len(table))
+        finally:
+            if writer is not None:
+                writer.close()
+
+        if writer is None:
+            actual_schema = schema or pa.schema([])
+            pq.write_table(pa.Table.from_pylist([], schema=actual_schema), temp_path)
+
+    return {"path": output_path, "count": count}
+
+
+def write_vortex_file(
+    records: Iterable,
+    output_path: str,
+    *,
+    schema: pa.Schema | None = None,
+    target_buffer_bytes: int = DEFAULT_TARGET_BUFFER_BYTES,
+) -> dict:
+    """Write records to a Vortex file using streaming writes.
+
+    Args:
+        records: Records to write (iterable of dicts)
+        output_path: Path to output .vortex file
+        schema: PyArrow schema (optional, will be inferred from first batch if None)
+        target_buffer_bytes: Target buffer size in bytes for accumulating records
+            before flushing to the writer.
+
+    Returns:
+        Dict with metadata: {"path": output_path, "count": num_records}
+    """
+    import vortex
+
+    ensure_parent_dir(output_path)
+
+    table_iter = _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes)
+    first_table = next(table_iter, None)
+
+    if first_table is None:
+        actual_schema = schema or pa.schema([])
+        empty_table = pa.Table.from_pylist([], schema=actual_schema)
+        with atomic_rename(output_path) as temp_path:
+            vortex.io.write(empty_table, temp_path)
+        return {"path": output_path, "count": 0}
+
+    actual_schema = first_table.schema
+    dtype = vortex.DType.from_arrow(actual_schema, non_nullable=True)
+    count = 0
+
+    def _array_batches():
+        nonlocal count
+        count += len(first_table)
+        counters.increment("zephyr/records_out", len(first_table))
+        yield vortex.Array.from_arrow(first_table)
+        for table in table_iter:
+            count += len(table)
+            counters.increment("zephyr/records_out", len(table))
+            yield vortex.Array.from_arrow(table)
+
+    array_iter = vortex.ArrayIterator.from_iter(dtype, _array_batches())
+
+    with atomic_rename(output_path) as temp_path:
+        vortex.io.write(array_iter, temp_path)
+
+    return {"path": output_path, "count": count}
+
+
+_SENTINEL = object()
+
+
+def _queue_iterable(q: queue.Queue) -> Iterable:
+    """Yield items from a bounded queue until the sentinel is received.
+
+    Designed for use with ``ThreadedBatchWriter``: the background thread passes
+    this iterable to a writer function so the writer can consume items naturally
+    as they arrive through the queue.
+    """
+    while True:
+        item = q.get()
+        if item is _SENTINEL:
+            return
+        yield item
+
+
+class ThreadedBatchWriter:
+    """Offloads batch writes to a background thread so the producer isn't blocked on IO.
+
+    Uses a bounded queue for backpressure: the producer blocks when the writer
+    falls behind, preventing unbounded memory growth.
+
+    The ``write_fn`` receives an iterable that yields submitted items from the
+    internal queue, allowing the writer to consume items as a natural stream
+    rather than via per-item callbacks.
+    """
+
+    def __init__(self, write_fn: Callable[[Iterable], None], maxsize: int = 128):
+        self._write_fn = write_fn
+        self._queue_maxsize = maxsize
+        self._queue: queue.Queue = queue.Queue(maxsize=maxsize)
+        self._error: BaseException | None = None
+        self._thread = threading.Thread(target=self._run, daemon=True, name="ZephyrWriter")
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            self._write_fn(_queue_iterable(self._queue))
+        except Exception as e:
+            self._error = e
+
+    def submit(self, batch: Any) -> None:
+        """Enqueue *batch* for writing. Raises if the background thread failed."""
+        # Poll so we detect background-thread failures even when the queue is
+        # full (a plain ``put`` would block forever if the consumer died).
+        while True:
+            if self._error is not None:
+                raise self._error
             try:
-                fs.mv(backup_path, output_path, recursive=True)
-            except Exception as restore_exc:
-                raise RuntimeError(
-                    f"Failed to promote {tmp_path} to {output_path} and failed to restore {backup_path}"
-                ) from restore_exc
-        raise
-    else:
-        if backup_path is not None and fs.exists(backup_path):
-            fs.rm(backup_path, recursive=True)
+                self._queue.put(batch, timeout=1.0)
+                return
+            except queue.Full:
+                logger.warning(f"ThreadedBatchWriter queue is full (size={self._queue_maxsize}), waiting ...")
+                continue
+
+    def close(self) -> None:
+        """Wait for all pending writes and propagate any error."""
+        self._queue.put(_SENTINEL)
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
+
+    def __enter__(self) -> ThreadedBatchWriter:
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        if exc_type is not None:
+            # Signal the thread to stop without blocking the caller.
+            try:
+                self._queue.put_nowait(_SENTINEL)
+            except queue.Full:
+                pass
+            self._thread.join(timeout=5.0)
+            return False
+        self.close()
+        return False
 
 
-def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, metadata: dict[str, Any]) -> dict:
-    """Write tokenized records to Levanter cache format."""
+def write_levanter_cache(
+    records: Iterable[dict[str, Any]],
+    output_path: str,
+    *,
+    metadata: dict[str, Any],
+    batch_size: int = _LEVANTER_BATCH_SIZE,
+) -> dict:
+    """Write tokenized records to Levanter cache format.
+
+    Args:
+        records: Tokenized records (iterable of dicts with array values)
+        output_path: Path to output cache directory
+        metadata: Metadata for the cache
+        batch_size: Number of records to accumulate before flushing to disk.
+    """
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+
     from levanter.store.cache import CacheMetadata, SerialCacheWriter
 
     ensure_parent_dir(output_path)
     record_iter = iter(records)
-    tmp_path = f"{output_path}.tmp"
-    fs = fsspec.core.url_to_fs(output_path)[0]
-
-    if fs.exists(output_path) and fs.exists(tmp_path):
-        logger.info("Removing stale temporary cache %s because %s already exists", tmp_path, output_path)
-        fs.rm(tmp_path, recursive=True)
 
     try:
         exemplar = next(record_iter)
     except StopIteration:
-        return {"path": output_path, "count": 0, "token_count": 0}
+        return {"path": output_path, "count": 0}
 
-    count = 1
-    token_count = len(exemplar.get("input_ids", []))
-    logger.info("write_levanter_cache: starting write to %s", output_path)
+    count = 0
+    logger.info("write_levanter_cache: starting write to %s (batch_size=%d)", output_path, batch_size)
 
-    existing_rows = 0 if fs.exists(output_path) else _get_existing_row_count(tmp_path, exemplar)
+    with atomic_rename(output_path) as tmp_path:
+        with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata)) as writer:
 
-    if existing_rows > 0:
-        logger.info("Resuming write to %s from %d existing rows", output_path, existing_rows)
-        # we already consumed 1 record (exemplar), skip existing_rows - 1 more
-        rows_to_skip = existing_rows - 1
-        skipped_rows = 0
-        for record in itertools.islice(record_iter, rows_to_skip):
-            skipped_rows += 1
-            count += 1
-            token_count += len(record.get("input_ids", []))
-        if skipped_rows != rows_to_skip:
-            raise ValueError(
-                f"Temporary cache at {tmp_path} has {existing_rows} rows, but input has only {skipped_rows + 1} rows"
-            )
-        mode = "a"
-        write_exemplar = False
-    else:
-        mode = "w"
-        write_exemplar = True
+            def _drain_batches(batches: Iterable) -> None:
+                for batch in batches:
+                    writer.write_batch(batch)
 
-    with SerialCacheWriter(
-        tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata), mode=mode
-    ) as writer:
-        if write_exemplar:
-            writer.write_batch([exemplar])
-        for batch in batchify(record_iter):
-            writer.write_batch(batch)
-            count += len(batch)
-            for record in batch:
-                token_count += len(record.get("input_ids", []))
-            if count % 1000 == 0:
-                logger.info("write_levanter_cache: %s — %d records, %d tokens so far", output_path, count, token_count)
+            with ThreadedBatchWriter(_drain_batches) as threaded:
+                threaded.submit([exemplar])
+                count += 1
+                counters.increment("zephyr/records_out")
+                for batch in batchify(record_iter, n=batch_size):
+                    threaded.submit(batch)
+                    count += len(batch)
+                    counters.increment("zephyr/records_out", len(batch))
+                    logger.info("write_levanter_cache: %s — %d records so far", output_path, count)
 
-    logger.info("write_levanter_cache: finished %s — %d records, %d tokens", output_path, count, token_count)
-
-    _promote_tmp_cache(fs, tmp_path, output_path)
+    logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
 
     # write success sentinel
-    with fsspec.open(f"{output_path}/.success", "w") as f:
+    with open_url(f"{output_path}/.success", "w") as f:
         f.write("")
 
-    # write stats for aggregation
-    with fsspec.open(f"{output_path}/.stats.json", "w") as f:
-        json.dump({"count": count, "token_count": token_count}, f)
-
-    return {"path": output_path, "count": count, "token_count": token_count}
+    return {"path": output_path, "count": count}
 
 
 def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
@@ -355,9 +436,11 @@ def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
 
     count = 0
     with atomic_rename(output_path) as temp_path:
-        with fsspec.open(temp_path, "wb", block_size=64 * 1024 * 1024) as f:
+        fs, resolved_temp = url_to_fs(temp_path)
+        with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
             for record in records:
                 f.write(record)
                 count += 1
+                counters.increment("zephyr/records_out")
 
     return {"path": output_path, "count": count}

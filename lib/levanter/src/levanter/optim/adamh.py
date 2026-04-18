@@ -1,7 +1,6 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 from dataclasses import dataclass
 from typing import NamedTuple, Optional, Any
 
@@ -12,9 +11,9 @@ import optax
 from optax import tree_utils as otu
 
 import haliax
-from haliax.nn import Linear
 
 from levanter.optim.config import OptimizerConfig
+from levanter.optim.util import is_linear_like_module, label_linear_like_module
 from levanter.utils.jax_utils import leaf_key_paths
 
 
@@ -88,12 +87,12 @@ class AdamHConfig(OptimizerConfig):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             if "Embedding" in path_str:
                 return "adam"
-            elif isinstance(param, Linear):
-                return dataclasses.replace(param, weight="adamh", bias="adam" if param.bias is not None else None)
+            elif is_linear_like_module(param):
+                return label_linear_like_module(param, weight_label="adamh", bias_label="adam")
             else:
                 return "adam"
 
-        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, Linear))
+        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=is_linear_like_module)
 
 
 class ScaleByAdamHState(NamedTuple):

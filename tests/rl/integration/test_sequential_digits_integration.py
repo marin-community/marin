@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """End-to-end integration test for sequential digits task."""
@@ -70,7 +70,7 @@ def test_train_worker_with_sequential_digits(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
+            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
             replay_buffer=ReplayBufferConfig(
                 capacity=2048,
                 alpha=3.0,

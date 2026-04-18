@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
+from marin.execution.remote import remote
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
@@ -60,9 +61,10 @@ def evaluate_lm_evaluation_harness(
         model_path (str): Path to the model.
         evals (list[EvalTaskConfig]): List of evaluations to run with LM Evaluation Harness.
     """
+    dispatch_resources = resource_config or ResourceConfig.with_tpu("v5p-8")
     return ExecutorStep(
         name=f"evaluation/lm_evaluation_harness/{model_name}",
-        fn=evaluate,
+        fn=remote(evaluate, resources=dispatch_resources, pip_dependency_groups=["eval", "vllm", "tpu"]),
         config=EvaluationConfig(
             evaluator="lm_evaluation_harness",
             model_name=model_name,
@@ -70,7 +72,7 @@ def evaluate_lm_evaluation_harness(
             evaluation_path=this_output_path(),
             evals=evals,
             max_eval_instances=max_eval_instances,
-            launch_with_ray=True,
+            launch_with_ray=False,
             discover_latest_checkpoint=discover_latest_checkpoint,
             engine_kwargs=engine_kwargs,
             resource_config=resource_config,
@@ -136,9 +138,10 @@ def evaluate_levanter_lm_evaluation_harness(
     Create an ExecutorStep to evaluate the model using Levanter LM Evaluation Harness.
     """
     logger.info(f"Running evals on the following tasks: {evals}")
+    dispatch_resources = resource_config or ResourceConfig.with_tpu("v5p-8")
     return ExecutorStep(
         name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}",
-        fn=evaluate,
+        fn=remote(evaluate, resources=dispatch_resources, pip_dependency_groups=["eval", "vllm", "tpu"]),
         config=EvaluationConfig(
             evaluator="levanter_lm_evaluation_harness",
             model_name=None,  # imputed automatically
@@ -371,6 +374,96 @@ def default_key_evals(
     ]
 
 
+def evaluate_harbor(
+    model_name: str,
+    model_path: str | None,
+    dataset: str,
+    version: str = "1.0",
+    max_eval_instances: int | None = None,
+    resource_config: ResourceConfig | None = None,
+    apply_chat_template: bool = False,
+    wandb_tags: list[str] | None = None,
+    generation_params: dict | None = None,
+    agent: str = "claude-code",
+    n_concurrent: int = 4,
+    env: str = "local",
+    agent_kwargs: dict | None = None,
+) -> ExecutorStep:
+    """
+    Evaluate on ANY Harbor dataset from the registry.
+
+    No custom adapters needed! Harbor's registry handles all datasets generically.
+
+    Available datasets: https://harborframework.com/registry
+    - aime@1.0: 60 math problems (AIME 2024, 2025-I, 2025-II)
+    - terminal-bench@2.0: 89 terminal tasks
+    - swebench-verified@1.0: 500 software engineering tasks
+    - And 40+ more benchmarks!
+
+    Args:
+        model_name: Model identifier
+        model_path: Path to model (can be None for API models like Claude)
+        dataset: Harbor dataset name (e.g., "aime", "terminal-bench", "swebench-verified")
+        version: Dataset version (e.g., "1.0", "2.0")
+        max_eval_instances: Limit number of tasks to run
+        resource_config: Resource configuration for Ray
+        apply_chat_template: Whether to apply chat template (not used by Harbor)
+        wandb_tags: Tags for W&B logging
+        generation_params: Generation parameters (not used by Harbor)
+        agent: Harbor agent type ("claude-code", "terminus-2", etc.)
+        n_concurrent: Number of parallel trials
+        env: Environment type ("local", "daytona", "e2b", "modal")
+
+    Returns:
+        ExecutorStep configured for Harbor evaluation
+
+    Examples:
+        # AIME evaluation
+        evaluate_harbor("claude-opus-4", None, "aime", "1.0")
+
+        # Terminal-Bench
+        evaluate_harbor("qwen2.5-7b", "gs://.../model", "terminal-bench", "2.0")
+
+        # SWE-bench Verified
+        evaluate_harbor("claude-opus-4", None, "swebench-verified", "1.0", max_eval_instances=10)
+    """
+
+    # Harbor config goes in engine_kwargs
+    engine_kwargs = {
+        "harbor_config": {
+            "dataset": dataset,
+            "version": version,
+            "agent": agent,
+            "n_concurrent": n_concurrent,
+            "env": env,
+            "agent_kwargs": agent_kwargs or {},
+        }
+    }
+
+    # When model_path is set, the evaluator launches a fray sub-job for vLLM serving
+    # with the correct resources. The outer executor step runs on CPU.
+    dispatch_resources = ResourceConfig.with_cpu() if model_path else resource_config
+    return ExecutorStep(
+        name=f"evaluation/harbor/{model_name}-{dataset}-{version}",
+        fn=remote(evaluate, resources=dispatch_resources, pip_dependency_groups=["harbor"]),
+        config=EvaluationConfig(
+            evaluator="harbor",
+            model_name=model_name,
+            model_path=model_path,
+            evaluation_path=this_output_path(),
+            evals=[],  # Harbor uses dataset directly, not evals
+            max_eval_instances=max_eval_instances,
+            launch_with_ray=False,
+            discover_latest_checkpoint=False,
+            engine_kwargs=engine_kwargs,
+            resource_config=resource_config,
+            apply_chat_template=apply_chat_template,
+            wandb_tags=wandb_tags,
+            generation_params=generation_params,
+        ),
+    )
+
+
 def evaluate_evalchemy(
     model_name: str,
     model_path: str,
@@ -407,9 +500,10 @@ def evaluate_evalchemy(
     task_names = "_".join(sorted(e.name for e in evals))
     seed = generation_params.get("seed") if generation_params else None
     seed_suffix = f"_seed{seed}" if seed is not None else ""
+    dispatch_resources = resource_config or ResourceConfig.with_tpu("v5p-8")
     return ExecutorStep(
         name=f"evaluation/evalchemy/{model_name}/{task_names}{seed_suffix}",
-        fn=evaluate,
+        fn=remote(evaluate, resources=dispatch_resources, pip_dependency_groups=["evalchemy", "vllm", "tpu"]),
         config=EvaluationConfig(
             evaluator="evalchemy",
             model_name=model_name,
@@ -417,7 +511,7 @@ def evaluate_evalchemy(
             evaluation_path=this_output_path(),
             evals=evals,
             max_eval_instances=max_eval_instances,
-            launch_with_ray=True,
+            launch_with_ray=False,
             discover_latest_checkpoint=discover_latest_checkpoint,
             engine_kwargs=engine_kwargs,
             generation_params=generation_params,

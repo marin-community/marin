@@ -1,15 +1,9 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
 Transform ar5iv HTML to markdown in two stages: clean_html and markdownify.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=600 --memory=512MB \
-    lib/marin/src/marin/transform/ar5iv/transform.py \
-    --input_path gs://bucket/ar5iv/ \
-    --output_path gs://bucket/ar5iv-processed/ \
-    --file_size 256
 """
 
 import datetime
@@ -263,25 +257,25 @@ class Config:
 @draccus.wrap()
 def main(cfg: Config) -> None:
     """Convert ar5iv HTML to markdown in two stages."""
-    with ZephyrContext(name="transform-ar5iv") as ctx:
-        # Stage 1: Clean HTML
-        print("Stage 1: Cleaning HTML...")
-        clean_pipeline = (
-            Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
-            .flat_map(load_jsonl)
-            .map(clean_ar5iv_record)
-            .write_jsonl(f"{cfg.output_path}/html_clean/{{shard:05d}}.jsonl.gz", skip_existing=True)
-        )
-        ctx.execute(clean_pipeline)
+    ctx = ZephyrContext(name="transform-ar5iv")
+    # Stage 1: Clean HTML
+    print("Stage 1: Cleaning HTML...")
+    clean_pipeline = (
+        Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
+        .flat_map(load_jsonl)
+        .map(clean_ar5iv_record)
+        .write_jsonl(f"{cfg.output_path}/html_clean/{{shard:05d}}.jsonl.gz", skip_existing=True)
+    )
+    ctx.execute(clean_pipeline)
 
-        # Stage 2: Convert to Markdown
-        print("Stage 2: Converting to markdown...")
-        markdown_pipeline = (
-            Dataset.from_files(f"{cfg.output_path}/html_clean/**/*.jsonl.gz")
-            .flat_map(load_jsonl)
-            .map(markdownify_ar5iv_record)
-            .write_jsonl(f"{cfg.output_path}/md/{{shard:05d}}.jsonl.gz", skip_existing=True)
-        )
-        ctx.execute(markdown_pipeline)
+    # Stage 2: Convert to Markdown
+    print("Stage 2: Converting to markdown...")
+    markdown_pipeline = (
+        Dataset.from_files(f"{cfg.output_path}/html_clean/**/*.jsonl.gz")
+        .flat_map(load_jsonl)
+        .map(markdownify_ar5iv_record)
+        .write_jsonl(f"{cfg.output_path}/md/{{shard:05d}}.jsonl.gz", skip_existing=True)
+    )
+    ctx.execute(markdown_pipeline)
 
     print("Transformation complete!")

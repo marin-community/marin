@@ -1,17 +1,13 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-import dataclasses
 import logging
-import os
-import tempfile
 import typing
 import warnings
 from contextlib import AbstractContextManager
 from typing import Any, Literal, Optional
 
-import draccus
 import jax
 from jaxtyping import Scalar
 
@@ -29,8 +25,17 @@ logger = logging.getLogger(__name__)
 
 _should_use_callback = True
 _global_tracker: Optional["Tracker"] = None
+_has_logged_missing_tracker = False
 
 LoggableValue: typing.TypeAlias = Scalar | jax.Array | str | dict | Histogram
+
+
+def _log_missing_tracker_once() -> None:
+    global _has_logged_missing_tracker
+    if _has_logged_missing_tracker:
+        return
+    _has_logged_missing_tracker = True
+    logger.info("No global tracker set; tracker logs are being dropped.")
 
 
 def log(metrics: typing.Mapping[str, LoggableValue | Any], *, step: Optional[int], commit: Optional[bool] = None):
@@ -45,7 +50,8 @@ def log(metrics: typing.Mapping[str, LoggableValue | Any], *, step: Optional[int
     """
     global _global_tracker
     if _global_tracker is None:
-        raise RuntimeError("No global tracker set")
+        _log_missing_tracker_once()
+        return
 
     if is_inside_jit():
         # we're inside a jit, so we need to log from the host
@@ -71,7 +77,7 @@ def log_metrics(
 def _do_jit_log(metrics, *, step=None):
     try:
         if _global_tracker is None:
-            warnings.warn("No global tracker set")
+            _log_missing_tracker_once()
         else:
             _global_tracker.log(metrics, step=step, commit=False)
     except Exception:
@@ -91,7 +97,7 @@ def jit_log(metrics, *, step=None):
     We strongly recommend using the first method, as it is much more performant.
     """
     if _global_tracker is None:
-        warnings.warn("No global tracker set")
+        _log_missing_tracker_once()
         return
     if not _should_use_callback:
         # we're not using the callback, so we assume we're inside a defer_tracker_for_jit context manager
@@ -154,7 +160,7 @@ def log_summary(metrics: dict[str, Any]):
     """
     global _global_tracker
     if _global_tracker is None:
-        warnings.warn("No global tracker set")
+        _log_missing_tracker_once()
         return
 
     _global_tracker.log_summary(metrics)
@@ -169,38 +175,26 @@ def log_hyperparameters(hparams: dict[str, Any]):
     """
     global _global_tracker
     if _global_tracker is None:
-        warnings.warn("No global tracker set")
+        _log_missing_tracker_once()
         return
 
     _global_tracker.log_hyperparameters(hparams)
 
 
-def log_configuration(hparams: Any, config_name: Optional[str] = None):
+def log_configuration(hparams: Any):
     """
-     Logs a configuration object to the global tracker. If the configuration object is a dataclass,
-        it is dumped to a yaml file and logged as an artifact.
+     Logs a configuration object to the global tracker as hyperparameters.
 
     Args:
          hparams: Hyperparameters to log
     """
     global _global_tracker
     if _global_tracker is None:
-        warnings.warn("No global tracker set")
+        _log_missing_tracker_once()
         return
 
     hparams_dict = hparams_to_dict(hparams)
     _global_tracker.log_hyperparameters(hparams_dict)
-
-    if dataclasses.is_dataclass(hparams):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = os.path.join(tmpdir, "config.yaml")
-            try:
-                with open(config_path, "w") as f:
-                    draccus.dump(hparams, f, encoding="utf-8")
-                    name = config_name or "config.yaml"
-                    _global_tracker.log_artifact(config_path, name=name, type="config")
-            except Exception:  # noqa
-                logger.warning("Failed to dump config to yaml. Skipping logging as artifact.", exc_info=True)
 
 
 def set_global_tracker(tracker: Tracker):

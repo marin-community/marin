@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Function thunk helper for executing cloudpickled callables.
@@ -18,16 +18,16 @@ Usage as library:
 """
 
 import logging
-import sys
 import tempfile
 from collections.abc import Callable, Sequence
 from typing import Any
 
 import click
 import cloudpickle
-import fsspec
+from rigging.filesystem import open_url
 
 from fray.v2.types import Entrypoint
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -67,12 +67,11 @@ def main(path: str):
     Args:
         path: fsspec-compatible path to the cloudpickled callable
     """
-    logging.basicConfig(
-        level=logging.INFO, format="%(filename)s:%(lineno)d %(asctime)s %(levelname)s %(message)s", stream=sys.stderr
-    )
+
+    configure_logging(level=logging.INFO)
     try:
         logger.info("Loading callable from %s", path)
-        with fsspec.open(path, "rb") as f:
+        with open_url(path, "rb") as f:
             payload = cloudpickle.load(f)
             if isinstance(payload, tuple) and len(payload) == 3:
                 callable_fn, args, kwargs = payload

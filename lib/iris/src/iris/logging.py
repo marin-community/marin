@@ -1,106 +1,31 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
-import sys
-from collections import deque
-from dataclasses import dataclass
-from threading import Lock
-from typing import Protocol
+"""Proto-dependent log level converters.
 
-LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-LOG_DATEFMT = "%Y%m%d %H%M%S"
+General-purpose logging utilities (configure_logging, LevelPrefixFormatter,
+LogRingBuffer, etc.) have moved to ``rigging.log_setup``.  This module
+retains only the functions that depend on ``iris.rpc.logging_pb2``.
+"""
 
 
-@dataclass(frozen=True)
-class BufferedLogRecord:
-    timestamp: float
-    level: str
-    logger_name: str
-    message: str
+def str_to_log_level(level_name: str) -> int:
+    """Convert a canonical level name (e.g. "INFO") to the LogLevel proto enum value.
 
+    Returns LOG_LEVEL_UNKNOWN (0) for unrecognized names.
+    Uses lazy import to avoid pulling in protobuf at module load time.
+    """
+    from iris.rpc import logging_pb2
 
-class LogBuffer(Protocol):
-    def append(self, record: BufferedLogRecord) -> None: ...
-    def query(self, *, prefix: str | None = None, limit: int = 200) -> list[BufferedLogRecord]: ...
-
-
-class LogRingBuffer:
-    """Thread-safe ring buffer that collects Python log records."""
-
-    def __init__(self, maxlen: int = 5000):
-        self._buffer: deque[BufferedLogRecord] = deque(maxlen=maxlen)
-        self._lock = Lock()
-
-    def append(self, record: BufferedLogRecord) -> None:
-        with self._lock:
-            self._buffer.append(record)
-
-    def query(self, *, prefix: str | None = None, limit: int = 200) -> list[BufferedLogRecord]:
-        with self._lock:
-            items = list(self._buffer)
-        if prefix:
-            items = [r for r in items if r.logger_name.startswith(prefix)]
-        return items[-limit:]
-
-
-class RingBufferHandler(logging.Handler):
-    def __init__(self, buffer: LogRingBuffer):
-        super().__init__()
-        self._buffer = buffer
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self._buffer.append(
-            BufferedLogRecord(
-                timestamp=record.created,
-                level=record.levelname,
-                logger_name=record.name,
-                message=self.format(record),
-            )
-        )
-
-
-_global_buffer = LogRingBuffer()
-
-
-def get_global_buffer() -> LogRingBuffer:
-    return _global_buffer
-
-
-_configured = False
-
-
-def configure_logging(level: int = logging.DEBUG) -> LogRingBuffer:
-    """Configure iris logging: stderr handler + ring buffer. Idempotent."""
-    global _configured
-    if _configured:
-        root = logging.getLogger()
-        root.setLevel(level)
-        for h in root.handlers:
-            if isinstance(h, logging.StreamHandler) and not isinstance(h, RingBufferHandler):
-                h.setLevel(level)
-        return _global_buffer
-
-    _configured = True
-    root = logging.getLogger()
-    root.setLevel(level)
-    root.handlers.clear()
-
-    formatter = logging.Formatter(fmt=LOG_FORMAT, datefmt=LOG_DATEFMT)
-
-    stderr_handler = logging.StreamHandler(sys.stderr)
-    stderr_handler.setLevel(level)
-    stderr_handler.setFormatter(formatter)
-    root.addHandler(stderr_handler)
-
-    ring_handler = RingBufferHandler(_global_buffer)
-    ring_handler.setLevel(logging.DEBUG)
-    ring_handler.setFormatter(formatter)
-    root.addHandler(ring_handler)
-
-    # Suppress noisy HTTP client logging (httpx and httpcore)
-    if level <= logging.INFO:
-        logging.getLogger("httpx").setLevel(logging.WARNING)
-        logging.getLogger("httpcore").setLevel(logging.WARNING)
-
-    return _global_buffer
+    _STR_TO_ENUM = {
+        "DEBUG": logging_pb2.LOG_LEVEL_DEBUG,
+        "INFO": logging_pb2.LOG_LEVEL_INFO,
+        "WARNING": logging_pb2.LOG_LEVEL_WARNING,
+        "ERROR": logging_pb2.LOG_LEVEL_ERROR,
+        "CRITICAL": logging_pb2.LOG_LEVEL_CRITICAL,
+    }
+    return (
+        _STR_TO_ENUM.get(level_name.upper(), logging_pb2.LOG_LEVEL_UNKNOWN)
+        if level_name
+        else logging_pb2.LOG_LEVEL_UNKNOWN
+    )

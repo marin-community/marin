@@ -1,15 +1,12 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
-from functools import partial
 from typing import Any, TypedDict
 
 import dupekit
-from zephyr import Dataset, ZephyrContext
-from zephyr.expr import col
+from zephyr import Dataset, ZephyrContext, counters, write_parquet_file, ShardInfo
 
 logger = logging.getLogger(__name__)
 
@@ -17,34 +14,23 @@ logger = logging.getLogger(__name__)
 # TODO (rav): can we have just a single id that's expected to be clean on the inputs?
 class RecordId(TypedDict):
     record_id: Any
-    record_id_norm: str
+    id_norm: str
+    file_idx: int
 
 
-# TODO: dataclasses are not writable to parquet ATM, is there something better than TypedDict that works out of the box?
 class CCNode(TypedDict):
-    node_id: RecordId
+    record_id: Any
+    id_norm: str
     adjacency_list: list[str]
     component_id: str
     changed: bool
-
-
-@dataclass
-class CCMessage: ...
-
-
-@dataclass
-class SelfMessage(CCMessage):
-    node: CCNode
-
-
-@dataclass
-class CompMessage(CCMessage):
-    component_id: str
+    file_idx: int
 
 
 class CCInput(TypedDict):
     bucket: str
     id: Any
+    file_idx: int
 
 
 def _internal_orderable_id(record_id: Any) -> str:
@@ -54,17 +40,12 @@ def _internal_orderable_id(record_id: Any) -> str:
     to string to make internal zephyr/ray/pyarrow serde happy.
     """
     if isinstance(record_id, int):
-        record_id_norm = str(record_id)
+        id_norm = str(record_id)
     elif isinstance(record_id, str):
-        record_id_norm = str(dupekit.hash_xxh3_128(record_id.encode()))
+        id_norm = str(dupekit.hash_xxh3_128(record_id.encode()))
     else:
         raise ValueError(f"Unsupported id type: {type(record_id)}")
-    return record_id_norm
-
-
-class BucketWithIds(TypedDict):
-    bucket: str
-    ids: list[RecordId]
+    return id_norm
 
 
 def connected_components(
@@ -85,139 +66,218 @@ def connected_components(
         max_iterations: Maximum number of iterations to run the connected components algorithm
         preserve_singletons: Whether to preserve single-node buckets in the output
     """
+
+    def _reduce_bucket_to_links(bucket: str, items: Iterator[CCInput]) -> Iterator[dict]:
+        """Generator reducer: dedup items by id_norm, yield star-topology links.
+
+        Streams through items tracking only the current minimum hub RecordId (O(1))
+        and a set of seen id_norms for dedup (O(n) strings). This is ~4x cheaper
+        than the previous dict[str, RecordId] approach which stored a full RecordId
+        per unique item. When a new minimum hub is found mid-stream, the old hub is
+        linked to the new hub so all prior nodes remain transitively connected.
+        """
+        seen: set[str] = set()
+        hub: RecordId | None = None
+        num_unique = 0
+
+        for item in items:
+            norm = _internal_orderable_id(item["id"])
+            if norm in seen:
+                continue
+            seen.add(norm)
+            num_unique += 1
+
+            record = RecordId(record_id=item["id"], id_norm=norm, file_idx=item["file_idx"])
+
+            if hub is None:
+                hub = record
+            elif norm < hub["id_norm"]:
+                yield _make_link(record, hub)
+                yield _make_link(hub, record)
+                counters.increment("cc/links", 2)
+                hub = record
+            else:
+                yield _make_link(hub, record)
+                yield _make_link(record, hub)
+                counters.increment("cc/links", 2)
+
+        if hub is None:
+            return
+
+        counters.increment("cc/buckets")
+        counters.increment("cc/bucket_nodes", num_unique)
+
+        if preserve_singletons and num_unique == 1:
+            yield _make_link(hub, hub)
+
+    def _dedup_combiner(bucket: str, items: Iterator[CCInput]) -> Iterator[CCInput]:
+        """Local pre-aggregation: deduplicate items by record_id within each scatter buffer."""
+        # TODO (rav): replace this with bloom filter? Reduce mem overhead.
+        seen: set[str] = set()
+        for item in items:
+            norm = _internal_orderable_id(item["id"])
+            if norm not in seen:
+                seen.add(norm)
+                yield item
+
+    # Determine reduce shard count. Default to ctx max_workers to avoid
+    # I/O amplification.
+    num_reduce_shards = ctx.max_workers
+
     curr_it = ctx.execute(
         ds
-        # Group nodes in buckets
+        # Group nodes in buckets, deduplicate, and emit pairwise links
         .group_by(
             lambda x: x["bucket"],
-            _reduce_buckets,
+            reducer=_reduce_bucket_to_links,
+            combiner=_dedup_combiner,
+            num_output_shards=num_reduce_shards,
         )
-        # Go from bucket -> links
-        .flat_map(partial(_gen_links_within_buckets, preserve_singletons=preserve_singletons))
         # Construct Node state, init with:
         #  * each node is its own component
         #  * adjacency list from links
         .group_by(
-            lambda x: x[0]["record_id_norm"],
-            _build_adjacency,
+            lambda x: x["source_id_norm"],
+            reducer=_build_adjacency,
+            num_output_shards=num_reduce_shards,
         ).write_parquet(f"{output_dir}/it_0/part-{{shard:05d}}.parquet"),
         verbose=True,
-    )
+    ).results
+
+    def _get_write_shard_and_count_fn(iteration: int):
+        # NOTE: this function exists to make the iteration number closure capture explicit
+        def _write_shard_and_count(nodes: Iterator[CCNode], shard_info: ShardInfo) -> Iterator[dict]:
+            num_changes = 0
+
+            def counting_iter():
+                nonlocal num_changes
+                for node in nodes:
+                    counters.increment("cc/iteration_nodes")
+                    if node["changed"]:
+                        num_changes += 1
+                        counters.increment("cc/changes")
+                    yield node
+
+            path = (
+                f"{output_dir}/it_{iteration}/part-{shard_info.shard_idx:05d}-of-{shard_info.total_shards:05d}.parquet"
+            )
+            result = write_parquet_file(counting_iter(), path)
+            yield {**result, "num_changes": num_changes}
+
+        return _write_shard_and_count
 
     converged = False
     for i in range(1, max_iterations + 1):  # type: ignore[bad-assignment]
         logger.info(f"Connected components iteration {i}...")
-        curr_it = ctx.execute(
+
+        shard_results = ctx.execute(
             Dataset.from_list(curr_it)
             .load_parquet()
             .map(lambda record: CCNode(**record))
             .flat_map(_emit_messages)
-            .group_by(key=lambda x: x[0], reducer=_reduce_node_step)
-            # NOTE: parquet built-in does not support list of int :/
-            .write_parquet(f"{output_dir}/it_{i}/part-{{shard:05d}}.parquet"),
+            .group_by(key=lambda x: x["key"], reducer=_reduce_node_step, num_output_shards=num_reduce_shards)
+            .map_shard(_get_write_shard_and_count_fn(i)),
             verbose=True,
-        )
+        ).results
 
-        # Check for convergence
-        changes = ctx.execute(
-            Dataset.from_list(curr_it).load_parquet(columns=["changed"]).filter(col("changed")).count(),
-        )
-
-        num_changes = changes[0]
+        curr_it = [r["path"] for r in shard_results]
+        num_changes = sum(r["num_changes"] for r in shard_results)
 
         if num_changes == 0:
             converged = True
             logger.info(f"Connected components converged after {i} iterations.")
             break
         else:
-            logger.info(f"Connected components iteration {i} found {num_changes} changes.")
+            logger.info(f"Connected components iteration {i} found {num_changes:,} changes.")
 
     return converged, curr_it
 
 
-def _reduce_buckets(bucket: str, items: Iterator[CCInput]) -> BucketWithIds:
-    # TODO: do we want/need this optimization?
-    # if len(all_items) <= 1:
-    #    return None  # No duplicates in this bucket
+def _make_link(source: RecordId, dest: RecordId) -> dict:
     return {
-        "bucket": bucket,
-        "ids": [RecordId(record_id=item["id"], record_id_norm=_internal_orderable_id(item["id"])) for item in items],
+        "source_record_id": source["record_id"],
+        "source_id_norm": source["id_norm"],
+        "source_file_idx": source["file_idx"],
+        "dest_id_norm": dest["id_norm"],
     }
 
 
-def _gen_links_within_buckets(record: CCInput, *, preserve_singletons: bool) -> Iterator[tuple[RecordId, RecordId]]:
-    ids = record.get("ids", [])
-
-    norm_ids = [i["record_id_norm"] for i in ids]
-    # TODO: this will materialize ids!
-    if len(norm_ids) != len(set(norm_ids)):
-        duplicate_ids = [x for x in norm_ids if norm_ids.count(x) > 1]
-        raise ValueError(f"Duplicate found in bucket during link_reduce: {duplicate_ids}")
-
-    if preserve_singletons and len(ids) == 1:
-        yield (ids[0], ids[0])
-        return
-
-    # Emit all pairwise links
-    for i in range(len(ids)):
-        for j in range(i + 1, len(ids)):
-            if ids[i] == ids[j]:
-                continue
-
-            yield (ids[i], ids[j])
-            yield (ids[j], ids[i])
-
-
-def _build_adjacency(node_id: RecordId, links: Iterator[tuple[RecordId, RecordId]]) -> CCNode:
-    all_links = list(links)
+def _build_adjacency(node_id: str, links: Iterator[dict]) -> CCNode:
+    first = next(links)
+    adj: set[str] = {first["dest_id_norm"]}
+    for link in links:
+        adj.add(link["dest_id_norm"])
+    counters.increment("cc/nodes")
     return CCNode(
-        node_id=all_links[0][0],
-        adjacency_list=list(set([link[1]["record_id_norm"] for link in all_links])),
-        # init with own id as component
+        record_id=first["source_record_id"],
+        id_norm=first["source_id_norm"],
+        adjacency_list=list(adj),
         component_id=node_id,
         changed=True,
+        file_idx=first["source_file_idx"],
     )
 
 
-def _emit_messages(node: CCNode) -> Iterator[tuple[str, CCMessage]]:
+def _emit_messages(node: CCNode) -> Iterator[dict]:
     """
     1. Emit the node structure to itself (to preserve graph topology).
     2. Emit the current component ID to all neighbors.
     """
-    # 1. Preserve structure
-    yield (node["node_id"]["record_id_norm"], SelfMessage(node=node))
+    # 1. Preserve structure (self-message carries all node fields)
+    yield {
+        "key": node["id_norm"],
+        "is_self": True,
+        "record_id": node["record_id"],
+        "id_norm": node["id_norm"],
+        "adjacency_list": node["adjacency_list"],
+        "component_id": node["component_id"],
+        "changed": node["changed"],
+        "file_idx": node["file_idx"],
+    }
 
     # 2. Propagate component ID to neighbors
-    # (Optimization: Only send if we changed recently, but strictly Hash-to-Min sends always)
-    msg = CompMessage(component_id=node["component_id"])
+    # Use [""] instead of [] so Arrow infers list<string> consistently
+    # with the self-message's adjacency_list, avoiding schema evolution.
     for neighbor_id in node["adjacency_list"]:
-        yield (neighbor_id, msg)
+        yield {
+            "key": neighbor_id,
+            "is_self": False,
+            "record_id": node["record_id"],
+            "id_norm": "",
+            "adjacency_list": [""],
+            "component_id": node["component_id"],
+            "changed": False,
+            "file_idx": 0,
+        }
 
 
-def _reduce_node_step(key: str, incoming: Iterator[tuple[str, CCMessage]]) -> CCNode:
+def _reduce_node_step(key: str, incoming: Iterator[dict]) -> CCNode:
     """
-    1. Recover NodeState.
-    2. Find minimum component ID from messages.
+    1. Recover NodeState from self-message.
+    2. Find minimum component ID from all messages.
     3. Update state if a smaller ID is found.
     """
     # NOTE: init the minimum component ID with the current key
     min_comp = key
     node_structure: CCNode | None = None
 
-    # Iterate through mixed stream of structure and messages
-    for _, msg in incoming:
-        if isinstance(msg, SelfMessage):
-            node_structure = msg.node
+    for msg in incoming:
+        if msg["is_self"]:
+            node_structure = CCNode(
+                record_id=msg["record_id"],
+                id_norm=msg["id_norm"],
+                adjacency_list=msg["adjacency_list"],
+                component_id=msg["component_id"],
+                changed=msg["changed"],
+                file_idx=msg["file_idx"],
+            )
             if node_structure["component_id"] < min_comp:
                 min_comp = node_structure["component_id"]
         else:
-            assert isinstance(msg, CompMessage)
-            remote_comp = msg.component_id
-            if remote_comp < min_comp:
-                min_comp = remote_comp
+            if msg["component_id"] < min_comp:
+                min_comp = msg["component_id"]
 
     if node_structure is None:
-        # Should technically not happen if graph is well-formed
         raise ValueError(f"Lost/corrupted structure for node {key}")
 
     if min_comp < node_structure["component_id"]:

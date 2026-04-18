@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Actor system for distributed RPC.
@@ -10,11 +10,9 @@ see iris.client.resolver.
 from iris.actor.client import ActorClient
 from iris.actor.pool import ActorPool, BroadcastFuture, CallResult
 from iris.actor.resolver import (
+    ACTOR_ENDPOINT_HEADER,
     FixedResolver,
-    GcsApi,
-    GcsResolver,
-    MockGcsApi,
-    RealGcsApi,
+    ProxyResolver,
     ResolvedEndpoint,
     ResolveResult,
     Resolver,
@@ -22,6 +20,7 @@ from iris.actor.resolver import (
 from iris.actor.server import ActorId, ActorServer
 
 __all__ = [
+    "ACTOR_ENDPOINT_HEADER",
     "ActorClient",
     "ActorId",
     "ActorPool",
@@ -29,10 +28,7 @@ __all__ = [
     "BroadcastFuture",
     "CallResult",
     "FixedResolver",
-    "GcsApi",
-    "GcsResolver",
-    "MockGcsApi",
-    "RealGcsApi",
+    "ProxyResolver",
     "ResolveResult",
     "ResolvedEndpoint",
     "Resolver",

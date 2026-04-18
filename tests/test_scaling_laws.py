@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Unit tests for the scaling_laws module.
@@ -41,21 +41,16 @@ def test_parse_isoflop_run_name():
 
 def test_candidate_configs_within_tolerance():
     """Test that generated configs achieve the target FLOP budget within tolerance."""
-    from experiments.isoflop_sweep import Marin2025Recipe
+    from experiments.scaling_law_sweeps.c_adamc import CAdamCHeuristic
 
-    recipe = Marin2025Recipe()
+    heuristic = CAdamCHeuristic()
     budget = 1e19
     flop_tolerance = 0.01
     seq_len = DEFAULT_SEQ_LEN
 
-    # Generate candidates using the new API
-    for model_config in recipe.build_model_configs(budget, seq_len):
-        flops_per_token = model_config.flops_per_token(recipe.vocab_size, seq_len)
-        tokens = budget / (3 * flops_per_token)
-        candidate = recipe.build_candidate_config(model_config, tokens, budget, seq_len)
-
-        if candidate is None:
-            continue
+    # Generate candidates using the public API
+    for candidate in heuristic.candidates_for_budget(budget, seq_len):
+        flops_per_token = candidate.model_config.flops_per_token(heuristic.vocab_size, seq_len)
 
         # Compute training FLOPs inline: 3 * flops_per_token * batch * steps * seq_len
         achieved = 3 * flops_per_token * candidate.batch_size * candidate.train_steps * seq_len
@@ -97,9 +92,9 @@ def test_candidates_for_budget_snapshot():
 
     This ensures reproducibility of the config generation algorithm.
     """
-    from experiments.isoflop_sweep import Marin2025Recipe
+    from experiments.scaling_law_sweeps.c_adamc import CAdamCHeuristic
 
-    recipe = Marin2025Recipe()
+    recipe = CAdamCHeuristic()
     result = list(recipe.candidates_for_budget(budget=3e18))
 
     assert len(result) == len(EXPECTED_ISOFLOP_CONFIGS_3E18)

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """TPU execution functions with gang scheduling and retry logic."""
@@ -176,6 +176,7 @@ def get_current_tpu_is_preempted() -> bool:
         response.raise_for_status()
         return response.text.lower() == "true"
     except Exception:
+        logger.exception("Error checking TPU preemption status; assuming not preempted")
         return False
 
 
@@ -279,14 +280,26 @@ def _cancel_tasks_and_wait(tasks: list[ray.ObjectRef]) -> None:
 
 
 def _start_fn_on_slice(
-    slice_actor: ActorHandle, remote_fn: RemoteFunction, mxla_env: dict | None
+    slice_actor: ActorHandle,
+    remote_fn: RemoteFunction,
+    mxla_env: dict | None,
+    runtime_env: dict | None = None,
 ) -> list[ray.ObjectRef]:
-    """Start the remote function on a slice of the TPU pod."""
-    runtime_env = remote_fn._runtime_env or {}
+    """Start the remote function on a slice of the TPU pod.
+
+    Args:
+        runtime_env: Explicit runtime environment dict. Passed separately because
+            remote_fn._runtime_env is lost when the RemoteFunction is serialized
+            across Ray workers (e.g. through run_on_pod_ray.remote()).
+    """
+    # Prefer explicit runtime_env; fall back to remote_fn._runtime_env for
+    # direct callers of run_on_pod* that attach env via ray.remote(runtime_env=...).
+    effective_env = runtime_env if runtime_env is not None else (remote_fn._runtime_env or {})
+    merged_env = dict(effective_env) if effective_env else {}
     if mxla_env is not None:
         mxla_env = dict(env_vars=mxla_env)
-        runtime_env = mergedeep.merge({}, runtime_env, mxla_env, strategy=mergedeep.Strategy.ADDITIVE)
-    futures_for_slice = ray.get(slice_actor.run_remote_fn.remote(remote_fn, runtime_env))
+        merged_env = mergedeep.merge({}, merged_env, mxla_env, strategy=mergedeep.Strategy.ADDITIVE)
+    futures_for_slice = ray.get(slice_actor.run_remote_fn.remote(remote_fn, merged_env))
     return futures_for_slice
 
 
@@ -656,8 +669,9 @@ def run_on_pod(
     tpu_type: str,
     *,
     num_slices: int | Sequence[int] = 1,
-    max_retries_preemption=10000,
+    max_retries_preemption=1000,
     max_retries_failure=10,
+    runtime_env: dict | None = None,
 ):
     """Repeatedly run a function on a TPU pod until it succeeds or max retries reached.
 
@@ -665,7 +679,9 @@ def run_on_pod(
     """
     _validate_num_slices(num_slices)
 
-    return ray.get(run_on_pod_ray.remote(remote_fn, tpu_type, num_slices, max_retries_preemption, max_retries_failure))
+    return ray.get(
+        run_on_pod_ray.remote(remote_fn, tpu_type, num_slices, max_retries_preemption, max_retries_failure, runtime_env)
+    )
 
 
 @ray.remote(num_cpus=0.1, max_retries=-1, retry_exceptions=False)
@@ -673,12 +689,18 @@ def run_on_pod_ray(
     remote_fn: RemoteFunction,
     tpu_type: str,
     num_slices: int | Sequence[int] = 1,
-    max_retries_preemption: int = 10000,
+    max_retries_preemption: int = 1000,
     max_retries_failure: int = 10,
+    runtime_env: dict | None = None,
 ):
     """Repeatedly run a function on a TPU pod until it succeeds or max retries reached.
 
     This is a Ray remote function callable from anywhere in the cluster.
+
+    Args:
+        runtime_env: Explicit runtime environment dict to propagate to TPU workers.
+            Passed as a plain dict because remote_fn._runtime_env is lost during
+            serialization when this function is invoked via .remote().
     """
     _validate_num_slices(num_slices)
 
@@ -731,7 +753,7 @@ def run_on_pod_ray(
                     else:
                         mxla_env = {}
 
-                    futures_for_slice = _start_fn_on_slice(tpu_slice.actor, remote_fn, mxla_env)
+                    futures_for_slice = _start_fn_on_slice(tpu_slice.actor, remote_fn, mxla_env, runtime_env)
                     logger.info(f"Futures for slice {tpu_slice.actor_info.slice_name}: {futures_for_slice}")
 
                     futures.extend(futures_for_slice)

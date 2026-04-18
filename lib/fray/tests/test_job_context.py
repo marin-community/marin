@@ -1,21 +1,18 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for execution contexts."""
 
 import pytest
-from fray.v1.job import RayContext, SimpleActor, SyncContext, ThreadContext, create_job_ctx
+from fray.v1.job import SimpleActor, SyncContext, ThreadContext, create_job_ctx
 from fray.v1.job.context import _apply_default_jax_platforms
 
 
-@pytest.fixture(params=["sync", "threadpool", "ray"])
-def job_context(request, ray_cluster):
+@pytest.fixture(params=["sync", "threadpool"])
+def job_context(request):
     if request.param == "sync":
         return SyncContext()
-    elif request.param == "threadpool":
-        return ThreadContext(max_workers=2)
-
-    return RayContext()
+    return ThreadContext(max_workers=2)
 
 
 def test_context_put_get(job_context):

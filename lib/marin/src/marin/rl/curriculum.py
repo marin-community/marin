@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -15,9 +15,8 @@ import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-import fsspec
 import numpy as np
-from fray.v1.job import get_default_job_ctx
+from rigging.filesystem import url_to_fs
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
 
@@ -125,13 +124,16 @@ class CurriculumConfig:
     """Maximum total sequence length (prompt + response) for training batches."""
 
     eval_frequency: int = 100
-    """How often to run full evaluation across all lessons (in rollout worker steps)."""
+    """How often to run full evaluation across all lessons (in completed trainer steps)."""
 
     eval_n_examples: int = 64
     """Number of examples to use for each lesson during full evaluation."""
 
-    micro_eval_frequency: int = 10
-    """How often to run micro-evaluation on the current lesson (in rollout worker steps)."""
+    micro_eval_frequency: int | None = 10
+    """How often to run micro-evaluation on the current lesson (in rollout worker steps).
+
+    Set to `None` to disable micro-evaluation explicitly.
+    """
 
     micro_eval_n_examples: int = 4
     """Number of examples for micro-evaluation (keep small for speed)."""
@@ -536,7 +538,7 @@ class Curriculum:
 
         logger.info("Saving curriculum checkpoint to %s/%s at step %d", checkpoint_dir, filename, self.current_step)
 
-        fs, _ = fsspec.core.url_to_fs(checkpoint_dir)
+        fs, _ = url_to_fs(checkpoint_dir)
         fs.makedirs(checkpoint_dir, exist_ok=True)
         checkpoint_path = os.path.join(checkpoint_dir, filename)
 
@@ -576,7 +578,7 @@ class Curriculum:
             checkpoint_dir: Directory containing the checkpoint.
             filename: Name of the checkpoint file to load (default pattern).
         """
-        fs, _ = fsspec.core.url_to_fs(checkpoint_dir)
+        fs, _ = url_to_fs(checkpoint_dir)
         checkpoint_path = os.path.join(checkpoint_dir, filename)
 
         if not fs.exists(checkpoint_path):
@@ -605,20 +607,3 @@ class Curriculum:
         self.current_step = checkpoint_data["current_step"]
 
         logger.info("Restored curriculum checkpoint from %s at step %d", checkpoint_path, self.current_step)
-
-
-def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: str | None = None):
-    job_ctx = get_default_job_ctx()
-    actor = job_ctx.create_actor(
-        Curriculum, config, name=config.actor_name, get_if_exists=True, preemptible=False, num_cpus=0
-    )
-
-    # Auto-restore from checkpoint if path provided
-    if checkpoint_path:
-        try:
-            future = actor.restore_checkpoint.remote(checkpoint_path)
-            job_ctx.get(future)
-        except Exception as e:
-            logger.warning(f"Failed to restore curriculum checkpoint from {checkpoint_path}: {e}, starting fresh")
-
-    return actor

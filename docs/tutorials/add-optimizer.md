@@ -1,8 +1,6 @@
-# How to Add a New Optimizer for Speedruns
+# How to Add a New Optimizer
 
 Marin builds on [Levanter](https://levanter.readthedocs.io/) for training code, meaning any training changes made in Levanter are automatically available in Marin. However, you can also add new optimizers **directly in Marin**- thanks to Levanter’s support for [Optax](https://optax.readthedocs.io/)-- without needing to merge a pull request upstream.
-
-This makes it easy to experiment with new optimizers (especially for speedruns) before integrating them into Levanter.
 
 In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs.io/en/latest/api/optimizers.html#optax.adamax) optimizer as an example.
 
@@ -101,7 +99,7 @@ In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs
     and use it in `TrainLmConfig`:
 
     ```python
-    from levanter.trainer import TrainLmConfig
+    from levanter.main.train_lm import TrainLmConfig
 
     trainer_config = TrainLmConfig(
         ...
@@ -129,38 +127,7 @@ In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs
 
     Then pass it into `default_train`, which will set the optimizer config correctly in the training step.
 
-### Sample usage in a speedrun script
-
-Here's an example of a speedrun configuration that leverages `AdamaxConfig`:
-
-```python
-speedrun_config = SpeedrunConfig(
-    author=Author(
-        name="...",
-        affiliation="...",
-        url="...",
-    ),
-    description="75M parameter model with Adamax optimizer",
-    model_config=llama_75m,
-    train_config=SimpleTrainConfig(
-        TpuPodConfig(tpu_type="v4-128"),
-        train_batch_size=512,
-        num_train_steps=6000,
-        learning_rate=3e-3,
-        weight_decay=0.0,
-        steps_per_eval=2000,
-        optimizer_config=AdamaxConfig(),
-    ),
-)
-
-speedrun_config.print_run_info()
-
-if __name__ == "__main__":
-    executor_main(steps=default_speedrun("llama_75m_adamax", speedrun_config))
-```
-
-🎉 That’s it! You can now define new optimizers in this manner and train models using them, all within Marin. For optimizers that are widely useful or “standard,” consider submitting a pull request to Levanter.
-See a full working example [in this GitHub link](https://github.com/marin-community/marin/blob/main/experiments/speedrun/llama_75m_adamax/llama_75m_adamax.py).
+That’s it! You can now define new optimizers in this manner and train models using them, all within Marin. For optimizers that are widely useful or “standard,” consider submitting a pull request to Levanter.
 
 Further reading:
 

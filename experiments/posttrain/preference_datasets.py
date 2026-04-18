@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -14,7 +14,7 @@ How to retrieve a preference dataset:
 
 Current datasets:
 1. HuggingFaceH4/ultrafeedback_binarized
-   (only train_prefs split included to avoid accidentally training on test_prefs)
+   (train_prefs and test_prefs splits included; keep them separate in downstream training)
 2. allenai/olmo-2-1124-7b-preference-mix
 """
 
@@ -22,7 +22,7 @@ import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
+from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -69,7 +69,7 @@ PREFERENCE_DATASET_NAME_TO_CONFIG = {
         wait_for_completion=True,
         metadata_columns=["prompt", "score_chosen", "score_rejected"],
         filetype="parquet",
-        splits=["train_prefs"],
+        splits=["train_prefs", "test_prefs"],
     ),
     "allenai/olmo-2-1124-7b-preference-mix": PreferenceDatasetConfig(
         hf_dataset_id="allenai/olmo-2-1124-7b-preference-mix",

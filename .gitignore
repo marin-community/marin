@@ -6,6 +6,9 @@ logs/
 # CPU profiles
 prof/
 
+# Downloaded build tools (zig, etc.)
+.tools/
+
 tests/snapshots/outputs
 tests/snapshots/diffs
 
@@ -209,9 +212,6 @@ archive/
 # wandb logs
 wandb
 
-# Generated leaderboard data
-marin/speedrun/static/data/runs.json
-
 # Ignore generated credentials from google-github-actions/auth
 gha-creds-*.json
 
@@ -228,6 +228,11 @@ scr/*
 
 /scratch
 
+.forge
 .claude
+!.claude/skills
+.agents/tmp/
+.codex
+.entire
 
-run_*.sh
+.worktrees

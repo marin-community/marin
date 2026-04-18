@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Device FLOPS data and utilities.
@@ -138,6 +138,16 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "fp8": 485e12,
         "int8": 485e12,
     },
+    # source: https://www.nvidia.com/en-us/data-center/l40s/
+    # nvidia publishes spec sheet with a 2x sparsity factor
+    "l40s": {
+        "fp32": 91.6e12,
+        "tf32": 366.4e12 / 2,
+        "fp16": 733e12 / 2,
+        "bf16": 733e12 / 2,
+        "fp8": 1466e12 / 2,
+        "int8": 1466e12 / 2,
+    },
     # NVIDIA GB10
     "gb10": {
         "bf16": 100e12,
@@ -245,10 +255,10 @@ def jax_device_kind_to_fray_device_type(kind: str) -> str:
         return tpu_gen.replace(" ", "")
 
     # NVIDIA GPUs - check more specific patterns first
-    if "h100" in kind and ("sxm" in kind or "hbm3" in kind):
-        return "h100"
-    if "h100" in kind:
+    if "h100" in kind and "pcie" in kind:
         return "h100-pcie"
+    if "h100" in kind:
+        return "h100"
     if "h200" in kind:
         return "h200"
     # Check for A100 variants - JAX returns "80gb" or "40gb" (with 'b')

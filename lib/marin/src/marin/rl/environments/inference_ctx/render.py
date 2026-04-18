@@ -1,11 +1,11 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 # https://github.com/thinking-machines-lab/tinker-cookbook/blob/989f84926245b227634797b8eac46abe232f9c24/tinker_cookbook/renderers.py#L459
 
 from typing import Literal, NotRequired, TypedDict
-from transformers import PreTrainedTokenizerBase as Tokenizer
+from levanter.tokenizers import MarinTokenizer
 import pydantic
 import json
 import re
@@ -139,7 +139,7 @@ class Message(TypedDict):
 
 
 class Renderer:
-    def __init__(self, tokenizer: Tokenizer):
+    def __init__(self, tokenizer: MarinTokenizer):
         self.tokenizer = tokenizer
 
     def get_stop_sequences(self) -> list[str] | list[int]:
@@ -163,7 +163,9 @@ def _tool_call_payload(tool_call: ToolCall) -> dict[str, object]:
     }
 
 
-def parse_response_for_stop_token(response: list[int], tokenizer: Tokenizer, stop_token: int) -> tuple[Message, bool]:
+def parse_response_for_stop_token(
+    response: list[int], tokenizer: MarinTokenizer, stop_token: int
+) -> tuple[Message, bool]:
     """Parse response for a single stop token.
 
     We expect a properly rendered response to have exactly one stop token; but it may have zero if e.g. the model
@@ -255,7 +257,7 @@ class Qwen3Renderer(Renderer):
         I can help you with...<|im_end|>
     """
 
-    def __init__(self, tokenizer: Tokenizer, strip_thinking_from_history: bool = True):
+    def __init__(self, tokenizer: MarinTokenizer, strip_thinking_from_history: bool = True):
         """
         Args:
             tokenizer: The tokenizer to use for encoding.

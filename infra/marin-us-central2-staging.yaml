@@ -69,6 +69,9 @@ docker:
 
 
 initialization_commands:
+  # https://github.com/marin-community/marin/issues/3066
+  - sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
+  - sudo sysctl -w net.ipv4.tcp_tw_reuse=1
   - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
   - yes | gcloud auth configure-docker us-central2-docker.pkg.dev
   # always run this because ray doesn't run with sudo
@@ -130,8 +133,8 @@ available_node_types:
             # Set Source Image =>> Ubuntu 22.04 Base VM
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
-    max_workers: 1024
-    min_workers: 4
+    max_workers: 4
+    min_workers: 0
     node_config:
       acceleratorType: v4-8
       runtimeVersion: tpu-ubuntu2204-base
@@ -142,7 +145,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_16:
-    max_workers: 1024
+    max_workers: 2
     min_workers: 0
     node_config:
       acceleratorType: v4-16
@@ -154,7 +157,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_32:
-    max_workers: 1024
+    max_workers: 2
     min_workers: 0
     node_config:
       acceleratorType: v4-32
@@ -166,7 +169,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_64:
-    max_workers: 1024
+    max_workers: 2
     min_workers: 0
     node_config:
       acceleratorType: v4-64
@@ -178,7 +181,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_128:
-    max_workers: 1024
+    max_workers: 1
     min_workers: 0
     node_config:
       acceleratorType: v4-128
@@ -190,7 +193,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_256:
-    max_workers: 1024
+    max_workers: 1
     min_workers: 0
     node_config:
       acceleratorType: v4-256
@@ -202,7 +205,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_512:
-    max_workers: 1024
+    max_workers: 1
     min_workers: 0
     node_config:
       acceleratorType: v4-512
@@ -214,7 +217,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_1024:
-    max_workers: 1024
+    max_workers: 1
     min_workers: 0
     node_config:
       acceleratorType: v4-1024
@@ -226,7 +229,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_2048:
-    max_workers: 1024
+    max_workers: 1
     min_workers: 0
     node_config:
       acceleratorType: v4-2048
@@ -238,7 +241,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v4_4096:
-    max_workers: 1024
+    max_workers: 1
     min_workers: 0
     node_config:
       acceleratorType: v4-4096

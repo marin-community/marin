@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import fsspec
+from rigging.filesystem import filesystem as marin_filesystem
 
 from .types import RolloutBatch
 
@@ -163,7 +164,7 @@ class FileRolloutReader(RolloutReader):
 
         # Create filesystem instance
         storage_options = fsspec.utils.infer_storage_options(path)  # type: ignore[attr-defined]
-        self.fs = fsspec.filesystem(storage_options["protocol"] or "file")
+        self.fs = marin_filesystem(storage_options["protocol"] or "file")
 
         # Track already-read files to avoid re-reading
         self._read_files: set[str] = set()
@@ -257,7 +258,7 @@ class FileRolloutWriter(RolloutWriter):
 
         # Create filesystem instance
         storage_options = fsspec.utils.infer_storage_options(path)  # type: ignore[attr-defined]
-        self.fs = fsspec.filesystem(storage_options["protocol"] or "file")
+        self.fs = marin_filesystem(storage_options["protocol"] or "file")
 
         # Create output directory structure
         self._ensure_directories()

@@ -1,0 +1,36 @@
+# Iris local configuration with static token authentication
+# Usage: iris --cluster=local-auth-static cluster start --local
+# Test token: "dev-token-123" (username: "developer")
+
+platform:
+  local:
+
+controller:
+  local:
+    port: 0  # auto-assign
+
+worker_provider: {}
+
+auth:
+  static:
+    tokens:
+      dev-token-123: developer
+      admin-token-456: admin
+  admin_users:
+    - admin
+
+scale_groups:
+  cpu:
+    num_vms: 1
+    resources:
+      cpu: 16
+      ram: 32GB
+      disk: 100GB
+      device_type: cpu
+      device_variant: cpu
+      capacity_type: on-demand
+    buffer_slices: 1
+    max_slices: 4
+    slice_template:
+      num_vms: 1
+      local:

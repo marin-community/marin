@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -9,17 +9,36 @@ including both local Levanter checkpoints and HuggingFace repositories.
 """
 
 import logging
+import os
 
 import equinox as eqx
 import haliax as hax
 import jax
 from jax.sharding import Mesh
 from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
+from levanter.compat.hf_checkpoints import (
+    HFCheckpointConverter,
+    PYTORCH_WEIGHTS_INDEX_NAME,
+    RepoRef,
+    SAFE_TENSORS_INDEX_NAME,
+)
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
+from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
+
+
+HF_CHECKPOINT_MARKERS = (
+    "config.json",
+    SAFE_TENSORS_INDEX_NAME,
+    PYTORCH_WEIGHTS_INDEX_NAME,
+    "tokenizer_config.json",
+)
+
+
+def _has_hf_checkpoint_files(checkpoint: str) -> bool:
+    return any(fsspec_exists(os.path.join(checkpoint, marker)) for marker in HF_CHECKPOINT_MARKERS)
 
 
 def is_hf_checkpoint(checkpoint: str) -> bool:
@@ -35,9 +54,11 @@ def is_hf_checkpoint(checkpoint: str) -> bool:
     # hf:// URLs are HuggingFace checkpoints (fsspec streaming protocol)
     if checkpoint.startswith("hf://"):
         return True
-    return not (
-        "://" in checkpoint or checkpoint.startswith("/") or checkpoint.startswith("./") or checkpoint.startswith("../")
-    )
+
+    if "://" in checkpoint or checkpoint.startswith("/") or checkpoint.startswith("./") or checkpoint.startswith("../"):
+        return _has_hf_checkpoint_files(checkpoint)
+
+    return True
 
 
 def load_model_from_checkpoint(

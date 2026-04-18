@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import numpy as np
@@ -246,3 +246,155 @@ def test_wsds_schedule_with_cycle_points():
     assert np.isclose(sched_fn(701), 1e-3)
     assert np.isclose(sched_fn(969), 1e-3)
     assert sched_fn(971) < 1e-3
+
+
+def test_polynomial_schedule_quadratic():
+    """Quadratic decay: (1-t)^2 shape via PolynomialLrSchedule."""
+    from levanter.optim.config import PolynomialLrSchedule
+
+    optimizer = AdamConfig(
+        learning_rate=1e-3,
+        weight_decay=0.0,
+        warmup=0.1,
+        min_lr_ratio=0.0,
+        lr_schedule=PolynomialLrSchedule(power=2.0),
+    )
+
+    sched_fn = optimizer.lr_scheduler(1000)
+
+    # Warmup phase
+    assert np.isclose(sched_fn(0), 0.0)
+    assert np.isclose(sched_fn(100), 1e-3)
+
+    # Decay phase: at midpoint (t=450 into 900-step decay), LR = 1e-3 * (1 - 450/900)^2 = 0.25e-3
+    assert np.isclose(sched_fn(550), 0.25e-3, atol=1e-6)
+
+    # End of decay
+    assert np.isclose(sched_fn(999), 0.0, atol=1e-5)
+
+
+def test_polynomial_schedule_linear():
+    """Power=1 should match linear decay."""
+    from levanter.optim.config import PolynomialLrSchedule
+
+    optimizer = AdamConfig(
+        learning_rate=1e-3,
+        weight_decay=0.0,
+        warmup=0.0,
+        min_lr_ratio=0.0,
+        lr_schedule=PolynomialLrSchedule(power=1.0),
+    )
+
+    sched_fn = optimizer.lr_scheduler(100)
+
+    assert np.isclose(sched_fn(0), 1e-3)
+    assert np.isclose(sched_fn(50), 0.5e-3, atol=1e-6)
+    assert np.isclose(sched_fn(100), 0.0, atol=1e-6)
+
+
+def test_polynomial_schedule_sqrt():
+    """Power=0.5 (sqrt decay) holds LR higher early, drops faster at end."""
+    from levanter.optim.config import PolynomialLrSchedule
+
+    optimizer = AdamConfig(
+        learning_rate=1e-3,
+        weight_decay=0.0,
+        warmup=0.0,
+        min_lr_ratio=0.0,
+        lr_schedule=PolynomialLrSchedule(power=0.5),
+    )
+
+    sched_fn = optimizer.lr_scheduler(100)
+
+    # At midpoint: (1-0.5)^0.5 ≈ 0.707
+    assert np.isclose(sched_fn(50), 1e-3 * 0.5**0.5, atol=1e-5)
+    assert np.isclose(sched_fn(100), 0.0, atol=1e-6)
+
+
+def test_polynomial_schedule_with_min_lr():
+    """Polynomial decay with a floor (min_lr_ratio > 0)."""
+    from levanter.optim.config import PolynomialLrSchedule
+
+    optimizer = AdamConfig(
+        learning_rate=1e-3,
+        weight_decay=0.0,
+        warmup=0.0,
+        min_lr_ratio=0.05,
+        lr_schedule=PolynomialLrSchedule(power=2.0),
+    )
+
+    sched_fn = optimizer.lr_scheduler(100)
+
+    # End of decay should reach min_lr = 0.05 * 1e-3
+    assert np.isclose(sched_fn(100), 0.05e-3, atol=1e-6)
+
+
+def test_inv_sqrt_decay_lr_schedule():
+    """InvSqrtDecayLrSchedule: lr / sqrt(1 + c * t / T)."""
+    from levanter.optim.config import InvSqrtDecayLrSchedule
+
+    optimizer = AdamConfig(
+        learning_rate=1e-3,
+        weight_decay=0.0,
+        warmup=0.0,
+        min_lr_ratio=0.0,
+        lr_schedule=InvSqrtDecayLrSchedule(decay_constant=28.6),
+    )
+
+    sched_fn = optimizer.lr_scheduler(1000)
+
+    # At t=0, lr = 1e-3 / sqrt(1) = 1e-3
+    assert np.isclose(sched_fn(0), 1e-3)
+
+    # Monotonically decreasing
+    assert sched_fn(100) < sched_fn(0)
+    assert sched_fn(500) < sched_fn(100)
+    assert sched_fn(999) < sched_fn(500)
+
+    # At t=T, lr = 1e-3 / sqrt(1 + 28.6) ≈ 1e-3 / 5.44 ≈ 0.000184
+    expected_end = 1e-3 / np.sqrt(1 + 28.6)
+    assert np.isclose(sched_fn(1000), expected_end, atol=1e-6)
+
+    # Never reaches zero
+    assert sched_fn(1000) > 0
+
+
+def test_inv_sqrt_decay_lr_schedule_honors_min_lr():
+    """InvSqrtDecayLrSchedule should clamp to min_lr when decay_constant is large."""
+    from levanter.optim.config import InvSqrtDecayLrSchedule
+
+    optimizer = AdamConfig(
+        learning_rate=1e-3,
+        weight_decay=0.0,
+        warmup=0.0,
+        min_lr_ratio=0.1,
+        lr_schedule=InvSqrtDecayLrSchedule(decay_constant=200.0),
+    )
+
+    sched_fn = optimizer.lr_scheduler(1000)
+    min_lr = 1e-3 * 0.1  # 1e-4
+
+    # Without clamping, lr at t=T would be 1e-3 / sqrt(1+200) ≈ 7.06e-5 < min_lr
+    unclamped = 1e-3 / np.sqrt(1 + 200.0)
+    assert unclamped < min_lr, "test precondition: unclamped value should be below min_lr"
+
+    # With clamping, schedule should never go below min_lr
+    assert np.isclose(sched_fn(1000), min_lr, atol=1e-7)
+    assert sched_fn(500) >= min_lr - 1e-10
+
+
+def test_warmup_longer_than_run_does_not_jump():
+    optimizer = AdamConfig(
+        learning_rate=3e-3,
+        weight_decay=0.0,
+        warmup=1000,
+        decay=0.2,
+        min_lr_ratio=0.1,
+        lr_schedule="cosine",
+    )
+
+    sched_fn = optimizer.lr_scheduler(200)
+
+    assert np.isclose(sched_fn(160), 0.0024, atol=1e-6)
+    assert sched_fn(161) > sched_fn(160)
+    assert np.isclose(sched_fn(200), 3e-3, atol=1e-6)

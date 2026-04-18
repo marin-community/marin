@@ -1,4 +1,4 @@
-// Copyright 2025 The Marin Authors
+// Copyright The Marin Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -36,6 +36,9 @@ message LocalPlatformConfig {}
 
 message CoreweavePlatformConfig {
   string region = 1;
+  string namespace = 2;         // default: "iris"
+  string kubeconfig_path = 3;   // optional, uses in-cluster auth if empty
+  string object_storage_endpoint = 4;  // S3 base endpoint, NOT bucket-specific (e.g. https://cwobject.com)
 }
 
 message PlatformConfig {
@@ -67,6 +70,7 @@ message GcpVmConfig {
   string zone = 1;
   string machine_type = 2;      // Default: "n2-standard-4"
   int32 boot_disk_size_gb = 3;  // Default: 50
+  string service_account = 4;
 }
 
 message ManualVmConfig {
@@ -90,16 +94,27 @@ message VmConfig {
 // ============================================================================
 
 message GcpSliceConfig {
+  enum GcpSliceMode {
+    GCP_SLICE_MODE_TPU = 0;
+    GCP_SLICE_MODE_VM = 1;
+  }
+
+  GcpSliceMode mode = 6;
   string zone = 1;
   string runtime_version = 2;
   reserved 3;  // was: preemptible (moved to SliceConfig)
   string topology = 4;
   reserved 5;  // was: zones (each slice/scaling group operates in a single zone)
+  string machine_type = 7;      // Required for mode=GCP_SLICE_MODE_VM
+  reserved 8;  // was: boot_disk_size_gb (moved to SliceConfig.disk_size_gb)
+  string service_account = 9;
 }
 
 message CoreweaveSliceConfig {
   string region = 1;
-  string instance_type = 2;
+  string instance_type = 2;     // e.g. "gd-8xh100ib-i128"
+  string gpu_class = 4;         // e.g. "H100"
+  bool infiniband = 5;          // request rdma/ib: 1
 }
 
 message ManualSliceConfig {
@@ -112,11 +127,14 @@ message LocalSliceConfig {}
 
 message SliceConfig {
   string name_prefix = 1;
-  int32 slice_size = 2;
+  int32 num_vms = 2;
   AcceleratorType accelerator_type = 3;
   string accelerator_variant = 4;
   map<string, string> labels = 5;
-  bool preemptible = 6;
+  reserved 6;  // was: bool preemptible (replaced by capacity_type)
+  int32 gpu_count = 7;          // number of GPUs per VM (populated from ScaleGroupResources)
+  int32 disk_size_gb = 8;       // boot disk size in GB (populated from ScaleGroupResources)
+  CapacityType capacity_type = 14;  // populated from ScaleGroupResources
   oneof platform {
     GcpSliceConfig gcp = 10;
     CoreweaveSliceConfig coreweave = 11;
@@ -137,17 +155,41 @@ enum AcceleratorType {
   ACCELERATOR_TYPE_TPU = 3;
 }
 
+// Capacity type for TPU provisioning — controls which GCP API is used.
+enum CapacityType {
+  CAPACITY_TYPE_UNSPECIFIED = 0;
+  CAPACITY_TYPE_PREEMPTIBLE = 1;  // gcloud compute tpus tpu-vm create --preemptible
+  CAPACITY_TYPE_ON_DEMAND = 2;    // gcloud compute tpus tpu-vm create (no flag)
+  CAPACITY_TYPE_RESERVED = 3;     // gcloud alpha compute tpus queued-resources create --reserved
+}
+
 // Reserved: VmType enum was removed (dispatch now via SliceConfig.WhichOneof("platform"))
 // enum VmType { ... } used field numbers 0-4
 // Callers should use slice_template.WhichOneof("platform") instead.
 
-// Resources available per slice in a scale group.
+// Resources available per VM in a scale group.
+// This is the single declaration of what each worker provides. The config
+// loader derives SliceConfig and WorkerConfig fields from these values.
 message ScaleGroupResources {
-  int32 cpu = 1;
+  int32 cpu_millicores = 1;  // CPU in millicores (1000 = 1 core)
   int64 memory_bytes = 2;
   int64 disk_bytes = 3;
-  int32 gpu_count = 4;
-  int32 tpu_count = 5;
+  reserved 4;  // was: gpu_count (replaced by device_count)
+  reserved 5;  // was: tpu_count (replaced by device_count)
+
+  // Device configuration — canonical source for accelerator type/variant
+  AcceleratorType device_type = 10;
+  string device_variant = 11;       // e.g. "v5litepod-16", "H100"
+  int32 device_count = 12;          // GPUs or TPU chips per VM
+
+  reserved 20;  // was: bool preemptible (replaced by capacity_type)
+
+  // Capacity type — controls which provisioning API is used
+  CapacityType capacity_type = 21;
+}
+
+message WorkerSettings {
+  map<string, string> attributes = 1;
 }
 
 // Configuration for a scale group
@@ -156,17 +198,18 @@ message ScaleGroupConfig {
   reserved 2;  // was: vm_type (removed, use slice_template.WhichOneof)
 
   // Scaling policy
-  int32 min_slices = 3 [features.field_presence = EXPLICIT];
+  // Extra slices to keep warm beyond current demand.
+  // Target = min(demand + buffer_slices, max_slices).
+  int32 buffer_slices = 3 [features.field_presence = EXPLICIT];
   int32 max_slices = 4 [features.field_presence = EXPLICIT];
 
-  // Device configuration (kept on ScaleGroupConfig for demand matching)
-  AcceleratorType accelerator_type = 9;
-  string accelerator_variant = 10;
+  reserved 9;   // was: accelerator_type (moved to ScaleGroupResources.device_type)
+  reserved 10;  // was: accelerator_variant (moved to ScaleGroupResources.device_variant)
   reserved 11;  // was: topology (now in slice_template.gcp)
   reserved 12;  // was: runtime_version (now in slice_template.gcp)
   reserved 13;  // was: preemptible (moved to SliceConfig)
   ScaleGroupResources resources = 14;
-  int32 slice_size = 15 [features.field_presence = EXPLICIT];
+  int32 num_vms = 15 [features.field_presence = EXPLICIT];
 
   reserved 20;  // was: zones (now in slice_template.gcp.zone)
 
@@ -175,38 +218,113 @@ message ScaleGroupConfig {
 
   reserved 40;  // was: manual (now in slice_template.manual)
 
+  // Maximum scale-up requests per minute for this group (token bucket).
+  // 0 = use default (5/min). Prevents hitting cloud API rate limits.
+  int32 scale_up_rate_limit = 70 [features.field_presence = EXPLICIT];
+
+  // Maximum scale-down terminations per minute for this group (token bucket).
+  // 0 = use default (5/min). Controls how fast idle slices are released.
+  int32 scale_down_rate_limit = 71 [features.field_presence = EXPLICIT];
+
   // What to create when scaling up — the slice template
   SliceConfig slice_template = 50;
+  WorkerSettings worker = 60;
+
+  // Allocation pool grouping. Groups sharing a quota_pool propagate
+  // quota-exceeded state: when tier N fails, tiers > N are blocked.
+  // If empty, quota state is independent (default behavior).
+  string quota_pool = 80;
+
+  // Tier within the quota pool (1-based, lower = smaller/preferred).
+  // When tier N hits quota or backoff, tiers > N in the same pool are
+  // skipped during routing. Groups at the same tier are independent.
+  // 0 means unset (not part of any tier ordering).
+  int32 allocation_tier = 81 [features.field_presence = EXPLICIT];
 }
 
 // ============================================================================
-// BOOTSTRAP, TIMEOUT, AND SSH CONFIGURATION
+// WORKER CONFIGURATION
 // ============================================================================
 
-// Bootstrap configuration passed to VmBootstrap
-message BootstrapConfig {
-  string controller_address = 1;  // Address workers use to connect (e.g., "10.0.0.1:10000")
-  string worker_id = 2;           // Auto-generated if empty
-  int32 worker_port = 3;          // Default: 10001
-  string docker_image = 4;        // Worker image to run
-  string cache_dir = 5;           // Default: /var/cache/iris
-  map<string, string> env_vars = 6;
-}
+// Everything the worker process needs. Built by autoscaler from
+// defaults.worker + per-scale-group overrides.
+message WorkerConfig {
+  // Worker container image (used by bootstrap, not by the worker process itself)
+  string docker_image = 1;
 
-// Timeout configuration for VM lifecycle (SSH timeout is in SshConfig)
-message TimeoutConfig {
-  iris.time.Duration boot_timeout = 1;        // Default: 300s (5 min)
-  iris.time.Duration init_timeout = 2;        // Default: 600s (10 min)
-  reserved 3;                                   // Was: ssh_connect_timeout_seconds (moved to SshConfig)
-  iris.time.Duration ssh_poll_interval = 4;   // Default: 5s
+  // Network
+  string host = 2;                           // e.g. "0.0.0.0"
+  int32 port = 3;                            // e.g. 10001
+  string port_range = 4;                     // e.g. "30000-40000"
+
+  // Identity
+  string worker_id = 5;                      // auto-generated if empty
+  string controller_address = 6;             // e.g. "10.0.0.1:10000"
+
+  // Storage
+  string cache_dir = 7;
+
+  // Task defaults
+  string default_task_image = 9;
+  map<string, string> task_env = 10;
+  string runtime = 11;                       // "docker" or "kubernetes"
+
+  // Accelerator (from scale group resources, not env vars)
+  AcceleratorType accelerator_type = 20;
+  string accelerator_variant = 21;
+  int32 gpu_count = 22;
+  reserved 23;  // was: bool preemptible (replaced by capacity_type)
+  CapacityType capacity_type = 24;
+
+  // Scheduling attributes
+  map<string, string> worker_attributes = 30;
+
+  // Timing
+  iris.time.Duration poll_interval = 40;
+  iris.time.Duration heartbeat_timeout = 41;
+
+  // Iris slice_id; used by multi-VM slices (TPU) to construct worker_id
+  // from slice_id + TPU worker index so registration IDs match platform IDs.
+  string slice_id = 8;
+
+  // Platform config (for image resolution — worker creates lightweight platform)
+  PlatformConfig platform = 50;
+
+  // Storage prefix for task artifacts (profiles). Injected by the controller
+  // from the resolved remote_state_dir. Empty disables profile upload.
+  string storage_prefix = 60;
+
+  // Bearer token for worker→controller authentication.
+  // Set by the controller when auth is enabled; empty when auth is disabled.
+  string auth_token = 70;
 }
 
 // SSH configuration for manual hosts
 message SshConfig {
+  enum AuthMode {
+    SSH_AUTH_MODE_METADATA = 0;
+    SSH_AUTH_MODE_OS_LOGIN = 1;
+  }
+
   string user = 1;                        // Default: "root"
   string key_file = 2;                    // Path to SSH private key
   int32 port = 3;                         // Default: 22
   iris.time.Duration connect_timeout = 4;  // Default: 30s
+  AuthMode auth_mode = 5;                 // Default: SSH_AUTH_MODE_METADATA
+  string os_login_user = 6;               // Optional explicit POSIX username for OS Login
+  string impersonate_service_account = 7; // Optional SA email for gcloud/OS Login impersonation
+}
+
+// ============================================================================
+// STORAGE CONFIGURATION
+// ============================================================================
+
+message StorageConfig {
+  string local_state_dir = 1;      // Local directory for controller DB, logs, bundle cache.
+                                    // Must be on a volume that survives container restarts.
+                                    // Default: /var/cache/iris/controller
+  string remote_state_dir = 2;     // Remote URI for controller checkpoints and worker profiles
+                                    // (e.g. gs://bucket/iris/state). Required for production.
 }
 
 // ============================================================================
@@ -219,6 +337,7 @@ message GcpControllerConfig {
   string machine_type = 2;      // Default: "n2-standard-4"
   int32 boot_disk_size_gb = 3;  // Default: 50
   int32 port = 4;               // Default: 10000
+  string service_account = 5;
 }
 
 // Manually-managed controller configuration (SSH bootstrap)
@@ -232,15 +351,23 @@ message LocalControllerConfig {
   int32 port = 1;               // 0 = auto-assign
 }
 
+// CoreWeave controller configuration (Kubernetes Deployment + Service)
+message CoreweaveControllerConfig {
+  int32 port = 1;               // default: 10000
+  string service_name = 2;      // K8s Service name for discovery
+  string scale_group = 3;       // Scale group whose NodePool the controller runs on (required)
+}
+
 // Controller configuration using oneof for type-safe dispatch
 message ControllerVmConfig {
   string image = 10;            // Controller docker image (shared by all controller types)
-  string bundle_prefix = 11;    // URI prefix for job bundles (e.g., gs://bucket/path)
   iris.time.Duration worker_timeout = 12;  // Default: 60s
+  int32 heartbeat_failure_threshold = 13;  // Consecutive heartbeat failures before marking worker dead (default: 10)
   oneof controller {
     GcpControllerConfig gcp = 1;
     ManualControllerConfig manual = 2;
     LocalControllerConfig local = 3;
+    CoreweaveControllerConfig coreweave = 4;
   }
 }
 
@@ -250,18 +377,71 @@ message ControllerVmConfig {
 
 message AutoscalerConfig {
   iris.time.Duration evaluation_interval = 1;  // Default: 10s
-  iris.time.Duration requesting_timeout = 2;   // Default: 120s
   iris.time.Duration scale_up_delay = 3;       // Default: 60s
-  iris.time.Duration scale_down_delay = 4;     // Default: 300s
+  iris.time.Duration scale_down_delay = 4;     // Default: 600s (idle threshold before scale-down)
   iris.time.Duration startup_grace_period = 5; // Default: 30min — time for new slices to boot and register workers
   iris.time.Duration heartbeat_grace_period = 6; // Default: 5min — time after last worker heartbeat before reaping slice
 }
 
 message DefaultsConfig {
-  TimeoutConfig timeouts = 1;
   SshConfig ssh = 2;
   AutoscalerConfig autoscaler = 3;
-  BootstrapConfig bootstrap = 4;
+  reserved 4;  // was: BootstrapConfig bootstrap
+  reserved 5;  // was: string default_task_image
+  WorkerConfig worker = 6;
+  map<string, string> task_env = 7;  // Env vars injected into every task container
+}
+
+// ============================================================================
+// AUTHENTICATION CONFIGURATION
+// ============================================================================
+
+message GcpAuthConfig {
+  string project_id = 1;  // GCP project ID — users must have access to this project to log in
+}
+
+message StaticAuthConfig {
+  // Map of token string → username. Useful for local dev and testing.
+  map<string, string> tokens = 1;
+}
+
+message AuthConfig {
+  oneof provider {
+    GcpAuthConfig gcp = 1;
+    StaticAuthConfig static = 2;
+  }
+  repeated string admin_users = 3;
+
+  // When true, authentication is attempted but not required. Requests with
+  // valid tokens get the authenticated identity; requests without tokens
+  // fall through as anonymous admin. Invalid tokens are still rejected.
+  // This allows gradual rollout of auth on clusters that currently rely on
+  // SSH tunnels.
+  bool optional = 4;
+}
+
+// ============================================================================
+// PROVIDER CONFIGURATION
+// ============================================================================
+
+// Configuration for WorkerProvider: RPC-based worker daemons managed by the autoscaler.
+// No fields needed — all configuration is in defaults.worker and scale_groups.
+message WorkerProviderConfig {}
+
+// Configuration for KubernetesProvider: direct Pod dispatch without worker daemons.
+message KubernetesProviderConfig {
+  string namespace = 1;    // Kubernetes namespace for task pods (default: "iris")
+  string kubeconfig = 2;   // Path to kubeconfig file; empty string uses in-cluster auth
+  string default_image = 3; // Default container image for task pods
+  // Topology key for pod affinity on multi-VM gang-scheduled jobs.
+  // When set, sibling task pods for the same job prefer scheduling on nodes
+  // sharing this topology (e.g. "coreweave.cloud/spine" for IB colocation).
+  // Leave empty to disable. Default: "coreweave.cloud/spine".
+  string colocation_topology_key = 4;
+  string service_account = 5;    // K8s ServiceAccount for task pods (default: "")
+  bool host_network = 6;         // Run task pods with hostNetwork (for NCCL/IB)
+  string cache_dir = 7;          // hostPath base for cache mounts (default: "/cache")
+  string controller_address = 8; // Controller URL injected into task pods
 }
 
 // ============================================================================
@@ -270,11 +450,13 @@ message DefaultsConfig {
 
 // Full cluster configuration - single source of truth
 message IrisClusterConfig {
-  reserved 1 to 4;
+  // Human-readable cluster name for token store
+  string name = 5;
 
   // Platform settings
   PlatformConfig platform = 10;
   DefaultsConfig defaults = 11;
+  StorageConfig storage = 12;
 
   // Controller settings
   ControllerVmConfig controller = 31;
@@ -282,6 +464,12 @@ message IrisClusterConfig {
   // Scale groups (name -> config)
   map<string, ScaleGroupConfig> scale_groups = 50;
 
-  reserved 70;  // label_prefix (moved to PlatformConfig)
-  reserved 80 to 83;  // Duplicate fields removed (use defaults.* instead)
+  // Authentication (optional — when absent, no auth is required)
+  AuthConfig auth = 60;
+
+  // Task provider — required. Exactly one must be set.
+  oneof provider {
+    KubernetesProviderConfig kubernetes_provider = 70;
+    WorkerProviderConfig worker_provider = 71;
+  }
 }

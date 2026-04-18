@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -17,6 +17,8 @@ import traceback
 
 import fsspec
 import pandas as pd
+from rigging.filesystem import filesystem as marin_filesystem
+from rigging.filesystem import open_url
 
 from marin.evaluation.evaluation_config import WANDB_PROJECT
 
@@ -107,11 +109,11 @@ def _load_results_from_input_paths(
                     expected = str(example.get("answer", example.get("expected_answer", ""))).strip()
                     model_answers = example.get("model_answers", [])
                     model_answer = str(model_answers[0]).strip() if model_answers else ""
-                    # TODO: This naive string comparison produces wrong results for benchmarks
-                    # that use symbolic answers (e.g. HMMT with \frac{22}{7}, \sqrt{3}) or
-                    # execution-based grading (CodeForces, LiveCodeBench, JEEBench). The
-                    # evaluators store per-item correctness in example["label"] or
-                    # example["correctness"] — use those instead of re-grading here.
+                    # TODO: This string match only works for evals with simple answers
+                    # (integers, letters) like AIME, AMC, GPQA, HLE. It produces wrong
+                    # results for benchmarks with complex answers needing math symbol
+                    # comparison (HMMT), numerical tolerance (OlympiadBench_Physics),
+                    # or execution-based grading (LiveCodeBench, JEEBench).
                     correct = 1 if (model_answer == expected and expected) else 0
 
                     record = {
@@ -264,7 +266,7 @@ def compile_evalchemy_results_fn(config: dict) -> None:
     if not input_paths:
         raise ValueError("No input paths found!")
 
-    fs = fsspec.filesystem("gcs")
+    fs = marin_filesystem("gcs")
 
     all_results = _load_results_from_input_paths(input_paths, fs)
 
@@ -274,11 +276,11 @@ def compile_evalchemy_results_fn(config: dict) -> None:
 
     # Save compiled results
     results_file = f"{output_path}/compiled_results.json"
-    with fsspec.open(results_file, "w") as f:
+    with open_url(results_file, "w") as f:
         json.dump(all_results, f, indent=2)
 
     csv_file = f"{output_path}/compiled_results.csv"
-    with fsspec.open(csv_file, "w") as f:
+    with open_url(csv_file, "w") as f:
         df.to_csv(f, index=False)
 
     logger.info(f"Compiled results saved to: {results_file}")
@@ -307,11 +309,11 @@ def compile_evalchemy_results_fn(config: dict) -> None:
 
     # Save averaged results
     avg_results_file = f"{output_path}/averaged_results.json"
-    with fsspec.open(avg_results_file, "w") as f:
+    with open_url(avg_results_file, "w") as f:
         json.dump(avg_df.to_dict(orient="records"), f, indent=2)
 
     avg_csv_file = f"{output_path}/averaged_results.csv"
-    with fsspec.open(avg_csv_file, "w") as f:
+    with open_url(avg_csv_file, "w") as f:
         avg_df.to_csv(f, index=False)
 
     logger.info(f"Averaged results saved to: {avg_results_file}")

@@ -1,9 +1,11 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Actor pool for load-balanced and broadcast RPC calls."""
 
+import logging
 import threading
+import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -11,9 +13,14 @@ from typing import Any, Generic, TypeVar
 
 import cloudpickle
 
+from iris.actor.client import unwrap_actor_response
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult, Resolver
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
+from iris.rpc.errors import call_with_retry
+from rigging.timing import ExponentialBackoff
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -83,27 +90,81 @@ class ActorPool(Generic[T]):
         >>> results = broadcast.wait_all()
     """
 
-    def __init__(self, resolver: Resolver, name: str, timeout: float = 30.0):
+    def __init__(
+        self,
+        resolver: Resolver,
+        name: str,
+        timeout: float = 30.0,
+        max_call_attempts: int = 5,
+        backoff: ExponentialBackoff = ExponentialBackoff(initial=0.1, maximum=10.0, factor=2.0, jitter=0.25),
+        resolve_ttl: float = 5.0,
+    ):
         """Initialize actor pool.
 
         Args:
             resolver: Resolver to discover endpoints
             name: Actor name to resolve
             timeout: RPC timeout in seconds
+            max_call_attempts: Maximum number of RPC call attempts before giving up.
+            backoff: Exponential backoff configuration for call retries.
+            resolve_ttl: Seconds to cache resolve results before re-querying the resolver
         """
         self._resolver = resolver
         self._name = name
         self._timeout = timeout
+        self._max_call_attempts = max_call_attempts
+        self._backoff = backoff
+        self._resolve_ttl = resolve_ttl
         self._endpoint_index = 0
         self._cached_result: ResolveResult | None = None
+        self._last_resolve_time: float = 0.0
         self._lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=32)
+        self._clients: dict[str, ActorServiceClientSync] = {}
+
+    def _get_client(self, endpoint: ResolvedEndpoint) -> ActorServiceClientSync:
+        """Return a cached client for the endpoint, creating one if needed."""
+        url = endpoint.url
+        with self._lock:
+            client = self._clients.get(url)
+            if client is not None:
+                return client
+            client = ActorServiceClientSync(
+                address=url,
+                timeout_ms=int(self._timeout * 1000),
+                accept_compression=[],
+            )
+            self._clients[url] = client
+            return client
 
     def _resolve(self) -> ResolveResult:
-        result = self._resolver.resolve(self._name)
+        now = time.monotonic()
         with self._lock:
-            self._cached_result = result
+            if self._cached_result is not None and (now - self._last_resolve_time) < self._resolve_ttl:
+                return self._cached_result
+
+        result = self._resolver.resolve(self._name)
+        if result.endpoints:
+            with self._lock:
+                self._cached_result = result
+                self._last_resolve_time = time.monotonic()
         return result
+
+    def _invalidate_resolve_cache(self) -> None:
+        """Force the next _resolve() call to re-query the resolver."""
+        with self._lock:
+            self._last_resolve_time = 0.0
+            self._cached_result = None
+
+    def _evict_client(self, url: str) -> None:
+        """Remove and close a cached client so it is recreated on next use."""
+        with self._lock:
+            client = self._clients.pop(url, None)
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                logger.debug("Error closing evicted client for %s", url, exc_info=True)
 
     def _get_next_endpoint(self) -> ResolvedEndpoint:
         """Get the next endpoint in round-robin order.
@@ -120,6 +181,14 @@ class ActorPool(Generic[T]):
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=True)
+        with self._lock:
+            clients = list(self._clients.values())
+            self._clients.clear()
+        for client in clients:
+            try:
+                client.close()
+            except Exception:
+                logger.debug("Error closing client during shutdown", exc_info=True)
 
     def __enter__(self) -> "ActorPool[T]":
         return self
@@ -142,10 +211,7 @@ class ActorPool(Generic[T]):
         args: tuple,
         kwargs: dict,
     ) -> Any:
-        client = ActorServiceClientSync(
-            address=endpoint.url,
-            timeout_ms=int(self._timeout * 1000),
-        )
+        client = self._get_client(endpoint)
 
         call = actor_pb2.ActorCall(
             method_name=method_name,
@@ -155,13 +221,7 @@ class ActorPool(Generic[T]):
         )
 
         resp = client.call(call)
-
-        if resp.HasField("error"):
-            if resp.error.serialized_exception:
-                raise cloudpickle.loads(resp.error.serialized_exception)
-            raise RuntimeError(f"{resp.error.error_type}: {resp.error.message}")
-
-        return cloudpickle.loads(resp.serialized_value)
+        return unwrap_actor_response(resp)
 
     def call(self) -> "_PoolCallProxy[T]":
         return _PoolCallProxy(self)
@@ -176,8 +236,25 @@ class _PoolCallProxy(Generic[T]):
 
     def __getattr__(self, method_name: str) -> Callable[..., Any]:
         def call(*args, **kwargs):
-            endpoint = self._pool._get_next_endpoint()
-            return self._pool._call_endpoint(endpoint, method_name, args, kwargs)
+            last_url: list[str | None] = [None]
+
+            def do_call():
+                endpoint = self._pool._get_next_endpoint()
+                last_url[0] = endpoint.url
+                return self._pool._call_endpoint(endpoint, method_name, args, kwargs)
+
+            def on_retry(_exc):
+                self._pool._invalidate_resolve_cache()
+                if last_url[0] is not None:
+                    self._pool._evict_client(last_url[0])
+
+            return call_with_retry(
+                f"{self._pool._name}.{method_name}",
+                do_call,
+                on_retry=on_retry,
+                max_attempts=self._pool._max_call_attempts,
+                backoff=self._pool._backoff,
+            )
 
         return call
 

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """GCP utilities for cluster management.
@@ -103,8 +103,10 @@ def delete_tpu_node(node_name: str, project: str, zone: str, quiet: bool = False
     run_gcloud_command(cmd)
 
 
-def find_tpu_by_ip(target_ip: str, project: str, zone: str) -> tuple[str, str, int] | None:
+def find_tpu_by_ip(target_ip: str, project: str, zone: str = "-") -> tuple[str, str, int] | None:
     """Find TPU node by its internal IP address.
+
+    Searches all zones by default (zone="-").
 
     Returns:
         Tuple of (tpu_name, zone, worker_index) or None if not found
@@ -127,6 +129,56 @@ def find_tpu_by_ip(target_ip: str, project: str, zone: str) -> tuple[str, str, i
                     return full_name, zone, worker_index
 
     return None
+
+
+def find_vm_by_ip(target_ip: str, project: str) -> tuple[str, str] | None:
+    """Find a GCE VM by its internal IP address.
+
+    Searches all zones.
+
+    Returns:
+        Tuple of (instance_name, zone) or None if not found
+    """
+    cmd = [
+        "gcloud",
+        "compute",
+        "instances",
+        "list",
+        f"--project={project}",
+        f"--filter=networkInterfaces[0].networkIP={target_ip}",
+        "--format=json(name,zone)",
+    ]
+    result = run_gcloud_command(cmd)
+    instances = json.loads(result.stdout)
+    if not instances:
+        return None
+
+    if len(instances) > 1:
+        details = ", ".join(f"{i['name']} ({i['zone'].split('/')[-1]})" for i in instances)
+        raise RuntimeError(f"Multiple VMs found with IP {target_ip}: {details}")
+
+    instance = instances[0]
+    name = instance["name"]
+    # zone is a full URL like .../zones/us-central1-a
+    zone = instance["zone"].split("/")[-1]
+    return name, zone
+
+
+def ssh_to_vm(instance_name: str, zone: str, project: str, extra_args: list[str] | None = None) -> None:
+    """SSH into a GCE VM."""
+    cmd = [
+        "gcloud",
+        "compute",
+        "ssh",
+        instance_name,
+        f"--zone={zone}",
+        f"--project={project}",
+    ]
+
+    if extra_args:
+        cmd.extend(["--", *extra_args])
+
+    subprocess.run(cmd, check=True)
 
 
 def ssh_to_tpu(tpu_name: str, zone: str, project: str, extra_args: list[str] | None = None, worker_id: int = 0) -> None:

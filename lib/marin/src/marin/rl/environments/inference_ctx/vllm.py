@@ -1,28 +1,26 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import gc
 import logging
 import os
 import time
-import re
-import jax
-import jax.numpy as jnp
-import numpy as np
-from enum import StrEnum
 from dataclasses import dataclass
+from enum import StrEnum
+
+import numpy as np
+from levanter.models.lm_model import LmHeadModel
+from levanter.tokenizers import load_tokenizer
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.completion_usage import CompletionUsage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob, TopLogprob
-from levanter.models.lm_model import LmHeadModel
-from transformers import AutoTokenizer
-from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
-from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 from marin.rl.environments.inference_ctx.render import Llama3Renderer, Qwen3Renderer, Renderer, Message
+from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
+from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +46,38 @@ class InferenceMode(StrEnum):
 
 
 @dataclass
+class VLLMSamplingConfig:
+    """Serializable sampling config that doesn't depend on vllm.
+
+    Replaces vllm.SamplingParams in config objects so they can be
+    serialized/deserialized on CPU workers without vllm installed.
+    Converted to vllm.SamplingParams inside the inference context.
+    """
+
+    temperature: float = 1.0
+    n: int = 1
+    max_tokens: int = 512
+    top_k: int = -1
+    stop: list[str] | None = None
+    include_stop_str_in_output: bool = False
+    logprobs: int | None = 1
+
+    def to_vllm(self):
+        """Convert to vllm.SamplingParams. Must be called where vllm is available."""
+        if SamplingParams is None:
+            raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
+        return SamplingParams(
+            temperature=self.temperature,
+            n=self.n,
+            max_tokens=self.max_tokens,
+            top_k=self.top_k,
+            stop=self.stop,
+            include_stop_str_in_output=self.include_stop_str_in_output,
+            logprobs=self.logprobs,
+        )
+
+
+@dataclass
 class vLLMInferenceContextConfig:
     """Configuration for vLLM engine and sampling parameters."""
 
@@ -55,10 +85,12 @@ class vLLMInferenceContextConfig:
     max_model_len: int
     tensor_parallel_size: int
     gpu_memory_utilization: float
-    sampling_params: SamplingParams
+    sampling_params: VLLMSamplingConfig
+    canonical_model_name: str | None = None
     mode: InferenceMode = InferenceMode.SYNC
     load_format: str = "auto"
     enforce_eager: bool = True
+    kv_cache_metrics: bool = False
 
 
 class vLLMInferenceContext(BaseInferenceContext):
@@ -78,15 +110,16 @@ class vLLMInferenceContext(BaseInferenceContext):
         # )
         self.mesh = None
         self.axis_mapping = {}
-        self.tokenizer = AutoTokenizer.from_pretrained(inference_config.model_name)
+        self.tokenizer = load_tokenizer(inference_config.model_name)
+        # Reverse vocab map for logprob token string display
+        self._id_to_token: dict[int, str] = {v: k for k, v in self.tokenizer.get_vocab().items()}
         self.model_name = inference_config.model_name
-        self.sampling_params = inference_config.sampling_params
+        self.canonical_model_name = inference_config.canonical_model_name or inference_config.model_name
+        self.sampling_config = inference_config.sampling_params
+        self._use_final_only = inference_config.mode == InferenceMode.ASYNC
 
         # Initialize the appropriate renderer based on model type
-        self.renderer = self._get_renderer(inference_config.model_name, self.tokenizer)
-
-        if inference_config.mode == InferenceMode.ASYNC:
-            self.sampling_params.output_kind = RequestOutputKind.FINAL_ONLY
+        self.renderer = self._get_renderer(self.canonical_model_name, self.tokenizer)
 
     @staticmethod
     def _get_renderer(model_name: str, tokenizer) -> Renderer:
@@ -115,15 +148,25 @@ class vLLMInferenceContext(BaseInferenceContext):
 
     @staticmethod
     def _patch_tpu_inference_registry():
-        """Register Qwen2ForCausalLM in tpu_inference if not present."""
+        """Register architectures needed by RL hot-reload in tpu_inference."""
         try:
             from tpu_inference.models.common import model_loader
+            from tpu_inference.models.jax.llama3 import LlamaForCausalLM
+            from tpu_inference.models.jax.qwen2 import Qwen2ForCausalLM
 
-            if "Qwen2ForCausalLM" not in model_loader._MODEL_REGISTRY:
-                logger.info("Patching tpu_inference to support Qwen2ForCausalLM")
-                from tpu_inference.models.jax.qwen2 import Qwen2ForCausalLM
+            required_architectures = {
+                # Qwen2 is still missing in the pinned tpu_inference registry.
+                "Qwen2ForCausalLM": Qwen2ForCausalLM,
+                # vLLM already resolves Mistral onto the Llama implementation;
+                # keep tpu_inference on the same JAX-native path for RL reloads.
+                "MistralForCausalLM": LlamaForCausalLM,
+            }
 
-                model_loader.register_model("Qwen2ForCausalLM", Qwen2ForCausalLM)
+            for architecture_name, model_cls in required_architectures.items():
+                if architecture_name in model_loader._MODEL_REGISTRY:
+                    continue
+                logger.info("Patching tpu_inference to support %s", architecture_name)
+                model_loader.register_model(architecture_name, model_cls)
         except ImportError:
             logger.exception("Failed to patch tpu_inference registry")
             raise
@@ -148,60 +191,8 @@ class vLLMInferenceContext(BaseInferenceContext):
             gpu_memory_utilization=inference_config.gpu_memory_utilization,
             load_format=inference_config.load_format,
             enforce_eager=inference_config.enforce_eager,
+            kv_cache_metrics=inference_config.kv_cache_metrics,
         )
-
-    def _convert_vllm_state_dict_to_trainer_keys(
-        self, state_dict_trainer: dict, state_dict_vllm: dict, mapping: dict
-    ) -> dict:
-        state_dict_vllm_with_trainer_keys = {}
-        for src_path, _ in state_dict_trainer.items():
-            src_key = ".".join(str(p) for p in src_path)
-
-            # Try to find a matching pattern
-            matched = False
-            for src_pattern, (dst_pattern, _) in mapping.items():
-
-                if not re.match(src_pattern, src_key):
-                    continue
-
-                match_layer_number = re.match(r".*layers\.(\d+).*", src_key)
-                if match_layer_number:
-                    layer_number = int(match_layer_number.group(1))
-                    dst_path = []
-                    for part in dst_pattern.split("."):
-                        if part == "*":
-                            dst_path.append(layer_number)
-                        else:
-                            dst_path.append(part)
-                    dst_path = tuple(dst_path)
-                    if dst_path in state_dict_vllm:
-                        state_dict_vllm_with_trainer_keys[src_path] = state_dict_vllm[dst_path]
-                        matched = True
-                        break
-                else:
-                    dst_path = tuple(dst_pattern.split("."))
-                    if dst_path in state_dict_vllm:
-                        state_dict_vllm_with_trainer_keys[src_path] = state_dict_vllm[dst_path]
-                        matched = True
-                        break
-
-            if not matched:
-                print(f"Warning: No mapping found for {src_key}")
-
-        return state_dict_vllm_with_trainer_keys
-
-    def _check_weight_differences(self, state_dict: dict, state_dict_other: dict):
-        for key in state_dict:
-            if key in state_dict_other:
-                assert (
-                    state_dict[key].shape == state_dict_other[key].shape
-                ), f"Shape mismatch for key {key}: {state_dict[key].shape} != {state_dict_other[key].shape}"
-                weight = jax.device_get(state_dict[key]).astype(jnp.bfloat16)
-                weight_other = jax.device_get(state_dict_other[key]).astype(jnp.bfloat16)
-                print(
-                    f"Weight {key}, max diff: {jnp.max(jnp.abs(weight - weight_other))}, \
-                    mean diff: {jnp.mean(jnp.abs(weight - weight_other))}"
-                )
 
     def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
         """Tokenize the prompt with the choice's prompt token IDs.
@@ -230,7 +221,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             logprobs_content = []
             for token_id, logprob_dict in zip(output.token_ids, output.logprobs, strict=False):
                 # Get the token string (may be None for padding token IDs)
-                token = self.tokenizer.convert_ids_to_tokens(token_id)
+                token = self._id_to_token.get(token_id)
                 if token is None:
                     token = f"<id_{token_id}>"
 
@@ -242,7 +233,7 @@ class vLLMInferenceContext(BaseInferenceContext):
                     if logprob_obj.rank == 1:
                         selected_logprob = logprob_obj.logprob
 
-                    token_str = self.tokenizer.convert_ids_to_tokens(tid)
+                    token_str = self._id_to_token.get(tid)
                     if token_str is None:
                         token_str = f"<id_{tid}>"
                     top_logprobs.append(
@@ -290,26 +281,34 @@ class vLLMInferenceContext(BaseInferenceContext):
             id=request_output.request_id,
             choices=choices,
             created=int(time.time()),
-            model=self.model_name,
+            model=self.canonical_model_name,
             object="chat.completion",
             usage=usage,
         )
 
     def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> LmHeadModel | None:
+        t0 = time.time()
+        logger.info("reload_model: starting prefix cache reset")
         # Reset prefix cache before syncing weights to free up memory
         self.llm.llm_engine.reset_prefix_cache()
         gc.collect()
 
+        logger.info("reload_model: converting state dict")
         # TODO(chris): levanter to vllm state dict
         nnx_state = levanter_state_dict_to_nnx_state_on_cpu(state_dict)
+        t1 = time.time()
+        logger.info("reload_model: calling sync_weights (%d params, %.1fs so far)", len(nnx_state), t1 - t0)
         self.llm.llm_engine.model_executor.driver_worker.sync_weights(
             nnx_state,
-            mappings=MODEL_MAPPINGS[self.model_name],
-            transpose_keys=MODEL_TRANSPOSE_KEYS[self.model_name],
+            mappings=MODEL_MAPPINGS[self.canonical_model_name],
+            transpose_keys=MODEL_TRANSPOSE_KEYS[self.canonical_model_name],
             reshard_fn=None,
         )
 
+        t2 = time.time()
+        logger.info("reload_model: sync_weights done in %.1fs, resetting prefix cache", t2 - t1)
         self.llm.llm_engine.reset_prefix_cache()  # Reset prefix cache because of new weights
+        logger.info("reload_model: complete in %.1fs", time.time() - t0)
         return model
 
     def start_server(self, model: LmHeadModel) -> None:
@@ -340,17 +339,18 @@ class vLLMInferenceContext(BaseInferenceContext):
         """
         if SamplingParams is None:
             raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
-        sampling_params = SamplingParams(
-            temperature=temperature,
-            n=n,
-            # NOTE(chris): We allow the override to take precedence over the default sampling params.
-            max_tokens=max_tokens or self.sampling_params.max_tokens,
-            top_k=top_k or self.sampling_params.top_k,
-            stop=stop or self.sampling_params.stop,
-            logprobs=1,
-            include_stop_str_in_output=self.sampling_params.include_stop_str_in_output,
-            output_kind=self.sampling_params.output_kind,
-        )
+        kwargs = {
+            "temperature": temperature,
+            "n": n,
+            "max_tokens": max_tokens or self.sampling_config.max_tokens,
+            "top_k": top_k or self.sampling_config.top_k,
+            "stop": stop or self.sampling_config.stop,
+            "logprobs": 1,
+            "include_stop_str_in_output": self.sampling_config.include_stop_str_in_output,
+        }
+        if self._use_final_only and RequestOutputKind is not None:
+            kwargs["output_kind"] = RequestOutputKind.FINAL_ONLY
+        sampling_params = SamplingParams(**kwargs)
 
         # Convert prompts to message lists if they aren't already
         message_lists: list[list[Message]] = []
@@ -380,7 +380,10 @@ class vLLMInferenceContext(BaseInferenceContext):
         if TokensPrompt is None:
             raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
         prompts_for_vllm = [TokensPrompt(prompt_token_ids=tokens) for tokens in prompt_token_ids]
+        logger.info("generate: starting, %d prompts, max_tokens=%d", len(prompts_for_vllm), sampling_params.max_tokens)
+        t0 = time.time()
         outputs = self.llm.generate(prompts_for_vllm, sampling_params)
+        logger.info("generate: done in %.1fs", time.time() - t0)
 
         # Convert vLLM outputs to OpenAI ChatCompletion format
         return [self._convert_vllm_to_openai(output) for output in outputs]

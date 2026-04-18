@@ -1,10 +1,11 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """LocalClient: in-process fray v2 backend for development and testing."""
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import subprocess
 import threading
@@ -12,8 +13,17 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, cast
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.actor import (
+    ActorContext,
+    ActorFuture,
+    ActorGroup,
+    ActorHandle,
+    HostedActor,
+    _reset_current_actor,
+    _set_current_actor,
+)
 from fray.v2.types import (
+    ActorConfig,
     BinaryEntrypoint,
     CallableEntrypoint,
     JobRequest,
@@ -64,16 +74,30 @@ class LocalJobHandle:
 
 
 def _run_callable(entry: CallableEntrypoint) -> None:
-    entry.callable(*entry.args, **entry.kwargs)
+    name = getattr(entry.callable, "__name__", repr(entry.callable))
+    try:
+        entry.callable(*entry.args, **entry.kwargs)
+    except Exception:
+        logger.warning("Callable %r failed", name, exc_info=True)
+        raise
 
 
 def _run_binary(entry: BinaryEntrypoint) -> None:
-    subprocess.run(
-        [entry.command, *entry.args],
-        check=True,
-        capture_output=True,
+    cmd = [entry.command, *entry.args]
+    logger.info("Running binary: %s", " ".join(cmd))
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
     )
+    assert process.stdout is not None
+    for line in process.stdout:
+        logger.info("[%s] %s", entry.command, line.rstrip("\n"))
+    returncode = process.wait()
+    if returncode != 0:
+        logger.warning("Binary %r exited with code %d", entry.command, returncode)
+        raise subprocess.CalledProcessError(returncode, cmd)
 
 
 class LocalClient:
@@ -86,19 +110,59 @@ class LocalClient:
         self._executor = ThreadPoolExecutor(max_workers=max_threads)
         self._jobs: list[LocalJobHandle] = []
 
-    def submit(self, request: JobRequest) -> LocalJobHandle:
+    def submit(self, request: JobRequest, adopt_existing: bool = True) -> LocalJobHandle:
+        """Submit a job for execution.
+
+        Args:
+            request: The job request to submit.
+            adopt_existing: If True (default), return existing job handle when name conflicts.
+                          LocalClient currently doesn't enforce unique names, so this
+                          parameter has no effect but is included for API compatibility.
+        """
+        # Copy the current context so that contextvars (e.g. set_current_client)
+        # propagate into the executor thread. Without this, callables that call
+        # current_client() would get a fresh auto-detected client instead of
+        # the one set by the caller.
+        ctx = contextvars.copy_context()
         entry = request.entrypoint
         if entry.callable_entrypoint is not None:
-            future = self._executor.submit(_run_callable, entry.callable_entrypoint)
+            future = self._executor.submit(ctx.run, _run_callable, entry.callable_entrypoint)
         elif entry.binary_entrypoint is not None:
-            future = self._executor.submit(_run_binary, entry.binary_entrypoint)
+            future = self._executor.submit(ctx.run, _run_binary, entry.binary_entrypoint)
         else:
             raise ValueError("JobRequest entrypoint must have either callable_entrypoint or binary_entrypoint")
 
         job_id = f"local-{request.name}-{uuid.uuid4().hex[:8]}"
+
+        def _on_done(fut: Future[None], _job_id: str = job_id) -> None:
+            exc = fut.exception()
+            if exc is not None:
+                logger.warning("Job %s failed: %s", _job_id, exc, exc_info=exc)
+
+        future.add_done_callback(_on_done)
         handle = LocalJobHandle(job_id, future)
         self._jobs.append(handle)
         return handle
+
+    def host_actor(
+        self,
+        actor_class: type,
+        *args: Any,
+        name: str,
+        actor_config: ActorConfig = ActorConfig(),
+        **kwargs: Any,
+    ) -> HostedActor:
+        """Host an actor in-process. No server to stop for LocalClient."""
+        endpoint = f"local/{name}-0"
+        handle = LocalActorHandle(endpoint)
+        ctx = ActorContext(handle=handle, index=0, group_name=name)
+        token = _set_current_actor(ctx)
+        try:
+            instance = actor_class(*args, **kwargs)
+        finally:
+            _reset_current_actor(token)
+        _local_actor_registry[endpoint] = instance
+        return HostedActor(handle)
 
     def create_actor(
         self,
@@ -106,6 +170,7 @@ class LocalClient:
         *args: Any,
         name: str,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> LocalActorHandle:
         """Create an in-process actor, returning a handle immediately."""
@@ -119,6 +184,7 @@ class LocalClient:
         name: str,
         count: int,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorGroup:
         """Create N in-process actor instances, returning a group handle."""
@@ -183,12 +249,6 @@ class LocalActorHandle:
             raise AttributeError(f"{method_name} is not callable on {type(instance).__name__}")
         return LocalActorMethod(method)
 
-    def shutdown(self) -> None:
-        """Shutdown the actor instance."""
-        instance = _local_actor_registry.get(self._endpoint)
-        if instance is not None:
-            instance.shutdown()
-
     def __getstate__(self) -> dict:
         """Serialize to just the endpoint name."""
         return {"endpoint": self._endpoint}
@@ -211,17 +271,23 @@ class LocalActorMethod:
         backpressure when many actors make concurrent remote calls.
         """
         future: Future[Any] = Future()
+        method_name = getattr(self._method, "__name__", repr(self._method))
 
         def run():
             try:
                 result = self._method(*args, **kwargs)
                 future.set_result(result)
             except Exception as e:
+                logger.warning("Actor method %r failed: %s", method_name, e, exc_info=True)
                 future.set_exception(e)
 
         thread = threading.Thread(target=run, daemon=True)
         thread.start()
         return future
+
+    def submit(self, *args: Any, **kwargs: Any) -> ActorFuture:
+        """Long-running operation path. Same as remote() for local backend."""
+        return self.remote(*args, **kwargs)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Call method synchronously."""
@@ -255,13 +321,13 @@ class LocalActorGroup:
         self._yielded = True
         return self._handles
 
+    def is_done(self) -> bool:
+        """Local actors run in-process and don't independently fail."""
+        return False
+
     def shutdown(self) -> None:
         """Terminate all local actors and clean up registry."""
         for job in self._jobs:
             job.terminate()
         for handle in self._handles:
-            try:
-                handle.shutdown()
-            except Exception as e:
-                logger.warning("Error shutting down actor %s: %s", handle._endpoint, e)
             _local_actor_registry.pop(handle._endpoint, None)

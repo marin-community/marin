@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -8,18 +8,13 @@ Deduplication is performed per-file: duplicate question IDs within each input
 file are removed, keeping the first occurrence. Duplicates across different
 input files are NOT removed.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
-    lib/marin/src/marin/transform/stackexchange/filter_stackexchange.py \
-    --input_path gs://marin-us-central2/raw/stackexchange/ \
-    --output_path gs://marin-us-central2/processed/stackexchange/filtered \
-    --min_vote_threshold 10 \
-    --remove_duplicate_questions
 """
 
 import dataclasses
+import json
 
 import draccus
+from rigging.filesystem import open_url
 from zephyr import Dataset, ZephyrContext
 
 
@@ -41,13 +36,9 @@ def _process_file_with_filtering(file_path: str, config: FilterStackExchangeConf
     Yields:
         Records that pass the vote threshold and are unique within this file
     """
-    import json
-
-    import fsspec
-
     seen_ids = set() if config.remove_duplicate_questions else None
 
-    with fsspec.open(file_path, "rt", compression="infer") as f:
+    with open_url(file_path, "rt", compression="infer") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -79,8 +70,8 @@ def filter_stackexchange(config: FilterStackExchangeConfig):
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
 
-    with ZephyrContext(name="filter-stackexchange") as ctx:
-        ctx.execute(pipeline)
+    ctx = ZephyrContext(name="filter-stackexchange")
+    ctx.execute(pipeline)
 
 
 if __name__ == "__main__":

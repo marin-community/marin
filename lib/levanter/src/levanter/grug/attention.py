@@ -1,18 +1,23 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 import functools
+import inspect
 import math
 from dataclasses import dataclass
 
+import equinox as eqx
 import jax
 from jax import numpy as jnp
-from jax.experimental.shard_map import shard_map
-from jax.sharding import NamedSharding, PartitionSpec as P
-from jax.tree_util import register_dataclass
+from jax import shard_map
+from jax.sharding import NamedSharding, get_abstract_mesh
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.jax_utils import named_call
 from haliax.partitioning import _get_mesh
+
+
+_SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
+_SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
 
 
 @dataclass(frozen=True)
@@ -23,9 +28,7 @@ class RotaryConfig:
     scaling_factor: float | None = None
 
 
-@functools.partial(register_dataclass, data_fields=["segment_ids"], meta_fields=["is_causal", "sliding_window"])
-@dataclass(frozen=True)
-class AttentionMask:
+class AttentionMask(eqx.Module):
     """Grug attention mask spec.
 
     This is deliberately simpler than `levanter.layers.attention.AttentionMask`:
@@ -33,9 +36,9 @@ class AttentionMask:
     - Supports causal masking, sliding windows, and segment IDs.
     """
 
-    is_causal: bool = False
+    is_causal: bool = eqx.field(default=False, static=True)
     segment_ids: tuple[jax.Array, jax.Array] | None = None
-    sliding_window: int | None = None
+    sliding_window: int | None = eqx.field(default=None, static=True)
 
     @classmethod
     def causal(cls, *, sliding_window: int | None = None) -> "AttentionMask":
@@ -131,6 +134,21 @@ def apply_rotary_embedding(
     return _apply(q), _apply(k)
 
 
+def align_kv_heads(x: Float[Array, "B K Hkv D"], *, num_q_heads: int) -> Float[Array, "B K Hq D"]:
+    """Expand grouped-query KV heads to match query-head layout."""
+    num_kv_heads = x.shape[2]
+    if num_q_heads == num_kv_heads:
+        return x
+    if num_q_heads % num_kv_heads != 0:
+        raise ValueError(f"num_heads ({num_q_heads}) must be divisible by num_kv_heads ({num_kv_heads})")
+    repeat = num_q_heads // num_kv_heads
+    out_sharding = None
+    if isinstance(getattr(x, "sharding", None), NamedSharding):
+        sharding = x.sharding
+        out_sharding = sharding.spec if get_abstract_mesh() is not None else sharding
+    return jnp.repeat(x, repeat, axis=2, out_sharding=out_sharding)
+
+
 def reference_attention(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
@@ -141,14 +159,8 @@ def reference_attention(
 ) -> Float[Array, "B Q Hq D"]:
     head_dim = q.shape[-1]
     num_q_heads = q.shape[2]
-    num_kv_heads = k.shape[2]
-
-    if num_q_heads != num_kv_heads:
-        if num_q_heads % num_kv_heads != 0:
-            raise ValueError(f"num_heads ({num_q_heads}) must be divisible by num_kv_heads ({num_kv_heads})")
-        repeat = num_q_heads // num_kv_heads
-        k = jnp.repeat(k, repeat, axis=2)
-        v = jnp.repeat(v, repeat, axis=2)
+    k = align_kv_heads(k, num_q_heads=num_q_heads)
+    v = align_kv_heads(v, num_q_heads=num_q_heads)
 
     scale = 1.0 / math.sqrt(head_dim)
     scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k)
@@ -359,15 +371,12 @@ def _tpu_splash_attention(
         q_seq_shards=q_seq_shards,
     )
 
-    kernel_sharding = NamedSharding(mesh, P(q_pspec[1], q_pspec[2]))
-    kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
-
     @functools.partial(
         shard_map,
         mesh=mesh,
-        in_specs=(q_pspec, k_pspec, v_pspec, segment_ids_axes, kernel_specs),
+        in_specs=(q_pspec, k_pspec, v_pspec, segment_ids_axes, None),
         out_specs=q_pspec,
-        check_rep=False,
+        **_SHARD_MAP_CHECK_KWARGS,
     )
     def wrap(q_bhsd, k_bhsd, v_bhsd, seg_ids, kernel):
         return jax.vmap(kernel, in_axes=(0, 0, 0, segment_batch_axis))(q_bhsd, k_bhsd, v_bhsd, seg_ids)
@@ -392,6 +401,7 @@ def attention(
 __all__ = [
     "AttentionMask",
     "RotaryConfig",
+    "align_kv_heads",
     "apply_rotary_embedding",
     "attention",
     "reference_attention",

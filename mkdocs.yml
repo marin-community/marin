@@ -66,10 +66,7 @@ nav:
       - Prepare a Storage Bucket: tutorials/storage-bucket.md
       - Setting up a TPU Cluster: tutorials/tpu-cluster-setup.md
       - Executor 101: tutorials/executor-101.md
-      - Data Browser: tutorials/data-browser.md
       - Training an LM: tutorials/train-an-lm.md
-      - Submitting a Speedrun: tutorials/submitting-speedrun.md
-      - Adding an Optimizer for Speedrun: tutorials/add-optimizer.md
   - Explanations:
       - The Language Modeling Pipeline: explanations/lm-pipeline.md
       - Evaluation: explanations/evaluation.md
@@ -77,6 +74,7 @@ nav:
       - Executor: explanations/executor.md
       - Guidelines: explanations/guidelines.md
   - Experiments:
+      - Daily Ferry Log: experiments/daily-ferry-log.md
       - Report Index: reports/index.md
       - Auto-Generated Summary: reports/summary.md
       - Marin 8B Retro: reports/marin-8b-retro.md
@@ -84,9 +82,9 @@ nav:
       - Markdownified Datasets: reports/markdownified-datasets.md
   - Developer Guide:
       - Contributing: dev-guide/contributing.md
-      - Deployment: dev-guide/deployment.md
       - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
       - Internal Guidelines: dev-guide/guidelines-internal.md
+      - Forking Policy: dev-guide/forking-policy.md
       - Building Docs: dev-guide/building-docs.md
       - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
@@ -94,6 +92,7 @@ nav:
       - Executor API: references/executor-api.md
       - Default Steps: references/default-steps.md
       - Training Configuration: references/train-config.md
+      - HBM Optimization: references/hbm-optimization.md
 
 markdown_extensions:
   - markdown.extensions.footnotes

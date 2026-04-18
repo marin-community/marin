@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
@@ -6,7 +6,7 @@ import math
 from typing import Literal, cast
 
 from datasets import Dataset, concatenate_datasets, get_dataset_config_names, load_dataset
-from transformers import PreTrainedTokenizer
+from levanter.tokenizers import MarinTokenizer
 
 from .math_grading import (
     extract_boxed,
@@ -117,9 +117,7 @@ def _get_hendrycks_math_train() -> Dataset:
 
 
 # Adapted from https://github.com/thinking-machines-lab/tinker-cookbook/blob/20e26a629797188aa8c6f34474b0d4757b20b90d/tinker_cookbook/renderers.py#L165
-def parse_response_for_stop_token(
-    response: list[int], tokenizer: PreTrainedTokenizer, stop_token: int
-) -> tuple[str, bool]:
+def parse_response_for_stop_token(response: list[int], tokenizer: MarinTokenizer, stop_token: int) -> tuple[str, bool]:
     """Parse response for a single stop token.
 
     We expect a properly rendered response to have exactly one stop token; but it may have zero if e.g. the model

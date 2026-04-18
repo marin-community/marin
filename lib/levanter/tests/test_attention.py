@@ -1,19 +1,20 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from contextlib import ExitStack
 
-import equinox
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
 import pytest
 import equinox as eqx
+import equinox
 from chex import assert_trees_all_close
+from jax._src import config as jax_config
 from jax.lax import Precision
-from jax.sharding import NamedSharding, PartitionSpec
-from contextlib import ExitStack
+from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec, use_abstract_mesh
 
 import haliax as hax
 from haliax import Axis
@@ -21,6 +22,7 @@ from haliax.partitioning import ResourceAxis
 from levanter.utils.mesh import create_mesh_from_axis_specs
 
 from levanter.layers.attention import (
+    Attention,
     AttentionBackend,
     AttentionConfig,
     AttentionMask,
@@ -30,7 +32,34 @@ from levanter.layers.attention import (
     AttentionWithSink,
     dot_product_attention,
 )
-from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
+from levanter.grug.attention import align_kv_heads
+from test_utils import skip_if_module_missing, skip_if_no_torch, skip_if_not_enough_devices, use_test_mesh
+
+
+class _reset_abstract_mesh:
+    def __enter__(self):
+        self._prev = jax_config.abstract_mesh_context_manager.swap_local(jax_config.config_ext.unset)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        jax_config.abstract_mesh_context_manager.set_local(self._prev)
+        return False
+
+
+def _make_explicit_mesh() -> Mesh:
+    return Mesh(
+        np.array(jax.devices()[:8]).reshape(4, 2),
+        axis_names=("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
+
+
+def _make_explicit_abstract_mesh() -> AbstractMesh:
+    return AbstractMesh(
+        axis_sizes=(4, 2),
+        axis_names=("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
 
 
 @pytest.mark.skip
@@ -129,6 +158,105 @@ def test_attention_with_sink_module():
 
     expected = np.full((2, 1), 2.0 / 3)
     assert_trees_all_close(out.array, expected)
+
+
+def test_attention_with_gating_module():
+    """Test elementwise gated attention.
+
+    When gated="elementwise", a separate gate_proj outputs [kv_head, q_heads_per_group, head_size].
+
+    With zero weights/biases for Q and gate, the gate output is sigmoid(0) = 0.5.
+    With v_proj bias=1 and o_proj weight=1, the attention output before gating is 1.
+    After gating: 1 * 0.5 = 0.5
+    """
+    Pos = hax.Axis("position", 2)
+    Embed = hax.Axis("embed", 1)
+
+    config = AttentionConfig(Embed=Embed, num_heads=1, num_kv_heads=1, use_bias=True, gated="elementwise")
+    attn = Attention.init(config, key=jrandom.PRNGKey(0))
+
+    # q_proj has shape [embed, kv_head, q_heads_per_group, head_size]
+    # gate_proj is a separate projection with same output shape
+    attn = eqx.tree_at(lambda a: a.q_proj.weight, attn, hax.zeros(attn.q_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.q_proj.bias, attn, hax.zeros(attn.q_proj.bias.axes))
+    attn = eqx.tree_at(lambda a: a.k_proj.weight, attn, hax.zeros(attn.k_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.k_proj.bias, attn, hax.zeros(attn.k_proj.bias.axes))
+    attn = eqx.tree_at(lambda a: a.v_proj.weight, attn, hax.zeros(attn.v_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.v_proj.bias, attn, hax.ones(attn.v_proj.bias.axes))
+    attn = eqx.tree_at(lambda a: a.o_proj.weight, attn, hax.ones(attn.o_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.o_proj.bias, attn, hax.zeros(attn.o_proj.bias.axes))
+    # Zero out gate_proj so sigmoid(0) = 0.5
+    attn = eqx.tree_at(lambda a: a.gate_proj.weight, attn, hax.zeros(attn.gate_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.gate_proj.bias, attn, hax.zeros(attn.gate_proj.bias.axes))
+
+    x = hax.zeros((Pos, Embed))
+    out = attn(x, None)
+
+    expected = np.full((2, 1), 0.5)
+    assert_trees_all_close(out.array, expected)
+
+
+def test_attention_with_headwise_gating_module():
+    """Test headwise gated attention.
+
+    When gated="headwise", a separate gate_proj outputs [kv_head, q_heads_per_group, 1]
+    (one scalar per head).
+
+    With zero weights/biases for Q and gate, the gate output is sigmoid(0) = 0.5.
+    With v_proj bias=1 and o_proj weight=1, the attention output before gating is 1.
+    After gating: 1 * 0.5 = 0.5
+    """
+    Pos = hax.Axis("position", 2)
+    Embed = hax.Axis("embed", 1)
+
+    config = AttentionConfig(Embed=Embed, num_heads=1, num_kv_heads=1, use_bias=True, gated="headwise")
+    attn = Attention.init(config, key=jrandom.PRNGKey(0))
+
+    # q_proj has shape [embed, kv_head, q_heads_per_group, head_size]
+    # gate_proj is a separate projection with output [kv_head, q_heads_per_group, 1]
+    attn = eqx.tree_at(lambda a: a.q_proj.weight, attn, hax.zeros(attn.q_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.q_proj.bias, attn, hax.zeros(attn.q_proj.bias.axes))
+    attn = eqx.tree_at(lambda a: a.k_proj.weight, attn, hax.zeros(attn.k_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.k_proj.bias, attn, hax.zeros(attn.k_proj.bias.axes))
+    attn = eqx.tree_at(lambda a: a.v_proj.weight, attn, hax.zeros(attn.v_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.v_proj.bias, attn, hax.ones(attn.v_proj.bias.axes))
+    attn = eqx.tree_at(lambda a: a.o_proj.weight, attn, hax.ones(attn.o_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.o_proj.bias, attn, hax.zeros(attn.o_proj.bias.axes))
+    # Zero out gate_proj so sigmoid(0) = 0.5
+    attn = eqx.tree_at(lambda a: a.gate_proj.weight, attn, hax.zeros(attn.gate_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.gate_proj.bias, attn, hax.zeros(attn.gate_proj.bias.axes))
+
+    x = hax.zeros((Pos, Embed))
+    out = attn(x, None)
+
+    expected = np.full((2, 1), 0.5)
+    assert_trees_all_close(out.array, expected)
+
+
+def test_align_kv_heads_repeats_grouped_query_heads():
+    kv = jnp.arange(2 * 3 * 2 * 4, dtype=jnp.float32).reshape(2, 3, 2, 4)
+
+    aligned = align_kv_heads(kv, num_q_heads=4)
+
+    assert aligned.shape == (2, 3, 4, 4)
+    assert jnp.array_equal(aligned[:, :, 0], kv[:, :, 0])
+    assert jnp.array_equal(aligned[:, :, 1], kv[:, :, 0])
+    assert jnp.array_equal(aligned[:, :, 2], kv[:, :, 1])
+    assert jnp.array_equal(aligned[:, :, 3], kv[:, :, 1])
+
+
+@skip_if_not_enough_devices(8)
+def test_align_kv_heads_lowers_with_explicit_mesh_axes():
+    mesh = _make_explicit_mesh()
+    abstract_mesh = _make_explicit_abstract_mesh()
+    sharding = NamedSharding(mesh, PartitionSpec("data", None, "model", None))
+    kv = jax.ShapeDtypeStruct((8, 3, 2, 4), jnp.float32, sharding=sharding)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(abstract_mesh):
+        aligned = eqx.filter_eval_shape(lambda: align_kv_heads(kv, num_q_heads=4))
+
+    assert aligned.shape == (8, 3, 4, 4)
+    assert aligned.sharding == NamedSharding(abstract_mesh, PartitionSpec("data", None, "model", None))
 
 
 def test_te_bin_and_group_axes_by_function():
@@ -350,7 +478,7 @@ def test_tpu_splash_attention():
     if jax.default_backend() != "tpu":
         pytest.skip("TPU only")
 
-    BLOCK_SIZE = 512
+    BLOCK_SIZE = 256
 
     Head = hax.Axis("Head", 8)
     Key = hax.Axis("Key", 128)  # splash only supports 128
@@ -385,7 +513,7 @@ def test_tpu_splash_attention_sliding_window():
     if jax.default_backend() != "tpu":
         pytest.skip("TPU only")
 
-    BLOCK_SIZE = 512
+    BLOCK_SIZE = 256
 
     Head = hax.Axis("Head", 8)
     Key = hax.Axis("Key", 128)  # splash only supports 128

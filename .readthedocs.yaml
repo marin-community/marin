@@ -4,6 +4,7 @@ build:
   os: "ubuntu-24.04"
   tools:
     python: "3.11"
+    nodejs: "22"
   commands:
     - pip install uv
     - uv sync --group docs --package marin

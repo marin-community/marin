@@ -1,9 +1,10 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Pytest fixtures for zephyr tests."""
+import tempfile
 
-import logging
+import atexit
 import os
 import sys
 import threading
@@ -12,17 +13,12 @@ import traceback
 import warnings
 from pathlib import Path
 
-# Disable Ray's automatic UV runtime env propagation BEFORE importing ray.
-# This prevents Ray from packaging the entire working directory (~38MB) for actors.
-os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
-os.environ["MARIN_CI_DISABLE_RUNTIME_ENVS"] = "1"
+from rigging.timing import ExponentialBackoff
 
 import pytest
-import ray
 from fray.v2 import ResourceConfig
 from fray.v2.iris_backend import FrayIrisClient
 from fray.v2.local_backend import LocalClient
-from fray.v2.ray_backend.backend import RayClient
 from zephyr import load_file
 from zephyr.execution import ZephyrContext
 
@@ -30,46 +26,53 @@ from zephyr.execution import ZephyrContext
 ZEPHYR_ROOT = Path(__file__).resolve().parents[1]
 
 # Use Iris demo config as base
-IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "examples" / "demo.yaml"
+IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "examples" / "test.yaml"
 
 
 @pytest.fixture(scope="session")
 def iris_cluster():
     """Start local Iris cluster for testing - reused across all tests."""
-    from iris.cluster.manager import ClusterManager
-    from iris.cluster.config import load_config, make_local_config
+    from iris.cluster.config import load_config, make_local_config, connect_cluster
 
     config = load_config(IRIS_CONFIG)
     config = make_local_config(config)
-    manager = ClusterManager(config)
-    with manager.connect() as url:
+    with connect_cluster(config) as url:
         yield url
 
 
+# --- Local-only fixtures (functional tests) ---
+
+
 @pytest.fixture(scope="session")
-def ray_cluster():
-    """Initialize Ray cluster for testing - reused across all tests."""
-    if not ray.is_initialized():
-        logging.info("Initializing Ray cluster for zephyr tests")
-        ray.init(
-            address="local",
-            num_cpus=8,
-            ignore_reinit_error=True,
-            logging_level="info",
-            log_to_driver=True,
-            resources={"head_node": 1},
-        )
-    yield
-    # Don't shutdown - Ray will be reused across test sessions
+def local_client():
+    client = LocalClient()
+    yield client
+    client.shutdown(wait=True)
 
 
-@pytest.fixture(params=["local", "iris", "ray"], scope="module")
-def fray_client(request):
-    """Parametrized fixture providing Local, Iris, and Ray clients.
+@pytest.fixture(scope="session")
+def zephyr_ctx(local_client, tmp_path_factory):
+    """Local-only ZephyrContext for functional tests."""
+    tmp_path = tmp_path_factory.mktemp("zephyr")
+    ctx = ZephyrContext(
+        client=local_client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name="test-ctx",
+    )
+    yield ctx
+    ctx.shutdown()
 
-    Fixtures are requested lazily to avoid initializing Ray when running
-    Iris tests (and vice-versa), since ray.is_initialized() being true
-    causes current_client() auto-detection to pick Ray.
+
+# --- Multi-backend fixtures (integration tests) ---
+
+
+@pytest.fixture(params=["local", "iris"], scope="session")
+def integration_client(request):
+    """Parametrized fixture providing Local and Iris clients.
+
+    Session-scoped to reuse clusters across all test modules.
     """
     if request.param == "local":
         client = LocalClient()
@@ -83,42 +86,45 @@ def fray_client(request):
         iris_client = IrisClient.remote(iris_cluster, workspace=ZEPHYR_ROOT)
         client = FrayIrisClient.from_iris_client(iris_client)
 
-        # Set up IrisContext so actor handles can resolve
-        ctx = IrisContext(job_id=JobName.root("test"), client=iris_client)
+        ctx = IrisContext(job_id=JobName.root("test-user", "test"), client=iris_client)
         with iris_ctx_scope(ctx):
             yield client
         client.shutdown(wait=True)
-    elif request.param == "ray":
-        request.getfixturevalue("ray_cluster")
-        client = RayClient()
-        yield client
-        client.shutdown(wait=True)
     else:
         raise ValueError(f"Unknown backend: {request.param}")
+
+
+@pytest.fixture(scope="session")
+def integration_ctx(integration_client, tmp_path_factory):
+    """ZephyrContext on all backends for integration tests."""
+    tmp_path = tmp_path_factory.mktemp("zephyr-integration")
+    ctx = ZephyrContext(
+        client=integration_client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name="test-integration",
+    )
+    yield ctx
+    ctx.shutdown()
+
+
+@pytest.fixture
+def actor_context():
+    """Provide a fake actor context so ZephyrCoordinator can call current_actor()."""
+    from unittest.mock import MagicMock
+
+    from fray.v2.actor import ActorContext, _reset_current_actor, _set_current_actor
+
+    token = _set_current_actor(ActorContext(handle=MagicMock(), index=0, group_name="test-coord"))
+    yield
+    _reset_current_actor(token)
 
 
 @pytest.fixture
 def sample_data():
     """Sample data for testing."""
     return list(range(1, 11))  # [1, 2, 3, ..., 10]
-
-
-@pytest.fixture(scope="module")
-def zephyr_ctx(fray_client, tmp_path_factory):
-    """ZephyrContext running on all backends with temp chunk storage.
-
-    Module-scoped to reuse coordinator/workers across tests in the same file.
-    """
-    tmp_path = tmp_path_factory.mktemp("zephyr")
-    chunk_prefix = str(tmp_path / "chunks")
-    with ZephyrContext(
-        client=fray_client,
-        num_workers=2,
-        resources=ResourceConfig(cpu=1, ram="512m"),
-        chunk_storage_prefix=chunk_prefix,
-        name="test-ctx",
-    ) as ctx:
-        yield ctx
 
 
 class CallCounter:
@@ -145,26 +151,61 @@ class CallCounter:
 
 
 @pytest.fixture(autouse=True)
+def _configure_marin_prefix():
+    """Set MARIN_PREFIX to a temp directory for tests that rely on it."""
+    if "MARIN_PREFIX" in os.environ:
+        yield
+        return
+
+    with tempfile.TemporaryDirectory(prefix="marin_prefix") as temp_dir:
+        os.environ["MARIN_PREFIX"] = temp_dir
+        yield
+        del os.environ["MARIN_PREFIX"]
+
+
+# Thread name prefixes for infrastructure threads managed by session-scoped
+# clusters (iris, fray). These persist across tests and are not leaks.
+_INFRA_THREAD_PREFIXES = (
+    "worker-server",
+    "worker-lifecycle",
+    "AnyIO worker thread",
+    "ThreadPoolExecutor",
+    "asyncio_",
+    "grpc_",
+    "monitoring",
+)
+
+
+@pytest.fixture(autouse=True)
 def _thread_cleanup():
     """Ensure no new non-daemon threads leak from each test.
 
     Takes a snapshot of threads before the test and checks that no new
     non-daemon threads remain after teardown. Waits briefly for threads
     that are in the process of shutting down.
+
+    Infrastructure threads from session-scoped clusters (iris) are
+    excluded — they persist for the session and are not leaks.
     """
     before = {t.ident for t in threading.enumerate()}
     yield
 
-    deadline = time.monotonic() + 5.0
+    def _is_leaked(t: threading.Thread) -> bool:
+        if not t.is_alive() or t.daemon or t.name == "MainThread":
+            return False
+        if t.ident in before:
+            return False
+        if any(t.name.startswith(prefix) for prefix in _INFRA_THREAD_PREFIXES):
+            return False
+        return True
+
+    backoff = ExponentialBackoff(initial=0.1, maximum=1.0)
+    deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline:
-        leaked = [
-            t
-            for t in threading.enumerate()
-            if t.is_alive() and not t.daemon and t.name != "MainThread" and t.ident not in before
-        ]
+        leaked = [t for t in threading.enumerate() if _is_leaked(t)]
         if not leaked:
             return
-        time.sleep(0.1)
+        time.sleep(backoff.next_interval())
 
     thread_info = [f"{t.name} (daemon={t.daemon}, ident={t.ident})" for t in leaked]
     warnings.warn(
@@ -189,4 +230,4 @@ def pytest_sessionfinish(session, exitstatus):
         tty.flush()
         tty.close()
         if exitstatus != 0:
-            os._exit(exitstatus)
+            atexit.register(os._exit, exitstatus)

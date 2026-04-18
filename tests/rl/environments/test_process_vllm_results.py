@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for vLLM result processing functions."""
@@ -7,7 +7,6 @@ import pytest
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice, ChoiceLogprobs, ChatCompletionTokenLogprob
 from openai.types.completion_usage import CompletionUsage
-from transformers import AutoTokenizer
 
 from marin.rl.environments.process_vllm_results import (
     parse_chat_completion_tokens_from_bytes,
@@ -16,9 +15,9 @@ from marin.rl.environments.process_vllm_results import (
 
 
 @pytest.fixture
-def tokenizer():
-    """Create a tokenizer for testing."""
-    return AutoTokenizer.from_pretrained("gpt2")
+def tokenizer(gpt2_tokenizer):
+    """Alias the session-scoped local GPT-2 tokenizer."""
+    return gpt2_tokenizer
 
 
 def create_mock_chat_completion_with_logprobs(
@@ -57,6 +56,8 @@ def create_mock_chat_completion_with_logprobs(
 def test_parse_chat_completion_tokens_special_tokens(tokenizer):
     """Test token parsing with special tokens like newlines."""
     # Ċ is how GPT-2 represents newlines in BPE
+    # "Hello" and "World" are not raw vocab entries in byte-level BPE, so they
+    # fall back to 0 (unknown). Ċ (newline byte) is a real vocab token.
     token_strs = ["Hello", "Ċ", "World"]
     logprobs = [-0.1, -0.2, -0.3]
 
@@ -67,7 +68,8 @@ def test_parse_chat_completion_tokens_special_tokens(tokenizer):
     assert len(parsed_tokens) == 3
     assert all(isinstance(t, int) for t in parsed_tokens)
 
-    expected_ids = [tokenizer.convert_tokens_to_ids(t) for t in token_strs]
+    vocab = tokenizer.get_vocab()
+    expected_ids = [vocab.get(t, 0) for t in token_strs]
     assert parsed_tokens == expected_ids
 
 
@@ -97,11 +99,9 @@ def test_parse_chat_completion_logprobs(tokenizer):
     assert parsed_logprobs == logprobs
 
 
-def test_parse_chat_completion_tokens_empty_response():
+def test_parse_chat_completion_tokens_empty_response(gpt2_tokenizer):
     """Test handling of empty response."""
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
-
     chat_completion = create_mock_chat_completion_with_logprobs("", [], [])
 
-    parsed_tokens = parse_chat_completion_tokens_from_bytes(chat_completion, tokenizer)
+    parsed_tokens = parse_chat_completion_tokens_from_bytes(chat_completion, gpt2_tokenizer)
     assert parsed_tokens == []

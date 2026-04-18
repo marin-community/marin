@@ -3,16 +3,18 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "zephyr"
-version = "0.1.0"
+name = "marin-zephyr"
+version = "0.99"
 description = "Lightweight dataset library for distributed data processing"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-    "iris",
-    "fray[ray]",
+    "marin-iris",
+    "marin-rigging",
+    "marin-fray[ray]",
     "typing-extensions>=4.0",
     "click>=8.0",
+    "cloudpickle>=3.0",
     "humanfriendly>=10.0",
     "msgspec>=0.18.0",
     "numpy>=2.0",
@@ -20,11 +22,8 @@ dependencies = [
     "braceexpand>=0.1.0",
     "zstandard>=0.18.0",
     "tqdm-loggable>=0.2",
-    "vortex-data>=0.1.0",
+    "vortex-data>=0.61.0",
 ]
-
-[project.scripts]
-zephyr = "zephyr.cli:main"
 
 [dependency-groups]
 test = [

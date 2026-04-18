@@ -333,6 +333,9 @@ sequence of inputs. In Haliax, layers are represented as [equinox.nn.Module][]s,
 provides a way to create a sequence of layers that can be applied to a sequence of inputs that implements the
 scan-over-layers pattern.
 
+If your stack does not use a named layer axis, see [ArrayStacked](array-stacked.md) for the array-native variant:
+[haliax.nn.ArrayStacked][].
+
 ### Stacked
 
 [haliax.nn.Stacked][] lets you apply a layer sequentially to an input, scanning over a "Layers" axis. For instance,

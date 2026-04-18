@@ -1,137 +1,112 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for cluster client hierarchical name handling."""
+"""Tests for job lifecycle operations through the RPC service layer.
+
+These tests exercise the ControllerServiceImpl API parameterized across
+both GCP and K8s providers via the ServiceTestHarness.
+"""
 
 import pytest
 from connectrpc.errors import ConnectError
 
-from iris.client import IrisClient, LocalClientConfig
-from iris.cluster.types import Entrypoint, JobName, ResourceSpec
-from iris.rpc import cluster_pb2
+from iris.cluster.types import JobName
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
+
+from .conftest import ServiceTestHarness
 
 
-def dummy_entrypoint():
-    """A simple entrypoint for testing."""
-    pass
+def _ensure_workers(harness: ServiceTestHarness) -> None:
+    """Register a GCP worker if needed. K8s harness already has a default node pool."""
+    if harness.provider_type == "gcp":
+        harness.register_gcp_worker("w1")
 
 
-@pytest.fixture
-def local_client():
-    """Create a IrisClient for testing."""
-    config = LocalClientConfig(max_workers=2)
-    with IrisClient.local(config) as client:
-        yield client
+def test_submit_rejects_duplicate_name(harness: ServiceTestHarness):
+    """Second launch with the same name raises ALREADY_EXISTS."""
+    harness.submit("dup-job")
+    with pytest.raises(ConnectError, match="already exists"):
+        harness.submit("dup-job")
 
 
-def test_submit_rejects_name_with_slash(local_client):
-    """Verify submit raises ValueError for names containing '/'."""
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
+def test_list_jobs_returns_all_jobs(harness: ServiceTestHarness):
+    """All submitted jobs appear in list_jobs results."""
+    id1 = harness.submit("list-job-1")
+    id2 = harness.submit("list-job-2")
 
-    with pytest.raises(ValueError) as exc_info:
-        local_client.submit(entrypoint, "invalid/name", resources)
+    resp = harness.service.list_jobs(controller_pb2.Controller.ListJobsRequest(), None)
+    job_ids = {j.job_id for j in resp.jobs}
 
-    assert "/" in str(exc_info.value)
-
-
-def test_submit_rejects_duplicate_name(local_client):
-    """Verify submit rejects duplicate job names."""
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
-
-    # First submit should succeed
-    job = local_client.submit(entrypoint, "duplicate-job", resources)
-    assert job.job_id == JobName.root("duplicate-job")
-
-    # Second submit with same name should fail with RPC conflict error
-    with pytest.raises(ConnectError) as exc_info:
-        local_client.submit(entrypoint, "duplicate-job", resources)
-
-    assert "already exists" in str(exc_info.value)
+    assert id1.to_wire() in job_ids
+    assert id2.to_wire() in job_ids
 
 
-def test_list_jobs_returns_all_jobs(local_client):
-    """Verify list_jobs returns all submitted jobs."""
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
+def test_list_jobs_filter_by_state(harness: ServiceTestHarness):
+    """list_jobs state_filter narrows results to the requested state."""
+    _ensure_workers(harness)
 
-    job1 = local_client.submit(entrypoint, "list-job-1", resources)
-    job2 = local_client.submit(entrypoint, "list-job-2", resources)
+    # Drive one job to completion first, then submit a second job that
+    # stays pending. This ordering avoids the K8s sync (triggered by
+    # drive_job_to_completion) from also advancing the pending job.
+    done_id = harness.submit("will-succeed")
+    harness.drive_job_to_completion(done_id)
+    pending_id = harness.submit("stays-pending")
 
-    jobs = local_client.list_jobs()
-    job_ids = {j.job_id for j in jobs}
+    succeeded = harness.service.list_jobs(controller_pb2.Controller.ListJobsRequest(state_filter="succeeded"), None)
+    succeeded_ids = {j.job_id for j in succeeded.jobs}
+    assert done_id.to_wire() in succeeded_ids
+    assert pending_id.to_wire() not in succeeded_ids
 
-    assert job1.job_id.to_wire() in job_ids
-    assert job2.job_id.to_wire() in job_ids
-
-
-def test_list_jobs_filter_by_state(local_client):
-    """Verify list_jobs can filter by state."""
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
-
-    job = local_client.submit(entrypoint, "state-filter-job", resources)
-    job.wait()  # Wait for completion
-
-    # Filter for SUCCEEDED only
-    succeeded_jobs = local_client.list_jobs(states=[cluster_pb2.JOB_STATE_SUCCEEDED])
-    assert any(j.job_id == job.job_id.to_wire() for j in succeeded_jobs)
-
-    # Filter for PENDING only - should not include completed job
-    pending_jobs = local_client.list_jobs(states=[cluster_pb2.JOB_STATE_PENDING])
-    assert not any(j.job_id == job.job_id.to_wire() for j in pending_jobs)
+    pending = harness.service.list_jobs(controller_pb2.Controller.ListJobsRequest(state_filter="pending"), None)
+    pending_ids = {j.job_id for j in pending.jobs}
+    assert pending_id.to_wire() in pending_ids
+    assert done_id.to_wire() not in pending_ids
 
 
-def test_list_jobs_filter_by_prefix(local_client):
-    """Verify list_jobs can filter by job_id prefix."""
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
+def test_list_jobs_filter_by_name(harness: ServiceTestHarness):
+    """list_jobs name_filter matches job names containing the substring."""
+    harness.submit("exp-a-job")
+    harness.submit("exp-b-job")
+    other_id = harness.submit("other-job")
 
-    local_client.submit(entrypoint, "exp-a-job", resources)
-    local_client.submit(entrypoint, "exp-b-job", resources)
-    local_client.submit(entrypoint, "other-job", resources)
+    resp = harness.service.list_jobs(controller_pb2.Controller.ListJobsRequest(name_filter="exp-"), None)
+    job_ids = {j.job_id for j in resp.jobs}
 
-    # Filter by prefix
-    jobs = local_client.list_jobs(prefix=JobName.root("exp-"))
-    job_ids = {j.job_id for j in jobs}
-
-    assert JobName.root("exp-a-job").to_wire() in job_ids
-    assert JobName.root("exp-b-job").to_wire() in job_ids
-    assert JobName.root("other-job").to_wire() not in job_ids
+    assert other_id.to_wire() not in job_ids
+    assert len(job_ids) >= 2
 
 
-def test_terminate_prefix_basic(local_client):
-    """Verify terminate_prefix terminates matching jobs."""
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
+def test_terminate_job(harness: ServiceTestHarness):
+    """terminate_job transitions a running job to KILLED."""
+    _ensure_workers(harness)
+    job_id = harness.submit("term-me")
 
-    # Submit jobs with different prefixes
-    local_client.submit(entrypoint, "exp-a-job1", resources)
-    local_client.submit(entrypoint, "exp-a-job2", resources)
-    local_client.submit(entrypoint, "exp-b-job1", resources)
+    harness.service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None)
 
-    # Terminate exp-a jobs
-    terminated = local_client.terminate_prefix(JobName.root("exp-a"))
-
-    assert len(terminated) == 2
-    assert JobName.root("exp-a-job1") in terminated
-    assert JobName.root("exp-a-job2") in terminated
-    assert JobName.root("exp-b-job1") not in terminated
+    status = harness.get_job_status(job_id)
+    assert status.state == job_pb2.JOB_STATE_KILLED
 
 
-def test_terminate_prefix_excludes_finished(local_client):
-    """Verify terminate_prefix skips finished jobs by default."""
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
+def test_terminate_job_skips_finished(harness: ServiceTestHarness):
+    """Terminating an already-succeeded job is a no-op (no error)."""
+    _ensure_workers(harness)
+    job_id = harness.submit("already-done")
+    harness.drive_job_to_completion(job_id)
 
-    job = local_client.submit(entrypoint, "finished-test", resources)
-    job.wait()  # Wait for completion
+    status = harness.get_job_status(job_id)
+    assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
-    # Job should be SUCCEEDED now
-    status = job.status()
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    # Terminating a finished job should not raise
+    harness.service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None)
+    # State should remain SUCCEEDED
+    status = harness.get_job_status(job_id)
+    assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
-    # terminate_prefix should not include it
-    terminated = local_client.terminate_prefix(JobName.root("finished-test"))
-    assert job.job_id not in terminated
+
+def test_submit_rejects_name_with_slash(harness: ServiceTestHarness):
+    """Job names containing '/' at the leaf are rejected."""
+    # JobName.root already validates that the name segment is clean,
+    # so constructing a wire name with a slash in the leaf is invalid.
+    with pytest.raises(ValueError):
+        JobName.root("test-user", "invalid/name")

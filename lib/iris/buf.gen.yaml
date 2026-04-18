@@ -6,5 +6,5 @@ plugins:
     out: src/iris/rpc
   - remote: buf.build/protocolbuffers/pyi:v33.4
     out: src/iris/rpc
-  - remote: buf.build/connectrpc/python
+  - remote: buf.build/connectrpc/python:v0.9.0
     out: src/iris/rpc

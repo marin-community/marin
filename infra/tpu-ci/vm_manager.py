@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 #
@@ -247,6 +247,13 @@ REGISTRATION_TOKEN=$(curl -s -X POST \\
   -H "Authorization: Bearer $GITHUB_TOKEN" \\
   https://api.github.com/repos/marin-community/marin/actions/runners/registration-token \\
   | jq -r .token)
+
+if [ "$REGISTRATION_TOKEN" = "null" ] || [ -z "$REGISTRATION_TOKEN" ]; then
+    echo "ERROR: Failed to obtain runner registration token from GitHub API."
+    echo "The PAT in Secret Manager likely expired or lacks the 'Administration' repository permission."
+    echo "Update it with: MARIN_CI_TOKEN=<new-token> uv run infra/tpu-ci/setup.py update-token"
+    exit 1
+fi
 
 echo "Configuring GitHub Actions runner..."
 cd /home/$RUNNER_USER
@@ -763,7 +770,8 @@ def debug_tpu(name: str, test_path: str, pytest_args: str, timeout: int, env_var
     for env_var in env_vars:
         env_var_flags += f"  -e {env_var} \\\n"
 
-    # Use the same script structure as GitHub Actions workflow
+    # Match the GitHub Actions TPU path and keep pytest single-process because
+    # some levanter tests call jax.devices() during collection.
     test_script = f"""
 sudo rm -f /tmp/libtpu_lockfile || true
 sudo lsof -t /dev/vfio/* 2>/dev/null | xargs -r sudo kill -9 || true
@@ -784,7 +792,7 @@ sudo docker run --rm \\
   --tmpfs /workspace/.pytest_cache:rw \\
   -w /workspace \\
   ghcr.io/{config.GITHUB_REPOSITORY}/{config.DOCKER_IMAGE_NAME}:{config.DOCKER_IMAGE_TAG} \\
-  timeout --kill-after=5 --signal=TERM {timeout} uv run pytest {test_path} {pytest_args}
+  timeout --kill-after=5 --signal=TERM {timeout} uv run pytest -n 0 {test_path} {pytest_args}
 """
 
     ssh_cmd = [

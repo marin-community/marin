@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -255,6 +255,9 @@ def process_cluster(config_path: str, threshold: int, dry_run: bool, parallel: i
     deleted = cleanup_preempted_tpus(zone, project, dry_run)
     if deleted:
         logger.info(f"Cleaned up {len(deleted)} preempted/terminated TPUs")
+
+    if threshold <= 0:
+        return True
 
     tpu_names = list_cluster_workers(zone, project)
     if not tpu_names:

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import jax.numpy as jnp
@@ -87,7 +87,15 @@ def create_test_inference_context():
         def __init__(self):
             self.tokenizer = create_test_tokenizer()
 
-        def batch_completions(self, prompts, temperature, n, max_tokens=None, stop=None, system_prompt=None):
+        def batch_completions(
+            self,
+            prompts,
+            temperature,
+            n,
+            max_tokens=None,
+            stop=None,
+            system_prompt=None,
+        ):
             completions = []
             for prompt in prompts:
                 responses = [f"mock_response_{i}" for i in range(n)]

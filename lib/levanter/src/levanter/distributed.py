@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import atexit
@@ -108,7 +108,6 @@ class LevanterSlurmCluster(clusters.SlurmCluster):
                 f"Number of visible devices ({len(all_visible_devices)}) is not divisible by the number "
                 f"of local tasks ({local_process_count})"
             )
-            return None
 
         num_devices_per_local_process = len(all_visible_devices) // local_process_count
 
@@ -350,6 +349,14 @@ class DistributedConfig:
             logger.info("Skipping jax.distributed.initialize because initialize_jax_distributed=False.")
             return
 
+        from iris.cluster.client.job_info import get_job_info
+        from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
+
+        if get_job_info() is not None:
+            logger.info("Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.")
+            initialize_iris_jax()
+            return
+
         if self._is_distributed():
             device_ids = self.local_device_ids
             coordinator_address = self.coordinator_address
@@ -391,7 +398,7 @@ class DistributedConfig:
 class RayConfig:
     address: Optional[str] = None
     start_workers: bool = True
-    auto_start_cluster: bool = True
+    auto_start_cluster: bool = False
 
     def initialize(self):
         if self.auto_start_cluster:
@@ -450,12 +457,12 @@ def _is_local_leader():
 
     try:
         with lock.acquire(timeout=0.1):
+            atexit.register(_remove_if_possible, lock.lock_file)
+            atexit.register(_remove_if_possible, action_performed_file)
             if not os.path.exists(action_performed_file):
                 _touch(action_performed_file)
                 return True  # Action needs to be performed
             else:
                 return False  # Action already performed
-            atexit.register(_remove_if_possible, lock.lock_file)
-            atexit.register(_remove_if_possible, action_performed_file)
     except filelock.Timeout:
         return False

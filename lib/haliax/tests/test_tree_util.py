@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -89,3 +89,28 @@ def test_scan_aware_tree_map():
     model3 = htu.tree_map(transform_linear, model, is_leaf=lambda x: isinstance(x, hax.nn.Linear))
 
     assert hax.all(model2.layers.stacked.up.weight != model3.layers.stacked.up.weight)
+
+
+def test_scan_aware_tree_map_with_array_stacked():
+    class Layer(eqx.Module):
+        weight: jax.Array
+
+        @staticmethod
+        def init(weight):
+            return Layer(weight=weight)
+
+    num_layers = 3
+    width = 5
+    stacked = hax.nn.ArrayStacked.init(num_layers, Layer)(
+        weight=jax.random.normal(jax.random.PRNGKey(0), (num_layers, width))
+    )
+
+    def normalize_layer(x):
+        if not isinstance(x, Layer):
+            return x
+        return dataclasses.replace(x, weight=x.weight - jnp.mean(x.weight))  # type: ignore
+
+    mapped_scan = htu.scan_aware_tree_map(normalize_layer, stacked, is_leaf=lambda x: isinstance(x, Layer))
+    mapped_plain = htu.tree_map(normalize_layer, stacked, is_leaf=lambda x: isinstance(x, Layer))
+
+    assert jnp.any(mapped_scan.stacked.weight != mapped_plain.stacked.weight)

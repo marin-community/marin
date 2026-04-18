@@ -1,10 +1,12 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from fray.cluster import ResourceConfig
+from levanter.eval_harness import TaskConfig
 
 # Wandb project name for evaluations. Controlled via WANDB_PROJECT env var.
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
@@ -69,9 +71,9 @@ class EvaluationConfig:
     Whether to discover the latest HF checkpoint in the model path.
     """
 
-    launch_with_ray: bool = True
+    launch_with_ray: bool = False
     """
-    Whether to launch the evaluation run with Ray.
+    Deprecated. Eval dispatch now uses Fray @remote via the executor.
     """
 
     max_eval_instances: int | None = None
@@ -102,3 +104,15 @@ class EvaluationConfig:
     base_eval_run_name: str | None = None
     """Custom base name for wandb runs. If set, wandb runs will be named
     evalchemy-{base_eval_run_name}[-step{N}]-{task}-seed{S}."""
+
+
+def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
+    """Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects."""
+    return [
+        TaskConfig(
+            task=task.name,
+            num_fewshot=task.num_fewshot,
+            task_alias=task.task_alias,
+        )
+        for task in tasks
+    ]

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -10,11 +10,6 @@ Given an input path to a top-level `documents/` directory on GCS, runs a Zephyr 
 validates all documents, computes dataset statistics, and writes a `metadata.json` file
 to the same directory.
 
-Run with:
-    uv run zephyr --backend=ray --max-parallelism=1000 --memory=4GB --cluster=us-central2 \
-        lib/marin/src/marin/validate/validate.py \
-        --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart \
-        --num_examples_to_sample 1024
 """
 
 import json
@@ -22,8 +17,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import draccus
-import fsspec
 import numpy as np
+from rigging.filesystem import open_url
 from marin.utilities.validation_utils import compute_global_mean_std, summarize_document
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
@@ -136,7 +131,7 @@ def aggregate_and_write_metadata(shard_metadata_iter: Iterator[list[dict]], outp
         "examples": examples,
     }
 
-    with fsspec.open(output_path, "wt") as f:
+    with open_url(output_path, "wt") as f:
         json.dump(metadata, f, indent=2)
 
     return {
@@ -152,15 +147,15 @@ def main(cfg: ValidationConfig) -> None:
     pipeline = (
         Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
         .flat_map(load_jsonl)
-        .map_shard(lambda docs: validate_shard(docs, cfg.num_examples_to_sample))
+        .map_shard(lambda docs, _: validate_shard(docs, cfg.num_examples_to_sample))
         .reduce(
             local_reducer=list,
             global_reducer=lambda shards: aggregate_and_write_metadata(shards, f"{cfg.input_path}/metadata.json"),
         )
     )
 
-    with ZephyrContext(name="validate") as ctx:
-        result = list(ctx.execute(pipeline))
+    ctx = ZephyrContext(name="validate")
+    result = ctx.execute(pipeline).results
     print(f"Validation complete: {result[0]}")
 
 

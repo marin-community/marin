@@ -67,9 +67,27 @@ gcloud storage buckets describe "$BUCKET" \
 
 Clearing the policy ensures that once a training job deletes temporary files they disappear immediately, preventing runaway storage bills. You can still enable backups via lifecycle rules or replication if you need recovery.
 
-## Step 4: Configure Lifecycle Rules (Optional but Helpful)
+## Step 4: Temporary Scratch Buckets (`marin-tmp-*`)
 
-Large experimentation buckets benefit from automatic cleanup. For example, delete files under `tmp/` after seven days and move old checkpoints to colder storage:
+For intermediate checkpoints and other short-lived data, Marin provides dedicated **scratch buckets** named `marin-tmp-{region}` (one per region). These buckets have lifecycle rules that automatically delete objects based on a `ttl=Nd/` path prefix — for example, objects stored under `gs://marin-tmp-us-central2/ttl=3d/my-job/` are deleted after 3 days.
+
+Supported TTLs: 1, 2, 3, 4, 5, 6, 7, 14, and 30 days.
+
+To provision or update all scratch buckets (create if missing, disable soft delete, apply lifecycle rules):
+
+```bash
+uv run infra/configure_temp_buckets.py
+
+# Preview without applying changes:
+uv run infra/configure_temp_buckets.py --dry-run
+
+# Target a single bucket:
+uv run infra/configure_temp_buckets.py --bucket marin-tmp-us-central2
+```
+
+### Custom lifecycle rules for your own buckets
+
+For non-scratch buckets, you can still set up lifecycle rules manually. For example, delete files under a prefix after seven days:
 
 ```json
 {
@@ -85,7 +103,7 @@ Large experimentation buckets benefit from automatic cleanup. For example, delet
 Save this as `lifecycle.json` and apply it:
 
 ```bash
-gsutil lifecycle set lifecycle.json "$BUCKET"
+gcloud storage buckets update "$BUCKET" --lifecycle-file=lifecycle.json
 ```
 
 Adjust prefixes to match how your experiments organize outputs.

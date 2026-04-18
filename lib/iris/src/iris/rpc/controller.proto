@@ -1,0 +1,653 @@
+// Copyright The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2023";
+
+// Controller-specific request/response messages and the ControllerService RPC.
+// Shared types live in job.proto; worker-specific types live in worker.proto.
+//
+// Package deliberately kept as iris.cluster to preserve the wire-protocol URL
+// /iris.cluster.ControllerService/... for all existing clients and JS dashboard.
+package iris.cluster;
+
+import "job.proto";
+import "logging.proto";
+import "query.proto";
+import "time.proto";
+import "vm.proto";
+
+// ============================================================================
+// CONTROLLER SERVICE MESSAGES
+// ============================================================================
+
+message Controller {
+  // --- Job Lifecycle ---
+  message LaunchJobRequest {
+    string name = 1;
+    iris.job.RuntimeEntrypoint entrypoint = 2;       // Structured entrypoint for runtime layer
+    iris.job.ResourceSpecProto resources = 3;        // Full resource specification
+    iris.job.EnvironmentConfig environment = 4;  // Environment configuration
+
+    // Bundle information - either provide bundle_id OR blob (not both)
+    string bundle_id = 5;  // Canonical bundle identifier (SHA256 of zip bytes)
+    bytes bundle_blob = 6;  // Direct bundle upload (controller writes to bundle store)
+
+    // Scheduling timeout - job fails with UNSCHEDULABLE if not scheduled within this time
+    // If not set or milliseconds=0, no timeout (wait forever)
+    iris.time.Duration scheduling_timeout = 8;
+
+    // Named ports to allocate (e.g., ["http", "grpc", "actor"])
+    // Worker allocates ports and injects FLUSTER_PORT_<NAME> env vars into the container
+    repeated string ports = 9;
+
+    // Job-level failure tolerance
+    // A job fails when this many tasks have exhausted their retries (default 0 = fail on first task failure)
+    // Preemptions do not count toward this limit
+    int32 max_task_failures = 11;
+
+    // Per-task retry limits
+    // When a task fails (non-zero exit code), retry up to this many times before marking permanently failed
+    int32 max_retries_failure = 12;  // Default: 0 (no retries on task failure)
+
+    // When a task is preempted (worker dies), retry up to this many times
+    int32 max_retries_preemption = 13;  // Default: 100 (generous preemption tolerance)
+
+    // Constraints for filtering workers by attribute.
+    // All constraints must match for a worker to be eligible (AND semantics).
+    repeated iris.job.Constraint constraints = 14;
+
+    // Coscheduling configuration for multi-host jobs (e.g., multi-host TPU).
+    // When set, all tasks are scheduled atomically to workers sharing the same
+    // group_by attribute value. If not enough workers are available in any group,
+    // the job stays pending.
+    iris.job.CoschedulingConfig coscheduling = 15;
+
+    // Number of tasks to create for gang scheduling (default: 1).
+    // For multi-host TPU jobs, set to the number of VMs in the slice.
+    int32 replicas = 20;
+
+    // Per-task timeout. Task is killed if it runs longer than this.
+    // If not set or milliseconds=0, no timeout.
+    iris.time.Duration timeout = 21;
+
+    // If true, return ALREADY_EXISTS error even if an existing job with the same
+    // name is in a terminal state. If false (default), finished jobs are automatically
+    // removed and replaced with the new submission.
+    bool fail_if_exists = 22;
+
+    // Resource reservation. When set, the autoscaler pre-provisions capacity
+    // and the reserving job is held pending until the reservation is satisfied.
+    iris.job.ReservationConfig reservation = 30;
+
+    iris.job.JobPreemptionPolicy preemption_policy = 31;
+    iris.job.ExistingJobPolicy existing_job_policy = 32;
+    iris.job.PriorityBand priority_band = 33;
+
+    // Per-job override for the task container image. When empty, the worker
+    // uses its cluster-configured default_task_image. Used for jobs that
+    // need a custom runtime (e.g. an image with runsc/skopeo for sandboxing
+    // untrusted child workloads).
+    string task_image = 34;
+
+    // Full argv of the CLI invocation that submitted this job (e.g. the
+    // user's `iris ... job run -- python train.py ...`). Captured from
+    // sys.argv at the client with secret-looking env var values redacted.
+    // Empty when submitted programmatically. Bookkeeping only; not
+    // interpreted by the controller.
+    repeated string submit_argv = 35;
+  }
+
+  message LaunchJobResponse {
+    string job_id = 1;
+  }
+
+  message GetJobStatusRequest {
+    string job_id = 1;
+    reserved 2;  // was include_result (removed: serialized_result no longer exists)
+    reserved 3;  // was include_tasks (all callers use ListTasks for per-task detail)
+  }
+
+  message GetJobStatusResponse {
+    iris.job.JobStatus job = 1;
+    LaunchJobRequest request = 2;  // Original job request for debugging
+    // Min/max resource usage across currently-running tasks.
+    iris.job.ResourceUsage resource_min = 3;
+    iris.job.ResourceUsage resource_max = 4;
+  }
+
+  // Lightweight batch state query — returns only the state enum for each job,
+  // avoiding the cost of loading tasks, attempts, and worker addresses.
+  message GetJobStateRequest {
+    repeated string job_ids = 1;
+  }
+
+  message GetJobStateResponse {
+    map<string, iris.job.JobState> states = 1;
+  }
+
+  message TerminateJobRequest {
+    string job_id = 1;
+  }
+
+  // Sort fields for job listing
+  enum JobSortField {
+    JOB_SORT_FIELD_UNSPECIFIED = 0;
+    JOB_SORT_FIELD_DATE = 1;     // submitted_at_ms
+    JOB_SORT_FIELD_NAME = 2;
+    JOB_SORT_FIELD_STATE = 3;
+    JOB_SORT_FIELD_FAILURES = 4;
+    JOB_SORT_FIELD_PREEMPTIONS = 5;
+  }
+
+  enum SortDirection {
+    SORT_DIRECTION_UNSPECIFIED = 0;  // Default to descending for date, ascending for others
+    SORT_DIRECTION_ASC = 1;
+    SORT_DIRECTION_DESC = 2;
+  }
+
+  enum JobQueryScope {
+    JOB_QUERY_SCOPE_UNSPECIFIED = 0;
+    JOB_QUERY_SCOPE_ALL = 1;
+    JOB_QUERY_SCOPE_ROOTS = 2;
+    JOB_QUERY_SCOPE_CHILDREN = 3;
+  }
+
+  message JobQuery {
+    // Ancestry scope. Defaults to JOB_QUERY_SCOPE_ALL (flat list, all depths).
+    JobQueryScope scope = 1;
+    // Required when scope == JOB_QUERY_SCOPE_CHILDREN; ignored otherwise.
+    string parent_job_id = 2;
+    // Substring match against job name (case-insensitive).
+    string name_filter = 3;
+    // Exact state name (e.g. "running"). Empty means all user-visible states.
+    string state_filter = 4;
+    JobSortField sort_field = 5;
+    SortDirection sort_direction = 6;
+    int32 offset = 7;
+    int32 limit = 8;  // Max jobs to return (default: 50, max: 500).
+  }
+
+  message ListJobsRequest {
+    // Preferred typed query shape. When set, legacy fields are ignored.
+    JobQuery query = 9;
+
+    // DEPRECATED: legacy flat query fields kept for rolling compatibility
+    // with older clients (e.g. iris.cluster.client.remote_client, CLI).
+    // The server normalizes these into `query` once at ingestion; do not
+    // read them elsewhere. Remove together with the normalization shim
+    // tracked in https://github.com/marin-community/marin/issues/4573
+    // (~2 weeks after the JobQuery rollout).
+    int32 offset = 1;
+    int32 limit = 2;
+    JobSortField sort_field = 3;
+    SortDirection sort_direction = 4;
+    string name_filter = 5;
+    string state_filter = 6;
+    string parent_job_id = 7;
+  }
+
+  message ListJobsResponse {
+    repeated iris.job.JobStatus jobs = 1;
+
+    // Pagination info
+    int32 total_count = 2;  // Total jobs matching filters (before pagination)
+    bool has_more = 3;      // More jobs available after this page
+  }
+
+  // --- Task Operations ---
+  message GetTaskStatusRequest {
+    string task_id = 1;
+  }
+
+  message GetTaskStatusResponse {
+    iris.job.TaskStatus task = 1;
+    // Job-level resource limits for this task's parent job.
+    iris.job.ResourceSpecProto job_resources = 2;
+  }
+
+  message ListTasksRequest {
+    string job_id = 1;
+  }
+
+  message ListTasksResponse {
+    repeated iris.job.TaskStatus tasks = 1;
+  }
+
+  // --- Exec in Container (proxied to worker) ---
+  message ExecInContainerRequest {
+    string task_id = 1;             // Task whose container to exec into
+    repeated string command = 2;     // Command to execute (e.g. ["bash", "-c", "ls"])
+    int32 timeout_seconds = 3;      // Command timeout in seconds (0 = default 60s)
+  }
+
+  message ExecInContainerResponse {
+    int32 exit_code = 1;
+    string stdout = 2;
+    string stderr = 3;
+    string error = 4;               // Non-empty if exec setup failed
+  }
+
+  // --- Worker Management ---
+  message WorkerInfo {
+    string worker_id = 1;
+    string address = 2;              // host:port for WorkerService
+    iris.job.WorkerMetadata metadata = 3;
+    iris.time.Timestamp registered_at = 4;
+  }
+
+  message WorkerHealthStatus {
+    string worker_id = 1;
+    bool healthy = 2;
+    int32 consecutive_failures = 3;
+    iris.time.Timestamp last_heartbeat = 4;
+    repeated string running_job_ids = 5;
+    string address = 6;                    // Worker RPC address (host:port)
+    iris.job.WorkerMetadata metadata = 7;           // Full worker metadata
+    string status_message = 8;             // Error or status message (e.g., "Heartbeat timeout", "Worker crashed")
+  }
+
+  message ListWorkersRequest {}
+
+  message ListWorkersResponse {
+    repeated WorkerHealthStatus workers = 1;
+  }
+
+  message RegisterRequest {
+    string address = 1;
+    iris.job.WorkerMetadata metadata = 2;
+    // Worker ID assigned by the autoscaler via WorkerConfig.
+    // The controller uses this as the canonical worker identity.
+    string worker_id = 3;
+    // Infrastructure identity from WorkerConfig, set by the autoscaler at
+    // bootstrap. Stored in the workers table so restart_worker() can look
+    // up the worker's slice without waiting for the autoscaler refresh cycle.
+    string slice_id = 4;
+    string scale_group = 5;
+  }
+
+  message RegisterResponse {
+    string worker_id = 1;
+    bool accepted = 2;
+  }
+
+  // --- Endpoint Registry ---
+  // Endpoints are registered with prefixed names: "{root_job_id}/{actor_name}"
+  message Endpoint {
+    string endpoint_id = 1;
+    string name = 2;                 // Full prefixed name: "abc123/my-actor"
+    string address = 3;              // host:port
+    string task_id = 4;              // Wire-format task ID (e.g. "/user/job/0")
+    map<string, string> metadata = 5;
+  }
+
+  message RegisterEndpointRequest {
+    string name = 1;                 // Full prefixed name: "abc123/my-actor"
+    string address = 2;
+    string task_id = 3;              // Wire-format task ID (e.g. "/user/job/0")
+    map<string, string> metadata = 4;
+    int32 attempt_id = 5;            // Attempt number for stale endpoint cleanup
+    string endpoint_id = 6;          // Client-generated UUID for idempotency; server generates one if empty.
+  }
+
+  message RegisterEndpointResponse {
+    string endpoint_id = 1;
+  }
+
+  message UnregisterEndpointRequest {
+    string endpoint_id = 1;
+  }
+
+  message ListEndpointsRequest {
+    string prefix = 1;               // Prefix to match: "abc123/" or "abc123/my-actor"
+    bool exact = 2;                  // If true, match prefix as an exact name instead
+  }
+
+  message ListEndpointsResponse {
+    repeated Endpoint endpoints = 1;
+  }
+
+  // --- Autoscaler ---
+  message GetAutoscalerStatusRequest {}
+
+  message GetAutoscalerStatusResponse {
+    iris.vm.AutoscalerStatus status = 1;
+  }
+
+  // --- Transactions / Actions Log ---
+  message TransactionAction {
+    iris.time.Timestamp timestamp = 1;
+    string action = 2;
+    string entity_id = 3;
+    string details = 4;
+  }
+
+  message GetTransactionsRequest {
+    int32 limit = 1;  // 0 = default (50)
+  }
+
+  message GetTransactionsResponse {
+    repeated TransactionAction actions = 1;
+  }
+
+  // --- Checkpoint ---
+  message BeginCheckpointRequest {}
+  message BeginCheckpointResponse {
+    string checkpoint_path = 1;
+    iris.time.Timestamp created_at = 2;
+    int32 job_count = 3;
+    int32 task_count = 4;
+    int32 worker_count = 5;
+  }
+
+  message UserSummary {
+    string user = 1;
+    map<string, int32> task_state_counts = 2;
+    map<string, int32> job_state_counts = 3;
+  }
+
+  message ListUsersRequest {}
+
+  message ListUsersResponse {
+    repeated UserSummary users = 1;
+  }
+
+  // --- Task/Job Logs (batch fetching) ---
+  message GetTaskLogsRequest {
+    string id = 1;                   // Job ID or Task ID (detected by trailing numeric)
+    bool include_children = 2;       // Include child jobs (only for job IDs)
+    int64 since_ms = 3;              // Only return logs after this timestamp (exclusive)
+    int64 max_total_lines = 4;       // Max lines total (0 = default 10000)
+    string substring = 5;             // Literal substring match on log data
+    int32 attempt_id = 6;            // Filter to specific attempt (-1 = all attempts)
+    string min_level = 7;            // Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+    int64 cursor = 8;               // Autoincrement id cursor for incremental polling
+    bool tail = 9;                  // If true, return the last N lines instead of the first N
+  }
+
+  message TaskLogBatch {
+    string task_id = 1;
+    repeated iris.logging.LogEntry logs = 2;
+    string error = 3;                // If fetch failed for this task
+    string worker_id = 4;            // Worker that produced these logs
+  }
+
+  message GetTaskLogsResponse {
+    repeated TaskLogBatch task_logs = 1;
+    bool truncated = 2;              // True if max_total_lines hit
+
+    // Child job statuses (populated when include_children=true).
+    // Included on every response so the client can detect state transitions
+    // (e.g. child moved to FAILED) without a separate ListJobs RPC.
+    repeated iris.job.JobStatus child_job_statuses = 3;
+
+    int64 cursor = 4;               // Max autoincrement id seen (cursor for next poll)
+  }
+
+  // --- Worker Detail (unified VM + worker view) ---
+  message GetWorkerStatusRequest {
+    string id = 1;  // VM ID or worker ID — resolved against both
+  }
+
+  message GetWorkerStatusResponse {
+    // VM info (null if identifier matched a worker with no VM)
+    iris.vm.VmInfo vm = 1;
+    string scale_group = 2;
+
+    // Worker health (null if no worker registered)
+    WorkerHealthStatus worker = 3;
+
+    // Bootstrap logs (from VM init)
+    string bootstrap_logs = 4;
+
+    // Worker daemon logs (proxied from worker via FetchLogs, empty if unhealthy/absent)
+    repeated iris.logging.LogEntry worker_log_entries = 9;
+
+    reserved 5;  // was: repeated ProcessLogRecord worker_logs
+
+    // Recent tasks that ran or are running on this worker (newest first)
+    repeated iris.job.TaskStatus recent_tasks = 6;
+
+    // Current host-level resource snapshot (from latest heartbeat)
+    iris.job.WorkerResourceSnapshot current_resources = 7;
+
+    // Recent resource history (ring buffer of snapshots from heartbeats)
+    repeated iris.job.WorkerResourceSnapshot resource_history = 8;
+  }
+
+  // --- Provider Status (for direct-dispatch providers like KubernetesProvider) ---
+  message SchedulingEvent {
+    string task_id = 1;
+    int32 attempt_id = 2;
+    string event_type = 3;
+    string reason = 4;
+    string message = 5;
+    iris.time.Timestamp timestamp = 6;
+  }
+
+  message ClusterCapacity {
+    int32 schedulable_nodes = 1;
+    int64 total_cpu_millicores = 2;
+    int64 available_cpu_millicores = 3;
+    int64 total_memory_bytes = 4;
+    int64 available_memory_bytes = 5;
+  }
+
+  message GetProviderStatusRequest {}
+
+  message GetProviderStatusResponse {
+    bool has_direct_provider = 1;
+    repeated SchedulingEvent scheduling_events = 2;
+    ClusterCapacity capacity = 3;
+  }
+
+  message GetKubernetesClusterStatusRequest {}
+
+  message KubernetesPodStatus {
+    string pod_name = 1;
+    string task_id = 2;
+    string phase = 3;
+    string reason = 4;
+    string message = 5;
+    iris.time.Timestamp last_transition = 6;
+    string node_name = 7;
+  }
+
+  message NodePoolStatus {
+    string name = 1;
+    string instance_type = 2;
+    string scale_group = 3;
+    int32 target_nodes = 4;
+    int32 current_nodes = 5;
+    int32 queued_nodes = 6;
+    int32 in_progress_nodes = 7;
+    bool autoscaling = 8;
+    int32 min_nodes = 9;
+    int32 max_nodes = 10;
+    string capacity = 11;
+    string quota = 12;
+  }
+
+  message GetKubernetesClusterStatusResponse {
+    string namespace = 1;
+    int32 total_nodes = 2;
+    int32 schedulable_nodes = 3;
+    string allocatable_cpu = 4;
+    string allocatable_memory = 5;
+    repeated KubernetesPodStatus pod_statuses = 6;
+    string provider_version = 7;
+    repeated NodePoolStatus node_pools = 8;
+  }
+
+  // --- Worker Restart ---
+
+  message RestartWorkerRequest {
+    string worker_id = 1;
+  }
+
+  message RestartWorkerResponse {
+    bool accepted = 1;
+    string error = 2;
+  }
+
+  // --- Budget Management ---
+  message SetUserBudgetRequest {
+    string user_id = 1;
+    int64 budget_limit = 2;      // max budget value (0 = unlimited)
+    iris.job.PriorityBand max_band = 3;   // highest band this user can submit to (lower number = higher priority)
+  }
+  message SetUserBudgetResponse {}
+
+  message GetUserBudgetRequest {
+    string user_id = 1;
+  }
+  message GetUserBudgetResponse {
+    string user_id = 1;
+    int64 budget_limit = 2;
+    int64 budget_spent = 3;      // current running resource value
+    iris.job.PriorityBand max_band = 4;
+  }
+
+  message ListUserBudgetsRequest {}
+  message ListUserBudgetsResponse {
+    repeated GetUserBudgetResponse users = 1;
+  }
+
+  // --- Scheduler State ---
+  message GetSchedulerStateRequest {}
+
+  message SchedulerTaskEntry {
+    string task_id = 1;
+    string job_id = 2;
+    string user_id = 3;
+    iris.job.PriorityBand original_band = 4;
+    iris.job.PriorityBand effective_band = 5;
+    int32 queue_position = 6;
+    int32 resource_value = 7;
+  }
+
+  message SchedulerBandGroup {
+    iris.job.PriorityBand band = 1;
+    repeated SchedulerTaskEntry tasks = 2;
+    int32 total_in_band = 3;
+  }
+
+  message SchedulerUserBudget {
+    string user_id = 1;
+    int64 budget_limit = 2;
+    int64 budget_spent = 3;
+    iris.job.PriorityBand max_band = 4;
+    iris.job.PriorityBand effective_band = 5;
+    float utilization_percent = 6;
+  }
+
+  message SchedulerRunningTask {
+    string task_id = 1;
+    string job_id = 2;
+    string user_id = 3;
+    string worker_id = 4;
+    iris.job.PriorityBand effective_band = 5;
+    int32 resource_value = 6;
+    bool preemptible = 7;
+    repeated iris.job.PriorityBand preemptible_by = 8;
+    bool is_coscheduled = 9;
+  }
+
+  message GetSchedulerStateResponse {
+    repeated SchedulerBandGroup pending_queue = 1;
+    repeated SchedulerUserBudget user_budgets = 2;
+    repeated SchedulerRunningTask running_tasks = 3;
+    int32 total_pending = 4;
+    int32 total_running = 5;
+  }
+}
+
+// ============================================================================
+// SERVICES
+// ============================================================================
+
+service ControllerService {
+  // Job lifecycle
+  rpc LaunchJob(Controller.LaunchJobRequest) returns (Controller.LaunchJobResponse);
+  rpc GetJobStatus(Controller.GetJobStatusRequest) returns (Controller.GetJobStatusResponse);
+  rpc GetJobState(Controller.GetJobStateRequest) returns (Controller.GetJobStateResponse);
+  rpc TerminateJob(Controller.TerminateJobRequest) returns (iris.job.Empty);
+  rpc ListJobs(Controller.ListJobsRequest) returns (Controller.ListJobsResponse);
+
+  // Task operations
+  rpc GetTaskStatus(Controller.GetTaskStatusRequest) returns (Controller.GetTaskStatusResponse);
+  rpc ListTasks(Controller.ListTasksRequest) returns (Controller.ListTasksResponse);
+
+  // Worker management
+  rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);
+  rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
+  // Endpoint registry (generic service discovery)
+  rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
+  rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (iris.job.Empty);
+  rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
+
+  // Autoscaler
+  rpc GetAutoscalerStatus(Controller.GetAutoscalerStatusRequest) returns (Controller.GetAutoscalerStatusResponse);
+
+  // Transactions / Actions Log
+  rpc GetTransactions(Controller.GetTransactionsRequest) returns (Controller.GetTransactionsResponse);
+
+  rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
+
+  // DEPRECATED: use LogService.FetchLogs with regex patterns instead.
+  // Forwards to LogService.FetchLogs internally. Scheduled for removal 2026-05-01.
+  rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);
+
+  // Profiling (proxied to worker)
+  rpc ProfileTask(iris.job.ProfileTaskRequest) returns (iris.job.ProfileTaskResponse);
+
+  // Exec in container (proxied to worker)
+  rpc ExecInContainer(Controller.ExecInContainerRequest) returns (Controller.ExecInContainerResponse);
+
+  // Unified worker detail (VM + worker + logs in one call)
+  rpc GetWorkerStatus(Controller.GetWorkerStatusRequest) returns (Controller.GetWorkerStatusResponse);
+
+  // Checkpoint
+  rpc BeginCheckpoint(Controller.BeginCheckpointRequest) returns (Controller.BeginCheckpointResponse);
+
+  // Process status (local process info + recent logs)
+  rpc GetProcessStatus(iris.job.GetProcessStatusRequest) returns (iris.job.GetProcessStatusResponse);
+
+  // Authentication & API key management
+  rpc GetAuthInfo(iris.job.GetAuthInfoRequest) returns (iris.job.GetAuthInfoResponse);
+  rpc Login(iris.job.LoginRequest) returns (iris.job.LoginResponse);
+  rpc CreateApiKey(iris.job.CreateApiKeyRequest) returns (iris.job.CreateApiKeyResponse);
+  rpc RevokeApiKey(iris.job.RevokeApiKeyRequest) returns (iris.job.Empty);
+  rpc ListApiKeys(iris.job.ListApiKeysRequest) returns (iris.job.ListApiKeysResponse);
+  rpc GetCurrentUser(iris.job.GetCurrentUserRequest) returns (iris.job.GetCurrentUserResponse);
+
+  // Provider status (direct-dispatch providers)
+  rpc GetProviderStatus(Controller.GetProviderStatusRequest) returns (Controller.GetProviderStatusResponse);
+
+  // Kubernetes cluster status
+  rpc GetKubernetesClusterStatus(Controller.GetKubernetesClusterStatusRequest) returns (Controller.GetKubernetesClusterStatusResponse);
+
+  // Generic query API
+  rpc ExecuteRawQuery(iris.query.RawQueryRequest) returns (iris.query.RawQueryResponse);
+
+  // Worker lifecycle
+  rpc RestartWorker(Controller.RestartWorkerRequest) returns (Controller.RestartWorkerResponse);
+
+  // Budget management
+  rpc SetUserBudget(Controller.SetUserBudgetRequest) returns (Controller.SetUserBudgetResponse);
+  rpc GetUserBudget(Controller.GetUserBudgetRequest) returns (Controller.GetUserBudgetResponse);
+  rpc ListUserBudgets(Controller.ListUserBudgetsRequest) returns (Controller.ListUserBudgetsResponse);
+
+  // Scheduler state (dashboard)
+  rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
+}
