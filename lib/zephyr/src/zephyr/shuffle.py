@@ -303,6 +303,14 @@ class ScatterReader:
 
         avg_item_bytes = weighted_bytes / total_chunks_for_avg if total_chunks_for_avg > 0 else 0.0
 
+        logger.info(
+            "ScatterReader for shard %d: %d files, %d total chunks, " "max_chunk_rows=%d, avg_item_bytes=%.1f",
+            target_shard,
+            len(iterators),
+            sum(it.chunk_count for it in iterators),
+            max_rows,
+            avg_item_bytes,
+        )
         return cls(iterators=iterators, max_chunk_rows=max_rows, avg_item_bytes=avg_item_bytes)
 
     def __iter__(self) -> Iterator:
