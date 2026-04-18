@@ -29,7 +29,9 @@ from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+from iris.logging import configure_logging
+
+configure_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Test configuration
@@ -199,7 +201,7 @@ def cleanup():
 
 def run_inference_mode(args):
     """Run in inference worker mode."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    configure_logging(level=logging.INFO)
     logger = logging.getLogger("rollout_worker")
 
     logger.info("Starting inference worker mode...")
@@ -216,7 +218,7 @@ def run_inference_mode(args):
 
 def run_training_mode(args):
     """Run in training worker mode."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    configure_logging(level=logging.INFO)
     logger = logging.getLogger("training_worker")
 
     logger.info("Starting training worker mode...")
@@ -232,7 +234,7 @@ def run_training_mode(args):
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    configure_logging(level=logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",

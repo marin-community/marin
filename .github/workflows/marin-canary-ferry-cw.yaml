@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: '0 10 * * *'  # Daily at 10 AM UTC
   workflow_dispatch:
+    inputs:
+      target_tokens:
+        description: 'Override training token budget'
+        type: number
+        required: false
+      keep_nodepool:
+        description: 'Keep CW node pool alive after the run (for faster re-runs)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read   # actions/checkout
@@ -14,15 +23,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     concurrency:
-      group: canary-ferry-cw
+      group: canary-ferry-cw-iris-canary
       cancel-in-progress: true
+    env:
+      RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
+      CANARY_ACCELERATOR: gpu
+      CANARY_BATCH_SIZE: "32"
+      CANARY_TARGET_TOKENS: "6553600"
+      CANARY_MIN_STEPS: "40"
+      CANARY_MAX_LOSS: "8.0"
+      CANARY_MAX_WALL_CLOCK: "7200"
+      WANDB_ENTITY: marin-community
+      WANDB_PROJECT: marin
+      IRIS_CONFIG: lib/iris/examples/coreweave-canary.yaml
+      # Must match the label_prefix and namespace in IRIS_CONFIG so teardown
+      # targets only this cluster's resources.
+      IRIS_LABEL_PREFIX: iris-canary
+      IRIS_NAMESPACE: iris-canary
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -48,37 +72,111 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Start CoreWeave cluster
-        run: .venv/bin/iris -v --config=lib/iris/examples/coreweave.yaml cluster start
+        run: .venv/bin/iris -v --config=${{ env.IRIS_CONFIG }} cluster start
         env:
           BUILDKIT_PROGRESS: plain
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
       - name: Submit canary ferry
+        id: submit
+        shell: bash -l {0}
         run: |
-          .venv/bin/iris --config=lib/iris/examples/coreweave.yaml \
-            job run \
+          JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+            job run --no-wait \
             --memory=16G --disk=16G --cpu=1 --extra=cpu \
-            -e MARIN_PREFIX s3://marin-us-west-04a/marin/ \
-            -e CANARY_DATE "$(date -u +%Y-%m-%d)" \
+            -e MARIN_PREFIX s3://marin-na/marin/ \
+            -e RUN_ID "$RUN_ID" \
+            -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
+            -e CANARY_BATCH_SIZE "$CANARY_BATCH_SIZE" \
+            -e CANARY_TARGET_TOKENS "$CANARY_TARGET_TOKENS" \
+            -e WANDB_ENTITY "$WANDB_ENTITY" \
+            -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
-            -- python -m experiments.ferries.canary_ferry_cw
+            -- python -m experiments.ferries.canary_ferry)
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+          echo "Submitted job: $JOB_ID"
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CANARY_TARGET_TOKENS: ${{ inputs.target_tokens || env.CANARY_TARGET_TOKENS }}
+
+      - name: Wait for canary ferry
+        shell: bash -l {0}
+        run: |
+          JOB_ID="${{ steps.submit.outputs.job_id }}"
+          echo "Polling job status: $JOB_ID"
+          while true; do
+            STATE=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+              job list --json --prefix "$JOB_ID" \
+              | jq -r --arg id "$JOB_ID" '[.[] | select(.job_id == $id)][0].state // empty')
+            case "$STATE" in
+              JOB_STATE_SUCCEEDED)
+                echo "Job succeeded"
+                exit 0
+                ;;
+              JOB_STATE_PENDING|JOB_STATE_BUILDING|JOB_STATE_RUNNING)
+                echo "$(date -u +%H:%M:%S) Job state: $STATE"
+                sleep 30
+                ;;
+              "")
+                echo "Job not found: $JOB_ID"
+                exit 1
+                ;;
+              *)
+                echo "Job finished with state: $STATE"
+                .venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+                  job list --json --prefix "$JOB_ID" \
+                  | jq --arg id "$JOB_ID" '.[] | {job_id, state, error}' || true
+                exit 1
+                ;;
+            esac
+          done
+
+      - name: Validate canary metrics
+        continue-on-error: ${{ inputs.target_tokens != '' }}
+        shell: bash -l {0}
+        run: .venv/bin/python scripts/canary/validate_canary_metrics.py
+        env:
+          MARIN_PREFIX: s3://marin-na/marin/
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+
+      - name: Summarize GPU canary profile
+        continue-on-error: true
+        shell: bash -l {0}
+        run: |
+          .venv/bin/python -m marin.profiling.cli summarize \
+            --run-target "$RUN_ID" \
+            --entity "$WANDB_ENTITY" \
+            --project "$WANDB_PROJECT"
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+
+      - name: Capture failure diagnostics
+        if: failure()
+        run: |
+          kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
+            logs -l app=iris-controller --tail=500 || true
+          kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
+            describe pod -l app=iris-controller || true
+          kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
+            get events --sort-by='.lastTimestamp' --field-selector type!=Normal || true
 
       # `cluster stop` only deletes Pods; NodePools survive and rely on the
       # CW autoscaler to scale down. Delete them explicitly to avoid lingering
-      # H100 costs. We attempt both even if one fails — cost protection matters
-      # more than clean state.
-      # TODO(#3277): Move NodePool teardown into Iris (e.g. `iris cluster stop
-      # --delete-nodepools`) so CI doesn't leak the `iris-iris-managed` label.
+      # H100 costs.
       - name: Tear down CoreWeave cluster
         if: always()
         run: |
-          .venv/bin/iris -v --config=lib/iris/examples/coreweave.yaml cluster stop || true
-          kubectl --kubeconfig ~/.kube/coreweave-iris \
-            delete nodepool -l iris-iris-managed=true
+          .venv/bin/iris -v --config=${{ env.IRIS_CONFIG }} cluster stop || true
+          if [ "${{ inputs.keep_nodepool }}" != "true" ]; then
+            kubectl --kubeconfig ~/.kube/coreweave-iris \
+              delete nodepool -l iris-${{ env.IRIS_LABEL_PREFIX }}-managed=true
+          else
+            echo "Keeping node pool alive (keep_nodepool=true)"
+          fi

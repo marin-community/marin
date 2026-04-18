@@ -138,3 +138,24 @@ def test_litellm_get_model_output_limit_no_model_info(caplog):
     assert any(
         "Failed to retrieve model info" in record.message and model_name in record.message for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_litellm_forwards_top_p_and_top_k(monkeypatch):
+    llm = LiteLLM(model_name="fake-provider/fake-model", temperature=0.6, top_p=0.95, top_k=20)
+    captured_kwargs = {}
+
+    async def fake_completion(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+
+    monkeypatch.setattr("litellm.acompletion", fake_completion)
+
+    await llm.call(prompt="hello", message_history=[])
+
+    assert captured_kwargs["temperature"] == 0.6
+    assert captured_kwargs["top_p"] == 0.95
+    assert captured_kwargs["top_k"] == 20

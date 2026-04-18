@@ -48,10 +48,23 @@ def test_build_runtime_entrypoint_includes_pip_packages():
     setup = "\n".join(rt.setup_commands)
     assert "torch" in setup
     assert "numpy" in setup
+    assert "--python .venv/bin/python" in setup
     # cloudpickle, py-spy, memray are always included
     assert "cloudpickle" in setup
     assert "py-spy" in setup
     assert "memray" in setup
+
+
+def test_build_runtime_entrypoint_activates_venv_before_pip_install():
+    ep = _make_entrypoint(["python", "train.py"])
+    env = _make_env_config(pip_packages=["numpy"])
+    rt = build_runtime_entrypoint(ep, env)
+
+    setup_commands = list(rt.setup_commands)
+    activate_index = setup_commands.index("source .venv/bin/activate")
+    install_index = next(i for i, cmd in enumerate(setup_commands) if cmd.startswith("uv pip install "))
+
+    assert activate_index < install_index
 
 
 def test_build_runtime_entrypoint_with_python_version():
@@ -59,8 +72,8 @@ def test_build_runtime_entrypoint_with_python_version():
     env = _make_env_config(python_version="3.11")
     rt = build_runtime_entrypoint(ep, env)
 
-    setup = "\n".join(rt.setup_commands)
-    assert "--python 3.11" in setup
+    sync_command = next(cmd for cmd in rt.setup_commands if cmd.startswith("uv sync "))
+    assert "--python 3.11" in sync_command
 
 
 def test_build_runtime_entrypoint_no_python_version():
@@ -68,8 +81,8 @@ def test_build_runtime_entrypoint_no_python_version():
     env = _make_env_config()
     rt = build_runtime_entrypoint(ep, env)
 
-    setup = "\n".join(rt.setup_commands)
-    assert "--python" not in setup
+    sync_command = next(cmd for cmd in rt.setup_commands if cmd.startswith("uv sync "))
+    assert "--python" not in sync_command
 
 
 def test_runtime_entrypoint_to_bash_script_structure():

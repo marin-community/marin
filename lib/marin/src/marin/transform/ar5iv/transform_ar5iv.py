@@ -38,7 +38,7 @@ from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 @dataclass

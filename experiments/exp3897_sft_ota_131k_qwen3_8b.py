@@ -38,6 +38,7 @@ Usage (Iris):
 
 import dataclasses
 import math
+import os
 
 from haliax.nn.scan import ScanCheckpointPolicy
 from levanter.data.text import ChatLmDatasetFormat
@@ -60,11 +61,14 @@ DATASET_ID = "DCAgent2/GLM-4.7-r2egym_sandboxes-maxeps-131k"
 NUM_SAMPLES = 4521
 
 # v5p-32 (16 chips) with batch=16: matches OT-Agent's 16 GPU setup.
+# Override TPU via TPU_VARIANT env var (e.g. v5p-256); batch scales to 1 per chip.
 # 256 GB host RAM: XLA compilation of the 131K graph with host offloading
 # exceeds the default 128 GB.
-RESOURCES = ResourceConfig.with_tpu("v5p-32", ram="256g")
-TRAIN_BATCH_SIZE = 16
-MICROBATCH_SIZE = 16
+TPU_VARIANT = os.environ.get("TPU_VARIANT", "v5p-32")
+RESOURCES = ResourceConfig.with_tpu(TPU_VARIANT, ram="256g")
+NUM_CHIPS = RESOURCES.chip_count()
+TRAIN_BATCH_SIZE = NUM_CHIPS  # 1 example per chip
+MICROBATCH_SIZE = NUM_CHIPS
 
 
 def build_dataset_specs() -> tuple[dict[str, str], dict[str, float]]:

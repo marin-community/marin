@@ -18,6 +18,16 @@ package iris.logging;
 
 import "time.proto";
 
+// Best-effort parsed log level for a log entry.
+enum LogLevel {
+  LOG_LEVEL_UNKNOWN = 0;   // Could not parse a level from the log line
+  LOG_LEVEL_DEBUG = 1;
+  LOG_LEVEL_INFO = 2;
+  LOG_LEVEL_WARNING = 3;
+  LOG_LEVEL_ERROR = 4;
+  LOG_LEVEL_CRITICAL = 5;
+}
+
 // Log entry for task execution.
 // Used for both RPC responses and GCS persistence.
 message LogEntry {
@@ -25,6 +35,7 @@ message LogEntry {
   string source = 2;  // "stdout", "stderr", or "build"
   string data = 3;    // Log line content
   int32 attempt_id = 4;  // Which attempt produced this log
+  LogLevel level = 5;   // Best-effort parsed log level (UNKNOWN if unparseable)
 }
 
 // Collection of log entries for a single source (stdout/stderr/build).

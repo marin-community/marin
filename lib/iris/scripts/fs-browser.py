@@ -56,9 +56,9 @@ def load_s3_config(config_path: str) -> S3Config:
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
     endpoint = cfg["platform"]["coreweave"]["object_storage_endpoint"]
-    # Derive the bucket from the first storage prefix (e.g. s3://marin-test/iris/bundles -> marin-test)
-    bundle_prefix = cfg["storage"]["bundle_prefix"]
-    bucket = bundle_prefix.removeprefix("s3://").split("/")[0]
+    # Derive the bucket from the remote state dir (e.g. s3://marin-test/iris/state -> marin-test)
+    remote_state_dir = cfg["storage"]["remote_state_dir"]
+    bucket = remote_state_dir.removeprefix("s3://").split("/")[0]
     return S3Config(endpoint=endpoint, bucket=bucket)
 
 

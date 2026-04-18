@@ -270,8 +270,8 @@ def cb_tagged_lm_evaluate(
             levanter.tracker.log(log_dict, step=step_count)
             metrics_to_write.update(log_dict)
 
-        # Write metrics to file if checkpoint_path is provided
-        if checkpoint_path is not None and metrics_to_write:
+        # Write metrics to file if checkpoint_path is provided (only from head process to avoid GCS rate limits)
+        if checkpoint_path is not None and metrics_to_write and jax.process_index() == 0:
             metrics_file = os.path.join(checkpoint_path, "eval_metrics.jsonl")
             fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
             fs.makedirs(checkpoint_path, exist_ok=True)
@@ -388,7 +388,7 @@ class TaggedEvaluator(Generic[Ex, M]):
 
     def __init__(
         self,
-        EvalBatch: hax.Axis,
+        EvalBatch: hax.Axis | int,
         tagged_eval_sets: Sequence[tuple[AsyncDataset[Ex], Sequence[str]]],
         loss_fn: Callable[[M, Ex], LossFnOutput],
         tokenizer: Optional[HfTokenizer] = None,
@@ -396,6 +396,8 @@ class TaggedEvaluator(Generic[Ex, M]):
         axis_mapping=None,
         max_examples_per_dataset=None,
     ):
+        if isinstance(EvalBatch, int):
+            EvalBatch = hax.Axis("batch", EvalBatch)
         self.loss_fn = loss_fn
         self.dataset = DomainTaggedDataset(tagged_eval_sets, max_examples_per_dataset)
         self.loader = DataLoader(

@@ -132,11 +132,24 @@ concrete class for testing.)
 ## E2E Tests
 
 All Iris E2E tests live in `tests/e2e/`. Every test is marked `e2e`.
-Tests use three core fixtures:
+Tests are organized into two files:
 
-- `cluster`: Booted local cluster with `IrisClient` and RPC access
-- `page`: Playwright page pointed at the dashboard (request only when needed)
-- `screenshot`: Capture labeled screenshots to `IRIS_SCREENSHOT_DIR`
+- **`test_smoke.py`**: Realistic scenario walkthroughs using a **module-scoped** cluster
+  shared across all smoke tests. Covers diverse job types, dashboard screenshots,
+  scheduling, endpoints, log levels, multi-region routing, profiling, and GPU metadata.
+- **`test_chaos.py`**: Chaos/failure injection tests using a **function-scoped** cluster
+  (fresh cluster per test). Tests bundle download failures, task timeouts, worker crashes,
+  heartbeat failures, RPC failures, checkpoint/snapshot, and high concurrency.
+
+Core fixtures:
+
+- `cluster`: Function-scoped local cluster with `IrisClient` and RPC access (chaos tests)
+- `smoke_cluster`: Module-scoped local cluster for smoke tests (12 workers)
+- `smoke_page` / `smoke_screenshot`: Module-scoped Playwright page and screenshot capture
+- `page` / `screenshot`: Function-scoped Playwright page and screenshot capture
+
+Cloud mode: smoke tests can connect to existing clusters via `--iris-controller-url`
+or start one via `--iris-config` + `--iris-mode`.
 
 Chaos injection is auto-reset between tests. Call `enable_chaos()` directly.
 Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
@@ -147,6 +160,12 @@ Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
 # All unit tests
 uv run pytest lib/iris/tests/ -m "not e2e" -o "addopts="
 
+# E2E smoke tests (shared cluster, fast)
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e -o "addopts="
+
+# E2E chaos tests (fresh cluster per test, slower)
+uv run pytest lib/iris/tests/e2e/test_chaos.py -m e2e -o "addopts="
+
 # All E2E tests
 uv run pytest lib/iris/tests/e2e/ -m e2e -o "addopts="
 
@@ -156,11 +175,14 @@ uv run pytest lib/iris/tests/e2e/ -m "e2e and not docker" -o "addopts="
 # Docker-only tests
 uv run pytest lib/iris/tests/e2e/ -m docker -o "addopts="
 
-# Dashboard tests with screenshots
-IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_dashboard.py -o "addopts="
+# Dashboard smoke tests with screenshots
+IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_smoke.py -o "addopts="
 
-# When modifying the dashboard
-uv run pytest lib/iris/tests/e2e/test_dashboard.py -x -o "addopts="
+# Cloud mode: connect to running cluster
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url http://localhost:8080 -o "addopts="
+
+# Cloud mode: full lifecycle
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-config examples/smoke.yaml --iris-mode full -o "addopts="
 
 # K8s runtime tests (requires a running cluster — kind, k3d, minikube, etc.)
 uv run pytest lib/iris/tests/e2e/test_coreweave_live_kubernetes_runtime.py \

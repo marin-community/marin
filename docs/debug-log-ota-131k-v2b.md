@@ -29,6 +29,25 @@ The `v5p-32` failure was caused by the offload strategy plus frequent temporary 
 
 If we keep the no-offload path and eliminate the 10-minute temporary checkpoints, `v5p-32` should remain stable long enough to reach the halfway point.
 
+## Results
+
+- `exp3897v2b` launched successfully on a fresh `v5p-32` slice after an initial scheduling delay.
+- The `train_lm` child job started at `2026-03-30 08:44:10 UTC` on slice `marin-tpu-v5p-32-us-central1-a-20260330-0840-1dcab560`.
+- All four TPU workers initialized `jax.distributed` cleanly and began loading the `Qwen/Qwen3-8B` HF checkpoint at `08:45:39 UTC`.
+- The model shards loaded fully, and the trainer reached `Tracing train_step for jaxpr...` at `08:47:17 UTC`.
+- All workers completed JAX tracing in about `104.7s` and lowered `train_step` to HLO in about `1.5s` by `08:49:07 UTC`.
+- No OOM, exit 137, or XLA crash has appeared during startup.
+- One new warning is unrelated to model memory: Levanter's config artifact dump cannot encode `save_interval=None`, so W&B skips logging the YAML config artifact. Training continues despite that warning.
+
+## Hypothesis 3
+
+`save_interval=None` is the right runtime setting for `v2b`, but it introduces a benign config-serialization warning in Levanter's tracker path.
+
+## Changes to make
+
+- Do not change the runtime behavior yet; the warning is non-fatal and the priority is to observe train-step stability.
+- If `v2b` proves stable through compilation and early steps, consider a follow-up fix so Levanter can serialize an absent checkpoint interval cleanly.
+
 ## Future Work
 
 - [ ] If `v2b` still OOMs, capture whether it happens during training, permanent checkpoint save, or some unrelated controller/scheduler event.

@@ -70,6 +70,32 @@ def _get_git_non_ignored_files(workspace: Path) -> set[Path] | None:
         return None
 
 
+# Glob patterns for generated files that are gitignored but required at runtime.
+# These are produced by build hooks (e.g. hatch_build.py protobuf generation)
+# and must be included in task bundles so that `uv sync` inside containers can
+# skip regeneration.
+_GENERATED_ARTIFACT_GLOBS = [
+    "src/iris/rpc/*_pb2.py",
+    "src/iris/rpc/*_pb2.pyi",
+    "src/iris/rpc/*_connect.py",
+    "lib/iris/src/iris/rpc/*_pb2.py",
+    "lib/iris/src/iris/rpc/*_pb2.pyi",
+    "lib/iris/src/iris/rpc/*_connect.py",
+]
+
+
+def _include_generated_build_artifacts(workspace: Path, files: set[Path]) -> None:
+    """Add generated build artifacts that exist on disk but are gitignored."""
+    added = 0
+    for pattern in _GENERATED_ARTIFACT_GLOBS:
+        for path in workspace.glob(pattern):
+            if path.is_file() and path not in files and not _should_exclude(path.relative_to(workspace)):
+                files.add(path)
+                added += 1
+    if added:
+        logger.debug("Included %d generated build artifact(s) in bundle", added)
+
+
 class BundleCreator:
     """Helper for creating workspace bundles.
 
@@ -93,6 +119,8 @@ class BundleCreator:
             ValueError: If bundle size exceeds MAX_BUNDLE_SIZE_BYTES
         """
         git_files = _get_git_non_ignored_files(self._workspace)
+        if git_files is not None:
+            _include_generated_build_artifacts(self._workspace, git_files)
 
         with tempfile.TemporaryDirectory(prefix="bundle_") as td:
             bundle_path = Path(td) / "bundle.zip"

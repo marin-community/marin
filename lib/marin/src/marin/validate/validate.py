@@ -152,7 +152,7 @@ def main(cfg: ValidationConfig) -> None:
     pipeline = (
         Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
         .flat_map(load_jsonl)
-        .map_shard(lambda docs: validate_shard(docs, cfg.num_examples_to_sample))
+        .map_shard(lambda docs, _: validate_shard(docs, cfg.num_examples_to_sample))
         .reduce(
             local_reducer=list,
             global_reducer=lambda shards: aggregate_and_write_metadata(shards, f"{cfg.input_path}/metadata.json"),

@@ -1,8 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Proto submodules (time_pb2, config_pb2, vm_pb2, query_pb2, cluster_pb2)
-# are imported directly by their consumers rather than re-exported here.
-# Re-exporting them causes circular imports because iris.time_utils
-# imports time_pb2, which triggers this __init__, which tries to import
-# more submodules from the partially-initialized package.
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Import order matters: cluster_pb2 depends on vm_pb2
+from iris.rpc import vm_pb2 as vm_pb2
+from iris.rpc import cluster_pb2 as cluster_pb2

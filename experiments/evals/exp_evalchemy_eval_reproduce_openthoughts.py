@@ -79,14 +79,12 @@ BASE_GENERATION_PARAMS = {
 # =============================================================================
 # Engine Configuration
 # =============================================================================
-# tensor_parallel_size: Number of TPU chips to use for tensor parallelism
-# v6e-8 has 4 chips, so we use tensor_parallel_size=4 to utilize all chips
+# tensor_parallel_size: Number of TPU chips to use for tensor parallelism.
+# A v6e-8 slice is one 8-chip host; tp=4 uses half of the available chips.
 # max_num_seqs: Batch size for parallel generation
 BATCH_SIZE = 256
 ENGINE_KWARGS = {
-    "tensor_parallel_size": (
-        4
-    ),  # 8 chips on v6e-8, but OpenThinker3-7B has 28 attention heads so 4 is largest possible given 2x4 TPU topology
+    "tensor_parallel_size": 4,  # v6e-8 has 8 chips, but 4 is the largest tensor-parallel degree compatible with 28 heads
     "max_num_seqs": BATCH_SIZE,  # For vLLM: Enable batched generation for better throughput
     "batch_size": BATCH_SIZE,  # For lm-eval: Submit all requests at once for batched inference
 }

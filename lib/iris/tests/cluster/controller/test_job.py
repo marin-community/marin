@@ -1,26 +1,58 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for job state derivation and job-to-task expansion."""
+"""DB-native tests for job/task state behavior and expansion."""
+
 
 import pytest
 
-from iris.cluster.controller.state import ControllerJob, expand_job_to_tasks
-from iris.cluster.types import JobName
+from iris.cluster.controller.db import JOBS, TASKS, WORKERS, ControllerDB, Job, Task, Worker
+from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
+from iris.cluster.log_store import LogStore
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
+from iris.time_utils import Timestamp
+
+
+def _query_job(db: ControllerDB, job_id: JobName) -> Job | None:
+    with db.snapshot() as q:
+        return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
+
+
+def _query_task(db: ControllerDB, task_id: JobName) -> Task | None:
+    with db.snapshot() as q:
+        return q.one(TASKS, where=TASKS.c.task_id == task_id.to_wire())
+
+
+def _query_worker(db: ControllerDB, worker_id: WorkerId) -> Worker | None:
+    with db.snapshot() as q:
+        return q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
+
+
+def _query_tasks_for_job(db: ControllerDB, job_id: JobName) -> list[Task]:
+    with db.snapshot() as q:
+        return q.select(TASKS, where=TASKS.c.job_id == job_id.to_wire())
 
 
 def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
-    """Create a minimal RuntimeEntrypoint proto for testing."""
     entrypoint = cluster_pb2.RuntimeEntrypoint()
     entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     return entrypoint
 
 
 @pytest.fixture
-def make_job_request():
-    """Create a minimal LaunchJobRequest for testing."""
+def state(tmp_path):
+    db_path = tmp_path / "controller.sqlite3"
+    db = ControllerDB(db_path=db_path)
+    log_store = LogStore(db_path=db_path)
+    s = ControllerTransitions(db=db, log_store=log_store)
+    yield s
+    log_store.close()
+    db.close()
 
+
+@pytest.fixture
+def make_job_request():
     def _make(name: str = "test-job") -> cluster_pb2.Controller.LaunchJobRequest:
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
@@ -33,153 +65,112 @@ def make_job_request():
     return _make
 
 
-# --- Task State Tracking ---
+def _register_worker(state: ControllerTransitions, worker_id: str) -> WorkerId:
+    wid = WorkerId(worker_id)
+    metadata = cluster_pb2.WorkerMetadata(
+        hostname=worker_id,
+        ip_address="127.0.0.1",
+        cpu_count=8,
+        memory_bytes=16 * 1024**3,
+        disk_bytes=100 * 1024**3,
+    )
+    state.register_or_refresh_worker(wid, f"{worker_id}:8080", metadata, Timestamp.now())
+    return wid
 
 
-def test_job_compute_job_state_all_succeeded(make_job_request):
-    """Job state becomes SUCCEEDED when all tasks succeed."""
-    job = ControllerJob(job_id=JobName.root("test-user", "test"), request=make_job_request())
-    job.num_tasks = 2
-
-    # Start with pending tasks
-    job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] = 2
-
-    # First task succeeds - job should stay pending
-    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_SUCCEEDED)
-    assert new_state is None
-
-    # Second task succeeds - job should become SUCCEEDED
-    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_SUCCEEDED)
-    assert new_state == cluster_pb2.JOB_STATE_SUCCEEDED
-
-
-def test_job_compute_job_state_failed(make_job_request):
-    """Job state becomes FAILED when task failures exceed threshold."""
-    request = make_job_request()
-    request.max_task_failures = 0
-    job = ControllerJob(job_id=JobName.root("test-user", "test"), request=request)
-    job.num_tasks = 2
-
-    # Start with running tasks
-    job.task_state_counts[cluster_pb2.TASK_STATE_RUNNING] = 2
-    job.state = cluster_pb2.JOB_STATE_RUNNING
-
-    # First task fails - should trigger job failure (0 allowed, 1 failed)
-    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_FAILED)
-    assert new_state == cluster_pb2.JOB_STATE_FAILED
+def _run_task_to_state(state: ControllerTransitions, task_id: JobName, worker_id: WorkerId, new_state: int) -> None:
+    state.queue_assignments([Assignment(task_id=task_id, worker_id=worker_id)])
+    state.apply_task_updates(
+        HeartbeatApplyRequest(
+            worker_id=worker_id,
+            worker_resource_snapshot=None,
+            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING)],
+        )
+    )
+    if new_state != cluster_pb2.TASK_STATE_RUNNING:
+        state.apply_task_updates(
+            HeartbeatApplyRequest(
+                worker_id=worker_id,
+                worker_resource_snapshot=None,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=new_state)],
+            )
+        )
 
 
-def test_job_compute_job_state_tolerates_failures(make_job_request):
-    """Job state stays RUNNING when failures are within threshold."""
-    request = make_job_request()
-    request.max_task_failures = 1
-    job = ControllerJob(job_id=JobName.root("test-user", "test"), request=request)
-    job.num_tasks = 3
-
-    # Start with running tasks
-    job.task_state_counts[cluster_pb2.TASK_STATE_RUNNING] = 3
-    job.state = cluster_pb2.JOB_STATE_RUNNING
-
-    # First task fails - job stays running (1 allowed, 1 failed)
-    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_FAILED)
-    assert new_state is None  # No state change
-
-    # Second task fails - job should fail (1 allowed, 2 failed)
-    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_FAILED)
-    assert new_state == cluster_pb2.JOB_STATE_FAILED
-
-
-def test_job_finished_task_count(make_job_request):
-    """finished_task_count returns count of tasks in terminal states."""
-    job = ControllerJob(job_id=JobName.root("test-user", "test"), request=make_job_request())
-    job.num_tasks = 5
-
-    # Start with 5 pending tasks
-    job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] = 5
-
-    # Move 2 tasks through running to succeeded
-    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING)
-    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING)
-    job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_SUCCEEDED)
-    job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_SUCCEEDED)
-
-    # Move 1 task through running to failed
-    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING)
-    job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_FAILED)
-
-    # Keep 2 tasks running
-    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING)
-    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING)
-
-    assert job.finished_task_count == 3  # 2 succeeded + 1 failed
-
-
-def test_job_on_task_transition_sets_running_on_first_dispatch(make_job_request):
-    """Job state becomes RUNNING when first task starts running."""
-    job = ControllerJob(job_id=JobName.root("test-user", "test"), request=make_job_request())
-    job.num_tasks = 2
-    job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] = 2
-
-    # First task starts running
-    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING)
-
-    assert new_state == cluster_pb2.JOB_STATE_RUNNING
-    assert job.started_at is not None and job.started_at.epoch_ms() > 0
-
-
-# --- Job Expansion ---
-
-
-def test_job_expands_to_correct_number_of_tasks(make_job_request):
-    """expand_job_to_tasks creates correct number of tasks based on replicas."""
-    request = make_job_request()
-    request.replicas = 3
-    job = ControllerJob(job_id=JobName.root("test-user", "test-job"), request=request)
-
-    tasks = expand_job_to_tasks(job)
-
-    assert len(tasks) == 3
-    for i, task in enumerate(tasks):
-        assert task.task_index == i
-        assert task.job_id == job.job_id
-
-
-def test_job_expands_tasks_with_retry_limits_from_request(make_job_request):
-    """expand_job_to_tasks reads per-task retry limits from LaunchJobRequest."""
+def test_job_becomes_succeeded_when_all_tasks_succeed(state: ControllerTransitions, make_job_request) -> None:
     request = make_job_request()
     request.replicas = 2
+    jid = JobName.root("test-user", "all-succeeded")
+    request.name = jid.to_wire()
+    state.submit_job(jid, request, Timestamp.now())
+
+    wid = _register_worker(state, "w1")
+    for task in _query_tasks_for_job(state._db, jid):
+        _run_task_to_state(state, task.task_id, wid, cluster_pb2.TASK_STATE_SUCCEEDED)
+
+    job = _query_job(state._db, jid)
+    assert job is not None
+    assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+
+def test_job_failure_threshold_applies(state: ControllerTransitions, make_job_request) -> None:
+    request = make_job_request()
+    request.replicas = 2
+    request.max_task_failures = 0
+    jid = JobName.root("test-user", "fail-fast")
+    request.name = jid.to_wire()
+    state.submit_job(jid, request, Timestamp.now())
+
+    wid = _register_worker(state, "w1")
+    first = _query_tasks_for_job(state._db, jid)[0]
+    _run_task_to_state(state, first.task_id, wid, cluster_pb2.TASK_STATE_FAILED)
+
+    job = _query_job(state._db, jid)
+    assert job is not None
+    assert job.state == cluster_pb2.JOB_STATE_FAILED
+
+
+def test_job_expands_to_replicas_and_retry_limits(state: ControllerTransitions, make_job_request) -> None:
+    request = make_job_request()
+    request.replicas = 3
     request.max_retries_failure = 3
     request.max_retries_preemption = 7
-    job = ControllerJob(job_id=JobName.root("test-user", "test-job"), request=request)
+    jid = JobName.root("test-user", "expand")
+    request.name = jid.to_wire()
 
-    tasks = expand_job_to_tasks(job)
+    state.submit_job(jid, request, Timestamp.now())
+    tasks = _query_tasks_for_job(state._db, jid)
 
-    assert len(tasks) == 2
-    for task in tasks:
+    assert len(tasks) == 3
+    for idx, task in enumerate(tasks):
+        assert task.task_id == jid.task(idx)
         assert task.max_retries_failure == 3
         assert task.max_retries_preemption == 7
 
 
-def test_job_becomes_unschedulable_when_task_unschedulable(make_job_request):
-    """Job transitions to UNSCHEDULABLE when any task becomes unschedulable."""
-    job = ControllerJob(job_id=JobName.root("test-user", "test"), request=make_job_request())
-    job.num_tasks = 3
-    job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] = 3
+def test_job_becomes_unschedulable_when_task_unschedulable(state: ControllerTransitions, make_job_request) -> None:
+    request = make_job_request()
+    request.replicas = 2
+    jid = JobName.root("test-user", "unsched")
+    request.name = jid.to_wire()
+    state.submit_job(jid, request, Timestamp.now())
 
-    # One task becomes unschedulable
-    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_UNSCHEDULABLE)
+    first_task = _query_tasks_for_job(state._db, jid)[0]
+    state.mark_task_unschedulable(first_task.task_id, reason="no capacity")
 
-    assert new_state == cluster_pb2.JOB_STATE_UNSCHEDULABLE
+    job = _query_job(state._db, jid)
+    assert job is not None
+    assert job.state == cluster_pb2.JOB_STATE_UNSCHEDULABLE
 
 
-def test_job_becomes_killed_when_task_killed(make_job_request):
-    """Job transitions to KILLED when any task is killed."""
-    job = ControllerJob(job_id=JobName.root("test-user", "test"), request=make_job_request())
-    job.num_tasks = 3
-    job.task_state_counts[cluster_pb2.TASK_STATE_RUNNING] = 3
-    job.state = cluster_pb2.JOB_STATE_RUNNING
+def test_job_cancel_marks_job_killed(state: ControllerTransitions, make_job_request) -> None:
+    request = make_job_request()
+    request.replicas = 2
+    jid = JobName.root("test-user", "killed")
+    request.name = jid.to_wire()
+    state.submit_job(jid, request, Timestamp.now())
 
-    # One task is killed
-    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_KILLED)
-
-    assert new_state == cluster_pb2.JOB_STATE_KILLED
+    state.cancel_job(jid, reason="manual")
+    job = _query_job(state._db, jid)
+    assert job is not None
+    assert job.state == cluster_pb2.JOB_STATE_KILLED

@@ -12,17 +12,22 @@ context window at evaluation time; this launcher exports the final HF checkpoint
 for downstream TB2 evaluation.
 
 Usage:
-    uv run lib/marin/src/marin/run/ray_run.py \
-        --env_vars WANDB_ENTITY marin-community \
-        --env_vars WANDB_PROJECT marin \
-        --env_vars TPU_CI true \
-        --cluster us-east5-a \
-        --no_wait \
+    uv run iris --config lib/iris/examples/marin.yaml job run \
+        --tpu v5p-256 \
+        --zone us-east5-a \
+        -e MARIN_PREFIX gs://marin-us-east5 \
+        -e WANDB_ENTITY marin-community \
+        -e WANDB_PROJECT marin \
+        -e WANDB_API_KEY ${WANDB_API_KEY} \
+        -e HF_TOKEN ${HF_TOKEN} \
+        -e TPU_CI true \
+        --no-wait \
         -- python experiments/exp4307_sft_nemotron_terminal_corpus_qwen3_32b.py
 """
 
 import dataclasses
 import math
+import os
 
 import haliax
 from levanter.data.text import ChatLmDatasetFormat
@@ -32,7 +37,7 @@ from experiments.posttrain.instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
     get_instruction_dataset,
 )
-from experiments.qwen3 import qwen3_32b_hf, qwen3_32b_tokenizer
+from experiments.qwen3 import qwen3_32b_hf, qwen3_32b_tokenizer, qwen3_8b_tokenizer
 from experiments.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
 from experiments.simple_sft_config import SimpleSFTConfig, compute_per_device_parallelism
 from fray.cluster import ResourceConfig
@@ -51,21 +56,27 @@ WEIGHTS = {name: float(size) for name, size in SUBSET_SIZES.items()}
 EFFECTIVE_EXAMPLES = int(sum(WEIGHTS.values()))
 
 TARGET_EPOCHS = 2
+_TPU_VARIANT = os.environ.get("TPU_VARIANT", "v5p-256")
+_NUM_CHIPS = int(_TPU_VARIANT.split("-")[-1]) // 2
 TRAIN_BATCH_SIZE = 128
-MICROBATCH_SIZE = 128
+_TENSOR_PARALLEL_SIZE = int(os.environ.get("TENSOR_PARALLEL_SIZE", "1"))
+_NUM_DATA_PARALLEL = _NUM_CHIPS // _TENSOR_PARALLEL_SIZE
+MICROBATCH_SIZE = min(128, _NUM_DATA_PARALLEL)
 NUM_TRAIN_STEPS = max(1, math.ceil(TARGET_EPOCHS * EFFECTIVE_EXAMPLES / TRAIN_BATCH_SIZE))
 
-RESOURCES = ResourceConfig.with_tpu("v5p-256")
+RESOURCES = ResourceConfig.with_tpu(_TPU_VARIANT)
 RESOURCE_SUFFIX = RESOURCES.device.variant.replace("-", "") if RESOURCES.device.kind == "tpu" else "gpu"
 
 
 def create_tokenization_step(dataset_identifier: str, short_name: str):
+    # Qwen3-8B and Qwen3-32B share the same tokenizer (vocab_size=151643, identical encoding).
+    # Reuse the 8B-tokenized data that already exists and is marked SUCCESS.
     dataset_config = INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_identifier]
     dataset = get_instruction_dataset(dataset_identifier, splits=dataset_config.splits)
     return default_tokenize(
-        name=f"{short_name.split('/')[-1]}_qwen3_32b_tokenizer",
+        name=f"{short_name.split('/')[-1]}_qwen3_8b_tokenizer",
         dataset=dataset / "**/*.jsonl.gz",
-        tokenizer=qwen3_32b_tokenizer,
+        tokenizer=qwen3_8b_tokenizer,
         format=ChatLmDatasetFormat(chat_template=QWEN_3_CHAT_TEMPLATE),
     )
 
@@ -77,8 +88,11 @@ sft_config = SimpleSFTConfig(
     tokenizer=qwen3_32b_tokenizer,
     initialize_from_hf="Qwen/Qwen3-32B",
     train_batch_size=TRAIN_BATCH_SIZE,
-    per_device_parallelism=compute_per_device_parallelism(TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES),
+    per_device_parallelism=compute_per_device_parallelism(
+        TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES, _TENSOR_PARALLEL_SIZE
+    ),
     per_device_eval_parallelism=1,
+    tensor_parallel_size=_TENSOR_PARALLEL_SIZE,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=2e-5,
     max_seq_len=32768,

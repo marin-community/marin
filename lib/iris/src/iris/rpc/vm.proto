@@ -69,6 +69,9 @@ message VmInfo {
   string init_log_tail = 21;
   string init_error = 22;
 
+  // Running task count (populated by autoscaler status)
+  int32 running_task_count = 25;
+
   // Labels/metadata
   map<string, string> labels = 30;
 }
@@ -80,6 +83,11 @@ message SliceInfo {
   iris.time.Timestamp created_at = 3;
   repeated VmInfo vms = 4;
   string error_message = 5;
+
+  // Idle tracking: when the slice last had active tasks (epoch_ms=0 means never active)
+  iris.time.Timestamp last_active = 6;
+  // True if the slice is currently eligible for scale-down (idle >= idle_threshold)
+  bool idle = 7;
 }
 
 // A scaling decision
@@ -120,6 +128,9 @@ message ScaleGroupStatus {
 
   // Scale-up cooldown — set when cooldown is active (last_scale_up + cooldown > now)
   iris.time.Timestamp scale_up_cooldown_until = 70;
+
+  // Idle threshold in milliseconds (how long a slice must be idle before scale-down)
+  int64 idle_threshold_ms = 71;
 }
 
 // Autoscaler action/event log entry
@@ -135,8 +146,9 @@ message AutoscalerAction {
 message DemandEntryStatus {
   repeated string task_ids = 1;
   string coschedule_group_id = 2;
-  iris.config.AcceleratorType accelerator_type = 3;
-  string accelerator_variant = 4;
+  reserved 3, 4;
+  string device_type = 7;      // "cpu", "gpu", "tpu"
+  string device_variant = 8;   // e.g. "v5p-8", "H100", or "*" for any
   bool preemptible = 5;
   ResourceSpec resources = 6;
 }

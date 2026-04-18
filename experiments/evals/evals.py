@@ -11,6 +11,7 @@ from collections.abc import Sequence
 
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
+from marin.evaluation.evaluators.harbor_evaluator import HARBOR_EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.run import evaluate
 from marin.execution.remote import remote
 from marin.execution.executor import (
@@ -378,10 +379,12 @@ def evaluate_harbor(
     dataset: str,
     version: str = "1.0",
     max_eval_instances: int | None = None,
+    task_names: list[str] | None = None,
     resource_config: ResourceConfig | None = None,
     apply_chat_template: bool = False,
     wandb_tags: list[str] | None = None,
     generation_params: dict | None = None,
+    engine_kwargs: dict | None = None,
     agent: str = "claude-code",
     n_concurrent: int = 4,
     env: str = "local",
@@ -404,10 +407,12 @@ def evaluate_harbor(
         dataset: Harbor dataset name (e.g., "aime", "terminal-bench", "swebench-verified")
         version: Dataset version (e.g., "1.0", "2.0")
         max_eval_instances: Limit number of tasks to run
-        resource_config: Resource configuration for Ray
+        task_names: Optional explicit Harbor task subset or shard
+        resource_config: Resource configuration for direct Iris execution
         apply_chat_template: Whether to apply chat template (not used by Harbor)
         wandb_tags: Tags for W&B logging
         generation_params: Generation parameters (not used by Harbor)
+        engine_kwargs: Additional vLLM server kwargs for local-model Harbor evals
         agent: Harbor agent type ("claude-code", "terminus-2", etc.)
         n_concurrent: Number of parallel trials
         env: Environment type ("local", "daytona", "e2b", "modal")
@@ -426,24 +431,38 @@ def evaluate_harbor(
         evaluate_harbor("claude-opus-4", None, "swebench-verified", "1.0", max_eval_instances=10)
     """
 
-    # Harbor config goes in engine_kwargs
-    engine_kwargs = {
-        "harbor_config": {
-            "dataset": dataset,
-            "version": version,
-            "agent": agent,
-            "n_concurrent": n_concurrent,
-            "env": env,
-            "agent_kwargs": agent_kwargs or {},
-        }
+    if model_path is not None and resource_config is None:
+        raise ValueError("resource_config must be provided for Harbor evals with a local model_path")
+
+    merged_engine_kwargs = dict(engine_kwargs or {})
+    merged_engine_kwargs["harbor_config"] = {
+        **(merged_engine_kwargs.get("harbor_config") or {}),
+        "dataset": dataset,
+        "version": version,
+        "agent": agent,
+        "n_concurrent": n_concurrent,
+        "env": env,
+        "agent_kwargs": agent_kwargs or {},
+        "task_names": task_names,
     }
 
-    # When model_path is set, the evaluator launches a fray sub-job for vLLM serving
-    # with the correct resources. The outer executor step runs on CPU.
-    dispatch_resources = ResourceConfig.with_cpu() if model_path else resource_config
+    if model_path is None:
+        step_resources = ResourceConfig.with_cpu()
+        pip_dependency_groups = ["harbor"]
+    else:
+        step_resources = resource_config
+        pip_dependency_groups = ["harbor", "vllm"]
+        if resource_config.device.kind == "tpu":
+            pip_dependency_groups.append("tpu")
+
     return ExecutorStep(
         name=f"evaluation/harbor/{model_name}-{dataset}-{version}",
-        fn=remote(evaluate, resources=dispatch_resources, pip_dependency_groups=["harbor"]),
+        fn=remote(
+            evaluate,
+            resources=step_resources,
+            env_vars=env_vars_from_keys(HARBOR_EVAL_ENV_KEYS),
+            pip_dependency_groups=pip_dependency_groups,
+        ),
         config=EvaluationConfig(
             evaluator="harbor",
             model_name=model_name,
@@ -451,9 +470,9 @@ def evaluate_harbor(
             evaluation_path=this_output_path(),
             evals=[],  # Harbor uses dataset directly, not evals
             max_eval_instances=max_eval_instances,
-            launch_with_ray=True,
+            launch_with_ray=False,
             discover_latest_checkpoint=False,
-            engine_kwargs=engine_kwargs,
+            engine_kwargs=merged_engine_kwargs,
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
             wandb_tags=wandb_tags,

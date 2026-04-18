@@ -134,6 +134,11 @@ fi
 # Ensure docker daemon is running
 sudo systemctl start docker || true
 
+# Tune network stack for high-connection workloads (#3066).
+# Expands ephemeral port range and allows reuse of TIME_WAIT sockets.
+sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
+sudo sysctl -w net.ipv4.tcp_tw_reuse=1
+
 # Create cache directory
 sudo mkdir -p {{ cache_dir }}
 
@@ -176,6 +181,7 @@ fi
 # Start worker container without restart policy first (fail fast during bootstrap)
 sudo docker run -d --name iris-worker \\
     --network=host \\
+    --ulimit core=0:0 \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
     -v /etc/iris/worker_config.json:/etc/iris/worker_config.json:ro \\
@@ -285,6 +291,10 @@ else
     exit 1
 fi
 
+# Tune network stack for high-connection workloads (#3066).
+sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
+sudo sysctl -w net.ipv4.tcp_tw_reuse=1
+
 echo "[iris-controller] [3/5] Pulling image: {{ docker_image }}"
 echo "[iris-controller]       This may take several minutes for large images..."
 
@@ -318,10 +328,14 @@ fi
 # Create cache directory
 sudo mkdir -p /var/cache/iris
 
-# Start controller container with restart policy
+# Start controller container with restart policy.
+# Raise the open-file soft limit so the controller can handle many concurrent
+# worker connections (endpoint RPCs, heartbeats, gcloud subprocesses, etc.).
 sudo docker run -d --name {{ container_name }} \\
     --network=host \\
     --restart=unless-stopped \\
+    --ulimit nofile=65536:524288 \\
+    --ulimit core=0:0 \\
     -v /var/cache/iris:/var/cache/iris \\
     {{ config_volume }} \\
     {{ docker_image }} \\

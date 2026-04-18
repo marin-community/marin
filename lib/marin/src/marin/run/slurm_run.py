@@ -48,6 +48,7 @@ import time
 from huggingface_hub import HfFolder
 
 import wandb
+from iris.logging import configure_logging
 
 # Setup logger
 logger = logging.getLogger("slurm")
@@ -304,5 +305,6 @@ def main():
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    configure_logging(level=logging.INFO)
     main()

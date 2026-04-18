@@ -5,7 +5,7 @@
 Baseline eval: Marin-8B base on SWE-bench Verified (100-instance subset).
 
 Evaluates the untrained Marin-8B base model on 100 random SWE-bench Verified
-instances (DCAgent2/swebench-verified-random-100-folders) using the terminus-2
+instances (DCAgent2/swebench-verified-random-100-folders) using the mini-swe-agent
 Harbor agent. Expected result: ~0% resolve rate (untrained base model).
 
 This establishes the baseline for the SWE-ZERO quality validation (#4898).
@@ -169,12 +169,12 @@ AGENT_KWARGS = {
     },
 }
 
-OUTPUT_DIR = os.path.join("evaluation", "harbor", "swebench-verified", MODEL_NAME, "terminus-2", "baseline-100")
+OUTPUT_DIR = os.path.join("evaluation", "harbor", "swebench-verified", MODEL_NAME, "mini-swe-agent", "baseline-100")
 
 logger.info("=" * 60)
 logger.info("exp4898 baseline: %s on SWE-bench Verified (100 tasks)", MODEL_NAME)
 logger.info("Model: %s", MODEL_PATH)
-logger.info("Agent: terminus-2, Env: %s, Concurrent: %d", ENV_TYPE, N_CONCURRENT)
+logger.info("Agent: mini-swe-agent, Env: %s, Concurrent: %d", ENV_TYPE, N_CONCURRENT)
 logger.info("=" * 60)
 
 if __name__ == "__main__":
@@ -189,14 +189,14 @@ if __name__ == "__main__":
         wandb_tags=[
             "harbor",
             "swebench-verified",
-            "terminus-2",
+            "mini-swe-agent",
             ENV_TYPE,
             MODEL_NAME,
             "baseline",
             "exp4898",
             "swe-zero-validation",
         ],
-        agent="terminus-2",
+        agent="mini-swe-agent",
         n_concurrent=N_CONCURRENT,
         env=ENV_TYPE,
         agent_kwargs=AGENT_KWARGS,

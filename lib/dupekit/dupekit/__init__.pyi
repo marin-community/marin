@@ -115,15 +115,6 @@ class Transformation:
     """
 
     @staticmethod
-    def ResolveIds(text_col: str, id_col: str, output_col: str) -> "Transformation":
-        """Creates a new column `output_col` containing resolved document IDs.
-
-        If `id_col` exists and is not null, it is used. Otherwise, a stable hash
-        of `text_col` is generated (using the default hash algorithm) and used as the ID.
-        """
-        ...
-
-    @staticmethod
     def SplitParagraphs(text_col: str, id_col: str) -> "Transformation":
         """Explodes the batch by splitting `text_col` into paragraphs (by newline).
 
@@ -171,19 +162,6 @@ class Transformation:
         ...
 
 def transform(batch: pa.RecordBatch, steps: list[Transformation]) -> pa.RecordBatch: ...
-def mark_paragraph_duplicates(
-    batch: pa.RecordBatch,
-    dup_map: dict[str, dict[str, str]],
-    attribute_name: str,
-    algorithm: Optional[HashAlgorithm] = None,
-) -> pa.RecordBatch: ...
-def mark_document_duplicates(
-    batch: pa.RecordBatch,
-    dup_map: dict[str, dict[str, str]],
-    attribute_name: str,
-    hash_col: Optional[str] = None,
-    algorithm: Optional[HashAlgorithm] = None,
-) -> pa.RecordBatch: ...
 def hash_blake2(text: bytes) -> list[int]: ...
 def hash_blake3(text: bytes) -> list[int]: ...
 def hash_xxh3_128(text: bytes) -> int: ...

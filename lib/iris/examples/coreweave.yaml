@@ -35,11 +35,10 @@ platform:
     region: US-WEST-04A
     namespace: iris
     kubeconfig_path: ~/.kube/coreweave-iris  # Set this to your local kubeconfig, or use KUBECONFIG env var
-    object_storage_endpoint: https://a5a1f66f973e2196a26bae21c81b899b.r2.cloudflarestorage.com
+    object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
 
 storage:
-  bundle_prefix: s3://marin-test/iris/bundles
-  log_prefix: s3://marin-test/iris/logs
+  remote_state_dir: s3://marin-na/iris/state
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
@@ -68,22 +67,20 @@ defaults:
 scale_groups:
   # CPU general-purpose — used for data processing, orchestration, etc.
   cpu-erapids:
-    accelerator_type: cpu
     num_vms: 1
     resources:
       cpu: 64
       ram: 256GB
-      gpu_count: 0
       disk: 1TB
+      device_type: cpu
     worker:
       attributes:
         region: US-WEST-04A
         pool: cpu-erapids
     min_slices: 0
     max_slices: 1  # Cost-safe default; increase for production workloads
-    priority: 100
+    priority: 50
     slice_template:
-      accelerator_type: cpu
       num_vms: 1
       coreweave:
         region: US-WEST-04A
@@ -91,25 +88,46 @@ scale_groups:
 
   # 8x H100 with InfiniBand — primary training workhorse
   h100-8x:
-    accelerator_type: gpu
-    accelerator_variant: H100
     num_vms: 1
     resources:
       cpu: 128
       ram: 2048GB
-      gpu_count: 8
       disk: 1TB
+      device_type: gpu
+      device_variant: H100
+      device_count: 8
     worker:
       attributes:
         region: US-WEST-04A
         pool: h100-8x
     min_slices: 0
     max_slices: 1  # Cost-safe default; increase for production workloads
-    priority: 50
+    priority: 100
     slice_template:
-      accelerator_type: gpu
-      accelerator_variant: H100
       num_vms: 1
+      coreweave:
+        region: US-WEST-04A
+        instance_type: gd-8xh100ib-i128
+
+  # 16x H100 (2-VM) with InfiniBand — multi-node training
+  h100-16x:
+    num_vms: 2
+    resources:
+      cpu: 128
+      ram: 2048GB
+      disk: 1TB
+      device_type: gpu
+      device_variant: H100
+      device_count: 8
+    worker:
+      attributes:
+        region: US-WEST-04A
+        pool: h100-16x
+    min_slices: 0
+    max_slices: 1
+    priority: 100
+    slice_template:
+      num_vms: 2
       coreweave:
         region: US-WEST-04A
         instance_type: gd-8xh100ib-i128

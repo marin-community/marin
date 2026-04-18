@@ -129,6 +129,7 @@ project-excludes = [
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
     "lib/iris/src/iris/rpc/*_pb2*",  # Generated protobuf files
+    "lib/iris/src/iris/rpc/*_connect.py",  # Generated Connect RPC files
     # Keep key excludes that pyrefly normally adds heuristically.
     "**/node_modules",
     "**/__pycache__",

@@ -5,7 +5,6 @@ import functools
 import logging
 import os
 import random
-import re
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -75,20 +74,15 @@ def fsspec_rm(path: str):
         path (str): The path of the file
 
     Returns:
-        bool: True if the file exists, False otherwise.
+        bool: True if the file existed (and was removed or already gone), False if it never existed.
     """
-
-    # Use fsspec to check if the file exists
     fs = url_to_fs(path)[0]
     if fs.exists(path):
         try:
             fs.rm(path, recursive=True)
         except FileNotFoundError as e:
-            print(f"Error removing the file: {e}. Likely caused by the race condition and file is already removed.")
-
-        # TODO (@siddk) - I think you don't need the finally?
-        finally:
-            return True  # noqa: B012
+            logger.info("File already removed (race condition): %s", e)
+        return True
 
     return False
 
@@ -135,56 +129,6 @@ def fsspec_mkdirs(dir_path, exist_ok=True):
     # Use fsspec to create the directory
     fs = url_to_fs(dir_path)[0]
     fs.makedirs(dir_path, exist_ok=exist_ok)
-
-
-def fsspec_get_curr_subdirectories(dir_path):
-    """
-    Get all subdirectories under this current directory only. Does not return the parent directory.
-
-    Args:
-        dir_path (str): The path of the directory
-
-    Returns:
-        list: A list of subdirectories.
-    """
-    fs, _ = url_to_fs(dir_path)
-    protocol = fsspec.core.split_protocol(dir_path)[0]
-
-    # List only immediate subdirectories
-    subdirectories = fs.ls(dir_path, detail=True)
-
-    def join_protocol(path):
-        return f"{protocol}://{path}" if protocol else path
-
-    subdirectories = [join_protocol(subdir["name"]) for subdir in subdirectories if subdir["type"] == "directory"]
-    return subdirectories
-
-
-def fsspec_dir_only_contains_files(dir_path):
-    """
-    Check if a directory only contains files in a fsspec filesystem.
-    """
-    fs, _ = url_to_fs(dir_path)
-    ls_res = fs.ls(dir_path, detail=True)
-    if len(ls_res) == 0:
-        return False
-    return all(item["type"] == "file" for item in ls_res)
-
-
-def fsspec_get_atomic_directories(dir_path):
-    """
-    Get all directories under this directory that only contains files within them
-    """
-    subdirectories = []
-
-    if fsspec_isdir(dir_path):
-        for subdir in fsspec_get_curr_subdirectories(dir_path):
-            if fsspec_dir_only_contains_files(subdir):
-                subdirectories.append(subdir)
-            else:
-                subdirectories.extend(fsspec_get_atomic_directories(subdir))
-
-    return subdirectories
 
 
 def fsspec_isdir(dir_path):
@@ -343,48 +287,6 @@ def is_path_like(path: str) -> bool:
     if protocol is not None:
         return True
     return os.path.exists(path)
-
-
-def validate_marin_gcp_path(path: str) -> str:
-    """
-    Validate the given path according to the marin GCP convention.
-
-    This function ensures that the provided path follows the required format for
-    GCS paths in a specific bucket structure. The expected format is either:
-    gs://marin-$REGION/scratch//* (any structure after scratch)
-    or
-    gs://marin-$REGION/(documents|attributes|filtered)/$EXPERIMENT/$DATASET/$VERSION/
-
-    Parameters:
-    path (str): The GCS path to validate.
-
-    Returns:
-    str: The original path if it's valid.
-
-    Raises:
-    ValueError: If the path doesn't match the expected format.
-                The error message provides details on the correct structure.
-
-    Example:
-    >>> validate_marin_gcp_path("gs://marin-us-central1/documents/exp1/dataset1/v1/")
-    'gs://marin-us-central1/documents/exp1/dataset1/v1/'
-    >>> validate_marin_gcp_path("gs://marin-us-central1/attributes/exp1/dataset1/v1/")
-    'gs://marin-us-central1/attributes/exp1/dataset1/v1/'
-    >>> validate_marin_gcp_path("gs://marin-us-central1/filtered/exp1/dataset1/v1/")
-    'gs://marin-us-central1/filtered/exp1/dataset1/v1/'
-    >>> validate_marin_gcp_path("gs://marin-us-central1/scratch/documents/exp1/dataset1/v1/")
-    'gs://marin-us-central1/scratch/documents/exp1/dataset1/v1/'
-    >>> validate_marin_gcp_path("gs://marin-us-central1/scratch/decontamination/decontamination_demo.jsonl.gz")
-    'gs://marin-us-central1/scratch/decontamination/decontamination_demo.jsonl.gz'
-    """
-    pattern = r"^gs://marin-[^/]+/(scratch/.+|(documents|attributes|filtered)/[^/]+/[^/]+/[^/]+(/.*)?$)"
-    if not re.match(pattern, path):
-        raise ValueError(
-            "Invalid path format. It should follow either:\n"
-            "1. gs://marin-$REGION/scratch/* (any structure after scratch)\n"
-            "2. gs://marin-$REGION/{documents|attributes|filtered}/$EXPERIMENT/$DATASET/$VERSION/"
-        )
-    return path
 
 
 def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None, old_extension=None):

@@ -22,7 +22,7 @@ from typing import TypeAlias
 
 import jax
 import jax.numpy as jnp
-from haliax.jax_utils import named_call
+from haliax.jax_utils import named_call, tree_checkpoint_name
 from jax import shard_map
 from jax.sharding import PartitionSpec as P, get_abstract_mesh
 from jaxtyping import Array, Float, Int
@@ -100,12 +100,16 @@ def _moe_mlp_local(
         combine_weights,
         num_experts=num_experts,
     )
+    x_dispatch = tree_checkpoint_name(x_dispatch, "grug_moe_dispatch_input")
 
     with jax.named_scope("moe_up_down"):
-        w13_out = ragged_dot(x_dispatch, moe_w13, group_sizes)
+        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), "grug_moe_expert_hidden")
         moe_dim = moe_w2.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes)
+        out_dispatch = tree_checkpoint_name(
+            ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes),
+            "grug_moe_dispatch_output",
+        )
 
     with jax.named_scope("scatter"):
         out = jnp.zeros_like(x).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
@@ -118,6 +122,16 @@ def _batch_spec_from_x(x: jax.Array, mesh: jax.sharding.AbstractMesh | None) -> 
     if spec is not None and len(spec) > 0:
         return P(spec[0])
     return _batch_spec(mesh)
+
+
+def _prefix_cap_counts(counts: Int[Array, "E"], *, capacity: int) -> Int[Array, "E"]:
+    accepted = []
+    remaining = jnp.array(capacity, dtype=jnp.int32)
+    for expert in range(int(counts.shape[0])):
+        take = jnp.minimum(counts[expert], remaining)
+        accepted.append(take)
+        remaining = jnp.maximum(remaining - take, 0)
+    return jnp.stack(accepted, axis=0)
 
 
 def _moe_mlp_ep_ring_local(
@@ -144,12 +158,6 @@ def _moe_mlp_ep_ring_local(
         assignments = tokens * topk
         expert_flat = selected_experts_global.reshape(assignments)
         weight_flat = combine_weights_global.reshape(assignments)
-        token_flat = jnp.arange(assignments, dtype=jnp.int32) // topk
-
-        sort_idx = jnp.argsort(expert_flat, axis=0)
-        expert_sorted = jnp.take(expert_flat, sort_idx, axis=0)
-        token_sorted = jnp.take(token_flat, sort_idx, axis=0)
-        weight_sorted = jnp.take(weight_flat, sort_idx, axis=0).astype(x_local.dtype)
 
         local_experts = moe_w13_local.shape[0]
         if num_experts % local_experts != 0:
@@ -163,34 +171,54 @@ def _moe_mlp_ep_ring_local(
 
         expert_axis = jax.lax.axis_index("expert")
         expert_start = expert_axis * local_experts
-        expert_end = expert_start + local_experts
-        local_mask = jnp.logical_and(expert_sorted >= expert_start, expert_sorted < expert_end)
+        local_expert = expert_flat - expert_start
+        local_mask = jnp.logical_and(local_expert >= 0, local_expert < local_experts)
 
-        local_idx = jnp.nonzero(local_mask, size=local_capacity, fill_value=0)[0]
-        local_count = jnp.sum(local_mask, dtype=jnp.int32)
-        dropped_local = jnp.maximum(local_count - local_capacity, 0)
-        valid = jnp.arange(local_capacity, dtype=jnp.int32) < local_count
-        valid_weight = valid.astype(jnp.float32)
+        # Keep only the assignments this shard will execute, ordered by
+        # (local expert id, original flat position). This avoids the global
+        # argsort + fused takes over all assignments that dominated high-EP
+        # shapes, while preserving the grouped layout expected by ragged_dot.
+        local_expert = jnp.where(local_mask, local_expert, 0)
+        # TPU lowers this small-expert count reduction better as a dense
+        # compare+sum than as `bincount`.
+        expert_ids = jnp.arange(local_experts, dtype=jnp.int32)
+        local_mask_i32 = local_mask.astype(jnp.int32)
+        counts = jnp.sum(
+            (local_expert[:, None] == expert_ids[None, :]).astype(jnp.int32) * local_mask_i32[:, None],
+            axis=0,
+            dtype=jnp.int32,
+        )
+        accepted_counts = _prefix_cap_counts(counts, capacity=local_capacity)
+        accepted_total = jnp.sum(accepted_counts, dtype=jnp.int32)
+        dropped_local = jnp.sum(counts, dtype=jnp.int32) - accepted_total
+        valid = jnp.arange(local_capacity, dtype=jnp.int32) < accepted_total
 
-        token_local = jnp.take(token_sorted, local_idx, axis=0)
-        expert_local = jnp.take(expert_sorted, local_idx, axis=0) - expert_start
-        weight_local = jnp.take(weight_sorted, local_idx, axis=0)
+        flat_pos = jnp.arange(assignments, dtype=jnp.int32)
+        order_key = local_expert * assignments + flat_pos
+        max_order_key = local_experts * assignments
+        selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
+        _, local_idx = jax.lax.top_k(selection_key, local_capacity)
+
+        token_local = jnp.floor_divide(local_idx, topk)
+        weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_local.dtype)
 
         x_take = jnp.take(x_global, token_local, axis=0)
         x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
+        x_dispatch = tree_checkpoint_name(x_dispatch, "grug_moe_dispatch_input")
         weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
-        expert_local = jnp.where(valid, expert_local, 0)
-
-    group_sizes = jnp.bincount(expert_local, weights=valid_weight, length=local_experts).astype(jnp.int32)
+    group_sizes = accepted_counts
     # `local_idx` pads by appending invalid rows at the end; keep GMM segment
     # boundaries aligned by attributing padding to the final expert segment.
     group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
 
     with jax.named_scope("moe_up_down"):
-        w13_out = ragged_dot(x_dispatch, moe_w13_local, group_sizes)
+        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), "grug_moe_expert_hidden")
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
+        out_dispatch = tree_checkpoint_name(
+            ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes),
+            "grug_moe_dispatch_output",
+        )
 
     with jax.named_scope("scatter"):
         out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")

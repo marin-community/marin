@@ -76,6 +76,8 @@ class LlamaConfig(HFCompatConfig):
     upcast_attn: bool = False
     attn_backend: Optional[AttentionBackend] = None
     flash_attention_block_size: Optional[int] = None
+    cross_entropy_block_size: int | None = None
+    fused_cross_entropy_implementation: str | None = None
 
     gradient_checkpointing: bool | ScanCheckpointPolicy | str = True
     scan_layers: bool = True

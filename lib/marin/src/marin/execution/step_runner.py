@@ -29,7 +29,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Thread
 
 import levanter.utils.fsspec_utils as fsspec_utils
-from iris.distributed_lock import HEARTBEAT_INTERVAL
+from iris.distributed_lock import HEARTBEAT_INTERVAL, LeaseLostError
 from iris.marin_fs import open_url, url_to_fs
 
 from fray.v2.client import JobHandle, JobStatus
@@ -280,12 +280,18 @@ def step_lock(output_path: str, step_label: str, *, force_run_failed: bool = Tru
     if not should_run(status_file, step_label, force_run_failed=force_run_failed):
         raise StepAlreadyDone(output_path)
 
-    # Start heartbeat
+    # Start heartbeat — LeaseLostError is fatal and signals the main thread.
     stop_event = Event()
+    lease_lost_event = Event()
 
     def _heartbeat():
         while not stop_event.wait(HEARTBEAT_INTERVAL):
-            status_file.refresh_lock()
+            try:
+                status_file.refresh_lock()
+            except LeaseLostError:
+                logger.error("Lease lost for %s — step must terminate", output_path, exc_info=True)
+                lease_lost_event.set()
+                return
 
     heartbeat_thread = Thread(target=_heartbeat, daemon=True)
     heartbeat_thread.start()
@@ -295,6 +301,8 @@ def step_lock(output_path: str, step_label: str, *, force_run_failed: bool = Tru
     finally:
         stop_event.set()
         heartbeat_thread.join(timeout=5)
+        if lease_lost_event.is_set():
+            raise LeaseLostError(f"Lease was lost during execution of {output_path}")
         status_file.release_lock()
 
 

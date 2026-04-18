@@ -12,6 +12,7 @@ def compute_per_device_parallelism(
     global_batch_size: int,
     microbatch_size: int,
     resources: ResourceConfig,
+    tensor_parallel_size: int = 1,
 ) -> int:
     """Compute per_device_parallelism for gradient accumulation.
 
@@ -19,32 +20,33 @@ def compute_per_device_parallelism(
         global_batch_size: The effective batch size after gradient accumulation.
         microbatch_size: The batch size that fits in memory (local batch size).
         resources: The ResourceConfig specifying TPU/GPU resources.
+        tensor_parallel_size: Number of chips per model-parallel group (default: 1).
 
     Returns:
         per_device_parallelism: Number of examples each device processes per forward/backward pass.
-
-    Example:
-        For v5p-8 (4 chips), global_batch_size=128, microbatch_size=8:
-        - per_device_parallelism = 8 / 4 = 2
-        - gradient_accumulation = 128 / 8 = 16 steps
     """
     num_chips = resources.chip_count()
+    num_data_parallel = num_chips // tensor_parallel_size
 
-    if microbatch_size % num_chips != 0:
-        raise ValueError(f"microbatch_size ({microbatch_size}) must be divisible by num_chips ({num_chips})")
+    if microbatch_size % num_data_parallel != 0:
+        raise ValueError(
+            f"microbatch_size ({microbatch_size}) must be divisible by "
+            f"num_data_parallel ({num_data_parallel}) = num_chips ({num_chips}) / TP ({tensor_parallel_size})"
+        )
 
     if global_batch_size % microbatch_size != 0:
         raise ValueError(
             f"global_batch_size ({global_batch_size}) must be divisible by " f"microbatch_size ({microbatch_size})"
         )
 
-    per_device_parallelism = microbatch_size // num_chips
+    per_device_parallelism = microbatch_size // num_data_parallel
     grad_accum_steps = global_batch_size // microbatch_size
 
     print(
         f"Gradient accumulation config: "
         f"global_batch={global_batch_size}, microbatch={microbatch_size}, "
-        f"num_chips={num_chips}, "
+        f"num_chips={num_chips}, TP={tensor_parallel_size}, "
+        f"num_data_parallel={num_data_parallel}, "
         f"per_device_parallelism={per_device_parallelism}, "
         f"grad_accum_steps={grad_accum_steps}"
     )
@@ -162,6 +164,9 @@ class SimpleSFTConfig:
 
     per_device_eval_parallelism: int | None = None
     """Number of examples to evaluate in parallel on each device."""
+
+    tensor_parallel_size: int = 1
+    """Number of chips per model-parallel group. Set >1 when num_chips > batch_size."""
 
     reinit_tokens: list[str] | bool = False
     """

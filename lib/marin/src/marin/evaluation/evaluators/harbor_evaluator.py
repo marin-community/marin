@@ -45,6 +45,24 @@ _DEFAULT_HOSTED_VLLM_MODEL_INFO: dict[str, Any] = {
     "output_cost_per_token": 0.0,
 }
 
+HARBOR_EVAL_ENV_KEYS = (
+    "WANDB_API_KEY",
+    "WANDB_ENTITY",
+    "WANDB_PROJECT",
+    "HF_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "DAYTONA_API_KEY",
+    "E2B_API_KEY",
+    "MODAL_API_KEY",
+    "TPU_CI",
+    "MARIN_PREFIX",
+    "MARIN_VLLM_MODE",
+    "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
+    "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
+    "VLLM_TPU_SKIP_PRECOMPILE",
+)
+
 
 def _sanitize_hosted_vllm_canonical_name(name: str) -> str:
     """Return a Harbor-safe canonical name for `hosted_vllm/<canonical>`.
@@ -68,7 +86,7 @@ def _sanitize_hosted_vllm_canonical_name(name: str) -> str:
     return candidate
 
 
-def _env_vars_from_keys(keys: list[str]) -> dict[str, str]:
+def env_vars_from_keys(keys: list[str] | tuple[str, ...]) -> dict[str, str]:
     env_vars: dict[str, str] = {}
     for key in keys:
         value = os.environ.get(key)
@@ -77,13 +95,46 @@ def _env_vars_from_keys(keys: list[str]) -> dict[str, str]:
     return env_vars
 
 
-def _generate_stable_job_name(dataset: str, version: str, model_name: str, agent: str, task_limit: int | None) -> str:
+def _normalize_task_names(task_names: Any) -> list[str] | None:
+    if task_names is None:
+        return None
+
+    if not isinstance(task_names, list):
+        raise TypeError(f"harbor_config['task_names'] must be a list[str], got {type(task_names)}")
+
+    if not all(isinstance(task_name, str) for task_name in task_names):
+        raise TypeError("harbor_config['task_names'] must contain only strings")
+
+    return task_names
+
+
+def _generate_stable_job_name(
+    dataset: str,
+    version: str,
+    model_name: str,
+    agent: str,
+    task_limit: int | None,
+    task_names: list[str] | None,
+    output_path: str | None,
+) -> str:
     """Generate a deterministic job name for resume capability.
 
     The job name is based on the key parameters so that re-running the same
     evaluation will find and resume the previous job.
     """
-    key = f"{dataset}|{version}|{model_name}|{agent}|{task_limit}"
+    key = json.dumps(
+        {
+            "agent": agent,
+            "dataset": dataset,
+            "model_name": model_name,
+            "output_path": output_path,
+            "task_limit": task_limit,
+            "task_names": task_names,
+            "version": version,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
     # Sanitize dataset name for use in path
     safe_dataset = re.sub(r"[^A-Za-z0-9_-]", "_", dataset)[:32]
@@ -212,11 +263,14 @@ class HarborEvaluator(Evaluator):
         if not isinstance(agent_kwargs, dict):
             raise TypeError(f"harbor_config['agent_kwargs'] must be a dict, got {type(agent_kwargs)}")
         agent_kwargs = dict(agent_kwargs)
+        task_names = _normalize_task_names(harbor_config.get("task_names"))
 
         logger.info("Running Harbor evaluation: %s@%s", dataset, version)
         logger.info("Agent=%s Model=%s Concurrent=%s Env=%s", agent, model.name, n_concurrent, env_type)
         if max_eval_instances is not None:
             logger.info("Limiting to first %s task(s)", max_eval_instances)
+        if task_names:
+            logger.info("Using Harbor task shard with %s task(s)", len(task_names))
 
         if model.path is None:
             self._run_eval_inner(
@@ -230,6 +284,7 @@ class HarborEvaluator(Evaluator):
                 wandb_tags=wandb_tags,
                 dataset=dataset,
                 version=version,
+                task_names=task_names,
             )
             return
 
@@ -259,6 +314,7 @@ class HarborEvaluator(Evaluator):
                 wandb_tags=wandb_tags,
                 dataset=dataset,
                 version=version,
+                task_names=task_names,
             )
 
     def launch_evaluate_with_ray(
@@ -289,25 +345,7 @@ class HarborEvaluator(Evaluator):
         mode_str = resolve_vllm_mode(None)
         pip_packages = VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else ()
 
-        env_vars = _env_vars_from_keys(
-            [
-                "WANDB_API_KEY",
-                "WANDB_ENTITY",
-                "WANDB_PROJECT",
-                "HF_TOKEN",
-                "ANTHROPIC_API_KEY",
-                "OPENAI_API_KEY",
-                "DAYTONA_API_KEY",
-                "E2B_API_KEY",
-                "MODAL_API_KEY",
-                "TPU_CI",
-                "MARIN_PREFIX",
-                "MARIN_VLLM_MODE",
-                "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
-                "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
-                "VLLM_TPU_SKIP_PRECOMPILE",
-            ]
-        )
+        env_vars = env_vars_from_keys(HARBOR_EVAL_ENV_KEYS)
         env_vars.setdefault("VLLM_ALLOW_LONG_MAX_MODEL_LEN", "1")
         env_vars.setdefault("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1")
         env_vars.setdefault("VLLM_TPU_SKIP_PRECOMPILE", "1")
@@ -340,6 +378,7 @@ class HarborEvaluator(Evaluator):
         wandb_tags: list[str] | None,
         dataset: str,
         version: str,
+        task_names: list[str] | None,
     ) -> None:
         """Run Harbor trials and save results."""
         results = self._run_harbor_trials(
@@ -351,6 +390,7 @@ class HarborEvaluator(Evaluator):
             n_concurrent=n_concurrent,
             env_type=env_type,
             task_limit=max_eval_instances,
+            task_names=task_names,
             output_path=output_path,
         )
 
@@ -363,6 +403,7 @@ class HarborEvaluator(Evaluator):
             "env": env_type,
             "max_eval_instances": max_eval_instances,
             "model": model_name,
+            "task_names": task_names,
         }
         self._save_results(parsed_results, output_path, wandb_tags, model_name, dataset, version)
 
@@ -377,6 +418,7 @@ class HarborEvaluator(Evaluator):
         n_concurrent: int,
         env_type: str,
         task_limit: int | None = None,
+        task_names: list[str] | None = None,
         agent_kwargs: dict | None = None,
         output_path: str | None = None,
     ) -> dict:
@@ -396,7 +438,7 @@ class HarborEvaluator(Evaluator):
         from harbor.models.trial.config import AgentConfig, EnvironmentConfig
 
         # Generate deterministic job name for resume capability
-        job_name = _generate_stable_job_name(dataset, version, model_name, agent, task_limit)
+        job_name = _generate_stable_job_name(dataset, version, model_name, agent, task_limit, task_names, output_path)
 
         # Get stable local working directory (persists across pre-emptions despite being in /tmp)
         workdir = _get_stable_local_workdir(job_name)
@@ -455,6 +497,7 @@ class HarborEvaluator(Evaluator):
             dataset_config = LocalDatasetConfig(
                 path=Path(dataset_root),
                 n_tasks=task_limit,
+                task_names=task_names,
             )
         elif dataset_path.exists():
             if not dataset_path.is_dir():
@@ -462,6 +505,7 @@ class HarborEvaluator(Evaluator):
             dataset_config = LocalDatasetConfig(
                 path=dataset_path,
                 n_tasks=task_limit,
+                task_names=task_names,
             )
         else:
             dataset_config = RegistryDatasetConfig(
@@ -469,6 +513,7 @@ class HarborEvaluator(Evaluator):
                 name=dataset,
                 version=version,
                 n_tasks=task_limit,
+                task_names=task_names,
             )
 
         # Create Harbor JobConfig with deterministic job name

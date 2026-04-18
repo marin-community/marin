@@ -149,6 +149,9 @@ jobs:
           body: Auto-generated from GitHub Actions.
 
   # Iris Images - Worker, controller, and task images pushed to GHCR
+  # Uses a single multi-stage Dockerfile (lib/iris/Dockerfile) with --target.
+  # Controller and worker share all layers up to Python deps; the worker adds
+  # only the Docker CLI. Task is an independent stage with marin root context.
   iris-images:
     # Run on: manual trigger OR weekly schedule (02:00 UTC on Sundays)
     if: |
@@ -159,13 +162,13 @@ jobs:
       matrix:
         include:
           - image: iris-worker
-            dockerfile: lib/iris/Dockerfile.worker
+            target: worker
             context: lib/iris
           - image: iris-controller
-            dockerfile: lib/iris/Dockerfile.controller
+            target: controller
             context: lib/iris
           - image: iris-task
-            dockerfile: lib/iris/Dockerfile.task
+            target: task
             context: .
     steps:
       - name: Checkout repository
@@ -187,15 +190,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Build and push ${{ matrix.image }} with inline cache
+      - name: Build and push ${{ matrix.image }}
         run: |
-          docker buildx build --file ${{ matrix.dockerfile }} \
-            --cache-to type=inline \
+          docker buildx build --file lib/iris/Dockerfile \
+            --target ${{ matrix.target }} \
+            --cache-from type=registry,ref=ghcr.io/marin-community/iris-cache:${{ matrix.target }} \
+            --cache-to type=registry,ref=ghcr.io/marin-community/iris-cache:${{ matrix.target }},mode=max \
+            --output type=image,compression=zstd,compression-level=3,push=true \
             --provenance=false \
+            --build-arg IRIS_GIT_HASH=${{ steps.set-tags.outputs.HASH_TAG }} \
             --tag ghcr.io/marin-community/${{ matrix.image }}:latest \
             --tag ghcr.io/marin-community/${{ matrix.image }}:${{ steps.set-tags.outputs.DATE_TAG }} \
             --tag ghcr.io/marin-community/${{ matrix.image }}:${{ steps.set-tags.outputs.HASH_TAG }} \
-            --push ${{ matrix.context }}
+            ${{ matrix.context }}
 
   # Marin TPU CI Images - For self-hosted TPU CI runners
   marin-tpu-ci-images:

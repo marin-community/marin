@@ -19,7 +19,13 @@ from marin.execution.remote import remote
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LmDatasetFormatBase, LMMixtureDatasetConfig, PreferenceLmDataConfig, TextLmDatasetFormat
+from levanter.data.text import (
+    BlockShuffleConfig,
+    LmDatasetFormatBase,
+    LMMixtureDatasetConfig,
+    PreferenceLmDataConfig,
+    TextLmDatasetFormat,
+)
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
@@ -50,6 +56,7 @@ from marin.execution.executor import (
     ensure_versioned,
     this_output_path,
     unwrap_versioned_value,
+    versioned,
 )
 from marin.processing.tokenize import (
     HfDatasetSpec,
@@ -68,7 +75,15 @@ from marin.training.training import (
     run_levanter_train_lm,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
+
+
+DEFAULT_NEW_RUN_DATA_SHUFFLE = BlockShuffleConfig(
+    io_block_size=256,
+    window_blocks=512,
+    perm_type="feistel",
+)
+"""Hierarchical block-shuffle default for newly constructed training runs."""
 
 
 def _truncate_wandb_name(name: str) -> str:
@@ -366,7 +381,7 @@ def default_train(
             ),
             model_averaging=model_averaging,
             mesh=MeshConfig(
-                axes={"data": -1},
+                axes={"replica": 1, "data": -1, "model": train_config.tensor_parallel_size},
                 # Special axes for MoEs
                 # TODO: this is actually bad and we should remove, but keeping for now
                 compute_mapping={
@@ -433,6 +448,7 @@ def default_train(
         train_config=inner_config,
         resources=pod_config,
         output_path=this_output_path(),
+        env_vars=train_config.env_vars,
     )
 
     model_config = unwrap_versioned_value(model_config)
@@ -511,6 +527,7 @@ def default_sft(
         pad_tokenizer_to_match_model=sft_config.pad_tokenizer_to_match_model,
         per_device_parallelism=sft_config.per_device_parallelism,
         per_device_eval_parallelism=sft_config.per_device_eval_parallelism,
+        tensor_parallel_size=sft_config.tensor_parallel_size,
     )
 
     if sft_config.reinit_tokens:
@@ -679,6 +696,7 @@ def _prepare_data_config(
         pretraining_data = lm_data_config(
             training_set=tokenized,
             validation_sets=validation_sets,
+            shuffle=versioned(DEFAULT_NEW_RUN_DATA_SHUFFLE),
         )
     else:
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures

@@ -290,8 +290,10 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
             reduction=reduction,
             reduction_axis=reduction_axis,
             logsumexp_weight=logsumexp_weight,
+            block_size=getattr(self.config, "cross_entropy_block_size", None),
             dtype=loss_dtype,
             logit_soft_cap=logit_soft_cap,
+            implementation=getattr(self.config, "fused_cross_entropy_implementation", None),
         )
 
         return loss + aux_loss

@@ -90,6 +90,12 @@ class BackgroundIterator(Iterator[Ex]):
     def __del__(self):
         self.stop()
 
+    def qsize(self) -> int | None:
+        """Current number of items in the prefetch queue, or None if unbuffered."""
+        if self.thread is not None:
+            return self.q.qsize()
+        return None
+
     def stop(self, wait: bool = True):
         self._stop_event.set()
         # I'm getting an error that the thread is threading.current_thread(), which seems impossible

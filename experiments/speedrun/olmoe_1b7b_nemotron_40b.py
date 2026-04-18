@@ -24,7 +24,7 @@ from marin.processing.tokenize import lm_data_config, lm_mixture_data_config
 from marin.speedrun.speedrun import Author, SpeedrunConfig, SpeedrunResultsConfig, speedrun_results
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Shared experiment knobs (mirrors the dense baseline for flop matching)

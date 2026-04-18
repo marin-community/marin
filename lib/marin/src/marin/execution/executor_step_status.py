@@ -22,12 +22,13 @@ from typing import TypeVar
 
 from iris.distributed_lock import (
     HEARTBEAT_INTERVAL,
-    DistributedLock,
+    LeaseLostError,
+    create_lock,
     default_worker_id,
 )
 from iris.marin_fs import url_to_fs
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -50,7 +51,7 @@ class StatusFile:
       Contains {worker_id, timestamp}. Must be refreshed periodically.
     - Status file (simple text): Final state - SUCCESS, FAILURE, or RUNNING.
 
-    Lock acquisition delegates to ``iris.distributed_lock.DistributedLock``.
+    Lock acquisition delegates to ``iris.distributed_lock``.
     """
 
     def __init__(self, output_path: str, worker_id: str):
@@ -59,7 +60,7 @@ class StatusFile:
         self.worker_id = worker_id
         self._lock_path = self.path + ".lock"
         self.fs = url_to_fs(self.path, use_listings_cache=False)[0]
-        self._lock = DistributedLock(self._lock_path, worker_id=worker_id)
+        self._lock = create_lock(self._lock_path, worker_id=worker_id)
 
     @property
     def status(self) -> str | None:
@@ -122,7 +123,10 @@ class StatusFile:
         logger.debug("[%s] Wrote status %s to %s", self.worker_id, status, self.path)
 
     def refresh_lock(self) -> None:
-        """Refresh a lock held by the current worker."""
+        """Refresh a lock held by the current worker.
+
+        Raises ``LeaseLostError`` if another worker holds the lock.
+        """
         self._lock.refresh()
 
     def try_acquire_lock(self) -> bool:
@@ -154,7 +158,9 @@ class PreviousTaskFailedError(Exception):
 def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool = True) -> bool:
     """Check if the step should run based on lease-based distributed locking.
 
-    Uses lease files for distributed locking and status file for final state.
+    Uses double-check locking: check status, attempt to acquire lock,
+    re-check status after acquisition to avoid overwriting a concurrent
+    completion.
     """
     wid = status_file.worker_id
     log_once = True
@@ -184,6 +190,14 @@ def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool =
 
         logger.info(f"[{wid}] Attempting to acquire lock for {step_name}")
         if status_file.try_acquire_lock():
+            # Double-check: re-read status after acquiring lock to avoid
+            # overwriting a concurrent SUCCESS.
+            recheck = status_file.status
+            if recheck == STATUS_SUCCESS:
+                logger.info(f"[{wid}] Step {step_name} completed by another worker after lock acquired.")
+                status_file.release_lock()
+                return False
+
             status_file.write_status(STATUS_RUNNING)
             logger.info(f"[{wid}] Acquired lock for {step_name}")
             return True
@@ -225,19 +239,29 @@ def distributed_lock(fn: Callable[[str], T], *, force_run_failed: bool = True) -
             raise StepAlreadyDone(output_path)
 
         stop_event = Event()
+        lease_lost_event = Event()
 
         def _heartbeat():
             while not stop_event.wait(HEARTBEAT_INTERVAL):
-                status_file.refresh_lock()
+                try:
+                    status_file.refresh_lock()
+                except LeaseLostError:
+                    logger.error("Lease lost for %s — step must terminate", output_path, exc_info=True)
+                    lease_lost_event.set()
+                    return
 
         heartbeat_thread = Thread(target=_heartbeat, daemon=True)
         heartbeat_thread.start()
 
         try:
-            return fn(output_path)
+            result = fn(output_path)
         finally:
             stop_event.set()
             heartbeat_thread.join(timeout=5)
+            if lease_lost_event.is_set():
+                raise LeaseLostError(f"Lease was lost during execution of {output_path}")
             status_file.release_lock()
+
+        return result
 
     return wrapper

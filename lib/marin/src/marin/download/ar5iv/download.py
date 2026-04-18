@@ -21,6 +21,7 @@ import draccus
 from iris.marin_fs import open_url
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -129,5 +130,6 @@ def download(cfg: DownloadConfig) -> None:
 @draccus.wrap()
 def main(cfg: DownloadConfig) -> None:
     """CLI entrypoint for downloading and processing Ar5iv dataset."""
-    logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+
+    configure_logging(level=logging.INFO)
     download(cfg)

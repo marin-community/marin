@@ -1,8 +1,8 @@
 # Iris smoke-test configuration
-# Usage: uv run python scripts/smoke-test.py
+# Usage: uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-config examples/smoke.yaml --iris-mode full -o "addopts="
 
 platform:
-  label_prefix: smoke
+  label_prefix: smoke-ci
   gcp:
     project_id: hai-gcp-models
 
@@ -19,6 +19,9 @@ defaults:
     default_task_image: ghcr.io/marin-community/iris-task:latest
     port: 10001
 
+storage:
+  remote_state_dir: gs://marin-us-central2/iris/smoke/state
+
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   gcp:
@@ -31,46 +34,35 @@ scale_groups:
   # Intentionally not default: selected only when jobs constrain preemptible=false.
   cpu_vm_e2_standard_4_ondemand:
     zones: [europe-west4-b]
-    accelerator_type: cpu
     num_vms: 1
     resources:
       cpu: 4
       ram: 16GB
       disk: 100GB
-      tpu_count: 0
-      gpu_count: 0
+      device_type: cpu
+      preemptible: false
     min_slices: 0
     max_slices: 2
     priority: 1000
     slice_template:
-      accelerator_type: cpu
-      preemptible: false
       gcp:
         mode: GCP_SLICE_MODE_VM
         machine_type: e2-standard-4
-    worker:
-      attributes:
-        preemptible: "false"
 
   tpu_v5e_16:
     zones: [europe-west4-b, us-west4-a]
-    accelerator_type: tpu
-    accelerator_variant: v5litepod-16
     num_vms: 4
     resources:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu_count: 4
-      gpu_count: 0
+      device_type: tpu
+      device_variant: v5litepod-16
+      device_count: 4
+      preemptible: true
     min_slices: 1
     max_slices: 4
     priority: 100
     slice_template:
-      accelerator_variant: v5litepod-16
-      preemptible: true
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
-    worker:
-      attributes:
-        preemptible: "true"

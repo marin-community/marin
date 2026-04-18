@@ -205,5 +205,20 @@ setup_pre_commit:
 	chmod +x $$HOOK_PATH; \
 	echo "Installed git pre-commit hook -> $$HOOK_PATH"
 
-dev_setup: install_uv install_gcloud get_secret_key get_ray_auth_token setup_pre_commit
+install_node:
+	@if command -v node > /dev/null 2>&1; then \
+		echo "Node.js $$(node --version) is already installed."; \
+	elif command -v brew > /dev/null 2>&1; then \
+		echo "Installing Node.js via Homebrew..."; \
+		brew install node; \
+	elif command -v apt-get > /dev/null 2>&1; then \
+		echo "Installing Node.js via apt..."; \
+		curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && \
+		sudo apt-get install -y nodejs; \
+	else \
+		echo "Cannot auto-install Node.js. Please install manually: https://nodejs.org/"; \
+		exit 1; \
+	fi
+
+dev_setup: install_uv install_gcloud install_node get_secret_key get_ray_auth_token setup_pre_commit
 	@echo "Dev setup complete."

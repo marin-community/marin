@@ -32,7 +32,7 @@ from fray.v1.cluster.ray.deps import build_python_path, build_runtime_env_for_pa
 from fray.v1.cluster.ray.tpu import run_on_pod_ray
 from fray.v1.job.context import RayContext, fray_default_job_ctx
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 # We can't launch TPU or callable entrypoint jobs directly via Ray, as it

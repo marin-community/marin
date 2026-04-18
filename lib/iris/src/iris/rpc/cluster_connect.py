@@ -13,6 +13,7 @@ from connectrpc.method import IdempotencyLevel, MethodInfo
 from connectrpc.request import Headers, RequestContext
 from connectrpc.server import ConnectASGIApplication, ConnectWSGIApplication, Endpoint, EndpointSync
 from . import cluster_pb2 as cluster__pb2
+from . import query_pb2 as query__pb2
 
 
 class ControllerService(Protocol):
@@ -40,16 +41,10 @@ class ControllerService(Protocol):
     async def list_workers(self, request: cluster__pb2.Controller.ListWorkersRequest, ctx: RequestContext) -> cluster__pb2.Controller.ListWorkersResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def notify_task_update(self, request: cluster__pb2.Controller.NotifyTaskUpdateRequest, ctx: RequestContext) -> cluster__pb2.Empty:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
     async def register_endpoint(self, request: cluster__pb2.Controller.RegisterEndpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.RegisterEndpointResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def unregister_endpoint(self, request: cluster__pb2.Controller.UnregisterEndpointRequest, ctx: RequestContext) -> cluster__pb2.Empty:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def lookup_endpoint(self, request: cluster__pb2.Controller.LookupEndpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.LookupEndpointResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def list_endpoints(self, request: cluster__pb2.Controller.ListEndpointsRequest, ctx: RequestContext) -> cluster__pb2.Controller.ListEndpointsResponse:
@@ -61,16 +56,13 @@ class ControllerService(Protocol):
     async def get_transactions(self, request: cluster__pb2.Controller.GetTransactionsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetTransactionsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def get_cluster_summary(self, request: cluster__pb2.Controller.GetClusterSummaryRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetClusterSummaryResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
     async def list_users(self, request: cluster__pb2.Controller.ListUsersRequest, ctx: RequestContext) -> cluster__pb2.Controller.ListUsersResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def get_task_logs(self, request: cluster__pb2.Controller.GetTaskLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetTaskLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def get_process_logs(self, request: cluster__pb2.Controller.GetProcessLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetProcessLogsResponse:
+    async def fetch_logs(self, request: cluster__pb2.FetchLogsRequest, ctx: RequestContext) -> cluster__pb2.FetchLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def profile_task(self, request: cluster__pb2.ProfileTaskRequest, ctx: RequestContext) -> cluster__pb2.ProfileTaskResponse:
@@ -80,6 +72,30 @@ class ControllerService(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def begin_checkpoint(self, request: cluster__pb2.Controller.BeginCheckpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.BeginCheckpointResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def get_process_status(self, request: cluster__pb2.GetProcessStatusRequest, ctx: RequestContext) -> cluster__pb2.GetProcessStatusResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def get_auth_info(self, request: cluster__pb2.GetAuthInfoRequest, ctx: RequestContext) -> cluster__pb2.GetAuthInfoResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def login(self, request: cluster__pb2.LoginRequest, ctx: RequestContext) -> cluster__pb2.LoginResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def create_api_key(self, request: cluster__pb2.CreateApiKeyRequest, ctx: RequestContext) -> cluster__pb2.CreateApiKeyResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def revoke_api_key(self, request: cluster__pb2.RevokeApiKeyRequest, ctx: RequestContext) -> cluster__pb2.Empty:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def list_api_keys(self, request: cluster__pb2.ListApiKeysRequest, ctx: RequestContext) -> cluster__pb2.ListApiKeysResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def get_current_user(self, request: cluster__pb2.GetCurrentUserRequest, ctx: RequestContext) -> cluster__pb2.GetCurrentUserResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def execute_raw_query(self, request: query__pb2.RawQueryRequest, ctx: RequestContext) -> query__pb2.RawQueryResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -168,16 +184,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                     ),
                     function=svc.list_workers,
                 ),
-                "/iris.cluster.ControllerService/NotifyTaskUpdate": Endpoint.unary(
-                    method=MethodInfo(
-                        name="NotifyTaskUpdate",
-                        service_name="iris.cluster.ControllerService",
-                        input=cluster__pb2.Controller.NotifyTaskUpdateRequest,
-                        output=cluster__pb2.Empty,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.notify_task_update,
-                ),
                 "/iris.cluster.ControllerService/RegisterEndpoint": Endpoint.unary(
                     method=MethodInfo(
                         name="RegisterEndpoint",
@@ -197,16 +203,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.unregister_endpoint,
-                ),
-                "/iris.cluster.ControllerService/LookupEndpoint": Endpoint.unary(
-                    method=MethodInfo(
-                        name="LookupEndpoint",
-                        service_name="iris.cluster.ControllerService",
-                        input=cluster__pb2.Controller.LookupEndpointRequest,
-                        output=cluster__pb2.Controller.LookupEndpointResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.lookup_endpoint,
                 ),
                 "/iris.cluster.ControllerService/ListEndpoints": Endpoint.unary(
                     method=MethodInfo(
@@ -238,16 +234,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                     ),
                     function=svc.get_transactions,
                 ),
-                "/iris.cluster.ControllerService/GetClusterSummary": Endpoint.unary(
-                    method=MethodInfo(
-                        name="GetClusterSummary",
-                        service_name="iris.cluster.ControllerService",
-                        input=cluster__pb2.Controller.GetClusterSummaryRequest,
-                        output=cluster__pb2.Controller.GetClusterSummaryResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.get_cluster_summary,
-                ),
                 "/iris.cluster.ControllerService/ListUsers": Endpoint.unary(
                     method=MethodInfo(
                         name="ListUsers",
@@ -268,15 +254,15 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                     ),
                     function=svc.get_task_logs,
                 ),
-                "/iris.cluster.ControllerService/GetProcessLogs": Endpoint.unary(
+                "/iris.cluster.ControllerService/FetchLogs": Endpoint.unary(
                     method=MethodInfo(
-                        name="GetProcessLogs",
+                        name="FetchLogs",
                         service_name="iris.cluster.ControllerService",
-                        input=cluster__pb2.Controller.GetProcessLogsRequest,
-                        output=cluster__pb2.Controller.GetProcessLogsResponse,
+                        input=cluster__pb2.FetchLogsRequest,
+                        output=cluster__pb2.FetchLogsResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=svc.get_process_logs,
+                    function=svc.fetch_logs,
                 ),
                 "/iris.cluster.ControllerService/ProfileTask": Endpoint.unary(
                     method=MethodInfo(
@@ -307,6 +293,86 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.begin_checkpoint,
+                ),
+                "/iris.cluster.ControllerService/GetProcessStatus": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetProcessStatus",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.GetProcessStatusRequest,
+                        output=cluster__pb2.GetProcessStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_process_status,
+                ),
+                "/iris.cluster.ControllerService/GetAuthInfo": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetAuthInfo",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.GetAuthInfoRequest,
+                        output=cluster__pb2.GetAuthInfoResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_auth_info,
+                ),
+                "/iris.cluster.ControllerService/Login": Endpoint.unary(
+                    method=MethodInfo(
+                        name="Login",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.LoginRequest,
+                        output=cluster__pb2.LoginResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.login,
+                ),
+                "/iris.cluster.ControllerService/CreateApiKey": Endpoint.unary(
+                    method=MethodInfo(
+                        name="CreateApiKey",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.CreateApiKeyRequest,
+                        output=cluster__pb2.CreateApiKeyResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.create_api_key,
+                ),
+                "/iris.cluster.ControllerService/RevokeApiKey": Endpoint.unary(
+                    method=MethodInfo(
+                        name="RevokeApiKey",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.RevokeApiKeyRequest,
+                        output=cluster__pb2.Empty,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.revoke_api_key,
+                ),
+                "/iris.cluster.ControllerService/ListApiKeys": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ListApiKeys",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.ListApiKeysRequest,
+                        output=cluster__pb2.ListApiKeysResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.list_api_keys,
+                ),
+                "/iris.cluster.ControllerService/GetCurrentUser": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetCurrentUser",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.GetCurrentUserRequest,
+                        output=cluster__pb2.GetCurrentUserResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_current_user,
+                ),
+                "/iris.cluster.ControllerService/ExecuteRawQuery": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ExecuteRawQuery",
+                        service_name="iris.cluster.ControllerService",
+                        input=query__pb2.RawQueryRequest,
+                        output=query__pb2.RawQueryResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.execute_raw_query,
                 ),
             },
             interceptors=interceptors,
@@ -480,26 +546,6 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def notify_task_update(
-        self,
-        request: cluster__pb2.Controller.NotifyTaskUpdateRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> cluster__pb2.Empty:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="NotifyTaskUpdate",
-                service_name="iris.cluster.ControllerService",
-                input=cluster__pb2.Controller.NotifyTaskUpdateRequest,
-                output=cluster__pb2.Empty,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
     async def register_endpoint(
         self,
         request: cluster__pb2.Controller.RegisterEndpointRequest,
@@ -534,26 +580,6 @@ class ControllerServiceClient(ConnectClient):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.Controller.UnregisterEndpointRequest,
                 output=cluster__pb2.Empty,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def lookup_endpoint(
-        self,
-        request: cluster__pb2.Controller.LookupEndpointRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> cluster__pb2.Controller.LookupEndpointResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="LookupEndpoint",
-                service_name="iris.cluster.ControllerService",
-                input=cluster__pb2.Controller.LookupEndpointRequest,
-                output=cluster__pb2.Controller.LookupEndpointResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -620,26 +646,6 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def get_cluster_summary(
-        self,
-        request: cluster__pb2.Controller.GetClusterSummaryRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> cluster__pb2.Controller.GetClusterSummaryResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetClusterSummary",
-                service_name="iris.cluster.ControllerService",
-                input=cluster__pb2.Controller.GetClusterSummaryRequest,
-                output=cluster__pb2.Controller.GetClusterSummaryResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
     async def list_users(
         self,
         request: cluster__pb2.Controller.ListUsersRequest,
@@ -680,20 +686,20 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def get_process_logs(
+    async def fetch_logs(
         self,
-        request: cluster__pb2.Controller.GetProcessLogsRequest,
+        request: cluster__pb2.FetchLogsRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> cluster__pb2.Controller.GetProcessLogsResponse:
+    ) -> cluster__pb2.FetchLogsResponse:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="GetProcessLogs",
+                name="FetchLogs",
                 service_name="iris.cluster.ControllerService",
-                input=cluster__pb2.Controller.GetProcessLogsRequest,
-                output=cluster__pb2.Controller.GetProcessLogsResponse,
+                input=cluster__pb2.FetchLogsRequest,
+                output=cluster__pb2.FetchLogsResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -760,6 +766,166 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def get_process_status(
+        self,
+        request: cluster__pb2.GetProcessStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.GetProcessStatusResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetProcessStatus",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.GetProcessStatusRequest,
+                output=cluster__pb2.GetProcessStatusResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def get_auth_info(
+        self,
+        request: cluster__pb2.GetAuthInfoRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.GetAuthInfoResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetAuthInfo",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.GetAuthInfoRequest,
+                output=cluster__pb2.GetAuthInfoResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def login(
+        self,
+        request: cluster__pb2.LoginRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.LoginResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="Login",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.LoginRequest,
+                output=cluster__pb2.LoginResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def create_api_key(
+        self,
+        request: cluster__pb2.CreateApiKeyRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.CreateApiKeyResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="CreateApiKey",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.CreateApiKeyRequest,
+                output=cluster__pb2.CreateApiKeyResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def revoke_api_key(
+        self,
+        request: cluster__pb2.RevokeApiKeyRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Empty:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="RevokeApiKey",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.RevokeApiKeyRequest,
+                output=cluster__pb2.Empty,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def list_api_keys(
+        self,
+        request: cluster__pb2.ListApiKeysRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.ListApiKeysResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListApiKeys",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.ListApiKeysRequest,
+                output=cluster__pb2.ListApiKeysResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def get_current_user(
+        self,
+        request: cluster__pb2.GetCurrentUserRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.GetCurrentUserResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetCurrentUser",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.GetCurrentUserRequest,
+                output=cluster__pb2.GetCurrentUserResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def execute_raw_query(
+        self,
+        request: query__pb2.RawQueryRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> query__pb2.RawQueryResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ExecuteRawQuery",
+                service_name="iris.cluster.ControllerService",
+                input=query__pb2.RawQueryRequest,
+                output=query__pb2.RawQueryResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 
 class WorkerService(Protocol):
@@ -772,13 +938,16 @@ class WorkerService(Protocol):
     async def health_check(self, request: cluster__pb2.Empty, ctx: RequestContext) -> cluster__pb2.Worker.HealthResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def get_process_logs(self, request: cluster__pb2.Worker.GetProcessLogsRequest, ctx: RequestContext) -> cluster__pb2.Worker.GetProcessLogsResponse:
+    async def fetch_logs(self, request: cluster__pb2.FetchLogsRequest, ctx: RequestContext) -> cluster__pb2.FetchLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def heartbeat(self, request: cluster__pb2.HeartbeatRequest, ctx: RequestContext) -> cluster__pb2.HeartbeatResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def profile_task(self, request: cluster__pb2.ProfileTaskRequest, ctx: RequestContext) -> cluster__pb2.ProfileTaskResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def get_process_status(self, request: cluster__pb2.GetProcessStatusRequest, ctx: RequestContext) -> cluster__pb2.GetProcessStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -817,15 +986,15 @@ class WorkerServiceASGIApplication(ConnectASGIApplication[WorkerService]):
                     ),
                     function=svc.health_check,
                 ),
-                "/iris.cluster.WorkerService/GetProcessLogs": Endpoint.unary(
+                "/iris.cluster.WorkerService/FetchLogs": Endpoint.unary(
                     method=MethodInfo(
-                        name="GetProcessLogs",
+                        name="FetchLogs",
                         service_name="iris.cluster.WorkerService",
-                        input=cluster__pb2.Worker.GetProcessLogsRequest,
-                        output=cluster__pb2.Worker.GetProcessLogsResponse,
+                        input=cluster__pb2.FetchLogsRequest,
+                        output=cluster__pb2.FetchLogsResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=svc.get_process_logs,
+                    function=svc.fetch_logs,
                 ),
                 "/iris.cluster.WorkerService/Heartbeat": Endpoint.unary(
                     method=MethodInfo(
@@ -846,6 +1015,16 @@ class WorkerServiceASGIApplication(ConnectASGIApplication[WorkerService]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.profile_task,
+                ),
+                "/iris.cluster.WorkerService/GetProcessStatus": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetProcessStatus",
+                        service_name="iris.cluster.WorkerService",
+                        input=cluster__pb2.GetProcessStatusRequest,
+                        output=cluster__pb2.GetProcessStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_process_status,
                 ),
             },
             interceptors=interceptors,
@@ -919,20 +1098,20 @@ class WorkerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def get_process_logs(
+    async def fetch_logs(
         self,
-        request: cluster__pb2.Worker.GetProcessLogsRequest,
+        request: cluster__pb2.FetchLogsRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> cluster__pb2.Worker.GetProcessLogsResponse:
+    ) -> cluster__pb2.FetchLogsResponse:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="GetProcessLogs",
+                name="FetchLogs",
                 service_name="iris.cluster.WorkerService",
-                input=cluster__pb2.Worker.GetProcessLogsRequest,
-                output=cluster__pb2.Worker.GetProcessLogsResponse,
+                input=cluster__pb2.FetchLogsRequest,
+                output=cluster__pb2.FetchLogsResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -979,6 +1158,26 @@ class WorkerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def get_process_status(
+        self,
+        request: cluster__pb2.GetProcessStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.GetProcessStatusResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetProcessStatus",
+                service_name="iris.cluster.WorkerService",
+                input=cluster__pb2.GetProcessStatusRequest,
+                output=cluster__pb2.GetProcessStatusResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 class ControllerServiceSync(Protocol):
     def launch_job(self, request: cluster__pb2.Controller.LaunchJobRequest, ctx: RequestContext) -> cluster__pb2.Controller.LaunchJobResponse:
@@ -997,13 +1196,9 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_workers(self, request: cluster__pb2.Controller.ListWorkersRequest, ctx: RequestContext) -> cluster__pb2.Controller.ListWorkersResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def notify_task_update(self, request: cluster__pb2.Controller.NotifyTaskUpdateRequest, ctx: RequestContext) -> cluster__pb2.Empty:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def register_endpoint(self, request: cluster__pb2.Controller.RegisterEndpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.RegisterEndpointResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def unregister_endpoint(self, request: cluster__pb2.Controller.UnregisterEndpointRequest, ctx: RequestContext) -> cluster__pb2.Empty:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def lookup_endpoint(self, request: cluster__pb2.Controller.LookupEndpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.LookupEndpointResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_endpoints(self, request: cluster__pb2.Controller.ListEndpointsRequest, ctx: RequestContext) -> cluster__pb2.Controller.ListEndpointsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -1011,19 +1206,33 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_transactions(self, request: cluster__pb2.Controller.GetTransactionsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetTransactionsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def get_cluster_summary(self, request: cluster__pb2.Controller.GetClusterSummaryRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetClusterSummaryResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_users(self, request: cluster__pb2.Controller.ListUsersRequest, ctx: RequestContext) -> cluster__pb2.Controller.ListUsersResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_task_logs(self, request: cluster__pb2.Controller.GetTaskLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetTaskLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def get_process_logs(self, request: cluster__pb2.Controller.GetProcessLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetProcessLogsResponse:
+    def fetch_logs(self, request: cluster__pb2.FetchLogsRequest, ctx: RequestContext) -> cluster__pb2.FetchLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def profile_task(self, request: cluster__pb2.ProfileTaskRequest, ctx: RequestContext) -> cluster__pb2.ProfileTaskResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_worker_status(self, request: cluster__pb2.Controller.GetWorkerStatusRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetWorkerStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def begin_checkpoint(self, request: cluster__pb2.Controller.BeginCheckpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.BeginCheckpointResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_process_status(self, request: cluster__pb2.GetProcessStatusRequest, ctx: RequestContext) -> cluster__pb2.GetProcessStatusResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_auth_info(self, request: cluster__pb2.GetAuthInfoRequest, ctx: RequestContext) -> cluster__pb2.GetAuthInfoResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def login(self, request: cluster__pb2.LoginRequest, ctx: RequestContext) -> cluster__pb2.LoginResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def create_api_key(self, request: cluster__pb2.CreateApiKeyRequest, ctx: RequestContext) -> cluster__pb2.CreateApiKeyResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def revoke_api_key(self, request: cluster__pb2.RevokeApiKeyRequest, ctx: RequestContext) -> cluster__pb2.Empty:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def list_api_keys(self, request: cluster__pb2.ListApiKeysRequest, ctx: RequestContext) -> cluster__pb2.ListApiKeysResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_current_user(self, request: cluster__pb2.GetCurrentUserRequest, ctx: RequestContext) -> cluster__pb2.GetCurrentUserResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def execute_raw_query(self, request: query__pb2.RawQueryRequest, ctx: RequestContext) -> query__pb2.RawQueryResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -1111,16 +1320,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                     ),
                     function=service.list_workers,
                 ),
-                "/iris.cluster.ControllerService/NotifyTaskUpdate": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="NotifyTaskUpdate",
-                        service_name="iris.cluster.ControllerService",
-                        input=cluster__pb2.Controller.NotifyTaskUpdateRequest,
-                        output=cluster__pb2.Empty,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.notify_task_update,
-                ),
                 "/iris.cluster.ControllerService/RegisterEndpoint": EndpointSync.unary(
                     method=MethodInfo(
                         name="RegisterEndpoint",
@@ -1140,16 +1339,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.unregister_endpoint,
-                ),
-                "/iris.cluster.ControllerService/LookupEndpoint": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="LookupEndpoint",
-                        service_name="iris.cluster.ControllerService",
-                        input=cluster__pb2.Controller.LookupEndpointRequest,
-                        output=cluster__pb2.Controller.LookupEndpointResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.lookup_endpoint,
                 ),
                 "/iris.cluster.ControllerService/ListEndpoints": EndpointSync.unary(
                     method=MethodInfo(
@@ -1181,16 +1370,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                     ),
                     function=service.get_transactions,
                 ),
-                "/iris.cluster.ControllerService/GetClusterSummary": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="GetClusterSummary",
-                        service_name="iris.cluster.ControllerService",
-                        input=cluster__pb2.Controller.GetClusterSummaryRequest,
-                        output=cluster__pb2.Controller.GetClusterSummaryResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.get_cluster_summary,
-                ),
                 "/iris.cluster.ControllerService/ListUsers": EndpointSync.unary(
                     method=MethodInfo(
                         name="ListUsers",
@@ -1211,15 +1390,15 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                     ),
                     function=service.get_task_logs,
                 ),
-                "/iris.cluster.ControllerService/GetProcessLogs": EndpointSync.unary(
+                "/iris.cluster.ControllerService/FetchLogs": EndpointSync.unary(
                     method=MethodInfo(
-                        name="GetProcessLogs",
+                        name="FetchLogs",
                         service_name="iris.cluster.ControllerService",
-                        input=cluster__pb2.Controller.GetProcessLogsRequest,
-                        output=cluster__pb2.Controller.GetProcessLogsResponse,
+                        input=cluster__pb2.FetchLogsRequest,
+                        output=cluster__pb2.FetchLogsResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=service.get_process_logs,
+                    function=service.fetch_logs,
                 ),
                 "/iris.cluster.ControllerService/ProfileTask": EndpointSync.unary(
                     method=MethodInfo(
@@ -1250,6 +1429,86 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.begin_checkpoint,
+                ),
+                "/iris.cluster.ControllerService/GetProcessStatus": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetProcessStatus",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.GetProcessStatusRequest,
+                        output=cluster__pb2.GetProcessStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_process_status,
+                ),
+                "/iris.cluster.ControllerService/GetAuthInfo": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetAuthInfo",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.GetAuthInfoRequest,
+                        output=cluster__pb2.GetAuthInfoResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_auth_info,
+                ),
+                "/iris.cluster.ControllerService/Login": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="Login",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.LoginRequest,
+                        output=cluster__pb2.LoginResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.login,
+                ),
+                "/iris.cluster.ControllerService/CreateApiKey": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="CreateApiKey",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.CreateApiKeyRequest,
+                        output=cluster__pb2.CreateApiKeyResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.create_api_key,
+                ),
+                "/iris.cluster.ControllerService/RevokeApiKey": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="RevokeApiKey",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.RevokeApiKeyRequest,
+                        output=cluster__pb2.Empty,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.revoke_api_key,
+                ),
+                "/iris.cluster.ControllerService/ListApiKeys": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ListApiKeys",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.ListApiKeysRequest,
+                        output=cluster__pb2.ListApiKeysResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.list_api_keys,
+                ),
+                "/iris.cluster.ControllerService/GetCurrentUser": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetCurrentUser",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.GetCurrentUserRequest,
+                        output=cluster__pb2.GetCurrentUserResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_current_user,
+                ),
+                "/iris.cluster.ControllerService/ExecuteRawQuery": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ExecuteRawQuery",
+                        service_name="iris.cluster.ControllerService",
+                        input=query__pb2.RawQueryRequest,
+                        output=query__pb2.RawQueryResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.execute_raw_query,
                 ),
             },
             interceptors=interceptors,
@@ -1423,26 +1682,6 @@ class ControllerServiceClientSync(ConnectClientSync):
             timeout_ms=timeout_ms,
         )
 
-    def notify_task_update(
-        self,
-        request: cluster__pb2.Controller.NotifyTaskUpdateRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> cluster__pb2.Empty:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="NotifyTaskUpdate",
-                service_name="iris.cluster.ControllerService",
-                input=cluster__pb2.Controller.NotifyTaskUpdateRequest,
-                output=cluster__pb2.Empty,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
     def register_endpoint(
         self,
         request: cluster__pb2.Controller.RegisterEndpointRequest,
@@ -1477,26 +1716,6 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.Controller.UnregisterEndpointRequest,
                 output=cluster__pb2.Empty,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def lookup_endpoint(
-        self,
-        request: cluster__pb2.Controller.LookupEndpointRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> cluster__pb2.Controller.LookupEndpointResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="LookupEndpoint",
-                service_name="iris.cluster.ControllerService",
-                input=cluster__pb2.Controller.LookupEndpointRequest,
-                output=cluster__pb2.Controller.LookupEndpointResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -1563,26 +1782,6 @@ class ControllerServiceClientSync(ConnectClientSync):
             timeout_ms=timeout_ms,
         )
 
-    def get_cluster_summary(
-        self,
-        request: cluster__pb2.Controller.GetClusterSummaryRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> cluster__pb2.Controller.GetClusterSummaryResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetClusterSummary",
-                service_name="iris.cluster.ControllerService",
-                input=cluster__pb2.Controller.GetClusterSummaryRequest,
-                output=cluster__pb2.Controller.GetClusterSummaryResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
     def list_users(
         self,
         request: cluster__pb2.Controller.ListUsersRequest,
@@ -1623,20 +1822,20 @@ class ControllerServiceClientSync(ConnectClientSync):
             timeout_ms=timeout_ms,
         )
 
-    def get_process_logs(
+    def fetch_logs(
         self,
-        request: cluster__pb2.Controller.GetProcessLogsRequest,
+        request: cluster__pb2.FetchLogsRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> cluster__pb2.Controller.GetProcessLogsResponse:
+    ) -> cluster__pb2.FetchLogsResponse:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="GetProcessLogs",
+                name="FetchLogs",
                 service_name="iris.cluster.ControllerService",
-                input=cluster__pb2.Controller.GetProcessLogsRequest,
-                output=cluster__pb2.Controller.GetProcessLogsResponse,
+                input=cluster__pb2.FetchLogsRequest,
+                output=cluster__pb2.FetchLogsResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -1703,6 +1902,166 @@ class ControllerServiceClientSync(ConnectClientSync):
             timeout_ms=timeout_ms,
         )
 
+    def get_process_status(
+        self,
+        request: cluster__pb2.GetProcessStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.GetProcessStatusResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetProcessStatus",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.GetProcessStatusRequest,
+                output=cluster__pb2.GetProcessStatusResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_auth_info(
+        self,
+        request: cluster__pb2.GetAuthInfoRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.GetAuthInfoResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetAuthInfo",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.GetAuthInfoRequest,
+                output=cluster__pb2.GetAuthInfoResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def login(
+        self,
+        request: cluster__pb2.LoginRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.LoginResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="Login",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.LoginRequest,
+                output=cluster__pb2.LoginResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def create_api_key(
+        self,
+        request: cluster__pb2.CreateApiKeyRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.CreateApiKeyResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="CreateApiKey",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.CreateApiKeyRequest,
+                output=cluster__pb2.CreateApiKeyResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def revoke_api_key(
+        self,
+        request: cluster__pb2.RevokeApiKeyRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Empty:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="RevokeApiKey",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.RevokeApiKeyRequest,
+                output=cluster__pb2.Empty,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def list_api_keys(
+        self,
+        request: cluster__pb2.ListApiKeysRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.ListApiKeysResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListApiKeys",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.ListApiKeysRequest,
+                output=cluster__pb2.ListApiKeysResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_current_user(
+        self,
+        request: cluster__pb2.GetCurrentUserRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.GetCurrentUserResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetCurrentUser",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.GetCurrentUserRequest,
+                output=cluster__pb2.GetCurrentUserResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def execute_raw_query(
+        self,
+        request: query__pb2.RawQueryRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> query__pb2.RawQueryResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ExecuteRawQuery",
+                service_name="iris.cluster.ControllerService",
+                input=query__pb2.RawQueryRequest,
+                output=query__pb2.RawQueryResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 class WorkerServiceSync(Protocol):
     def get_task_status(self, request: cluster__pb2.Worker.GetTaskStatusRequest, ctx: RequestContext) -> cluster__pb2.TaskStatus:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -1710,11 +2069,13 @@ class WorkerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def health_check(self, request: cluster__pb2.Empty, ctx: RequestContext) -> cluster__pb2.Worker.HealthResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def get_process_logs(self, request: cluster__pb2.Worker.GetProcessLogsRequest, ctx: RequestContext) -> cluster__pb2.Worker.GetProcessLogsResponse:
+    def fetch_logs(self, request: cluster__pb2.FetchLogsRequest, ctx: RequestContext) -> cluster__pb2.FetchLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def heartbeat(self, request: cluster__pb2.HeartbeatRequest, ctx: RequestContext) -> cluster__pb2.HeartbeatResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def profile_task(self, request: cluster__pb2.ProfileTaskRequest, ctx: RequestContext) -> cluster__pb2.ProfileTaskResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_process_status(self, request: cluster__pb2.GetProcessStatusRequest, ctx: RequestContext) -> cluster__pb2.GetProcessStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -1752,15 +2113,15 @@ class WorkerServiceWSGIApplication(ConnectWSGIApplication):
                     ),
                     function=service.health_check,
                 ),
-                "/iris.cluster.WorkerService/GetProcessLogs": EndpointSync.unary(
+                "/iris.cluster.WorkerService/FetchLogs": EndpointSync.unary(
                     method=MethodInfo(
-                        name="GetProcessLogs",
+                        name="FetchLogs",
                         service_name="iris.cluster.WorkerService",
-                        input=cluster__pb2.Worker.GetProcessLogsRequest,
-                        output=cluster__pb2.Worker.GetProcessLogsResponse,
+                        input=cluster__pb2.FetchLogsRequest,
+                        output=cluster__pb2.FetchLogsResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=service.get_process_logs,
+                    function=service.fetch_logs,
                 ),
                 "/iris.cluster.WorkerService/Heartbeat": EndpointSync.unary(
                     method=MethodInfo(
@@ -1781,6 +2142,16 @@ class WorkerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.profile_task,
+                ),
+                "/iris.cluster.WorkerService/GetProcessStatus": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetProcessStatus",
+                        service_name="iris.cluster.WorkerService",
+                        input=cluster__pb2.GetProcessStatusRequest,
+                        output=cluster__pb2.GetProcessStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_process_status,
                 ),
             },
             interceptors=interceptors,
@@ -1854,20 +2225,20 @@ class WorkerServiceClientSync(ConnectClientSync):
             timeout_ms=timeout_ms,
         )
 
-    def get_process_logs(
+    def fetch_logs(
         self,
-        request: cluster__pb2.Worker.GetProcessLogsRequest,
+        request: cluster__pb2.FetchLogsRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> cluster__pb2.Worker.GetProcessLogsResponse:
+    ) -> cluster__pb2.FetchLogsResponse:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="GetProcessLogs",
+                name="FetchLogs",
                 service_name="iris.cluster.WorkerService",
-                input=cluster__pb2.Worker.GetProcessLogsRequest,
-                output=cluster__pb2.Worker.GetProcessLogsResponse,
+                input=cluster__pb2.FetchLogsRequest,
+                output=cluster__pb2.FetchLogsResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -1908,6 +2279,26 @@ class WorkerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.WorkerService",
                 input=cluster__pb2.ProfileTaskRequest,
                 output=cluster__pb2.ProfileTaskResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_process_status(
+        self,
+        request: cluster__pb2.GetProcessStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.GetProcessStatusResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetProcessStatus",
+                service_name="iris.cluster.WorkerService",
+                input=cluster__pb2.GetProcessStatusRequest,
+                output=cluster__pb2.GetProcessStatusResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

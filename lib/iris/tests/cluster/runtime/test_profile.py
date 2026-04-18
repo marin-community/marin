@@ -41,7 +41,7 @@ def test_resolve_cpu_spec_maps_format_to_pyspy_format_and_extension(proto_format
 def test_resolve_cpu_spec_defaults_rate_hz_when_zero():
     cfg = cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.FLAMEGRAPH, rate_hz=0)
     spec = resolve_cpu_spec(cfg, duration_seconds=5, pid="1")
-    assert spec.rate_hz == 100
+    assert spec.rate_hz == 20
 
 
 def test_resolve_cpu_spec_preserves_nonzero_rate_hz():

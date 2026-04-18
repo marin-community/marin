@@ -11,8 +11,93 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Protocol
 
-LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-LOG_DATEFMT = "%Y%m%d %H%M%S"
+LOG_FORMAT = "%(levelprefix)s%(asctime)s %(thread)s %(name)s %(message)s"
+LOG_DATEFMT = "%Y%m%d %H:%M:%S"
+
+# Map log level names to single-character prefixes for compact log output.
+# E.g., INFO -> "I", ERROR -> "E", WARNING -> "W".
+_LEVEL_PREFIX = {
+    "DEBUG": "D",
+    "INFO": "I",
+    "WARNING": "W",
+    "ERROR": "E",
+    "CRITICAL": "C",
+}
+
+# Reverse map: single-letter prefix -> canonical level name.
+_PREFIX_TO_LEVEL = {v: k for k, v in _LEVEL_PREFIX.items()}
+
+# Canonical level names, derived from _LEVEL_PREFIX keys.
+LOG_LEVEL_NAMES = tuple(_LEVEL_PREFIX.keys())
+
+
+def parse_log_level(line: str) -> str | None:
+    """Best-effort parse a log level from a log line.
+
+    Recognizes the single-letter prefix format produced by LevelPrefixFormatter:
+        "I20260102 12:34:56 ..."  ->  "INFO"
+        "E20260102 12:44:05 ..."  ->  "ERROR"
+
+    Returns the canonical level name (e.g. "INFO") or None.
+    """
+    if not line or len(line) < 2:
+        return None
+
+    # Single-letter prefix format: "I20260102 12:34:56 ..."
+    if line[0] in _PREFIX_TO_LEVEL and line[1:2].isdigit():
+        return _PREFIX_TO_LEVEL[line[0]]
+
+    return None
+
+
+def str_to_log_level(level_name: str) -> int:
+    """Convert a canonical level name (e.g. "INFO") to the LogLevel proto enum value.
+
+    Returns LOG_LEVEL_UNKNOWN (0) for unrecognized names.
+    Uses lazy import to avoid pulling in protobuf at module load time.
+    """
+    from iris.rpc import logging_pb2
+
+    _STR_TO_ENUM = {
+        "DEBUG": logging_pb2.LOG_LEVEL_DEBUG,
+        "INFO": logging_pb2.LOG_LEVEL_INFO,
+        "WARNING": logging_pb2.LOG_LEVEL_WARNING,
+        "ERROR": logging_pb2.LOG_LEVEL_ERROR,
+        "CRITICAL": logging_pb2.LOG_LEVEL_CRITICAL,
+    }
+    return (
+        _STR_TO_ENUM.get(level_name.upper(), logging_pb2.LOG_LEVEL_UNKNOWN)
+        if level_name
+        else logging_pb2.LOG_LEVEL_UNKNOWN
+    )
+
+
+def log_level_to_str(level: int) -> str:
+    """Convert a LogLevel proto enum value to canonical level name.
+
+    Returns "" for LOG_LEVEL_UNKNOWN (0).
+    """
+    from iris.rpc import logging_pb2
+
+    _ENUM_TO_STR = {
+        logging_pb2.LOG_LEVEL_DEBUG: "DEBUG",
+        logging_pb2.LOG_LEVEL_INFO: "INFO",
+        logging_pb2.LOG_LEVEL_WARNING: "WARNING",
+        logging_pb2.LOG_LEVEL_ERROR: "ERROR",
+        logging_pb2.LOG_LEVEL_CRITICAL: "CRITICAL",
+    }
+    return _ENUM_TO_STR.get(level, "")
+
+
+class LevelPrefixFormatter(logging.Formatter):
+    """Formatter that prepends a single-letter level prefix (I/W/E/D/C).
+
+    Produces lines like: I20260306 12:44:05 iris.worker starting up
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        record.levelprefix = _LEVEL_PREFIX.get(record.levelname, "?")
+        return super().format(record)
 
 
 @dataclass(frozen=True)
@@ -103,7 +188,7 @@ def get_global_buffer() -> LogRingBuffer:
 _configured = False
 
 
-def configure_logging(level: int = logging.DEBUG) -> LogRingBuffer:
+def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
     """Configure iris logging: stderr handler + ring buffer. Idempotent."""
     global _configured
     if _configured:
@@ -119,7 +204,7 @@ def configure_logging(level: int = logging.DEBUG) -> LogRingBuffer:
     root.setLevel(level)
     root.handlers.clear()
 
-    formatter = logging.Formatter(fmt=LOG_FORMAT, datefmt=LOG_DATEFMT)
+    formatter = LevelPrefixFormatter(fmt=LOG_FORMAT, datefmt=LOG_DATEFMT)
 
     stderr_handler = logging.StreamHandler(sys.stderr)
     stderr_handler.setLevel(level)

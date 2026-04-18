@@ -28,6 +28,15 @@ class ActorService(Protocol):
     async def list_actors(self, request: actor__pb2.ListActorsRequest, ctx: RequestContext) -> actor__pb2.ListActorsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def start_operation(self, request: actor__pb2.ActorCall, ctx: RequestContext) -> actor__pb2.Operation:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def get_operation(self, request: actor__pb2.OperationId, ctx: RequestContext) -> actor__pb2.Operation:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def cancel_operation(self, request: actor__pb2.OperationId, ctx: RequestContext) -> actor__pb2.Operation:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
 
 class ActorServiceASGIApplication(ConnectASGIApplication[ActorService]):
     def __init__(self, service: ActorService | AsyncGenerator[ActorService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None) -> None:
@@ -73,6 +82,36 @@ class ActorServiceASGIApplication(ConnectASGIApplication[ActorService]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list_actors,
+                ),
+                "/iris.actor.ActorService/StartOperation": Endpoint.unary(
+                    method=MethodInfo(
+                        name="StartOperation",
+                        service_name="iris.actor.ActorService",
+                        input=actor__pb2.ActorCall,
+                        output=actor__pb2.Operation,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.start_operation,
+                ),
+                "/iris.actor.ActorService/GetOperation": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetOperation",
+                        service_name="iris.actor.ActorService",
+                        input=actor__pb2.OperationId,
+                        output=actor__pb2.Operation,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_operation,
+                ),
+                "/iris.actor.ActorService/CancelOperation": Endpoint.unary(
+                    method=MethodInfo(
+                        name="CancelOperation",
+                        service_name="iris.actor.ActorService",
+                        input=actor__pb2.OperationId,
+                        output=actor__pb2.Operation,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.cancel_operation,
                 ),
             },
             interceptors=interceptors,
@@ -166,6 +205,66 @@ class ActorServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def start_operation(
+        self,
+        request: actor__pb2.ActorCall,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> actor__pb2.Operation:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="StartOperation",
+                service_name="iris.actor.ActorService",
+                input=actor__pb2.ActorCall,
+                output=actor__pb2.Operation,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def get_operation(
+        self,
+        request: actor__pb2.OperationId,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> actor__pb2.Operation:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetOperation",
+                service_name="iris.actor.ActorService",
+                input=actor__pb2.OperationId,
+                output=actor__pb2.Operation,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def cancel_operation(
+        self,
+        request: actor__pb2.OperationId,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> actor__pb2.Operation:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="CancelOperation",
+                service_name="iris.actor.ActorService",
+                input=actor__pb2.OperationId,
+                output=actor__pb2.Operation,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 class ActorServiceSync(Protocol):
     def call(self, request: actor__pb2.ActorCall, ctx: RequestContext) -> actor__pb2.ActorResponse:
@@ -175,6 +274,12 @@ class ActorServiceSync(Protocol):
     def list_methods(self, request: actor__pb2.ListMethodsRequest, ctx: RequestContext) -> actor__pb2.ListMethodsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_actors(self, request: actor__pb2.ListActorsRequest, ctx: RequestContext) -> actor__pb2.ListActorsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def start_operation(self, request: actor__pb2.ActorCall, ctx: RequestContext) -> actor__pb2.Operation:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_operation(self, request: actor__pb2.OperationId, ctx: RequestContext) -> actor__pb2.Operation:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def cancel_operation(self, request: actor__pb2.OperationId, ctx: RequestContext) -> actor__pb2.Operation:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -221,6 +326,36 @@ class ActorServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list_actors,
+                ),
+                "/iris.actor.ActorService/StartOperation": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="StartOperation",
+                        service_name="iris.actor.ActorService",
+                        input=actor__pb2.ActorCall,
+                        output=actor__pb2.Operation,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.start_operation,
+                ),
+                "/iris.actor.ActorService/GetOperation": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetOperation",
+                        service_name="iris.actor.ActorService",
+                        input=actor__pb2.OperationId,
+                        output=actor__pb2.Operation,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_operation,
+                ),
+                "/iris.actor.ActorService/CancelOperation": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="CancelOperation",
+                        service_name="iris.actor.ActorService",
+                        input=actor__pb2.OperationId,
+                        output=actor__pb2.Operation,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.cancel_operation,
                 ),
             },
             interceptors=interceptors,
@@ -308,6 +443,66 @@ class ActorServiceClientSync(ConnectClientSync):
                 service_name="iris.actor.ActorService",
                 input=actor__pb2.ListActorsRequest,
                 output=actor__pb2.ListActorsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def start_operation(
+        self,
+        request: actor__pb2.ActorCall,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> actor__pb2.Operation:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="StartOperation",
+                service_name="iris.actor.ActorService",
+                input=actor__pb2.ActorCall,
+                output=actor__pb2.Operation,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_operation(
+        self,
+        request: actor__pb2.OperationId,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> actor__pb2.Operation:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetOperation",
+                service_name="iris.actor.ActorService",
+                input=actor__pb2.OperationId,
+                output=actor__pb2.Operation,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def cancel_operation(
+        self,
+        request: actor__pb2.OperationId,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> actor__pb2.Operation:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="CancelOperation",
+                service_name="iris.actor.ActorService",
+                input=actor__pb2.OperationId,
+                output=actor__pb2.Operation,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

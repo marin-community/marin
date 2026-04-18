@@ -69,7 +69,7 @@ Finally, to launch an experiment, use [`ray_run.py`](https://github.com/marin-co
 launches jobs to the Ray cluster:
 
 ```bash
-python marin/run/ray_run.py -- python experiments/hello_world.py
+uv run lib/marin/src/marin/run/ray_run.py -- python experiments/hello_world.py
 ```
 
 This script ensure that:
@@ -77,4 +77,4 @@ This script ensure that:
 - The working directory is set appropriately.
 - Any subpaths under submodules are appended to PYTHONPATH.
 
-> **New:** Agent-friendly recipes are now available in `docs/recipes/`. See [add_dataset.md](../recipes/add_dataset.md) for a guide to dataset schema inspection and addition.
+> Agents can use the `add-dataset` skill for a guide to dataset schema inspection and addition.

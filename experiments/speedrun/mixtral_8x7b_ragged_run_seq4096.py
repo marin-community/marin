@@ -13,7 +13,7 @@ from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 nemotron_cc_steps = tokenize_nemotron(tokenizer=llama3_tokenizer)
 nemotron_cc_mixture = lm_mixture_data_config(

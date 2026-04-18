@@ -10,7 +10,7 @@ be in BUILDING state on each worker, preventing resource exhaustion.
 
 The scheduler operates exclusively on scheduler-owned types (JobRequirements,
 WorkerCapacity, SchedulingContext) and has ZERO runtime imports from controller
-state. The boundary conversion from ControllerWorker to WorkerCapacity happens
+state. The boundary conversion from worker rows to WorkerCapacity happens
 via the WorkerSnapshot protocol in create_scheduling_context.
 """
 
@@ -21,12 +21,17 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
 
-from iris.cluster.types import (
+from iris.cluster.constraints import (
     AttributeValue,
+    ConstraintIndex,
+    ResourceCapacity,
+    WellKnownAttribute,
+    check_resource_fit,
+    evaluate_constraint,
+)
+from iris.cluster.types import (
     JobName,
     WorkerId,
-    get_device_type,
-    get_device_variant,
     get_gpu_count,
     get_tpu_count,
 )
@@ -54,8 +59,8 @@ spare CPU can absorb multiple tasks, preventing false demand signals.
 class WorkerSnapshot(Protocol):
     """What the scheduler needs from a worker to build a capacity snapshot.
 
-    This protocol decouples the scheduler from ControllerWorker. Any object
-    exposing these fields can be used (ControllerWorker satisfies this).
+    This protocol decouples the scheduler from a concrete worker row type. Any object
+    exposing these fields can be used.
     """
 
     worker_id: WorkerId
@@ -63,8 +68,6 @@ class WorkerSnapshot(Protocol):
     available_memory: int
     available_gpus: int
     available_tpus: int
-    device_type: str
-    device_variant: str | None
     attributes: dict[str, AttributeValue]
     healthy: bool
 
@@ -74,8 +77,6 @@ class RejectionKind(StrEnum):
 
     CPU = "cpu"
     MEMORY = "memory"
-    DEVICE_TYPE = "device_type"
-    DEVICE_VARIANT = "device_variant"
     GPU_COUNT = "gpu_count"
     TPU_COUNT = "tpu_count"
     BUILDING_LIMIT = "building_limit"
@@ -102,10 +103,6 @@ class RejectionReason:
                 need_gb = self.details["need"] / (1024**3)
                 have_gb = self.details["have"] / (1024**3)
                 return f"Insufficient memory (need {need_gb:.1f}GB, available {have_gb:.1f}GB)"
-            case RejectionKind.DEVICE_TYPE:
-                return f"Device type mismatch (need {self.details['need']}, worker has {self.details['have']})"
-            case RejectionKind.DEVICE_VARIANT:
-                return f"Device variant mismatch (need {self.details['need']}, worker has {self.details['have']})"
             case RejectionKind.GPU_COUNT:
                 return f"Insufficient GPUs (need {self.details['need']}, available {self.details['have']})"
             case RejectionKind.TPU_COUNT:
@@ -131,106 +128,7 @@ class JobRequirements:
     coscheduling_group_by: str | None
 
 
-def device_compatible(job_device_type: str, worker_device_type: str) -> bool:
-    """Check if a job's device requirement is compatible with a worker's device.
-
-    CPU jobs can run on any worker since every host has a CPU.
-    Accelerator jobs (GPU, TPU) require the specific hardware.
-    """
-    if job_device_type == "cpu":
-        return True
-    return job_device_type == worker_device_type
-
-
-def device_variant_matches(job_variant: str, worker_variant: str | None) -> bool:
-    """Check if a job's requested device variant matches a worker's reported variant.
-
-    Uses case-insensitive substring matching so that short config names (e.g. "H100")
-    match full nvidia-smi names (e.g. "NVIDIA H100 80GB HBM3").
-    """
-    if not worker_variant:
-        return False
-    return job_variant.lower() in worker_variant.lower() or worker_variant.lower() in job_variant.lower()
-
-
-def _compare_ordered(
-    attr_value: str | int | float,
-    target_value: str | int | float,
-    op: str,
-) -> bool:
-    """Compare two attribute values with an ordering operator.
-
-    Only numeric types (int, float) support ordered comparisons.
-    Strings are not orderable (comparing "v4-8" > "v5" is not meaningful).
-
-    Raises:
-        ValueError: If either value is a string (ordered comparison not supported).
-    """
-    if isinstance(attr_value, str) or isinstance(target_value, str):
-        raise ValueError(
-            f"Ordered comparison ({op}) not supported for string attributes: "
-            f"{attr_value!r} vs {target_value!r}. Use EQ or NE operators instead."
-        )
-
-    attr_num: int | float = attr_value
-    target_num: int | float = target_value
-
-    if op == "gt":
-        return attr_num > target_num
-    elif op == "ge":
-        return attr_num >= target_num
-    elif op == "lt":
-        return attr_num < target_num
-    elif op == "le":
-        return attr_num <= target_num
-    return False
-
-
-def _evaluate_constraint(
-    attr: AttributeValue | None,
-    constraint: cluster_pb2.Constraint,
-) -> bool:
-    """Evaluate a single constraint against a worker attribute.
-
-    Args:
-        attr: Worker attribute value (None if attribute doesn't exist)
-        constraint: Constraint to evaluate
-
-    Returns:
-        True if constraint is satisfied, False otherwise
-    """
-    op = constraint.op
-
-    # EXISTS/NOT_EXISTS don't need a value comparison
-    if op == cluster_pb2.CONSTRAINT_OP_EXISTS:
-        return attr is not None
-    if op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS:
-        return attr is None
-
-    # All other operators require the attribute to exist
-    if attr is None:
-        return False
-
-    target = AttributeValue.from_proto(constraint.value)
-
-    match op:
-        case cluster_pb2.CONSTRAINT_OP_EQ:
-            return attr.value == target.value
-        case cluster_pb2.CONSTRAINT_OP_NE:
-            return attr.value != target.value
-        case cluster_pb2.CONSTRAINT_OP_GT:
-            return _compare_ordered(attr.value, target.value, "gt")
-        case cluster_pb2.CONSTRAINT_OP_GE:
-            return _compare_ordered(attr.value, target.value, "ge")
-        case cluster_pb2.CONSTRAINT_OP_LT:
-            return _compare_ordered(attr.value, target.value, "lt")
-        case cluster_pb2.CONSTRAINT_OP_LE:
-            return _compare_ordered(attr.value, target.value, "le")
-        case cluster_pb2.CONSTRAINT_OP_IN:
-            target_values = {AttributeValue.from_proto(v).value for v in constraint.values}
-            return attr.value in target_values
-        case _:
-            return False
+_evaluate_constraint = evaluate_constraint
 
 
 @dataclass
@@ -249,8 +147,6 @@ class WorkerCapacity:
     available_memory: int
     available_gpus: int
     available_tpus: int
-    device_type: str
-    device_variant: str | None
     attributes: dict[str, AttributeValue] = field(default_factory=dict)
     building_task_count: int = 0
     max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER
@@ -274,8 +170,6 @@ class WorkerCapacity:
             available_memory=worker.available_memory,
             available_gpus=worker.available_gpus,
             available_tpus=worker.available_tpus,
-            device_type=worker.device_type,
-            device_variant=worker.device_variant,
             attributes=dict(worker.attributes),
             building_task_count=building_count,
             max_building_tasks=max_building_tasks,
@@ -291,13 +185,13 @@ class WorkerCapacity:
     def can_fit(self, req: JobRequirements) -> RejectionReason | None:
         """Check if this capacity can fit the job's resource requirements.
 
-        Args:
-            req: The job requirements to check
+        Only checks resource capacity (CPU, memory, device count, building limit).
+        Device type and variant matching is handled by matches_constraints() via
+        the posting-list index in SchedulingContext.
 
         Returns:
             None if job fits, otherwise RejectionReason with lazy-formatted details
         """
-        # Check building task back-pressure first
         if not self.can_accept_building_task():
             return RejectionReason(
                 kind=RejectionKind.BUILDING_LIMIT,
@@ -305,44 +199,49 @@ class WorkerCapacity:
             )
 
         res = req.resources
+        gpu_count = get_gpu_count(res.device)
+        tpu_count = get_tpu_count(res.device)
 
-        if res.cpu_millicores > self.available_cpu_millicores:
+        available = ResourceCapacity(
+            cpu_millicores=self.available_cpu_millicores,
+            memory_bytes=self.available_memory,
+            gpu_count=self.available_gpus,
+            tpu_count=self.available_tpus,
+        )
+        required = ResourceCapacity(
+            cpu_millicores=res.cpu_millicores,
+            memory_bytes=res.memory_bytes,
+            gpu_count=gpu_count,
+            tpu_count=tpu_count,
+        )
+
+        reason = check_resource_fit(available, required)
+        if reason is None:
+            return None
+
+        return self._reason_to_rejection(reason, res, gpu_count, tpu_count)
+
+    def _reason_to_rejection(
+        self, reason: str, res: cluster_pb2.ResourceSpecProto, gpu_count: int, tpu_count: int
+    ) -> RejectionReason:
+        """Map a check_resource_fit reason string to a RejectionReason."""
+        if reason.startswith("cpu:"):
             return RejectionReason(
                 kind=RejectionKind.CPU, details={"need": res.cpu_millicores, "have": self.available_cpu_millicores}
             )
-
-        if res.memory_bytes > self.available_memory:
+        if reason.startswith("memory:"):
             return RejectionReason(
                 kind=RejectionKind.MEMORY, details={"need": res.memory_bytes, "have": self.available_memory}
             )
-
-        job_device_type = get_device_type(res.device)
-        if not device_compatible(job_device_type, self.device_type):
+        if reason.startswith("gpu:"):
             return RejectionReason(
-                kind=RejectionKind.DEVICE_TYPE, details={"need": job_device_type, "have": self.device_type}
+                kind=RejectionKind.GPU_COUNT, details={"need": gpu_count, "have": self.available_gpus}
             )
-
-        job_variant = get_device_variant(res.device)
-        if job_variant and job_variant != "auto" and not device_variant_matches(job_variant, self.device_variant):
+        if reason.startswith("tpu:"):
             return RejectionReason(
-                kind=RejectionKind.DEVICE_VARIANT, details={"need": job_variant, "have": self.device_variant}
+                kind=RejectionKind.TPU_COUNT, details={"need": tpu_count, "have": self.available_tpus}
             )
-
-        if job_device_type == "gpu":
-            gpu_count = get_gpu_count(res.device)
-            if gpu_count > self.available_gpus:
-                return RejectionReason(
-                    kind=RejectionKind.GPU_COUNT, details={"need": gpu_count, "have": self.available_gpus}
-                )
-
-        if job_device_type == "tpu":
-            tpu_count = get_tpu_count(res.device)
-            if tpu_count > self.available_tpus:
-                return RejectionReason(
-                    kind=RejectionKind.TPU_COUNT, details={"need": tpu_count, "have": self.available_tpus}
-                )
-
-        return None
+        return RejectionReason(kind=RejectionKind.CPU, details={"need": 0, "have": 0})
 
     def deduct(self, req: JobRequirements) -> None:
         """Deduct job's resources from available capacity."""
@@ -380,18 +279,13 @@ class SchedulingContext:
     worker receives per cycle (default 1 for round-robin distribution).
     """
 
-    all_worker_ids: set[WorkerId]
-
-    # Posting lists for fast constraint matching
-    # Maps: attribute_key -> attribute_value -> set of worker IDs
-    discrete_lists: dict[str, dict[str | int | float, set[WorkerId]]]
+    index: ConstraintIndex
 
     # Worker capacities indexed by worker ID
     capacities: dict[WorkerId, WorkerCapacity]
 
-    # Device index for fast device-based filtering.
-    # Key (device_type, variant) -> exact match; key (device_type, None) -> all workers of that type.
-    device_index: dict[tuple[str, str | None], set[WorkerId]] = field(default_factory=dict)
+    # Reverse map from string ID back to WorkerId
+    _str_to_wid: dict[str, WorkerId]
 
     # Per-worker assignment count this cycle (replaces scheduled_workers set)
     assignment_counts: dict[WorkerId, int] = field(default_factory=dict)
@@ -405,6 +299,10 @@ class SchedulingContext:
     # Job requirements indexed by job ID
     jobs: dict[JobName, JobRequirements] = field(default_factory=dict)
 
+    @property
+    def all_worker_ids(self) -> set[WorkerId]:
+        return {self._str_to_wid[s] for s in self.index._all_ids}
+
     @classmethod
     def from_workers(
         cls,
@@ -417,9 +315,8 @@ class SchedulingContext:
     ) -> "SchedulingContext":
         """Build scheduling context from worker list.
 
-        Creates capacity snapshots for healthy workers and constructs posting
-        lists for all worker attributes. String, int, and float values are
-        indexed for fast EQ lookups.
+        Creates capacity snapshots for healthy workers and builds a
+        ConstraintIndex for fast attribute matching.
 
         Args:
             workers: List of workers to include in scheduling context
@@ -431,7 +328,6 @@ class SchedulingContext:
         """
         building_counts = building_counts or {}
 
-        # Build capacity map for healthy workers
         capacities = {
             w.worker_id: WorkerCapacity.from_worker(
                 w,
@@ -441,55 +337,24 @@ class SchedulingContext:
             for w in workers
             if w.healthy
         }
-        discrete_lists: dict[str, dict[str | int | float, set[WorkerId]]] = {}
 
-        device_index: dict[tuple[str, str | None], set[WorkerId]] = {}
-        for worker_id, cap in capacities.items():
-            for key, attr_value in cap.attributes.items():
-                if key not in discrete_lists:
-                    discrete_lists[key] = {}
-                value = attr_value.value
-                if value not in discrete_lists[key]:
-                    discrete_lists[key][value] = set()
-                discrete_lists[key][value].add(worker_id)
+        str_to_wid: dict[str, WorkerId] = {}
+        entity_attrs: dict[str, dict[str, AttributeValue]] = {}
+        for wid, cap in capacities.items():
+            key = str(wid)
+            str_to_wid[key] = wid
+            entity_attrs[key] = dict(cap.attributes)
 
-            # Build device index: (type, variant) for exact match, (type, None) for type-wide
-            dt = cap.device_type
-            dv = cap.device_variant
-            device_index.setdefault((dt, dv), set()).add(worker_id)
-            device_index.setdefault((dt, None), set()).add(worker_id)
+        index = ConstraintIndex.build(entity_attrs)
 
         return cls(
-            all_worker_ids=set(capacities.keys()),
-            discrete_lists=discrete_lists,
+            index=index,
             capacities=capacities,
-            device_index=device_index,
+            _str_to_wid=str_to_wid,
             pending_tasks=pending_tasks or [],
             jobs=jobs or {},
             max_assignments_per_worker=max_assignments_per_worker,
         )
-
-    def workers_for_device(self, device_type: str, device_variant: str | None) -> set[WorkerId]:
-        """Get workers compatible with the given device requirement.
-
-        CPU jobs can run on any worker. For accelerator jobs, returns workers
-        matching the variant when specified (substring match to handle short
-        config names vs full nvidia-smi names), or all workers of that device
-        type when variant is None or "auto".
-        """
-        if device_type == "cpu":
-            return self.all_worker_ids
-        all_of_type = self.device_index.get((device_type, None), set())
-        if not device_variant or device_variant == "auto":
-            return all_of_type
-        # Try exact match first (fast path for local/test workers)
-        exact = self.device_index.get((device_type, device_variant))
-        if exact:
-            return exact
-        # Fall back to substring match (nvidia-smi full names vs short config names)
-        return {
-            wid for wid in all_of_type if device_variant_matches(device_variant, self.capacities[wid].device_variant)
-        }
 
     def matching_workers(self, constraints: Sequence[cluster_pb2.Constraint]) -> set[WorkerId]:
         """Get workers matching ALL constraints.
@@ -497,70 +362,8 @@ class SchedulingContext:
         Uses posting lists for fast EQ/EXISTS/NOT_EXISTS lookups.
         Falls back to linear scan for NE, GT, GE, LT, LE operators.
         """
-        if not constraints:
-            return self.all_worker_ids
-
-        result: set[WorkerId] | None = None
-
-        for constraint in constraints:
-            matches = self._evaluate_constraint_set(constraint)
-
-            if result is None:
-                result = matches
-            else:
-                result = result & matches
-
-            # Short-circuit if no workers match
-            if not result:
-                return set()
-
-        return result or set()
-
-    def _evaluate_constraint_set(self, constraint: cluster_pb2.Constraint) -> set[WorkerId]:
-        """Evaluate a single constraint, returning matching worker IDs."""
-        key = constraint.key
-        op = constraint.op
-
-        # Fast path: EQ on discrete attribute with posting list
-        if op == cluster_pb2.CONSTRAINT_OP_EQ and key in self.discrete_lists:
-            target = AttributeValue.from_proto(constraint.value).value
-            return self.discrete_lists[key].get(target, set())
-
-        # Fast path: EXISTS check - union all workers that have this attribute
-        if op == cluster_pb2.CONSTRAINT_OP_EXISTS:
-            if key in self.discrete_lists:
-                result: set[WorkerId] = set()
-                for workers in self.discrete_lists[key].values():
-                    result.update(workers)
-                return result
-            # Attribute doesn't exist for any worker
-            return set()
-
-        # Fast path: NOT_EXISTS - all workers minus those with the attribute
-        if op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS:
-            if key in self.discrete_lists:
-                has_attr: set[WorkerId] = set()
-                for workers in self.discrete_lists[key].values():
-                    has_attr.update(workers)
-                return self.all_worker_ids - has_attr
-            # Attribute doesn't exist for any worker, so all workers match
-            return self.all_worker_ids
-
-        # Fast path: IN on discrete attribute — union of posting lists for each value
-        if op == cluster_pb2.CONSTRAINT_OP_IN and key in self.discrete_lists:
-            in_result: set[WorkerId] = set()
-            for av in constraint.values:
-                target_val = AttributeValue.from_proto(av).value
-                in_result |= self.discrete_lists[key].get(target_val, set())
-            return in_result
-
-        # Slow path: linear scan for NE, GT, GE, LT, LE, or non-indexed attributes
-        result_set: set[WorkerId] = set()
-        for worker_id, cap in self.capacities.items():
-            attr = cap.attributes.get(key)
-            if _evaluate_constraint(attr, constraint):
-                result_set.add(worker_id)
-        return result_set
+        matched_strs = self.index.matching_entities(constraints)
+        return {self._str_to_wid[s] for s in matched_strs}
 
     def workers_by_group(
         self,
@@ -576,18 +379,9 @@ class SchedulingContext:
         Returns:
             Dict mapping group key (str representation) to list of worker IDs
         """
-        groups: dict[str, list[WorkerId]] = defaultdict(list)
-
-        if group_by not in self.discrete_lists:
-            return groups
-
-        # Use posting list to efficiently find workers in each group
-        for value, workers in self.discrete_lists[group_by].items():
-            for worker_id in workers:
-                if worker_id in matching_worker_ids:
-                    groups[str(value)].append(worker_id)
-
-        return groups
+        matching_strs = {str(wid) for wid in matching_worker_ids}
+        str_groups = self.index.entities_by_group(group_by, matching_strs)
+        return {key: [self._str_to_wid[s] for s in ids] for key, ids in str_groups.items()}
 
 
 @dataclass
@@ -661,37 +455,9 @@ class Scheduler:
 
         constraints = list(req.constraints)
 
-        # Pre-filter by device type/variant before constraint matching
-        job_device_type = get_device_type(req.resources.device)
-        job_device_variant = get_device_variant(req.resources.device)
-        device_candidates = context.workers_for_device(job_device_type, job_device_variant)
-        if not device_candidates:
-            if collect_details:
-                # Report available variants so the user can see what the cluster has
-                available_variants = sorted(
-                    {
-                        cap.device_variant or "unknown"
-                        for cap in context.capacities.values()
-                        if cap.device_type == job_device_type
-                    }
-                )
-                if available_variants:
-                    return TaskScheduleResult(
-                        task_id=task_id,
-                        failure_reason=(
-                            f"Device variant mismatch (need {job_device_variant}, "
-                            f"cluster has {', '.join(available_variants)})"
-                        ),
-                    )
-                return TaskScheduleResult(
-                    task_id=task_id,
-                    failure_reason=f"No workers with device type {job_device_type}",
-                )
-            return TaskScheduleResult(task_id=task_id, failure_reason=None)
-
-        # Use posting lists for fast constraint matching, intersected with device candidates
-        matching_worker_ids = context.matching_workers(constraints)
-        candidate_ids = matching_worker_ids & device_candidates
+        # Use posting lists for fast constraint matching (device type/variant
+        # are matched via constraints, not bespoke device matching)
+        candidate_ids = context.matching_workers(constraints)
 
         # Cheap mode: try all matching workers, no detailed rejection tracking
         if not collect_details:
@@ -889,14 +655,7 @@ class Scheduler:
         num_tasks = len(task_ids)
         constraints = list(req.constraints)
 
-        # Pre-filter by device before constraint matching
-        job_device_type = get_device_type(req.resources.device)
-        job_device_variant = get_device_variant(req.resources.device)
-        device_candidates = context.workers_for_device(job_device_type, job_device_variant)
-        if not device_candidates:
-            return None
-
-        matching_worker_ids = context.matching_workers(constraints) & device_candidates
+        matching_worker_ids = context.matching_workers(constraints)
         groups = context.workers_by_group(group_by, matching_worker_ids)
 
         # Find first group with enough workers that have capacity.
@@ -912,7 +671,11 @@ class Scheduler:
                 continue
 
             # Sort workers by tpu-worker-id for deterministic task-to-worker mapping
-            available.sort(key=lambda w: context.capacities[w].attributes.get("tpu-worker-id", AttributeValue(0)).value)
+            available.sort(
+                key=lambda w: context.capacities[w]
+                .attributes.get(WellKnownAttribute.TPU_WORKER_ID, AttributeValue(0))
+                .value
+            )
 
             # Sort tasks by task_index
             sorted_task_ids = sorted(task_ids, key=lambda t: t.require_task()[1])
@@ -951,7 +714,7 @@ class Scheduler:
         """Create a scheduling context for the given workers.
 
         This is the boundary conversion point: accepts WorkerSnapshot-compatible
-        objects (e.g. ControllerWorker) and converts them to scheduler-internal types.
+        objects (e.g. worker rows) and converts them to scheduler-internal types.
 
         Args:
             workers: Workers to include (any objects satisfying WorkerSnapshot)

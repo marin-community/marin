@@ -19,6 +19,7 @@ from google.protobuf.message import Message
 
 from iris.cli.main import require_controller_url
 from iris.rpc import actor_connect, cluster_connect
+from iris.rpc.auth import AuthTokenInjector, TokenProvider
 
 PROTO_TYPE_TO_CLICK: dict[int, click.ParamType] = {
     FieldDescriptor.TYPE_STRING: click.STRING,
@@ -164,7 +165,13 @@ def build_request(method_info: MethodInfo, json_str: str | None, kwargs: dict[st
     return json_format.ParseDict(data, method_info.input_type())
 
 
-def call_rpc(service_name: str, method_name: str, url: str, request: Message) -> Message:
+def call_rpc(
+    service_name: str,
+    method_name: str,
+    url: str,
+    request: Message,
+    token_provider: TokenProvider | None = None,
+) -> Message:
     """Execute an RPC call and return the response."""
     register_services()
 
@@ -178,7 +185,8 @@ def call_rpc(service_name: str, method_name: str, url: str, request: Message) ->
         available = ", ".join(service.methods.keys())
         raise ValueError(f"Unknown method '{method_name}' on service '{service_name}'. Available: {available}")
 
-    client = service.client_class(url)
+    interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
+    client = service.client_class(url, interceptors=interceptors)
     method_fn = getattr(client, method.method_fn_name)
     return method_fn(request)
 
@@ -288,7 +296,8 @@ class ServiceCommands(click.MultiCommand):
             controller_url = require_controller_url(ctx)
             field_values = {k: v for k, v in kwargs.items() if v is not None}
             request = build_request(method, json_str, field_values)
-            response = call_rpc(service_name, method.name, controller_url, request)
+            tp = ctx.obj.get("token_provider") if ctx.obj else None
+            response = call_rpc(service_name, method.name, controller_url, request, token_provider=tp)
             click.echo(format_response(response))
 
         return click.Command(

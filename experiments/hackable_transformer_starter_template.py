@@ -61,7 +61,7 @@ from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 _IMPORT_PATH = getattr(__spec__, "name", __name__)
 

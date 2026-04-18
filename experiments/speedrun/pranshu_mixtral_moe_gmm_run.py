@@ -27,7 +27,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 from marin.execution.executor import executor_main
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 # Custom MoE classes that use GMM

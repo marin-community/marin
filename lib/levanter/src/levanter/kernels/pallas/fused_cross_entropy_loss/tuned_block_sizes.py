@@ -90,43 +90,58 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
     },
     "TPU v5e": {
-        ("bfloat16", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
-        ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
-        ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
-        ("float32", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
-        ("float32", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
-        ("float32", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
+        ("bfloat16", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024),
+        ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512),
+        ("bfloat16", "mid-h-large-vocab"): BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024),
+        ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=4096, h_block_size=512, v_block_size=2048),
+        ("bfloat16", "huge-batch-small-h"): BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024),
+        ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
+        ("float32", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024),
+        ("float32", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512),
+        ("float32", "mid-h-large-vocab"): BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024),
+        ("float32", "large-batch-small-h"): BlockSizes(b_block_size=4096, h_block_size=512, v_block_size=2048),
+        ("float32", "huge-batch-small-h"): BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024),
+        ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
     },
     "TPU v6": {
-        ("bfloat16", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
-        ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
-        ("bfloat16", "mid-h-large-vocab"): BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=1024),
-        ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
-        ("float32", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
-        ("float32", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
-        ("float32", "mid-h-large-vocab"): BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=1024),
-        ("float32", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
+        ("bfloat16", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=2048),
+        ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512),
+        ("bfloat16", "mid-h-large-vocab"): BlockSizes(b_block_size=8192, h_block_size=1024, v_block_size=1024),
+        ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=4096, h_block_size=512, v_block_size=2048),
+        ("bfloat16", "huge-batch-small-h"): BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024),
+        ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
+        ("float32", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=2048),
+        ("float32", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512),
+        ("float32", "mid-h-large-vocab"): BlockSizes(b_block_size=8192, h_block_size=1024, v_block_size=1024),
+        ("float32", "large-batch-small-h"): BlockSizes(b_block_size=4096, h_block_size=512, v_block_size=2048),
+        ("float32", "huge-batch-small-h"): BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024),
+        ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
     },
     "TPU v5p": {
         ("bfloat16", "small-vocab"): BlockSizes(
             b_block_size=1024,
             h_block_size=256,
-            v_block_size=512,
+            v_block_size=1024,
         ),
         ("bfloat16", "llama3-ish"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
-            v_block_size=1024,
+            v_block_size=512,
         ),
         ("bfloat16", "large-batch-small-h"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
-            v_block_size=1024,
+            v_block_size=2048,
         ),
         ("bfloat16", "medium-batch-medium-h"): BlockSizes(
             b_block_size=1024,
             h_block_size=256,
-            v_block_size=2048,
+            v_block_size=512,
+        ),
+        ("bfloat16", "large-batch-medium-h"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=1024,
+            v_block_size=768,
         ),
         ("bfloat16", "huge-batch-llama3-ish"): BlockSizes(
             b_block_size=1024,
@@ -136,22 +151,27 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "small-vocab"): BlockSizes(
             b_block_size=1024,
             h_block_size=256,
-            v_block_size=512,
+            v_block_size=1024,
         ),
         ("float32", "llama3-ish"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
-            v_block_size=1024,
+            v_block_size=512,
         ),
         ("float32", "large-batch-small-h"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
-            v_block_size=1024,
+            v_block_size=2048,
         ),
         ("float32", "medium-batch-medium-h"): BlockSizes(
             b_block_size=1024,
             h_block_size=256,
-            v_block_size=2048,
+            v_block_size=512,
+        ),
+        ("float32", "large-batch-medium-h"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=1024,
+            v_block_size=768,
         ),
         ("float32", "huge-batch-llama3-ish"): BlockSizes(
             b_block_size=1024,
@@ -163,22 +183,27 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("bfloat16", "small-vocab"): BlockSizes(
             b_block_size=1024,
             h_block_size=256,
-            v_block_size=512,
+            v_block_size=1024,
         ),
         ("bfloat16", "llama3-ish"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
-            v_block_size=1024,
+            v_block_size=512,
         ),
         ("bfloat16", "large-batch-small-h"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
-            v_block_size=1024,
+            v_block_size=2048,
         ),
         ("bfloat16", "medium-batch-medium-h"): BlockSizes(
             b_block_size=1024,
             h_block_size=256,
-            v_block_size=2048,
+            v_block_size=512,
+        ),
+        ("bfloat16", "large-batch-medium-h"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=1024,
+            v_block_size=768,
         ),
         ("bfloat16", "huge-batch-llama3-ish"): BlockSizes(
             b_block_size=1024,
@@ -188,22 +213,27 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "small-vocab"): BlockSizes(
             b_block_size=1024,
             h_block_size=256,
-            v_block_size=512,
+            v_block_size=1024,
         ),
         ("float32", "llama3-ish"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
-            v_block_size=1024,
+            v_block_size=512,
         ),
         ("float32", "large-batch-small-h"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
-            v_block_size=1024,
+            v_block_size=2048,
         ),
         ("float32", "medium-batch-medium-h"): BlockSizes(
             b_block_size=1024,
             h_block_size=256,
-            v_block_size=2048,
+            v_block_size=512,
+        ),
+        ("float32", "large-batch-medium-h"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=1024,
+            v_block_size=768,
         ),
         ("float32", "huge-batch-llama3-ish"): BlockSizes(
             b_block_size=1024,
@@ -215,10 +245,10 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("bfloat16", "small-vocab"): BlockSizes(
             b_block_size=1024,
             h_block_size=256,
-            v_block_size=1024,
+            v_block_size=512,
         ),
         ("bfloat16", "llama3-ish"): BlockSizes(
-            b_block_size=1024,
+            b_block_size=8192,
             h_block_size=512,
             v_block_size=1024,
         ),
@@ -230,11 +260,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("bfloat16", "large-batch-small-h"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
-            v_block_size=1024,
+            v_block_size=512,
         ),
         ("bfloat16", "huge-batch-small-h"): BlockSizes(
             b_block_size=1024,
-            h_block_size=128,
+            h_block_size=1024,
             v_block_size=256,
         ),
         ("bfloat16", "medium-batch-medium-h"): BlockSizes(
@@ -245,10 +275,10 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "small-vocab"): BlockSizes(
             b_block_size=1024,
             h_block_size=256,
-            v_block_size=1024,
+            v_block_size=512,
         ),
         ("float32", "llama3-ish"): BlockSizes(
-            b_block_size=1024,
+            b_block_size=8192,
             h_block_size=512,
             v_block_size=1024,
         ),
@@ -260,11 +290,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "large-batch-small-h"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
-            v_block_size=1024,
+            v_block_size=512,
         ),
         ("float32", "huge-batch-small-h"): BlockSizes(
             b_block_size=1024,
-            h_block_size=128,
+            h_block_size=1024,
             v_block_size=256,
         ),
         ("float32", "medium-batch-medium-h"): BlockSizes(
@@ -358,9 +388,18 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
         v_max=131072,
     ),
     ShapeBucket(
+        name="large-batch-medium-h",
+        b_min=32768,
+        b_max=131072,
+        h_min=1536,
+        h_max=3072,
+        v_min=120000,
+        v_max=131072,
+    ),
+    ShapeBucket(
         name="medium-batch-medium-h",
         b_min=8192,
-        b_max=32768,
+        b_max=32767,
         h_min=1536,
         h_max=3072,
         v_min=120000,
@@ -413,7 +452,7 @@ def _device_key(device_kind: Optional[str]) -> Optional[str]:
         return "TPU v4"
     if "v5p" in device_kind:
         return "TPU v5p"
-    if "v5e" in device_kind:
+    if "v5e" in device_kind or "v5lite" in device_kind or "v5 lite" in device_kind:
         return "TPU v5e"
     if "v5" in device_kind:
         return "TPU v5"
@@ -428,6 +467,20 @@ def _dtype_name(dtype: Optional[jnp.dtype]) -> Optional[str]:
     return jnp.dtype(dtype).name
 
 
+def widest_dtype_name(
+    *,
+    dtype: Optional[jnp.dtype],
+    x_dtype: Optional[jnp.dtype] = None,
+    w_dtype: Optional[jnp.dtype] = None,
+) -> Optional[str]:
+    """Return the widest dtype name among compute and operand dtypes."""
+    candidates = [candidate for candidate in (dtype, x_dtype, w_dtype) if candidate is not None]
+    if not candidates:
+        return None
+    widest = max((jnp.dtype(candidate) for candidate in candidates), key=lambda candidate: candidate.itemsize)
+    return widest.name
+
+
 def _shape_bucket(b: int, h: int, v: int, *, device_key: Optional[str]) -> Optional[str]:
     for bucket in SHAPE_BUCKETS:
         if bucket.name.startswith("gb10-") and device_key != "NVIDIA GB10":
@@ -435,6 +488,67 @@ def _shape_bucket(b: int, h: int, v: int, *, device_key: Optional[str]) -> Optio
         if bucket.matches(b, h, v):
             return bucket.name
     return None
+
+
+def shape_bucket_name(
+    b: int,
+    h: int,
+    v: int,
+    *,
+    device_kind: Optional[str] = None,
+) -> Optional[str]:
+    """Return the named shape bucket for a local B/H/V shape."""
+    normalized_device_kind = _normalized_device_kind(device_kind)
+    device_key = _device_key(normalized_device_kind)
+    bucket = _shape_bucket(b, h, v, device_key=device_key)
+    return _extend_tpu_v4_bucket_for_mid_vocab(bucket, b=b, h=h, v=v, device_key=device_key)
+
+
+def _extend_tpu_v4_bucket_for_mid_vocab(
+    bucket: Optional[str], *, b: int, h: int, v: int, device_key: Optional[str]
+) -> Optional[str]:
+    """Map mid-vocab TPU v4 shapes into existing tuned buckets.
+
+    TPU v4 tuned data historically focused on small vocab and llama3-sized vocab.
+    For intermediate vocab sizes (for example GPT-2 and Llama2), route shapes to
+    the same regime buckets so infer chooses robust v4 block sizes instead of
+    falling back to defaults.
+    """
+    if bucket is not None or device_key != "TPU v4":
+        return bucket
+    if not (16_385 <= v <= 119_999):
+        return bucket
+
+    candidate_buckets: list[str] = []
+    if 512 <= b <= 2_048 and 256 <= h <= 1_024:
+        candidate_buckets.append("small-vocab")
+    if 4_096 <= b <= 16_384 and h == 4_096:
+        candidate_buckets.append("llama3-ish")
+    if 4_096 <= b <= 32_768 and 768 <= h <= 1_536:
+        candidate_buckets.append("mid-h-large-vocab")
+    if 131_073 <= b <= 1_048_576 and 256 <= h <= 1_024:
+        candidate_buckets.append("huge-batch-small-h")
+    if 32_768 <= b <= 131_072 and 256 <= h <= 1_024:
+        candidate_buckets.append("large-batch-small-h")
+    if 8_192 <= b <= 32_768 and 1_536 <= h <= 3_072:
+        candidate_buckets.append("medium-batch-medium-h")
+
+    # Only advertise a remapped bucket when the corresponding TPU v4 tuned entry
+    # is actually valid for this local B/H shape.
+    for candidate in candidate_buckets:
+        for dtype_name in ("bfloat16", "float32"):
+            entry = TUNED_BLOCK_SIZES["TPU v4"].get((dtype_name, candidate))
+            if entry is None:
+                continue
+            if _is_valid_for_pallas_shape(
+                entry,
+                b=b,
+                h=h,
+                device_key=device_key,
+                device_kind=device_key,
+            ):
+                return candidate
+    return bucket
 
 
 def _has_scoped_vmem_limit_override() -> bool:
@@ -507,6 +621,17 @@ def _largest_divisor_multiple_of_1024(dim: int, preferred: int) -> int:
     return preferred
 
 
+def _largest_divisor_at_most(dim: int, preferred: int) -> int:
+    """Return the largest divisor of `dim` up to `preferred`."""
+    upper = min(dim, preferred)
+
+    for block in range(upper, 0, -1):
+        if dim % block == 0:
+            return block
+
+    return 1
+
+
 def _is_valid_for_pallas_shape(
     block_sizes: BlockSizes,
     *,
@@ -565,6 +690,8 @@ def infer_block_sizes(
     v: int,
     *,
     dtype: Optional[jnp.dtype],
+    x_dtype: Optional[jnp.dtype] = None,
+    w_dtype: Optional[jnp.dtype] = None,
     device_kind: Optional[str] = None,
 ) -> BlockSizes:
     """Infer block sizes from a small tuned table.
@@ -584,6 +711,8 @@ def infer_block_sizes(
         h,
         v,
         dtype=dtype,
+        x_dtype=x_dtype,
+        w_dtype=w_dtype,
         device_kind=device_kind,
     )
     return block_sizes
@@ -595,13 +724,15 @@ def infer_block_sizes_with_tuned_match(
     v: int,
     *,
     dtype: Optional[jnp.dtype],
+    x_dtype: Optional[jnp.dtype] = None,
+    w_dtype: Optional[jnp.dtype] = None,
     device_kind: Optional[str] = None,
 ) -> tuple[BlockSizes, bool]:
     """Infer block sizes and report whether they came from tuned lookup data."""
     normalized_device_kind = _normalized_device_kind(device_kind)
-    dtype_name = _dtype_name(dtype)
+    dtype_name = widest_dtype_name(dtype=dtype, x_dtype=x_dtype, w_dtype=w_dtype)
     device_key = _device_key(normalized_device_kind)
-    bucket = _shape_bucket(b, h, v, device_key=device_key)
+    bucket = shape_bucket_name(b, h, v, device_kind=normalized_device_kind)
 
     if dtype_name and bucket:
         for key in (device_key, DEFAULT_DEVICE_KEY):
@@ -669,6 +800,24 @@ def infer_xla_v_block_size(
     return max(128, 128 * (target // 128))
 
 
+def infer_xla_b_block_size(b: int, v_block_size: int) -> int:
+    """Heuristic batch block size for the XLA streaming path."""
+    if b <= 0 or v_block_size <= 0:
+        return 1
+
+    max_b_block_size = min(b, (2**31 - 1) // v_block_size)
+    if max_b_block_size <= 0:
+        return 1
+
+    preferred = max_b_block_size - (max_b_block_size % 128)
+    if preferred >= 128:
+        block_size = _largest_divisor_multiple_of_128(b, preferred)
+        if block_size <= max_b_block_size and b % block_size == 0:
+            return block_size
+
+    return _largest_divisor_at_most(b, max_b_block_size)
+
+
 __all__ = [
     "DEFAULT_DEVICE_KEY",
     "ShapeBucket",
@@ -676,5 +825,8 @@ __all__ = [
     "SHAPE_BUCKETS",
     "infer_block_sizes",
     "infer_block_sizes_with_tuned_match",
+    "infer_xla_b_block_size",
     "infer_xla_v_block_size",
+    "shape_bucket_name",
+    "widest_dtype_name",
 ]

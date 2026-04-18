@@ -22,7 +22,7 @@ from experiments.speedrun.adamh_llama_scaling.llama_with_hybrid_norm import (
 
 AUTHOR = Author(name="Kaiyue Wen", affiliation="Stanford University", url="https://whenwen.github.io")
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def get_num_train_steps(param_count, batch_size, max_seq_len):

@@ -9,7 +9,7 @@ import equinox as eqx
 import jax
 from jax import numpy as jnp
 from jax import shard_map
-from jax.sharding import NamedSharding, PartitionSpec as P
+from jax.sharding import NamedSharding
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.jax_utils import named_call
@@ -362,13 +362,10 @@ def _tpu_splash_attention(
         q_seq_shards=q_seq_shards,
     )
 
-    kernel_sharding = NamedSharding(mesh, P(q_pspec[1], q_pspec[2]))
-    kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
-
     @functools.partial(
         shard_map,
         mesh=mesh,
-        in_specs=(q_pspec, k_pspec, v_pspec, segment_ids_axes, kernel_specs),
+        in_specs=(q_pspec, k_pspec, v_pspec, segment_ids_axes, None),
         out_specs=q_pspec,
         **_SHARD_MAP_CHECK_KWARGS,
     )

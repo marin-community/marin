@@ -9,6 +9,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -276,16 +277,25 @@ def _maybe_enable_streaming(model: ModelConfig) -> ModelConfig:
 
 
 def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
+    flag_map = {
+        "distributed_executor_backend": "--distributed-executor-backend",
+        "dtype": "--dtype",
+        "gpu_memory_utilization": "--gpu-memory-utilization",
+        "kv_cache_dtype": "--kv-cache-dtype",
+        "load_format": "--load-format",
+        "max_model_len": "--max-model-len",
+        "max_num_batched_tokens": "--max-num-batched-tokens",
+        "max_num_seqs": "--max-num-seqs",
+        "pipeline_parallel_size": "--pipeline-parallel-size",
+        "tensor_parallel_size": "--tensor-parallel-size",
+    }
+
     args: list[str] = []
-    load_format = engine_kwargs.get("load_format")
-    if load_format is not None:
-        args.extend(["--load-format", load_format])
-    max_model_len = engine_kwargs.get("max_model_len")
-    if max_model_len is not None:
-        args.extend(["--max-model-len", str(max_model_len)])
-    gpu_memory_utilization = engine_kwargs.get("gpu_memory_utilization")
-    if gpu_memory_utilization is not None:
-        args.extend(["--gpu-memory-utilization", str(gpu_memory_utilization)])
+    for key, flag in flag_map.items():
+        value = engine_kwargs.get(key)
+        if value is None:
+            continue
+        args.extend([flag, str(value)])
     return args
 
 
@@ -798,6 +808,32 @@ def _vllm_env() -> dict[str, str]:
     return env
 
 
+def _resolve_vllm_binary(path_env: str | None = None, python_executable: str | None = None) -> str:
+    """Resolve the vLLM binary, preferring the active Python environment's bin dir."""
+
+    search_paths: list[str] = []
+    bin_dir = os.path.dirname(python_executable or sys.executable)
+    if bin_dir:
+        search_paths.append(bin_dir)
+
+    if path_env:
+        search_paths.append(path_env)
+
+    search_path = os.pathsep.join(search_paths) if search_paths else None
+    return shutil.which("vllm", path=search_path) or "vllm"
+
+
+def _resolve_vllm_cli_command(path_env: str | None = None, python_executable: str | None = None) -> list[str]:
+    """Resolve a vLLM CLI command that works inside the active Python environment."""
+
+    resolved_python = python_executable or sys.executable
+    resolved_binary = _resolve_vllm_binary(path_env=path_env, python_executable=resolved_python)
+    if resolved_binary != "vllm":
+        return [resolved_binary]
+
+    return [resolved_python, "-m", "vllm.entrypoints.cli.main"]
+
+
 def _start_vllm_native_server(
     *,
     model_name_or_path: str,
@@ -810,9 +846,8 @@ def _start_vllm_native_server(
 
     resolved_port = port if port is not None else 8000
 
-    vllm_bin = shutil.which("vllm") or "vllm"
     cmd: list[str] = [
-        vllm_bin,
+        *_resolve_vllm_cli_command(path_env=os.environ.get("PATH")),
         "serve",
         model_name_or_path,
         "--trust-remote-code",
@@ -834,7 +869,13 @@ def _start_vllm_native_server(
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
         f"TPU_STDERR_LOG_LEVEL={native_env.get('TPU_STDERR_LOG_LEVEL')}"
     )
-    process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, text=True, env=native_env)
+    logger.info("vLLM native command: %s", shlex.join(cmd))
+    try:
+        process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, text=True, env=native_env)
+    except OSError as exc:
+        stdout_f.close()
+        stderr_f.close()
+        raise RuntimeError(f"Failed to launch vLLM native server command: {shlex.join(cmd)}") from exc
 
     server_url: str = f"http://{host}:{resolved_port}/v1"
     start_time: float = time.time()

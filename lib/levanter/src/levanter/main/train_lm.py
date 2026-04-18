@@ -248,7 +248,6 @@ def main(config: TrainLmConfig):
                     last_stage = stage
 
             trainer.add_hook(log_mixture_weights, every=1)
-        # trainer.add_hook(callbacks.GradWatchCallback(include_histograms=True), every=5)
 
         if config.hf_save_path is not None and config.hf_save_steps is not None:
             # bit gross to reach this far into the config, but it's fine

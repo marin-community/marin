@@ -26,6 +26,7 @@ from fray.v1.cluster.base import (
     ResourceConfig,
     TpuConfig,
 )
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -235,5 +236,6 @@ def generate_job_name(command: str) -> str:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    configure_logging(level=logging.INFO)
     main()

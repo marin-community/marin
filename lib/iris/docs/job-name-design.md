@@ -69,7 +69,7 @@ Job names are constructed and parsed manually throughout the codebase:
 | `cluster/controller/state.py` | 793 | `job.job_id.task(i)` |
 | `cluster/controller/service.py` | 334 | `JobName.from_wire(...).task(...)` |
 | `cluster/controller/service.py` | 637 | `job_id.task(...)` in errors |
-| `cluster/controller/bundle_store.py` | 58 | `rsplit("/")` for bundle paths |
+| `cluster/bundle.py` | 58 | `rsplit("/")` for bundle paths |
 | `cluster/types.py` | 445 | `JobName.namespace` |
 
 ## Proposed Design

@@ -69,9 +69,9 @@ def serve(worker_config: str):
     config = worker_config_from_proto(wc_proto, resolve_image=resolve_image)
 
     if wc_proto.runtime == "kubernetes":
-        container_runtime = KubernetesRuntime()
+        container_runtime = KubernetesRuntime(cache_dir=config.cache_dir)
     else:
-        container_runtime = DockerRuntime()
+        container_runtime = DockerRuntime(cache_dir=config.cache_dir)
 
     worker = Worker(config, container_runtime=container_runtime)
 

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from iris.cluster.controller.pending_diagnostics import build_job_pending_hints
+from iris.cluster.controller.pending_diagnostics import PendingHint, build_job_pending_hints
 from iris.cluster.types import JobName
 from iris.rpc import vm_pb2
 
@@ -20,8 +20,9 @@ def test_build_job_pending_hints_reports_scale_up_group() -> None:
 
     hints = build_job_pending_hints(routing)
 
-    assert hints[JobName.root("test-user", "job-a").to_wire()] == (
-        "Waiting for worker scale-up in scale group 'tpu_v5e_32' (1 slice(s) requested)"
+    assert hints[JobName.root("test-user", "job-a").to_wire()] == PendingHint(
+        message="Waiting for worker scale-up in scale group 'tpu_v5e_32' (1 slice(s) requested)",
+        is_scaling_up=True,
     )
 
 
@@ -37,8 +38,9 @@ def test_build_job_pending_hints_reports_waiting_ready_when_no_launch() -> None:
 
     hints = build_job_pending_hints(routing)
 
-    assert hints[JobName.root("test-user", "job-b").to_wire()] == (
-        "Waiting for workers in scale group 'tpu_v5e_32' to become ready"
+    assert hints[JobName.root("test-user", "job-b").to_wire()] == PendingHint(
+        message="Waiting for workers in scale group 'tpu_v5e_32' to become ready",
+        is_scaling_up=False,
     )
 
 
@@ -54,6 +56,7 @@ def test_build_job_pending_hints_reports_unmet_when_not_routed() -> None:
 
     hints = build_job_pending_hints(routing)
 
-    assert hints[JobName.root("test-user", "job-c").to_wire()] == (
-        "Unsatisfied autoscaler demand: no_matching_group: need device=tpu:v5p-8"
+    assert hints[JobName.root("test-user", "job-c").to_wire()] == PendingHint(
+        message="Unsatisfied autoscaler demand: no_matching_group: need device=tpu:v5p-8",
+        is_scaling_up=False,
     )

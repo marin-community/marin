@@ -16,21 +16,22 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import threading
 import time
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from iris.cluster.runtime.bundle import stage_bundle_to_local
-from iris.cluster.runtime.env import build_device_env_vars
+from iris.cluster.bundle import BundleStore
+from iris.cluster.runtime.env import build_device_env_vars, write_workdir_files
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
     build_memray_transform_cmd,
     build_pyspy_cmd,
+    build_pyspy_dump_cmd,
     resolve_cpu_spec,
     resolve_memory_spec,
 )
@@ -42,6 +43,8 @@ from iris.cluster.runtime.types import (
     ContainerStats,
     ContainerStatus,
     ImageInfo,
+    MountKind,
+    MountSpec,
 )
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
@@ -72,6 +75,59 @@ def _is_docker_infra_error(stderr: str) -> bool:
     return any(p.lower() in stderr_lower for p in _INFRA_ERROR_PATTERNS)
 
 
+# Network sysctl tuning for containers with their own network namespace (#3066).
+# Host-network containers inherit host settings (configured at VM bootstrap).
+_NETWORK_SYSCTLS: dict[str, str] = {
+    "net.ipv4.ip_local_port_range": "1024 65535",
+    "net.ipv4.tcp_tw_reuse": "1",
+}
+
+
+@dataclass(frozen=True)
+class ResolvedMount:
+    """A MountSpec resolved to concrete host and container paths for Docker."""
+
+    host_path: str
+    container_path: str
+    mode: str  # "rw" or "ro"
+    kind: MountKind
+
+
+def _has_tpu_device(config: ContainerConfig) -> bool:
+    """Return True when config requests TPU resources."""
+    if not config.resources:
+        return False
+    has_device = config.resources.HasField("device")
+    return has_device and config.resources.device.HasField("tpu")
+
+
+def _discover_tpu_device_mappings() -> list[str]:
+    """Return host TPU device mappings for Docker --device flags.
+
+    TPU hosts expose device nodes differently by generation:
+    - v4 commonly exposes /dev/accel*
+    - v5+/v6e commonly use /dev/vfio/<N> under /dev/vfio
+
+    We pass through whichever device paths exist on the current worker host.
+    """
+    mappings: list[str] = []
+
+    vfio_path = Path("/dev/vfio")
+    if vfio_path.exists():
+        mappings.append("/dev/vfio:/dev/vfio")
+
+    accel_devices: list[Path] = []
+    for device_path in Path("/dev").glob("accel[0-9]*"):
+        if device_path.is_char_device():
+            accel_devices.append(device_path)
+
+    accel_devices.sort(key=lambda path: int(path.name.removeprefix("accel")))
+    for device_path in accel_devices:
+        mappings.append(f"{device_path}:{device_path}")
+
+    return mappings
+
+
 def _build_device_flags(config: ContainerConfig) -> list[str]:
     """Build Docker device flags based on resource configuration.
 
@@ -85,36 +141,39 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
         return flags
 
     has_device = config.resources.HasField("device")
-    has_tpu = has_device and config.resources.device.HasField("tpu")
+    has_tpu = _has_tpu_device(config)
     logger.info("Device flags check: has_device=%s, has_tpu=%s", has_device, has_tpu)
 
     if has_tpu:
+        for device_mapping in _discover_tpu_device_mappings():
+            flags.extend(["--device", device_mapping])
+
         flags.extend(
             [
-                "--device",
-                "/dev/vfio:/dev/vfio",
                 "--shm-size=100g",
                 "--cap-add=SYS_RESOURCE",
                 "--ulimit",
                 "memlock=68719476736:68719476736",
             ]
         )
+        if "--device" not in flags:
+            logger.warning("TPU resources requested, but no TPU device nodes were discovered on host")
         logger.info("TPU device flags: %s", flags)
 
     return flags
 
 
-def _detect_mount_user(mounts: list[tuple[str, str, str]]) -> str | None:
+def _detect_mount_user(mounts: list[ResolvedMount]) -> str | None:
     """Detect user to run container as based on bind mount ownership.
 
     When bind-mounting directories owned by non-root users, the container
     must run as that user to have write access. Returns "uid:gid" for
     --user flag, or None to run as root.
     """
-    for host_path, _container_path, mode in mounts:
-        if "w" not in mode:
+    for mount in mounts:
+        if "w" not in mount.mode:
             continue
-        path = Path(host_path)
+        path = Path(mount.host_path)
         if not path.exists():
             continue
         stat = path.stat()
@@ -234,6 +293,7 @@ class DockerContainerHandle:
 
     config: ContainerConfig
     runtime: "DockerRuntime"
+    _resolved_mounts: list[ResolvedMount] = field(default_factory=list, repr=False)
     _run_container_id: str | None = field(default=None, repr=False)
 
     @property
@@ -312,9 +372,9 @@ class DockerContainerHandle:
 
     def _write_setup_script(self, script: str) -> None:
         """Write the setup script to the workdir mount."""
-        for host_path, container_path, _mode in self.config.mounts:
-            if container_path == "/app":
-                (Path(host_path) / "_setup_env.sh").write_text(script)
+        for rm in self._resolved_mounts:
+            if rm.container_path == "/app":
+                (Path(rm.host_path) / "_setup_env.sh").write_text(script)
                 return
         raise RuntimeError("No /app mount found in config")
 
@@ -356,9 +416,9 @@ exec {quoted_cmd}
 
     def _write_run_script(self, script: str) -> None:
         """Write the run script to the workdir mount."""
-        for host_path, container_path, _mode in self.config.mounts:
-            if container_path == "/app":
-                (Path(host_path) / "_run.sh").write_text(script)
+        for rm in self._resolved_mounts:
+            if rm.container_path == "/app":
+                (Path(rm.host_path) / "_run.sh").write_text(script)
                 return
         raise RuntimeError("No /app mount found in config")
 
@@ -383,22 +443,39 @@ exec {quoted_cmd}
             return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
         return self._docker_stats(self._run_container_id)
 
-    def profile(self, duration_seconds: int, profile_type: "cluster_pb2.ProfileType") -> bytes:
-        """Profile the running process using py-spy (CPU) or memray (memory)."""
+    def disk_usage_mb(self) -> int:
+        """Return used space in MB on the filesystem containing the workdir."""
+        for rm in self._resolved_mounts:
+            if rm.container_path == self.config.workdir:
+                path = Path(rm.host_path)
+                if path.exists():
+                    return int(shutil.disk_usage(path).used / (1024 * 1024))
+        return 0
 
+    def profile(self, duration_seconds: int, profile_type: "cluster_pb2.ProfileType") -> bytes:
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
         container_id = self._run_container_id
         if not container_id:
             raise RuntimeError("Cannot profile: no running container")
 
         profile_id = uuid.uuid4().hex[:8]
 
-        # Dispatch to CPU or memory profiling based on profile_type
-        if profile_type.HasField("cpu"):
+        if profile_type.HasField("threads"):
+            return self._profile_threads(container_id, include_locals=profile_type.threads.locals)
+        elif profile_type.HasField("cpu"):
             return self._profile_cpu(container_id, duration_seconds, profile_type.cpu, profile_id)
         elif profile_type.HasField("memory"):
             return self._profile_memory(container_id, duration_seconds, profile_type.memory, profile_id)
         else:
-            raise RuntimeError("ProfileType must specify either cpu or memory profiler")
+            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
+
+    def _profile_threads(self, container_id: str, *, include_locals: bool = False) -> bytes:
+        """Collect thread stacks from the container using py-spy dump."""
+        cmd = build_pyspy_dump_cmd(pid="1", py_spy_bin="/app/.venv/bin/py-spy", include_locals=include_locals)
+        result = self._docker_exec(container_id, cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(f"py-spy dump failed: {result.stderr}")
+        return result.stdout.encode("utf-8")
 
     def _docker_exec(self, container_id: str, cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
         return subprocess.run(["docker", "exec", container_id, *cmd], **kwargs)
@@ -428,7 +505,8 @@ exec {quoted_cmd}
             spec.rate_hz,
         )
         try:
-            result = self._docker_exec(container_id, cmd, capture_output=True, text=True, timeout=duration_seconds + 5)
+            # py-spy needs extra headroom beyond the sample duration for writing output
+            result = self._docker_exec(container_id, cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
             if result.returncode != 0:
                 raise RuntimeError(f"py-spy failed: {result.stderr}")
             return self._docker_read_file(container_id, output_path)
@@ -496,14 +574,15 @@ exec {quoted_cmd}
         cmd = [
             "docker",
             "create",
-            "--security-opt",
-            "no-new-privileges",
+            "--ulimit",
+            "core=0:0",
             "-w",
             config.workdir,
         ]
+        cmd.extend(["--security-opt", "no-new-privileges"])
 
         # Run as the owner of bind-mounted directories
-        user_flag = _detect_mount_user(config.mounts)
+        user_flag = _detect_mount_user(self._resolved_mounts)
         if user_flag:
             cmd.extend(["--user", user_flag])
 
@@ -511,6 +590,12 @@ exec {quoted_cmd}
             cmd.extend(["--network", config.network_mode])
         else:
             cmd.append("--add-host=host.docker.internal:host-gateway")
+
+        # Network sysctl tuning for containers with own network namespace (#3066).
+        # Host-network containers inherit host settings from VM bootstrap.
+        if config.network_mode != "host":
+            for key, value in _NETWORK_SYSCTLS.items():
+                cmd.extend(["--sysctl", f"{key}={value}"])
 
         cmd.extend(["--cap-drop", "ALL"])
         cmd.extend(["--cap-add", "SYS_PTRACE"])
@@ -544,8 +629,12 @@ exec {quoted_cmd}
             cmd.extend(["-e", f"{k}={v}"])
 
         # Mounts
-        for host, container, mode in config.mounts:
-            cmd.extend(["-v", f"{host}:{container}:{mode}"])
+        for rm in self._resolved_mounts:
+            if rm.kind == MountKind.TMPFS:
+                # Use Docker --tmpfs for per-container isolation instead of shared bind mount
+                cmd.extend(["--tmpfs", rm.container_path])
+            else:
+                cmd.extend(["-v", f"{rm.host_path}:{rm.container_path}:{rm.mode}"])
 
         cmd.append(config.image)
         cmd.extend(command)
@@ -701,7 +790,8 @@ class DockerRuntime:
     Tracks all created containers for cleanup on shutdown.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, cache_dir: Path) -> None:
+        self._cache_dir = cache_dir
         self._handles: list[DockerContainerHandle] = []
         self._created_containers: set[str] = set()
         # Serializes `docker pull` per image tag so that concurrent task threads
@@ -753,31 +843,55 @@ class DockerRuntime:
             logger.info("Image %s pulled successfully", image)
             self._pulled_images.add(image)
 
+    def resolve_mounts(self, mounts: list[MountSpec], workdir_host_path: Path | None = None) -> list[ResolvedMount]:
+        """Convert semantic MountSpecs to ResolvedMount instances.
+
+        Creates host directories as needed. WORKDIR uses the explicit host path
+        (created by task_attempt). CACHE gets shared dirs under cache_dir.
+        TMPFS uses Docker --tmpfs for per-container isolation (no host dir).
+        """
+        result: list[ResolvedMount] = []
+        for mount in mounts:
+            mode = "ro" if mount.read_only else "rw"
+            if mount.kind == MountKind.WORKDIR:
+                if workdir_host_path is None:
+                    raise RuntimeError("WORKDIR mount requires workdir_host_path")
+                result.append(ResolvedMount(str(workdir_host_path), mount.container_path, mode, mount.kind))
+            elif mount.kind == MountKind.TMPFS:
+                # TMPFS mounts use Docker --tmpfs (per-container isolation); no host dir needed
+                result.append(ResolvedMount("", mount.container_path, mode, mount.kind))
+            elif mount.kind == MountKind.CACHE:
+                host_dir = self._cache_dir / mount.container_path.strip("/").replace("/", "-")
+                host_dir.mkdir(parents=True, exist_ok=True)
+                result.append(ResolvedMount(str(host_dir), mount.container_path, mode, mount.kind))
+        return result
+
     def create_container(self, config: ContainerConfig) -> DockerContainerHandle:
         """Create a container handle from config.
 
         The handle is not started - call handle.build() then handle.run()
         to execute the container.
         """
-        handle = DockerContainerHandle(config=config, runtime=self)
+        resolved = self.resolve_mounts(config.mounts, workdir_host_path=config.workdir_host_path)
+        handle = DockerContainerHandle(config=config, runtime=self, _resolved_mounts=resolved)
         self._handles.append(handle)
         return handle
+
+    def prepare_workdir(self, workdir: Path, disk_bytes: int) -> None:
+        """No-op: workdirs live on cache_dir (/dev/shm/iris) which is already tmpfs."""
 
     def stage_bundle(
         self,
         *,
-        bundle_gcs_path: str,
+        bundle_id: str,
         workdir: Path,
         workdir_files: dict[str, bytes],
-        fetch_bundle: Callable[[str], Path],
+        bundle_store: BundleStore,
     ) -> None:
         """Stage bundle and workdir files on worker-local filesystem."""
-        stage_bundle_to_local(
-            bundle_gcs_path=bundle_gcs_path,
-            workdir=workdir,
-            workdir_files=workdir_files,
-            fetch_bundle=fetch_bundle,
-        )
+        if bundle_id:
+            bundle_store.extract_bundle_to(bundle_id, workdir)
+        write_workdir_files(workdir, workdir_files)
 
     def track_container(self, container_id: str) -> None:
         """Track a container ID for cleanup."""

@@ -13,7 +13,7 @@ _runtime_version.ValidateProtobufRuntimeVersion(
     _runtime_version.Domain.PUBLIC,
     6,
     33,
-    4,
+    0,
     '',
     'snapshot.proto'
 )

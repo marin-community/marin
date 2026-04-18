@@ -13,7 +13,7 @@ from marin.schemas.web.convert import (
     ResiliparseConfig,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def extract_content_from_dom(

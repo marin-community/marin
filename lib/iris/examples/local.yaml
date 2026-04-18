@@ -11,19 +11,15 @@ controller:
 
 scale_groups:
   cpu:
-    accelerator_type: cpu
-    accelerator_variant: cpu
     num_vms: 1
     resources:
       cpu: 16
       ram: 32GB
       disk: 100GB
-      tpu_count: 0
-      gpu_count: 0
+      device_type: cpu
+      device_variant: cpu
     min_slices: 0
     max_slices: 4  # Allow up to 4 local workers
     slice_template:
-      accelerator_type: cpu
-      accelerator_variant: cpu
       num_vms: 1
       local:

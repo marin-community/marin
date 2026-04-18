@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
+from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Timestamp
 
@@ -98,9 +99,11 @@ def gather_bug_report(
     job_id: JobName,
     *,
     tail: int = 50,
+    token_provider: TokenProvider | None = None,
 ) -> BugReport:
     """Gather all diagnostic data for a job into a BugReport."""
-    client = ControllerServiceClientSync(controller_url, timeout_ms=30000)
+    interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
+    client = ControllerServiceClientSync(controller_url, timeout_ms=30000, interceptors=interceptors)
     try:
         return _gather(client, job_id, tail=tail)
     finally:

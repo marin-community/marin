@@ -20,7 +20,7 @@ from iris.cluster.config import (
     validate_config,
 )
 from iris.cluster.platform.factory import create_platform
-from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, ZONE_ATTRIBUTE_KEY
+from iris.cluster.constraints import WellKnownAttribute
 from iris.rpc import config_pb2
 
 
@@ -42,15 +42,14 @@ defaults:
 
 scale_groups:
   tpu_v5e_8:
-    accelerator_type: tpu
-    accelerator_variant: v5litepod-8
     num_vms: 8
     resources:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu_count: 8
-      gpu_count: 0
+      device_type: tpu
+      device_variant: v5litepod-8
+      device_count: 8
     min_slices: 1
     max_slices: 10
     slice_template:
@@ -65,7 +64,7 @@ scale_groups:
         original_config = load_config(config_path)
 
         # Verify accelerator type
-        assert original_config.scale_groups["tpu_v5e_8"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
+        assert original_config.scale_groups["tpu_v5e_8"].resources.device_type == config_pb2.ACCELERATOR_TYPE_TPU
 
         # Round-trip: proto → dict → yaml → dict → proto
         config_dict = config_to_dict(original_config)
@@ -76,7 +75,7 @@ scale_groups:
         loaded_config = load_config(round_trip_path)
 
         # Verify accelerator type is still TPU after round-trip
-        assert loaded_config.scale_groups["tpu_v5e_8"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
+        assert loaded_config.scale_groups["tpu_v5e_8"].resources.device_type == config_pb2.ACCELERATOR_TYPE_TPU
 
     def test_manual_provider_survives_round_trip(self, tmp_path: Path):
         """Manual config survives proto→dict→yaml→dict→proto round-trip."""
@@ -95,14 +94,13 @@ defaults:
 
 scale_groups:
   manual_hosts:
-    accelerator_type: cpu
     num_vms: 1
     resources:
       cpu: 16
       ram: 32GB
       disk: 100GB
-      tpu_count: 0
-      gpu_count: 0
+      device_type: cpu
+      device_count: 0
     slice_template:
       manual:
         hosts: [10.0.0.1, 10.0.0.2]
@@ -153,15 +151,14 @@ defaults:
 
 scale_groups:
   tpu_group_a:
-    accelerator_type: tpu
-    accelerator_variant: v5litepod-8
     num_vms: 8
     resources:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu_count: 8
-      gpu_count: 0
+      device_type: tpu
+      device_variant: v5litepod-8
+      device_count: 8
     min_slices: 1
     max_slices: 10
     slice_template:
@@ -169,15 +166,14 @@ scale_groups:
         runtime_version: v2-alpha-tpuv5-lite
         zone: us-central1-a
   tpu_group_b:
-    accelerator_type: tpu
-    accelerator_variant: v5litepod-16
     num_vms: 16
     resources:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu_count: 8
-      gpu_count: 0
+      device_type: tpu
+      device_variant: v5litepod-16
+      device_count: 8
     min_slices: 0
     max_slices: 4
     slice_template:
@@ -197,8 +193,8 @@ scale_groups:
         round_trip_path.write_text(yaml_str)
         loaded_config = load_config(round_trip_path)
 
-        assert loaded_config.scale_groups["tpu_group_a"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
-        assert loaded_config.scale_groups["tpu_group_b"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
+        assert loaded_config.scale_groups["tpu_group_a"].resources.device_type == config_pb2.ACCELERATOR_TYPE_TPU
+        assert loaded_config.scale_groups["tpu_group_b"].resources.device_type == config_pb2.ACCELERATOR_TYPE_TPU
 
     def test_example_eu_west4_config_round_trips(self, tmp_path: Path):
         """Real example config from examples/marin.yaml round-trips correctly."""
@@ -212,7 +208,8 @@ scale_groups:
         # After expansion, zone-specific groups should exist
         assert "tpu_v5e_16-europe-west4-b" in original_config.scale_groups
         assert (
-            original_config.scale_groups["tpu_v5e_16-europe-west4-b"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
+            original_config.scale_groups["tpu_v5e_16-europe-west4-b"].resources.device_type
+            == config_pb2.ACCELERATOR_TYPE_TPU
         )
 
         # Round-trip via dict and YAML
@@ -223,7 +220,8 @@ scale_groups:
         loaded_config = load_config(round_trip_path)
 
         assert (
-            loaded_config.scale_groups["tpu_v5e_16-europe-west4-b"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
+            loaded_config.scale_groups["tpu_v5e_16-europe-west4-b"].resources.device_type
+            == config_pb2.ACCELERATOR_TYPE_TPU
         )
 
     @pytest.mark.parametrize(
@@ -235,7 +233,7 @@ scale_groups:
         ],
     )
     def test_lowercase_accelerator_types_work(self, tmp_path: Path, accelerator_type: str, expected_enum):
-        """Config accepts lowercase accelerator types and converts them to enum values."""
+        """Config accepts lowercase accelerator types in resources.device_type."""
         config_content = f"""\
 platform:
   manual: {{}}
@@ -248,14 +246,13 @@ defaults:
 
 scale_groups:
   test_group:
-    accelerator_type: {accelerator_type}
     num_vms: 1
     resources:
       cpu: 8
       ram: 16GB
       disk: 50GB
-      tpu_count: 0
-      gpu_count: 0
+      device_type: {accelerator_type}
+      device_count: 0
     slice_template:
       manual:
         hosts: [10.0.0.1]
@@ -265,7 +262,7 @@ scale_groups:
 
         config = load_config(config_path)
 
-        assert config.scale_groups["test_group"].accelerator_type == expected_enum
+        assert config.scale_groups["test_group"].resources.device_type == expected_enum
 
     def test_uppercase_accelerator_types_still_work(self, tmp_path: Path):
         """Config still accepts uppercase accelerator types for backwards compatibility."""
@@ -282,15 +279,14 @@ defaults:
 
 scale_groups:
   tpu_group:
-    accelerator_type: TPU
-    accelerator_variant: v5litepod-8
     num_vms: 8
     resources:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu_count: 8
-      gpu_count: 0
+      device_type: ACCELERATOR_TYPE_TPU
+      device_variant: v5litepod-8
+      device_count: 8
     min_slices: 1
     max_slices: 10
     slice_template:
@@ -303,7 +299,7 @@ scale_groups:
 
         config = load_config(config_path)
 
-        assert config.scale_groups["tpu_group"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
+        assert config.scale_groups["tpu_group"].resources.device_type == config_pb2.ACCELERATOR_TYPE_TPU
 
 
 class TestCreateAutoscalerFromConfig:
@@ -324,15 +320,14 @@ defaults:
 
 scale_groups:
   tpu_v5e_8:
-    accelerator_type: tpu
-    accelerator_variant: v5litepod-8
     num_vms: 8
     resources:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu_count: 8
-      gpu_count: 0
+      device_type: tpu
+      device_variant: v5litepod-8
+      device_count: 8
     min_slices: 0
     max_slices: 2
     slice_template:
@@ -375,14 +370,13 @@ defaults:
 
 scale_groups:
   manual_hosts:
-    accelerator_type: cpu
     num_vms: 1
     resources:
       cpu: 16
       ram: 32GB
       disk: 100GB
-      tpu_count: 0
-      gpu_count: 0
+      device_type: cpu
+      device_count: 0
     slice_template:
       manual:
         hosts: [10.0.0.1, 10.0.0.2]
@@ -420,15 +414,14 @@ defaults:
 
 scale_groups:
   tpu_v5e_8:
-    accelerator_type: tpu
-    accelerator_variant: v5litepod-8
     num_vms: 8
     resources:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu_count: 8
-      gpu_count: 0
+      device_type: tpu
+      device_variant: v5litepod-8
+      device_count: 8
     min_slices: 0
     max_slices: 2
     slice_template:
@@ -567,7 +560,7 @@ defaults:
     scale_up_delay:
       milliseconds: 60000
     scale_down_delay:
-      milliseconds: 300000
+      milliseconds: 600000
 
 controller:
   gcp:
@@ -576,15 +569,14 @@ controller:
 
 scale_groups:
   tpu_group:
-    accelerator_type: tpu
-    accelerator_variant: v5litepod-8
     num_vms: 8
     resources:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu_count: 8
-      gpu_count: 0
+      device_type: tpu
+      device_variant: v5litepod-8
+      device_count: 8
     min_slices: 1
     max_slices: 10
     slice_template:
@@ -609,8 +601,8 @@ scale_groups:
         # Verify fast timings applied (0.5s eval, 1s scale_up)
         assert local_config.defaults.autoscaler.evaluation_interval.milliseconds == 500
         assert local_config.defaults.autoscaler.scale_up_delay.milliseconds == 1000
-        # scale_down_delay stays at 5min
-        assert local_config.defaults.autoscaler.scale_down_delay.milliseconds == 300000
+        # scale_down_delay preserved from YAML (600s)
+        assert local_config.defaults.autoscaler.scale_down_delay.milliseconds == 600000
 
     def test_make_local_config_preserves_scale_group_details(self, tmp_path: Path):
         """make_local_config preserves accelerator type and other scale group settings."""
@@ -631,14 +623,13 @@ controller:
 
 scale_groups:
   cpu_group:
-    accelerator_type: cpu
     num_vms: 1
     resources:
       cpu: 16
       ram: 32GB
       disk: 100GB
-      tpu_count: 0
-      gpu_count: 0
+      device_type: cpu
+      device_count: 0
     min_slices: 2
     max_slices: 5
     priority: 50
@@ -647,15 +638,14 @@ scale_groups:
         zone: us-central1-a
         runtime_version: cos-stable
   tpu_group:
-    accelerator_type: tpu
-    accelerator_variant: v5litepod-16
     num_vms: 16
     resources:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu_count: 8
-      gpu_count: 0
+      device_type: tpu
+      device_variant: v5litepod-16
+      device_count: 8
     min_slices: 1
     max_slices: 3
     priority: 100
@@ -672,14 +662,14 @@ scale_groups:
 
         # Verify other fields preserved
         cpu_group = local_config.scale_groups["cpu_group"]
-        assert cpu_group.accelerator_type == config_pb2.ACCELERATOR_TYPE_CPU
+        assert cpu_group.resources.device_type == config_pb2.ACCELERATOR_TYPE_CPU
         assert cpu_group.min_slices == 2
         assert cpu_group.max_slices == 5
         assert cpu_group.priority == 50
 
         tpu_group = local_config.scale_groups["tpu_group"]
-        assert tpu_group.accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
-        assert tpu_group.accelerator_variant == "v5litepod-16"
+        assert tpu_group.resources.device_type == config_pb2.ACCELERATOR_TYPE_TPU
+        assert tpu_group.resources.device_variant == "v5litepod-16"
         assert tpu_group.min_slices == 1
         assert tpu_group.max_slices == 3
         assert tpu_group.priority == 100
@@ -691,7 +681,7 @@ scale_groups:
         iris_root = Path(__file__).parent.parent.parent.parent
         example_configs = [
             iris_root / "examples" / "marin.yaml",
-            iris_root / "examples" / "demo.yaml",
+            iris_root / "examples" / "test.yaml",
         ]
 
         for config_path in example_configs:
@@ -716,9 +706,12 @@ def _valid_scale_group() -> config_pb2.ScaleGroupConfig:
     """Create a valid ScaleGroupConfig for use in validation tests."""
     sg = config_pb2.ScaleGroupConfig(
         name="test",
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
         num_vms=1,
-        resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3),
+        resources=config_pb2.ScaleGroupResources(
+            cpu_millicores=8000,
+            memory_bytes=16 * 1024**3,
+            device_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        ),
     )
     sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
     sg.slice_template.num_vms = 1
@@ -749,7 +742,6 @@ class TestConfigValidation:
         config = config_pb2.IrisClusterConfig()
         sg = config.scale_groups["test"]
         sg.name = "test"
-        sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
         sg.num_vms = 1
         with pytest.raises(ValueError, match="must set resources"):
             validate_config(config)
@@ -758,8 +750,13 @@ class TestConfigValidation:
         config = config_pb2.IrisClusterConfig()
         sg = config.scale_groups["test"]
         sg.name = "test"
-        sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
-        sg.resources.CopyFrom(config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3))
+        sg.resources.CopyFrom(
+            config_pb2.ScaleGroupResources(
+                cpu_millicores=8000,
+                memory_bytes=16 * 1024**3,
+                device_type=config_pb2.ACCELERATOR_TYPE_CPU,
+            )
+        )
         with pytest.raises(ValueError, match="must set num_vms"):
             validate_config(config)
 
@@ -768,13 +765,27 @@ class TestConfigValidation:
             validate_config(_config_with(num_vms=0))
 
     def test_rejects_unspecified_accelerator_type(self):
-        with pytest.raises(ValueError, match="must set accelerator_type"):
-            validate_config(_config_with(accelerator_type=config_pb2.ACCELERATOR_TYPE_UNSPECIFIED))
+        with pytest.raises(ValueError, match=r"must set resources\.device_type"):
+            validate_config(
+                _config_with(
+                    resources=config_pb2.ScaleGroupResources(
+                        cpu_millicores=8000,
+                        memory_bytes=16 * 1024**3,
+                        device_type=config_pb2.ACCELERATOR_TYPE_UNSPECIFIED,
+                    )
+                )
+            )
 
     def test_rejects_negative_cpu(self):
         with pytest.raises(ValueError, match="invalid cpu_millicores"):
             validate_config(
-                _config_with(resources=config_pb2.ScaleGroupResources(cpu_millicores=-1000, memory_bytes=16 * 1024**3))
+                _config_with(
+                    resources=config_pb2.ScaleGroupResources(
+                        cpu_millicores=-1000,
+                        memory_bytes=16 * 1024**3,
+                        device_type=config_pb2.ACCELERATOR_TYPE_CPU,
+                    )
+                )
             )
 
     def test_rejects_gcp_zone_not_in_platform_zones(self):
@@ -785,10 +796,13 @@ class TestConfigValidation:
 
         sg = config_pb2.ScaleGroupConfig(
             name="tpu",
-            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-            accelerator_variant="v5litepod-8",
             num_vms=8,
-            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3, tpu_count=4),
+            resources=config_pb2.ScaleGroupResources(
+                cpu_millicores=8000,
+                memory_bytes=16 * 1024**3,
+                device_count=4,
+                device_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            ),
         )
         sg.slice_template.gcp.zone = "zone-b"
         sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
@@ -805,10 +819,13 @@ class TestConfigValidation:
 
         sg = config_pb2.ScaleGroupConfig(
             name="tpu",
-            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-            accelerator_variant="v5litepod-8",
             num_vms=8,
-            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3, tpu_count=4),
+            resources=config_pb2.ScaleGroupResources(
+                cpu_millicores=8000,
+                memory_bytes=16 * 1024**3,
+                device_count=4,
+                device_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            ),
         )
         sg.slice_template.gcp.zone = "zone-a"
         sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
@@ -820,9 +837,13 @@ class TestConfigValidation:
         config = config_pb2.IrisClusterConfig()
         sg = config_pb2.ScaleGroupConfig(
             name="cpu-vm",
-            accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
             num_vms=1,
-            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3),
+            resources=config_pb2.ScaleGroupResources(
+                cpu_millicores=8000,
+                memory_bytes=16 * 1024**3,
+                device_type=config_pb2.ACCELERATOR_TYPE_CPU,
+                preemptible=True,
+            ),
         )
         sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
         sg.slice_template.preemptible = True
@@ -838,9 +859,10 @@ class TestConfigValidation:
         config = config_pb2.IrisClusterConfig()
         sg = config_pb2.ScaleGroupConfig(
             name="cpu-vm",
-            accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
             num_vms=2,
-            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3),
+            resources=config_pb2.ScaleGroupResources(
+                cpu_millicores=8000, memory_bytes=16 * 1024**3, device_type=config_pb2.ACCELERATOR_TYPE_CPU
+            ),
         )
         sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
         sg.slice_template.gcp.zone = "us-central1-a"
@@ -855,9 +877,13 @@ class TestConfigValidation:
         config = config_pb2.IrisClusterConfig()
         sg = config_pb2.ScaleGroupConfig(
             name="gpu-vm",
-            accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
             num_vms=1,
-            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3, gpu_count=1),
+            resources=config_pb2.ScaleGroupResources(
+                cpu_millicores=8000,
+                memory_bytes=16 * 1024**3,
+                device_count=1,
+                device_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            ),
         )
         sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_GPU
         sg.slice_template.gcp.zone = "us-central1-a"
@@ -865,16 +891,17 @@ class TestConfigValidation:
         sg.slice_template.gcp.machine_type = "n2-standard-4"
         config.scale_groups["gpu-vm"].CopyFrom(sg)
 
-        with pytest.raises(ValueError, match="require accelerator_type=cpu"):
+        with pytest.raises(ValueError, match="require device_type=cpu"):
             validate_config(config)
 
     def test_accepts_gcp_vm_mode_cpu_single_vm_non_preemptible(self):
         config = config_pb2.IrisClusterConfig()
         sg = config_pb2.ScaleGroupConfig(
             name="cpu-vm",
-            accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
             num_vms=1,
-            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3),
+            resources=config_pb2.ScaleGroupResources(
+                cpu_millicores=8000, memory_bytes=16 * 1024**3, device_type=config_pb2.ACCELERATOR_TYPE_CPU
+            ),
         )
         sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
         sg.slice_template.gcp.zone = "us-central1-a"
@@ -889,9 +916,14 @@ def _gcp_scale_group(zone: str, *, preemptible: bool = False) -> config_pb2.Scal
     """Build a valid GCP-backed ScaleGroupConfig for worker settings validation tests."""
     sg = config_pb2.ScaleGroupConfig(
         name="test",
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
         num_vms=1,
-        resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3, tpu_count=1),
+        resources=config_pb2.ScaleGroupResources(
+            cpu_millicores=8000,
+            memory_bytes=16 * 1024**3,
+            device_count=1,
+            device_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            preemptible=preemptible,
+        ),
     )
     sg.slice_template.gcp.zone = zone
     sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
@@ -925,7 +957,7 @@ class TestWorkerSettingsValidation:
 
     def test_region_matching_zone_prefix_accepted(self):
         """worker.attributes.region that matches zone prefix passes validation."""
-        config = _config_with_gcp_sg("us-west4-b", worker_attributes={REGION_ATTRIBUTE_KEY: "us-west4"})
+        config = _config_with_gcp_sg("us-west4-b", worker_attributes={WellKnownAttribute.REGION: "us-west4"})
         validate_config(config)
 
     @pytest.mark.parametrize(
@@ -938,84 +970,58 @@ class TestWorkerSettingsValidation:
     )
     def test_region_mismatching_zone_prefix_rejected(self, zone: str, region: str):
         """worker.attributes.region that doesn't match zone prefix fails validation."""
-        config = _config_with_gcp_sg(zone, worker_attributes={REGION_ATTRIBUTE_KEY: region})
+        config = _config_with_gcp_sg(zone, worker_attributes={WellKnownAttribute.REGION: region})
         with pytest.raises(ValueError, match="must match"):
             validate_config(config)
 
     def test_empty_region_attribute_rejected(self):
         """worker.attributes.region set to empty string fails validation."""
-        config = _config_with_gcp_sg("us-west4-b", worker_attributes={REGION_ATTRIBUTE_KEY: ""})
+        config = _config_with_gcp_sg("us-west4-b", worker_attributes={WellKnownAttribute.REGION: ""})
         with pytest.raises(ValueError, match="must be non-empty"):
             validate_config(config)
 
-    def test_preemptible_true_matches_template_true(self):
-        """worker.attributes.preemptible='true' with slice_template.preemptible=True passes."""
-        config = _config_with_gcp_sg(
-            "us-west4-b", preemptible=True, worker_attributes={PREEMPTIBLE_ATTRIBUTE_KEY: "true"}
-        )
-        validate_config(config)
-
-    def test_preemptible_false_matches_template_false(self):
-        """worker.attributes.preemptible='false' with slice_template.preemptible=False passes."""
-        config = _config_with_gcp_sg(
-            "us-west4-b", preemptible=False, worker_attributes={PREEMPTIBLE_ATTRIBUTE_KEY: "false"}
-        )
-        validate_config(config)
-
-    @pytest.mark.parametrize(
-        "attr_value,template_preemptible",
-        [
-            ("true", False),
-            ("false", True),
-        ],
-    )
-    def test_preemptible_mismatch_rejected(self, attr_value: str, template_preemptible: bool):
-        """worker.attributes.preemptible disagreeing with slice_template.preemptible fails."""
-        config = _config_with_gcp_sg(
-            "us-west4-b",
-            preemptible=template_preemptible,
-            worker_attributes={PREEMPTIBLE_ATTRIBUTE_KEY: attr_value},
-        )
-        with pytest.raises(ValueError, match="must match"):
-            validate_config(config)
-
-    def test_invalid_preemptible_attribute_value_rejected(self):
-        """worker.attributes.preemptible with a non-boolean string fails validation."""
-        config = _config_with_gcp_sg("us-west4-b", worker_attributes={PREEMPTIBLE_ATTRIBUTE_KEY: "yes"})
-        with pytest.raises(ValueError, match="must be 'true' or 'false'"):
-            validate_config(config)
-
-    def test_both_region_and_preemptible_valid_together(self):
-        """Both region and preemptible worker attributes that agree with slice_template pass."""
+    @pytest.mark.parametrize("preemptible_value", ["true", "false", "yes"])
+    def test_preemptible_in_worker_attributes_rejected(self, preemptible_value: str):
+        """worker.attributes.preemptible is now derived from resources and rejected."""
         config = _config_with_gcp_sg(
             "us-west4-b",
             preemptible=True,
-            worker_attributes={REGION_ATTRIBUTE_KEY: "us-west4", PREEMPTIBLE_ATTRIBUTE_KEY: "true"},
+            worker_attributes={WellKnownAttribute.PREEMPTIBLE: preemptible_value},
+        )
+        with pytest.raises(ValueError, match="derived from resources"):
+            validate_config(config)
+
+    def test_region_valid_without_preemptible_attribute(self):
+        """Region in worker.attributes works when preemptible is only on resources."""
+        config = _config_with_gcp_sg(
+            "us-west4-b",
+            preemptible=True,
+            worker_attributes={WellKnownAttribute.REGION: "us-west4"},
         )
         validate_config(config)
 
     def test_region_check_skipped_for_non_gcp_platform(self):
         """Region/zone consistency is only checked for GCP slice templates; manual/local groups are unaffected."""
         sg = _valid_scale_group()  # uses local platform
-        sg.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-west4"
+        sg.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
         config = config_pb2.IrisClusterConfig()
         config.scale_groups["test"].CopyFrom(sg)
         validate_config(config)  # no GCP zone — region check does not apply
 
     def test_zone_matching_gcp_zone_accepted(self):
         """worker.attributes.zone matching slice_template.gcp.zone passes validation."""
-        config = _config_with_gcp_sg("us-west4-b", worker_attributes={ZONE_ATTRIBUTE_KEY: "us-west4-b"})
+        config = _config_with_gcp_sg("us-west4-b", worker_attributes={WellKnownAttribute.ZONE: "us-west4-b"})
         validate_config(config)
 
     def test_zone_mismatching_gcp_zone_rejected(self):
         """worker.attributes.zone not matching slice_template.gcp.zone fails validation."""
-        config = _config_with_gcp_sg("us-west4-b", worker_attributes={ZONE_ATTRIBUTE_KEY: "us-west4-a"})
+        config = _config_with_gcp_sg("us-west4-b", worker_attributes={WellKnownAttribute.ZONE: "us-west4-a"})
         with pytest.raises(ValueError, match="must match"):
             validate_config(config)
 
     def test_empty_zone_attribute_rejected(self):
         """worker.attributes.zone set to empty string fails validation."""
-        config = _config_with_gcp_sg("us-west4-b", worker_attributes={ZONE_ATTRIBUTE_KEY: ""})
+        config = _config_with_gcp_sg("us-west4-b", worker_attributes={WellKnownAttribute.ZONE: ""})
         with pytest.raises(ValueError, match="must be non-empty"):
             validate_config(config)
 
@@ -1036,18 +1042,12 @@ defaults:
 scale_groups:
   tpu_v5e_16:
     zones: [europe-west4-b, us-west4-a]
-    accelerator_type: tpu
-    accelerator_variant: v5litepod-16
     num_vms: 4
-    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, device_type: tpu, device_variant: v5litepod-16, device_count: 4 }
     max_slices: 4
     slice_template:
-      preemptible: true
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
-    worker:
-      attributes:
-        preemptible: "true"
 """
         p = tmp_path / "config.yaml"
         p.write_text(config_content)
@@ -1059,14 +1059,14 @@ scale_groups:
 
         eu = config.scale_groups["tpu_v5e_16-europe-west4-b"]
         assert eu.slice_template.gcp.zone == "europe-west4-b"
-        assert eu.worker.attributes["zone"] == "europe-west4-b"
-        assert eu.worker.attributes["region"] == "europe-west4"
+        assert eu.worker.attributes[WellKnownAttribute.ZONE] == "europe-west4-b"
+        assert eu.worker.attributes[WellKnownAttribute.REGION] == "europe-west4"
         assert eu.min_slices == 0
 
         us = config.scale_groups["tpu_v5e_16-us-west4-a"]
         assert us.slice_template.gcp.zone == "us-west4-a"
-        assert us.worker.attributes["zone"] == "us-west4-a"
-        assert us.worker.attributes["region"] == "us-west4"
+        assert us.worker.attributes[WellKnownAttribute.ZONE] == "us-west4-a"
+        assert us.worker.attributes[WellKnownAttribute.REGION] == "us-west4"
 
     def test_min_slices_preserved_when_explicit(self, tmp_path: Path):
         config_content = """\
@@ -1081,10 +1081,9 @@ defaults:
 scale_groups:
   tpu_group:
     zones: [us-west4-a]
-    accelerator_type: tpu
     num_vms: 1
     min_slices: 2
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, tpu_count: 1, gpu_count: 0 }
+    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1107,9 +1106,8 @@ defaults:
 
 scale_groups:
   static_group:
-    accelerator_type: tpu
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, tpu_count: 1, gpu_count: 0 }
+    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
     min_slices: 1
     slice_template:
       gcp:
@@ -1135,9 +1133,8 @@ defaults:
 scale_groups:
   tpu_group:
     zones: [us-west4-a, europe-west4-b]
-    accelerator_type: tpu
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, tpu_count: 1, gpu_count: 0 }
+    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1158,9 +1155,8 @@ platform:
 scale_groups:
   tpu_group:
     zones: []
-    accelerator_type: tpu
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, tpu_count: 1, gpu_count: 0 }
+    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1184,18 +1180,16 @@ defaults:
 
 scale_groups:
   static_cpu:
-    accelerator_type: cpu
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, tpu_count: 0, gpu_count: 0 }
+    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: cpu, device_count: 0 }
     slice_template:
       gcp:
         zone: us-central1-a
         runtime_version: cos-stable
   expanded_tpu:
     zones: [us-west4-a, europe-west4-b]
-    accelerator_type: tpu
     num_vms: 4
-    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, device_type: tpu, device_variant: v5litepod-16, device_count: 4 }
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1217,9 +1211,8 @@ platform:
 scale_groups:
   tpu_group:
     zones: [us-west4-a, us-west4-a]
-    accelerator_type: tpu
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, tpu_count: 1, gpu_count: 0 }
+    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1238,9 +1231,8 @@ platform:
 scale_groups:
   tpu_group:
     zones: [123]
-    accelerator_type: tpu
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, tpu_count: 1, gpu_count: 0 }
+    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1260,9 +1252,8 @@ platform:
 scale_groups:
   tpu_group:
     zones: [us-west4-a]
-    accelerator_type: tpu
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, tpu_count: 1, gpu_count: 0 }
+    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
     slice_template:
       gcp:
         zone: europe-west4-b
@@ -1283,9 +1274,8 @@ platform:
 scale_groups:
   tpu_group:
     zones: [us-west4-a]
-    accelerator_type: tpu
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, tpu_count: 1, gpu_count: 0 }
+    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1308,9 +1298,8 @@ platform:
 scale_groups:
   tpu_group:
     zones: [us-west4-a]
-    accelerator_type: tpu
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, tpu_count: 1, gpu_count: 0 }
+    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1333,9 +1322,8 @@ platform:
 scale_groups:
   manual_group:
     zones: [us-west4-a]
-    accelerator_type: cpu
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, tpu_count: 0, gpu_count: 0 }
+    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: cpu, device_count: 0 }
     slice_template:
       manual:
         hosts: [10.0.0.1]
@@ -1355,18 +1343,16 @@ platform:
 
 scale_groups:
   tpu_group-us-west4-a:
-    accelerator_type: tpu
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, tpu_count: 1, gpu_count: 0 }
+    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
     slice_template:
       gcp:
         zone: us-west4-a
         runtime_version: v2-alpha-tpuv5-lite
   tpu_group:
     zones: [us-west4-a]
-    accelerator_type: tpu
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, tpu_count: 1, gpu_count: 0 }
+    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1374,4 +1360,54 @@ scale_groups:
         p = tmp_path / "config.yaml"
         p.write_text(config_content)
         with pytest.raises(ValueError, match="collides"):
+            load_config(p)
+
+
+class TestPreemptibleNormalization:
+    """Tests for preemptible field parsing during config normalization."""
+
+    _BASE_CONFIG = """\
+scale_groups:
+  test:
+    num_vms: 1
+    resources:
+      cpu: 8
+      ram: 16GB
+      disk: 50GB
+      device_type: gpu
+      device_variant: a100
+      device_count: 1
+      preemptible: {value}
+    slice_template:
+      manual:
+        hosts: [10.0.0.1]
+"""
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("true", True),
+            ("True", True),
+            ("TRUE", True),
+            ("false", False),
+            ("False", False),
+            ("FALSE", False),
+            (True, True),
+            (False, False),
+        ],
+    )
+    def test_preemptible_parsed_correctly(self, tmp_path: Path, value: object, expected: bool):
+        content = self._BASE_CONFIG.format(value=value)
+        p = tmp_path / "config.yaml"
+        p.write_text(content)
+        config = load_config(p)
+        assert config.scale_groups["test"].resources.preemptible == expected
+
+    @pytest.mark.parametrize("value", ['"yes"', '"no"', '"1"', '"0"', '"maybe"'])
+    def test_preemptible_rejects_invalid_string(self, tmp_path: Path, value: str):
+        """Strings other than 'true'/'false' are rejected."""
+        content = self._BASE_CONFIG.format(value=value)
+        p = tmp_path / "config.yaml"
+        p.write_text(content)
+        with pytest.raises(ValueError, match="preemptible must be true or false"):
             load_config(p)

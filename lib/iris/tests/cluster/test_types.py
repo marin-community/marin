@@ -5,18 +5,23 @@
 
 import pytest
 
-from iris.cluster.types import (
+from iris.cluster.constraints import (
     Constraint,
     ConstraintOp,
+    WellKnownAttribute,
+    constraints_from_resources,
+    device_variant_constraint,
+    extract_placement_requirements,
+    merge_constraints,
+    preemptible_constraint,
+    region_constraint,
+)
+from iris.cluster.types import (
     Entrypoint,
     JobName,
-    merge_constraints,
-    normalize_constraints,
-    preemptible_constraint,
-    preemptible_preference_from_constraints,
-    region_constraint,
-    required_regions_from_constraints,
-    required_zones_from_constraints,
+    TaskAttempt,
+    gpu_device,
+    tpu_device,
 )
 from iris.rpc import cluster_pb2
 
@@ -111,6 +116,71 @@ def test_job_name_depth():
 
 
 # ---------------------------------------------------------------------------
+# TaskAttempt: structured task_id:attempt_id
+# ---------------------------------------------------------------------------
+
+
+def test_task_name_roundtrip_without_attempt():
+    tn = TaskAttempt.from_wire("/alice/job/0")
+    assert tn.task_id == JobName.from_string("/alice/job/0")
+    assert tn.attempt_id is None
+    assert tn.to_wire() == "/alice/job/0"
+    assert str(tn) == "/alice/job/0"
+
+
+def test_task_name_roundtrip_with_attempt():
+    tn = TaskAttempt.from_wire("/alice/job/0:3")
+    assert tn.task_id == JobName.from_string("/alice/job/0")
+    assert tn.attempt_id == 3
+    assert tn.to_wire() == "/alice/job/0:3"
+
+
+def test_task_name_require_attempt():
+    tn = TaskAttempt.from_wire("/alice/job/0:5")
+    assert tn.require_attempt() == 5
+
+    tn_no_attempt = TaskAttempt.from_wire("/alice/job/0")
+    with pytest.raises(ValueError, match="no attempt_id"):
+        tn_no_attempt.require_attempt()
+
+
+def test_task_name_job_id_and_task_index():
+    tn = TaskAttempt.from_wire("/alice/parent/child/0:2")
+    assert tn.job_id == JobName.from_string("/alice/parent/child")
+    assert tn.task_index == 0
+
+
+def test_task_name_with_and_without_attempt():
+    tn = TaskAttempt.from_wire("/alice/job/0")
+    with_attempt = tn.with_attempt(7)
+    assert with_attempt.attempt_id == 7
+    assert with_attempt.task_id == tn.task_id
+
+    without = with_attempt.without_attempt()
+    assert without.attempt_id is None
+    assert without.task_id == tn.task_id
+
+
+def test_task_name_from_components():
+    task_id = JobName.from_string("/alice/job/0")
+    tn = TaskAttempt(task_id=task_id, attempt_id=2)
+    assert tn.to_wire() == "/alice/job/0:2"
+
+
+@pytest.mark.parametrize("value", ["", "not-a-path", "/alice/job/0:notanint"])
+def test_task_name_rejects_invalid_inputs(value: str):
+    with pytest.raises(ValueError):
+        TaskAttempt.from_wire(value)
+
+
+def test_task_name_attempt_zero():
+    """Attempt 0 is a valid attempt_id and must round-trip."""
+    tn = TaskAttempt.from_wire("/alice/job/0:0")
+    assert tn.attempt_id == 0
+    assert tn.to_wire() == "/alice/job/0:0"
+
+
+# ---------------------------------------------------------------------------
 # Helpers for building proto constraints used by the extraction functions.
 # ---------------------------------------------------------------------------
 
@@ -131,14 +201,14 @@ def _proto_constraint(key: str, string_value: str, op: int = cluster_pb2.CONSTRA
 
 def test_region_constraint_single_region_produces_eq():
     c = region_constraint(["us-west4"])
-    assert c.key == "region"
+    assert c.key == WellKnownAttribute.REGION
     assert c.op == ConstraintOp.EQ
     assert c.value == "us-west4"
 
 
 def test_region_constraint_multiple_regions_produces_in():
     c = region_constraint(["us-central1", "us-central2"])
-    assert c.key == "region"
+    assert c.key == WellKnownAttribute.REGION
     assert c.op == ConstraintOp.IN
     assert c.values == ("us-central1", "us-central2")
     assert c.value is None
@@ -155,7 +225,7 @@ def test_region_constraint_empty_string_raises():
 
 
 # ---------------------------------------------------------------------------
-# preemptible_preference_from_constraints (proto inputs)
+# extract_placement_requirements: preemptible field
 # ---------------------------------------------------------------------------
 
 
@@ -167,102 +237,102 @@ def test_region_constraint_empty_string_raises():
     ],
 )
 def test_preemptible_preference_returns_bool(raw_value: str, expected: bool):
-    constraints = [_proto_constraint("preemptible", raw_value)]
-    assert preemptible_preference_from_constraints(constraints) is expected
+    constraints = [_proto_constraint(WellKnownAttribute.PREEMPTIBLE, raw_value)]
+    assert extract_placement_requirements(constraints).preemptible is expected
 
 
 def test_preemptible_preference_none_when_absent():
-    constraints = [_proto_constraint("region", "us-west4")]
-    assert preemptible_preference_from_constraints(constraints) is None
+    constraints = [_proto_constraint(WellKnownAttribute.REGION, "us-west4")]
+    assert extract_placement_requirements(constraints).preemptible is None
 
 
 def test_preemptible_preference_conflicting_raises():
     constraints = [
-        _proto_constraint("preemptible", "true"),
-        _proto_constraint("preemptible", "false"),
+        _proto_constraint(WellKnownAttribute.PREEMPTIBLE, "true"),
+        _proto_constraint(WellKnownAttribute.PREEMPTIBLE, "false"),
     ]
     with pytest.raises(ValueError, match="conflicting"):
-        preemptible_preference_from_constraints(constraints)
+        extract_placement_requirements(constraints)
 
 
 def test_preemptible_preference_invalid_value_raises():
-    constraints = [_proto_constraint("preemptible", "maybe")]
+    constraints = [_proto_constraint(WellKnownAttribute.PREEMPTIBLE, "maybe")]
     with pytest.raises(ValueError, match="'true' or 'false'"):
-        preemptible_preference_from_constraints(constraints)
+        extract_placement_requirements(constraints)
 
 
 # ---------------------------------------------------------------------------
-# required_regions_from_constraints (proto inputs)
+# extract_placement_requirements: required_regions field
 # ---------------------------------------------------------------------------
 
 
 def test_required_regions_single():
-    constraints = [_proto_constraint("region", "eu-west4")]
-    assert required_regions_from_constraints(constraints) == frozenset({"eu-west4"})
+    constraints = [_proto_constraint(WellKnownAttribute.REGION, "eu-west4")]
+    assert extract_placement_requirements(constraints).required_regions == frozenset({"eu-west4"})
 
 
 def test_required_regions_none_when_absent():
-    constraints = [_proto_constraint("preemptible", "true")]
-    assert required_regions_from_constraints(constraints) is None
+    constraints = [_proto_constraint(WellKnownAttribute.PREEMPTIBLE, "true")]
+    assert extract_placement_requirements(constraints).required_regions is None
 
 
 def test_required_regions_conflicting_raises():
     constraints = [
-        _proto_constraint("region", "us-west4"),
-        _proto_constraint("region", "eu-west4"),
+        _proto_constraint(WellKnownAttribute.REGION, "us-west4"),
+        _proto_constraint(WellKnownAttribute.REGION, "eu-west4"),
     ]
     with pytest.raises(ValueError, match="conflicting"):
-        required_regions_from_constraints(constraints)
+        extract_placement_requirements(constraints)
 
 
 def test_required_regions_empty_string_raises():
-    constraints = [_proto_constraint("region", "")]
+    constraints = [_proto_constraint(WellKnownAttribute.REGION, "")]
     with pytest.raises(ValueError, match="non-empty"):
-        required_regions_from_constraints(constraints)
+        extract_placement_requirements(constraints)
 
 
 # ---------------------------------------------------------------------------
-# required_zones_from_constraints (proto inputs)
+# extract_placement_requirements: required_zones field
 # ---------------------------------------------------------------------------
 
 
 def test_required_zones_single():
-    constraints = [_proto_constraint("zone", "us-central2-b")]
-    assert required_zones_from_constraints(constraints) == frozenset({"us-central2-b"})
+    constraints = [_proto_constraint(WellKnownAttribute.ZONE, "us-central2-b")]
+    assert extract_placement_requirements(constraints).required_zones == frozenset({"us-central2-b"})
 
 
 def test_required_zones_none_when_absent():
-    constraints = [_proto_constraint("preemptible", "true")]
-    assert required_zones_from_constraints(constraints) is None
+    constraints = [_proto_constraint(WellKnownAttribute.PREEMPTIBLE, "true")]
+    assert extract_placement_requirements(constraints).required_zones is None
 
 
 def test_required_zones_conflicting_raises():
     constraints = [
-        _proto_constraint("zone", "us-central2-a"),
-        _proto_constraint("zone", "us-central2-b"),
+        _proto_constraint(WellKnownAttribute.ZONE, "us-central2-a"),
+        _proto_constraint(WellKnownAttribute.ZONE, "us-central2-b"),
     ]
     with pytest.raises(ValueError, match="conflicting"):
-        required_zones_from_constraints(constraints)
+        extract_placement_requirements(constraints)
 
 
 def test_required_zones_empty_string_raises():
-    constraints = [_proto_constraint("zone", "")]
+    constraints = [_proto_constraint(WellKnownAttribute.ZONE, "")]
     with pytest.raises(ValueError, match="non-empty"):
-        required_zones_from_constraints(constraints)
+        extract_placement_requirements(constraints)
 
 
 # ---------------------------------------------------------------------------
-# normalize_constraints (proto inputs, combines both extractors)
+# extract_placement_requirements (proto inputs, combines both extractors)
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_constraints_combines_fields():
+def test_extract_placement_requirements_combines_fields():
     constraints = [
-        _proto_constraint("preemptible", "true"),
-        _proto_constraint("region", "us-central1"),
-        _proto_constraint("zone", "us-central1-a"),
+        _proto_constraint(WellKnownAttribute.PREEMPTIBLE, "true"),
+        _proto_constraint(WellKnownAttribute.REGION, "us-central1"),
+        _proto_constraint(WellKnownAttribute.ZONE, "us-central1-a"),
     ]
-    nc = normalize_constraints(constraints)
+    nc = extract_placement_requirements(constraints)
     assert nc.preemptible is True
     assert nc.required_regions == frozenset({"us-central1"})
     assert nc.required_zones == frozenset({"us-central1-a"})
@@ -284,7 +354,7 @@ def test_merge_child_overrides_region():
     parent = [region_constraint(["us-west4"])]
     child = [region_constraint(["eu-west4"])]
     result = merge_constraints(parent, child)
-    regions = [c for c in result if c.key == "region"]
+    regions = [c for c in result if c.key == WellKnownAttribute.REGION]
     assert len(regions) == 1
     assert regions[0].value == "eu-west4"
 
@@ -293,27 +363,37 @@ def test_merge_child_overrides_preemptible():
     parent = [preemptible_constraint(True)]
     child = [preemptible_constraint(False)]
     result = merge_constraints(parent, child)
-    preemptibles = [c for c in result if c.key == "preemptible"]
+    preemptibles = [c for c in result if c.key == WellKnownAttribute.PREEMPTIBLE]
     assert len(preemptibles) == 1
     assert preemptibles[0].value == "false"
 
 
+def test_merge_child_overrides_zone():
+    """Child zone constraint replaces parent's (zone is canonical)."""
+    parent = [Constraint(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value="a")]
+    child = [Constraint(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value="b")]
+    result = merge_constraints(parent, child)
+    zone_constraints = [c for c in result if c.key == WellKnownAttribute.ZONE]
+    assert len(zone_constraints) == 1
+    assert zone_constraints[0].value == "b"
+
+
 def test_merge_non_canonical_key_both_present():
     """Non-canonical keys from parent and child are both kept."""
-    parent = [Constraint(key="zone", op=ConstraintOp.EQ, value="a")]
-    child = [Constraint(key="zone", op=ConstraintOp.EQ, value="b")]
+    parent = [Constraint(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="a")]
+    child = [Constraint(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="b")]
     result = merge_constraints(parent, child)
-    zone_constraints = [c for c in result if c.key == "zone"]
-    assert len(zone_constraints) == 2
-    assert {c.value for c in zone_constraints} == {"a", "b"}
+    tpu_constraints = [c for c in result if c.key == WellKnownAttribute.TPU_NAME]
+    assert len(tpu_constraints) == 2
+    assert {c.value for c in tpu_constraints} == {"a", "b"}
 
 
 def test_merge_non_canonical_key_dedup():
     """Duplicate non-canonical constraints are deduplicated."""
-    shared = Constraint(key="zone", op=ConstraintOp.EQ, value="a")
+    shared = Constraint(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="a")
     result = merge_constraints([shared], [shared])
-    zone_constraints = [c for c in result if c.key == "zone"]
-    assert len(zone_constraints) == 1
+    tpu_constraints = [c for c in result if c.key == WellKnownAttribute.TPU_NAME]
+    assert len(tpu_constraints) == 1
 
 
 def test_merge_multiple_canonical_keys_partial_override():
@@ -322,11 +402,11 @@ def test_merge_multiple_canonical_keys_partial_override():
     child = [region_constraint(["eu-west4"])]
     result = merge_constraints(parent, child)
 
-    regions = [c for c in result if c.key == "region"]
+    regions = [c for c in result if c.key == WellKnownAttribute.REGION]
     assert len(regions) == 1
     assert regions[0].value == "eu-west4"
 
-    preemptibles = [c for c in result if c.key == "preemptible"]
+    preemptibles = [c for c in result if c.key == WellKnownAttribute.PREEMPTIBLE]
     assert len(preemptibles) == 1
     assert preemptibles[0].value == "true"
 
@@ -343,7 +423,7 @@ def test_region_constraint_empty_string_in_multi_raises():
 
 def test_constraint_in_proto_roundtrip():
     """IN constraint survives a proto round-trip."""
-    original = Constraint(key="region", op=ConstraintOp.IN, values=("us-central1", "eu-west4"))
+    original = Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=("us-central1", "eu-west4"))
     proto = original.to_proto()
     assert proto.op == cluster_pb2.CONSTRAINT_OP_IN
     assert len(proto.values) == 2
@@ -352,7 +432,7 @@ def test_constraint_in_proto_roundtrip():
 
 
 # ---------------------------------------------------------------------------
-# required_regions_from_constraints with IN operator (proto inputs)
+# extract_placement_requirements: IN operator for regions (proto inputs)
 # ---------------------------------------------------------------------------
 
 
@@ -365,32 +445,123 @@ def _proto_in_constraint(key: str, string_values: list[str]) -> cluster_pb2.Cons
 
 
 def test_required_regions_in_multiple():
-    constraints = [_proto_in_constraint("region", ["us-central1", "us-central2"])]
-    result = required_regions_from_constraints(constraints)
+    constraints = [_proto_in_constraint(WellKnownAttribute.REGION, ["us-central1", "us-central2"])]
+    result = extract_placement_requirements(constraints).required_regions
     assert result == frozenset({"us-central1", "us-central2"})
 
 
 def test_required_regions_in_single():
-    constraints = [_proto_in_constraint("region", ["eu-west4"])]
-    result = required_regions_from_constraints(constraints)
+    constraints = [_proto_in_constraint(WellKnownAttribute.REGION, ["eu-west4"])]
+    result = extract_placement_requirements(constraints).required_regions
     assert result == frozenset({"eu-west4"})
 
 
 def test_required_regions_in_empty_values_raises():
     """IN constraint with no values is invalid."""
-    c = cluster_pb2.Constraint(key="region", op=cluster_pb2.CONSTRAINT_OP_IN)
+    c = cluster_pb2.Constraint(key=WellKnownAttribute.REGION, op=cluster_pb2.CONSTRAINT_OP_IN)
     with pytest.raises(ValueError, match="at least one value"):
-        required_regions_from_constraints([c])
+        extract_placement_requirements([c])
 
 
-def test_normalize_constraints_with_in_region():
-    """normalize_constraints works with IN region constraints."""
+def test_extract_placement_requirements_with_in_region():
+    """extract_placement_requirements works with IN region constraints."""
     constraints = [
-        _proto_constraint("preemptible", "false"),
-        _proto_in_constraint("region", ["us-central1", "us-central2"]),
-        _proto_constraint("zone", "us-central2-b"),
+        _proto_constraint(WellKnownAttribute.PREEMPTIBLE, "false"),
+        _proto_in_constraint(WellKnownAttribute.REGION, ["us-central1", "us-central2"]),
+        _proto_constraint(WellKnownAttribute.ZONE, "us-central2-b"),
     ]
-    nc = normalize_constraints(constraints)
+    nc = extract_placement_requirements(constraints)
     assert nc.preemptible is False
     assert nc.required_regions == frozenset({"us-central1", "us-central2"})
     assert nc.required_zones == frozenset({"us-central2-b"})
+
+
+# ---------------------------------------------------------------------------
+# constraints_from_resources
+# ---------------------------------------------------------------------------
+
+
+def test_constraints_from_resources_tpu():
+    """TPU resource spec produces device-type and device-variant constraints."""
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=2000)
+    resources.device.CopyFrom(tpu_device("v5litepod-16"))
+    result = constraints_from_resources(resources)
+    keys = {c.key for c in result}
+    assert WellKnownAttribute.DEVICE_TYPE in keys
+    assert WellKnownAttribute.DEVICE_VARIANT in keys
+    type_c = next(c for c in result if c.key == WellKnownAttribute.DEVICE_TYPE)
+    assert type_c.value == "tpu"
+    variant_c = next(c for c in result if c.key == WellKnownAttribute.DEVICE_VARIANT)
+    assert variant_c.value == "v5litepod-16"
+
+
+def test_constraints_from_resources_gpu():
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=2000)
+    resources.device.CopyFrom(gpu_device("H100", count=8))
+    result = constraints_from_resources(resources)
+    type_c = next(c for c in result if c.key == WellKnownAttribute.DEVICE_TYPE)
+    assert type_c.value == "gpu"
+    variant_c = next(c for c in result if c.key == WellKnownAttribute.DEVICE_VARIANT)
+    assert variant_c.value == "h100"
+
+
+def test_constraints_from_resources_cpu_produces_nothing():
+    """CPU-only resource spec produces no device constraints."""
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=2000)
+    resources.device.CopyFrom(cluster_pb2.DeviceConfig(cpu=cluster_pb2.CpuDevice()))
+    result = constraints_from_resources(resources)
+    assert result == []
+
+
+def test_constraints_from_resources_no_device():
+    """Resource spec with no device field produces no constraints."""
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=2000)
+    result = constraints_from_resources(resources)
+    assert result == []
+
+
+def test_constraints_from_resources_auto_variant_skipped():
+    """Variant 'auto' is not emitted as a constraint."""
+    resources = cluster_pb2.ResourceSpecProto()
+    resources.device.CopyFrom(cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="auto", count=1)))
+    result = constraints_from_resources(resources)
+    assert len(result) == 1
+    assert result[0].key == WellKnownAttribute.DEVICE_TYPE
+
+
+# ---------------------------------------------------------------------------
+# merge_constraints: device-type is a canonical key
+# ---------------------------------------------------------------------------
+
+
+def test_merge_child_overrides_device_type():
+    """Child device-type constraint replaces parent's."""
+    parent = [Constraint(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value="tpu")]
+    child = [Constraint(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value="gpu")]
+    result = merge_constraints(parent, child)
+    dt = [c for c in result if c.key == WellKnownAttribute.DEVICE_TYPE]
+    assert len(dt) == 1
+    assert dt[0].value == "gpu"
+
+
+def test_merge_auto_constraints_with_user_variant_override():
+    """User multi-variant IN constraint replaces auto-generated single-variant EQ."""
+    auto = constraints_from_resources(
+        cluster_pb2.ResourceSpecProto(
+            cpu_millicores=2000,
+            device=tpu_device("v5litepod-16"),
+        )
+    )
+    user = [device_variant_constraint(["v5litepod-16", "v6e-16"])]
+    merged = merge_constraints(auto, user)
+
+    # device-type from auto should be kept
+    dt = [c for c in merged if c.key == WellKnownAttribute.DEVICE_TYPE]
+    assert len(dt) == 1
+    assert dt[0].value == "tpu"
+
+    # device-variant should be the user's IN constraint, not auto's EQ
+    dv = [c for c in merged if c.key == WellKnownAttribute.DEVICE_VARIANT]
+    assert len(dv) == 1
+    assert dv[0].op == ConstraintOp.IN
+    assert dv[0].values == ("v5litepod-16", "v6e-16")

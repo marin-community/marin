@@ -22,6 +22,7 @@ import ctypes.util
 import logging
 import os
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -29,13 +30,12 @@ import tempfile
 import threading
 import uuid
 import weakref
-from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from iris.cluster.runtime.bundle import stage_bundle_to_local
-from iris.cluster.runtime.env import build_device_env_vars
+from iris.cluster.bundle import BundleStore
+from iris.cluster.runtime.env import build_device_env_vars, write_workdir_files
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
     build_memray_transform_cmd,
@@ -43,7 +43,15 @@ from iris.cluster.runtime.profile import (
     resolve_cpu_spec,
     resolve_memory_spec,
 )
-from iris.cluster.runtime.types import ContainerConfig, ContainerPhase, ContainerStats, ContainerStatus, RuntimeLogReader
+from iris.cluster.runtime.profile import run_pyspy_dump
+from iris.cluster.runtime.types import (
+    ContainerConfig,
+    ContainerPhase,
+    ContainerStats,
+    ContainerStatus,
+    MountKind,
+    RuntimeLogReader,
+)
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ManagedThread, get_thread_container
 from iris.rpc import cluster_pb2
@@ -368,6 +376,31 @@ class ProcessLogReader:
         return list(self._logs)
 
 
+def _resolve_mount_map(config: ContainerConfig, cache_dir: Path | None = None) -> dict[str, str]:
+    """Build container_path -> host_path mapping for process runtime.
+
+    WORKDIR mounts resolve to config.workdir_host_path (set by task_attempt).
+    CACHE mounts resolve to shared subdirectories under cache_dir.
+    TMPFS mounts resolve to per-task temp directories under cache_dir for isolation.
+    """
+    result: dict[str, str] = {}
+    for mount in config.mounts:
+        if mount.kind == MountKind.WORKDIR:
+            if config.workdir_host_path:
+                result[mount.container_path] = str(config.workdir_host_path)
+        elif mount.kind == MountKind.CACHE:
+            if cache_dir:
+                host_dir = cache_dir / mount.container_path.strip("/").replace("/", "-")
+                host_dir.mkdir(parents=True, exist_ok=True)
+                result[mount.container_path] = str(host_dir)
+        elif mount.kind == MountKind.TMPFS:
+            if cache_dir:
+                prefix = mount.container_path.strip("/").replace("/", "-") + "-"
+                host_dir = Path(tempfile.mkdtemp(prefix=prefix, dir=cache_dir))
+                result[mount.container_path] = str(host_dir)
+    return result
+
+
 @dataclass
 class ProcessContainerHandle:
     """Process implementation of ContainerHandle.
@@ -382,6 +415,7 @@ class ProcessContainerHandle:
     _container_id: str | None = field(default=None, repr=False)
     _prev_cpu_total: float = field(default=0.0, repr=False)
     _prev_cpu_utime: float = field(default=0.0, repr=False)
+    _tmpfs_dirs: list[Path] = field(default_factory=list, repr=False)
 
     @property
     def container_id(self) -> str | None:
@@ -404,11 +438,19 @@ class ProcessContainerHandle:
         config = self.config
 
         # Remap container paths to host paths in env vars
-        mount_map = {container_path: host_path for host_path, container_path, _ in config.mounts}
+        mount_map = _resolve_mount_map(config, cache_dir=self.runtime._cache_dir)
         env = {**build_device_env_vars(config), **dict(config.env)}
         for key, value in env.items():
             if value in mount_map:
                 env[key] = mount_map[value]
+
+        # Track TMPFS dirs for cleanup and set TMPDIR so tempfile uses the mapped path
+        for mount in config.mounts:
+            if mount.kind == MountKind.TMPFS and mount.container_path in mount_map:
+                host_path = mount_map[mount.container_path]
+                self._tmpfs_dirs.append(Path(host_path))
+                if mount.container_path == "/tmp":
+                    env["TMPDIR"] = host_path
 
         # In local mode, resolve IRIS_PYTHON to the current interpreter so that
         # bash -c "exec $IRIS_PYTHON ..." works even when "python" isn't on PATH.
@@ -478,19 +520,27 @@ class ProcessContainerHandle:
             available=memory_mb is not None,
         )
 
+    def disk_usage_mb(self) -> int:
+        """Return used space in MB on the filesystem containing the workdir."""
+        if self.config.workdir_host_path and self.config.workdir_host_path.exists():
+            return int(shutil.disk_usage(self.config.workdir_host_path).used / (1024 * 1024))
+        return 0
+
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
-        """Profile the running process using py-spy (CPU) or memray (memory), with fallback stubs."""
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
 
         if not self._container or not self._container._process:
             raise RuntimeError("Cannot profile: no running process")
 
-        # Dispatch to CPU or memory profiling
-        if profile_type.HasField("cpu"):
+        if profile_type.HasField("threads"):
+            pid = str(self._container._process.pid)
+            return run_pyspy_dump(pid, include_locals=profile_type.threads.locals)
+        elif profile_type.HasField("cpu"):
             return self._profile_cpu(duration_seconds, profile_type.cpu)
         elif profile_type.HasField("memory"):
             return self._profile_memory(duration_seconds, profile_type.memory)
         else:
-            raise RuntimeError("ProfileType must specify either cpu or memory profiler")
+            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
     def _profile_cpu(self, duration_seconds: int, cpu_config: cluster_pb2.CpuProfile) -> bytes:
         """Profile CPU using py-spy, with fallback stub."""
@@ -572,6 +622,9 @@ class ProcessContainerHandle:
             self._container.kill()
         self._container = None
         self._container_id = None
+        for tmpfs_dir in self._tmpfs_dirs:
+            shutil.rmtree(tmpfs_dir, ignore_errors=True)
+        self._tmpfs_dirs.clear()
 
 
 class ProcessRuntime:
@@ -581,7 +634,8 @@ class ProcessRuntime:
     Creates ProcessContainerHandle instances with the build/run lifecycle.
     """
 
-    def __init__(self):
+    def __init__(self, cache_dir: Path):
+        self._cache_dir = cache_dir
         self._handles: list[ProcessContainerHandle] = []
         _active_runtimes.add(self)
 
@@ -595,21 +649,21 @@ class ProcessRuntime:
         self._handles.append(handle)
         return handle
 
+    def prepare_workdir(self, workdir: Path, disk_bytes: int) -> None:
+        pass
+
     def stage_bundle(
         self,
         *,
-        bundle_gcs_path: str,
+        bundle_id: str,
         workdir: Path,
         workdir_files: dict[str, bytes],
-        fetch_bundle: Callable[[str], Path],
+        bundle_store: BundleStore,
     ) -> None:
         """Stage bundle and workdir files on worker-local filesystem."""
-        stage_bundle_to_local(
-            bundle_gcs_path=bundle_gcs_path,
-            workdir=workdir,
-            workdir_files=workdir_files,
-            fetch_bundle=fetch_bundle,
-        )
+        if bundle_id:
+            bundle_store.extract_bundle_to(bundle_id, workdir)
+        write_workdir_files(workdir, workdir_files)
 
     def list_containers(self) -> list[ProcessContainerHandle]:
         """List all managed container handles."""

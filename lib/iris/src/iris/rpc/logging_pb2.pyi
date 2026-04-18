@@ -1,5 +1,6 @@
-from . import time_pb2 as _time_pb2
+from iris.rpc import time_pb2 as _time_pb2
 from google.protobuf.internal import containers as _containers
+from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
 from collections.abc import Iterable as _Iterable, Mapping as _Mapping
@@ -7,17 +8,34 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class LogLevel(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    LOG_LEVEL_UNKNOWN: _ClassVar[LogLevel]
+    LOG_LEVEL_DEBUG: _ClassVar[LogLevel]
+    LOG_LEVEL_INFO: _ClassVar[LogLevel]
+    LOG_LEVEL_WARNING: _ClassVar[LogLevel]
+    LOG_LEVEL_ERROR: _ClassVar[LogLevel]
+    LOG_LEVEL_CRITICAL: _ClassVar[LogLevel]
+LOG_LEVEL_UNKNOWN: LogLevel
+LOG_LEVEL_DEBUG: LogLevel
+LOG_LEVEL_INFO: LogLevel
+LOG_LEVEL_WARNING: LogLevel
+LOG_LEVEL_ERROR: LogLevel
+LOG_LEVEL_CRITICAL: LogLevel
+
 class LogEntry(_message.Message):
-    __slots__ = ("timestamp", "source", "data", "attempt_id")
+    __slots__ = ("timestamp", "source", "data", "attempt_id", "level")
     TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     DATA_FIELD_NUMBER: _ClassVar[int]
     ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+    LEVEL_FIELD_NUMBER: _ClassVar[int]
     timestamp: _time_pb2.Timestamp
     source: str
     data: str
     attempt_id: int
-    def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., source: _Optional[str] = ..., data: _Optional[str] = ..., attempt_id: _Optional[int] = ...) -> None: ...
+    level: LogLevel
+    def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., source: _Optional[str] = ..., data: _Optional[str] = ..., attempt_id: _Optional[int] = ..., level: _Optional[_Union[LogLevel, str]] = ...) -> None: ...
 
 class LogBatch(_message.Message):
     __slots__ = ("entries",)
@@ -47,7 +65,7 @@ class TaskAttemptMetadata(_message.Message):
     status: int
     error_message: str
     resource_usage: ResourceUsage
-    def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., start_time: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., end_time: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., exit_code: _Optional[int] = ..., oom_killed: _Optional[bool] = ..., status: _Optional[int] = ..., error_message: _Optional[str] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ...) -> None: ...
+    def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., start_time: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., end_time: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., exit_code: _Optional[int] = ..., oom_killed: bool = ..., status: _Optional[int] = ..., error_message: _Optional[str] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ...) -> None: ...
 
 class ResourceUsage(_message.Message):
     __slots__ = ("peak_memory_bytes", "cpu_seconds", "gpu_memory_bytes")

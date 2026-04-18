@@ -34,6 +34,7 @@ from marin.training.training import _add_run_env_variables
 from marin.utilities.json_encoder import CustomJsonEncoder
 from marin.utils import remove_tpu_lockfile_on_exit
 from transformers import AutoTokenizer, PreTrainedTokenizer
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -204,16 +205,16 @@ class RLJob:
 
         def train_worker_task():
             with remove_tpu_lockfile_on_exit():
-                logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+
+                configure_logging(level=logging.INFO)
                 worker = TrainWorker(config=train_worker_config)
                 worker.train()
 
         def make_inference_task(worker_idx: int):
             def inference_worker_task():
                 with remove_tpu_lockfile_on_exit():
-                    logging.basicConfig(
-                        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True
-                    )
+
+                    configure_logging(level=logging.INFO)
                     # use deterministic seed based on worker index
 
                     config = dataclasses.replace(

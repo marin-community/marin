@@ -63,13 +63,14 @@ When you are satisfied with your work, move on to submitting your results to the
 
 2. Give a brief explanation of your approach (model architecture, training strategy, optimizations) in your submission script `experiments/speedrun/<submission-name>/main.py`.
 
-3. Set up your repository so you can [submit a PR](submitting-pr.md).
+3. Push your submission branch to GitHub and open a pull request against `marin-community/marin:main`.
+   If you are working from a fork, push to your fork and create the PR from there.
 
 4. Include the output of `print_run_info()` and `speedrun_results.json` in the PR description.
 
 5. Leave "Allow edits by maintainers" on so the Marin team can help work on your code.
 
-6. The Marin team will review your PR and leave comments if needed.  Once you have addressed any comments,
+6. The Marin team will review your PR and leave comments if needed. Once you have addressed any comments,
 the Marin team will merge your PR and your submission will appear on the [public leaderboard](https://marin.community/speedrun/).
 
 Good luck!

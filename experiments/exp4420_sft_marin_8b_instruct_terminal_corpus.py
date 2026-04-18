@@ -55,16 +55,20 @@ SKILL_BASED_SUBSET_SIZES = {k: v for k, v in ALL_SUBSET_SIZES.items() if "skill_
 
 USE_FULL_CORPUS = os.environ.get("USE_FULL_CORPUS", "true").strip().lower() in {"true", "1", "yes"}
 
+_TPU_VARIANT = os.environ.get("TPU_VARIANT", None)
+
 if USE_FULL_CORPUS:
     SUBSET_SIZES = ALL_SUBSET_SIZES
     FRACTION = 1.0
-    RESOURCES = ResourceConfig.with_tpu("v5p-64")
-    MICROBATCH_SIZE = 32
+    RESOURCES = ResourceConfig.with_tpu(_TPU_VARIANT or "v5p-64")
+    _NUM_CHIPS = int(RESOURCES.device.variant.split("-")[-1]) // 2
+    MICROBATCH_SIZE = min(128, _NUM_CHIPS)
 else:
     SUBSET_SIZES = SKILL_BASED_SUBSET_SIZES
     FRACTION = float(os.environ.get("SYNTHETIC_DATA_FRACTION", "0.05"))
-    RESOURCES = ResourceConfig.with_tpu("v5p-32")
-    MICROBATCH_SIZE = 16
+    RESOURCES = ResourceConfig.with_tpu(_TPU_VARIANT or "v5p-32")
+    _NUM_CHIPS = int(RESOURCES.device.variant.split("-")[-1]) // 2
+    MICROBATCH_SIZE = min(16, _NUM_CHIPS)
 
 DATASETS = {k: k for k in SUBSET_SIZES}
 WEIGHTS = {k: FRACTION * v for k, v in SUBSET_SIZES.items()}

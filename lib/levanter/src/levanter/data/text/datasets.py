@@ -680,6 +680,12 @@ class LmDataConfig:
 
         return datasets
 
+    @staticmethod
+    def _position_axis(seq_len: int) -> Axis:
+        if seq_len <= 0:
+            raise ValueError(f"seq_len must be positive, got {seq_len}")
+        return Axis("position", seq_len)
+
     def train_set(
         self,
         Pos: Axis,
@@ -779,7 +785,21 @@ class LmDataConfig:
 
         return datasets
 
-    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
+    def train_grug_sets(
+        self,
+        *,
+        seq_len: int,
+        initial_batch_size: int | None = None,
+        key: PRNGKeyArray,
+    ) -> Mapping[str, AsyncDataset[GrugLmExample]]:
+        """Build train datasets that emit array-first [GrugLmExample][]."""
+        return self.train_sets(
+            self._position_axis(seq_len),
+            initial_batch_size=initial_batch_size,
+            key=key,
+        )
+
+    def _validation_datasets_unwrapped(self, Pos: Axis) -> dict[str, AsyncDataset[GrugLmExample]]:
         doc_caches = self.build_caches("validation")
         validation_datasets = self.build_token_datasets(doc_caches, Pos, split="validation")
 
@@ -793,7 +813,16 @@ class LmDataConfig:
                 )
                 validation_datasets[name] = val_ds
 
+        return validation_datasets
+
+    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
+        validation_datasets = self._validation_datasets_unwrapped(Pos)
         return {name: NamedLmDataset(ds, Pos) for name, ds in validation_datasets.items()}
+
+    def validation_grug_sets(self, *, seq_len: int) -> Mapping[str, AsyncDataset[GrugLmExample]]:
+        """Build validation datasets that emit array-first [GrugLmExample][]."""
+        Pos = self._position_axis(seq_len)
+        return self._validation_datasets_unwrapped(Pos)
 
     def build_caches(self, split: str) -> dict[str, TreeCache[dict]]:
         caches: dict[str, TreeCache[dict]] = {}
@@ -860,6 +889,15 @@ class LmDataConfig:
 
     def tagged_eval_sets(self, Pos: Axis) -> list[tuple[AsyncDataset[LmExample], list[str]]]:
         eval_sets = self.validation_sets(Pos)
+        tagged = []
+        for name, ds in eval_sets.items():
+            tags = (self.components[name].tags or []) + [name]
+            tagged.append((ds, tags))
+        return tagged
+
+    def tagged_eval_grug_sets(self, *, seq_len: int) -> list[tuple[AsyncDataset[GrugLmExample], list[str]]]:
+        """Build tagged validation datasets for array-first evaluators."""
+        eval_sets = self.validation_grug_sets(seq_len=seq_len)
         tagged = []
         for name, ds in eval_sets.items():
             tags = (self.components[name].tags or []) + [name]

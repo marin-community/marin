@@ -57,7 +57,6 @@ def _make_slice_config(
         name_prefix=name_prefix,
         num_vms=1,
         gpu_count=gpu_count,
-        accelerator_variant="H100",
         coreweave=config_pb2.CoreweaveSliceConfig(
             region="LGA1",
             instance_type=instance_type,
@@ -93,6 +92,8 @@ class FakeKubectl:
         self._services: dict[str, dict] = {}
         self._configmaps: dict[str, dict] = {}
         self._secrets: dict[str, dict] = {}
+        self._cluster_roles: dict[str, dict] = {}
+        self._cluster_role_bindings: dict[str, dict] = {}
         self._failures: dict[str, str] = {}
         self._pod_logs: dict[str, str] = {}
         self._events: list[dict] = []
@@ -192,6 +193,10 @@ class FakeKubectl:
             return self._handle_delete_generic(clean_args, "configmap", self._configmaps)
         if "delete" in clean_args and "secret" in clean_args:
             return self._handle_delete_generic(clean_args, "secret", self._secrets)
+        if "delete" in clean_args and "clusterrolebinding" in clean_args:
+            return self._handle_delete_generic(clean_args, "clusterrolebinding", self._cluster_role_bindings)
+        if "delete" in clean_args and "clusterrole" in clean_args:
+            return self._handle_delete_generic(clean_args, "clusterrole", self._cluster_roles)
         if "set" in clean_args and "image" in clean_args:
             return self._handle_set_image(clean_args)
         if "rollout" in clean_args and "restart" in clean_args:
@@ -263,6 +268,19 @@ class FakeKubectl:
             self._secrets[name] = {
                 "metadata": data.get("metadata", {}),
                 "data": data.get("data", {}),
+            }
+            return _completed()
+        elif kind == "ClusterRole":
+            self._cluster_roles[name] = {
+                "metadata": data.get("metadata", {}),
+                "rules": data.get("rules", []),
+            }
+            return _completed()
+        elif kind == "ClusterRoleBinding":
+            self._cluster_role_bindings[name] = {
+                "metadata": data.get("metadata", {}),
+                "subjects": data.get("subjects", []),
+                "roleRef": data.get("roleRef", {}),
             }
             return _completed()
 
@@ -657,7 +675,7 @@ def test_terminate_deletes_pod_only(fake_kubectl: FakeKubectl):
     handle = platform.create_slice(config, bootstrap)
     slice_id = handle.slice_id
 
-    pod_name = f"iris-worker-{slice_id}"
+    pod_name = f"iris-worker-{slice_id}-vm0"
     # Wait for Pod to be created by monitor thread
     _wait_for_condition(lambda: pod_name in fake_kubectl._pods, timeout=5)
 
@@ -755,28 +773,132 @@ def test_node_selector_uses_label_override_not_name_prefix(fake_kubectl: FakeKub
 
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
 
-    pod_name = f"iris-worker-{handle.slice_id}"
+    pod_name = f"iris-worker-{handle.slice_id}-vm0"
     node_selector = fake_kubectl._pods[pod_name]["spec"]["nodeSelector"]
     assert node_selector == {iris_labels.iris_scale_group: "h100_8x"}
     platform.shutdown()
 
 
-def test_create_slice_rejects_multi_node(fake_kubectl: FakeKubectl):
-    """create_slice() raises ValueError when num_vms > 1."""
+def test_create_slice_multi_node_creates_n_pods(fake_kubectl: FakeKubectl):
+    """create_slice() with num_vms=2 creates 2 Pods sharing one ConfigMap."""
     platform = _make_platform()
     config = config_pb2.SliceConfig(
         name_prefix="h100-8x",
         num_vms=2,
         gpu_count=8,
-        accelerator_variant="H100",
         coreweave=config_pb2.CoreweaveSliceConfig(
             region="LGA1",
             instance_type="gd-8xh100ib-i128",
+            gpu_class="H100",
         ),
     )
+    bootstrap = _make_worker_config()
 
-    with pytest.raises(ValueError, match="does not support multi-node"):
-        platform.create_slice(config)
+    handle = platform.create_slice(config, bootstrap)
+    slice_id = handle.slice_id
+
+    pod0 = f"iris-worker-{slice_id}-vm0"
+    pod1 = f"iris-worker-{slice_id}-vm1"
+
+    # Wait for both Pods to be created
+    _wait_for_condition(lambda: pod0 in fake_kubectl._pods and pod1 in fake_kubectl._pods, timeout=5)
+
+    # Both pods should exist
+    assert pod0 in fake_kubectl._pods
+    assert pod1 in fake_kubectl._pods
+
+    # Single shared ConfigMap
+    cm_name = f"iris-worker-{slice_id}-wc"
+    assert cm_name in fake_kubectl._configmaps
+
+    # Each pod has a distinct IRIS_WORKER_ID
+    env0 = {e["name"]: e for e in fake_kubectl._pods[pod0]["spec"]["containers"][0]["env"]}
+    env1 = {e["name"]: e for e in fake_kubectl._pods[pod1]["spec"]["containers"][0]["env"]}
+    assert env0["IRIS_WORKER_ID"]["value"] == pod0
+    assert env1["IRIS_WORKER_ID"]["value"] == pod1
+
+    # Mark both pods ready
+    fake_kubectl.make_pod_ready(pod0)
+    fake_kubectl.make_pod_ready(pod1)
+
+    _wait_for_condition(lambda: handle.describe().state == CloudSliceState.READY, timeout=5)
+
+    status = handle.describe()
+    assert status.state == CloudSliceState.READY
+    assert status.worker_count == 2
+    assert len(status.workers) == 2
+    platform.shutdown()
+
+
+def test_multi_node_terminate_deletes_all_pods(fake_kubectl: FakeKubectl):
+    """terminate() on a multi-VM slice deletes all Pods and the shared ConfigMap."""
+    platform = _make_platform()
+    config = config_pb2.SliceConfig(
+        name_prefix="h100-8x",
+        num_vms=2,
+        gpu_count=8,
+        coreweave=config_pb2.CoreweaveSliceConfig(
+            region="LGA1",
+            instance_type="gd-8xh100ib-i128",
+            gpu_class="H100",
+        ),
+    )
+    bootstrap = _make_worker_config()
+
+    handle = platform.create_slice(config, bootstrap)
+    slice_id = handle.slice_id
+    pod0 = f"iris-worker-{slice_id}-vm0"
+    pod1 = f"iris-worker-{slice_id}-vm1"
+    cm_name = f"iris-worker-{slice_id}-wc"
+
+    _wait_for_condition(lambda: pod0 in fake_kubectl._pods and pod1 in fake_kubectl._pods, timeout=5)
+    fake_kubectl.make_pod_ready(pod0)
+    fake_kubectl.make_pod_ready(pod1)
+    _wait_for_condition(lambda: handle.describe().state == CloudSliceState.READY, timeout=5)
+
+    handle.terminate()
+
+    assert pod0 not in fake_kubectl._pods
+    assert pod1 not in fake_kubectl._pods
+    assert cm_name not in fake_kubectl._configmaps
+    platform.shutdown()
+
+
+def test_multi_node_partial_failure_cleans_up(fake_kubectl: FakeKubectl):
+    """If one Pod in a multi-VM slice fails, all created Pods are cleaned up."""
+    platform = _make_platform()
+    config = config_pb2.SliceConfig(
+        name_prefix="h100-8x",
+        num_vms=2,
+        gpu_count=8,
+        coreweave=config_pb2.CoreweaveSliceConfig(
+            region="LGA1",
+            instance_type="gd-8xh100ib-i128",
+            gpu_class="H100",
+        ),
+    )
+    bootstrap = _make_worker_config()
+
+    # Make the first Pod apply succeed, then fail the second apply
+    apply_count = 0
+    original_call = fake_kubectl.__call__
+
+    def failing_apply(cmd, **kwargs):
+        nonlocal apply_count
+        if "apply" in cmd and "-f" in cmd:
+            # ConfigMap apply (1st), Pod vm0 apply (2nd) succeed; Pod vm1 apply (3rd) fails
+            input_data = kwargs.get("input", "")
+            if '"kind": "Pod"' in input_data:
+                apply_count += 1
+                if apply_count >= 2:
+                    return _completed(returncode=1, stderr="simulated pod creation failure")
+        return original_call(cmd, **kwargs)
+
+    with patch("iris.cluster.k8s.kubectl.subprocess.run", failing_apply):
+        handle = platform.create_slice(config, bootstrap)
+        _wait_for_condition(lambda: handle.describe().state == CloudSliceState.FAILED, timeout=5)
+
+    assert handle.describe().state == CloudSliceState.FAILED
     platform.shutdown()
 
 
@@ -946,7 +1068,7 @@ def _make_cluster_config(
     port: int = 10000,
     service_name: str = "iris-controller-svc",
     image: str = "ghcr.io/marin-community/iris-controller:latest",
-    bundle_prefix: str = "gs://test-bucket/bundles",
+    remote_state_dir: str = "gs://test-bucket/bundles",
     controller_scale_group: str = "cpu-erapids",
 ) -> config_pb2.IrisClusterConfig:
     config = config_pb2.IrisClusterConfig(
@@ -966,7 +1088,7 @@ def _make_cluster_config(
             ),
         ),
         storage=config_pb2.StorageConfig(
-            bundle_prefix=bundle_prefix,
+            remote_state_dir=remote_state_dir,
         ),
     )
     # Add the controller's scale group so start_controller can validate it
@@ -986,7 +1108,7 @@ def _make_cluster_config(
 def test_start_controller_creates_all_resources(fake_kubectl: FakeKubectl):
     """start_controller creates ConfigMap, shared NodePools, Deployment, and Service."""
     platform = _make_platform()
-    cluster_config = _make_cluster_config(bundle_prefix="s3://test-bucket/bundles")
+    cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
 
     # Make Deployment available once it exists
     def auto_ready_deployment():
@@ -1047,9 +1169,9 @@ def test_start_controller_reconciles_when_already_available(fake_kubectl: FakeKu
 
 
 def test_stop_controller_deletes_resources_except_nodepool(fake_kubectl: FakeKubectl):
-    """stop_controller deletes Deployment, Service, ConfigMap, and S3 secret but not NodePool."""
+    """stop_controller deletes Deployment, Service, ConfigMap, S3 secret, and RBAC but not NodePool."""
     platform = _make_platform()
-    cluster_config = _make_cluster_config(bundle_prefix="s3://test-bucket/bundles")
+    cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
 
     # Pre-populate resources
     fake_kubectl._deployments["iris-controller"] = {
@@ -1085,6 +1207,35 @@ def test_stop_controller_idempotent(fake_kubectl: FakeKubectl):
     # No resources exist -- should not raise
     platform.stop_controller(cluster_config)
     platform.shutdown()
+
+
+def test_rbac_isolation_across_namespaces(fake_kubectl: FakeKubectl):
+    """Two Iris instances with different namespaces get isolated RBAC; teardown of one doesn't affect the other."""
+    platform_a = _make_platform(namespace="alpha")
+    platform_b = _make_platform(namespace="beta")
+
+    platform_a.ensure_rbac()
+    platform_b.ensure_rbac()
+
+    # Each gets a namespace-qualified ClusterRole and ClusterRoleBinding
+    assert "iris-controller-alpha" in fake_kubectl._cluster_roles
+    assert "iris-controller-beta" in fake_kubectl._cluster_roles
+
+    # Binding references the correct ClusterRole and namespace
+    binding_a = fake_kubectl._cluster_role_bindings["iris-controller-alpha"]
+    assert binding_a["roleRef"]["name"] == "iris-controller-alpha"
+    assert binding_a["subjects"][0]["namespace"] == "alpha"
+
+    # Stopping alpha cleans up its RBAC without affecting beta
+    platform_a.stop_controller(_make_cluster_config())
+
+    assert "iris-controller-alpha" not in fake_kubectl._cluster_roles
+    assert "iris-controller-alpha" not in fake_kubectl._cluster_role_bindings
+    assert "iris-controller-beta" in fake_kubectl._cluster_roles
+    assert "iris-controller-beta" in fake_kubectl._cluster_role_bindings
+
+    platform_a.shutdown()
+    platform_b.shutdown()
 
 
 def test_tunnel_parses_address():
@@ -1165,7 +1316,7 @@ def test_controller_deployment_includes_endpoint_url(fake_kubectl: FakeKubectl):
     )
     platform = CoreweavePlatform(config=cw_config, label_prefix="iris", poll_interval=0.05)
 
-    cluster_config = _make_cluster_config(bundle_prefix="s3://test-bucket/bundles")
+    cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
     cluster_config.platform.coreweave.object_storage_endpoint = "https://object.lga1.coreweave.com"
 
     def auto_ready():
@@ -1200,7 +1351,7 @@ def test_worker_pod_has_gpu_resource_limits_with_docker_runtime(fake_kubectl: Fa
     handle = platform.create_slice(config, wc)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
 
-    pod_name = f"iris-worker-{handle.slice_id}"
+    pod_name = f"iris-worker-{handle.slice_id}-vm0"
     container = fake_kubectl._pods[pod_name]["spec"]["containers"][0]
     limits = container["resources"]["limits"]
     assert limits["nvidia.com/gpu"] == "8"
@@ -1216,7 +1367,7 @@ def test_worker_pod_no_gpu_limits_with_kubernetes_runtime(fake_kubectl: FakeKube
     handle = platform.create_slice(config, bootstrap)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
 
-    pod_name = f"iris-worker-{handle.slice_id}"
+    pod_name = f"iris-worker-{handle.slice_id}-vm0"
     container = fake_kubectl._pods[pod_name]["spec"]["containers"][0]
     assert "nvidia.com/gpu" not in container.get("resources", {}).get("limits", {})
     platform.shutdown()
@@ -1231,7 +1382,7 @@ def test_worker_pod_no_gpu_limits_when_zero(fake_kubectl: FakeKubectl):
     handle = platform.create_slice(config, bootstrap)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
 
-    pod_name = f"iris-worker-{handle.slice_id}"
+    pod_name = f"iris-worker-{handle.slice_id}-vm0"
     container = fake_kubectl._pods[pod_name]["spec"]["containers"][0]
     assert "nvidia.com/gpu" not in container.get("resources", {}).get("limits", {})
     platform.shutdown()
@@ -1248,7 +1399,7 @@ def test_worker_pod_has_s3_env_vars(fake_kubectl: FakeKubectl):
 
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
 
-    pod_name = f"iris-worker-{handle.slice_id}"
+    pod_name = f"iris-worker-{handle.slice_id}-vm0"
     container = fake_kubectl._pods[pod_name]["spec"]["containers"][0]
     env_by_name = {e["name"]: e for e in container["env"]}
 
@@ -1306,7 +1457,7 @@ def test_start_controller_errors_without_s3_credentials(fake_kubectl: FakeKubect
     monkeypatch.delenv("R2_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("R2_SECRET_ACCESS_KEY", raising=False)
     platform = _make_platform()
-    cluster_config = _make_cluster_config(bundle_prefix="s3://my-bucket/bundles")
+    cluster_config = _make_cluster_config(remote_state_dir="s3://my-bucket/bundles")
 
     with pytest.raises(PlatformError, match="R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY"):
         platform.start_controller(cluster_config)
@@ -1458,7 +1609,7 @@ def test_start_controller_skips_s3_for_gs_storage(fake_kubectl: FakeKubectl, mon
     monkeypatch.delenv("R2_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("R2_SECRET_ACCESS_KEY", raising=False)
     platform = _make_platform()
-    cluster_config = _make_cluster_config(bundle_prefix="gs://test-bucket/bundles")
+    cluster_config = _make_cluster_config(remote_state_dir="gs://test-bucket/bundles")
 
     def auto_ready():
         _wait_for_condition(lambda: "iris-controller" in fake_kubectl._deployments, timeout=10)
@@ -1507,7 +1658,7 @@ def test_stop_all_deletes_pods_not_nodepools(fake_kubectl: FakeKubectl):
     targets = platform.stop_all(cluster_config)
 
     # Worker Pod should be deleted
-    assert "iris-worker-iris-h100-8x-1000" not in fake_kubectl._pods
+    assert "iris-worker-iris-h100-8x-1000-vm0" not in fake_kubectl._pods
     # NodePool should remain
     assert "iris-h100-8x" in fake_kubectl._nodepools
     # Controller resources deleted
@@ -1525,10 +1676,10 @@ def test_stop_all_dry_run(fake_kubectl: FakeKubectl):
 
     targets = platform.stop_all(cluster_config, dry_run=True)
 
-    assert "pod:iris-worker-iris-h100-8x-1000" in targets
+    assert "pod:iris-worker-iris-h100-8x-1000-vm0" in targets
     assert "controller" in targets
     # Pod should still exist
-    assert "iris-worker-iris-h100-8x-1000" in fake_kubectl._pods
+    assert "iris-worker-iris-h100-8x-1000-vm0" in fake_kubectl._pods
     platform.shutdown()
 
 
@@ -1543,14 +1694,14 @@ def _make_cluster_config_with_workers(
     controller_image: str = "ghcr.io/marin-community/iris-controller:v2",
     port: int = 10000,
     service_name: str = "iris-controller-svc",
-    bundle_prefix: str = "gs://test-bucket/bundles",
+    remote_state_dir: str = "gs://test-bucket/bundles",
 ) -> config_pb2.IrisClusterConfig:
     """Build a cluster config with scale_groups and worker config for reload tests."""
     config = _make_cluster_config(
         port=port,
         service_name=service_name,
         image=controller_image,
-        bundle_prefix=bundle_prefix,
+        remote_state_dir=remote_state_dir,
     )
     config.defaults.worker.CopyFrom(
         config_pb2.WorkerConfig(
@@ -1567,7 +1718,6 @@ def _make_cluster_config_with_workers(
         config_pb2.SliceConfig(
             name_prefix=scale_group_name,
             num_vms=1,
-            accelerator_variant="H100",
             coreweave=config_pb2.CoreweaveSliceConfig(
                 region="LGA1",
                 instance_type="gd-8xh100ib-i128",
@@ -1575,7 +1725,7 @@ def _make_cluster_config_with_workers(
             ),
         )
     )
-    sg.resources.CopyFrom(config_pb2.ScaleGroupResources(gpu_count=8))
+    sg.resources.CopyFrom(config_pb2.ScaleGroupResources(device_count=8, device_type=config_pb2.ACCELERATOR_TYPE_GPU))
     return config
 
 
@@ -1585,10 +1735,11 @@ def _seed_worker_pod(
     scale_group: str,
     label_prefix: str = "iris",
     ready: bool = True,
+    vm_index: int = 0,
 ) -> None:
     """Inject a managed worker Pod into FakeKubectl state."""
     pod_labels = Labels(label_prefix)
-    pod_name = f"iris-worker-{slice_id}"
+    pod_name = f"iris-worker-{slice_id}-vm{vm_index}"
     fake_kubectl._pods[pod_name] = {
         "metadata": {
             "name": pod_name,

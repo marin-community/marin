@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):

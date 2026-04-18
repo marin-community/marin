@@ -33,6 +33,7 @@ from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
 from openai import AsyncOpenAI
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -251,7 +252,7 @@ def main():
 
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    configure_logging(level=logging.INFO)
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)

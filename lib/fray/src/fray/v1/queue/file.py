@@ -81,7 +81,7 @@ class FileQueue(Queue[T]):
         try:
             files = sorted(self.fs.ls(str(self.pending_dir), detail=False))
             files = [f for f in files if f.rstrip("/") != str(self.pending_dir).rstrip("/")]
-        except Exception:
+        except OSError:
             return None
 
         for file_path in files:
@@ -106,7 +106,7 @@ class FileQueue(Queue[T]):
         """Check processing directory for expired leases and move them back to pending."""
         try:
             files = self.fs.ls(str(self.processing_dir), detail=False)
-        except Exception:
+        except OSError:
             return
 
         now = time.time()

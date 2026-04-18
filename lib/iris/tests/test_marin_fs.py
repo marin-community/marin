@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import concurrent.futures
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -8,11 +9,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from iris.marin_fs import (
-    CROSS_REGION_READ_THRESHOLD_BYTES,
     MARIN_CROSS_REGION_OVERRIDE_ENV,
     CrossRegionGuardedFS,
-    CrossRegionReadError,
-    _fs_is_gcs,
+    TransferBudget,
+    TransferBudgetExceeded,
     _regions_match,
     check_gcs_paths_same_region,
     filesystem,
@@ -235,16 +235,42 @@ def test_regions_match(vm_region, bucket_location, expected):
 
 
 # ---------------------------------------------------------------------------
+# TransferBudget tests
+# ---------------------------------------------------------------------------
+
+
+def test_budget_records_and_blocks():
+    budget = TransferBudget(limit_bytes=1000)
+    budget.record(400, "a")
+    budget.record(400, "b")
+    assert budget.bytes_used == 800
+
+    with pytest.raises(TransferBudgetExceeded, match="transfer budget exceeded"):
+        budget.record(300, "c")
+
+    # Counter unchanged on failure.
+    assert budget.bytes_used == 800
+
+
+def test_budget_thread_safety():
+    budget = TransferBudget(limit_bytes=10 * 1024 * 1024)
+
+    def record_batch():
+        for _ in range(100):
+            budget.record(1, "x")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda _: record_batch(), range(8)))
+
+    assert budget.bytes_used == 800
+
+
+# ---------------------------------------------------------------------------
 # CrossRegionGuardedFS tests
 # ---------------------------------------------------------------------------
 
 
 class _FakeGCSFS:
-    """Minimal fake GCS filesystem for testing the cross-region guard.
-
-    Stores files as {path: bytes} and reports protocol ``gs``.
-    """
-
     protocol = "gs"
 
     def __init__(self) -> None:
@@ -278,142 +304,94 @@ class _FakeGCSFS:
         return path in self._files
 
 
-class _FakeLocalFS:
-    """Minimal fake local filesystem (protocol ``file``)."""
-
-    protocol = "file"
-
-    def open(self, path: str, mode: str = "rb", **kwargs):
-        return b""
-
-    def size(self, path: str) -> int:
-        return 999_999_999
+@pytest.fixture()
+def budget():
+    return TransferBudget(limit_bytes=1024)
 
 
-def test_fs_is_gcs_detects_gs_protocol():
-    assert _fs_is_gcs(_FakeGCSFS()) is True
-    assert _fs_is_gcs(_FakeLocalFS()) is False
-
-
-def test_guarded_fs_blocks_large_cross_region_read():
+def test_guarded_fs_charges_budget_for_cross_region_reads(budget):
     fs = _FakeGCSFS()
-    large_data = b"x" * (CROSS_REGION_READ_THRESHOLD_BYTES + 1)
-    fs.add_file("remote-bucket/big-file.bin", large_data)
+    for i in range(3):
+        fs.add_file(f"remote-bucket/f{i}.bin", b"x" * 400)
 
-    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: True)
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _: True, budget=budget)
 
-    with pytest.raises(CrossRegionReadError, match=MARIN_CROSS_REGION_OVERRIDE_ENV):
-        guarded.open("remote-bucket/big-file.bin", "rb")
+    guarded.open("remote-bucket/f0.bin", "rb")
+    guarded.open("remote-bucket/f1.bin", "rb")
+    assert budget.bytes_used == 800
+
+    with pytest.raises(TransferBudgetExceeded):
+        guarded.open("remote-bucket/f2.bin", "rb")
 
 
-def test_guarded_fs_allows_small_cross_region_read():
+def test_guarded_fs_skips_same_region(budget):
     fs = _FakeGCSFS()
-    small_data = b"x" * 1024  # 1 KB
-    fs.add_file("remote-bucket/small-file.bin", small_data)
+    fs.add_file("local-bucket/big.bin", b"x" * 9999)
 
-    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: True)
-
-    # Should not raise
-    guarded.open("remote-bucket/small-file.bin", "rb")
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _: False, budget=budget)
+    guarded.open("local-bucket/big.bin", "rb")
+    assert budget.bytes_used == 0
 
 
-def test_guarded_fs_allows_same_region_large_read():
+def test_guarded_fs_override_env_bypasses_budget(budget):
     fs = _FakeGCSFS()
-    large_data = b"x" * (CROSS_REGION_READ_THRESHOLD_BYTES + 1)
-    fs.add_file("local-bucket/big-file.bin", large_data)
+    fs.add_file("remote-bucket/big.bin", b"x" * 2000)
 
-    # cross_region_checker returns False → same region
-    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: False)
-
-    guarded.open("local-bucket/big-file.bin", "rb")
-
-
-def test_guarded_fs_override_env_allows_large_cross_region_read():
-    fs = _FakeGCSFS()
-    large_data = b"x" * (CROSS_REGION_READ_THRESHOLD_BYTES + 1)
-    fs.add_file("remote-bucket/big-file.bin", large_data)
-
-    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: True)
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _: True, budget=budget)
 
     with patch.dict(os.environ, {MARIN_CROSS_REGION_OVERRIDE_ENV: "testuser"}):
-        guarded.open("remote-bucket/big-file.bin", "rb")
+        guarded.open("remote-bucket/big.bin", "rb")
+
+    assert budget.bytes_used == 0
 
 
-def test_guarded_fs_skips_non_gcs_filesystem():
-    fs = _FakeLocalFS()
-    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: True)
-
-    # Should not raise even though cross_region_checker returns True,
-    # because the filesystem is not GCS.
-    guarded.open("/some/local/path", "rb")
-
-
-def test_guarded_fs_allows_write_mode():
+def test_guarded_fs_write_mode_skips_guard(budget):
     fs = _FakeGCSFS()
-    large_data = b"x" * (CROSS_REGION_READ_THRESHOLD_BYTES + 1)
-    fs.add_file("remote-bucket/big-file.bin", large_data)
+    fs.add_file("remote-bucket/big.bin", b"x" * 2000)
 
-    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: True)
-
-    # Write mode should not trigger the guard
-    guarded.open("remote-bucket/big-file.bin", "wb")
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _: True, budget=budget)
+    guarded.open("remote-bucket/big.bin", "wb")
+    assert budget.bytes_used == 0
 
 
 @pytest.mark.parametrize(
     "method, args",
     [
-        ("cat_file", ("remote-bucket/big-file.bin",)),
-        ("cat", (["remote-bucket/big-file.bin"],)),
-        ("get_file", ("remote-bucket/big-file.bin", "/tmp/local")),
-        ("get", ("remote-bucket/big-file.bin", "/tmp/local")),
-        ("get", (["remote-bucket/big-file.bin"], "/tmp/local")),
+        ("cat_file", ("remote-bucket/f.bin",)),
+        ("cat", (["remote-bucket/f.bin"],)),
+        ("get_file", ("remote-bucket/f.bin", "/tmp/local")),
+        ("get", ("remote-bucket/f.bin", "/tmp/local")),
     ],
-    ids=["cat_file", "cat_list", "get_file", "get_str", "get_list"],
+    ids=["cat_file", "cat_list", "get_file", "get"],
 )
-def test_guarded_fs_read_method_blocked(method, args):
+def test_guarded_fs_all_read_methods_charge_budget(budget, method, args):
     fs = _FakeGCSFS()
-    large_data = b"x" * (CROSS_REGION_READ_THRESHOLD_BYTES + 1)
-    fs.add_file("remote-bucket/big-file.bin", large_data)
+    fs.add_file("remote-bucket/f.bin", b"x" * 100)
 
-    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: True)
-
-    with pytest.raises(CrossRegionReadError):
-        getattr(guarded, method)(*args)
-
-
-def test_guarded_fs_custom_threshold():
-    fs = _FakeGCSFS()
-    data = b"x" * 500  # 500 bytes
-    fs.add_file("remote-bucket/file.bin", data)
-
-    # Threshold of 100 bytes → should block
-    guarded = CrossRegionGuardedFS(
-        fs,
-        threshold_bytes=100,
-        cross_region_checker=lambda _bucket: True,
-    )
-
-    with pytest.raises(CrossRegionReadError):
-        guarded.open("remote-bucket/file.bin", "rb")
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _: True, budget=budget)
+    getattr(guarded, method)(*args)
+    assert budget.bytes_used == 100
 
 
 def test_guarded_fs_delegates_non_read_methods():
     fs = _FakeGCSFS()
     fs.add_file("bucket/file.txt", b"hello")
 
-    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: True)
-
-    # exists() is not intercepted, should delegate transparently
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _: True)
     assert guarded.exists("bucket/file.txt") is True
     assert guarded.exists("bucket/nope.txt") is False
 
 
-def test_url_to_fs_returns_guarded_for_local(tmp_path):
+# ---------------------------------------------------------------------------
+# Guarded entry point tests
+# ---------------------------------------------------------------------------
+
+
+def test_url_to_fs_does_not_wrap_local(tmp_path):
     test_file = tmp_path / "test.txt"
     test_file.write_text("hello")
 
     fs, _path = url_to_fs(str(test_file))
-    # Local filesystems are not wrapped in CrossRegionGuardedFS
     assert not isinstance(fs, CrossRegionGuardedFS)
 
 
@@ -421,7 +399,6 @@ def test_open_url_local_file(tmp_path):
     test_file = tmp_path / "test.txt"
     test_file.write_text("hello")
 
-    # Local files should work fine
     result = open_url(str(test_file), "r")
     with result as f:
         assert f.read() == "hello"
@@ -429,5 +406,4 @@ def test_open_url_local_file(tmp_path):
 
 def test_filesystem_local():
     fs = filesystem("file")
-    # Local filesystems are not wrapped
     assert not isinstance(fs, CrossRegionGuardedFS)

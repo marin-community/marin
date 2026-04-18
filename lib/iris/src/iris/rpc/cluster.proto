@@ -19,12 +19,68 @@ package iris.cluster;
 import "time.proto";
 import "vm.proto";
 import "logging.proto";
+import "query.proto";
 
 // ============================================================================
 // SHARED TYPES
 // ============================================================================
 
 message Empty {}
+
+// --- Authentication ---
+message LoginRequest {
+  string identity_token = 1;
+}
+message LoginResponse {
+  string token = 1;
+  string key_id = 2;
+  string user_id = 3;
+}
+
+message GetAuthInfoRequest {}
+message GetAuthInfoResponse {
+  string provider = 1;        // "gcp" or "static" or "" (no auth)
+  string gcp_project_id = 2;  // set when provider == "gcp"
+}
+
+message CreateApiKeyRequest {
+  string user_id = 1;
+  string name = 2;
+  int64 ttl_ms = 3;
+}
+message CreateApiKeyResponse {
+  string key_id = 1;
+  string token = 2;
+  string key_prefix = 3;
+}
+
+message RevokeApiKeyRequest {
+  string key_id = 1;
+}
+
+message ListApiKeysRequest {
+  string user_id = 1;
+}
+message ApiKeyInfo {
+  string key_id = 1;
+  string key_prefix = 2;
+  string user_id = 3;
+  string name = 4;
+  int64 created_at_ms = 5;
+  int64 last_used_at_ms = 6;
+  int64 expires_at_ms = 7;
+  bool revoked = 8;
+}
+message ListApiKeysResponse {
+  repeated ApiKeyInfo keys = 1;
+}
+
+message GetCurrentUserRequest {}
+message GetCurrentUserResponse {
+  string user_id = 1;
+  string role = 2;
+  string display_name = 3;
+}
 
 // --- Profiling ---
 // Shared by both ControllerService and WorkerService (controller proxies to worker).
@@ -53,18 +109,30 @@ message MemoryProfile {
   bool leaks = 2;       // Focus on potential memory leaks
 }
 
+// Thread dump configuration
+message ThreadsProfile {
+  bool locals = 1;  // Include local variables in the dump (--locals flag)
+}
+
 // Profile type selector
 message ProfileType {
   oneof profiler {
     CpuProfile cpu = 1;
     MemoryProfile memory = 2;
+    ThreadsProfile threads = 3;
   }
 }
 
 message ProfileTaskRequest {
-  string task_id = 1;
+  // Target to profile. Accepts either:
+  //   /job/name/task/0             - task (uses current/latest attempt)
+  //   /job/name/task/0:attempt_id  - specific task attempt (optional)
+  //   /system/process              - the local process (worker or controller)
+  string target = 4;
   int32 duration_seconds = 2;   // How long to sample (default: 10)
   ProfileType profile_type = 3;
+
+  reserved 1;  // was task_id, replaced by target
 }
 
 message ProfileTaskResponse {
@@ -72,11 +140,58 @@ message ProfileTaskResponse {
   string error = 2;             // Non-empty if profiling failed
 }
 
-message ProcessLogRecord {
-  double timestamp = 1;
-  string level = 2;
-  string logger_name = 3;
-  string message = 4;
+// Unified log fetching request, shared by controller and worker services.
+// The source key identifies the log stream:
+//   /system/process                - local process logs (controller or worker)
+//   /job/name/task/0:0      - task attempt logs (task_wire:attempt_id)
+message FetchLogsRequest {
+  string source = 1;           // Log source key
+  int64 since_ms = 2;          // Only return entries after this timestamp (exclusive)
+  int64 cursor = 3;            // Autoincrement id cursor (resume after this id)
+  string substring = 4;        // Substring filter on log data (matched via SQL LIKE)
+  int32 max_lines = 5;         // Max entries to return (0 = default 1000)
+  bool tail = 6;               // Return last N entries instead of first N
+  string min_level = 7;        // Minimum log level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+}
+
+message FetchLogsResponse {
+  repeated iris.logging.LogEntry entries = 1;
+  int64 cursor = 2;            // Max autoincrement id seen (cursor for next poll)
+}
+
+// --- Process Status ---
+// Shared by both ControllerService and WorkerService.
+// Returns local process info (host, resource usage) and recent process logs.
+
+message ProcessInfo {
+  string hostname = 1;
+  int32 pid = 2;
+  string python_version = 3;
+  int64 uptime_ms = 4;          // Process uptime in milliseconds
+  int64 memory_rss_bytes = 5;   // Resident set size
+  int64 memory_vms_bytes = 6;   // Virtual memory size
+  float cpu_percent = 7;        // CPU utilization (0-100)
+  int32 thread_count = 8;
+  int32 open_fd_count = 9;      // Open file descriptors
+  int64 memory_total_bytes = 10; // Total system memory
+  int32 cpu_count = 11;          // Number of CPU cores
+  string git_hash = 12;          // Git commit hash baked in at image build time (IRIS_GIT_HASH)
+}
+
+message GetProcessStatusRequest {
+  int32 max_log_lines = 1;     // Max log entries to include (0 = default 200)
+  string log_substring = 2;    // Substring filter for logs
+  string min_log_level = 3;    // Minimum log level filter
+
+  // Target process. Uses the same naming convention as profiling/logs:
+  //   /system/process              - the local process (default if empty)
+  //   /system/worker/<worker_id>   - proxy to a specific worker
+  string target = 4;
+}
+
+message GetProcessStatusResponse {
+  ProcessInfo process_info = 1;
+  repeated iris.logging.LogEntry log_entries = 2;
 }
 
 enum JobState {
@@ -408,9 +523,27 @@ message WorkerMetadata {
   // using format: key1=value1,key2=value2 (e.g., taint:maintenance=true,pool=large-jobs)
   map<string, AttributeValue> attributes = 40;
 
-  // VM IP address used for autoscaler slice/worker matching.
-  // Self-discovered by the worker at startup via socket probe.
+  // DEPRECATED: No longer used for worker identification.
+  // Worker identity is now set via RegisterRequest.worker_id.
+  // Field kept for proto wire compatibility but ignored by the controller.
   string vm_address = 41;
+
+  // Git commit hash baked into the worker image at build time (IRIS_GIT_HASH).
+  // Allows the controller to surface per-worker version info for debugging.
+  string git_hash = 42;
+}
+
+enum JobPreemptionPolicy {
+  JOB_PREEMPTION_POLICY_UNSPECIFIED = 0;
+  JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN = 1;
+  JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN = 2;
+}
+
+enum ExistingJobPolicy {
+  EXISTING_JOB_POLICY_UNSPECIFIED = 0;
+  EXISTING_JOB_POLICY_ERROR = 1;
+  EXISTING_JOB_POLICY_KEEP = 2;
+  EXISTING_JOB_POLICY_RECREATE = 3;
 }
 
 // ============================================================================
@@ -425,10 +558,9 @@ message Controller {
     ResourceSpecProto resources = 3;        // Full resource specification
     EnvironmentConfig environment = 4;  // Environment configuration
 
-    // Bundle information - either provide gcs_path OR blob (not both)
-    string bundle_gcs_path = 5;        // gs://bucket/path/bundle.zip
-    string bundle_hash = 6;            // SHA256 hash for caching
-    bytes bundle_blob = 7;             // Direct bundle upload (controller writes to bundle_dir)
+    // Bundle information - either provide bundle_id OR blob (not both)
+    string bundle_id = 5;  // Canonical bundle identifier (SHA256 of zip bytes)
+    bytes bundle_blob = 6;  // Direct bundle upload (controller writes to bundle store)
 
     // Scheduling timeout - job fails with UNSCHEDULABLE if not scheduled within this time
     // If not set or milliseconds=0, no timeout (wait forever)
@@ -476,6 +608,9 @@ message Controller {
     // Resource reservation. When set, the autoscaler pre-provisions capacity
     // and the reserving job is held pending until the reservation is satisfied.
     ReservationConfig reservation = 30;
+
+    JobPreemptionPolicy preemption_policy = 31;
+    ExistingJobPolicy existing_job_policy = 32;
   }
 
   message LaunchJobResponse {
@@ -595,15 +730,15 @@ message Controller {
   message RegisterRequest {
     string address = 1;
     WorkerMetadata metadata = 2;
+    // Worker ID assigned by the autoscaler via WorkerConfig.
+    // When set, the controller uses this as the canonical worker identity
+    // instead of deriving it from vm_address.
+    string worker_id = 3;
   }
 
   message RegisterResponse {
     string worker_id = 1;
     bool accepted = 2;
-  }
-
-  message NotifyTaskUpdateRequest {
-    string worker_id = 1;
   }
 
   // --- Endpoint Registry ---
@@ -612,15 +747,17 @@ message Controller {
     string endpoint_id = 1;
     string name = 2;                 // Full prefixed name: "abc123/my-actor"
     string address = 3;              // host:port
-    string job_id = 4;
+    string task_id = 4;              // Wire-format task ID (e.g. "/user/job/0")
     map<string, string> metadata = 5;
   }
 
   message RegisterEndpointRequest {
     string name = 1;                 // Full prefixed name: "abc123/my-actor"
     string address = 2;
-    string job_id = 3;
+    string task_id = 3;              // Wire-format task ID (e.g. "/user/job/0")
     map<string, string> metadata = 4;
+    int32 attempt_id = 5;            // Attempt number for stale endpoint cleanup
+    string endpoint_id = 6;          // Client-generated UUID for idempotency; server generates one if empty.
   }
 
   message RegisterEndpointResponse {
@@ -631,16 +768,9 @@ message Controller {
     string endpoint_id = 1;
   }
 
-  message LookupEndpointRequest {
-    string name = 1;                 // Full prefixed name: "abc123/my-actor"
-  }
-
-  message LookupEndpointResponse {
-    Endpoint endpoint = 1;
-  }
-
   message ListEndpointsRequest {
     string prefix = 1;               // Prefix to match: "abc123/" or "abc123/my-actor"
+    bool exact = 2;                  // If true, match prefix as an exact name instead
   }
 
   message ListEndpointsResponse {
@@ -673,21 +803,11 @@ message Controller {
   // --- Checkpoint ---
   message BeginCheckpointRequest {}
   message BeginCheckpointResponse {
-    string snapshot_path = 1;
+    string checkpoint_path = 1;
     iris.time.Timestamp created_at = 2;
     int32 job_count = 3;
     int32 task_count = 4;
     int32 worker_count = 5;
-  }
-
-  // --- Cluster Summary ---
-  message GetClusterSummaryRequest {}
-  message GetClusterSummaryResponse {
-    map<string, int32> job_state_counts = 1;
-    int32 total_jobs = 2;
-    int32 total_workers = 3;
-    int32 healthy_workers = 4;
-    int32 total_users = 5;
   }
 
   message UserSummary {
@@ -708,9 +828,11 @@ message Controller {
     bool include_children = 2;       // Include child jobs (only for job IDs)
     int64 since_ms = 3;              // Only return logs after this timestamp (exclusive)
     int64 max_total_lines = 4;       // Max lines total (0 = default 10000)
-    string regex = 5;                // Regex filter (propagated to workers)
+    string substring = 5;             // Substring filter (matched via SQL LIKE)
     int32 attempt_id = 6;            // Filter to specific attempt (-1 = all attempts)
-    map<string, int64> resume_offsets = 7;  // Per-attempt line offset cursor: key = "{task_wire}/{attempt_id}"
+    string min_level = 7;            // Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+    int64 cursor = 8;               // Autoincrement id cursor for incremental polling
+    bool tail = 9;                  // If true, return the last N lines instead of the first N
   }
 
   message TaskLogBatch {
@@ -722,25 +844,14 @@ message Controller {
 
   message GetTaskLogsResponse {
     repeated TaskLogBatch task_logs = 1;
-    int64 last_timestamp_ms = 2;     // Max timestamp seen (for next since_ms)
-    bool truncated = 3;              // True if max_total_lines hit
+    bool truncated = 2;              // True if max_total_lines hit
 
     // Child job statuses (populated when include_children=true).
     // Included on every response so the client can detect state transitions
     // (e.g. child moved to FAILED) without a separate ListJobs RPC.
-    repeated JobStatus child_job_statuses = 4;
+    repeated JobStatus child_job_statuses = 3;
 
-    map<string, int64> resume_offsets = 5;  // Per-attempt line offset cursor for next poll
-  }
-
-  // --- Process Logs ---
-  message GetProcessLogsRequest {
-    string prefix = 1;   // Logger name prefix filter (empty = all)
-    int32 limit = 2;     // Max records to return (0 = default 200)
-  }
-
-  message GetProcessLogsResponse {
-    repeated ProcessLogRecord records = 1;
+    int64 cursor = 4;               // Max autoincrement id seen (cursor for next poll)
   }
 
   // --- Worker Detail (unified VM + worker view) ---
@@ -759,8 +870,10 @@ message Controller {
     // Bootstrap logs (from VM init)
     string bootstrap_logs = 4;
 
-    // Worker daemon logs (proxied from worker, empty if unhealthy/absent)
-    repeated ProcessLogRecord worker_logs = 5;
+    // Worker daemon logs (proxied from worker via FetchLogs, empty if unhealthy/absent)
+    repeated iris.logging.LogEntry worker_log_entries = 9;
+
+    reserved 5;  // was: repeated ProcessLogRecord worker_logs
 
     // Recent tasks that ran or are running on this worker (newest first)
     repeated TaskStatus recent_tasks = 6;
@@ -785,7 +898,7 @@ message Worker {
 
     RuntimeEntrypoint entrypoint = 3;  // Structured entrypoint for runtime layer
     EnvironmentConfig environment = 4;
-    string bundle_gcs_path = 5;
+    string bundle_id = 5;
     ResourceSpecProto resources = 6;
     iris.time.Duration timeout = 7;
     repeated string ports = 8;
@@ -815,15 +928,6 @@ message Worker {
     int32 running_tasks = 3;        // Renamed from running_jobs
   }
 
-  // --- Process Logs ---
-  message GetProcessLogsRequest {
-    string prefix = 1;   // Logger name prefix filter (empty = all)
-    int32 limit = 2;     // Max records to return (0 = default 200)
-  }
-
-  message GetProcessLogsResponse {
-    repeated ProcessLogRecord records = 1;
-  }
 }
 
 // ============================================================================
@@ -849,6 +953,14 @@ message HeartbeatResponse {
 
   // Current host-level resource snapshot
   WorkerResourceSnapshot resource_snapshot = 3;
+
+  // Worker health status. When false, the worker has detected a local fault
+  // (disk full, cannot write tempfile, etc.) and should be immediately
+  // marked as permanently failed by the controller.
+  bool worker_healthy = 5;
+
+  // Human-readable description of the health check failure.
+  string health_error = 6;
 }
 
 // ============================================================================
@@ -869,12 +981,9 @@ service ControllerService {
   // Worker management
   rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);
   rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
-  rpc NotifyTaskUpdate(Controller.NotifyTaskUpdateRequest) returns (Empty);
-
   // Endpoint registry (generic service discovery)
   rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
   rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (Empty);
-  rpc LookupEndpoint(Controller.LookupEndpointRequest) returns (Controller.LookupEndpointResponse);
   rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
 
   // Autoscaler
@@ -883,15 +992,13 @@ service ControllerService {
   // Transactions / Actions Log
   rpc GetTransactions(Controller.GetTransactionsRequest) returns (Controller.GetTransactionsResponse);
 
-  // Cluster summary (aggregated counts)
-  rpc GetClusterSummary(Controller.GetClusterSummaryRequest) returns (Controller.GetClusterSummaryResponse);
   rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
 
   // Task logs (proxied to worker)
   rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);
 
-  // Controller process logs
-  rpc GetProcessLogs(Controller.GetProcessLogsRequest) returns (Controller.GetProcessLogsResponse);
+  // Unified log fetching (process logs, task logs, etc. by key)
+  rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
 
   // Profiling (proxied to worker)
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
@@ -901,13 +1008,30 @@ service ControllerService {
 
   // Checkpoint
   rpc BeginCheckpoint(Controller.BeginCheckpointRequest) returns (Controller.BeginCheckpointResponse);
+
+  // Process status (local process info + recent logs)
+  rpc GetProcessStatus(GetProcessStatusRequest) returns (GetProcessStatusResponse);
+
+  // Authentication & API key management
+  rpc GetAuthInfo(GetAuthInfoRequest) returns (GetAuthInfoResponse);
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc CreateApiKey(CreateApiKeyRequest) returns (CreateApiKeyResponse);
+  rpc RevokeApiKey(RevokeApiKeyRequest) returns (Empty);
+  rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse);
+  rpc GetCurrentUser(GetCurrentUserRequest) returns (GetCurrentUserResponse);
+
+  // Generic query API
+  rpc ExecuteRawQuery(RawQueryRequest) returns (RawQueryResponse);
 }
 
 service WorkerService {
   rpc GetTaskStatus(Worker.GetTaskStatusRequest) returns (TaskStatus);
   rpc ListTasks(Worker.ListTasksRequest) returns (Worker.ListTasksResponse);
   rpc HealthCheck(Empty) returns (Worker.HealthResponse);
-  rpc GetProcessLogs(Worker.GetProcessLogsRequest) returns (Worker.GetProcessLogsResponse);
+  rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
+
+  // Process status (local process info + recent logs)
+  rpc GetProcessStatus(GetProcessStatusRequest) returns (GetProcessStatusResponse);
 }

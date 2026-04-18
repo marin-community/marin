@@ -127,6 +127,9 @@ def _thread_cleanup():
 def pytest_sessionfinish(session, exitstatus):
     """Dump any non-daemon threads still alive at session end.
 
+    Groups threads by stack trace so identical stacks are shown once with all
+    thread names listed, rather than repeating the same trace for each thread.
+
     Registers an atexit handler so the force-exit happens only after pytest has
     finished printing the FAILURES section and test summary.
     """
@@ -137,12 +140,19 @@ def pytest_sessionfinish(session, exitstatus):
     tty = os.fdopen(os.dup(2), "w")
     tty.write(f"\n⚠ {len(alive)} non-daemon threads still alive at session end:\n")
     frames = sys._current_frames()
+
+    # Group threads by stack trace so duplicate stacks are shown only once.
+    groups: dict[str, list[str]] = {}
     for t in alive:
-        tty.write(f"\n  Thread: {t.name} (daemon={t.daemon}, ident={t.ident})\n")
         frame = frames.get(t.ident)
-        if frame:
-            for line in traceback.format_stack(frame):
-                tty.write(f"    {line.rstrip()}\n")
+        stack_key = "".join(traceback.format_stack(frame)) if frame else "<no stack>"
+        groups.setdefault(stack_key, []).append(t.name)
+
+    for stack, names in groups.items():
+        tty.write(f"\n  Threads: {', '.join(names)}\n")
+        for line in stack.splitlines():
+            tty.write(f"    {line}\n")
+
     tty.flush()
     tty.close()
 

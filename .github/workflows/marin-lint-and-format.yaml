@@ -24,5 +24,10 @@ jobs:
         python-version: "3.11"
         enable-cache: true
 
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
     - name: Run pre-commit checks
       run: ./infra/pre-commit.py --all-files

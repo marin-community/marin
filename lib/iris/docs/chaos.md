@@ -174,14 +174,13 @@ import time
 import pytest
 from pathlib import Path
 from iris.chaos import reset_chaos
-from iris.cluster.manager import connect_cluster
-from iris.cluster.config import make_local_config, load_config
+from iris.cluster.config import connect_cluster, make_local_config, load_config
 from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec, EnvironmentSpec
 from iris.rpc import cluster_pb2
 
 IRIS_ROOT = Path(__file__).resolve().parents[2]  # lib/iris
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "demo.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 TERMINAL_STATES = {
     cluster_pb2.JOB_STATE_SUCCEEDED,

@@ -284,7 +284,10 @@ class FakePlatform:
             slice_id = f"fake-slice-{self._config.config.name}-{self._slice_counter}"
             ts = Timestamp.now().epoch_ms()
 
-            topology = get_tpu_topology(self._config.config.accelerator_variant)
+            device_variant = (
+                self._config.config.resources.device_variant if self._config.config.HasField("resources") else ""
+            )
+            topology = get_tpu_topology(device_variant)
             vm_count = topology.vm_count
             zone = self._config.config.slice_template.gcp.zone or "us-central1-a"
 
@@ -326,8 +329,8 @@ class FakePlatform:
             slices = [s for s in slices if all(s.labels.get(k) == v for k, v in labels.items())]
         return slices
 
-    def list_all_slices(self, labels: dict[str, str] | None = None) -> list[FakeSliceHandle]:
-        return self.list_slices(zones=[], labels=labels)
+    def list_all_slices(self) -> list[FakeSliceHandle]:
+        return self.list_slices(zones=[], labels=None)
 
     def list_vms(self, zones: list[str], labels: dict[str, str] | None = None) -> list:
         return []
@@ -573,16 +576,21 @@ class FakeGcloud:
             return failure
 
         zone = _parse_flag(cmd, "zone")
+        all_zones = zone == "-"
         filter_str = _parse_flag(cmd, "filter")
         required_labels = _parse_filter_labels(filter_str) if filter_str else {}
 
         matching = []
         for (_, tpu_zone), tpu in self._tpus.items():
-            if zone and tpu_zone != zone:
+            if not all_zones and zone and tpu_zone != zone:
                 continue
             tpu_labels = tpu.get("labels", {})
             if all(tpu_labels.get(k) == v for k, v in required_labels.items()):
-                matching.append(tpu)
+                entry = dict(tpu)
+                # --zone=- returns full resource paths for TPU names
+                if all_zones:
+                    entry["name"] = f"projects/test-project/locations/{tpu_zone}/nodes/{tpu['name']}"
+                matching.append(entry)
 
         return FakeResult(returncode=0, stdout=json.dumps(matching))
 

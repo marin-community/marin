@@ -28,6 +28,9 @@ from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import EnvironmentPaths, TrialPaths
 from harbor.utils.logger import logger
 
+_DAYTONA_SANDBOX_CREATE_RETRY_ATTEMPTS = 8
+_DAYTONA_SANDBOX_CREATE_RETRY_WAIT = wait_exponential(multiplier=2, min=5, max=60)
+
 
 class DaytonaClientManager:
     """
@@ -180,8 +183,8 @@ class DaytonaEnvironment(BaseEnvironment):
             raise FileNotFoundError(f"{self._environment_definition_path} not found. Please ensure the " "file exists.")
 
     @retry(
-        stop=stop_after_attempt(2),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
+        stop=stop_after_attempt(_DAYTONA_SANDBOX_CREATE_RETRY_ATTEMPTS),
+        wait=_DAYTONA_SANDBOX_CREATE_RETRY_WAIT,
         reraise=True,
     )
     async def _create_sandbox(self, params: CreateSandboxFromImageParams | CreateSandboxFromSnapshotParams):

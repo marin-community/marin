@@ -18,9 +18,9 @@ walks through setting up a DPO run end-to-end in Marin.
 from experiments.defaults import default_dpo, default_tokenize
 from experiments.llama import llama_3_1_8b
 from experiments.simple_dpo_config import SimpleDPOConfig
+from fray.cluster import ResourceConfig
 from levanter.data.text import PreferenceChatLmDatasetFormat
 from marin.execution.executor import executor_main
-from marin.resources.resource_configs import v5p_32
 ```
 
 ## Tokenizing Preference Data
@@ -56,7 +56,7 @@ from the loss by default.
 model_config = llama_3_1_8b()
 
 dpo_config = SimpleDPOConfig(
-    resources=v5p_32,
+    resources=ResourceConfig.with_tpu("v5p-32"),
     train_batch_size=128,
     num_train_steps=2000,
     learning_rate=5e-7,
@@ -96,7 +96,7 @@ dpo_step = default_dpo(
 
 ```python
 if __name__ == "__main__":
-    executor_main(dpo_step)
+    executor_main(steps=[dpo_step])
 ```
 
 Submit the job:

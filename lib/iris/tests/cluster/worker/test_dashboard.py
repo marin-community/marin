@@ -12,7 +12,7 @@ from connectrpc.request import RequestContext
 
 from iris.cluster.types import Entrypoint, JobName
 from iris.time_utils import Duration
-from iris.cluster.worker.bundle_cache import BundleCache
+from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import ContainerPhase, ContainerStats, ContainerStatus
@@ -28,14 +28,10 @@ from tests.test_utils import wait_for_condition
 
 
 @pytest.fixture
-def mock_bundle_cache(tmp_path):
-    """Create mock BundleCache with a real temp directory."""
-    bundle_dir = tmp_path / "bundle"
-    bundle_dir.mkdir()
-    (bundle_dir / "test_file.py").write_text("print('hello')")
-
-    cache = Mock(spec=BundleCache)
-    cache.get_bundle = Mock(return_value=bundle_dir)
+def mock_bundle_store(tmp_path):
+    """Create mock BundleStore with a real temp directory."""
+    cache = Mock(spec=BundleStore)
+    cache.extract_bundle_to = Mock()
     return cache
 
 
@@ -53,6 +49,7 @@ def create_mock_container_handle():
     handle.stop = Mock()
     handle.logs = Mock(return_value=[])
     handle.stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=1, available=True))
+    handle.disk_usage_mb = Mock(return_value=0)
     handle.cleanup = Mock()
     return handle
 
@@ -71,18 +68,17 @@ def mock_runtime():
 
 
 @pytest.fixture
-def worker(mock_bundle_cache, mock_runtime, tmp_path):
+def worker(mock_bundle_store, mock_runtime, tmp_path):
     """Create Worker with mocked dependencies."""
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
-        log_prefix=f"file://{(tmp_path / 'cache' / 'iris-logs').as_posix()}",
     )
     return Worker(
         config,
-        bundle_provider=mock_bundle_cache,
+        bundle_store=mock_bundle_store,
         container_runtime=mock_runtime,
     )
 
@@ -115,7 +111,7 @@ def create_run_task_request(
         num_tasks=num_tasks,
         entrypoint=entrypoint_proto,
         environment=env_config,
-        bundle_gcs_path="gs://bucket/bundle.zip",
+        bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         resources=resources,
         ports=ports or [],
     )

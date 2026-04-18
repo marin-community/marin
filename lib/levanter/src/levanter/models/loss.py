@@ -33,6 +33,7 @@ def maybe_fused_next_token_loss(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
+    implementation: str | None = None,
 ) -> NamedArray:
     """
     Compute the next token loss using the fused kernel path.
@@ -51,6 +52,7 @@ def maybe_fused_next_token_loss(
         dtype (Optional[jnp.dtype]): Data type for the loss.
         logit_soft_cap (Optional[float]): Optional soft cap for logits
         precision (Optional[jax.lax.PrecisionLike]): Optional matmul precision override.
+        implementation: Optional fused CE backend override.
     Returns:
         NamedArray: Computed loss.
     """
@@ -84,6 +86,7 @@ def maybe_fused_next_token_loss(
         dtype=dtype,
         logit_soft_cap=logit_soft_cap,
         precision=precision,
+        implementation=implementation,
     )
 
 
@@ -173,6 +176,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
+    implementation: str | None = None,
     return_argmax: Literal[False] = False,
 ) -> NamedArray: ...
 
@@ -193,6 +197,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
+    implementation: str | None = None,
     return_argmax: Literal[True] = True,
 ) -> tuple[NamedArray, NamedArray]: ...
 
@@ -212,6 +217,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
+    implementation: str | None = None,
     return_argmax: bool = False,
 ) -> NamedArray | tuple[NamedArray, NamedArray]:
     """
@@ -230,6 +236,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         block_size (int | None): Optional vocabulary block size for processing.
         dtype (Optional[jnp.dtype]): Data type for the loss.
         precision (Optional[jax.lax.PrecisionLike]): Optional matmul precision override for the fused kernel.
+        implementation: Optional fused CE backend override.
         return_argmax (bool): Whether to return per-position argmax token ids as well.
 
     Returns:
@@ -263,6 +270,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
+            implementation=implementation,
             return_argmax=return_argmax,
         )
         if return_argmax:
