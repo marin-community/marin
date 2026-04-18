@@ -438,7 +438,7 @@ def test_reads_recover_when_local_segment_vanishes(tmp_path: Path):
 
 
 def test_compaction_merges_tmps_into_log(tmp_path: Path):
-    """Compaction merges all tmp_*.parquet files into a single log_*.parquet,
+    """Compaction merges all tmp_*.parquet files into a single logs_*.parquet,
     preserves data, and unlinks the sources."""
     log_dir = tmp_path / "logs"
     store = DuckDBLogStore(log_dir=log_dir)
@@ -449,12 +449,12 @@ def test_compaction_merges_tmps_into_log(tmp_path: Path):
             store._force_flush()
 
         assert len(sorted(log_dir.glob("tmp_*.parquet"))) == 5
-        assert len(sorted(log_dir.glob("log_*.parquet"))) == 0
+        assert len(sorted(log_dir.glob("logs_*.parquet"))) == 0
 
         store._force_compaction()
 
         assert len(sorted(log_dir.glob("tmp_*.parquet"))) == 0
-        assert len(sorted(log_dir.glob("log_*.parquet"))) == 1
+        assert len(sorted(log_dir.glob("logs_*.parquet"))) == 1
 
         result = store.get_logs(KEY)
         assert len(result.entries) == 50
@@ -478,17 +478,17 @@ def test_compaction_skips_single_tmp(tmp_path: Path):
 
         tmps_after = sorted(log_dir.glob("tmp_*.parquet"))
         assert tmps_after == tmps_before
-        assert len(sorted(log_dir.glob("log_*.parquet"))) == 0
+        assert len(sorted(log_dir.glob("logs_*.parquet"))) == 0
     finally:
         store.close()
 
 
 def test_recovery_reads_both_tmp_and_log(tmp_path: Path):
-    """After restart, a dir with mixed tmp_ and log_ files is fully readable."""
+    """After restart, a dir with mixed tmp_ and logs_ files is fully readable."""
     log_dir = tmp_path / "logs"
     store1 = DuckDBLogStore(log_dir=log_dir)
     try:
-        # Two flushes, then compact -> produces one log_ file.
+        # Two flushes, then compact -> produces one logs_ file.
         for batch in range(2):
             store1.append(KEY, [_make_entry(f"old-{batch}-{i}", epoch_ms=batch * 10 + i) for i in range(3)])
             store1._force_flush()
@@ -499,7 +499,7 @@ def test_recovery_reads_both_tmp_and_log(tmp_path: Path):
     finally:
         store1.close()
 
-    assert len(sorted(log_dir.glob("log_*.parquet"))) == 1
+    assert len(sorted(log_dir.glob("logs_*.parquet"))) == 1
     assert len(sorted(log_dir.glob("tmp_*.parquet"))) == 1
 
     store2 = DuckDBLogStore(log_dir=log_dir)
@@ -519,49 +519,6 @@ def test_recovery_reads_both_tmp_and_log(tmp_path: Path):
         ]
     finally:
         store2.close()
-
-
-def test_recovery_migrates_legacy_logs_filenames(tmp_path: Path):
-    """Pre-tiered-layout ``logs_*.parquet`` files are renamed to ``log_*.parquet``.
-
-    A controller upgraded from the single-series layout must not silently
-    drop historical segments on restart — that would reset _next_seq to 1
-    and cause sequence reuse on subsequent writes.
-    """
-    log_dir = tmp_path / "logs"
-    log_dir.mkdir()
-
-    # Write one log_*.parquet via a first-gen store, then rename to legacy naming.
-    seed = DuckDBLogStore(log_dir=log_dir)
-    try:
-        for batch in range(2):
-            seed.append(KEY, [_make_entry(f"legacy-{batch}-{i}", epoch_ms=batch * 10 + i) for i in range(2)])
-            seed._force_flush()
-        seed._force_compaction()
-    finally:
-        seed.close()
-    log_files = sorted(log_dir.glob("log_*.parquet"))
-    assert len(log_files) == 1
-    legacy = log_files[0].with_name("logs_" + log_files[0].name[len("log_") :])
-    log_files[0].rename(legacy)
-    assert sorted(log_dir.glob("logs_*.parquet")) == [legacy]
-
-    # Reopen: migration must rename it and recovery must pick up the max seq.
-    store = DuckDBLogStore(log_dir=log_dir)
-    try:
-        assert sorted(log_dir.glob("logs_*.parquet")) == []
-        assert len(sorted(log_dir.glob("log_*.parquet"))) == 1
-
-        result = store.get_logs(KEY)
-        assert [e.data for e in result.entries] == ["legacy-0-0", "legacy-0-1", "legacy-1-0", "legacy-1-1"]
-
-        # New writes must use fresh seq numbers; tailing post-append should
-        # return only the new batch when cursored past the legacy data.
-        store.append(KEY, [_make_entry("fresh", epoch_ms=100)])
-        after = store.get_logs(KEY, cursor=result.cursor)
-        assert [e.data for e in after.entries] == ["fresh"]
-    finally:
-        store.close()
 
 
 # =============================================================================

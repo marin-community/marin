@@ -6,8 +6,10 @@
 Two on-disk tiers:
 
     ``tmp_{min_seq}.parquet`` -- written by every flush; local-only.
-    ``log_{min_seq}.parquet`` -- produced by periodic compaction that merges
-    all current tmps into one archive and uploads only that to GCS.
+    ``logs_{min_seq}.parquet`` -- produced by periodic compaction that merges
+    all current tmps into one archive and uploads only that to GCS. (Named
+    ``logs_`` rather than ``log_`` for continuity with the pre-tiered layout,
+    which used the same filename to mean the same thing.)
 
 Lifecycle of a log entry:
 
@@ -24,7 +26,7 @@ Lifecycle of a log entry:
           write path is strictly append-only.
        c. Every ``compaction_interval_sec`` (default 10 min) or when tmp
           count exceeds ``max_tmp_segments_before_compact`` (default 10):
-          merge all tmp_ files into a single ``log_*.parquet`` via DuckDB
+          merge all tmp_ files into a single ``logs_*.parquet`` via DuckDB
           ``COPY (SELECT ... ORDER BY key, seq) TO ... (FORMAT parquet)``,
           then upload the merged file to GCS and unlink the tmps. DuckDB's
           streaming COPY avoids the pyarrow concat/sort/write leak path.
@@ -128,10 +130,12 @@ _ROW_GROUP_SIZE = 16_384
 _MAX_PARQUET_BYTES_PER_READ = 2_500 * 1024 * 1024
 
 # File naming: hot flushes write tmp_*.parquet; compaction merges them into
-# log_*.parquet and uploads only that to GCS. Both are keyed by min_seq so
-# sorting by filename yields chronological order.
+# logs_*.parquet and uploads only that to GCS. Both are keyed by min_seq so
+# sorting by filename yields chronological order. The logs_ name matches the
+# pre-tiered layout (same semantics, same contents), so upgrades need no
+# migration and downgrades still find their files.
 _TMP_PREFIX = "tmp_"
-_LOG_PREFIX = "log_"
+_LOG_PREFIX = "logs_"
 
 
 def _tmp_filename(min_seq: int) -> str:
@@ -170,25 +174,6 @@ def _read_seq_bounds(path: Path) -> tuple[int, int]:
         return min_seq, max_seq
     except Exception:
         return 0, 0
-
-
-# Pre-tiered layout: a single series of compacted files named
-# ``logs_{min_seq:019d}.parquet``. Equivalent to the new ``log_*.parquet``
-# semantic (sealed, GCS-uploaded). On upgrade, rename them in place so they
-# participate in seq recovery and segment discovery.
-_LEGACY_LOG_PREFIX = "logs_"
-
-
-def _migrate_legacy_segments(log_dir: Path) -> None:
-    """Rename any pre-tiered-layout ``logs_*.parquet`` to ``log_*.parquet``."""
-    for p in log_dir.glob(f"{_LEGACY_LOG_PREFIX}*.parquet"):
-        target = p.with_name(_LOG_PREFIX + p.name[len(_LEGACY_LOG_PREFIX) :])
-        if target.exists():
-            # A same-min_seq log file from the new layout already exists;
-            # prefer it and drop the stale legacy copy.
-            p.unlink()
-            continue
-        p.rename(target)
 
 
 def _discover_segments(log_dir: Path) -> list[Path]:
@@ -414,9 +399,6 @@ class DuckDBLogStore:
         self._segment_target_bytes = segment_target_bytes
         self._max_tmp_segments_before_compact = max_tmp_segments_before_compact
 
-        # Upgrade any pre-tiered-layout files before discovery / seq recovery.
-        _migrate_legacy_segments(self._log_dir)
-
         # ---- shared mutable state (all guarded by _lock) ----
         self._lock = Lock()
         self._next_seq = _recover_max_seq(self._log_dir)
@@ -430,7 +412,7 @@ class DuckDBLogStore:
         self._segments_rwlock = _RWLock()
 
         # Discover pre-existing Parquet files from a previous run. Both tmp_
-        # (pre-compaction, local-only) and log_ (compacted, uploaded) are
+        # (pre-compaction, local-only) and logs_ (compacted, uploaded) are
         # re-registered so reads work immediately after restart.
         for p in _discover_segments(self._log_dir):
             min_seq, max_seq = _read_seq_bounds(p)
@@ -1132,7 +1114,7 @@ def _add_common_filters(
 def _build_union_source(parquet_files: list[str], ram_table_names: list[str]) -> str:
     """Build a SQL source expression: local Parquet files UNION ALL ram tables.
 
-    File paths are self-generated (``tmp_*.parquet`` / ``log_*.parquet``) so
+    File paths are self-generated (``tmp_*.parquet`` / ``logs_*.parquet``) so
     no SQL injection risk from the f-string embedding. RAM table names are
     generated internally (``_ram_<cid>_<i>``).
     """
