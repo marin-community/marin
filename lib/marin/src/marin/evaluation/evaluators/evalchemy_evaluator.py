@@ -147,7 +147,6 @@ class EvalchemyEvaluator(Evaluator):
         "chat_template.jinja",
     ]
 
-
     def _log_results_to_wandb(
         self,
         result_dir: str,
@@ -980,7 +979,7 @@ _patch_autoconfig_for_gcs()
                 if returncode == 0 and not results_files:
                     # Log what's actually in the result dir for debugging
                     all_files = []
-                    for root, dirs, files in os.walk(result_dir):
+                    for root, _, files in os.walk(result_dir):
                         for f in files:
                             all_files.append(os.path.join(root, f))
                     log_tail = ""

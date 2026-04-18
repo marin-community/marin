@@ -16,8 +16,6 @@ from experiments.evals.evalchemy_task_configs import (
     AIME25,
     AIME26,
     AMC23,
-    CODEELO,
-    CODEFORCES,
     GPQA_DIAMOND,
     HMMT,
     HUMANITYS_LAST_EXAM,
@@ -142,7 +140,7 @@ if __name__ == "__main__":
         help="TPU type for eval jobs (default: v5p-8)",
     )
     args, remaining = parser.parse_known_args()
-    sys.argv = [sys.argv[0]] + remaining
+    sys.argv = [sys.argv[0], *remaining]
 
     if args.checkpoint:
         checkpoints = {args.experiment: [args.checkpoint]}

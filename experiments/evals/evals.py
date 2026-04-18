@@ -453,7 +453,6 @@ def evaluate_harbor(
             evaluation_path=this_output_path(),
             evals=[],  # Harbor uses dataset directly, not evals
             max_eval_instances=max_eval_instances,
-
             discover_latest_checkpoint=False,
             engine_kwargs=engine_kwargs,
             resource_config=resource_config,
