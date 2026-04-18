@@ -166,6 +166,9 @@ VLLM_ENGINE_KWARGS = {
     "tensor_parallel_size": 4,
 }
 
+os.environ.setdefault("MSWEA_API_KEY", "EMPTY")  # vLLM doesn't need auth
+os.environ.setdefault("OPENAI_API_KEY", "EMPTY")  # Fallback for hosted_vllm provider
+
 AGENT_KWARGS = {
     "version": "v1",  # Pin to mini-swe-agent v1 (bash-only, matches SWE-ZERO training format)
     "temperature": 1.0,
