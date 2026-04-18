@@ -30,13 +30,11 @@ class HealthSignal(enum.StrEnum):
     """Failure signals that move the worker health score."""
 
     RPC_FAILURE = "rpc_failure"
-    TASK_PREEMPTED = "task_preempted"
     TASK_WORKER_FAILED = "task_worker_failed"
 
 
 SIGNAL_WEIGHT: Mapping[HealthSignal, float] = {
     HealthSignal.RPC_FAILURE: 1.0,
-    HealthSignal.TASK_PREEMPTED: 1.0,
     HealthSignal.TASK_WORKER_FAILED: 1.0,
 }
 """Per-signal additive weight. Equal weights preserve today's 10-strike
@@ -44,7 +42,6 @@ heartbeat behavior (10 consecutive RPC failures trip the threshold) and
 extend it uniformly to task-level failures."""
 
 HEALTH_SCORE_THRESHOLD = 10.0
-"""Score at or above which the reaper terminates the worker."""
 
 HEALTH_SCORE_HALF_LIFE_S = 300.0
 """Score half-life. Evidence older than a few half-lives decays below

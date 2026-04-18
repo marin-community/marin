@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -1178,6 +1179,11 @@ class Controller:
         scheduler responds to new work within one cycle.
         """
         self._wake_event.set()
+
+    def record_worker_observations(self, observations: Iterable[tuple[WorkerId, HealthSignal]]) -> None:
+        """Forward failure-signal observations from a transitions result into the health tracker."""
+        for worker_id, signal in observations:
+            self._health.bump(worker_id, signal)
 
     @property
     def started(self) -> bool:

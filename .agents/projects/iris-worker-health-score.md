@@ -35,12 +35,10 @@ Introduce a `WorkerHealthTracker` — a pure in-memory object owned by the contr
 
 class HealthSignal(StrEnum):
     RPC_FAILURE = "rpc_failure"
-    TASK_PREEMPTED = "task_preempted"
     TASK_WORKER_FAILED = "task_worker_failed"
 
 SIGNAL_WEIGHT: dict[HealthSignal, float] = {
     HealthSignal.RPC_FAILURE: 1.0,
-    HealthSignal.TASK_PREEMPTED: 1.0,
     HealthSignal.TASK_WORKER_FAILED: 1.0,
 }
 HEALTH_SCORE_THRESHOLD = 10.0
@@ -116,9 +114,9 @@ class WorkerHealthTracker:
 
 1. Heartbeat RPC failures — `controller.py` around the `fail_heartbeats_batch` call site. Add `self._health.bump(worker_id, HealthSignal.RPC_FAILURE)` next to each recorded failure.
 
-2. Task outcomes — in `_apply_task_transitions` at `transitions.py` (the function driven by `apply_task_updates` at `transitions.py:1959`), when a task transitions into `TASK_STATE_PREEMPTED` or `TASK_STATE_WORKER_FAILED`, emit a `bump`. Since `transitions.py` is DB-only today, the cleanest split is:
+2. Task outcomes — in `_apply_task_transitions` at `transitions.py` (the function driven by `apply_task_updates` at `transitions.py:1959`), when a task transitions into `TASK_STATE_WORKER_FAILED`, emit a `bump`. Since `transitions.py` is DB-only today, the cleanest split is:
 
-   - `_apply_task_transitions` returns a list of `(worker_id, HealthSignal)` observations in its `TxResult`. The mapping is direct: `TASK_STATE_PREEMPTED → TASK_PREEMPTED`, `TASK_STATE_WORKER_FAILED → TASK_WORKER_FAILED`. No other states produce a signal.
+   - `_apply_task_transitions` returns a list of `(worker_id, HealthSignal)` observations in its `TxResult`. The mapping is direct: `TASK_STATE_WORKER_FAILED → TASK_WORKER_FAILED`. No other states produce a signal — preemption is an infrastructure event, not a worker-health signal.
    - The controller consumer that calls `apply_task_updates` forwards those observations to `self._health.bump(...)` after the transaction commits. This keeps `transitions.py` free of mutable non-DB state.
 
 User-level `TASK_STATE_FAILED` does not emit a signal — that's user code failing, not a bad worker.
@@ -180,9 +178,9 @@ Schema migration: drop `consecutive_failures` from the `workers` table in `schem
 │   ping / poll           apply_task_updates     every 30s      │
 │     │                     │ returns obs list     │            │
 │     ▼                     ▼                      ▼            │
-│  bump(RPC_FAILURE)    bump(TASK_PREEMPTED /  ┌──────────────┐ │
-│                             TASK_WORKER_     │ score > T    │ │
-│                             FAILED)          │ heartbeat    │ │
+│  bump(RPC_FAILURE)    bump(TASK_WORKER_      ┌──────────────┐ │
+│                             FAILED)          │ score > T    │ │
+│                                              │ heartbeat    │ │
 │                                              │   age > 15m  │ │
 │                                              └──────┬───────┘ │
 │                                                     ▼         │

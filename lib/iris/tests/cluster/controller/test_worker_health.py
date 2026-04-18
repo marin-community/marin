@@ -89,8 +89,7 @@ def test_rapid_bumps_cross_threshold(tracker: WorkerHealthTracker) -> None:
     for signal in [
         HealthSignal.RPC_FAILURE,
         HealthSignal.TASK_WORKER_FAILED,
-        HealthSignal.TASK_PREEMPTED,
-    ] * 4:
+    ] * 6:
         tracker.bump(wid, signal)
     # 12 bumps of weight 1.0 with no decay = 12.0 >= 10.0
     over = tracker.workers_over_threshold()

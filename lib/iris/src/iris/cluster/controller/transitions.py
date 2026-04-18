@@ -3287,13 +3287,14 @@ class ControllerTransitions:
             - The heartbeat RPC failed (timeout, connection refused, etc.)
         Postconditions:
             - worker.consecutive_failures incremented
-            - If threshold exceeded: worker pruned, ALL tasks cascade to WORKER_FAILED
-            - If worker still healthy: buffered dispatches (tasks_to_run, tasks_to_kill)
-              are re-queued for the next heartbeat. We cannot tell whether the worker
-              received the previous heartbeat (RPC timeout ≠ delivery failure), so we
-              re-send the same RunTaskRequests with the same attempt_ids. If the worker
-              did receive them, it will reject re-sends as benign duplicates. If it
-              did not, it will start them fresh.
+            - Buffered dispatches (tasks_to_run, tasks_to_kill) are re-queued for the
+              next heartbeat. We cannot tell whether the worker received the previous
+              heartbeat (RPC timeout ≠ delivery failure), so we re-send the same
+              RunTaskRequests with the same attempt_ids. If the worker did receive
+              them, it will reject re-sends as benign duplicates. If it did not, it
+              will start them fresh.
+            - Worker termination decisions are made by the reaper thread based on the
+              aggregate health score (bumped by the caller on RPC failure), not here.
 
         Note: we intentionally do NOT fire WORKER_FAILED for tasks_to_run here.
         The heartbeat may have timed out on the controller side but the worker may
