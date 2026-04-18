@@ -160,6 +160,7 @@ VLLM_ENGINE_KWARGS = {
 }
 
 AGENT_KWARGS = {
+    "version": "v1",  # Pin to mini-swe-agent v1 (bash-only, matches SWE-ZERO training format)
     "temperature": 1.0,
     "model_info": {
         "max_input_tokens": 32768,

@@ -17,10 +17,12 @@ fi
 source "$HOME/.local/bin/env"
 
 # Install mini-swe-agent from git repository
+# Official repo: SWE-agent/mini-SWE-agent (has v1 and v2.0 branches)
+# Fork: li-boxuan/mini-swe-agent (tracks main/v2)
 {% if version %}
-uv tool install git+https://github.com/li-boxuan/mini-swe-agent.git@{{ version }}
+uv tool install "git+https://github.com/SWE-agent/mini-SWE-agent.git@{{ version }}"
 {% else %}
-uv tool install git+https://github.com/li-boxuan/mini-swe-agent.git
+uv tool install "git+https://github.com/SWE-agent/mini-SWE-agent.git"
 {% endif %}
 
 echo "INSTALL_SUCCESS"
