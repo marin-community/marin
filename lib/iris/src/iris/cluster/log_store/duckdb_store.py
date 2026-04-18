@@ -607,18 +607,23 @@ class DuckDBLogStore:
             if self._pending:
                 tables.append(_build_buffer_table(self._pending))
                 self._pending = []
-            new_table = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
-            # Sort by (key, seq) so Parquet row-group statistics on `key` are
-            # tight, letting DuckDB skip row groups that don't contain the
-            # target key on reads.
-            new_table = new_table.sort_by([("key", "ascending"), ("seq", "ascending")])
+
+        # Concat + sort outside the lock — hundreds of ms on large flushes.
+        # Safe because _chunks has a single writer (_compact_step), which
+        # runs serially with _flush_step in the bg thread.
+        # Sort by (key, seq) so Parquet row-group stats on `key` are tight,
+        # letting DuckDB skip row groups that don't contain the target key.
+        new_table = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
+        new_table = new_table.sort_by([("key", "ascending"), ("seq", "ascending")])
+        seq_col = new_table.column("seq")
+        sealed = _SealedBuffer(
+            table=new_table,
+            min_seq=pc.min(seq_col).as_py(),
+            max_seq=pc.max(seq_col).as_py(),
+        )
+
+        with self._lock:
             self._chunks = []
-            seq_col = new_table.column("seq")
-            sealed = _SealedBuffer(
-                table=new_table,
-                min_seq=pc.min(seq_col).as_py(),
-                max_seq=pc.max(seq_col).as_py(),
-            )
             self._flushing = sealed
 
         try:
