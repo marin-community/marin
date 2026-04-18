@@ -32,6 +32,7 @@ Environment variables:
     - HARBOR_N_CONCURRENT: parallel trials (default: 4)
 """
 
+import json
 import logging
 import os
 
@@ -43,7 +44,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 # 100 random SWE-bench Verified instances from DCAgent2/swebench-verified-random-100-folders
-TASK_NAMES = [
+# Override with HARBOR_TASK_NAMES_JSON env var for sharded evaluation.
+ALL_TASK_NAMES = [
     "astropy__astropy-13236",
     "astropy__astropy-14369",
     "astropy__astropy-14508",
@@ -145,6 +147,10 @@ TASK_NAMES = [
     "sympy__sympy-23413",
     "sympy__sympy-24443",
 ]
+
+# Support sharded evaluation via HARBOR_TASK_NAMES_JSON env var
+_task_names_json = os.environ.get("HARBOR_TASK_NAMES_JSON")
+TASK_NAMES = json.loads(_task_names_json) if _task_names_json else ALL_TASK_NAMES
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "marin-community/marin-8b-base")
 MODEL_NAME = os.environ.get("MODEL_NAME", "marin-8b-base")
