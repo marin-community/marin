@@ -142,7 +142,12 @@ def _read_sidecar_slice(path: str, shard_key: str) -> _SidecarSlice | None:
     """Read one sidecar and extract only the fields for ``shard_key``.
 
     Returns ``None`` if the sidecar has no ranges for this shard. The parsed
-    dict is released when this function returns.
+    dict is released when this function returns. Once we confirm this shard
+    has ranges, ``max_chunk_rows[shard_key]`` and ``avg_item_bytes`` must
+    also be present — ``ScatterWriter`` records both in the same ``_flush``
+    that appends to ``shards[shard_key]``. A missing field here means the
+    sidecar is corrupt or was written by an incompatible version, and we
+    fail rather than silently substituting zero.
     """
     meta_path = _scatter_meta_path(path)
     with open_url(meta_path, "r") as f:
@@ -150,10 +155,18 @@ def _read_sidecar_slice(path: str, shard_key: str) -> _SidecarSlice | None:
     ranges_raw = meta.get("shards", {}).get(shard_key)
     if not ranges_raw:
         return None
+    max_rows_map = meta.get("max_chunk_rows", {})
+    if shard_key not in max_rows_map:
+        raise ValueError(f"Sidecar {meta_path} has ranges for shard {shard_key} but no max_chunk_rows entry.")
+    if "avg_item_bytes" not in meta:
+        raise ValueError(f"Sidecar {meta_path} has ranges for shard {shard_key} but no avg_item_bytes.")
     ranges = tuple((int(off), int(length)) for off, length in ranges_raw)
-    max_rows = int(meta.get("max_chunk_rows", {}).get(shard_key, 0))
-    avg = float(meta.get("avg_item_bytes", 0.0))
-    return _SidecarSlice(path=path, ranges=ranges, max_chunk_rows=max_rows, avg_item_bytes=avg)
+    return _SidecarSlice(
+        path=path,
+        ranges=ranges,
+        max_chunk_rows=int(max_rows_map[shard_key]),
+        avg_item_bytes=float(meta["avg_item_bytes"]),
+    )
 
 
 def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -> list[_SidecarSlice]:
