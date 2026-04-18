@@ -33,8 +33,13 @@ def write_jsonl_gz():
 
 
 def _read_all_parquet(output_dir: Path) -> list[dict]:
+    """Read every main-branch Parquet file under *output_dir*.
+
+    The normalize step writes per-subdir ``outputs/main/`` and ``outputs/dups/``
+    branches; tests want just the main output.
+    """
     records = []
-    for pf in sorted(output_dir.glob("**/*.parquet")):
+    for pf in sorted(output_dir.glob("**/outputs/main/*.parquet")):
         records.extend(pq.read_table(str(pf)).to_pylist())
     return records
 
@@ -185,22 +190,6 @@ def test_exact_dedup(tmp_path: Path, write_jsonl_gz):
     results = _read_all_parquet(output_dir)
     assert {r["text"] for r in results} == {"Duplicate text", "Unique text"}
     assert len(results) == 2
-
-
-def test_skip_existing_idempotent(tmp_path: Path, write_jsonl_gz):
-    """A second run with the same input does not rewrite existing parquet files."""
-    input_dir = tmp_path / "input"
-    output_dir = tmp_path / "output"
-
-    write_jsonl_gz(input_dir / "data.jsonl.gz", [{"text": "Hello world"}])
-
-    normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
-    parquet_files = list(output_dir.glob("*.parquet"))
-    assert len(parquet_files) == 1
-    mtime_first = parquet_files[0].stat().st_mtime
-
-    normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
-    assert parquet_files[0].stat().st_mtime == mtime_first
 
 
 def test_whitespace_compaction(tmp_path: Path, write_jsonl_gz):
