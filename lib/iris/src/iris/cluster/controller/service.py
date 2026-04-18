@@ -2621,6 +2621,12 @@ class ControllerServiceImpl:
         them through the same ControllerTransitions.apply_heartbeat() path
         used by the poll-based heartbeat. Stop decisions are delivered via
         the StopTasks RPC, not piggy-backed on the response.
+
+        Vestigial: the kill decisions produced by apply_heartbeat are ignored
+        here. The poll loop reruns the same transition logic every 60s and
+        routes kills through _stop_tasks_direct, so push-path kills are
+        recovered with ≤60s latency. This RPC will be removed once the poll
+        loop is the sole path.
         """
         updates = task_updates_from_proto(request.updates)
         if updates:

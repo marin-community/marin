@@ -1682,7 +1682,7 @@ class ControllerTransitions:
                         task_image=job.task_image,
                     )
                     if direct_dispatch:
-                        start_requests.append((assignment.worker_id, str(worker_row["address"]), run_request))
+                        start_requests.append((assignment.worker_id, worker_row["address"], run_request))
                     else:
                         enqueue_run_dispatch(cur, str(assignment.worker_id), run_request.SerializeToString(), now_ms)
                     has_real_dispatch = True

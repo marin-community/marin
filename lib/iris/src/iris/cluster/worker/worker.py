@@ -249,7 +249,7 @@ class Worker:
                 interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
             self._controller_client = ControllerServiceClientSync(
                 address=self._config.controller_address,
-                timeout_ms=60_000,
+                timeout_ms=10_000,
                 interceptors=interceptors,
             )
             self._log_pusher = LogPusher(
