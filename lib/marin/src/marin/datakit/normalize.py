@@ -81,6 +81,7 @@ class NormalizeResult(BaseModel):
     via ``Artifact.load(step, NormalizeResult)``.
     """
 
+    version: str = "v1"
     subdirs: list[NormalizeSubdirResult] = []
 
     @property
