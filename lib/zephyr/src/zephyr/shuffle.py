@@ -332,11 +332,23 @@ class ScatterReader:
             return 0
         return max(length for file_iter in self.iterators for _, length in file_iter.chunks)
 
+    _MAX_IN_MEMORY_ITERATORS = 10_000
+
     def needs_external_sort(self, memory_limit: int, memory_fraction: float = 0.5) -> bool:
         """Return True if opening all chunks at once would blow the budget."""
         total_chunks = self.total_chunks
         if total_chunks == 0:
             return False
+
+        # Too many open iterators -- force external sort regardless of memory.
+        if total_chunks > self._MAX_IN_MEMORY_ITERATORS:
+            logger.info(
+                "needs_external_sort: total_chunks=%d > %d -> forced external sort",
+                total_chunks,
+                self._MAX_IN_MEMORY_ITERATORS,
+            )
+            return True
+
         if self.avg_item_bytes <= 0:
             raise ValueError(
                 "avg_item_bytes not available in scatter manifest. "
