@@ -33,8 +33,8 @@ def tokenize_starcoder2_extras(*, tokenizer: str = marin_tokenizer) -> list[Toke
         steps.append(
             default_tokenize(
                 name=f"starcoder2_extras/{subset}",
-                # Normalize now splits main/dup outputs; only tokenize the main branch.
-                dataset=normalized.as_executor_step() / "**/outputs/main/*.parquet",
+                # Normalize splits main/dup outputs; only tokenize the main branch.
+                dataset=normalized.as_executor_step() / "outputs/main/*.parquet",
                 tokenizer=tokenizer,
                 format=TextLmDatasetFormat(text_key="text"),
                 levanter_batch_size=128,
