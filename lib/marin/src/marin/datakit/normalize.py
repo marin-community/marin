@@ -322,6 +322,7 @@ def normalize_to_parquet(
     target_partition_bytes: int = 256 * 1024 * 1024,
     max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
+    max_workers: int | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
 ) -> NormalizedData:
@@ -354,6 +355,8 @@ def normalize_to_parquet(
             Defaults to 2 CPU / 16GB RAM / 10GB disk, sized for
             ``target_partition_bytes`` of 256MB.  Scale up when increasing
             partition size.
+        max_workers: Maximum number of Zephyr workers per subdirectory pipeline.
+            Defaults to Zephyr's own default (128 for distributed backends).
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
             ``zephyr.readers.load_file``.
@@ -422,6 +425,7 @@ def normalize_step(
     target_partition_bytes: int = 256 * 1024 * 1024,
     max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
+    max_workers: int | None = None,
     override_output_path: str | None = None,
     input_path: str | None = None,
     file_extensions: tuple[str, ...] | None = None,
@@ -437,6 +441,8 @@ def normalize_step(
         target_partition_bytes: Target size per output partition.
         worker_resources: Per-worker resource request for the Zephyr pipeline.
             See :func:`normalize_to_parquet` for the default.
+        max_workers: Maximum number of Zephyr workers. Defaults to Zephyr's
+            own default (128 for distributed backends).
         override_output_path: Override the computed output path.
         input_path: Override the input path. Defaults to ``download.output_path``.
             Useful when normalizing a subdirectory of the download output.
@@ -458,6 +464,7 @@ def normalize_step(
             target_partition_bytes=target_partition_bytes,
             max_whitespace_run_chars=max_whitespace_run_chars,
             worker_resources=worker_resources,
+            max_workers=max_workers,
             file_extensions=file_extensions,
             dedup_mode=dedup_mode,
         ),
