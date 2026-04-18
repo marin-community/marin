@@ -261,19 +261,19 @@ def _iter_chunk(fs: Any, fs_path: str, offset: int, length: int) -> Iterator:
 class ScatterReader:
     """All scatter chunks for one target shard, across all source files.
 
-    Construct via :meth:`from_manifest` for production use, or pass fields
+    Construct via :meth:`from_sidecars` for production use, or pass fields
     directly for testing.
     """
 
     def __init__(
         self,
-        iterators: list[ScatterFileIterator] | None = None,
-        max_chunk_rows: int = 100_000,
-        avg_item_bytes: float = 0.0,
+        iterators: list[ScatterFileIterator],
+        max_chunk_rows: int,
+        avg_item_bytes: float,
     ) -> None:
-        self.iterators: list[ScatterFileIterator] = iterators if iterators is not None else []
-        self.max_chunk_rows: int = max_chunk_rows
-        self.avg_item_bytes: float = avg_item_bytes
+        self.iterators = iterators
+        self.max_chunk_rows = max_chunk_rows
+        self.avg_item_bytes = avg_item_bytes
 
     @classmethod
     def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> ScatterReader:
