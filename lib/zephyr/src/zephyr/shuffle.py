@@ -10,11 +10,12 @@ single ``pickle.dump(list_of_items)`` into the zstd stream. This amortises
 per-item pickle/zstd dispatch over a sub-batch while still letting the
 reader stream sub-batches lazily without materialising the full chunk.
 
-A JSON sidecar (``.scatter_meta``) maps ``target_shard -> [(offset, length)]``
-byte ranges into the data file, plus per-shard ``max_chunk_rows`` and a global
-``avg_item_bytes`` estimate. Sidecars from all source shards are aggregated
-into a single ``scatter_metadata`` manifest at the end of the scatter stage,
-which reducers consume to build :class:`ScatterReader` instances.
+A Parquet sidecar (``.scatter_meta``) stores one row per (target_shard, chunk)
+pair with columns ``target_shard``, ``chunk_offset``, ``chunk_length``,
+``max_chunk_rows``, and ``avg_item_bytes``. Rows are sorted by ``target_shard``
+and written with small row groups (64 rows) so row-group min/max statistics
+enable predicate pushdown -- each reducer reads only the 1-2 row groups
+that match its shard, skipping ~99% of the sidecar.
 
 On read, each chunk is fetched with a single ``cat_file`` range GET (one
 HTTP request, no per-chunk file handle), then streamed via
@@ -29,7 +30,6 @@ from __future__ import annotations
 
 import concurrent.futures
 import io
-import json
 import logging
 import os
 import pickle
@@ -39,11 +39,14 @@ from dataclasses import dataclass
 from typing import Any
 
 import cloudpickle
+import pyarrow as pa
+import pyarrow.parquet as pq
 import zstandard as zstd
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import url_to_fs
 from rigging.timing import log_time
 
 from zephyr.plan import deterministic_hash
+from zephyr.readers import iter_parquet_row_groups
 from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -87,7 +90,7 @@ _SCATTER_META_SUFFIX = ".scatter_meta"
 _SCATTER_DATA_SUFFIX = ".shuffle"
 
 # Number of parallel sidecar reads each reducer issues when building its
-# ScatterReader. Sidecars are small JSON files (a few KB) and reads are
+# ScatterReader. Sidecars are small Parquet files (a few KB) and reads are
 # GCS GET-bound, so a modest pool keeps latency low without thrashing.
 _SIDECAR_READ_CONCURRENCY = 32
 # Number of items sampled from the first flush to estimate avg_item_bytes.
@@ -102,8 +105,26 @@ _SUB_BATCH_SIZE = 1024
 
 
 # ---------------------------------------------------------------------------
-# Sidecar / manifest helpers
+# Sidecar format (Parquet with predicate pushdown)
 # ---------------------------------------------------------------------------
+#
+# Each mapper writes a ``.scatter_meta`` Parquet file with one row per
+# (target_shard, chunk) pair. Rows are sorted by ``target_shard`` and
+# written with ``row_group_size=64`` so row-group min/max statistics
+# on ``target_shard`` allow the reader to skip ~99% of groups.
+#
+# Schema:
+#   target_shard:   int32   (which reducer owns this chunk)
+#   chunk_offset:   int64   (byte offset into the .shuffle data file)
+#   chunk_length:   int32   (byte length of the zstd frame)
+#   max_chunk_rows: int32   (max items in any chunk for this target)
+#   avg_item_bytes: float64 (pickle-serialized item size estimate)
+#
+# Reader for target T uses iter_parquet_row_groups with
+# equality_predicates={"target_shard": T} to read only the matching
+# row group(s).
+
+_SIDECAR_ROW_GROUP_SIZE = 64
 
 
 def _scatter_meta_path(data_path: str) -> str:
@@ -112,25 +133,55 @@ def _scatter_meta_path(data_path: str) -> str:
     return stem + _SCATTER_META_SUFFIX
 
 
-def _write_scatter_meta(data_path: str, sidecar: dict) -> None:
+def _write_scatter_meta(
+    data_path: str,
+    shard_ranges: dict[int, list[tuple[int, int]]],
+    per_shard_max_rows: dict[int, int],
+    avg_item_bytes: float,
+) -> None:
+    """Write a Parquet sidecar with per-chunk rows sorted by target shard."""
     meta_path = _scatter_meta_path(data_path)
-    payload = json.dumps(sidecar)
+
+    # Flatten into rows sorted by target for good row-group statistics.
+    rows_target: list[int] = []
+    rows_offset: list[int] = []
+    rows_length: list[int] = []
+    rows_max_rows: list[int] = []
+    rows_avg_bytes: list[float] = []
+
+    for target in sorted(shard_ranges.keys()):
+        max_rows = per_shard_max_rows.get(target, 0)
+        for chunk_offset, chunk_length in shard_ranges[target]:
+            rows_target.append(target)
+            rows_offset.append(chunk_offset)
+            rows_length.append(chunk_length)
+            rows_max_rows.append(max_rows)
+            rows_avg_bytes.append(avg_item_bytes)
+
+    table = pa.table(
+        {
+            "target_shard": pa.array(rows_target, type=pa.int32()),
+            "chunk_offset": pa.array(rows_offset, type=pa.int64()),
+            "chunk_length": pa.array(rows_length, type=pa.int32()),
+            "max_chunk_rows": pa.array(rows_max_rows, type=pa.int32()),
+            "avg_item_bytes": pa.array(rows_avg_bytes, type=pa.float64()),
+        }
+    )
+
     with log_time(f"Writing scatter meta for {data_path} to {meta_path}", level=logging.DEBUG):
-        with open_url(meta_path, "w") as f:
-            f.write(payload)
+        fs, fs_path = url_to_fs(meta_path)
+        with fs.open(fs_path, "wb") as f:
+            pq.write_table(
+                table,
+                f,
+                row_group_size=_SIDECAR_ROW_GROUP_SIZE,
+                write_statistics=True,
+            )
 
 
 @dataclass(frozen=True)
 class _SidecarSlice:
-    """One reducer's slice of a mapper sidecar.
-
-    A full sidecar is ~hundreds of KB and carries byte ranges for every
-    target shard (tens of thousands on large jobs). A reducer only consumes
-    its own shard's ranges plus two scalars, so the worker extracts just
-    those fields and discards the parsed dict before returning. This keeps
-    the reducer's resident memory proportional to the number of mappers
-    instead of mappers * sidecar size.
-    """
+    """One reducer's slice of a mapper sidecar."""
 
     path: str
     ranges: tuple[tuple[int, int], ...]
@@ -138,38 +189,37 @@ class _SidecarSlice:
     avg_item_bytes: float
 
 
-def _read_sidecar_slice(path: str, shard_key: str) -> _SidecarSlice | None:
-    """Read one sidecar and extract only the fields for ``shard_key``.
+def _read_sidecar_slice(path: str, target_shard: int) -> _SidecarSlice | None:
+    """Read a Parquet sidecar using row-group predicate pushdown.
 
-    Returns ``None`` if the sidecar has no ranges for this shard. The parsed
-    dict is released when this function returns. Once we confirm this shard
-    has ranges, ``max_chunk_rows[shard_key]`` and ``avg_item_bytes`` must
-    also be present — ``ScatterWriter`` records both in the same ``_flush``
-    that appends to ``shards[shard_key]``. A missing field here means the
-    sidecar is corrupt or was written by an incompatible version, and we
-    fail rather than silently substituting zero.
-
-    Uses ``fs.cat_file`` rather than ``open_url`` — one direct GET returning
-    bytes is ~25% faster than going through ``TextIOWrapper(BufferedFile)``
-    for small sidecars, and ``json.loads`` accepts bytes directly.
+    Row groups whose ``target_shard`` min/max statistics exclude the
+    target are skipped entirely. Only matching groups are read and
+    decoded — typically 1 out of ~100 groups.
     """
     meta_path = _scatter_meta_path(path)
-    fs, fs_path = url_to_fs(meta_path)
-    meta = json.loads(fs.cat_file(fs_path))
-    ranges_raw = meta.get("shards", {}).get(shard_key)
-    if not ranges_raw:
+
+    ranges: list[tuple[int, int]] = []
+    max_chunk_rows = 0
+    avg_item_bytes = 0.0
+
+    pf = pq.ParquetFile(meta_path)
+    for table in iter_parquet_row_groups(
+        pf,
+        equality_predicates={"target_shard": target_shard},
+    ):
+        for row in table.to_pylist():
+            ranges.append((row["chunk_offset"], row["chunk_length"]))
+            max_chunk_rows = max(max_chunk_rows, row["max_chunk_rows"])
+            avg_item_bytes = row["avg_item_bytes"]
+
+    if not ranges:
         return None
-    max_rows_map = meta.get("max_chunk_rows", {})
-    if shard_key not in max_rows_map:
-        raise ValueError(f"Sidecar {meta_path} has ranges for shard {shard_key} but no max_chunk_rows entry.")
-    if "avg_item_bytes" not in meta:
-        raise ValueError(f"Sidecar {meta_path} has ranges for shard {shard_key} but no avg_item_bytes.")
-    ranges = tuple((int(off), int(length)) for off, length in ranges_raw)
+
     return _SidecarSlice(
         path=path,
-        ranges=ranges,
-        max_chunk_rows=int(max_rows_map[shard_key]),
-        avg_item_bytes=float(meta["avg_item_bytes"]),
+        ranges=tuple(ranges),
+        max_chunk_rows=max_chunk_rows,
+        avg_item_bytes=avg_item_bytes,
     )
 
 
@@ -185,10 +235,9 @@ def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -
     read across colocated reducers) would avoid the redundant GCS GETs when
     many reducers run on the same host.
     """
-    shard_key = str(target_shard)
     ordered: list[_SidecarSlice | None] = [None] * len(scatter_paths)
     with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
-        futures = {pool.submit(_read_sidecar_slice, p, shard_key): i for i, p in enumerate(scatter_paths)}
+        futures = {pool.submit(_read_sidecar_slice, p, target_shard): i for i, p in enumerate(scatter_paths)}
         for fut in concurrent.futures.as_completed(futures):
             idx = futures[fut]
             ordered[idx] = fut.result()
@@ -507,15 +556,13 @@ class ScatterWriter:
                     self._flush(target, buf)
         self._out.close()
 
-        sidecar: dict = {
-            "shards": {str(k): v for k, v in self._shard_ranges.items()},
-            "max_chunk_rows": {str(k): v for k, v in self._per_shard_max_rows.items() if v > 0},
-        }
-        if self._avg_item_bytes > 0:
-            sidecar["avg_item_bytes"] = round(self._avg_item_bytes, 1)
-
         with log_time(f"Writing scatter meta for {self._data_path}"):
-            _write_scatter_meta(self._data_path, sidecar)
+            _write_scatter_meta(
+                self._data_path,
+                shard_ranges=dict(self._shard_ranges),
+                per_shard_max_rows=dict(self._per_shard_max_rows),
+                avg_item_bytes=self._avg_item_bytes,
+            )
 
         return ListShard(refs=[MemChunk(items=[self._data_path])])
 
