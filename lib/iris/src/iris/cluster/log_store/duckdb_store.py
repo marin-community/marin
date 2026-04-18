@@ -11,7 +11,7 @@ Two on-disk tiers:
 
 Lifecycle of a log entry:
 
-    1. Appended to ``_pending`` (plain Python list) under ``_lock``.
+    1. Appended to ``_pending`` (plain Python list) under ``_memory_lock``.
     2. A single background thread wakes periodically and:
        a. Every ``compact_interval_sec`` (default 1s): if ``_pending`` has at
           least ``_CHUNK_THRESHOLD`` rows, convert it to an Arrow ``Table`` and
@@ -41,7 +41,7 @@ The per-read working set is capped by ``_MAX_PARQUET_BYTES_PER_READ``, which
 handles a mix of small tmps and large logs gracefully.
 
 Locking:
-    ``_lock``  -- protects all mutable RAM state: ``_pending``, ``_chunks``,
+    ``_memory_lock``  -- protects all mutable RAM state: ``_pending``, ``_chunks``,
     ``_flushing``, ``_local_segments``, and ``_next_seq``. Held briefly for
     snapshots and swaps; never held across I/O.
 
@@ -361,7 +361,7 @@ class _ConnectionPool:
 class DuckDBLogStore:
     """Log store backed by rotating RAM buffers + Parquet segments.
 
-    Thread-safe. ``_lock`` protects all mutable RAM state; ``_segments_rwlock``
+    Thread-safe. ``_memory_lock`` protects all mutable RAM state; ``_segments_rwlock``
     serializes file ops against in-flight DuckDB reads.
     """
 
@@ -393,8 +393,8 @@ class DuckDBLogStore:
         self._segment_target_bytes = segment_target_bytes
         self._max_tmp_segments_before_compact = max_tmp_segments_before_compact
 
-        # ---- shared mutable state (all guarded by _lock) ----
-        self._lock = Lock()
+        # ---- shared mutable state (all guarded by _memory_lock) ----
+        self._memory_lock = Lock()
         self._next_seq = _recover_max_seq(self._log_dir)
         self._pending: list[tuple] = []  # hot write list, converted by bg thread
         self._chunks: list[pa.Table] = []  # power-of-2 merged arrow tables
@@ -438,7 +438,7 @@ class DuckDBLogStore:
     def append(self, key: str, entries: list) -> None:
         if not entries:
             return
-        with self._lock:
+        with self._memory_lock:
             first_seq = self._next_seq
             self._next_seq += len(entries)
             self._pending.extend(
@@ -450,7 +450,7 @@ class DuckDBLogStore:
 
     def append_batch(self, items: list[tuple[str, list]]) -> None:
         """Write log entries from multiple keys in a single operation."""
-        with self._lock:
+        with self._memory_lock:
             for key, entries in items:
                 if not entries:
                     continue
@@ -565,7 +565,7 @@ class DuckDBLogStore:
             # Backpressure: if total RAM holders blew past the segment target,
             # drain immediately and reset both rate limiters so the next idle
             # tick doesn't fire redundantly.
-            with self._lock:
+            with self._memory_lock:
                 force_drain = self._ram_bytes_locked() >= self._segment_target_bytes
                 tmp_count = sum(1 for s in self._local_segments if _is_tmp_path(s.path))
                 force_compaction = tmp_count > self._max_tmp_segments_before_compact
@@ -588,19 +588,19 @@ class DuckDBLogStore:
 
     def _compact_step(self) -> None:
         """Move ``_pending`` into a new Arrow chunk (if big enough)."""
-        with self._lock:
+        with self._memory_lock:
             if len(self._pending) < _CHUNK_THRESHOLD:
                 return
             rows = self._pending
             self._pending = []
         table = _build_buffer_table(rows)
-        with self._lock:
+        with self._memory_lock:
             self._chunks.append(table)
             self._chunks = _merge_chunks(self._chunks)
 
     def _flush_step(self) -> None:
         """Seal any RAM data into a Parquet segment on disk."""
-        with self._lock:
+        with self._memory_lock:
             if not self._chunks and not self._pending:
                 return
             tables = list(self._chunks)
@@ -622,7 +622,7 @@ class DuckDBLogStore:
             max_seq=pc.max(seq_col).as_py(),
         )
 
-        with self._lock:
+        with self._memory_lock:
             self._chunks = []
             self._flushing = sealed
 
@@ -630,7 +630,7 @@ class DuckDBLogStore:
             self._write_new_segment(sealed)
         except Exception:
             logger.warning("Flush failed, restoring data to chunks", exc_info=True)
-            with self._lock:
+            with self._memory_lock:
                 self._chunks.insert(0, sealed.table)
                 self._flushing = None
             return
@@ -667,7 +667,7 @@ class DuckDBLogStore:
             min_seq=sealed.min_seq,
             max_seq=sealed.max_seq,
         )
-        with self._lock:
+        with self._memory_lock:
             self._local_segments.append(seg)
             self._flushing = None
 
@@ -688,7 +688,7 @@ class DuckDBLogStore:
         inside DuckDB — never touches pyarrow's concat/sort path, which
         leaks ~45 MB per invocation when reading parquet back.
         """
-        with self._lock:
+        with self._memory_lock:
             tmps = [s for s in self._local_segments if _is_tmp_path(s.path)]
         if not tmps:
             return
@@ -730,7 +730,7 @@ class DuckDBLogStore:
         self._segments_rwlock.write_acquire()
         try:
             staging_path.rename(merged_path)
-            with self._lock:
+            with self._memory_lock:
                 new_segments: deque[_LocalSegment] = deque()
                 merged_inserted = False
                 for s in self._local_segments:
@@ -774,7 +774,7 @@ class DuckDBLogStore:
         in-progress DuckDB reads (which hold the shared read lock) are not
         disrupted by file deletion.
         """
-        with self._lock:
+        with self._memory_lock:
             total_bytes = sum(s.size_bytes for s in self._local_segments)
             to_delete: list[tuple[str, int]] = []
             remaining_count = len(self._local_segments)
@@ -829,7 +829,7 @@ class DuckDBLogStore:
             return existing
 
         missing_set = set(missing)
-        with self._lock:
+        with self._memory_lock:
             self._local_segments = deque(s for s in self._local_segments if s.path not in missing_set)
         logger.warning(
             "Pruned %d missing local segment(s) from in-memory index (e.g. %s)",
@@ -906,9 +906,8 @@ class DuckDBLogStore:
         include_key_in_select: bool,
         exact_key: str | None = None,
     ) -> LogReadResult:
-        # Acquire the segments read lock BEFORE snapshotting paths. This
-        # guarantees that no file in our snapshot can be deleted (by GC or
-        # consolidation) until we release the lock after DuckDB is done.
+        # Hold the rwlock across the whole query so GC / compaction can't
+        # unlink a file that DuckDB may still open lazily.
         self._segments_rwlock.read_acquire()
         try:
             rows = self._run_read_locked(
@@ -970,7 +969,7 @@ class DuckDBLogStore:
         """Snapshot RAM + segments, run one DuckDB query. Caller holds the
         segments read lock. All pruning is delegated to DuckDB.
         """
-        with self._lock:
+        with self._memory_lock:
             segments = list(self._local_segments)
             ram_tables: list[pa.Table] = list(self._chunks)
             if self._flushing is not None:
