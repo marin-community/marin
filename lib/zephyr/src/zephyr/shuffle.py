@@ -120,29 +120,62 @@ def _write_scatter_meta(data_path: str, sidecar: dict) -> None:
             f.write(payload)
 
 
-def _read_sidecars_parallel(scatter_paths: list[str]) -> list[tuple[str, dict]]:
-    """Read every ``.scatter_meta`` sidecar concurrently, preserving input order.
+@dataclass(frozen=True)
+class _SidecarSlice:
+    """One reducer's slice of a mapper sidecar.
 
-    Each reducer calls this to build its ``ScatterReader`` directly from the
-    per-mapper sidecars, without going through a coordinator-written manifest.
+    A full sidecar is ~hundreds of KB and carries byte ranges for every
+    target shard (tens of thousands on large jobs). A reducer only consumes
+    its own shard's ranges plus two scalars, so the worker extracts just
+    those fields and discards the parsed dict before returning. This keeps
+    the reducer's resident memory proportional to the number of mappers
+    instead of mappers * sidecar size.
+    """
+
+    path: str
+    ranges: tuple[tuple[int, int], ...]
+    max_chunk_rows: int
+    avg_item_bytes: float
+
+
+def _read_sidecar_slice(path: str, shard_key: str) -> _SidecarSlice | None:
+    """Read one sidecar and extract only the fields for ``shard_key``.
+
+    Returns ``None`` if the sidecar has no ranges for this shard. The parsed
+    dict is released when this function returns.
+    """
+    meta_path = _scatter_meta_path(path)
+    with open_url(meta_path, "r") as f:
+        meta = json.loads(f.read())
+    ranges_raw = meta.get("shards", {}).get(shard_key)
+    if not ranges_raw:
+        return None
+    ranges = tuple((int(off), int(length)) for off, length in ranges_raw)
+    max_rows = int(meta.get("max_chunk_rows", {}).get(shard_key, 0))
+    avg = float(meta.get("avg_item_bytes", 0.0))
+    return _SidecarSlice(path=path, ranges=ranges, max_chunk_rows=max_rows, avg_item_bytes=avg)
+
+
+def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -> list[_SidecarSlice]:
+    """Read every sidecar concurrently and return per-shard slices in input order.
+
+    Extraction happens inside the worker so full sidecar dicts never
+    accumulate in the reducer process. Sidecars with no ranges for
+    ``target_shard`` are dropped.
 
     TODO(rav): each reducer subprocess re-reads every sidecar even though only
     one shard's byte ranges are used. A worker-level sidecar cache (or a shared
     read across colocated reducers) would avoid the redundant GCS GETs when
     many reducers run on the same host.
     """
-
-    def _read_entry(path: str) -> tuple[str, dict]:
-        meta_path = _scatter_meta_path(path)
-        with open_url(meta_path, "r") as f:
-            return path, json.loads(f.read())
-
-    results: dict[str, dict] = {}
+    shard_key = str(target_shard)
+    ordered: list[_SidecarSlice | None] = [None] * len(scatter_paths)
     with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
-        for path, meta in pool.map(_read_entry, scatter_paths):
-            results[path] = meta
-
-    return [(path, results[path]) for path in scatter_paths]
+        futures = {pool.submit(_read_sidecar_slice, p, shard_key): i for i, p in enumerate(scatter_paths)}
+        for fut in concurrent.futures.as_completed(futures):
+            idx = futures[fut]
+            ordered[idx] = fut.result()
+    return [s for s in ordered if s is not None]
 
 
 # ---------------------------------------------------------------------------
@@ -234,8 +267,6 @@ class ScatterReader:
         is needed, which eliminates a serialization bottleneck when there are
         thousands of mappers.
         """
-        shard_key = str(target_shard)
-
         iterators: list[ScatterFileIterator] = []
         max_rows = 0
         weighted_bytes = 0.0
@@ -245,26 +276,12 @@ class ScatterReader:
             f"Building ScatterReader for target shard {target_shard} "
             f"from {len(scatter_paths)} sidecars (concurrency={_SIDECAR_READ_CONCURRENCY})"
         ):
-            for path, meta in _read_sidecars_parallel(scatter_paths):
-                shards = meta.get("shards", {})
-                ranges = shards.get(shard_key)
-                if not ranges:
-                    continue
-
-                iterators.append(
-                    ScatterFileIterator(
-                        path=path,
-                        chunks=tuple((int(off), int(length)) for off, length in ranges),
-                    )
-                )
-
-                per_shard_max = meta.get("max_chunk_rows", {})
-                max_rows = max(max_rows, per_shard_max.get(shard_key, 0))
-
-                ab = meta.get("avg_item_bytes", 0.0)
-                if ab > 0:
-                    count = len(ranges)
-                    weighted_bytes += ab * count
+            for slice_ in _read_sidecar_slices_parallel(scatter_paths, target_shard):
+                iterators.append(ScatterFileIterator(path=slice_.path, chunks=slice_.ranges))
+                max_rows = max(max_rows, slice_.max_chunk_rows)
+                if slice_.avg_item_bytes > 0:
+                    count = len(slice_.ranges)
+                    weighted_bytes += slice_.avg_item_bytes * count
                     total_chunks_for_avg += count
 
         if max_rows == 0:
