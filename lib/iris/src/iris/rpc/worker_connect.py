@@ -39,6 +39,18 @@ class WorkerService(Protocol):
     async def exec_in_container(self, request: worker__pb2.Worker.ExecInContainerRequest, ctx: RequestContext) -> worker__pb2.Worker.ExecInContainerResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def ping(self, request: worker__pb2.Worker.PingRequest, ctx: RequestContext) -> worker__pb2.Worker.PingResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def start_tasks(self, request: worker__pb2.Worker.StartTasksRequest, ctx: RequestContext) -> worker__pb2.Worker.StartTasksResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def stop_tasks(self, request: worker__pb2.Worker.StopTasksRequest, ctx: RequestContext) -> worker__pb2.Worker.StopTasksResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def poll_tasks(self, request: worker__pb2.Worker.PollTasksRequest, ctx: RequestContext) -> worker__pb2.Worker.PollTasksResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
 
 class WorkerServiceASGIApplication(ConnectASGIApplication[WorkerService]):
     def __init__(self, service: WorkerService | AsyncGenerator[WorkerService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None) -> None:
@@ -114,6 +126,46 @@ class WorkerServiceASGIApplication(ConnectASGIApplication[WorkerService]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.exec_in_container,
+                ),
+                "/iris.cluster.WorkerService/Ping": Endpoint.unary(
+                    method=MethodInfo(
+                        name="Ping",
+                        service_name="iris.cluster.WorkerService",
+                        input=worker__pb2.Worker.PingRequest,
+                        output=worker__pb2.Worker.PingResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.ping,
+                ),
+                "/iris.cluster.WorkerService/StartTasks": Endpoint.unary(
+                    method=MethodInfo(
+                        name="StartTasks",
+                        service_name="iris.cluster.WorkerService",
+                        input=worker__pb2.Worker.StartTasksRequest,
+                        output=worker__pb2.Worker.StartTasksResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.start_tasks,
+                ),
+                "/iris.cluster.WorkerService/StopTasks": Endpoint.unary(
+                    method=MethodInfo(
+                        name="StopTasks",
+                        service_name="iris.cluster.WorkerService",
+                        input=worker__pb2.Worker.StopTasksRequest,
+                        output=worker__pb2.Worker.StopTasksResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.stop_tasks,
+                ),
+                "/iris.cluster.WorkerService/PollTasks": Endpoint.unary(
+                    method=MethodInfo(
+                        name="PollTasks",
+                        service_name="iris.cluster.WorkerService",
+                        input=worker__pb2.Worker.PollTasksRequest,
+                        output=worker__pb2.Worker.PollTasksResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.poll_tasks,
                 ),
             },
             interceptors=interceptors,
@@ -268,6 +320,86 @@ class WorkerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def ping(
+        self,
+        request: worker__pb2.Worker.PingRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> worker__pb2.Worker.PingResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="Ping",
+                service_name="iris.cluster.WorkerService",
+                input=worker__pb2.Worker.PingRequest,
+                output=worker__pb2.Worker.PingResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def start_tasks(
+        self,
+        request: worker__pb2.Worker.StartTasksRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> worker__pb2.Worker.StartTasksResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="StartTasks",
+                service_name="iris.cluster.WorkerService",
+                input=worker__pb2.Worker.StartTasksRequest,
+                output=worker__pb2.Worker.StartTasksResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def stop_tasks(
+        self,
+        request: worker__pb2.Worker.StopTasksRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> worker__pb2.Worker.StopTasksResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="StopTasks",
+                service_name="iris.cluster.WorkerService",
+                input=worker__pb2.Worker.StopTasksRequest,
+                output=worker__pb2.Worker.StopTasksResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def poll_tasks(
+        self,
+        request: worker__pb2.Worker.PollTasksRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> worker__pb2.Worker.PollTasksResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="PollTasks",
+                service_name="iris.cluster.WorkerService",
+                input=worker__pb2.Worker.PollTasksRequest,
+                output=worker__pb2.Worker.PollTasksResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 class WorkerServiceSync(Protocol):
     def get_task_status(self, request: worker__pb2.Worker.GetTaskStatusRequest, ctx: RequestContext) -> job__pb2.TaskStatus:
@@ -283,6 +415,14 @@ class WorkerServiceSync(Protocol):
     def get_process_status(self, request: job__pb2.GetProcessStatusRequest, ctx: RequestContext) -> job__pb2.GetProcessStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def exec_in_container(self, request: worker__pb2.Worker.ExecInContainerRequest, ctx: RequestContext) -> worker__pb2.Worker.ExecInContainerResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def ping(self, request: worker__pb2.Worker.PingRequest, ctx: RequestContext) -> worker__pb2.Worker.PingResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def start_tasks(self, request: worker__pb2.Worker.StartTasksRequest, ctx: RequestContext) -> worker__pb2.Worker.StartTasksResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def stop_tasks(self, request: worker__pb2.Worker.StopTasksRequest, ctx: RequestContext) -> worker__pb2.Worker.StopTasksResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def poll_tasks(self, request: worker__pb2.Worker.PollTasksRequest, ctx: RequestContext) -> worker__pb2.Worker.PollTasksResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -359,6 +499,46 @@ class WorkerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.exec_in_container,
+                ),
+                "/iris.cluster.WorkerService/Ping": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="Ping",
+                        service_name="iris.cluster.WorkerService",
+                        input=worker__pb2.Worker.PingRequest,
+                        output=worker__pb2.Worker.PingResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.ping,
+                ),
+                "/iris.cluster.WorkerService/StartTasks": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="StartTasks",
+                        service_name="iris.cluster.WorkerService",
+                        input=worker__pb2.Worker.StartTasksRequest,
+                        output=worker__pb2.Worker.StartTasksResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.start_tasks,
+                ),
+                "/iris.cluster.WorkerService/StopTasks": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="StopTasks",
+                        service_name="iris.cluster.WorkerService",
+                        input=worker__pb2.Worker.StopTasksRequest,
+                        output=worker__pb2.Worker.StopTasksResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.stop_tasks,
+                ),
+                "/iris.cluster.WorkerService/PollTasks": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="PollTasks",
+                        service_name="iris.cluster.WorkerService",
+                        input=worker__pb2.Worker.PollTasksRequest,
+                        output=worker__pb2.Worker.PollTasksResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.poll_tasks,
                 ),
             },
             interceptors=interceptors,
@@ -507,6 +687,86 @@ class WorkerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.WorkerService",
                 input=worker__pb2.Worker.ExecInContainerRequest,
                 output=worker__pb2.Worker.ExecInContainerResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def ping(
+        self,
+        request: worker__pb2.Worker.PingRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> worker__pb2.Worker.PingResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="Ping",
+                service_name="iris.cluster.WorkerService",
+                input=worker__pb2.Worker.PingRequest,
+                output=worker__pb2.Worker.PingResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def start_tasks(
+        self,
+        request: worker__pb2.Worker.StartTasksRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> worker__pb2.Worker.StartTasksResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="StartTasks",
+                service_name="iris.cluster.WorkerService",
+                input=worker__pb2.Worker.StartTasksRequest,
+                output=worker__pb2.Worker.StartTasksResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def stop_tasks(
+        self,
+        request: worker__pb2.Worker.StopTasksRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> worker__pb2.Worker.StopTasksResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="StopTasks",
+                service_name="iris.cluster.WorkerService",
+                input=worker__pb2.Worker.StopTasksRequest,
+                output=worker__pb2.Worker.StopTasksResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def poll_tasks(
+        self,
+        request: worker__pb2.Worker.PollTasksRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> worker__pb2.Worker.PollTasksResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="PollTasks",
+                service_name="iris.cluster.WorkerService",
+                input=worker__pb2.Worker.PollTasksRequest,
+                output=worker__pb2.Worker.PollTasksResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

@@ -241,5 +241,7 @@ def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("fsspec").setLevel(logging.WARNING)
+    logging.getLogger("fsspec.caching").setLevel(logging.WARNING)
 
     return _global_buffer

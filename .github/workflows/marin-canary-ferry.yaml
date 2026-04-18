@@ -62,15 +62,16 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Set up OS Login SSH key
+      - name: Install SSH key
+        env:
+          SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
+          SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
         run: |
           mkdir -p ~/.ssh
-          ssh-keygen -t rsa -b 4096 -f ~/.ssh/google_compute_engine -N "" -q -C "gha-${{ github.run_id }}-${{ github.run_attempt }}"
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
+          printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
           chmod 600 ~/.ssh/google_compute_engine
-          gcloud compute os-login ssh-keys add \
-            --key-file ~/.ssh/google_compute_engine.pub \
-            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
-            --ttl=6h
+          chmod 644 ~/.ssh/google_compute_engine.pub
 
       - name: Submit canary ferry
         id: submit
@@ -132,6 +133,16 @@ jobs:
       - name: Validate canary metrics
         continue-on-error: ${{ inputs.target_tokens != '' }}
         shell: bash -l {0}
+        # MARIN_PREFIX is required so mirror:// knows which gs://marin-* bucket
+        # counts as "local" — without it the runner falls back to /tmp/marin,
+        # _mirror_remote_prefixes() returns [] (to avoid anonymous-caller 401s
+        # from gcsfs off-GCP), and the read raises FileNotFoundError. The
+        # google-github-actions/auth step above provides the credentials
+        # gcsfs needs to actually scan the remote buckets. Canary lands on v5p
+        # in us-central1 or us-east5; picking us-central1 keeps the hit rate
+        # high and lets mirror:// resolve either region.
+        env:
+          MARIN_PREFIX: gs://marin-us-central1
         run: .venv/bin/python scripts/canary/validate_canary_metrics.py
 
       - name: Summarize TPU canary profile
@@ -247,13 +258,6 @@ jobs:
           path: slack_message.md
           retention-days: 1
           if-no-files-found: ignore
-
-      - name: Remove OS Login SSH key
-        if: always()
-        run: |
-          gcloud compute os-login ssh-keys remove \
-            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
-            --key-file ~/.ssh/google_compute_engine.pub || true
 
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. `needs.canary-ferry.result` reflects the main job

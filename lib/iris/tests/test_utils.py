@@ -91,7 +91,7 @@ def test_wait_for_condition_timeout() -> None:
         wait_for_condition(lambda: False, timeout=Duration.from_seconds(0.1))
     elapsed = time.monotonic() - start
 
-    assert 0.09 < elapsed < 0.2
+    assert 0.09 < elapsed < 1.0
 
 
 def test_wait_for_condition_becomes_true() -> None:

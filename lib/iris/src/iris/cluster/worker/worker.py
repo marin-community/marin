@@ -249,8 +249,13 @@ class Worker:
                 interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
             self._controller_client = ControllerServiceClientSync(
                 address=self._config.controller_address,
-                timeout_ms=5000,
+                timeout_ms=10_000,
                 interceptors=interceptors,
+            )
+            self._log_pusher = LogPusher(
+                "/system/log-server",
+                interceptors=interceptors,
+                resolver=self._resolve_log_service,
             )
 
             # Start lifecycle thread: register + serve + reset loop
@@ -308,6 +313,7 @@ class Worker:
                 port_allocator=self._port_allocator,
                 poll_interval_seconds=self._config.poll_interval.to_seconds(),
             )
+            attempt.on_state_change = self._make_state_change_callback(attempt)
 
             key = (container.task_id, container.attempt_id)
             with self._lock:
@@ -460,61 +466,29 @@ class Worker:
 
         return None
 
-    def _resolve_log_service(self) -> str | None:
-        """Resolve the LogService address via the /system/log-server endpoint.
-
-        Called before registration, so the controller may not yet be reachable.
-        Treats RPC errors and missing endpoints the same: log a warning and
-        return None so the caller can skip remote log attachment without
-        crashing the lifecycle thread.
-        """
-        if not self._controller_client:
-            return None
-        try:
-            resp = self._controller_client.list_endpoints(
-                controller_pb2.Controller.ListEndpointsRequest(
-                    prefix="/system/log-server",
-                    exact=True,
-                ),
-            )
-        except Exception as e:
-            logger.warning("Failed to resolve /system/log-server: %s", e)
-            return None
+    def _resolve_log_service(self, server_url: str) -> str:
+        """Look up ``server_url`` on the controller's endpoint registry."""
+        if self._controller_client is None:
+            raise ConnectionError("worker controller client not yet initialized")
+        resp = self._controller_client.list_endpoints(
+            controller_pb2.Controller.ListEndpointsRequest(prefix=server_url, exact=True),
+        )
         if not resp.endpoints:
-            logger.warning("No /system/log-server endpoint registered on controller")
-            return None
-        addr = resp.endpoints[0].address
-        logger.info("Resolved /system/log-server -> %s", addr)
-        return addr
+            raise ConnectionError(f"No {server_url!r} endpoint registered on controller")
+        return resp.endpoints[0].address
 
     def _attach_log_handler(self) -> None:
-        """Create LogPusher and attach RemoteLogHandler under ``worker_log_key``.
-
-        Always tears down any existing handler first so each lifecycle cycle
-        re-resolves /system/log-server (picking up log-server failover) and
-        rebuilds the LogPusher against the fresh address.
-
-        Skipped when ``self._worker_id`` is not yet known locally — in that
-        (rare) case the controller will assign an id during ``_register`` and
-        the lifecycle loop re-calls this method with the canonical id.
-        """
-        self._detach_log_handler()
-        if not self._worker_id:
+        """Attach or rename the remote log handler under ``worker_log_key(self._worker_id)``."""
+        if not self._worker_id or self._log_pusher is None:
             return
-        log_addr = self._resolve_log_service()
-        if not log_addr:
-            return
-        log_interceptors = ()
-        if self._config.auth_token:
-            log_interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
-        self._log_pusher = LogPusher(log_addr, interceptors=log_interceptors)
-        self._log_handler = RemoteLogHandler(
-            self._log_pusher,
-            key=worker_log_key(self._worker_id),
-        )
-        self._log_handler.setLevel(logging.INFO)
-        self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
-        logging.getLogger().addHandler(self._log_handler)
+        key = worker_log_key(self._worker_id)
+        if self._log_handler is None:
+            self._log_handler = RemoteLogHandler(self._log_pusher, key=key)
+            self._log_handler.setLevel(logging.INFO)
+            self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+            logging.getLogger().addHandler(self._log_handler)
+        else:
+            self._log_handler.key = key
 
     def _detach_log_handler(self) -> None:
         """Remove and close the current RemoteLogHandler and LogPusher if any."""
@@ -525,6 +499,51 @@ class Worker:
         if self._log_pusher is not None:
             self._log_pusher.close()
             self._log_pusher = None
+
+    def _make_state_change_callback(self, attempt: TaskAttempt) -> Callable[[job_pb2.TaskState], None]:
+        """Build a closure that pushes a WorkerTaskStatus to the controller on transition.
+
+        Runs synchronously on the TaskAttempt's own thread. RPC failures are
+        dropped — the controller's poll loop reconciles missed transitions.
+        """
+
+        def _on_state_change(new_state: job_pb2.TaskState) -> None:
+            client = self._controller_client
+            if client is None or not self._worker_id:
+                return
+            reported_state = new_state
+            if reported_state == job_pb2.TASK_STATE_PENDING:
+                reported_state = job_pb2.TASK_STATE_BUILDING
+            entry = job_pb2.WorkerTaskStatus(
+                task_id=attempt.task_id.to_wire(),
+                attempt_id=attempt.attempt_id,
+                state=reported_state,
+                exit_code=attempt.exit_code or 0,
+                error=attempt.error or "",
+                container_id=attempt.platform_container_id or "",
+            )
+            if attempt.finished_at is not None:
+                entry.finished_at.CopyFrom(timestamp_to_proto(attempt.finished_at))
+            usage = job_pb2.ResourceUsage(
+                memory_mb=attempt.current_memory_mb,
+                memory_peak_mb=attempt.peak_memory_mb,
+                disk_mb=attempt.disk_mb,
+                cpu_millicores=attempt.current_cpu_millicores,
+                process_count=attempt.process_count,
+            )
+            if usage.ByteSize() > 0:
+                entry.resource_usage.CopyFrom(usage)
+            try:
+                client.update_task_status(
+                    controller_pb2.Controller.UpdateTaskStatusRequest(
+                        worker_id=self._worker_id,
+                        updates=[entry],
+                    )
+                )
+            except Exception as e:
+                logger.warning("UpdateTaskStatus push failed for %s: %s", attempt.task_id, e)
+
+        return _on_state_change
 
     def _resolve_address(self) -> str:
         """Resolve the address to advertise to the controller."""
@@ -678,6 +697,7 @@ class Worker:
             log_pusher=self._log_pusher,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )
+        attempt.on_state_change = self._make_state_change_callback(attempt)
 
         with self._lock:
             self._tasks[key] = attempt
@@ -734,6 +754,91 @@ class Worker:
                 by_task[task_id] = task
         return list(by_task.values())
 
+    def _encode_task_status(self, task: TaskAttempt, task_id: str) -> job_pb2.WorkerTaskStatus:
+        """Build a WorkerTaskStatus proto from a worker-side TaskAttempt.
+
+        Maps PENDING → BUILDING because the controller treats PENDING as
+        "not yet picked up by a worker"; once a worker holds the task, the
+        earliest visible state to the controller is BUILDING.
+        """
+        task_proto = task.to_proto()
+        reported_state = task.status
+        if reported_state == job_pb2.TASK_STATE_PENDING:
+            reported_state = job_pb2.TASK_STATE_BUILDING
+        entry = job_pb2.WorkerTaskStatus(
+            task_id=task_id,
+            attempt_id=task_proto.current_attempt_id,
+            state=reported_state,
+            exit_code=task_proto.exit_code,
+            error=task_proto.error or "",
+            container_id=task_proto.container_id or "",
+        )
+        if task.status in self._TERMINAL_STATES:
+            entry.finished_at.CopyFrom(task_proto.finished_at)
+        if task_proto.resource_usage.ByteSize() > 0:
+            entry.resource_usage.CopyFrom(task_proto.resource_usage)
+        return entry
+
+    @staticmethod
+    def _missing_task_status(task_id: str, expected_attempt_id: int) -> job_pb2.WorkerTaskStatus:
+        """Status for an expected task that the worker has no record of (lost state)."""
+        return job_pb2.WorkerTaskStatus(
+            task_id=task_id,
+            attempt_id=expected_attempt_id,
+            state=job_pb2.TASK_STATE_WORKER_FAILED,
+            exit_code=0,
+            error="Task not found on worker",
+            finished_at=timestamp_to_proto(Timestamp.now()),
+        )
+
+    def _reconcile_expected_tasks(
+        self,
+        expected_entries,
+        extra_expected_keys: set[tuple[str, int]] | None = None,
+    ) -> tuple[list[job_pb2.WorkerTaskStatus], list[tuple[str, int]]]:
+        """Build status entries for expected tasks; collect non-terminal local tasks
+        not in the expected set as targets to kill.
+
+        Caller must hold ``self._lock``.
+
+        ``extra_expected_keys`` keeps freshly-submitted tasks (e.g. ``tasks_to_run``
+        on the legacy heartbeat) from being killed when they aren't yet in the
+        controller's expected set.
+        """
+        tasks: list[job_pb2.WorkerTaskStatus] = []
+        expected_keys: set[tuple[str, int]] = set()
+        for expected_entry in expected_entries:
+            task_id = expected_entry.task_id
+            expected_attempt_id = expected_entry.attempt_id
+            key = (task_id, expected_attempt_id)
+            expected_keys.add(key)
+            task = self._tasks.get(key)
+            if task is None:
+                tasks.append(self._missing_task_status(task_id, expected_attempt_id))
+            else:
+                tasks.append(self._encode_task_status(task, task_id))
+        if extra_expected_keys:
+            expected_keys |= extra_expected_keys
+        tasks_to_kill: list[tuple[str, int]] = []
+        for key, task in self._tasks.items():
+            if key not in expected_keys and task.status not in self._TERMINAL_STATES:
+                tasks_to_kill.append(key)
+        return tasks, tasks_to_kill
+
+    def _collect_resource_metrics(self) -> job_pb2.WorkerResourceSnapshot:
+        """Collect host metrics with running-task and process aggregates filled in."""
+        snapshot = self._host_metrics.collect()
+        running_count = 0
+        total_processes = 0
+        with self._lock:
+            for task in self._tasks.values():
+                if task.status == job_pb2.TASK_STATE_RUNNING:
+                    running_count += 1
+                    total_processes += task.process_count
+        snapshot.running_task_count = running_count
+        snapshot.total_process_count = total_processes
+        return snapshot
+
     def handle_heartbeat(self, request: job_pb2.HeartbeatRequest) -> job_pb2.HeartbeatResponse:
         """Handle controller-initiated heartbeat with reconciliation.
 
@@ -785,60 +890,13 @@ class Worker:
                     except Exception as e:
                         logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
 
-            tasks: list[job_pb2.WorkerTaskStatus] = []
-
             with slow_log(logger, "heartbeat reconciliation", threshold_ms=200):
+                # tasks_to_run was just submitted above; carry those keys so a
+                # newly-assigned task isn't killed if the controller hasn't yet
+                # listed it in expected_tasks.
+                extra_keys = {(r.task_id, r.attempt_id) for r in request.tasks_to_run}
                 with self._lock:
-                    # Reconcile expected_tasks against actual state
-                    for expected_entry in request.expected_tasks:
-                        task_id = expected_entry.task_id
-                        expected_attempt_id = expected_entry.attempt_id
-                        key = (task_id, expected_attempt_id)
-                        task = self._tasks.get(key)
-
-                        if task is None:
-                            tasks.append(
-                                job_pb2.WorkerTaskStatus(
-                                    task_id=task_id,
-                                    attempt_id=expected_attempt_id,
-                                    state=job_pb2.TASK_STATE_WORKER_FAILED,
-                                    exit_code=0,
-                                    error="Task not found on worker",
-                                    finished_at=timestamp_to_proto(Timestamp.now()),
-                                )
-                            )
-                        else:
-                            task_proto = task.to_proto()
-                            reported_state = task.status
-                            if reported_state == job_pb2.TASK_STATE_PENDING:
-                                reported_state = job_pb2.TASK_STATE_BUILDING
-
-                            entry = job_pb2.WorkerTaskStatus(
-                                task_id=task_id,
-                                attempt_id=task_proto.current_attempt_id,
-                                state=reported_state,
-                                exit_code=task_proto.exit_code,
-                                error=task_proto.error or "",
-                                container_id=task_proto.container_id or "",
-                            )
-                            if task.status in self._TERMINAL_STATES:
-                                entry.finished_at.CopyFrom(task_proto.finished_at)
-                            if task_proto.resource_usage.ByteSize() > 0:
-                                entry.resource_usage.CopyFrom(task_proto.resource_usage)
-                            tasks.append(entry)
-
-                    # Kill tasks not in expected_tasks - the controller has decided these
-                    # tasks should no longer run (e.g., job was killed, task was reassigned).
-                    # Include tasks_to_run in the expected set: these were just submitted
-                    # in this heartbeat and may not yet appear in expected_tasks if the
-                    # controller excludes unconfirmed tasks.
-                    expected_keys = {(entry.task_id, entry.attempt_id) for entry in request.expected_tasks}
-                    for run_req in request.tasks_to_run:
-                        expected_keys.add((run_req.task_id, run_req.attempt_id))
-                    tasks_to_kill: list[tuple[str, int]] = []
-                    for key, task in self._tasks.items():
-                        if key not in expected_keys and task.status not in self._TERMINAL_STATES:
-                            tasks_to_kill.append(key)
+                    tasks, tasks_to_kill = self._reconcile_expected_tasks(request.expected_tasks, extra_keys)
 
                 # Kill removed tasks asynchronously outside lock to avoid deadlock
                 for task_id, attempt_id in tasks_to_kill:
@@ -847,16 +905,7 @@ class Worker:
 
             # Collect host metrics and aggregate task stats
             with slow_log(logger, "heartbeat host_metrics", threshold_ms=100):
-                resource_snapshot = self._host_metrics.collect()
-                running_count = 0
-                total_processes = 0
-                with self._lock:
-                    for task in self._tasks.values():
-                        if task.status == job_pb2.TASK_STATE_RUNNING:
-                            running_count += 1
-                            total_processes += task.process_count
-                resource_snapshot.running_task_count = running_count
-                resource_snapshot.total_process_count = total_processes
+                resource_snapshot = self._collect_resource_metrics()
 
             # Run health checks to detect local faults (disk full, write failure)
             with slow_log(logger, "heartbeat health_check", threshold_ms=100):
@@ -870,6 +919,53 @@ class Worker:
                 worker_healthy=health.healthy,
                 health_error=health.error,
             )
+
+    def handle_ping(self, request: worker_pb2.Worker.PingRequest) -> worker_pb2.Worker.PingResponse:
+        """Liveness check. Resets heartbeat deadline, returns resource snapshot and health."""
+        self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
+        resource_snapshot = self._collect_resource_metrics()
+        health = check_worker_health(disk_path=str(self._cache_dir))
+        if not health.healthy:
+            logger.warning("Worker health check failed: %s", health.error)
+        return worker_pb2.Worker.PingResponse(
+            resource_snapshot=resource_snapshot,
+            healthy=health.healthy,
+            health_error=health.error,
+        )
+
+    def handle_start_tasks(self, request: worker_pb2.Worker.StartTasksRequest) -> worker_pb2.Worker.StartTasksResponse:
+        """Start task attempts on this worker. Returns per-task ack."""
+        acks = []
+        for run_req in request.tasks:
+            try:
+                self.submit_task(run_req)
+                logger.info("StartTasks: submitted task %s", run_req.task_id)
+                acks.append(worker_pb2.Worker.TaskAck(task_id=run_req.task_id, accepted=True))
+            except Exception as e:
+                logger.warning("StartTasks: failed to submit task %s: %s", run_req.task_id, e)
+                acks.append(worker_pb2.Worker.TaskAck(task_id=run_req.task_id, accepted=False, error=str(e)))
+        return worker_pb2.Worker.StartTasksResponse(acks=acks)
+
+    def handle_stop_tasks(self, request: worker_pb2.Worker.StopTasksRequest) -> worker_pb2.Worker.StopTasksResponse:
+        """Stop given tasks on this worker."""
+        for task_id in request.task_ids:
+            try:
+                current = self._get_current_attempt(task_id)
+                if current:
+                    self._kill_task_attempt(task_id, current.attempt_id, async_kill=True)
+                    logger.info("StopTasks: initiated async kill for task %s", task_id)
+            except Exception as e:
+                logger.warning("StopTasks: failed to kill task %s: %s", task_id, e)
+        return worker_pb2.Worker.StopTasksResponse()
+
+    def handle_poll_tasks(self, request: worker_pb2.Worker.PollTasksRequest) -> worker_pb2.Worker.PollTasksResponse:
+        """Report status of expected tasks and kill unexpected tasks."""
+        with self._lock:
+            tasks, tasks_to_kill = self._reconcile_expected_tasks(request.expected_tasks)
+        for task_id, attempt_id in tasks_to_kill:
+            logger.warning("PollTasks: killing task %s attempt %d (unexpected)", task_id, attempt_id)
+            self._kill_task_attempt(task_id, attempt_id, async_kill=True)
+        return worker_pb2.Worker.PollTasksResponse(tasks=tasks)
 
     def _kill_task_attempt(
         self,

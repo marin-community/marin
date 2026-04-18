@@ -156,24 +156,10 @@ class Controller(_message.Message):
         limit: int
         def __init__(self, scope: _Optional[_Union[Controller.JobQueryScope, str]] = ..., parent_job_id: _Optional[str] = ..., name_filter: _Optional[str] = ..., state_filter: _Optional[str] = ..., sort_field: _Optional[_Union[Controller.JobSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ...) -> None: ...
     class ListJobsRequest(_message.Message):
-        __slots__ = ("query", "offset", "limit", "sort_field", "sort_direction", "name_filter", "state_filter", "parent_job_id")
+        __slots__ = ("query",)
         QUERY_FIELD_NUMBER: _ClassVar[int]
-        OFFSET_FIELD_NUMBER: _ClassVar[int]
-        LIMIT_FIELD_NUMBER: _ClassVar[int]
-        SORT_FIELD_FIELD_NUMBER: _ClassVar[int]
-        SORT_DIRECTION_FIELD_NUMBER: _ClassVar[int]
-        NAME_FILTER_FIELD_NUMBER: _ClassVar[int]
-        STATE_FILTER_FIELD_NUMBER: _ClassVar[int]
-        PARENT_JOB_ID_FIELD_NUMBER: _ClassVar[int]
         query: Controller.JobQuery
-        offset: int
-        limit: int
-        sort_field: Controller.JobSortField
-        sort_direction: Controller.SortDirection
-        name_filter: str
-        state_filter: str
-        parent_job_id: str
-        def __init__(self, query: _Optional[_Union[Controller.JobQuery, _Mapping]] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ..., sort_field: _Optional[_Union[Controller.JobSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., name_filter: _Optional[str] = ..., state_filter: _Optional[str] = ..., parent_job_id: _Optional[str] = ...) -> None: ...
+        def __init__(self, query: _Optional[_Union[Controller.JobQuery, _Mapping]] = ...) -> None: ...
     class ListJobsResponse(_message.Message):
         __slots__ = ("jobs", "total_count", "has_more")
         JOBS_FIELD_NUMBER: _ClassVar[int]
@@ -644,6 +630,16 @@ class Controller(_message.Message):
         USERS_FIELD_NUMBER: _ClassVar[int]
         users: _containers.RepeatedCompositeFieldContainer[Controller.GetUserBudgetResponse]
         def __init__(self, users: _Optional[_Iterable[_Union[Controller.GetUserBudgetResponse, _Mapping]]] = ...) -> None: ...
+    class UpdateTaskStatusRequest(_message.Message):
+        __slots__ = ("worker_id", "updates")
+        WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+        UPDATES_FIELD_NUMBER: _ClassVar[int]
+        worker_id: str
+        updates: _containers.RepeatedCompositeFieldContainer[_job_pb2.WorkerTaskStatus]
+        def __init__(self, worker_id: _Optional[str] = ..., updates: _Optional[_Iterable[_Union[_job_pb2.WorkerTaskStatus, _Mapping]]] = ...) -> None: ...
+    class UpdateTaskStatusResponse(_message.Message):
+        __slots__ = ()
+        def __init__(self) -> None: ...
     class GetSchedulerStateRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...

@@ -35,7 +35,6 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import cloudpickle
-import pyarrow as pa
 from rigging.filesystem import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from fray.v2.client import JobHandle
@@ -112,12 +111,9 @@ class PickleDiskChunk:
 from zephyr.shuffle import (  # noqa: E402
     ListShard,
     MemChunk,
-    ScatterShard,  # noqa: F401 — re-exported for plan.py and external callers
-    _build_scatter_shard_from_manifest,  # noqa: F401 — re-exported for plan.py
-    _make_envelope,
-    _write_parquet_scatter,
-    _write_scatter_manifest,
-    _SCATTER_MANIFEST_NAME,
+    ScatterReader,  # noqa: F401 — re-exported for plan.py and external callers
+    ScatterWriter,  # noqa: F401 — re-exported for external callers
+    _write_scatter,
 )
 
 # ---------------------------------------------------------------------------
@@ -232,36 +228,22 @@ def _write_stage_output(
     TaskResult with a ListShard.
     """
     if scatter_op is not None:
-        # Peek first item to test Arrow serializability
         first_item = next(stage_gen, None)
         if first_item is None:
             return TaskResult(shard=ListShard(refs=[]))
 
         full_gen = itertools.chain([first_item], stage_gen)
 
-        use_pickle_envelope = False
-        try:
-            test_envelope = _make_envelope([first_item], 0, 0)
-            pa.RecordBatch.from_pylist(test_envelope)
-            logger.info("Using Parquet for scatter serialization for shard %d", source_shard)
-        except Exception:
-            use_pickle_envelope = True
-            logger.info(
-                "Using Parquet with pickle envelope for scatter serialization for shard %d",
-                source_shard,
-            )
-
         num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
-        parquet_path = f"{stage_dir}/shard-{shard_idx:04d}.parquet"
-        shard = _write_parquet_scatter(
+        data_path = f"{stage_dir}/shard-{shard_idx:04d}.shuffle"
+        shard = _write_scatter(
             full_gen,
             source_shard,
-            parquet_path,
+            data_path,
             key_fn=scatter_op.key_fn,
             num_output_shards=num_output_shards,
             sort_fn=scatter_op.sort_fn,
             combiner_fn=scatter_op.combiner_fn,
-            pickled=use_pickle_envelope,
         )
         return TaskResult(shard=shard)
 
@@ -1310,25 +1292,23 @@ def _regroup_result_refs(
     """Regroup worker output refs by output shard index without loading data.
 
     Non-scatter: each worker's ListShard maps to its own index (identity).
-    Scatter: writes a consolidated scatter manifest combining all sidecar
-    metadata into a single file, then gives each reducer a shard containing
-    just the manifest path.
+    Scatter: passes the list of scatter data-file paths to every reducer.
+    Each reducer reads the per-mapper ``.scatter_meta`` sidecars in parallel
+    to build its own ``ScatterReader`` without coordinator-side consolidation.
     """
     num_output = max(max(result_refs.keys(), default=0) + 1, input_shard_count)
     if output_shard_count is not None:
         num_output = max(num_output, output_shard_count)
 
     if is_scatter:
-        # Collect all scatter file paths from all workers
+        # Collect all scatter file paths from all workers. The coordinator
+        # does NOT read the sidecars or write a consolidated manifest —
+        # reducers do their own parallel sidecar reads.
         all_paths: list[str] = []
         for result in result_refs.values():
             all_paths.extend(result.shard)
 
-        # Write consolidated manifest and point reducers at it
-        manifest_path = f"{scatter_manifest_dir}/{_SCATTER_MANIFEST_NAME}"
-        _write_scatter_manifest(all_paths, manifest_path)
-        shared_refs = MemChunk(items=[manifest_path])
-
+        shared_refs = MemChunk(items=all_paths)
         return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
 
     # Non-scatter: each result's shard maps to its own index

@@ -11,7 +11,6 @@ from rigging.filesystem import filesystem as marin_filesystem
 import levanter
 import levanter.eval_harness as eval_harness
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.distributed import RayConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
@@ -73,7 +72,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 tracker=WandbConfig(project="marin", tags=wandb_tags, name=name),
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
                 per_device_eval_parallelism=1,
-                ray=RayConfig(auto_start_cluster=False),
             )
             logger.debug("after trainer config")
 

@@ -12,6 +12,8 @@ import json
 import logging
 import re
 import secrets
+import threading
+import time
 import uuid
 import dataclasses
 from dataclasses import dataclass
@@ -84,11 +86,16 @@ from iris.cluster.controller.schema import (
     WorkerRow,
     tasks_with_attempts,
 )
-from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints
+from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.query import execute_raw_query
 from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
-from iris.cluster.controller.transitions import ControllerTransitions, TASK_RESOURCE_HISTORY_RETENTION
+from iris.cluster.controller.transitions import (
+    TASK_RESOURCE_HISTORY_RETENTION,
+    ControllerTransitions,
+    HeartbeatApplyRequest,
+    task_updates_from_proto,
+)
 from iris.cluster.controller.provider import ProviderError
 from iris.cluster.log_store import build_log_source, worker_log_key
 from iris.cluster.process_status import get_process_status
@@ -681,38 +688,14 @@ def _query_jobs(
 def _query_from_list_jobs_request(
     request: controller_pb2.Controller.ListJobsRequest,
 ) -> controller_pb2.Controller.JobQuery:
-    """Normalize a ``ListJobsRequest`` into a single ``JobQuery``.
+    """Return the request's ``JobQuery`` with paging clamped to safe bounds.
 
-    If ``request.query`` is set, it is used verbatim. Otherwise the legacy
-    flat fields on ``ListJobsRequest`` are mapped into an equivalent
-    ``JobQuery`` so the rest of the server only ever sees one shape.
-
-    The legacy-field path exists only to keep older clients working during
-    the JobQuery rollout; delete it together with the legacy fields when
-    https://github.com/marin-community/marin/issues/4573 is resolved.
+    The legacy flat fields on ``ListJobsRequest`` were removed in #4573;
+    callers must now always submit a ``JobQuery``.
     """
+    query = controller_pb2.Controller.JobQuery()
     if request.HasField("query"):
-        query = controller_pb2.Controller.JobQuery()
         query.CopyFrom(request.query)
-    else:
-        # Legacy parent_job_id is only honored under SCOPE_CHILDREN; without
-        # this mapping the filter is silently dropped and all jobs are
-        # returned. See https://github.com/marin-community/marin/issues/4705.
-        scope = (
-            controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN
-            if request.parent_job_id
-            else controller_pb2.Controller.JOB_QUERY_SCOPE_ALL
-        )
-        query = controller_pb2.Controller.JobQuery(
-            scope=scope,
-            parent_job_id=request.parent_job_id,
-            name_filter=request.name_filter,
-            state_filter=request.state_filter,
-            sort_field=request.sort_field,
-            sort_direction=request.sort_direction,
-            offset=request.offset,
-            limit=request.limit,
-        )
 
     # Clamp paging: 0 (unset) defaults to MAX; explicit values are capped at MAX.
     # We no longer support unbounded listing — callers that previously relied on
@@ -898,6 +881,10 @@ class AutoscalerProtocol(Protocol):
         """Get autoscaler status."""
         ...
 
+    def get_pending_hints(self) -> dict[str, PendingHint]:
+        """Get cached pending-hint dict keyed by job id."""
+        ...
+
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
         """Get info for a specific VM."""
         ...
@@ -1004,6 +991,14 @@ class ControllerServiceImpl:
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
         self._system_endpoints: dict[str, str] = system_endpoints or {}
+        # Short-TTL cache of the worker roster. Dashboards call ListWorkers
+        # and GetAutoscalerStatus back-to-back; both enumerate every worker.
+        # 1s is short enough that stale rows don't matter (workers have
+        # slower health/heartbeat cadence) and long enough to fuse adjacent
+        # refreshes into one SELECT.
+        self._worker_roster_cache: tuple[float, list[WorkerDetailRow]] | None = None
+        self._worker_roster_cache_lock = threading.Lock()
+        self._worker_roster_ttl_s = 1.0
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)
@@ -1011,15 +1006,33 @@ class ControllerServiceImpl:
     def blob_data(self, blob_id: str) -> bytes:
         return self._bundle_store.get_zip(blob_id)
 
+    def _worker_roster_cached(self) -> list[WorkerDetailRow]:
+        """Return the worker roster, refreshed at most once per TTL window.
+
+        `ListWorkers` and `GetAutoscalerStatus` both enumerate every worker
+        and get polled back-to-back by the dashboard. The SELECT + attribute
+        fan-out is expensive (no WHERE, full scan of workers + worker_attributes)
+        and repeating it twice per refresh is pure duplication.
+        """
+        now = time.monotonic()
+        with self._worker_roster_cache_lock:
+            cached = self._worker_roster_cache
+            if cached is not None and (now - cached[0]) < self._worker_roster_ttl_s:
+                return cached[1]
+        roster = _worker_roster(self._db)
+        with self._worker_roster_cache_lock:
+            self._worker_roster_cache = (now, roster)
+        return roster
+
     def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
         """Build autoscaler-based pending hints keyed by job id."""
         autoscaler = self._controller.autoscaler
         if autoscaler is None:
             return {}
-        status = autoscaler.get_status()
-        if not status.HasField("last_routing_decision"):
-            return {}
-        return build_job_pending_hints(status.last_routing_decision)
+        # Autoscaler caches the hint dict per evaluate() cycle; this avoids
+        # rebuilding the full AutoscalerStatus proto on every GetJobStatus
+        # RPC (#4844).
+        return autoscaler.get_pending_hints()
 
     def _authorize_job_owner(self, job_id: JobName) -> None:
         """Raise PERMISSION_DENIED if the authenticated user doesn't own this job.
@@ -1193,7 +1206,10 @@ class ControllerServiceImpl:
         )
 
         # Get scheduling diagnostics for pending jobs from cache
-        # (populated each scheduling cycle by the controller).
+        # (populated each scheduling cycle by the controller). The autoscaler
+        # hint dict is cached per evaluate() cycle (#4848), so the lookup here
+        # is a single dict get — we only attach this job's hint, never the
+        # full routing decision.
         pending_reason = ""
         if job.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(job.job_id.to_wire())
@@ -1575,7 +1591,7 @@ class ControllerServiceImpl:
         if self._controller.has_direct_provider:
             return controller_pb2.Controller.ListWorkersResponse()
         workers = []
-        worker_rows = _worker_roster(self._db)
+        worker_rows = self._worker_roster_cached()
         running_by_worker = running_tasks_by_worker(self._db, {worker.worker_id for worker in worker_rows})
         for worker in worker_rows:
             workers.append(
@@ -1727,7 +1743,7 @@ class ControllerServiceImpl:
         status = autoscaler.get_status()
 
         # Build a map of worker_id -> (worker_id, healthy) for enriching VmInfo
-        workers = _worker_roster(self._db)
+        workers = self._worker_roster_cached()
         worker_id_to_info: dict[str, tuple[str, bool]] = {}
         for w in workers:
             worker_id_to_info[w.worker_id] = (w.worker_id, w.healthy)
@@ -2591,3 +2607,36 @@ class ControllerServiceImpl:
             total_pending=total_pending,
             total_running=len(running_protos),
         )
+
+    # --- Worker Push ---
+
+    def update_task_status(
+        self,
+        request: controller_pb2.Controller.UpdateTaskStatusRequest,
+        _ctx: Any,
+    ) -> controller_pb2.Controller.UpdateTaskStatusResponse:
+        """Worker pushes task state transitions to controller.
+
+        Converts the proto updates into TaskUpdate dataclasses and applies
+        them through the same ControllerTransitions.apply_heartbeat() path
+        used by the poll-based heartbeat. Stop decisions are delivered via
+        the StopTasks RPC, not piggy-backed on the response.
+
+        Vestigial: the kill decisions produced by apply_heartbeat are ignored
+        here. The poll loop reruns the same transition logic every 60s and
+        routes kills through _stop_tasks_direct, so push-path kills are
+        recovered with ≤60s latency. This RPC will be removed once the poll
+        loop is the sole path.
+        """
+        updates = task_updates_from_proto(request.updates)
+        if updates:
+            self._transitions.apply_heartbeat(
+                HeartbeatApplyRequest(
+                    worker_id=WorkerId(request.worker_id),
+                    worker_resource_snapshot=None,
+                    updates=updates,
+                )
+            )
+            # Wake the controller so it can act on any state changes promptly.
+            self._controller.wake()
+        return controller_pb2.Controller.UpdateTaskStatusResponse()
