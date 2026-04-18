@@ -941,7 +941,22 @@ class TrainerConfig:
         if self.use_explicit_mesh_axes:
             axis_names = list(ici.keys()) + [k for k in dcn.keys() if k not in ici]
             axis_types = tuple(AxisType.Explicit for _ in axis_names)
-        return create_mesh_from_axis_specs(ici_axes=ici, dcn_axes=dcn, axis_types=axis_types)
+        devices = None
+        if self.mesh.device_permutation is not None:
+            permutation = tuple(self.mesh.device_permutation)
+            devices = list(jax.devices())
+            if sorted(permutation) != list(range(len(devices))):
+                raise ValueError(
+                    f"device_permutation must be a permutation of 0..{len(devices) - 1}, got {permutation}"
+                )
+            devices = [devices[i] for i in permutation]
+        return create_mesh_from_axis_specs(
+            ici_axes=ici,
+            dcn_axes=dcn,
+            devices=devices,
+            axis_types=axis_types,
+            preserve_device_order=self.mesh.preserve_device_order,
+        )
 
     def use_device_mesh(self) -> ContextManager[None]:
         """
