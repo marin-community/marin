@@ -31,7 +31,7 @@ from rigging.log_setup import configure_logging
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
-from marin.datakit.normalize import NormalizeResult, normalize_step
+from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import Artifact
 from marin.execution.executor import (
     ExecutorMainConfig,
@@ -88,7 +88,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         hash_attrs={"mode": "exact_paragraph"},
         deps=[normalize_hq_spec],
         fn=lambda output_path: dedup_exact_paragraph(
-            input_paths=Artifact.load(normalize_hq_spec, NormalizeResult).main_output_dirs,
+            input_paths=[Artifact.load(normalize_hq_spec, NormalizedData).main_output_dir],
             output_path=output_path,
             max_parallelism=4,
             worker_resources=ResourceConfig(cpu=1, ram="1g"),
@@ -101,8 +101,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         name=os.path.join(prefix, "cleaned"),
         deps=[normalize_hq_spec, dedup_exact_paragraph_spec],
         fn=lambda output_path: consolidate(
-            # Single subdir (flat jsonl.gz input), so exactly one main dir.
-            input_path=Artifact.load(normalize_hq_spec, NormalizeResult).main_output_dirs[0],
+            input_path=Artifact.load(normalize_hq_spec, NormalizedData).main_output_dir,
             output_path=output_path,
             # Normalize emits parquet; override the jsonl.gz default.
             filetype="parquet",
