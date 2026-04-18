@@ -111,6 +111,41 @@ def test_complete_heartbeat_success(state, worker_metadata):
     assert worker.healthy
 
 
+def test_update_worker_ping_success_writes_snapshot_columns(state, worker_metadata):
+    """Ping-loop success path writes scalar snapshot columns and history row."""
+    _register_worker(state, "worker1", worker_metadata)
+    snap = job_pb2.WorkerResourceSnapshot(
+        host_cpu_percent=42,
+        memory_used_bytes=1_000,
+        memory_total_bytes=2_000,
+        disk_used_bytes=3_000,
+        disk_total_bytes=4_000,
+        running_task_count=5,
+        total_process_count=6,
+        net_recv_bps=7,
+        net_sent_bps=8,
+    )
+
+    state.update_worker_ping_success(WorkerId("worker1"), snap)
+
+    with state._db.snapshot() as q:
+        row = q.fetchone(
+            "SELECT snapshot_host_cpu_percent, snapshot_memory_used_bytes, snapshot_net_sent_bps "
+            "FROM workers WHERE worker_id = ?",
+            ("worker1",),
+        )
+        assert row["snapshot_host_cpu_percent"] == 42
+        assert row["snapshot_memory_used_bytes"] == 1_000
+        assert row["snapshot_net_sent_bps"] == 8
+
+        hist = q.fetchall(
+            "SELECT snapshot_host_cpu_percent FROM worker_resource_history WHERE worker_id = ?",
+            ("worker1",),
+        )
+        assert len(hist) == 1
+        assert hist[0]["snapshot_host_cpu_percent"] == 42
+
+
 def test_fail_heartbeat_below_threshold(state, worker_metadata):
     """RPC failure below threshold returns TRANSIENT_FAILURE, worker stays alive."""
     _register_worker(state, "worker1", worker_metadata)

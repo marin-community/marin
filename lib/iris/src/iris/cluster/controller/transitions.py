@@ -3068,16 +3068,36 @@ class ControllerTransitions:
 
         Does not reset consecutive_failures — the ping loop tracks failures in-memory.
         """
-        snapshot_bytes = resource_snapshot.SerializeToString()
+        snap_fields = (
+            resource_snapshot.host_cpu_percent,
+            resource_snapshot.memory_used_bytes,
+            resource_snapshot.memory_total_bytes,
+            resource_snapshot.disk_used_bytes,
+            resource_snapshot.disk_total_bytes,
+            resource_snapshot.running_task_count,
+            resource_snapshot.total_process_count,
+            resource_snapshot.net_recv_bps,
+            resource_snapshot.net_sent_bps,
+        )
         now_ms = Timestamp.now().epoch_ms()
         with self._db.transaction() as cur:
             cur.execute(
-                "UPDATE workers SET last_heartbeat_ms = ?, resource_snapshot_proto = ? WHERE worker_id = ?",
-                (now_ms, snapshot_bytes, str(worker_id)),
+                "UPDATE workers SET last_heartbeat_ms = ?, "
+                "snapshot_host_cpu_percent = ?, snapshot_memory_used_bytes = ?, "
+                "snapshot_memory_total_bytes = ?, snapshot_disk_used_bytes = ?, "
+                "snapshot_disk_total_bytes = ?, snapshot_running_task_count = ?, "
+                "snapshot_total_process_count = ?, snapshot_net_recv_bps = ?, "
+                "snapshot_net_sent_bps = ? WHERE worker_id = ?",
+                (now_ms, *snap_fields, str(worker_id)),
             )
             cur.execute(
-                "INSERT INTO worker_resource_history(worker_id, snapshot_proto, timestamp_ms) VALUES (?, ?, ?)",
-                (str(worker_id), snapshot_bytes, now_ms),
+                "INSERT INTO worker_resource_history("
+                "worker_id, snapshot_host_cpu_percent, snapshot_memory_used_bytes, "
+                "snapshot_memory_total_bytes, snapshot_disk_used_bytes, snapshot_disk_total_bytes, "
+                "snapshot_running_task_count, snapshot_total_process_count, "
+                "snapshot_net_recv_bps, snapshot_net_sent_bps, timestamp_ms"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (str(worker_id), *snap_fields, now_ms),
             )
 
     def get_running_tasks_for_poll(
