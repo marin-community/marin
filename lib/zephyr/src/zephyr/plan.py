@@ -14,7 +14,6 @@ import heapq
 import inspect
 import logging
 import os
-import zlib
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
@@ -22,6 +21,7 @@ from itertools import groupby, islice
 from typing import Any, Protocol
 
 import msgspec
+import xxhash
 from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import url_to_fs
 
@@ -564,7 +564,7 @@ def compute_plan(dataset: Dataset) -> PhysicalPlan:
 def deterministic_hash(obj: object) -> int:
     """Compute a deterministic hash for an object."""
     s = msgspec.msgpack.encode(obj, order="deterministic")
-    return zlib.adler32(s)
+    return xxhash.xxh3_64_intdigest(s)
 
 
 def make_windows(

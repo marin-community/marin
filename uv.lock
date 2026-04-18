@@ -5449,6 +5449,7 @@ dependencies = [
     { name = "tqdm-loggable" },
     { name = "typing-extensions" },
     { name = "vortex-data" },
+    { name = "xxhash" },
     { name = "zstandard" },
 ]
 
@@ -5481,6 +5482,7 @@ requires-dist = [
     { name = "tqdm-loggable", specifier = ">=0.2" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "vortex-data", specifier = ">=0.61.0" },
+    { name = "xxhash", specifier = ">=3.4" },
     { name = "zstandard", specifier = ">=0.18.0" },
 ]
 
