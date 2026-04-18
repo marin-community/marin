@@ -1,0 +1,312 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Compute fuzzy duplicate markers from one or more ``MinHashAttrData`` inputs.
+
+Loads MinHash bucket attrs from each input, runs LSH-graph connected
+components globally across all inputs, and writes per-source attribute trees
+that mark duplicates. Each source's attr tree is co-partitioned with its
+underlying ``NormalizedData``, so :mod:`marin.processing.classification.\
+consolidate` can join them directly.
+
+Per-document attr rows have schema ``{id: str, attributes: {dup_doc: True}}``
+and only duplicates are emitted, matching the existing behavior consumed by
+``consolidate(..., keep_if_missing=True)``.
+
+Combining multiple ``MinHashAttrData`` inputs is the foundation for iterative
+global dedup: re-running this job over the union of all per-dataset MinHash
+artifacts produces fresh markers without re-reading any source text.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from collections.abc import Iterator
+from typing import Any
+
+from fray.v2 import ResourceConfig
+from pydantic import BaseModel
+from zephyr import Dataset, ZephyrContext, counters, write_parquet_file
+
+from marin.execution.artifact import Artifact
+from marin.execution.step_spec import StepSpec
+from marin.processing.classification.deduplication.connected_components import connected_components
+from marin.processing.classification.deduplication.dedup_commons import (
+    DEFAULT_COORDINATOR_RESOURCES,
+    _load_batches,
+)
+from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
+from marin.utils import fsspec_glob
+
+logger = logging.getLogger(__name__)
+
+
+class FuzzyDupsPerSource(BaseModel):
+    """Per-source output entry inside :class:`FuzzyDupsAttrData`.
+
+    Attributes:
+        attr_dir: Directory containing per-shard duplicate marker Parquet
+            files. Filenames mirror the source's MinHash attr (and thus its
+            normalized) shards.
+    """
+
+    attr_dir: str
+
+
+class FuzzyDupsAttrData(BaseModel):
+    """Co-partitioned fuzzy-duplicate marker attrs for one or more sources.
+
+    Persisted as the step's ``.artifact``. Load via
+    ``Artifact.load(step, FuzzyDupsAttrData)``.
+
+    Attributes:
+        version: Schema version of this artifact.
+        params: MinHash params; equal to every input's params.
+        sources: Mapping from each input's ``MinHashAttrData.source_main_dir``
+            to its per-source attr output entry.
+        counters: Aggregated zephyr counters across all sources.
+    """
+
+    version: str = "v1"
+    params: MinHashParams
+    sources: dict[str, FuzzyDupsPerSource]
+    counters: dict[str, int]
+
+
+def _validate_inputs(inputs: list[MinHashAttrData]) -> MinHashParams:
+    """Ensure every input shares the same MinHash params; raise otherwise."""
+    if not inputs:
+        raise ValueError("compute_fuzzy_dups_attrs requires at least one input")
+
+    head = inputs[0].params
+    mismatched = [(i, m.params) for i, m in enumerate(inputs) if m.params != head]
+    if mismatched:
+        details = "; ".join(f"inputs[{i}]={p}" for i, p in mismatched)
+        raise ValueError(
+            f"All MinHashAttrData inputs must share identical MinHash params. "
+            f"inputs[0]={head} but mismatches: {details}"
+        )
+    return head
+
+
+def _build_shard_index(inputs: list[MinHashAttrData]) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Enumerate every source shard across *inputs* and assign a global file_idx.
+
+    Returns:
+        (entries, source_tag_for_input) where ``entries[file_idx]`` holds
+        ``{attr_path, source_main_dir, source_tag, basename}`` and
+        ``source_tag_for_input[source_main_dir] = "source_NNN"``.
+    """
+    # Sort inputs by source_main_dir so source_tags are deterministic regardless
+    # of the order callers happen to pass them in.
+    ordered = sorted(enumerate(inputs), key=lambda iv: iv[1].source_main_dir)
+    source_tag: dict[str, str] = {}
+    for new_idx, (_, m) in enumerate(ordered):
+        source_tag[m.source_main_dir] = f"source_{new_idx:03d}"
+
+    entries: list[dict[str, Any]] = []
+    for m in inputs:
+        attr_shards = sorted(fsspec_glob(f"{m.attr_dir.rstrip('/')}/*.parquet"))
+        if not attr_shards:
+            raise FileNotFoundError(f"No attr parquet shards under {m.attr_dir}")
+        for attr_path in attr_shards:
+            entries.append(
+                {
+                    "file_idx": len(entries),
+                    "attr_path": attr_path,
+                    "source_main_dir": m.source_main_dir,
+                    "source_tag": source_tag[m.source_main_dir],
+                    "basename": os.path.basename(attr_path),
+                }
+            )
+    return entries, source_tag
+
+
+def _emit_bucket_records(entries: list[dict[str, Any]]) -> Iterator[dict]:
+    """For each (bucket, id) pair across all attr shards in *entries*, emit a routing record."""
+    for entry in entries:
+        for batch in _load_batches(entry["attr_path"], columns=["id", "buckets"]):
+            ids = batch["id"]
+            buckets_col = batch["buckets"]
+            for doc_id, doc_buckets in zip(ids, buckets_col, strict=True):
+                if not doc_buckets.is_valid:
+                    continue
+                doc_id_val = doc_id.as_py()
+                for b in doc_buckets.as_py():
+                    yield {"bucket": str(b), "id": doc_id_val, "file_idx": entry["file_idx"]}
+
+
+def _make_per_shard_writer(output_path: str, entries: list[dict[str, Any]], counter_prefix: str):
+    """Return a group_by reducer that writes per-shard duplicate-marker parquet files."""
+
+    def aggregate(file_idx: int, records: Iterator[dict]) -> dict:
+        entry = entries[file_idx]
+        out_path = f"{output_path}/outputs/{entry['source_tag']}/{entry['basename']}"
+
+        total = 0
+        dups = 0
+
+        def dup_records():
+            nonlocal total, dups
+            for record in records:
+                total += 1
+                counters.increment(f"{counter_prefix}/total")
+                if record["is_dup"]:
+                    dups += 1
+                    counters.increment(f"{counter_prefix}/dups")
+                    yield {"id": record["id"], "attributes": {"dup_doc": True}}
+                else:
+                    counters.increment(f"{counter_prefix}/unique")
+
+        result = write_parquet_file(dup_records(), out_path)
+        return {
+            **result,
+            "file_idx": file_idx,
+            "source_tag": entry["source_tag"],
+            "total": total,
+            "dups": dups,
+            "unique": total - dups,
+        }
+
+    return aggregate
+
+
+def compute_fuzzy_dups_attrs(
+    *,
+    inputs: list[MinHashAttrData],
+    output_path: str,
+    cc_max_iterations: int = 10,
+    max_parallelism: int,
+    worker_resources: ResourceConfig | None = None,
+    coordinator_resources: ResourceConfig | None = None,
+) -> FuzzyDupsAttrData:
+    """Mark fuzzy duplicates across one or more ``MinHashAttrData`` inputs.
+
+    All inputs must share identical :class:`MinHashParams`. The job builds a
+    global LSH bucket graph across every input shard, runs connected
+    components, and emits a per-source attribute tree under
+    ``<output_path>/outputs/source_NNN/`` with one parquet file per source
+    shard (filenames preserved from the source). Each row marks a duplicate:
+    ``{id: str, attributes: {dup_doc: True}}``.
+
+    For each connected component, exactly one document is treated as the
+    canonical survivor (the rest are marked duplicates). The choice is
+    determined by ``connected_components`` and is currently order-sensitive
+    across re-runs (see TODO).
+
+    Args:
+        inputs: ``MinHashAttrData`` artifacts to fuzzy-dedup together.
+        output_path: Output root. Per-source attr trees land under
+            ``<output_path>/outputs/source_NNN/``.
+        cc_max_iterations: Max iterations for connected components.
+        max_parallelism: Worker count for the ZephyrContext.
+        worker_resources: Per-worker resource request.
+        coordinator_resources: Coordinator resource request.
+
+    Returns:
+        :class:`FuzzyDupsAttrData` describing per-source attr directories,
+        the shared MinHash params, and aggregated counters.
+
+    Raises:
+        ValueError: If inputs is empty or input params disagree.
+        FileNotFoundError: If any input ``attr_dir`` is missing parquet shards.
+    """
+    params = _validate_inputs(inputs)
+    entries, source_tag = _build_shard_index(inputs)
+
+    logger.info(
+        "Computing fuzzy dups for %d inputs (%d total shards) → %s, params=%s",
+        len(inputs),
+        len(entries),
+        output_path,
+        params,
+    )
+
+    ctx = ZephyrContext(
+        name="fuzzy-dups",
+        max_workers=max_parallelism,
+        resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+        coordinator_resources=coordinator_resources or DEFAULT_COORDINATOR_RESOURCES,
+    )
+
+    # Cap shard count at max_parallelism. Each group reads its attr files
+    # sequentially and emits bucket records; file_idx is preserved on the entry
+    # itself, not by enumeration order, so grouping is safe.
+    n_groups = min(max_parallelism, len(entries))
+    entry_groups: list[list[dict[str, Any]]] = [[] for _ in range(n_groups)]
+    for i, entry in enumerate(entries):
+        entry_groups[i % n_groups].append(entry)
+
+    bucket_ds = Dataset.from_list(entry_groups).flat_map(_emit_bucket_records)
+    converged, cc_files = connected_components(
+        bucket_ds, ctx, output_dir=f"{output_path}/metadata/cc", max_iterations=cc_max_iterations
+    )
+    if not converged:
+        # TODO (rav): log the number of changed nodes?
+        logger.warning("Connected components did not converge")
+
+    aggregator = _make_per_shard_writer(output_path, entries, counter_prefix="dedup/fuzzy/document")
+
+    shard_pipeline = (
+        Dataset.from_list(cc_files)
+        .load_parquet()
+        .map(
+            lambda r: {
+                "id": r["record_id"],
+                "is_dup": r["component_id"] != r["id_norm"],
+                "file_idx": r["file_idx"],
+            }
+        )
+        .group_by(
+            lambda r: r["file_idx"],
+            sort_by=lambda r: r["id"],
+            reducer=aggregator,
+        )
+    )
+
+    outcome = ctx.execute(shard_pipeline, verbose=True)
+    shard_results = outcome.results
+
+    # Aggregate per-source counters across shards for the final artifact.
+    sources: dict[str, FuzzyDupsPerSource] = {
+        src_dir: FuzzyDupsPerSource(attr_dir=f"{output_path}/outputs/{tag}") for src_dir, tag in source_tag.items()
+    }
+
+    total = sum(r["total"] for r in shard_results)
+    dups = sum(r["dups"] for r in shard_results)
+    unique = total - dups
+    logger.info("Fuzzy dups: total=%d dups=%d unique=%d", total, dups, unique)
+
+    return FuzzyDupsAttrData(
+        params=params,
+        sources=sources,
+        counters=dict(outcome.counters),
+    )
+
+
+def compute_fuzzy_dups_attrs_step(
+    *,
+    name: str,
+    minhash_steps: list[StepSpec],
+    cc_max_iterations: int = 10,
+    max_parallelism: int,
+    worker_resources: ResourceConfig | None = None,
+    coordinator_resources: ResourceConfig | None = None,
+    override_output_path: str | None = None,
+) -> StepSpec:
+    """Create a StepSpec that computes fuzzy duplicate attrs from ``MinHashAttrData`` step outputs."""
+    return StepSpec(
+        name=name,
+        deps=list(minhash_steps),
+        fn=lambda output_path: compute_fuzzy_dups_attrs(
+            inputs=[Artifact.load(s, MinHashAttrData) for s in minhash_steps],
+            output_path=output_path,
+            cc_max_iterations=cc_max_iterations,
+            max_parallelism=max_parallelism,
+            worker_resources=worker_resources,
+            coordinator_resources=coordinator_resources,
+        ),
+        hash_attrs={"cc_max_iterations": cc_max_iterations},
+        override_output_path=override_output_path,
+    )

@@ -26,7 +26,14 @@ from marin.processing.classification.consolidate import (
     FilterType,
     consolidate,
 )
-from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
+from marin.processing.classification.deduplication.fuzzy_dups import (
+    FuzzyDupsAttrData,
+    compute_fuzzy_dups_attrs,
+)
+from marin.processing.classification.deduplication.fuzzy_minhash import (
+    MinHashAttrData,
+    compute_minhash_attrs,
+)
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 
 logger = logging.getLogger(__name__)
@@ -55,21 +62,34 @@ def build_steps(run_id: str) -> list[StepSpec]:
         override_output_path=f"{base}/normalize",
     )
 
-    # Dedup peaked at ~5 GB mem (default 32g is 6x over), 22 GB disk (default 5g).
-    # max_parallelism=128: 10BT has only 106 normalized shards — 1024 created
-    # ~900 empty reduce shards and massive scheduling overhead.
-    deduped = StepSpec(
-        name="datakit-smoke/dedup_fuzzy_document",
+    # MinHash attrs: per-shard 1:1 from the normalized dataset.
+    # Sized like the old dedup_fuzzy_document map stage — dupekit's Rust pool
+    # uses ~2 cores beyond the Python thread.
+    minhash = StepSpec(
+        name="datakit-smoke/minhash",
         deps=[normalized],
-        hash_attrs={"mode": "fuzzy_document"},
-        fn=lambda output_path: dedup_fuzzy_document(
-            input_paths=[Artifact.load(normalized, NormalizedData).main_output_dir],
+        fn=lambda output_path: compute_minhash_attrs(
+            source=Artifact.load(normalized, NormalizedData),
+            output_path=output_path,
+            worker_resources=ResourceConfig(cpu=5, ram="16g", disk="10g"),
+        ),
+        override_output_path=f"{base}/minhash",
+    )
+
+    # Fuzzy dups: connected components over the MinHash bucket graph.
+    # max_parallelism=128 mirrors the old dedup tuning for 10BT (~106 shards).
+    deduped = StepSpec(
+        name="datakit-smoke/fuzzy_dups",
+        deps=[minhash],
+        hash_attrs={"cc_max_iterations": 3},
+        fn=lambda output_path: compute_fuzzy_dups_attrs(
+            inputs=[Artifact.load(minhash, MinHashAttrData)],
             output_path=output_path,
             max_parallelism=128,
             cc_max_iterations=3,
-            worker_resources=ResourceConfig(cpu=5, ram="16g", disk="30g"),
+            worker_resources=ResourceConfig(cpu=1, ram="16g", disk="30g"),
         ),
-        override_output_path=f"{base}/dedup",
+        override_output_path=f"{base}/fuzzy_dups",
     )
 
     consolidated = StepSpec(
@@ -82,7 +102,9 @@ def build_steps(run_id: str) -> list[StepSpec]:
             filters=[
                 FilterConfig(
                     type=FilterType.REMOVE_DOC,
-                    attribute_path=f"{deduped.output_path}/data",
+                    attribute_path=Artifact.load(deduped, FuzzyDupsAttrData)
+                    .sources[Artifact.load(normalized, NormalizedData).main_output_dir]
+                    .attr_dir,
                     name="dup_doc",
                     attribute_filetype="parquet",
                     keep_if_missing=True,
@@ -108,7 +130,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         override_output_path=f"{base}/tokens",
     )
 
-    return [downloaded, normalized, deduped, consolidated, tokenized]
+    return [downloaded, normalized, minhash, deduped, consolidated, tokenized]
 
 
 def _write_status(status: str, marin_prefix: str) -> None:
