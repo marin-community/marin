@@ -37,6 +37,8 @@ from experiments.evals.task_configs import (
     MMLU_PRO_5_SHOT,
     OPEN_LM_LEADERBOARD_GEN,
     OPEN_LM_LEADERBOARD_MCQ,
+    RULER_MAX_GENERATION_TOKENS,
+    ruler_tasks_for_lengths,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,8 @@ def evaluate_lm_evaluation_harness(
     apply_chat_template: bool = False,
     wandb_tags: list[str] | None = None,
     discover_latest_checkpoint: bool = True,
+    task_metadata: dict | None = None,
+    evaluation_name: str | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
@@ -61,8 +65,9 @@ def evaluate_lm_evaluation_harness(
         model_path (str): Path to the model.
         evals (list[EvalTaskConfig]): List of evaluations to run with LM Evaluation Harness.
     """
+    step_name = evaluation_name or model_name
     return ExecutorStep(
-        name=f"evaluation/lm_evaluation_harness/{model_name}",
+        name=f"evaluation/lm_evaluation_harness/{step_name}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="lm_evaluation_harness",
@@ -77,6 +82,7 @@ def evaluate_lm_evaluation_harness(
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
             wandb_tags=wandb_tags,
+            task_metadata=task_metadata,
         ),
     )
 
@@ -330,6 +336,80 @@ def default_sft_eval(
             )
             eval_jobs.append(olmo_generation)
     return eval_jobs
+
+
+def _required_ruler_max_model_len(lengths: Sequence[int], *, apply_chat_template: bool) -> int:
+    selected_lengths = tuple(lengths)
+    if not selected_lengths:
+        raise ValueError("At least one RULER context length is required.")
+
+    chat_template_buffer = 256 if apply_chat_template else 0
+    return max(selected_lengths) + chat_template_buffer
+
+
+def default_ruler_eval(
+    step: ExecutorStep | InputName | str,
+    *,
+    lengths: Sequence[int] = (4096,),
+    task_names: Sequence[str] | None = None,
+    evals: Sequence[EvalTaskConfig] | None = None,
+    resource_config: ResourceConfig = ResourceConfig.with_tpu("v5p-8"),
+    max_eval_instances: int | None = None,
+    engine_kwargs: dict | None = None,
+    tokenizer: str | None = None,
+    apply_chat_template: bool = False,
+    discover_latest_checkpoint: bool = False,
+    wandb_tags: list[str] | None = None,
+) -> ExecutorStep:
+    """Create a vLLM-backed lm-eval RULER evaluation step."""
+    selected_lengths = tuple(lengths)
+    if evals is None:
+        if task_names is None:
+            evals = ruler_tasks_for_lengths(selected_lengths)
+        else:
+            evals = ruler_tasks_for_lengths(selected_lengths, task_names=task_names)
+
+    required_max_model_len = _required_ruler_max_model_len(selected_lengths, apply_chat_template=apply_chat_template)
+    resolved_engine_kwargs = dict(engine_kwargs or {})
+    if tokenizer is not None:
+        existing_tokenizer = resolved_engine_kwargs.get("tokenizer")
+        if existing_tokenizer is not None and existing_tokenizer != tokenizer:
+            raise ValueError(f"Conflicting RULER tokenizer values: {existing_tokenizer!r} and {tokenizer!r}")
+        resolved_engine_kwargs["tokenizer"] = tokenizer
+
+    resolved_engine_kwargs.setdefault("max_model_len", required_max_model_len)
+    if int(resolved_engine_kwargs["max_model_len"]) < required_max_model_len:
+        raise ValueError(
+            f"RULER max_model_len={resolved_engine_kwargs['max_model_len']} is smaller than "
+            f"the required length {required_max_model_len}."
+        )
+
+    resolved_engine_kwargs.setdefault("max_length", resolved_engine_kwargs["max_model_len"])
+    if int(resolved_engine_kwargs["max_length"]) < required_max_model_len:
+        raise ValueError(
+            f"RULER max_length={resolved_engine_kwargs['max_length']} is smaller than "
+            f"the required length {required_max_model_len}."
+        )
+
+    resolved_engine_kwargs.setdefault("max_gen_toks", RULER_MAX_GENERATION_TOKENS)
+
+    name, model_step_path = extract_model_name_and_path(step)
+    length_label = "_".join(f"{length // 1024}k" for length in selected_lengths)
+    task_metadata = {"max_seq_lengths": selected_lengths}
+
+    return evaluate_lm_evaluation_harness(
+        name,
+        model_step_path,
+        list(evals),
+        max_eval_instances=max_eval_instances,
+        engine_kwargs=resolved_engine_kwargs,
+        resource_config=resource_config,
+        apply_chat_template=apply_chat_template,
+        wandb_tags=wandb_tags or ["ruler", "long-context"],
+        discover_latest_checkpoint=discover_latest_checkpoint,
+        task_metadata=task_metadata,
+        evaluation_name=f"{name}/ruler_{length_label}",
+    )
 
 
 def default_key_evals(

@@ -81,6 +81,62 @@ BASE_GENERATION_TASKS = (
     EvalTaskConfig(name="triviaqa", num_fewshot=0, task_alias="triviaqa"),
 )
 
+RULER_CONTEXT_LENGTHS = (4096, 8192, 16384, 32768, 65536)
+RULER_MAX_GENERATION_TOKENS = 128
+RULER_TASK_NAMES = (
+    "niah_single_1",
+    "niah_single_2",
+    "niah_single_3",
+    "niah_multikey_1",
+    "niah_multikey_2",
+    "niah_multikey_3",
+    "niah_multiquery",
+    "niah_multivalue",
+    "ruler_vt",
+    "ruler_cwe",
+    "ruler_fwe",
+    "ruler_qa_squad",
+    "ruler_qa_hotpot",
+)
+RULER_NIAH_TASK_NAMES = RULER_TASK_NAMES[:8]
+
+
+def _validate_ruler_lengths(lengths: Sequence[int]) -> tuple[int, ...]:
+    selected_lengths = tuple(lengths)
+    if not selected_lengths:
+        raise ValueError("At least one RULER context length is required.")
+
+    unsupported_lengths = sorted(set(selected_lengths) - set(RULER_CONTEXT_LENGTHS))
+    if unsupported_lengths:
+        raise ValueError(
+            f"Unsupported RULER context lengths: {unsupported_lengths}. "
+            f"Supported lengths: {list(RULER_CONTEXT_LENGTHS)}."
+        )
+
+    return selected_lengths
+
+
+def ruler_tasks_for_lengths(
+    lengths: Sequence[int] = (4096,),
+    *,
+    task_names: Sequence[str] = RULER_TASK_NAMES,
+) -> tuple[EvalTaskConfig, ...]:
+    """Build explicit lm-eval RULER task configs for the requested context lengths."""
+    selected_lengths = _validate_ruler_lengths(lengths)
+    return tuple(
+        EvalTaskConfig(
+            name=task_name,
+            num_fewshot=0,
+            task_alias=task_name,
+            task_kwargs={"max_seq_lengths": selected_lengths},
+        )
+        for task_name in task_names
+    )
+
+
+RULER_TASKS = ruler_tasks_for_lengths((4096,))
+RULER_NIAH_TASKS = ruler_tasks_for_lengths((4096,), task_names=RULER_NIAH_TASK_NAMES)
+
 # Settings are chosen to compare to Olmo2
 KEY_GENERATION_TASKS = (
     EvalTaskConfig(name="ifeval", num_fewshot=0),

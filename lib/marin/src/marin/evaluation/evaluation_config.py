@@ -6,7 +6,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from fray.cluster import ResourceConfig
-from levanter.eval_harness import TaskConfig
 
 # Wandb project name for evaluations. Controlled via WANDB_PROJECT env var.
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
@@ -105,9 +104,14 @@ class EvaluationConfig:
     """Custom base name for wandb runs. If set, wandb runs will be named
     evalchemy-{base_eval_run_name}[-step{N}]-{task}-seed{S}."""
 
+    task_metadata: dict | None = None
+    """Additional metadata passed to evaluator task loaders."""
 
-def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
+
+def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list:
     """Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects."""
+    from levanter.eval_harness import TaskConfig
+
     return [
         TaskConfig(
             task=task.name,

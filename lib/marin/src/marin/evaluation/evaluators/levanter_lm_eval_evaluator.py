@@ -9,7 +9,6 @@ import os
 import jmp
 from rigging.filesystem import filesystem as marin_filesystem
 import levanter
-import levanter.eval_harness as eval_harness
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -59,6 +58,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         """
         # Eval Harness code: https://github.com/stanford-crfm/levanter/blob/main/src/levanter/eval_harness.py
         # Run the harness with the model and the specified evals
+        import levanter.eval_harness as eval_harness
 
         try:
             model_name_or_path: str = self.model_name_or_path(model)
@@ -128,10 +128,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         except Exception as e:
             logger.error(f"Error running eval harness: {e}")
             raise e
-
-        finally:
-            # Clean up resources
-            self.cleanup(model)
 
 
 def _json_default(value):
