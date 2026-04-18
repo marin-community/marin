@@ -810,34 +810,6 @@ class DuckDBLogStore:
             remaining_bytes,
         )
 
-    def _drop_missing_local_segments(self, paths: list[str]) -> list[str]:
-        """Filter ``paths`` to those that still exist on disk.
-
-        Missing files are also pruned from ``_local_segments`` so future reads
-        don't repeatedly hit the same DuckDB error. Self-healing against
-        out-of-band deletion; our own GC removes entries from memory before
-        unlinking.
-        """
-        existing: list[str] = []
-        missing: list[str] = []
-        for p in paths:
-            if Path(p).exists():
-                existing.append(p)
-            else:
-                missing.append(p)
-        if not missing:
-            return existing
-
-        missing_set = set(missing)
-        with self._memory_lock:
-            self._local_segments = deque(s for s in self._local_segments if s.path not in missing_set)
-        logger.warning(
-            "Pruned %d missing local segment(s) from in-memory index (e.g. %s)",
-            len(missing),
-            missing[:3],
-        )
-        return existing
-
     def _offload_to_gcs(self, filename: str, filepath: Path) -> None:
         """Copy a Parquet file to GCS (best-effort)."""
         if not self._remote_log_dir:
@@ -980,7 +952,7 @@ class DuckDBLogStore:
             ram_tables.append(_build_buffer_table(pending_snapshot))
 
         segments = _cap_segments(segments)
-        parquet_files = self._drop_missing_local_segments([s.path for s in segments])
+        parquet_files = [s.path for s in segments]
 
         where_clause = " AND ".join(where_parts)
         select_cols = (
