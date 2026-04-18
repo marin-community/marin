@@ -7,9 +7,7 @@ Two on-disk tiers:
 
     ``tmp_{min_seq}.parquet`` -- written by every flush; local-only.
     ``logs_{min_seq}.parquet`` -- produced by periodic compaction that merges
-    all current tmps into one archive and uploads only that to GCS. (Named
-    ``logs_`` rather than ``log_`` for continuity with the pre-tiered layout,
-    which used the same filename to mean the same thing.)
+    all current tmps into one archive and uploads only that to GCS.
 
 Lifecycle of a log entry:
 
@@ -129,11 +127,7 @@ _ROW_GROUP_SIZE = 16_384
 # size only — file count doesn't cleanly distinguish the two.
 _MAX_PARQUET_BYTES_PER_READ = 2_500 * 1024 * 1024
 
-# File naming: hot flushes write tmp_*.parquet; compaction merges them into
-# logs_*.parquet and uploads only that to GCS. Both are keyed by min_seq so
-# sorting by filename yields chronological order. The logs_ name matches the
-# pre-tiered layout (same semantics, same contents), so upgrades need no
-# migration and downgrades still find their files.
+# Both prefixes keyed by min_seq, so sort-by-filename yields chronological order.
 _TMP_PREFIX = "tmp_"
 _LOG_PREFIX = "logs_"
 
@@ -407,13 +401,8 @@ class DuckDBLogStore:
         self._flushing: _SealedBuffer | None = None  # pre-flush snapshot being written
         self._local_segments: deque[_LocalSegment] = deque()
 
-        # RWLock: readers hold shared lock during DuckDB queries;
-        # GC / consolidation hold exclusive lock before unlinking or renaming.
         self._segments_rwlock = _RWLock()
 
-        # Discover pre-existing Parquet files from a previous run. Both tmp_
-        # (pre-compaction, local-only) and logs_ (compacted, uploaded) are
-        # re-registered so reads work immediately after restart.
         for p in _discover_segments(self._log_dir):
             min_seq, max_seq = _read_seq_bounds(p)
             self._local_segments.append(
@@ -557,15 +546,7 @@ class DuckDBLogStore:
     # ------------------------------------------------------------------
 
     def _ram_bytes_locked(self) -> int:
-        """Total bytes across every in-RAM holder (pending + chunks + flushing).
-
-        Used for backpressure: _pending alone is a poor signal because the
-        compact tick (1s) drains _pending into _chunks long before it reaches
-        segment_target_bytes, so a check against _pending never fires. The
-        flush tick runs every 60s, so without this aggregate accounting we'd
-        accumulate a full minute of arrow-table data (hundreds of MB at
-        realistic rates) before any flush.
-        """
+        """Total bytes across every in-RAM holder (pending + chunks + flushing)."""
         chunks_b = sum(t.nbytes for t in self._chunks)
         flushing_b = self._flushing.table.nbytes if self._flushing is not None else 0
         return len(self._pending) * _EST_BYTES_PER_ROW + chunks_b + flushing_b
@@ -696,17 +677,11 @@ class DuckDBLogStore:
         )
 
     def _compaction_step(self) -> None:
-        """Merge all tmp_ segments into a single log_ segment via DuckDB.
+        """Merge all tmp_ segments into a single logs_ segment, upload, unlink.
 
-        Uses ``COPY (SELECT ... ORDER BY key, seq)`` so the merge is a
-        DuckDB-native streaming operation — never touches pyarrow's
-        concat/sort path (which leaks ~45 MB per invocation when reading
-        parquet back).
-
-        On success: uploads the merged file to GCS, unlinks the tmps locally,
-        replaces them in ``_local_segments``, and bumps ``_compaction_generation``.
-        Read queries are protected by ``_segments_rwlock`` — the unlink + swap
-        happen under the exclusive write lock.
+        Uses ``COPY (SELECT ... ORDER BY key, seq)`` so the merge streams
+        inside DuckDB — never touches pyarrow's concat/sort path, which
+        leaks ~45 MB per invocation when reading parquet back.
         """
         with self._lock:
             tmps = [s for s in self._local_segments if _is_tmp_path(s.path)]
@@ -751,7 +726,6 @@ class DuckDBLogStore:
         try:
             staging_path.rename(merged_path)
             with self._lock:
-                # Rebuild deque: first tmp is replaced by merged; other tmps dropped.
                 new_segments: deque[_LocalSegment] = deque()
                 merged_inserted = False
                 for s in self._local_segments:
@@ -759,7 +733,6 @@ class DuckDBLogStore:
                         if not merged_inserted:
                             new_segments.append(merged_seg)
                             merged_inserted = True
-                        # skip — it's being replaced
                     else:
                         new_segments.append(s)
                 if not merged_inserted:
@@ -835,12 +808,10 @@ class DuckDBLogStore:
     def _drop_missing_local_segments(self, paths: list[str]) -> list[str]:
         """Filter ``paths`` to those that still exist on disk.
 
-        If any are missing they're also pruned from ``_local_segments`` so
-        future reads don't repeatedly hit the same DuckDB error. Vanishing
-        files normally come from out-of-band deletion (manual ``rm``, disk
-        pressure outside our GC, leftover entries from an old filename
-        format) — anything our own GC removes is gone from the in-memory
-        list before the file is unlinked.
+        Missing files are also pruned from ``_local_segments`` so future reads
+        don't repeatedly hit the same DuckDB error. Self-healing against
+        out-of-band deletion; our own GC removes entries from memory before
+        unlinking.
         """
         existing: list[str] = []
         missing: list[str] = []
@@ -992,13 +963,7 @@ class DuckDBLogStore:
         include_key_in_select: bool,
     ) -> list[tuple]:
         """Snapshot RAM + segments, run one DuckDB query. Caller holds the
-        segments read lock.
-
-        All pruning is delegated to DuckDB. Per-file row-group ``key`` bounds
-        on the sorted segments are narrow enough that opening every file in
-        the capped working set costs ~4ms/file of planning even when zero
-        rows match. The ``_cap_segments`` bound is a safety net for
-        pathological body-LIKE queries with no row-group-prunable predicate.
+        segments read lock. All pruning is delegated to DuckDB.
         """
         with self._lock:
             segments = list(self._local_segments)
