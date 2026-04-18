@@ -73,6 +73,10 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    # Slim layer: replace the MoE in this layer index with a single dense FFN.
+    # -1 means no replacement (default). The dense width is computed to match
+    # the active param count of the replaced MoE + shared expert.
+    slim_layer_index: int = -1
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -412,12 +416,23 @@ class Block(eqx.Module):
     attn: CausalSelfAttention
     rms_mlp: RMSNorm
     mlp_gated_norm: GatedNorm
-    mlp: MoEMLP
+    mlp: MoEMLP | None
     shared: DenseMLP | None
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, dense_only_width: int = 0) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
+        if dense_only_width > 0:
+            # Slim layer: replace MoE + shared with a single wider dense FFN.
+            return Block(
+                rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+                attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
+                attn=CausalSelfAttention.init(cfg, key=attn_key),
+                rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+                mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
+                mlp=None,
+                shared=DenseMLP.init(cfg.hidden_dim, dense_only_width, cfg.initializer_std, key=shared_key),
+            )
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
             shared = DenseMLP.init(
@@ -442,9 +457,13 @@ class Block(eqx.Module):
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
-        if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+        if self.mlp is not None:
+            mlp_out, router_stats = self.mlp(mlp_in)
+            if self.shared is not None:
+                mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+        else:
+            mlp_out = self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            router_stats = {}
         x = x + mlp_out
         return x, router_stats
 
@@ -466,7 +485,18 @@ class Transformer(eqx.Module):
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
-        blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+        # Compute dense-only width for the slim layer (if any).
+        # Matches active param count: K*3*d*inter + 3*d*shared = 3*d*wide
+        # wide = K*inter + shared
+        slim_width = (
+            cfg.num_experts_per_token * cfg.intermediate_dim + cfg.shared_expert_intermediate_dim
+            if cfg.slim_layer_index >= 0
+            else 0
+        )
+        blocks = tuple(
+            Block.init(cfg, key=block_keys[i], dense_only_width=slim_width if i == cfg.slim_layer_index else 0)
+            for i in range(cfg.num_layers)
+        )
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -500,7 +530,8 @@ class Transformer(eqx.Module):
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
             hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
-            moe_router_stats.append(router_stats)
+            if router_stats:
+                moe_router_stats.append(router_stats)
 
         router_metrics = {
             "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
