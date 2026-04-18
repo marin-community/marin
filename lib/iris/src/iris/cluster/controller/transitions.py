@@ -279,6 +279,19 @@ class WorkerFailureBatchResult(TxResult):
     results: list[HeartbeatFailureResult] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class WorkerPing:
+    """Result of a Ping RPC for a single worker.
+
+    A snapshot of None means liveness-only: bump last_heartbeat without
+    rewriting resource columns. The ping loop emits these on the cycles
+    where it skips the (more expensive) resource refresh.
+    """
+
+    worker_id: WorkerId
+    snapshot: job_pb2.WorkerResourceSnapshot | None
+
+
 class RunningTaskEntry(NamedTuple):
     """Task ID and attempt ID pair captured at snapshot time."""
 
@@ -822,6 +835,67 @@ def _resolve_task_failure_state(
 
 
 # =============================================================================
+# Worker resource snapshot writers
+# =============================================================================
+
+
+def _snapshot_fields(snap: job_pb2.WorkerResourceSnapshot) -> tuple[int, ...]:
+    """Pack the 9 scalar columns we persist from a WorkerResourceSnapshot."""
+    return (
+        snap.host_cpu_percent,
+        snap.memory_used_bytes,
+        snap.memory_total_bytes,
+        snap.disk_used_bytes,
+        snap.disk_total_bytes,
+        snap.running_task_count,
+        snap.total_process_count,
+        snap.net_recv_bps,
+        snap.net_sent_bps,
+    )
+
+
+def _write_worker_snapshots(
+    cur: TransactionCursor,
+    items: Sequence[tuple[str, job_pb2.WorkerResourceSnapshot]],
+    now_ms: int,
+    *,
+    reset_health: bool,
+) -> None:
+    """Update worker snapshot columns and append history rows.
+
+    Heartbeat path passes ``reset_health=True`` because a successful heartbeat
+    means the worker has recovered. Ping path passes False — the ping loop
+    tracks failures in-memory and removes workers via ``fail_workers_batch``.
+    """
+    if not items:
+        return
+
+    rows = [(wid, _snapshot_fields(snap)) for wid, snap in items]
+    update_params = [(now_ms, *fields, wid) for wid, fields in rows]
+    history_params = [(wid, *fields, now_ms) for wid, fields in rows]
+
+    health_prefix = "healthy = 1, active = 1, consecutive_failures = 0, " if reset_health else ""
+    cur.executemany(
+        f"UPDATE workers SET {health_prefix}last_heartbeat_ms = ?, "
+        "snapshot_host_cpu_percent = ?, snapshot_memory_used_bytes = ?, "
+        "snapshot_memory_total_bytes = ?, snapshot_disk_used_bytes = ?, "
+        "snapshot_disk_total_bytes = ?, snapshot_running_task_count = ?, "
+        "snapshot_total_process_count = ?, snapshot_net_recv_bps = ?, "
+        "snapshot_net_sent_bps = ? WHERE worker_id = ?",
+        update_params,
+    )
+    cur.executemany(
+        "INSERT INTO worker_resource_history("
+        "worker_id, snapshot_host_cpu_percent, snapshot_memory_used_bytes, "
+        "snapshot_memory_total_bytes, snapshot_disk_used_bytes, snapshot_disk_total_bytes, "
+        "snapshot_running_task_count, snapshot_total_process_count, "
+        "snapshot_net_recv_bps, snapshot_net_sent_bps, timestamp_ms"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        history_params,
+    )
+
+
+# =============================================================================
 # Batch helpers for apply_heartbeats_batch
 # =============================================================================
 
@@ -847,58 +921,24 @@ def _batch_worker_health(
     ).fetchall()
     existing = {str(r["worker_id"]) for r in rows}
 
-    health_params_no_snap = []
-    health_params_with_snap = []
-    history_params = []
+    liveness_params: list[tuple] = []
+    snapshot_writes: list[tuple[str, job_pb2.WorkerResourceSnapshot]] = []
     for req in requests:
         wid = str(req.worker_id)
         if wid not in existing:
             continue
-        snap = req.worker_resource_snapshot
-        if snap is not None:
-            snap_fields = (
-                snap.host_cpu_percent,
-                snap.memory_used_bytes,
-                snap.memory_total_bytes,
-                snap.disk_used_bytes,
-                snap.disk_total_bytes,
-                snap.running_task_count,
-                snap.total_process_count,
-                snap.net_recv_bps,
-                snap.net_sent_bps,
-            )
-            health_params_with_snap.append((now_ms, *snap_fields, wid))
-            history_params.append((wid, *snap_fields, now_ms))
+        if req.worker_resource_snapshot is None:
+            liveness_params.append((now_ms, wid))
         else:
-            health_params_no_snap.append((now_ms, wid))
+            snapshot_writes.append((wid, req.worker_resource_snapshot))
 
-    if health_params_no_snap:
+    if liveness_params:
         cur.executemany(
             "UPDATE workers SET healthy = 1, active = 1, consecutive_failures = 0, "
             "last_heartbeat_ms = ? WHERE worker_id = ?",
-            health_params_no_snap,
+            liveness_params,
         )
-    if health_params_with_snap:
-        cur.executemany(
-            "UPDATE workers SET healthy = 1, active = 1, consecutive_failures = 0, "
-            "last_heartbeat_ms = ?, "
-            "snapshot_host_cpu_percent = ?, snapshot_memory_used_bytes = ?, "
-            "snapshot_memory_total_bytes = ?, snapshot_disk_used_bytes = ?, "
-            "snapshot_disk_total_bytes = ?, snapshot_running_task_count = ?, "
-            "snapshot_total_process_count = ?, snapshot_net_recv_bps = ?, "
-            "snapshot_net_sent_bps = ? WHERE worker_id = ?",
-            health_params_with_snap,
-        )
-    if history_params:
-        cur.executemany(
-            "INSERT INTO worker_resource_history("
-            "worker_id, snapshot_host_cpu_percent, snapshot_memory_used_bytes, "
-            "snapshot_memory_total_bytes, snapshot_disk_used_bytes, snapshot_disk_total_bytes, "
-            "snapshot_running_task_count, snapshot_total_process_count, "
-            "snapshot_net_recv_bps, snapshot_net_sent_bps, timestamp_ms"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            history_params,
-        )
+    _write_worker_snapshots(cur, snapshot_writes, now_ms, reset_health=True)
     return existing
 
 
@@ -3052,53 +3092,34 @@ class ControllerTransitions:
     # Split Heartbeat Helpers
     # =========================================================================
 
-    def touch_worker_liveness(self, worker_ids: Sequence[WorkerId]) -> None:
-        """Cheap liveness bump: update last_heartbeat_ms without rewriting resources."""
-        if not worker_ids:
+    def update_worker_pings(self, pings: Sequence[WorkerPing]) -> None:
+        """Apply a batch of Ping RPC results in a single transaction.
+
+        For each ping, bumps last_heartbeat_ms; if a snapshot is attached,
+        also rewrites the worker's snapshot_* columns and appends a row to
+        worker_resource_history. Does not touch healthy/active/
+        consecutive_failures — the ping loop tracks failures in-memory and
+        uses fail_workers_batch to remove workers past threshold.
+        """
+        if not pings:
             return
         now_ms = Timestamp.now().epoch_ms()
-        with self._db.transaction() as cur:
-            cur.executemany(
-                "UPDATE workers SET last_heartbeat_ms = ? WHERE worker_id = ?",
-                [(now_ms, str(wid)) for wid in worker_ids],
-            )
+        liveness_params: list[tuple] = []
+        snapshot_writes: list[tuple[str, job_pb2.WorkerResourceSnapshot]] = []
+        for ping in pings:
+            wid = str(ping.worker_id)
+            if ping.snapshot is None:
+                liveness_params.append((now_ms, wid))
+            else:
+                snapshot_writes.append((wid, ping.snapshot))
 
-    def update_worker_ping_success(self, worker_id: WorkerId, resource_snapshot: job_pb2.WorkerResourceSnapshot) -> None:
-        """Update worker timestamp and resource snapshot from a successful ping.
-
-        Does not reset consecutive_failures — the ping loop tracks failures in-memory.
-        """
-        snap_fields = (
-            resource_snapshot.host_cpu_percent,
-            resource_snapshot.memory_used_bytes,
-            resource_snapshot.memory_total_bytes,
-            resource_snapshot.disk_used_bytes,
-            resource_snapshot.disk_total_bytes,
-            resource_snapshot.running_task_count,
-            resource_snapshot.total_process_count,
-            resource_snapshot.net_recv_bps,
-            resource_snapshot.net_sent_bps,
-        )
-        now_ms = Timestamp.now().epoch_ms()
         with self._db.transaction() as cur:
-            cur.execute(
-                "UPDATE workers SET last_heartbeat_ms = ?, "
-                "snapshot_host_cpu_percent = ?, snapshot_memory_used_bytes = ?, "
-                "snapshot_memory_total_bytes = ?, snapshot_disk_used_bytes = ?, "
-                "snapshot_disk_total_bytes = ?, snapshot_running_task_count = ?, "
-                "snapshot_total_process_count = ?, snapshot_net_recv_bps = ?, "
-                "snapshot_net_sent_bps = ? WHERE worker_id = ?",
-                (now_ms, *snap_fields, str(worker_id)),
-            )
-            cur.execute(
-                "INSERT INTO worker_resource_history("
-                "worker_id, snapshot_host_cpu_percent, snapshot_memory_used_bytes, "
-                "snapshot_memory_total_bytes, snapshot_disk_used_bytes, snapshot_disk_total_bytes, "
-                "snapshot_running_task_count, snapshot_total_process_count, "
-                "snapshot_net_recv_bps, snapshot_net_sent_bps, timestamp_ms"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (str(worker_id), *snap_fields, now_ms),
-            )
+            if liveness_params:
+                cur.executemany(
+                    "UPDATE workers SET last_heartbeat_ms = ? WHERE worker_id = ?",
+                    liveness_params,
+                )
+            _write_worker_snapshots(cur, snapshot_writes, now_ms, reset_health=False)
 
     def get_running_tasks_for_poll(
         self,

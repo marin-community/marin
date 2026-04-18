@@ -24,6 +24,7 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     RunningTaskEntry,
     TaskUpdate,
+    WorkerPing,
 )
 from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.types import JobName, WorkerId
@@ -111,9 +112,16 @@ def test_complete_heartbeat_success(state, worker_metadata):
     assert worker.healthy
 
 
-def test_update_worker_ping_success_writes_snapshot_columns(state, worker_metadata):
-    """Ping-loop success path writes scalar snapshot columns and history row."""
+def test_update_worker_pings_writes_snapshot_and_liveness(state, worker_metadata):
+    """Bulk ping update writes scalar snapshot columns + history for snapshot
+    pings, and bumps last_heartbeat for liveness-only pings, in one call."""
     _register_worker(state, "worker1", worker_metadata)
+    _register_worker(state, "worker2", worker_metadata, address="host:8081")
+
+    # Force liveness-only worker's heartbeat backwards so we can detect the bump.
+    with state._db.transaction() as cur:
+        cur.execute("UPDATE workers SET last_heartbeat_ms = 0 WHERE worker_id = ?", ("worker2",))
+
     snap = job_pb2.WorkerResourceSnapshot(
         host_cpu_percent=42,
         memory_used_bytes=1_000,
@@ -126,17 +134,22 @@ def test_update_worker_ping_success_writes_snapshot_columns(state, worker_metada
         net_sent_bps=8,
     )
 
-    state.update_worker_ping_success(WorkerId("worker1"), snap)
+    state.update_worker_pings(
+        [
+            WorkerPing(worker_id=WorkerId("worker1"), snapshot=snap),
+            WorkerPing(worker_id=WorkerId("worker2"), snapshot=None),
+        ]
+    )
 
     with state._db.snapshot() as q:
-        row = q.fetchone(
+        row1 = q.fetchone(
             "SELECT snapshot_host_cpu_percent, snapshot_memory_used_bytes, snapshot_net_sent_bps "
             "FROM workers WHERE worker_id = ?",
             ("worker1",),
         )
-        assert row["snapshot_host_cpu_percent"] == 42
-        assert row["snapshot_memory_used_bytes"] == 1_000
-        assert row["snapshot_net_sent_bps"] == 8
+        assert row1["snapshot_host_cpu_percent"] == 42
+        assert row1["snapshot_memory_used_bytes"] == 1_000
+        assert row1["snapshot_net_sent_bps"] == 8
 
         hist = q.fetchall(
             "SELECT snapshot_host_cpu_percent FROM worker_resource_history WHERE worker_id = ?",
@@ -144,6 +157,19 @@ def test_update_worker_ping_success_writes_snapshot_columns(state, worker_metada
         )
         assert len(hist) == 1
         assert hist[0]["snapshot_host_cpu_percent"] == 42
+
+        # Liveness-only ping bumps last_heartbeat without inserting history.
+        row2 = q.fetchone(
+            "SELECT last_heartbeat_ms, snapshot_host_cpu_percent FROM workers WHERE worker_id = ?",
+            ("worker2",),
+        )
+        assert row2["last_heartbeat_ms"] > 0
+        assert row2["snapshot_host_cpu_percent"] is None
+        assert q.fetchall("SELECT 1 FROM worker_resource_history WHERE worker_id = ?", ("worker2",)) == []
+
+
+def test_update_worker_pings_empty_is_noop(state):
+    state.update_worker_pings([])
 
 
 def test_fail_heartbeat_below_threshold(state, worker_metadata):

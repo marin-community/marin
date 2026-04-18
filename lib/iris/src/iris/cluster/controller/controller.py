@@ -104,6 +104,7 @@ from iris.cluster.controller.transitions import (
     ReservationClaim,
     SchedulingEvent,
     TaskUpdate,
+    WorkerPing,
 )
 from iris.cluster.log_store import CONTROLLER_LOG_KEY
 from iris.cluster.providers.types import find_free_port, resolve_external_host
@@ -2280,7 +2281,7 @@ class Controller:
                 cycle += 1
 
                 dead_workers: list[str] = []
-                liveness_ids: list[WorkerId] = []
+                pings: list[WorkerPing] = []
                 for result in results:
                     wid_str = str(result.worker_id)
                     if result.error is not None:
@@ -2294,13 +2295,10 @@ class Controller:
                             )
                     else:
                         ping_failures.pop(wid_str, None)
-                        if update_resources and result.resource_snapshot:
-                            self._transitions.update_worker_ping_success(result.worker_id, result.resource_snapshot)
-                        else:
-                            liveness_ids.append(result.worker_id)
+                        snapshot = result.resource_snapshot if update_resources else None
+                        pings.append(WorkerPing(worker_id=result.worker_id, snapshot=snapshot))
 
-                if liveness_ids:
-                    self._transitions.touch_worker_liveness(liveness_ids)
+                self._transitions.update_worker_pings(pings)
 
                 if dead_workers:
                     failure_result = self._transitions.fail_workers_batch(
