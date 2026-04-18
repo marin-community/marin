@@ -301,8 +301,6 @@ class ScatterReader:
                     weighted_bytes += slice_.avg_item_bytes * count
                     total_chunks_for_avg += count
 
-        if max_rows == 0:
-            max_rows = 100_000
         avg_item_bytes = weighted_bytes / total_chunks_for_avg if total_chunks_for_avg > 0 else 0.0
 
         return cls(iterators=iterators, max_chunk_rows=max_rows, avg_item_bytes=avg_item_bytes)
