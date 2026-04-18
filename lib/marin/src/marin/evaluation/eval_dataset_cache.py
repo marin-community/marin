@@ -38,9 +38,11 @@ Usage as ExecutorStep:
     )
 """
 
+import contextlib
 import json
 import logging
 import os
+import sys
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -54,6 +56,67 @@ from marin.execution.executor import ExecutorStep
 from marin.utils import call_with_hf_backoff, fsspec_exists
 
 logger = logging.getLogger(__name__)
+MANIFEST_FILE = ".eval_datasets_manifest.json"
+HF_CACHE_LAYOUT_VERSION = 2
+
+
+def default_hf_cache_root() -> str:
+    """Return the default Hugging Face cache root for this process."""
+    return os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+
+
+def _hf_cache_subdirs(cache_root: str) -> dict[str, str]:
+    return {
+        "root": cache_root,
+        "datasets": os.path.join(cache_root, "datasets"),
+        "hub": os.path.join(cache_root, "hub"),
+        "modules": os.path.join(cache_root, "modules"),
+    }
+
+
+@contextlib.contextmanager
+def _temporary_hf_cache_root(cache_root: str):
+    """Temporarily redirect HF caches into one explicit root."""
+    paths = _hf_cache_subdirs(cache_root)
+    for path in paths.values():
+        os.makedirs(path, exist_ok=True)
+
+    env_updates = {
+        "HF_HOME": paths["root"],
+        "HF_DATASETS_CACHE": paths["datasets"],
+        "HF_HUB_CACHE": paths["hub"],
+        "HUGGINGFACE_HUB_CACHE": paths["hub"],
+        "HF_MODULES_CACHE": paths["modules"],
+    }
+    previous_env = {key: os.environ.get(key) for key in env_updates}
+    try:
+        os.environ.update(env_updates)
+        if "datasets" in sys.modules:
+            try:
+                import datasets.config as datasets_config
+
+                datasets_config.HF_HOME = paths["root"]
+                datasets_config.HF_DATASETS_CACHE = paths["datasets"]
+                datasets_config.HF_HUB_CACHE = paths["hub"]
+            except Exception:
+                logger.debug("datasets.config unavailable while rebasing HF cache root", exc_info=True)
+        if "huggingface_hub.constants" in sys.modules:
+            try:
+                import huggingface_hub.constants as hub_constants
+
+                hub_constants.HF_HOME = paths["root"]
+                hub_constants.HF_HUB_CACHE = paths["hub"]
+                hub_constants.HUGGINGFACE_HUB_CACHE = paths["hub"]
+                hub_constants.HF_TOKEN_PATH = os.path.join(paths["root"], "token")
+            except Exception:
+                logger.debug("huggingface_hub.constants unavailable while rebasing HF cache root", exc_info=True)
+        yield paths
+    finally:
+        for key, previous in previous_env.items():
+            if previous is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous
 
 
 def extract_datasets_from_tasks(
@@ -119,11 +182,23 @@ class CacheManifest:
     failed_datasets: list[tuple[str, str | None, str]]
     """List of (dataset_path, dataset_name, error_message) tuples that failed to cache."""
 
+    cache_layout_version: int = HF_CACHE_LAYOUT_VERSION
+    """Layout version for the uploaded HF cache root."""
+
+    includes_hf_hub_cache: bool = True
+    """Whether the uploaded cache includes HF Hub metadata/cache content."""
+
+    includes_hf_modules_cache: bool = True
+    """Whether the uploaded cache includes HF modules cache content."""
+
     def to_dict(self) -> dict:
         return {
             "task_names": self.task_names,
             "cached_datasets": [[d[0], d[1]] for d in self.cached_datasets],
             "failed_datasets": [[d[0], d[1], d[2]] for d in self.failed_datasets],
+            "cache_layout_version": self.cache_layout_version,
+            "includes_hf_hub_cache": self.includes_hf_hub_cache,
+            "includes_hf_modules_cache": self.includes_hf_modules_cache,
         }
 
     @classmethod
@@ -132,11 +207,51 @@ class CacheManifest:
             task_names=data["task_names"],
             cached_datasets=[(d[0], d[1]) for d in data["cached_datasets"]],
             failed_datasets=[(d[0], d[1], d[2]) for d in data["failed_datasets"]],
+            cache_layout_version=int(data.get("cache_layout_version", 1)),
+            includes_hf_hub_cache=bool(data.get("includes_hf_hub_cache", False)),
+            includes_hf_modules_cache=bool(data.get("includes_hf_modules_cache", False)),
         )
 
     def is_complete(self) -> bool:
         """Return True if all requested datasets were successfully cached."""
         return len(self.failed_datasets) == 0
+
+    def supports_full_offline_task_loading(self) -> bool:
+        """Return True if the cache should support offline lm-eval task loading."""
+        return (
+            self.is_complete()
+            and self.cache_layout_version >= HF_CACHE_LAYOUT_VERSION
+            and self.includes_hf_hub_cache
+            and self.includes_hf_modules_cache
+        )
+
+
+def load_cache_manifest(gcs_path: str) -> CacheManifest | None:
+    """Load the eval cache manifest from a cache root, if it exists."""
+    manifest_path = os.path.join(gcs_path, MANIFEST_FILE)
+    if not fsspec_exists(manifest_path):
+        return None
+    with fsspec.open(manifest_path, "r") as f:
+        return CacheManifest.from_dict(json.load(f))
+
+
+def warm_task_metadata_cache(
+    eval_tasks: Sequence[EvalTaskConfig],
+    *,
+    log: logging.Logger | None = None,
+) -> None:
+    """Warm lm-eval task metadata once so workers can resolve tasks offline later."""
+    import lm_eval.tasks as tasks
+
+    log_obj = log or logger
+    task_manager = tasks.TaskManager()
+    unique_task_names = sorted({task.name for task in eval_tasks})
+    for task_name in unique_task_names:
+        log_obj.info(f"Warming task metadata cache for task: {task_name}")
+        call_with_hf_backoff(
+            lambda name=task_name: tasks.get_task_dict([name], task_manager),
+            context=f"warm task metadata {task_name}",
+        )
 
 
 def save_eval_datasets_to_gcs(
@@ -167,24 +282,23 @@ def save_eval_datasets_to_gcs(
     Raises:
         RuntimeError: If any datasets failed to download.
     """
-    import datasets
-
     log_obj = log or logger
     kwargs = dataset_kwargs or {}
 
     # Check if already cached in GCS with a complete manifest
-    manifest_path = os.path.join(gcs_path, ".eval_datasets_manifest.json")
-    if fsspec_exists(manifest_path):
+    manifest_path = os.path.join(gcs_path, MANIFEST_FILE)
+    existing_manifest = load_cache_manifest(gcs_path)
+    if existing_manifest is not None:
         try:
-            with fsspec.open(manifest_path, "r") as f:
-                manifest = CacheManifest.from_dict(json.load(f))
-            if manifest.is_complete():
+            if existing_manifest.supports_full_offline_task_loading():
                 log_obj.info(f"Eval datasets already cached at {gcs_path} (complete)")
                 return gcs_path
             else:
                 log_obj.info(
                     f"Found incomplete cache at {gcs_path} "
-                    f"({len(manifest.failed_datasets)} failed). Re-downloading..."
+                    f"(failed={len(existing_manifest.failed_datasets)}, "
+                    f"layout_version={existing_manifest.cache_layout_version}, "
+                    f"hub_cache={existing_manifest.includes_hf_hub_cache}). Re-downloading..."
                 )
         except Exception as e:
             log_obj.warning(f"Could not read manifest at {manifest_path}: {e}. Re-downloading...")
@@ -199,36 +313,45 @@ def save_eval_datasets_to_gcs(
     temp_dir_obj = None
     if local_cache_dir is None:
         temp_dir_obj = tempfile.TemporaryDirectory()
-        cache_dir = temp_dir_obj.name
+        cache_root = temp_dir_obj.name
     else:
-        cache_dir = local_cache_dir
-        os.makedirs(cache_dir, exist_ok=True)
+        cache_root = local_cache_dir
+        os.makedirs(cache_root, exist_ok=True)
 
     try:
-        # Download all datasets to local cache
-        log_obj.info(f"Downloading {len(datasets_needed)} datasets to {cache_dir}")
-        cached_datasets: list[tuple[str, str | None]] = []
-        failed_datasets: list[tuple[str, str | None, str]] = []
+        with _temporary_hf_cache_root(cache_root) as cache_paths:
+            import datasets
 
-        for dataset_path, dataset_name in datasets_needed:
-            log_obj.info(f"Downloading dataset: {dataset_path} (config: {dataset_name})")
-            try:
-                call_with_hf_backoff(
-                    lambda dp=dataset_path, dn=dataset_name: datasets.load_dataset(
-                        path=dp,
-                        name=dn,
-                        cache_dir=cache_dir,
-                        trust_remote_code=True,
-                        **kwargs,
-                    ),
-                    context=f"download dataset {dataset_path}",
-                    logger=log_obj,
-                )
-                cached_datasets.append((dataset_path, dataset_name))
-            except Exception as e:
-                error_msg = str(e)
-                log_obj.warning(f"Failed to download dataset {dataset_path}: {error_msg}")
-                failed_datasets.append((dataset_path, dataset_name, error_msg))
+            datasets_cache_dir = cache_paths["datasets"]
+            log_obj.info(f"Downloading {len(datasets_needed)} datasets to {datasets_cache_dir}")
+            cached_datasets: list[tuple[str, str | None]] = []
+            failed_datasets: list[tuple[str, str | None, str]] = []
+
+            for dataset_path, dataset_name in datasets_needed:
+                log_obj.info(f"Downloading dataset: {dataset_path} (config: {dataset_name})")
+                try:
+                    call_with_hf_backoff(
+                        lambda dp=dataset_path, dn=dataset_name: datasets.load_dataset(
+                            path=dp,
+                            name=dn,
+                            cache_dir=datasets_cache_dir,
+                            trust_remote_code=True,
+                            **kwargs,
+                        ),
+                        context=f"download dataset {dataset_path}",
+                    )
+                    cached_datasets.append((dataset_path, dataset_name))
+                except Exception as e:
+                    error_msg = str(e)
+                    log_obj.warning(f"Failed to download dataset {dataset_path}: {error_msg}")
+                    failed_datasets.append((dataset_path, dataset_name, error_msg))
+
+            if not failed_datasets:
+                warm_task_metadata_cache(eval_tasks, log=log_obj)
+
+            token_path = os.path.join(cache_paths["root"], "token")
+            if os.path.exists(token_path):
+                os.remove(token_path)
 
         # Create manifest
         manifest = CacheManifest(
@@ -241,7 +364,7 @@ def save_eval_datasets_to_gcs(
         # trailing slash is needed to upload the contents of the folder to gcs_path
         log_obj.info(f"Uploading datasets to {gcs_path}")
         fs = fsspec.core.url_to_fs(gcs_path)[0]
-        fs.put(cache_dir + "/", gcs_path, recursive=True)
+        fs.put(cache_root + "/", gcs_path, recursive=True)
 
         # Write manifest file
         with fsspec.open(manifest_path, "w") as f:
@@ -267,7 +390,7 @@ def load_eval_datasets_from_gcs(
     local_cache_dir: str | None = None,
     *,
     log: logging.Logger | None = None,
-) -> bool:
+) -> CacheManifest | None:
     """
     Sync evaluation datasets from GCS to local HuggingFace cache directory.
 
@@ -282,33 +405,24 @@ def load_eval_datasets_from_gcs(
         log: Optional logger instance.
 
     Returns:
-        True if sync was successful, False otherwise.
+        The cache manifest if sync was successful, otherwise None.
     """
     log_obj = log or logger
 
     # Check if GCS cache exists
-    manifest_path = os.path.join(gcs_path, ".eval_datasets_manifest.json")
-    if not fsspec_exists(manifest_path):
+    manifest = load_cache_manifest(gcs_path)
+    if manifest is None:
         log_obj.info(f"No eval datasets cache found at {gcs_path}")
-        return False
-
-    # Read manifest to check completeness
-    try:
-        with fsspec.open(manifest_path, "r") as f:
-            manifest = CacheManifest.from_dict(json.load(f))
-        if not manifest.is_complete():
-            log_obj.warning(
-                f"Eval datasets cache at {gcs_path} is incomplete "
-                f"({len(manifest.failed_datasets)} failed). Proceeding with available datasets."
-            )
-    except Exception as e:
-        log_obj.warning(f"Could not read manifest: {e}. Proceeding anyway.")
+        return None
+    if not manifest.is_complete():
+        log_obj.warning(
+            f"Eval datasets cache at {gcs_path} is incomplete "
+            f"({len(manifest.failed_datasets)} failed). Proceeding with available datasets."
+        )
 
     # Determine local cache directory
     if local_cache_dir is None:
-        local_cache_dir = os.environ.get("HF_DATASETS_CACHE")
-        if local_cache_dir is None:
-            local_cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "datasets")
+        local_cache_dir = default_hf_cache_root()
 
     # Ensure local cache directory exists
     os.makedirs(local_cache_dir, exist_ok=True)
@@ -321,10 +435,10 @@ def load_eval_datasets_from_gcs(
         fs = fsspec.core.url_to_fs(gcs_path)[0]
         fs.get(gcs_path + "/", local_cache_dir, recursive=True)
         log_obj.info(f"Successfully synced eval datasets to {local_cache_dir}")
-        return True
+        return manifest
     except Exception as e:
         log_obj.warning(f"Failed to sync eval datasets from GCS: {e}")
-        return False
+        return None
 
 
 # ============================================================================

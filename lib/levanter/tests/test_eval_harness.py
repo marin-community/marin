@@ -19,6 +19,7 @@ from levanter.eval_harness import (
     TaskConfig,
     _LmEvalHarnessWorker,
     _encode_batch_texts,
+    _enable_hf_offline_mode_for_eval_cache,
     _enable_hf_dataset_cache_only_mode,
     _effective_pad_token_id,
     _iterate_tokenized_requests,
@@ -192,6 +193,22 @@ def test_encode_batch_texts_falls_back_to_hf_call():
     assert _encode_batch_texts(tokenizer, ["ab", "hello"]) == [[2], [5]]
 
 
+def test_enable_hf_offline_mode_for_eval_cache(monkeypatch):
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("HF_DATASETS_OFFLINE", raising=False)
+    monkeypatch.setattr(datasets_config, "HF_HUB_OFFLINE", False)
+    monkeypatch.setattr(datasets_config, "HF_DATASETS_OFFLINE", False)
+    monkeypatch.setattr(hub_constants, "HF_HUB_OFFLINE", False)
+
+    _enable_hf_offline_mode_for_eval_cache()
+
+    assert os.environ["HF_HUB_OFFLINE"] == "1"
+    assert os.environ["HF_DATASETS_OFFLINE"] == "1"
+    assert datasets_config.HF_HUB_OFFLINE is True
+    assert datasets_config.HF_DATASETS_OFFLINE is True
+    assert hub_constants.HF_HUB_OFFLINE is True
+
+
 def test_enable_hf_dataset_cache_only_mode(monkeypatch):
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     monkeypatch.delenv("HF_DATASETS_OFFLINE", raising=False)
@@ -207,15 +224,52 @@ def test_enable_hf_dataset_cache_only_mode(monkeypatch):
     assert hub_constants.HF_HUB_OFFLINE is False
 
 
-def test_sync_datasets_from_gcs_enables_dataset_cache_only_mode_on_success(monkeypatch):
+def test_sync_datasets_from_gcs_enables_full_offline_mode_when_manifest_supports_it(monkeypatch):
     import marin.evaluation.eval_dataset_cache as eval_dataset_cache
+
+    manifest = eval_dataset_cache.CacheManifest(
+        task_names=["mmlu"],
+        cached_datasets=[("cais/mmlu", None)],
+        failed_datasets=[],
+        cache_layout_version=eval_dataset_cache.HF_CACHE_LAYOUT_VERSION,
+        includes_hf_hub_cache=True,
+        includes_hf_modules_cache=True,
+    )
+
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("HF_DATASETS_OFFLINE", raising=False)
+    monkeypatch.setattr(datasets_config, "HF_HUB_OFFLINE", False)
+    monkeypatch.setattr(datasets_config, "HF_DATASETS_OFFLINE", False)
+    monkeypatch.setattr(hub_constants, "HF_HUB_OFFLINE", False)
+    monkeypatch.setattr(eval_dataset_cache, "load_eval_datasets_from_gcs", lambda **_: manifest)
+
+    config = LmEvalHarnessConfig(task_spec=[], eval_datasets_cache_path="gs://example/eval-cache")
+
+    assert config._sync_datasets_from_gcs() is True
+    assert os.environ["HF_HUB_OFFLINE"] == "1"
+    assert datasets_config.HF_HUB_OFFLINE is True
+    assert datasets_config.HF_DATASETS_OFFLINE is True
+    assert hub_constants.HF_HUB_OFFLINE is True
+
+
+def test_sync_datasets_from_gcs_enables_dataset_cache_only_mode_for_legacy_manifest(monkeypatch):
+    import marin.evaluation.eval_dataset_cache as eval_dataset_cache
+
+    manifest = eval_dataset_cache.CacheManifest(
+        task_names=["mmlu"],
+        cached_datasets=[("cais/mmlu", None)],
+        failed_datasets=[],
+        cache_layout_version=1,
+        includes_hf_hub_cache=False,
+        includes_hf_modules_cache=False,
+    )
 
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     monkeypatch.delenv("HF_DATASETS_OFFLINE", raising=False)
     monkeypatch.setattr(datasets_config, "HF_HUB_OFFLINE", True)
     monkeypatch.setattr(datasets_config, "HF_DATASETS_OFFLINE", False)
     monkeypatch.setattr(hub_constants, "HF_HUB_OFFLINE", True)
-    monkeypatch.setattr(eval_dataset_cache, "load_eval_datasets_from_gcs", lambda **_: True)
+    monkeypatch.setattr(eval_dataset_cache, "load_eval_datasets_from_gcs", lambda **_: manifest)
 
     config = LmEvalHarnessConfig(task_spec=[], eval_datasets_cache_path="gs://example/eval-cache")
 
