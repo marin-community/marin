@@ -24,7 +24,6 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     RunningTaskEntry,
     TaskUpdate,
-    WorkerPing,
 )
 from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.types import JobName, WorkerId
@@ -134,12 +133,7 @@ def test_update_worker_pings_writes_snapshot_and_liveness(state, worker_metadata
         net_sent_bps=8,
     )
 
-    state.update_worker_pings(
-        [
-            WorkerPing(worker_id=WorkerId("worker1"), snapshot=snap),
-            WorkerPing(worker_id=WorkerId("worker2"), snapshot=None),
-        ]
-    )
+    state.update_worker_pings({WorkerId("worker1"): snap, WorkerId("worker2"): None})
 
     with state._db.snapshot() as q:
         row1 = q.fetchone(
@@ -169,7 +163,7 @@ def test_update_worker_pings_writes_snapshot_and_liveness(state, worker_metadata
 
 
 def test_update_worker_pings_empty_is_noop(state):
-    state.update_worker_pings([])
+    state.update_worker_pings({})
 
 
 def test_fail_heartbeat_below_threshold(state, worker_metadata):

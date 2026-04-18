@@ -13,7 +13,7 @@ from collections import defaultdict
 import json
 import logging
 from dataclasses import dataclass, field
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, NamedTuple
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
@@ -277,19 +277,6 @@ class WorkerFailureBatchResult(TxResult):
 
     removed_workers: list[tuple[WorkerId, str | None]] = field(default_factory=list)
     results: list[HeartbeatFailureResult] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class WorkerPing:
-    """Result of a Ping RPC for a single worker.
-
-    A snapshot of None means liveness-only: bump last_heartbeat without
-    rewriting resource columns. The ping loop emits these on the cycles
-    where it skips the (more expensive) resource refresh.
-    """
-
-    worker_id: WorkerId
-    snapshot: job_pb2.WorkerResourceSnapshot | None
 
 
 class RunningTaskEntry(NamedTuple):
@@ -921,7 +908,7 @@ def _batch_worker_health(
     ).fetchall()
     existing = {str(r["worker_id"]) for r in rows}
 
-    liveness_params: list[tuple] = []
+    liveness_params: list[tuple[int, str]] = []
     snapshot_writes: list[tuple[str, job_pb2.WorkerResourceSnapshot]] = []
     for req in requests:
         wid = str(req.worker_id)
@@ -3092,26 +3079,31 @@ class ControllerTransitions:
     # Split Heartbeat Helpers
     # =========================================================================
 
-    def update_worker_pings(self, pings: Sequence[WorkerPing]) -> None:
+    def update_worker_pings(
+        self,
+        snapshots: Mapping[WorkerId, job_pb2.WorkerResourceSnapshot | None],
+    ) -> None:
         """Apply a batch of Ping RPC results in a single transaction.
 
-        For each ping, bumps last_heartbeat_ms; if a snapshot is attached,
+        For each entry, bumps last_heartbeat_ms; if the value is a snapshot,
         also rewrites the worker's snapshot_* columns and appends a row to
-        worker_resource_history. Does not touch healthy/active/
-        consecutive_failures — the ping loop tracks failures in-memory and
-        uses fail_workers_batch to remove workers past threshold.
+        worker_resource_history. A None value means liveness-only — the ping
+        loop emits these on cycles where it skips the resource refresh.
+        Does not touch healthy/active/consecutive_failures — the ping loop
+        tracks failures in-memory and uses fail_workers_batch to remove
+        workers past threshold.
         """
-        if not pings:
+        if not snapshots:
             return
         now_ms = Timestamp.now().epoch_ms()
-        liveness_params: list[tuple] = []
+        liveness_params: list[tuple[int, str]] = []
         snapshot_writes: list[tuple[str, job_pb2.WorkerResourceSnapshot]] = []
-        for ping in pings:
-            wid = str(ping.worker_id)
-            if ping.snapshot is None:
+        for worker_id, snap in snapshots.items():
+            wid = str(worker_id)
+            if snap is None:
                 liveness_params.append((now_ms, wid))
             else:
-                snapshot_writes.append((wid, ping.snapshot))
+                snapshot_writes.append((wid, snap))
 
         with self._db.transaction() as cur:
             if liveness_params:
