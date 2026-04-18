@@ -157,7 +157,8 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "marin-8b-base")
 ENV_TYPE = os.environ.get("ENV_TYPE", "daytona")
 N_CONCURRENT = int(os.environ.get("HARBOR_N_CONCURRENT", "4"))
 
-RESOURCES = ResourceConfig.with_tpu("v5p-8")
+_TPU_VARIANT = os.environ.get("TPU_VARIANT", "v6e-4")
+RESOURCES = ResourceConfig.with_tpu(_TPU_VARIANT)
 
 VLLM_ENGINE_KWARGS = {
     "max_model_len": 32768,
