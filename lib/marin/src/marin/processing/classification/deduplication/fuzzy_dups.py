@@ -75,7 +75,7 @@ class FuzzyDupsAttrData(BaseModel):
 
 
 def _validate_inputs(inputs: list[MinHashAttrData]) -> MinHashParams:
-    """Ensure every input shares the same MinHash params; raise otherwise."""
+    """Ensure every input shares the same MinHash params and a unique source; raise otherwise."""
     if not inputs:
         raise ValueError("compute_fuzzy_dups_attrs requires at least one input")
 
@@ -87,6 +87,17 @@ def _validate_inputs(inputs: list[MinHashAttrData]) -> MinHashParams:
             f"All MinHashAttrData inputs must share identical MinHash params. "
             f"inputs[0]={head} but mismatches: {details}"
         )
+
+    seen: dict[str, int] = {}
+    for i, m in enumerate(inputs):
+        if m.source_main_dir in seen:
+            raise ValueError(
+                f"Duplicate source_main_dir in inputs: inputs[{seen[m.source_main_dir]}] and "
+                f"inputs[{i}] both point to {m.source_main_dir!r}. Each source must be "
+                "represented at most once so its output attr tree is unambiguous."
+            )
+        seen[m.source_main_dir] = i
+
     return head
 
 
@@ -123,6 +134,30 @@ def _build_shard_index(inputs: list[MinHashAttrData]) -> tuple[list[dict[str, An
     return entries, source_tag
 
 
+# Separator between the per-source CC tag and the original content-hash id.
+# "|" can't appear in the hex-digit content hashes produced by normalize's
+# generate_id, so splitting on the first "|" is unambiguous.
+_CC_ID_SEP = "|"
+
+
+def _cc_id(source_tag: str, doc_id: str) -> str:
+    """Prefix *doc_id* with *source_tag* so CC treats cross-source collisions as distinct nodes.
+
+    ``connected_components`` keys nodes by a hash of the record id. Two
+    inputs can carry byte-identical normalized ids (e.g. exact text overlap
+    across datasets), and without this prefix they collapse to a single
+    node — under-reporting dups and potentially clobbering co-partitioned
+    attr files. The prefix is stripped in :func:`_strip_cc_prefix` before
+    the final attr parquet is written.
+    """
+    return f"{source_tag}{_CC_ID_SEP}{doc_id}"
+
+
+def _strip_cc_prefix(record_id: str) -> str:
+    """Reverse :func:`_cc_id`, returning the original ``doc_id``."""
+    return record_id.split(_CC_ID_SEP, 1)[1]
+
+
 def _emit_bucket_records(entries: list[dict[str, Any]]) -> Iterator[dict]:
     """For each (bucket, id) pair across all attr shards in *entries*, emit a routing record."""
     for entry in entries:
@@ -132,9 +167,9 @@ def _emit_bucket_records(entries: list[dict[str, Any]]) -> Iterator[dict]:
             for doc_id, doc_buckets in zip(ids, buckets_col, strict=True):
                 if not doc_buckets.is_valid:
                     continue
-                doc_id_val = doc_id.as_py()
+                cc_id = _cc_id(entry["source_tag"], doc_id.as_py())
                 for b in doc_buckets.as_py():
-                    yield {"bucket": str(b), "id": doc_id_val, "file_idx": entry["file_idx"]}
+                    yield {"bucket": str(b), "id": cc_id, "file_idx": entry["file_idx"]}
 
 
 def _make_per_shard_writer(output_path: str, entries: list[dict[str, Any]], counter_prefix: str):
@@ -253,7 +288,7 @@ def compute_fuzzy_dups_attrs(
         .load_parquet()
         .map(
             lambda r: {
-                "id": r["record_id"],
+                "id": _strip_cc_prefix(r["record_id"]),
                 "is_dup": r["component_id"] != r["id_norm"],
                 "file_idx": r["file_idx"],
             }

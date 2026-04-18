@@ -109,7 +109,14 @@ def test_fuzzy_dups_single_source_finds_fuzzy_pair(fox_corpus):
 
 
 def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
-    """Two MinHashAttrData inputs produce two co-partitioned attr trees keyed by source_main_dir."""
+    """Two MinHashAttrData inputs produce two co-partitioned attr trees keyed by source_main_dir.
+
+    Also asserts the cross-source exact-text collision case (test_contaminated_1 ==
+    train_arctic_1 byte-identical → same normalized id in both datasets). Without
+    a per-source prefix into connected_components, the two nodes would collapse
+    into one and at most one side would be marked; with the fix each side
+    independently carries its own dup marker.
+    """
     train_norm = _normalize(fox_corpus["train_dir"], os.path.join(fox_corpus["output_dir"], "norm_train"))
     test_norm = _normalize(fox_corpus["test_dir"], os.path.join(fox_corpus["output_dir"], "norm_test"))
 
@@ -130,12 +137,28 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
         ), per_source.attr_dir
         assert Path(per_source.attr_dir).exists(), f"missing attr dir for {src_dir}"
 
-    # At least one document is marked across both source trees: test_high_overlap
-    # (in test) is fuzzy-similar to train_arctic_1 (in train), so the cross-dataset
-    # cluster forces one of them to be flagged in its respective attr tree.
-    train_flagged = _read_dup_attr_ids(dups.sources[train_norm.main_output_dir].attr_dir)
-    test_flagged = _read_dup_attr_ids(dups.sources[test_norm.main_output_dir].attr_dir)
-    assert (len(train_flagged) + len(test_flagged)) >= 1
+    # Resolve each side's flagged ids back to source_ids via the normalize main parquet.
+    train_by_id = _read_main_records(train_norm)
+    test_by_id = _read_main_records(test_norm)
+    train_flagged_source_ids = {
+        train_by_id[i]["source_id"]
+        for i in _read_dup_attr_ids(dups.sources[train_norm.main_output_dir].attr_dir)
+        if i in train_by_id
+    }
+    test_flagged_source_ids = {
+        test_by_id[i]["source_id"]
+        for i in _read_dup_attr_ids(dups.sources[test_norm.main_output_dir].attr_dir)
+        if i in test_by_id
+    }
+
+    # Cross-source exact-text pairs: (train_arctic_1, test_contaminated_1) and
+    # (train_red_1, test_contaminated_2). Each pair forms a CC cluster of two
+    # post-fix; exactly one side per cluster must be marked as the duplicate.
+    arctic_cluster = {"train_arctic_1", "test_contaminated_1"}
+    red_cluster = {"train_red_1", "test_contaminated_2"}
+    combined = train_flagged_source_ids | test_flagged_source_ids
+    assert len(arctic_cluster & combined) == 1, f"arctic cluster: got {arctic_cluster & combined}"
+    assert len(red_cluster & combined) == 1, f"red cluster: got {red_cluster & combined}"
 
 
 def test_fuzzy_dups_rejects_param_mismatch(fox_corpus):
@@ -152,6 +175,19 @@ def test_fuzzy_dups_rejects_param_mismatch(fox_corpus):
     with pytest.raises(ValueError, match=r"identical MinHash params"):
         compute_fuzzy_dups_attrs(
             inputs=[a, b],
+            output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups"),
+            max_parallelism=4,
+        )
+
+
+def test_fuzzy_dups_rejects_duplicate_source(fox_corpus):
+    """Two inputs pointing to the same ``source_main_dir`` must be rejected to avoid output clobbering."""
+    source = _normalize(fox_corpus["test_dir"], os.path.join(fox_corpus["output_dir"], "norm"))
+    mh = compute_minhash_attrs(source=source, output_path=os.path.join(fox_corpus["output_dir"], "mh"))
+
+    with pytest.raises(ValueError, match=r"Duplicate source_main_dir"):
+        compute_fuzzy_dups_attrs(
+            inputs=[mh, mh],
             output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups"),
             max_parallelism=4,
         )
