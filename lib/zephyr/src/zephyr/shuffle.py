@@ -328,7 +328,7 @@ class ScatterReader:
 
     _MAX_IN_MEMORY_ITERATORS = 10_000
 
-    def needs_external_sort(self, memory_limit: int, memory_fraction: float = 0.5) -> bool:
+    def needs_external_sort(self, memory_limit: int, memory_fraction: float = 0.33) -> bool:
         """Return True if opening all chunks at once would blow the budget."""
         total_chunks = self.total_chunks
         if total_chunks == 0:
