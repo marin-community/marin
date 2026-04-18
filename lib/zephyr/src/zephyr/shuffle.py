@@ -348,10 +348,30 @@ class ScatterReader:
                 "avg_item_bytes not available in scatter manifest. "
                 "Re-run the scatter stage with a version that records avg_item_bytes."
             )
-        # Heuristic: assume each open chunk could hold up to max_chunk_rows
-        # items in the worst case (e.g. if downstream materialises chunks).
-        estimated = total_chunks * self.max_chunk_rows * self.avg_item_bytes
-        return estimated > memory_limit * memory_fraction
+        # Estimate merge memory: each open iterator holds the compressed chunk
+        # blob + one sub-batch of _SUB_BATCH_SIZE items in memory. Use 3x
+        # multiplier on pickle bytes to approximate in-memory object size.
+        _IN_MEMORY_MULTIPLIER = 3
+        total_compressed = sum(length for it in self.iterators for _, length in it.chunks)
+        avg_compressed = total_compressed / total_chunks
+        per_iterator = avg_compressed + _SUB_BATCH_SIZE * self.avg_item_bytes * _IN_MEMORY_MULTIPLIER
+        estimated = total_chunks * per_iterator
+        budget = memory_limit * memory_fraction
+        triggered = estimated > budget
+        logger.info(
+            "needs_external_sort: %d chunks x %.1f MB/iter (%.1f MB compressed + %.1f MB sub-batch) "
+            "= %.1f GB estimated vs %.1f GB budget (%.1f GB * %.2f) -> %s",
+            total_chunks,
+            per_iterator / 1e6,
+            avg_compressed / 1e6,
+            (_SUB_BATCH_SIZE * self.avg_item_bytes * _IN_MEMORY_MULTIPLIER) / 1e6,
+            estimated / 1e9,
+            budget / 1e9,
+            memory_limit / 1e9,
+            memory_fraction,
+            triggered,
+        )
+        return triggered
 
 
 # ---------------------------------------------------------------------------
