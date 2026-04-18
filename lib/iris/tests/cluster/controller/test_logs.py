@@ -521,6 +521,49 @@ def test_recovery_reads_both_tmp_and_log(tmp_path: Path):
         store2.close()
 
 
+def test_recovery_migrates_legacy_logs_filenames(tmp_path: Path):
+    """Pre-tiered-layout ``logs_*.parquet`` files are renamed to ``log_*.parquet``.
+
+    A controller upgraded from the single-series layout must not silently
+    drop historical segments on restart — that would reset _next_seq to 1
+    and cause sequence reuse on subsequent writes.
+    """
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+
+    # Write one log_*.parquet via a first-gen store, then rename to legacy naming.
+    seed = DuckDBLogStore(log_dir=log_dir)
+    try:
+        for batch in range(2):
+            seed.append(KEY, [_make_entry(f"legacy-{batch}-{i}", epoch_ms=batch * 10 + i) for i in range(2)])
+            seed._force_flush()
+        seed._force_compaction()
+    finally:
+        seed.close()
+    log_files = sorted(log_dir.glob("log_*.parquet"))
+    assert len(log_files) == 1
+    legacy = log_files[0].with_name("logs_" + log_files[0].name[len("log_") :])
+    log_files[0].rename(legacy)
+    assert sorted(log_dir.glob("logs_*.parquet")) == [legacy]
+
+    # Reopen: migration must rename it and recovery must pick up the max seq.
+    store = DuckDBLogStore(log_dir=log_dir)
+    try:
+        assert sorted(log_dir.glob("logs_*.parquet")) == []
+        assert len(sorted(log_dir.glob("log_*.parquet"))) == 1
+
+        result = store.get_logs(KEY)
+        assert [e.data for e in result.entries] == ["legacy-0-0", "legacy-0-1", "legacy-1-0", "legacy-1-1"]
+
+        # New writes must use fresh seq numbers; tailing post-append should
+        # return only the new batch when cursored past the legacy data.
+        store.append(KEY, [_make_entry("fresh", epoch_ms=100)])
+        after = store.get_logs(KEY, cursor=result.cursor)
+        assert [e.data for e in after.entries] == ["fresh"]
+    finally:
+        store.close()
+
+
 # =============================================================================
 # Parquet-specific tests
 # =============================================================================

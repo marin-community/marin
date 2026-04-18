@@ -172,6 +172,25 @@ def _read_seq_bounds(path: Path) -> tuple[int, int]:
         return 0, 0
 
 
+# Pre-tiered layout: a single series of compacted files named
+# ``logs_{min_seq:019d}.parquet``. Equivalent to the new ``log_*.parquet``
+# semantic (sealed, GCS-uploaded). On upgrade, rename them in place so they
+# participate in seq recovery and segment discovery.
+_LEGACY_LOG_PREFIX = "logs_"
+
+
+def _migrate_legacy_segments(log_dir: Path) -> None:
+    """Rename any pre-tiered-layout ``logs_*.parquet`` to ``log_*.parquet``."""
+    for p in log_dir.glob(f"{_LEGACY_LOG_PREFIX}*.parquet"):
+        target = p.with_name(_LOG_PREFIX + p.name[len(_LEGACY_LOG_PREFIX) :])
+        if target.exists():
+            # A same-min_seq log file from the new layout already exists;
+            # prefer it and drop the stale legacy copy.
+            p.unlink()
+            continue
+        p.rename(target)
+
+
 def _discover_segments(log_dir: Path) -> list[Path]:
     """Return every on-disk segment (tmp + log), chronological by filename."""
     return sorted(list(log_dir.glob(f"{_TMP_PREFIX}*.parquet")) + list(log_dir.glob(f"{_LOG_PREFIX}*.parquet")))
@@ -394,6 +413,9 @@ class DuckDBLogStore:
         self._max_local_bytes = max_local_bytes
         self._segment_target_bytes = segment_target_bytes
         self._max_tmp_segments_before_compact = max_tmp_segments_before_compact
+
+        # Upgrade any pre-tiered-layout files before discovery / seq recovery.
+        _migrate_legacy_segments(self._log_dir)
 
         # ---- shared mutable state (all guarded by _lock) ----
         self._lock = Lock()
