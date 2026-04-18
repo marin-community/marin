@@ -44,9 +44,6 @@ extend it uniformly to task-level failures."""
 HEALTH_SCORE_THRESHOLD = 10.0
 
 HEALTH_SCORE_HALF_LIFE_S = 300.0
-"""Score half-life. Evidence older than a few half-lives decays below
-threshold-contributing levels, so stretches of bad behavior separated by
-calm periods don't accumulate across hours."""
 
 
 @dataclass(slots=True)

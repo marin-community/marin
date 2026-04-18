@@ -2630,14 +2630,13 @@ class ControllerServiceImpl:
         """
         updates = task_updates_from_proto(request.updates)
         if updates:
-            result = self._transitions.apply_heartbeat(
+            self._transitions.apply_heartbeat(
                 HeartbeatApplyRequest(
                     worker_id=WorkerId(request.worker_id),
                     worker_resource_snapshot=None,
                     updates=updates,
                 )
             )
-            self._controller.record_worker_observations(result.worker_observations)
             # Wake the controller so it can act on any state changes promptly.
             self._controller.wake()
         return controller_pb2.Controller.UpdateTaskStatusResponse()

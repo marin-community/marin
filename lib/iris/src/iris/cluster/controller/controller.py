@@ -12,7 +12,6 @@ import tempfile
 import threading
 import time
 from collections import defaultdict
-from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -142,9 +141,6 @@ _SLOW_HEARTBEAT_MS = 5000
 # full data-prune interval, which is typically 1 hour).
 _HISTORY_CLEANUP_INTERVAL_S = 60.0
 
-# How often the reaper thread checks worker health scores and heartbeat
-# staleness. Short enough that a worker tripping the score threshold is
-# terminated within a tick; long enough to stay cheap.
 _REAPER_INTERVAL_S = 30.0
 
 
@@ -1097,12 +1093,13 @@ class Controller:
         self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger("iris").addHandler(self._log_handler)
 
+        self._health = WorkerHealthTracker()
         self._transitions = ControllerTransitions(
             db=self._db,
             heartbeat_failure_threshold=config.heartbeat_failure_threshold,
             user_budget_defaults=config.user_budget_defaults,
+            health=self._health,
         )
-        self._health = WorkerHealthTracker()
         self._scheduler = Scheduler()
 
         self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
@@ -1179,11 +1176,6 @@ class Controller:
         scheduler responds to new work within one cycle.
         """
         self._wake_event.set()
-
-    def record_worker_observations(self, observations: Iterable[tuple[WorkerId, HealthSignal]]) -> None:
-        """Forward failure-signal observations from a transitions result into the health tracker."""
-        for worker_id, signal in observations:
-            self._health.bump(worker_id, signal)
 
     @property
     def started(self) -> bool:
@@ -2356,8 +2348,6 @@ class Controller:
                 for result in results:
                     all_tasks_to_kill.update(result.tasks_to_kill)
                     all_task_kill_workers.update(result.task_kill_workers)
-                    for worker_id, signal in result.worker_observations:
-                        self._health.bump(worker_id, signal)
                 if all_tasks_to_kill:
                     self._stop_tasks_direct(all_tasks_to_kill, all_task_kill_workers)
             except Exception:
@@ -2395,60 +2385,29 @@ class Controller:
         """Fail workers whose last heartbeat exceeds the staleness threshold.
 
         On controller restart from checkpoint, workers carry their old
-        last_heartbeat_ms but consecutive_failures=0 and healthy=1.  If the
+        last_heartbeat_ms but consecutive_failures=0 and healthy=1. If the
         backing VMs were preempted during the outage, we'd otherwise wait for
         many RPC timeouts per worker before the score-based reaper catches up.
-        This check short-circuits that by failing any worker that hasn't
-        heartbeated in HEARTBEAT_STALENESS_THRESHOLD (15 minutes).
         """
-        if isinstance(self._provider, K8sTaskProvider):
-            return []
-        if self._config.dry_run:
-            return []
         threshold_ms = HEARTBEAT_STALENESS_THRESHOLD.to_ms()
         workers = healthy_active_workers_with_attributes(self._db)
         stale = [w for w in workers if w.last_heartbeat.age_ms() > threshold_ms]
         if not stale:
             return []
-        stale_samples = [
-            {
-                "worker_id": str(w.worker_id),
-                "age_s": int(w.last_heartbeat.age_ms() / 1000),
-                "address": w.address,
-            }
+        samples = [
+            {"worker_id": str(w.worker_id), "age_s": int(w.last_heartbeat.age_ms() / 1000), "address": w.address}
             for w in stale[:10]
         ]
         logger.warning(
             "Failing %d workers with stale heartbeats (threshold=%ds): %s",
             len(stale),
             HEARTBEAT_STALENESS_THRESHOLD.to_seconds(),
-            stale_samples,
+            samples,
         )
         return self._terminate_workers(
             [str(w.worker_id) for w in stale],
             reason=f"heartbeat stale (>{int(HEARTBEAT_STALENESS_THRESHOLD.to_seconds())}s since last heartbeat)",
             sibling_reason="stale worker failed, slice terminated",
-        )
-
-    def _reap_unhealthy_workers(self) -> list[WorkerId]:
-        """Fail workers whose accumulated health score has crossed the threshold."""
-        if isinstance(self._provider, K8sTaskProvider):
-            return []
-        if self._config.dry_run:
-            return []
-        unhealthy = self._health.workers_over_threshold()
-        if not unhealthy:
-            return []
-        logger.warning(
-            "Failing %d workers over health-score threshold %.1f: %s",
-            len(unhealthy),
-            self._health.threshold,
-            [(str(wid), round(score, 2)) for wid, score in unhealthy[:10]],
-        )
-        return self._terminate_workers(
-            [str(wid) for wid, _ in unhealthy],
-            reason=f"worker health score >= {self._health.threshold:.1f}",
-            sibling_reason="unhealthy worker failed, slice terminated",
         )
 
     def _run_reaper_loop(self, stop_event: threading.Event) -> None:
@@ -2457,6 +2416,8 @@ class Controller:
         Owns all worker termination decisions so the ping/poll/heartbeat threads
         never block on DB writes or RPC fanout for kills.
         """
+        if isinstance(self._provider, K8sTaskProvider) or self._config.dry_run:
+            return
         limiter = RateLimiter(interval_seconds=_REAPER_INTERVAL_S)
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
@@ -2464,9 +2425,22 @@ class Controller:
             if self._checkpoint_paused.is_set():
                 continue
             try:
-                removed: list[WorkerId] = []
-                removed.extend(self._reap_stale_workers())
-                removed.extend(self._reap_unhealthy_workers())
+                removed = list(self._reap_stale_workers())
+                unhealthy = self._health.workers_over_threshold()
+                if unhealthy:
+                    logger.warning(
+                        "Failing %d workers over health-score threshold %.1f: %s",
+                        len(unhealthy),
+                        self._health.threshold,
+                        [(str(wid), round(score, 2)) for wid, score in unhealthy[:10]],
+                    )
+                    removed.extend(
+                        self._terminate_workers(
+                            [str(wid) for wid, _ in unhealthy],
+                            reason=f"worker health score >= {self._health.threshold:.1f}",
+                            sibling_reason="unhealthy worker failed, slice terminated",
+                        )
+                    )
                 if removed:
                     self._health.forget_many(removed)
             except Exception:
@@ -2531,8 +2505,6 @@ class Controller:
         for result in batch_results:
             acc.all_tasks_to_kill.update(result.tasks_to_kill)
             acc.all_task_kill_workers.update(result.task_kill_workers)
-            for worker_id, signal in result.worker_observations:
-                self._health.bump(worker_id, signal)
 
     def _handle_failed_heartbeats(
         self,

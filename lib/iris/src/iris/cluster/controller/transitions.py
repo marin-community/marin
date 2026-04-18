@@ -45,7 +45,7 @@ from iris.cluster.controller.schema import (
     JobDetailRow,
     WorkerDetailRow,
 )
-from iris.cluster.controller.worker_health import HealthSignal
+from iris.cluster.controller.worker_health import HealthSignal, WorkerHealthTracker
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
@@ -236,11 +236,6 @@ class TxResult:
     tasks_to_kill: set[JobName] = field(default_factory=set)
     task_kill_workers: dict[JobName, WorkerId] = field(default_factory=dict)
     has_real_dispatch: bool = False
-    # Worker-level failure signals observed while applying this transaction
-    # (e.g. a task transitioning to WORKER_FAILED on worker W). The controller
-    # forwards these to the WorkerHealthTracker after commit. Kept out of the
-    # DB because reaping runs entirely in-memory.
-    worker_observations: list[tuple[WorkerId, HealthSignal]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -978,10 +973,12 @@ class ControllerTransitions:
         db: ControllerDB,
         heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD,
         user_budget_defaults: UserBudgetDefaults | None = None,
+        health: WorkerHealthTracker | None = None,
     ):
         self._db = db
         self._heartbeat_failure_threshold = heartbeat_failure_threshold
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
+        self._health = health or WorkerHealthTracker()
 
     def _record_transaction(
         self,
@@ -1773,7 +1770,6 @@ class ControllerTransitions:
         task_kill_workers: dict[JobName, WorkerId] = {}
         cascaded_jobs: set[JobName] = set()
         jobs_to_recompute: set[JobName] = set()
-        worker_observations: list[tuple[WorkerId, HealthSignal]] = []
         # Cache job_config rows keyed by job_id wire format.
         job_config_cache: dict[str, dict | None] = {}
 
@@ -1876,7 +1872,7 @@ class ControllerTransitions:
                 if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state in EXECUTING_TASK_STATES:
                     preemption_count += 1
                     if worker_id is not None:
-                        worker_observations.append((WorkerId(str(worker_id)), HealthSignal.TASK_WORKER_FAILED))
+                        self._health.bump(WorkerId(str(worker_id)), HealthSignal.TASK_WORKER_FAILED)
                 if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state == job_pb2.TASK_STATE_ASSIGNED:
                     task_state = job_pb2.TASK_STATE_PENDING
                     terminal_ms = None
@@ -2010,7 +2006,6 @@ class ControllerTransitions:
         return TxResult(
             tasks_to_kill=tasks_to_kill,
             task_kill_workers=task_kill_workers,
-            worker_observations=worker_observations,
         )
 
     def apply_task_updates(self, req: HeartbeatApplyRequest) -> TxResult:
@@ -2129,18 +2124,13 @@ class ControllerTransitions:
                 results[req_idx] = HeartbeatApplyResult(
                     tasks_to_kill=tx_result.tasks_to_kill,
                     action=HeartbeatAction.OK,
-                    worker_observations=tx_result.worker_observations,
                 )
 
         return results
 
     def apply_heartbeat(self, req: HeartbeatApplyRequest) -> HeartbeatApplyResult:
         result = self.apply_task_updates(req)
-        return HeartbeatApplyResult(
-            tasks_to_kill=result.tasks_to_kill,
-            action=HeartbeatAction.OK,
-            worker_observations=result.worker_observations,
-        )
+        return HeartbeatApplyResult(tasks_to_kill=result.tasks_to_kill, action=HeartbeatAction.OK)
 
     def _remove_failed_worker(
         self,
