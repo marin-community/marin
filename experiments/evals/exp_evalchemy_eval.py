@@ -2,10 +2,35 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Example experiment for running Evalchemy reasoning benchmarks.
+Script to evaluate any checkpoint on reasoning tasks using Evalchemy.
 
-Evalchemy (https://github.com/mlfoundations/evalchemy) provides specialized
-reasoning tasks including AIME24/25, MATH500, HLE, and more.
+Supports math, science, code, and all suites. Can evaluate HuggingFace models
+or GCS checkpoints. Submit via Iris to run on a TPU cluster.
+
+Here are a couple of examples:
+
+    # Evaluate Qwen3-4B base model on math benchmarks
+    uv run iris --cluster=marin job run --no-wait \
+        --job-name eval-qwen3-4b-math \
+        --zone us-east5-a \
+        --memory 4GB --enable-extra-resources \
+        -e WANDB_ENTITY stanford-mercury \
+        -e WANDB_PROJECT my-project \
+        -- python experiments/evals/exp_evalchemy_eval.py \
+        --experiment Qwen_Qwen3-4B --checkpoint Qwen/Qwen3-4B --suite math
+
+    # Evaluate a GCS checkpoint on science benchmarks
+    uv run iris --cluster=marin job run --no-wait \
+        --job-name eval-n1-vr5-step200-science \
+        --zone us-east5-a \
+        --memory 4GB --enable-extra-resources \
+        -e WANDB_ENTITY stanford-mercury \
+        -e WANDB_PROJECT my-project \
+        -- python experiments/evals/exp_evalchemy_eval.py \
+        --experiment exp_sft_qwen3_4b_selfinstill_ot3_math53k_n1_vr5_round1 \
+        --suite science \
+        --checkpoint gs://marin-us-east5/checkpoints/\
+    exp_sft_qwen3_4b_selfinstill_ot3_math53k_n1_vr5_round1-422aae/hf/step-200
 """
 import argparse
 import sys
