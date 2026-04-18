@@ -26,7 +26,7 @@ from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_data_config, step_to_lm_mixture_component
 
-TOKENIZER = "WillHeld/contactdoc-tokenizer"
+TOKENIZER = "timodonnell/protein-docs-tokenizer"
 
 model = Qwen3Config(
     max_seq_len=8192,
@@ -73,19 +73,19 @@ train_config = SimpleTrainConfig(
 protein_docs_download = default_download(
     name="raw/protein-docs",
     hf_dataset_id="timodonnell/protein-docs",
-    revision="05b4797b9e4d7c6108e36f379673d1f5af1abd3c",
+    revision="cdd2e2b4af3c52835b7b5d9fa2819c51abe55b91",
 )
 
 protein_docs_tokenized = default_tokenize(
     name="protein-docs",
-    dataset=protein_docs_download / "random-3-bins-5x/train",
+    dataset=protein_docs_download / "contacts-and-distances-v1-5x/train",
     tokenizer=TOKENIZER,
     format=TextLmDatasetFormat(text_key="document"),
 )
 
 protein_docs_val_tokenized = default_tokenize(
     name="protein-docs-val",
-    dataset=protein_docs_download / "random-3-bins-5x/val",
+    dataset=protein_docs_download / "contacts-and-distances-v1-5x/val",
     tokenizer=TOKENIZER,
     format=TextLmDatasetFormat(text_key="document"),
     is_validation=True,
@@ -113,7 +113,7 @@ protein_docs_data = LmDataConfig(
 )
 
 training_step = default_train(
-    name="protein-docs-1b-v3",
+    name="protein-docs-1b-v4",
     tokenized=protein_docs_data,
     model_config=model,
     train_config=train_config,
