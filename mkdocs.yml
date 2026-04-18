@@ -93,6 +93,7 @@ nav:
       - Default Steps: references/default-steps.md
       - Training Configuration: references/train-config.md
       - HBM Optimization: references/hbm-optimization.md
+      - Architecture: architecture/architecture.md
 
 markdown_extensions:
   - markdown.extensions.footnotes
