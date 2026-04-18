@@ -129,7 +129,6 @@ def make_client() -> JobSubmissionClient:
     # API endpoint (e.g. from a `ray://...` address), it can resolve to the head
     # node's internal `webui_url`, which isn't reachable from a developer laptop
     # when using SSH port forwarding.
-
     return JobSubmissionClient(address)
 
 

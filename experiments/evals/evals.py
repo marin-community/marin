@@ -74,7 +74,6 @@ def evaluate_lm_evaluation_harness(
             evaluation_path=this_output_path(),
             evals=evals,
             max_eval_instances=max_eval_instances,
-
             discover_latest_checkpoint=discover_latest_checkpoint,
             engine_kwargs=engine_kwargs,
             resource_config=resource_config,
@@ -511,7 +510,6 @@ def evaluate_evalchemy(
             evaluation_path=this_output_path(),
             evals=evals,
             max_eval_instances=max_eval_instances,
-
             discover_latest_checkpoint=discover_latest_checkpoint,
             engine_kwargs=engine_kwargs,
             generation_params=generation_params,

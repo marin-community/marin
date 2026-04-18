@@ -104,7 +104,6 @@ BASE_GENERATION_PARAMS = {
 # =============================================================================
 # tensor_parallel_size: Number of TPU chips to use for tensor parallelism
 # max_num_seqs: Batch size for parallel generation
-RESOURCE = ResourceConfig.with_tpu("v5p-8")  # v5p-8 has 4 chips
 BATCH_SIZE = 256
 ENGINE_KWARGS = {
     "tensor_parallel_size": 4,
@@ -136,6 +135,12 @@ if __name__ == "__main__":
         choices=["math", "science", "code", "all"],
         help="Eval suite to run (default: math)",
     )
+    parser.add_argument(
+        "--resource",
+        type=str,
+        default="v5p-8",
+        help="TPU type for eval jobs (default: v5p-8)",
+    )
     args, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + remaining
 
@@ -157,7 +162,7 @@ if __name__ == "__main__":
         checkpoints=checkpoints,
         task_seed_groups=task_seed_groups,
         base_generation_params=BASE_GENERATION_PARAMS,
-        resource_config=RESOURCE,
+        resource_config=ResourceConfig.with_tpu(args.resource),
         engine_kwargs=ENGINE_KWARGS,
         apply_chat_template=True,
         discover_latest_checkpoint=DISCOVER_LATEST_CHECKPOINT,
