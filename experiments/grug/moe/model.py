@@ -73,6 +73,9 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    # Router combine mode: "sigmoid" (default), "identity" (no activation),
+    # "sigmoid_post_bias" (sigmoid first, then add QB bias to combine weights).
+    router_combine_mode: str = "sigmoid"
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -351,15 +354,27 @@ class MoEMLP(eqx.Module):
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
-        biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
-        # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
-        _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
-        qb_alpha = _topk_logits[:, -1:]
-        selected_experts = selected_experts[:, :-1]
-        # Sigmoid combine weights on unbiased logits for selected experts.
-        unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
+
+        if self.cfg.router_combine_mode == "pre_sigmoid":
+            # Sigmoid first, then add bias for selection. Combine weights = sigmoid(logits).
+            router_sigmoid = jax.nn.sigmoid(router_logits)
+            biased_sigmoid = router_sigmoid + jax.lax.stop_gradient(self.router_bias)
+            _topk_vals, selected_experts = jax.lax.top_k(biased_sigmoid, self.cfg.num_experts_per_token + 1)
+            qb_alpha = _topk_vals[:, -1:]
+            selected_experts = selected_experts[:, :-1]
+            combine_weights = jnp.take_along_axis(router_sigmoid, selected_experts, axis=-1).astype(x.dtype)
+        else:
+            # Default: bias for selection on raw logits, sigmoid on unbiased logits for combine.
+            biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
+            _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
+            qb_alpha = _topk_logits[:, -1:]
+            selected_experts = selected_experts[:, :-1]
+            unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
+            if self.cfg.router_combine_mode == "identity":
+                combine_weights = unbiased_topk.astype(x.dtype)
+            else:
+                combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
         router_stats = _routing_stats(
             selected_experts,
             router_probs,
