@@ -826,21 +826,6 @@ def _resolve_task_failure_state(
 # =============================================================================
 
 
-def _snapshot_fields(snap: job_pb2.WorkerResourceSnapshot) -> tuple[int, ...]:
-    """Pack the 9 scalar columns we persist from a WorkerResourceSnapshot."""
-    return (
-        snap.host_cpu_percent,
-        snap.memory_used_bytes,
-        snap.memory_total_bytes,
-        snap.disk_used_bytes,
-        snap.disk_total_bytes,
-        snap.running_task_count,
-        snap.total_process_count,
-        snap.net_recv_bps,
-        snap.net_sent_bps,
-    )
-
-
 def _write_worker_snapshots(
     cur: TransactionCursor,
     items: Sequence[tuple[str, job_pb2.WorkerResourceSnapshot]],
@@ -857,28 +842,50 @@ def _write_worker_snapshots(
     if not items:
         return
 
-    rows = [(wid, _snapshot_fields(snap)) for wid, snap in items]
-    update_params = [(now_ms, *fields, wid) for wid, fields in rows]
-    history_params = [(wid, *fields, now_ms) for wid, fields in rows]
-
+    binds = [
+        {
+            "worker_id": wid,
+            "now_ms": now_ms,
+            "host_cpu_percent": snap.host_cpu_percent,
+            "memory_used_bytes": snap.memory_used_bytes,
+            "memory_total_bytes": snap.memory_total_bytes,
+            "disk_used_bytes": snap.disk_used_bytes,
+            "disk_total_bytes": snap.disk_total_bytes,
+            "running_task_count": snap.running_task_count,
+            "total_process_count": snap.total_process_count,
+            "net_recv_bps": snap.net_recv_bps,
+            "net_sent_bps": snap.net_sent_bps,
+        }
+        for wid, snap in items
+    ]
     health_prefix = "healthy = 1, active = 1, consecutive_failures = 0, " if reset_health else ""
     cur.executemany(
-        f"UPDATE workers SET {health_prefix}last_heartbeat_ms = ?, "
-        "snapshot_host_cpu_percent = ?, snapshot_memory_used_bytes = ?, "
-        "snapshot_memory_total_bytes = ?, snapshot_disk_used_bytes = ?, "
-        "snapshot_disk_total_bytes = ?, snapshot_running_task_count = ?, "
-        "snapshot_total_process_count = ?, snapshot_net_recv_bps = ?, "
-        "snapshot_net_sent_bps = ? WHERE worker_id = ?",
-        update_params,
+        f"UPDATE workers SET {health_prefix}last_heartbeat_ms = :now_ms, "
+        "snapshot_host_cpu_percent = :host_cpu_percent, "
+        "snapshot_memory_used_bytes = :memory_used_bytes, "
+        "snapshot_memory_total_bytes = :memory_total_bytes, "
+        "snapshot_disk_used_bytes = :disk_used_bytes, "
+        "snapshot_disk_total_bytes = :disk_total_bytes, "
+        "snapshot_running_task_count = :running_task_count, "
+        "snapshot_total_process_count = :total_process_count, "
+        "snapshot_net_recv_bps = :net_recv_bps, "
+        "snapshot_net_sent_bps = :net_sent_bps "
+        "WHERE worker_id = :worker_id",
+        binds,
     )
     cur.executemany(
-        "INSERT INTO worker_resource_history("
+        "INSERT INTO worker_resource_history ("
         "worker_id, snapshot_host_cpu_percent, snapshot_memory_used_bytes, "
         "snapshot_memory_total_bytes, snapshot_disk_used_bytes, snapshot_disk_total_bytes, "
         "snapshot_running_task_count, snapshot_total_process_count, "
         "snapshot_net_recv_bps, snapshot_net_sent_bps, timestamp_ms"
-        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        history_params,
+        ") VALUES ("
+        ":worker_id, :host_cpu_percent, :memory_used_bytes, "
+        ":memory_total_bytes, :disk_used_bytes, :disk_total_bytes, "
+        ":running_task_count, :total_process_count, "
+        ":net_recv_bps, :net_sent_bps, :now_ms"
+        ")",
+        binds,
     )
 
 

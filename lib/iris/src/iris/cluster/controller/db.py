@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import queue
 import sqlite3
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace as dc_replace
 from pathlib import Path
@@ -250,7 +250,7 @@ class TransactionCursor:
         """Raw SQL escape hatch."""
         return self._cursor.execute(sql, params)
 
-    def executemany(self, sql: str, params: Iterable[tuple]) -> sqlite3.Cursor:
+    def executemany(self, sql: str, params: Iterable[tuple | Mapping[str, object]]) -> sqlite3.Cursor:
         """Raw SQL batch escape hatch."""
         return self._cursor.executemany(sql, params)
 
