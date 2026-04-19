@@ -403,9 +403,15 @@ class DuckDBLogStore:
 
         self._segments_rwlock = _RWLock()
 
+        # Seq numbers are monotonic across the controller's lifetime and each
+        # flush assigns a unique range, so any tmp whose [min, max] is fully
+        # contained in a logs_ segment's range is a leftover from a prior
+        # compaction that crashed between rename and unlink. Drop it on
+        # startup so restart reads don't double-count those rows.
+        discovered = []
         for p in _discover_segments(self._log_dir):
             min_seq, max_seq = _read_seq_bounds(p)
-            self._local_segments.append(
+            discovered.append(
                 _LocalSegment(
                     path=str(p),
                     size_bytes=p.stat().st_size,
@@ -413,6 +419,16 @@ class DuckDBLogStore:
                     max_seq=max_seq,
                 )
             )
+        log_ranges = [(s.min_seq, s.max_seq) for s in discovered if not _is_tmp_path(s.path)]
+        for s in discovered:
+            if _is_tmp_path(s.path) and any(lo <= s.min_seq and s.max_seq <= hi for lo, hi in log_ranges):
+                logger.info("Dropping stale tmp segment %s covered by compacted logs_ range", s.path)
+                try:
+                    Path(s.path).unlink()
+                except Exception:
+                    logger.warning("Failed to unlink stale tmp segment %s", s.path, exc_info=True)
+                continue
+            self._local_segments.append(s)
 
         self._pool = _ConnectionPool(memory_limit=duckdb_memory_limit)
 
@@ -533,10 +549,13 @@ class DuckDBLogStore:
         self._wake.set()
         self._bg_thread.join()
         # Final drain + compaction in the foreground so any lingering tmp
-        # segments get merged and uploaded before shutdown.
+        # segments get merged and uploaded before shutdown. ``compact_single``
+        # ensures the last tmp is rewritten to a logs_ segment and offloaded
+        # to GCS even when only one exists — otherwise a low-volume shutdown
+        # leaves only local tmp_*.parquet and loses data on fresh restart.
         self._compact_step()
         self._flush_step()
-        self._compaction_step()
+        self._compaction_step(compact_single=True)
         self._pool.close()
         if self._temp_dir is not None:
             self._temp_dir.cleanup()
@@ -681,19 +700,22 @@ class DuckDBLogStore:
             int((time.monotonic() - write_start) * 1000),
         )
 
-    def _compaction_step(self) -> None:
+    def _compaction_step(self, *, compact_single: bool = False) -> None:
         """Merge all tmp_ segments into a single logs_ segment, upload, unlink.
 
         Uses ``COPY (SELECT ... ORDER BY key, seq)`` so the merge streams
         inside DuckDB — never touches pyarrow's concat/sort path, which
         leaks ~45 MB per invocation when reading parquet back.
+
+        By default, a single tmp is left alone — rewriting it buys nothing at
+        steady state. ``close()`` passes ``compact_single=True`` so the final
+        tmp on shutdown still becomes a logs_ segment and reaches GCS.
         """
         with self._memory_lock:
             tmps = [s for s in self._local_segments if _is_tmp_path(s.path)]
         if not tmps:
             return
-        # Single-tmp compaction costs a rewrite for no fanout benefit — skip.
-        if len(tmps) < 2:
+        if len(tmps) < 2 and not compact_single:
             return
 
         tmps.sort(key=lambda s: s.min_seq)
