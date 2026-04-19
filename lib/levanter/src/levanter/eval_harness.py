@@ -1665,8 +1665,8 @@ def _iterate_tokenized_requests(
         combined_batch = [combined_texts[i] for i in batch_indices]
         context_batch = [contexts[i] for i in batch_indices]
         # Tokenize batched inputs
-        combined_encodings = {"input_ids": tokenizer.encode_batch(combined_batch)}
-        context_encodings = {"input_ids": tokenizer.encode_batch(context_batch)}
+        combined_encodings = tokenizer(combined_batch, add_special_tokens=False)  # pyrefly: ignore[not-callable]
+        context_encodings = tokenizer(context_batch, add_special_tokens=False)  # pyrefly: ignore[not-callable]
 
         for off in range(len(batch_indices)):
             i = batch_indices[off]
