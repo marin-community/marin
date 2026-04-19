@@ -40,6 +40,12 @@ CONTROLLER_UNAVAILABLE_TOLERANCE = 3600.0
 # the controller at the old ~2s ceiling.
 MAX_STATE_POLL_INTERVAL = 30.0
 
+# Floor on the backoff cap. ``ExponentialBackoff`` requires ``maximum >= initial``
+# (currently 100ms), so we clamp the caller-supplied ``poll_interval`` up to this
+# value before handing it to the backoff. Callers asking for a sub-100ms cap end
+# up polling at 100ms instead of crashing with ValueError.
+MIN_STATE_POLL_INTERVAL = 0.1
+
 
 class RemoteClusterClient:
     """Cluster client via RPC to controller.
@@ -206,7 +212,10 @@ class RemoteClusterClient:
             TimeoutError: If job doesn't complete within timeout
         """
         deadline = Deadline.from_seconds(timeout)
-        backoff = ExponentialBackoff(initial=0.1, maximum=poll_interval)
+        backoff = ExponentialBackoff(
+            initial=MIN_STATE_POLL_INTERVAL,
+            maximum=max(poll_interval, MIN_STATE_POLL_INTERVAL),
+        )
 
         while True:
             # Poll with lightweight state-only RPC during the loop.
@@ -259,7 +268,10 @@ class RemoteClusterClient:
         terminal_status: job_pb2.JobStatus | None = None
         source = build_log_source(job_id)
         cursor: int = 0
-        backoff = ExponentialBackoff(initial=0.1, maximum=poll_interval)
+        backoff = ExponentialBackoff(
+            initial=MIN_STATE_POLL_INTERVAL,
+            maximum=max(poll_interval, MIN_STATE_POLL_INTERVAL),
+        )
 
         while True:
             # Poll with lightweight state-only RPC during the loop.
