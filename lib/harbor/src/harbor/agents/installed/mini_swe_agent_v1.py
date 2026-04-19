@@ -232,34 +232,28 @@ class MiniSweAgentV1(BaseAgent):
 
         # Convert messages to ATIF trajectory
         steps: list[Step] = []
-        step_id = 1
-        for msg in agent.messages:
+        is_first_user = True
+        for i, msg in enumerate(agent.messages):
             role = msg.get("role", "")
             content = msg.get("content", "")
+            sid = len(steps) + 1  # Sequential step_id
 
             if role == "system":
                 steps.append(
-                    Step(
-                        step_id=step_id, timestamp=datetime.now(timezone.utc).isoformat(), source="system",
-                        message=content,
-                    )
+                    Step(step_id=sid, timestamp=datetime.now(timezone.utc).isoformat(), source="system", message=content)
                 )
             elif role == "user":
-                if step_id <= 2:
+                if is_first_user:
                     steps.append(
-                        Step(
-                            step_id=step_id, timestamp=datetime.now(timezone.utc).isoformat(), source="user",
-                            message=content,
-                        )
+                        Step(step_id=sid, timestamp=datetime.now(timezone.utc).isoformat(), source="user", message=content)
                     )
+                    is_first_user = False
                 elif steps and steps[-1].source == "agent":
+                    # Attach observation to previous agent step (no new step)
                     steps[-1].observation = Observation(results=[ObservationResult(content=content)])
                 else:
                     steps.append(
-                        Step(
-                            step_id=step_id, timestamp=datetime.now(timezone.utc).isoformat(), source="user",
-                            message=content,
-                        )
+                        Step(step_id=sid, timestamp=datetime.now(timezone.utc).isoformat(), source="user", message=content)
                     )
             elif role == "assistant":
                 import re
@@ -272,11 +266,7 @@ class MiniSweAgentV1(BaseAgent):
                 tool_calls = None
                 if bash_cmd:
                     tool_calls = [
-                        ToolCall(
-                            tool_call_id=f"call_{step_id}",
-                            function_name="bash_command",
-                            arguments={"command": bash_cmd},
-                        )
+                        ToolCall(tool_call_id=f"call_{sid}", function_name="bash_command", arguments={"command": bash_cmd})
                     ]
 
                 usage = msg.get("extra", {}).get("response", {}).get("usage", {})
@@ -289,7 +279,7 @@ class MiniSweAgentV1(BaseAgent):
 
                 steps.append(
                     Step(
-                        step_id=step_id,
+                        step_id=sid,
                         timestamp=datetime.now(timezone.utc).isoformat(),
                         source="agent",
                         model_name=self._model_name,
@@ -298,7 +288,6 @@ class MiniSweAgentV1(BaseAgent):
                         metrics=metrics,
                     )
                 )
-            step_id += 1
 
         trajectory = Trajectory(
             schema_version="ATIF-v1.2",
