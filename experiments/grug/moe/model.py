@@ -73,6 +73,7 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    use_paired_head_attn: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -130,7 +131,12 @@ class CausalSelfAttention(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        use_paired_heads: bool = False,
+    ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
@@ -142,14 +148,29 @@ class CausalSelfAttention(eqx.Module):
         k = rms_norm(k)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
-        attn_out = attention(q, k, v, mask)
-        aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
-        # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
-        # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
-        dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
-        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+
+        if use_paired_heads:
+            # Merge adjacent positions, halve heads: (B, S, H, D) -> (B, 2S, H/2, D)
+            q = rearrange(q, "b s (h2 two) d -> b (s two) h2 d", two=2)
+            k = rearrange(k, "b s (m2 two) d -> b (s two) m2 d", two=2)
+            v = rearrange(v, "b s (m2 two) d -> b (s two) m2 d", two=2)
+            attn_out = attention(q, k, v, mask)
+            # XSA on paired output
+            aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
+            aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
+            dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
+            v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
+            attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+            # Reshape back: (B, 2S, H/2, D) -> (B, S, H, D)
+            attn_out = rearrange(attn_out, "b (s two) h2 d -> b s (h2 two) d", two=2)
+        else:
+            attn_out = attention(q, k, v, mask)
+            aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
+            aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
+            dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
+            v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
+            attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
@@ -438,9 +459,10 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        use_paired_heads: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask)
+        x = x + self.attn(attn_in, mask, use_paired_heads=use_paired_heads)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -499,7 +521,8 @@ class Transformer(eqx.Module):
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            paired = cfg.use_paired_head_attn and i % 2 == 0
+            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask, paired)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
