@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -53,6 +54,8 @@ from experiments.domain_phase_mix.two_phase_many_observed_runs import (
     load_original_qsplit240_named_panel,
     load_original_qsplit240_with_core_baselines,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_QSPLIT240_EVAL_DATASETS_CACHE_PATH = "gs://marin-us-central1/raw/eval-datasets/qsplit240-300m-6b-expanded-tasks"
 DEFAULT_REGION_AGNOSTIC_TPU_REGIONS = ("us-east5", "us-central1")
@@ -165,7 +168,18 @@ def _checkpoint_path_from_metadata_path(metadata_path: str) -> tuple[str, int] |
 def _is_committed_checkpoint_metadata(fs: AbstractFileSystem, metadata_path: str) -> bool:
     with fs.open(metadata_path, "rb") as metadata_file:
         metadata = json.load(metadata_file)
-    return not metadata.get("is_temporary", False)
+    if metadata.get("is_temporary", False):
+        return False
+    # Verify actual tensor data exists, not just metadata.
+    # Incomplete cross-region replication can leave metadata.json without the
+    # OCDBT manifest or data shards, causing silent fallback to old checkpoints.
+    checkpoint_dir = metadata_path.removesuffix("/metadata.json")
+    has_manifest = fs.exists(f"{checkpoint_dir}/manifest.ocdbt")
+    has_data_dir = fs.exists(f"{checkpoint_dir}/d")
+    if not has_manifest and not has_data_dir:
+        logger.warning("Checkpoint %s has metadata but no tensor data — skipping.", checkpoint_dir)
+        return False
+    return True
 
 
 def normalize_tpu_regions(tpu_regions: str | Sequence[str]) -> tuple[str, ...]:
