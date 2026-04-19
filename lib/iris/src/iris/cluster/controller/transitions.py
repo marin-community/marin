@@ -828,12 +828,17 @@ def _resolve_task_failure_state(
 
 def _write_worker_snapshots(
     cur: TransactionCursor,
-    items: Sequence[tuple[str, job_pb2.WorkerResourceSnapshot]],
+    items: Sequence[tuple[str, job_pb2.WorkerResourceSnapshot | None]],
     now_ms: int,
     *,
     reset_health: bool,
 ) -> None:
-    """Update worker snapshot columns and append history rows.
+    """Bump last_heartbeat for every worker; for entries with a snapshot, also
+    rewrite snapshot_* columns and append a worker_resource_history row.
+
+    A None snapshot means liveness-only: heartbeat path emits these for
+    workers that didn't ship a fresh resource snapshot this cycle, ping path
+    emits these on cycles where it skips the resource refresh.
 
     Heartbeat path passes ``reset_health=True`` because a successful heartbeat
     means the worker has recovered. Ping path passes False — the ping loop
@@ -842,7 +847,16 @@ def _write_worker_snapshots(
     if not items:
         return
 
-    binds = [
+    health_prefix = "healthy = 1, active = 1, consecutive_failures = 0, " if reset_health else ""
+
+    liveness_only = [(now_ms, wid) for wid, snap in items if snap is None]
+    if liveness_only:
+        cur.executemany(
+            f"UPDATE workers SET {health_prefix}last_heartbeat_ms = ? WHERE worker_id = ?",
+            liveness_only,
+        )
+
+    snapshot_binds = [
         {
             "worker_id": wid,
             "now_ms": now_ms,
@@ -857,8 +871,11 @@ def _write_worker_snapshots(
             "net_sent_bps": snap.net_sent_bps,
         }
         for wid, snap in items
+        if snap is not None
     ]
-    health_prefix = "healthy = 1, active = 1, consecutive_failures = 0, " if reset_health else ""
+    if not snapshot_binds:
+        return
+
     cur.executemany(
         f"UPDATE workers SET {health_prefix}last_heartbeat_ms = :now_ms, "
         "snapshot_host_cpu_percent = :host_cpu_percent, "
@@ -871,7 +888,7 @@ def _write_worker_snapshots(
         "snapshot_net_recv_bps = :net_recv_bps, "
         "snapshot_net_sent_bps = :net_sent_bps "
         "WHERE worker_id = :worker_id",
-        binds,
+        snapshot_binds,
     )
     cur.executemany(
         "INSERT INTO worker_resource_history ("
@@ -885,7 +902,7 @@ def _write_worker_snapshots(
         ":running_task_count, :total_process_count, "
         ":net_recv_bps, :net_sent_bps, :now_ms"
         ")",
-        binds,
+        snapshot_binds,
     )
 
 
@@ -915,24 +932,8 @@ def _batch_worker_health(
     ).fetchall()
     existing = {str(r["worker_id"]) for r in rows}
 
-    liveness_params: list[tuple[int, str]] = []
-    snapshot_writes: list[tuple[str, job_pb2.WorkerResourceSnapshot]] = []
-    for req in requests:
-        wid = str(req.worker_id)
-        if wid not in existing:
-            continue
-        if req.worker_resource_snapshot is None:
-            liveness_params.append((now_ms, wid))
-        else:
-            snapshot_writes.append((wid, req.worker_resource_snapshot))
-
-    if liveness_params:
-        cur.executemany(
-            "UPDATE workers SET healthy = 1, active = 1, consecutive_failures = 0, "
-            "last_heartbeat_ms = ? WHERE worker_id = ?",
-            liveness_params,
-        )
-    _write_worker_snapshots(cur, snapshot_writes, now_ms, reset_health=True)
+    items = [(str(req.worker_id), req.worker_resource_snapshot) for req in requests if str(req.worker_id) in existing]
+    _write_worker_snapshots(cur, items, now_ms, reset_health=True)
     return existing
 
 
@@ -3103,22 +3104,9 @@ class ControllerTransitions:
         if not snapshots:
             return
         now_ms = Timestamp.now().epoch_ms()
-        liveness_params: list[tuple[int, str]] = []
-        snapshot_writes: list[tuple[str, job_pb2.WorkerResourceSnapshot]] = []
-        for worker_id, snap in snapshots.items():
-            wid = str(worker_id)
-            if snap is None:
-                liveness_params.append((now_ms, wid))
-            else:
-                snapshot_writes.append((wid, snap))
-
+        items = [(str(wid), snap) for wid, snap in snapshots.items()]
         with self._db.transaction() as cur:
-            if liveness_params:
-                cur.executemany(
-                    "UPDATE workers SET last_heartbeat_ms = ? WHERE worker_id = ?",
-                    liveness_params,
-                )
-            _write_worker_snapshots(cur, snapshot_writes, now_ms, reset_health=False)
+            _write_worker_snapshots(cur, items, now_ms, reset_health=False)
 
     def get_running_tasks_for_poll(
         self,
