@@ -241,9 +241,13 @@ def preload_workers(
                 db=db,
                 delays=delays,
             )
-            worker.start()
-            pool._register_external(worker)  # internal: track without going through spawn_for_slice
             workers.append(worker)
+    # Start subprocesses in parallel — serial startup of N workers would be
+    # N * ~500 ms (Popen + wait-for-READY). The pool fans out to a bounded
+    # thread pool and blocks until every child has registered.
+    pool.start_workers_parallel(workers)
+    for worker in workers:
+        pool._register_external(worker)
     logger.info(
         "preload_workers: spawned %d synthetic workers across %d groups",
         len(workers),

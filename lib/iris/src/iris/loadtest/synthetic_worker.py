@@ -4,52 +4,61 @@
 """Real-RPC synthetic workers for the fleet-wide scenario.
 
 Each successful `LoadtestGcpService.tpu_create` spawns a `SyntheticWorker`.
-A synthetic worker is a *real* Connect/RPC server: it binds a free localhost
-port and mounts `WorkerServiceWSGIApplication` the same way the production
-worker does (see `iris.cluster.worker.dashboard`). It then registers with
-the controller DB via `ControllerTransitions.register_worker` using its real
-`host:port`, so any controller code that holds a `WorkerServiceClientSync`
-against that address will hit the worker over a real socket.
+A synthetic worker is a *real* Connect/RPC server running in its own OS
+subprocess — it binds a free localhost port and mounts
+`WorkerServiceWSGIApplication` the same way the production worker does (see
+`iris.cluster.worker.dashboard`). The parent registers the worker with the
+controller DB via `ControllerTransitions.register_worker` using the child's
+real `host:port`, so any controller code that holds a
+`WorkerServiceClientSync` against that address will hit the worker over a
+real socket.
+
+Why an OS subprocess (not a thread): each worker's uvicorn event loop used
+to share the harness interpreter's GIL with the Controller. That invalidates
+ablation measurements of controller concurrency — the controller and its
+"fleet" compete for a single interpreter. Splitting each worker into its own
+process gives real parallel CPU isolation, matching prod where every worker
+is on a separate VM.
 
 Why real sockets: the suspected prod CPU channel is the controller→worker RPC
 path (connection pooling, retries, timeouts); an in-process shortcut leaves
 that channel uninstrumented. With a real server on a real port, the
 Controller's own ping loop exercises that channel — closing the gap.
 
-Task lifecycle: the worker drives each assigned task through
-`ASSIGNED → BUILDING → RUNNING → COMPLETED` on a background timer. Per-
-transition delays are configurable via `HarnessConfig` so tests can compress
-the lifecycle to <1 s while production-style runs keep the prod-realistic
-~60 s per transition.
+Task lifecycle: the child drives each assigned task through
+`ASSIGNED → BUILDING → RUNNING → COMPLETED` on a background timer inside
+the subprocess. Per-transition delays are configurable via `HarnessConfig`
+so tests can compress the lifecycle to <1 s while production-style runs
+keep the prod-realistic ~60 s per transition.
 
-Preemption: when `tpu_delete` fires, `stop(abrupt=True)` sets
-`server.should_exit` *and* closes the underlying socket immediately. The
-controller's next RPC to this worker will fail with a connection error —
-that's the observed failure path in prod. Graceful deregistration is
-explicitly not modelled (prod preemption is ungraceful).
+Preemption: ``signal_stop(abrupt=True)`` sends SIGKILL to the child's
+process group; a subsequent ``join`` reaps it. The controller's next RPC
+to the dead worker will fail with a connection error — that's the
+observed failure path in prod. Graceful deregistration is explicitly not
+modelled (prod preemption is ungraceful).
 """
 
 from __future__ import annotations
 
 import logging
-import socket
+import os
+import re
+import signal
+import subprocess
+import sys
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-import uvicorn
 from connectrpc.request import RequestContext
-from starlette.applications import Starlette
-from starlette.middleware.wsgi import WSGIMiddleware
-from starlette.routing import Mount
 
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.types import WorkerId, get_tpu_topology
 from iris.rpc import job_pb2, worker_pb2
-from iris.rpc.worker_connect import WorkerServiceWSGIApplication
 from rigging.timing import Timer, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -62,6 +71,18 @@ HEARTBEAT_INTERVAL_SECONDS = 5.0
 # Prod-realistic per-state delays. Compressible via SyntheticWorkerConfig.
 DEFAULT_BUILDING_SECONDS = 60.0
 DEFAULT_RUNNING_SECONDS = 60.0
+
+# Seconds to wait for a freshly-spawned child to emit its READY line.
+# 10 s is conservative — empirically ~300-500 ms cold for a fresh Python
+# process. Bumped on slower CI hardware.
+READY_TIMEOUT_SECONDS = 10.0
+
+# Parallelism for subprocess fan-out when starting many workers at once
+# (preload / autoscaler burst). Bounded to keep fork storms away from the
+# FD limit and syscall throughput.
+STARTUP_PARALLELISM = 16
+
+_READY_RE = re.compile(r"^READY port=(\d+)\s*$")
 
 
 @dataclass
@@ -99,20 +120,6 @@ class LifecycleDelays:
 
     building_seconds: float = DEFAULT_BUILDING_SECONDS
     running_seconds: float = DEFAULT_RUNNING_SECONDS
-
-
-def _find_free_port(host: str = "127.0.0.1") -> int:
-    """Bind-and-release to discover an ephemeral port.
-
-    There's an inherent TOCTOU race between releasing the port here and
-    rebinding it inside uvicorn. In a loopback-only test harness spawning
-    100s of workers back-to-back the collision risk is low enough to be
-    empirically negligible; if it ever fires, the uvicorn startup will raise
-    and the caller retries.
-    """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((host, 0))
-        return s.getsockname()[1]
 
 
 class _SyntheticTaskProvider:
@@ -329,7 +336,7 @@ class _WorkerServiceAdapter:
 
 
 class SyntheticWorker:
-    """Real Connect/RPC server on a bound localhost port."""
+    """Real Connect/RPC server running in its own OS subprocess."""
 
     def __init__(
         self,
@@ -343,62 +350,110 @@ class SyntheticWorker:
         self._transitions = transitions
         self._db = db
         self._delays = delays
-        self._provider = _SyntheticTaskProvider(config.worker_id, delays)
-        self._adapter = _WorkerServiceAdapter(self._provider)
 
-        self._port = _find_free_port(config.host)
-        self._address = f"{config.host}:{self._port}"
-
-        rpc_wsgi_app = WorkerServiceWSGIApplication(service=self._adapter)
-        rpc_app = WSGIMiddleware(rpc_wsgi_app)
-        self._app = Starlette(routes=[Mount(rpc_wsgi_app.path, app=rpc_app)])
-
-        self._server = uvicorn.Server(
-            uvicorn.Config(
-                self._app,
-                host=config.host,
-                port=self._port,
-                log_level="error",
-                log_config=None,
-                timeout_keep_alive=30,
-                # A single loop/thread per worker keeps per-worker overhead low.
-                # Connect-WSGI runs synchronously inside the middleware anyway.
-                loop="asyncio",
-                # We don't use startup/shutdown events; leaving lifespan on
-                # means every worker teardown logs a CancelledError traceback
-                # from starlette's receive loop.
-                lifespan="off",
-            )
-        )
-        self._server_thread: threading.Thread | None = None
-        self._lifecycle_thread: threading.Thread | None = None
-        self._stop = threading.Event()
+        self._process: subprocess.Popen | None = None
+        self._address: str | None = None
+        self._reader_thread: threading.Thread | None = None
 
     @property
     def address(self) -> str:
+        assert self._address is not None, "start() must be called before reading address"
         return self._address
 
     @property
     def worker_id(self) -> WorkerId:
         return self._config.worker_id
 
+    # ---- startup ----------------------------------------------------------
+
     def start(self) -> None:
-        self._server_thread = threading.Thread(
-            target=self._server.run, name=f"synth-rpc-{self._config.worker_id}", daemon=True
+        """Spawn the child, block until READY, then register with the controller.
+
+        ``sys.executable -m iris.loadtest.synthetic_worker_main`` is used so
+        the child inherits the current venv without requiring ``uv run``
+        re-entry. ``start_new_session=True`` puts the child in its own
+        process group — ``os.killpg`` then cleanly reaps uvicorn workers /
+        any asyncio helpers the event loop may spawn.
+        """
+        cmd = [
+            sys.executable,
+            "-m",
+            "iris.loadtest.synthetic_worker_main",
+            "--worker-id",
+            str(self._config.worker_id),
+            "--slice-id",
+            self._config.slice_id,
+            "--scale-group",
+            self._config.scale_group,
+            "--zone",
+            self._config.zone,
+            "--device-variant",
+            self._config.device_variant,
+            "--tpu-worker-id",
+            str(self._config.tpu_worker_id),
+            "--building-seconds",
+            str(self._delays.building_seconds),
+            "--running-seconds",
+            str(self._delays.running_seconds),
+            "--host",
+            self._config.host,
+        ]
+        self._process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+            bufsize=1,  # line-buffered so READY arrives promptly
         )
-        self._server_thread.start()
-        # Wait briefly for uvicorn to accept. uvicorn sets `started` after the
-        # socket is bound; 500 ms has been plenty even with many workers.
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and not getattr(self._server, "started", False):
-            time.sleep(0.01)
+        port = self._await_ready()
+        self._address = f"{self._config.host}:{port}"
+
+        # Drain remaining child stdout to DEBUG. Daemon so it never blocks
+        # parent exit; on EOF (child has exited) the thread returns.
+        self._reader_thread = threading.Thread(
+            target=self._drain_output,
+            name=f"synth-log-{self._config.worker_id}",
+            daemon=True,
+        )
+        self._reader_thread.start()
+
         self._register()
-        self._lifecycle_thread = threading.Thread(
-            target=self._run_lifecycle, name=f"synth-life-{self._config.worker_id}", daemon=True
-        )
-        self._lifecycle_thread.start()
+
+    def _await_ready(self) -> int:
+        assert self._process is not None
+        assert self._process.stdout is not None
+        deadline = time.monotonic() + READY_TIMEOUT_SECONDS
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._kill_unconditionally()
+                raise RuntimeError(
+                    f"synthetic worker {self._config.worker_id} did not emit READY "
+                    f"within {READY_TIMEOUT_SECONDS:.1f}s"
+                )
+            line = self._process.stdout.readline()
+            if line == "":
+                # EOF — child died before ready.
+                rc = self._process.poll()
+                raise RuntimeError(f"synthetic worker {self._config.worker_id} exited (rc={rc}) before READY")
+            match = _READY_RE.match(line)
+            if match:
+                return int(match.group(1))
+            # Non-READY pre-ready log lines go to DEBUG.
+            logger.debug("[worker %s pre-ready] %s", self._config.worker_id, line.rstrip())
+
+    def _drain_output(self) -> None:
+        assert self._process is not None
+        assert self._process.stdout is not None
+        try:
+            for line in self._process.stdout:
+                logger.debug("[worker %s] %s", self._config.worker_id, line.rstrip())
+        except Exception:
+            logger.exception("reader thread for worker %s failed", self._config.worker_id)
 
     def _register(self) -> None:
+        assert self._address is not None
         metadata = _build_metadata(self._config)
         self._transitions.register_worker(
             worker_id=self._config.worker_id,
@@ -409,40 +464,47 @@ class SyntheticWorker:
             scale_group=self._config.scale_group,
         )
 
-    def _run_lifecycle(self) -> None:
-        """Advance task states on a fixed cadence.
-
-        Cadence is the min of `building_seconds` and `running_seconds`
-        divided by 4 so each transition fires promptly in fast tests but
-        doesn't burn CPU at full-scale delays.
-        """
-        cadence = max(0.1, min(self._delays.building_seconds, self._delays.running_seconds) / 4.0)
-        while not self._stop.is_set():
-            try:
-                self._provider.advance(self._delays)
-            except Exception:
-                logger.exception("synthetic worker %s lifecycle advance failed", self._config.worker_id)
-            if self._stop.wait(cadence):
-                return
+    # ---- shutdown ---------------------------------------------------------
 
     def signal_stop(self, *, abrupt: bool = True) -> None:
-        """Non-blocking: tell the worker to exit. Threads are daemons so a
-        subsequent join is optional — callers that need deterministic teardown
-        can call :meth:`join` afterwards (ideally in parallel across workers).
+        """Fire a signal at the child's process group.
+
+        ``abrupt=True`` simulates prod preemption (SIGKILL, connection dies
+        mid-flight). ``abrupt=False`` lets uvicorn drain in-flight RPCs
+        first (SIGTERM → server.should_exit).
         """
-        self._stop.set()
-        if self._server is not None:
-            self._server.should_exit = True
-            if abrupt:
-                self._server.force_exit = True
+        if self._process is None:
+            return
+        sig = signal.SIGKILL if abrupt else signal.SIGTERM
+        try:
+            os.killpg(os.getpgid(self._process.pid), sig)
+        except ProcessLookupError:
+            # Child already exited — nothing to kill.
+            pass
 
     def join(self, *, timeout: float = 2.0) -> None:
-        if self._server_thread is not None:
-            self._server_thread.join(timeout=timeout)
-            self._server_thread = None
-        if self._lifecycle_thread is not None:
-            self._lifecycle_thread.join(timeout=timeout)
-            self._lifecycle_thread = None
+        if self._process is None:
+            return
+        try:
+            self._process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Deadline exceeded — escalate to SIGKILL and wait again.
+            try:
+                os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                self._process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    "synthetic worker %s did not exit after SIGKILL; leaking process pid=%s",
+                    self._config.worker_id,
+                    self._process.pid,
+                )
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=timeout)
+            self._reader_thread = None
+        self._process = None
 
     def stop(self, *, abrupt: bool = True, timeout: float = 2.0) -> None:
         """Signal + join sequentially. Prefer ``signal_stop`` + parallel
@@ -451,6 +513,25 @@ class SyntheticWorker:
         """
         self.signal_stop(abrupt=abrupt)
         self.join(timeout=timeout)
+
+    def _kill_unconditionally(self) -> None:
+        """Best-effort teardown used when startup fails."""
+        if self._process is None:
+            return
+        try:
+            os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            self._process.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _start_worker(worker: SyntheticWorker) -> SyntheticWorker:
+    """Helper for ThreadPoolExecutor fan-out startup."""
+    worker.start()
+    return worker
 
 
 class SyntheticWorkerPool:
@@ -462,12 +543,30 @@ class SyntheticWorkerPool:
         db: ControllerDB,
         *,
         delays: LifecycleDelays | None = None,
+        startup_parallelism: int = STARTUP_PARALLELISM,
     ) -> None:
         self._transitions = transitions
         self._db = db
         self._delays = delays or LifecycleDelays()
+        self._startup_parallelism = startup_parallelism
         self._workers: dict[str, list[SyntheticWorker]] = {}
         self._lock = threading.Lock()
+
+    def start_workers_parallel(self, workers: list[SyntheticWorker]) -> None:
+        """Start a batch of workers concurrently.
+
+        Subprocess spawn + READY wait is ~300-500 ms per worker; serial
+        startup of 600 preload workers would burn ~5 minutes. A bounded
+        pool parallelises the Popen + readline block.
+        """
+        if not workers:
+            return
+        with ThreadPoolExecutor(
+            max_workers=min(self._startup_parallelism, len(workers)),
+            thread_name_prefix="synth-start",
+        ) as pool:
+            # list() forces all futures to resolve so exceptions propagate.
+            list(pool.map(_start_worker, workers))
 
     def spawn_for_slice(
         self,
@@ -505,8 +604,8 @@ class SyntheticWorkerPool:
                 db=self._db,
                 delays=self._delays,
             )
-            worker.start()
             workers.append(worker)
+        self.start_workers_parallel(workers)
         with self._lock:
             self._workers[slice_id] = workers
         return workers
@@ -530,11 +629,10 @@ class SyntheticWorkerPool:
             worker.join(timeout=max(0.0, deadline - time.monotonic()))
 
     def stop_all(self, *, timeout: float = 2.0) -> None:
-        """Signal every worker to exit, then wait up to ``timeout`` seconds
-        *total* for them to drain — not per-worker. Lifecycle + uvicorn
-        threads are daemons, so any that overshoot the deadline are left for
-        process exit to reap. This turns a 600-worker teardown from ~20 min
-        (worst case, serial 2 s joins) into a bounded one-shot wait.
+        """SIGKILL every worker's process group, then wait up to ``timeout``
+        seconds *total* for them to exit. Subprocesses we fail to reap here
+        become orphaned; ``start_new_session=True`` plus the explicit
+        ``killpg`` should make that vanishingly rare.
         """
         with self._lock:
             workers = [w for slice_workers in self._workers.values() for w in slice_workers]

@@ -86,6 +86,9 @@ class HarnessConfig:
     # 0 picks an ephemeral port (preferred for parallel tests).
     controller_port: int = 0
     controller_checkpoint_interval: Duration | None = None
+    # When True, controller uses direct StartTasks/StopTasks RPCs + task-updater
+    # thread. When False, falls back to the legacy monolithic Heartbeat path.
+    use_split_heartbeat: bool = True
 
 
 @dataclass
@@ -317,6 +320,7 @@ class LoadtestHarness:
         self._controller_url: str | None = None
         self._controller_temp_dir: Any | None = None
         self._controller_threads: ThreadContainer | None = None
+        self._task_provider: WorkerProvider | None = None
         # `patch.object(...)` returns a `_patch` helper — there is no public
         # stable type to annotate against, so this stays as `Any`.
         self._bootstrap_patch: Any | None = None
@@ -451,11 +455,13 @@ class LoadtestHarness:
             # default local-cluster test setup.
             auth_verifier=None,
             auth_provider=None,
+            use_split_heartbeat=self._config.use_split_heartbeat,
         )
 
         # TaskProvider used by scheduler / ping / poll loops. Hits the
         # synthetic workers' real Connect/RPC endpoints over sockets.
         task_provider = WorkerProvider(stub_factory=RpcWorkerStubFactory())
+        self._task_provider = task_provider
 
         # Give the Controller its own ThreadContainer so its loops are tracked
         # separately from the autoscaler's scale-up threads (metrics inspects
@@ -475,10 +481,12 @@ class LoadtestHarness:
         logger.info("Full controller started at %s", self._controller_url)
 
     def stop(self) -> None:
-        if self._worker_pool is not None:
-            self._worker_pool.stop_all(timeout=2.0)
-            self._worker_pool = None
-
+        # Order matters: stop the controller (which drains the autoscaler) BEFORE
+        # tearing down the worker pool. The autoscaler's scale-up threads call
+        # LoadtestGcpService.tpu_create, which synchronously spawns subprocess
+        # workers and registers them against the DB — if we stopped the worker
+        # pool first, in-flight tpu_create calls would race with db.close() and
+        # fail with "Cannot operate on a closed database."
         if self._controller is not None:
             # Controller.stop() drains its own threads and calls
             # autoscaler.shutdown() internally.
@@ -489,7 +497,10 @@ class LoadtestHarness:
             self._controller = None
             self._controller_url = None
             self._autoscaler = None
-            self._db = None
+
+        if self._worker_pool is not None:
+            self._worker_pool.stop_all(timeout=5.0)
+            self._worker_pool = None
 
         if self._db is not None:
             self._db.close()

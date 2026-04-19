@@ -41,6 +41,7 @@ worker = []
 iris = "iris.cli:iris"
 iris-run = "iris.cli.run:run"
 iris-loadtest = "iris.loadtest.cli:main"
+iris-loadtest-synthetic-worker = "iris.loadtest.synthetic_worker_main:main"
 
 [dependency-groups]
 examples = [

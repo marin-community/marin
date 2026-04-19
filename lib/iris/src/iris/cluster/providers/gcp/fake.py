@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import threading
 import uuid
 from pathlib import Path
 
@@ -83,7 +84,11 @@ class InMemoryGcpService:
         self._valid_zones: set[str] = set(KNOWN_GCP_ZONES)
         self._valid_accelerator_types: set[str] = set(KNOWN_TPU_TYPES)
 
-        # In-memory state for DRY_RUN/LOCAL modes
+        # In-memory state for DRY_RUN/LOCAL modes. Guarded by _lock so the
+        # loadtest harness can call tpu_create/delete/list concurrently from
+        # autoscaler scale-up threads without "dictionary changed size during
+        # iteration" races.
+        self._lock = threading.RLock()
         self._tpus: dict[tuple[str, str], TpuInfo] = {}
         self._vms: dict[tuple[str, str], VmInfo] = {}
         self._queued_resources: set[tuple[str, str]] = set()  # TPUs created via queued_resource_create
@@ -150,10 +155,11 @@ class InMemoryGcpService:
 
     def advance_tpu_state(self, name: str, zone: str, state: str = "READY") -> None:
         """Transition a TPU to a new state (DRY_RUN/LOCAL only)."""
-        key = (name, zone)
-        if key not in self._tpus:
-            raise ValueError(f"TPU {name!r} not found in {zone}")
-        self._tpus[key] = dataclasses.replace(self._tpus[key], state=state)
+        with self._lock:
+            key = (name, zone)
+            if key not in self._tpus:
+                raise ValueError(f"TPU {name!r} not found in {zone}")
+            self._tpus[key] = dataclasses.replace(self._tpus[key], state=state)
 
     def _check_injected_failure(self, operation: str) -> None:
         err = self._injected_failures.pop(operation, None)
@@ -174,25 +180,6 @@ class InMemoryGcpService:
         else:
             validate_tpu_create(request, self._valid_zones, self._valid_accelerator_types)
 
-        # DRY_RUN / LOCAL: duplicate detection
-        if (request.name, request.zone) in self._tpus:
-            raise InfraError(f"TPU {request.name!r} already exists in {request.zone}")
-
-        # Check quota
-        zone_count = sum(1 for (_, z) in self._tpus if z == request.zone)
-        max_quota = self._zone_quotas.get(request.zone, self.DEFAULT_QUOTA)
-        if zone_count >= max_quota:
-            raise QuotaExhaustedError(f"Quota exhausted in {request.zone}")
-
-        # Per-type-per-zone availability
-        if self._available_types_by_zone is not None:
-            zone_types = self._available_types_by_zone.get(request.zone, set())
-            if request.accelerator_type not in zone_types:
-                raise QuotaExhaustedError(
-                    f"Accelerator type {request.accelerator_type!r} not available in {request.zone}"
-                )
-
-        # Synthetic network endpoints based on TPU topology
         from iris.cluster.types import get_tpu_topology
 
         try:
@@ -202,45 +189,61 @@ class InMemoryGcpService:
             logger.debug("Unknown accelerator type %r; TPU topology not available", request.accelerator_type)
             vm_count = 1
 
-        seq = len(self._tpus)
-        endpoints = [f"10.0.{seq}.{i}" for i in range(vm_count)]
+        with self._lock:
+            if (request.name, request.zone) in self._tpus:
+                raise InfraError(f"TPU {request.name!r} already exists in {request.zone}")
 
-        info = TpuInfo(
-            name=request.name,
-            state="CREATING",
-            accelerator_type=request.accelerator_type,
-            zone=request.zone,
-            labels=dict(request.labels),
-            metadata=dict(request.metadata),
-            service_account=request.service_account,
-            network_endpoints=endpoints,
-            external_network_endpoints=[None] * len(endpoints),
-            created_at=Timestamp.now(),
-        )
-        self._tpus[(request.name, request.zone)] = info
-        return info
+            zone_count = sum(1 for (_, z) in self._tpus if z == request.zone)
+            max_quota = self._zone_quotas.get(request.zone, self.DEFAULT_QUOTA)
+            if zone_count >= max_quota:
+                raise QuotaExhaustedError(f"Quota exhausted in {request.zone}")
+
+            if self._available_types_by_zone is not None:
+                zone_types = self._available_types_by_zone.get(request.zone, set())
+                if request.accelerator_type not in zone_types:
+                    raise QuotaExhaustedError(
+                        f"Accelerator type {request.accelerator_type!r} not available in {request.zone}"
+                    )
+
+            seq = len(self._tpus)
+            endpoints = [f"10.0.{seq}.{i}" for i in range(vm_count)]
+
+            info = TpuInfo(
+                name=request.name,
+                state="CREATING",
+                accelerator_type=request.accelerator_type,
+                zone=request.zone,
+                labels=dict(request.labels),
+                metadata=dict(request.metadata),
+                service_account=request.service_account,
+                network_endpoints=endpoints,
+                external_network_endpoints=[None] * len(endpoints),
+                created_at=Timestamp.now(),
+            )
+            self._tpus[(request.name, request.zone)] = info
+            return info
 
     def tpu_delete(self, name: str, zone: str) -> None:
         self._check_injected_failure("tpu_delete")
 
-        # DRY_RUN / LOCAL: remove from in-memory state
-        self._tpus.pop((name, zone), None)
-
-        # LOCAL: stop worker threads for this slice
-        local_slice = self._local_slices.pop(name, None)
+        with self._lock:
+            self._tpus.pop((name, zone), None)
+            local_slice = self._local_slices.pop(name, None)
         if local_slice is not None:
             local_slice.terminate()
 
     def tpu_describe(self, name: str, zone: str) -> TpuInfo | None:
         self._check_injected_failure("tpu_describe")
-        return self._tpus.get((name, zone))
+        with self._lock:
+            return self._tpus.get((name, zone))
 
     def tpu_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[TpuInfo]:
         self._check_injected_failure("tpu_list")
 
-        # DRY_RUN / LOCAL: filter in-memory state
+        with self._lock:
+            items = list(self._tpus.items())
         results: list[TpuInfo] = []
-        for (_, z), info in self._tpus.items():
+        for (_, z), info in items:
             if zones and z not in zones:
                 continue
             if labels and not all(info.labels.get(k) == v for k, v in labels.items()):
@@ -254,30 +257,34 @@ class InMemoryGcpService:
 
     def queued_resource_create(self, request: TpuCreateRequest) -> None:
         self._check_injected_failure("queued_resource_create")
-        # In DRY_RUN/LOCAL mode, simulate immediate provisioning by creating
-        # the TPU directly (as if the queued resource instantly became ACTIVE).
-        self.tpu_create(request)
-        self._queued_resources.add((request.name, request.zone))
+        with self._lock:
+            self.tpu_create(request)
+            self._queued_resources.add((request.name, request.zone))
 
     def queued_resource_describe(self, name: str, zone: str) -> QueuedResourceInfo | None:
         self._check_injected_failure("queued_resource_describe")
-        if (name, zone) not in self._queued_resources:
-            return None
-        state = "ACTIVE" if (name, zone) in self._tpus else "PROVISIONING"
+        with self._lock:
+            if (name, zone) not in self._queued_resources:
+                return None
+            state = "ACTIVE" if (name, zone) in self._tpus else "PROVISIONING"
         return QueuedResourceInfo(name=name, state=state, zone=zone)
 
     def queued_resource_delete(self, name: str, zone: str) -> None:
         self._check_injected_failure("queued_resource_delete")
-        self._queued_resources.discard((name, zone))
-        self.tpu_delete(name, zone)
+        with self._lock:
+            self._queued_resources.discard((name, zone))
+            self.tpu_delete(name, zone)
 
     def queued_resource_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[QueuedResourceInfo]:
         self._check_injected_failure("queued_resource_list")
+        with self._lock:
+            pairs = list(self._queued_resources)
+            tpu_snapshot = dict(self._tpus)
         results: list[QueuedResourceInfo] = []
-        for name, zone in self._queued_resources:
+        for name, zone in pairs:
             if zones and zone not in zones:
                 continue
-            tpu_info = self._tpus.get((name, zone))
+            tpu_info = tpu_snapshot.get((name, zone))
             tpu_labels = tpu_info.labels if tpu_info else {}
             if labels and not all(tpu_labels.get(k) == v for k, v in labels.items()):
                 continue
@@ -298,35 +305,34 @@ class InMemoryGcpService:
         else:
             validate_vm_create(request, self._valid_zones)
 
-        # DRY_RUN / LOCAL: duplicate detection
-        if (request.name, request.zone) in self._vms:
-            raise InfraError(f"VM {request.name!r} already exists in {request.zone}")
+        with self._lock:
+            if (request.name, request.zone) in self._vms:
+                raise InfraError(f"VM {request.name!r} already exists in {request.zone}")
 
-        # Check VM quota
-        vm_zone_count = sum(1 for (_, z) in self._vms if z == request.zone)
-        max_vm_quota = self._vm_zone_quotas.get(request.zone, self.DEFAULT_QUOTA)
-        if vm_zone_count >= max_vm_quota:
-            raise QuotaExhaustedError(f"VM quota exhausted in {request.zone}")
+            vm_zone_count = sum(1 for (_, z) in self._vms if z == request.zone)
+            max_vm_quota = self._vm_zone_quotas.get(request.zone, self.DEFAULT_QUOTA)
+            if vm_zone_count >= max_vm_quota:
+                raise QuotaExhaustedError(f"VM quota exhausted in {request.zone}")
 
-        # DRY_RUN / LOCAL: create in-memory
-        seq = len(self._vms)
-        info = VmInfo(
-            name=request.name,
-            status="RUNNING",
-            zone=request.zone,
-            internal_ip=f"10.1.{seq}.1",
-            external_ip=None,
-            labels=dict(request.labels),
-            metadata=dict(request.metadata),
-            service_account=request.service_account,
-            created_at=Timestamp.now(),
-        )
-        self._vms[(request.name, request.zone)] = info
-        return info
+            seq = len(self._vms)
+            info = VmInfo(
+                name=request.name,
+                status="RUNNING",
+                zone=request.zone,
+                internal_ip=f"10.1.{seq}.1",
+                external_ip=None,
+                labels=dict(request.labels),
+                metadata=dict(request.metadata),
+                service_account=request.service_account,
+                created_at=Timestamp.now(),
+            )
+            self._vms[(request.name, request.zone)] = info
+            return info
 
     def vm_delete(self, name: str, zone: str, *, wait: bool = False) -> None:
         self._check_injected_failure("vm_delete")
-        self._vms.pop((name, zone), None)
+        with self._lock:
+            self._vms.pop((name, zone), None)
 
     def vm_reset(self, name: str, zone: str) -> None:
         self._check_injected_failure("vm_reset")
@@ -334,13 +340,16 @@ class InMemoryGcpService:
 
     def vm_describe(self, name: str, zone: str) -> VmInfo | None:
         self._check_injected_failure("vm_describe")
-        return self._vms.get((name, zone))
+        with self._lock:
+            return self._vms.get((name, zone))
 
     def vm_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[VmInfo]:
         self._check_injected_failure("vm_list")
 
+        with self._lock:
+            items = list(self._vms.items())
         results: list[VmInfo] = []
-        for (_, z), info in self._vms.items():
+        for (_, z), info in items:
             if zones and z not in zones:
                 continue
             if labels and not all(info.labels.get(k) == v for k, v in labels.items()):
@@ -352,19 +361,20 @@ class InMemoryGcpService:
         self._check_injected_failure("vm_update_labels")
         validate_labels(labels)
 
-        # DRY_RUN / LOCAL: update in-memory state
-        vm = self._vms.get((name, zone))
-        if vm is None:
-            raise InfraError(f"VM {name!r} not found in zone {zone!r}")
-        vm.labels.update(labels)
+        with self._lock:
+            vm = self._vms.get((name, zone))
+            if vm is None:
+                raise InfraError(f"VM {name!r} not found in zone {zone!r}")
+            vm.labels.update(labels)
 
     def vm_set_metadata(self, name: str, zone: str, metadata: dict[str, str]) -> None:
         self._check_injected_failure("vm_set_metadata")
 
-        vm = self._vms.get((name, zone))
-        if vm is None:
-            raise InfraError(f"VM {name!r} not found in zone {zone!r}")
-        vm.metadata.update(metadata)
+        with self._lock:
+            vm = self._vms.get((name, zone))
+            if vm is None:
+                raise InfraError(f"VM {name!r} not found in zone {zone!r}")
+            vm.metadata.update(metadata)
 
     def set_serial_port_output(self, name: str, zone: str, output: str) -> None:
         """Inject serial port output for a VM. Used by tests to simulate GCE serial console."""

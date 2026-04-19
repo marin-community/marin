@@ -166,12 +166,19 @@ class ScenarioMetrics:
         self._samples_lock = threading.Lock()
         self._lock_hold = _Reservoir()
         self._query_latency = _Reservoir()
+        # Per-method RPC wall-clock reservoirs. Populated when start() wraps
+        # the harness's WorkerProvider. Key is the method name
+        # (e.g. "ping_workers", "sync", "start_tasks", "stop_tasks",
+        # "poll_workers"); value is elapsed ms for one call to that method.
+        self._rpc: dict[str, _Reservoir] = {}
         self._started_at: float | None = None
         self._rss_start: int = 0
         self._sampler_thread: threading.Thread | None = None
         self._probe_thread: threading.Thread | None = None
         self._original_db_lock: object | None = None
         self._original_read_pool_entries: list = []
+        # (provider, method_name, original_callable) tuples restored on stop().
+        self._rpc_patches: list[tuple[Any, str, Any]] = []
 
     def start(self) -> None:
         # Swap the DB writer lock with an instrumented one. ControllerDB uses
@@ -185,6 +192,8 @@ class ScenarioMetrics:
 
         self._started_at = time.monotonic()
         self._rss_start = _rss_bytes()
+
+        self._wrap_rpc_methods()
 
         self._sampler_thread = threading.Thread(target=self._run_sampler, name="loadtest-sampler", daemon=True)
         self._probe_thread = threading.Thread(target=self._run_probe, name="loadtest-probe", daemon=True)
@@ -201,6 +210,44 @@ class ScenarioMetrics:
         if self._original_db_lock is not None:
             self._harness.db._lock = self._original_db_lock
             self._original_db_lock = None
+        # Restore original RPC methods.
+        for obj, name, original in self._rpc_patches:
+            setattr(obj, name, original)
+        self._rpc_patches.clear()
+
+    def _wrap_rpc_methods(self) -> None:
+        """Wrap WorkerProvider entrypoints with wall-clock timing.
+
+        Batch-level granularity: one sample per ``sync`` / ``ping_workers``
+        / ``start_tasks`` / ``stop_tasks`` / ``poll_workers`` invocation. The
+        value is the method's total wall time in ms, which is the end-to-end
+        cost the calling loop actually pays per tick. Per-RPC-per-worker
+        timing would need to hook the inner coroutines; batch-level is
+        enough to distinguish slow legacy heartbeat sync (10-100 s) from
+        split-heartbeat (<1 s).
+        """
+        provider = getattr(self._harness, "_task_provider", None)
+        if provider is None:
+            return
+        for method_name in ("sync", "ping_workers", "start_tasks", "stop_tasks", "poll_workers"):
+            original = getattr(provider, method_name, None)
+            if original is None:
+                continue
+            reservoir = self._rpc.setdefault(method_name, _Reservoir())
+
+            def make_wrapper(fn, name, res):
+                def wrapper(*args, **kwargs):
+                    t0 = time.monotonic()
+                    try:
+                        return fn(*args, **kwargs)
+                    finally:
+                        res.add((time.monotonic() - t0) * 1000.0)
+
+                wrapper.__name__ = name
+                return wrapper
+
+            setattr(provider, method_name, make_wrapper(original, method_name, reservoir))
+            self._rpc_patches.append((provider, method_name, original))
 
     def _run_sampler(self) -> None:
         while not self._stop.is_set():
@@ -265,6 +312,13 @@ class ScenarioMetrics:
             },
             "rss_start_bytes": self._rss_start,
             "rss_peak_bytes": max((s.rss_bytes for s in self._samples), default=self._rss_start),
+            "rpc_ms": {
+                name: {
+                    "total": res.total,
+                    "percentiles": _percentiles(res.snapshot()),
+                }
+                for name, res in sorted(self._rpc.items())
+            },
         }
 
     def dump_json(self, path: Path) -> None:
@@ -331,6 +385,17 @@ class ScenarioMetrics:
             f"- total samples: {query_stats['count']}",
             f"- P50/P95/P99/max (ms): {query_stats['p50']:.2f} / {query_stats['p95']:.2f} / "
             f"{query_stats['p99']:.2f} / {query_stats['max']:.2f}",
+            "",
+            "## rpc_ms (batch wall-clock per WorkerProvider call)",
+            "| method | calls | P50 | P95 | P99 | max |",
+            "| ------ | ----- | --- | --- | --- | --- |",
+        ]
+        for name, res in sorted(self._rpc.items()):
+            if res.total == 0:
+                continue
+            p = _percentiles(res.snapshot())
+            lines.append(f"| {name} | {res.total} | {p['p50']:.1f} | {p['p95']:.1f} | {p['p99']:.1f} | {p['max']:.1f} |")
+        lines += [
             "",
             "## Per-window thread counts (min/mean/max active_scale_up_threads)",
             "| window | samples | min | mean | max |",

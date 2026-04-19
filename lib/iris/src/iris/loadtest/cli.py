@@ -32,12 +32,6 @@ import click
 # set those env vars from CLI flags and only THEN import the harness.
 
 SCENARIOS = ("burst", "api-timeouts", "incident", "fleet-wide", "prod-scale")
-ABLATION_STEPS: dict[int, tuple[str, dict[str, str]]] = {
-    0: ("baseline", {}),
-    1: ("sqlite-tuning", {"IRIS_DB_MMAP_BYTES": "268435456", "IRIS_DB_CACHE_KB": "1048576"}),
-    2: ("controller-yield", {"IRIS_CONTROLLER_YIELD": "1"}),
-    3: ("job-status-cache", {"IRIS_JOB_STATUS_CACHE_TTL_MS": "1000"}),
-}
 
 
 def _default_output_dir() -> Path:
@@ -51,6 +45,7 @@ def _apply_fix_env(
     controller_yield: bool,
     job_status_cache: bool,
     cache_ttl_ms: int,
+    heartbeat_inmemory: bool,
 ) -> list[str]:
     """Populate os.environ for each enabled toggle; return a label list.
 
@@ -68,6 +63,9 @@ def _apply_fix_env(
     if job_status_cache:
         os.environ["IRIS_JOB_STATUS_CACHE_TTL_MS"] = str(cache_ttl_ms)
         labels.append(f"job-status-cache:{cache_ttl_ms}ms")
+    if heartbeat_inmemory:
+        os.environ["IRIS_HEARTBEAT_INMEMORY"] = "1"
+        labels.append("heartbeat-inmemory")
     return labels
 
 
@@ -123,6 +121,18 @@ def _common_options(func):
         click.option("--job-status-cache/--no-job-status-cache", default=False),
         click.option("--cache-ttl-ms", type=int, default=1000, show_default=True),
         click.option(
+            "--heartbeat-inmemory/--no-heartbeat-inmemory",
+            "heartbeat_inmemory",
+            default=False,
+            help="Set IRIS_HEARTBEAT_INMEMORY=1 so the ping loop tracks liveness in RAM and skips DB writes on success.",
+        ),
+        click.option(
+            "--use-split-heartbeat/--no-use-split-heartbeat",
+            "use_split_heartbeat",
+            default=True,
+            help="When True, controller uses direct StartTasks/StopTasks; False uses legacy heartbeat path.",
+        ),
+        click.option(
             "--log-level",
             type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False),
             default="INFO",
@@ -168,11 +178,11 @@ def list_cmd() -> None:
     click.echo("  fleet-wide    — prod-magnitude: all zones, all sizes, synthetic workers + probes")
     click.echo("  prod-scale    — full-controller: 600 preload, real RPC dashboard, dashboard probe mix")
     click.echo()
-    click.echo("Toggle flags (cumulative; each sets env vars the controller reads at import time):")
-    for step, (name, env) in sorted(ABLATION_STEPS.items()):
-        env_str = " ".join(f"{k}={v}" for k, v in env.items()) or "(baseline)"
-        click.echo(f"  step {step}: --{name}")
-        click.echo(f"    env: {env_str}")
+    click.echo("Ablation steps (see `iris-loadtest ablation --help` to run the series):")
+    from iris.loadtest.ablation import DEFAULT_STEPS
+
+    for idx, (name, flags) in enumerate(DEFAULT_STEPS):
+        click.echo(f"  step {idx}: {name}  flags: {' '.join(flags) or '(baseline)'}")
 
 
 def _run_scenario(
@@ -188,6 +198,7 @@ def _run_scenario(
     latency_seconds: float,
     probe_tokens: tuple[str, ...],
     fix_labels: list[str],
+    use_split_heartbeat: bool = True,
 ) -> int:
     """Execute a scenario end-to-end. Env vars must already be populated."""
     # Deferred imports: env gates are read at import time.
@@ -203,6 +214,7 @@ def _run_scenario(
         synthetic_worker_building_seconds=dwell_seconds,
         synthetic_worker_running_seconds=dwell_seconds,
         heartbeat_interval_seconds=5.0,
+        use_split_heartbeat=use_split_heartbeat,
     )
 
     probe_specs = parse_probe_specs(list(probe_tokens)) if probe_tokens else None
@@ -275,6 +287,8 @@ def scenario_cmd(
     controller_yield: bool,
     job_status_cache: bool,
     cache_ttl_ms: int,
+    heartbeat_inmemory: bool,
+    use_split_heartbeat: bool,
     log_level: str,
 ) -> None:
     """Run one of the canonical scenarios (burst/api-timeouts/incident/fleet-wide/prod-scale)."""
@@ -284,6 +298,7 @@ def scenario_cmd(
         controller_yield=controller_yield,
         job_status_cache=job_status_cache,
         cache_ttl_ms=cache_ttl_ms,
+        heartbeat_inmemory=heartbeat_inmemory,
     )
 
     # Deferred import: DEFAULT_SNAPSHOT_PATH is safe to import without gates.
@@ -306,94 +321,88 @@ def scenario_cmd(
         latency_seconds=latency_seconds,
         probe_tokens=probe_tokens,
         fix_labels=fix_labels,
+        use_split_heartbeat=use_split_heartbeat,
     )
     sys.exit(rc)
 
 
 @main.command("ablation")
+@click.option("--preload-workers", type=int, default=100, show_default=True)
+@click.option("--duration", type=int, default=300, show_default=True)
+@click.option("--burst-jobs", type=int, default=100, show_default=True)
+@click.option("--cpu-jobs", type=int, default=10, show_default=True)
+@click.option("--cpu-tasks-per-job", type=int, default=100, show_default=True)
 @click.option(
-    "--steps",
-    type=str,
-    default="0,1,2,3,4,5",
+    "--step-timeout-seconds",
+    type=int,
+    default=540,
     show_default=True,
-    help="Comma-separated step ids to run (cumulative).",
+    help="Hard wall-clock cap per step; on expiry the child pgroup is SIGKILLed.",
 )
-@_common_options
+@click.option(
+    "--output-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Default: logs/autoscaler-loadtest/run-<timestamp>",
+)
+@click.option(
+    "--use-split-heartbeat/--no-use-split-heartbeat",
+    "use_split_heartbeat",
+    default=True,
+    show_default=True,
+    help="Hold on throughout so RAM-HBM is an isolable toggle.",
+)
+@click.option(
+    "--log-level",
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False),
+    default="INFO",
+    show_default=True,
+)
 def ablation_cmd(
-    steps: str,
-    duration: int,
     preload_workers: int,
+    duration: int,
     burst_jobs: int,
     cpu_jobs: int,
     cpu_tasks_per_job: int,
+    step_timeout_seconds: int,
     output_dir: Path | None,
-    snapshot: Path | None,
-    latency_seconds: float,
-    probe_tokens: tuple[str, ...],
-    sqlite_tuning: bool,  # ignored; ablation computes these from --steps
-    controller_yield: bool,
-    job_status_cache: bool,
-    cache_ttl_ms: int,
+    use_split_heartbeat: bool,
     log_level: str,
 ) -> None:
-    """Run the sequential ablation across --steps.
+    """Run the serial toggle ablation against prod-scale.
 
-    Each step applies its env-gated toggle in addition to every prior step's
-    toggles, then launches the prod-scale scenario against a fresh DB copy
-    and writes ``step-<N>-<name>-{summary.md,metrics.json}`` under --output-dir.
+    Each step spawns a fresh ``iris-loadtest scenario prod-scale`` subprocess
+    (so import-time env gates are reread cleanly), with cleanup between
+    steps. After the series a combined ``REPORT.md`` is written comparing
+    writer/dashboard latencies, per-RPC batch wall-clock, and Slow-log
+    counts across steps.
     """
     _configure_logging(log_level)
 
-    try:
-        chosen = sorted({int(s) for s in steps.split(",") if s.strip()})
-    except ValueError as exc:
-        raise click.ClickException(f"--steps must be comma-separated ints, got {steps!r}") from exc
-    unknown = [s for s in chosen if s not in ABLATION_STEPS]
-    if unknown:
-        raise click.ClickException(f"Unknown ablation steps: {unknown}")
+    from iris.loadtest.ablation import DEFAULT_STEPS, run_series, write_report
 
-    from iris.loadtest.configs import DEFAULT_SNAPSHOT_PATH
+    out = (output_dir or _default_output_dir()).resolve()
+    common = ["--use-split-heartbeat"] if use_split_heartbeat else ["--no-use-split-heartbeat"]
 
-    snap = snapshot or DEFAULT_SNAPSHOT_PATH
-    if not snap.exists():
-        raise click.ClickException(f"Snapshot not found: {snap}")
-
-    base_out = output_dir or _default_output_dir()
-    base_out.mkdir(parents=True, exist_ok=True)
-
-    # Cumulative env: by step N, every env var from steps <= N is set.
-    cumulative_env: dict[str, str] = {}
-    cumulative_labels: list[str] = []
-    for step in sorted(ABLATION_STEPS):
-        if step not in chosen:
-            # Still accumulate so later steps include prior fixes.
-            cumulative_env.update(ABLATION_STEPS[step][1])
-            if ABLATION_STEPS[step][1]:
-                cumulative_labels.append(ABLATION_STEPS[step][0])
-            continue
-
-        name, env = ABLATION_STEPS[step]
-        cumulative_env.update(env)
-        for k, v in cumulative_env.items():
-            os.environ[k] = v
-        if env:
-            cumulative_labels.append(name)
-
-        step_dir = base_out / f"step-{step}-{name}"
-        click.echo(f"=== Ablation step {step}: {name} (cumulative env: {sorted(cumulative_env)}) ===")
-        _run_scenario(
-            scenario="prod-scale",
-            duration=duration,
-            preload_workers=preload_workers,
-            burst_jobs=burst_jobs,
-            cpu_jobs=cpu_jobs,
-            cpu_tasks_per_job=cpu_tasks_per_job,
-            output_dir=step_dir,
-            snapshot=snap,
-            latency_seconds=latency_seconds,
-            probe_tokens=probe_tokens,
-            fix_labels=list(cumulative_labels),
-        )
+    results = run_series(
+        steps=DEFAULT_STEPS,
+        scenario="prod-scale",
+        preload_workers=preload_workers,
+        duration=duration,
+        burst_jobs=burst_jobs,
+        cpu_jobs=cpu_jobs,
+        cpu_tasks_per_job=cpu_tasks_per_job,
+        out_dir=out,
+        timeout_seconds=step_timeout_seconds,
+        common_flags=common,
+    )
+    header = (
+        f"Serial ablation — {preload_workers} preload workers, {duration}s duration, "
+        f"{burst_jobs} burst jobs, {cpu_jobs}x{cpu_tasks_per_job} CPU tasks, "
+        f"split-heartbeat={'on' if use_split_heartbeat else 'off'}"
+    )
+    report_path = write_report(out, results, header)
+    click.echo(f"\nCombined report: {report_path}")
 
 
 if __name__ == "__main__":
