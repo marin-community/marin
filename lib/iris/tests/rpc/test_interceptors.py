@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from unittest.mock import Mock
 
 import pytest
+from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 from iris.rpc.errors import extract_error_details
@@ -169,3 +170,70 @@ def test_concurrency_limit_releases_slot_on_exception():
     # If the slot leaked, the fourth call would deadlock — a successful
     # passthrough proves the semaphore was released on each exception.
     assert interceptor.intercept_unary_sync(lambda req, ctx: "ok", "request", ctx) == "ok"
+
+
+# --- Stats collector integration -------------------------------------------
+
+
+class _RecordingCollector:
+    """Stub that captures every record() call for assertions."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def record(self, *, method, duration_ms, request, ctx, error_code="", error_message=""):
+        self.calls.append(
+            {
+                "method": method,
+                "duration_ms": duration_ms,
+                "error_code": error_code,
+                "error_message": error_message,
+            }
+        )
+
+
+def test_interceptor_records_successful_call():
+    collector = _RecordingCollector()
+    interceptor = RequestTimingInterceptor(collector=collector)
+    ctx = _make_ctx("ListJobs")
+
+    result = interceptor.intercept_unary_sync(lambda req, ctx: "ok", "request", ctx)
+
+    assert result == "ok"
+    assert len(collector.calls) == 1
+    call = collector.calls[0]
+    assert call["method"] == "ListJobs"
+    assert call["error_code"] == ""
+    assert call["duration_ms"] >= 0
+
+
+def test_interceptor_records_connect_error_with_code_name():
+    collector = _RecordingCollector()
+    interceptor = RequestTimingInterceptor(collector=collector)
+    ctx = _make_ctx("ListJobs")
+
+    def boom(req, ctx):
+        raise ConnectError(code=Code.NOT_FOUND, message="not found")
+
+    with pytest.raises(ConnectError):
+        interceptor.intercept_unary_sync(boom, "request", ctx)
+
+    assert len(collector.calls) == 1
+    assert collector.calls[0]["error_code"] == "NOT_FOUND"
+    assert "not found" in collector.calls[0]["error_message"]
+
+
+def test_interceptor_records_unhandled_exception_as_internal():
+    collector = _RecordingCollector()
+    interceptor = RequestTimingInterceptor(collector=collector)
+    ctx = _make_ctx("LaunchJob")
+
+    def boom(req, ctx):
+        raise RuntimeError("kaboom")
+
+    with pytest.raises(ConnectError):
+        interceptor.intercept_unary_sync(boom, "request", ctx)
+
+    assert len(collector.calls) == 1
+    assert collector.calls[0]["error_code"] == "INTERNAL"
+    assert collector.calls[0]["error_message"] == "kaboom"
