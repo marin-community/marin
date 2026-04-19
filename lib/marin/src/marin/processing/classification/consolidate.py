@@ -33,6 +33,7 @@ from zephyr import Dataset, ZephyrContext, ZephyrExecutionResult
 class FilterType(StrEnum):
     REMOVE_SPANS = "remove_spans"
     REMOVE_DOC = "remove_docs"
+    KEEP_DOC = "keep_docs"
 
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,8 @@ def _make_filter_combiner(filt: FilterConfig) -> Callable[[dict, dict | None], d
         attrs = right["attributes"]
         if filt.type == FilterType.REMOVE_DOC:
             return left if not attrs.get(filt.name, False) else None
+        if filt.type == FilterType.KEEP_DOC:
+            return left if attrs.get(filt.name, False) else None
         assert filt.type == FilterType.REMOVE_SPANS
         mutated = _remove_spans_from_doc(left, filt, attrs)
         return mutated if mutated.get("text") else None
