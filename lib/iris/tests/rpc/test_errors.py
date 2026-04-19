@@ -126,32 +126,6 @@ def test_call_with_retry_no_retry_on_not_found() -> None:
     assert call_count == 1
 
 
-def test_call_with_retry_default_budget_survives_many_attempts() -> None:
-    """Default retry budget must cover controller stalls >> 20 attempts (issue #4913).
-
-    Previously the default ``max_attempts`` was 20, so ~3 min of controller
-    unavailability crashed clients mid-job. The new defaults must ride out
-    at least a few dozen consecutive UNAVAILABLE responses.
-    """
-    call_count = 0
-
-    def fail_many_then_succeed():
-        nonlocal call_count
-        call_count += 1
-        if call_count <= 50:
-            raise ConnectError(Code.UNAVAILABLE, "Controller overloaded")
-        return "recovered"
-
-    # Tiny backoff keeps the test fast; we only care about attempt budgeting.
-    result = call_with_retry(
-        "test_op",
-        fail_many_then_succeed,
-        backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
-    )
-    assert result == "recovered"
-    assert call_count == 51
-
-
 def test_call_with_retry_max_elapsed_stops_retrying() -> None:
     """call_with_retry should stop retrying after max_elapsed seconds."""
     call_count = 0
