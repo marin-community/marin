@@ -4836,3 +4836,94 @@ Expected: `glm5 vs gpt51 ≈ 0.728`, `gpt41 vs gpt51 ≈ 0.770`.
 have ρ ≥ 0.6 median vs gpt51 (full_dpo 0.703, lora_lr1e5 0.707,
 lora_lr5e6 0.715). No reason to halt; proceed to GLM-5.1 mirror
 if pursuing this thread further.
+
+## Stage B.1/B.2 mirror — GLM-5.1 (2026-04-19)
+
+Run ID `glm51_20260418_201250Z`. Judge: `zai-org/GLM-5.1`
+(Together API), workers=8, max_tokens=8000, temperature=0.0.
+Resume-capable runner: `scratch/run_glm51_all_dpo_background.sh`.
+
+Total runtime: **15h40m** for 3 DPO targets × 7698 items
+(beat GLM-5's 11.9–13.7 h/target baseline). Target 1 hit a
+110-error cold-start burst, all auto-retried to success; targets
+2 & 3 ran clean (0 errors). Length-cut counts: 6/2/6 across
+targets (<0.1%, negligible).
+
+### Per-target Spearman (glm51 vs gpt51)
+
+| target | n_stmt | median ρ | mean | min | max | ≥0.7 |
+|---|---:|---:|---:|---:|---:|---:|
+| sft | 45 | 0.757 | 0.751 | 0.445 | 0.906 | 73.3% |
+| full_dpo_beta01_b64_step1699 | 45 | **0.739** | 0.723 | 0.455 | 0.905 | 60.0% |
+| lora_lr1e5_b64_step1699 | 45 | 0.745 | 0.720 | 0.401 | 0.928 | 64.4% |
+| lora_lr5e6_b64_step1699 | 45 | 0.738 | 0.730 | 0.446 | 0.913 | 60.0% |
+| **POOLED** | 180 | **0.7459** | 0.7307 | — | — | — |
+
+**Stage-B.1 gate (median ρ ≥ 0.6 on full_dpo): PASS** (0.739).
+
+### GLM-5.1 vs GLM-5 vs GPT-4.1 (pooled median)
+
+| judge | pooled median | gap to GPT-4.1 baseline |
+|---|---:|---:|
+| gpt41 (intra-OpenAI reference) | 0.7551 | — |
+| **glm51** (this run) | **0.7459** | −0.009 |
+| glm5 (Stage-B prior) | 0.7152 | −0.040 |
+
+**Headline: GLM-5.1 is the preferred open-weight drop-in for GPT-5.1.**
+It lifts pooled median by +0.031 over GLM-5 and essentially matches
+the GPT-4.1 intra-OpenAI baseline (gap narrows from 0.040 → 0.009).
+
+### SFT-to-DPO degradation — muted in GLM-5.1
+
+| judge | SFT median | DPO mean (3 targets) | Δ |
+|---|---:|---:|---:|
+| glm5 | 0.761 | 0.709 | −0.052 |
+| glm51 | 0.757 | 0.741 | **−0.016** |
+
+GLM-5 drops ~0.05 moving SFT→DPO (classic DPO stress on judges
+weighting style/tone rubrics differently). **GLM-5.1 only drops
+~0.016** — roughly a third of the degradation, so it's more
+robust in the regime we actually evaluate in.
+
+### SFT parity — not a win for GLM-5
+
+On SFT alone, GLM-5 edges GLM-5.1 by 0.004 (0.761 vs 0.757) —
+within noise. The earlier Stage-A numbers (5.1: 0.765, 5: 0.753)
+reported a cleaner 5.1 > 5 ordering; this run's re-measurement
+ties them on SFT but 5.1 wins decisively on every DPO target
+(+0.023 to +0.038 median). **Weighted across the pipeline, GLM-5.1 wins.**
+
+### Weakest rubrics (pooled glm51 vs gpt51)
+
+Bottom 5 per-statement ρ — style/tone, as with GLM-5:
+`refusal_style` (0.511), `avoid_abuse` (0.533),
+`be_rationally_optimistic` (0.584), `protect_privacy` (0.601),
+`be_clear` (0.618). Same carve-outs from the GLM-5
+recommendation still apply (use GPT-5.1 or pair with gpt41 for
+style-sensitive rubrics).
+
+Top 5 (content/safety, strong agreement):
+`avoid_extremist_content` (0.916), `avoid_info_hazards` (0.908),
+`avoid_errors` (0.893), `comply_with_laws` (0.886),
+`no_erotica_or_gore` (0.852).
+
+### Reproducibility
+
+Artifact locations:
+- `/Users/ahmed/together_batch/glm51_20260418_201250Z/zai-org_GLM-5.1/{full_dpo_beta01_b64_step1699,lora_lr1e5_b64_step1699,lora_lr5e6_b64_step1699}/`
+- SFT (pre-existing from Stage A): `/Users/ahmed/together_batch/zai-org_GLM-5.1/sft/`
+- `~/together_batch/latest/zai-org_GLM-5.1/` has symlinks to all
+  four targets (SFT symlink added manually 2026-04-19T17:15Z).
+
+Uncommitted runner script: `scratch/run_glm51_all_dpo_background.sh`
+(gitignored, mirrors `run_glm5_all_dpo_background.sh` with model
+swapped and analyze-per-target steps dropped).
+
+### Stage B conclusion
+
+Both gates (GLM-5, GLM-5.1) cleared. **Prefer GLM-5.1** for the
+cheap-drop-in role — same ~$0.60/M pricing, ~16× cost reduction
+vs GPT-5.1, with a DPO-robustness edge that matters for this
+pipeline. Stage-B.3 (Kimi / MM-M2.5 / Qwen3-235B on DPO) is
+unnecessary for the cost-reduction goal; skip unless a specific
+ablation needs a third independent judge family.

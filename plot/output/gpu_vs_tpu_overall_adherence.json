@@ -1,0 +1,92 @@
+[
+  {
+    "label": "SFT Baseline",
+    "bloom_gpu": {
+      "mean": 7.940504027019992,
+      "ci95": 0.08035045704637046,
+      "std": 2.0766370880689937,
+      "count": 2566,
+      "summary_path": "/Users/ahmed/code/bloom/results/judging/dev-bloom-results-gpt-4-mini-prompts/_lfs_skampere3_0_ahmedah_models_marin_marin-8b-instruct/run_20260324_152421_7c0a6d282da6/summary.json"
+    },
+    "marin_tpu": {
+      "mean": 7.872824110158483,
+      "ci95": 0.08750030530820584,
+      "std": 2.261423094525987,
+      "count": 2566,
+      "summary_path": "gs://marin-us-east1/eval/marin_8b_instruct_bloom_speceval/judge-gpt41/summary.json"
+    },
+    "delta_tpu_minus_gpu": -0.06767991686150943
+  },
+  {
+    "label": "DPO $\\beta$=0.01, lr=5e-7",
+    "bloom_gpu": {
+      "mean": 8.698363211223688,
+      "ci95": 0.06904879404151476,
+      "std": 1.7845484875126045,
+      "count": 2566,
+      "summary_path": "/Users/ahmed/code/bloom/results/judging/dev-bloom-results-gpt-4-mini-prompts/_lfs_skampere3_0_ahmedah_models_marin_bloom_v2_beta0-01_lr5e-7_seed0_step-849/run_20260325_183808_5ef636ab1ebc/summary.json"
+    },
+    "marin_tpu": {
+      "mean": 8.765133800987257,
+      "ci95": 0.07110389459505079,
+      "std": 1.8376620376535966,
+      "count": 2566,
+      "summary_path": "gs://marin-us-east5/eval/marin_dpo_beta001_lr5e7_seed0_bloom_speceval/judge-gpt41/summary.json"
+    },
+    "delta_tpu_minus_gpu": 0.06677058976356953
+  },
+  {
+    "label": "DPO $\\beta$=0.01, lr=7.5e-7",
+    "bloom_gpu": {
+      "mean": 8.65406599116653,
+      "ci95": 0.07054590618915146,
+      "std": 1.823240969485505,
+      "count": 2566,
+      "summary_path": "/Users/ahmed/code/bloom/results/judging/dev-bloom-results-gpt-4-mini-prompts/_lfs_skampere3_0_ahmedah_models_marin_bloom_v2_beta0-01_lr7-5e-7_seed0_step-849/run_20260325_192827_81d1d40ed0cb/summary.json"
+    },
+    "marin_tpu": {
+      "mean": 8.728046245778126,
+      "ci95": 0.07083668190858759,
+      "std": 1.8307559938610667,
+      "count": 2566,
+      "summary_path": "gs://marin-us-east5/eval/marin_dpo_beta001_lr75e7_seed0_bloom_speceval/judge-gpt41/summary.json"
+    },
+    "delta_tpu_minus_gpu": 0.07398025461159641
+  },
+  {
+    "label": "DPO $\\beta$=0.1, lr=5e-7",
+    "bloom_gpu": {
+      "mean": 8.337620161080803,
+      "ci95": 0.07792490668100235,
+      "std": 2.0139493569364144,
+      "count": 2566,
+      "summary_path": "/Users/ahmed/code/bloom/results/judging/dev-bloom-results-gpt-4-mini-prompts/_lfs_skampere3_0_ahmedah_models_marin_bloom_v2_beta0-1_lr5e-7_seed0_step-849/run_20260325_195043_8929a88217b8/summary.json"
+    },
+    "marin_tpu": {
+      "mean": 8.406079501169149,
+      "ci95": 0.08015066230001851,
+      "std": 2.0714734437597104,
+      "count": 2566,
+      "summary_path": "gs://marin-us-east5/eval/marin_dpo_beta01_lr5e7_seed0_bloom_speceval/judge-gpt41/summary.json"
+    },
+    "delta_tpu_minus_gpu": 0.06845934008834575
+  },
+  {
+    "label": "DPO $\\beta$=0.1, lr=7.5e-7",
+    "bloom_gpu": {
+      "mean": 8.38646401662771,
+      "ci95": 0.07869476910266585,
+      "std": 2.0338462550538003,
+      "count": 2566,
+      "summary_path": "/Users/ahmed/code/bloom/results/judging/dev-bloom-results-gpt-4-mini-prompts/_lfs_skampere3_0_ahmedah_models_marin_bloom_v2_beta0-1_lr7-5e-7_seed0_step-849/run_20260325_195043_092641116cf6/summary.json"
+    },
+    "marin_tpu": {
+      "mean": 8.427383736035335,
+      "ci95": 0.08080899229825525,
+      "std": 2.0884878148134787,
+      "count": 2566,
+      "summary_path": "gs://marin-us-central1/eval/marin_dpo_beta01_lr75e7_seed0_bloom_speceval/judge-gpt41/summary.json"
+    },
+    "delta_tpu_minus_gpu": 0.04091971940762562
+  }
+]

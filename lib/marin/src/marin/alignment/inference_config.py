@@ -113,6 +113,7 @@ class VLLMConfig(InferenceConfig):
         cpu: Host CPU request for the worker.
         disk: Ephemeral disk request for TPU workers (e.g. "200g").
         ram: Memory request for TPU workers (e.g. "256g").
+        preemptible: Whether the remote worker can be preempted.
         serve_mode: Optional vLLM serving mode override. When unset, TPU-backed
             configs default to ``"native"`` and GPU-backed configs default to
             ``"docker"``.
@@ -139,6 +140,7 @@ class VLLMConfig(InferenceConfig):
     cpu: int = 32
     disk: str = "50g"
     ram: str = "128g"
+    preemptible: bool = True
     serve_mode: Literal["native", "docker"] | None = None
     docker_image: str | None = None
     additional_config: dict[str, Any] | None = None
@@ -155,10 +157,17 @@ class VLLMConfig(InferenceConfig):
                 cpu=self.cpu,
                 disk=self.disk,
                 ram=self.ram,
+                preemptible=self.preemptible,
             )
         if self.tpu_type is None:
             raise ValueError("VLLMConfig requires either gpu_type or tpu_type.")
-        return ResourceConfig.with_tpu(self.tpu_type, cpu=self.cpu, disk=self.disk, ram=self.ram)
+        return ResourceConfig.with_tpu(
+            self.tpu_type,
+            cpu=self.cpu,
+            disk=self.disk,
+            ram=self.ram,
+            preemptible=self.preemptible,
+        )
 
     @property
     def pip_dependency_groups(self) -> list[str]:
@@ -200,6 +209,7 @@ class VLLMConfig(InferenceConfig):
                 self.cpu,
                 self.disk,
                 self.ram,
+                self.preemptible,
                 self.serve_mode,
                 self.docker_image,
                 additional_config_json,

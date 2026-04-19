@@ -324,10 +324,27 @@ def _compute_compliance_summary(
     }
 
 
-def run_eval_judge(config: EvalJudgeConfig) -> None:
-    """Judge eval inference outputs and produce compliance summary."""
-    eval_results = load_sharded_jsonl_gz(config.eval_responses_path)
-    statements = load_spec(config.spec_path)
+def _judge_one_artifact(
+    *,
+    eval_responses_path: str,
+    output_path: str,
+    statements: dict[str, Statement],
+    judge_model: InferenceConfig | str,
+    batch_size: int,
+    judge_max_tokens: int,
+    workers: int,
+    max_failure_rate: float,
+    session: BatchedVllmServeSession | None,
+) -> None:
+    """Judge one eval-responses artifact. Caller owns session lifecycle.
+
+    When ``session`` is provided, judging is routed through the shared
+    ``BatchedVllmServeSession`` (local vLLM path). When ``None``, the
+    OpenAI-compatible API path is used via ``judge_responses_api_batch``.
+    Writes sharded JSONL, ``summary.json``, and (for the local path)
+    ``artifacts/vllm_metrics.json`` to ``output_path``.
+    """
+    eval_results = load_sharded_jsonl_gz(eval_responses_path)
     logger.info("Loaded %d eval results for judging", len(eval_results))
 
     requests, skipped = _build_eval_judge_requests(eval_results, statements)
@@ -336,30 +353,26 @@ def run_eval_judge(config: EvalJudgeConfig) -> None:
     if not requests:
         raise ValueError("No valid eval results to judge.")
 
-    is_local = isinstance(config.judge_model, VLLMConfig)
-
-    if is_local:
-        session = BatchedVllmServeSession(config.judge_model)
-        with session:
-            reporter = LiveProgressReporter(
-                stage_name="Eval Judge",
-                total_items=len(requests),
-                batch_size=config.batch_size,
-                metrics_provider=vllm_stage_metrics_provider(session, stage_name="eval_judge"),
+    if session is not None:
+        reporter = LiveProgressReporter(
+            stage_name="Eval Judge",
+            total_items=len(requests),
+            batch_size=batch_size,
+            metrics_provider=vllm_stage_metrics_provider(session, stage_name="eval_judge"),
+        )
+        all_compliance_results: list[ComplianceResult] = []
+        for batch_start in range(0, len(requests), batch_size):
+            batch = requests[batch_start : batch_start + batch_size]
+            batch_results = judge_responses_local_batch(
+                batch,
+                session=session,
+                max_tokens=judge_max_tokens,
             )
-            all_compliance_results: list[ComplianceResult] = []
-            for batch_start in range(0, len(requests), config.batch_size):
-                batch = requests[batch_start : batch_start + config.batch_size]
-                batch_results = judge_responses_local_batch(
-                    batch,
-                    session=session,
-                    max_tokens=config.judge_max_tokens,
-                )
-                all_compliance_results.extend(batch_results)
-                reporter.maybe_log(len(all_compliance_results))
+            all_compliance_results.extend(batch_results)
+            reporter.maybe_log(len(all_compliance_results))
         session_metrics = session.metrics_snapshot()
         write_vllm_metrics_artifact(
-            f"{config.output_path}/artifacts/vllm_metrics.json",
+            f"{output_path}/artifacts/vllm_metrics.json",
             logical_stage="eval_judge",
             sessions=[("eval_judge", session_metrics)],
         )
@@ -367,16 +380,16 @@ def run_eval_judge(config: EvalJudgeConfig) -> None:
         reporter = LiveProgressReporter(
             stage_name="Eval Judge",
             total_items=len(requests),
-            batch_size=config.batch_size,
+            batch_size=batch_size,
         )
         all_compliance_results = []
-        for batch_start in range(0, len(requests), config.batch_size):
-            batch = requests[batch_start : batch_start + config.batch_size]
+        for batch_start in range(0, len(requests), batch_size):
+            batch = requests[batch_start : batch_start + batch_size]
             batch_results = judge_responses_api_batch(
                 batch,
-                judge_model=config.judge_model,
-                max_tokens=config.judge_max_tokens,
-                workers=config.workers,
+                judge_model=judge_model,
+                max_tokens=judge_max_tokens,
+                workers=workers,
             )
             all_compliance_results.extend(batch_results)
             reporter.maybe_log(len(all_compliance_results))
@@ -411,11 +424,11 @@ def run_eval_judge(config: EvalJudgeConfig) -> None:
             model_name = result["model"]
             break
 
-    write_sharded_jsonl_gz(judged_results, config.output_path, shard_size=5000)
+    write_sharded_jsonl_gz(judged_results, output_path, shard_size=5000)
     summary = _compute_compliance_summary(judged_results, model_name)
     summary["failure_count"] = failure_count
     summary["skipped_count"] = len(skipped)
-    write_json(f"{config.output_path}/summary.json", summary)
+    write_json(f"{output_path}/summary.json", summary)
 
     logger.info(
         "Eval complete: %d judged, overall_mean=%.2f, compliance_rate=%.1f%%",
@@ -424,7 +437,165 @@ def run_eval_judge(config: EvalJudgeConfig) -> None:
         summary["overall_compliance_rate"] * 100,
     )
 
-    if requests and failure_count / len(requests) > config.max_failure_rate:
+    if requests and failure_count / len(requests) > max_failure_rate:
         raise RuntimeError(
-            f"Judge failure rate {failure_count}/{len(requests)} exceeds " f"threshold {config.max_failure_rate:.0%}"
+            f"Judge failure rate {failure_count}/{len(requests)} exceeds threshold {max_failure_rate:.0%}"
         )
+
+
+def run_eval_judge(config: EvalJudgeConfig) -> None:
+    """Judge eval inference outputs and produce compliance summary."""
+    statements = load_spec(config.spec_path)
+    if isinstance(config.judge_model, VLLMConfig):
+        with BatchedVllmServeSession(config.judge_model) as session:
+            _judge_one_artifact(
+                eval_responses_path=config.eval_responses_path,
+                output_path=config.output_path,
+                statements=statements,
+                judge_model=config.judge_model,
+                batch_size=config.batch_size,
+                judge_max_tokens=config.judge_max_tokens,
+                workers=config.workers,
+                max_failure_rate=config.max_failure_rate,
+                session=session,
+            )
+    else:
+        _judge_one_artifact(
+            eval_responses_path=config.eval_responses_path,
+            output_path=config.output_path,
+            statements=statements,
+            judge_model=config.judge_model,
+            batch_size=config.batch_size,
+            judge_max_tokens=config.judge_max_tokens,
+            workers=config.workers,
+            max_failure_rate=config.max_failure_rate,
+            session=None,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Batched eval judge — reuses one vLLM session across many artifacts
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class EvalJudgeTarget:
+    """One inference artifact to judge inside a batched run."""
+
+    label: str
+    eval_responses_path: str
+    output_path: str
+
+
+@dataclass(frozen=True)
+class BatchEvalJudgeConfig:
+    """Judge multiple eval artifacts with one shared vLLM session.
+
+    Resumable: any target whose ``{output_path}/summary.json`` already exists
+    is skipped on restart, so preemption only costs rejudging the in-flight
+    target plus any unstarted ones.
+    """
+
+    targets: list[EvalJudgeTarget]
+    spec_path: str
+    judge_model: InferenceConfig | str = "gpt-4.1"
+    workers: int = 64
+    batch_size: int = 8
+    judge_max_tokens: int = 1000
+    max_failure_rate: float = 0.2
+
+
+def _target_already_done(output_path: str) -> bool:
+    """Return True if this target has a completed summary.json."""
+    summary_path = f"{output_path}/summary.json"
+    fs, fs_path = url_to_fs(summary_path)
+    return fs.exists(fs_path)
+
+
+def run_batch_eval_judge(config: BatchEvalJudgeConfig) -> None:
+    """Judge many eval inference artifacts using one shared vLLM session.
+
+    Loads the judge model exactly once. Each target writes its own sharded
+    JSONL + ``summary.json`` to its own output directory. On restart after
+    preemption, targets whose ``summary.json`` already exists are skipped, so
+    a restart only rejudges the in-flight target plus any unstarted ones.
+    Fails fast inside a target if its parse failure rate exceeds threshold.
+    """
+    if not config.targets:
+        raise ValueError("run_batch_eval_judge requires at least one target.")
+
+    # Partition into done vs pending before loading the model so a fully
+    # completed run is free on re-entry.
+    total = len(config.targets)
+    pending: list[tuple[int, EvalJudgeTarget]] = []
+    for idx, target in enumerate(config.targets):
+        if _target_already_done(target.output_path):
+            logger.info(
+                "[batch-judge %d/%d] SKIP %s (summary.json exists at %s)",
+                idx + 1,
+                total,
+                target.label,
+                target.output_path,
+            )
+        else:
+            pending.append((idx, target))
+
+    if not pending:
+        logger.info("All %d targets already have summary.json; nothing to do.", total)
+        return
+
+    logger.info(
+        "Batch judge plan: %d total, %d done, %d pending",
+        total,
+        total - len(pending),
+        len(pending),
+    )
+
+    statements = load_spec(config.spec_path)
+    is_local = isinstance(config.judge_model, VLLMConfig)
+
+    if is_local:
+        with BatchedVllmServeSession(config.judge_model) as session:
+            for pending_idx, (orig_idx, target) in enumerate(pending):
+                logger.info(
+                    "[batch-judge pending %d/%d (total %d/%d)] judging %s -> %s",
+                    pending_idx + 1,
+                    len(pending),
+                    orig_idx + 1,
+                    total,
+                    target.label,
+                    target.output_path,
+                )
+                _judge_one_artifact(
+                    eval_responses_path=target.eval_responses_path,
+                    output_path=target.output_path,
+                    statements=statements,
+                    judge_model=config.judge_model,
+                    batch_size=config.batch_size,
+                    judge_max_tokens=config.judge_max_tokens,
+                    workers=config.workers,
+                    max_failure_rate=config.max_failure_rate,
+                    session=session,
+                )
+    else:
+        for pending_idx, (orig_idx, target) in enumerate(pending):
+            logger.info(
+                "[batch-judge pending %d/%d (total %d/%d)] judging %s -> %s",
+                pending_idx + 1,
+                len(pending),
+                orig_idx + 1,
+                total,
+                target.label,
+                target.output_path,
+            )
+            _judge_one_artifact(
+                eval_responses_path=target.eval_responses_path,
+                output_path=target.output_path,
+                statements=statements,
+                judge_model=config.judge_model,
+                batch_size=config.batch_size,
+                judge_max_tokens=config.judge_max_tokens,
+                workers=config.workers,
+                max_failure_rate=config.max_failure_rate,
+                session=None,
+            )
