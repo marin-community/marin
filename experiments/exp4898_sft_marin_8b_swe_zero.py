@@ -94,7 +94,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG[DATASET_ID] = InstructionDatasetConfig(
 def create_tokenization_step():
     dataset = get_instruction_dataset(DATASET_ID, splits=["train"])
     return default_tokenize(
-        name=f"swe_zero_{SUBSET_SIZE // 1000}k_marin_tokenizer",
+        name=f"swe_zero_{SUBSET_SIZE // 1000}k_marin_tokenizer_v2",  # v2: cache-bust after dataset cleanup
         dataset=dataset / "**/*.jsonl.gz",
         tokenizer=marin_tokenizer,
         format=ChatLmDatasetFormat(chat_template=MARIN_CHAT_TEMPLATE),
