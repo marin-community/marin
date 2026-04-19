@@ -22,9 +22,15 @@ if __name__ == "__main__":
             *default_base_eval(deeper_starling_path),
             *default_base_eval(llama_3_1_8b),
             *default_base_eval(olmo_2_base_8b),
-            *default_base_eval(amber_base_7b, engine_kwargs={"max_model_len": 2048, "max_gen_toks": 2048}),
             *default_base_eval(
-                map_neo_7b, engine_kwargs={"trust_remote_code": True, "max_model_len": 4096, "max_gen_toks": 4096}
+                amber_base_7b,
+                deployment_kwargs={"max_model_len": 2048},
+                extra_model_args=("max_gen_toks=2048",),
+            ),
+            *default_base_eval(
+                map_neo_7b,
+                deployment_kwargs={"trust_remote_code": True, "max_model_len": 4096},
+                extra_model_args=("max_gen_toks=4096",),
             ),
         ]
     )
