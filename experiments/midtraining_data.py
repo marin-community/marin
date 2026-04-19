@@ -4,8 +4,6 @@
 """
 Registry of midtraining math datasets, grouped by provenance bucket.
 
-See .agents/projects/midtraining_math.md for the full analysis.
-
 Buckets:
     BUCKET_1 — no model-rewritten text (filter / score / extract only)
     BUCKET_2 — non-Qwen model rewriting allowed
@@ -13,8 +11,7 @@ Buckets:
 
 Only datasets already tokenized in Marin are exposed here. Datasets not yet
 ingested (OpenWebMath standalone, MathPile, InfiMM-WebMath, MathCode-Pile,
-Nemotron-MIND standalone, UltraData-Math) are listed in the module docstring
-below and noted in .agents/projects/midtraining_math.md §9 as ingestion TODO.
+Nemotron-MIND standalone, UltraData-Math) are tracked separately.
 """
 
 from experiments.midtraining_datasets import (
