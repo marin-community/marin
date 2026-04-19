@@ -2,19 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Mini-SWE-Agent v1 as a BaseAgent (runs in-process, not inside sandbox).
+Mini-SWE-Agent v1 as a BaseAgent (in-process, not installed in sandbox).
 
-This agent drives the mini-swe-agent v1 conversation loop directly from
-the orchestrator process using the OpenAI chat completions API and
-environment.exec() for bash commands. Unlike the InstalledAgent version,
-LLM calls go through litellm from the host process, so api_base pointing
-to localhost vLLM works with any environment type (Docker, Daytona, etc.).
+Directly reuses the official mini-swe-agent v1 DefaultAgent class
+(SWE-agent/mini-SWE-agent@v1) with Harbor-native adapters for the Model
+and Environment interfaces. LLM calls go through litellm on the host
+(reaching localhost vLLM), bash commands execute via Harbor's
+environment.exec() (runs in the sandbox).
+
+This avoids the networking issue with InstalledAgent + Daytona where the
+mini CLI inside the sandbox can't reach the host's vLLM server.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
-import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -26,7 +29,6 @@ import litellm
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
-from harbor.models.agent.name import AgentName
 from harbor.models.trajectories import (
     Agent,
     FinalMetrics,
@@ -39,70 +41,115 @@ from harbor.models.trajectories import (
 )
 from harbor.utils.logger import logger
 
-MAX_TURNS = 15
-MAX_OUTPUT_TOKENS = 1024
-MAX_TOTAL_TOKENS = 32768
-EXEC_TIMEOUT_SECONDS = 30
-OBSERVATION_MAX_CHARS = 8000
+# ---------------------------------------------------------------------------
+# Import mini-swe-agent v1's DefaultAgent and config
+# ---------------------------------------------------------------------------
+try:
+    from minisweagent import Environment as MsweaEnvironment
+    from minisweagent import Model as MsweaModel
+    from minisweagent.agents.default import AgentConfig, DefaultAgent, Submitted, TerminatingException
 
-SYSTEM_PROMPT = """\
-You are a helpful assistant that interacts with a computer to solve software-engineering tasks.
-
-Every response must contain EXACTLY ONE bash code block (triple backticks) with EXACTLY ONE command.
-Before the bash block, include a THOUGHT section explaining your reasoning. Put ALL explanation in
-THOUGHT — do NOT prefix the bash command with `# comment` lines.
-
-Format:
-THOUGHT: <your reasoning>
-
-```bash
-<one bash command>
-```
-
-ENVIRONMENT:
-- Working directory is the repository root. Every command runs in a fresh subshell starting at the
-  repo root, so `cd` does NOT persist between commands. NEVER use `cd`. Always use repo-relative paths
-  (`cat README.md`, `find . -name "*.py"`) or absolute paths.
-- ALLOWED tools: cat, head, tail, less, nl, wc, file, ls, find, tree, stat, grep, sed (including
-  `sed -i` for in-place edits), awk, cut, sort, uniq, diff, tr, tee, echo, printf, cp, mv, rm,
-  mkdir, ln, cat <<EOF > file (heredoc), tar, git diff/log/show/status.
-- Commands may be chained with `&&` or `||` or `|`.
-
-DO NOT:
-- Do NOT use `cd`. It silently has no effect on subsequent commands.
-- Do NOT try `python`, `pytest`, `pip`, or any other interpreter or test runner.
-- Do NOT use `bash -c`, `sh -c`, `eval`, `source`.
-
-TO FINISH:
-- The FIRST LINE of the output of your bash command must be exactly
-  `COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`. The standard way is `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`.
-
-WORKFLOW:
-1. Explore the repo with find, grep, and cat to locate the files involved in the issue.
-2. Understand the root cause from the code, not from running it.
-3. Edit source files with `sed -i` or `cat <<EOF > file`.
-4. Verify your edit by re-reading the file with cat or sed -n.
-5. Submit with `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`.\
-"""
+    _HAS_MINISWEAGENT = True
+except ImportError:
+    _HAS_MINISWEAGENT = False
 
 
-def _extract_bash_command(response: str) -> str | None:
-    pattern = r"```bash\s*\n(.*?)\n```"
-    matches = re.findall(pattern, response, re.DOTALL)
-    if matches:
-        return matches[0].strip()
-    return None
+# ---------------------------------------------------------------------------
+# Adapters: bridge mini-swe-agent's Model/Environment to Harbor's
+# ---------------------------------------------------------------------------
+
+if _HAS_MINISWEAGENT:
+
+    class LitellmModelAdapter(MsweaModel):
+        """Adapter: mini-swe-agent Model → litellm (host-side, reaches localhost vLLM)."""
+
+        def __init__(self, model_name: str, api_base: str | None = None, temperature: float = 1.0, **kwargs):
+            self.model_name = model_name
+            self.api_base = api_base
+            self.temperature = temperature
+            self.model_kwargs = kwargs.get("model_kwargs", {})
+            self._cost = 0.0
+            self._n_calls = 0
+
+        @property
+        def cost(self) -> float:
+            return self._cost
+
+        @property
+        def n_calls(self) -> int:
+            return self._n_calls
+
+        def get_template_vars(self) -> dict:
+            return {}
+
+        def query(self, messages: list[dict]) -> dict:
+            """Synchronous query — mini-swe-agent v1 uses sync API."""
+            cleaned = [{"role": m["role"], "content": m["content"]} for m in messages]
+            response = litellm.completion(
+                model=self.model_name,
+                messages=cleaned,
+                temperature=self.temperature,
+                api_base=self.api_base,
+                api_key="EMPTY",
+                **self.model_kwargs,
+            )
+            self._n_calls += 1
+            usage = response.usage
+            if usage:
+                cost = litellm.completion_cost(response) if hasattr(litellm, "completion_cost") else 0.0
+                self._cost += cost
+            content = response.choices[0].message.content or ""
+            result: dict[str, Any] = {"content": content}
+            if usage:
+                result["extra"] = {
+                    "response": {
+                        "usage": {
+                            "prompt_tokens": usage.prompt_tokens,
+                            "completion_tokens": usage.completion_tokens,
+                        }
+                    }
+                }
+            return result
+
+    class HarborEnvironmentAdapter(MsweaEnvironment):
+        """Adapter: mini-swe-agent Environment → Harbor's environment.exec()."""
+
+        def __init__(self, harbor_env: BaseEnvironment, loop: asyncio.AbstractEventLoop):
+            self._env = harbor_env
+            self._loop = loop
+
+        def get_template_vars(self) -> dict:
+            import platform
+
+            return {
+                "system": platform.system(),
+                "release": platform.release(),
+                "version": platform.version(),
+                "machine": platform.machine(),
+            }
+
+        def execute(self, command: str, timeout: int = 30) -> dict:
+            """Execute command in Harbor sandbox, return mini-swe-agent format."""
+            future = asyncio.run_coroutine_threadsafe(self._env.exec(command=command, timeout=timeout), self._loop)
+            result = future.result(timeout=timeout + 10)
+            stdout = result.stdout or ""
+            stderr = result.stderr or ""
+            output = stdout
+            if stderr:
+                output = f"{output}\n{stderr}" if output else stderr
+            return {
+                "output": output,
+                "returncode": result.exit_code if hasattr(result, "exit_code") else 0,
+            }
 
 
-def _truncate_observation(text: str, max_chars: int = OBSERVATION_MAX_CHARS) -> str:
-    if len(text) <= max_chars:
-        return text
-    half = max_chars // 2
-    return f"{text[:half]}\n\n... ({len(text) - max_chars} chars truncated) ...\n\n{text[-half:]}"
+# ---------------------------------------------------------------------------
+# Harbor BaseAgent wrapper
+# ---------------------------------------------------------------------------
 
 
 class MiniSweAgentV1(BaseAgent):
-    """Mini-SWE-Agent v1 running in-process (BaseAgent, not InstalledAgent)."""
+    """Mini-SWE-Agent v1 using the official DefaultAgent with Harbor adapters."""
 
     SUPPORTS_ATIF: bool = True
 
@@ -112,30 +159,30 @@ class MiniSweAgentV1(BaseAgent):
         model_name: str | None = None,
         api_base: str | None = None,
         temperature: float = 1.0,
-        max_turns: int = MAX_TURNS,
-        max_total_tokens: int = MAX_TOTAL_TOKENS,
+        max_turns: int = 15,
         model_info: dict | None = None,
         **kwargs,
     ):
         super().__init__(logs_dir, model_name, **kwargs)
         if not model_name:
             raise ValueError("model_name is required")
+        if not _HAS_MINISWEAGENT:
+            raise ImportError(
+                "minisweagent not installed. Install with: "
+                'uv pip install "git+https://github.com/SWE-agent/mini-SWE-agent.git@v1"'
+            )
         self._model_name = model_name
         self._api_base = api_base
         self._temperature = temperature
         self._max_turns = max_turns
-        self._max_total_tokens = max_total_tokens
         self._model_info = model_info or {}
-        self._trajectory_steps: list[Step] = []
-        self._total_prompt_tokens = 0
-        self._total_completion_tokens = 0
 
         if self._model_info:
             litellm.register_model(
                 {
                     self._model_name: {
-                        "max_tokens": self._model_info.get("max_output_tokens", MAX_OUTPUT_TOKENS),
-                        "max_input_tokens": self._model_info.get("max_input_tokens", MAX_TOTAL_TOKENS),
+                        "max_tokens": self._model_info.get("max_output_tokens", 1024),
+                        "max_input_tokens": self._model_info.get("max_input_tokens", 32768),
                         "input_cost_per_token": self._model_info.get("input_cost_per_token", 0),
                         "output_cost_per_token": self._model_info.get("output_cost_per_token", 0),
                     }
@@ -147,135 +194,139 @@ class MiniSweAgentV1(BaseAgent):
         return "mini-swe-agent-v1"
 
     def version(self) -> str | None:
-        return "1.0-inprocess"
+        return "1.0"
 
     async def setup(self, environment: BaseEnvironment) -> None:
         pass
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
         _logger = logger.getChild(__name__)
-        messages: list[dict[str, str]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": instruction},
-        ]
+        loop = asyncio.get_event_loop()
 
-        self._trajectory_steps = [
-            Step(step_id=1, timestamp=datetime.now(timezone.utc).isoformat(), source="system", message=SYSTEM_PROMPT),
-            Step(step_id=2, timestamp=datetime.now(timezone.utc).isoformat(), source="user", message=instruction),
-        ]
-        step_id = 3
+        model = LitellmModelAdapter(
+            model_name=self._model_name,
+            api_base=self._api_base,
+            temperature=self._temperature,
+            model_kwargs={"drop_params": True},
+        )
+        env = HarborEnvironmentAdapter(environment, loop)
 
-        for turn in range(self._max_turns):
-            try:
-                response = await litellm.acompletion(
-                    model=self._model_name,
-                    messages=messages,
-                    temperature=self._temperature,
-                    max_tokens=MAX_OUTPUT_TOKENS,
-                    api_base=self._api_base,
-                    api_key="EMPTY",
-                )
-            except Exception as e:
-                _logger.error("LLM call failed at turn %d: %s", turn, e)
-                break
+        agent = DefaultAgent(
+            model,
+            env,
+            step_limit=self._max_turns,
+        )
 
-            choice = response.choices[0]
-            assistant_text = choice.message.content or ""
-            usage = response.usage
-            if usage:
-                self._total_prompt_tokens += usage.prompt_tokens
-                self._total_completion_tokens += usage.completion_tokens
+        # Run the official v1 agent loop (synchronous — run in thread)
+        exit_status, exit_message = await asyncio.to_thread(agent.run, instruction)
+        _logger.info("Agent finished: %s — %s", exit_status, exit_message[:100])
 
-            bash_cmd = _extract_bash_command(assistant_text)
+        # Extract metrics
+        context.n_input_tokens = sum(
+            (m.get("extra", {}).get("response", {}).get("usage", {}).get("prompt_tokens", 0)) for m in agent.messages
+        )
+        context.n_output_tokens = sum(
+            (m.get("extra", {}).get("response", {}).get("usage", {}).get("completion_tokens", 0))
+            for m in agent.messages
+        )
 
-            tool_calls = None
-            if bash_cmd:
-                tool_calls = [
-                    ToolCall(
-                        tool_call_id=f"call_{step_id}",
-                        function_name="bash_command",
-                        arguments={"command": bash_cmd},
+        # Convert messages to ATIF trajectory
+        steps: list[Step] = []
+        step_id = 1
+        for msg in agent.messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if role == "system":
+                steps.append(
+                    Step(
+                        step_id=step_id, timestamp=datetime.now(timezone.utc).isoformat(), source="system",
+                        message=content,
                     )
-                ]
-
-            metrics = None
-            if usage:
-                metrics = Metrics(
-                    prompt_tokens=usage.prompt_tokens,
-                    completion_tokens=usage.completion_tokens,
                 )
+            elif role == "user":
+                if step_id <= 2:
+                    steps.append(
+                        Step(
+                            step_id=step_id, timestamp=datetime.now(timezone.utc).isoformat(), source="user",
+                            message=content,
+                        )
+                    )
+                elif steps and steps[-1].source == "agent":
+                    steps[-1].observation = Observation(results=[ObservationResult(content=content)])
+                else:
+                    steps.append(
+                        Step(
+                            step_id=step_id, timestamp=datetime.now(timezone.utc).isoformat(), source="user",
+                            message=content,
+                        )
+                    )
+            elif role == "assistant":
+                import re
 
-            self._trajectory_steps.append(
-                Step(
-                    step_id=step_id,
-                    timestamp=datetime.now(timezone.utc).isoformat(),
-                    source="agent",
-                    model_name=self._model_name,
-                    message=assistant_text,
-                    tool_calls=tool_calls,
-                    metrics=metrics,
+                bash_cmd = None
+                matches = re.findall(r"```bash\s*\n(.*?)\n```", content, re.DOTALL)
+                if matches:
+                    bash_cmd = matches[0].strip()
+
+                tool_calls = None
+                if bash_cmd:
+                    tool_calls = [
+                        ToolCall(
+                            tool_call_id=f"call_{step_id}",
+                            function_name="bash_command",
+                            arguments={"command": bash_cmd},
+                        )
+                    ]
+
+                usage = msg.get("extra", {}).get("response", {}).get("usage", {})
+                metrics = None
+                if usage:
+                    metrics = Metrics(
+                        prompt_tokens=usage.get("prompt_tokens", 0),
+                        completion_tokens=usage.get("completion_tokens", 0),
+                    )
+
+                steps.append(
+                    Step(
+                        step_id=step_id,
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        source="agent",
+                        model_name=self._model_name,
+                        message=content,
+                        tool_calls=tool_calls,
+                        metrics=metrics,
+                    )
                 )
-            )
             step_id += 1
-            messages.append({"role": "assistant", "content": assistant_text})
 
-            if bash_cmd is None:
-                err = "Please always provide EXACTLY ONE action in triple backticks."
-                messages.append({"role": "user", "content": err})
-                self._trajectory_steps.append(
-                    Step(step_id=step_id, timestamp=datetime.now(timezone.utc).isoformat(), source="user", message=err)
-                )
-                step_id += 1
-                if choice.finish_reason == "stop":
-                    break
-                continue
-
-            # Execute in the environment
-            exec_result = await environment.exec(
-                command=bash_cmd,
-                timeout=EXEC_TIMEOUT_SECONDS,
-            )
-            stdout = exec_result.stdout or ""
-            stderr = exec_result.stderr or ""
-            output = stdout
-            if stderr:
-                output = f"{output}\n{stderr}" if output else stderr
-            output = _truncate_observation(output)
-
-            # Check for submission
-            first_line = output.lstrip().splitlines()[0].strip() if output.strip() else ""
-            if first_line in ("COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT", "MINI_SWE_AGENT_FINAL_OUTPUT"):
-                # Add observation to previous step
-                self._trajectory_steps[-1].observation = Observation(
-                    results=[ObservationResult(content=output)]
-                )
-                break
-
-            obs_text = f"Observation: {output}" if output else "Observation: "
-            messages.append({"role": "user", "content": obs_text})
-
-            # Add observation to previous agent step
-            self._trajectory_steps[-1].observation = Observation(results=[ObservationResult(content=obs_text)])
-
-        # Set context
-        context.n_input_tokens = self._total_prompt_tokens
-        context.n_output_tokens = self._total_completion_tokens
-
-        # Dump trajectory
         trajectory = Trajectory(
             schema_version="ATIF-v1.2",
             session_id=str(uuid.uuid4()),
-            agent=Agent(
-                name="mini-swe-agent-v1",
-                version="1.0-inprocess",
-                model_name=self._model_name,
-            ),
-            steps=self._trajectory_steps,
+            agent=Agent(name="mini-swe-agent-v1", version="1.0", model_name=self._model_name),
+            steps=steps,
             final_metrics=FinalMetrics(
-                total_prompt_tokens=self._total_prompt_tokens,
-                total_completion_tokens=self._total_completion_tokens,
+                total_prompt_tokens=context.n_input_tokens or 0,
+                total_completion_tokens=context.n_output_tokens or 0,
             ),
         )
         traj_path = self.logs_dir / "trajectory.json"
         traj_path.write_text(json.dumps(trajectory.to_json_dict(), indent=2))
-        _logger.info("Trajectory saved to %s", traj_path)
+
+        # Also save the raw mini-swe-agent messages for debugging
+        raw_path = self.logs_dir / "mini-swe-agent.trajectory.json"
+        raw_path.write_text(
+            json.dumps(
+                {
+                    "messages": agent.messages,
+                    "info": {
+                        "exit_status": exit_status,
+                        "exit_message": exit_message,
+                        "model_stats": {"instance_cost": model.cost, "n_calls": model.n_calls},
+                    },
+                },
+                indent=2,
+                default=str,
+            )
+        )
+        _logger.info("Trajectories saved to %s", self.logs_dir)
