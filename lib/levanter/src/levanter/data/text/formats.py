@@ -242,12 +242,20 @@ class ChatProcessor(BatchProcessor[dict, dict]):
             tokenized = {"input_ids": input_ids_batches, "assistant_masks": assistant_mask_batches}
 
         masks = tokenized["assistant_masks"]
-        for seq, mask_for_seq in zip(batch, masks):
+        skip_indices: set[int] = set()
+        for i, (seq, mask_for_seq) in enumerate(zip(batch, masks)):
             if not np.any(mask_for_seq):
-                raise ValueError(f"Chat did not contain an assistant message for sequence {seq}")
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Skipping sequence with no assistant message: %s", seq.get("id", "?")
+                )
+                skip_indices.add(i)
 
         out: list[dict] = []
-        for ids, mask in zip(tokenized["input_ids"], masks):
+        for i, (ids, mask) in enumerate(zip(tokenized["input_ids"], masks)):
+            if i in skip_indices:
+                continue
             out.append(
                 {
                     "input_ids": np.array(ids, dtype=np.int32),
