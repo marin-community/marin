@@ -150,10 +150,14 @@ class CausalSelfAttention(eqx.Module):
         q = q * self.cfg.qk_mult
 
         if use_paired_heads:
-            # Merge adjacent positions, halve heads: (B, S, H, D) -> (B, 2S, H/2, D)
-            q = rearrange(q, "b s (h2 two) d -> b (s two) h2 d", two=2)
-            k = rearrange(k, "b s (m2 two) d -> b (s two) m2 d", two=2)
-            v = rearrange(v, "b s (m2 two) d -> b (s two) m2 d", two=2)
+            # Pair adjacent positions: interleave into seq dim, halve heads.
+            # Q: (B, S, H, D) -> (B, S, H/2, 2, D) -> (B, S*2, H/2, D)
+            # For KV with fewer heads: (B, S, M, D) -> (B, S*2, M, D/2)
+            # Simpler approach: concat pairs along head dim, halve seq for attention.
+            # Q: (B, S, H, D) -> (B, S/2, H, 2*D) — pairs of positions share heads
+            q = rearrange(q, "b (s2 two) h d -> b s2 h (two d)", two=2)
+            k = rearrange(k, "b (s2 two) m d -> b s2 m (two d)", two=2)
+            v = rearrange(v, "b (s2 two) m d -> b s2 m (two d)", two=2)
             attn_out = attention(q, k, v, mask)
             # XSA on paired output
             aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
@@ -161,8 +165,8 @@ class CausalSelfAttention(eqx.Module):
             dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
             v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
             attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
-            # Reshape back: (B, 2S, H/2, D) -> (B, S, H, D)
-            attn_out = rearrange(attn_out, "b (s two) h2 d -> b s (h2 two) d", two=2)
+            # Reshape back: (B, S/2, H, 2*D) -> (B, S, H, D)
+            attn_out = rearrange(attn_out, "b s2 h (two d) -> b (s2 two) h d", two=2)
         else:
             attn_out = attention(q, k, v, mask)
             aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
