@@ -418,6 +418,10 @@ class DuckDBLogStore:
         self._memory_lock = Lock()
         self._next_seq = _recover_max_seq(self._log_dir)
         self._pending: list[tuple] = []  # hot write list, converted by bg thread
+        # Arrow snapshot of _pending published by the bg thread every ~1s.
+        # Readers use this directly and accept up to compact_interval_sec of
+        # staleness; rebuilding per-read was 67% of log_server CPU in prod.
+        self._pending_table: pa.Table | None = None
         self._chunks: list[pa.Table] = []  # power-of-2 merged arrow tables
         self._flushing: _SealedBuffer | None = None  # pre-flush snapshot being written
         self._local_segments: deque[_LocalSegment] = deque()
@@ -627,16 +631,36 @@ class DuckDBLogStore:
             self._wake.clear()
 
     def _compact_step(self) -> None:
-        """Move ``_pending`` into a new Arrow chunk (if big enough)."""
+        """Move ``_pending`` into a new Arrow chunk (if big enough), and
+        refresh the reader-visible pending snapshot either way.
+
+        Readers consult ``self._pending_table`` directly instead of rebuilding
+        an Arrow table per request, so the bg thread has to keep it current.
+        """
         with self._memory_lock:
-            if len(self._pending) < _CHUNK_THRESHOLD:
-                return
-            rows = self._pending
-            self._pending = []
+            drain = len(self._pending) >= _CHUNK_THRESHOLD
+            rows = self._pending if drain else list(self._pending)
+            if drain:
+                self._pending = []
+                self._pending_table = None
+        if not rows:
+            if not drain:
+                with self._memory_lock:
+                    if not self._pending:
+                        self._pending_table = None
+            return
         table = _build_buffer_table(rows)
-        with self._memory_lock:
-            self._chunks.append(table)
-            self._chunks = _merge_chunks(self._chunks)
+        if drain:
+            with self._memory_lock:
+                self._chunks.append(table)
+                self._chunks = _merge_chunks(self._chunks)
+        else:
+            with self._memory_lock:
+                # Only publish if _pending still contains at least the rows we
+                # snapshotted; if it rotated (drain by _flush_step) the next
+                # tick will rebuild.
+                if len(self._pending) >= len(rows):
+                    self._pending_table = table
 
     def _flush_step(self) -> None:
         """Seal any RAM data into a Parquet segment on disk."""
@@ -647,6 +671,7 @@ class DuckDBLogStore:
             if self._pending:
                 tables.append(_build_buffer_table(self._pending))
                 self._pending = []
+                self._pending_table = None
 
         # Concat + sort outside the lock — hundreds of ms on large flushes.
         # Safe because _chunks has a single writer (_compact_step), which
@@ -989,10 +1014,30 @@ class DuckDBLogStore:
             ram_tables: list[pa.Table] = list(self._chunks)
             if self._flushing is not None:
                 ram_tables.append(self._flushing.table)
-            pending_snapshot = list(self._pending) if self._pending else None
+            pending_len = len(self._pending)
+            cached = self._pending_table
+            # Accept the cached snapshot if it covers all current pending
+            # rows. The bg thread refreshes it every compact_interval_sec, so
+            # high-QPS readers share a single build; writes arriving since
+            # the refresh are acceptable staleness.
+            if pending_len == 0:
+                pending_snapshot = None
+            elif cached is not None and cached.num_rows >= pending_len:
+                ram_tables.append(cached)
+                pending_snapshot = None
+            else:
+                # Snapshot under the lock so the list can't mutate under us,
+                # then build outside. First reader to finish publishes the
+                # result; concurrent readers may duplicate the work — benign.
+                pending_snapshot = list(self._pending)
 
-        if pending_snapshot:
-            ram_tables.append(_build_buffer_table(pending_snapshot))
+        if pending_snapshot is not None:
+            built = _build_buffer_table(pending_snapshot)
+            with self._memory_lock:
+                existing = self._pending_table
+                if existing is None or existing.num_rows < built.num_rows:
+                    self._pending_table = built
+            ram_tables.append(built)
 
         segments = _cap_segments(segments)
         parquet_files = [s.path for s in segments]
