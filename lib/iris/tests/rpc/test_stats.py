@@ -8,8 +8,6 @@ histogram buckets add up, slow samples are bounded, discovery is throttled,
 and the service returns a populated snapshot.
 """
 
-import time
-
 from unittest.mock import Mock
 
 from iris.rpc import job_pb2, stats_pb2
@@ -99,7 +97,7 @@ def test_discovery_samples_throttled_per_method():
         slow_threshold_ms=1000,
         slow_samples=0,
         discovery_samples=10,
-        discovery_interval_s=3600,
+        discovery_interval=3600,
     )
 
     for _ in range(5):
@@ -118,12 +116,11 @@ def test_discovery_samples_capture_after_interval_elapses():
         slow_threshold_ms=1000,
         slow_samples=0,
         discovery_samples=10,
-        discovery_interval_s=0,  # never throttle
+        discovery_interval=0,  # never throttle
     )
 
     for _ in range(3):
         collector.record(method="ListJobs", duration_ms=1, request=_request(), ctx=_ctx())
-        time.sleep(0.001)
 
     snap = collector.snapshot_proto()
     assert len(snap.discovery_samples) == 3

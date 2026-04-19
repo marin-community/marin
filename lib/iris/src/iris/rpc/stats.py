@@ -19,7 +19,6 @@ import logging
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
 from collections.abc import Mapping
 
 from connectrpc.request import RequestContext
@@ -40,35 +39,8 @@ BUCKET_UPPER_BOUNDS_MS: tuple[int, ...] = (1, 2, 5, 10, 20, 50, 100, 200, 500, 1
 # with many methods; request previews are capped separately below.
 DEFAULT_SLOW_SAMPLES = 50
 DEFAULT_DISCOVERY_SAMPLES = 20
-DEFAULT_DISCOVERY_INTERVAL_S = 30.0
+DEFAULT_DISCOVERY_INTERVAL = 30.0
 DEFAULT_REQUEST_PREVIEW_BYTES = 1024
-
-
-@dataclass(frozen=True, slots=True)
-class CallSample:
-    """One recorded RPC invocation."""
-
-    method: str
-    timestamp_ms: int
-    duration_ms: float
-    peer: str = ""
-    user_agent: str = ""
-    caller: str = ""
-    error_code: str = ""
-    error_message: str = ""
-    request_preview: str = ""
-
-
-@dataclass(slots=True)
-class _MethodState:
-    count: int = 0
-    error_count: int = 0
-    total_duration_ms: float = 0.0
-    max_duration_ms: float = 0.0
-    last_call_ms: int = 0
-    # Parallel array to BUCKET_UPPER_BOUNDS_MS.
-    bucket_counts: list[int] = field(default_factory=lambda: [0] * len(BUCKET_UPPER_BOUNDS_MS))
-    last_discovery_ms: int = 0
 
 
 class RpcStatsCollector:
@@ -78,6 +50,11 @@ class RpcStatsCollector:
     interceptor hot path, and ``snapshot_proto()`` for consumers. All
     mutations hold a single lock; contention is expected to be tiny
     (recording is a handful of arithmetic ops).
+
+    Internal state is held as ``stats_pb2.RpcMethodStats`` and
+    ``stats_pb2.RpcCallSample`` protos directly, mutated in place.
+    Percentiles and the echoed bucket-bounds array are filled in at
+    snapshot time, not on the hot path.
     """
 
     def __init__(
@@ -86,16 +63,17 @@ class RpcStatsCollector:
         slow_threshold_ms: float,
         slow_samples: int = DEFAULT_SLOW_SAMPLES,
         discovery_samples: int = DEFAULT_DISCOVERY_SAMPLES,
-        discovery_interval_s: float = DEFAULT_DISCOVERY_INTERVAL_S,
+        discovery_interval: float = DEFAULT_DISCOVERY_INTERVAL,
         request_preview_bytes: int = DEFAULT_REQUEST_PREVIEW_BYTES,
     ):
         self._slow_threshold_ms = slow_threshold_ms
-        self._discovery_interval_ms = int(discovery_interval_s * 1000)
+        self._discovery_interval_ms = int(discovery_interval * 1000)
         self._request_preview_bytes = request_preview_bytes
         self._lock = threading.Lock()
-        self._methods: dict[str, _MethodState] = {}
-        self._slow: deque[CallSample] = deque(maxlen=slow_samples)
-        self._discovery: deque[CallSample] = deque(maxlen=discovery_samples)
+        self._methods: dict[str, stats_pb2.RpcMethodStats] = {}
+        self._last_discovery_ms: dict[str, int] = {}
+        self._slow: deque[stats_pb2.RpcCallSample] = deque(maxlen=slow_samples)
+        self._discovery: deque[stats_pb2.RpcCallSample] = deque(maxlen=discovery_samples)
         self._started_at_ms = int(time.time() * 1000)
 
     # -- Hot path ------------------------------------------------------
@@ -115,7 +93,8 @@ class RpcStatsCollector:
         with self._lock:
             state = self._methods.get(method)
             if state is None:
-                state = _MethodState()
+                state = stats_pb2.RpcMethodStats(method=method)
+                state.bucket_counts.extend([0] * len(BUCKET_UPPER_BOUNDS_MS))
                 self._methods[method] = state
             state.count += 1
             if error_code:
@@ -123,11 +102,12 @@ class RpcStatsCollector:
             state.total_duration_ms += duration_ms
             if duration_ms > state.max_duration_ms:
                 state.max_duration_ms = duration_ms
-            state.last_call_ms = now_ms
+            state.last_call.epoch_ms = now_ms
             _bump_bucket(state.bucket_counts, duration_ms)
 
+            last_discovery_ms = self._last_discovery_ms.get(method, 0)
             is_slow = duration_ms >= self._slow_threshold_ms or bool(error_code)
-            is_discovery = (now_ms - state.last_discovery_ms) >= self._discovery_interval_ms
+            is_discovery = (now_ms - last_discovery_ms) >= self._discovery_interval_ms
             if not (is_slow or is_discovery):
                 return
             sample = self._build_sample(
@@ -143,7 +123,7 @@ class RpcStatsCollector:
                 self._slow.append(sample)
             if is_discovery:
                 self._discovery.append(sample)
-                state.last_discovery_ms = now_ms
+                self._last_discovery_ms[method] = now_ms
 
     def _build_sample(
         self,
@@ -155,14 +135,14 @@ class RpcStatsCollector:
         ctx: RequestContext | None,
         error_code: str,
         error_message: str,
-    ) -> CallSample:
+    ) -> stats_pb2.RpcCallSample:
         peer, user_agent = _extract_call_metadata(ctx)
         identity = get_verified_identity()
         caller = identity.user_id if identity is not None else ""
         preview = _render_preview(request, self._request_preview_bytes)
-        return CallSample(
+        return stats_pb2.RpcCallSample(
             method=method,
-            timestamp_ms=timestamp_ms,
+            timestamp=time_pb2.Timestamp(epoch_ms=timestamp_ms),
             duration_ms=duration_ms,
             peer=peer,
             user_agent=user_agent,
@@ -176,28 +156,31 @@ class RpcStatsCollector:
 
     def snapshot_proto(self) -> stats_pb2.GetRpcStatsResponse:
         """Return a protobuf snapshot of current stats."""
-        with self._lock:
-            methods = [_method_to_proto(name, state) for name, state in self._methods.items()]
-            slow = [_sample_to_proto(s) for s in self._slow]
-            discovery = [_sample_to_proto(s) for s in self._discovery]
-            started = time_pb2.Timestamp(epoch_ms=self._started_at_ms)
-        methods.sort(key=lambda m: m.method)
-        return stats_pb2.GetRpcStatsResponse(
-            methods=methods,
-            slow_samples=slow,
-            discovery_samples=discovery,
-            collector_started_at=started,
+        response = stats_pb2.GetRpcStatsResponse(
+            collector_started_at=time_pb2.Timestamp(epoch_ms=self._started_at_ms),
         )
+        with self._lock:
+            for state in self._methods.values():
+                m = response.methods.add()
+                m.CopyFrom(state)
+                m.p50_ms = _percentile_ms(state.bucket_counts, 50)
+                m.p95_ms = _percentile_ms(state.bucket_counts, 95)
+                m.p99_ms = _percentile_ms(state.bucket_counts, 99)
+                m.bucket_upper_bounds_ms.extend(BUCKET_UPPER_BOUNDS_MS)
+            response.slow_samples.extend(self._slow)
+            response.discovery_samples.extend(self._discovery)
+        response.methods.sort(key=lambda m: m.method)
+        return response
 
 
-def _bump_bucket(counts: list[int], duration_ms: float) -> None:
+def _bump_bucket(counts, duration_ms: float) -> None:
     for i, upper in enumerate(BUCKET_UPPER_BOUNDS_MS):
         if upper == 0 or duration_ms <= upper:
             counts[i] += 1
             return
 
 
-def _percentile_ms(counts: list[int], pct: float) -> float:
+def _percentile_ms(counts, pct: float) -> float:
     """Estimate a percentile from bucket counts via linear interpolation.
 
     The sentinel +inf bucket returns its lower bound (last finite upper).
@@ -224,42 +207,15 @@ def _percentile_ms(counts: list[int], pct: float) -> float:
     return lower
 
 
-def _method_to_proto(name: str, state: _MethodState) -> stats_pb2.RpcMethodStats:
-    return stats_pb2.RpcMethodStats(
-        method=name,
-        count=state.count,
-        error_count=state.error_count,
-        total_duration_ms=state.total_duration_ms,
-        max_duration_ms=state.max_duration_ms,
-        p50_ms=_percentile_ms(state.bucket_counts, 50),
-        p95_ms=_percentile_ms(state.bucket_counts, 95),
-        p99_ms=_percentile_ms(state.bucket_counts, 99),
-        bucket_upper_bounds_ms=list(BUCKET_UPPER_BOUNDS_MS),
-        bucket_counts=list(state.bucket_counts),
-        last_call=time_pb2.Timestamp(epoch_ms=state.last_call_ms),
-    )
-
-
-def _sample_to_proto(sample: CallSample) -> stats_pb2.RpcCallSample:
-    return stats_pb2.RpcCallSample(
-        method=sample.method,
-        timestamp=time_pb2.Timestamp(epoch_ms=sample.timestamp_ms),
-        duration_ms=sample.duration_ms,
-        peer=sample.peer,
-        user_agent=sample.user_agent,
-        caller=sample.caller,
-        error_code=sample.error_code,
-        error_message=sample.error_message,
-        request_preview=sample.request_preview,
-    )
-
-
 def _extract_call_metadata(ctx: RequestContext | None) -> tuple[str, str]:
     if ctx is None:
         return ("", "")
     try:
         headers: Mapping[str, str] = ctx.request_headers()
     except Exception:
+        # Stats hot path must not crash the RPC; log so silent breakage
+        # is still visible in debug-level server logs.
+        logger.debug("Failed to read request headers for stats", exc_info=True)
         return ("", "")
     user_agent = headers.get("user-agent", "") or headers.get("grpc-user-agent", "")
     # x-forwarded-for may be a comma-separated chain; take the first hop.
@@ -274,6 +230,7 @@ def _render_preview(request: Message | None, max_bytes: int) -> str:
     try:
         rendered = MessageToJson(request, preserving_proto_field_name=True, indent=None)
     except Exception:
+        logger.debug("Failed to render request preview for %s", type(request).__name__, exc_info=True)
         return ""
     return _truncate(rendered, max_bytes)
 
