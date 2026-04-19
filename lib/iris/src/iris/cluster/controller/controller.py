@@ -91,7 +91,6 @@ from iris.cluster.controller.scheduler import (
     WorkerSnapshot,
 )
 from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.heartbeat_manager import HeartbeatManager, heartbeat_inmemory_enabled
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
@@ -170,37 +169,16 @@ _HEALTH_SUMMARY_INTERVAL = RateLimiter(interval_seconds=30)
 # Log a detailed per-phase scheduling trace every this many rounds.
 _SCHEDULING_TRACE_INTERVAL = 50
 
-# Stage 10c step-4: env-gated scheduler + task-updater yield. Off by default.
-# When "1"/"true", before each batched DB transaction (queue_assignments in
-# the scheduling loop; apply_heartbeats_batch in the task-updater loop) the
-# controller samples the writer-lock wait EMA exposed by ``ControllerDB``.
-# If it's above ``_SCHED_YIELD_WAIT_MS`` the thread sleeps for
-# ``_SCHED_YIELD_SLEEP_MS`` and re-checks. If still hot, that tick's flush is
-# skipped (task-updater only — the scheduler always commits so pending
-# assignments are not dropped). Threshold + sleep are configurable per-path
-# via separate env vars so the scheduler and autoscaler can tune independently.
-_SCHED_YIELD_BATCH_ENABLED = os.environ.get("IRIS_SCHEDULER_YIELD_BATCH", "").lower() in ("1", "true", "yes")
-_SCHED_YIELD_WAIT_MS = float(os.environ.get("IRIS_SCHEDULER_YIELD_WAIT_MS", "100"))
-_SCHED_YIELD_SLEEP_MS = float(os.environ.get("IRIS_SCHEDULER_YIELD_SLEEP_MS", "50"))
+
+# When set, the scheduler and task-updater loops call ``time.sleep(0)`` between
+# phases so RPC / heartbeat / autoscaler threads can make progress on busy
+# controllers.
+_YIELD = os.environ.get("IRIS_CONTROLLER_YIELD", "").lower() in ("1", "true", "yes")
 
 
-def _maybe_yield_for_writer_lock(db: ControllerDB) -> bool:
-    """Relax the caller briefly when the writer-lock is hot.
-
-    Returns True if the caller should skip its batched flush this tick. When
-    the writer-lock wait EMA is above ``_SCHED_YIELD_WAIT_MS`` the helper
-    sleeps ``_SCHED_YIELD_SLEEP_MS`` and re-samples; only if the EMA is *still*
-    hot does the caller skip. Callers that cannot skip (e.g. the scheduler
-    after computing assignments) should still call this helper so the sleep
-    lands — they just ignore the return value.
-    """
-    if not _SCHED_YIELD_BATCH_ENABLED:
-        return False
-    wait_ms = db.writer_wait_ms_ema()
-    if wait_ms < _SCHED_YIELD_WAIT_MS:
-        return False
-    time.sleep(_SCHED_YIELD_SLEEP_MS / 1000.0)
-    return db.writer_wait_ms_ema() >= _SCHED_YIELD_WAIT_MS
+def _yield() -> None:
+    if _YIELD:
+        time.sleep(0)
 
 
 # Taint attribute injected onto claimed workers to prevent non-reservation
@@ -1174,11 +1152,6 @@ class Controller:
         self._heartbeat_iteration = 0
         self._last_timeout_check_ms: int = 0
 
-        # In-memory heartbeat store (env-gated). When enabled, the ping loop
-        # records liveness here instead of writing to `workers` on every ping;
-        # the DB is only touched when a worker crosses the failure threshold.
-        self._heartbeat_manager: HeartbeatManager | None = HeartbeatManager() if heartbeat_inmemory_enabled() else None
-
         # Cached scheduling diagnostics: populated each scheduling cycle for
         # pending jobs that could not be assigned.  Keyed by job wire ID.
         # RPC handlers read this dict instead of recomputing diagnostics,
@@ -1186,14 +1159,7 @@ class Controller:
         self._scheduling_diagnostics: dict[str, str] = {}
         self._scheduling_round: int = 0
 
-        # Stage 10c step-4: scheduler + task-updater yield/batch counters.
-        # Always populated (zero when gate off) so tests/dashboards can read
-        # without introspecting the env var.
-        self._scheduler_yield_events: int = 0
-        self._task_updater_yield_events: int = 0
-        self._task_updater_skipped_flushes: int = 0
-        self._task_updater_batched_flushes: int = 0
-        self._task_updater_batched_rows: int = 0
+        # Bounded sample of scheduler tick durations (ms) for diagnostics.
         self._scheduler_tick_durations_ms: deque[float] = deque(maxlen=1024)
 
         # Set to True once start() is called. Used to gate operations that
@@ -1276,9 +1242,6 @@ class Controller:
         self._started = True
         if self._config.dry_run:
             logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
-
-        if self._heartbeat_manager is not None:
-            self._seed_heartbeat_manager()
 
         if isinstance(self._provider, K8sTaskProvider):
             self._heartbeat_thread = self._threads.spawn(self._run_direct_provider_loop, name="provider-loop")
@@ -1425,13 +1388,6 @@ class Controller:
                 backoff.reset()
 
             self._enforce_execution_timeouts()
-
-            # Stage 10c step-4: yield before expensive DB batch. We do not skip
-            # the tick — scheduler must always commit assignments if it has them
-            # — but letting the writer-lock queue drain briefly keeps the
-            # dashboard/heartbeat paths responsive when the EMA is hot.
-            if _SCHED_YIELD_BATCH_ENABLED and _maybe_yield_for_writer_lock(self._db):
-                self._scheduler_yield_events += 1
 
             tick_start = time.monotonic()
             outcome = self._run_scheduling()
@@ -1824,6 +1780,7 @@ class Controller:
             self._scheduling_diagnostics = {}
             return SchedulingOutcome.NO_PENDING_TASKS
 
+        _yield()
         order = self._compute_scheduling_order(
             gated.schedulable_task_ids,
             state.pending_tasks,
@@ -1831,10 +1788,12 @@ class Controller:
             trace=trace,
         )
 
+        _yield()
         all_assignments, context, tainted_jobs = self._run_scheduler_pass(
             order, gated, state, claims, timer, trace=trace
         )
 
+        _yield()
         preemptions = self._apply_preemptions(order, tainted_jobs, all_assignments, claims, context)
 
         self._cache_scheduling_diagnostics(context, tainted_jobs, all_assignments, order.ordered_task_ids)
@@ -2322,23 +2281,6 @@ class Controller:
         workers = healthy_active_workers_with_attributes(self._db)
         return [(w.worker_id, w.address) for w in workers]
 
-    def _seed_heartbeat_manager(self) -> None:
-        """Populate the in-memory heartbeat map from the workers table.
-
-        Called once at controller start so that after a restart the freshly-
-        empty map does not cause `_reap_stale_workers` to mass-reap workers
-        that were healthy before the restart.
-        """
-        assert self._heartbeat_manager is not None
-        with self._db.read_snapshot() as q:
-            rows = q.fetchall("SELECT worker_id, last_heartbeat_ms FROM workers WHERE active = 1")
-        entries = [(str(r["worker_id"]), r["last_heartbeat_ms"]) for r in rows]
-        self._heartbeat_manager.seed_from_db(entries)
-        logger.info(
-            "Heartbeat manager seeded from DB: %d workers (IRIS_HEARTBEAT_INMEMORY=1)",
-            len(entries),
-        )
-
     def _run_ping_loop(self, stop_event: threading.Event) -> None:
         """Fast ping loop for liveness detection.
 
@@ -2352,10 +2294,6 @@ class Controller:
         """
         ping_interval_s = self._config.heartbeat_interval.to_seconds()
         limiter = RateLimiter(interval_seconds=ping_interval_s)
-        hbm = self._heartbeat_manager
-        # When hbm is None, we keep a per-loop dict of failure counts. When hbm
-        # is active, failure counts live inside the manager so the reconciler
-        # sees the same view the ping loop does.
         ping_failures: dict[str, int] = {}
         threshold = self._config.heartbeat_failure_threshold
         # Refresh resource snapshots every ~60s; other cycles just note liveness.
@@ -2377,11 +2315,8 @@ class Controller:
                 for result in results:
                     wid_str = str(result.worker_id)
                     if result.error is not None:
-                        if hbm is not None:
-                            new_fail_count = hbm.record_failure(wid_str)
-                        else:
-                            new_fail_count = ping_failures.get(wid_str, 0) + 1
-                            ping_failures[wid_str] = new_fail_count
+                        new_fail_count = ping_failures.get(wid_str, 0) + 1
+                        ping_failures[wid_str] = new_fail_count
                         if new_fail_count >= threshold:
                             dead_workers.append(wid_str)
                             logger.warning(
@@ -2390,31 +2325,17 @@ class Controller:
                                 new_fail_count,
                             )
                     else:
-                        if hbm is not None:
-                            hbm.record_alive(wid_str)
-                        else:
-                            ping_failures.pop(wid_str, None)
+                        ping_failures.pop(wid_str, None)
                         ping_snapshots[result.worker_id] = result.resource_snapshot if update_resources else None
 
-                if hbm is None:
-                    # Legacy path: per-ping DB write.
-                    self._transitions.update_worker_pings(ping_snapshots)
-                # hbm path deliberately skips the per-ping DB write — the
-                # whole point of this ablation. Snapshot columns go stale
-                # until the next worker_resource_history tick from the
-                # heartbeat path (split-heartbeat mode writes those via
-                # apply_heartbeats_batch, not here).
+                self._transitions.update_worker_pings(ping_snapshots)
 
                 if dead_workers:
                     failure_result = self._transitions.fail_workers_batch(
                         dead_workers, reason="ping failure threshold exceeded"
                     )
-                    if hbm is not None:
-                        hbm.note_db_failure_write(len(failure_result.removed_workers))
                     for wid, addr in failure_result.removed_workers:
                         ping_failures.pop(str(wid), None)
-                        if hbm is not None:
-                            hbm.remove(str(wid))
                         self._provider.on_worker_failed(wid, addr)
 
                     if self._autoscaler and failure_result.removed_workers:
@@ -2432,13 +2353,10 @@ class Controller:
                     if failure_result.tasks_to_kill:
                         self.kill_tasks_on_workers(failure_result.tasks_to_kill, failure_result.task_kill_workers)
 
-                # Clean up stale entries
                 active_ids = {str(wid) for wid, _ in workers}
                 for wid in list(ping_failures):
                     if wid not in active_ids:
                         del ping_failures[wid]
-                if hbm is not None:
-                    hbm.retain_only(active_ids)
 
             except Exception:
                 logger.exception("Ping loop iteration failed")
@@ -2489,30 +2407,9 @@ class Controller:
             requests = _drain_queue(self._task_update_queue, timeout=1.0)
             if not requests or stop_event.is_set():
                 continue
-            # Stage 10c step-4: yield under writer-lock contention. The task
-            # updater *can* legitimately skip a flush because each heartbeat
-            # carries the authoritative current state — the next drain 1s
-            # later will re-apply the latest state with one more tick's worth
-            # of updates batched in. Correctness caveat: task-attempt
-            # visibility to the scheduler is delayed by one updater tick
-            # (≤1s + sleep). No test in cluster/ relies on within-tick
-            # task-attempt visibility; the scheduler reads the DB next cycle.
-            if _SCHED_YIELD_BATCH_ENABLED:
-                if _maybe_yield_for_writer_lock(self._db):
-                    self._task_updater_yield_events += 1
-                    self._task_updater_skipped_flushes += 1
-                    # Re-enqueue so the next drain picks up these requests
-                    # plus any new arrivals.
-                    for req in requests:
-                        self._task_update_queue.put(req)
-                    continue
             try:
                 results = self._transitions.apply_heartbeats_batch(requests)
-                # Rows touched ≈ sum of per-request update counts. This is the
-                # "batched task_attempts rows per flush" signal the ablation
-                # brief asks for.
-                self._task_updater_batched_flushes += 1
-                self._task_updater_batched_rows += sum(len(req.updates) for req in requests)
+                _yield()
                 all_tasks_to_kill: set[JobName] = set()
                 all_task_kill_workers: dict[JobName, WorkerId] = {}
                 for result in results:
@@ -2539,20 +2436,7 @@ class Controller:
             return
         threshold_ms = HEARTBEAT_STALENESS_THRESHOLD.to_ms()
         workers = healthy_active_workers_with_attributes(self._db)
-        hbm = self._heartbeat_manager
-        if hbm is not None:
-            # In-memory path: prefer the monotonic-ns age; fall back to the
-            # DB column only for workers that have not yet been pinged since
-            # seed time (e.g. registered between seed and first ping).
-            def _effective_age(w: WorkerDetailRow) -> int:
-                mem_age = hbm.age_ms(str(w.worker_id))
-                if mem_age is not None:
-                    return mem_age
-                return w.last_heartbeat.age_ms()
-
-            stale = [w for w in workers if _effective_age(w) > threshold_ms]
-        else:
-            stale = [w for w in workers if w.last_heartbeat.age_ms() > threshold_ms]
+        stale = [w for w in workers if w.last_heartbeat.age_ms() > threshold_ms]
         if not stale:
             return
         stale_samples = [

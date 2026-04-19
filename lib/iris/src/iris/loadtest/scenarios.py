@@ -1,19 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage-3 scenario runners.
+"""Scenario runners.
 
-Scenario runners — :func:`run_burst`, :func:`run_api_timeouts`,
-:func:`run_incident`, :func:`run_fleet_wide`, :func:`run_prod_scale` — each take
-an already-started :class:`LoadtestHarness` and an output directory, run the
-scenario for a bounded wall time, write the time-series JSON + human summary,
-and return a :class:`ScenarioResult`.
+Each scenario runner — :func:`run_burst`, :func:`run_api_timeouts`,
+:func:`run_incident`, :func:`run_fleet_wide`, :func:`run_prod_scale` — takes
+an already-started :class:`LoadtestHarness` and an output directory, runs the
+scenario for a bounded wall time, writes the time-series JSON + human summary,
+and returns a :class:`ScenarioResult`.
 
 Each scenario:
   1. Resets scale-group state for the target pattern (fresh backoff).
   2. Starts metrics collection (sampler + probe threads).
-  3. Runs stimuli on a timed loop; the harness's own tick thread drives
-     the autoscaler.
+  3. Runs stimuli on a timed loop; the Controller's autoscaler loop drives scaling.
   4. Emits ``<scenario>-metrics.json`` and ``<scenario>-summary.md``.
 
 Probe read-pressure is expressed as a list of :class:`ProbeSpec` — each spec
@@ -31,8 +30,6 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-
-from iris.cluster.controller.controller import compute_demand_entries
 
 from iris.loadtest.configs import DEFAULT_SNAPSHOT_PATH
 from iris.loadtest.harness import LoadtestHarness
@@ -60,10 +57,10 @@ from iris.cluster.types import get_tpu_topology
 logger = logging.getLogger(__name__)
 
 
-# Group patterns. Stage-2 observed that the autoscaler routes size-8
-# v6e-preemptible demand to us-east5-b first (lowest tier). To concentrate
-# failure pressure we target every zone that appears in the v6e-preemptible
-# pools so routing can't duck to a healthy zone.
+# Group patterns. The autoscaler routes size-8 v6e-preemptible demand to
+# us-east5-b first (lowest tier). To concentrate failure pressure we target
+# every zone that appears in the v6e-preemptible pools so routing can't duck
+# to a healthy zone.
 V6E_PREEMPTIBLE_SLICE_PATTERN = r"tpu-v6e-preemptible-(4|8|16)-"
 V6E_PREEMPTIBLE_GROUP_PATTERN_LIKE = "tpu_v6e-preemptible_%"
 
@@ -176,12 +173,11 @@ def _build_cluster_state(harness: LoadtestHarness, *, seed: int = 0) -> ClusterS
     """Snapshot pending/running job ids from the harness DB for probe consumption.
 
     Runs after preload/seed burst so the probes see live job ids the
-    controller knows about. Requires the harness to expose a Connect/RPC
-    URL (full-controller mode).
+    controller knows about.
     """
     url = harness.controller_url
     if url is None:
-        raise RuntimeError("probes require a full Controller; set HarnessConfig(enable_full_controller=True)")
+        raise RuntimeError("Harness is not started")
     pending, running = load_live_pending_running_job_ids(harness.db)
     return ClusterState(
         controller_url=url,
@@ -221,7 +217,6 @@ def run_burst(
 ) -> ScenarioResult:
     """Submit a large v6e-preemptible-8 burst; no API failures."""
     harness.reset_scale_group_state(name_pattern=V6E_PREEMPTIBLE_GROUP_PATTERN_LIKE)
-    harness.pause_ticks()
 
     specs = probes if probes is not None else BURST_PROBES
 
@@ -251,14 +246,6 @@ def run_burst(
         )
         submitter.start()
 
-        pump = threading.Thread(
-            target=_demand_pump,
-            name="burst-demand-pump",
-            kwargs=dict(harness=harness, stop=stop, deadline=deadline),
-            daemon=True,
-        )
-        pump.start()
-
         probe_runner = _maybe_start_probes(
             harness, specs, duration_s=duration_s, stop=stop, holder=probe_result_holder, seed=1001
         )
@@ -267,7 +254,6 @@ def run_burst(
         stop.set()
         submitter.join(timeout=5.0)
         _ = burst_deadline  # documentation only
-        pump.join(timeout=5.0)
         if probe_runner is not None:
             probe_runner.join(timeout=10.0)
     finally:
@@ -309,27 +295,6 @@ def _maybe_start_probes(
     return t
 
 
-def _demand_pump(harness: LoadtestHarness, stop: threading.Event, deadline: float) -> None:
-    """Drive the autoscaler with *real* demand on a 1 Hz cadence.
-
-    The harness's own ``_run_tick_loop`` calls ``run_once(demand_entries=[])``,
-    which means the autoscaler has nothing to scale up even if jobs are
-    submitted. In full-controller mode the Controller's own loop already
-    computes real demand each cycle, so this becomes a no-op.
-    """
-    if harness.controller_url is not None:
-        stop.wait(max(0.0, deadline - time.monotonic()))
-        return
-    while not stop.is_set() and time.monotonic() < deadline:
-        try:
-            demand = compute_demand_entries(harness.db)
-            harness.tick(demand_entries=demand)
-        except Exception:
-            logger.exception("demand pump tick failed")
-        if stop.wait(1.0):
-            return
-
-
 # ---------------------------------------------------------------------------
 # api-timeouts: API timeouts only
 # ---------------------------------------------------------------------------
@@ -345,7 +310,6 @@ def run_api_timeouts(
 ) -> ScenarioResult:
     """No new submissions; tpu_create timeouts for the whole duration."""
     harness.reset_scale_group_state(name_pattern=V6E_PREEMPTIBLE_GROUP_PATTERN_LIKE)
-    harness.pause_ticks()
 
     specs = probes if probes is not None else API_TIMEOUTS_PROBES
 
@@ -374,19 +338,11 @@ def run_api_timeouts(
     probe_result_holder: dict[str, ProbeResult] = {}
 
     try:
-        pump = threading.Thread(
-            target=_demand_pump,
-            name="api-timeouts-demand-pump",
-            kwargs=dict(harness=harness, stop=stop, deadline=deadline),
-            daemon=True,
-        )
-        pump.start()
         probe_runner = _maybe_start_probes(
             harness, specs, duration_s=duration_s, stop=stop, holder=probe_result_holder, seed=2001
         )
         _sleep_until(deadline, stop)
         stop.set()
-        pump.join(timeout=5.0)
         if probe_runner is not None:
             probe_runner.join(timeout=10.0)
     finally:
@@ -418,7 +374,6 @@ def run_incident(
 ) -> ScenarioResult:
     """Burst + bad API + periodic preemption."""
     harness.reset_scale_group_state(name_pattern=V6E_PREEMPTIBLE_GROUP_PATTERN_LIKE)
-    harness.pause_ticks()
 
     specs = probes if probes is not None else INCIDENT_PROBES
 
@@ -455,14 +410,6 @@ def run_incident(
         )
         submitter.start()
 
-        pump = threading.Thread(
-            target=_demand_pump,
-            name="incident-demand-pump",
-            kwargs=dict(harness=harness, stop=stop, deadline=deadline),
-            daemon=True,
-        )
-        pump.start()
-
         preempter = threading.Thread(
             target=_preempt_loop,
             name="incident-preempter",
@@ -484,7 +431,6 @@ def run_incident(
         _sleep_until(deadline, stop)
         stop.set()
         submitter.join(timeout=5.0)
-        pump.join(timeout=5.0)
         preempter.join(timeout=5.0)
         if probe_runner is not None:
             probe_runner.join(timeout=10.0)
@@ -544,7 +490,6 @@ def run_fleet_wide(
 ) -> ScenarioResult:
     """Prod-magnitude repro: all zones, all sizes, synthetic workers + probes."""
     harness.reset_scale_group_state(name_pattern=V6E_PREEMPTIBLE_GROUP_PATTERN_LIKE)
-    harness.pause_ticks()
 
     specs = probes if probes is not None else FLEET_WIDE_PROBES
 
@@ -573,14 +518,6 @@ def run_fleet_wide(
     probe_result_holder: dict[str, ProbeResult] = {}
 
     try:
-        pump = threading.Thread(
-            target=_demand_pump,
-            name="fleet-wide-demand-pump",
-            kwargs=dict(harness=harness, stop=stop, deadline=deadline),
-            daemon=True,
-        )
-        pump.start()
-
         preempter = threading.Thread(
             target=_preempt_loop,
             name="fleet-wide-preempter",
@@ -601,7 +538,6 @@ def run_fleet_wide(
 
         _sleep_until(deadline, stop)
         stop.set()
-        pump.join(timeout=5.0)
         preempter.join(timeout=5.0)
         if probe_runner is not None:
             probe_runner.join(timeout=10.0)
@@ -616,7 +552,7 @@ def run_fleet_wide(
 
 
 # ---------------------------------------------------------------------------
-# prod-scale: prod-scale fleet + scale-up storm + preemption churn (Stage 7)
+# prod-scale: prod-scale fleet + scale-up storm + preemption churn
 # ---------------------------------------------------------------------------
 
 
@@ -677,7 +613,6 @@ def run_prod_scale(
     logger.info("prod-scale: pre-loaded %d synthetic workers from %s", preloaded, snapshot)
 
     harness.reset_scale_group_state(name_pattern=SCALE_STORM_GROUP_PATTERN_LIKE)
-    harness.pause_ticks()
 
     specs = probes if probes is not None else PROD_SCALE_PROBES
 
@@ -736,14 +671,6 @@ def run_prod_scale(
     probe_result_holder: dict[str, ProbeResult] = {}
 
     try:
-        pump = threading.Thread(
-            target=_demand_pump,
-            name="prod-scale-demand-pump",
-            kwargs=dict(harness=harness, stop=stop, deadline=deadline),
-            daemon=True,
-        )
-        pump.start()
-
         preempter = threading.Thread(
             target=_preempt_loop,
             name="prod-scale-preempter",
@@ -764,7 +691,6 @@ def run_prod_scale(
 
         _sleep_until(deadline, stop)
         stop.set()
-        pump.join(timeout=5.0)
         preempter.join(timeout=5.0)
         if probe_runner is not None:
             probe_runner.join(timeout=10.0)

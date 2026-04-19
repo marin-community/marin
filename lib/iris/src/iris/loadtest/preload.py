@@ -3,18 +3,12 @@
 
 """Pre-load synthetic workers to reproduce prod-scale fleet pressure.
 
-Stage 6 measured the controller under 32 to 48 synthetic workers that were
-spawned *on demand* as the autoscaler issued successful ``tpu_create`` calls.
-During the 2026-04-18 incident the live fleet carried ~1000 TPU workers — the
-controller was handling roster reads, prober RPCs, and heartbeat bookkeeping
-over that entire set *before* the scale-up storm landed.
-
-This module pre-populates the harness with N real-RPC ``SyntheticWorker``
-instances distributed across scale groups proportional to the snapshot's
-``workers`` table. Each pre-loaded worker is a real Connect/RPC server on an
-ephemeral localhost port, registered via ``ControllerTransitions.register_worker``
-so the controller-side prober (and any other RPC-over-the-wire consumer) hits
-it through the same socket stack that fires in production.
+Pre-populates the harness with N real-RPC ``SyntheticWorker`` instances
+distributed across scale groups proportional to the snapshot's ``workers``
+table. Each pre-loaded worker is a real Connect/RPC server on an ephemeral
+localhost port, registered via ``ControllerTransitions.register_worker`` so the
+controller-side prober (and any other RPC-over-the-wire consumer) hits it
+through the same socket stack that fires in production.
 
 Separate from the autoscaler-driven ``attach_worker_pool`` path: pre-loaded
 workers do not have a backing ``tpu_create`` in the fake GCP service, so they

@@ -1,11 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Time-series metric collection for Stage-3 autoscaler load-test scenarios.
+"""Time-series metric collection for load-test scenarios.
 
 The harness exposes the moving pieces (autoscaler, DB, fake GCP service);
-this module wraps them to produce per-second samples of the quantities the
-Stage-3 plan calls out:
+this module wraps them to produce per-second samples:
 
 - ``active_scale_up_threads`` — live threads in ``Autoscaler._threads``.
 - ``scale_up_pending`` — sum of ``ScalingGroup._pending_scale_ups``.
@@ -18,8 +17,7 @@ Stage-3 plan calls out:
   scenario start).
 
 The writer-lock instrumentation monkey-patches ``db._lock`` on start and
-restores it on stop. This is the minimally-invasive approach called out in
-the plan: no changes to production code, no subclassing of ``ControllerDB``.
+restores it on stop — no changes to production code, no subclassing.
 """
 
 from __future__ import annotations

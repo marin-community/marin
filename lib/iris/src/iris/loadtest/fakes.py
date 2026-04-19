@@ -58,10 +58,8 @@ class FailureRule:
     latency_seconds: float
 
 
-# Maximum allowed latency-sleep. The Autoscaler thread container's stop()
-# uses a short timeout; sleeps longer than this will leak a thread past
-# teardown. See Stage 0 audit §6 ("ThreadContainer's stop timeout vs 120 s
-# blocking threads"). The loadtest caps latency here as a safety net; tests
+# Maximum allowed latency-sleep. The Autoscaler thread container's stop() uses
+# a short timeout; sleeps longer than this leak a thread past teardown. Tests
 # should use <=30 s where possible.
 MAX_LATENCY_SECONDS = 120.0
 
@@ -82,8 +80,7 @@ class LoadtestGcpService:
             tpu_create_timeout_seconds: If set, ``tpu_create`` enforces this
                 deadline against the injected latency; an injected sleep that
                 exceeds the deadline is cut short and an InfraError("timed out")
-                is raised. This is the loadtest-side equivalent of Stage-4
-                Fix 2 (the production fix lives in CloudGcpService).
+                is raised.
         """
         self._inner = inner
         self._rules: list[FailureRule] = []
@@ -94,8 +91,7 @@ class LoadtestGcpService:
         self.counts_create_failures: int = 0
         # Optional synthetic-worker pool. When set (via attach_worker_pool),
         # each successful tpu_create spawns a SyntheticWorker; each tpu_delete
-        # stops the corresponding worker. Left None by default so Stage 1-4
-        # tests keep their original shape.
+        # stops the corresponding worker.
         self._worker_pool: SyntheticWorkerPool | None = None
 
     # -- configuration -------------------------------------------------------

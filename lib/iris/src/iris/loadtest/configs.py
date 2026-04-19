@@ -3,13 +3,11 @@
 
 """Hydrate real ScaleGroupConfig protos from the cluster YAML for the load-test.
 
-Stage 1 fabricated CPU placeholders for every persisted scaling-groups row.
-For Stage 2 we need the *real* expanded set — per-(size, zone) TPU groups with
-topology-derived ``num_vms`` / ``device_count`` / ``device_variant`` — so that
-demand routing, scale-up targeting, and failure injection all use the same
-shapes as production.
+Emits the *real* expanded set — per-(size, zone) TPU groups with topology-derived
+``num_vms`` / ``device_count`` / ``device_variant`` — so demand routing, scale-up
+targeting, and failure injection all use the same shapes as production.
 
-Re-use ``iris.cluster.config.load_config`` so we do not reimplement
+Re-uses ``iris.cluster.config.load_config`` so we do not reimplement
 ``_expand_tpu_pools``. The return value is a ``dict`` in the same shape
 ``create_autoscaler`` expects (``name -> ScaleGroupConfig``).
 """

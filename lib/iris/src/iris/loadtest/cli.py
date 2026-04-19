@@ -3,17 +3,15 @@
 
 """Unified ``iris-loadtest`` CLI.
 
-Single entry point that replaces the pile of per-stage ``run_*.py`` drivers.
 Subcommands:
 
-- ``scenario NAME`` — run one of the canonical scenarios (burst/api-timeouts/incident/fleet-wide/prod-scale).
-- ``ablation``      — run the Stage-10c sequential ablation (steps 0..5).
-- ``list``          — list scenarios and fix flags for interactive discovery.
+- ``scenario NAME`` — run one of the canonical scenarios.
+- ``ablation``      — sweep toggle combinations against prod-scale.
+- ``list``          — list scenarios and toggle flags.
 
-Fix flags are applied via environment variables that the controller +
-autoscaler code paths read at import time. They MUST be set before the
-harness module is imported; this CLI enforces that by deferring all
-``iris.loadtest.*`` imports until after env vars have been populated.
+Toggle flags set environment variables read by the controller / autoscaler /
+service at import time; all ``iris.loadtest.*`` imports are deferred until
+after env vars have been populated.
 """
 
 from __future__ import annotations
@@ -36,14 +34,9 @@ import click
 SCENARIOS = ("burst", "api-timeouts", "incident", "fleet-wide", "prod-scale")
 ABLATION_STEPS: dict[int, tuple[str, dict[str, str]]] = {
     0: ("baseline", {}),
-    1: (
-        "sqlite-tuning",
-        {"IRIS_DB_MMAP_BYTES": "10*1000*1000*1000", "IRIS_DB_CACHE_KB": "256000"},
-    ),
-    2: ("heartbeat-inmemory", {"IRIS_HEARTBEAT_INMEMORY": "1"}),
-    3: ("autoscaler-yield-batch", {"IRIS_AUTOSCALER_YIELD_BATCH": "1"}),
-    4: ("scheduler-yield-batch", {"IRIS_SCHEDULER_YIELD_BATCH": "1"}),
-    5: ("job-status-cache", {"IRIS_JOB_STATUS_CACHE": "1", "IRIS_JOB_STATUS_CACHE_TTL_MS": "1000"}),
+    1: ("sqlite-tuning", {"IRIS_DB_MMAP_BYTES": "268435456", "IRIS_DB_CACHE_KB": "1048576"}),
+    2: ("controller-yield", {"IRIS_CONTROLLER_YIELD": "1"}),
+    3: ("job-status-cache", {"IRIS_JOB_STATUS_CACHE_TTL_MS": "1000"}),
 }
 
 
@@ -55,33 +48,24 @@ def _default_output_dir() -> Path:
 def _apply_fix_env(
     *,
     sqlite_tuning: bool,
-    heartbeat_inmemory: bool,
-    autoscaler_yield_batch: bool,
-    scheduler_yield_batch: bool,
+    controller_yield: bool,
     job_status_cache: bool,
     cache_ttl_ms: int,
 ) -> list[str]:
-    """Populate os.environ for each enabled fix; return a label list.
+    """Populate os.environ for each enabled toggle; return a label list.
 
-    This must run BEFORE any iris.loadtest import. The controller and
-    autoscaler read these gates at import time.
+    Must run BEFORE any iris.loadtest import — the controller / autoscaler
+    / service read these env vars once at import time.
     """
     labels: list[str] = []
     if sqlite_tuning:
         os.environ["IRIS_DB_MMAP_BYTES"] = "268435456"
         os.environ["IRIS_DB_CACHE_KB"] = "1048576"
         labels.append("sqlite-tuning")
-    if heartbeat_inmemory:
-        os.environ["IRIS_HEARTBEAT_INMEMORY"] = "1"
-        labels.append("heartbeat-inmemory")
-    if autoscaler_yield_batch:
-        os.environ["IRIS_AUTOSCALER_YIELD_BATCH"] = "1"
-        labels.append("autoscaler-yield-batch")
-    if scheduler_yield_batch:
-        os.environ["IRIS_SCHEDULER_YIELD_BATCH"] = "1"
-        labels.append("scheduler-yield-batch")
+    if controller_yield:
+        os.environ["IRIS_CONTROLLER_YIELD"] = "1"
+        labels.append("controller-yield")
     if job_status_cache:
-        os.environ["IRIS_JOB_STATUS_CACHE"] = "1"
         os.environ["IRIS_JOB_STATUS_CACHE_TTL_MS"] = str(cache_ttl_ms)
         labels.append(f"job-status-cache:{cache_ttl_ms}ms")
     return labels
@@ -128,11 +112,14 @@ def _common_options(func):
             multiple=True,
             help="Override scenario probe mix (repeatable). Format: name:hz (e.g. list_jobs:1)",
         ),
-        # Fix flags
+        # Toggle flags
         click.option("--sqlite-tuning/--no-sqlite-tuning", default=False),
-        click.option("--heartbeat-inmemory/--no-heartbeat-inmemory", default=False),
-        click.option("--autoscaler-yield-batch/--no-autoscaler-yield-batch", default=False),
-        click.option("--scheduler-yield-batch/--no-scheduler-yield-batch", default=False),
+        click.option(
+            "--controller-yield/--no-controller-yield",
+            "controller_yield",
+            default=False,
+            help="Set IRIS_CONTROLLER_YIELD=1 so scheduler + autoscaler loops sleep(0) between phases.",
+        ),
         click.option("--job-status-cache/--no-job-status-cache", default=False),
         click.option("--cache-ttl-ms", type=int, default=1000, show_default=True),
         click.option(
@@ -173,15 +160,15 @@ def probes_cmd() -> None:
 
 @main.command("list")
 def list_cmd() -> None:
-    """List scenarios and available fix flags."""
+    """List scenarios and available toggle flags."""
     click.echo("Scenarios:")
     click.echo("  burst         — burst only (baseline)")
     click.echo("  api-timeouts  — API timeouts only (tpu_create hangs)")
     click.echo("  incident      — combined: burst + bad API + periodic preemption (2026-04-18 repro)")
     click.echo("  fleet-wide    — prod-magnitude: all zones, all sizes, synthetic workers + probes")
-    click.echo("  prod-scale    — Stage-8 full-controller: 600 preload, real RPC dashboard, Stage-10c probe mix")
+    click.echo("  prod-scale    — full-controller: 600 preload, real RPC dashboard, dashboard probe mix")
     click.echo()
-    click.echo("Fix flags (cumulative; each toggles env-gated code paths):")
+    click.echo("Toggle flags (cumulative; each sets env vars the controller reads at import time):")
     for step, (name, env) in sorted(ABLATION_STEPS.items()):
         env_str = " ".join(f"{k}={v}" for k, v in env.items()) or "(baseline)"
         click.echo(f"  step {step}: --{name}")
@@ -209,20 +196,13 @@ def _run_scenario(
     from iris.loadtest.report import RunConfig, write_summary
     from iris.loadtest.scenarios import SCENARIO_RUNNERS
 
-    # All scenarios boot the full Controller so probes have a live Connect/RPC
-    # endpoint to hit. prod-scale additionally pre-loads synthetic workers.
-    needs_synthetic = scenario in ("fleet-wide", "prod-scale")
-
-    # Fast-test dwell keeps synthetic workers churning; prod-magnitude uses 5 s
-    # so task lifecycle is visible within the 5-minute default duration.
+    # Dwell = 5 s so task lifecycle is visible inside the default 5-minute duration.
     dwell_seconds = 5.0
 
     config = HarnessConfig(
-        enable_synthetic_workers=needs_synthetic,
         synthetic_worker_building_seconds=dwell_seconds,
         synthetic_worker_running_seconds=dwell_seconds,
-        controller_prober_interval_seconds=5.0,
-        enable_full_controller=True,
+        heartbeat_interval_seconds=5.0,
     )
 
     probe_specs = parse_probe_specs(list(probe_tokens)) if probe_tokens else None
@@ -292,9 +272,7 @@ def scenario_cmd(
     latency_seconds: float,
     probe_tokens: tuple[str, ...],
     sqlite_tuning: bool,
-    heartbeat_inmemory: bool,
-    autoscaler_yield_batch: bool,
-    scheduler_yield_batch: bool,
+    controller_yield: bool,
     job_status_cache: bool,
     cache_ttl_ms: int,
     log_level: str,
@@ -303,9 +281,7 @@ def scenario_cmd(
     _configure_logging(log_level)
     fix_labels = _apply_fix_env(
         sqlite_tuning=sqlite_tuning,
-        heartbeat_inmemory=heartbeat_inmemory,
-        autoscaler_yield_batch=autoscaler_yield_batch,
-        scheduler_yield_batch=scheduler_yield_batch,
+        controller_yield=controller_yield,
         job_status_cache=job_status_cache,
         cache_ttl_ms=cache_ttl_ms,
     )
@@ -355,18 +331,16 @@ def ablation_cmd(
     latency_seconds: float,
     probe_tokens: tuple[str, ...],
     sqlite_tuning: bool,  # ignored; ablation computes these from --steps
-    heartbeat_inmemory: bool,
-    autoscaler_yield_batch: bool,
-    scheduler_yield_batch: bool,
+    controller_yield: bool,
     job_status_cache: bool,
     cache_ttl_ms: int,
     log_level: str,
 ) -> None:
-    """Run the Stage-10c sequential ablation across --steps (default 0..5).
+    """Run the sequential ablation across --steps.
 
-    Each step applies its env-gated fix in addition to every prior step's
-    fixes, then launches the prod-scale scenario against a fresh DB copy and writes
-    ``step-<N>-<name>-{summary.md,metrics.json}`` under --output-dir.
+    Each step applies its env-gated toggle in addition to every prior step's
+    toggles, then launches the prod-scale scenario against a fresh DB copy
+    and writes ``step-<N>-<name>-{summary.md,metrics.json}`` under --output-dir.
     """
     _configure_logging(log_level)
 

@@ -295,9 +295,8 @@ def load_live_pending_running_job_ids(db, limit: int = 500) -> tuple[list[str], 
 # ---------------------------------------------------------------------------
 
 
-# Stage-10c mix with running-job polling added. Running jobs get polled more
-# often than pending ones — that's the per-user behavior (watching an in-flight
-# job's progress page).
+# Dashboard probe mix. Running jobs get polled more often than pending ones —
+# that's the per-user behavior (watching an in-flight job's progress page).
 INCIDENT_PROBES: list[ProbeSpec] = [
     ProbeSpec("list_jobs", hz=1.0),  # dashboard tab
     ProbeSpec("list_jobs", hz=5.0),  # job-page sidebar

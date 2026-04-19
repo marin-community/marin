@@ -11,12 +11,10 @@ the controller DB via `ControllerTransitions.register_worker` using its real
 `host:port`, so any controller code that holds a `WorkerServiceClientSync`
 against that address will hit the worker over a real socket.
 
-Why real sockets: Stage-3 showed the harness plateaus at ~24 concurrent
-scale-up threads while prod saw ~96. The suspected prod CPU channel is the
-controller→worker RPC path (connection pooling, retries, timeouts); an
-in-process shortcut leaves that channel uninstrumented. With a real server
-on a real port, the harness's prober thread (see `controller_prober` in
-`harness.py`) exercises that same channel — closing the gap.
+Why real sockets: the suspected prod CPU channel is the controller→worker RPC
+path (connection pooling, retries, timeouts); an in-process shortcut leaves
+that channel uninstrumented. With a real server on a real port, the
+Controller's own ping loop exercises that channel — closing the gap.
 
 Task lifecycle: the worker drives each assigned task through
 `ASSIGNED → BUILDING → RUNNING → COMPLETED` on a background timer. Per-
@@ -39,7 +37,6 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from collections.abc import Callable
 
 import uvicorn
 from connectrpc.request import RequestContext
@@ -557,44 +554,3 @@ class SyntheticWorkerPool:
         """Snapshot of (worker_id, address) pairs across every slice — used by the prober."""
         with self._lock:
             return [(w.worker_id, w.address) for ws in self._workers.values() for w in ws]
-
-
-def run_controller_prober(
-    get_addresses: Callable[[], list[tuple[WorkerId, str]]],
-    *,
-    stop: threading.Event,
-    interval_seconds: float = HEARTBEAT_INTERVAL_SECONDS,
-    timeout_ms: int = 2000,
-) -> None:
-    """Controller-side ping loop over real sockets.
-
-    The Stage-6 harness doesn't boot the full Controller (only Autoscaler +
-    DB). A real Controller would hit each registered worker's `Ping` RPC on
-    a heartbeat loop via `WorkerServiceClientSync`. To exercise the same
-    channel from the harness, this helper polls every known worker address
-    at `interval_seconds`. Workers whose sockets have been torn down
-    (preemption) raise ConnectError — which is exactly the failure we want
-    to observe.
-
-    Intentionally sequential per-tick: we're instrumenting the protocol, not
-    maximising throughput. A thread pool would hide connection-pooling
-    artefacts.
-    """
-    # Local import so the module is importable without connectrpc at tool time.
-    from iris.rpc.worker_connect import WorkerServiceClientSync
-
-    clients: dict[str, WorkerServiceClientSync] = {}
-    while not stop.is_set():
-        for worker_id, address in get_addresses():
-            client = clients.get(address)
-            if client is None:
-                client = WorkerServiceClientSync(address=f"http://{address}", timeout_ms=timeout_ms)
-                clients[address] = client
-            try:
-                client.ping(worker_pb2.Worker.PingRequest())
-            except Exception:
-                # Preempted workers are expected to fail here; log at DEBUG.
-                logger.debug("prober ping to %s (%s) failed", worker_id, address, exc_info=True)
-                clients.pop(address, None)
-        if stop.wait(interval_seconds):
-            return
