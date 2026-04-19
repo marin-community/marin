@@ -168,17 +168,20 @@ def _checkpoint_path_from_metadata_path(metadata_path: str) -> tuple[str, int] |
 def _is_committed_checkpoint_metadata(fs: AbstractFileSystem, metadata_path: str) -> bool:
     with fs.open(metadata_path, "rb") as metadata_file:
         metadata = json.load(metadata_file)
-    if metadata.get("is_temporary", False):
-        return False
+    checkpoint_dir = metadata_path.removesuffix("/metadata.json")
     # Verify actual tensor data exists, not just metadata.
     # Incomplete cross-region replication can leave metadata.json without the
     # OCDBT manifest or data shards, causing silent fallback to old checkpoints.
-    checkpoint_dir = metadata_path.removesuffix("/metadata.json")
     has_manifest = fs.exists(f"{checkpoint_dir}/manifest.ocdbt")
     has_data_dir = fs.exists(f"{checkpoint_dir}/d")
     if not has_manifest and not has_data_dir:
         logger.warning("Checkpoint %s has metadata but no tensor data — skipping.", checkpoint_dir)
         return False
+    # Accept temporary checkpoints that have valid tensor data for resume.
+    # These are checkpoints where training was interrupted before the metadata
+    # commit flag could be finalized, but the data is complete.
+    if metadata.get("is_temporary", False):
+        logger.info("Checkpoint %s is temporary but has tensor data — accepting for resume.", checkpoint_dir)
     return True
 
 
