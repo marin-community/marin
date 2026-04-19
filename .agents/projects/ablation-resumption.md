@@ -28,17 +28,18 @@ toggles without touching the CLI.
 
 ## Toggles under test
 
-Applied cumulatively, each on top of the previous step's set:
+Applied cumulatively. Steps 0-3 run against the legacy heartbeat path so
+each tuning toggle's effect is visible on the path that's currently in
+production; step 4 is the split-heartbeat flip; step 5 layers RAM HBM on
+top (RAM HBM requires split-heartbeat — it's only read in the ping loop
+and `_reap_stale_workers`, so reversing the order silently no-ops it).
 
-1. `--sqlite-tuning` → `IRIS_DB_MMAP_BYTES=268435456 IRIS_DB_CACHE_KB=1048576`
-2. `--controller-yield` → `IRIS_CONTROLLER_YIELD=1` (scheduler + autoscaler loops `sleep(0)` between phases)
-3. `--job-status-cache` → `IRIS_JOB_STATUS_CACHE_TTL_MS=1000` (decorator cache on `_get_job_status_impl`, `_list_jobs_impl`)
-4. `--heartbeat-inmemory` → `IRIS_HEARTBEAT_INMEMORY=1` (RAM liveness map, no DB writes on successful ping; only active under split-heartbeat)
-
-`--use-split-heartbeat` is on for every step. `HeartbeatManager` is only
-consulted in the split-heartbeat ping loop (`_run_ping_loop`) and
-`_reap_stale_workers`; leaving split-HB off would silently no-op the RAM
-HBM toggle.
+0. baseline — legacy heartbeat, no tuning toggles
+1. +`--sqlite-tuning` → `IRIS_DB_MMAP_BYTES=268435456 IRIS_DB_CACHE_KB=1048576`
+2. +`--controller-yield` → `IRIS_CONTROLLER_YIELD=1`
+3. +`--job-status-cache` → `IRIS_JOB_STATUS_CACHE_TTL_MS=1000`
+4. flip to `--use-split-heartbeat` (same tuning toggles stay on)
+5. +`--heartbeat-inmemory` → `IRIS_HEARTBEAT_INMEMORY=1`
 
 ## Metrics captured
 

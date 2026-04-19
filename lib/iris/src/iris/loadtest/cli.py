@@ -352,13 +352,6 @@ def scenario_cmd(
     help="Controller sqlite snapshot (passed to each scenario subprocess).",
 )
 @click.option(
-    "--use-split-heartbeat/--no-use-split-heartbeat",
-    "use_split_heartbeat",
-    default=True,
-    show_default=True,
-    help="Hold on throughout so RAM-HBM is an isolable toggle.",
-)
-@click.option(
     "--log-level",
     type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False),
     default="INFO",
@@ -373,7 +366,6 @@ def ablation_cmd(
     step_timeout_seconds: int,
     output_dir: Path | None,
     snapshot: Path | None,
-    use_split_heartbeat: bool,
     log_level: str,
 ) -> None:
     """Run the serial toggle ablation against prod-scale.
@@ -389,7 +381,7 @@ def ablation_cmd(
     from iris.loadtest.ablation import DEFAULT_STEPS, run_series, write_report
 
     out = (output_dir or _default_output_dir()).resolve()
-    common = ["--use-split-heartbeat"] if use_split_heartbeat else ["--no-use-split-heartbeat"]
+    common: list[str] = []
     if snapshot is not None:
         common += ["--snapshot", str(snapshot)]
 
@@ -407,8 +399,7 @@ def ablation_cmd(
     )
     header = (
         f"Serial ablation — {preload_workers} preload workers, {duration}s duration, "
-        f"{burst_jobs} burst jobs, {cpu_jobs}x{cpu_tasks_per_job} CPU tasks, "
-        f"split-heartbeat={'on' if use_split_heartbeat else 'off'}"
+        f"{burst_jobs} burst jobs, {cpu_jobs}x{cpu_tasks_per_job} CPU tasks"
     )
     report_path = write_report(out, results, header)
     click.echo(f"\nCombined report: {report_path}")
