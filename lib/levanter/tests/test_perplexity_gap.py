@@ -15,6 +15,7 @@ import haliax
 from levanter.analysis.perplexity_gap import (
     GapReportBuilder,
     RawTextDocument,
+    TokenizedDocument,
     _truncate_text_to_byte_limit,
     tokenize_text_with_byte_spans,
 )
@@ -74,6 +75,45 @@ def test_gap_report_builder_tracks_whitespace_bucket():
 
     assert "whitespace/multi_space" in bucket_names
     assert "paloma" in group_names
+
+
+def test_gap_report_builder_records_per_model_literal_boundaries():
+    report = GapReportBuilder(model_a_name="a", model_b_name="b", output_path="/tmp/report")
+    document = RawTextDocument(
+        dataset_name="paloma/example",
+        tags=("paloma/example",),
+        shard_name="docs",
+        row_index=0,
+        text="abc",
+    )
+    tokenized_a = TokenizedDocument(
+        token_ids=np.asarray([1], dtype=np.int32),
+        byte_starts=np.asarray([0], dtype=np.int32),
+        byte_ends=np.asarray([3], dtype=np.int32),
+        num_bytes=3,
+    )
+    tokenized_b = TokenizedDocument(
+        token_ids=np.asarray([1, 2], dtype=np.int32),
+        byte_starts=np.asarray([0, 1], dtype=np.int32),
+        byte_ends=np.asarray([1, 3], dtype=np.int32),
+        num_bytes=3,
+    )
+
+    report.add_document(
+        document=document,
+        per_byte_loss_a=np.asarray([0.1, 0.1, 0.1], dtype=np.float64),
+        per_byte_loss_b=np.asarray([0.0, 0.0, 0.0], dtype=np.float64),
+        tokenized_a=tokenized_a,
+        tokenized_b=tokenized_b,
+    )
+
+    summary = report.build_summary()
+    literal_row = summary["top_literals"]["model_a_worse"][0]
+
+    assert literal_row["name"] == "abc"
+    assert literal_row["model_a_token_boundaries"] == "|abc|"
+    assert literal_row["model_b_token_boundaries"] == "|a|bc|"
+    assert literal_row["example_dataset"] == "paloma/example"
 
 
 def test_truncate_text_to_byte_limit_respects_utf8_boundaries():

@@ -22,6 +22,7 @@ from levanter.analysis.perplexity_gap import (
     GapReportBuilder,
     RawTextDocument,
     TokenizedChunk,
+    TokenizedDocument,
     batch_chunks,
     iter_raw_text_documents,
     tokenize_text_with_byte_spans,
@@ -73,7 +74,7 @@ class _ModelRunner:
     eval_length: int
     compute_losses: Any
 
-    def score_texts(self, texts: list[str]) -> list[np.ndarray]:
+    def score_texts(self, texts: list[str]) -> tuple[list[TokenizedDocument], list[np.ndarray]]:
         tokenized = [tokenize_text_with_byte_spans(self.tokenizer, self.hf_tokenizer, text) for text in texts]
         per_byte_losses = [np.zeros(doc.num_bytes, dtype=np.float64) for doc in tokenized]
 
@@ -104,7 +105,7 @@ class _ModelRunner:
                 out = per_byte_losses[chunk.doc_index]
                 _accumulate_token_losses(out, starts, ends, losses)
 
-        return per_byte_losses
+        return tokenized, per_byte_losses
 
     def _score_chunk_batch(self, chunk_batch: list[TokenizedChunk]) -> np.ndarray:
         tokens = np.zeros((self.eval_batch_size, self.eval_length), dtype=np.int32)
@@ -173,13 +174,22 @@ def main(config: GapFinderConfig) -> None:
                 current_dataset = batch_dataset
                 logger.info("Starting dataset %s", current_dataset)
             texts = [doc.text for doc in docs]
-            per_byte_a = runner_a.score_texts(texts)
-            per_byte_b = runner_b.score_texts(texts)
-            for doc, losses_a, losses_b in zip(docs, per_byte_a, per_byte_b, strict=True):
+            tokenized_a, per_byte_a = runner_a.score_texts(texts)
+            tokenized_b, per_byte_b = runner_b.score_texts(texts)
+            for doc, doc_a, losses_a, doc_b, losses_b in zip(
+                docs,
+                tokenized_a,
+                per_byte_a,
+                tokenized_b,
+                per_byte_b,
+                strict=True,
+            ):
                 report.add_document(
                     document=doc,
                     per_byte_loss_a=losses_a,
                     per_byte_loss_b=losses_b,
+                    tokenized_a=doc_a,
+                    tokenized_b=doc_b,
                 )
             docs_processed += len(docs)
             if docs_processed % 32 == 0:

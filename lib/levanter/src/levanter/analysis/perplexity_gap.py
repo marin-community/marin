@@ -64,6 +64,15 @@ class TokenizedChunk:
     byte_ends: np.ndarray
 
 
+@dataclass(frozen=True)
+class LiteralExample:
+    abs_delta_bits: float
+    dataset_name: str
+    doc_preview: str
+    model_a_token_boundaries: str
+    model_b_token_boundaries: str
+
+
 @dataclass
 class GapAggregate:
     total_loss_a: float = 0.0
@@ -109,6 +118,7 @@ class GapReportBuilder:
     dataset_stats: dict[str, GapAggregate] = field(default_factory=lambda: defaultdict(GapAggregate))
     bucket_stats: dict[str, GapAggregate] = field(default_factory=lambda: defaultdict(GapAggregate))
     literal_stats: dict[tuple[str, str], GapAggregate] = field(default_factory=lambda: defaultdict(GapAggregate))
+    literal_examples: dict[tuple[str, str], LiteralExample] = field(default_factory=dict)
     group_to_leaves: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
     _top_docs_positive: list[tuple[float, int, dict[str, Any]]] = field(default_factory=list)
     _top_docs_negative: list[tuple[float, int, dict[str, Any]]] = field(default_factory=list)
@@ -129,6 +139,8 @@ class GapReportBuilder:
         document: RawTextDocument,
         per_byte_loss_a: np.ndarray,
         per_byte_loss_b: np.ndarray,
+        tokenized_a: TokenizedDocument | None = None,
+        tokenized_b: TokenizedDocument | None = None,
     ) -> None:
         self.register_dataset(document.dataset_name, document.tags)
 
@@ -171,18 +183,30 @@ class GapReportBuilder:
             segment_loss_a = float(prefix_a[byte_end] - prefix_a[byte_start])
             segment_loss_b = float(prefix_b[byte_end] - prefix_b[byte_start])
             segment_bytes = int(byte_end - byte_start)
+            segment_delta_bits = (segment_loss_a - segment_loss_b) * LOG2E
             bucket = bucket_for_segment(segment)
             visible = render_visible(segment)
 
             self.bucket_stats[bucket].add(loss_a=segment_loss_a, loss_b=segment_loss_b, num_bytes=segment_bytes)
             if segment_bytes <= 32:
-                self.literal_stats[(bucket, visible)].add(
+                literal_key = (bucket, visible)
+                self.literal_stats[literal_key].add(
                     loss_a=segment_loss_a,
                     loss_b=segment_loss_b,
                     num_bytes=segment_bytes,
                 )
+                if tokenized_a is not None and tokenized_b is not None:
+                    self._maybe_record_literal_example(
+                        literal_key=literal_key,
+                        document=document,
+                        segment_text=segment,
+                        segment_byte_start=byte_start,
+                        segment_byte_end=byte_end,
+                        segment_delta_bits=segment_delta_bits,
+                        tokenized_a=tokenized_a,
+                        tokenized_b=tokenized_b,
+                    )
 
-            segment_delta_bits = (segment_loss_a - segment_loss_b) * LOG2E
             if segment_delta_bits == 0.0:
                 continue
 
@@ -233,8 +257,18 @@ class GapReportBuilder:
 
         bucket_rows = [stats.as_dict(bucket) for bucket, stats in sorted(self.bucket_stats.items())]
 
-        positive_literals = _top_literal_rows(self.literal_stats, direction="positive", limit=self.top_k_literals)
-        negative_literals = _top_literal_rows(self.literal_stats, direction="negative", limit=self.top_k_literals)
+        positive_literals = _top_literal_rows(
+            self.literal_stats,
+            literal_examples=self.literal_examples,
+            direction="positive",
+            limit=self.top_k_literals,
+        )
+        negative_literals = _top_literal_rows(
+            self.literal_stats,
+            literal_examples=self.literal_examples,
+            direction="negative",
+            limit=self.top_k_literals,
+        )
 
         summary = {
             "model_a": self.model_a_name,
@@ -276,6 +310,39 @@ class GapReportBuilder:
         parts = tag.split("/")
         for i in range(1, len(parts)):
             self.group_to_leaves["/".join(parts[:i])].add(dataset_name)
+
+    def _maybe_record_literal_example(
+        self,
+        *,
+        literal_key: tuple[str, str],
+        document: RawTextDocument,
+        segment_text: str,
+        segment_byte_start: int,
+        segment_byte_end: int,
+        segment_delta_bits: float,
+        tokenized_a: TokenizedDocument,
+        tokenized_b: TokenizedDocument,
+    ) -> None:
+        candidate = LiteralExample(
+            abs_delta_bits=abs(segment_delta_bits),
+            dataset_name=document.dataset_name,
+            doc_preview=preview_text(document.text),
+            model_a_token_boundaries=render_token_boundaries(
+                segment_text=segment_text,
+                segment_byte_start=segment_byte_start,
+                segment_byte_end=segment_byte_end,
+                tokenized=tokenized_a,
+            ),
+            model_b_token_boundaries=render_token_boundaries(
+                segment_text=segment_text,
+                segment_byte_start=segment_byte_start,
+                segment_byte_end=segment_byte_end,
+                tokenized=tokenized_b,
+            ),
+        )
+        current = self.literal_examples.get(literal_key)
+        if current is None or candidate.abs_delta_bits > current.abs_delta_bits:
+            self.literal_examples[literal_key] = candidate
 
 
 def iter_raw_text_documents(
@@ -460,17 +527,55 @@ def batch_chunks(
 
 
 def render_visible(text: str, limit: int = 32) -> str:
-    visible = text.translate(VISIBLE_WHITESPACE)
+    visible = visible_text(text)
     if len(visible) > limit:
         return visible[: limit - 1] + "\u2026"
     return visible
 
 
 def preview_text(text: str, limit: int = 120) -> str:
-    preview = text.translate(VISIBLE_WHITESPACE)
+    preview = visible_text(text)
     if len(preview) > limit:
         preview = preview[: limit - 1] + "\u2026"
     return preview
+
+
+def visible_text(text: str) -> str:
+    return text.translate(VISIBLE_WHITESPACE)
+
+
+def render_token_boundaries(
+    *,
+    segment_text: str,
+    segment_byte_start: int,
+    segment_byte_end: int,
+    tokenized: TokenizedDocument,
+) -> str:
+    segment_bytes = segment_text.encode("utf-8")
+    pieces: list[str] = []
+
+    for token_start, token_end in zip(tokenized.byte_starts, tokenized.byte_ends, strict=True):
+        if token_start < 0 or token_end <= token_start:
+            continue
+        if token_end <= segment_byte_start or token_start >= segment_byte_end:
+            continue
+
+        overlap_start = max(token_start, segment_byte_start) - segment_byte_start
+        overlap_end = min(token_end, segment_byte_end) - segment_byte_start
+        if overlap_end <= overlap_start:
+            continue
+
+        piece = visible_text(segment_bytes[overlap_start:overlap_end].decode("utf-8"))
+        if token_start < segment_byte_start:
+            piece = "\u2026" + piece
+        if token_end > segment_byte_end:
+            piece = piece + "\u2026"
+        pieces.append(piece)
+
+    if not pieces:
+        return "(no aligned tokens)"
+
+    return "|" + "|".join(pieces) + "|"
 
 
 def bucket_for_segment(segment: str) -> str:
@@ -495,7 +600,7 @@ def bucket_for_segment(segment: str) -> str:
 
 
 def render_report_html(summary: dict[str, Any]) -> str:
-    def section(title: str, rows: Sequence[dict[str, Any]]) -> str:
+    def section(title: str, rows: Sequence[dict[str, Any]], note: str | None = None) -> str:
         if not rows:
             return f"<h2>{html.escape(title)}</h2><p>No rows.</p>"
 
@@ -504,8 +609,13 @@ def render_report_html(summary: dict[str, Any]) -> str:
         for row in rows:
             table += "<tr>" + "".join(f"<td>{html.escape(_format_cell(row[h]))}</td>" for h in headers) + "</tr>"
         table += "</tbody></table>"
-        return f"<h2>{html.escape(title)}</h2>{table}"
+        note_html = f"<p>{html.escape(note)}</p>" if note is not None else ""
+        return f"<h2>{html.escape(title)}</h2>{note_html}{table}"
 
+    literal_note = (
+        "Representative token boundaries come from the highest-gap occurrence for each literal. "
+        "An ellipsis means the token continues outside the literal boundary in that example."
+    )
     parts = [
         "<html><head><meta charset='utf-8'><style>"
         "body{font-family:sans-serif;max-width:1200px;margin:24px auto;padding:0 16px;}"
@@ -523,14 +633,16 @@ def render_report_html(summary: dict[str, Any]) -> str:
         section("Top Documents: Model B Worse", summary["top_documents"]["model_b_worse"]),
         section("Top Segments: Model A Worse", summary["top_segments"]["model_a_worse"]),
         section("Top Segments: Model B Worse", summary["top_segments"]["model_b_worse"]),
-        section("Top Literals: Model A Worse", summary["top_literals"]["model_a_worse"]),
-        section("Top Literals: Model B Worse", summary["top_literals"]["model_b_worse"]),
+        section("Top Literals: Model A Worse", summary["top_literals"]["model_a_worse"], note=literal_note),
+        section("Top Literals: Model B Worse", summary["top_literals"]["model_b_worse"], note=literal_note),
         "</body></html>",
     ]
     return "".join(parts)
 
 
 def _format_cell(value: Any) -> str:
+    if value is None:
+        return ""
     if isinstance(value, float):
         return f"{value:.6f}"
     return str(value)
@@ -575,13 +687,28 @@ def _sorted_records(heap: Sequence[tuple[float, int, dict[str, Any]]]) -> list[d
 def _top_literal_rows(
     literal_stats: dict[tuple[str, str], GapAggregate],
     *,
+    literal_examples: dict[tuple[str, str], LiteralExample],
     direction: str,
     limit: int,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for (bucket, literal), stats in literal_stats.items():
-        row = stats.as_dict(literal)
-        row["bucket"] = bucket
+        example = literal_examples.get((bucket, literal))
+        stats_row = stats.as_dict(literal)
+        row = {
+            "name": stats_row["name"],
+            "bucket": bucket,
+            "example_dataset": example.dataset_name if example is not None else None,
+            "example_doc_preview": example.doc_preview if example is not None else None,
+            "model_a_token_boundaries": example.model_a_token_boundaries if example is not None else None,
+            "model_b_token_boundaries": example.model_b_token_boundaries if example is not None else None,
+            "documents": stats_row["documents"],
+            "bytes": stats_row["bytes"],
+            "model_a_bpb": stats_row["model_a_bpb"],
+            "model_b_bpb": stats_row["model_b_bpb"],
+            "gap_bpb": stats_row["gap_bpb"],
+            "delta_bits": stats_row["delta_bits"],
+        }
         rows.append(row)
 
     if direction == "positive":
