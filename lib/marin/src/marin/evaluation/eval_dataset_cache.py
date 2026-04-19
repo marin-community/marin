@@ -52,7 +52,7 @@ import fsspec
 import rigging.filesystem  # noqa: F401
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorStep
+from marin.execution.executor import ExecutorStep, versioned
 from marin.utils import call_with_hf_backoff, fsspec_exists
 
 logger = logging.getLogger(__name__)
@@ -452,6 +452,7 @@ class CacheEvalDatasetsConfig:
 
     eval_tasks: tuple[EvalTaskConfig, ...]
     gcs_path: str
+    cache_layout_version: int = HF_CACHE_LAYOUT_VERSION
 
 
 def _cache_eval_datasets(config: CacheEvalDatasetsConfig) -> str:
@@ -504,5 +505,6 @@ def create_cache_eval_datasets_step(
         config=CacheEvalDatasetsConfig(
             eval_tasks=tuple(eval_tasks),
             gcs_path=gcs_path,
+            cache_layout_version=versioned(HF_CACHE_LAYOUT_VERSION),
         ),
     )
