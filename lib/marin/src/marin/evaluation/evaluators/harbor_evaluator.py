@@ -61,6 +61,8 @@ HARBOR_EVAL_ENV_KEYS = (
     "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
     "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
     "VLLM_TPU_SKIP_PRECOMPILE",
+    "VLLM_TOKENIZER",
+    "VLLM_CHAT_TEMPLATE",
 )
 
 
@@ -300,6 +302,8 @@ class HarborEvaluator(Evaluator):
         extra_vllm_args = ["--served-model-name", canonical_name]
         if chat_template := os.environ.get("VLLM_CHAT_TEMPLATE"):
             extra_vllm_args.extend(["--chat-template", chat_template])
+        if vllm_tokenizer := os.environ.get("VLLM_TOKENIZER"):
+            extra_vllm_args.extend(["--tokenizer", vllm_tokenizer])
         with VllmEnvironment(
             model,
             extra_args=extra_vllm_args,

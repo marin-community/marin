@@ -168,12 +168,10 @@ VLLM_ENGINE_KWARGS = {
     "tensor_parallel_size": 4,
 }
 
-# Use the same MARIN_CHAT_TEMPLATE that SFT training uses.
-# This ensures the vLLM server formats messages identically to training.
-_chat_template_file = tempfile.NamedTemporaryFile(mode="w", suffix=".jinja2", delete=False)
-_chat_template_file.write(MARIN_CHAT_TEMPLATE)
-_chat_template_file.close()
-os.environ.setdefault("VLLM_CHAT_TEMPLATE", _chat_template_file.name)
+# Use the marin-tokenizer which has MARIN_CHAT_TEMPLATE baked in.
+# This ensures vLLM formats messages identically to SFT training.
+# The env var is forwarded to the child Iris job via harbor_evaluator.
+os.environ.setdefault("VLLM_TOKENIZER", "marin-community/marin-tokenizer")
 
 os.environ.setdefault("MSWEA_API_KEY", "EMPTY")  # vLLM doesn't need auth
 os.environ.setdefault("OPENAI_API_KEY", "EMPTY")  # Fallback for hosted_vllm provider
