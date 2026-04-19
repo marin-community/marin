@@ -363,6 +363,9 @@ class MiniSweAgent(BaseInstalledAgent):
 
         if "MSWEA_API_KEY" in os.environ:
             env["MSWEA_API_KEY"] = os.environ["MSWEA_API_KEY"]
+        elif self.model_name.startswith("hosted_vllm/"):
+            # hosted_vllm models use a local vLLM server — no API key needed
+            env["MSWEA_API_KEY"] = "EMPTY"
         else:
             try:
                 api_key_vars = get_api_key_var_names_from_model_name(self.model_name)
