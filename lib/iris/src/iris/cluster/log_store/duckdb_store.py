@@ -314,13 +314,19 @@ def _next_cursor_id() -> int:
 
 
 class _ConnectionPool:
-    """Single DuckDB database with cursor-based concurrency.
+    """Two DuckDB databases: one for reads, one for compaction.
 
-    One ``duckdb.connect()`` call creates the shared buffer pool and the
-    parquet object cache (``enable_object_cache=true``), which caches parquet
-    footers and row-group stats across queries. Callers get cursors via
-    ``conn.cursor()`` which share that pool, keeping total memory bounded by a
-    single ``memory_limit``.
+    Reads share a single ``duckdb.connect()`` with ``enable_object_cache``
+    so parquet footer / row-group stats are cached across queries. Callers
+    get cursors via ``conn.cursor()`` which share that connection's thread
+    pool and buffer pool.
+
+    Compaction runs on a second, isolated connection. Sharing one connection
+    across reads and compaction starves the compaction COPY's sort phase:
+    DuckDB schedules concurrent cursors cooperatively over a fixed worker
+    pool, so ~16 in-flight fetch_logs cursors stretch a 2s compaction past
+    10s and reads on top of it time out. The dedicated connection has its
+    own thread pool so compaction's sort cost is independent of reader load.
 
     RAM tables are registered with unique names (incorporating a monotonic
     counter) so concurrent cursors don't collide on table names.
@@ -332,6 +338,9 @@ class _ConnectionPool:
         # reads over the same segment set don't re-parse metadata. This is the
         # single most impactful setting for read latency on the log store.
         self._conn.execute("SET enable_object_cache=true")
+        # Compaction writes a fresh file each run, so no object cache benefit.
+        # Bounded memory so it can't starve the read path under pressure.
+        self._compaction_conn = duckdb.connect(config={"memory_limit": memory_limit, "threads": "4"})
 
     @contextmanager
     def checkout(self, buffer_tables: list[pa.Table]) -> Iterator[tuple[duckdb.DuckDBPyConnection, list[str]]]:
@@ -354,8 +363,20 @@ class _ConnectionPool:
                 cursor.unregister(name)
             cursor.close()
 
+    @contextmanager
+    def compaction_checkout(self) -> Iterator[duckdb.DuckDBPyConnection]:
+        """Cursor on the dedicated compaction connection. No RAM tables needed —
+        compaction only reads already-flushed tmp_*.parquet files.
+        """
+        cursor = self._compaction_conn.cursor()
+        try:
+            yield cursor
+        finally:
+            cursor.close()
+
     def close(self) -> None:
         self._conn.close()
+        self._compaction_conn.close()
 
 
 class DuckDBLogStore:
@@ -731,10 +752,10 @@ class DuckDBLogStore:
         sql = (
             f"COPY (SELECT * FROM read_parquet([{paths_sql}]) ORDER BY key, seq) "
             f"TO '{staging_path}' "
-            f"(FORMAT 'parquet', ROW_GROUP_SIZE {_ROW_GROUP_SIZE}, COMPRESSION 'zstd')"
+            f"(FORMAT 'parquet', ROW_GROUP_SIZE {_ROW_GROUP_SIZE}, COMPRESSION 'zstd', COMPRESSION_LEVEL 1)"
         )
         try:
-            with self._pool.checkout([]) as (conn, _):
+            with self._pool.compaction_checkout() as conn:
                 conn.execute(sql)
         except Exception:
             logger.warning("Compaction failed, leaving tmp segments in place", exc_info=True)
