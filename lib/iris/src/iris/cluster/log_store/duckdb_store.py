@@ -13,9 +13,8 @@ Lifecycle of a log entry:
 
     1. Appended to ``_pending`` (plain Python list) under ``_memory_lock``.
     2. A single background thread wakes periodically and:
-       a. Every ``compact_interval_sec`` (default 1s): if ``_pending`` has at
-          least ``_CHUNK_THRESHOLD`` rows, convert it to an Arrow ``Table`` and
-          append to ``_chunks`` (power-of-2 merged).
+       a. Every ``compact_interval_sec`` (default 1s): convert ``_pending``
+          to an Arrow ``Table`` and append to ``_chunks`` (power-of-2 merged).
        b. Every ``flush_interval_sec`` (default 60s), or under backpressure:
           seal RAM data into ``_flushing`` and write a standalone
           ``tmp_*.parquet`` segment to local disk. Existing segments are
@@ -34,7 +33,7 @@ Lifecycle of a log entry:
 
 Read path: DuckDB ``read_parquet()`` over local segments (tmp + log), UNION
 ALL pyarrow tables for in-RAM data (``_chunks``, ``_flushing.table`` if
-present, and ``_pending``). Relies entirely on DuckDB's per-row-group parquet
+present). Relies entirely on DuckDB's per-row-group parquet
 stats for pruning — files are sorted by ``(key, seq)`` so row-group ``key``
 bounds are tight enough that file-level Python filtering would add nothing.
 The per-read working set is capped by ``_MAX_PARQUET_BYTES_PER_READ``, which
@@ -210,11 +209,6 @@ def _build_buffer_table(buffer: list[tuple]) -> pa.Table:
 # ---------------------------------------------------------------------------
 # Internal data structures
 # ---------------------------------------------------------------------------
-
-
-# Rows in _pending below this count aren't worth converting to Arrow yet —
-# the per-chunk overhead (array construction, metadata) dominates.
-_CHUNK_THRESHOLD = 1024
 
 
 def _merge_chunks(chunks: list[pa.Table]) -> list[pa.Table]:
@@ -416,12 +410,11 @@ class DuckDBLogStore:
 
         # ---- shared mutable state (all guarded by _memory_lock) ----
         self._memory_lock = Lock()
+        # Serializes _flush_step so test _force_flush + bg thread can't both
+        # be mid-write against the same tmp filename simultaneously.
+        self._flush_lock = Lock()
         self._next_seq = _recover_max_seq(self._log_dir)
         self._pending: list[tuple] = []  # hot write list, converted by bg thread
-        # Arrow snapshot of _pending published by the bg thread every ~1s.
-        # Readers use this directly and accept up to compact_interval_sec of
-        # staleness; rebuilding per-read was 67% of log_server CPU in prod.
-        self._pending_table: pa.Table | None = None
         self._chunks: list[pa.Table] = []  # power-of-2 merged arrow tables
         self._flushing: _SealedBuffer | None = None  # pre-flush snapshot being written
         self._local_segments: deque[_LocalSegment] = deque()
@@ -631,80 +624,69 @@ class DuckDBLogStore:
             self._wake.clear()
 
     def _compact_step(self) -> None:
-        """Move ``_pending`` into a new Arrow chunk (if big enough), and
-        refresh the reader-visible pending snapshot either way.
+        """Graduate ``_pending`` row tuples into an Arrow chunk.
 
-        Readers consult ``self._pending_table`` directly instead of rebuilding
-        an Arrow table per request, so the bg thread has to keep it current.
+        Always drains: readers see ``_chunks`` directly, so leaving rows in
+        ``_pending`` would hide them until the next flush. ``_merge_chunks``
+        keeps the chunk list logarithmic even under low-rate writes.
         """
         with self._memory_lock:
-            drain = len(self._pending) >= _CHUNK_THRESHOLD
-            rows = self._pending if drain else list(self._pending)
-            if drain:
-                self._pending = []
-                self._pending_table = None
-        if not rows:
-            if not drain:
-                with self._memory_lock:
-                    if not self._pending:
-                        self._pending_table = None
-            return
+            rows = self._pending
+            if not rows:
+                return
+            self._pending = []
         table = _build_buffer_table(rows)
-        if drain:
-            with self._memory_lock:
-                self._chunks.append(table)
-                self._chunks = _merge_chunks(self._chunks)
-        else:
-            with self._memory_lock:
-                # Only publish if _pending still contains at least the rows we
-                # snapshotted; if it rotated (drain by _flush_step) the next
-                # tick will rebuild.
-                if len(self._pending) >= len(rows):
-                    self._pending_table = table
+        with self._memory_lock:
+            self._chunks.append(table)
+            self._chunks = _merge_chunks(self._chunks)
 
     def _flush_step(self) -> None:
-        """Seal any RAM data into a Parquet segment on disk."""
-        with self._memory_lock:
-            if not self._chunks and not self._pending:
-                return
-            tables = list(self._chunks)
-            if self._pending:
-                tables.append(_build_buffer_table(self._pending))
-                self._pending = []
-                self._pending_table = None
+        """Seal any RAM data into a Parquet segment on disk.
 
-        # Concat + sort outside the lock — hundreds of ms on large flushes.
-        # Safe because _chunks has a single writer (_compact_step), which
-        # runs serially with _flush_step in the bg thread.
-        # Sort by (key, seq) so Parquet row-group stats on `key` are tight,
-        # letting DuckDB skip row groups that don't contain the target key.
-        new_table = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
-        new_table = new_table.sort_by([("key", "ascending"), ("seq", "ascending")])
-        seq_col = new_table.column("seq")
-        sealed = _SealedBuffer(
-            table=new_table,
-            min_seq=pc.min(seq_col).as_py(),
-            max_seq=pc.max(seq_col).as_py(),
-        )
-
-        with self._memory_lock:
-            self._chunks = []
-            self._flushing = sealed
-
-        try:
-            self._write_new_segment(sealed)
-        except Exception:
-            logger.warning("Flush failed, restoring data to chunks", exc_info=True)
+        The flush lock serializes with any concurrent caller (test
+        ``_force_flush`` vs bg thread) so two writers can't race on the same
+        tmp filename.
+        """
+        with self._flush_lock:
             with self._memory_lock:
-                self._chunks.insert(0, sealed.table)
-                self._flushing = None
-            return
+                if not self._chunks and not self._pending:
+                    return
+                tables = list(self._chunks)
+                if self._pending:
+                    tables.append(_build_buffer_table(self._pending))
+                    self._pending = []
 
-        with self._flush_generation_cond:
-            self._flush_generation += 1
-            self._flush_generation_cond.notify_all()
+            # Concat + sort outside the memory lock — hundreds of ms on large
+            # flushes. Sort by (key, seq) so Parquet row-group stats on `key`
+            # are tight, letting DuckDB skip row groups that don't contain
+            # the target key.
+            new_table = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
+            new_table = new_table.sort_by([("key", "ascending"), ("seq", "ascending")])
+            seq_col = new_table.column("seq")
+            sealed = _SealedBuffer(
+                table=new_table,
+                min_seq=pc.min(seq_col).as_py(),
+                max_seq=pc.max(seq_col).as_py(),
+            )
 
-        self._gc_local_segments()
+            with self._memory_lock:
+                self._chunks = []
+                self._flushing = sealed
+
+            try:
+                self._write_new_segment(sealed)
+            except Exception:
+                logger.warning("Flush failed, restoring data to chunks", exc_info=True)
+                with self._memory_lock:
+                    self._chunks.insert(0, sealed.table)
+                    self._flushing = None
+                return
+
+            with self._flush_generation_cond:
+                self._flush_generation += 1
+                self._flush_generation_cond.notify_all()
+
+            self._gc_local_segments()
 
     def _write_new_segment(self, sealed: _SealedBuffer) -> None:
         """Write a sealed buffer as a new tmp_ Parquet file.
@@ -1014,12 +996,6 @@ class DuckDBLogStore:
             ram_tables: list[pa.Table] = list(self._chunks)
             if self._flushing is not None:
                 ram_tables.append(self._flushing.table)
-            # _pending_table is maintained by the bg _compact_step thread as
-            # an Arrow snapshot of _pending; readers use it directly and
-            # never rebuild. Writes arriving since the last refresh are
-            # acceptable staleness (<= compact_interval_sec).
-            if self._pending_table is not None:
-                ram_tables.append(self._pending_table)
 
         segments = _cap_segments(segments)
         parquet_files = [s.path for s in segments]
