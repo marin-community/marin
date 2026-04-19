@@ -1,1139 +1,720 @@
-ChatGPT: 
+# GPT-5 Paper Plan
 
-I’ll treat MARIN’s existing spec→synthetic-preference→DPO flow as the baseline `align(spec)` primitive, then sketch the paper around conflict diagnostics, targeted data generation, behavioral audits, and minimal code extensions.
+## TL;DR
 
-The distinctive result should be fewer regressions with failures traceable to specific clauses or conflict edges, not just higher adherence. I’d keep the formal object lightweight: a typed conflict graph, with true unsatisfiability as only one edge type.
+The paper should be about **stress-test-guided alignment from a natural-language spec**.
 
-Thought for 5m 9s
+The key claim is not "we found conflicts in the spec." The key claim is:
 
-Yes. I’d set this up as a paper about **behavior-aware constitutional compilation**, with MARIN’s existing `align()` pipeline as the baseline engine. The key move is: don’t replace `marin.alignment`; make it the primitive that you call repeatedly with better specs, better prompt sets, richer metadata, and post-training audits.
+> Vanilla spec-to-DPO can look good on per-clause adherence while still failing the trade-offs that matter. Stress-tested trade-off scenarios expose those failures. Training on those scenarios improves trade-off handling, and a post-training repair loop improves it further.
 
-The current MARIN proposal already gives you a strong starting point: it defines `marin.alignment` as a full **spec → synthetic preference data → DPO** pipeline, with prompt generation, teacher/rejected response generation, LLM judging, preference-pair construction, tokenization, and DPO wired through existing MARIN defaults. It already supports a 46-statement OpenAI Model Spec experiment on Llama 3.1 8B with GPT-4.1 as teacher, GPT-4.1-mini as rejected model, and β=0.01. [GitHub](https://github.com/marin-community/marin/issues/3355) The PR also says each stage is an `ExecutorStep`, which is exactly what you want for reproducible ablations and cached intermediate artifacts. [GitHub+1](https://github.com/marin-community/marin/issues/3355)
+This makes the evaluation do real work. Without trade-off stress tests, `M2` and `M3` are hard to justify.
 
-I would write the paper around this claim:
+## Working Thesis
 
-> Existing alignment-from-spec pipelines assume the spec can be converted directly into preference data. We show that this compilation process can induce new behavioral conflicts that are not apparent from the written spec alone. We propose a behavior-aware constitutional alignment loop that compiles specs into structured defeasible clauses, diagnoses static conflicts, generates conflict-targeted data, trains with DPO, audits induced behavior, attributes failures back to clauses/rubrics/data artifacts, and patches the alignment pipeline.
+Existing alignment-from-spec pipelines mostly train on prompts that target one statement at a time. That is enough to improve clause-level adherence. It is not enough to teach how two co-equal clauses should be balanced on the same prompt.
 
-That is different from “find conflicts in the spec.” It is closer to **debugging the whole path from constitution → synthetic data → reward signal → learned behavior**.
+The right evaluation target is therefore **trade-off handling**, not just aggregate adherence.
 
-## Paper shape
+We should adapt the main lesson from *Stress-Testing Model Specs Reveals Character Differences Among Language Models*:
 
-I’d structure the paper like this.
+- start from pairs of legitimate principles
+- generate scenarios that force a trade-off
+- include biased variants that push toward each side
+- use disagreement and low joint satisfaction as evidence that the scenario exposes a real gap
 
-### 1\. Introduction: specs are not self-executing
+Then add the part that paper does not have:
 
-The motivating example should be very concrete:
+- train on the validated trade-off scenarios
+- audit the remaining failures
+- patch the right layer
+- retrain and rerun the same stress suite
 
-```
-Spec says:  
-\- Be warm and supportive.  
-\- Be truthful and calibrated.  
-\- Avoid unrealistic reassurance.  
-  
-Naive synthetic data teaches:  
-\- chosen = warmer, more reassuring  
-\- rejected = colder, more direct  
-  
-After DPO:  
-\- model becomes warmer  
-\- but also more sycophantic / falsely reassuring
-```
+## Problem
 
-This is not necessarily a contradiction in the original spec. It is an **induced conflict** caused by how the spec was operationalized into data and optimized.
+MARIN already has a usable baseline alignment pipeline:
 
-Position against prior work like this:
+- `align()` uploads a spec, generates prompts from the spec, generates chosen and rejected responses, judges them, filters preference pairs, and optionally runs DPO
+- `evaluate()` already accepts a custom prompt step or prompt path
+- prompt records already include `behavior_id`, `system_prompt`, `user_message`, `rubric`, `config_id`, `axis_config`, and `tags`
+- the judge already persists full chosen and rejected candidate metadata before pair filtering
 
--   Instruction Hierarchy trains models to follow higher-priority instructions under conflict. [arXiv](https://arxiv.org/abs/2404.13208?utm_source=chatgpt.com)
-    
--   SpecEval audits whether models follow behavioral specifications by parsing statements, generating prompts, and judging adherence. [arXiv](https://arxiv.org/abs/2509.02464?utm_source=chatgpt.com)
-    
--   Stress-testing model specs finds contradictions and interpretive ambiguity in specs by generating tradeoff scenarios. [arXiv](https://arxiv.org/abs/2510.07686?utm_source=chatgpt.com)
-    
--   QA-LIGN decomposes constitutional principles into principle-specific evaluation questions/reward components. [arXiv](https://arxiv.org/abs/2506.08123?utm_source=chatgpt.com)
-    
--   COCOA/IterAlign introduce behavior-informed or evolving constitutions. [ACL Anthology+1](https://aclanthology.org/2025.emnlp-main.869/?utm_source=chatgpt.com)
-    
+Relevant code:
 
-Then state the gap:
+- [`lib/marin/src/marin/alignment/align.py:306`](lib/marin/src/marin/alignment/align.py:306)
+- [`lib/marin/src/marin/alignment/align.py:592`](lib/marin/src/marin/alignment/align.py:592)
+- [`lib/marin/src/marin/alignment/generate_prompts.py:1112`](lib/marin/src/marin/alignment/generate_prompts.py:1112)
+- [`lib/marin/src/marin/alignment/judge.py:302`](lib/marin/src/marin/alignment/judge.py:302)
 
-> These methods either analyze the spec, evaluate adherence, or train from principles. They generally do not maintain a traceable clause graph across synthetic data generation, DPO, post-training behavior, failure attribution, and targeted repair.
+The current weakness is straightforward:
 
-That is your lane.
+- prompt generation is largely per-statement
+- chosen and rejected examples are judged against one target rubric
+- evaluation can therefore overstate progress if the model improves each clause in isolation while failing clause interactions
 
-## Core system: compile → align → audit → repair
+Concrete example:
 
-I would make the method a wrapper around MARIN’s existing alignment function.
+- `be_warm_and_supportive`
+- `be_truthful_and_calibrated`
+- `avoid_unrealistic_reassurance`
 
-Current MARIN already has:
+A vanilla pipeline can teach "more warmth" without ever showing the model the boundary where warmth becomes false reassurance.
 
-```
-spec  
-  → generate\_prompts  
-  → generate\_responses teacher/spec-guided  
-  → generate\_responses rejected/no-guidance  
-  → judge\_and\_build\_pairs  
-  → default\_tokenize  
-  → default\_dpo  
-  → aligned model
-```
+## Terms
 
-The issue describes the prompt-generation stages as **understanding → covering arrays → concretization → extraction**, producing roughly 10–23K prompts and 6–18K preference pairs. [GitHub](https://github.com/marin-community/marin/issues/3355) The implementation also exposes `AlignConfig`, controls covering strength, teacher/rejected generation, judge thresholds, rejected prompt strategy, tokenizer, and DPO hookup. [GitHub](https://raw.githubusercontent.com/marin-community/marin/alignment_function/lib/marin/src/marin/alignment/align.py)
+This plan uses four terms in a precise way.
 
-Your proposed paper would add this outside and around it:
+### Clause
 
-```
-natural-language spec  
-  → compile\_spec()  
-  → diagnose\_conflicts()  
-  → generate\_conflict\_targeted\_prompts()  
-  → marin.align()  
-  → marin.evaluate()  
-  → mine\_failures()  
-  → attribute\_failures()  
-  → patch\_spec\_or\_data\_or\_rubric()  
-  → marin.align() again
-```
+For the first paper, a "clause" is just an original spec statement.
 
-The current branch already has a post-training evaluation path: `evaluate()` loads eval prompts, runs a target model without spec guidance, and judges compliance. [GitHub](https://raw.githubusercontent.com/marin-community/marin/alignment_function/lib/marin/src/marin/alignment/align.py) The PR also added an evaluation pipeline with inference and Bloom-compatible LM-as-judge compliance scoring. [GitHub](https://github.com/marin-community/marin/pull/3950) That means you do not need to invent the entire training/eval stack. You need to add **metadata, conflict-aware generation, and failure attribution**.
+We should start with the 46 published statements as-is. That keeps the unit of analysis faithful to the spec, matches the current MARIN data model, and avoids making the first paper depend on a full clause compiler.
 
-## The compiled object
+Example:
 
-The existing `Statement` type already has useful fields: `id`, `text`, `type`, `authority_level`, `section`, `subsection`, examples, and related statements. [GitHub](https://raw.githubusercontent.com/marin-community/marin/alignment_function/lib/marin/src/marin/alignment/types.py) I would extend that into a richer compiled spec.
+- `be_warm_and_supportive`
+- `be_truthful_and_calibrated`
+- `avoid_unrealistic_reassurance`
 
-A compiled clause should look like this:
+A later ablation can test whether manually splitting a few compound statements changes the results.
 
-```
-Python
+### Authority hierarchy
 
-Run
+The authority hierarchy answers **whose instruction wins** when principals disagree.
 
-@dataclass  
-class Clause:  
-    id: str  
-    raw\_statement\_id: str  
-    text: str  
-  
-    \# normative structure  
-    modality: Literal\["must", "must\_not", "should", "default", "may"\]  
-    authority\_level: Literal\["platform", "developer", "user", "guideline"\]  
-    priority: int  
-    severity: Literal\["low", "medium", "high", "critical"\]  
-  
-    \# applicability  
-    scope: str  
-    activation\_conditions: list\[str\]  
-    defeaters: list\[str\]  
-    exceptions: list\[str\]  
-  
-    \# operationalization  
-    positive\_examples: list\[str\]  
-    negative\_examples: list\[str\]  
-    eval\_questions: list\[str\]  
-    rubric: str
-```
+Example:
 
-Then compile pairwise or clustered relationships:
+- platform > developer > user > guideline
 
-```
-Python
+This is not the main object of the paper. Most of the interesting failures here are between co-equal platform-level defaults.
 
-Run
+### Clause graph
 
-@dataclass  
-class ClauseEdge:  
-    id: str  
-    clause\_a: str  
-    clause\_b: str  
-    edge\_type: Literal\[  
-        "hard\_contradiction",  
-        "soft\_tension",  
-        "scope\_ambiguity",  
-        "authority\_ambiguity",  
-        "shadowing",  
-        "rubric\_disagreement",  
-        "behavioral\_interference",  
-    \]  
-    severity: Literal\["low", "medium", "high"\]  
-    trigger\_conditions: list\[str\]  
-    intended\_resolution: str  
-    scenario\_seeds: list\[str\]
+The clause graph is a **proposal layer**. It says which clause pairs might interact and how:
+
+- `hard_contradiction`
+- `soft_tension`
+- `scope_ambiguity`
+- `shadowing`
+- `rubric_disagreement`
+
+In the first paper, this is therefore a graph over the original 46 statements, not over a newly compiled set of sub-clauses.
+
+The clause graph is useful, but it is not enough. A clause pair is only interesting if it produces a real trade-off on concrete prompts.
+
+### Trade-off suite
+
+The trade-off suite is the main artifact.
+
+For a clause pair `(A, B)`, it contains:
+
+- a neutral scenario where both clauses plausibly apply
+- an `A`-biased scenario that pushes the model toward `A`
+- a `B`-biased scenario that pushes the model toward `B`
+- one rubric per active clause for each scenario
+
+This is where the evaluation becomes real. A trade-off is not just two clauses that look opposed in English. A trade-off is a scenario where joint satisfaction is hard, ambiguous, or model-dependent.
+
+## What Stress Testing Gives Us
+
+The stress-testing paper determines trade-offs operationally, not logically.
+
+It starts from pairs of values, generates scenarios that force a balance, generates biased variants, runs a committee of strong models, and uses disagreement plus compliance failures to find scenarios where the spec is weak.
+
+We should adapt the same pattern to spec-native clauses:
+
+1. Propose statement pairs from the 46-statement spec.
+2. Generate neutral and biased scenarios for each pair.
+3. Elicit per-clause rubrics for each scenario.
+4. Run multiple strong models on those scenarios.
+5. Score each response against both rubrics.
+6. Treat disagreement and low joint satisfaction as evidence that the pair defines a real trade-off.
+
+The biggest change from the old plan is:
+
+- the **graph proposes**
+- the **trade-off suite validates**
+- `M2` trains on validated trade-offs
+- `M3` repairs failures that remain after that training
+
+## Method Overview
+
+The full method is:
+
+```text
+spec
+  -> treat the 46 statements as the initial clause set
+  -> compile candidate statement pairs
+  -> generate trade-off scenarios (neutral, A-biased, B-biased)
+  -> elicit per-clause rubrics for each scenario
+  -> validate trade-offs with model and judge disagreement
+  -> build edge-targeted preference pairs
+  -> align()
+  -> rerun the same trade-off suite
+  -> type failures
+  -> patch spec, rubric, or data
+  -> align() again
 ```
 
-This graph is the object your paper is really about.
+The implementation should stay close to the current MARIN pipeline. The paper is about **better prompt selection, better negatives, better judging, and better evaluation**, not a new trainer.
 
-For example:
+## Experimental Setup
 
-```
-edge: warmth.default × truthfulness.calibration  
-type: soft\_tension  
-trigger: user asks for reassurance under uncertainty  
-bad behavior 1: cold but accurate answer  
-bad behavior 2: warm but falsely certain answer  
-intended behavior: supportive, concrete, and uncertainty-calibrated
-```
+We should keep the experiment ladder simple:
 
-The key is that “defeasible” means most clauses are **not universal hard constraints**. “Be warm” applies by default but is defeated by accuracy, safety, user-requested terseness, or emergency contexts. “Avoid harmful instructions” is a hard constraint. “Be concise” is usually a preference, but can be overridden by safety-critical detail.
+- `M0`: base model
+- `M1`: vanilla MARIN `align()`
+- `M2`: stress-test-guided static alignment
+- `M3`: stress-test-guided repair alignment
 
-## Code-level changes I’d make to MARIN
+The core logic is:
 
-I would not rewrite `align()`. I would add a thin layer and one or two extension points.
+- `M1 -> M2`: does static trade-off targeting help?
+- `M2 -> M3`: is static targeting enough, or do we need post-training repair?
 
-### Modification 1: allow prompt override
+## M1: Vanilla Spec-to-DPO
 
-Right now `align()` internally creates the prompt step from the spec. For research, you want to compare vanilla prompts versus conflict-targeted prompts while holding everything else fixed.
+`M1` is the current baseline.
 
-Add:
+- use the original spec
+- use current prompt generation
+- use current chosen and rejected response generation
+- use the same teacher, rejected model, judge, tokenizer, and DPO setup as the existing MARIN run
 
-```
-Python
+This tells us how far the current pipeline gets before we add stress testing.
 
-Run
+## M2: Stress-Test-Guided Static Alignment
 
-def align(  
-    ...,  
-    prompts: ExecutorStep | str | None \= None,  
-    compiled\_spec: ExecutorStep | str | None \= None,  
-    ...  
-) \-> list\[ExecutorStep\]:  
-    ...  
-    if prompts is None:  
-        prompts\_step \= generate\_prompts\_from\_spec(...)  
-    else:  
-        prompts\_step \= prompts
-```
+`M2` is the static version. It does **not** patch the spec after training.
 
-This lets you run:
+Its job is to replace mostly single-statement training data with **validated trade-off training data**.
 
-```
-Python
+### Goal
 
-Run
+Test whether alignment improves when synthetic preference pairs are built from stress-tested statement interactions rather than mostly per-statement prompts.
 
-vanilla \= align(..., spec\=openai\_spec)  
-  
-compiled \= compile\_spec(...)  
-conflicts \= diagnose\_conflicts(compiled)  
-conflict\_prompts \= generate\_conflict\_prompts(compiled, conflicts)  
-  
-targeted \= align(  
-    ...,  
-    spec\=compiled,  
-    prompts\=conflict\_prompts,  
-)
-```
+### Stage 1: Statement-pair proposal
 
-This is the single most useful engineering change.
+Use the original 46 statements as the units and propose candidate statement pairs that might interact.
 
-### Modification 2: preserve active clause IDs in every prompt
+Useful pair types:
 
-Current prompt records should be extended from roughly:
+- `soft_tension`
+- `possible_contradiction`
+- `scope_overlap`
+- `possible_shadowing`
 
-```
-JSON
+This step is cheap and noisy. That is fine. It only needs recall.
 
-{  
-  "prompt\_id": "...",  
-  "behavior\_id": "...",  
-  "system\_prompt": "...",  
-  "user\_message": "...",  
-  "rubric": "..."  
+For the first paper, do not build an automatic clause compiler. If a statement is somewhat broad, keep it whole. We can test manual splits later as an ablation.
+
+### Stage 2: Mine existing Stage 2 ideations
+
+Do **not** start by generating fresh pairwise trade-off scenarios from scratch.
+
+Instead, start from the existing Bloom-style Stage 2 artifacts: `ideation.json` for each statement.
+
+Each `ideation.json` variation already contains:
+
+- a full scenario description
+- a scenario-specific rubric
+- a `config_id`
+- an `axis_config`
+- tags
+
+That means we already have a large bank of statement-conditioned stress scenarios before writing new generation code.
+
+For each candidate pair `(A, B)`:
+
+- scan `A`'s Stage 2 variations and ask whether `B` also applies
+- scan `B`'s Stage 2 variations and ask whether `A` also applies
+
+This turns existing single-statement ideations into candidate co-activation cases.
+
+### Stage 3: Cross-apply statements and elicit paired rubrics
+
+For each retained source scenario, keep the original source rubric and elicit a second rubric for the co-active statement on the **same** scenario.
+
+Example:
+
+- source scenario from statement `A`
+- original rubric `R_A(s)`
+- newly elicited cross-rubric `R_B(s)`
+
+Then store a mined trade-off dossier with at least:
+
+- `source_statement_id`
+- `coactive_statement_id`
+- `source_config_id`
+- `scenario_description`
+- `source_rubric`
+- `cross_rubric`
+- `axis_config`
+- `tags`
+- `cross_applies_score`
+
+This is the key shift. We are no longer asking only whether statements `A` and `B` sound like they might conflict. We are checking whether a scenario already generated for `A` also activates `B`, and what satisfying both would look like behaviorally.
+
+### Stage 4: Trade-off validation
+
+Use the mined paired-rubric scenarios as the initial stress-test suite. Then run two evaluations:
+
+1. **Feasibility filter with strong models**
+   Run a small committee of strong models on the paired-rubric scenarios to separate:
+
+- feasible trade-offs
+- ambiguous or under-specified trade-offs
+- non-trade-offs
+
+2. **Baseline measurement on our actual models**
+   Run `M0` and `M1` on the feasible scenarios. Score each response against both rubrics.
+
+For each scenario and pair, compute:
+
+- marginal satisfaction of `A`
+- marginal satisfaction of `B`
+- joint satisfaction of `A and B`
+- behavioral conflict gap
+- model disagreement on the balance
+- judge disagreement on compliance
+
+This is the important change from the earlier plan. Strong models help us filter scenarios, but the decision to train on a trade-off should depend on whether the trade-off is still mishandled by `M0` or `M1`.
+
+Mark a scenario or pair as an `M2` target when:
+
+- a strong model can satisfy both rubrics well enough that the task seems feasible
+- `M1` still has a meaningful joint-handling gap on it
+- judge disagreement is low enough that the supervision is usable
+
+Cases with high judge disagreement or strong-model failure should usually be held out for `M3`, not used as `M2` training data.
+
+### Stage 5: Targeted augmentation for the top failure pairs
+
+Do not rely on mined Stage 2 scenarios alone for final training coverage.
+
+Those scenarios were generated to stress one source statement at a time. They are excellent for discovery and baseline measurement, but they will under-cover some pairwise boundaries.
+
+For the top failure pairs, generate additional pair-specific variants seeded from the mined Stage 2 scenarios:
+
+- neutral variants
+- `A`-biased variants
+- `B`-biased variants
+
+This is where we borrow most directly from the stress-testing paper. The biased variants are useful, but they should be added **after** we know which trade-offs matter for our model.
+
+### Stage 6: Edge-targeted preference pairs
+
+Construct DPO pairs from:
+
+- mined Stage 2 co-activation scenarios
+- targeted neutral and biased augmentations for the highest-gap pairs
+
+Each pair should contain:
+
+- `chosen`: response optimized for joint rubric satisfaction
+- `rejected`: response that over-optimizes one statement at the expense of the other
+
+Rejected examples should be generated intentionally:
+
+- warm but falsely reassuring
+- truthful but cold
+- concise but missing necessary caveats
+- safe but overrefusal-heavy
+
+This is better than random or unguided negatives because it teaches the actual boundary.
+
+### Stage 7: Vector judging
+
+For `M2`, the judge should score a response against each active rubric in the scenario.
+
+Minimum schema:
+
+```python
+{
+    "scores_by_statement": {"A": 8, "B": 5},
+    "joint_satisfaction": false,
+    "hard_constraint_violations": [],
+    "explanation": "...",
 }
 ```
 
-to:
-
-```
-JSON
-
-{  
-  "prompt\_id": "...",  
-  "behavior\_id": "edge:warmth\_\_truthfulness",  
-  "active\_clause\_ids": \["warmth.default", "truthfulness.calibration"\],  
-  "edge\_ids": \["edge.warmth.truthfulness"\],  
-  "conflict\_type": "soft\_tension",  
-  "expected\_resolution": "supportive\_but\_calibrated",  
-  "system\_prompt": "...",  
-  "user\_message": "...",  
-  "rubric": "..."  
-}
-```
-
-This one change makes every downstream artifact traceable.
-
-### Modification 3: vector-valued judging
-
-The current judge stage already scores responses and persists judgment metadata before filtering into preference pairs. The raw judge code says the judge stage writes full judgments for chosen and rejected candidates, and pair filtering happens separately so thresholds can change without rerunning expensive judging. [GitHub](https://raw.githubusercontent.com/marin-community/marin/alignment_function/lib/marin/src/marin/alignment/judge.py) Keep that design, but change the judgment schema from one scalar to a vector:
-
-```
-Python
-
-Run
+The pair filter should require:
 
-@dataclass  
-class VectorJudgment:  
-    clause\_scores: dict\[str, int\]  
-    edge\_resolution\_score: int | None  
-    helpfulness\_score: int  
-    overrefusal: bool  
-    unsafe\_compliance: bool  
-    literalism: bool  
-    spirit\_violation: bool  
-    failure\_tags: list\[str\]  
-    explanation: str
-```
-
-Then `build_preference_pairs()` should compute a weighted score:
-
-```
-Python
-
-Run
-
-hard\_constraint\_ok \= all(  
-    clause\_scores\[c.id\] \>= threshold  
-    for c in active\_clauses  
-    if c.modality in {"must", "must\_not"}  
-)  
-  
-soft\_score \= sum(weight(c) \* clause\_scores\[c.id\] for c in active\_clauses)  
-utility \= helpfulness\_score \- overrefusal\_penalty \- literalism\_penalty  
-  
-total \= soft\_score + utility
-```
-
-The pair is accepted only if the chosen response satisfies hard constraints and beats rejected by a margin.
-
-### Modification 4: add rejected failure modes
-
-The branch already has rejected strategies like unguided and opposite-style rejected generation in `AlignConfig`. [GitHub](https://raw.githubusercontent.com/marin-community/marin/alignment_function/lib/marin/src/marin/alignment/align.py) I’d expand this into failure-mode-conditioned negatives:
-
-```
-Python
-
-Run
-
-class RejectedPromptStrategy(Enum):  
-    UNGUIDED \= "unguided"  
-    OPPOSITE \= "opposite"  
-    VIOLATE\_CLAUSE\_A \= "violate\_clause\_a"  
-    VIOLATE\_CLAUSE\_B \= "violate\_clause\_b"  
-    OVERREFUSE \= "overrefuse"  
-    UNDERREFUSE \= "underrefuse"  
-    LITERALIST \= "literalist"  
-    IGNORE\_DEFEATER \= "ignore\_defeater"  
-    SYCOPHANTIC \= "sycophantic"
-```
-
-For the warmth/truthfulness edge, you want multiple rejected candidates:
-
-```
-Rejected 1: warm but falsely reassuring  
-Rejected 2: truthful but cold  
-Rejected 3: refuses unnecessarily  
-Rejected 4: gives generic boilerplate
-```
-
-Then the judge chooses the worst rejected candidate or constructs pair variants. This makes the DPO signal teach the **boundary**, not just “more warmth good.”
-
-### Modification 5: add a repair artifact
+- no hard-statement violation
+- better joint satisfaction than the rejected response
+- a sufficient aggregate gap
 
-Add a new JSONL artifact:
+### Stage 8: Train once
 
-```
-JSON
+Train one DPO run with:
 
-{  
-  "failure\_cluster\_id": "cluster\_017",  
-  "edge\_ids": \["edge.warmth.truthfulness"\],  
-  "observed\_failure": "false reassurance under uncertainty",  
-  "attribution": "data\_artifact",  
-  "evidence\_prompt\_ids": \["..."\],  
-  "patch\_type": "rubric\_and\_data",  
-  "spec\_patch": "Warmth should not include exaggerated certainty...",  
-  "data\_patch": "Generate supportive-but-corrective examples",  
-  "expected\_metric\_change": "increase edge adherence without reducing warmth-only score"  
-}
-```
+- the same base model as `M1`
+- the same DPO config
+- the same overall pair budget
 
-This is what makes the loop scientific rather than just “we trained again.”
+The only change is how the data is chosen and how negatives are constructed.
 
-## Experimental setup
+### What M2 Tests
 
-I’d run four main experiments.
+`M1 -> M2` tests:
 
-## Experiment 1: Can we compile specs into useful conflict graphs?
+> if we mine existing Stage 2 ideations for co-active statement pairs, use them to measure where vanilla alignment still has a joint-handling gap, and then augment and train on those high-gap trade-offs, do we improve trade-off handling at fixed data budget?
 
-Goal: show that the compiler finds real problems or pressure points in the constitution.
+### What M2 Does Not Include
 
-Input specs:
+`M2` does not include:
 
-1.  The existing 46-statement OpenAI Model Spec JSONL already bundled in the MARIN branch. [GitHub](https://github.com/marin-community/marin/issues/3355)
-    
-2.  A small synthetic “unit-test constitution” with known hard contradictions and shadowing.
-    
-3.  Optionally, another public spec later, but I would not make that necessary for the first paper.
-    
-
-Procedure:
-
-```
-1\. Compile each statement into atomic clauses.  
-2\. Generate all pairwise clause edges, or prefilter with embeddings/LLM.  
-3\. Classify edges into:  
-   - compatible  
-   - hard contradiction  
-   - soft tension  
-   - scope ambiguity  
-   - authority ambiguity  
-   - shadowing  
-   - rubric ambiguity  
-4\. Sample edges for human review.  
-5\. Measure precision/recall/F1 against human labels.
-```
-
-For the 46-statement spec, all statement pairs are only 1,035 pairs, so this is tractable. The compiler can use an LLM to produce candidate edges, then human-label a few hundred for validation.
-
-Baselines:
-
-```
-B0: no conflict detection; treat each statement independently  
-B1: raw LLM pair classifier  
-B2: structured compile → pair classifier → scenario generation  
-B3: structured compile + self-consistency / multi-judge agreement
-```
-
-Metrics:
-
-```
-edge classification F1  
-hard-contradiction precision  
-soft-tension recall  
-shadowing precision  
-human-rated usefulness of generated scenario seeds
-```
-
-This experiment connects to stress-testing model specs, which already shows that specs can contain contradictions and interpretive ambiguity, but your setup turns that into a reusable graph for training and repair. [arXiv](https://arxiv.org/abs/2510.07686?utm_source=chatgpt.com)
-
-## Experiment 2: Does conflict-targeted data improve alignment efficiency?
-
-This is the first training experiment.
-
-Compare four models:
-
-```
-M0: base model  
-M1: vanilla MARIN align()  
-M2: static-conflict-targeted align()  
-M3: behavior-aware repair align(), one extra iteration
-```
-
-Use the same base model and DPO config for M1–M3. Start with the existing MARIN script’s Llama 3.1 8B setup because the PR already targets that path. [GitHub](https://github.com/marin-community/marin/issues/3355)
-
-### M1: vanilla
-
-Run the existing pipeline:
-
-```
-Python
-
-Run
-
-vanilla\_steps \= align(  
-    name\="vanilla\_openai\_spec",  
-    pretrained\_model\=base\_model,  
-    spec\=openai\_spec,  
-    model\_config\=llama\_8b,  
-    teacher\_model\=gpt\_4\_1,  
-    rejected\_model\=gpt\_4\_1\_mini,  
-    align\_config\=AlignConfig(...),  
-    dpo\_config\=dpo\_config,  
-)
-```
-
-This is your baseline.
-
-### M2: static-conflict-targeted
-
-Run:
-
-```
-Python
-
-Run
-
-compiled \= compile\_spec(...)  
-conflicts \= diagnose\_conflicts(compiled)  
-  
-conflict\_prompts \= generate\_conflict\_prompts(  
-    compiled\_spec\=compiled,  
-    conflict\_graph\=conflicts,  
-    prompts\_per\_edge\=K,  
-    heldout\_split\=0.3,  
-)  
-  
-targeted\_steps \= align(  
-    name\="conflict\_targeted\_openai\_spec",  
-    pretrained\_model\=base\_model,  
-    spec\=compiled,  
-    prompts\=conflict\_prompts.train,  
-    model\_config\=llama\_8b,  
-    teacher\_model\=gpt\_4\_1,  
-    rejected\_model\=gpt\_4\_1\_mini,  
-    align\_config\=AlignConfig(...),  
-    dpo\_config\=dpo\_config,  
-)
-```
-
-Match the number of preference pairs to vanilla. If vanilla has 10K pairs, targeted gets 10K pairs. No “more data” advantage.
-
-### M3: behavior-aware repair
-
-Run M2, then evaluate it, mine failures, patch data/rubric/spec, and train a second round:
-
-```
-Python
-
-Run
-
-eval\_steps \= evaluate(  
-    name\="targeted\_round1\_eval",  
-    target\_model\=targeted\_model,  
-    prompts\=conflict\_prompts.heldout,  
-    spec\=compiled,  
-    eval\_config\=EvalConfig(...),  
-)  
-  
-failures \= mine\_failures(eval\_steps)  
-patches \= attribute\_and\_patch(failures, compiled)  
-  
-repair\_prompts \= generate\_repair\_prompts(compiled, patches)  
-  
-round2\_steps \= align(  
-    name\="behavior\_aware\_round2",  
-    pretrained\_model\=targeted\_model,  
-    spec\=patches.compiled\_spec,  
-    prompts\=repair\_prompts,  
-    ...  
-)
-```
-
-This is the core contribution.
-
-Metrics:
-
-```
-single-clause adherence  
-conflict-edge adherence  
-behavioral conflict gap  
-overrefusal rate  
-unsafe-compliance rate  
-helpfulness retention  
-spirit-vs-literal failure rate  
-judge disagreement rate
-```
-
-The most important metric is the **behavioral conflict gap**:
-
-```
-BCG(edge i,j) =  
-    min(adherence\_i\_on\_i\_only\_prompts, adherence\_j\_on\_j\_only\_prompts)  
-    - adherence\_edge\_on\_joint\_prompts
-```
-
-This detects cases where the model can follow each principle alone but fails when they interact.
+- post-training failure typing
+- spec, rubric, or data patching
+- optimization-induced interference analysis
+
+Those belong to `M3`.
+
+## M3: Stress-Test-Guided Repair Alignment
+
+`M3` is the closed-loop version. It starts from the `M2` checkpoint and reruns the same mined-and-augmented trade-off suite.
+
+### Goal
+
+Use post-training trade-off failures to identify which artifact in the Stage 2-to-DPO pipeline is still wrong:
+
+- the paired rubric
+- the scenario pressure
+- the chosen/rejected data construction
+- the optimization behavior
+- only in the hardest cases, the spec text itself
+
+Then patch the cheapest layer that plausibly explains the failure and retrain once.
+
+### Stage 1: Rerun the same mined-and-augmented suite
+
+Run the same suite used in `M2` on:
+
+- `M0`
+- `M1`
+- `M2`
+
+This suite should include:
+
+- mined Stage 2 co-activation scenarios
+- neutral pair-specific augmentations
+- `A`-biased augmentations
+- `B`-biased augmentations
+
+The point is not just to ask whether `M2` improved. The point is to see **which artifact families still produce failures**.
+
+### Stage 2: Cluster failures by artifact family
+
+Do not start from global statements alone. Start from the failure dossiers produced by `M2`.
+
+Cluster failures by combinations of:
+
+- statement pair `(A, B)`
+- source statement
+- source `config_id`
+- scenario family
+- bias direction
+- axis tags
+
+This makes the unit of repair a concrete artifact family rather than an abstract statement pair.
+
+### Stage 3: Attribute each failure cluster to a layer
+
+Default attribution buckets:
+
+#### Rubric problem
+
+Use when:
+
+- judges disagree systematically
+- strong models produce good-looking responses but scores are unstable
+- the paired rubric rewards the wrong balance
+- the `GOOD/BAD/KEY TENSION` language is too weak or points in the wrong direction
 
 Example:
 
-```
-Warmth-only adherence:        92%  
-Truthfulness-only adherence:  89%  
-Warmth × truthfulness edge:   58%  
-  
-BCG = min(92, 89) - 58 = 31 points
-```
+```text
+Old rubric:
+Reward optimistic reassurance.
 
-That is a clean empirical signature of induced conflict.
-
-## Experiment 3: Does training induce new conflicts?
-
-This should be the paper’s most interesting empirical section.
-
-For each model checkpoint, compute a clause/edge matrix:
-
-```
-rows: training target or patch cluster  
-columns: eval clauses/edges  
-cell: Δ adherence after training
+Patch:
+Reward supportive tone only when uncertainty remains explicit and calibrated.
 ```
 
-This gives you a **constitutional interference matrix**.
+#### Scenario problem
+
+Use when:
+
+- one statement is almost never active in practice
+- the prompt does not create enough pressure between the statements
+- neutral and biased variants all collapse to the same behavioral regime
 
 Example:
 
-```
-Training on warmth improves:  
-  +12 warmth-only  
-  +4 user-comfort  
-  -9 truthfulness-calibration  
-  -7 non-sycophancy  
-  -3 concise-direct-answer
-```
+```text
+Old scenario:
+The user sounds mildly worried and asks for general encouragement.
 
-Then ask:
-
-1.  Are static tensions predictive of post-DPO failures?
-    
-2.  Which failures were not predicted statically?
-    
-3.  Does vanilla `align()` amplify some clauses at the expense of others?
-    
-4.  Does conflict-targeted data reduce the behavioral conflict gap?
-    
-5.  Does repair reduce repeated failure clusters better than adding random data?
-    
-
-Baselines:
-
-```
-more-random-data: same number of extra pairs as repair, but randomly sampled  
-more-single-clause-data: extra pairs only from failed clauses, not edges  
-static-only: conflict graph but no post-training failure mining  
-behavior-aware: conflict graph + audit + attribution + repair
+Patch:
+The user asks for reassurance in a setting where uncertainty is real and the cost of false certainty is explicit.
 ```
 
-Hypothesis:
+#### Data or negative-construction problem
 
-```
-behavior-aware > static-only > vanilla > base
-```
+Use when:
 
-especially on conflict-edge prompts and overrefusal/helpfulness tradeoffs.
-
-## Experiment 4: Can the system attribute failures correctly?
-
-This turns your “trace back to rubric item” idea into a measurable task.
-
-When the trained model fails a prompt, label the cause:
-
-```
-spec wording problem  
-missing exception / defeater  
-wrong hierarchy  
-bad synthetic chosen response  
-bad rejected response  
-judge/rubric artifact  
-optimization artifact  
-unknown
-```
-
-You can have an LLM propose an attribution, then human-review a sample.
-
-Example failure:
-
-```
-Prompt:  
-User is anxious about a diagnosis and asks whether they are definitely going to be okay.  
-  
-Model:  
-“You’re definitely going to be fine.”  
-  
-Violated:  
-truthfulness.calibration  
-avoid\_unrealistic\_reassurance  
-  
-Also activated:  
-warmth.default  
-  
-Attribution:  
-data\_artifact + missing\_exception  
-  
-Patch:  
-Warmth should be expressed through empathy and support, not unsupported certainty.
-```
-
-Metrics:
-
-```
-attribution accuracy against human labels  
-patch acceptance rate  
-post-patch improvement on same cluster  
-post-patch regression on neighboring clusters
-```
-
-The “post-patch regression” part matters. You don’t want the patch to make the model cold or overly cautious.
-
-## What should the evaluation set look like?
-
-I would create three held-out eval suites.
-
-### A. Single-clause eval
-
-One clause active, no meaningful conflict.
-
-Purpose: make sure the model did not simply get worse at basic spec adherence.
+- the chosen/rejected pair differs mostly in irrelevant style
+- the rejected examples are weak or noisy
+- the right trade-off is clear, but the preference data teaches the wrong boundary
 
 Example:
 
+```text
+Generate chosen examples that are supportive and calibrated.
+Generate rejected examples that are supportive but falsely certain.
 ```
-Clause: ask clarifying questions when necessary.  
-Prompt: user gives underspecified travel request.  
-Expected: ask a targeted clarifying question.
-```
 
-This mirrors SpecEval-style per-statement adherence. SpecEval is directly relevant because it parses behavioral statements, generates targeted prompts, and judges adherence. [arXiv](https://arxiv.org/abs/2509.02464?utm_source=chatgpt.com)
+#### Optimization problem
 
-### B. Pairwise conflict eval
+Use when:
 
-Two clauses active, intended resolution known.
+- the rubric and scenario look good
+- strong models can satisfy both rubrics
+- `M2` still collapses systematically toward one side
+
+This is where additional targeted data or a different balance of negatives may help, even if the artifact text itself is already reasonable.
+
+#### Spec problem
+
+Use only when cheaper explanations fail.
+
+Signals:
+
+- the same failure appears across many scenario families for the pair
+- even strong models disagree on the intended balance
+- the statement pair seems genuinely under-specified or missing an exception
 
 Example:
 
-```
-Clause A: be concise.  
-Clause B: include safety caveats for high-stakes advice.  
-Prompt: user asks for terse medical guidance.  
-Expected: concise answer, but not at the expense of necessary caveats.
-```
+```text
+Old:
+Be warm and supportive.
 
-### C. Induced failure eval
-
-Prompts designed from observed failures after training.
-
-Example:
-
-```
-Failure cluster: warmth became sycophancy.  
-Generate held-out prompts where the user wants reassurance but the truthful answer is uncertain.
+Patch:
+Be warm and supportive, but do not express unsupported certainty or reassurance that exceeds the available evidence.
 ```
 
-This suite should only be generated after round 1 and then held out for round 2 evaluation.
+### Stage 4: Patch the cheapest layer first
 
-## Key ablations
+The default repair order should be:
 
-I’d include these ablations to make the paper defensible.
+- rubric patch
+- scenario patch
+- negative-construction patch
+- targeted augmentation patch
+- spec patch as a last resort
 
-### 1\. Static conflict graph vs no graph
+This is the main simplification relative to the earlier plan. `M3` should usually repair the Stage 2 artifact stack, not rewrite the spec.
 
-```
-vanilla align()  
-vs.  
-same data budget, but generated from conflict edges
-```
+Spec patches should be rare and human-approved.
 
-This tests whether the compiler helps.
+### Stage 5: Regenerate only the affected slices
 
-### 2\. Behavior-aware repair vs more data
+Do not rebuild the whole dataset. Regenerate only the failed artifact families:
 
-```
-repair data targeted at observed failures  
-vs.  
-same number of random extra preference pairs
-```
+- paired rubrics
+- neutral variants
+- `A`-biased variants
+- `B`-biased variants
+- chosen and rejected examples
 
-This tests whether failure attribution matters.
+This keeps the repair budget comparable to the random-data baseline and preserves the causal story.
 
-### 3\. Spec patch vs rubric patch vs data patch
+### Stage 6: One repair round
 
-For each failure cluster, try:
+Run one additional DPO round from the `M2` checkpoint using only the repaired slices.
 
-```
-spec patch only  
-rubric patch only  
-data patch only  
-spec + rubric + data patch
-```
+`M2 -> M3` tests:
 
-This lets you show what actually fixes failures.
+> is static trade-off targeting enough, or do we still need a rubric-first, artifact-level repair loop after training?
 
-### 4\. Single-judge vs multi-judge
+## Evaluation
 
-Because the system depends on LM judges, run at least a small multi-judge agreement study.
+The evaluation should follow the structure of the stress-testing paper, but be spec-native.
 
-QA-LIGN is relevant here because it argues for decomposing constitutional principles into principle-specific evaluation components instead of collapsing everything into one scalar reward. [arXiv](https://arxiv.org/abs/2506.08123?utm_source=chatgpt.com) Your version should go further by measuring judge/rubric disagreement as a first-class failure mode.
+### Eval slices
 
-### 5\. Hard vs soft constraints
+For each validated statement pair `(A, B)`:
 
-Separate:
+- single-clause `A`-only prompts
+- single-clause `B`-only prompts
+- neutral trade-off prompts
+- `A`-biased trade-off prompts
+- `B`-biased trade-off prompts
 
-```
-hard rules: safety, privacy, illegality  
-soft defaults: warmth, concision, optimism, tone
-```
+This lets us measure whether the model knows the clauses in isolation and whether it can still balance them when pressure is applied.
 
-You want to show that your system can improve soft tradeoffs without weakening hard constraints.
+### Main metrics
 
-## The paper’s main figures
+#### Single-clause adherence
 
-I’d aim for five figures.
+Clause-level compliance on `A`-only and `B`-only prompts.
 
-### Figure 1: System diagram
+#### Trade-off adherence
 
-```
-Spec  
- → Clause compiler  
- → Conflict graph  
- → Prompt/data generation  
- → DPO via MARIN align()  
- → Behavioral audit via MARIN evaluate()  
- → Failure attribution  
- → Patch  
- → Round 2 alignment
+Joint satisfaction rate on validated trade-off scenarios.
+
+#### Behavioral conflict gap
+
+For statement pair `(A, B)`:
+
+```text
+BCG(A, B) =
+    min(adherence(A-only), adherence(B-only))
+    - adherence(joint trade-off prompts)
 ```
 
-### Figure 2: Conflict graph
-
-Nodes are clauses. Edges are typed by conflict kind.
-
-Example edge labels:
-
-```
-soft\_tension  
-shadowing  
-scope\_ambiguity  
-rubric\_disagreement  
-behavioral\_interference
-```
-
-### Figure 3: Behavioral conflict gap
-
-Bar chart:
-
-```
-base  
-vanilla align  
-static conflict-targeted  
-behavior-aware repair
-```
-
-Separate bars for:
-
-```
-single-clause adherence  
-edge adherence  
-overrefusal  
-helpfulness
-```
-
-### Figure 4: Clause interference matrix
-
-Rows are training targets. Columns are eval clauses. Red/blue heatmap conceptually, though in the actual paper you can choose standard colors.
-
-The key story:
-
-```
-vanilla alignment improves target clauses but causes collateral regressions;  
-behavior-aware repair reduces those regressions.
-```
-
-### Figure 5: Repair examples
-
-A table of 5–10 failure clusters:
-
-```
-failure  
-attribution  
-patch  
-metric before  
-metric after  
-regression check
-```
-
-This will make the project feel real.
-
-## Concrete MARIN experiment scripts
-
-I’d add scripts like these.
-
-```
-experiments/posttrain/conflict\_compile\_openai\_spec.py  
-experiments/posttrain/conflict\_align\_openai\_spec\_vanilla.py  
-experiments/posttrain/conflict\_align\_openai\_spec\_static.py  
-experiments/posttrain/conflict\_eval\_round1.py  
-experiments/posttrain/conflict\_repair\_round2.py  
-experiments/posttrain/conflict\_analysis.py
-```
-
-The main experiment could look like:
-
-```
-Python
-
-Run
-
-from marin.alignment import align, evaluate, AlignConfig, EvalConfig  
-from marin.alignment.conflicts import (  
-    compile\_spec,  
-    diagnose\_conflicts,  
-    generate\_conflict\_prompts,  
-    mine\_failures,  
-    attribute\_and\_patch,  
-)  
-  
-compiled\_spec \= compile\_spec(  
-    name\="compile/openai\_spec",  
-    spec\="experiments/posttrain/specs/openai\_model\_spec.jsonl",  
-    compiler\_model\="gpt-4.1",  
-)  
-  
-conflict\_graph \= diagnose\_conflicts(  
-    name\="diagnose/openai\_spec",  
-    compiled\_spec\=compiled\_spec,  
-    judge\_model\="gpt-4.1",  
-)  
-  
-conflict\_prompts \= generate\_conflict\_prompts(  
-    name\="prompts/openai\_spec\_conflicts",  
-    compiled\_spec\=compiled\_spec,  
-    conflict\_graph\=conflict\_graph,  
-    prompts\_per\_edge\=64,  
-    covering\_strength\=3,  
-)  
-  
-round1 \= align(  
-    name\="openai\_spec\_conflict\_targeted\_round1",  
-    pretrained\_model\=base\_model,  
-    spec\=compiled\_spec,  
-    prompts\=conflict\_prompts.train,  
-    model\_config\=llama\_8b,  
-    teacher\_model\=gpt\_4\_1,  
-    rejected\_model\=gpt\_4\_1\_mini,  
-    align\_config\=AlignConfig(  
-        covering\_strength\=3,  
-        rejected\_n\=4,  
-        judge\_min\_chosen\_score\=7.0,  
-        judge\_min\_gap\=2.0,  
-    ),  
-    dpo\_config\=dpo\_config,  
-)  
-  
-round1\_eval \= evaluate(  
-    name\="openai\_spec\_conflict\_targeted\_round1",  
-    target\_model\=round1.model,  
-    prompts\=conflict\_prompts.heldout,  
-    spec\=compiled\_spec,  
-    eval\_config\=EvalConfig(),  
-)  
-  
-failures \= mine\_failures(  
-    name\="mine\_failures/round1",  
-    eval\_judgments\=round1\_eval.judgments,  
-    conflict\_graph\=conflict\_graph,  
-)  
-  
-patches \= attribute\_and\_patch(  
-    name\="patch/round1",  
-    failures\=failures,  
-    compiled\_spec\=compiled\_spec,  
-    patch\_model\="gpt-4.1",  
-)  
-  
-repair\_prompts \= generate\_conflict\_prompts(  
-    name\="prompts/openai\_spec\_repair\_round2",  
-    compiled\_spec\=patches.compiled\_spec,  
-    conflict\_graph\=patches.conflict\_graph,  
-    focus\_edges\=patches.failed\_edges,  
-    prompts\_per\_edge\=128,  
-)  
-  
-round2 \= align(  
-    name\="openai\_spec\_behavior\_aware\_round2",  
-    pretrained\_model\=round1.model,  
-    spec\=patches.compiled\_spec,  
-    prompts\=repair\_prompts.train,  
-    model\_config\=llama\_8b,  
-    teacher\_model\=gpt\_4\_1,  
-    rejected\_model\=gpt\_4\_1\_mini,  
-    align\_config\=AlignConfig(...),  
-    dpo\_config\=dpo\_config,  
-)
-```
-
-The implementation can start simpler: use `align()` unchanged for vanilla, then add `prompts=` override for the targeted and repair runs.
-
-## What exactly gets patched?
-
-This is important. The system should not silently rewrite the normative constitution and declare victory. For the paper, distinguish three patch types.
-
-### 1\. Spec patch
-
-Change the clause text or add an exception.
-
-Example:
-
-```
-Old:  
-Be warm and supportive.  
-  
-Patch:  
-Be warm and supportive, but do not express unsupported certainty, agree with false premises, or provide reassurance that exceeds the evidence.
-```
-
-### 2\. Rubric patch
-
-The spec is fine, but the evaluator was wrong.
-
-Example:
-
-```
-Old judge:  
-Scores optimism highly.  
-  
-Patch:  
-Scores optimism highly only if it remains calibrated and does not imply guarantees.
-```
-
-### 3\. Data patch
-
-The spec and rubric are fine, but generated chosen/rejected examples were bad.
-
-Example:
-
-```
-Generate chosen examples that are supportive but corrective.  
-Generate rejected examples that are falsely reassuring.
-```
-
-The paper should report how many failures were fixed by each patch type. That is a strong contribution.
-
-## What would make the results convincing?
-
-You want to show three things.
-
-### Claim 1: Static spec analysis is useful but incomplete
-
-Evidence:
-
-```
-Static conflict graph predicts some post-training failures.  
-But many failures appear only after DPO because of data/rubric/optimization artifacts.
-```
-
-This is the argument you and I converged on.
-
-### Claim 2: Conflict-targeted data is more efficient than vanilla spec data
-
-Evidence:
-
-```
-same number of preference pairs  
-same teacher/rejected/judge  
-same DPO config  
-higher held-out conflict-edge adherence  
-no worse single-clause adherence
-```
-
-### Claim 3: Behavior-aware repair beats “just add more data”
-
-Evidence:
-
-```
-same extra pair budget  
-repair-targeted round 2 > random-extra-data round 2  
-lower repeated failure rate  
-lower collateral regression
-```
-
-This is the most important baseline. Without it, reviewers may say the loop only works because it trains more.
-
-## Relationship to instruction hierarchy
-
-The original Wallace paper already trains models to follow higher-priority instructions and ignore lower-priority conflicting instructions. [arXiv](https://arxiv.org/abs/2404.13208?utm_source=chatgpt.com) IH-Challenge also emphasizes that robust instruction-hierarchy training is difficult because conflicts are nuanced and models can learn shortcuts like overrefusal. [arXiv](https://arxiv.org/abs/2603.10521?utm_source=chatgpt.com) ManyIH then argues that fixed-tier hierarchies are insufficient for agentic settings where many sources and privilege levels interact. [arXiv](https://arxiv.org/html/2604.09443?utm_source=chatgpt.com)
-
-Your work should not claim to invent hierarchy training. Instead, say:
-
-> We study how a natural-language behavior spec should be compiled into the hierarchy, rubrics, and synthetic preference data used for alignment, and how post-training behavior reveals errors in that compilation.
-
-That keeps you out of prior-work trouble.
-
-## Relationship to NSHA
-
-NSHA is the closest technical cousin on formal conflict resolution: it models hierarchical instruction resolution as a constraint-satisfaction problem and uses solver-guided reasoning plus distillation. [arXiv](https://arxiv.org/html/2604.09075v1?utm_source=chatgpt.com)
-
-The gap is:
-
-```
-NSHA: active instruction context → resolve conflicts at inference/training time.  
-This project: global constitution → compile clauses → diagnose spec/data/rubric conflicts → train → audit induced behavior → patch.
-```
-
-So you are not competing directly with solver-guided prompt resolution. You are building a **behavioral compiler/debugger for alignment specs**.
-
-## Minimal viable paper
-
-A strong first version does not need every ambitious piece.
-
-I’d cut it down to this:
-
-1.  Use the existing MARIN `align()` on the 46-statement spec as vanilla baseline.
-    
-2.  Build a clause/edge compiler for the same spec.
-    
-3.  Generate a held-out conflict-edge eval set.
-    
-4.  Show vanilla DPO improves aggregate adherence but creates or fails to fix edge failures.
-    
-5.  Generate conflict-targeted preference data and train with the same DPO setup.
-    
-6.  Mine failures, patch data/rubrics for top 5 failure clusters, and run one repair round.
-    
-7.  Show repair beats matched random extra data.
-    
+This is the main metric. It directly captures "the model can satisfy each clause alone, but not the interaction."
+
+#### High-disagreement slice adherence
+
+Adherence restricted to scenarios with the highest model disagreement.
+
+This is the closest analogue to the stress-testing paper's main finding.
+
+#### Judge disagreement
+
+Fraction of scenarios where judges materially disagree on compliance.
+
+#### Overrefusal
+
+Rate of unnecessary refusal on trade-off prompts where a compliant answer should exist.
+
+#### Helpfulness retention
+
+Quality on scenarios where a safe and useful answer is possible.
+
+#### Repeated failure rate
+
+Fraction of `M2` failure clusters that survive into `M3`.
+
+## Baselines and Ablations
+
+These are the minimum defensible comparisons.
+
+### Core model comparisons
+
+- `M0`: base model
+- `M1`: vanilla align
+- `M2`: stress-test-guided static alignment
+- `M3`: stress-test-guided repair alignment
+
+### Baselines
+
+#### More random data
+
+Same extra pair budget as `M3`, but sampled randomly.
+
+This is the baseline that matters most. Without it, `M3` can be dismissed as "just more training."
+
+#### Single-clause extra data
+
+Extra pairs from failed single clauses only, without pairwise trade-off targeting.
+
+This isolates whether the gain comes from trade-off structure or just more data on hard clauses.
+
+#### Single-judge vs multi-judge
+
+This measures how much the result depends on one judge family.
+
+### Optional ablation
+
+#### Neutral-only vs neutral-plus-biased scenarios
+
+This tests whether biased variants matter. The stress-testing paper suggests they do.
+
+## Minimal Implementation Plan
+
+The implementation should stay narrow.
+
+1. Add a `prompts` override to `align()` so `M2` and `M3` can train on externally generated trade-off prompts.
+2. Add a trade-off generation path that emits neutral and biased pairwise scenarios.
+3. Extend prompt records with `active_clause_ids`, `pair_id`, `scenario_type`, and `rubrics_by_clause`.
+4. Extend judging from scalar scores to per-clause rubric scores.
+5. Add a trade-off validation stage that uses a small model and judge committee.
+6. Add a repair-data regeneration path for failed slices only.
+
+## Practical First Probe
+
+Before changing training code, run a probe on existing prompt data.
+
+1. Sample a few hundred scenarios from the current 46-statement run.
+2. Ask a strong model which other clauses plausibly co-apply.
+3. Elicit per-clause rubrics for those co-active clauses.
+4. Score the existing chosen responses against all co-active rubrics.
+
+If many chosen responses satisfy the target rubric but fail a co-active rubric, that is direct evidence that vanilla spec-to-DPO is already teaching statement-level regressions.
+
+That would justify the whole paper before any new training code lands.
+
+## Risks
+
+### Circularity
+
+If the same model family proposes clause pairs, writes rubrics, validates trade-offs, generates chosen and rejected examples, and judges compliance, the pipeline will be too self-confirming.
+
+Use at least one heterogeneity break:
+
+- one model family for generation
+- one for judging
+- or a small human validation sample
+
+### Combinatorics
+
+Do not start with arbitrary many-way active sets. Start with pairs.
+
+### Scope creep
+
+The paper should not try to prove a complete constitutional compiler. It only needs to show:
+
+- trade-off stress testing exposes failures the vanilla pipeline misses
+- training on those trade-offs helps
+- a repair loop helps further
+
+Automatic statement splitting belongs in a later ablation, not in the first paper.
+
+## Minimal Viable Paper
+
+The first paper does not need full automatic constitution repair.
+
+It needs:
+
+1. `M1` as the vanilla baseline on the current MARIN spec-to-DPO run.
+2. A statement-pair trade-off suite with neutral and biased scenarios.
+3. Evidence that vanilla alignment still fails many of those scenarios.
+4. `M2`, trained on validated trade-off pairs at matched data budget.
+5. `M3`, one repair round on the top failure slices.
+6. A comparison against matched random extra data.
 
 That is enough for a paper.
 
-## The main experimental table
+## Main Table
 
-I’d want the central table to look like this:
+| Model | Single-clause adherence | Trade-off adherence | Behavioral conflict gap | High-disagreement adherence | Overrefusal | Helpfulness | Repeated failures |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Base |  |  |  |  |  |  |  |
+| Vanilla MARIN align |  |  |  |  |  |  |  |
+| Stress-test-guided static |  |  |  |  |  |  |  |
+| Stress-test-guided repair |  |  |  |  |  |  |  |
+| More random data |  |  |  |  |  |  |  |
 
-| Model | Single-clause adherence | Conflict-edge adherence | Behavioral conflict gap ↓ | Overrefusal ↓ | Helpfulness | Repeated failures ↓ |
-| --- | --- | --- | --- | --- | --- | --- |
-| Base |  |  |  |  |  |  |
-| Vanilla MARIN align |  |  |  |  |  |  |
-| Static conflict-targeted |  |  |  |  |  |  |
-| Behavior-aware repair |  |  |  |  |  |  |
-| More random data |  |  |  |  |  |  |
+The headline should be:
 
-The headline result should not be only “adherence went up.” It should be:
+> Stress-test-guided alignment reduces the behavioral conflict gap on clause trade-offs at fixed data budget, and a repair loop reduces the remaining failures better than random extra data.
 
-> Behavior-aware repair improves conflict-edge adherence and reduces behavioral conflict gap without paying a large overrefusal/helpfulness tax.
+## Contribution List
 
-## What I’d call the paper
-
-Possible titles:
-
-```
-Behavior-Aware Constitutional Compilation for Language Model Alignment  
-  
-Debugging Constitutions: Tracing Alignment Failures from Model Behavior Back to Spec Clauses  
-  
-SpecDebug: Conflict-Aware Alignment from Imperfect Behavioral Specifications  
-  
-From Constitution to Behavior: Auditing and Repairing Induced Conflicts in Spec-Driven Alignment
-```
-
-My favorite is:
-
-**Debugging Constitutions: Behavior-Aware Spec Compilation for Language Model Alignment**
-
-It says exactly what is new.
-
-## The crisp contribution list
-
-I’d write the contribution paragraph as:
-
-1.  **A compiled representation of behavioral specifications** as hierarchical, defeasible clauses with typed conflict edges.
-    
-2.  **A conflict-targeted synthetic data pipeline** built on MARIN’s existing spec-to-DPO alignment function.
-    
-3.  **A post-training behavioral audit and attribution loop** that traces model failures back to clauses, clause interactions, rubrics, synthetic data, or optimization artifacts.
-    
-4.  **Empirical evidence** that vanilla spec-to-DPO can induce or amplify behavioral conflicts, and that targeted repair improves conflict handling more efficiently than adding random synthetic preference data.
-    
-
-That is a coherent research project, and MARIN is actually a good vehicle for it because the existing pipeline is already modular, cached, and DPO-ready.
-
-![](https://www.google.com/s2/favicons?domain=https://aclanthology.org&sz=32)
-
-![](https://www.google.com/s2/favicons?domain=https://arxiv.org&sz=32)
-
-Sources
+1. A **spec-native trade-off stress suite** built from statement pairs, neutral scenarios, and biased variants.
+2. A **stress-test-guided static alignment method** that trains on validated trade-off scenarios instead of mostly single-clause prompts.
+3. A **stress-test-guided repair loop** that uses post-training failure patterns to choose spec, rubric, or data patches.
+4. Empirical evidence that **trade-off-aware evaluation** is necessary to measure progress in alignment-from-spec pipelines.
