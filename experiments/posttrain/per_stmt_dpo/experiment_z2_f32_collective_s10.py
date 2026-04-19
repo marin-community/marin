@@ -24,6 +24,17 @@ Outcomes:
 - loss at step 2 stays at ~0.685 → collective precision (per this
   flag) is not the mechanism; try a different flag or move to Z4
   (HLO diff).
+
+Note
+----
+
+New runs in this campaign should use the same-region GCS copy of
+``Llama-3.1-8B-Instruct`` as the base model (see
+``experiments.posttrain.per_stmt_dpo.base_model.LLAMA_3_1_8B_INSTRUCT_GCS_PATH``).
+Loading is ~3-5x faster than the HuggingFace Hub CDN and Bug-1 has been
+verified model-agnostic. Do NOT retroactively edit the ``model_name_or_path``
+here - its historical value is tied to the run artifacts. This note is
+for future forks of this experiment.
 """
 
 import os

@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from typing import Literal, Optional, cast, overload
 
 import jax
@@ -14,6 +15,13 @@ from haliax.partitioning import _get_mesh, current_thread_local_mapping, shard_m
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     fused_cross_entropy_loss_and_logsumexp_penalty as fused_cross_entropy_loss_and_logsumexp_penalty_kernel,
 )
+
+# DEBUGSTART — debug_accum_tpu_type Class-B BH: env-var override for CE implementation.
+# Default on TPU is "xla" (the blocked XLA kernel). Set MARIN_DEBUG_CE_IMPL=reference
+# to force the pure-JAX reference path (no blocking, no Pallas). Other allowed values:
+# xla, pallas_tpu, pallas_gpu. Unset/empty = default selection.
+_DBG_CE_IMPL = os.environ.get("MARIN_DEBUG_CE_IMPL", "").strip() or None
+# DEBUGEND
 
 DEFAULT_REDUCTION = cast(hax.ReductionFunction, hax.mean)
 
@@ -252,10 +260,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
 
         flat_labels = hax.flatten_axes(shard_labels, shard_labels.axes, batch_axis)
 
-        kernel_output = fused_cross_entropy_loss_and_logsumexp_penalty_kernel(
-            flat_embeddings.array,
-            flat_labels.array.astype(jnp.int32),
-            shard_lm_head.array,
+        _kernel_kwargs = dict(
             reduction=None,
             weight=None,
             logsumexp_weight=logsumexp_weight,
@@ -264,6 +269,16 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             logit_soft_cap=logit_soft_cap,
             precision=precision,
             return_argmax=return_argmax,
+        )
+        # DEBUGSTART — BH: MARIN_DEBUG_CE_IMPL forces kernel implementation
+        if _DBG_CE_IMPL is not None:
+            _kernel_kwargs["implementation"] = _DBG_CE_IMPL
+        # DEBUGEND
+        kernel_output = fused_cross_entropy_loss_and_logsumexp_penalty_kernel(
+            flat_embeddings.array,
+            flat_labels.array.astype(jnp.int32),
+            shard_lm_head.array,
+            **_kernel_kwargs,
         )
         if return_argmax:
             loss_flat, argmax_flat = cast(tuple[jax.Array, jax.Array], kernel_output)

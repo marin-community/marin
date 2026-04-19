@@ -88,8 +88,22 @@ class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
             key: Not used, but there for compat with other modules
         """
         del key
+        # DEBUGSTART — debug_accum_tpu_type C5 probe: cast weight and input to bf16
+        # before matmul, back to original dtype after. Simulates c=bf16 compute
+        # while keeping f32 storage. Gated by env var.
+        import os as _dbg_os
+        import jax.numpy as _dbg_jnp
+
+        weight = self.weight * self.reparam.active_scale
+        if _dbg_os.environ.get("MARIN_DEBUG_ROUND_LINEAR_WEIGHT", "0") == "1":
+            weight_orig_dtype = weight.dtype
+            weight = weight.astype(_dbg_jnp.bfloat16).astype(weight_orig_dtype)
+        if _dbg_os.environ.get("MARIN_DEBUG_ROUND_LINEAR_INPUT", "0") == "1":
+            inputs_orig_dtype = inputs.dtype
+            inputs = inputs.astype(_dbg_jnp.bfloat16).astype(inputs_orig_dtype)
+        # DEBUGEND
         q = inputs.dot(
-            self.weight * self.reparam.active_scale,
+            weight,
             axis=self.In,
             dot_general=self.dot_general,
         )
@@ -98,6 +112,18 @@ class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
         if self.bias is not None:
             q = q + self.bias
             q = hax.auto_sharded(q)
+
+        # DEBUGSTART — debug_accum_tpu_type C3 probe: round Linear outputs to bf16
+        # and back to f32. Simulates the beneficial activation rounding that
+        # c=bf16 compute injects at every layer. Gated by env var.
+        import os as _dbg_os
+
+        if _dbg_os.environ.get("MARIN_DEBUG_ROUND_LINEAR_OUT", "0") == "1":
+            import jax.numpy as _dbg_jnp
+
+            orig_dtype = q.dtype
+            q = q.astype(_dbg_jnp.bfloat16).astype(orig_dtype)
+        # DEBUGEND
 
         return q
 

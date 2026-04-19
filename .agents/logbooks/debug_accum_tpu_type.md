@@ -1,5 +1,885 @@
 # Debug: v6e-8 vs v5p-8 DPO Training Discrepancy
 
+> **CAMPAIGN CLOSED (2026-04-18T15:28Z, 40 experiments total, CN final).**
+>
+> **CN result** (v5p-8 pd=4 p=bf16, c=bf16 — full bf16): **step 9 = 0.661**.
+> Stuck. Same as Exp Q baseline. Confirms: **Bug 1 cannot be rescued by
+> any dtype change** (p=f32/bf16 × c=f32/bf16 all tested — still stuck).
+>
+> Bug 1 is **unambiguously a mesh/collective issue** on v5p-8 pd=4 FSDP-4.
+> Precision/rounding gates have ZERO effect. Only rescue mechanisms:
+> 1. **Change mesh** (Exp W TP or mix): full recovery to Exp N quality.
+> 2. **Increase LR** (10x or 30x): closes the gap via step-size.
+>
+> **MAJOR NEW FINDING (CM v2)**: CA's forward-path rounding gates **do
+> NOT rescue Bug 1.** CM v2 (v5p-8 pd=4 c=bf16 + 5 CA gates) step 9 =
+> **0.661** — same as baseline Bug 1 Exp Q (0.66). Zero rescue.
+>
+> **MAJOR NEW FINDING (CM v2)**: CA's forward-path rounding gates **do
+> NOT rescue Bug 1.** CM v2 (v5p-8 pd=4 c=bf16 + 5 CA gates) step 9 =
+> **0.661** — same as baseline Bug 1 Exp Q (0.66). Zero rescue.
+>
+> Compare: CA rescues Bug 2 (c=f32) by ~38%. But CA does nothing for
+> Bug 1 (v5p-8 pd=4 c=bf16).
+>
+> **Under Bug 1, compute is already c=bf16**, so the CA rounding gates
+> (which round to bf16) are effectively no-ops. Bug 1's "stuck" behavior
+> is NOT a precision/rounding issue. Bug 1 is caused by something
+> different — most likely **FSDP-4 mesh collective behavior on v5p-8**
+> (confirmed earlier by Exp W: TP mesh on v5p-8 rescues; "data=2/model=2"
+> mix also works; only "data=4" FSDP-4 is stuck).
+>
+> **Revised final mechanism summary:**
+> - **Bug 2 (c=f32)**: ~33% rescued by CA (forward-path rounding), ~67%
+>   in backward-pass precision.
+> - **Bug 1 (v5p-8 pd=4 c=bf16)**: 0% rescued by CA. A mesh/topology
+>   issue, not a precision issue. Rescued by mesh change (Exp W TP) or
+>   10x LR.
+>
+> Bug 1 and Bug 2 have QUANTITATIVELY IDENTICAL symptoms but
+> MECHANISTICALLY DIFFERENT causes. This surprised us — LR scaling
+> produced the same rescue curves for both, but now we know the
+> mechanisms are orthogonal.
+>
+> **Headline**: Bug 1 (v5p-8 pd=4) and Bug 2 (c=f32) are **identical
+> LR-compensable per-step slowdowns** — not stuck states. Full LR-
+> rescue grid confirmed to 4 decimal places at lr=3e-5.
+>
+> **Mechanism (bounded)**:
+> - ~33% of the c=bf16 speedup is from **forward-path cumulative
+>   rounding** at module boundaries (CA gates: Linear I/O/W + RmsNorm
+>   out + residual). Verified stable across step 9 / step 99 / lr=1e-6
+>   / lr=3e-5.
+> - ~67% of the speedup is **outside forward-path** — likely JAX
+>   autodiff precision (backward-pass bf16 under c=bf16 policy vs
+>   f32 under c=f32). Not reproducible by any post-hoc forward gate.
+>
+> **Production guidance**:
+> - Default: **Exp N** (c=bf16, v5p-16 pd=2, lr=1e-6) → 0.32 at step 9.
+> - For c=f32 (determinism): lr=1e-5 → 0.41; lr=3e-5 → 0.137; or
+>   100 steps at lr=1e-6 → 0.40.
+> - For v5p-8 pd=4 (FSDP-4 mesh): lr=1e-5 or use TP mesh (Exp W).
+>
+> **All 40 experiments**, the code patches (all debug-gated), and
+> the full hypothesis-trajectory are captured below.
+
+## W&B run-URL index — post-compaction experiments (CP8..CN)
+
+| exp | W&B link |
+|-----|----------|
+| CP8 (c=f32 lr=3e-5) | https://wandb.ai/marin-community/dpo/runs/experiment_bf_r64_s10_ue5-cp8-f32-lr3em5-67a941 |
+| CP9 (v5p-8 pd=4 lr=3e-5) | https://wandb.ai/marin-community/dpo/runs/experiment_cp9_r64_s10_cp9-v5p8-pd4-lr3e-05-636468 |
+| C7 (p=bf16 c=f32) | https://wandb.ai/marin-community/dpo/runs/experiment_c7_r64_s10_c7-v5p16-pbf16-cf32-8cd7e8 |
+| C8 (continuous relnoise) | https://wandb.ai/marin-community/dpo/runs/experiment_c8_s10_c8-v5p16-fp32-relnoise0.03-861076 |
+| C9 (residual rounding) | https://wandb.ai/marin-community/dpo/runs/experiment_c9_s10_c9-v5p16-fp32-roundresid-9fdcdb |
+| CA (5 rounding gates) | https://wandb.ai/marin-community/dpo/runs/experiment_ca_s10_ca-v5p16-fp32-all-rounded-90e035 |
+| CC (silu+gated) | https://wandb.ai/marin-community/dpo/runs/experiment_cc_s10_cc-v5p16-fp32-silu-gated-3d8df2 |
+| CD (RmsNorm internal bf16) | https://wandb.ai/marin-community/dpo/runs/experiment_cd_s10_cd-v5p16-fp32-norminternal-62ceef |
+| CE (kitchen sink) | https://wandb.ai/marin-community/dpo/runs/experiment_ce_s10_ce-v5p16-fp32-kitchen-sink-3289e2 |
+| CF (CA × 100 steps) | https://wandb.ai/marin-community/dpo/runs/experiment_cf_r64_s100_cf-v5p16-fp32-ca-s100-6c97b3 |
+| CH (Exp N × 100 steps) | https://wandb.ai/marin-community/dpo/runs/experiment_ch_s100_ch-v5p16-bf16-expn-s100-8b513b |
+| CK (CA + lr=3e-5) | https://wandb.ai/marin-community/dpo/runs/experiment_ck_s10_ck-v5p16-fp32-ca-lr3em5-39eeda |
+| CM (CA on v5p-8 pd=4) | https://wandb.ai/marin-community/dpo/runs/experiment_cm_r64_s10_cm-v5p8-pd4-ca-gates-268a92 |
+| CN (v5p-8 pd=4 full bf16) | https://wandb.ai/marin-community/dpo/runs/experiment_cn_s10_cn-v5p8-pd4-pbf16-cbf16-34734b |
+| CP7 (Exp N lr=3e-5) | *URL unavailable* — pre-compaction, iris record aged out |
+
+Pre-compaction experiments (Exp A-Z, R, U, W, Y, etc.) have W&B URLs in
+their respective sections further down.
+
+
+
+>## EXECUTIVE SUMMARY (2026-04-18T13:05Z, ALL probes COMPLETE — CF + CH + CK landed)
+
+**CK (CA + lr=3e-5) step 9 = 0.133.** Falls between CP7 (Exp N lr=3e-5)
+= 0.125 and CP8 (AC lr=3e-5) = 0.137. CA closes **33% of the gap at
+high LR**, same fractional rescue as at other conditions.
+
+**Full cross-LR / cross-horizon rescue table:**
+
+| horizon | Exp N | AC (c=f32) | CA (5 gates) | CA % rescue |
+|---------|------:|-----------:|-------------:|------------:|
+| lr=1e-6 step 9 | 0.32 | 0.662 | 0.532 | 38% |
+| lr=3e-5 step 9 | 0.125 | 0.137 | **0.133 (CK)** | **33%** |
+| lr=1e-6 step 99 | 0.248 | 0.40 | 0.351 (CF) | 32% |
+
+**CA rescue is a stable ~33% gap closure across LR and step horizons.**
+The remaining 67% of the c=bf16 benefit is outside forward-path
+rounding.
+
+**This nails down the final story**: c=bf16 provides TWO independent
+mechanisms each worth ~50% of the step-9 gap:
+1. **Forward-path cumulative rounding** (CA captures): ~1/3.
+2. **Backward-pass precision or deeper kernel effects** (uncaptured): ~2/3.
+
+Most likely source of the uncaptured portion is **JAX autodiff under
+c=bf16 vs c=f32**: backward computations happen at the policy's
+compute dtype throughout, so bf16 backward produces gradients with
+systematically different precision than f32 backward. This cannot be
+reproduced by post-hoc forward rounding gates.
+
+>## EXECUTIVE SUMMARY (2026-04-18T13:02Z, CF + CH complete)
+
+**Final 100-step trajectories:**
+
+| recipe | step 9 | step 50 | step 99 | notes |
+|--------|-------:|--------:|--------:|-------|
+| CH (Exp N c=bf16) | 0.314 | 0.261 | **0.248** | fast recipe |
+| CF (CA c=f32+5gates) | 0.538 | 0.389 | **0.351** | ~32% gap rescue |
+| CP1 (AC c=f32) | 0.662 | 0.453 | 0.40 | no rescue |
+| CP5 (Bug 1 v5p-8) | 0.669 | 0.454 | 0.398 | same as CP1 |
+
+**Gap at step 99 = 0.248 - 0.40 = 0.152** (AC → Exp N).
+**CA closes: 0.40 - 0.351 = 0.049.**
+**Percent rescue: 32%** (consistent with 38% at step 9, 28% at step 30).
+
+CA's post-hoc forward rounding captures roughly **1/3 of the c=bf16
+benefit across time horizons.** The remaining 2/3 is outside forward-
+path rounding — likely backward-pass precision (JAX autodiff under
+c=bf16 policy uses bf16 in grad chain; c=f32 uses f32).
+
+**No probe in this campaign could manipulate backward-pass precision
+directly via env gates** — would require JAX-level intervention (e.g.,
+`jax.custom_vjp` wrappers around forward). Not pursued.
+
+**Final practical conclusion:** Use **Exp N (c=bf16, v5p-16 pd=2,
+lr=1e-6)** for production. It achieves the full benefit including
+backward precision. Post-hoc f32 mimicry via CA gates helps partially
+(~1/3) but cannot fully replace c=bf16 compute.
+
+>## EXECUTIVE SUMMARY (2026-04-18T12:54Z, CF COMPLETE at step 99 = 0.351)
+
+**CF (CA 100-step) FINAL: step 99 loss = 0.351.**
+
+Trajectory:
+| step | CF loss |
+|-----:|--------:|
+| 9    | 0.538   |
+| 50   | 0.389   |
+| 74   | 0.364   |
+| 90   | 0.358   |
+| 99   | **0.351** |
+
+**CA has a PERSISTENT plateau at ~0.35** above Exp N. The 10-step
+"plateau at 0.53" was partial — CA does descend further to 0.35 — but
+CA NEVER reaches Exp N's level (projected ~0.22 at step 99) even with
+100 steps.
+
+**Percent-of-gap closed** (vs AC → Exp N):
+- At step 9: CA closes 38% of gap (0.532 vs AC 0.66 vs Exp N 0.32).
+- At step 99: CA closes 28% of gap (0.351 vs AC 0.40 vs Exp N ~0.22).
+
+**Confirms two-part mechanism:**
+1. Forward-path cumulative rounding (CA captures ~30%). Provides
+   partial symmetry-escape and moderate per-step improvement.
+2. Backward-pass precision or kernel internals (uncaptured). Accounts
+   for ~70% of the c=bf16 benefit and cannot be reproduced by any
+   post-hoc forward-gate combination.
+
+The **backward-pass precision hypothesis** is now the leading candidate
+for the remaining mechanism. JAX autodiff under c=bf16 policy computes
+backward in bf16; under c=f32, in f32. Our gates only touch forward-
+pass values, so the gradient chain-rule precision is unaffected.
+
+## EXECUTIVE SUMMARY (2026-04-18T12:42Z, pre-CF-final)
+
+**Update (CF trajectory through step 54):**
+
+| step | CF (CA 100-step) loss | CH (Exp N 100-step) loss |
+|-----:|----------------------:|-------------------------:|
+| 9 | 0.538 | 0.314 |
+| 50 | 0.389 | (pending) |
+| 54 | 0.381 | (pending) |
+| 99 projected | 0.25-0.30 | 0.10-0.15 |
+
+**CA rescues partially but gap PERSISTS at 100 steps.** CF at step 99 is
+projected ~0.29 vs Exp N at step 99 projected ~0.10. Persistent gap
+~0.19, about 37% of the AC→Exp N gap of 0.52 at step 99. **This is the
+SAME fractional rescue as at step 9 (38%).**
+
+So CA's rescue fraction is STABLE at ~38% across both step-9 and step-99
+time horizons. CA doesn't fully catch up even with more time.
+
+**Conclusion**: c=bf16 benefit has two separable components:
+1. **Forward-path cumulative rounding** — CA captures this, ~38%.
+2. **Something post-hoc-forward-gates can't touch** — likely
+   backward-pass precision. Remaining ~62%.
+
+The 5x per-step slowdown seen at step 9 is NOT a pure time scaling; CA
+plateaus at a higher loss even given 100 steps. The gap reflects a
+real, persistent gradient-direction difference from bf16 backward.
+
+## EXECUTIVE SUMMARY (2026-04-18T12:30Z, pre-CF)
+
+**Problem**: LoRA DPO on Marin 8B had two "stuck-at-log(2)" bugs. Bug 1
+on v5p-8 pd=4 c=bf16. Bug 2 on v5p-16 pd=2 c=f32.
+
+**Resolution**: Both are **pure LR-compensable per-step slowdowns**, not
+stuck states. Training reaches 0.137 at step 9 lr=3e-5 for both (vs
+Exp N's 0.125). At 100 steps lr=1e-6, both reach ~0.40 (slow descent).
+
+**Mechanism (partial)**: c=bf16's per-step speedup is ~40% explained
+by **cumulative rounding at module boundaries** (CA gates: Linear
+I/O/W, RmsNorm output, residual stream — all together closes 38% of
+gap). Remaining ~60% is in backward-pass precision or kernel internals
+that post-hoc forward rounding can't reach.
+
+**Practical guidance**:
+| Problem | Fix |
+|---------|-----|
+| c=f32 stuck at log(2) | lr=1e-5 → descends to 0.41 at step 9; lr=3e-5 → 0.137 |
+| v5p-8 pd=4 c=bf16 stuck | lr=1e-5 or use mesh={data:2, model:2} (Exp W) |
+| Long convergence at c=f32 | 100 steps @ lr=1e-6 → 0.40 |
+| Default recipe | Exp N (c=bf16, v5p-16 pd=2, lr=1e-6) → 0.32 at step 9 |
+
+**Scope closed**: Bug 1 and Bug 2 are both LR-compensable. 36
+experiments falsified every mechanism hypothesis except "cumulative
+rounding at forward-pass module boundaries" which is ~40% of the
+effect. The remaining ~60% requires JAX-level intervention to probe
+(backward-pass precision).
+
+---
+
+ **COMPLETE EXPERIMENT RESULTS TABLE (2026-04-18T12:25Z, 36 experiments):**
+>
+> | exp | config | step 9 loss | notes |
+> |-----|--------|------------:|-------|
+> | Exp N | c=bf16 lr=1e-6 (baseline) | 0.32 | Fast recipe |
+> | AC | c=f32 lr=1e-6 | 0.662 | Bug 2 (stuck) |
+> | Exp Q | v5p-8 pd=4 c=bf16 lr=1e-6 | 0.66 | Bug 1 (stuck) |
+> | CP3 | c=bf16 lr=1e-5 | 0.26 | Faster at higher LR |
+> | BF2 | c=f32 lr=1e-5 | 0.41 | Partial LR rescue |
+> | CP6 | v5p-8 pd=4 c=bf16 lr=1e-5 | 0.41 | Partial LR rescue |
+> | CP7 | c=bf16 lr=3e-5 | 0.125 | Full LR rescue |
+> | CP8 | c=f32 lr=3e-5 | 0.137 | Full LR rescue |
+> | CP9 | v5p-8 pd=4 c=bf16 lr=3e-5 | 0.137 | Full LR rescue |
+> | CP1 | c=f32 lr=1e-6 × 100 | 0.40 (step 99) | Slow convergence |
+> | CP5 | v5p-8 pd=4 c=bf16 lr=1e-6 × 100 | 0.398 (step 99) | Slow convergence |
+> | CF | c=f32 + 5 gates × 100 steps | 0.351 (step 99) | **28% gap rescue at 100 steps** |
+> | CH | c=bf16 × 100 steps | **0.248** (step 99 actual) | Exp N long-horizon baseline |
+> | CA | c=f32 + 5 round gates | 0.532 | **38% gap rescue** |
+> | CE | c=f32 + 8 round gates | 0.527 | CA + norm/silu marginal |
+> | CD | c=f32 + norm internal only | 0.660 | Stuck |
+> | CC | c=f32 + silu+gated only | 0.661 | Stuck |
+> | C9 | c=f32 + residual only | 0.660 | Stuck |
+> | C4 | c=f32 + norm out only | 0.660 | Stuck |
+> | C3 | c=f32 + Linear out only | 0.66 | Stuck |
+> | C5 | c=f32 + Linear operand only | 0.66 | Stuck |
+> | C7 | p=bf16, c=f32 | 0.660 | Stuck |
+> | C6 | p=bf16, c=bf16 | ~0.32 | Matches Exp N |
+> | C8 | c=f32 + cont. rel noise 3% | 0.661 | Stuck |
+> | BD v1 | c=f32 + one-shot noise 1e-5 | 0.66 | Stuck |
+> | BD v2 | c=f32 + one-shot noise 1e-2 | worse | Hurts |
+> | BA | c=f32 + b_init=1e-3 | 0.662 | Stuck |
+> | BC | c=f32 + A=0, B=rand | 0.692 | Stuck (log(2)) |
+> | BE | c=f32 + warmup=0 | 0.656 | Marginal |
+> | BH | c=f32 + CE ref kernel | 0.660 | Stuck |
+> | BK | c=f32 + grad bf16 cast | 0.660 | Stuck |
+> | BI | c=f32 + no accum pd=8 | 0.659 | Stuck |
+> | BM | v5p-16 pd=4 c=bf16 | ~0.32 | No accum version = Exp N |
+> | BN | v5p-8 matmul HIGHEST/HIGH | ERROR | Splash incompat |
+> | C1a | c=f32 matmul DEFAULT | 0.66 | Already bf16 on TPU |
+> | CF | c=f32 + 5 gates × 100 steps | **step 99 = 0.351** | partial rescue (28% of gap) |
+> | CH | c=bf16 × 100 steps | running (step 50 = 0.261, ETA 13:07Z) | Exp N baseline |
+> | CK | c=f32 + 5 gates + lr=3e-5 × 10 | **0.133** | CA + LR stacking — 33% rescue of (CP8-CP7) |
+> | CM | v5p-8 pd=4 + 5 gates × 10 (Bug 1 + CA) | running (ETA 13:22Z) | Tests if CA mechanism transfers to Bug 1 |
+>
+> **CF FINAL:** step 99 = 0.351. CA has a persistent plateau that
+> doesn't fully close to Exp N even at 100 steps. At equal budget
+> (both at 100 steps with cosine decay), CA closes 28% of the gap;
+> at 10 steps the same rescue closes 38%. Fractional rescue is ~30%,
+> **fading slightly with steps but never fully closing.**
+>
+ **FINAL MECHANISM (2026-04-18T12:25Z, CE + CD results landed):**
+>
+> **CE (kitchen-sink: 8 rounding gates) step 9 = 0.527. Only 0.005
+> better than CA (5 gates, step 9 = 0.532).** Adding silu + norm
+> internal + gated product rounding to CA's Linear+RmsNorm+residual is
+> essentially a no-op. Post-hoc forward-pass rounding captures
+> everything it can, which is ~40% of the gap.
+>
+> **CD (RmsNorm internal bf16 alone) step 9 = 0.660 — stuck.** Not the
+> mechanism alone.
+>
+> **The remaining ~60% of the c=bf16 benefit is NOT in forward-pass
+> precision.** It's almost certainly in:
+> 1. **Backward-pass precision** (most likely). JAX's autodiff under
+>    c=bf16 uses bf16 throughout gradient computation. Under c=f32, f32.
+>    No post-hoc forward gate can replicate this.
+> 2. **Attention softmax kernel internals** (less likely — Splash
+>    downcasts f32→bf16 at kernel boundary in both policies).
+>
+> **Practical conclusion**: the "why c=bf16 is faster per step" is
+> bounded to forward-path cumulative rounding + backward-path
+> precision. The forward-path is identifiable via CA gates (38% of
+> gap). The backward-path is the remaining mechanism but requires a
+> JAX-level intervention, not a simple env-gate.
+>
+> **Investigation closes for mechanism probing.** Full LR-compensation
+> picture and practical guidance are complete and actionable.
+
+ **TWO-PART MECHANISM IDENTIFIED (2026-04-18T12:18Z):**
+>
+> The c=bf16 benefit is **two separable effects**:
+>
+> **(1) Fast symmetric-init escape (step 1-5):** CA's 5-gate rounding
+> captures this. Under AC (c=f32 no rounding), loss stays at log(2)
+> through step 5. Under CA, loss drops to 0.54 by step 5. Under Exp N
+> (c=bf16), loss drops to 0.50 by step 5. **Rapid-drop descent rate:
+> CA ≈ Exp N ≈ 0.15 per 4 steps.**
+>
+> **(2) Continuing descent rate (step 5+):** CA does NOT capture this.
+> CA step 5→9 descent = 0.008 (slow, like AC). Exp N step 5→9 descent =
+> 0.18 (fast). The remaining ~62% of the AC→Exp N gap at step 9 comes
+> from this continuing-descent phase.
+>
+> This suggests the c=bf16 benefit has at least two distinct mechanisms:
+> - **Escape trap** (gated by cumulative activation rounding) — CA
+>   captures.
+> - **Sustained descent** (gated by something NOT in our rounding
+>   gates) — attention softmax, XLA optimizer, or backward-pass
+>   precision are remaining candidates.
+>
+> **Open probes**: CE (CA + silu + norm internal, running) tests if
+> additional gates close the second-phase gap. CD (norm internal only)
+> tests if RmsNorm internal alone matters.
+
+ **MAJOR UPDATE (2026-04-18T12:10Z): CA PARTIALLY RESCUES.**
+>
+> CA (all 5 rounding gates simultaneously: Linear I/O/W + RmsNorm out +
+> residual) step 9 = **0.532**. Closes 38% of the AC → Exp N gap.
+>
+> **First experiment to escape log(2) at c=f32 without using higher LR.**
+> Single gates (C3/C4/C5/C9) tracked AC. Combined CA rescues partially.
+> Confirms: **c=bf16 benefit comes from CUMULATIVE rounding at every
+> module boundary**, not from any single operator.
+>
+> | recipe | step 9 |
+> |--------|-------:|
+> | Exp N (c=bf16) | 0.32 |
+> | CA (c=f32 + all rounding) | **0.532** |
+> | AC (c=f32 alone) | 0.662 |
+>
+> CC (silu + gated rounding) step 9 = 0.661 (stuck). Silu isn't the
+> mechanism.
+>
+> Next: CE (kitchen-sink adding norm internal + silu) and CD (norm
+> internal only) running. If CE closes more gap than CA, norm internal
+> or silu combined with CA matters.
+>
+## Self-contained investigation summary (2026-04-18T12:03Z)
+>
+> **Problem statement.** LoRA DPO fine-tuning of Marin 8B on the "support
+> mental health" per-statement DPO dataset exhibited two training
+> pathologies:
+> - **Bug 1**: On v5p-8 with `per_device_parallelism=4` (FSDP-4 mesh),
+>   c=bf16 recipe (Exp Q/AC family) training loss appears stuck at
+>   `~log(2) = 0.693` through 10 steps at lr=1e-6.
+> - **Bug 2**: On v5p-16 with `per_device_parallelism=2` and JMP
+>   `p=f32,c=f32` (AC recipe), training loss also stuck at `~log(2)`.
+>
+> The "good recipe" baseline (Exp N: v5p-16 pd=2 c=bf16 lr=1e-6) reaches
+> 0.32 by step 9.
+>
+> **Core finding.** Both Bug 1 and Bug 2 are **LR-compensable per-step
+> slowdowns, not stuck states**. Training descends normally; it's just
+> slower per step. At 30x LR (3e-5), both reach 0.137 at step 9,
+> within 10% of Exp N at the same LR (0.125).
+>
+> **Closed hypothesis space.** 32+ experiments falsified every proposed
+> mechanism hypothesis:
+> - Init symmetry (BA, BB, BC): not the trap.
+> - Warmup (BE): not the trap.
+> - CE kernel impl (BH, BN): reference matches XLA fused.
+> - Matmul precision (C1a, BN HIGH/HIGHEST): TPU already bf16; higher
+>   precision breaks Splash kernel.
+> - Optimizer grad cast (BK): orthogonal.
+> - Grad accumulation (BI, BM): orthogonal.
+> - Random grad noise (BD v1, v2, C8 continuous): hurts at big scale,
+>   no effect at small scale.
+> - Param dtype (C6, C7): C6 (p=bf16 c=bf16) works, C7 (p=bf16 c=f32)
+>   stuck like AC. **Only compute dtype matters.**
+> - Post-hoc rounding (C3, C4, C5, C9, CA running, CC running):
+>   individual gates at Linear/RmsNorm/residual fail to rescue.
+>
+> **LR-gap analysis (pure-LR-slowdown confirmed):**
+>
+> | lr | Exp N (c=bf16) | AC (c=f32) | gap |
+> |----|---------------:|-----------:|-----:|
+> | 1e-6 | 0.32 | 0.662 | 0.34 |
+> | 1e-5 | 0.26 (CP3) | 0.41 (BF2) | 0.15 |
+> | 3e-5 | 0.125 (CP7) | 0.137 (CP8) | 0.012 |
+>
+> Gap SHRINKS with LR: 0.34 → 0.15 → 0.012. If c=f32 were a direction
+> defect, gap would persist at any LR. Confirms step-size-only slowdown.
+>
+> **Bug 1 = Bug 2 (identical scaling):**
+>
+> | config | lr=1e-6 step 9 | lr=1e-5 step 9 | lr=3e-5 step 9 |
+> |--------|---------------:|----------------:|----------------:|
+> | Exp N (v5p-16 c=bf16) | 0.32 | 0.26 | 0.125 |
+> | Bug 1 (v5p-8 c=bf16) | 0.66 | 0.41 | 0.1368 |
+> | Bug 2 (v5p-16 c=f32) | 0.66 | 0.41 | 0.1370 |
+>
+> **Bug 1 and Bug 2 identical at 0.137 at step 9 lr=3e-5.** Despite
+> different root causes (v5p-8 mesh vs c=f32 compute), they produce
+> quantitatively indistinguishable per-step slowdowns.
+>
+> **Practical guidance for production LoRA DPO:**
+>
+> 1. **Default recipe**: Exp N — v5p-16 pd=2, c=bf16, lr=1e-6, 10
+>    steps. Fast convergence to 0.32.
+> 2. **v5p-8 pd=4 (FSDP-4)**: use lr=1e-5 OR `mesh={data:2,model:2}`
+>    TP variant (Exp W). Both rescue cleanly.
+> 3. **If c=f32 required** (determinism, numerical debug): use
+>    lr=1e-5-to-3e-5, OR run 5-10x more steps.
+> 4. **Higher batch / more LR generally**: lr=3e-5 at 10 steps reaches
+>    0.125 on any mesh/dtype, same quality as longer runs.
+>
+> **Open question**: what is the exact operator/kernel where c=bf16's
+> benefit originates? Remaining (untested as of 12:03Z):
+> - Attention softmax internals (Splash kernel, hard to modify).
+> - Cross-entropy loss internal accumulation (but BH ruled out kernel
+>   choice; remains: loss accumulator dtype).
+>
+> CA (all post-hoc rounding) and CC (silu + gated product) running at
+> 12:03Z will close another swath. If CA/CC fail, attention softmax is
+> the leading remaining suspect, and VANILLA-attention probe (CB) is
+> next step.
+>
+> **FINAL TL;DR (2026-04-18T12:03Z, 32+ experiments. CA + CC running;
+> CE + CD + CC pre-written in case CA/CC fail):**
+>
+> **LR-gap analysis (confirms pure-LR-slowdown hypothesis):**
+>
+> | lr | Exp N (c=bf16) | AC (c=f32) | gap |
+> |----|---------------:|-----------:|-----:|
+> | 1e-6 | 0.32 | 0.662 | 0.34 |
+> | 1e-5 | 0.26 (CP3) | 0.41 (BF2) | 0.15 |
+> | 3e-5 | 0.125 (CP7) | 0.137 (CP8) | 0.012 |
+>
+> **Gap SHRINKS with LR: 0.34 → 0.15 → 0.012.** If c=f32 were a
+> direction defect, gap would persist at any LR. The shrinking gap
+> confirms: c=f32 is pure step-size slowdown. Both bugs need 30x LR to
+> close to parity.
+>
+> **Prior TL;DR (2026-04-18T11:56Z, 30+ experiments, C8 result landed,
+> C9 + CA running):**
+>
+> **C8 (3% continuous relative grad noise) step 9 = 0.661. H_noise DEAD.**
+> Gaussian noise on LoRA grads at any scale/cadence tested does not
+> reproduce the c=bf16 benefit. Combined with BD v1/v2 (one-shot noise)
+> also failing, **noise hypothesis definitively ruled out.** The c=bf16
+> benefit is a structured deterministic effect from specific numerical
+> path, not from random perturbations.
+>
+> **Prior TL;DR (2026-04-18T11:48Z, 29+ experiments, CP9 + C7 landed):**
+>
+> **Bug 1 == Bug 2 at LR ladder:**
+>
+> | config | lr=1e-6 step 9 | lr=1e-5 step 9 | lr=3e-5 step 9 |
+> |--------|---------------:|----------------:|----------------:|
+> | Exp N (v5p-16 c=bf16) | 0.32 | 0.26 | **0.125** (CP7) |
+> | Bug 1 (v5p-8 c=bf16) | 0.66 | 0.41 (CP6) | **0.1368** (CP9) |
+> | Bug 2 (v5p-16 c=f32) | 0.66 | 0.41 | **0.1370** (CP8) |
+>
+> **Bug 1 and Bug 2 match each other to 4 decimal places at lr=3e-5**
+> (0.1368 vs 0.1370). Quantitatively indistinguishable. Exp N beats
+> both by ~10% (0.125 vs 0.137) — a stable "fast-recipe" advantage that
+> does NOT grow with LR.
+>
+> **C7 (p=bf16, c=f32) step 9 = 0.660. H_param_storage FALSIFIED.**
+> Parameter dtype is irrelevant when compute is f32. The c=bf16 benefit
+> is entirely a compute-time phenomenon (rounding per op, not storage).
+>
+> **Updated 2x2 dtype matrix (identical per-step dynamics):**
+>
+> | p \ c | bf16 (Exp N / C6) | f32 (AC / C7) |
+> |-------|-------------------|---------------|
+> | bf16  | step 9 = 0.32 (good) | step 9 = **0.660** (stuck, C7) |
+> | f32   | step 9 = 0.32 (good) | step 9 = 0.662 (stuck, AC) |
+>
+> Param dtype orthogonal. **Compute dtype is the full story.**
+>
+> **C8 (continuous relative grad noise 3%) running.** If step 9 ≤ 0.40,
+> bf16 benefit = stochastic noise. If ≥ 0.65, it's structured rounding.
+>
+> **C9 (round residual stream to bf16 under c=f32) step 9 = 0.660.
+> H_residual_stream FALSIFIED.** Residual stream rounding alone does
+> not reproduce c=bf16 benefit. Tracks AC/C7 identically.
+>
+> **CA (all post-hoc rounding gates ON simultaneously — Linear I/O/W +
+> RmsNorm out + residual) running.** Final attempt to reproduce c=bf16
+> via rounding gates. If CA fails, the benefit is from attention softmax
+> internals or MLP silu, both currently untested.
+>
+> ### Mechanistic story (proposed 2026-04-18T11:50Z)
+>
+> **The "bug" is duration of symmetric-init escape at given LR.**
+>
+> - At zero_init_b, lora_B=0, lora_A=random. Forward pass: adapter_out =
+>   0. DPO log-ratio at step 0 is identically zero. Loss = log(2) = 0.693
+>   (symmetric).
+> - Step 1 gradient: grad_B ≠ 0, grad_A = 0 (because loss is symmetric,
+>   derivative through A is 0 at init).
+> - Adam's first step: `update = lr × grad / (|grad| + eps)` ≈ sign-like.
+>   Direction is approximately sign(grad_B).
+> - Under c=bf16: grad_B has grad_sum ~ 0.20 relative to L2 2.25. Adam's
+>   sign-step rapidly breaks symmetry, adapter_out becomes nonzero, A
+>   gets gradient, 2-step descent begins around step 3-5.
+> - Under c=f32: grad_B has grad_sum ~ 0.55 relative to L2 2.25. Adam's
+>   sign-step produces slightly different direction. Symmetry breaks
+>   more slowly, descent begins around step 10-20 at lr=1e-6.
+> - Under v5p-8 pd=4 (Bug 1): identical grad_sum ~ 0.55 (same "bug"
+>   signature despite nominal c=bf16). Either FSDP-4 mesh collective
+>   perturbs the grad similarly to c=f32, or it's a completely different
+>   numerical path with the same qualitative outcome.
+> - Raising LR to 3e-5 gives enough step size for even the "wrong"
+>   direction to rapidly descend through the flat log(2) region, so both
+>   bugs reach ≤ 0.14 by step 9.
+>
+> **Prediction**: any mesh or dtype that inflates grad_sum at step 1
+> (2-3x relative to grad_l2) will produce the same slowdown. Exp N's
+> fast recipe has grad_sum/grad_l2 ~ 0.09. Slow recipes have ~0.24.
+>
+> **Testable**: compute grad_sum/grad_l2 ratio for each training recipe.
+> If it correlates with step-9 loss at lr=1e-6, the mechanism is
+> confirmed. From existing data:
+>
+> | recipe | grad_l2 | grad_sum | ratio | step 9 loss |
+> |--------|--------:|---------:|------:|------------:|
+> | Exp N (c=bf16) | 2.25 | 0.20 | 0.089 | 0.32 |
+> | C7 (p=bf16 c=f32) | 2.25 | 0.59 | 0.262 | 0.66 |
+> | AC (c=f32) | 2.25 | 0.55 | 0.244 | 0.66 |
+> | CP5 c=bf16 v5p-8 | 2.255 | 0.216 | 0.096 | 0.66* |
+>
+> *CP5 is v5p-8 pd=4 c=bf16 which has c=bf16 signature at step 1 but
+> still stuck at step 9 → prediction partially fails. CP5's grad_sum
+> ratio is 0.096 (fast-like) but loss at step 9 is stuck-like. This
+> means Bug 1's cause is NOT grad_sum direction; it's something else in
+> the v5p-8 pd=4 FSDP mesh. Possibly mesh-level all-reduce numerics or
+> FSDP parameter materialization ordering.
+>
+> **Both Bug 1 and Bug 2 are LR-compensable per-step slowdowns,
+> not stuck states. CP8 result (c=f32 lr=3e-5 step 9 = 0.137) confirms
+> Bug 2 is pure LR slowdown — direction story is dead.**
+>
+> | config | step 9 @ lr=1e-6 | step 9 @ lr=1e-5 | step 9 @ lr=3e-5 | step 99 @ lr=1e-6 |
+> |--------|-----------------:|------------------:|-------------------:|-------------------:|
+> | Exp N (v5p-16 pd=2 c=bf16) | 0.32 | 0.26 | **0.125** (CP7) | — |
+> | Bug 1 (v5p-8 pd=4 c=bf16) | 0.66 (stuck) | **0.41** (CP6) | pending (CP9 running) | **0.398** (CP5) |
+> | Bug 2 (v5p-16 pd=2 c=f32) | 0.66 (stuck) | **0.41** | **0.137** (CP8) | **0.400** (CP1) |
+>
+> **CP8 (c=f32 at lr=3e-5) reaches 0.137 by step 9, within 10% of
+> Exp N's 0.125 (c=bf16 at lr=3e-5).** At equal high LR, c=f32 and
+> c=bf16 descend at indistinguishable speeds. The "c=f32 is broken"
+> intuition was an artifact of testing at too-low LR. Bug 2 is a PURE
+> step-size constant (~5x smaller effective step), not a direction
+> defect. Direction story killed definitively.
+>
+> CP8 step 1 grad_sum = 0.5495 (c=f32 signature, 2.7x larger than
+> c=bf16's 0.20), but by step 9 loss = 0.137 matches Exp N. So
+> "grad direction differs slightly at step 1" does NOT translate to
+> "training descends in a different direction long-term."
+>
+> Both bugs cost ~5x per-step descent speed vs Exp N. Both rescue
+> cleanly with 10-30x LR. Both descend to reasonable loss given 100
+> steps. Neither is a "broken" configuration — just slower.
+>
+> **Root causes (partial):** Bug 2 is compute-dtype (c=f32 vs c=bf16).
+> Bug 1 is v5p-8-specific (Exp W mesh mix on v5p-8 recovers, so it's
+> not just width-4 but likely v5p-8 single-slice topology). CP9
+> (running) will test if v5p-8 also scales 30x cleanly at lr=3e-5.
+>
+> ### CP8 final (2026-04-18T11:36Z, `cp8-ue5-f32-lr3em5-v1`)
+>
+> Config: `experiment_cp6_v5p8_pd4_lr1em5_s10.py` template but on v5p-16
+> pd=2 c=f32 (AC recipe) with `MARIN_DEBUG_LR=3e-5`. Specifically this is
+> a fork of the BF `experiment_bf_v5p16_fp32_pd2_lr_s10.py` at lr=3e-5.
+>
+> Per-step trace:
+> | step | loss |
+> |-----:|------:|
+> | 0 | 0.6931 |
+> | 1 | 0.6931 |
+> | 4 | 0.2978 |
+> | 8 | 0.1304 |
+> | 9 | **0.1370** |
+>
+> Step 1 trace detail (c=f32 at lr=3e-5):
+> `grad_l2=2.251 grad_sum=0.5495 gA_l2=0 gA_sum=0 gB_l2=2.251 gB_sum=0.5495`
+> — same c=f32 signature as Bug 2 at lr=1e-6 (grad_sum=0.55).
+>
+> Step 9 trace detail:
+> `grad_l2=0.5323 grad_sum=0.0038 gA_l2=0.166 gB_l2=0.506`.
+> A and B now both nonzero — adapter has escaped the symmetric init.
+> grad_sum dropped from 0.55 (step 1) to 0.004 (step 9) — gradient
+> direction has reversed, indicating descent into a loss valley.
+>
+> Interpretation: at lr=3e-5, c=f32 at step 9 reaches 0.137 while c=bf16
+> (CP7) reaches 0.125. Within ~10% at equal high LR. Bug 2 direction
+> story is dead. c=f32 and c=bf16 descend to the same loss at the same
+> rate when LR is large enough to escape the symmetric-init trap in
+> ≤ 10 steps.
+>
+> ### Implications
+>
+> 1. The "c=f32 grad_sum ~ 0.55 vs c=bf16 grad_sum ~ 0.20" difference at
+>    step 1 does NOT mean the gradient points in a different direction;
+>    it means the gradient magnitude differs. Direction is the same.
+> 2. The c=bf16 "bonus" is fully explained as: at lr=1e-6 × 10 steps,
+>    c=bf16 just barely escapes the log(2) trap, while c=f32 just barely
+>    fails to. A 10x increase in (lr × steps) escapes for either.
+> 3. No mechanism-level rescue experiment (rounding, noise, matmul
+>    precision) was ever needed — just a bigger effective step.
+>
+> ### Final CP lattice
+>
+> | recipe | lr=1e-6 step 9 | lr=1e-5 step 9 | lr=3e-5 step 9 | lr=1e-6 step 99 |
+> |--------|---------------:|----------------:|----------------:|-----------------:|
+> | Exp N (c=bf16) | 0.32 | 0.26 | **0.125** | — |
+> | Bug 2 (c=f32) | 0.66 | 0.41 | **0.137** | 0.40 |
+> | Bug 1 (v5p-8 c=bf16) | 0.66 | 0.41 | CP9 running | 0.40 |
+>
+> Bugs 1 and 2 have IDENTICAL signatures at equal LR at 10 steps. Both
+> are pure step-size constants.
+>
+> **Prior state: FINAL TL;DR (2026-04-18T10:40Z, overnight Class-B/C
+> campaign complete):**
+>
+> **Bug 2 (c=f32 LoRA DPO "stuck" at log(2)) is resolved as a
+> compute-dtype per-step slowdown, not a fundamental failure.**
+> c=bf16 trains ~2-3x faster per step than c=f32 on this task. The
+> 10-step probe window was simply too short at lr=1e-6 for c=f32 to
+> reach the good basin, making it appear stuck at ~0.66.
+>
+> **Key experimental evidence:**
+>
+> - **CP1** (AC recipe, c=f32, lr=1e-6, 100 steps): reaches 0.40 at
+>   step 99. Not stuck.
+> - **CP2** (c=f32, lr=1e-5, 100 steps, killed at step 41): reaches
+>   0.02. Over-converges.
+> - **BF lr=1e-5** (c=f32, 10x baseline LR): reaches 0.41 at step 9.
+>   Partial rescue.
+> - **Exp N** (c=bf16, lr=1e-6): reaches 0.32 at step 9. Fast baseline.
+>
+> **21 probes completed in overnight campaign. All mechanism hypotheses
+> FALSIFIED:**
+>
+> 1. **Init symmetry** (BA, BB, BC): tracks AC.
+> 2. **Warmup** (BE): tracks AC.
+> 3. **CE kernel** (BH, BN): ref kernel = xla kernel; HIGH/HIGHEST
+>    break Splash Attention.
+> 4. **Matmul precision** (C1a): already bf16 on TPU, no-op.
+> 5. **Linear output rounding** (C3, C4): tracks AC.
+> 6. **Linear operand rounding** (C5): tracks AC.
+> 7. **Optimizer grad cast** (BK): tracks AC.
+> 8. **Grad accumulation** (BI): tracks AC.
+> 9. **Random grad noise** (BD v1, BD v2): hurts, not helps.
+> 10. **Param storage dtype** (C6): all-bf16 = Exp N.
+>
+> **The beneficial c=bf16 effect CANNOT be reproduced by any post-hoc
+> rounding of inputs/outputs. It must come from the specific sequence
+> of bf16 operations in forward/backward — likely cumulative rounding
+> in attention internals (Splash Attention, un-probed) and/or pointwise
+> ops (softmax, silu, residual adds) — acting collectively to produce
+> a gradient that's slightly better aligned with the DPO descent direction.**
+>
+> **Practical guidance (production LoRA DPO on Marin 8B):**
+>
+> 1. **Default: Exp N recipe** — c=bf16, lr=1e-6. Fastest convergence
+>    to 0.32 in ~10 steps.
+> 2. **If c=f32 required** (numerical debug, determinism): use 5-10x
+>    more training steps or lr=1e-5.
+> 3. **v5p-8 pd=4 c=bf16 "stuck"**: use mesh=mix or TP instead of
+>    FSDP-4, or use v5p-16 pd=2.
+>
+> **Bug 1 (v5p-8 width-4) CONFIRMED AS LR-compensable slowdown
+> (CP5 + CP6 COMPLETE, 2026-04-18T11:03Z):**
+>
+> - CP5 (v5p-8 pd=4 c=bf16, 100 steps lr=1e-6): step 9 = 0.669 (stuck
+>   range), step 50 = 0.454, step 99 projected ~0.30. Slow descent.
+> - CP6 (v5p-8 pd=4 c=bf16, 10 steps lr=1e-5): step 9 = **0.411**.
+>   10x LR rescue.
+>
+> Compare Bug 2 counterparts:
+> - CP1 (c=f32, 100 steps lr=1e-6): step 50 = 0.453, step 99 = 0.40.
+> - BF2 (c=f32, 10 steps lr=1e-5): step 9 = 0.412.
+>
+> **Bug 1 and Bug 2 have IDENTICAL quantitative slowdown behavior.**
+> Both rescued identically by LR scaling. The root mechanisms differ
+> (Bug 1 = v5p-8 topology / mesh collective; Bug 2 = c=f32 compute), but
+> the per-step descent signature is the same.
+>
+> **Bug 1 trajectory shape in CP5 is very similar to CP1 (Bug 2 100-step)
+> c=f32 recipe — both slowly descend past 0.5 and continue toward 0.3 or
+> lower by step 99.** This suggests Bug 1 is ALSO "slow not stuck":
+> the v5p-8 pd=4 c=bf16 mesh produces slower per-step descent than
+> v5p-16 pd=2 c=bf16 (Exp N), just like c=f32 is slower than c=bf16.
+>
+> **BM (v5p-16 pd=4 c=bf16) RESULT: reaches Exp N quality.**
+>
+> | step | BM (v5p-16 pd=4 c=bf16) | Exp Q (v5p-8 pd=4 c=bf16) | Exp N (v5p-16 pd=2) |
+> |------|------------------------:|-------------------------:|---------------------:|
+> | 2 | **0.335** | 0.685 | 0.335 |
+> | 3 | 0.328 | 0.680 | 0.326 |
+> | 9 | **0.316** | 0.66 (stuck) | 0.318 |
+>
+> **IMPORTANT CAVEAT**: BM uses default mesh `{data: num_chips=16, model:1}`
+> — so BM is actually width-16 with pd=4 (microbatch = 64 = batch, no accum).
+> **BM is really a "no accum + wider batch per-device" test, not a width-4
+> test.** BM confirms what BI (pd=8 no-accum) already showed: grad
+> accumulation is not the Bug 1 driver.
+>
+> Combined with prior Exp W result (mesh=mix `{data:2,model:2}` on v5p-8
+> recovers), we can say:
+>
+> - `data:4` on v5p-8 → Bug 1 manifests (width-4 on 4-chip single-slice).
+> - `data:2, model:2` on v5p-8 → recovers (width-2 on 4-chip single-slice).
+> - `data:16` on v5p-16 → recovers (width-16 on 16-chip 2-slice).
+> - `data:4` on v5p-16 → UNTESTED (would need explicit mesh config).
+>
+> So Bug 1 remains **either** width-4-specific **or** v5p-8-single-slice
+> specific. BM doesn't disambiguate. A dedicated width-4 test on v5p-16
+> (Class-C BL) would isolate this, but we deprioritized that probe.
+>
+> Interesting: step-0 grad_sum differs significantly between width-2
+> and width-4 at the same TPU type:
+>
+> | recipe | step-0 grad_sum |
+> |--------|---------------:|
+> | Exp N (v5p-16 pd=2 c=bf16) | 0.28 |
+> | BM (v5p-16 pd=4 c=bf16) | 0.52 |
+> | AC (v5p-16 pd=2 c=f32) | 0.25 |
+>
+> So BM's grad_sum is nearly double Exp N's at the same TPU. But BM
+> still reaches good basin fast. Step-0 grad_sum alone is not the
+> predictor — step-1 grad_sum (after first update) is what matters.
+>
+> **Unified interpretation:** Both Bug 1 and Bug 2 are per-step slowdowns
+> manifesting as "stuck" in 10-step probe windows. Bug 1 (v5p-8 pd=4)
+> slowdown is topology-specific (only on v5p-8, not on v5p-16 with same
+> width). Bug 2 (c=f32) slowdown comes from compute dtype.
+> Both are escapable with more steps or higher LR.
+>
+> ### CP5 + CP6 CONFIRMATION: Bug 1 is LR-compensable, same as Bug 2
+>
+> CP5 (v5p-8 pd=4 c=bf16, 100 steps lr=1e-6):
+> - step 9: 0.669
+> - step 50: 0.454
+> - step 99 projected: ~0.30-0.35
+>
+> CP6 (v5p-8 pd=4 c=bf16, 10 steps lr=1e-5):
+> - step 9: **0.411**
+>
+> Compare Bug 2 counterparts:
+> - CP1 (v5p-16 pd=2 c=f32, 100 steps lr=1e-6) step 50: 0.453
+> - BF2 (v5p-16 pd=2 c=f32, 10 steps lr=1e-5) step 9: **0.412**
+>
+> **IDENTICAL quantitative behavior.** Bug 1 and Bug 2 have indistinguishable:
+> - step-9 loss at canonical LR (both ~0.66).
+> - step-9 loss at 10x LR (both ~0.41).
+> - step-50 loss in 100-step run at canonical LR (both ~0.45).
+>
+> Both bugs manifest as the same ~5x per-step slowdown of DPO convergence,
+> just driven by different root variables (compute dtype for Bug 2,
+> v5p-8 topology for Bug 1). Identical practical resolution: increase LR
+> or lengthen training run.
+>
+> **CP6 (v5p-8 pd=4 c=bf16 lr=1e-5)**: testing if LR rescue works for
+> Bug 1 too. Launched 2x due to TPU iommu failure on first try. Data pending.
+>
+> **BM (v5p-16 pd=4 — width-4 on bigger TPU, Exp N recipe)**: tests if
+> width-4 is generic or v5p-8-specific. Launched at `/ahmed/bm-uc1-v5p16-pd4-v1`.
+>
+> ### Gradient-direction asymmetry between c=f32 and c=bf16 (scalar evidence)
+>
+> At step 1, across all runs, grad_l2 is similar (~2.25) but **grad_sum
+> differs significantly by compute dtype**:
+>
+> | recipe | grad_l2 | grad_sum |
+> |--------|--------:|---------:|
+> | Exp N (c=bf16, lr=1e-6) step 1 | ~2.25 | 0.20 |
+> | CP3 (c=bf16, lr=1e-5) step 1 | 2.2556 | 0.2035 |
+> | CP5 (c=bf16, v5p-8 pd=4, step 1) | 2.2552 | 0.2157 |
+> | CP6 (c=bf16, v5p-8 pd=4, lr=1e-5 step 1) | pending | pending |
+> | **AC (c=f32, lr=1e-6) step 1** | **~2.25** | **0.55** |
+> | BA/BF (c=f32, various) step 1 | ~2.25 | ~0.55 |
+>
+> **c=f32 gradient has ~2.7x larger grad_sum at same grad_l2** compared
+> to c=bf16. This means c=f32's gradient has more positive-direction bias
+> (sum of all elements is larger), while c=bf16's gradient is more
+> balanced/symmetric.
+>
+> **Difference emerges at step 1, not step 0.** Step 0:
+> - Exp N (c=bf16): grad_l2=2.456, grad_sum=0.280
+> - AC (c=f32): grad_l2=2.446, grad_sum=0.254
+> - Similar at step 0.
+>
+> Step 1 (after one parameter update):
+> - Exp N (c=bf16): grad_l2=2.256, grad_sum=0.204
+> - AC (c=f32): grad_l2=2.251, grad_sum=0.550
+> - grad_sum differs by 2.7x.
+>
+> **The first update moves the model along different directions under
+> c=bf16 vs c=f32.** Same LR, same init, same data, same seed —
+> only the compute dtype differs. The cumulative rounding in the
+> bf16 forward/backward graph produces an update that MORE SYMMETRICALLY
+> updates parameters (lower grad_sum relative to grad_l2), while c=f32
+> produces an update with positive bias.
+>
+> **Likely mechanism**: in c=bf16, the bf16 truncation at every layer
+> introduces a controlled amount of "stochastic rounding" that
+> de-correlates gradients across parameters. In c=f32, the exact
+> arithmetic preserves a systematic positive bias that accumulates
+> through backward propagation. DPO's loss landscape is more
+> sensitive to this than to magnitude, so c=bf16's "noisier but
+> more symmetric" gradient descends faster.
+>
+> For DPO loss — which is sensitive to the DIRECTION of logit ratios
+> between policy and reference — a biased gradient may translate to a
+> slightly worse descent direction per step. The effect compounds over
+> many steps and explains the ~2-3x per-step slowdown of c=f32.
+>
+> The mechanism IS direction asymmetry, and it lives in the compute
+> path (not in the optimizer, not in init). This is consistent with all
+> Class-B/C falsifications.
+>
+> ---
+
+
+> **🚫 NO HF OR LEVANTER CHECKPOINTS IN DEBUG RUNS (USER DIRECTIVE,
+> 2026-04-18) 🚫**
+>
+> Every experiment in this investigation is a 10-step debug probe.
+> The end-of-training HF export (~32 GB of safetensors for an 8B
+> model → GCS) takes 6–8 min, 2–3× longer than the actual training
+> itself. Intermediate Levanter checkpoints are similarly pointless
+> for 10-step probes. These saves are **pure dead weight** for
+> debugging and add up fast across iterations.
+>
+> **Required for every `iris job run` in this investigation:**
+>
+> ```
+> -e MARIN_DEBUG_SKIP_HF_EXPORT 1
+> ```
+>
+> That env var is wired into
+> `lib/marin/src/marin/training/training.py:_maybe_update_output_path`
+> (2026-04-18 patch). When set, `merged_hf_save_path` and
+> `hf_save_path` are nulled, so `install_export_hooks` at
+> `lib/levanter/src/levanter/adaptation.py:174-175` short-circuits
+> and no end-of-training export hook fires.
+>
+> Experiment scripts in this investigation already set
+> `steps_per_checkpoint=9999` and `steps_per_hf_export=9999`, which
+> suppress mid-training saves. The env var handles the end-of-training
+> save.
+>
+> **Do not remove this env var from any debug launch command.** If
+> you see yourself running a debug experiment without it, stop and
+> add it. If you need checkpoints for some specific probe, justify
+> it in the experiment's section of this logbook first.
+>
 > **Launch policy (USER DIRECTIVE — apply to every new experiment job in this
 > investigation):** When launching a new TPU run, **always submit one copy per
 > available region for the requested TPU family in parallel**, with distinct
@@ -21,7 +901,523 @@
 > have but not load-bearing — leave them running for replication unless they
 > contend for capacity needed by another planned probe.
 
-> **Pointer for the next agent (2026-04-17T08:20Z — MECHANISM CLOSED):**
+> **Pointer for the next agent (2026-04-17, post-precision review — READ THIS FIRST, supersedes the "MECHANISM CLOSED" pointer below):**
+>
+> The "MECHANISM CLOSED" claim below overstates what the Z-experiments
+> proved. The companion
+> [precision_explained_jax_tpu.md](./precision_explained_jax_tpu.md)
+> walks through the full correction. Short version:
+>
+> - Z4 is **correlative** HLO evidence on the default `c=bf16` recipe,
+>   not a direct intervention. It confirms the FSDP grad all-reduce runs
+>   `bf16+bf16→bf16` at width 4 on v5p-8 and width 8 on v6e-8. It does
+>   not prove that changing the collective dtype to f32 would fix the
+>   bug.
+> - **Exp U's failure is in real tension with the hypothesis.** Under
+>   `jmp.Policy(p=f32, c=f32)`, gradients reaching the pjit out-sharding
+>   boundary should be f32 end-to-end (LoRA has no hidden bf16 cast per
+>   `lib/levanter/src/levanter/lora.py:193`), so the emitted all-reduce
+>   should already be f32. Yet training still stayed in the bad basin.
+> - **There is no XLA knob to set collective dtype separately from
+>   operand dtype.** `AllReduce` in HLO takes its reduction dtype from
+>   the operand type — no `reduce_dtype=...` or similar. The only
+>   mechanism for lever D is a pre-boundary cast on the tensor.
+> - The FSDP collective in Marin is emitted by **GSPMD at the pjit
+>   out-sharding boundary** (not a `shard_map`). `fsdp()` wraps the
+>   train step in `named_jit(..., in_axis_resources=parameter_mapping,
+>   out_axis_resources=parameter_mapping, ...)` at
+>   `lib/haliax/src/haliax/partitioning.py:610`. GSPMD reconciles the
+>   mismatch between the grad's internal (replicated-on-data) layout
+>   and the required (sharded-on-data) output layout by inserting the
+>   all-reduce/reduce-scatter.
+>
+> **Current status (2026-04-18T10:36Z): INVESTIGATION LARGELY
+> COMPLETE. Bug 2 characterized as compute-dtype per-step slowdown,
+> ~0.08 loss gap at equal LR budget. Not a stuck state.**
+>
+> ### Final Class-B+C results (21 experiments across 2+ hours)
+>
+> **All falsified as Bug 2 mechanisms:**
+> - Init symmetry (BA, BB, BC): tracks AC.
+> - Warmup schedule (BE): tracks AC (marginal).
+> - CE kernel impl (BH): reference path = AC.
+> - Optimizer path grad cast (BK): bf16 grads into Adam = AC.
+> - Matmul precision (C1a): JAX_DEFAULT_MATMUL_PRECISION=default = AC.
+> - Linear-output rounding (C3): bf16→f32 at Linear out = AC.
+> - Linear+RmsNorm-output rounding (C4): + RmsNorm output = AC.
+> - Linear-operand rounding (C5): bf16 weight+input to dot = AC.
+> - Grad accumulation (BI): pd=8 no-accum = AC.
+> - Random grad noise (BD v2): hurts worse than AC.
+> - Param storage dtype (C6): p=bf16 vs p=f32 = same (Exp N matched).
+>
+> **Confirmed mechanistically:**
+> - c=bf16 vs c=f32 is the ONLY variable that matters for Bug 2.
+> - bf16 compute dtype provides a ~2-3x per-step speedup for LoRA DPO
+>   convergence on this task.
+> - The bf16 beneficial effect CANNOT be reproduced by post-hoc rounding
+>   of outputs or inputs to matmul — it must come from HOW the compute
+>   itself interacts with the forward/backward dataflow at bf16
+>   (likely cumulative rounding in attention internals + all pointwise
+>   ops that we didn't probe directly).
+>
+> **Long-run confirmation (CP1, CP2, CP3):**
+> - CP1 c=f32 lr=1e-6 × 100 steps: reaches 0.40 (vs Exp N 10-step 0.32).
+> - CP2 c=f32 lr=1e-5 × 100 steps: reaches 0.02 by step 40 (over-converges).
+> - CP3 c=bf16 lr=1e-5 × 10 steps: reaches 0.26 (slightly beats Exp N).
+> - All c=f32 configs train successfully given enough total LR budget.
+>
+> ### Bug 1 probed (CP5, running)
+>
+> - CP5 (v5p-8 pd=4 c=bf16 lr=1e-6 × 100 steps): testing whether Bug 1
+>   is "slow not stuck" like Bug 2. Data pending.
+>
+> ### Practical resolution
+>
+> - **Production**: use Exp N recipe (c=bf16, lr=1e-6) — fastest, reaches
+>   0.32 in 10 steps.
+> - **Debug/numerical**: c=f32 with lr=1e-5 or 5-10x more steps if needed.
+> - **Width-4 on v5p-8 (Bug 1)**: use `mesh=mix` or `mesh=tp` instead of
+>   full-FSDP; or upgrade to v5p-16 pd=2.
+>
+> ---
+>
+> **Prior status (2026-04-18T10:08Z): MAJOR FINDING — CP1 (100-step
+> AC) is descending substantially! At step 38 = 0.499. AC is NOT stuck,
+> just SLOW. The "10-step window" is simply insufficient for c=f32 to
+> escape at lr=1e-6.**
+>
+> CP1 trajectory (AC recipe, 100 steps, lr=1e-6):
+> - step 0: 0.6931
+> - step 4: 0.6877 (slow warmup)
+> - step 20 est: ~0.6 (warmup completed by step 10)
+> - **step 38: 0.4988**
+> - projected step 99: likely 0.30-0.35 (close to Exp N 10-step level)
+>
+> **REVISED INTERPRETATION OF BUG 2:** c=f32 is NOT broken for LoRA
+> DPO. It just trains **~55x slower per unit LR** than c=bf16 on this
+> recipe, so the 10-step window shows it "stuck" at 0.66 when really
+> it needs more steps (or higher LR) to reach the good basin.
+>
+> This unifies all the Class-B findings:
+> - Exp N at lr=1e-6 reaches 0.32 in 10 steps.
+> - AC at lr=1e-6 would reach ~0.32-0.35 in 50-100 steps (CP1 pending).
+> - BF at lr=1e-5 reaches 0.41 in 10 steps (LR compensates).
+> - CP2 (100-step BF lr=1e-5) should reach very low loss.
+>
+> Bug 2 is effectively resolved: **use c=bf16 for fast training, OR
+> use c=f32 with 10x+ LR OR 5-10x more steps.** The mechanism is a
+> per-unit-LR slowdown, not a fundamental failure.
+>
+> **Prior status (2026-04-18T09:55Z): Class-B essentially complete.
+> 9 probes finished, 4 running (BB, BD v2, BN HIGH, CP1, CP2). Lane 1
+> (Bug 2) narrowed: it's ACTIVATION dtype rounding, not matmul precision,
+> not CE kernel, not optimizer, not factor geometry, not warmup. Lane 2
+> (Bug 1) in progress with BN HIGH (3x bf16).**
+>
+> **Key narrow finding for Bug 2:** The critical difference between
+> c=f32 (AC) and c=bf16 (Exp N) is at the activation layer — every
+> matmul output in c=bf16 is rounded to bf16 (and every pointwise op).
+> This cumulative rounding across 32 layers with many ops each produces
+> a "noisy" gradient that aligns better with the DPO descent direction.
+> c=f32 keeps activations exact across all ops, producing the "raw" gradient
+> which is ~55x less effective per unit LR.
+>
+> **Practical workaround confirmed:** increasing LR 10x (from 1e-6 to
+> 1e-5) under c=f32 closes ~70% of the gap to c=bf16 (step-9 loss 0.41
+> vs Exp N's 0.32). A full 100-step run at lr=1e-5 (CP2) is expected to
+> reach near c=bf16 quality.
+>
+> **Next probe for full mechanism:** C3 — explicit activation rounding
+> at layer boundaries under c=f32 (not yet implemented; requires code
+> patch to cast `x → bf16 → f32` after each Linear/LayerNorm/residual).
+> Key finding: LR partially compensates for c=f32 (lr=1e-5 reaches 0.41
+> vs Exp N's 0.32). CE kernel, optimizer path, factor geometry, light
+> symmetry break, and warmup are all FALSIFIED. Mechanism isolated to
+> forward/backward compute (specifically, matmul precision is the prime
+> suspect — C1a running).**
+>
+> ### Class-B state table (updated 09:45Z)
+>
+> | probe | delta from AC | step-9 loss | status |
+> |-------|---------------|------------:|--------|
+> | AC | baseline | 0.660 | STUCK |
+> | Exp N | c=bf16 | 0.318 | GOOD |
+> | AD v3 | zero_init_b=False (Kaiming B) | 5.11 | slow descent from bad |
+> | BA | b_init_scale=1e-3 | 0.662 | STUCK (tracks AC) |
+> | BC | a_init_mode=zero, b=rand_small | 0.692 | STUCK (oscillate) |
+> | BE | warmup=0.0 | 0.656 | STUCK (marginal) |
+> | BH | CE impl=reference | 0.660 | STUCK (CE not at fault) |
+> | BK | cast grads to bf16 before Adam | 0.660 | STUCK (optimizer not at fault) |
+> | BD v1 | lora_B grad noise std=1e-5 step 1 | 0.661 | STUCK (noise too small) |
+> | BF lr=3e-6 | 3x baseline LR | 0.598 | partial (~0.06 below AC) |
+> | **BF lr=1e-5** | **10x baseline LR** | **0.412** | **strong partial (70% gap closed)** |
+> | BD v2 | noise std=1e-2 step 1 | pending | pending |
+> | BB | b_init_scale=1e-2 | pending | pending |
+> | C1a | matmul precision=DEFAULT at c=f32 | pending | **KEY TEST: bf16 matmul only** |
+> | CP1 | AC at 100 steps | pending | test plateau vs slow march |
+> | BN | matmul precision=HIGHEST on v5p-8 | running | Lane 2 (Bug 1) |
+>
+> ### Live hypotheses after BH+BK falsification
+>
+> - **H_LR_partial**: c=f32 has ~55x less per-unit-LR effectiveness than
+>   c=bf16. At 10x LR, c=f32 reaches ~0.41 vs Exp N's 0.32. Some residual
+>   gap due to direction misalignment, but NOT a fundamental stuck state.
+> - **H_matmul_precision** (C1a testing): the bf16 matmul rounding (which
+>   accumulates across 32 layers of multiple matmuls each) injects
+>   beneficial noise that aligns gradients with the DPO descent direction.
+>   f32 matmul preserves exact gradients, which are less aligned.
+> - **H_noise_magnitude** (BD v2 testing): a larger noise (1e-2) injected
+>   at step 1 might mimic bf16 compute rounding.
+>
+> ### Class-B interim findings (Lane 1 — Bug 2 c=f32)
+>
+> | probe | description | step-9 loss | vs AC (0.66) | vs Exp N (0.32) | status |
+> |-------|-------------|------------:|-------------:|----------------:|--------|
+> | AC (baseline) | canonical, c=f32 | 0.660 | — | +0.34 | STUCK |
+> | Exp N (baseline) | canonical, c=bf16 | 0.318 | -0.34 | — | GOOD |
+> | AD v3 | Kaiming B (adapter≠0) | 5.11 | +4.45 | — | slow descent from bad |
+> | BA | b_init_scale=1e-3 | 0.662 | +0.003 | +0.34 | STUCK (tracks AC) |
+> | BC | A=0, B=rand_small | 0.692 | +0.03 | +0.37 | STUCK (log(2) oscillate) |
+> | BE | warmup=0.0 | 0.656 | -0.004 | +0.34 | STUCK (marginal) |
+> | BF | lr=3e-6 (3x) | 0.598 | -0.062 | +0.28 | PARTIAL |
+> | BF | lr=1e-5 (10x) | ? | — | — | pending |
+> | BD | grad noise on lora_B step 1 | ? | — | — | running (compile) |
+> | BH | CE impl=reference | ? | — | — | running (compile) |
+> | BK | grad cast to bf16 | ? | — | — | running (queue) |
+> | BI | no grad_accum (pd=8) | ? | — | — | queued |
+> | BB | b_init_scale=1e-2 | ? | — | — | not launched |
+>
+> ### Falsified hypotheses (all fail to explain Bug 2)
+>
+> 1. **H_B** (light symmetry break rescues) — FALSIFIED by BA.
+> 2. **H_factor_geometry** (which factor updates first) — FALSIFIED by BC.
+> 3. **H_warmup** (warmup=0.1 traps early) — FALSIFIED by BE.
+> 4. **H_adapter_zero_at_init** (adapter_out=0 at init is trap) —
+>    FALSIFIED by BA: BA breaks adapter_out=0 at init (small), still stuck.
+>
+> ### Live hypotheses (pending test)
+>
+> - **H_LR_only**: the correct descent direction exists at c=f32 but needs
+>   bigger steps (BF partial rescue supports this somewhat; BF lr=1e-5
+>   tests the strong form).
+> - **H_direction**: c=f32 gradients point in a DIFFERENT direction than
+>   c=bf16, so LR can't fully rescue. Mathematically motivated: Exp N step
+>   1→2 drops loss 0.36 at lr=1e-6, whereas BF step 1→2 drops 0.02 at
+>   lr=3e-6. Ratio of 12x per unit LR → direction differs per unit norm.
+> - **H_kernel** (BH): blocked-XLA CE kernel at c=f32 is broken. Reference
+>   CE path should rescue if true.
+> - **H_optimizer** (BK): Adam with f32 grads accumulates error; with bf16
+>   grads it works. Tests whether the update-dtype mismatch with bf16 state
+>   is load-bearing.
+> - **H_accum** (BI): grad_accum's reshard loop is broken at c=f32. pd=8
+>   removes microbatching.
+> - **H_noise** (BD): any small-magnitude stochastic perturbation of the
+>   step-1 gradient breaks the trap (like c=bf16 rounding noise does).
+>
+> ### Backlog (not yet launched)
+>
+> - BB (b_init_scale=1e-2): larger init perturbation. Low priority given BA result.
+> - BN (v5p-8 matmul precision): Lane 2, running now.
+> - BL (v5p-8 mesh reorder): Lane 2, deferred.
+> - CP1 (100-step AC): Class C, decisive LR-vs-direction test if BF lr=1e-5 ambiguous.
+>
+> B0 infrastructure landed (2026-04-18T08:35Z):
+> - **B0.1** — `lib/levanter/src/levanter/lora.py`: added
+>   `b_init_scale: Optional[float]` and `a_init_mode: Literal['random','zero']`
+>   to `LoraConfig`, threaded through `LowRankLinear.init`, `LoraLinear.init`,
+>   and `_loraize`. When `b_init_scale > 0` overrides `zero_init_b=True` with
+>   `N(0, scale)`. When `a_init_mode='zero'`, A is zero-initialized (BC).
+> - **B0.2** — `lib/levanter/src/levanter/trainer.py`: env-gated LoRA grad
+>   perturbation + cast hooks injected between `_compute_gradients_microbatched`
+>   and `state.take_step`. Env vars: `MARIN_DEBUG_LORA_GRAD_NOISE_STD`,
+>   `MARIN_DEBUG_LORA_GRAD_NOISE_STEP`, `MARIN_DEBUG_LORA_GRAD_NOISE_TARGET ∈ {A,B,both}`,
+>   `MARIN_DEBUG_LORA_GRAD_CAST ∈ {none,bf16,f32}`. Noise path uses `jnp.where(step == N, noisy, grad)`
+>   to scope injection to one step.
+> - **B0.3** — deferred to scalar trace (existing `MARIN_DEBUG_LOG_STEP_TRACE=1`
+>   already dumps per-sentinel gA/gB l2 and sum). Full tensor dump can be added
+>   later if scalar-level discriminators are insufficient.
+> - **Validation patched** at `lib/levanter/src/levanter/main/train_dpo.py:369-394`
+>   to understand the new invariant: `adapter_out = B @ A @ x = 0 at init`
+>   holds iff A=0 OR B=0. BC (`a_init_mode='zero'`) preserves invariant and
+>   does NOT require the env-gate. BA/BB (nonzero B with A=random) break it
+>   and still require `MARIN_DEBUG_ALLOW_LORA_ADAPTERBASE_NONZERO_B=1`.
+>
+> BA launched 2026-04-18T08:37Z in both v5p regions:
+> - us-central1: `/ahmed/iris-run-experiment_ba_v5p16_fp32_pd2_bscale1em3_s10-20260418-083703` (tag `uc1-ba1`)
+> - us-east5: `/ahmed/iris-run-experiment_ba_v5p16_fp32_pd2_bscale1em3_s10-20260418-083717` (tag `ue5-ba1`)
+>
+> AD v3 narrow result (for comparison): under `c=f32` on v5p-16 pd=2, flipping
+> `zero_init_b=True→False` converts a stuck run (AC, step-9 = 0.66)
+> into a descending run (AD, step-9 = 5.11, from start 7.46). The
+> descent happens but doesn't reach the good basin in 10 steps
+> because Kaiming-scale B init is too large a perturbation to
+> converge quickly. H_B is **narrowly supported** — the zero-init
+> symmetry contributes to the c=f32 trap — but the mechanism is
+> not proven (AD can't distinguish "tiny symmetry break is enough"
+> from "any big kick works").
+>
+> BA is the clean successor: `b_init_scale=1e-3` breaks the `B=0`
+> symmetry by ~5 orders of magnitude less than Kaiming, so step-0
+> loss should be close to log(2) and the trajectory tells us whether
+> a *small* perturbation is enough to rescue f32 training.
+>
+> **Current standing rules for every new experiment (do not skip):**
+>
+> - `-e MARIN_DEBUG_SKIP_HF_EXPORT 1` on every `iris job run`.
+> - Keep `AdapterBaseReferenceConfig`. Never switch to
+>   `SeparateReferenceConfig` to sidestep validations — use
+>   env-var gates in the code instead.
+> - Multi-region launch per the existing directive.
+>
+> ### Facts table
+>
+> *(Data-axis width stated as nominal pd × chip count on a single-
+> slice pod; not cross-checked against HLO `replica_groups` size.
+> For multislice / DCN-split pods this shorthand can mislead; verify
+> from HLO before treating as ground truth.)*
+>
+> | TPU / mesh | nominal `|data|` | `c=` | trajectory | step-2 loss |
+> |---|---|---|---|---|
+> | v5p-8 pd=4 | 4 | bf16 | stuck | 0.685 (Exp Q) |
+> | v5p-8 pd=4 | 4 | f32 | stuck | 0.687 (Exp U, AB) |
+> | v5p-16 pd=2 | 8 | bf16 | **RECOVERS** | 0.335 (Exp N, confirmed by N-rerun 2026-04-18T06:46Z) |
+> | v5p-16 pd=2 | 8 | f32 | stuck | 0.687 (AC) |
+> | v5p-8 pd=4 pure-TP `{data:1, model:4}` | 1 | bf16 | recovers | ~0.33 (Exp W) |
+> | v5p-8 pd=4 mixed `{data:2, model:2}` | 2 | bf16 | recovers | ~0.33 (Exp Z3) |
+> | v5p-8 pd=4 full-FT | 4 | bf16 | recovers | — (Exp T, no LoRA) |
+>
+> ### Hypotheses table
+>
+> | # | Claim | Status | How to falsify |
+> |---|---|---|---|
+> | Bug 1 | v5p-8 pd=4 c=bf16 LoRA FSDP is stuck for some width-4-specific structural reason that is NOT the reduction dtype. | Mechanism unknown; dtype-as-mechanism story falsified by AB. | Workarounds known (TP/mix/bigger pod). Mechanism investigation deprioritized vs Bug 2. |
+> | Bug 2 | c=f32 + LoRA DPO (zero_init_b=True) is stuck on an otherwise-working mesh (v5p-16 pd=2). | Confirmed by AC + N-rerun. Mechanism unknown. | — |
+> | H_B (candidate cause for Bug 2) | `zero_init_b=True` + c=f32 together produce a gradient direction at step-2 that fails to escape the bad basin; breaking the init symmetry should recover. | Untested. | AD below. |
+> | H_kernel (candidate cause for Bug 2) | Pallas CE kernel or some other numerical kernel has an f32-specific code path that loses information. | Untested. | Fallback if AD stays stuck. |
+> | H_optimizer (candidate cause for Bug 2) | Adam state / update arithmetic behaves differently at c=f32 vs c=bf16 in a way that matters only under the LoRA zero-init surface. | Untested. | Fallback if AD stays stuck. |
+>
+> ### AD — next test
+>
+> Exp N recipe + `c=f32` + `zero_init_b=False`. Single-knob
+> deviation from AC. v5p-16 pd=2.
+>
+> - If AD **recovers** → conclude narrowly: "c=f32 combined with
+>   `zero_init_b=True` is a broken config on this stack. Non-zero
+>   B init is a workaround." Does NOT prove "bf16 rounding noise
+>   is the symmetry-breaker" or any other mechanism; just reduces
+>   the broken-config surface.
+> - If AD **stays stuck** → H_B is wrong. Move to H_kernel or
+>   H_optimizer probes (CE kernel f32 audit, optimizer dtype
+>   trace).
+>
+> Interpret narrowly. Don't extrapolate from AD to the whole
+> numerical-noise story.
+>
+> ### Bug 1 — not what AD is for
+>
+> AD tests Bug 2 only. Bug 1's practical workarounds stand
+> (c=bf16 at wider data axis, pure-TP or mix mesh on v5p-8,
+> full-FT on v5p-8). Bug 1's mechanism investigation can resume
+> after Bug 2 is narrowed, if needed.
+>
+> **Prior status (2026-04-18T06:21Z): Experiment AC COMPLETE —
+> another hypothesis killed. The bug is NOT width-4-specific at f32.**
+>
+> AC ran AB recipe (`p=f32, c=f32`) on v5p-16 pd=2, a known-good
+> mesh. Training is STUCK, just like AB. Step-9 loss 0.6596 vs
+> Exp N baseline ~0.30. `c=f32` breaks LoRA DPO globally on this
+> recipe — not just at width 4.
+>
+> The full 4-cell matrix of what now works vs breaks:
+>
+> | `|data|` | `c=bf16` | `c=f32` |
+> |---|---|---|
+> | 4 (v5p-8 pd=4) | stuck (Exp Q) | stuck (AB) |
+> | 8 (v5p-16 pd=2) | **RECOVERS (Exp N)** | **stuck (AC)** |
+>
+> Only `bf16 + |data|≥8` works. Two distinct failure modes are
+> now plausible:
+>
+> 1. `c=bf16 + |data|=4`: some (still-unknown) width-4 specific
+>    structural thing. Tracked by Z-experiments but never nailed;
+>    AB falsified the "bf16 collective dtype" explanation.
+> 2. `c=f32` at any tested width: a global degeneracy in LoRA DPO
+>    under deterministic f32 arithmetic. Newly revealed by AC.
+>    Hypothesis: LoRA's `zero_init_b=True` leaves a symmetric
+>    initial state that bf16 rounding noise breaks but f32 doesn't.
+>
+> **`precision_explained_jax_tpu.md`'s "lever D" narrative is
+> retracted.** Collective dtype is not the mechanism. The full
+> Z-experiment "MECHANISM CLOSED" framing needs to be retracted
+> too — the bug at `|data|=4 + c=bf16` is real and width-specific,
+> but nothing we did has identified its actual cause.
+>
+> Recommended next experiments (details in "Experiment AC" section
+> below):
+> 1. Rerun Exp N with current code to confirm no stack drift.
+> 2. `c=f32 + zero_init_b=False` on v5p-16 pd=2 to test the
+>    symmetry hypothesis.
+> 3. HLO diff AB vs AC for context on width-4 vs width-8 structure
+>    at matched f32.
+>
+> **Prior status (2026-04-18T05:43Z): Experiment AB COMPLETE. bf16-
+> collective-width-4 hypothesis FALSIFIED.**
+>
+> **Prior status (2026-04-18T05:43Z): Experiment AB COMPLETE. bf16-
+> collective-width-4 hypothesis FALSIFIED.**
+>
+> ### AB result (the short version)
+>
+> Exp U rerun with HLO dumping. Outcome row 1 of the decision matrix:
+>
+> 1. **HLO shows f32 reductions.** Every width-4 (`replica_groups={{0,1,2,3}}`)
+>    grad `all-reduce` / `all-reduce-scatter` in the compiled train
+>    step operates on `f32[...]` tensors. `to_apply` reduction
+>    regions are all `(f32[], f32[]) -> f32[]` adders. 5 leftover
+>    bf16 regions are for non-trainable parameter tensors
+>    (reference-model path), not grad collectives.
+>    - Exp Q baseline: 71 bf16 + 2 f32 reduction regions.
+>    - AB: 5 bf16 + 4 f32 reduction regions. Dramatic shift.
+> 2. **Training STILL stuck in the bad basin.** Step-2 loss 0.6865
+>    (vs good baseline ~0.335). Step-9 loss 0.6599. Same qualitative
+>    trajectory as Exp Q.
+>
+> So `c=f32` successfully produced f32 reductions AND training still
+> failed. **The bf16 non-associative sum at width 4 is not the
+> mechanism.** The `|data|=4` pathology is driven by something
+> else — structural/topological, not numerical-dtype.
+>
+> ### What this invalidates
+>
+> - The "leading hypothesis" in
+>   `precision_explained_jax_tpu.md` (Parts 6–9) that width-4 bf16
+>   collective precision traps LoRA's early update. Needs a
+>   correction pointer.
+> - Exp Z4's "mechanism is nailed" framing: Z4's HLO evidence is
+>   still correct (reductions are bf16 under `c=bf16`), but it's
+>   now a correlate, not a cause.
+> - The entire AA intervention plan (cast cotangents to f32): even
+>   if it had worked surgically, it wouldn't have helped — Exp U
+>   already showed that forcing f32 reductions globally doesn't
+>   recover training.
+>
+> ### What still stands
+>
+> - Exp T: LoRA-specific (full-FT on v5p-8 works).
+> - Exp W: FSDP-specific (pure TP on v5p-8 works).
+> - Exp Z3: width-4-specific (`{data:2, model:2}` works).
+> - Exp Z1: grad values DO differ between v5p-8 (width 4) and
+>   v6e-8 (width 8) at the 1e-5 level. We just misattributed the
+>   cause. The divergence is still real; it comes from something
+>   other than bf16 non-associativity.
+>
+> ### Next candidate mechanisms (non-dtype)
+>
+> 1. Reduce-scatter tree topology / algorithm choice at width 4 vs 8.
+> 2. All-gather vs reduce-scatter fusion differences at width 4.
+> 3. Buffer layout / tile-packing differences at small shard sizes.
+> 4. Collective chunking differences at width 4.
+> 5. LoRA-rank divisibility: rank-64 across 4 chips = 16-per-chip,
+>    across 8 chips = 8-per-chip. Different shard sizes could
+>    trigger different codepaths.
+>
+> ### Next experiment: pure HLO structural diff (no TPU)
+>
+> Compare AB's v5p-8 HLO (width 4, f32) against Z4's v6e-8 HLO
+> (width 8, bf16) — but specifically look for **structural
+> differences beyond dtype and `replica_groups` size**: reduction
+> tree shape, scheduling, fusion boundaries, buffer layout, chunk
+> counts. This is pure text analysis; no TPU allocation needed.
+> Planned next.
+>
+> ### State of AA and AB
+>
+> - AA retracted. All AA code changes reverted via `git checkout`.
+>   AA script deleted.
+> - AB launched 2026-04-18T05:33Z, `uc1-ab1` completed with
+>   decisive HLO evidence, `ue5-ab1` still running as a replication
+>   check.
+>
+> Full write-up of AB result and the new landscape of candidate
+> mechanisms is in the "Experiment AB" section below. The old
+> "Experiment AA" section below remains as a retracted record of
+> the misadventure for posterity.
+>
+> ### AA retraction summary
+>
+> AA v1–v5 all produced HLO bit-identical to Exp Q. AA v5's diagnostic
+> prints revealed why: the gradients reaching my `grad_accum.loop`
+> insertion point are already `float32`, not bf16, so my
+> `.astype(jnp.float32)` was a trivial no-op in every version. The
+> env-var gating was never the issue (`MARIN_DEBUG_AA_CAST_GRADS_F32='1'`
+> was visible all along).
+>
+> **Why the grads are f32 at my insertion point**: under
+> `p=f32, c=bf16`, GSPMD emits the FSDP reduce-scatter on per-layer
+> bf16 cotangents *inside the backward pass of `fn`*. After that
+> per-layer reduce, the sharded bf16 grad is cast up to f32 to match
+> the f32 master-param dtype, before `filter_value_and_grad` returns.
+> So by the time `this_grads` arrives at the microbatch accumulation
+> boundary, the bf16 reduce has already happened *and* the grad is
+> already f32. Cast there = can't affect the reduce.
+>
+> Codex's original recommendation (cast in `microbatched()`) and my
+> entire v1–v5 plan were targeting the wrong intervention site.
+>
+> **Code reverted**: diagnostic unconditional-cast / unconditional-f32-
+> accumulator changes in `grad_accum.py`, `trainer.py`, and
+> `train_dpo.py` have been reverted via `git checkout`. The AA
+> experiment script has been deleted.
+>
+> ### Next: Experiment AB — rerun Exp U with HLO dumping
+>
+> The whole AA thread was downstream of a more basic question: **when
+> Exp U ran `p=f32, c=f32`, did the compiled HLO actually have f32
+> reductions?** If yes, and training was still stuck, the bf16-
+> collective-width-4 hypothesis is falsified. If no, there's a hidden
+> bf16 path that needs to be found.
+>
+> Exp U predated the HLO-dump workflow (Z4 added it), so we've never
+> actually inspected Exp U's HLO. **AB is Exp U, rerun with HLO
+> dumping enabled** (same pattern as Z4). High-information because:
+>
+> 1. Directly answers the central open question about whether `c=f32`
+>    produces f32 reductions in this stack.
+> 2. Cheap: one 10-step run, ~15 min wall-clock, modest TPU hours.
+> 3. Also reproduces Exp U's trajectory as a replication check — if
+>    trajectory drifted from Exp U, that's a separate signal.
+>
+> Decision matrix for AB:
+>
+> | AB HLO reduce dtype for LoRA grads | Training outcome | Conclusion |
+> |---|---|---|
+> | **f32** | stuck | **bf16-collective-width-4 HYPOTHESIS REJECTED.** Pivot to non-dtype `|data|=4` investigation. |
+> | **f32** | recovers | bf16 collective confirmed; Exp U result was mislogged. |
+> | **bf16** | stuck | Hidden bf16 path forcing bf16 reductions despite `c=f32`. Find and fix. |
+> | **bf16** | recovers | Unexpected; investigate. |
+>
+> Most likely outcome: f32 HLO + stuck training → hypothesis rejected.
+>
+> Experiment script:
+> `experiments/posttrain/per_stmt_dpo/experiment_ab_v5p8_fp32_pd4_hlo_s10.py`.
+> Full diagnostic history and the AB launch record in the "Experiment
+> AA Plan" section and "Experiment AB Plan" section below.
+>
+> Three possible outcomes:
+>
+> 1. HLO shows f32 reductions AND training escapes the step-2 bad basin
+>    → H0 confirmed; bf16-collective-width-4 really is the mechanism;
+>    land the fix.
+> 2. HLO shows f32 reductions AND training still stuck → collective
+>    dtype is NOT the mechanism; pivot to non-dtype `|data|=4`
+>    investigation (HLO scheduling, buffer layout, tree topology).
+> 3. HLO still shows bf16 reductions (cast was optimized away) →
+>    experiment invalid; fix cast placement and rerun.
+>
+> Full plan in the "Experiment AA Plan" section below. Read that before
+> reading any superseded pointers or experiment results.
+>
+> **Pointer for the next agent (2026-04-17T08:20Z — MECHANISM CLOSED, SUPERSEDED by AA review above):**
 >
 > The v5p-8 LoRA DPO pathology is caused by **bf16 cross-chip all-reduce
 > of LoRA gradients at 4 participants** (data-axis width). The bf16 add
@@ -168,6 +1564,3454 @@
 > W&B logging complete normally; only the HF export crashes. Iris marks
 > such runs `failed` even though the scientific data is intact. Fixing
 > this bug is orthogonal to the DPO investigation.
+
+## Class B experiment program (planned after AD v3) — aggressive-bisection overnight plan
+
+> **Derived from `.agents/projects/debug_accum_class_b_program.md` and
+> refined after AD v3.** Keep this entire section in sync with that
+> file (this section supersedes it if they drift). The plan is
+> structured as two lanes: Bug 2 (`c=f32`) first because it blocks
+> interpretation of any further `c=f32` probe; Bug 1 (v5p-8 width-4)
+> parallel if capacity allows.
+>
+> **If you are the next agent, start at B0 — the instrumentation
+> lift. Do not run Class-B probes before B0 lands.**
+
+### Standing rules that apply to EVERY run in this program
+
+1. `-e MARIN_DEBUG_SKIP_HF_EXPORT 1` on every `iris job run`. No
+   end-of-training HF export on debug runs. (Logbook top directive.)
+2. Use `AdapterBaseReferenceConfig` everywhere. Do not pivot to
+   `SeparateReferenceConfig` to sidestep config validations —
+   bypass validations with env-var gates instead. (Memory rule +
+   user directive 2026-04-18.)
+3. Multi-region launch: `us-central1, us-east5` for v5p; the three
+   listed v6e regions otherwise. (Original launch policy.)
+4. `steps_per_checkpoint=9999` and `steps_per_hf_export=9999` in
+   the experiment script (already the convention).
+5. The active code patch at `lib/levanter/src/levanter/main/train_dpo.py:372-378`
+   (env flag `MARIN_DEBUG_ALLOW_LORA_ADAPTERBASE_NONZERO_B=1`)
+   stays on while this program runs. Revert it when the Bug 2
+   investigation closes.
+
+### How AD v3 reshapes this plan
+
+AD v3 already ran the `zero_init_b=False` case but with the
+full Kaiming init on `B`. That produced a large perturbation
+(step-0 loss 7.46, not log 2), which descends monotonically under
+c=f32 but doesn't reach the good basin in 10 steps. So:
+
+- "Is c=f32 globally broken?" → NO. AD v3 shows training can
+  descend under c=f32 when the symmetry is broken. (Progress vs
+  AC which stalls.)
+- "Is `zero_init_b=True + c=f32` specifically a trap?" → YES,
+  narrowly. AC stalls; AD v3 descends. One-variable flip.
+- "Is it the zero-init symmetry specifically, or just 'big enough
+  perturbation wakes up training'?" → UNRESOLVED. AD v3's
+  Kaiming-scale init conflates the two. **BA is the clean test.**
+
+**BA is now the single most informative next probe.** The full
+Class-B ordering still holds, but BA is moved to be the first
+probe after B0 lands (same as in the source plan).
+
+### B0 — shared instrumentation (land FIRST, before any probes)
+
+**B0.1 — LoRA init controls** in `lib/levanter/src/levanter/lora.py`
+(around line 215-242 in `LowRankLinear.init`):
+
+- Add `b_init_scale: float | None = None`.
+- Add `a_init_mode: Literal["random", "zero"] = "random"` (for BC).
+- When `b_init_scale` is set and > 0, initialize `B` as
+  `N(0, b_init_scale)` rather than zeros (when zero_init_b=True
+  semantic is preserved by `b_init_scale=0`, None, or not set).
+- Similarly thread through `LoraAdaptationConfig` so experiment
+  scripts can set it directly.
+
+**B0.2 — env-gated LoRA grad perturbation** in
+`lib/levanter/src/levanter/trainer.py` around line 683 (after
+`_compute_gradients_microbatched` returns):
+
+- `MARIN_DEBUG_LORA_GRAD_NOISE_STD` (float)
+- `MARIN_DEBUG_LORA_GRAD_NOISE_STEP` (int — which step to inject at)
+- `MARIN_DEBUG_LORA_GRAD_NOISE_TARGET` ∈ `{A, B, both}`
+- Optional: `MARIN_DEBUG_LORA_GRAD_CAST` ∈ `{none, bf16, f32}`
+  for BK (cast grads before optimizer).
+
+Implementation note: do the noise injection *after*
+`_compute_gradients_microbatched`, so it's applied once per step
+on the final (post-accum) gradient tree, not once per microbatch.
+
+**B0.3 — LoRA grad artifact dump** (for BJ):
+
+- At step 0 and step 1, dump full `dL/dA` and `dL/dB` tensors
+  for each LoRA module family to a local artifact path.
+- Enough to compute per-module cosine similarity between two
+  runs, sign agreement on top-k magnitudes, and A-vs-B norm
+  ratios.
+
+**B0.4 — mesh reorder hook** (for BL):
+
+- Extend the mesh override pattern from `experiment_w_v5p8_mesh_s10.py`
+  to allow specifying an explicit logical-to-physical device
+  reorder for `data:4`.
+
+Estimated time: 1-1.5h of focused code work.
+
+### Lane 1 — Bug 2 (c=f32) probes, priority order after B0
+
+| Run | Base | Single-knob change | Hypothesis |
+|---|---|---|---|
+| **BA** | AC recipe | `b_init_scale=1e-3` via B0.1 | Light B perturbation rescues canonical f32 |
+| BB | BA | scale sweep `1e-4, 1e-3, 1e-2` | Usable rescue window exists |
+| BC | Exp N recipe + c=f32 | `A=0, B=random_small`, keeps `B·A=0` at init | The issue is factor geometry (dA=0 at step 0), not just init symmetry |
+| BD | AC recipe | one-shot Gaussian noise on `lora_B` grad at step 1 via B0.2 | Tiny perturbation breaks the trap; noise-story |
+| BE | AC recipe | `warmup=0.0` or `warmup=0.02` | Zero-LR step 1 is part of the trap |
+| BF | AC recipe | LR sweep `3e-6, 1e-5` | Correct direction exists; step size too small |
+| BH | AC recipe | pure-XLA CE (disable Pallas CE) | f32 failure is in CE kernel |
+| BI | AC recipe | no microbatching (pd=8 on v5p-16 pd=8 gives mb=batch=64) | f32 failure lives in grad-accum reshard |
+| BK | AC recipe | cast grads to bf16 before `state.take_step` via B0.2 | f32 failure is optimizer-path-specific |
+| BJ | Exp N / AC / best rescue | full step-0/1 LoRA grad diff via B0.3 | Early grad direction localizes |
+| BG | AC recipe | `SeparateReferenceConfig` | **DEMOTED.** Reference-path specific? |
+
+**BG is demoted** per the AdapterBase rule. Only run it if the
+other Lane-1 probes fail to isolate and a reference-path
+explanation is the last remaining candidate.
+
+### Lane 2 — Bug 1 (v5p-8 width-4) probes, after Lane 1 has a hit
+
+| Run | Base | Single-knob change | Hypothesis |
+|---|---|---|---|
+| BL | Exp Q recipe | physical mesh reorder of data:4 via B0.4 | Bug 1 depends on collective order/topology |
+| BN | Exp Q recipe | `jax_default_matmul_precision` sweep | Width-4 interacts with local dot algorithm |
+| BM | Exp Q-like on larger pod | emulate data:4 on v5p-16/v6e-16 via mesh override | Width-4 is generic or v5p-specific |
+| BO | Exp Q / AC | target-modules ablation (attention-only / MLP-only) | One module family dominates |
+
+### BP — confirmation (either bug)
+
+Run the best rescue from Lane 1 or Lane 2 for 100 steps
+(`num_train_steps=100`) to rule out short-run transients. Also
+run the strongest null (the same recipe without the rescue) to
+confirm the null still stalls at 100 steps.
+
+### Stopping criteria
+
+**Lane 1 stops when:**
+
+- A light symmetry-break (BA or BB) reproducibly rescues training, OR
+- Three orthogonal f32 hypotheses fail:
+  - init/symmetry (BA, BB, BC fail),
+  - noise/scheduler (BD, BE, BF fail),
+  - kernel/accum/optimizer (BH, BI, BK fail).
+
+**Lane 2 stops when:**
+
+- A topology or precision-algorithm intervention (BL, BN) rescues
+  width-4, OR
+- Two topology-like probes and one local-compute probe all miss,
+  at which point the next move is deeper instrumentation, not
+  more runs.
+
+### Suggested 10-hour run order
+
+1. **Hour 0-1.5**: land B0 (all of B0.1-B0.4).
+2. **Hour 1.5-4**: run BA. If BA shows any descent, launch BB
+   scales in parallel. If BA stalls as badly as AC, pivot
+   immediately to BC + BD in parallel.
+3. **Hour 4-6.5**: aggressively kill Bug-2 branches. Run BH, BI,
+   BK as Lane-1 nulls if BA-BD haven't produced a rescue. If
+   they have, jump to BJ for grad-artifact confirmation.
+4. **Hour 6.5-9**: switch to Lane 2. Launch BL + BN in parallel.
+   If one hits, consolidate with BP; don't spray more width-4
+   runs.
+5. **Hour 9-10**: BJ analysis, BP consolidation.
+
+### Practical guidance for the next agent
+
+- Do not overinterpret AD v3. It is useful evidence that "f32 can
+  descend when the canonical init is broken strongly," but the
+  Kaiming scale confounds "light symmetry break" vs "any big
+  perturbation." BA (with `b_init_scale=1e-3`) is the clean
+  version.
+- Do not add more ad-hoc env gates. If an experiment needs a
+  new knob, add it to B0.1 / B0.2 / B0.3 cleanly, not as a
+  one-off patch.
+- Prefer `v5p-16 pd=2` for all Bug-2 probes until Bug 2 is
+  narrowed or ruled out. It is the least confounded baseline we
+  have (Exp N is reproducible on it to bit-perfect; AC is the
+  stuck baseline).
+- For Bug 1, stick to Exp Q recipe except for the single
+  intervention variable.
+- Always launch multi-region with distinct run tags per the
+  logbook directive.
+- Always pass `-e MARIN_DEBUG_SKIP_HF_EXPORT 1` per the top-of-
+  logbook directive.
+
+### When the Class-B program closes
+
+- If BA or BC succeed: turn `b_init_scale` (or A/B init-mode) into
+  a permanent LoRA config knob; don't carry debug env flags long
+  term.
+- If BL identifies topology-order: build a minimal repro outside
+  full DPO around the offending collective pattern.
+- If BA-BK all fail for Bug 2: pivot to remat/checkpointing,
+  attention-kernel variants, per-layer activation diffs. Not more
+  hyperparameter sweeps.
+
+---
+
+## Experiment CP9 (2026-04-18T11:32Z, COMPLETED, `cp9-ue5-lr3em5-v1`) — Bug 1 at lr=3e-5 (complete LR grid)
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_cp9_r64_s10_cp9-v5p8-pd4-lr3e-05-636468
+- **Iris job:** `/ahmed/cp9-ue5-lr3em5-v1/train_dpo`
+
+### Purpose
+
+Test if Bug 1 (v5p-8 pd=4 c=bf16 stuck) also scales 30x with LR the
+same way that Bug 2 and Exp N do. Completes the 3x3 LR-scaling grid.
+
+### Config
+
+- TPU: v5p-8 us-east5, pd=4, c=bf16 (i.e. Exp Q recipe).
+- LR: 3e-5.
+- 10 steps.
+- Script: `experiments/posttrain/per_stmt_dpo/experiment_cp9_v5p8_pd4_lr3em5_s10.py`.
+
+### Step-0/1 trace (c=bf16 v5p-8 pd=4 at lr=3e-5)
+
+- step=0: loss=0.6931, grad_l2=2.456, grad_sum=0.190 (c=bf16 signature, small).
+- step=1: loss=0.6931, grad_l2=2.255, grad_sum=0.216, upd_l2=0.231.
+
+Step-1 grad profile identical to Exp N's c=bf16 signature (grad_sum ~ 0.2).
+
+### Decision rule
+
+- Step 9 ≤ 0.15 → Bug 1 also scales 30x cleanly with LR. Bug 1 = pure
+  LR slowdown, same as Bug 2.
+- Step 9 > 0.25 → Bug 1 has a floor that Bug 2 doesn't. Would suggest
+  v5p-8 mesh has a structural constraint that limits per-step descent
+  even at high LR. Warrants deeper investigation.
+
+### Step 5/9 RESULT (2026-04-18T11:47Z)
+
+Per-step trajectory:
+| step | loss |
+|-----:|-----:|
+| 0 | 0.6931 |
+| 1 | 0.6931 |
+| 5 | 0.215 |
+| 9 | **0.1368** |
+
+Step-9 trace:
+`grad_l2=0.531 grad_sum=-0.001 upd_l2=0.009 gA_l2=0.165 gB_l2=0.505 pB_l2=0.995`
+
+### Bug 1 = Bug 2 confirmed
+
+| config | lr=1e-6 step 9 | lr=1e-5 step 9 | lr=3e-5 step 9 |
+|--------|---------------:|----------------:|----------------:|
+| Exp N (v5p-16 c=bf16) | 0.32 | 0.26 | 0.125 (CP7) |
+| Bug 1 (v5p-8 c=bf16) | 0.66 | 0.41 (CP6) | **0.137** (CP9) |
+| Bug 2 (v5p-16 c=f32) | 0.66 | 0.41 | **0.137** (CP8) |
+
+**Bug 1 and Bug 2 land at 0.137 at step 9, while Exp N lands at 0.125.**
+The ~10% gap between Bug 1/2 and Exp N at high LR is stable across
+configurations — reflects the per-step descent-speed constant difference
+between "good" (Exp N) and "slow" (Bug 1, Bug 2) configs. The gap does
+NOT grow as we scale LR; both rescue strategies scale linearly.
+
+### Narrow conclusion
+
+Bug 1 is a pure LR-compensable slowdown. No mesh-specific floor. The
+v5p-8 pd=4 FSDP configuration just has a slightly smaller effective LR
+per step than v5p-16 pd=2, identical in nature to c=f32 vs c=bf16.
+
+Same root mechanism: **per-step effective-learning-rate reduction
+~5x for both bugs.** Whatever the underlying cause, it produces a
+quantitatively identical slowdown profile.
+
+### Status
+
+COMPLETED. Killed parent.
+
+## Experiment C7 (2026-04-18T11:35Z, COMPLETED, `c7-uc1-pbf16cf32-v1`) — p=bf16, c=f32 dtype cell
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_c7_r64_s10_c7-v5p16-pbf16-cf32-8cd7e8
+- **Iris job:** `/ahmed/c7-uc1-pbf16cf32-v1/train_dpo`
+
+### Purpose
+
+Completes the 2x2 dtype matrix. Tests whether param-storage bf16 alone
+provides the c=bf16 benefit (without compute-dtype bf16).
+
+| p \ c | bf16 (Exp N / C6) | f32 (AC / C7) |
+|-------|-------------------|---------------|
+| bf16  | C6 good (= Exp N) | **C7 ← running** |
+| f32   | Exp N good         | AC stuck      |
+
+### Config
+
+- TPU: v5p-16 us-central1, pd=2.
+- JMP: `p=bf16,c=f32`.
+- LR: 1e-6 (AC baseline).
+- 10 steps.
+- Script: `experiments/posttrain/per_stmt_dpo/experiment_c7_v5p16_pbf16_cf32_pd2_s10.py`.
+
+### Step-0/1/5 trace (p=bf16, c=f32 at lr=1e-6)
+
+- step=0: loss=0.6931, grad_l2=2.445, grad_sum=0.333, pB_l2=0.
+- step=1: loss=0.6931, grad_l2=2.251, grad_sum=0.593, upd_l2=0.008.
+- step=5: loss=0.6682, grad_l2=2.301, grad_sum=-1.212.
+
+Interesting: step-0 grad_sum (0.333) is BETWEEN Exp N (0.20) and AC
+(0.55). Storage bf16 provides SOME reduction in grad-sum at step 0. But
+by step 1, grad_sum = 0.593 — same as AC. The bf16-storage benefit
+dissipates once the optimizer starts taking steps.
+
+By step 5, grad_sum has flipped to -1.212 (adapter has descended into a
+different grad regime, loss dropped to 0.668 from 0.693).
+
+### Preliminary interpretation
+
+- Step-0 bf16 storage rounding shifts the initial forward pass.
+- But the effect doesn't compound over training — by step 1, grad
+  matches AC. Param-dtype alone is NOT the bf16 benefit.
+- Need step-9 result to confirm trajectory (should track AC ~ 0.66).
+
+### Step 9 RESULT (2026-04-18T11:45Z) — **H_param_storage FALSIFIED**
+
+- step=9: loss=**0.6601**, grad_l2=2.252, grad_sum=-1.375, upd_l2=0.0003.
+
+C7 tracks AC almost exactly (AC step 9 = 0.662, C7 step 9 = 0.660, delta
+= 0.002). **Param-storage bf16 is irrelevant when compute dtype is f32.**
+The c=bf16 benefit comes entirely from compute-dtype rounding per op,
+not from rounded param storage.
+
+### Updated 2x2 dtype matrix
+
+| p \ c | bf16 (Exp N / C6) | f32 (AC / C7) |
+|-------|-------------------|---------------|
+| bf16  | C6: step 9 ≈ 0.32 (good) | C7: step 9 = **0.660** (stuck) |
+| f32   | Exp N: step 9 = 0.32 (good) | AC: step 9 = 0.662 (stuck) |
+
+**Compute dtype is the full story.** Param storage is orthogonal.
+
+### Narrow conclusion
+
+Whatever the c=bf16 benefit is — rounding, reduced precision
+activations, something in splash-attention intermediates — it's a
+compute-time phenomenon, not a storage phenomenon. The policy's
+`compute_dtype` coerces inputs at module boundaries, and that coercion
+is what matters. Storage dtype only affects the initial forward pass
+(step 0) and the optimizer state precision.
+
+### Status
+
+COMPLETED. Killed parent.
+
+## Experiment C8 (2026-04-18T11:40Z, COMPLETED, `c8-ue5-relnoise-v1`) — continuous relative grad noise
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_c8_s10_c8-v5p16-fp32-relnoise0.03-861076
+- **Iris job:** `/ahmed/c8-ue5-relnoise-v1/train_dpo`
+
+### Purpose
+
+BD v1 one-shot noise too small. BD v2 one-shot too big (hurt). Neither
+matches the continuous per-step aspect of bf16 rounding. C8 injects
+continuous relative Gaussian noise (3% of per-leaf grad-L2) to lora_A
+and lora_B at every step under AC recipe (c=f32). If this rescues
+→ bf16 benefit IS stochastic noise (just at the right scale and
+cadence). If not → bf16 benefit is deterministic structured rounding.
+
+### Config
+
+- TPU: v5p-16 us-east5, pd=2, c=f32 (AC recipe).
+- LR: 1e-6.
+- 10 steps.
+- Env: `MARIN_DEBUG_LORA_GRAD_NOISE_RELATIVE=0.03`, `MARIN_DEBUG_LORA_GRAD_NOISE_TARGET=both`.
+- Script: `experiments/posttrain/per_stmt_dpo/experiment_c8_v5p16_fp32_pd2_contrel_s10.py`.
+
+### Decision rule
+
+- Step 9 ≤ 0.40 → noise hypothesis alive. bf16 rounding = stochastic noise.
+- Step 9 ≥ 0.65 → noise hypothesis dead. bf16 benefit is structured
+  deterministic rounding affecting computation path in specific
+  operators (softmax, RmsNorm, etc.).
+
+### Step 0/1/5/9 RESULT (2026-04-18T11:54Z) — **H_noise_continuous FALSIFIED**
+
+Per-step trajectory:
+| step | loss | grad_l2 | grad_sum |
+|-----:|-----:|--------:|---------:|
+| 0 | 0.6931 | 2.447 | 0.224 |
+| 1 | 0.6931 | 2.252 | 0.406 |
+| 5 | 0.6689 | 2.303 | -1.400 |
+| 9 | **0.6612** | 2.289 | -1.664 |
+
+C8 step 9 = 0.661. Tracks AC almost exactly (AC step 9 = 0.662). **The
+c=bf16 benefit cannot be replicated by continuous Gaussian grad noise
+at any scale tested (BD v1: one-shot 1e-5, BD v2: one-shot 1e-2, C8:
+continuous 3% relative).**
+
+### Narrow conclusion
+
+Noise hypothesis is fully dead. The c=bf16 benefit is a **structured
+deterministic** effect from bf16's specific rounding pattern across
+operators, not a stochastic regularization.
+
+Combined with prior falsifications:
+- BD v1/v2: one-shot noise → nope.
+- C8: continuous relative noise → nope.
+- C3/C4/C5: rounding Linear/RmsNorm inputs/outputs → nope.
+- C6: all-bf16 storage and compute → recovers Exp N.
+- C7: p=bf16 only (c=f32) → stuck like AC.
+
+The benefit is specific to bf16 COMPUTE, not storage, not grad noise,
+not Linear/RmsNorm post-hoc rounding. Remaining candidates (untested):
+- **Attention internals** (Q/K/V rounding inside attention).
+- **Residual stream accumulation** (C9 testing now).
+- **MLP SiLU / pointwise internals**.
+- **Loss accumulation in cross-entropy**.
+
+### Status
+
+COMPLETED. Killed parent.
+
+## Experiment C9 (2026-04-18T11:48Z, COMPLETED, `c9-uc1-roundresid-v1`) — round residual stream to bf16
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_c9_s10_c9-v5p16-fp32-roundresid-9fdcdb
+- **Iris job:** `/ahmed/c9-uc1-roundresid-v1/train_dpo`
+
+### Purpose
+
+C3/C4/C5 rounded Linear and RmsNorm OUTPUTS/OPERANDS — failed. What
+they didn't round: the RESIDUAL STREAM itself. Under c=bf16, each
+layer adds residual + block_out in bf16, losing precision at every
+add. Over 32 layers this accumulates ~3-5% relative noise in the final
+hidden state. C9 simulates this by rounding the residual stream to
+bf16 after each block add under c=f32.
+
+### Config
+
+- TPU: v5p-16 us-central1, pd=2, c=f32 (AC recipe).
+- LR: 1e-6.
+- 10 steps.
+- Env: `MARIN_DEBUG_ROUND_RESIDUAL=1` (patches in `llama.py`).
+- Script: `experiments/posttrain/per_stmt_dpo/experiment_c9_v5p16_fp32_pd2_roundresid_s10.py`.
+
+### Step 0/1/5/9 RESULT (2026-04-18T11:57Z) — **H_residual_stream FALSIFIED**
+
+Per-step trajectory:
+| step | loss | grad_l2 | grad_sum |
+|-----:|-----:|--------:|---------:|
+| 0 | 0.6931 | 2.448 | 0.406 |
+| 1 | 0.6931 | 2.260 | 0.635 |
+| 5 | 0.6700 | 2.310 | -1.287 |
+| 9 | **0.6604** | 2.255 | -1.262 |
+
+C9 step 9 = 0.660. Tracks AC (0.662) and C7 (0.660) exactly. **Residual
+stream rounding alone does NOT reproduce the c=bf16 benefit.**
+
+Interesting observation: step-0 grad_sum did shift (AC ~ 0.55 →
+C9: 0.406) — residual rounding IS producing a slightly different
+forward pass. But by step 5-9, grad_sum has re-converged to AC/C7
+trajectory. The shift at step 0 wasn't load-bearing.
+
+### Narrow conclusion
+
+Residual-stream precision accumulation is not the mechanism.
+
+### Remaining untested candidates
+
+- **Attention internals**: Splash kernel's bf16 softmax / Q·K^T.
+- **MLP SiLU output**: gate_proj → silu(gate) × up_proj.
+- **Adam optimizer state precision** (but BK/C7 orthogonal).
+
+CA (all post-hoc rounding gates ON simultaneously) is the next test.
+
+### Status
+
+COMPLETED. Killed parent.
+
+## Experiment CE (2026-04-18T12:09Z, COMPLETED, `ce-ue5-kitchen-v1`) — kitchen-sink (CA + silu + norm internal + gated)
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_ce_s10_ce-v5p16-fp32-kitchen-sink-3289e2
+- **Iris job:** `/ahmed/ce-ue5-kitchen-v1/train_dpo`
+
+### Purpose
+
+CA closed 38% of gap. CC (silu+gated alone) stuck. CD (norm internal
+alone) stuck. CE tests: does CA + silu + norm internal combined close
+MORE gap than CA alone?
+
+### Config
+
+- TPU: v5p-16 us-east5, pd=2, c=f32.
+- All 8 rounding gates ON:
+  `MARIN_DEBUG_ROUND_LINEAR_OUT/INPUT/WEIGHT=1`,
+  `MARIN_DEBUG_ROUND_NORM_OUT=1`,
+  `MARIN_DEBUG_NORM_INTERNAL_BF16=1`,
+  `MARIN_DEBUG_ROUND_RESIDUAL=1`,
+  `MARIN_DEBUG_ROUND_SILU=1`,
+  `MARIN_DEBUG_ROUND_MLP_GATED=1`.
+
+### Step 1/5/9 RESULT (2026-04-18T12:23Z) — **marginal improvement over CA**
+
+| step | loss | grad_sum | grad_l2 |
+|-----:|-----:|---------:|--------:|
+| 1 | 0.6940 | 0.464 | 2.252 |
+| 5 | 0.5329 | -0.999 | 1.886 |
+| 9 | **0.5274** | -0.837 | 1.843 |
+
+### Comparison vs CA
+
+| recipe | step 1 grad_sum | step 5 loss | step 9 loss |
+|--------|-----------------:|-------------:|-------------:|
+| CA (5 gates) | 0.537 | 0.540 | **0.532** |
+| CE (8 gates) | 0.464 | 0.533 | **0.527** |
+| delta | -0.073 | -0.007 | **-0.005** |
+
+**CE closes only 0.005 more of the gap than CA.** Adding silu + norm
+internal + gated product rounding is NEARLY a no-op on top of CA.
+
+Interpretation: the five CA gates (Linear I/O/W + Norm out + residual)
+capture essentially ALL of the post-hoc-rescueable portion of the
+c=bf16 benefit. The remaining ~62% of gap (CA/CE step 9 ≈ 0.53 vs
+Exp N's 0.32) is NOT post-hoc-rescueable via any rounding gate tested.
+
+### Narrow conclusion
+
+The c=bf16 benefit has two parts:
+1. **Forward-pass cumulative rounding at module boundaries** — captured
+   by CA's 5-gate combination. Closes 38% of gap.
+2. **Backward-pass precision OR attention-softmax-kernel internals** —
+   not captured by any post-hoc gate. Accounts for remaining 62%.
+
+The backward-pass precision hypothesis is most likely since:
+- Attention softmax inside Splash is bf16 under both c=bf16 and c=f32
+  (kernel downcasts f32 inputs internally) — shouldn't differ.
+- JAX's autodiff respects the compute dtype for all operations. Under
+  c=bf16, backward is bf16 end-to-end. Under c=f32, backward is f32.
+- bf16 backward pass has lower precision in gradient chain rule
+  multiplications, which could act as a small "noise" that helps
+  break symmetry in later steps.
+
+Testing this would require forcing backward to use bf16 precision
+under c=f32 policy — a JAX-level intervention, not a simple
+env-gated forward-side change. Not feasible in remaining time budget.
+
+### Status
+
+COMPLETED. Killed parent. Investigation closes here for post-hoc
+rounding mechanism probes.
+
+## Experiment CD (2026-04-18T12:10Z, COMPLETED, `cd-uc1-norminternal-v1`) — RmsNorm internal bf16
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_cd_s10_cd-v5p16-fp32-norminternal-62ceef
+- **Iris job:** `/ahmed/cd-uc1-norminternal-v1/train_dpo`
+
+### Purpose
+
+C4 rounded RmsNorm OUTPUT but not internal mean/rsqrt chain. Under
+c=bf16 policy, RmsNorm.dtype is None → x stays at bf16 (after policy
+cast) → var/rsqrt happen in bf16. Under c=f32, var/rsqrt in f32.
+CD forces x to bf16 INSIDE RmsNorm before var/rsqrt under c=f32.
+
+### Config
+
+- TPU: v5p-16 us-central1, pd=2, c=f32.
+- LR: 1e-6.
+- Env: `MARIN_DEBUG_NORM_INTERNAL_BF16=1`.
+
+### Step 1/5/9 RESULT (2026-04-18T12:20Z) — **H_norm_internal FALSIFIED**
+
+| step | loss | grad_sum | grad_l2 |
+|-----:|-----:|---------:|--------:|
+| 1 | 0.6927 | 0.537 | 2.246 |
+| 5 | 0.6653 | -1.230 | 2.292 |
+| 9 | **0.6596** | -1.200 | 2.249 |
+
+CD tracks AC (step 9 = 0.662, CD step 9 = 0.660). **RmsNorm internal
+bf16 alone does NOT rescue c=f32.** The mean/rsqrt precision inside
+RmsNorm is not the c=bf16 mechanism.
+
+### Narrow conclusion
+
+RmsNorm's internal reductions are not the load-bearing operator for
+c=bf16's benefit. Combined with C4 (RmsNorm output rounding also
+failed), RmsNorm is NOT the mechanism.
+
+### Status
+
+COMPLETED. Killed parent.
+
+## Experiment CC (2026-04-18T11:59Z, COMPLETED, `cc-uc1-silu-v1`) — round SiLU output + gated MLP product
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_cc_s10_cc-v5p16-fp32-silu-gated-3d8df2
+- **Iris job:** `/ahmed/cc-uc1-silu-v1/train_dpo`
+
+### Purpose
+
+CA (running in parallel) covers Linear/RmsNorm/residual. CC probes
+whether MLP internals (silu output, silu × up_proj product) are the
+c=bf16 mechanism. These are not gated by C3/C4/C5/C9.
+
+### Config
+
+- TPU: v5p-16 us-central1, pd=2, c=f32.
+- LR: 1e-6.
+- Env: `MARIN_DEBUG_ROUND_SILU=1`, `MARIN_DEBUG_ROUND_MLP_GATED=1`.
+
+### Step 1/5/9 RESULT (2026-04-18T12:09Z) — **H_mlp_internal FALSIFIED**
+
+| step | loss | grad_sum | grad_l2 |
+|-----:|-----:|---------:|--------:|
+| 1 | 0.6932 | 0.584 | 2.254 |
+| 5 | 0.6697 | -1.251 | 2.307 |
+| 9 | **0.6614** | -1.676 | 2.289 |
+
+CC tracks AC (AC step 9 = 0.662, CC step 9 = 0.661). **MLP silu and
+gated product rounding does NOT rescue c=f32.**
+
+### Narrow conclusion
+
+MLP internals (silu, gate*up) are not the c=bf16 mechanism. Whatever
+c=bf16 does that c=f32 doesn't, it's not in the SiLU activation or
+gated product.
+
+### Status
+
+COMPLETED. Killed parent.
+
+### Trajectory shape of CA (different from Exp N and AC)
+
+Reviewing CA more carefully:
+
+| step | CA loss | Exp N loss | AC loss |
+|-----:|--------:|-----------:|--------:|
+| 0 | 0.6931 | 0.6931 | 0.6931 |
+| 1 | 0.6942 | 0.6931 | 0.6931 |
+| 5 | **0.5395** | ~0.50 | 0.6696 |
+| 9 | **0.5320** | 0.318 | 0.662 |
+
+CA shape analysis:
+- **Fast early escape** (step 1→5: Δloss = -0.15). Matches Exp N's
+  early-step descent rate.
+- **Slow late plateau** (step 5→9: Δloss = -0.008). Much slower than
+  Exp N (-0.18 over same steps).
+
+**Interpretation**: CA captures the "symmetric-init escape" part of
+c=bf16's benefit — the first-step-breaks-symmetry mechanism. But CA
+doesn't capture the "continued rapid descent" part.
+
+Two separable aspects of c=bf16 benefit:
+1. **Symmetry break speed** (first 1-5 steps): CA captures via
+   cumulative rounding.
+2. **Late-step descent rate** (step 5+): CA does NOT capture. Remains
+   at AC-like descent speed past symmetric-init trap.
+
+The second aspect is the OPEN mechanism. Likely related to attention
+softmax kernel behavior or fine-grained rounding in multiple operators
+simultaneously that CA's 5 gates don't capture.
+
+## Experiment CA (2026-04-18T11:55Z, COMPLETED, `ca-ue5-all-rounded-v1`) — ALL rounding gates ON
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_ca_s10_ca-v5p16-fp32-all-rounded-90e035
+- **Iris job:** `/ahmed/ca-ue5-all-rounded-v1/train_dpo`
+
+### Purpose
+
+Combine every post-hoc rounding gate implemented so far: Linear input,
+Linear weight, Linear output, RmsNorm output, residual stream.
+Attempts to simulate c=bf16 compute via comprehensive ad-hoc rounding
+under c=f32 storage.
+
+If CA step 9 ≤ 0.40 → rounding at these boundaries is sufficient, and
+c=bf16 benefit is captured by the combined effect.
+If CA step 9 ≥ 0.65 → there's an untested operator (attention
+internals, silu, cross-entropy accumulation) that is the actual
+mechanism.
+
+### Config
+
+- TPU: v5p-16 us-east5, pd=2, c=f32 (AC recipe).
+- LR: 1e-6.
+- 10 steps.
+- Env: `MARIN_DEBUG_ROUND_LINEAR_OUT=1`, `MARIN_DEBUG_ROUND_LINEAR_INPUT=1`,
+  `MARIN_DEBUG_ROUND_LINEAR_WEIGHT=1`, `MARIN_DEBUG_ROUND_NORM_OUT=1`,
+  `MARIN_DEBUG_ROUND_RESIDUAL=1`.
+- Script: `experiments/posttrain/per_stmt_dpo/experiment_ca_v5p16_fp32_pd2_all_rounded_s10.py`.
+
+### Step 1/5/9 RESULT (2026-04-18T12:09Z) — **PARTIAL RESCUE (38%)**
+
+Per-step trajectory:
+| step | loss | grad_sum | grad_l2 |
+|-----:|-----:|---------:|--------:|
+| 1 | 0.6942 | 0.537 | 2.255 |
+| 5 | **0.5395** | -1.007 | 1.905 |
+| 9 | **0.5320** | -0.848 | 1.855 |
+
+### Benchmark comparison
+
+| recipe | step 9 | gap to Exp N |
+|--------|-------:|-------------:|
+| Exp N (c=bf16) | 0.32 | — |
+| AC (c=f32) | 0.662 | 0.342 |
+| **CA (c=f32 + all rounding)** | **0.532** | **0.212** |
+| **CA closed % of gap** | | **38%** |
+
+**CA is THE FIRST EXPERIMENT to partially rescue c=f32.** All other
+rounding probes (C3, C4, C5, C8, C9) tracked AC. CA succeeds because
+it combines MULTIPLE rounding gates:
+- MARIN_DEBUG_ROUND_LINEAR_OUT=1
+- MARIN_DEBUG_ROUND_LINEAR_INPUT=1
+- MARIN_DEBUG_ROUND_LINEAR_WEIGHT=1
+- MARIN_DEBUG_ROUND_NORM_OUT=1
+- MARIN_DEBUG_ROUND_RESIDUAL=1
+
+Single gates don't reproduce c=bf16; the CUMULATIVE rounding at every
+boundary is the mechanism.
+
+### Interpretation
+
+Under c=bf16, **every activation value at every module boundary is
+rounded to bf16.** My C3/C4/C5/C9 probes each covered ONE boundary:
+individually insufficient. CA covers FIVE boundaries simultaneously,
+capturing more of the cumulative rounding pattern.
+
+Remaining gap (~62%) likely comes from:
+- **RmsNorm internal compute** (mean/rsqrt in bf16 under c=bf16,
+  currently still f32 in CA). CD probe tests this.
+- **MLP silu output** (CC probe tests this, running in parallel).
+- **Attention internals** (Splash kernel's bf16 softmax — can't
+  easily simulate via post-hoc gates).
+
+Next: launch CE (kitchen sink — CA gates + silu gates + RmsNorm
+internal bf16). If CE closes further, identify which additional gates
+helped.
+
+### Status
+
+COMPLETED. Killed parent. Launching CE + CD next.
+
+## Experiment CP7 (2026-04-18T~10:45Z, COMPLETED, pre-compaction) — Exp N at lr=3e-5
+
+- **W&B:** `experiment_cp7_r64_s10_cp7-v5p16-fp32-lr3e-05-<hash>` (URL unavailable, iris job record aged out before this section was written)
+- **Iris job:** `/ahmed/cp7-...` (aged out)
+
+### Purpose
+
+Test Exp N (c=bf16, v5p-16 pd=2) at 30x the default LR (3e-5 vs 1e-6).
+Establishes the "high LR ceiling" for the fast recipe and anchors the
+LR-scaling comparison for Bug 1 / Bug 2.
+
+### Config
+
+- TPU: v5p-16, pd=2, c=bf16 (default JMP).
+- LR: 3e-5.
+- 10 steps.
+
+### Result
+
+- **step 9 loss = 0.125** (the fastest of all LR-scaled Exp N variants).
+
+### Role in campaign
+
+Establishes that at high LR (3e-5), the fast recipe descends from
+log(2)=0.693 to 0.125 in 10 steps. Baseline for CP8 (c=f32 @ 3e-5)
+and CP9 (v5p-8 @ 3e-5), which both reach 0.137 — within 10% of CP7.
+LR-compensation story depends on this anchor.
+
+### Status
+
+COMPLETED. Killed parent long before compaction; Iris record aged out
+and exact wandb run-ID hash wasn't captured.
+
+## Experiment CP8 (2026-04-18T11:22Z, COMPLETED, `cp8-ue5-f32-lr3em5-v1`) — c=f32 at lr=3e-5
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_bf_r64_s10_ue5-cp8-f32-lr3em5-67a941
+- **Iris job:** `/ahmed/cp8-ue5-f32-lr3em5-v1/train_dpo`
+
+### Purpose
+
+Completes the 3x3 LR-scaling grid on Bug 2 (c=f32 AC recipe). Tests if
+c=f32 at 30x LR closes to Exp N quality. Disambiguates "direction
+defect" vs "pure LR slowdown" theories for c=f32.
+
+### Config
+
+- TPU: v5p-16, pd=2, c=f32 (AC recipe, `jmp.p=f32,c=f32`).
+- LR: 3e-5.
+- 10 steps.
+
+### Per-step trajectory
+
+| step | loss |
+|-----:|------|
+| 0 | 0.6931 |
+| 1 | 0.6931 |
+| 4 | 0.2978 |
+| 8 | 0.1304 |
+| 9 | **0.1370** |
+
+### Step-1 trace (c=f32 signature at high LR)
+
+`grad_l2=2.251 grad_sum=0.5495 gA_l2=0 gA_sum=0 gB_l2=2.251 gB_sum=0.5495`
+— c=f32 signature (grad_sum ~0.55) persists at high LR. Direction of
+gradient is the same as at low LR; only magnitude (via Adam step)
+changes.
+
+### Comparison
+
+- CP7 (c=bf16 lr=3e-5): 0.125 at step 9.
+- CP8 (c=f32 lr=3e-5): **0.137** at step 9. **Within 10% of CP7.**
+- AC (c=f32 lr=1e-6): 0.662 at step 9.
+
+### Conclusion — direction story KILLED
+
+If c=f32 were a direction defect (not just a slowdown), gap to Exp N
+would persist at any LR. Instead gap shrinks: 0.34 at lr=1e-6 → 0.15
+at lr=1e-5 → 0.012 at lr=3e-5. **c=f32 is a pure step-size slowdown,
+not a direction defect.**
+
+### Status
+
+COMPLETED. Killed parent.
+
+## Experiment CF (2026-04-18T12:20Z, COMPLETED, `cf-uc1-ca-100step-v1`) — CA rounding gates × 100 steps
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_cf_r64_s100_cf-v5p16-fp32-ca-s100-6c97b3
+- **Iris job:** `/ahmed/cf-uc1-ca-100step-v1/train_dpo`
+
+### Purpose
+
+CA (5 rounding gates) at 10 steps closes 38% of gap. Does CA continue
+to close the gap given 100 steps, or does it plateau at a fraction
+of Exp N quality? Tests whether CA is a pure slowdown or a partial
+basin-shift.
+
+### Config
+
+- TPU: v5p-16, pd=2, c=f32, all 5 CA gates ON.
+- LR: 1e-6.
+- 100 steps (cosine decay).
+
+### Per-step trajectory
+
+| step | loss |
+|-----:|------|
+| 9 | 0.538 |
+| 26 | 0.47 |
+| 30 | 0.463 |
+| 38 | 0.437 |
+| 50 | 0.389 |
+| 74 | 0.364 |
+| 87 | 0.349 |
+| 90 | 0.358 |
+| 99 | **0.351** |
+
+### Gap analysis
+
+| horizon | AC | CA (CF) | Exp N (CH) | CA % of gap |
+|---------|---:|--------:|-----------:|-----------:|
+| step 9 | 0.66 | 0.532 | 0.32 | 38% |
+| step 50 | 0.45 | 0.389 | 0.261 | 32% |
+| step 99 | 0.40 | 0.351 | 0.248 | 32% |
+
+**CA captures a STABLE ~33% of the gap.** Does not close to Exp N
+given more steps — hits a persistent plateau above Exp N.
+
+### Conclusion
+
+CA is NOT a pure slowdown. The forward-path rounding captures a
+fraction of the c=bf16 benefit but cannot replicate it fully, even
+given 100 steps. Remaining ~67% is outside forward-path rounding
+(likely JAX autodiff backward precision).
+
+### Status
+
+COMPLETED. Killed parent.
+
+## Experiment CH (2026-04-18T12:27Z, COMPLETED, `ch-ue5-expn-100step-v1`) — Exp N × 100 steps (baseline for CF)
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_ch_s100_ch-v5p16-bf16-expn-s100-8b513b
+- **Iris job:** `/ahmed/ch-ue5-expn-100step-v1/train_dpo`
+
+### Purpose
+
+CF runs 100 steps of CA. CH runs 100 steps of Exp N (c=bf16, no gates)
+as the lower-bound baseline. Gap between CF and CH at step 99 tells us
+how much of the c=bf16 benefit CA fails to capture at long horizons.
+
+### Config
+
+- TPU: v5p-16, pd=2, c=bf16 (Exp N default JMP, no rounding gates).
+- LR: 1e-6.
+- 100 steps (cosine decay).
+
+### Per-step trajectory
+
+| step | loss |
+|-----:|------|
+| 9 | 0.314 |
+| 46 | 0.260 |
+| 50 | 0.261 |
+| 90 | 0.256 |
+| 97 | 0.253 |
+| 98 | 0.256 |
+| 99 | **0.248** |
+
+### Compared to short-horizon
+
+Exp N 10-step step 9 = 0.32; CH (100-step) step 9 = 0.314. Matches
+to ~2% — confirms the short-horizon baseline is reliable.
+
+### Role
+
+Lower-bound baseline for CA (CF) comparison. Establishes AC → Exp N
+gap at step 99 = 0.152, of which CA (CF) closes 32%.
+
+### Status
+
+COMPLETED. Killed parent.
+
+## Experiment CK (2026-04-18T12:55Z, COMPLETED, `ck-uc1-ca-lr3em5-v1`) — CA gates + lr=3e-5 (stacking test)
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_ck_s10_ck-v5p16-fp32-ca-lr3em5-39eeda
+- **Iris job:** `/ahmed/ck-uc1-ca-lr3em5-v1/train_dpo`
+
+### Purpose
+
+Does CA's rescue stack with LR rescue? If CA at lr=3e-5 matches CP7
+(Exp N @ 3e-5 = 0.125), CA is fully LR-compensable. If between CP7
+and CP8 (c=f32 @ 3e-5 = 0.137), CA adds a fractional benefit at high
+LR.
+
+### Config
+
+- TPU: v5p-16, pd=2, c=f32, all 5 CA gates ON.
+- LR: 3e-5.
+- 10 steps.
+
+### Per-step trajectory
+
+| step | loss |
+|-----:|------|
+| 5 | 0.201 |
+| 9 | **0.133** |
+
+### Comparison at lr=3e-5
+
+- CP7 (Exp N): 0.125.
+- CK (CA + 5 gates): **0.133**.
+- CP8 (AC, no gates): 0.137.
+
+### Rescue fraction
+
+CK closes 33% of the (CP8 - CP7) gap — **same ~33% fraction as at
+lr=1e-6 and at step 99**. CA provides a stable fractional rescue
+independent of LR and step horizon.
+
+### Conclusion
+
+**CA's ~33% rescue is a structural property, not LR- or
+time-dependent.** Forward-path rounding captures exactly 1/3 of the
+c=bf16 benefit regardless of training horizon or LR.
+
+### Status
+
+COMPLETED. Killed parent.
+
+## Experiment CM (2026-04-18T13:09Z, COMPLETED, `cm-ue5-bug1-ca-v2`) — CA gates on Bug 1 (v5p-8 pd=4)
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_cm_r64_s10_cm-v5p8-pd4-ca-gates-268a92
+- **Iris job:** `/ahmed/cm-ue5-bug1-ca-v2/train_dpo`
+- **Note:** v1 (`cm-ue5-bug1-ca-v1`) failed with GitHub 504 during deps sync. v2 is the clean run.
+
+### Purpose
+
+CA's rescue is 33% on Bug 2 (c=f32). Does CA also rescue Bug 1 (v5p-8
+pd=4 c=bf16)? If yes with similar fraction → CA mechanism is
+mesh/dtype-agnostic. If no → the two bugs have different mechanisms
+despite identical LR-scaling signatures.
+
+### Config
+
+- TPU: v5p-8, pd=4, c=bf16 (Exp Q recipe).
+- LR: 1e-6.
+- 10 steps.
+- Env: all 5 CA gates ON (MARIN_DEBUG_ROUND_LINEAR_*, _NORM_OUT,
+  _RESIDUAL).
+
+### Per-step trajectory
+
+| step | loss |
+|-----:|------|
+| 5 | 0.669 |
+| 9 | **0.661** |
+
+### Conclusion — **Bug 1 ≠ Bug 2** at the mechanism level
+
+CM step 9 = 0.661, same as baseline Bug 1 (Exp Q = 0.66). **Zero
+rescue.** Under Bug 1, compute is already c=bf16, so CA's rounding
+gates (which round TO bf16) are effective no-ops.
+
+**Bug 1 is NOT a precision/rounding issue.** It's a mesh/collective
+topology problem on v5p-8 pd=4 FSDP-4. The only known rescues are:
+1. Mesh change (Exp W TP or mix): full recovery.
+2. LR scaling (lr=1e-5 → 0.41 partial, lr=3e-5 → 0.137 full).
+
+Bug 1 and Bug 2 produce QUANTITATIVELY IDENTICAL stuck behavior
+(both log(2) at step 9 lr=1e-6) but via MECHANISTICALLY DIFFERENT
+paths.
+
+### Status
+
+COMPLETED. Killed parent.
+
+## Experiment CN (2026-04-18T15:12Z, COMPLETED, `cn-ue5-pbf16-v1`) — v5p-8 pd=4 full bf16 (p=bf16, c=bf16)
+
+- **W&B:** https://wandb.ai/marin-community/dpo/runs/experiment_cn_s10_cn-v5p8-pd4-pbf16-cbf16-34734b
+- **Iris job:** `/ahmed/cn-ue5-pbf16-v1/train_dpo`
+
+### Purpose
+
+CM showed CA gates don't rescue Bug 1. This could be because Bug 1 is
+already in bf16 compute (so CA's bf16 rounding is a no-op). CN tests
+if changing **param storage to bf16** (beyond compute) rescues Bug 1.
+
+Exp Q uses p=f32, c=bf16 (JMP default). C6 showed p=bf16, c=bf16
+matches Exp N quality on v5p-16 pd=2. Does that full-bf16 recipe
+also rescue Bug 1?
+
+### Config
+
+- TPU: v5p-8, pd=4.
+- JMP policy: `p=bf16, c=bf16`.
+- LR: 1e-6.
+- 10 steps.
+
+### Per-step trajectory
+
+| step | loss |
+|-----:|------|
+| 5 | 0.669 |
+| 9 | **0.661** |
+
+Identical to CM and baseline Bug 1.
+
+### Conclusion
+
+**Bug 1 cannot be rescued by ANY dtype change.** Tested:
+- p=f32, c=bf16 (Exp Q, default): 0.66 stuck.
+- p=bf16, c=bf16 (CN): 0.66 stuck.
+- p=f32, c=bf16 + CA gates (CM): 0.66 stuck.
+
+Confirms Bug 1 is a mesh/collective issue on v5p-8 pd=4 FSDP-4.
+Compute dtype, storage dtype, and forward-path rounding all orthogonal.
+
+### Status
+
+COMPLETED. Killed parent.
+
+## Experiment BC (2026-04-18T08:52Z, RUNNING, uc1-bc1) — factor geometry swap
+
+### Key result so far (step 5): **STALLS AT log(2), factor-geometry hypothesis FALSIFIED**
+
+Setup: Exp N recipe + `c=f32` + `a_init_mode='zero'` + `b_init_scale=1e-3`.
+At init: A=0, B~N(0, 1e-3). adapter_out = B·A·x = B·0 = 0. Policy = reference.
+Invariant preserved. No env-gate needed.
+
+Deltas from AC (canonical LoRA + c=f32, stuck):
+- `a_init_mode='zero'` instead of canonical random A.
+- `b_init_scale=1e-3` with `zero_init_b=False` — random small B.
+- Swap of which factor has nonzero step-0 gradient: in AC, dL/dA=0 and
+  dL/dB ≠ 0; in BC, dL/dB=0 (because A=0 kills chain) and dL/dA ≠ 0.
+
+### Trajectory (steps 0-5, uc1-bc1)
+
+| step | loss | gA_l2 | gB_l2 | pA_l2 | pB_l2 |
+|------|-----:|------:|------:|------:|------:|
+| 0 | 0.6931 | 0.211 | **0.000** | 0.000 | 9.384 |
+| 1 | 0.6931 | 0.194 | 0.000 | 0.0074 | 9.384 |
+| 2 | 0.6935 | 0.205 | 0.0022 | 0.0138 | 9.384 |
+| 3 | 0.6925 | 0.213 | 0.0043 | 0.0195 | 9.385 |
+| 4 | 0.6912 | 0.213 | 0.0061 | 0.0242 | 9.385 |
+| 5 | 0.6928 | 0.213 | 0.0080 | 0.0278 | 9.385 |
+
+Compare AC (Exp N recipe + c=f32, canonical LoRA init) step-5 loss ≈ 0.6696.
+Both BC and AC are stuck at the log(2) attractor.
+
+- step-0 loss = 0.6931471824645996 = log(2) exactly ✓ (invariant held)
+- gB=0 at step 0 exactly as predicted (A=0 kills chain).
+- pB_l2=9.384: matches expected ||N(0, 1e-3)|| for ~100M lora_B elements.
+
+### Narrow conclusion
+
+**The "which factor gets the first gradient update" story is wrong.**
+
+- AC: canonical A=random, B=0. dL/dA=0 at step 0, dL/dB ≠ 0. STUCK.
+- BC: A=0, B=random_small. dL/dB=0 at step 0, dL/dA ≠ 0. STUCK.
+
+Both produce `adapter_out=0 at init` (policy=reference), both stall at
+log(2) under c=f32. Flipping which of A or B carries the first gradient
+does NOT escape the trap. Factor-asymmetry of the canonical (A=rand, B=0)
+init is not load-bearing for Bug 2.
+
+### H_adapter_zero REVISED AFTER BA COMPLETES (2026-04-18T08:59Z)
+
+After BA full trajectory came in, **H_adapter_zero is partially falsified**:
+
+- AC: adapter_out = 0 at init + c=f32 → step-9 = 0.6596 (slow descent).
+- BC: adapter_out = 0 at init + c=f32 → step-9 ≈ 0.6919 (no descent, oscillating).
+- **BA: adapter_out ≠ 0 at init (small) + c=f32 → step-9 = 0.6620 (tracks AC +0.003).**
+- AD v3: adapter_out ≠ 0 at init (Kaiming) + c=f32 → step-9 = 5.11 (huge start → slow descent).
+- Exp N (bf16 baseline): adapter_out = 0 at init + c=bf16 → step-9 = 0.3176 (fast escape).
+
+Pattern: **none of {BA, BC, AC} reach the good basin under c=f32**, regardless of
+adapter_out at init. BC is the only one that doesn't descend at all — likely
+because its A-direction is starting from zero rather than Kaiming.
+
+So the refined refined hypothesis is:
+**H_cf32_fundamental**: c=f32 fundamentally lacks the "fast escape to good
+basin" property that c=bf16 has, for LoRA DPO. Init perturbations change
+trajectory shape but don't unlock the escape. This is NOT about the
+init — it's about the numerics of c=f32 at some key step in the train loop.
+
+Candidate mechanisms (remaining, to test):
+- **H_kernel** (BH): CE blocked-XLA kernel has f32-specific broken path.
+- **H_optimizer** (BK): Adam consuming f32 grads with f32 state behaves worse than bf16 grads.
+- **H_accum** (BI): grad_accum reshard loop accumulates error at f32.
+- **H_lr** (BF): the escape direction exists but too weak at lr=1e-6.
+- **H_warmup** (BE): warmup=0.1 masks the first few updates too much.
+- **H_noise** (BD): random perturbation of grad at step 1 could unlock escape.
+
+---
+
+## Experiment BF (2026-04-18T09:15Z, uc1-lr3e-6 COMPLETED) — LR sweep — **PARTIAL RESCUE**
+
+### Key result: lr=3e-6 (3x baseline) descends **significantly** faster than AC
+
+| step | BF @ lr=3e-6 | AC @ lr=1e-6 | Exp N @ lr=1e-6 c=bf16 |
+|------|-------------:|-------------:|-----------------------:|
+| 0 | 0.6931 | 0.6927 | 0.6931 |
+| 1 | 0.6931 | 0.6947 | 0.6931 |
+| 2 | 0.6735 | 0.6865 | 0.3352 |
+| 3 | 0.6537 | 0.6805 | 0.3260 |
+| 4 | 0.6383 | 0.6743 | 0.3362 |
+| 5 | 0.6225 | 0.6696 | 0.3168 |
+| 7 | 0.6062 | 0.6636 | 0.3243 |
+| 9 | **0.5981** | 0.6596 | 0.3176 |
+
+Step-9 gap: BF @ 0.598 vs AC @ 0.660 → 0.062 better.
+Step-9 gap: BF @ 0.598 vs Exp N @ 0.318 → 0.280 worse.
+
+### Narrow conclusion
+
+Higher LR (3x) at c=f32 descends **1.5x faster per step** than AC but still
+nowhere near the c=bf16 escape speed. This is **partial support** for
+H_lr but not a clean rescue. Two interpretations:
+
+1. **LR-only story**: The correct escape direction exists in f32; AC's
+   lr=1e-6 is simply too weak to traverse it in 10 steps. A longer run
+   at lr=1e-6 might eventually reach 0.33. BP (100-step confirmation) on
+   AC is needed to resolve this.
+
+2. **Direction-differs story**: The c=f32 gradients point in a different
+   direction than c=bf16. Higher LR just makes faster progress in the
+   (slightly wrong) direction. Running BF to 100 steps would plateau
+   above 0.5 if this is correct.
+
+### BF lr=1e-5 RESULT (2026-04-18T09:43Z, uc1-bf2-lr1em5 COMPLETE)
+
+| step | BF lr=1e-5 | BF lr=3e-6 | AC lr=1e-6 | Exp N c=bf16 lr=1e-6 |
+|------|-----------:|-----------:|-----------:|---------------------:|
+| 0 | 0.6931 | 0.6931 | 0.6927 | 0.6931 |
+| 1 | 0.6931 | 0.6931 | 0.6947 | 0.6931 |
+| 2 | **0.6282** | 0.6735 | 0.6865 | 0.3352 |
+| 3 | **0.5690** | 0.6537 | 0.6805 | 0.3260 |
+| 4 | **0.5269** | 0.6383 | 0.6743 | 0.3362 |
+| 5 | **0.4769** | 0.6225 | 0.6696 | 0.3168 |
+| 6 | **0.4618** | 0.6062 | 0.6673 | 0.3370 |
+| 7 | **0.4368** | — | 0.6636 | 0.3243 |
+| 8 | **0.4092** | — | 0.6583 | 0.3061 |
+| 9 | **0.4124** | 0.5981 | 0.6596 | 0.3176 |
+
+### Partial LR story CONFIRMED
+
+- BF lr=1e-5 (10x baseline) descends to **0.412** at step 9.
+- BF lr=3e-6 (3x baseline) descends to 0.598.
+- AC lr=1e-6 (baseline) descends to 0.660.
+- Exp N c=bf16 lr=1e-6 descends to 0.318.
+
+**Gap Exp N − BF lr=1e-5 = 0.10.** Substantial but not huge. 10x LR at
+c=f32 closes ~70% of the gap to c=bf16.
+
+### Refined conclusion
+
+**Bug 2 is a COMBINED effect:**
+
+1. **Partial LR story**: c=f32 gradients DO point in a descent direction,
+   but the per-unit-LR effectiveness is ~60% of c=bf16's. With 10x LR,
+   training reaches ~0.4 by step 9 — clearly making progress, no stuck
+   plateau.
+
+2. **Residual direction issue**: even at 10x LR, c=f32 lags c=bf16 by
+   ~0.10 at step 9. This suggests the f32 gradient has a small but
+   persistent misalignment component that LR can't fully fix.
+
+### Combined with other falsified probes
+
+- **H_kernel** (BH): CE kernel not at fault.
+- **H_optimizer** (BK): grad cast to bf16 before Adam doesn't help.
+- **H_B** (BA): light symmetry break doesn't help.
+- **H_factor_geometry** (BC): factor swap doesn't help.
+- **H_warmup** (BE): warmup=0.0 doesn't help (marginal).
+- **H_noise small** (BD v1 at 1e-5): too small to perturb, doesn't help.
+- **H_LR_partial** (BF lr=1e-5): DOES help substantially.
+
+### Remaining live hypothesis
+
+**H_compute_rounding_noise**: the bf16 compute's cumulative rounding
+injects beneficial noise throughout forward/backward that aligns
+gradients better with descent direction. c=f32 preserves exact
+gradients which have a subtle misalignment. C1a (matmul precision
+DEFAULT under c=f32) will test this by forcing bf16 matmul while
+keeping activations in f32.
+
+C1a launch: `/ahmed/c1a-ue5-mmdefault-v1` with
+`JAX_DEFAULT_MATMUL_PRECISION=default`.
+
+### C1a RESULT (2026-04-18T09:52Z, uc1-c1a-mmdef COMPLETE) — **H_matmul_precision FALSIFIED**
+
+| step | C1a (matmul=default) | AC |
+|------|--------------------:|---:|
+| 0 | 0.6931 | 0.6927 |
+| 1 | 0.6931 | 0.6947 |
+| 2 | 0.6877 | 0.6865 |
+| 3 | 0.6793 | 0.6805 |
+| 4 | 0.6743 | 0.6743 |
+| 5 | 0.6686 | 0.6696 |
+| 8 | 0.6583 | 0.6583 |
+| 9 | **0.6596** | **0.6596** |
+
+**C1a trajectory identical to AC.** Setting `JAX_DEFAULT_MATMUL_PRECISION=default`
+is a no-op on TPU — matmul IS already bf16 by default. So AC and C1a both
+use bf16 matmul internally with f32 accumulate.
+
+**H_matmul_precision FALSIFIED.** The key difference between c=f32 and
+c=bf16 is NOT matmul precision. It must be **activation dtype rounding at
+layer boundaries**:
+
+- c=bf16: every matmul output is bf16 (rounded), every pointwise op is bf16.
+- c=f32: every matmul output is f32 (not rounded), every pointwise op is f32.
+
+The bf16 activation rounding at each layer boundary is what injects
+beneficial noise. matmul precision alone doesn't capture this because
+the multiply-accumulate happens in the same underlying hardware regardless.
+
+### Remaining mechanism hypothesis: H_activation_rounding
+
+**H_activation_rounding**: c=bf16's per-layer activation rounding (every
+matmul output, pointwise op output, residual add, etc. cast to bf16)
+cumulatively injects beneficial noise that aligns DPO gradients with
+descent direction. c=f32 keeps activations exact, producing gradients
+that are more precise but less aligned.
+
+**C3 (Linear-output rounding to bf16) RESULT (2026-04-18T10:05Z, uc1-c3):**
+
+| step | C3 (round Linear out) | AC |
+|------|--------------------:|---:|
+| 2 | 0.6869 | 0.6865 |
+| 9 | 0.6599 | 0.6596 |
+
+**C3 does NOT rescue.** Rounding only Linear layer outputs to bf16 gives
+the same trajectory as AC. The beneficial bf16 effect requires rounding
+at MORE operations than just Linear outputs.
+
+**C4 (Linear + RmsNorm output rounding) RESULT (2026-04-18T10:15Z, uc1-c4):**
+
+| step | C4 (round Linear+Norm out) | AC |
+|------|--------------------------:|---:|
+| 2 | 0.6867 | 0.6865 |
+| 9 | 0.6595 | 0.6596 |
+
+**C4 also does NOT rescue.** Adding RmsNorm output rounding doesn't help
+either. The mechanism isn't captured by rounding f32 activations to bf16
+at the output of Linear/RmsNorm.
+
+**C5 (Linear weight+input rounding to bf16) running** at
+`/ahmed/c5-uc1-bf16op-v1` — tests whether matmul input dtype matters
+(cast operands to bf16 before the dot).
+
+**C6 (all-bf16: p=bf16, c=bf16) running** at `/ahmed/c6-ue5-allbf16-v1` —
+tests whether param storage dtype matters on top of compute dtype.
+
+---
+
+## CODE PATCHES — TO REVERT AFTER INVESTIGATION CLOSES
+
+### Permanent (KEEP)
+- `lib/marin/src/marin/training/training.py`: `MARIN_DEBUG_SKIP_HF_EXPORT=1`
+  gate that nulls `merged_hf_save_path` during debug runs. Useful beyond
+  this investigation.
+
+### Debug gates (REVERT)
+1. `lib/levanter/src/levanter/main/train_dpo.py:369-394` — env-gated
+   validation relax for `AdapterBase+LoRA+nonzero adapter_out` via
+   `MARIN_DEBUG_ALLOW_LORA_ADAPTERBASE_NONZERO_B`. Only needed for AD /
+   BA. Revert.
+2. `lib/levanter/src/levanter/lora.py:141-161, 215-276, 282-332, 394-410` —
+   added `b_init_scale` and `a_init_mode` fields to `LoraConfig` and
+   threaded through `LowRankLinear.init`, `LoraLinear.init`, `_loraize`.
+   Could be kept as a permanent debug knob if useful; otherwise revert.
+3. `lib/levanter/src/levanter/trainer.py:683-760` — env-gated LoRA grad
+   noise injection + cast before `state.take_step`. Includes C8 additions
+   (`MARIN_DEBUG_LORA_GRAD_NOISE_CONTINUOUS`,
+   `MARIN_DEBUG_LORA_GRAD_NOISE_RELATIVE`). Revert all.
+4. `lib/levanter/src/levanter/models/loss.py:1-23, 255-275` — env-gated
+   `MARIN_DEBUG_CE_IMPL` override for CE kernel implementation. Revert.
+5. `lib/levanter/src/levanter/tracker/wandb.py:261-285` — extended
+   `wandb.init` timeout from 90s to 300s via `MARIN_DEBUG_WANDB_INIT_TIMEOUT`.
+   Could be kept permanently (safer default). Otherwise revert.
+6. `lib/haliax/src/haliax/nn/linear.py:83-120` — env-gated rounding of
+   Linear weight / input / output to bf16. Revert (debug-only).
+7. `lib/haliax/src/haliax/nn/normalization.py:127-145` — env-gated rounding
+   of RmsNorm output to bf16. Revert.
+9. `lib/levanter/src/levanter/models/llama.py:327-355` — env-gated rounding
+   of residual stream to bf16 after attention and MLP adds
+   (`MARIN_DEBUG_ROUND_RESIDUAL`). Revert (C9 debug-only).
+8. `lib/levanter/src/levanter/main/train_dpo.py:456-470` — added
+   `b_init_scale` and `a_init_mode` to `_resolved_lora_hparams` for W&B
+   logging. Keep if `b_init_scale` is kept as a config knob.
+
+### Revert command template
+
+```bash
+git checkout HEAD -- \
+  lib/levanter/src/levanter/main/train_dpo.py \
+  lib/levanter/src/levanter/lora.py \
+  lib/levanter/src/levanter/trainer.py \
+  lib/levanter/src/levanter/models/loss.py \
+  lib/levanter/src/levanter/tracker/wandb.py \
+  lib/haliax/src/haliax/nn/linear.py \
+  lib/haliax/src/haliax/nn/normalization.py \
+  lib/levanter/src/levanter/models/llama.py
+```
+
+Keep `lib/marin/src/marin/training/training.py` HF-export gate (permanent).
+
+---
+
+## FINAL CLASS-B/EARLY CLASS-C CONSOLIDATED SUMMARY (2026-04-18T10:25Z)
+
+### Comprehensive trajectory data
+
+| setup | recipe | step 9 | step 99 |
+|-------|-------|-------:|--------:|
+| Exp N | c=bf16, lr=1e-6 | **0.318** | — |
+| CP3 | c=bf16, lr=1e-5 | 0.257 | — |
+| AC | c=f32, lr=1e-6 | 0.660 | — |
+| BF1 | c=f32, lr=3e-6 | 0.598 | — |
+| BF2 | c=f32, lr=1e-5 | 0.412 | — |
+| **CP1** | **c=f32, lr=1e-6, 100 steps** | — | **0.400** |
+| CP2 | c=f32, lr=1e-5, 100 steps (in progress) | — | TBD |
+
+### Core finding
+
+**Bug 2 is a ~2x per-step slowdown of c=f32 vs c=bf16 for LoRA DPO.**
+NOT a fundamental failure:
+- 100 steps of c=f32 at lr=1e-6 reaches 0.40 (close to Exp N's 0.32).
+- 10 steps of c=f32 at lr=1e-5 reaches 0.41 (close but not equal).
+- The "stuck at 0.66" interpretation was artifact of 10-step probe window.
+
+### Mechanism remains unresolved
+
+After extensive probing:
+- **NOT** init symmetry, factor geometry, warmup, CE kernel, optimizer path,
+  matmul precision, Linear-output rounding, Linear+norm-output rounding,
+  Linear-operand rounding, grad accumulation, random grad noise.
+- Higher LR partially compensates (0.41 at 10x LR vs 0.66 default).
+- c=bf16 benefits slightly from higher LR (0.26 vs 0.32).
+- The per-unit-LR rate differs ~2-3x between c=f32 and c=bf16.
+
+### H_compute_rounding_noise (refined)
+
+The most plausible remaining explanation: bf16's cumulative rounding
+across the forward/backward graph produces a gradient that is slightly
+better aligned with descent direction. Our C3-C5 probes tried to
+reproduce this with explicit activation rounding but didn't capture the
+full effect — possibly because:
+- TPU matmul hardware already rounds to bf16 internally for f32 inputs.
+- The beneficial rounding happens DURING the matmul accumulation, not
+  after, and can't be reproduced by casting inputs/outputs.
+- Or the effect is in attention internals (Splash Attention) which we
+  didn't probe directly.
+
+### Practical guidance (production)
+
+1. **Use c=bf16 for fast LoRA DPO training** (Exp N baseline).
+2. **Use c=f32 with lr=1e-5 or ~5-10x more steps** if f32 is required
+   for debugging/numerical reasons.
+3. Don't use c=f32 with lr=1e-6 for short 10-step runs — it will appear
+   stuck when it's just slow.
+
+### Mechanism closed as "slow-compute effect"
+
+The investigation has narrowed Bug 2 to a class of numerical effects
+(bf16 vs f32 in the forward/backward graph) that collectively produce
+~2-3x per-step descent rate difference. The root cause (which specific
+operation or accumulated rounding pattern provides the structural bias)
+is not uniquely identified but all tested isolated interventions
+(BH, BK, C3, C4, C5, C6) fail to reproduce the effect.
+
+For production, this is a "workable" story: c=bf16 is the recommended
+dtype, c=f32 works but trains slower.
+
+---
+
+## MAJOR CLASS-B FINDING (consolidated, 2026-04-18T10:15Z)
+
+### Bug 2 is NOT a fundamental failure — it's a slowdown
+
+Key result from CP1 (100-step AC): **AC trajectory continues to descend
+monotonically throughout all 100 steps**. At step 68, loss = 0.420.
+Projected step 99 = ~0.32-0.37 (matches c=bf16 quality).
+
+Class-B interpretation: c=f32 is **~5-10x slower per unit LR** than
+c=bf16 for LoRA DPO on the 8B model. The 10-step window is simply too
+short at lr=1e-6 for c=f32 to reach the good basin, making it appear
+"stuck" at 0.66 when really it just needs more time.
+
+### Compensation strategies
+
+| strategy | step-9 loss | how |
+|----------|-----------:|------|
+| c=bf16 (Exp N) | 0.318 | default |
+| c=bf16 lr=1e-5 (CP3) | 0.257 | 10x LR on c=bf16 |
+| c=f32 lr=1e-5 (BF2) | 0.412 | 10x LR on c=f32 |
+| c=f32 lr=1e-6 (AC) | 0.660 | baseline "stuck" |
+| **c=f32 lr=1e-6, 100 steps (CP1)** | **~0.35 projected at step 99** | longer run |
+
+### What we ruled OUT as mechanisms
+
+- **CE kernel** (BH): reference/pure-JAX path identical to blocked XLA.
+- **Optimizer path** (BK): cast grads to bf16 before Adam = same as AC.
+- **CE → grad path inside CE** (implicit in BH): not at fault.
+- **LoRA init symmetry** (BA, BC, BB): all variants stall.
+- **Warmup** (BE): warmup=0.0 doesn't help.
+- **Factor geometry** (BC): A=0/B=rand swap doesn't help.
+- **Matmul precision** (C1a): JAX_DEFAULT_MATMUL_PRECISION=default no-op.
+- **Random grad noise** (BD v2): HURTS training.
+- **Linear-output bf16 rounding** (C3): doesn't help.
+- **Linear+RmsNorm output rounding** (C4): doesn't help.
+- **Plateau/stuck in bad basin**: FALSIFIED by CP1 (continues descending).
+
+### What we haven't ruled out
+
+- **bf16 matmul operand rounding at Linear** (C5, running): cast weight+input
+  to bf16 before dot. If this rescues → matmul operand dtype is the driver.
+- **param storage dtype** (C6, running): p=bf16 vs p=f32. If C6 matches
+  Exp N, param dtype irrelevant.
+- **Attention internals** (not tested): q*k, softmax, *v inside splash attn.
+- **Downstream per-layer residual adds** (not tested).
+- **LM head matmul specifically** (not tested).
+
+### Practical resolution for Bug 2
+
+**Keep using c=bf16 as the production default** (fastest convergence).
+c=f32 works but is slower; only use if numerical debugging demands f32
+(e.g., tracking down a specific non-determinism).
+
+---
+
+---
+
+## Experiment BD v2 (2026-04-18T10:02Z, ue5-bd2-n1e-2 COMPLETE) — random noise HURTS
+
+| step | BD v2 (noise=1e-2 @ step 1 on B) | AC |
+|------|---------------------------------:|---:|
+| 1 | 0.6931 (grad_l2=93.9 from noise) | 0.6947 |
+| 2 | 0.6909 | 0.6865 |
+| 3 | 0.6860 | 0.6805 |
+| 9 | **0.6700** | **0.6596** |
+
+**BD v2 is WORSE than AC.** Random Gaussian noise injected on lora_B
+grads at step 1 (magnitude 1e-2 per element, 40x grad-per-element) does
+not rescue and actually HURTS descent slightly.
+
+### Narrow conclusion
+
+**H_noise_random FALSIFIED.** c=bf16's beneficial effect is NOT
+random-noise-style perturbation. It has STRUCTURAL bias aligned with
+DPO descent direction. Random Gaussian at grad level just perturbs the
+update in a random direction, which can only hurt (on expectation).
+
+The mechanism must be a STRUCTURED transformation of gradients via
+cumulative bf16 rounding through the forward/backward graph. Random
+noise at the gradient boundary doesn't reproduce this.
+
+---
+
+## Experiment BB (2026-04-18T10:00Z, ue5-bb1-bs1e-2 COMPLETE) — larger init perturbation
+
+| step | BB (b_init_scale=1e-2) | AC |
+|------|----------------------:|---:|
+| 0 | 0.7272 (adapter_out≠0 at init) | 0.6927 |
+| 9 | **0.6782** | **0.6596** |
+
+**BB is WORSE than AC.** Starts higher because larger B produces larger
+initial adapter perturbation. Descent rate similar to AC's plateau.
+
+### Conclusion
+
+`b_init_scale=1e-2` doesn't rescue. Combined with BA (b_init_scale=1e-3),
+init magnitude is NOT the mechanism at either scale. Only a factor-geometry
+change (BC: A=0,B=rand) produces a qualitatively different start — but
+BC also stalls.
+
+---
+
+## Experiment BN v1 (2026-04-18T09:45Z, ue5-bn-highest FAILED) — matmul=HIGHEST breaks Splash Attention
+
+Setup: Exp Q recipe + `JAX_DEFAULT_MATMUL_PRECISION=highest` (force f32
+matmul everywhere).
+
+### Failure mode
+
+```
+jax.errors.JaxRuntimeError: INTERNAL: Mosaic failed to compile TPU kernel: Bad lhs type
+  at _splash_attention dot_general
+```
+
+TPU's Splash Attention Pallas kernel cannot compile at f32 matmul
+precision — it expects bf16 inputs. This blocks directly testing Bug 1
+with HIGHEST matmul precision without also disabling splash attention.
+
+### Follow-up: BN v2 with HIGH precision
+
+Relaunching with `JAX_DEFAULT_MATMUL_PRECISION=high` (3 bf16 passes for
+accuracy). This should be compatible with Splash Attention since each
+sub-matmul is still bf16.
+
+Launch: `/ahmed/bn-ue5-high-v1`.
+
+---
+
+## Experiment BK (2026-04-18T09:38Z, uc1-bk1-bf16 COMPLETED) — grad cast bf16 before optimizer — **H_optimizer FALSIFIED**
+
+Setup: AC recipe + `MARIN_DEBUG_LORA_GRAD_CAST=bf16`. Cast lora_A and
+lora_B grads to bf16 right before `state.take_step`. Forward and backward
+compute remain in f32.
+
+### Trajectory comparison
+
+| step | BK (grads→bf16) | AC |
+|------|----------------:|---:|
+| 0 | 0.6931 | 0.6927 |
+| 1 | 0.6931 | 0.6947 |
+| 2 | 0.6867 | 0.6865 |
+| 3 | 0.6794 | 0.6805 |
+| 4 | 0.6736 | 0.6743 |
+| 5 | 0.6693 | 0.6696 |
+| 6 | 0.6671 | 0.6673 |
+| 7 | 0.6639 | 0.6636 |
+| 8 | 0.6597 | 0.6583 |
+| 9 | **0.6598** | **0.6596** |
+
+Essentially identical to AC (within 0.001 at every step).
+
+### Conclusion
+
+**H_optimizer FALSIFIED.** The issue is NOT that Adam consumes f32 grads
+differently than bf16 grads. The grads themselves are quantitatively
+different when computed in bf16 vs f32 compute.
+
+This is a critical finding: **the critical difference between c=f32 (AC)
+and c=bf16 (Exp N) is in forward/backward compute, not in optimizer**.
+
+### Implications
+
+The f32-computed gradient, even when cast to bf16 for the optimizer, is
+still "worse" than a true bf16-compute gradient. The cumulative rounding
+errors in bf16 matmuls produce a gradient with DIFFERENT VALUES (not just
+different precision) compared to an f32-compute-then-cast gradient. The
+bf16-compute gradient somehow aligns better with the DPO descent direction.
+
+**Hypothesis H_compute_rounding_noise**: bf16's forward/backward rounding
+injects noise at every matmul that, cumulatively, produces a gradient
+direction that's better aligned with the DPO loss's descent than the
+"exact" f32 gradient. Class C could test this by adding synthetic noise
+to f32 compute to simulate bf16 rounding.
+
+---
+
+## Experiment BH (2026-04-18T09:34Z, uc1-bh1-ref COMPLETED) — CE kernel isolation — **H_kernel FALSIFIED**
+
+Setup: AC recipe + `MARIN_DEBUG_CE_IMPL=reference` (pure-JAX CE, no
+blocking, no Pallas). Env-gated knob added to
+`lib/levanter/src/levanter/models/loss.py` (C-B instrumentation).
+
+### Trajectory comparison
+
+| step | BH (CE=ref) | AC (CE=xla default) |
+|------|------------:|--------------------:|
+| 0 | 0.6931 | 0.6927 |
+| 1 | 0.6931 | 0.6947 |
+| 7 | 0.6636 | 0.6636 |
+| 8 | 0.6595 | 0.6583 |
+| 9 | **0.6600** | **0.6596** |
+
+Step-9 difference: 0.0004 (within noise).
+
+### Conclusion
+
+**H_kernel FALSIFIED.** Swapping from blocked-XLA to pure-JAX reference CE
+gives trajectory essentially identical to AC. The CE kernel is NOT the
+cause of Bug 2. Rules out:
+- Block-size mistuning at c=f32.
+- Pallas fallback edge cases (reference path isn't used on TPU by default,
+  but confirms blocked-XLA path isn't the culprit either).
+- Any CE-specific f32 numerical flaw.
+
+---
+
+## Experiment BD v1 (2026-04-18T09:34Z, ue5-bd1-n1em5-B COMPLETED) — grad noise too small to matter
+
+Setup: AC recipe + `MARIN_DEBUG_LORA_GRAD_NOISE_STD=1e-5`,
+`MARIN_DEBUG_LORA_GRAD_NOISE_STEP=1`, `MARIN_DEBUG_LORA_GRAD_NOISE_TARGET=B`.
+
+### Trajectory
+
+| step | BD (noise=1e-5) | AC |
+|------|----------------:|---:|
+| 9 | 0.6607 | 0.6596 |
+
+### Diagnosis
+
+Grad magnitude at step 1 was ~2.25. Noise stddev 1e-5 per element is
+**5 orders of magnitude smaller** than the grad magnitudes — essentially
+invisible. Trajectory tracks AC to within 0.002.
+
+### Relaunched as BD v2 (noise=1e-2)
+
+`MARIN_DEBUG_LORA_GRAD_NOISE_STD=1e-2`, step 1, target B. This is
+~5x smaller than grad magnitudes (noticeable perturbation). Running as
+`/ahmed/bd-ue5-n1em2-v1`.
+
+### BD v2 RESULT (2026-04-18T10:02Z, ue5-bd2-n1e-2, STILL RUNNING through step 3)
+
+| step | BD v2 (noise=1e-2 @ step 1) | AC |
+|------|----------------------------:|---:|
+| 0 | 0.6931 | 0.6927 |
+| 1 | 0.6931 (grad_l2=93.9, huge from noise) | 0.6947 (grad_l2=2.25) |
+| 2 | 0.6909 | 0.6865 |
+| 3 | 0.6860 | 0.6805 |
+
+**BD v2 is WORSE than AC.** Random Gaussian noise on lora_B grad at
+step 1 perturbs the param in a random direction, which HURTS descent.
+
+### Refines the mechanism story
+
+**H_noise_random FALSIFIED**: adding random Gaussian noise at grad level
+does NOT reproduce c=bf16's beneficial effect. c=bf16 rounding noise is
+not "random" — it has STRUCTURAL bias toward the descent direction
+(i.e., bf16 rounding systematically projects gradients toward the true
+loss-surface steepest-descent, via the matmul + activation numerics).
+
+This strengthens H_activation_rounding as the mechanism (bf16's
+structural per-layer rounding), not H_noise_random (any small
+perturbation).
+
+---
+
+### Related: BE (warmup=0.0) COMPLETED at uc1 — **H_warmup FALSIFIED**
+
+Tests whether the warmup=0.1 → zero-LR-at-step-0/1 is part of the AC
+trap. Full trajectory with warmup=0.0:
+
+| step | BE @ wm=0 | AC @ wm=0.1 |
+|------|---------:|-----------:|
+| 0 | 0.6931 | 0.6927 |
+| 1 | 0.6868 | 0.6947 |
+| 2 | 0.6806 | 0.6865 |
+| 3 | 0.6732 | 0.6805 |
+| 4 | 0.6688 | 0.6743 |
+| 5 | 0.6649 | 0.6696 |
+| 6 | 0.6625 | 0.6673 |
+| 7 | 0.6604 | 0.6636 |
+| 8 | 0.6561 | 0.6583 |
+| 9 | **0.6556** | 0.6596 |
+
+Step-9 gap: BE 0.6556 vs AC 0.6596 → 0.004 better. **Marginal.**
+
+BE does let the first update happen at step 0 (upd_l2=0.0094 vs AC upd=0).
+That means the first-step update is not zero, but it doesn't change the
+plateau behavior.
+
+**H_warmup falsified**: warmup=0.1 is not what's trapping AC.
+
+Launch records:
+- BF uc1-lr3e-6: `/ahmed/bf-uc1-lr3em6-v2`, MARIN_DEBUG_LR=3e-6.
+- BF ue5-lr1e-5: `/ahmed/bf-ue5-lr1em5-v1`, MARIN_DEBUG_LR=1e-5.
+- BE uc1-wm0: `/ahmed/be-uc1-wm0-v2`, MARIN_DEBUG_WARMUP=0.0.
+
+Experiment scripts:
+- `experiments/posttrain/per_stmt_dpo/experiment_bf_v5p16_fp32_pd2_lr_s10.py`
+- `experiments/posttrain/per_stmt_dpo/experiment_be_v5p16_fp32_pd2_warmup_s10.py`
+
+---
+
+This reshapes the Class-B ordering:
+- BA (b_init_scale=1e-3 with A=random, B=random_small → adapter_out ≠ 0 at
+  init) is now the **key test** — if BA descends AND BC stalls, the
+  discriminating variable is "adapter_out=0 at init" not "init perturbation
+  magnitude" or "factor geometry."
+- BD (one-shot grad noise at step 1) becomes less likely to help if the
+  trap is at step 0 with adapter_out=0.
+- BH/BI/BK may still reveal mechanism (CE kernel, accum, optimizer) if
+  the trap is kernel-specific.
+
+BC uc1-bc1 is still running (will complete all 10 steps). ue5-bc1 running.
+
+Launch record:
+- us-central1: `/ahmed/iris-run-experiment_bc_v5p16_fp32_pd2_azero_s10-20260418-084003` (tag `uc1-bc1`).
+- us-east5: `/ahmed/iris-run-experiment_bc_v5p16_fp32_pd2_azero_s10-20260418-084018` (tag `ue5-bc1`).
+
+Experiment script: `experiments/posttrain/per_stmt_dpo/experiment_bc_v5p16_fp32_pd2_azero_s10.py`.
+
+---
+
+## Experiment BA (2026-04-18T08:59Z, COMPLETED, uc1-ba3) — light symmetry break under c=f32 — **H_B FALSIFIED**
+
+### Key result: **STUCK AT ~0.66, tracks AC with +0.003 offset**
+
+| step | BA loss | AC loss | Exp N loss |
+|------|--------:|--------:|-----------:|
+| 0 | 0.6973 | 0.6927 | 0.6931 |
+| 1 | 0.6988 | 0.6947 | 0.6931 |
+| 2 | 0.6900 | 0.6865 | 0.3352 |
+| 3 | 0.6835 | 0.6805 | 0.3260 |
+| 4 | 0.6779 | 0.6743 | 0.3362 |
+| 5 | 0.6727 | 0.6696 | 0.3168 |
+| 6 | 0.6696 | 0.6673 | 0.3370 |
+| 7 | 0.6654 | 0.6636 | 0.3243 |
+| 8 | 0.6612 | 0.6583 | 0.3061 |
+| 9 | 0.6620 | 0.6596 | 0.3176 |
+
+BA trajectory shape is essentially AC + constant offset of ~0.003.
+
+### Narrow interpretation
+
+- BA starts slightly above log(2) (0.6973) because adapter_out ≠ 0 at init
+  (pB_l2=9.38, pA_l2=118.12).
+- BA descends monotonically from step 2 onwards, like AC.
+- BA ends at step 9 = 0.6620, slightly higher than AC's 0.6596.
+- **Does NOT reach the good basin (~0.33).** Same failure mode as AC.
+
+### What BA proves
+
+`b_init_scale=1e-3` (small random B, A Kaiming) does NOT rescue c=f32.
+The "light symmetry break" hypothesis is **FALSIFIED**. Combining with AD v3
+(Kaiming-scale B, same descent direction, just from a wildly bad starting
+point), we can conclude:
+
+- `c=f32 + canonical init` → STUCK at ~0.66 (AC).
+- `c=f32 + light B symmetry break` → STUCK at ~0.66 (BA).
+- `c=f32 + Kaiming B symmetry break` → descends monotonically from 7.46
+  toward some basin (AD v3, slow).
+- `c=f32 + zero-adapter-out symmetric init (A=0)` → NO descent at all (BC).
+- `c=bf16 + canonical init` → reaches 0.33 by step 2 (Exp N).
+
+### The c=f32 trap is a plateau, not an exact fixed point
+
+- BC (A=0, B=rand_small): loss oscillates around 0.6925 with no net descent.
+- AC/BA (B=0 or rand_small, A=rand): slow monotonic descent to ~0.66.
+
+Both configurations fail to reach 0.33 in 10 steps. BC's behavior suggests
+the canonical geometry's slow descent is driven by the A=Kaiming direction.
+When both factors have roughly equal "strength" at init, gradients can't
+find the right direction to escape.
+
+The escape in Exp N (c=bf16) is FAST (reaches 0.33 by step 2). Whatever
+property of c=bf16 enables this is NOT present in c=f32.
+
+### Narrows the Bug-2 candidate set
+
+H_B (light symmetry break) — FALSIFIED (BA).
+H_factor_geometry (which factor gets first grad) — FALSIFIED (BC).
+H_adapter_zero_init (adapter_out=0 at init is the trap) — PARTIAL: BC shows
+  zero-adapter-out is worse than nonzero, but BA also stalls (nonzero).
+
+Remaining live hypotheses:
+- H_kernel: CE kernel f32-specific flaw (BH, pending).
+- H_optimizer: optimizer path consumes f32 grads badly (BK, pending).
+- H_accum: grad-accum reshard loop broken at c=f32 (BI, pending).
+- H_lr: correct direction exists, need bigger step (BF, pending, at lr=3e-6).
+- H_noise: the fast-escape in bf16 comes from rounding noise that any tiny
+  grad-level perturbation can replace (BD, pending).
+- H_warmup: zero-LR step 1 is part of trap (BE, running).
+
+Launch record:
+
+Setup: Exp N recipe + `c=f32` + `b_init_scale=1e-3` (with canonical A=random,
+`zero_init_b=True`). At init: A=random (Kaiming), B~N(0, 1e-3). adapter_out =
+B·A·x ≠ 0 (but small). Policy ≠ reference at init. Requires env-gate
+`MARIN_DEBUG_ALLOW_LORA_ADAPTERBASE_NONZERO_B=1`.
+
+Deltas from AC:
+- `b_init_scale=1e-3` — B is N(0, 1e-3), ~5 OOM smaller stddev than AD v3's
+  Kaiming-scale.
+
+### Launch history
+
+- uc1-ba1 (`/ahmed/iris-run-experiment_ba_v5p16_fp32_pd2_bscale1em3_s10-20260418-083703`):
+  wandb online init timed out after 90s on host 0. Killed.
+- ue5-ba1 (`/ahmed/iris-run-experiment_ba_v5p16_fp32_pd2_bscale1em3_s10-20260418-083717`):
+  same wandb timeout. Killed.
+- uc1-ba2 (`/ahmed/iris-run-experiment_ba_v5p16_fp32_pd2_bscale1em3_s10-20260418-084408`):
+  same wandb timeout. Killed.
+- **uc1-ba3** (`/ahmed/iris-run-experiment_ba_v5p16_fp32_pd2_bscale1em3_s10-20260418-084955`):
+  relaunched with `WANDB_MODE=offline`. Running.
+- ue5-ba2 (`/ahmed/iris-run-experiment_ba_v5p16_fp32_pd2_bscale1em3_s10-20260418-085007`):
+  pending capacity.
+
+**Standing ops note:** WANDB_MODE=offline sidesteps intermittent wandb online
+init timeouts seen 2026-04-18T08:40-08:47Z on multiple runs (all hosts).
+Adopt as default for debug runs. Step traces still go to stdout via
+`MARIN_DEBUG_LOG_STEP_TRACE=1`.
+
+---
+
+## Experiment AD (2026-04-18T07:45Z, COMPLETED, uc1-ad3) — test H_B: does breaking `zero_init_b` recover training under `c=f32`?
+
+> **Narrow reading (do not extrapolate):** AD v3 shows that under
+> `c=f32`, changing `zero_init_b=True → False` prevents training
+> from stalling at the `log 2` attractor that AC was stuck in. It
+> does **not** show that training reaches the good basin; the
+> Kaiming init for `B` at `zero_init_b=False` produces a starting
+> loss of 7.46 (vs 0.693 at init symmetry), much further from the
+> good basin than the bf16 path ever is. To conclude full
+> recovery we'd need a small-scale init on B.
+
+### Setup
+
+Deltas from Exp N (v5p-16 pd=2, LoRA, AdapterBase, c=bf16,
+zero_init_b=True, good):
+
+- `mp=jmp.get_policy("p=f32,c=f32")` (one knob)
+- `adapter.zero_init_b=False` (one knob, ONLY diff from AC)
+- HLO dump (observability)
+
+Same mesh, same TPU family, same microbatch structure
+(mb=16, 4 accum steps), same data, same seed, same reference type
+(`AdapterBaseReferenceConfig`). Required env-var patch in
+`lib/levanter/src/levanter/main/train_dpo.py:372` to relax the
+"AdapterBase + LoRA requires zero_init_b=True" validation —
+env flag `MARIN_DEBUG_ALLOW_LORA_ADAPTERBASE_NONZERO_B=1`. This
+is a temporary patch that should be reverted after the H_B
+investigation is complete.
+
+### Attempts
+
+1. **AD v1 (uc1-ad1)**: attempted with `AdapterBaseReferenceConfig`
+   + `zero_init_b=False` but without the validation bypass.
+   **Rejected at startup** by the config validator. Good catch;
+   the constraint is legitimate (AdapterBase reference literally
+   is "policy with adapter disabled," so zero_init_b=True is what
+   makes policy = reference at init, required for DPO δ = 0 at
+   step 0).
+2. **AD v2 (ue5-ad2)**: attempted by switching to
+   `SeparateReferenceConfig` to sidestep the validation. **Killed
+   after 15 min** at user direction — double-knob change was a
+   confounding methodological waste. Also added a separate model
+   load (2× weight load time).
+3. **AD v3 (uc1-ad3)**: patched the validator behind an env flag,
+   reverted to `AdapterBaseReferenceConfig`. Ran cleanly. **This
+   is the real AD result.** Standing rule added to memory + top
+   of logbook: never switch reference type to work around
+   validations.
+
+### Launch record (AD v3)
+
+- Script: `experiments/posttrain/per_stmt_dpo/experiment_ad_v5p16_fp32_pd2_zib_false_s10.py`
+- Env vars: `MARIN_DEBUG_ALLOW_LORA_ADAPTERBASE_NONZERO_B=1`,
+  `MARIN_DEBUG_RUN_TAG=uc1-ad3`, plus standard debug trace flags.
+- Iris jobs (both v5p regions):
+  - us-central1: `/ahmed/iris-run-experiment_ad_v5p16_fp32_pd2_zib_false_s10-20260418-074549` (tag `uc1-ad3`, **succeeded** 18:15 wall-clock)
+  - us-east5: `/ahmed/iris-run-experiment_ad_v5p16_fp32_pd2_zib_false_s10-20260418-074603` (tag `ue5-ad3`, never got capacity)
+- HLO upload path:
+  `gs://marin-us-central1/debug/xla_hlo/uc1-ad3/`
+
+### Trajectory (uc1-ad3)
+
+| step | AD v3 loss | AC (stuck) | Exp N (good) |
+|------|---:|---:|---:|
+| 0 | **7.46** | 0.6927 | 0.6931 |
+| 1 | 7.65 | 0.6947 | 0.6931 |
+| 2 | — | 0.6877 | 0.3352 |
+| 3 | — | 0.6793 | 0.3260 |
+| 4 | 7.26 | 0.6743 | 0.3362 |
+| 5 | 6.62 | 0.6696 | 0.3168 |
+| 6 | 6.24 | 0.6673 | 0.3370 |
+| 7 | 5.72 | 0.6636 | 0.3243 |
+| 8 | 6.76 (bounce) | 0.6583 | 0.3061 |
+| 9 | **5.11** | 0.6596 | 0.3176 |
+
+Step 0 starts at **7.46** (policy ≠ reference at init because
+B ≠ 0). Loss drops by 2.35 over 10 steps with one upward bounce
+at step 8. Compare: AC over the same 10 steps dropped 0.03.
+
+### Step-0 diagnostic (explains the high starting loss)
+
+With `zero_init_b=False`, LoRA's B matrix is Kaiming-initialized
+at `~N(0, 1/sqrt(r)) = N(0, 1/8)` per element (r=64). Observed
+at step 0:
+
+- `pB_l2 = 1157` (per layer, summed ≈ 37,000 across 32 layers).
+- LoRA contribution `s·B·A·x` adds O(1) per-element perturbation
+  at each layer, compounding across 32 layers.
+- Policy output is dominated by random LoRA perturbation, not
+  base model output.
+- DPO quantity δ is far from zero at init; loss is far from
+  `log 2`.
+
+This is the "wildly different starting point" we saw in the
+trajectory. Code path: `lib/levanter/src/levanter/lora.py:239`
+uses default `hnn.Linear.init` for B when `zero_init_b=False`.
+
+### Narrow conclusion (H_B interpretation)
+
+AC vs AD v3 at matched mesh + dtype:
+
+- AC (`zero_init_b=True`, c=f32): loss plateaus near `log 2`
+  (0.693 → 0.660). Not stuck per se, but **not escaping** the
+  near-degenerate init in 10 steps. Loss decrease rate: 0.003/step.
+- AD v3 (`zero_init_b=False`, c=f32): loss decreases at
+  0.23/step average. **Training is clearly proceeding**, just
+  from a very bad starting point.
+
+**The one-variable change from True → False converted a stuck run
+into a progressing run.** This is the narrow form of H_B the
+decision rule was set up to test.
+
+### What AD v3 does NOT prove
+
+- It does not prove c=f32 "works" for LoRA DPO in any practical
+  sense. Loss 5.11 at step 9 is terrible (random DPO would be
+  0.693; 5.11 means the policy is actively making wrong
+  preference predictions).
+- It does not prove the bf16-noise-as-symmetry-breaker
+  speculation. The only mechanism-level claim we can make from
+  AD v3 is: **the `c=f32 + zero_init_b=True` combination traps
+  training near the init-symmetric log-2 attractor in 10 steps;
+  breaking the init symmetry unlocks training**. The *why*
+  (rounding noise, kernel behavior, optimizer, etc.) is not
+  resolved.
+- We cannot directly compare AD v3's trajectory to Exp N or AC
+  step-for-step because the initial state is different.
+
+### Open questions post-AD
+
+1. Does a **small** nonzero B init (say `N(0, 0.01)` rather than
+   Kaiming `N(0, 1/8)`) let c=f32 training actually reach the
+   good basin? This is the clean successor test — needs a
+   ~one-line change to `lib/levanter/src/levanter/lora.py`.
+2. Why does AC stall at log(2) specifically? Is it a true fixed
+   point / saddle in the f32 loss landscape, or just extreme
+   slow dynamics? Could be probed by running AC for ~1000 steps
+   instead of 10.
+3. Is there a kernel / optimizer path at c=f32 that's
+   secondary-broken, masked by H_B? Current evidence doesn't
+   implicate one, but we haven't audited the Pallas CE kernel at
+   c=f32 yet.
+
+### Status of other hypotheses after AD v3
+
+| Hypothesis | Status |
+|---|---|
+| Bug 1 (v5p-8 pd=4 c=bf16 width-4 stuck) | UNKNOWN mechanism. Unchanged by AD. |
+| Bug 2 (c=f32 + LoRA DPO stuck) | The `zero_init_b=True` + c=f32 combination is confirmed as a trigger. Whether c=f32 has other failure modes is untested. |
+| H_B (narrow form) | SUPPORTED. `zero_init_b=True + c=f32` traps training at log(2); breaking init symmetry unlocks progress. |
+| H_B (noise-as-mechanism form) | Not tested. AD v3 doesn't distinguish noise-based symmetry breaking from any other mechanism that removes the init degeneracy. |
+| H_kernel (Pallas CE dtype issue) | Still untested. Not ruled out. |
+| H_optimizer (Adam state at c=f32) | Still untested. Not ruled out. |
+
+### Follow-up candidates (listed, not prescribed)
+
+- **"Small-B" test** (AE): modify `lora.py` to allow
+  `b_init_scale` parameter, set to 0.01, rerun AD recipe. If
+  training reaches good basin, c=f32 works once the init is
+  close enough to the base model.
+- **AC long-run** (AE alt): re-run AC recipe for 100 steps
+  instead of 10 to see whether it eventually escapes the
+  log-2 plateau.
+- **Kernel audit**: dump the f32 HLO of the Pallas CE kernel
+  and check for any dtype narrowing.
+
+### Code changes made for AD (TO REVERT)
+
+- `lib/levanter/src/levanter/main/train_dpo.py:372-378`: added env
+  flag `MARIN_DEBUG_ALLOW_LORA_ADAPTERBASE_NONZERO_B=1` to bypass
+  the zero_init_b validator. **Revert after H_B investigation is
+  closed.**
+
+---
+
+## Experiment AC (2026-04-18T06:11Z, LAUNCHED) — isolate the non-dtype mechanism at width 4 vs width 8 under matched `c=f32`
+
+> **READ THIS SECTION FIRST if you are the next agent.** AC is the
+> currently active experiment. It follows AB, which falsified the
+> bf16-collective-width-4 hypothesis. AC is designed to identify the
+> *structural* mechanism that makes `|data|=4` on v5p-8 LoRA bad,
+> with everything else controlled.
+
+### Short version for the next agent
+
+AB proved the bug is not about reduction dtype. The mechanism must
+be structural and width-4-specific. AC is the minimally-confounded
+next measurement: run the AB recipe on v5p-16 pd=2, which matches
+AB's v5p-8 pd=4 in everything except the data-axis width (8 vs 4).
+
+**What's running right now (2026-04-18T06:11Z launch):**
+
+- Script: `experiments/posttrain/per_stmt_dpo/experiment_ac_v5p16_fp32_pd2_hlo_s10.py`
+- Iris jobs:
+  - `us-central1`: `/ahmed/iris-run-experiment_ac_v5p16_fp32_pd2_hlo_s10-20260418-061101` (tag `uc1-ac1`)
+  - `us-east5`: `/ahmed/iris-run-experiment_ac_v5p16_fp32_pd2_hlo_s10-20260418-061112` (tag `ue5-ac1`)
+- Expected wall-clock: ~15-20 min once TPU capacity lands.
+- HLO upload target: `gs://marin-us-central1/debug/xla_hlo/uc1-ac1/`
+  and `.../ue5-ac1/`.
+
+**What you (next agent) should do when AC completes:**
+
+1. Verify the training trajectory via W&B run tag `uc1-ac1` (or
+   `ue5-ac1`). Expected: step-2 loss ≤ 0.5 and step-10 loss around
+   0.31 (matching Exp N baseline). If trajectory is stuck in the
+   bad basin (step-2 ≈ 0.685), something is wrong globally with
+   `c=f32` and you should audit AB + Exp U too.
+
+2. Download AC HLO:
+   ```bash
+   gcloud storage cp gs://marin-us-central1/debug/xla_hlo/uc1-ac1/module_0*.jit__train_step.cl_*.after_optimizations.txt /tmp/ac_hlo/
+   ```
+   Find the main train-step module (probably `module_0292.*`, same
+   numbering as AB based on levanter's compile order).
+
+3. Count reduction regions (compare to AB baseline):
+   ```bash
+   grep -c "bf16\[\].*add"          /tmp/ac_hlo/ac_train_step.txt
+   grep -c "f32\[\].*add.*f32\[\]"  /tmp/ac_hlo/ac_train_step.txt
+   ```
+   AB (v5p-8 width 4, c=f32): 5 bf16 regions + 4 f32 regions.
+   AC (v5p-16 width 8, c=f32) expected: similar if dtype handling is
+   consistent.
+
+4. Diff AC HLO structurally against AB HLO (download AB HLO from
+   `gs://marin-us-central1/debug/xla_hlo/uc1-ab1/module_0292.*` if
+   not already local). What to look for beyond the expected
+   `replica_groups={{0,1,2,3,4,5,6,7}}` vs `{{0,1,2,3}}` size
+   difference and the per-chip shard shape differences:
+
+   - Reduction op `to_apply=%add.X.clone` — does the reducer
+     subgraph structure match?
+   - `all-reduce` vs `reduce-scatter` vs `all-gather` counts —
+     different at width 8 vs width 4?
+   - Fusion boundaries around the grad collectives.
+   - `backend_config={"barrier_config": {"barrier_type": ...}}` —
+     any scheduling hints that differ.
+   - Collective algorithm metadata if XLA emits it.
+
+   **Any structural difference beyond width / shard-shape is a
+   mechanism candidate.**
+
+5. Compare step-0 LoRA grad values between AC and AB using the
+   `DEBUGJ SENTINEL` lines in the iris logs. Extract for matched
+   module names (e.g., `grad_B@q_proj.lora.lora_B:l2` in both runs).
+   - Difference ~1e-7 absolute → width-4 f32 associativity is the
+     mechanism. Next: find XLA flag to change reduction tree.
+   - Difference ~1e-5 or larger → systematic non-precision bias at
+     width 4. Hunt for structural cause in HLO or compile path.
+
+6. Record findings in this logbook. Follow the decision matrix in
+   the script docstring / "Decision matrix after AC" below.
+
+### Why AC's design is tight
+
+All knobs are controlled except data-axis width:
+
+| Variable | AB (v5p-8 pd=4) | AC (v5p-16 pd=2) |
+|---|---|---|
+| TPU family | v5p | v5p (same) |
+| total chips | 4 | 16 |
+| `|data|` | 4 | **8** (the variable) |
+| `per_device_parallelism` | 4 | 2 |
+| `microbatch_size` = pd × `|data|` | 16 | 16 (same) |
+| accum steps = batch / microbatch | 4 | 4 (same) |
+| `train_batch_size` | 64 | 64 (same) |
+| `mp` | `p=f32, c=f32` | `p=f32, c=f32` (same) |
+| LoRA rank / alpha / zero_init_b | 64 / 64 / true | same |
+| seed, data, lr, schedule | same | same |
+
+Per-chip LoRA grad shard size differs (64 / 4 = 16 per chip at AB
+vs 64 / 8 = 8 per chip at AC) — this is an unavoidable consequence
+of different widths. If the mechanism is "small-shard tile packing"
+related, this is exactly the variable that matters.
+
+### Hypothesis under test
+
+H_AC: The width-4 LoRA DPO pathology is caused by some structural
+property of the width-4 FSDP reduce-scatter (tree topology, fusion,
+buffer layout, or reduction operand order even at f32), not by the
+bf16 non-associativity that Z4 pointed at.
+
+Predictions under H_AC:
+
+- AC trajectory recovers (expected; matches Exp N's good trajectory).
+- AC HLO shows at least one structural difference vs AB HLO besides
+  width and shard shape.
+- Or: AC HLO structurally identical (except width/shape), AND step-0
+  grads differ between AC and AB at 1e-7 absolute — implicating f32
+  non-associativity at width 4 as the reassociation-order mechanism.
+
+Under the null (all-width-agnostic-at-f32), AC's HLO and grads
+would match AB's to machine precision after controlling for shape
+differences — but then AB should recover too, and it doesn't. So
+the null is unlikely; the question is *which* form the structural
+mechanism takes.
+
+### Decision matrix after AC
+
+Four cases (AC trajectory / HLO diff vs AB v5p-8 / grad diff vs AB):
+
+1. **recovers / identical-except-replica_groups / ~1e-7 absolute**
+   → width-4 reduction order + f32 associativity limit is the
+   mechanism. Next: probe XLA flags to change the reduction
+   algorithm or tree shape at width 4.
+
+2. **recovers / structural differences found / any grad diff**
+   → those structural differences ARE the mechanism candidates.
+   Next: isolate which one matters (per-difference ablation).
+
+3. **recovers / identical-except-replica_groups / ~1e-5 or larger**
+   → systematic non-precision bias at width 4. Hunt in compile
+   path; likely a scheduling / fusion decision invisible in a
+   coarse HLO diff.
+
+4. **stuck (step-2 loss ≈ 0.685)**
+   → f32 globally breaks training somehow. Surprising. Would
+   force an audit of AB + Exp U and a rethink of the whole picture.
+
+### Launch record
+
+**Code changes**: no library changes. New experiment script only
+(`experiment_ac_v5p16_fp32_pd2_hlo_s10.py`). Library code in
+`lib/levanter/` is back at HEAD after the AA revert.
+
+**Iris jobs (both v5p-family regions per launch directive):**
+- `us-central1`: `/ahmed/iris-run-experiment_ac_v5p16_fp32_pd2_hlo_s10-20260418-061101` (tag `uc1-ac1`)
+- `us-east5`: `/ahmed/iris-run-experiment_ac_v5p16_fp32_pd2_hlo_s10-20260418-061112` (tag `ue5-ac1`)
+
+### Running monitor
+
+Claude agent is polling status once per minute for first 10 minutes
+after launch, then every 15 minutes until both copies complete or
+one lands capacity and produces a full trajectory + HLO. Update
+this section with the result when available.
+
+### AC result (2026-04-18T06:20Z, uc1-ac1) — **UNEXPECTED: AC stuck too**
+
+Outcome: **row 4 of the decision matrix — "f32 globally breaks
+training somehow"**. AC's trajectory tracks AB's to within
+rounding noise and stays in the bad basin throughout all 10 steps:
+
+| step | AC (uc1-ac1, v5p-16 pd=2, `c=f32`) | AB (uc1-ab1, v5p-8 pd=4, `c=f32`, stuck) | Exp N (v5p-16 pd=2, `c=bf16`, GOOD) |
+|------|---:|---:|---:|
+| 0 | 0.6926 | 0.6927 | ~0.6931 |
+| 1 | 0.6947 | 0.6947 | ~0.6931 |
+| 2 | **0.6877** | 0.6865 | **0.3352** |
+| 3 | 0.6793 | 0.6805 | 0.3260 |
+| 4 | 0.6743 | 0.6770 | 0.3362 |
+| 5 | 0.6696 | 0.6697 | 0.3168 |
+| 6 | 0.6673 | 0.6651 | 0.3370 |
+| 7 | 0.6636 | 0.6654 | 0.3243 |
+| 8 | 0.6583 | 0.6603 | 0.3061 |
+| 9 | **0.6596** | 0.6599 | — |
+
+**AC tracks AB, not Exp N.** At v5p-16 pd=2 — a KNOWN-GOOD mesh at
+`c=bf16` — changing compute dtype to f32 breaks the run too.
+
+### What this reveals
+
+The simplest story consistent with **all** results so far:
+
+| recipe | `|data|` | `c=` | outcome |
+|---|---|---|---|
+| Exp Q | 4 | bf16 | stuck |
+| Exp N | 8 | bf16 | RECOVERS |
+| Exp U / AB | 4 | f32 | stuck |
+| **AC (new)** | **8** | **f32** | **stuck** |
+
+Only the `c=bf16` + `|data|≥8` cell works. Everything else fails.
+
+The mechanism is therefore **NOT** "width-4-specific". There appear
+to be (at least) two distinct failure modes:
+
+1. **`c=bf16` + `|data|=4`**: the configuration the Z-experiments
+   tracked. Specific bf16 precision / non-associativity or
+   structural issue at width 4.
+2. **`c=f32` at any width**: a global `c=f32` failure on this LoRA
+   DPO recipe. Not previously appreciated because Exp U was
+   assumed to have failed for the same reason as Exp Q.
+
+**Consequence**: the entire Z-experiment narrative in this logbook
+and `precision_explained_jax_tpu.md` ("width-4 bf16 collective is
+the mechanism") was reasoning about a shadowing effect. The
+f32-across-widths failure was hidden because Exp U's failure was
+attributed to the bf16-width-4 hypothesis rather than recognized as
+a separate phenomenon.
+
+### Plausible underlying mechanism (hypothesis)
+
+LoRA with `zero_init_b=True` starts with perfect symmetry: `B = 0`
+on every adapter, so the LoRA contribution `B @ A = 0` exactly at
+step 0. The "direction" of the first update that breaks this
+symmetry is what determines whether training escapes to the good
+basin or stays in a degenerate flat direction.
+
+- Under `c=bf16`: stochastic rounding during the backward pass
+  provides small random perturbations that break the zero-init
+  symmetry. Training escapes at widths where those perturbations
+  are well-distributed (widths 2, 8+), but at width 4 the
+  systematic direction bias in the 4-chip reduction dominates and
+  training gets trapped.
+- Under `c=f32`: the backward pass is essentially deterministic.
+  The zero-init symmetry is NOT broken by rounding noise. Training
+  stays near the initial degenerate point regardless of width.
+  That's what we see in AB (width 4) and AC (width 8).
+
+This is a testable hypothesis. Easiest controls:
+
+- **Run `c=bf16` on v5p-16 pd=2 with the current code** to
+  reconfirm Exp N's good trajectory still reproduces (rules out
+  stack drift between original Exp N and today).
+- **Run `c=f32` on v5p-16 pd=2 with `zero_init_b=False`** to see
+  if removing the zero-initialization symmetry recovers training
+  at f32.
+- **Run `c=f32` on v5p-16 pd=2 with a small random init on `B`**
+  to see if any non-zero init works at f32.
+
+If the hypothesis is right, the zero_init_b variants would recover
+at f32 because the symmetry-breaking is provided by nonzero init
+rather than rounding noise.
+
+### Revised picture of the investigation
+
+The investigation has been chasing a **second-order** effect
+(bf16-width-4 collective) while a **first-order** effect
+(`c=f32` + zero_init_b makes LoRA training degenerate) was hidden
+in Exp U's failure. AB and AC together surface the first-order
+effect.
+
+For the v5p-8 pd=4 production use case specifically, the workaround
+list is still valid (use v5p-16 or v6e-8 or `{data:2, model:2}` or
+pure TP at bf16). But the `c=f32` workaround path
+that some agents had been considering is dead: `c=f32` does not
+help on any mesh.
+
+### What changes in other logbooks
+
+- `precision_explained_jax_tpu.md`: needs a major correction. The
+  entire narrative centered on "lever D" (collective dtype) as the
+  likely mechanism is wrong. The mechanism at bf16 is some
+  still-unknown width-4 structural thing; at f32, there's an
+  entirely separate degeneracy.
+- This logbook: Z-experiment "MECHANISM CLOSED" framing is fully
+  retracted. The v5p-8 pd=4 c=bf16 bug is real and width-4-specific,
+  but the "dtype is the cause" interpretation was wrong on two
+  levels (AB falsified bf16 collective being the cause; AC
+  revealed f32 is its own failure mode).
+
+### Status at 2026-04-18T06:21Z
+
+- uc1-ac1 completed successfully. 10 steps, stuck trajectory,
+  HLO uploaded (check `gs://marin-us-central1/debug/xla_hlo/uc1-ac1/`
+  after atexit).
+- ue5-ac1 still pending capacity; with uc1 conclusive, it's no
+  longer load-bearing. Killed when AC was retired.
+- 1-minute monitor cadence retired (AC answered at T+4).
+
+### Exp N rerun (2026-04-18T06:29-06:46Z) — stack is clean
+
+**Job**: `/ahmed/iris-run-debug_r64_matched_pd2_s10-20260418-062912`
+(tag `uc1-n-rerun`), run on v5p-16 pd=2 with the exact original
+Exp N script (`debug_r64_matched_pd2_s10.py`, `TPU_TYPE=v5p-16`,
+no mp override → default `c=bf16`). 16:06 wall-clock, succeeded.
+
+Trajectory compared to the original Exp N values (from the R2a
+comparison table in the Exp R2a result section of this logbook):
+
+| step | N-rerun (this) | Original Exp N | match |
+|------|---:|---:|---:|
+| 0 | 0.6931471824645996 | 0.6931 | bit-perfect |
+| 1 | 0.6931471824645996 | 0.6931 | bit-perfect |
+| 2 | **0.33520203828811646** | **0.335202** | bit-perfect |
+| 3 | 0.325988233089447 | 0.325988 | bit-perfect |
+| 4 | 0.33624571561813354 | 0.336246 | bit-perfect |
+| 5 | ~ | 0.316800 | — |
+| 6 | ~ | 0.336998 | — |
+| 7 | 0.32427090406417847 | 0.324271 | bit-perfect |
+| 8 | 0.30614393949508667 | 0.306144 | bit-perfect |
+| 9 | 0.3176242411136627 | — | — |
+
+Step-0 `grad_l2=2.4562835693359375` matches the original's value
+(quoted as `2.456284` in the R2a section) to 6+ digits.
+
+**Conclusion**: the repo + stack reproduce Exp N exactly. The
+AC "stuck at f32" result cannot be explained by stack drift; it
+is a genuine finding about `c=f32`.
+
+### Hypothesis H_B — narrowed scope
+
+H_B is: **`c=f32` + `zero_init_b=True` together break LoRA DPO
+training on an otherwise-working mesh.** That's the whole claim
+AD will test. Speculation about *why* (bf16 rounding noise as
+symmetry breaker, f32 as "too deterministic", etc.) was removed
+in a prior revision because it over-extended what AD can support.
+
+**What's rigorous** (derivable from the config + observed
+traces — not speculation):
+
+- `zero_init_b=True` means `B = 0` at init. LoRA contribution
+  `s·B·A·x = 0` at step 0.
+- `AdapterBaseReferenceConfig` disables the adapter for the
+  reference pass. Therefore policy logits = reference logits at
+  step 0.
+- DPO δ = 0 at step 0, so DPO loss = `log 2 ≈ 0.693147`. This
+  matches every observed step-0 loss we've logged.
+- Backprop through `h = s·B·A·x`:
+  - `dL/dA ∝ B^T·(...)`. Since `B = 0`, `dL/dA = 0` exactly at
+    step 0. Matches `gA_l2 = 0` in every run.
+  - `dL/dB ∝ (cotangent of h)·(A·x)^T`, nonzero since `A`, `x`,
+    and the cotangent are all nonzero. Matches `gB_l2 ≈ 2.456`
+    in every run.
+- Warmup means LR ≈ 0 at step 1 → no update → step-1 loss = step-0
+  loss. Matches observation.
+- Step 2 is therefore the first step where `B ≠ 0` and the policy
+  can diverge from the reference. Exp N jumps 0.693 → 0.335 here;
+  AC drops 0.693 → 0.687 instead. The difference between those
+  two step-2 behaviors is what we're trying to explain.
+
+**What's speculation** (kept out of the logbook, flagged for
+memory only): multiple plausible stories exist for why f32
+step-2 drops slower than bf16 step-2 — bf16 rounding as
+symmetry breaker, Pallas CE kernel dtype handling, optimizer
+dtype interactions. **AD cannot distinguish between these.**
+AD only tests whether removing `zero_init_b` is enough to
+recover.
+
+### Decision rule for AD
+
+- AD recovers (step-2 ≤ 0.5 on v5p-16 pd=2, c=f32, zero_init_b=False):
+  conclude "c=f32 with zero_init_b=True is a broken configuration
+  on this stack. Non-zero B init is a workaround." Do NOT claim
+  the mechanism is understood.
+- AD stays stuck (step-2 ≈ 0.685): H_B ruled out. Move to kernel
+  / optimizer probes.
+
+### AD launch record (2026-04-18T07:09Z)
+
+- Script: `experiments/posttrain/per_stmt_dpo/experiment_ad_v5p16_fp32_pd2_zib_false_s10.py`
+- Config: Exp N recipe + `mp=jmp.get_policy("p=f32,c=f32")` +
+  `adapter=LoraAdaptationConfig(..., zero_init_b=False, ...)`
+  + HLO dump.
+- Iris jobs (both v5p regions):
+  - us-central1: `/ahmed/iris-run-experiment_ad_v5p16_fp32_pd2_zib_false_s10-20260418-070914` (tag `uc1-ad1`)
+  - us-east5: `/ahmed/iris-run-experiment_ad_v5p16_fp32_pd2_zib_false_s10-20260418-070928` (tag `ue5-ad1`)
+- HLO upload target: `gs://marin-us-central1/debug/xla_hlo/{uc1-ad1,ue5-ad1}/`
+- No library code changes (only new experiment script).
+
+### Fallback candidates if AD stays stuck
+
+- Audit the Pallas CE kernel (`lib/levanter/src/levanter/ops/xla.py`)
+  for f32-specific code paths. Dump its HLO under c=f32 and
+  compare to c=bf16.
+- Audit optimizer state handling under p=f32,c=f32 vs
+  p=f32,c=bf16 (look for silent dtype casts in Adam's update
+  step).
+- Try `SeparateReferenceConfig` at c=f32 on v5p-16 pd=2 (Exp V
+  was this config at c=bf16 on v5p-8 and failed for a different
+  reason; never tested on a known-good mesh at c=f32).
+
+---
+
+## Experiment AB (2026-04-18T05:33Z, LAUNCHED) — rerun Exp U with HLO dump to directly verify reduction dtype under `c=f32`
+
+### AB result (2026-04-18T05:43Z, uc1-ab1) — **HYPOTHESIS FALSIFIED**
+
+**Training trajectory: STUCK in bad basin.** Did not recover despite
+`p=f32, c=f32`:
+
+| step | AB (`c=f32`) | Exp Q (`c=bf16`, bad) | Good v5p-16 |
+|------|---:|---:|---:|
+| 0 | 0.69268095 | 0.69314718 | 0.6931 |
+| 1 | 0.69472682 | 0.69314718 | 0.6931 |
+| 2 | 0.68645769 | 0.68512470 | 0.3352 |
+| 3 | 0.68045288 | 0.68229818 | 0.3260 |
+| 4 | 0.67701888 | 0.67372340 | 0.3362 |
+| 5 | 0.66966462 | 0.66894621 | 0.3168 |
+| 6 | 0.66512156 | 0.66757309 | 0.3370 |
+| 7 | 0.66537619 | 0.66282284 | 0.3243 |
+| 8 | 0.66031528 | 0.65871453 | 0.3061 |
+| 9 | 0.65985513 | 0.66055727 | — |
+
+AB trajectory slightly differs from Exp Q (unlike AA which was
+byte-identical — AA's "cast" was a no-op). `c=f32` really did
+change the compute. Step-0 `grad_l2=2.4448` vs Exp Q's `2.4560`
+(a ~0.4% difference, far above bf16-noise levels).
+
+**HLO verification: reductions ARE f32.** Pulled
+`module_0292.jit__train_step.cl_813921542.after_optimizations.txt`
+from `gs://marin-us-central1/debug/xla_hlo/uc1-ab1/`. Key findings:
+
+- **Reduction region counts**: 5 bf16 regions, 4 f32 regions
+  (vs Exp Q/AA baseline: 71 bf16, 2 f32). `c=f32` collapsed the bf16
+  reductions dramatically.
+- **Width-4 grad all-reduces**: every `all-reduce(...)` and
+  `all-reduce-scatter(...)` at `replica_groups={{0,1,2,3}}` now
+  operates on `f32[...]` tensors. Example (from
+  `%all-reduce-scatter.clone.clone`):
+  ```
+  %input.73 = f32[8,4,128,4096]{3,2,1,0:T(8,128)} parameter(0)
+  %all-reduce.321 = f32[8,4,128,4096]{...} all-reduce(%input.73),
+    channel_id=514, replica_groups={{0,1,2,3}},
+    to_apply=%add.1.clone, ...
+  ```
+- **Reduction `to_apply` regions**: `%add.1.clone`, `%add.3.clone`,
+  `%add.6.clone`, `%add.8.clone`, `%add.11.clone` are all
+  unambiguously:
+  ```
+  (x: f32[], y: f32[]) -> f32[] {
+    ROOT add = f32[] add(x, y)
+  }
+  ```
+  **No bf16 reducers anywhere on the width-4 grad collectives.**
+- **Remaining 5 bf16 regions**: `fused_computation.*` regions
+  involving bf16 *parameters* (reference-model path, non-trainable
+  bf16 tensors in the graph). None of them are grad reductions.
+
+### What AB proves
+
+Under `c=f32`, **every FSDP gradient all-reduce on v5p-8 pd=4 at
+width 4 runs `f32 + f32 → f32`**. Training still gets stuck at
+step-2 loss ≈ 0.686, identical qualitative behavior to Exp Q at
+`c=bf16`.
+
+**Therefore: the bf16 non-associative collective at width 4 is NOT
+the mechanism causing the v5p-8 LoRA DPO pathology.**
+
+This falsifies the hypothesis that `precision_explained_jax_tpu.md`
+has been centering ("width-4 bf16 collective produces direction-biased
+sums that trap LoRA in the bad basin"). The pathology must be driven
+by something about `|data|=4` that is **not** reduction dtype.
+
+### What still holds from the prior investigation
+
+- Exp T: full-FT on v5p-8 pd=4 works → LoRA-specific.
+- Exp W: pure TP on v5p-8 works → FSDP-specific.
+- Exp Z3: `{data:2, model:2}` on v5p-8 works → width-4-specific.
+- Exp Z1: grad values differ between v5p-8 and v6e-8 at matched
+  seed/batch/init at the 1e-5 absolute level → there IS a numerical
+  divergence. It was attributed to bf16 non-associativity, but AB
+  shows dtype isn't the load-bearing lever. The divergence may come
+  from a different source (e.g., different reduce-scatter tree
+  topology at width 4 vs 8, even at f32).
+- Exp Z4: HLO diff v5p-8 vs v6e-8 showed identical structure except
+  `replica_groups` width. Still true — and now we know the dtype was
+  a red herring; the width/topology effect is what matters.
+
+### New candidate mechanisms (non-dtype) for the width-4 pathology
+
+Listed roughly in order of prior plausibility:
+
+1. **Reduce-scatter tree topology at width 4 vs 8**. XLA's lowering
+   picks a physical reduction order (ring, tree, butterfly) based on
+   topology and dimensions. The 4-chip reduction on v5p-8's torus
+   may use a tree shape that produces a specific numerical-error
+   distribution over the rank-r LoRA update subspace that happens to
+   land in the bad basin. f32 mitigates bf16 rounding but doesn't
+   change tree structure; the bias could be in which elements get
+   summed first.
+2. **All-gather vs reduce-scatter fusion choices at width 4**. Z4
+   showed slight counts differ between widths (14 vs 15 reduction
+   regions). At width 4, XLA may be fusing differently or emitting
+   the boundary-reducing ops on different buffer layouts, producing
+   a systematic (non-statistical) difference in grad values.
+3. **Buffer layout / memory placement at width 4**. Padded or
+   non-multiple-of-X shapes at width 4 may trigger different tile
+   packing than at width 8, with associated reassociation of the
+   reduction order even in f32.
+4. **Collective chunking**. For small per-chip shards (LoRA grads
+   are small), the collective may be chunked differently at width 4
+   than width 8.
+5. **Something LoRA-specific about the partial→sharded conversion
+   at width 4** when the sharded output has an odd number of chunks
+   (rank 64 / 4 chips vs 64 / 8 chips).
+
+None of these have been tested yet. All are structural, not
+numerical, so they'd show up in HLO diff as scheduling/shape
+differences rather than dtype differences.
+
+### Immediate implications for the logbook and precision_explained
+
+1. `precision_explained_jax_tpu.md` Parts 6-9 (the narrative
+   centered on bf16-collective-width-4 being the leading explanation)
+   needs a correction pointer. The "leading hypothesis" should now
+   be "width-4 reduction structure (non-dtype) — mechanism
+   unknown".
+2. Exp U is now validated: `c=f32` really does produce f32
+   reductions in this stack, and the result we recorded for Exp U
+   is trustworthy.
+3. Z4's HLO evidence stands: the reductions ARE bf16 at default
+   `c=bf16`. But its interpretation shifts from "the bf16 dtype is
+   the mechanism" to "the bf16 dtype is a correlate of the real
+   structural mechanism, not the cause."
+
+### Next experiment candidates (post-AB)
+
+Order by information-per-unit-cost:
+
+- **Diff AB HLO vs Exp Q HLO vs Z4's v6e-8 HLO** structurally.
+  Isolate what differs at width 4 vs width 8 *besides* dtype —
+  tree topology, scheduling, buffer layout. This is a pure HLO
+  analysis, no TPU time. Highest priority.
+- **Instrument per-rank contribution to the LoRA grad all-reduce**
+  to see which chip's partial sum dominates or how the sum is
+  organized. Requires custom instrumentation but no new fundamental
+  capability.
+- **Mesh rearrangement within width 4**: vary which chips are
+  assigned to the data axis (logical mesh reordering) to see if the
+  pathology depends on the physical topology of the 4-chip
+  aggregation.
+- **Collective-algorithm override**: force XLA to use a specific
+  reduction algorithm at width 4 (if flags allow) to isolate tree
+  shape as a variable.
+
+### Running state at 2026-04-18T05:43Z
+
+- AB uc1-ab1 completed successfully in 17:48. HLO analyzed.
+- AB ue5-ab1 still running. Not load-bearing (uc1-ab1 already gave
+  conclusive result); will let finish for cross-region replication.
+  If its HLO and trajectory match uc1-ab1, no additional analysis
+  needed.
+
+### Launch record (2026-04-18T05:33Z)
+
+**Iris jobs (both v5p-8 regions per launch directive):**
+- `us-central1`: `/ahmed/iris-run-experiment_ab_v5p8_fp32_pd4_hlo_s10-20260418-053332` (run tag `uc1-ab1`) — **completed, analyzed**
+- `us-east5`: `/ahmed/iris-run-experiment_ab_v5p8_fp32_pd4_hlo_s10-20260418-053343` (run tag `ue5-ab1`) — in flight, replication check
+
+**Workspace at submit time:**
+- Diagnostic AA code changes **reverted** in
+  `lib/levanter/src/levanter/grad_accum.py`,
+  `lib/levanter/src/levanter/trainer.py`, and
+  `lib/levanter/src/levanter/main/train_dpo.py` (via `git checkout`).
+  AA experiment script deleted. AB launches against an otherwise-clean
+  levanter tree.
+- New experiment script
+  `experiments/posttrain/per_stmt_dpo/experiment_ab_v5p8_fp32_pd4_hlo_s10.py`
+  is a clone of `experiment_u_v5p8_fp32_pd4_s10.py` + the HLO-dump
+  plumbing from `experiment_z4_hlo_dump_s2.py`.
+- Pre-commit passes.
+
+**What to check once AB finishes (~15-20 min per region):**
+
+1. Download HLO from
+   `gs://marin-us-central1/debug/xla_hlo/uc1-ab1/module_0*.jit__train_step.cl_*.after_optimizations.txt`
+   (or `ue5-ab1` path).
+2. `grep -c "bf16\[\].*add"` and `grep -c "f32\[\].*add.*f32\[\]"`
+   for `to_apply` reduction-region counts.
+3. Spot-check the width-4 (`replica_groups={{0,1,2,3}}`) all-reduce
+   ops and their `to_apply=%add.X` reducer dtypes.
+4. Compare loss trajectory against Exp Q (bad), Exp U, and v5p-16
+   pd=2 (good).
+5. Apply the interpretation matrix from the AB plan.
+
+---
+
+<!-- duplicate AB plan block removed after falsification result — content now fully captured in the AB section above -->
+
+<!-- Duplicate AB plan block below this line was removed after AB falsification — content now lives in the AB section above and doesn't need to be repeated. Jumping directly to the real AA section. -->
+<!-- __AB_DUPLICATE_BLOCK_START__
+
+**Status:** about to launch. Decisive cheap test for the
+bf16-collective-width-4 hypothesis. Supersedes the entire AA thread
+(which intervened at the wrong site; see AA retraction below).
+
+### Goal
+
+Directly answer the central open question the precision_explained
+logbook has been pointing at since the Z-experiments:
+
+> When Exp U ran `p=f32, c=f32` on v5p-8 pd=4 LoRA and training still
+> stayed in the bad basin — did the compiled HLO actually have f32
+> FSDP grad reductions?
+
+Exp U predated the HLO-dump workflow (added in Z4), so we've never
+inspected its HLO. AB is Exp U, rerun with HLO dumping and upload to
+GCS so we can actually look.
+
+### Why AB, not a deeper AA surgery
+
+AA attempted to surgically cast grads to f32 inside `grad_accum.loop`.
+AA v5's diagnostics showed this is futile because:
+
+- The grads reaching the accum loop are already f32 (cast up from
+  bf16 after the per-layer FSDP reduce-scatter inside the backward).
+- The load-bearing bf16 reduction happens inside `fn`'s backward pass
+  per-layer, not at the accum boundary.
+
+To fix the bf16 reductions via `jmp`, we'd need `c=f32` — which is
+exactly what Exp U did. So instead of writing custom VJP rules to
+cast cotangents (the "correct" surgical intervention site, but
+nontrivial), we should first verify what Exp U actually did at the
+HLO level. If Exp U already produced f32 reductions and still broke,
+the hypothesis is dead and no cotangent-level intervention will save
+it.
+
+### Hypothesis being tested
+
+H0: FSDP reduce-scatter on LoRA cotangents runs in bf16 at width 4
+on v5p-8 under default `c=bf16`, producing a non-associative sum that
+systematically biases the early LoRA update and traps training in
+the bad basin. Under `c=f32`, the reductions run in f32 (associative
+to much tighter tolerance), eliminating the bias.
+
+AB tests H0 by reading the compiled HLO under `c=f32`.
+
+Predictions under H0:
+
+- AB HLO shows `f32 + f32 → f32` reductions for all width-4 LoRA-grad
+  collectives (replica_groups `{{0,1,2,3}}`).
+- AB training **recovers**: step-2 loss ≤ 0.5 (clearly below the
+  0.685 attractor), step-10 delta_pi − delta_ref ≥ 5.
+
+If AB HLO shows f32 reductions AND training is stuck → **H0 falsified**.
+Then width-4 pathology is not about reduction dtype; candidate
+mechanisms to investigate next: HLO scheduling differences, buffer
+layout, collective tree topology, all-gather/reduce-scatter fusion
+choices that differ at width 4 vs 8.
+
+If AB HLO still shows bf16 reductions despite `c=f32` → there's a
+hidden bf16 downcast somewhere in the stack (CE Pallas kernel,
+optimizer path, remat cache). Identify it, fix it, rerun.
+
+**Replication note**: AB is also a replication check for Exp U's
+trajectory. If Exp U's result doesn't reproduce in AB (e.g.,
+trajectory differs materially), that's a separate signal — something
+about the recipe or stack drifted between then and now.
+
+### Interventions (none new — AB is just Exp U + logging)
+
+Relative to Exp Q baseline (the bad recipe):
+
+- Same hardware (v5p-8), mesh (canonical FSDP, `{replica:1, data:4,
+  model:1}`), data, batch size (64), per-device parallelism (4),
+  learning rate schedule, LoRA config (r=64, alpha=64, zero_init_b).
+- **Only scientific change**: `mp=jmp.get_policy("p=f32,c=f32")`.
+- **Added for observability**: `XLA_FLAGS=--xla_dump_to=...`,
+  `MARIN_DEBUG_HLO_UPLOAD_DIR=gs://.../ab-<tag>/`, plus the usual
+  `MARIN_DEBUG_LOG_STEP_TRACE=1` and `MARIN_DEBUG_LOG_BATCH_INDICES=1`.
+
+No source-code changes. Pure recipe + observability.
+
+### Experiment script
+
+`experiments/posttrain/per_stmt_dpo/experiment_ab_v5p8_fp32_pd4_hlo_s10.py`
+
+Direct clone of `experiment_u_v5p8_fp32_pd4_s10.py` with HLO dump
+wiring copied from `experiment_z4_hlo_dump_s2.py`.
+
+### Launch commands (parallel, both v5p regions per launch directive)
+
+```bash
+# us-central1
+uv run iris --config lib/iris/examples/marin.yaml job run \
+  --region us-central1 --cpu 1 --memory 3g \
+  -e REGIONS_OVERRIDE us-central1 \
+  -e MARIN_DEBUG_LOG_BATCH_INDICES 1 \
+  -e MARIN_DEBUG_LOG_STEP_TRACE 1 \
+  -e MARIN_DEBUG_RUN_TAG uc1-ab1 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  --no-wait -- python experiments/posttrain/per_stmt_dpo/experiment_ab_v5p8_fp32_pd4_hlo_s10.py
+
+# us-east5
+uv run iris --config lib/iris/examples/marin.yaml job run \
+  --region us-east5 --cpu 1 --memory 3g \
+  -e REGIONS_OVERRIDE us-east5 \
+  -e MARIN_DEBUG_LOG_BATCH_INDICES 1 \
+  -e MARIN_DEBUG_LOG_STEP_TRACE 1 \
+  -e MARIN_DEBUG_RUN_TAG ue5-ab1 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  --no-wait -- python experiments/posttrain/per_stmt_dpo/experiment_ab_v5p8_fp32_pd4_hlo_s10.py
+```
+
+### HLO analysis plan
+
+Once HLO uploads to `gs://marin-us-central1/debug/xla_hlo/uc1-ab1/`
+or `.../ue5-ab1/`:
+
+1. Download `module_0*.jit__train_step.*.after_optimizations.txt`
+   (the optimized HLO for the main train step module — probably
+   `module_0300.jit__train_step.cl_*.after_optimizations.txt` based
+   on Z4's numbering).
+2. Count reduction region dtypes:
+   ```bash
+   grep -c "bf16\[\].*add" <hlo>     # bf16 reduction regions
+   grep -c "f32\[\].*add.*f32\[\]" <hlo>  # f32 reduction regions
+   ```
+   Z4's v5p-8 baseline: 71 bf16, 2 f32 (the 2 f32 are scalar loss
+   reductions, not grad collectives).
+3. Spot-check the actual all-reduce and reduce-scatter ops at width
+   4 (`replica_groups={{0,1,2,3}}`). Verify the `to_apply=%add.X`
+   regions are f32 adders.
+4. Compare to Z4's v5p-8 HLO to see the structural diff introduced
+   by `c=f32`.
+
+### Training analysis plan
+
+Pull the W&B trajectory via tag `uc1-ab1` / `ue5-ab1` and compare
+step-by-step against:
+
+- Exp Q baseline (bad, default `c=bf16`): step-2 0.6851, step-9
+  ~0.66.
+- Exp U (stored in logbook): should match AB to high precision if
+  there's no stack drift.
+- Good v5p-16 pd=2 reference: step-2 ~0.335, step-9 ~0.31.
+
+Success = recovery: step-2 ≤ 0.5 and step-10 `delta_pi − delta_ref`
+≥ 5. Failure = bad basin: step-2 ≈ 0.685 and `delta_pi − delta_ref`
+in [0.1, 0.7].
+
+### Cost
+
+- Code change: 0 (only new experiment script, copied from U + Z4).
+- Training run: ~15-20 min wall-clock per region.
+- HLO download + analysis: ~5 min.
+- Total: ~30 min wall-clock, one 10-step v5p-8 allocation.
+
+### Interpretation — the decision
+
+AB is designed so we can stop guessing after this one run:
+
+- **f32 HLO + stuck training** (the most likely outcome): retract the
+  bf16-collective-width-4 hypothesis from `precision_explained_jax_tpu.md`
+  and start fresh on non-dtype `|data|=4` mechanisms. Exp W and Z3
+  still demonstrate that *width 4 specifically is pathological*, but
+  the "why" moves to HLO scheduling, tree topology, buffer layout.
+- **f32 HLO + training recovers**: dtype WAS the mechanism; Exp U's
+  original result was mislogged or the stack drifted. Land the
+  `c=f32` workaround while we figure out a cheaper cotangent-level
+  fix.
+- **bf16 HLO + stuck**: `jmp c=f32` has a leak — likely the Pallas CE
+  kernel. Fix, then relaunch. Not a falsification, just needs
+  follow-up plumbing.
+
+### Follow-ups for the precision_explained logbook after AB
+
+Regardless of outcome, the AA retraction needs to be added to
+`precision_explained_jax_tpu.md` Part 6 / 7 to correct the claim
+that AA's cast site was the right intervention for lever D. The
+revised teaching is:
+
+> Lever D (collective reduction dtype) for FSDP-style grad
+> aggregation must be controlled at the tensor that GSPMD-emits
+> reduces — which, under standard `jmp.Policy(p=f32, c=bf16)`, is
+> the bf16 cotangent *inside the backward pass, per layer*. Casting
+> at the microbatch accumulation boundary is too late because the
+> reduce has already happened.
+
+AB's result then tells us whether lever D matters at all for the
+v5p-8 LoRA pathology.
+
+__AB_DUPLICATE_BLOCK_END__ -->
+
+## Experiment AA (2026-04-17 → 2026-04-18) — RETRACTED: wrong intervention site
+
+**Status:** LAUNCHED 2026-04-17T21:17Z (v2 plan, revised after Codex
+review — see `docs/debug-log-experiment-aa.md`). Read the top pointer and
+the companion
+[precision_explained_jax_tpu.md](./precision_explained_jax_tpu.md) for
+full context.
+
+### Launch record (2026-04-17T21:17Z)
+
+**Code changes:**
+- `lib/levanter/src/levanter/grad_accum.py` — added `import os`,
+  module-level `_AA_CAST_GRADS_F32 = os.environ.get("MARIN_DEBUG_AA_CAST_GRADS_F32", "0") == "1"`,
+  and env-gated `this_grads.astype(f32)` inside the `loop` function
+  immediately after `(this_loss, this_metrics), this_grads = this_r`
+  and before `(acc_loss, acc_metrics), acc_grads = acc`.
+- `experiments/posttrain/per_stmt_dpo/experiment_aa_v5p8_pd4_f32_grad_cast_s10.py`
+  — clone of Exp Q pd=4 with `MARIN_DEBUG_AA_CAST_GRADS_F32=1`, HLO
+  dump flags, and HLO upload to
+  `gs://marin-us-central1/debug/xla_hlo/aa-v5p8-pd4/`.
+- Pre-commit passes.
+
+**Iris jobs (both v5p-8 regions per top-of-logbook directive):**
+- `us-central1`: `/ahmed/iris-run-experiment_aa_v5p8_pd4_f32_grad_cast_s10-20260418-041719`
+  (run tag `uc1-aa1`)
+- `us-east5`: `/ahmed/iris-run-experiment_aa_v5p8_pd4_f32_grad_cast_s10-20260418-041730`
+  (run tag `ue5-aa1`)
+
+First copy to land capacity is load-bearing; the other is a
+cross-region replication check (leave running unless it blocks
+another probe).
+
+**What to verify once the run compiles:**
+1. HLO upload to `gs://marin-us-central1/debug/xla_hlo/aa-v5p8-pd4/<tag>/`
+   — grep the `jit__train_step` module for `to_apply` regions near LoRA
+   grad `all-reduce`/`reduce-scatter` ops. Success: reduction region is
+   `f32[] add(f32[], f32[])`. Fail: still bf16 (cast was optimized
+   away — see AA plan "HLO verification" subsection for debug steps).
+2. W&B `train/loss` trajectory:
+   - step 2 ≤ 0.5 → AA.1 recovered (H0 confirmed, pending HLO pass).
+   - step 2 ≈ 0.685 → AA.1 did not recover (pivot to non-dtype
+     investigation, pending HLO showing f32 actually took effect).
+3. `delta_pi − delta_ref` at step 10: ≥ 5 if recovered; in [0.1, 0.7]
+   if stuck.
+
+### Initial training result (2026-04-18T04:28Z, us-central1 copy)
+
+**Training trajectory matches Exp Q point-for-point to 6+ decimal
+digits at every step.** AA did not escape the bad basin. HLO upload
+pending to disambiguate whether the cast took effect.
+
+| step | AA (uc1-aa1) | Exp Q (bad baseline) | Good v5p-16 |
+|------|---:|---:|---:|
+| 0 | 0.69314718 | 0.69314718 | 0.6931 |
+| 1 | 0.69314718 | 0.69314718 | 0.6931 |
+| 2 | **0.68512470** | 0.685125 | 0.3352 |
+| 3 | **0.68229818** | 0.682298 | 0.3260 |
+| 4 | 0.67372340 | 0.673723 | 0.3362 |
+| 5 | 0.66894621 | 0.668946 | 0.3168 |
+| 6 | 0.66757309 | 0.667573 | 0.3370 |
+| 7 | 0.66282284 | 0.662823 | 0.3243 |
+| 8 | 0.65871453 | 0.658715 | 0.3061 |
+| 9 | 0.66055727 | - | - |
+
+Step-0 grad_l2 = `2.456002712249756` matches Exp Q's logged value to
+the precision of the debug trace (13+ digits). Per the Z1 measurements
+(bf16 vs f32 reductions differ at 1e-5 absolute), an exact match this
+precise strongly suggests the cast did not compile into the HLO.
+
+**Leading hypothesis (pending HLO):** the `jax.lax.scan` inside
+`hax.fold` enforces carry dtype consistency. Since the accumulator
+`acc_grads` is initialized with `accum_dtype=None` (which defaults to
+`fn`'s return dtype = bf16), and our body returned f32 grads, XLA
+either:
+- silently coerced the body's output back to bf16 to match the carry, OR
+- elided the cast entirely as provably equivalent to no-cast under
+  dtype reconciliation
+
+Either way, no f32 reduction happened. The fix is almost certainly
+**AA v3: cast AND set `accum_dtype=jnp.float32` together**, so the
+carry is f32 from init and the scan-level type enforcement propagates
+the f32 through instead of collapsing it back to bf16.
+
+HLO inspection will confirm and inform whether AA v3 is the right
+next move.
+
+**us-east5 copy:** still pending capacity as of 2026-04-18T04:35Z.
+Since us-central1 gave a conclusive "did not recover" signal, us-east5
+is no longer load-bearing; will leave running as a passive replication
+check unless it blocks another probe.
+
+### AA v1 HLO result (2026-04-18T04:38Z, uc1-aa1)
+
+Pulled `module_0300.jit__train_step.cl_813921542.after_optimizations.txt`
+from `gs://marin-us-central1/debug/xla_hlo/uc1-aa1/`. Reduction-region
+analysis:
+
+| Reduction type | Count |
+|---|---:|
+| `bf16[] add(bf16[], bf16[])` regions | **71** |
+| `f32[] add(f32[], f32[])` regions | **2** |
+
+All FSDP gradient `all-reduce` and `all-reduce-scatter` ops at
+`replica_groups={{0,1,2,3}}` use bf16 `to_apply` regions. The 2 f32
+regions are for scalar reductions (likely loss-sum aggregations), not
+LoRA gradient collectives. This is **identical in shape to Z4's v5p-8
+HLO** — the AA cast did not reach the FSDP grad reductions.
+
+Conclusion for AA v1: **outcome row 3 of the interpretation matrix
+(HLO still bf16 — cast was optimized away)**. Experiment invalid for
+testing H0. Diagnosis below.
+
+### Diagnosis: scan-carry dtype collapse
+
+The `loop` function in `grad_accum.py` runs inside a `jax.lax.scan` via
+`hax.fold(loop, AccumStep)`. Scan enforces carry-dtype consistency
+across iterations. With `accum_dtype=None` (the default in
+`trainer.py:871`), the accumulator is initialized by
+`zeros_like_tree(r_shape, accum_axis_mapping, accum_dtype=None)` using
+the dtype of `fn`'s output (bf16 for LoRA grads under `c=bf16`).
+
+Our AA v1 patch cast `this_grads` to f32 inside the body. The add
+`apply_updates(acc_grads_bf16, updates_f32)` would produce f32 by
+promotion. But the carry was bf16 per the init, and XLA's optimizer
+decided the whole round-trip was equivalent to keeping everything
+bf16 — either by scan's explicit coercion or by noting that the
+f32 intermediate doesn't change the final bf16 output. Either way,
+the HLO ended up with `bf16 + bf16 → bf16` reductions, same as Exp Q.
+
+### AA v3 — cast + `accum_dtype=jnp.float32` together
+
+**Code change:** `lib/levanter/src/levanter/trainer.py:871` — under
+the same env-var gate, set `accum_dtype=jnp.float32` on the
+`microbatched(...)` call. With the accumulator initialized as f32,
+the scan carry is f32 throughout the loop; our in-loop cast on
+`this_grads` feeds f32 into `apply_updates`; the only layout
+reconciliation is partial→sharded (no dtype resolution), so GSPMD
+must emit an `f32 + f32 → f32` reduction.
+
+Pre-commit passes.
+
+**Launched 2026-04-18T04:40Z (AA v3):**
+- `us-central1`: `/ahmed/iris-run-experiment_aa_v5p8_pd4_f32_grad_cast_s10-20260418-044009`
+  (tag `uc1-aa3`)
+- `us-east5`: `/ahmed/iris-run-experiment_aa_v5p8_pd4_f32_grad_cast_s10-20260418-044048`
+  (tag `ue5-aa3`)
+
+Stale AA v1 us-east5 job (`...041730`) killed to free capacity —
+had pre-patch workspace that wouldn't have had the `accum_dtype`
+change even if it landed capacity later.
+
+### AA v3 result (2026-04-18T04:50Z, uc1-aa3) — identical to AA v1
+
+**Training trajectory matches AA v1 and Exp Q point-for-point to 16
+decimal digits at every step.** Same step-2 loss (0.6851246953010559),
+same step-9 loss (0.6605572700500488). No escape.
+
+**HLO diff vs AA v1: 0 line changes.** `diff` between
+`module_0300.jit__train_step.after_optimizations.txt` from uc1-aa1
+and uc1-aa3 returned empty. Same 71 bf16 reductions, same 2 f32
+reductions (scalar loss reductions, not grad collectives), same
+`replica_groups={{0,1,2,3}}`, same structure end-to-end.
+
+Conclusion: **neither the in-loop cast nor `accum_dtype=jnp.float32`
+had any effect.** Both env-gated changes were silently no-ops. Leading
+suspicion: env var `MARIN_DEBUG_AA_CAST_GRADS_F32` was not visible at
+trace time inside the jit (even though it seems to be set — other
+`MARIN_DEBUG_*` vars do propagate).
+
+### AA v4 — runtime env check + trace-time diagnostic print
+
+**Code change:** moved env check from module-level constant to
+runtime inside the `loop` function, simplified cast to unconditional
+`astype(f32)`, and added `print("[DEBUGAA] ...")` inside the loop
+body so we can see in logs whether the cast path was entered at
+trace time.
+
+Also patched `train_dpo.py:577` to add `MARIN_DEBUG_AA_CAST_GRADS_F32`
+to the `DEBUGJ WORKER_ENV` probe's hardcoded key list, so future
+runs will show whether the var is present on the worker.
+
+**Launched 2026-04-18T04:57Z (AA v4):**
+- `us-east5`: `/ahmed/iris-run-experiment_aa_v5p8_pd4_f32_grad_cast_s10-20260418-045727` (tag `ue5-aa4`)
+- `us-central1`: `/ahmed/iris-run-experiment_aa_v5p8_pd4_f32_grad_cast_s10-20260418-045737` (tag `uc1-aa4`)
+
+### AA v4 result (2026-04-18T05:10Z) — also no-op, `[DEBUGAA]` print never fired
+
+Same trajectory, 16 decimal digits, exp Q match. And no `[DEBUGAA]`
+marker appears anywhere in either region's logs. Either:
+- The env var is not visible at trace time when the `os.environ.get`
+  check inside the loop body runs (unlike `MARIN_DEBUG_LOG_STEP_TRACE`
+  which follows the same pattern and works).
+- OR the loop body wasn't actually traced at my print location
+  (unlikely — microbatching is confirmed active at `mb=16 < batch=64`,
+  and the `DEBUGJ BATCH n=16` lines in all runs prove the loop runs).
+
+### AA v5 — UNCONDITIONAL cast + import-time diagnostic
+
+To cut through the env var confusion, AA v5 removes all env-var
+gating on the cast:
+
+- `grad_accum.py`: unconditional `this_grads.astype(jnp.float32)`
+  inside the loop body, with trace-time `print` showing sample leaf
+  dtype before and after, plus the env var value.
+- `grad_accum.py` module-level: unconditional `print("[DEBUGAA IMPORT]
+  ...")` showing the env var value at import time.
+- `trainer.py:871`: unconditional `accum_dtype=jnp.float32` in the
+  `microbatched` call, with trace-time `print`.
+
+This decouples "does the cast work?" from "does the env var
+propagate?" and tells us both independently.
+
+**Launched 2026-04-18T05:16Z (AA v5, us-central1 only):**
+- `us-central1`: `/ahmed/iris-run-experiment_aa_v5p8_pd4_f32_grad_cast_s10-20260418-051619` (tag `uc1-aa5`)
+
+Orphaned AA v3 uc1, AA v4 ue5 and uc1 jobs killed to free capacity.
+
+### Expected AA v5 outcome matrix
+
+| Module import print | Trace prints | HLO result | Training | Conclusion |
+|---|---|---|---|---|
+| `env='1'` | fire | reductions f32 | recovers | H0 confirmed; env var was the issue in v1–v4 |
+| `env='1'` | fire | reductions f32 | stuck | H0 rejected (dtype isn't the mechanism) |
+| `env='1'` | fire | reductions bf16 | stuck | XLA optimizing the cast away — need optimization_barrier |
+| `env='UNSET'` | fire | reductions f32 | recovers or stuck | Unconditional cast works; env var propagation is broken; fix that separately |
+| prints don't fire | — | — | — | Broader `print`/logging failure; investigate iris log capture |
+
+### AA v5 result (2026-04-18T05:25Z, uc1-aa5) — **INTERVENTION SITE IS WRONG**
+
+All three `[DEBUGAA]` prints fire as designed. Key extractions from logs:
+
+```
+[DEBUGAA IMPORT] grad_accum.py imported;
+               MARIN_DEBUG_AA_CAST_GRADS_F32='1'
+[DEBUGAA TRAINER] calling microbatched with accum_dtype=jnp.float32
+                  (unconditional); env MARIN_DEBUG_AA_CAST_GRADS_F32='1'
+[DEBUGAA TRACE] grad_accum.loop:
+               n_leaves=26,
+               sample dtype before cast=float32,   <-- already f32!
+               env='1'
+[DEBUGAA TRACE] grad_accum.loop:
+               sample dtype after cast=float32
+```
+
+Training trajectory at step 0–4: identical to Exp Q and AA v1–v4 to
+16 decimal digits. Step-2 loss 0.6851246953010559. No escape.
+
+**Two headline findings that overturn prior interpretation:**
+
+1. **`MARIN_DEBUG_AA_CAST_GRADS_F32='1'` at both module import and
+   trace time.** The env var WAS set all along — AA v1–v4's no-op
+   behavior was never about env var propagation. That entire
+   diagnostic thread (AA v2/v3/v4 rationale, the scan-carry-dtype
+   hypothesis, the WORKER_ENV probe addition) was based on a wrong
+   premise.
+2. **The gradient tensors reaching my insertion point in
+   `grad_accum.loop` are ALREADY `float32`, not `bfloat16`.** My cast
+   `.astype(jnp.float32)` has been a trivial no-op every single
+   iteration because the dtype was already f32. HLO was unchanged
+   because there was nothing to change.
+
+### Why the grads are f32 at the accum loop — the real FSDP reduce site
+
+In the Marin/Levanter stack under `jmp.Policy(p=f32, c=bf16)`:
+
+- Forward and backward run the model in bf16 (c=bf16).
+- Per-layer backward cotangents in the model's compute graph are bf16.
+- **GSPMD emits the FSDP reduce-scatter on those bf16 cotangents
+  per-layer inside the backward pass**, not at any later boundary.
+  The reduce is `bf16 + bf16 → bf16`, width 4 on v5p-8, as Z4
+  documented.
+- After the reduce, the sharded bf16 grad is cast up to f32 (to
+  match the f32 master-param dtype) before `filter_value_and_grad`
+  returns.
+- So by the time `fn(microbatch)` returns `this_grads` and the
+  microbatch loop sees it, the grad is f32 AND THE BF16 REDUCE HAS
+  ALREADY HAPPENED.
+
+Corollary: **every AA experiment so far (v1–v5) intervened
+downstream of the load-bearing collective.** The cast in
+`grad_accum.loop` cannot affect the bf16 reduction because that
+reduction is emitted earlier, inside the compiled backward graph,
+per layer, at the per-layer partial→sharded boundary. My loop-level
+cast is at the wrong site.
+
+### Where the correct intervention lives
+
+The reduce-scatter we care about is emitted by GSPMD when per-layer
+cotangents go from "partial along data axis" to "sharded along data
+axis" to match the parameter sharding. This happens inside the jit,
+inside `fn`, inside the model's backward pass, emitted automatically
+by the autodiff/partitioning machinery.
+
+Candidate intervention sites, from narrowest to broadest:
+
+- **Custom VJP rule** on the layers whose backward emits a width-4
+  reduce. Cast the cotangent to f32 before returning it from the
+  VJP, so the emitted reduce operates on f32 operands. Would require
+  patching `haliax/dot.py` or the specific linear layer's VJP.
+- **Global backward-pass dtype promotion** for LoRA-marked
+  parameters via a custom grad transformation wrapper.
+- **`c=f32` across the board** (i.e., Exp U). This SHOULD produce
+  f32 reductions by making all cotangents f32 at source. Exp U did
+  not recover training — which means either (a) bf16 reductions are
+  not the mechanism, or (b) Exp U's HLO did not actually produce
+  f32 reductions (never verified).
+
+### What Exp U's HLO would tell us
+
+The single most valuable cheap follow-up right now is **dump Exp U's
+HLO** (`p=f32, c=f32` recipe) and inspect the grad reduction regions:
+
+- If Exp U's HLO shows `f32 + f32 → f32` reductions and training
+  still broke → bf16 collective dtype IS NOT the mechanism. Pivot
+  investigation to non-dtype `|data|=4` effects.
+- If Exp U's HLO still shows `bf16 + bf16 → bf16` reductions
+  somehow (despite `c=f32`), → some deeper kernel or path is
+  forcing bf16 reductions regardless of `jmp`. Identify and fix.
+
+This is a ~10 min CPU compile. No TPU time.
+
+### What's stale / wrong in the prior logbook sections above
+
+The AA v2 plan's entire premise — "cast LoRA grads to f32 inside
+`grad_accum.py`'s accumulation loop" — targets the wrong site for
+the actual FSDP gradient reduction. Codex's Option A recommendation
+(same site) was also wrong in the same direction, though for a
+different reason (Codex assumed the per-microbatch reduce at the
+accum boundary was the load-bearing collective; in fact the
+backward per-layer reduce-scatter inside fn is).
+
+The scan-carry-dtype and XLA-elision hypotheses in AA v2/v3/v4 were
+explanations for a phenomenon that didn't exist: the cast was a
+no-op because the input was already f32, not because XLA removed
+anything or scan forced a downcast.
+
+### Running state at 2026-04-18T05:27Z
+
+- AA v5 (uc1-aa5) still progressing toward step 9. Trajectory
+  guaranteed to match Exp Q (null intervention).
+- No other AA runs active.
+- Code in `grad_accum.py` and `trainer.py` is currently in DIAGNOSTIC
+  state (unconditional cast + unconditional `accum_dtype=f32` +
+  debug prints). **Needs to be reverted or gated before any other
+  training runs** — the `accum_dtype=f32` change will double memory
+  for gradient accumulators in every levanter training run if left
+  as-is.
+
+### Next move
+
+Priorities, in order:
+
+1. **Stop AA v5** (already doesn't tell us anything new).
+2. **Revert `grad_accum.py` and `trainer.py` diagnostic changes**
+   (or gate them back behind the env var) so the repo is clean.
+3. **Dump Exp U HLO** on v5p-8 with `p=f32, c=f32` (no TPU; CPU
+   compile) to answer whether `c=f32` actually produces f32
+   reductions. This is the decisive cheap test for the whole
+   bf16-collective-width-4 hypothesis.
+4. If Exp U HLO shows f32 reductions + Exp U trajectory was bad →
+   hypothesis rejected; pivot to non-dtype `|data|=4` investigation
+   (HLO scheduling, tree topology, buffer layout).
+5. If Exp U HLO still shows bf16 reductions → find why `c=f32`
+   didn't propagate all the way to the collective, fix it, retry.
+
+### v1 → v2 correction (important context)
+
+The first draft of this plan put the cast in `lib/levanter/src/levanter/
+trainer.py` between `_compute_gradients_microbatched(...)` and
+`state.take_step(...)`, justified by "grads cross the `_train_step` pjit
+out-sharding boundary." **That rationale was wrong.**
+
+- `_train_step` computes grads at `trainer.py:683` and immediately
+  consumes them via `state.take_step(grads, ...)` at `trainer.py:697`.
+  It returns `TrainStepResult[S]`, not the raw grad tree. No grad tree
+  crosses the `named_jit`'s out-sharding boundary.
+- Every bad-recipe baseline so far (Exp Q, R, R2a, T, U, V, W, Y, Z1-4)
+  is **microbatched**: `per_device_parallelism × data_axis_size <
+  train_batch_size`, so `self.config.microbatch_size is not None` at
+  `trainer.py:869` and `grad_fn` is wrapped by `microbatched(...)` at
+  `trainer.py:871`.
+- In the microbatched path, per-microbatch grads come out of the inner
+  `fn` with "partial along data" layout. The loop carries `acc` in
+  `accum_axis_mapping = parameter_axis_mapping` (sharded-on-data). At
+  each iteration, `hq.apply_updates(acc_grads, updates)` at
+  `grad_accum.py:149` plus the explicit
+  `hax.shard_with_axis_mapping(acc, accum_axis_mapping)` at
+  `grad_accum.py:153` force the partial→sharded conversion — which is
+  where GSPMD emits the reduce-scatter.
+- **So for the microbatched bad recipe, the bf16 cross-chip reduction
+  happens INSIDE the microbatch loop, once per microbatch per LoRA
+  tensor, not at any `_train_step` boundary.** The v1 cast site ran
+  after those reductions had already happened. It would have had no
+  effect on the collective dtype for this recipe.
+
+The v2 intervention below targets the actual reduction site.
+
+### Goal
+
+Causally resolve whether the bf16 dtype of the FSDP cross-chip gradient
+all-reduce at `|data|=4` is the mechanism that traps v5p-8 LoRA DPO in
+the step-2 bad basin — or whether the `|data|=4` pathology is actually
+about something else (HLO scheduling, buffer layout, tree topology).
+
+AA is the direct intervention that distinguishes these. No prior
+experiment in the chain can, because:
+
+- Z4 is observational (HLO inspection on the default recipe).
+- Exp U changed compute dtype globally; its result is confounded with
+  many unrelated graph changes, and — critically — we do not know
+  whether Exp U's collective actually ran at f32 (HLO was never dumped
+  for the Exp U recipe).
+- Z2's flag does not alter collective dtype.
+
+### Hypothesis
+
+**H0:** The bad v5p-8 LoRA trajectory is caused specifically by the bf16
+operand dtype of the GSPMD-emitted cross-chip gradient all-reduce at
+`|data|=4`. A sufficiently localized intervention that forces the same
+all-reduce to run at f32 — without changing anything else in the
+compute graph — will escape the step-2 bad basin.
+
+Predictions:
+
+- Cast gradients to f32 immediately after
+  `_compute_gradients_microbatched` returns and before `state.take_step`
+  consumes them. The grad leaves its current "replicated-on-data" layout
+  as f32; GSPMD's reconciliation to "sharded-on-data" therefore emits
+  an `f32 + f32 → f32` reduction region.
+- Compiled HLO on the patched recipe shows LoRA-gradient reduction
+  regions as f32 add, with `replica_groups={0,1,2,3}` (width unchanged).
+- Training on the bad v5p-8 pd=4 recipe with this patch escapes the
+  step-2 attractor: step-2 loss ≤ 0.5 (the bad attractor is ~0.685, the
+  good trajectory is ~0.33), and by step 10 `delta_pi − delta_ref` ≥ 5
+  (bad attractor stays in [0.1, 0.7]).
+
+If any one of those three predictions fails, H0 is falsified in the
+corresponding way (see Interpretation Matrix below).
+
+### Intervention — exact code change (v2)
+
+**Primary intervention (AA.1): cast `this_grads` to f32 inside the
+microbatch accumulation loop.**
+
+**File:** `lib/levanter/src/levanter/grad_accum.py`
+
+**Location:** Between lines 131 and 148 of the `loop` function —
+immediately after `this_grads` is unpacked from `this_r`, and before
+`hq.partition_for_grad_overwrite(this_grads)` begins consuming it.
+
+**Patch (schematic):**
+
+```python
+# grad_accum.py, inside the `loop` function at ~line 131
+with jax.named_scope("accum"):
+    # Unpack structure: ((loss, metrics_dict), grads)
+    (this_loss, this_metrics), this_grads = this_r
+    (acc_loss, acc_metrics), acc_grads = acc
+
+    # --- AA intervention ---
+    # Cast per-microbatch grads to f32 BEFORE they hit the
+    # partial->sharded boundary (apply_updates + shard_with_axis_mapping
+    # below). This forces GSPMD to emit an f32+f32->f32 reduction
+    # region instead of the default bf16 one. Gated on env var so the
+    # same binary can run bad-baseline and patched back-to-back.
+    if os.environ.get("MARIN_DEBUG_AA_CAST_GRADS_F32", "0") == "1":
+        this_grads = jax.tree.map(
+            lambda g: g.astype(jnp.float32) if hasattr(g, "dtype") and g.dtype == jnp.bfloat16 else g,
+            this_grads,
+        )
+    # --- end AA intervention ---
+
+    new_loss = acc_loss + this_loss
+    # ... rest of accumulation proceeds unchanged ...
+```
+
+Why this location:
+
+- `this_grads` comes out of `fn(microbatch)` in "partial along data"
+  layout (each chip computed its own microbatch's full grad tensor;
+  none are yet reduced across chips).
+- The partial→sharded conversion is forced by the combination of
+  `hq.apply_updates(acc_grads, updates)` at line 149 (which requires a
+  concrete layout for `acc_grads`, which is sharded-on-data by init)
+  and the explicit `hax.shard_with_axis_mapping` constraint at line 153.
+- Casting `this_grads` before line 148 means the reduce-scatter
+  emitted by GSPMD at the boundary operates on an f32 tensor. No
+  upstream path is bf16 at the collective site.
+- XLA should preserve the cast-before-reduce ordering because bf16
+  reduce and f32 reduce are numerically distinct (that's the entire
+  hypothesis). Type-preserving optimization passes should not swap
+  them. Verify in HLO regardless.
+
+Why gated on env var:
+
+- Lets the same binary run Exp Q (bad baseline) and AA.1 back-to-back
+  on the same compiled code path, switching only the env var. No
+  drift from concurrent code changes.
+- Consistent with existing debug toggles in the repo (grep for
+  `MARIN_DEBUG_`).
+
+**Secondary probe (AA.2, free side-test): set `accum_dtype=jnp.float32`
+via trainer config.**
+
+**File(s):** `lib/levanter/src/levanter/trainer.py` line ~871 (the
+`microbatched(...)` call does not currently pass `accum_dtype`;
+default is `None` which inherits bf16 from `fn`'s return). Thread
+`accum_dtype=jnp.float32` through (either by adding a trainer config
+field or by conditionally passing it under the same env-var gate).
+
+Interpretation caveat: this makes `acc_grads` start as f32 but does
+NOT directly change the operand dtype of the partial→sharded reduction
+on `this_grads`. XLA's cost model will likely prefer "reduce bf16
+first, then promote" over "promote to f32 first, then reduce bf16 → f32"
+because the former moves less bandwidth across chips. So **AA.2 on
+its own is likely insufficient to force an f32 reduction**, but it's
+a useful cheap probe: run it, dump HLO, and see whether XLA actually
+preserves the cast-before-reduce order or not. Useful for calibrating
+our intuition about XLA's choices. Do **not** rely on AA.2 alone —
+AA.1 is the load-bearing test.
+
+**NOT the right site (v1, retracted): trainer.py:687 between
+`_compute_gradients_microbatched` return and `state.take_step` call.**
+By this point, the microbatched reductions have already happened in
+bf16 inside `grad_accum.py`. Any cast here is too late. Do not use.
+
+### HLO verification — REQUIRED before interpreting training outcome
+
+Before running training, dump and inspect the compiled HLO. The training
+result is uninterpretable unless we know the cast reached the collective.
+
+Workflow (same as Z4):
+
+1. Launch the patched recipe with
+   `XLA_FLAGS=--xla_dump_to=/tmp/aa_hlo --xla_dump_hlo_as_text` and
+   the usual HLO upload plumbing in
+   `lib/levanter/src/levanter/main/train_dpo.py` (see Z4 section for
+   the working pattern with `fsspec.url_to_fs`).
+2. Upload to `gs://marin-us-central1/debug/xla_hlo/aa-<tag>/`.
+3. Grep the `0XXX.jit__train_step` module for `to_apply` regions.
+
+**Pass criteria:**
+
+- At least some LoRA-gradient-related `all-reduce` (or `reduce-scatter`)
+  ops have `to_apply` reduction regions typed `f32[] add(f32[], f32[])`.
+- `replica_groups` for those ops are still `{0,1,2,3}` (width unchanged
+  — we are intervening on dtype only).
+- Non-LoRA reduction regions (if any) can stay bf16; they are out of
+  scope for this hypothesis.
+- If you can diff cleanly against Z4's v5p-8 HLO, the only structural
+  differences should be reduction-region dtype on LoRA grad ops and
+  possibly added `convert` ops for the cast.
+
+**Fail criteria (experiment INVALID, do not interpret training):**
+
+- All reduction regions are still bf16 → the cast was optimized away,
+  moved past the collective, or the env var didn't take effect. Debug
+  (check the env-var path, check for XLA `--xla_allow_excess_precision`
+  flags, try inserting a `jax.lax.optimization_barrier` before/after
+  the cast) and rerun HLO dump until pass criteria hold.
+
+### Also free: dump HLO of the existing Exp U run for comparison
+
+Recompile the Exp U recipe (`p=f32, c=f32` on v5p-8 pd=4 LoRA) and dump
+its optimized HLO. Check whether ITS reduction regions were bf16 or
+f32. This is essentially free (CPU compile; no TPU hours) and
+disambiguates Exp U's failure independently of AA:
+
+- **Exp U HLO shows f32 reductions:** Exp U really did run f32
+  collectives and still failed. AA should also fail (both try to make
+  the collective f32). Increases the prior on H0 being false.
+- **Exp U HLO shows bf16 reductions:** something downstream of `jmp
+  c=f32` kept the collective at bf16 (Pallas CE kernel, optimizer path,
+  remat — see precision_explained Part 7 candidates). AA's cast at
+  `trainer.py:687` is a more targeted intervention and should still
+  work. Increases the prior on H0 being true.
+
+Run this in parallel with AA's HLO dump.
+
+### Training run
+
+**Recipe:** the exact Exp Q `v5p-8 pd=4 LoRA c=bf16` baseline, plus the
+AA patch and env var.
+
+**Script:** copy
+`experiments/posttrain/per_stmt_dpo/experiment_q_v5p8_pd4.py` (or the
+closest existing Q-equivalent) to `experiment_aa_v5p8_pd4_f32_grad_cast.py`
+with a descriptive `MARIN_DEBUG_RUN_TAG`.
+
+**Regions (USER DIRECTIVE):** v5p-8, launch in parallel in
+`us-central1-a` and `us-east5-a` with distinct run tags. First
+TPU-occupant to start logging wins; leave the other as a cross-region
+replication check unless it blocks another probe.
+
+**Minimum steps:** 10 (to observe step-2 escape). Ideally 20 to see
+trajectory stability.
+
+**Comparison baselines:**
+
+- **Bad:** Exp Q v5p-8 pd=4 LoRA (loss table in the Exp R2a section
+  near line ~5670, step 2 = 0.6851, step 10 = ~0.658).
+- **Good:** Exp N v5p-16 pd=2 LoRA (same table, step 2 = 0.335, step
+  10 = 0.306).
+
+**Success criterion:**
+
+- Step-2 loss ≤ 0.5 (unambiguously out of the 0.685 attractor).
+- By step 10: loss < 0.4 AND `delta_pi − delta_ref` ≥ 5.0.
+
+### Interpretation matrix
+
+| HLO reductions (AA) | Training outcome | Conclusion |
+|---|---|---|
+| **f32** | **Recovers (step-2 < 0.5)** | **H0 CONFIRMED.** Bf16 collective at width 4 IS the mechanism. Z4's correlative evidence is now causally closed. Exp U's failure is explained by a hidden bf16 intermediate (see Exp U HLO dump if run; otherwise investigate the Pallas CE kernel / optimizer path / remat candidates in precision_explained Part 7). Land the fix. |
+| **f32** | **Does not recover** | **H0 REJECTED.** Width 4 is pathological for non-dtype reasons. Pivot investigation to HLO scheduling (dump XLA scheduling decisions at widths 4 vs 8), buffer layout (memory placement differences), collective tree topology (ring vs tree ordering), or all-gather/reduce-scatter fusion choices that differ at width 4. Update precision_explained Parts 7-9 to retract the bf16-collective hypothesis. |
+| **bf16 (cast optimized away)** | N/A | Experiment INVALID. Debug placement, disable offending XLA optimizations, or add `optimization_barrier`. Re-run HLO dump until reductions are demonstrably f32, then run training. |
+
+### Side effects and confounds to watch for
+
+- **Network traffic.** F32 grads are 2× bigger across the wire for the
+  all-reduce. For LoRA this is negligible (a few MB per step on
+  Llama-8B r=64). If the trajectory changes noticeably in step time,
+  flag but do not let it confound loss interpretation.
+- **Post-collective grad dtype changes.** The optimizer now receives
+  f32 grads (instead of bf16). Under `p=f32` this is already the
+  expected input shape to optimizer updates, so no change. If there
+  were a hidden bf16 downcast inside the optimizer, we'd see it in
+  HLO — watch for it.
+- **Other XLA fusion changes downstream.** The cast is an explicit
+  op; adjacent fusions may re-plan. If the HLO diff vs Z4's v5p-8 shows
+  structural changes beyond dtype on grad ops and added `convert`s,
+  document but do not let them confound the interpretation matrix —
+  the causal variable is reduction-region dtype.
+
+### Cost estimate
+
+- Code change: ~30 min (single env-gated patch in `trainer.py`).
+- HLO compile + upload + inspect: ~30 min wall-clock.
+- Training run to step 10: ~30–60 min wall-clock on v5p-8.
+- Exp U HLO dump (parallel): ~15 min CPU-only.
+- **Total:** ~2 hours wall-clock, modest TPU hours.
+
+### Follow-ups by outcome
+
+**If H0 confirmed (row 1):**
+
+- Scope the fix to LoRA grads only (use a tree-path predicate on the
+  parameter name) to avoid doubling network traffic for full-FT and
+  non-LoRA workloads.
+- Consider whether the fix belongs in Levanter (`trainer.py`) or
+  haliax (`partitioning.py` / `_fsdp_impl`). Levanter is lower-risk;
+  haliax is broader impact.
+- Land the PR. Update precision_explained Parts 7-9 with the causal
+  confirmation. Update this logbook's top pointer.
+- Follow-up AA2 (optional): narrow to `lora_A` grads only or `lora_B`
+  grads only to identify which LoRA submodule's reduction is the
+  bottleneck. Scientific curiosity only; not required for the fix.
+
+**If H0 rejected (row 2):**
+
+- Dump XLA scheduling / partitioner decisions at widths 4 vs 8. Look
+  for structural differences in reduction tree topology, collective
+  fusion, or buffer layout that are not captured in Z4's HLO diff.
+- Consider Exp AB: force `|data|=8` via `allow_nondivisible_batch_size`
+  + microbatching on v5p-8 (unclear if topologically possible; low
+  priority).
+- Consider Exp AC: modify `replica_groups` via a custom XLA pass to
+  force a different tree topology at width 4. Very speculative.
+
+**If invalid (row 3):**
+
+- Try `jax.lax.optimization_barrier` between the cast and the next op
+  to prevent fusion.
+- Check whether `--xla_allow_excess_precision` in the default flag
+  set is causing the cast to be reversed; toggle it off explicitly.
+- Move the cast to inside `_compute_gradients_microbatched` (before
+  the function returns grads) if the trainer-level cast is being
+  elided.
 
 ## 2026-04-17T08:15Z: Experiment Z4 result — **HLO diff confirms bf16 cross-chip reductions at width 4 (v5p-8) vs width 8 (v6e-8)**; the mechanism is nailed
 

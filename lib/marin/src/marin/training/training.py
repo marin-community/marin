@@ -118,6 +118,11 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
     )
     hf_output_path = os.path.join(pod_config.output_path, DEFAULT_HF_CHECKPOINTS_PATH)
 
+    # debug_accum_tpu_type: allow disabling end-of-training HF export during
+    # debugging to save ~5-10 minutes per run. Flip MARIN_DEBUG_SKIP_HF_EXPORT=1
+    # on the iris parent / child to skip the merged-hf-checkpoint hook entirely.
+    _skip_hf_export = os.environ.get("MARIN_DEBUG_SKIP_HF_EXPORT", "0") == "1"
+
     from levanter.adaptation import NoAdaptationConfig
     from levanter.main.train_dpo import TrainDpoConfig
 
@@ -128,14 +133,14 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
             pod_config.train_config,
             trainer=trainer,
             hf_save_path=None,
-            merged_hf_save_path=hf_output_path,
+            merged_hf_save_path=None if _skip_hf_export else hf_output_path,
         )
         return replace(pod_config, train_config=config)
 
     config = replace(
         pod_config.train_config,
         trainer=trainer,
-        hf_save_path=hf_output_path,
+        hf_save_path=None if _skip_hf_export else hf_output_path,
     )
     return replace(pod_config, train_config=config)
 

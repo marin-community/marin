@@ -49,7 +49,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, TypeVar, Union
+from typing import Dict, List, Literal, Optional, Tuple, TypeVar, Union
 
 import equinox as eqx
 import jax
@@ -143,6 +143,22 @@ class LoraConfig:
     This is the standard PEFT convention and is critical for DPO, where
     non-zero initialization causes immediate policy-reference divergence.
     Default is False for backward compatibility with existing SFT configs."""
+    # DEBUGSTART — debug_accum_tpu_type Class-B probes: init-mode + scale controls.
+    # These knobs exist to support Bug 2 (c=f32 LoRA DPO stuck) investigation.
+    # `b_init_scale` overrides the `zero_init_b=True` path with a small
+    # Gaussian init on B (scale = stddev). `a_init_mode` lets BC test the
+    # symmetric case where A=0 and B is random. With A=0, the adapter output is
+    # zero at init regardless of B, preserving policy = reference.
+    b_init_scale: Optional[float] = None
+    """If set and > 0, initialize B as N(0, b_init_scale) instead of zeros.
+    Overrides zero_init_b when non-None. b_init_scale=0 behaves like zeros.
+    Only a debug knob for the c=f32 symmetry-break probes (Class B: BA, BB).
+    Leave None for canonical behavior."""
+    a_init_mode: Literal["random", "zero"] = "random"
+    """Initialization mode for A. 'random' uses the default Linear.init; 'zero'
+    initializes A to zeros (used by BC: A=0, B=random_small, preserves B·A=0
+    at init). Leave 'random' for canonical behavior."""
+    # DEBUGEND
     exclude_modules: Optional[List[str]] = None
     """modules to exclude from LoRA. Defaults to ["lm_head"] to avoid breaking get_lm_head().weight access."""
     # TODO: bias
@@ -216,6 +232,8 @@ class LowRankLinear(eqx.Module):
         key,
         zero_init_b: bool = False,
         debug_name: str = "",
+        b_init_scale: Optional[float] = None,  # DEBUGSTART — Class-B probes
+        a_init_mode: Literal["random", "zero"] = "random",  # DEBUGEND
     ):
         """
         Initializes a LowRankLinear module.
@@ -225,12 +243,28 @@ class LowRankLinear(eqx.Module):
                 (W + alpha/r * 0 * A = W). This is the standard PEFT convention and is critical
                 for DPO where policy must match reference at initialization.
             debug_name: DEBUGSTART — stable path from _loraize for sentinel trace filtering. DEBUGEND
+            b_init_scale: DEBUGSTART — Class-B probe. If set and > 0, init B as N(0, b_init_scale).
+                Overrides zero_init_b. DEBUGEND
+            a_init_mode: DEBUGSTART — Class-B probe. 'zero' initializes A to zeros (for BC). DEBUGEND
         """
         _R = hax.Axis(LORA_R, r)
         key_A, key_B = jax.random.split(key)
         # Peft always uses out_first=True (i.e. normal Torch convention) for linear, even for gpt2-style Conv1d
-        lora_A = hnn.Linear.init(In, _R, key=key_A, use_bias=False, out_first=True)
-        if zero_init_b:
+        # DEBUGSTART — Class-B: A=0 variant for BC (preserves B·A=0 with random B)
+        if a_init_mode == "zero":
+            a_joint_spec = hax.concat_axis_specs(_R, In)
+            zero_a_weight = hax.zeros(a_joint_spec)
+            lora_A = hnn.Linear(weight=zero_a_weight, bias=None, In=In, Out=_R)
+        else:
+            lora_A = hnn.Linear.init(In, _R, key=key_A, use_bias=False, out_first=True)
+        # DEBUGEND
+        # DEBUGSTART — Class-B: small nonzero B via b_init_scale overrides zero_init_b
+        if b_init_scale is not None and b_init_scale > 0.0:
+            b_joint_spec = hax.concat_axis_specs(Out, _R)
+            small_b = hax.random.normal(key_B, b_joint_spec) * b_init_scale
+            lora_B = hnn.Linear(weight=small_b, bias=None, In=_R, Out=Out)
+        # DEBUGEND
+        elif zero_init_b:
             # out_first=True means weight shape is (Out, In) — matching PEFT convention
             joint_spec = hax.concat_axis_specs(Out, _R)
             zero_weight = hax.zeros(joint_spec)
@@ -276,6 +310,8 @@ class LoraLinear(ModuleWithStateDictSerialization):
         key,
         zero_init_b: bool = False,
         debug_name: str = "",
+        b_init_scale: Optional[float] = None,  # DEBUGSTART — Class-B probes
+        a_init_mode: Literal["random", "zero"] = "random",  # DEBUGEND
     ):
         """
         Initializes a LoraLinear module.
@@ -289,6 +325,8 @@ class LoraLinear(ModuleWithStateDictSerialization):
             key=key,
             zero_init_b=zero_init_b,
             debug_name=debug_name,  # DEBUGSTART/DEBUGEND — experiment J2
+            b_init_scale=b_init_scale,  # DEBUGSTART — Class-B probes
+            a_init_mode=a_init_mode,  # DEBUGEND
         )
         return LoraLinear(wrapped, lora)
 
@@ -397,6 +435,8 @@ def _loraize(model: M, config: LoraConfig, key: jax.random.PRNGKey, prefix: str,
                 key=batched_key,
                 zero_init_b=config.zero_init_b,
                 debug_name=key_path,  # DEBUGSTART/DEBUGEND — experiment J2 stable name
+                b_init_scale=config.b_init_scale,  # DEBUGSTART — Class-B probes
+                a_init_mode=config.a_init_mode,  # DEBUGEND
             )
         else:
             return module

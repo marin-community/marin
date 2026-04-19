@@ -127,6 +127,14 @@ class RmsNorm(LayerNormBase):
     def __call__(self, x: NamedArray) -> NamedArray:
         in_dtype = x.dtype
         x = x.astype(self.dtype)
+        # DEBUGSTART — CD probe: force RmsNorm internal to bf16 under c=f32.
+        # Simulates c=bf16's per-op rounding inside RmsNorm's mean/square/rsqrt.
+        import os as _dbg_os
+        import jax.numpy as _dbg_jnp
+
+        if _dbg_os.environ.get("MARIN_DEBUG_NORM_INTERNAL_BF16", "0") == "1":
+            x = x.astype(_dbg_jnp.bfloat16)
+        # DEBUGEND
         var = hax.mean(hax.square(x), axis=self.axis)
         inv = hax.rsqrt(var + self.eps)
         out = x * inv
@@ -136,6 +144,14 @@ class RmsNorm(LayerNormBase):
             out = self.weight.astype(out.dtype) * out
         if self.bias is not None:
             out = out + self.bias.astype(out.dtype)
+        # DEBUGSTART — debug_accum_tpu_type C4 probe: round RmsNorm outputs to bf16.
+        # Complements the Linear-output rounding in linear.py. Gated by env var.
+        import os as _dbg_os
+
+        if _dbg_os.environ.get("MARIN_DEBUG_ROUND_NORM_OUT", "0") == "1":
+            orig_dtype = out.dtype
+            out = out.astype(jnp.bfloat16).astype(orig_dtype)
+        # DEBUGEND
         return out
 
 

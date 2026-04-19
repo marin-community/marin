@@ -53,6 +53,7 @@ import levanter.tracker
 import levanter.tracker.wandb
 import levanter.utils.logging
 from levanter.callbacks import Callback, CBInfo, JitCallback, LambdaCallback, StepInfo
+from levanter.callbacks.lora_debug import LoraDebugConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
@@ -342,6 +343,23 @@ class Trainer:
     def run_hooks(self, info: StepInfo, force: bool = False):
         self.hooks.run_hooks(info, force=force)
 
+    def _lora_debug_enabled(self) -> bool:
+        """True if ``TrainerConfig.lora_debug.enabled``, ``WandbConfig.lora_debug``,
+        or the ``MARIN_DEBUG_LORA_DEBUG=1`` env var is set.
+
+        The env var and ``WandbConfig.lora_debug`` are user-convenience knobs so
+        debug runs can be toggled without editing draccus configs.
+        """
+        if self.config.lora_debug.resolve_enabled():
+            return True
+        tracker_configs = self.config.tracker
+        if isinstance(tracker_configs, TrackerConfig):
+            tracker_configs = (tracker_configs,)
+        for tc in tracker_configs:
+            if isinstance(tc, WandbConfig) and getattr(tc, "lora_debug", False):
+                return True
+        return False
+
     @property
     def parameter_axis_mapping(self) -> ResourceMapping:
         return self.config.parameter_axis_mapping
@@ -590,6 +608,10 @@ class Trainer:
         if self.config.watch.is_enabled:
             self.add_hook(self.config.watch.build(), every=self.config.watch.interval)
 
+        # Add LoRA-debug callback if configured (config, WandbConfig convenience, or env override).
+        if self._lora_debug_enabled():
+            self.add_hook(self.config.lora_debug.build(), every=self.config.lora_debug.interval)
+
         profiler = self.config.profiler
         total_prof_steps = profiler.resolve_num_profile_steps(num_train_steps=self.config.num_train_steps)
         if profiler.is_enabled and total_prof_steps > 0:
@@ -683,6 +705,85 @@ class Trainer:
         loss, grads, wrapped_metrics = self._compute_gradients_microbatched(
             self.loss_fn, model, *batch, **batch_kwargs, key=key
         )
+
+        # DEBUGSTART — debug_accum_tpu_type Class-B B0.2: LoRA grad perturbation + cast.
+        # Env-gated knobs applied to the final (post-accumulation) gradient tree,
+        # before state.take_step consumes it:
+        #   MARIN_DEBUG_LORA_GRAD_NOISE_STD   — stddev of Gaussian noise
+        #   MARIN_DEBUG_LORA_GRAD_NOISE_STEP  — which step to inject at (int)
+        #   MARIN_DEBUG_LORA_GRAD_NOISE_TARGET ∈ {A, B, both}
+        #   MARIN_DEBUG_LORA_GRAD_CAST ∈ {none, bf16, f32} — cast grad dtype before optimizer
+        # Read at trace time; becomes a compile-time constant in the jit cache.
+        import os as _dbg_os
+
+        _dbg_noise_std = float(_dbg_os.environ.get("MARIN_DEBUG_LORA_GRAD_NOISE_STD", "0") or "0")
+        _dbg_noise_step = int(_dbg_os.environ.get("MARIN_DEBUG_LORA_GRAD_NOISE_STEP", "1") or "1")
+        _dbg_noise_target = _dbg_os.environ.get("MARIN_DEBUG_LORA_GRAD_NOISE_TARGET", "B").strip() or "B"
+        _dbg_grad_cast = _dbg_os.environ.get("MARIN_DEBUG_LORA_GRAD_CAST", "none").strip() or "none"
+        # Class-C C8: continuous per-step noise. When set, noise applies at every step ≥ 0.
+        _dbg_noise_continuous = int(_dbg_os.environ.get("MARIN_DEBUG_LORA_GRAD_NOISE_CONTINUOUS", "0") or "0")
+        # Class-C C8 variant: relative noise scaled to grad L2 per-leaf (mimics bf16 fractional rounding).
+        _dbg_noise_rel = float(_dbg_os.environ.get("MARIN_DEBUG_LORA_GRAD_NOISE_RELATIVE", "0") or "0")
+
+        if _dbg_noise_std > 0.0 or _dbg_grad_cast != "none" or _dbg_noise_rel > 0.0:
+            from jax.tree_util import keystr, tree_flatten_with_path, tree_unflatten
+
+            noise_target_keys = {
+                "A": ("lora_A",),
+                "B": ("lora_B",),
+                "both": ("lora_A", "lora_B"),
+            }.get(_dbg_noise_target, ("lora_B",))
+
+            cast_dtype = {"none": None, "bf16": jnp.bfloat16, "f32": jnp.float32}.get(_dbg_grad_cast)
+
+            def _dbg_is_lora_leaf(path_str: str, match_patterns: Tuple[str, ...]) -> bool:
+                return any(p in path_str for p in match_patterns)
+
+            leaves_with_paths, treedef = tree_flatten_with_path(grads, is_leaf=lambda x: isinstance(x, hax.NamedArray))
+            new_leaves = []
+            noise_key = jax.random.fold_in(key, 0xB0B02)
+            for i, (path, leaf) in enumerate(leaves_with_paths):
+                path_str = keystr(path)
+                is_named = isinstance(leaf, hax.NamedArray)
+                arr = leaf.array if is_named else leaf
+                if not (hasattr(arr, "shape") and hasattr(arr, "dtype")):
+                    new_leaves.append(leaf)
+                    continue
+
+                new_arr = arr
+                if _dbg_noise_std > 0.0 and _dbg_is_lora_leaf(path_str, noise_target_keys):
+                    step_folded_key = jax.random.fold_in(noise_key, i)
+                    # Per-step randomness: fold step into key to avoid reusing same noise each step.
+                    step_folded_key = jax.random.fold_in(step_folded_key, state.step)
+                    noise = jax.random.normal(step_folded_key, new_arr.shape, dtype=jnp.float32) * _dbg_noise_std
+                    noise = noise.astype(new_arr.dtype)
+                    if _dbg_noise_continuous:
+                        # All steps ≥ 0.
+                        new_arr = new_arr + noise
+                    else:
+                        at_step = jnp.equal(state.step, _dbg_noise_step)
+                        new_arr = jnp.where(at_step, new_arr + noise, new_arr)
+
+                if _dbg_noise_rel > 0.0 and _dbg_is_lora_leaf(path_str, noise_target_keys):
+                    # Relative noise: scale by per-leaf L2 norm so noise is a fraction of grad magnitude.
+                    step_folded_key = jax.random.fold_in(noise_key, 0x1E1 + i)
+                    step_folded_key = jax.random.fold_in(step_folded_key, state.step)
+                    rel_noise = jax.random.normal(step_folded_key, new_arr.shape, dtype=jnp.float32)
+                    leaf_l2 = jnp.sqrt(jnp.sum(jnp.square(new_arr.astype(jnp.float32))) + 1e-12)
+                    rel_scale = _dbg_noise_rel * leaf_l2 / jnp.sqrt(jnp.asarray(new_arr.size, dtype=jnp.float32))
+                    rel_noise = (rel_noise * rel_scale).astype(new_arr.dtype)
+                    new_arr = new_arr + rel_noise
+
+                if cast_dtype is not None and _dbg_is_lora_leaf(path_str, ("lora_A", "lora_B")):
+                    new_arr = new_arr.astype(cast_dtype)
+
+                if is_named:
+                    new_leaves.append(hax.named(new_arr, leaf.axes))
+                else:
+                    new_leaves.append(new_arr)
+
+            grads = tree_unflatten(treedef, new_leaves)
+        # DEBUGEND
 
         # Some optimizers need to be able to access the loss function
         def obj_fun(trainable_model):
@@ -944,6 +1045,11 @@ class TrainerConfig:
 
     tracker: TrackerConfig | Tuple[TrackerConfig, ...] = field(default_factory=WandbConfig)
     watch: WatchConfig = WatchConfig()
+    lora_debug: LoraDebugConfig = field(default_factory=LoraDebugConfig)
+    """LoRA-debug instrumentation. When enabled, publishes per-LoRA-module
+    gradient/parameter/update/delta_W/Adam/sentinel stats to W&B every step
+    (see ``levanter.callbacks.lora_debug``). Intended for the Bug-1 DPO LoRA
+    topology investigation. Off by default."""
     profiler: ProfilerConfig = ProfilerConfig()
 
     log_jaxprs: bool = True
@@ -1080,7 +1186,22 @@ class TrainerConfig:
         if self.use_explicit_mesh_axes:
             axis_names = list(ici.keys()) + [k for k in dcn.keys() if k not in ici]
             axis_types = tuple(AxisType.Explicit for _ in axis_names)
-        return create_mesh_from_axis_specs(ici_axes=ici, dcn_axes=dcn, axis_types=axis_types)
+        devices = None
+        if self.mesh.device_permutation is not None:
+            permutation = tuple(self.mesh.device_permutation)
+            devices = list(jax.devices())
+            if sorted(permutation) != list(range(len(devices))):
+                raise ValueError(
+                    f"device_permutation must be a permutation of 0..{len(devices) - 1}, got {permutation}"
+                )
+            devices = [devices[i] for i in permutation]
+        return create_mesh_from_axis_specs(
+            ici_axes=ici,
+            dcn_axes=dcn,
+            devices=devices,
+            axis_types=axis_types,
+            preserve_device_order=self.mesh.preserve_device_order,
+        )
 
     def use_device_mesh(self) -> ContextManager[None]:
         """

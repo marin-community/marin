@@ -237,6 +237,15 @@ class WandbConfig(TrackerConfig):
     replicate_path: Optional[str] = None
     """If set, write config and summary to this path (local or GCS) on finish()."""
 
+    lora_debug: bool = False
+    """Convenience flag that enables the LoRA debug instrumentation without editing
+    ``TrainerConfig.lora_debug``. When True, the trainer installs
+    :class:`levanter.callbacks.lora_debug.LoraDebugCallback` and publishes
+    per-LoRA-module grad/param/update/delta_W/Adam/sentinel stats to W&B.
+    The primary config lives at ``TrainerConfig.lora_debug`` — see that
+    dataclass for fine-grained knobs (interval, sentinel indices, opt_state
+    toggles). The env var ``MARIN_DEBUG_LORA_DEBUG=1`` also forces this on."""
+
     def init(self, run_id: Optional[str]) -> WandbTracker:
         import wandb
 
@@ -264,6 +273,20 @@ class WandbConfig(TrackerConfig):
         if "git_commit" in git_settings:
             hparams_to_save["git_commit"] = git_settings["git_commit"]
 
+        # DEBUGSTART — debug_accum_tpu_type: extend wandb init timeout to 300s on host 0.
+        # Default is 90s, which repeatedly fails under network load in uc1/ue5 during
+        # multi-host TPU startup. The retry pattern is clean — if online init exceeds
+        # 90s, the whole job fails the barrier and dies. Bumping to 300s covers the
+        # observed tail (network slow-path was ~120-180s in BA/BE failures).
+        _dbg_init_timeout = int(os.environ.get("MARIN_DEBUG_WANDB_INIT_TIMEOUT", "300") or "300")
+        try:
+            _dbg_settings = wandb.Settings(init_timeout=_dbg_init_timeout, **git_settings)
+        except Exception:
+            # Fallback: older wandb may not accept init_timeout via Settings ctor; pass dict.
+            _dbg_fallback: dict[str, Any] = dict(git_settings)
+            _dbg_fallback["init_timeout"] = _dbg_init_timeout
+            _dbg_settings = _dbg_fallback  # type: ignore[assignment]
+        # DEBUGEND
         r = wandb.init(
             entity=self.entity,
             project=self.project,
@@ -274,7 +297,7 @@ class WandbConfig(TrackerConfig):
             resume=self.resume,
             mode=mode,
             config=hparams_to_save,
-            settings=git_settings,
+            settings=_dbg_settings,
             allow_val_change=True,
         )
 

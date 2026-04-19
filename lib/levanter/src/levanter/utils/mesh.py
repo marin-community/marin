@@ -6,6 +6,8 @@ from functools import cached_property
 from math import prod
 from typing import Union, Sequence, Tuple, Mapping, Dict
 
+import numpy as np
+
 from draccus import field
 
 from haliax.partitioning import ResourceMapping
@@ -38,6 +40,10 @@ class MeshConfig:
     shared_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {})
     compute_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {})
     param_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {"embed": "data"})
+    # Debug-only hook for topology experiments. When set, reorder the device list before building the mesh.
+    device_permutation: Sequence[int] | None = None
+    # Preserve the provided device order exactly instead of letting mesh_utils choose a topology-aware arrangement.
+    preserve_device_order: bool = False
 
     @cached_property
     def resolved_compute_mapping(self) -> ResourceMapping:
@@ -144,6 +150,7 @@ def create_mesh_from_axis_specs(
     devices=None,
     allow_split_physical_axes: bool = True,
     axis_types: tuple[AxisType, ...] | None = None,
+    preserve_device_order: bool = False,
 ) -> Mesh:
     """
     Create a JAX mesh from ICI and DCN axis sizes. Supports both single-slice and multi-slice layouts.
@@ -165,7 +172,14 @@ def create_mesh_from_axis_specs(
     dcn_mesh_shape = tuple(dcn_axes.get(name, 1) for name in axis_names)
 
     is_multislice = hasattr(devices[0], "slice_index")
-    if is_multislice:
+    if preserve_device_order:
+        if any(d != 1 for d in dcn_mesh_shape):
+            raise ValueError("preserve_device_order only supports single-slice meshes.")
+        expected_devices = prod(ici_mesh_shape)
+        if len(devices) != expected_devices:
+            raise ValueError(f"Expected {expected_devices} devices, got {len(devices)}.")
+        device_mesh = np.array(devices, dtype=object).reshape(ici_mesh_shape)
+    elif is_multislice:
         device_mesh = mesh_utils.create_hybrid_device_mesh(
             mesh_shape=ici_mesh_shape,
             dcn_mesh_shape=dcn_mesh_shape,

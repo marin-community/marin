@@ -288,7 +288,20 @@ class LlamaMlp(eqx.Module):
         k_gate, k_up, k_down = maybe_rng_split(key, 3)
         hidden_states = self.gate_proj(x, key=k_gate)
         hidden_states = self.act(hidden_states)
+        # DEBUGSTART — CC probe: round SiLU output to bf16.
+        import os as _dbg_os
+        import jax.numpy as _dbg_jnp
+
+        if _dbg_os.environ.get("MARIN_DEBUG_ROUND_SILU", "0") == "1":
+            _orig_dt = hidden_states.dtype
+            hidden_states = hidden_states.astype(_dbg_jnp.bfloat16).astype(_orig_dt)
+        # DEBUGEND
         hidden_states = hidden_states * self.up_proj(x, key=k_up)
+        # DEBUGSTART — CC probe: round post-gated product to bf16.
+        if _dbg_os.environ.get("MARIN_DEBUG_ROUND_MLP_GATED", "0") == "1":
+            _orig_dt = hidden_states.dtype
+            hidden_states = hidden_states.astype(_dbg_jnp.bfloat16).astype(_orig_dt)
+        # DEBUGEND
         outputs = self.down_proj(hidden_states, key=k_down)
         return outputs
 
@@ -336,6 +349,14 @@ class LlamaDecoderLayer(eqx.Module):
         if self.post_attn_layernorm is not None:
             attn_output = self.post_attn_layernorm(attn_output)
         x = residual + attn_output
+        # DEBUGSTART — C9 probe: round residual stream to bf16 to simulate c=bf16 accumulation.
+        import os as _dbg_os
+        import jax.numpy as _dbg_jnp
+
+        if _dbg_os.environ.get("MARIN_DEBUG_ROUND_RESIDUAL", "0") == "1":
+            _orig_dt = x.dtype
+            x = x.astype(_dbg_jnp.bfloat16).astype(_orig_dt)
+        # DEBUGEND
 
         # MLP and skip connection
         residual = x
@@ -344,6 +365,11 @@ class LlamaDecoderLayer(eqx.Module):
         if self.post_mlp_layernorm is not None:
             mlp_output = self.post_mlp_layernorm(mlp_output)
         output = residual + mlp_output
+        # DEBUGSTART — C9 probe: round residual stream after MLP add too.
+        if _dbg_os.environ.get("MARIN_DEBUG_ROUND_RESIDUAL", "0") == "1":
+            _orig_dt = output.dtype
+            output = output.astype(_dbg_jnp.bfloat16).astype(_orig_dt)
+        # DEBUGEND
         return output
 
     @named_call

@@ -20,6 +20,17 @@ pre-registered fallback ladder without cloning more scripts:
 - EXPERIMENT_T_CHECKPOINTING=default   -> use llama_8b as-is
 - EXPERIMENT_T_CHECKPOINTING=offload   -> gradient_checkpointing="offload"
 - EXPERIMENT_T_CHECKPOINTING=recompute -> gradient_checkpointing="recompute"
+
+Note
+----
+
+New runs in this campaign should use the same-region GCS copy of
+``Llama-3.1-8B-Instruct`` as the base model (see
+``experiments.posttrain.per_stmt_dpo.base_model.LLAMA_3_1_8B_INSTRUCT_GCS_PATH``).
+Loading is ~3-5x faster than the HuggingFace Hub CDN and Bug-1 has been
+verified model-agnostic. Do NOT retroactively edit the ``model_name_or_path``
+here - its historical value is tied to the run artifacts. This note is
+for future forks of this experiment.
 """
 
 import dataclasses

@@ -19,6 +19,12 @@ from levanter.callbacks._metrics import (
     logger,
     pbar_logger,
 )
+from levanter.callbacks.lora_debug import (
+    LoraDebugCallback,
+    LoraDebugConfig,
+    collect_topology_summary,
+    log_topology_summary,
+)
 from levanter.callbacks.state_adapter import CallbackStateView, StateCallbackRunner
 from levanter.callbacks.profiler import _flush_while_waiting, profile
 from levanter.data import DataLoader
@@ -250,9 +256,13 @@ __all__ = [
     "CBInfo",
     "JitCallback",
     "LambdaCallback",
+    "LoraDebugCallback",
+    "LoraDebugConfig",
     "StepInfo",
-    "log_performance_stats",
+    "collect_topology_summary",
     "log_step_info",
+    "log_performance_stats",
+    "log_topology_summary",
     "pbar_logger",
     "CallbackStateView",
     "StateCallbackRunner",

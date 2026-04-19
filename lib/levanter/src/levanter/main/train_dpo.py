@@ -19,6 +19,7 @@ import levanter
 import levanter.callbacks
 import levanter.eval
 from levanter import callbacks
+from levanter.callbacks.lora_debug import log_topology_summary
 from levanter.adaptation import (
     AdaptationConfig,
     AdaptationExportConfig,
@@ -369,8 +370,27 @@ def _validate_dpo_config(config: TrainDpoConfig) -> None:
     if isinstance(config.reference, AdapterBaseReferenceConfig):
         if isinstance(config.adapter, NoAdaptationConfig):
             raise ValueError("reference.type=adapter_base requires a non-none adapter.")
-        if isinstance(config.adapter, LoraAdaptationConfig) and not config.adapter.zero_init_b:
-            raise ValueError("adapter.type=lora with reference.type=adapter_base requires zero_init_b=true.")
+        if isinstance(config.adapter, LoraAdaptationConfig):
+            # DEBUGSTART — debug_accum_tpu_type Class-B probes.
+            # The invariant AdapterBase relies on is "adapter_out = B @ A @ x = 0 at init",
+            # which holds iff A=0 OR B=0 at init. Canonical path: zero_init_b=True with
+            # no b_init_scale override. BC path: a_init_mode='zero' (A=0, B can be random).
+            a_is_zero = config.adapter.a_init_mode == "zero"
+            b_is_zero = config.adapter.zero_init_b and (
+                config.adapter.b_init_scale is None or config.adapter.b_init_scale == 0.0
+            )
+            adapter_output_zero_at_init = a_is_zero or b_is_zero
+            if not adapter_output_zero_at_init:
+                # debug_accum_tpu_type Exp AD probe + Class-B BA/BB probes:
+                # allow AdapterBase + LoRA with nonzero adapter output at init
+                # (breaks policy=reference at init) under env flag.
+                # REVERT this gate after the investigation closes.
+                if os.environ.get("MARIN_DEBUG_ALLOW_LORA_ADAPTERBASE_NONZERO_B", "0") != "1":
+                    raise ValueError(
+                        "adapter.type=lora with reference.type=adapter_base requires adapter_out=0 at init "
+                        "(set zero_init_b=True with b_init_scale None/0, or set a_init_mode='zero')."
+                    )
+            # DEBUGEND
         return
 
     raise TypeError(f"Unsupported reference configuration: {type(config.reference).__name__}")
@@ -455,6 +475,10 @@ def _resolved_lora_hparams(adapter: LoraAdaptationConfig) -> dict[str, Any]:
         "alpha_over_r": adapter.alpha / adapter.r,
         "dropout": adapter.dropout,
         "zero_init_b": adapter.zero_init_b,
+        # DEBUGSTART — Class-B probes: surface init overrides in W&B metadata
+        "b_init_scale": adapter.b_init_scale,
+        "a_init_mode": adapter.a_init_mode,
+        # DEBUGEND
         "target_modules": adapter.target_modules,
         "target_modules_mode": target_modules_mode,
         "exclude_modules_raw": adapter.exclude_modules,
@@ -884,6 +908,14 @@ def main(config: TrainDpoConfig):
                 "fraction_trainable": trainable_param_count * 1.0 / all_param_count,
             }
         )
+
+        # Emit the one-time LoRA debug topology summary when the flag is on.
+        # Puts mesh shape, physical device list, axis mappings, XLA_FLAGS, and
+        # every MARIN_DEBUG_* env var into the W&B run config so cross-run
+        # diffs (canonical vs reverse permutations, etc.) can be reconstructed
+        # from the run config alone. Guarded so we don't pollute normal runs.
+        if trainer._lora_debug_enabled():
+            log_topology_summary(trainer, state.model)
 
         max_eval_examples_per_ds = config.trainer.max_eval_batches
         if max_eval_examples_per_ds is not None:
