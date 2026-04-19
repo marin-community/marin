@@ -466,6 +466,13 @@ class ScalingGroup:
                 state.last_active = timestamp
         if state is not None:
             self._db_upsert_slice(slice_id, state)
+            logger.info(
+                "slice ready group=%s slice=%s n_workers=%d worker_ids=%s",
+                self._config.name,
+                slice_id,
+                len(worker_ids),
+                worker_ids,
+            )
 
     def mark_slice_failed(self, slice_id: str, error_message: str = "") -> None:
         """Mark a slice as FAILED. Called when bootstrap fails."""
@@ -474,8 +481,19 @@ class ScalingGroup:
             if state is not None:
                 state.lifecycle = SliceLifecycleState.FAILED
                 state.error_message = error_message
+                registered = list(state.worker_ids)
+            else:
+                registered = []
         if state is not None:
             self._db_upsert_slice(slice_id, state)
+            logger.warning(
+                "slice failed group=%s slice=%s n_registered=%d registered=%s error=%s",
+                self._config.name,
+                slice_id,
+                len(registered),
+                registered,
+                error_message,
+            )
 
     def reconcile(self) -> None:
         """Discover and adopt existing slices from the cloud.

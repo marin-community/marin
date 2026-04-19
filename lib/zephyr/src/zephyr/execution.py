@@ -26,7 +26,7 @@ import threading
 import time
 import traceback
 import uuid
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
@@ -35,13 +35,12 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import cloudpickle
-import pyarrow as pa
 from rigging.filesystem import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from fray.v2.client import JobHandle
 from fray.v2.types import Entrypoint, JobRequest
 from rigging.filesystem import marin_temp_bucket
-from rigging.timing import ExponentialBackoff
+from rigging.timing import ExponentialBackoff, log_time
 
 from zephyr.dataset import Dataset
 from zephyr.plan import (
@@ -112,12 +111,9 @@ class PickleDiskChunk:
 from zephyr.shuffle import (  # noqa: E402
     ListShard,
     MemChunk,
-    ScatterShard,  # noqa: F401 — re-exported for plan.py and external callers
-    _build_scatter_shard_from_manifest,  # noqa: F401 — re-exported for plan.py
-    _make_envelope,
-    _write_parquet_scatter,
-    _write_scatter_manifest,
-    _SCATTER_MANIFEST_NAME,
+    ScatterReader,  # noqa: F401 — re-exported for plan.py and external callers
+    ScatterWriter,  # noqa: F401 — re-exported for external callers
+    _write_scatter,
 )
 
 # ---------------------------------------------------------------------------
@@ -171,16 +167,12 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
     exec_dir = f"{prefix}/{execution_id}"
     fs = url_to_fs(exec_dir)[0]
 
-    # TODO: use log_time util when possible
-    t_0 = time.monotonic()
-    if fs.exists(exec_dir):
-        try:
-            fs.rm(exec_dir, recursive=True)
-        except Exception as e:
-            logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
-        finally:
-            elapsed = time.monotonic() - t_0
-            logger.info(f"Cleaned up execution directory {exec_dir} in {elapsed:.1f}s")
+    with log_time(f"Cleaning up execution directory {exec_dir}"):
+        if fs.exists(exec_dir):
+            try:
+                fs.rm(exec_dir, recursive=True)
+            except Exception as e:
+                logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
 
 
 def _write_pickle_chunks(
@@ -236,36 +228,22 @@ def _write_stage_output(
     TaskResult with a ListShard.
     """
     if scatter_op is not None:
-        # Peek first item to test Arrow serializability
         first_item = next(stage_gen, None)
         if first_item is None:
             return TaskResult(shard=ListShard(refs=[]))
 
         full_gen = itertools.chain([first_item], stage_gen)
 
-        use_pickle_envelope = False
-        try:
-            test_envelope = _make_envelope([first_item], 0, 0)
-            pa.RecordBatch.from_pylist(test_envelope)
-            logger.info("Using Parquet for scatter serialization for shard %d", source_shard)
-        except Exception:
-            use_pickle_envelope = True
-            logger.info(
-                "Using Parquet with pickle envelope for scatter serialization for shard %d",
-                source_shard,
-            )
-
         num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
-        parquet_path = f"{stage_dir}/shard-{shard_idx:04d}.parquet"
-        shard = _write_parquet_scatter(
+        data_path = f"{stage_dir}/shard-{shard_idx:04d}.shuffle"
+        shard = _write_scatter(
             full_gen,
             source_shard,
-            parquet_path,
+            data_path,
             key_fn=scatter_op.key_fn,
             num_output_shards=num_output_shards,
             sort_fn=scatter_op.sort_fn,
             combiner_fn=scatter_op.combiner_fn,
-            pickled=use_pickle_envelope,
         )
         return TaskResult(shard=shard)
 
@@ -517,7 +495,8 @@ class ZephyrCoordinator:
             dead,
         )
         if retried:
-            logger.warning("[%s] Shards retried (shard: attempts): %s", self._execution_id, retried)
+            attempts_histogram = dict(sorted(Counter(retried.values()).items()))
+            logger.warning("[%s] Shards retried (attempts: shard count): %s", self._execution_id, attempts_histogram)
 
     def _record_shard_failure(self, worker_id: str, error_info: str | None = None) -> bool:
         """Record a failure for the worker's in-flight shard. Must be called with lock held.
@@ -1166,7 +1145,13 @@ class ZephyrWorker:
             # Unpack task and config
             task, attempt, config = response
 
-            logger.info("[%s] Executing task for shard %d (attempt %d)", self._worker_id, task.shard_idx, attempt)
+            logger.info(
+                "[%s] Executing task for stage %s shard %d (attempt %d)",
+                self._worker_id,
+                task.stage_name,
+                task.shard_idx,
+                attempt,
+            )
             try:
                 t_0 = time.monotonic()
                 result, task_counters = self._execute_shard(task, config)
@@ -1307,25 +1292,23 @@ def _regroup_result_refs(
     """Regroup worker output refs by output shard index without loading data.
 
     Non-scatter: each worker's ListShard maps to its own index (identity).
-    Scatter: writes a consolidated scatter manifest combining all sidecar
-    metadata into a single file, then gives each reducer a shard containing
-    just the manifest path.
+    Scatter: passes the list of scatter data-file paths to every reducer.
+    Each reducer reads the per-mapper ``.scatter_meta`` sidecars in parallel
+    to build its own ``ScatterReader`` without coordinator-side consolidation.
     """
     num_output = max(max(result_refs.keys(), default=0) + 1, input_shard_count)
     if output_shard_count is not None:
         num_output = max(num_output, output_shard_count)
 
     if is_scatter:
-        # Collect all scatter file paths from all workers
+        # Collect all scatter file paths from all workers. The coordinator
+        # does NOT read the sidecars or write a consolidated manifest —
+        # reducers do their own parallel sidecar reads.
         all_paths: list[str] = []
         for result in result_refs.values():
             all_paths.extend(result.shard)
 
-        # Write consolidated manifest and point reducers at it
-        manifest_path = f"{scatter_manifest_dir}/{_SCATTER_MANIFEST_NAME}"
-        _write_scatter_manifest(all_paths, manifest_path)
-        shared_refs = MemChunk(items=[manifest_path])
-
+        shared_refs = MemChunk(items=all_paths)
         return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
 
     # Non-scatter: each result's shard maps to its own index

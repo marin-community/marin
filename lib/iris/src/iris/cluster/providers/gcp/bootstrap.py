@@ -270,6 +270,27 @@ echo "[iris-controller] ================================================"
 # Write config file if provided
 {{ config_setup }}
 
+# Install host telemetry. sysstat records memory/CPU/IO to /var/log/sysstat/
+# every 10 minutes so a wedged VM can be diagnosed after reboot. The Ops Agent
+# streams the same data to Cloud Monitoring while the VM is alive; install is
+# best-effort since it depends on the VM service account having metricWriter.
+echo "[iris-controller] [telemetry] Installing sysstat + Ops Agent..."
+export DEBIAN_FRONTEND=noninteractive
+if ! dpkg -s sysstat >/dev/null 2>&1; then
+    sudo apt-get update -qq || true
+    sudo apt-get install -y -qq sysstat || true
+fi
+if [ -f /etc/default/sysstat ]; then
+    sudo sed -i 's/^ENABLED="false"/ENABLED="true"/' /etc/default/sysstat || true
+    sudo systemctl enable --now sysstat || true
+fi
+if ! systemctl is-active --quiet google-cloud-ops-agent; then
+    curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh \
+        && sudo bash add-google-cloud-ops-agent-repo.sh --also-install \
+        || echo "[iris-controller] [telemetry] Ops Agent install failed (non-fatal)"
+    rm -f add-google-cloud-ops-agent-repo.sh
+fi
+
 # Install Docker if missing
 if ! command -v docker &> /dev/null; then
     echo "[iris-controller] [1/5] Docker not found, installing..."

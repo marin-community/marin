@@ -33,6 +33,14 @@ export function IrisPanel() {
             {data.controllerUrl && (
               <span className="font-mono text-xs text-slate-500">· {data.controllerUrl}</span>
             )}
+            <a
+              href="https://iris.oa.dev"
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs text-slate-500 hover:text-emerald-300"
+            >
+              · iris.oa.dev ↗
+            </a>
           </>
         )}
         <span className="ml-auto text-xs text-slate-500">

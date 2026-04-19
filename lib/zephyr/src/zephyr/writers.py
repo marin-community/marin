@@ -40,7 +40,7 @@ _MICRO_BATCH_SIZE = 8
 _LEVANTER_BATCH_SIZE = 16384
 
 # Number of items per intermediate chunk for pickle and scatter writes.
-# Used by both _write_pickle_chunks (execution.py) and _write_parquet_scatter (shuffle.py).
+# Used by both _write_pickle_chunks (execution.py) and _write_scatter (shuffle.py).
 INTERMEDIATE_CHUNK_SIZE = 100_000
 
 
@@ -104,8 +104,9 @@ def ensure_parent_dir(path: str) -> None:
     if "://" in path:
         output_dir = path.rsplit("/", 1)[0]
         fs, dir_path = url_to_fs(output_dir)
-        if not fs.exists(dir_path):
-            fs.mkdirs(dir_path, exist_ok=True)
+        # mkdirs(exist_ok=True) handles the already-exists case internally;
+        # a separate fs.exists() check would add a redundant network round-trip.
+        fs.mkdirs(dir_path, exist_ok=True)
     else:
         output_dir = os.path.dirname(path)
         if output_dir:

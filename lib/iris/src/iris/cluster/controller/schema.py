@@ -654,6 +654,7 @@ JOB_CONFIG = Table(
         Column("existing_job_policy", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
         Column("priority_band", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
         Column("task_image", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("submit_argv_json", "TEXT", "NOT NULL DEFAULT '[]'", python_type=str, decoder=str, default="[]"),
         Column("reservation_json", "TEXT", "", python_type=str | None, decoder=_nullable(str), default=None),
         Column(
             "fail_if_exists",
@@ -766,6 +767,9 @@ TASKS = Table(
         # Migration 0020
         "CREATE INDEX IF NOT EXISTS idx_tasks_current_worker"
         " ON tasks(current_worker_id) WHERE current_worker_id IS NOT NULL",
+        # Migration 0034: covers _task_summaries_for_jobs GROUP BY + SUM.
+        "CREATE INDEX IF NOT EXISTS idx_tasks_job_state_counts"
+        " ON tasks(job_id, state, failure_count, preemption_count)",
     ),
 )
 
@@ -959,7 +963,13 @@ WORKER_TASK_HISTORY = Table(
             python_type=WorkerId,
             decoder=decode_worker_id,
         ),
-        Column("task_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column(
+            "task_id",
+            "TEXT",
+            "NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE",
+            python_type=str,
+            decoder=str,
+        ),
         Column(
             "assigned_at_ms",
             "INTEGER",
@@ -972,6 +982,9 @@ WORKER_TASK_HISTORY = Table(
     indexes=(
         "CREATE INDEX IF NOT EXISTS idx_worker_task_history_worker"
         " ON worker_task_history(worker_id, assigned_at_ms DESC)",
+        # Probed on task delete by the new FK cascade; without it each delete
+        # scans the full history table.
+        "CREATE INDEX IF NOT EXISTS idx_worker_task_history_task" " ON worker_task_history(task_id)",
     ),
 )
 
@@ -1204,20 +1217,6 @@ RESERVATION_CLAIMS = Table(
     ),
 )
 
-LOGS = Table(
-    "logs",
-    "l",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column("key", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("source", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("data", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("epoch_ms", "INTEGER", "NOT NULL", python_type=int, decoder=int),
-        Column("level", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
-    ),
-    indexes=("CREATE INDEX IF NOT EXISTS idx_logs_key ON logs(key, id)",),
-)
-
 # Migration 0005 + 0014 + 0023 (moved to profiles DB)
 TASK_PROFILES = Table(
     "profiles.task_profiles",
@@ -1376,7 +1375,6 @@ MAIN_TABLES: tuple[Table, ...] = (
     SCALING_GROUPS,
     SLICES,
     RESERVATION_CLAIMS,
-    LOGS,
     USER_BUDGETS,
 )
 
@@ -1492,6 +1490,7 @@ class JobDetailRow:
     existing_job_policy: int
     priority_band: int
     task_image: str
+    submit_argv_json: str
     reservation_json: str | None
     fail_if_exists: bool
 
@@ -1845,6 +1844,7 @@ _job_detail_cols, _job_detail_aliases = _job_columns(
     "existing_job_policy",
     "priority_band",
     "task_image",
+    "submit_argv_json",
     "reservation_json",
     "fail_if_exists",
 )

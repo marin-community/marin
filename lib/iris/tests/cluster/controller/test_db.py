@@ -213,6 +213,52 @@ def test_read_snapshot_pool_returns_connections(db: ControllerDB) -> None:
     assert db._read_pool.qsize() == pool_size
 
 
+def test_backup_to_does_not_block_concurrent_writes(tmp_path: Path) -> None:
+    """backup_to uses a separate read-only source connection, so writers on
+    self._conn must proceed under WAL semantics while the backup runs."""
+    db = ControllerDB(db_dir=tmp_path)
+    _create_simple_table(db)
+
+    # Seed enough rows that the backup takes at least a few page-copy steps,
+    # giving the writer thread a real chance to interleave.
+    with db.transaction() as cur:
+        for i in range(2000):
+            cur.execute("INSERT INTO kv (key, value) VALUES (?, ?)", (f"seed-{i}", "x" * 256))
+
+    backup_dir = tmp_path / "backup"
+    backup_dir.mkdir()
+
+    writes_completed = 0
+    writer_exc: BaseException | None = None
+    stop = threading.Event()
+
+    def writer() -> None:
+        nonlocal writes_completed, writer_exc
+        try:
+            i = 0
+            while not stop.is_set():
+                with db.transaction() as cur:
+                    cur.execute("INSERT INTO kv (key, value) VALUES (?, ?)", (f"live-{i}", "y"))
+                writes_completed += 1
+                i += 1
+        except BaseException as e:
+            writer_exc = e
+
+    t = threading.Thread(target=writer, daemon=True)
+    t.start()
+    try:
+        db.backup_to(backup_dir / "controller.sqlite3")
+    finally:
+        stop.set()
+        t.join(timeout=5)
+
+    assert writer_exc is None, f"writer crashed: {writer_exc!r}"
+    # The writer must have made forward progress during the backup; if the
+    # backup path had re-acquired self._lock we'd expect zero writes here.
+    assert writes_completed > 0
+    db.close()
+
+
 def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
     """replace_from() must re-attach the auth DB so auth tables remain accessible."""
     db = ControllerDB(db_dir=tmp_path)
@@ -325,3 +371,126 @@ def test_migration_with_dml_does_not_leave_open_transaction(tmp_path: Path) -> N
     assert rows[0]["val"] == "world"
     assert rows[1]["val"] == "after_commit"
     db.close()
+
+
+def test_auto_vacuum_migrates_legacy_db(tmp_path: Path) -> None:
+    """A DB created with the SQLite default (auto_vacuum=0) must migrate to INCREMENTAL."""
+    db_dir = tmp_path / "ctrl"
+    db_dir.mkdir()
+    legacy_path = db_dir / ControllerDB.DB_FILENAME
+
+    # Seed a legacy DB with auto_vacuum disabled and some data to reclaim.
+    conn = sqlite3.connect(str(legacy_path))
+    conn.execute("PRAGMA auto_vacuum = NONE")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, blob TEXT)")
+    conn.executemany("INSERT INTO t (blob) VALUES (?)", [("x" * 4096,) for _ in range(200)])
+    conn.commit()
+    conn.close()
+    assert legacy_path.stat().st_size > 0
+
+    db = ControllerDB(db_dir=db_dir)
+    try:
+        row = db.fetchone("PRAGMA main.auto_vacuum")
+        assert row[0] == 2, f"expected auto_vacuum=INCREMENTAL(2), got {row[0]}"
+    finally:
+        db.close()
+
+
+def test_wal_checkpoint_truncate_runs_incremental_vacuum(tmp_path: Path) -> None:
+    """After TRUNCATE, freed pages from a large delete should be reclaimed."""
+    db = ControllerDB(db_dir=tmp_path)
+    try:
+        with db.transaction() as cur:
+            cur.execute("CREATE TABLE big (id INTEGER PRIMARY KEY, blob TEXT)")
+            cur.executemany("INSERT INTO big (blob) VALUES (?)", [("y" * 8192,) for _ in range(500)])
+
+        # Baseline size after population + checkpoint.
+        db.wal_checkpoint()
+        size_full = db.db_path.stat().st_size
+
+        with db.transaction() as cur:
+            cur.execute("DELETE FROM big")
+
+        # TRUNCATE flushes WAL and then reclaims freelist pages; file shrinks.
+        db.wal_checkpoint()
+        size_after = db.db_path.stat().st_size
+        assert size_after < size_full, f"expected shrink: before={size_full} after={size_after}"
+    finally:
+        db.close()
+
+
+def test_backfill_attempt_finished_at_migration(tmp_path: Path) -> None:
+    """0032 backfills finished_at_ms for orphaned terminal attempts.
+
+    Reproduces the historical bug where a FAILED/WORKER_FAILED attempt whose
+    task was retried kept finished_at_ms=NULL. The migration should populate
+    it using the next attempt's created_at_ms (and fall back to started_at_ms
+    or created_at_ms when no next attempt exists).
+
+    Exercises the migration SQL directly against a minimal schema so it
+    doesn't need to negotiate controller triggers / FKs.
+    """
+    import importlib
+
+    conn = sqlite3.connect(str(tmp_path / "c.sqlite3"))
+    conn.execute(
+        """
+        CREATE TABLE task_attempts (
+            task_id TEXT NOT NULL,
+            attempt_id INTEGER NOT NULL,
+            worker_id TEXT,
+            state INTEGER NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            started_at_ms INTEGER,
+            finished_at_ms INTEGER,
+            exit_code INTEGER,
+            error TEXT,
+            PRIMARY KEY (task_id, attempt_id)
+        )
+        """
+    )
+    rows = [
+        # task A: FAILED attempt followed by another FAILED attempt.
+        # Backfill must use next.created_at_ms (2000), not this row's started_at_ms.
+        ("/u/A", 0, 5, 1000, 1100, None),
+        ("/u/A", 1, 5, 2000, 2100, 2500),
+        # task B: FAILED orphan followed by a still-RUNNING retry.
+        # Next exists (created at 4000), so that's the bound — even though the
+        # next attempt isn't itself terminal.
+        ("/u/B", 0, 5, 3000, 3100, None),
+        ("/u/B", 1, 3, 4000, 4100, None),
+        # task C: FAILED orphan with no next attempt at all — fall back to
+        # started_at_ms (5100).
+        ("/u/C", 0, 5, 5000, 5100, None),
+        # task D: FAILED orphan, no next attempt, no started_at_ms — fall back
+        # to created_at_ms (6000).
+        ("/u/D", 0, 5, 6000, None, None),
+        # task E: control cases. Already-stamped row must not be rewritten; a
+        # non-terminal row must never be touched.
+        ("/u/E", 0, 4, 7000, 7100, 7200),
+        ("/u/E", 1, 3, 8000, 8100, None),
+    ]
+    conn.executemany(
+        "INSERT INTO task_attempts(task_id, attempt_id, state, created_at_ms, "
+        "started_at_ms, finished_at_ms) VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+
+    mod = importlib.import_module("iris.cluster.controller.migrations.0032_backfill_attempt_finished_at")
+    mod.migrate(conn)
+    conn.commit()
+
+    out = {
+        (r[0], r[1]): r[2]
+        for r in conn.execute("SELECT task_id, attempt_id, finished_at_ms FROM task_attempts").fetchall()
+    }
+    assert out[("/u/A", 0)] == 2000
+    assert out[("/u/A", 1)] == 2500
+    assert out[("/u/B", 0)] == 4000
+    assert out[("/u/B", 1)] is None
+    assert out[("/u/C", 0)] == 5100
+    assert out[("/u/D", 0)] == 6000
+    assert out[("/u/E", 0)] == 7200
+    assert out[("/u/E", 1)] is None
+    conn.close()

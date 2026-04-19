@@ -23,6 +23,7 @@ dependencies = [
     "zstandard>=0.18.0",
     "tqdm-loggable>=0.2",
     "vortex-data>=0.61.0",
+    "xxhash>=3.4",
 ]
 
 [dependency-groups]

@@ -244,34 +244,34 @@ const flattenedChildJobs = computed(() => {
   return result
 })
 
-async function loadChildJobs(parentJobId: string) {
-  if (loadingChildJobs.value.has(parentJobId)) return
-  const nextLoading = new Set(loadingChildJobs.value)
-  nextLoading.add(parentJobId)
-  loadingChildJobs.value = nextLoading
-  try {
-    const children = await fetchChildJobs(parentJobId)
-    const nextChildren = new Map(childJobsByParent.value)
-    nextChildren.set(parentJobId, children)
-    childJobsByParent.value = nextChildren
-  } finally {
-    const doneLoading = new Set(loadingChildJobs.value)
-    doneLoading.delete(parentJobId)
-    loadingChildJobs.value = doneLoading
-  }
-}
-
-function toggleExpandedChildJob(jobStatus: JobStatus) {
+async function toggleExpandedChildJob(jobStatus: JobStatus) {
   const next = new Set(expandedChildJobs.value)
   if (next.has(jobStatus.jobId)) {
     next.delete(jobStatus.jobId)
-  } else {
-    next.add(jobStatus.jobId)
-    if (!childJobsByParent.value.has(jobStatus.jobId)) {
-      void loadChildJobs(jobStatus.jobId)
-    }
+    expandedChildJobs.value = next
+    return
   }
+
+  next.add(jobStatus.jobId)
   expandedChildJobs.value = next
+
+  if (childJobsByParent.value.has(jobStatus.jobId)) {
+    return
+  }
+
+  const nextLoading = new Set(loadingChildJobs.value)
+  nextLoading.add(jobStatus.jobId)
+  loadingChildJobs.value = nextLoading
+  try {
+    const children = await fetchChildJobs(jobStatus.jobId)
+    const nextChildren = new Map(childJobsByParent.value)
+    nextChildren.set(jobStatus.jobId, children)
+    childJobsByParent.value = nextChildren
+  } finally {
+    const doneLoading = new Set(loadingChildJobs.value)
+    doneLoading.delete(jobStatus.jobId)
+    loadingChildJobs.value = doneLoading
+  }
 }
 
 const SEGMENT_COLORS: Record<string, string> = {
@@ -770,7 +770,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
 
       <!-- Job Request Details -->
       <div
-        v-if="jobRequest?.entrypoint?.runCommand?.argv?.length || jobRequest?.environment?.envVars || jobRequest?.environment?.pipPackages?.length || jobRequest?.ports?.length"
+        v-if="jobRequest?.entrypoint?.runCommand?.argv?.length || jobRequest?.submitArgv?.length || jobRequest?.environment?.envVars || jobRequest?.environment?.pipPackages?.length || jobRequest?.ports?.length"
         class="mb-6 rounded-lg border border-surface-border bg-surface px-4 py-3"
       >
         <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
@@ -780,6 +780,10 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           <div v-if="jobRequest.entrypoint?.runCommand?.argv?.length">
             <span class="text-text-muted text-xs">Command</span>
             <pre class="mt-0.5 px-2 py-1 bg-surface-sunken rounded font-mono text-xs whitespace-pre-wrap break-all">{{ jobRequest.entrypoint.runCommand.argv.join(' ') }}</pre>
+          </div>
+          <div v-if="jobRequest.submitArgv?.length">
+            <span class="text-text-muted text-xs">Submitted via</span>
+            <pre class="mt-0.5 px-2 py-1 bg-surface-sunken rounded font-mono text-xs whitespace-pre-wrap break-all">{{ jobRequest.submitArgv.join(' ') }}</pre>
           </div>
           <div v-if="jobRequest.entrypoint?.setupCommands?.length">
             <span class="text-text-muted text-xs">Setup Commands</span>

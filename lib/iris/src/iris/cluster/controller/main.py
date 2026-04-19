@@ -9,13 +9,13 @@ the standalone ``python -m iris.cluster.controller.main serve`` entrypoint
 serve`` subcommand in the main CLI.
 """
 
+import datetime
 import logging
 import os
 import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 from pathlib import Path
 
@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 LOCAL_STATE_DIR_DEFAULT = Path("/var/cache/iris/controller")
+DRY_RUN_STATE_DIR_ROOT = Path("/tmp/dry-run")
 HOURLY_CHECKPOINT_SECONDS = 3600.0
 
 # Default offset from the controller port for the log server.
@@ -57,20 +58,24 @@ def _start_log_server(
         env[LOG_SERVER_JWT_KEY_ENV_VAR] = signing_key
     if strict_auth:
         env[LOG_SERVER_AUTH_STRICT_ENV_VAR] = "1"
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "iris.log_server.main",
-            "--port",
-            str(port),
-            "--log-dir",
-            str(log_dir),
-            "--remote-log-dir",
-            remote_log_dir,
-        ],
-        env=env,
-    )
+    argv = [
+        sys.executable,
+        "-m",
+        "iris.log_server.main",
+        "--port",
+        str(port),
+        "--log-dir",
+        str(log_dir),
+        "--remote-log-dir",
+        remote_log_dir,
+    ]
+    # Run log server at idle I/O priority so Parquet writes and GCS uploads
+    # don't starve the controller's interactive disk I/O. ionice is Linux-only
+    # and absent on macOS / minimal containers — skip silently if unavailable.
+    ionice = shutil.which("ionice") if sys.platform == "linux" else None
+    if ionice is not None:
+        argv = [ionice, "-c", "3", *argv]
+    proc = subprocess.Popen(argv, env=env)
     ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
         lambda: port_is_open(port),
         timeout=Duration.from_seconds(10.0),
@@ -88,6 +93,7 @@ def run_controller_serve(
     checkpoint_interval: float | None = None,
     dry_run: bool = False,
     fresh: bool = False,
+    state_dir: Path | None = None,
 ) -> None:
     """Start the Iris controller, block until SIGTERM/SIGINT.
 
@@ -111,16 +117,22 @@ def run_controller_serve(
         )
     logger.info("Using remote_state_dir from config: %s", remote_state_dir)
 
-    if dry_run:
-        _dry_run_tmpdir = tempfile.mkdtemp(prefix="iris-dry-run-")
-        local_state_dir = Path(_dry_run_tmpdir)
-        logger.info("Dry-run mode: using temporary local state dir %s", local_state_dir)
+    if state_dir is not None:
+        local_state_dir = state_dir
+    elif dry_run:
+        local_state_dir = DRY_RUN_STATE_DIR_ROOT / datetime.date.today().isoformat()
     elif cluster_config.storage.local_state_dir:
         local_state_dir = Path(cluster_config.storage.local_state_dir)
     else:
         local_state_dir = LOCAL_STATE_DIR_DEFAULT
+    logger.info("Controller local state dir: %s (dry_run=%s)", local_state_dir, dry_run)
 
     heartbeat_failure_threshold = cluster_config.controller.heartbeat_failure_threshold or HEARTBEAT_FAILURE_THRESHOLD
+    use_split_heartbeat = (
+        cluster_config.controller.use_split_heartbeat
+        if cluster_config.controller.HasField("use_split_heartbeat")
+        else True
+    )
 
     # --- Restore or reuse local DB ---
     local_state_dir.mkdir(parents=True, exist_ok=True)
@@ -240,6 +252,7 @@ def run_controller_serve(
             auth=auth,
             dry_run=dry_run,
             log_service_address=log_service_address,
+            use_split_heartbeat=use_split_heartbeat,
         )
 
         controller = Controller(
@@ -339,6 +352,12 @@ def cli():
     default=False,
     help="Start with an empty database, ignoring any remote checkpoint",
 )
+@click.option(
+    "--state-dir",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Override the local state dir (default: /var/cache/iris/controller, or /tmp/dry-run/{today} in dry-run)",
+)
 def serve(
     host: str,
     port: int,
@@ -348,6 +367,7 @@ def serve(
     checkpoint_interval: float | None,
     dry_run: bool,
     fresh: bool,
+    state_dir: Path | None,
 ):
     """Start the Iris controller service."""
     from iris.cluster.config import load_config
@@ -366,6 +386,7 @@ def serve(
         checkpoint_interval=checkpoint_interval,
         dry_run=dry_run,
         fresh=fresh,
+        state_dir=state_dir,
     )
 
 

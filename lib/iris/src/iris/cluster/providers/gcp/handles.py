@@ -374,6 +374,11 @@ class GcpSliceHandle:
             logger.info("Terminating TPU (async): %s", self._slice_id)
             self._gcp_service.tpu_delete(self._slice_id, self._zone)
 
+    def cleanup_bootstrap_failure(self) -> None:
+        """Clean up provider state after bootstrap fails."""
+        if self.is_queued_resource:
+            self.terminate()
+
 
 class GcpVmSliceHandle:
     """Handle to a single-VM GCE-backed slice."""
@@ -481,3 +486,6 @@ class GcpVmSliceHandle:
     def terminate(self, *, wait: bool = False) -> None:
         logger.info("Terminating VM slice: %s (vm=%s)", self._slice_id, self._vm_name)
         self._gcp_service.vm_delete(self._vm_name, self._zone, wait=wait)
+
+    def cleanup_bootstrap_failure(self) -> None:
+        """Clean up provider state after bootstrap fails."""

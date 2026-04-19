@@ -316,8 +316,67 @@ def _wheel_for(pkg: str) -> Path:
     return candidates[0]
 
 
+def _delete_orphan_drafts(asset_names: set[str]) -> None:
+    """Purge tagless draft releases whose assets collide with the ones we're about to upload.
+
+    GitHub leaves an "untagged-<hash>" draft behind when a previous `gh release create`
+    uploads assets but never attaches the tag (observed for marin-levanter-latest on
+    2026-04-14). Those drafts are invisible to `gh release view <tag>` but still hold
+    the asset filename, which causes subsequent uploads to fail or the tag to stay
+    unattached. Walk all releases and delete any draft that holds a matching asset.
+    """
+    result = subprocess.run(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{REPO}/releases",
+            "--jq",
+            ".[] | select(.draft==true) | {id, assets: [.assets[].name]}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        rel = json.loads(line)
+        if any(name in asset_names for name in rel["assets"]):
+            print(f"Deleting orphan draft release id={rel['id']} (assets={rel['assets']})")
+            subprocess.run(
+                ["gh", "api", "-X", "DELETE", f"repos/{REPO}/releases/{rel['id']}"],
+                check=True,
+            )
+
+
+def _verify_release(tag: str, expected_assets: set[str], prerelease: bool) -> None:
+    """Fail loudly if the release didn't land in the expected state."""
+    result = subprocess.run(
+        ["gh", "api", f"repos/{REPO}/releases/tags/{tag}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    rel = json.loads(result.stdout)
+    assets = {a["name"] for a in rel["assets"]}
+    problems = []
+    if rel["draft"]:
+        problems.append("release is draft")
+    if rel["prerelease"] != prerelease:
+        problems.append(f"prerelease={rel['prerelease']} (expected {prerelease})")
+    if rel["tag_name"] != tag:
+        problems.append(f"tag_name={rel['tag_name']!r} (expected {tag!r})")
+    if not expected_assets.issubset(assets):
+        problems.append(f"missing assets: {expected_assets - assets}")
+    if problems:
+        raise RuntimeError(f"Release {tag} landed in a bad state: {'; '.join(problems)}")
+
+
 def _gh_release_replace(tag: str, files: list[Path], title: str, notes: str, prerelease: bool) -> None:
     """Idempotently (re)create a GitHub release with the given assets."""
+    asset_names = {f.name for f in files}
+    _delete_orphan_drafts(asset_names)
     subprocess.run(
         ["gh", "release", "delete", tag, "--yes", "--cleanup-tag", "--repo", REPO],
         check=False,
@@ -339,6 +398,7 @@ def _gh_release_replace(tag: str, files: list[Path], title: str, notes: str, pre
     if prerelease:
         cmd.append("--prerelease")
     subprocess.run(cmd, check=True)
+    _verify_release(tag, asset_names, prerelease)
 
 
 def publish_releases(version: str, mode: str) -> None:

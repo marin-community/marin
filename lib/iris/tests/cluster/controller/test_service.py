@@ -124,6 +124,65 @@ def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state)
     assert len(job.bundle_id) == 64
 
 
+def test_launch_job_rejects_tpu_chip_count_mismatch(service):
+    """A job requesting fewer chips than the variant's chips_per_vm is rejected."""
+    request = make_job_request("bad-tpu-chip-count")
+    request.resources.device.CopyFrom(tpu_device("v6e-8", count=4))
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+    assert "chip count mismatch" in exc_info.value.message
+
+
+def test_launch_job_rejects_mixed_vm_shape_alternatives(service):
+    """device-variant IN constraint with mismatched chips_per_vm is rejected."""
+    request = make_job_request("mixed-tpu-variants")
+    request.resources.device.CopyFrom(tpu_device("v6e-4"))
+    # User-provided IN constraint that mixes a 4-chip/VM and an 8-chip/VM variant.
+    request.constraints.append(device_variant_constraint(["v6e-4", "v6e-8"]).to_proto())
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+    # Mismatched shapes necessarily imply a chip-count mismatch for at least one
+    # candidate, so the per-candidate count check fires first.
+    assert "chip count mismatch" in exc_info.value.message
+    assert "v6e-8" in exc_info.value.message
+
+
+def test_launch_job_rejects_variant_override_with_smaller_primary(service):
+    """Explicit device-variant constraint overrides the primary; chip count must match it.
+
+    Regression for Codex review: primary v6e-4 (chips_per_vm=4) with an explicit
+    `device-variant EQ v6e-8` constraint would schedule onto a single v6e-8 VM
+    while reserving only 4 of its 8 chips — the exact partial-VM collision we
+    want to block. The validator must check chip count against every effective
+    candidate, not just the primary.
+    """
+    request = make_job_request("variant-override-mismatch")
+    request.resources.device.CopyFrom(tpu_device("v6e-4"))
+    request.constraints.append(device_variant_constraint(["v6e-8"]).to_proto())
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+    assert "chip count mismatch" in exc_info.value.message
+
+
+def test_launch_job_accepts_same_shape_alternatives(service):
+    """Alternatives sharing vm_count/chips_per_vm (e.g. v4-8 + v5p-8) are accepted."""
+    request = make_job_request("matched-tpu-variants")
+    request.resources.device.CopyFrom(tpu_device("v4-8"))
+    request.constraints.append(device_variant_constraint(["v4-8", "v5p-8"]).to_proto())
+
+    response = service.launch_job(request, None)
+    assert response.job_id == JobName.root("test-user", "matched-tpu-variants").to_wire()
+
+
 def test_launch_job_rejects_duplicate_name(service):
     """Verify launch_job rejects duplicate job names for running jobs."""
     request = make_job_request("duplicate-job")
@@ -319,7 +378,7 @@ def test_get_job_status_not_found(service):
 
 def test_redact_request_env_vars_does_not_mutate_original():
     """Verify redact_request_env_vars returns a copy and does not mutate the input."""
-    from iris.cluster.controller.service import REDACTED_VALUE, redact_request_env_vars
+    from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 
     original = controller_pb2.Controller.LaunchJobRequest(
         name="/test-user/job",
@@ -333,9 +392,48 @@ def test_redact_request_env_vars_does_not_mutate_original():
     assert redacted.environment.env_vars["SAFE"] == "ok"
 
 
+def test_submit_argv_roundtrips_through_get_job_status(service):
+    """submit_argv set on LaunchJob must survive storage and reconstruction."""
+    job_name = JobName.root("test-user", "submit-argv-test")
+    launch_req = controller_pb2.Controller.LaunchJobRequest(
+        name=job_name.to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        submit_argv=["iris", "job", "run", "-e", "LOG_LEVEL", "info", "--", "python", "t.py"],
+    )
+    service.launch_job(launch_req, None)
+
+    response = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=job_name.to_wire()), None)
+    assert list(response.request.submit_argv) == [
+        "iris",
+        "job",
+        "run",
+        "-e",
+        "LOG_LEVEL",
+        "info",
+        "--",
+        "python",
+        "t.py",
+    ]
+
+
+def test_submit_argv_empty_when_omitted(service):
+    """Programmatic submissions without submit_argv should reconstruct as empty."""
+    job_name = JobName.root("test-user", "submit-argv-empty")
+    launch_req = controller_pb2.Controller.LaunchJobRequest(
+        name=job_name.to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+    )
+    service.launch_job(launch_req, None)
+
+    response = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=job_name.to_wire()), None)
+    assert list(response.request.submit_argv) == []
+
+
 def test_get_job_status_redacts_sensitive_env_vars(service):
     """Verify get_job_status redacts env var values whose keys match sensitive patterns."""
-    from iris.cluster.controller.service import REDACTED_VALUE
+    from iris.cluster.redaction import REDACTED_VALUE
 
     job_name = JobName.root("test-user", "redact-test")
     launch_req = controller_pb2.Controller.LaunchJobRequest(
@@ -715,7 +813,7 @@ def test_list_jobs_sql_pagination(service):
         service.launch_job(make_job_request(f"job-{i}"), None)
 
     # Request page of 2
-    request = controller_pb2.Controller.ListJobsRequest(offset=0, limit=2)
+    request = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(offset=0, limit=2))
     response = service.list_jobs(request, None)
 
     assert len(response.jobs) == 2
@@ -723,7 +821,7 @@ def test_list_jobs_sql_pagination(service):
     assert response.has_more is True
 
     # Second page
-    request2 = controller_pb2.Controller.ListJobsRequest(offset=2, limit=2)
+    request2 = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(offset=2, limit=2))
     response2 = service.list_jobs(request2, None)
 
     assert len(response2.jobs) == 2
@@ -736,7 +834,7 @@ def test_list_jobs_sql_pagination(service):
     assert page1_ids.isdisjoint(page2_ids)
 
     # Last page
-    request3 = controller_pb2.Controller.ListJobsRequest(offset=4, limit=2)
+    request3 = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(offset=4, limit=2))
     response3 = service.list_jobs(request3, None)
 
     assert len(response3.jobs) == 1
@@ -752,7 +850,9 @@ def test_list_jobs_state_filter(service):
     )
 
     # Filter to killed only
-    request = controller_pb2.Controller.ListJobsRequest(state_filter="killed", limit=10)
+    request = controller_pb2.Controller.ListJobsRequest(
+        query=controller_pb2.Controller.JobQuery(state_filter="killed", limit=10)
+    )
     response = service.list_jobs(request, None)
 
     assert len(response.jobs) == 1
@@ -764,7 +864,7 @@ def test_list_jobs_name_filter(service):
     service.launch_job(make_job_request("alpha-job"), None)
     service.launch_job(make_job_request("beta-job"), None)
 
-    request = controller_pb2.Controller.ListJobsRequest(name_filter="alpha")
+    request = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(name_filter="alpha"))
     response = service.list_jobs(request, None)
 
     assert len(response.jobs) == 1
@@ -828,14 +928,6 @@ def test_list_jobs_job_query_roots_and_children(service, state):
         None,
     )
     assert [job.job_id for job in children_response.jobs] == [child_id.to_wire()]
-
-    # Legacy flat parent_job_id field (no JobQuery sub-message) must also
-    # filter to children only — see issue #4705.
-    legacy_children_response = service.list_jobs(
-        controller_pb2.Controller.ListJobsRequest(parent_job_id=parent_id.to_wire()),
-        None,
-    )
-    assert [job.job_id for job in legacy_children_response.jobs] == [child_id.to_wire()]
 
 
 # =============================================================================

@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { controllerRpcCall, useControllerRpc } from '@/composables/useRpc'
-import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import type {
   GetSchedulerStateResponse,
   SchedulerUserBudget,
@@ -90,7 +90,7 @@ async function refreshAll() {
   await Promise.all([refreshScheduler(), refreshUsers(), fetchUnscheduledJobs()])
 }
 
-useAutoRefresh(refreshAll, 15_000)
+useAutoRefresh(refreshAll, DEFAULT_REFRESH_MS)
 onMounted(refreshAll)
 
 // -- Scheduler computed --

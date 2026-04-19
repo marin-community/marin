@@ -34,7 +34,6 @@ from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data import DataLoader
 from levanter.data.text import DatasetComponent, LmDataConfig, LMMixtureDatasetConfig
-from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.models.loss import next_token_loss
@@ -255,7 +254,6 @@ def default_save_logprobs(
                 data=data,
                 trainer=TrainerConfig(
                     tracker=NoopConfig(),
-                    ray=RayConfig(auto_start_cluster=False),
                     per_device_eval_parallelism=per_device_batch_size,
                     mp=jmp.get_policy("c=bf16"),
                 ),
