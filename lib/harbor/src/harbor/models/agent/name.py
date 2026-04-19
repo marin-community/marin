@@ -18,6 +18,7 @@ class AgentName(str, Enum):
     GEMINI_CLI = "gemini-cli"
     GOOSE = "goose"
     MINI_SWE_AGENT = "mini-swe-agent"
+    MINI_SWE_AGENT_V1 = "mini-swe-agent-v1"
     SWE_AGENT = "swe-agent"
     OPENCODE = "opencode"
     OPENHANDS = "openhands"

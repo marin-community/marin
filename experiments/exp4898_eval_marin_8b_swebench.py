@@ -5,7 +5,7 @@
 Baseline eval: Marin-8B base on SWE-bench Verified (100-instance subset).
 
 Evaluates the untrained Marin-8B base model on 100 random SWE-bench Verified
-instances (DCAgent2/swebench-verified-random-100-folders) using the mini-swe-agent
+instances (DCAgent2/swebench-verified-random-100-folders) using the mini-swe-agent-v1
 Harbor agent. Expected result: ~0% resolve rate (untrained base model).
 
 This establishes the baseline for the SWE-ZERO quality validation (#4898).
@@ -170,7 +170,7 @@ os.environ.setdefault("MSWEA_API_KEY", "EMPTY")  # vLLM doesn't need auth
 os.environ.setdefault("OPENAI_API_KEY", "EMPTY")  # Fallback for hosted_vllm provider
 
 AGENT_KWARGS = {
-    "version": "v1",  # Pin to mini-swe-agent v1 (bash-only, matches SWE-ZERO training format)
+    # In-process agent — no version pin needed (not using installed CLI)
     "temperature": 1.0,
     "model_info": {
         "max_input_tokens": 32768,
@@ -180,12 +180,12 @@ AGENT_KWARGS = {
     },
 }
 
-OUTPUT_DIR = os.path.join("evaluation", "harbor", "swebench-verified", MODEL_NAME, "mini-swe-agent", "baseline-100")
+OUTPUT_DIR = os.path.join("evaluation", "harbor", "swebench-verified", MODEL_NAME, "mini-swe-agent-v1", "baseline-100")
 
 logger.info("=" * 60)
 logger.info("exp4898 baseline: %s on SWE-bench Verified (100 tasks)", MODEL_NAME)
 logger.info("Model: %s", MODEL_PATH)
-logger.info("Agent: mini-swe-agent, Env: %s, Concurrent: %d", ENV_TYPE, N_CONCURRENT)
+logger.info("Agent: mini-swe-agent-v1, Env: %s, Concurrent: %d", ENV_TYPE, N_CONCURRENT)
 logger.info("=" * 60)
 
 if __name__ == "__main__":
@@ -200,14 +200,14 @@ if __name__ == "__main__":
         wandb_tags=[
             "harbor",
             "swebench-verified",
-            "mini-swe-agent",
+            "mini-swe-agent-v1",
             ENV_TYPE,
             MODEL_NAME,
             "baseline",
             "exp4898",
             "swe-zero-validation",
         ],
-        agent="mini-swe-agent",
+        agent="mini-swe-agent-v1",
         n_concurrent=N_CONCURRENT,
         env=ENV_TYPE,
         agent_kwargs=AGENT_KWARGS,
