@@ -442,8 +442,82 @@ def test_compaction_skips_single_tmp(tmp_path: Path):
         store.close()
 
 
+def test_close_compacts_and_offloads_single_tmp(tmp_path: Path):
+    """close() with exactly one tmp must still produce a logs_ segment and
+    offload it to remote storage. Regression: the < 2 tmp skip in the
+    steady-state compaction path was inherited by close(), so a low-volume
+    shutdown left data only in local tmp_*.parquet and lost it on a fresh
+    restart with empty local storage."""
+    log_dir = tmp_path / "logs"
+    remote_dir = tmp_path / "remote"
+    remote_dir.mkdir()
+    store = DuckDBLogStore(log_dir=log_dir, remote_log_dir=str(remote_dir))
+    store.append(KEY, [_make_entry("only", epoch_ms=0)])
+    store._force_flush()
+    assert len(sorted(log_dir.glob("tmp_*.parquet"))) == 1
+    assert len(sorted(log_dir.glob("logs_*.parquet"))) == 0
+
+    store.close()
+
+    assert sorted(log_dir.glob("tmp_*.parquet")) == []
+    local_logs = sorted(log_dir.glob("logs_*.parquet"))
+    assert len(local_logs) == 1
+    remote_logs = sorted(remote_dir.glob("logs_*.parquet"))
+    assert len(remote_logs) == 1
+    assert remote_logs[0].name == local_logs[0].name
+
+
+def test_startup_drops_tmps_covered_by_log(tmp_path: Path):
+    """A compaction crash between ``rename(logs_)`` and ``unlink(tmp_)``
+    leaves both on disk with overlapping ranges. Restart must drop the
+    now-redundant tmps or reads double-count those rows."""
+    log_dir = tmp_path / "logs"
+    store1 = DuckDBLogStore(log_dir=log_dir)
+    for batch in range(3):
+        store1.append(KEY, [_make_entry(f"b{batch}-{i}", epoch_ms=batch * 10 + i) for i in range(3)])
+        store1._force_flush()
+
+    # Snapshot the tmp bytes before compaction destroys them.
+    tmps_before_compact = sorted(log_dir.glob("tmp_*.parquet"))
+    assert len(tmps_before_compact) == 3
+    saved_tmps = {p.name: p.read_bytes() for p in tmps_before_compact}
+
+    store1._force_compaction()
+    store1.close()
+    assert len(sorted(log_dir.glob("logs_*.parquet"))) == 1
+    assert sorted(log_dir.glob("tmp_*.parquet")) == []
+
+    # Simulate a mid-compaction crash: rename landed, unlink didn't.
+    for name, data in saved_tmps.items():
+        (log_dir / name).write_bytes(data)
+    assert len(sorted(log_dir.glob("tmp_*.parquet"))) == 3
+    assert len(sorted(log_dir.glob("logs_*.parquet"))) == 1
+
+    store2 = DuckDBLogStore(log_dir=log_dir)
+    try:
+        assert sorted(log_dir.glob("tmp_*.parquet")) == []
+        assert len(sorted(log_dir.glob("logs_*.parquet"))) == 1
+        result = store2.get_logs(KEY)
+        assert len(result.entries) == 9
+        assert [e.data for e in result.entries] == [
+            "b0-0",
+            "b0-1",
+            "b0-2",
+            "b1-0",
+            "b1-1",
+            "b1-2",
+            "b2-0",
+            "b2-1",
+            "b2-2",
+        ]
+    finally:
+        store2.close()
+
+
 def test_recovery_reads_both_tmp_and_log(tmp_path: Path):
-    """After restart, a dir with mixed tmp_ and logs_ files is fully readable."""
+    """After a non-graceful exit, a dir with mixed tmp_ and logs_ files is
+    fully readable. Emulates a crash by halting the bg thread without going
+    through close() (which would compact the trailing tmp into a logs_)."""
     log_dir = tmp_path / "logs"
     store1 = DuckDBLogStore(log_dir=log_dir)
     try:
@@ -456,7 +530,12 @@ def test_recovery_reads_both_tmp_and_log(tmp_path: Path):
         store1.append(KEY, [_make_entry(f"new-{i}", epoch_ms=100 + i) for i in range(3)])
         store1._force_flush()
     finally:
-        store1.close()
+        # Simulate crash: stop bg thread and release DuckDB without the
+        # shutdown-compaction path close() runs.
+        store1._stop.set()
+        store1._wake.set()
+        store1._bg_thread.join()
+        store1._pool.close()
 
     assert len(sorted(log_dir.glob("logs_*.parquet"))) == 1
     assert len(sorted(log_dir.glob("tmp_*.parquet"))) == 1
