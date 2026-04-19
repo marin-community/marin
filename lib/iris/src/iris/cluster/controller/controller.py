@@ -1000,7 +1000,7 @@ class ControllerConfig:
     dry_run: bool = False
     """Start in dry-run mode: compute scheduling but suppress all side effects."""
 
-    use_split_heartbeat: bool = False
+    use_split_heartbeat: bool = True
     """When True (default), use direct StartTasks/StopTasks RPCs instead of the
     dispatch_queue. Scheduling sends StartTasks immediately after committing
     assignments; kills send StopTasks directly. A task-updater thread applies
