@@ -73,6 +73,9 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    # Multiplier for GatedNorm weight init std. Under AdamH the Frobenius norm
+    # is preserved, so this controls the operating scale for the entire run.
+    gated_norm_init_mult: float = 1.0
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -425,10 +428,14 @@ class Block(eqx.Module):
             )
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
+            attn_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std * cfg.gated_norm_init_mult, key=gn_attn_key
+            ),
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
+            mlp_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std * cfg.gated_norm_init_mult, key=gn_mlp_key
+            ),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
         )
@@ -470,11 +477,15 @@ class Transformer(eqx.Module):
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
+            embed_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std * cfg.gated_norm_init_mult, key=embed_gn_key
+            ),
             output_proj=output_proj,
             blocks=blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
+            final_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std * cfg.gated_norm_init_mult, key=final_gn_key
+            ),
             config=cfg,
         )
 
