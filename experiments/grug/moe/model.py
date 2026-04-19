@@ -73,6 +73,7 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    use_pseudogram: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -406,6 +407,31 @@ class MoEMLP(eqx.Module):
         return routed, router_stats
 
 
+class Pseudogram(eqx.Module):
+    """Per-position sigmoid residual: out = v * sigmoid(rmsnorm(x) · w)."""
+
+    rms: RMSNorm
+    w: jax.Array  # (D,) — dot product weights
+    v: jax.Array  # (D,) — output direction
+
+    @staticmethod
+    def init(hidden_dim: int, initializer_std: float, layer_norm_eps: float, *, key: PRNGKeyArray) -> "Pseudogram":
+        k_w, k_v = random.split(key)
+        return Pseudogram(
+            rms=RMSNorm.init(hidden_dim, layer_norm_eps),
+            w=reshard(_init_weight(k_w, (hidden_dim,), initializer_std), P(None)),
+            v=reshard(_init_weight(k_v, (hidden_dim,), initializer_std), P(None)),
+        )
+
+    @named_call
+    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+        normed = self.rms(x)
+        # Dot product: (B, S, D) · (D,) -> (B, S)
+        gate = jax.nn.sigmoid(jnp.einsum("...d,d->...", normed, self.w))
+        # gate: (B, S) -> (B, S, 1), v: (D,) -> output: (B, S, D)
+        return gate[..., None] * self.v
+
+
 class Block(eqx.Module):
     rms_attn: RMSNorm
     attn_gated_norm: GatedNorm
@@ -414,10 +440,11 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    pseudogram: Pseudogram | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
-        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
+        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key, pg_key = random.split(key, 6)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
             shared = DenseMLP.init(
@@ -431,6 +458,11 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            pseudogram=(
+                Pseudogram.init(cfg.hidden_dim, cfg.initializer_std, cfg.layer_norm_eps, key=pg_key)
+                if cfg.use_pseudogram
+                else None
+            ),
         )
 
     @named_call
@@ -446,6 +478,8 @@ class Block(eqx.Module):
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
+        if self.pseudogram is not None:
+            x = x + self.pseudogram(x)
         return x, router_stats
 
 
