@@ -35,8 +35,10 @@ Environment variables:
 import json
 import logging
 import os
+import tempfile
 
 from experiments.evals.evals import evaluate_harbor
+from experiments.marin_models import MARIN_CHAT_TEMPLATE
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 
@@ -166,19 +168,10 @@ VLLM_ENGINE_KWARGS = {
     "tensor_parallel_size": 4,
 }
 
-# Marin-8B base doesn't have a chat template in its tokenizer.
-# Write a minimal Jinja2 template file for vLLM's --chat-template flag.
-import tempfile
-
-_CHAT_TEMPLATE = (
-    "{% for message in messages %}"
-    "{% if message['role'] == 'system' %}{{ message['content'] + '\\n\\n' }}"
-    "{% elif message['role'] == 'user' %}{{ 'User: ' + message['content'] + '\\n\\n' }}"
-    "{% elif message['role'] == 'assistant' %}{% generation %}{{ message['content'] }}{% endgeneration %}"
-    "{% endif %}{% endfor %}"
-)
+# Use the same MARIN_CHAT_TEMPLATE that SFT training uses.
+# This ensures the vLLM server formats messages identically to training.
 _chat_template_file = tempfile.NamedTemporaryFile(mode="w", suffix=".jinja2", delete=False)
-_chat_template_file.write(_CHAT_TEMPLATE)
+_chat_template_file.write(MARIN_CHAT_TEMPLATE)
 _chat_template_file.close()
 os.environ.setdefault("VLLM_CHAT_TEMPLATE", _chat_template_file.name)
 
