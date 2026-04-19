@@ -23,7 +23,7 @@ from levanter.models.llama import LlamaConfig
 from experiments.defaults import default_tokenize, default_train
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.v2 import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, versioned
 from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
 # -- Tokenizer (must be pushed to HF Hub before running) --
@@ -99,7 +99,7 @@ train_config = SimpleTrainConfig(
     resources=RESOURCES,
     train_batch_size=128,
     num_train_steps=50_000,
-    learning_rate=3.5e-4,
+    learning_rate=versioned(3.5e-4),
     weight_decay=0.01,
     warmup=0.1,
     train_seq_len=8192,
@@ -112,7 +112,7 @@ train_config = SimpleTrainConfig(
 # -- Train --
 
 protein_model_1b = default_train(
-    name="protein-contacts-1b-2.5e-4",
+    name="protein-contacts-1b-3.5e-4",
     tokenized=protein_docs_data,
     model_config=protein_llama_1b,
     train_config=train_config,
