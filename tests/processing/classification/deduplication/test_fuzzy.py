@@ -8,7 +8,7 @@ import pyarrow.parquet as pq
 import pytest
 from fray.v1.job import create_job_ctx, fray_default_job_ctx
 
-from marin.datakit.normalize import NormalizedData, normalize_to_parquet
+from marin.datakit.normalize import NormalizedData, generate_id, normalize_to_parquet
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs
 from marin.processing.classification.deduplication.fuzzy_minhash import (
     compute_minhash_attrs,
@@ -118,13 +118,14 @@ def test_fuzzy_dups_single_source_schema_and_pair(fox_corpus):
 
 
 def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
-    """Two MinHashAttrData inputs produce two co-partitioned attr trees keyed by source_main_dir.
+    """Two MinHashAttrData inputs produce two per-source attr trees.
 
-    Also asserts the cross-source exact-text collision case (test_contaminated_1 ==
-    train_arctic_1 byte-identical → same normalized id in both datasets). Without
-    a per-source prefix into connected_components, the two nodes would collapse
-    into one and at most one side would be marked; with the fix each side
-    independently carries its own dup marker.
+    Cross-source exact-text duplicates (e.g. ``train_arctic_1`` ==
+    ``test_contaminated_1`` byte-identical → same normalized id in both
+    datasets) must be detected as a 2-member cluster rather than collapsing
+    into a single node. Each side independently carries its own attr row for
+    the shared content hash, with a shared ``dup_cluster_id`` and exactly one
+    canonical across the pair.
     """
     train_norm = _normalize(fox_corpus["train_dir"], os.path.join(fox_corpus["output_dir"], "norm_train"))
     test_norm = _normalize(fox_corpus["test_dir"], os.path.join(fox_corpus["output_dir"], "norm_test"))
@@ -138,54 +139,32 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
         max_parallelism=4,
     )
 
-    # One per-source entry per input; both attr_dirs exist on disk.
     assert set(dups.sources.keys()) == {train_norm.main_output_dir, test_norm.main_output_dir}
-    for src_dir, per_source in dups.sources.items():
-        assert per_source.attr_dir.endswith("/outputs/source_000") or per_source.attr_dir.endswith(
-            "/outputs/source_001"
-        ), per_source.attr_dir
-        assert Path(per_source.attr_dir).exists(), f"missing attr dir for {src_dir}"
+    for per_source in dups.sources.values():
+        assert per_source.attr_dir.rsplit("/", 1)[-1].startswith("source_"), per_source.attr_dir
+        assert Path(per_source.attr_dir).exists()
 
-    # Resolve each side's attr rows back to source_ids via the normalize main parquet.
-    train_by_id = _read_main_records(train_norm)
-    test_by_id = _read_main_records(test_norm)
+    def rows_by_id(main_dir: str) -> dict[str, dict]:
+        return {r["id"]: r for r in _read_cluster_attrs(dups.sources[main_dir].attr_dir)}
 
-    def by_source_id(attr_dir: str, by_id: dict[str, dict]) -> dict[str, dict]:
-        rows = _read_cluster_attrs(attr_dir)
-        return {by_id[r["id"]]["source_id"]: r for r in rows if r["id"] in by_id}
+    train_rows = rows_by_id(train_norm.main_output_dir)
+    test_rows = rows_by_id(test_norm.main_output_dir)
 
-    train_rows = by_source_id(dups.sources[train_norm.main_output_dir].attr_dir, train_by_id)
-    test_rows = by_source_id(dups.sources[test_norm.main_output_dir].attr_dir, test_by_id)
-
-    # Cross-source exact-text pairs: (train_arctic_1, test_contaminated_1) and
-    # (train_red_*, test_contaminated_2). Each pair forms a CC cluster of two
-    # post-fix. Both members must appear in their respective source's attr tree,
-    # share a dup_cluster_id, and together contain exactly one canonical.
-    #
-    # train_red_1 and train_red_dup share identical text, so they collapse to the
-    # same normalized id and whichever one wins normalize's exact-dedup pass is
-    # non-deterministic — accept either as the train-side survivor.
-    for a_candidates, b_candidates in (
-        ({"train_arctic_1"}, {"test_contaminated_1"}),
-        ({"train_red_1", "train_red_dup"}, {"test_contaminated_2"}),
+    # Each cross-source byte-identical text must appear as an attr row on both
+    # sides (keyed by the same content hash), share a dup_cluster_id, and have
+    # exactly one canonical across the pair.
+    for shared_text in (
+        "Arctic predators have superior auditory capabilities for hunting beneath snow.",
+        "Red canids inhabit northern territories worldwide.",
     ):
-        a_present = a_candidates & train_rows.keys()
-        b_present = b_candidates & test_rows.keys()
-        assert len(a_present) == 1, f"expected one of {a_candidates} in train rows; got {a_present}"
-        assert len(b_present) == 1, f"expected one of {b_candidates} in test rows; got {b_present}"
-        a_source = next(iter(a_present))
-        b_source = next(iter(b_present))
-        cluster_ids = {
-            train_rows[a_source]["attributes"]["dup_cluster_id"],
-            test_rows[b_source]["attributes"]["dup_cluster_id"],
-        }
-        assert len(cluster_ids) == 1, f"({a_source}, {b_source}): should share dup_cluster_id; got {cluster_ids}"
-        canonicals = [
-            s
-            for s, row in ((a_source, train_rows[a_source]), (b_source, test_rows[b_source]))
-            if row["attributes"]["is_cluster_canonical"]
-        ]
-        assert len(canonicals) == 1, f"({a_source}, {b_source}): exactly one canonical expected; got {canonicals}"
+        content_id = generate_id(shared_text)
+        assert content_id in train_rows, f"missing train attr row for {shared_text!r}"
+        assert content_id in test_rows, f"missing test attr row for {shared_text!r}"
+        a, b = train_rows[content_id]["attributes"], test_rows[content_id]["attributes"]
+        assert a["dup_cluster_id"] == b["dup_cluster_id"], f"{shared_text!r}: dup_cluster_id mismatch"
+        assert (
+            a["is_cluster_canonical"] != b["is_cluster_canonical"]
+        ), f"{shared_text!r}: exactly one canonical expected across pair"
 
 
 def test_fuzzy_dups_rejects_param_mismatch(fox_corpus):
