@@ -111,6 +111,8 @@ from iris.log_server.client import LogPusher, LogServiceProxy, RemoteLogHandler
 from iris.log_server.main import build_log_server_asgi
 from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider
+from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS
+from iris.rpc.stats import RpcStatsCollector
 from iris.cluster.types import (
     JobName,
     WorkerStatus,
@@ -1192,7 +1194,14 @@ class Controller:
         # still accepted in null-auth/test mode, matching the dashboard's
         # behaviour. Real workers attach JWTs that the verifier validates.
         interceptors = (NullAuthInterceptor(verifier=self._config.auth_verifier),)
-        app = build_log_server_asgi(self._log_service, interceptors=interceptors)
+        # Stats collector for the in-process log server. Snapshot is reachable
+        # via /iris.stats.StatsService/GetRpcStats on the log-server port.
+        self._log_stats_collector = RpcStatsCollector(slow_threshold_ms=SLOW_RPC_THRESHOLD_MS)
+        app = build_log_server_asgi(
+            self._log_service,
+            interceptors=interceptors,
+            stats_collector=self._log_stats_collector,
+        )
         log_server_config = uvicorn.Config(
             app,
             host=self._config.host,

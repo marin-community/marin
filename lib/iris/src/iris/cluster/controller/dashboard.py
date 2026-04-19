@@ -263,26 +263,29 @@ class ControllerDashboard:
         return self._app
 
     def _create_app(self) -> ASGIApp:
-        timing_interceptor = RequestTimingInterceptor(
-            include_traceback=bool(os.environ.get("IRIS_DEBUG")),
-            collector=self._stats_collector,
-        )
-        interceptors = [timing_interceptor]
+        # Two timing interceptors: only the controller chain feeds the stats
+        # collector, so the panel stays a clean view of ControllerService
+        # traffic. The log server runs in a subprocess and will gain its own
+        # collector separately; the controller-side LogService mount is a
+        # legacy proxy whose forwarded calls would just add noise here.
+        include_tb = bool(os.environ.get("IRIS_DEBUG"))
+        controller_timing = RequestTimingInterceptor(include_traceback=include_tb, collector=self._stats_collector)
+        log_timing = RequestTimingInterceptor(include_traceback=include_tb)
         if self._auth_provider is not None and self._auth_verifier is not None:
-            interceptors.insert(0, _DashboardAuthInterceptor(self._auth_verifier, optional=self._auth_optional))
+            auth_interceptor = _DashboardAuthInterceptor(self._auth_verifier, optional=self._auth_optional)
         else:
             # Null-auth mode: no provider configured. Verify worker tokens
             # when present but treat everything as anonymous/admin.
-            interceptors.insert(0, NullAuthInterceptor(verifier=self._auth_verifier))
-        rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
+            auth_interceptor = NullAuthInterceptor(verifier=self._auth_verifier)
+        controller_interceptors = [auth_interceptor, controller_timing]
+        rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=controller_interceptors)
 
         # StatsService: reuses the auth interceptor (so non-admins can't read
         # sampled request previews) but skips RequestTimingInterceptor so the
         # stats endpoint itself doesn't pollute the numbers it reports.
-        stats_interceptors = interceptors[:-1]
         stats_wsgi_app = StatsServiceWSGIApplication(
             service=RpcStatsService(self._stats_collector),
-            interceptors=stats_interceptors,
+            interceptors=[auth_interceptor],
         )
         stats_app = WSGIMiddleware(stats_wsgi_app)
 
@@ -293,7 +296,7 @@ class ControllerDashboard:
         # push_logs() calls the remote LogService over RPC.
         # Cap concurrent FetchLogs RPCs to avoid evicting the page cache with
         # parallel DuckDB scans. See duckdb_store.py for working-set caps.
-        log_interceptors = [*interceptors, ConcurrencyLimitInterceptor({"FetchLogs": 4})]
+        log_interceptors = [auth_interceptor, log_timing, ConcurrencyLimitInterceptor({"FetchLogs": 4})]
         log_wsgi_app = LogServiceWSGIApplication(service=self._log_service, interceptors=log_interceptors)
         log_app = WSGIMiddleware(log_wsgi_app)
 
