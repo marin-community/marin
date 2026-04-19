@@ -125,14 +125,30 @@ BASE_GENERATION_PARAMS = {
 # =============================================================================
 # Engine Configuration
 # =============================================================================
-# tensor_parallel_size: Number of TPU chips to use for tensor parallelism
+# tensor_parallel_size is derived from the TPU type at runtime (see below).
 # max_num_seqs: Batch size for parallel generation
 BATCH_SIZE = 256
-ENGINE_KWARGS = {
-    "tensor_parallel_size": 4,
-    "max_num_seqs": BATCH_SIZE,  # For vLLM: Enable batched generation for better throughput
-    "batch_size": BATCH_SIZE,  # For lm-eval: Submit all requests at once for batched inference
+
+# TPU type -> number of chips for tensor parallelism
+TPU_CHIP_COUNT = {
+    "v4-8": 4,
+    "v4-16": 8,
+    "v4-32": 16,
+    "v4-64": 32,
+    "v5p-8": 4,
+    "v5p-16": 8,
+    "v5p-32": 16,
+    "v5p-64": 32,
 }
+
+
+def determine_tensor_parallel_size(tpu_type: str) -> int:
+    """Return the number of TPU chips for a given TPU type."""
+    tp_size = TPU_CHIP_COUNT.get(tpu_type)
+    if tp_size is None:
+        raise ValueError(f"Unknown TPU type: {tpu_type}. Known: {list(TPU_CHIP_COUNT)}")
+    return tp_size
+
 
 # =============================================================================
 # Parallel Job Limit
@@ -177,6 +193,12 @@ if __name__ == "__main__":
     else:
         suites = [args.suite]
 
+    engine_kwargs = {
+        "tensor_parallel_size": determine_tensor_parallel_size(args.resource),
+        "max_num_seqs": BATCH_SIZE,
+        "batch_size": BATCH_SIZE,
+    }
+
     task_seed_groups = []
     for suite in suites:
         task_seed_groups.extend(SUITE_TO_TASK_SEED_GROUPS[suite])
@@ -186,7 +208,7 @@ if __name__ == "__main__":
         task_seed_groups=task_seed_groups,
         base_generation_params=BASE_GENERATION_PARAMS,
         resource_config=ResourceConfig.with_tpu(args.resource),
-        engine_kwargs=ENGINE_KWARGS,
+        engine_kwargs=engine_kwargs,
         apply_chat_template=True,
         discover_latest_checkpoint=DISCOVER_LATEST_CHECKPOINT,
         max_parallel_jobs=MAX_PARALLEL_JOBS,
