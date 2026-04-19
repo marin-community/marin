@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace as dc_replace
 from pathlib import Path
 from threading import Lock, RLock
+from time import monotonic as _monotonic
 from typing import Any
 
 from iris.cluster.constraints import AttributeValue
@@ -278,7 +279,11 @@ class TransactionCursor:
 class ControllerDB:
     """Thread-safe SQLite wrapper with typed query and migration helpers."""
 
-    _READ_POOL_SIZE = 32
+    # Stage 10b Fix 1: pool expansion + per-connection mmap/cache tuning.
+    # Env-gated so the default controller is unchanged; the loadtest harness
+    # sets IRIS_DB_READ_POOL_SIZE / IRIS_DB_CACHE_KB / IRIS_DB_MMAP_BYTES
+    # per ablation step.
+    _READ_POOL_SIZE = int(__import__("os").environ.get("IRIS_DB_READ_POOL_SIZE", "32"))
     DB_FILENAME = "controller.sqlite3"
     AUTH_DB_FILENAME = "auth.sqlite3"
     PROFILES_DB_FILENAME = "profiles.sqlite3"
@@ -292,6 +297,16 @@ class ControllerDB:
         self._auth_db_path = self._db_dir / self.AUTH_DB_FILENAME
         self._profiles_db_path = self._db_dir / self.PROFILES_DB_FILENAME
         self._lock = RLock()
+
+        # Stage 10c step-3: cheap EMA of writer-lock **wait** time (ms), measured
+        # as the interval from entering ``transaction()`` to the ``_lock``
+        # acquisition returning. Exposed via ``writer_wait_ms_ema()`` so callers
+        # with optional write paths (e.g. the autoscaler) can yield under
+        # contention without adding their own instrumentation. Safe to read
+        # lock-free: a torn float is fine as an EMA probe.
+        self._writer_wait_ms_ema: float = 0.0
+        # EMA smoothing factor; alpha=0.2 ~ "last ~5 acquisitions dominate".
+        self._writer_wait_ema_alpha: float = 0.2
 
         t0 = time.monotonic()
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
@@ -405,10 +420,20 @@ class ControllerDB:
 
     @staticmethod
     def _configure(conn: sqlite3.Connection) -> None:
+        import os
+
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA foreign_keys = ON")
+        # Stage 10b Fix 1: optional per-connection cache + mmap.
+        # cache_size is in KB as a negative number: -2097152 = 2 GB.
+        mmap_bytes = os.environ.get("IRIS_DB_MMAP_BYTES")
+        if mmap_bytes:
+            conn.execute(f"PRAGMA mmap_size = {int(mmap_bytes)}")
+        cache_kb = os.environ.get("IRIS_DB_CACHE_KB")
+        if cache_kb:
+            conn.execute(f"PRAGMA cache_size = -{int(cache_kb)}")
 
     def optimize(self) -> None:
         """Run PRAGMA optimize to refresh statistics for tables with stale data.
@@ -457,7 +482,15 @@ class ControllerDB:
         (e.g. ``EndpointRegistry``) in sync with the DB without exposing a
         torn snapshot to concurrent readers.
         """
+        # Record writer-lock *wait* time as an EMA so optional writers (the
+        # autoscaler + scheduler) can yield under contention (Stage 10c step-3).
+        _t_enter = _monotonic()
         with self._lock:
+            wait_ms = (_monotonic() - _t_enter) * 1000.0
+            # EMA update is a read-modify-write; torn reads from concurrent
+            # probers are acceptable for a yield heuristic.
+            alpha = self._writer_wait_ema_alpha
+            self._writer_wait_ms_ema = (1.0 - alpha) * self._writer_wait_ms_ema + alpha * wait_ms
             cur = self._conn.cursor()
             cur.execute("BEGIN IMMEDIATE")
             tx_cur = TransactionCursor(cur)
@@ -469,6 +502,16 @@ class ControllerDB:
             else:
                 self._conn.commit()
                 tx_cur._run_commit_hooks()
+
+    def writer_wait_ms_ema(self) -> float:
+        """Exponential moving average of writer-lock *wait* time, in ms.
+
+        "Wait" means the interval from entering ``transaction()`` to the
+        ``_lock.acquire()`` returning. Intended for optional writers that
+        want to back off under contention (see
+        ``IRIS_AUTOSCALER_YIELD_BATCH`` in autoscaler/runtime.py).
+        """
+        return self._writer_wait_ms_ema
 
     def fetchall(self, query: str, params: tuple | list = ()) -> list[sqlite3.Row]:
         with self._lock:

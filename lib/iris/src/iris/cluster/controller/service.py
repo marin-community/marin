@@ -10,6 +10,7 @@ aggregated from task states.
 
 import json
 import logging
+import os
 import re
 import secrets
 import threading
@@ -962,6 +963,85 @@ def _inject_resource_constraints(
     return new_request
 
 
+def _read_cache_env_flag() -> bool:
+    """Return True when ``IRIS_JOB_STATUS_CACHE`` opts in.
+
+    Disabled by default. The TTL gate (``IRIS_JOB_STATUS_CACHE_TTL_MS=0``) can
+    also short-circuit the cache independently.
+    """
+    val = os.environ.get("IRIS_JOB_STATUS_CACHE", "").lower()
+    return val in ("1", "true", "yes")
+
+
+def _read_cache_ttl_ms() -> int:
+    raw = os.environ.get("IRIS_JOB_STATUS_CACHE_TTL_MS", "1000")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
+class _ResponseCache:
+    """Tiny thread-safe TTL cache for expensive read RPCs.
+
+    Keyed on (rpc_name, canonical-serialized request bytes). Values are
+    (inserted_at_monotonic, response_proto). The cache evicts stale entries
+    lazily on read; no background thread. Bounded by ``max_entries`` with
+    FIFO-ish eviction (oldest insert drops).
+    """
+
+    def __init__(self, ttl_ms: int, max_entries: int = 1024):
+        self._ttl_s = ttl_ms / 1000.0
+        self._max = max_entries
+        self._lock = threading.Lock()
+        self._entries: dict[tuple[str, bytes], tuple[float, Any]] = {}
+        self.hits: dict[str, int] = {}
+        self.misses: dict[str, int] = {}
+        self.stale_evictions: dict[str, int] = {}
+
+    @property
+    def ttl_s(self) -> float:
+        return self._ttl_s
+
+    def get(self, rpc: str, key: bytes) -> Any | None:
+        if self._ttl_s <= 0:
+            return None
+        now = time.monotonic()
+        with self._lock:
+            entry = self._entries.get((rpc, key))
+            if entry is None:
+                self.misses[rpc] = self.misses.get(rpc, 0) + 1
+                return None
+            inserted_at, value = entry
+            if (now - inserted_at) >= self._ttl_s:
+                self._entries.pop((rpc, key), None)
+                self.stale_evictions[rpc] = self.stale_evictions.get(rpc, 0) + 1
+                self.misses[rpc] = self.misses.get(rpc, 0) + 1
+                return None
+            self.hits[rpc] = self.hits.get(rpc, 0) + 1
+            return value
+
+    def put(self, rpc: str, key: bytes, value: Any) -> None:
+        if self._ttl_s <= 0:
+            return
+        now = time.monotonic()
+        with self._lock:
+            if len(self._entries) >= self._max:
+                # Drop one arbitrary oldest entry. The cache is small and
+                # the TTL is short; this keeps the bound without a heap.
+                oldest_key = min(self._entries, key=lambda k: self._entries[k][0])
+                self._entries.pop(oldest_key, None)
+            self._entries[(rpc, key)] = (now, value)
+
+    def snapshot(self) -> dict[str, dict[str, int]]:
+        with self._lock:
+            return {
+                "hits": dict(self.hits),
+                "misses": dict(self.misses),
+                "stale_evictions": dict(self.stale_evictions),
+            }
+
+
 class ControllerServiceImpl:
     """ControllerService RPC implementation.
 
@@ -999,6 +1079,16 @@ class ControllerServiceImpl:
         self._worker_roster_cache: tuple[float, list[WorkerDetailRow]] | None = None
         self._worker_roster_cache_lock = threading.Lock()
         self._worker_roster_ttl_s = 1.0
+        # Short-TTL response cache for the two hottest read RPCs in the
+        # Stage 10c probe mix (job_page pins one job_id at 5 Hz). Disabled
+        # unless IRIS_JOB_STATUS_CACHE=1. TTL configurable via
+        # IRIS_JOB_STATUS_CACHE_TTL_MS (default 1000 ms; 0 bypasses even
+        # when the master gate is on).
+        self._response_cache: _ResponseCache | None = None
+        if _read_cache_env_flag():
+            ttl_ms = _read_cache_ttl_ms()
+            if ttl_ms > 0:
+                self._response_cache = _ResponseCache(ttl_ms=ttl_ms)
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)
@@ -1192,7 +1282,28 @@ class ControllerServiceImpl:
         that need it should use ListTasks instead.  This keeps GetJobStatus
         cheap: one job row read + one GROUP BY query vs loading every task,
         attempt, and worker address.
+
+        When ``IRIS_JOB_STATUS_CACHE=1`` is set, identical requests within the
+        TTL window return a cached response. Callers may see state up to one
+        TTL-window stale.
         """
+        cache = self._response_cache
+        cache_key: bytes | None = None
+        if cache is not None:
+            cache_key = request.SerializeToString(deterministic=True)
+            cached = cache.get("GetJobStatus", cache_key)
+            if cached is not None:
+                return cached
+
+        response = self._get_job_status_uncached(request)
+        if cache is not None and cache_key is not None:
+            cache.put("GetJobStatus", cache_key, response)
+        return response
+
+    def _get_job_status_uncached(
+        self,
+        request: controller_pb2.Controller.GetJobStatusRequest,
+    ) -> controller_pb2.Controller.GetJobStatusResponse:
         job = _read_job(self._db, JobName.from_wire(request.job_id))
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
@@ -1400,7 +1511,28 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.ListJobsRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.ListJobsResponse:
-        """List jobs with SQL-level filtering, sorting, and pagination."""
+        """List jobs with SQL-level filtering, sorting, and pagination.
+
+        Cached per (filter, sort, offset, limit) when ``IRIS_JOB_STATUS_CACHE=1``.
+        Callers may see results up to one TTL window stale.
+        """
+        cache = self._response_cache
+        cache_key: bytes | None = None
+        if cache is not None:
+            cache_key = request.SerializeToString(deterministic=True)
+            cached = cache.get("ListJobs", cache_key)
+            if cached is not None:
+                return cached
+
+        response = self._list_jobs_uncached(request)
+        if cache is not None and cache_key is not None:
+            cache.put("ListJobs", cache_key, response)
+        return response
+
+    def _list_jobs_uncached(
+        self,
+        request: controller_pb2.Controller.ListJobsRequest,
+    ) -> controller_pb2.Controller.ListJobsResponse:
         query = _query_from_list_jobs_request(request)
 
         state_ids = _resolve_state_filter(query.state_filter)

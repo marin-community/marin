@@ -1284,6 +1284,7 @@ def create_autoscaler(
         scale_groups=scaling_groups,
         config=autoscaler_config,
         platform=platform,
+        threads=threads,
         base_worker_config=base_worker_config,
         db=db,
     )

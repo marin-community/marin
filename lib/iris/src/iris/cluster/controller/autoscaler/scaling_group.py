@@ -277,6 +277,14 @@ class ScalingGroup:
         # can be terminated in a single cycle, up to the token budget.
         self._scale_down_bucket = TokenBucket(capacity=scale_down_rate_limit, refill_period=Duration.from_minutes(1))
 
+        # Stage 10c step-3 (IRIS_AUTOSCALER_YIELD_BATCH=1): optional deferral of
+        # the scaling_groups UPDATE so the owning Autoscaler can coalesce many
+        # per-failure writes from one tick into a single ``db.transaction``.
+        # When True, ``_db_update_group`` flips ``_db_dirty`` and returns —
+        # ``flush_group_row`` is the single emission point.
+        self._defer_group_writes: bool = False
+        self._db_dirty: bool = False
+
         # Upsert scaling group row so it exists for future updates
         if self._db is not None:
             with self._db.transaction() as cur:
@@ -317,23 +325,47 @@ class ScalingGroup:
     def _db_update_group(self) -> None:
         if self._db is None:
             return
+        if self._defer_group_writes:
+            # Caller coalesces via flush_group_row (Stage 10c step-3).
+            self._db_dirty = True
+            return
         with self._db.transaction() as cur:
-            cur.execute(
-                "UPDATE scaling_groups SET "
-                "consecutive_failures=?, backoff_until_ms=?, last_scale_up_ms=?, "
-                "last_scale_down_ms=?, quota_exceeded_until_ms=?, quota_reason=?, updated_at_ms=? "
-                "WHERE name=?",
-                (
-                    self._consecutive_failures,
-                    self._backoff_until.as_timestamp().epoch_ms() if self._backoff_until else 0,
-                    self._last_scale_up.epoch_ms(),
-                    self._last_scale_down.epoch_ms(),
-                    self._quota_exceeded_until.as_timestamp().epoch_ms() if self._quota_exceeded_until else 0,
-                    self._quota_reason,
-                    Timestamp.now().epoch_ms(),
-                    self.name,
-                ),
-            )
+            cur.execute(*self._group_row_update_sql())
+
+    def _group_row_update_sql(self) -> tuple[str, tuple]:
+        """SQL + params for a single scaling_groups UPDATE for this group.
+
+        Shared between the per-call write path and the batched-flush path so
+        the two cannot drift on the column list.
+        """
+        return (
+            "UPDATE scaling_groups SET "
+            "consecutive_failures=?, backoff_until_ms=?, last_scale_up_ms=?, "
+            "last_scale_down_ms=?, quota_exceeded_until_ms=?, quota_reason=?, updated_at_ms=? "
+            "WHERE name=?",
+            (
+                self._consecutive_failures,
+                self._backoff_until.as_timestamp().epoch_ms() if self._backoff_until else 0,
+                self._last_scale_up.epoch_ms(),
+                self._last_scale_down.epoch_ms(),
+                self._quota_exceeded_until.as_timestamp().epoch_ms() if self._quota_exceeded_until else 0,
+                self._quota_reason,
+                Timestamp.now().epoch_ms(),
+                self.name,
+            ),
+        )
+
+    def take_pending_row_update(self) -> tuple[str, tuple] | None:
+        """If a deferred row update is pending, return its SQL+params and clear.
+
+        Used only by the Autoscaler's batched flusher (Stage 10c step-3)
+        when ``_defer_group_writes`` is True. Returns None if no update is
+        pending.
+        """
+        if not self._db_dirty:
+            return None
+        self._db_dirty = False
+        return self._group_row_update_sql()
 
     def _db_clear_slices(self) -> None:
         if self._db is None:

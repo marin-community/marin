@@ -20,6 +20,8 @@ The run_once() flow splits into two phases:
 from __future__ import annotations
 
 import logging
+import os
+import time
 from collections import deque
 from collections.abc import Sequence
 
@@ -64,6 +66,19 @@ SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
 
 # After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
 DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
+
+
+# Stage 10c step-3: env-gated autoscaler yield + batch. Off by default.
+# When "1"/"true", the autoscaler:
+#   (a) coalesces per-tick ``scaling_groups`` UPDATEs into a single
+#       ``db.transaction`` at end of the tick;
+#   (b) yields briefly (sleeps ``_YIELD_SLEEP_MS``) before that flush when the
+#       writer-lock wait EMA exceeds ``_YIELD_WAIT_THRESHOLD_MS``.
+# Autoscaler is "optional" — slowing its tick keeps dashboard + heartbeat
+# paths responsive under load.
+_YIELD_BATCH_ENABLED = os.environ.get("IRIS_AUTOSCALER_YIELD_BATCH", "").lower() in ("1", "true", "yes")
+_YIELD_WAIT_THRESHOLD_MS = float(os.environ.get("IRIS_AUTOSCALER_YIELD_WAIT_MS", "100"))
+_YIELD_SLEEP_MS = float(os.environ.get("IRIS_AUTOSCALER_YIELD_SLEEP_MS", "50"))
 
 
 class Autoscaler:
@@ -127,6 +142,28 @@ class Autoscaler:
 
         # Thread management
         self._threads = threads if threads is not None else get_thread_container()
+
+        # Stage 10c step-3 counters. Always present (zero when gate is off) so
+        # dashboards/tests can introspect without guarding on the env var.
+        self.batched_group_update_flushes: int = 0
+        self.batched_group_update_rows: int = 0
+        self.yield_events: int = 0
+        # Bounded sample of recent autoscaler tick durations (ms) for
+        # measurement. Populated by run_once when called via the loop.
+        self._tick_durations_ms: deque[float] = deque(maxlen=1024)
+        self._yield_batch_enabled: bool = _YIELD_BATCH_ENABLED and self._db is not None
+        if self._yield_batch_enabled:
+            # Flip defer on every ScalingGroup so record_failure /
+            # record_quota_exceeded / begin_scale_up / complete_scale_up etc.
+            # only dirty the in-memory row; one flush per autoscaler tick
+            # emits the actual UPDATE(s).
+            for _g in self._groups.values():
+                _g._defer_group_writes = True
+            logger.info(
+                "Autoscaler yield+batch enabled (threshold=%.0f ms, sleep=%.0f ms)",
+                _YIELD_WAIT_THRESHOLD_MS,
+                _YIELD_SLEEP_MS,
+            )
 
     @classmethod
     def from_config(
@@ -500,11 +537,57 @@ class Autoscaler:
         timestamp = timestamp or Timestamp.now()
         self._last_evaluation = timestamp
 
+        t0 = time.monotonic()
         decisions = self.evaluate(demand_entries, timestamp)
         if decisions:
             logger.info("Autoscaler decisions: %s", [(d.scale_group, d.action.value, d.reason) for d in decisions])
         self.execute(decisions, timestamp)
+        self._maybe_flush_group_rows()
+        self._tick_durations_ms.append((time.monotonic() - t0) * 1000.0)
         return decisions
+
+    def _maybe_flush_group_rows(self) -> None:
+        """Coalesce per-tick ``scaling_groups`` UPDATEs into one transaction.
+
+        Only active when ``IRIS_AUTOSCALER_YIELD_BATCH`` is set. Yields the
+        autoscaler thread briefly if the writer-lock wait EMA is hot, since
+        the autoscaler's pace is an acceptable tradeoff for dashboard +
+        heartbeat responsiveness under load.
+        """
+        if not self._yield_batch_enabled or self._db is None:
+            return
+
+        # Yield under contention. We check the EMA *before* acquiring the
+        # writer lock so the sleep actually relaxes the queue rather than
+        # just shuffling it. Deferred dirty rows stay dirty across ticks —
+        # the next tick will flush them.
+        wait_ms = self._db.writer_wait_ms_ema()
+        if wait_ms >= _YIELD_WAIT_THRESHOLD_MS:
+            self.yield_events += 1
+            logger.debug(
+                "Autoscaler yielding flush: writer-wait EMA %.1f ms >= %.1f ms",
+                wait_ms,
+                _YIELD_WAIT_THRESHOLD_MS,
+            )
+            time.sleep(_YIELD_SLEEP_MS / 1000.0)
+            # Re-check; if still hot, skip this tick's flush entirely.
+            if self._db.writer_wait_ms_ema() >= _YIELD_WAIT_THRESHOLD_MS:
+                return
+
+        pending: list[tuple[str, tuple]] = []
+        for group in self._groups.values():
+            stmt = group.take_pending_row_update()
+            if stmt is not None:
+                pending.append(stmt)
+        if not pending:
+            return
+
+        # One transaction, N UPDATE statements, one writer-lock acquisition.
+        with self._db.transaction() as cur:
+            for sql, params in pending:
+                cur.execute(sql, params)
+        self.batched_group_update_flushes += 1
+        self.batched_group_update_rows += len(pending)
 
     def run_once(
         self,

@@ -40,6 +40,7 @@ worker = []
 [project.scripts]
 iris = "iris.cli:iris"
 iris-run = "iris.cli.run:run"
+iris-loadtest = "iris.loadtest.cli:main"
 
 [dependency-groups]
 examples = [
@@ -82,11 +83,12 @@ packages = ["src/iris"]
 [tool.pytest.ini_options]
 timeout = 10
 timeout_method = "thread"
-addopts = "-n auto --durations=25 -m 'not slow and not docker and not e2e' -v"
+addopts = "-n auto --durations=25 -m 'not slow and not docker and not e2e and not loadtest' -v"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "docker: marks tests requiring Docker runtime (slow, needs daemon)",
     "e2e: end-to-end cluster tests (chaos, dashboard, scheduling)",
+    "loadtest: autoscaler load-test harness (opt-in, boots real DB snapshot)",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
 log_level = "INFO"

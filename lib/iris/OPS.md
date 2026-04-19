@@ -35,7 +35,6 @@ iris job bug-report /user/job-name      # structured diagnostic dump
 
 ### `job run` gotchas
 
-- **`--memory` not `--ram`** — unrecognized flags silently pass through to the command string.
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
 - **`--extra gpu`** installs CUDA jaxlib but does NOT request GPU hardware. Need both `--gpu H100x8 --extra gpu`.
 - **`--reserve`** holds capacity for scheduling only — does not attach accelerator devices. Use `--tpu`/`--gpu` on the task that needs hardware.
@@ -85,12 +84,14 @@ Priority bands: `PRIORITY_BAND_INTERACTIVE` (default), `PRIORITY_BAND_PRODUCTION
 
 ## SQL Queries
 
-The controller exposes its SQLite DB via RPC:
+The controller exposes its SQLite DB via RPC. If the controller is _healthy_ and the user is NOT asking about a load related task, you may use the online query.
 
 ```bash
 iris query "SELECT state, count(*) FROM jobs GROUP BY state"
 iris query "SELECT state, count(*) FROM tasks GROUP BY state" -f json
 ```
+
+**Default to the offline GCS checkpoint (see [Offline analysis](#offline-analysis--always-prefer-this-when-debugging)) for any non-trivial query** — `iris query` runs against the live DB and can stall a busy controller. `iris query` is appropriate only for tiny lookups on a healthy controller.
 
 **Never modify the controller database** without explicit user approval — read-only queries only, even on offline checkpoints.
 
@@ -118,22 +119,35 @@ SELECT slice_id, lifecycle, scale_group, worker_ids FROM slices WHERE lifecycle=
 -- Task attempt history (debugging retries)
 SELECT task_id, attempt_id, state, exit_code, error FROM task_attempts
 WHERE task_id LIKE '%<job_fragment>%' ORDER BY attempt_id;
-
--- What the controller has been doing
-SELECT kind, count(*) FROM txn_log GROUP BY kind ORDER BY count(*) DESC LIMIT 10;
 ```
 
 Full table list: `iris query "SELECT name FROM sqlite_master WHERE type='table'"`.
 
-### Offline checkpoint analysis
+### Offline analysis — ALWAYS prefer this when debugging
 
-For slow queries, trigger a checkpoint and query offline. **Never run expensive queries against the live DB** — they stall the controller.
+**Default rule: when diagnosing problems, pull the latest checkpoint from GCS and query it locally.** Do NOT query the live controller for anything beyond a couple of trivial lookups, and do NOT trigger a fresh checkpoint when the controller is already under load — checkpointing stalls it further and is exactly the wrong move during an incident.
+
+The controller writes a checkpoint every hour to `gs://marin-us-central2/iris/marin/state/controller-state/<unix_ms>/`. That is authoritative enough for triage.
 
 ```bash
-iris cluster controller checkpoint           # trigger fresh checkpoint
-# Download the checkpoint file (path printed by command above)
+# Grab the newest numbered checkpoint — this is the authoritative fresh copy (hourly). It is zstd compressed
+LATEST=$(gcloud storage ls gs://marin-us-central2/iris/marin/state/controller-state/ | grep -E '/[0-9]+/$' | sort | tail -1)
+gcloud storage cp "${LATEST}controller.sqlite3.zst" /tmp/
+zstd -f -d /tmp/controller.sqlite3.zst -o /tmp/controller.sqlite3
+
+# Parquet logs (optional):
+gcloud storage cp -r gs://marin-us-central2/iris/marin/state/logs /tmp/iris-logs
+
+# Query locally — no tunnel, no controller load
 sqlite3 /tmp/controller.sqlite3 "SELECT ..."
+duckdb -c "SELECT * FROM read_parquet('/tmp/iris-logs/**/*.parquet') LIMIT 10"
 ```
+
+**Only trigger `iris cluster controller checkpoint` manually when:**
+- The controller is healthy and idle, AND
+- You specifically need state newer than the last hourly checkpoint.
+
+If users are reporting dashboard slowness or stuck jobs, the controller is NOT healthy — use the existing GCS checkpoint.
 
 ## Users & Auth
 
@@ -172,9 +186,6 @@ iris key list / iris key revoke       # manage API keys
 # SSH tunnel (IAP)
 gcloud compute ssh iris-controller-marin --zone=us-central1-a \
   --project=hai-gcp-models --tunnel-through-iap -- -L 10000:localhost:10000 -N
-
-# Then: iris --controller-url=http://localhost:10000 ...
-# Or config-based auto-tunnel: iris --config=lib/iris/examples/marin.yaml ...
 ```
 
 Configs: `marin.yaml` (production), `marin-dev.yaml` (dev, smaller scale caps).
@@ -213,8 +224,6 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 ### GCP Gotchas
 
 - **Quota is the primary scaling bottleneck.** The autoscaler backs off exponentially per scale group. Check with `iris rpc controller get-autoscaler-status`.
-- **Stuck TPU VMs.** Occasionally a TPU VM gets stuck in DELETING for days. Check: `gcloud compute tpus tpu-vm list --project=hai-gcp-models --zone=- --filter="state=DELETING"`.
-- **Reservation system.** Accelerator jobs create `:reservation:` sub-jobs that hold slices. View with `iris query "SELECT * FROM reservation_claims"`.
 
 ---
 

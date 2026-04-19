@@ -131,7 +131,7 @@ def run_controller_serve(
     use_split_heartbeat = (
         cluster_config.controller.use_split_heartbeat
         if cluster_config.controller.HasField("use_split_heartbeat")
-        else True
+        else False
     )
 
     # --- Restore or reuse local DB ---
