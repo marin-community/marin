@@ -73,6 +73,7 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    use_backout: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -457,6 +458,7 @@ class Transformer(eqx.Module):
     blocks: tuple[Block, ...]
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
+    backout_lambda: jax.Array | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -475,6 +477,7 @@ class Transformer(eqx.Module):
             blocks=blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
+            backout_lambda=jnp.array(0.5) if cfg.use_backout else None,
             config=cfg,
         )
 
@@ -496,11 +499,18 @@ class Transformer(eqx.Module):
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
 
+        backout_layer = cfg.num_layers // 2
+        x_backout = None
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
             hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
             moe_router_stats.append(router_stats)
+            if self.backout_lambda is not None and i == backout_layer:
+                x_backout = hidden
+
+        if self.backout_lambda is not None and x_backout is not None:
+            hidden = hidden - self.backout_lambda * x_backout
 
         router_metrics = {
             "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
