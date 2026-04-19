@@ -1014,30 +1014,12 @@ class DuckDBLogStore:
             ram_tables: list[pa.Table] = list(self._chunks)
             if self._flushing is not None:
                 ram_tables.append(self._flushing.table)
-            pending_len = len(self._pending)
-            cached = self._pending_table
-            # Accept the cached snapshot if it covers all current pending
-            # rows. The bg thread refreshes it every compact_interval_sec, so
-            # high-QPS readers share a single build; writes arriving since
-            # the refresh are acceptable staleness.
-            if pending_len == 0:
-                pending_snapshot = None
-            elif cached is not None and cached.num_rows >= pending_len:
-                ram_tables.append(cached)
-                pending_snapshot = None
-            else:
-                # Snapshot under the lock so the list can't mutate under us,
-                # then build outside. First reader to finish publishes the
-                # result; concurrent readers may duplicate the work — benign.
-                pending_snapshot = list(self._pending)
-
-        if pending_snapshot is not None:
-            built = _build_buffer_table(pending_snapshot)
-            with self._memory_lock:
-                existing = self._pending_table
-                if existing is None or existing.num_rows < built.num_rows:
-                    self._pending_table = built
-            ram_tables.append(built)
+            # _pending_table is maintained by the bg _compact_step thread as
+            # an Arrow snapshot of _pending; readers use it directly and
+            # never rebuild. Writes arriving since the last refresh are
+            # acceptable staleness (<= compact_interval_sec).
+            if self._pending_table is not None:
+                ram_tables.append(self._pending_table)
 
         segments = _cap_segments(segments)
         parquet_files = [s.path for s in segments]
