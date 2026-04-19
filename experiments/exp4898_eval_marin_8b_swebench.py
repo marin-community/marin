@@ -166,6 +166,22 @@ VLLM_ENGINE_KWARGS = {
     "tensor_parallel_size": 4,
 }
 
+# Marin-8B base doesn't have a chat template in its tokenizer.
+# Write a minimal Jinja2 template file for vLLM's --chat-template flag.
+import tempfile
+
+_CHAT_TEMPLATE = (
+    "{% for message in messages %}"
+    "{% if message['role'] == 'system' %}{{ message['content'] + '\\n\\n' }}"
+    "{% elif message['role'] == 'user' %}{{ 'User: ' + message['content'] + '\\n\\n' }}"
+    "{% elif message['role'] == 'assistant' %}{% generation %}{{ message['content'] }}{% endgeneration %}"
+    "{% endif %}{% endfor %}"
+)
+_chat_template_file = tempfile.NamedTemporaryFile(mode="w", suffix=".jinja2", delete=False)
+_chat_template_file.write(_CHAT_TEMPLATE)
+_chat_template_file.close()
+os.environ.setdefault("VLLM_CHAT_TEMPLATE", _chat_template_file.name)
+
 os.environ.setdefault("MSWEA_API_KEY", "EMPTY")  # vLLM doesn't need auth
 os.environ.setdefault("OPENAI_API_KEY", "EMPTY")  # Fallback for hosted_vllm provider
 

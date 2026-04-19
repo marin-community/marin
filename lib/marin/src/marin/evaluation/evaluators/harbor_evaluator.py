@@ -297,9 +297,12 @@ class HarborEvaluator(Evaluator):
 
         agent_kwargs.setdefault("model_info", _DEFAULT_HOSTED_VLLM_MODEL_INFO)
 
+        extra_vllm_args = ["--served-model-name", canonical_name]
+        if chat_template := os.environ.get("VLLM_CHAT_TEMPLATE"):
+            extra_vllm_args.extend(["--chat-template", chat_template])
         with VllmEnvironment(
             model,
-            extra_args=["--served-model-name", canonical_name],
+            extra_args=extra_vllm_args,
         ) as env:
             agent_kwargs.setdefault("api_base", env.server_url)
             logger.info("vLLM server ready: api_base=%s model=%s", env.server_url, env.model_id)
