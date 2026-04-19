@@ -403,23 +403,35 @@ class ScatterReader:
                 "avg_item_bytes not available in scatter manifest. "
                 "Re-run the scatter stage with a version that records avg_item_bytes."
             )
-        # Estimate merge memory: each open iterator holds the compressed chunk
-        # blob + one sub-batch of _SUB_BATCH_SIZE items in memory. Use 3x
-        # multiplier on pickle bytes to approximate in-memory object size.
-        _IN_MEMORY_MULTIPLIER = 3
+        # Estimate merge memory per open iterator:
+        #
+        # 1. Compressed chunk blob: fetched via range GET, held in a BytesIO.
+        # 2. Decompressed frame: zstd stream_reader decompresses the full
+        #    frame into an internal buffer (~max_chunk_rows * avg_item_bytes).
+        # 3. One unpickled sub-batch: _SUB_BATCH_SIZE Python objects in memory.
+        #    Python object overhead is fixed per item (~500 bytes for a dict:
+        #    object header, hash table, key/value strings) so the multiplier
+        #    scales inversely with item size.
+        _FIXED_OVERHEAD_PER_ITEM = 512
+        in_memory_multiplier = (self.avg_item_bytes + _FIXED_OVERHEAD_PER_ITEM) / self.avg_item_bytes
         total_compressed = sum(length for it in self.iterators for _, length in it.chunks)
         avg_compressed = total_compressed / total_chunks
-        per_iterator = avg_compressed + _SUB_BATCH_SIZE * self.avg_item_bytes * _IN_MEMORY_MULTIPLIER
+        avg_decompressed = self.max_chunk_rows * self.avg_item_bytes
+        sub_batch_mem = _SUB_BATCH_SIZE * self.avg_item_bytes * in_memory_multiplier
+        per_iterator = avg_compressed + avg_decompressed + sub_batch_mem
         estimated = total_chunks * per_iterator
         budget = memory_limit * memory_fraction
         triggered = estimated > budget
         logger.info(
-            "needs_external_sort: %d chunks x %.1f MB/iter (%.1f MB compressed + %.1f MB sub-batch) "
+            "needs_external_sort: %d chunks x %.1f MB/iter "
+            "(%.1f MB compressed + %.1f MB decompressed + %.1f MB sub-batch [%.1fx]) "
             "= %.1f GB estimated vs %.1f GB budget (%.1f GB * %.2f) -> %s",
             total_chunks,
             per_iterator / 1e6,
             avg_compressed / 1e6,
-            (_SUB_BATCH_SIZE * self.avg_item_bytes * _IN_MEMORY_MULTIPLIER) / 1e6,
+            avg_decompressed / 1e6,
+            sub_batch_mem / 1e6,
+            in_memory_multiplier,
             estimated / 1e9,
             budget / 1e9,
             memory_limit / 1e9,
