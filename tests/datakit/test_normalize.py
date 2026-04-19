@@ -33,8 +33,13 @@ def write_jsonl_gz():
 
 
 def _read_all_parquet(output_dir: Path) -> list[dict]:
+    """Read every main-branch Parquet file under *output_dir*.
+
+    Normalize writes a single ``outputs/main/`` (and ``outputs/dups/``) branch
+    per run; tests want just the main output.
+    """
     records = []
-    for pf in sorted(output_dir.glob("**/*.parquet")):
+    for pf in sorted((output_dir / "outputs" / "main").glob("*.parquet")):
         records.extend(pq.read_table(str(pf)).to_pylist())
     return records
 
@@ -137,8 +142,7 @@ def test_missing_or_empty_text_filtered(tmp_path: Path, write_jsonl_gz, record):
     assert len(results) == 1
     assert results[0]["text"] == "valid"
 
-    total_empty = sum(s.counters.get("normalize/empty_text_filtered", 0) for s in result.subdirs)
-    assert total_empty >= 1
+    assert result.counters.get("normalize/empty_text_filtered", 0) >= 1
 
 
 def test_all_records_empty_text_raises(tmp_path: Path, write_jsonl_gz):
@@ -152,20 +156,18 @@ def test_all_records_empty_text_raises(tmp_path: Path, write_jsonl_gz):
         normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
 
 
-def test_directory_structure_preserved(tmp_path: Path, write_jsonl_gz):
-    """Each input subdirectory gets its own parquet output under the same relative path."""
+def test_subdirectories_merged_into_single_output(tmp_path: Path, write_jsonl_gz):
+    """Files discovered across input subdirectories are merged into one flat output."""
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
 
     write_jsonl_gz(input_dir / "subset_a" / "data.jsonl.gz", [{"text": "A doc"}])
     write_jsonl_gz(input_dir / "subset_b" / "data.jsonl.gz", [{"text": "B doc"}])
 
-    normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
+    result = normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
 
-    a_texts = [r["text"] for r in _read_all_parquet(output_dir / "subset_a")]
-    b_texts = [r["text"] for r in _read_all_parquet(output_dir / "subset_b")]
-    assert a_texts == ["A doc"]
-    assert b_texts == ["B doc"]
+    assert result.main_output_dir == str(output_dir / "outputs" / "main")
+    assert {r["text"] for r in _read_all_parquet(output_dir)} == {"A doc", "B doc"}
 
 
 def test_exact_dedup(tmp_path: Path, write_jsonl_gz):
@@ -187,20 +189,33 @@ def test_exact_dedup(tmp_path: Path, write_jsonl_gz):
     assert len(results) == 2
 
 
-def test_skip_existing_idempotent(tmp_path: Path, write_jsonl_gz):
-    """A second run with the same input does not rewrite existing parquet files."""
+def test_whitespace_compaction(tmp_path: Path, write_jsonl_gz):
+    """Long whitespace runs are compacted, not dropped. Content is preserved."""
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
 
-    write_jsonl_gz(input_dir / "data.jsonl.gz", [{"text": "Hello world"}])
+    records = [
+        {"id": "normal", "text": "Hello world"},
+        {"id": "pathological", "text": "before" + " " * 500 + "after"},
+        {"id": "also_normal", "text": "short  spaces  are  fine"},
+    ]
+    write_jsonl_gz(input_dir / "data.jsonl.gz", records)
 
-    normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
-    parquet_files = list(output_dir.glob("*.parquet"))
-    assert len(parquet_files) == 1
-    mtime_first = parquet_files[0].stat().st_mtime
+    normalize_to_parquet(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        max_whitespace_run_chars=100,
+    )
 
-    normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
-    assert parquet_files[0].stat().st_mtime == mtime_first
+    results = _read_all_parquet(output_dir)
+    # All three records survive — the pathological one is compacted, not dropped
+    assert len(results) == 3
+    by_source = {r["source_id"]: r for r in results}
+    assert by_source["pathological"]["text"] == "before" + " " * 100 + "after"
+    # id is recomputed from the compacted text
+    assert by_source["pathological"]["id"] == generate_id("before" + " " * 100 + "after")
+    # Normal docs are untouched
+    assert by_source["normal"]["text"] == "Hello world"
 
 
 def test_no_input_files_raises(tmp_path: Path):

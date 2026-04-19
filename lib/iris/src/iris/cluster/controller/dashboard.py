@@ -44,7 +44,7 @@ from iris.log_server.client import LogServiceProxy
 from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.controller_connect import ControllerServiceWSGIApplication
-from iris.rpc.interceptors import RequestTimingInterceptor
+from iris.rpc.interceptors import ConcurrencyLimitInterceptor, RequestTimingInterceptor
 from iris.rpc.logging_connect import LogServiceWSGIApplication
 
 logger = logging.getLogger(__name__)
@@ -270,7 +270,10 @@ class ControllerDashboard:
         # pushes and forward them to the real log server. Forwarding happens
         # transparently because self._log_service is a LogServiceProxy whose
         # push_logs() calls the remote LogService over RPC.
-        log_wsgi_app = LogServiceWSGIApplication(service=self._log_service, interceptors=interceptors)
+        # Cap concurrent FetchLogs RPCs to avoid evicting the page cache with
+        # parallel DuckDB scans. See duckdb_store.py for working-set caps.
+        log_interceptors = [*interceptors, ConcurrencyLimitInterceptor({"FetchLogs": 4})]
+        log_wsgi_app = LogServiceWSGIApplication(service=self._log_service, interceptors=log_interceptors)
         log_app = WSGIMiddleware(log_wsgi_app)
 
         # Backward-compat: old clients call ControllerService/FetchLogs (removed

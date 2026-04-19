@@ -12,6 +12,8 @@ import json
 import logging
 import re
 import secrets
+import threading
+import time
 import uuid
 import dataclasses
 from dataclasses import dataclass
@@ -21,7 +23,8 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
-from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
+from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
+from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.controller.codec import (
     constraints_from_json,
     proto_from_json,
@@ -55,14 +58,11 @@ from iris.rpc.auth import (
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
-    TERMINAL_JOB_STATES,
-    TERMINAL_TASK_STATES,
     ControllerDB,
     EndpointQuery,
     TaskJobSummary,
     UserStats,
     attempt_is_worker_failure,
-    job_is_finished,
     running_tasks_by_worker,
     task_row_can_be_scheduled,
 )
@@ -86,49 +86,42 @@ from iris.cluster.controller.schema import (
     WorkerRow,
     tasks_with_attempts,
 )
-from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints
+from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.query import execute_raw_query
 from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
-from iris.cluster.controller.transitions import ControllerTransitions, TASK_RESOURCE_HISTORY_RETENTION
+from iris.cluster.controller.transitions import (
+    TASK_RESOURCE_HISTORY_RETENTION,
+    ControllerTransitions,
+    HeartbeatApplyRequest,
+    task_updates_from_proto,
+)
 from iris.cluster.controller.provider import ProviderError
 from iris.cluster.log_store import build_log_source, worker_log_key
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
-from iris.cluster.types import JobName, WorkerId, get_gpu_count, get_tpu_count
+from iris.cluster.types import (
+    TERMINAL_JOB_STATES,
+    TERMINAL_TASK_STATES,
+    JobName,
+    WorkerId,
+    get_gpu_count,
+    get_tpu_count,
+    is_job_finished,
+)
 from iris.log_server.client import LogServiceProxy
 from iris.log_server.server import LogServiceImpl
 from iris.rpc import logging_pb2, vm_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from iris.rpc import worker_pb2
-from iris.rpc.proto_utils import job_state_friendly, job_state_name, task_state_name
+from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp, Timer
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TRANSACTION_LIMIT = 50
-
-# Pattern for env var keys that contain secrets and should be redacted in API responses.
-_SENSITIVE_ENV_KEY_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", re.IGNORECASE)
-REDACTED_VALUE = "**REDACTED**"
-
-
-def redact_request_env_vars(
-    request: controller_pb2.Controller.LaunchJobRequest,
-) -> controller_pb2.Controller.LaunchJobRequest:
-    """Return a copy of *request* with sensitive env var values replaced."""
-    if not request.environment.env_vars:
-        return request
-
-    redacted = controller_pb2.Controller.LaunchJobRequest()
-    redacted.CopyFrom(request)
-    env_vars = redacted.environment.env_vars
-    for key in list(env_vars):
-        if _SENSITIVE_ENV_KEY_RE.search(key):
-            env_vars[key] = REDACTED_VALUE
-    return redacted
 
 
 DEFAULT_MAX_TOTAL_LINES = 100000
@@ -259,16 +252,6 @@ def _parse_worker_target(target: str) -> str | None:
     return None
 
 
-def _task_state_key(state: int) -> str:
-    """Return the lowercase RPC key for a task state enum."""
-    return task_state_name(state).removeprefix("TASK_STATE_").lower()
-
-
-def _job_state_key(state: int) -> str:
-    """Return the lowercase RPC key for a job state enum."""
-    return job_state_name(state).removeprefix("JOB_STATE_").lower()
-
-
 def _active_job_count(job_state_counts: dict[int, int]) -> int:
     """Return the count of non-terminal jobs in a user aggregate."""
     return sum(count for state, count in job_state_counts.items() if state not in TERMINAL_JOB_STATES)
@@ -276,17 +259,17 @@ def _active_job_count(job_state_counts: dict[int, int]) -> int:
 
 def _task_state_counts_for_summary(task_state_counts: dict[int, int]) -> dict[str, int]:
     """Convert enum-keyed task counts to the string-keyed RPC shape."""
-    counts = {_task_state_key(state): 0 for state in USER_TASK_STATES}
+    counts = {task_state_friendly(state): 0 for state in USER_TASK_STATES}
     for state, count in task_state_counts.items():
-        counts[_task_state_key(state)] = count
+        counts[task_state_friendly(state)] = count
     return counts
 
 
 def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str, int]:
     """Convert enum-keyed job counts to the string-keyed RPC shape."""
-    counts = {_job_state_key(state): 0 for state in USER_JOB_STATES}
+    counts = {job_state_friendly(state): 0 for state in USER_JOB_STATES}
     for state, count in job_state_counts.items():
-        counts[_job_state_key(state)] = count
+        counts[job_state_friendly(state)] = count
     return counts
 
 
@@ -407,6 +390,8 @@ def _reconstruct_launch_job_request(job: JobDetailRow) -> controller_pb2.Control
         req.constraints.append(c.to_proto())
     for port in json.loads(job.ports_json):
         req.ports.append(port)
+    for arg in json.loads(job.submit_argv_json):
+        req.submit_argv.append(arg)
 
     if job.has_coscheduling:
         req.coscheduling.CopyFrom(job_pb2.CoschedulingConfig(group_by=job.coscheduling_group_by))
@@ -703,38 +688,14 @@ def _query_jobs(
 def _query_from_list_jobs_request(
     request: controller_pb2.Controller.ListJobsRequest,
 ) -> controller_pb2.Controller.JobQuery:
-    """Normalize a ``ListJobsRequest`` into a single ``JobQuery``.
+    """Return the request's ``JobQuery`` with paging clamped to safe bounds.
 
-    If ``request.query`` is set, it is used verbatim. Otherwise the legacy
-    flat fields on ``ListJobsRequest`` are mapped into an equivalent
-    ``JobQuery`` so the rest of the server only ever sees one shape.
-
-    The legacy-field path exists only to keep older clients working during
-    the JobQuery rollout; delete it together with the legacy fields when
-    https://github.com/marin-community/marin/issues/4573 is resolved.
+    The legacy flat fields on ``ListJobsRequest`` were removed in #4573;
+    callers must now always submit a ``JobQuery``.
     """
+    query = controller_pb2.Controller.JobQuery()
     if request.HasField("query"):
-        query = controller_pb2.Controller.JobQuery()
         query.CopyFrom(request.query)
-    else:
-        # Legacy parent_job_id is only honored under SCOPE_CHILDREN; without
-        # this mapping the filter is silently dropped and all jobs are
-        # returned. See https://github.com/marin-community/marin/issues/4705.
-        scope = (
-            controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN
-            if request.parent_job_id
-            else controller_pb2.Controller.JOB_QUERY_SCOPE_ALL
-        )
-        query = controller_pb2.Controller.JobQuery(
-            scope=scope,
-            parent_job_id=request.parent_job_id,
-            name_filter=request.name_filter,
-            state_filter=request.state_filter,
-            sort_field=request.sort_field,
-            sort_direction=request.sort_direction,
-            offset=request.offset,
-            limit=request.limit,
-        )
 
     # Clamp paging: 0 (unset) defaults to MAX; explicit values are capped at MAX.
     # We no longer support unbounded listing — callers that previously relied on
@@ -920,6 +881,10 @@ class AutoscalerProtocol(Protocol):
         """Get autoscaler status."""
         ...
 
+    def get_pending_hints(self) -> dict[str, PendingHint]:
+        """Get cached pending-hint dict keyed by job id."""
+        ...
+
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
         """Get info for a specific VM."""
         ...
@@ -1026,6 +991,14 @@ class ControllerServiceImpl:
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
         self._system_endpoints: dict[str, str] = system_endpoints or {}
+        # Short-TTL cache of the worker roster. Dashboards call ListWorkers
+        # and GetAutoscalerStatus back-to-back; both enumerate every worker.
+        # 1s is short enough that stale rows don't matter (workers have
+        # slower health/heartbeat cadence) and long enough to fuse adjacent
+        # refreshes into one SELECT.
+        self._worker_roster_cache: tuple[float, list[WorkerDetailRow]] | None = None
+        self._worker_roster_cache_lock = threading.Lock()
+        self._worker_roster_ttl_s = 1.0
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)
@@ -1033,15 +1006,33 @@ class ControllerServiceImpl:
     def blob_data(self, blob_id: str) -> bytes:
         return self._bundle_store.get_zip(blob_id)
 
+    def _worker_roster_cached(self) -> list[WorkerDetailRow]:
+        """Return the worker roster, refreshed at most once per TTL window.
+
+        `ListWorkers` and `GetAutoscalerStatus` both enumerate every worker
+        and get polled back-to-back by the dashboard. The SELECT + attribute
+        fan-out is expensive (no WHERE, full scan of workers + worker_attributes)
+        and repeating it twice per refresh is pure duplication.
+        """
+        now = time.monotonic()
+        with self._worker_roster_cache_lock:
+            cached = self._worker_roster_cache
+            if cached is not None and (now - cached[0]) < self._worker_roster_ttl_s:
+                return cached[1]
+        roster = _worker_roster(self._db)
+        with self._worker_roster_cache_lock:
+            self._worker_roster_cache = (now, roster)
+        return roster
+
     def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
         """Build autoscaler-based pending hints keyed by job id."""
         autoscaler = self._controller.autoscaler
         if autoscaler is None:
             return {}
-        status = autoscaler.get_status()
-        if not status.HasField("last_routing_decision"):
-            return {}
-        return build_job_pending_hints(status.last_routing_decision)
+        # Autoscaler caches the hint dict per evaluate() cycle; this avoids
+        # rebuilding the full AutoscalerStatus proto on every GetJobStatus
+        # RPC (#4844).
+        return autoscaler.get_pending_hints()
 
     def _authorize_job_owner(self, job_id: JobName) -> None:
         """Raise PERMISSION_DENIED if the authenticated user doesn't own this job.
@@ -1112,15 +1103,15 @@ class ControllerServiceImpl:
                     f"Job {job_id} already exists (state={job_pb2.JobState.Name(existing_job.state)})",
                 )
             elif policy == job_pb2.EXISTING_JOB_POLICY_KEEP:
-                if not job_is_finished(existing_job.state):
+                if not is_job_finished(existing_job.state):
                     return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
                 # Job finished, replace it (KEEP only preserves running jobs)
                 self._transitions.remove_finished_job(job_id)
             elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
-                if not job_is_finished(existing_job.state):
+                if not is_job_finished(existing_job.state):
                     self._transitions.cancel_job(job_id, "Replaced by new submission")
                 self._transitions.remove_finished_job(job_id)
-            elif job_is_finished(existing_job.state):
+            elif is_job_finished(existing_job.state):
                 # Default/UNSPECIFIED: replace finished jobs
                 logger.info(
                     "Replacing finished job %s (state=%s) with new submission",
@@ -1157,20 +1148,29 @@ class ControllerServiceImpl:
         # device-variant, etc.) replace auto-generated ones.
         request = _inject_resource_constraints(request)
 
+        # Reject TPU requests whose chip count doesn't match a single VM, or
+        # whose device-variant alternatives mix incompatible VM shapes (e.g.
+        # v6e-4 + v6e-8). Co-scheduling jobs onto a single-VM slice like v6e-8
+        # would put two tenants on one indivisible VM.
+        tpu_error = validate_tpu_request(request.resources, [Constraint.from_proto(c) for c in request.constraints])
+        if tpu_error:
+            raise ConnectError(Code.INVALID_ARGUMENT, tpu_error)
+
         # Reject jobs that can never be scheduled so they fail fast instead
         # of sitting in the pending queue. For coscheduled jobs this also
         # verifies the replica count is compatible with some group's num_vms.
         autoscaler = self._controller.autoscaler
         if autoscaler is not None:
             replicas = request.replicas if request.HasField("coscheduling") else None
+            constraints = [Constraint.from_proto(c) for c in request.constraints]
             error = autoscaler.job_feasibility(
-                constraints=[Constraint.from_proto(c) for c in request.constraints],
+                constraints=constraints,
                 replicas=replicas,
             )
             if error:
                 raise ConnectError(
                     Code.FAILED_PRECONDITION,
-                    f"Job is unschedulable: {error}",
+                    f"Job {job_id} is unschedulable: {error} (constraints: {constraints})",
                 )
 
         self._transitions.submit_job(job_id, request, Timestamp.now())
@@ -1202,11 +1202,14 @@ class ControllerServiceImpl:
         summary = summaries.get(job.job_id)
 
         task_state_counts = (
-            {_task_state_key(state): count for state, count in summary.task_state_counts.items()} if summary else {}
+            {task_state_friendly(state): count for state, count in summary.task_state_counts.items()} if summary else {}
         )
 
         # Get scheduling diagnostics for pending jobs from cache
-        # (populated each scheduling cycle by the controller).
+        # (populated each scheduling cycle by the controller). The autoscaler
+        # hint dict is cached per evaluate() cycle (#4848), so the lookup here
+        # is a single dict get — we only attach this job's hint, never the
+        # full routing decision.
         pending_reason = ""
         if job.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(job.job_id.to_wire())
@@ -1335,7 +1338,7 @@ class ControllerServiceImpl:
         """Convert a JobRow + its task summary into a JobStatus proto."""
         job_name = j.name
         task_state_counts = (
-            {_task_state_key(state): count for state, count in task_summary.task_state_counts.items()}
+            {task_state_friendly(state): count for state, count in task_summary.task_state_counts.items()}
             if task_summary
             else {}
         )
@@ -1588,7 +1591,7 @@ class ControllerServiceImpl:
         if self._controller.has_direct_provider:
             return controller_pb2.Controller.ListWorkersResponse()
         workers = []
-        worker_rows = _worker_roster(self._db)
+        worker_rows = self._worker_roster_cached()
         running_by_worker = running_tasks_by_worker(self._db, {worker.worker_id for worker in worker_rows})
         for worker in worker_rows:
             workers.append(
@@ -1740,7 +1743,7 @@ class ControllerServiceImpl:
         status = autoscaler.get_status()
 
         # Build a map of worker_id -> (worker_id, healthy) for enriching VmInfo
-        workers = _worker_roster(self._db)
+        workers = self._worker_roster_cached()
         worker_id_to_info: dict[str, tuple[str, bool]] = {}
         for w in workers:
             worker_id_to_info[w.worker_id] = (w.worker_id, w.healthy)
@@ -2604,3 +2607,36 @@ class ControllerServiceImpl:
             total_pending=total_pending,
             total_running=len(running_protos),
         )
+
+    # --- Worker Push ---
+
+    def update_task_status(
+        self,
+        request: controller_pb2.Controller.UpdateTaskStatusRequest,
+        _ctx: Any,
+    ) -> controller_pb2.Controller.UpdateTaskStatusResponse:
+        """Worker pushes task state transitions to controller.
+
+        Converts the proto updates into TaskUpdate dataclasses and applies
+        them through the same ControllerTransitions.apply_heartbeat() path
+        used by the poll-based heartbeat. Stop decisions are delivered via
+        the StopTasks RPC, not piggy-backed on the response.
+
+        Vestigial: the kill decisions produced by apply_heartbeat are ignored
+        here. The poll loop reruns the same transition logic every 60s and
+        routes kills through _stop_tasks_direct, so push-path kills are
+        recovered with ≤60s latency. This RPC will be removed once the poll
+        loop is the sole path.
+        """
+        updates = task_updates_from_proto(request.updates)
+        if updates:
+            self._transitions.apply_heartbeat(
+                HeartbeatApplyRequest(
+                    worker_id=WorkerId(request.worker_id),
+                    worker_resource_snapshot=None,
+                    updates=updates,
+                )
+            )
+            # Wake the controller so it can act on any state changes promptly.
+            self._controller.wake()
+        return controller_pb2.Controller.UpdateTaskStatusResponse()

@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { controllerRpcCall, useControllerRpc } from '@/composables/useRpc'
-import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { SEGMENT_COLORS, stateToName, stateDisplayName } from '@/types/status'
 import type { JobState } from '@/types/status'
 import type { JobStatus, JobQuery, ListJobsResponse } from '@/types/rpc'
@@ -138,13 +138,17 @@ async function loadChildJobs(parentJobId: string) {
   }
 }
 
-async function fetchAll() {
-  await fetchJobs()
+async function refreshExpandedChildren() {
   await Promise.all([...expandedJobs.value].map(loadChildJobs))
 }
 
+async function fetchAll() {
+  await fetchJobs()
+  await refreshExpandedChildren()
+}
+
 onMounted(fetchAll)
-useAutoRefresh(fetchAll, 30_000)
+useAutoRefresh(fetchAll, DEFAULT_REFRESH_MS)
 
 watch([page, sortField, sortDir, nameFilter, stateFilter], () => {
   childJobsByParent.value = new Map()

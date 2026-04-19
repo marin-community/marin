@@ -237,3 +237,5 @@ scr/*
 
 # Generated protobuf and Connect RPC files (rebuilt by hatch build hook)
 # Excluded via .git/info/exclude instead of here, so Ray job submission includes them.
+
+.worktrees

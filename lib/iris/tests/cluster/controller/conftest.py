@@ -30,10 +30,8 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
-    TERMINAL_TASK_STATES,
     ControllerDB,
     _decode_attribute_rows,
-    job_is_finished,
     task_row_can_be_scheduled,
     task_row_is_finished,
 )
@@ -65,7 +63,7 @@ from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId, is_job_finished
 from iris.rpc import config_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
@@ -77,9 +75,9 @@ check_task_can_be_scheduled = task_row_can_be_scheduled
 check_task_is_finished = task_row_is_finished
 
 
-def check_job_is_finished(j: JobDetailRow) -> bool:
+def check_is_job_finished(j: JobDetailRow) -> bool:
     """Whether a job row is in a terminal state."""
-    return job_is_finished(j.state)
+    return is_job_finished(j.state)
 
 
 class FakeProvider:
@@ -109,6 +107,22 @@ class FakeProvider:
         timeout_ms: int,
     ) -> job_pb2.ProfileTaskResponse:
         raise ProviderUnsupportedError("fake")
+
+    # --- Split heartbeat surface (no-op stubs so split-mode tests can run) ---
+
+    def ping_workers(self, workers):
+        return []
+
+    def start_tasks(self, jobs):
+        from iris.rpc import worker_pb2
+
+        return [(wid, worker_pb2.Worker.StartTasksResponse(), None) for wid, _, _ in jobs]
+
+    def stop_tasks(self, jobs):
+        return [(wid, None) for wid, _, _ in jobs]
+
+    def poll_workers(self, running, worker_addresses):
+        return []
 
     def close(self) -> None:
         pass

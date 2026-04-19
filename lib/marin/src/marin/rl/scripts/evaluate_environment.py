@@ -116,7 +116,6 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
     # Initialize Levanter with minimal trainer config
     trainer_config = TrainerConfig(
         mp=jmp.get_policy("p=f32,c=bfloat16"),
-        ray=levanter.distributed.RayConfig(auto_start_cluster=False),
         mesh=MeshConfig(axes={"model": model_axis_size}),
     )
 

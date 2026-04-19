@@ -3096,7 +3096,6 @@ def test_prune_old_terminal_jobs(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        log_retention=Duration.from_seconds(86400),
         txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
@@ -3129,7 +3128,6 @@ def test_prune_old_inactive_workers(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        log_retention=Duration.from_seconds(86400),
         txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
@@ -3139,19 +3137,9 @@ def test_prune_old_inactive_workers(state):
     assert _query_worker(state, stale_wid) is None  # pruned
 
 
-def test_prune_old_logs_and_txn_actions(state):
-    """Old logs and txn_actions are pruned by their respective retentions."""
+def test_prune_old_txn_actions(state):
+    """Old txn_actions are pruned by the txn_action retention."""
     register_worker(state, "w1", "host:8080", make_worker_metadata())
-
-    # Insert old logs directly
-    state._db.execute(
-        "INSERT INTO logs(key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)",
-        ("test-key", "test", "old log", 1000, 0),
-    )
-    state._db.execute(
-        "INSERT INTO logs(key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)",
-        ("test-key", "test", "recent log", Timestamp.now().epoch_ms(), 0),
-    )
 
     # Submit a job to generate txn_actions, then backdate some
     req = make_job_request("txn-test")
@@ -3161,28 +3149,22 @@ def test_prune_old_logs_and_txn_actions(state):
     state._db.execute("UPDATE txn_actions SET created_at_ms = 1000")
 
     old_txn_count = state._db.fetchone("SELECT COUNT(*) as c FROM txn_actions")["c"]
-    old_log_count = state._db.fetchone("SELECT COUNT(*) as c FROM logs")["c"]
 
     assert old_txn_count > 0
-    assert old_log_count == 2
 
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        log_retention=Duration.from_seconds(86400),
         txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
 
-    assert result.logs_deleted == 1  # old log pruned, recent kept
     assert result.txn_actions_deleted == old_txn_count
 
-    remaining_logs = state._db.fetchone("SELECT COUNT(*) as c FROM logs")["c"]
     remaining_txn_actions = state._db.fetchone("SELECT COUNT(*) as c FROM txn_actions")["c"]
 
-    assert remaining_logs == 1  # only the recent log
     # Incremental prune deletes old txn_actions in batches; no new aggregate
-    # action rows are recorded for log/txn_action cleanup.
+    # action rows are recorded for txn_action cleanup.
     assert remaining_txn_actions == 0
 
 
@@ -3192,7 +3174,6 @@ def test_prune_noop_when_nothing_old(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        log_retention=Duration.from_seconds(86400),
         txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
@@ -3275,7 +3256,6 @@ def test_prune_old_data_short_circuits_when_nothing_prunable(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        log_retention=Duration.from_seconds(86400),
         txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
@@ -3466,6 +3446,17 @@ def test_apply_failed_with_retry(state):
     # Task should be PENDING again (1 failure <= 1 max_retries_failure).
     assert _task_state_direct(state, task_id) == job_pb2.TASK_STATE_PENDING
 
+    # The dead attempt 0 must have finished_at_ms stamped even though the task
+    # itself rolled back to PENDING. Otherwise the row is indistinguishable from
+    # a still-assigned attempt. Regression guard for the terminal_ms conflation.
+    with state._db.snapshot() as q:
+        attempts = ATTEMPT_PROJECTION.decode(
+            q.fetchall("SELECT * FROM task_attempts WHERE task_id = ?", (task_id.to_wire(),))
+        )
+    assert len(attempts) == 1
+    assert attempts[0].state == job_pb2.TASK_STATE_FAILED
+    assert attempts[0].finished_at is not None
+
     # Draining again should promote it for a second attempt.
     batch = state.drain_for_direct_provider()
     assert len(batch.tasks_to_run) == 1
@@ -3551,6 +3542,61 @@ def test_kill_non_terminal_direct_provider_tasks(state):
     result = state.cancel_job(JobName.from_wire("/user/job1"), reason="test kill")
 
     assert task_ids[0] in result.tasks_to_kill
+
+
+def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harness):
+    """Finalizing a reservation-holder task must not decommit a co-tenant's resources.
+
+    Regression: ``_kill_non_terminal_tasks`` passed ``resources`` into
+    ``_terminate_task`` unconditionally. Reservation-holder tasks never commit
+    on assignment (see ``_assign_task``), so decommitting them on termination
+    subtracts chips that were never added — on a worker co-tenanted by a real
+    task, this floored ``committed_*`` below the co-tenant's true reservation,
+    letting the scheduler double-book the VM (seen in prod: two v5p-8 jobs on
+    the same 4-chip VM, with the second crashing on ``/dev/vfio/0 busy``).
+    """
+    from iris.cluster.controller.transitions import _kill_non_terminal_tasks
+
+    worker_id = harness.add_worker("w1")
+
+    real_tasks = harness.submit("real-job", replicas=1)
+    harness.dispatch(real_tasks[0], worker_id)
+
+    baseline_cpu = _query_worker(harness.state, worker_id).committed_cpu_millicores
+    baseline_mem = _query_worker(harness.state, worker_id).committed_mem
+    assert baseline_cpu > 0
+
+    holder_tasks = harness.submit("holder-job", replicas=1)
+    holder_job_id = JobName.root("test-user", "holder-job")
+    harness.state._db.execute(
+        "UPDATE jobs SET is_reservation_holder = 1 WHERE job_id = ?",
+        (holder_job_id.to_wire(),),
+    )
+    dispatch_task(harness.state, holder_tasks[0], worker_id)
+
+    # Holder did not consume capacity.
+    assert _query_worker(harness.state, worker_id).committed_cpu_millicores == baseline_cpu
+    assert _query_worker(harness.state, worker_id).committed_mem == baseline_mem
+
+    # Exercise the exact finalization path: _finalize_terminal_job cascades to
+    # the holder sub-job via _kill_non_terminal_tasks. cancel_job has its own
+    # inline gated path and doesn't cover this.
+    with harness.state._db.transaction() as cur:
+        _kill_non_terminal_tasks(
+            cur,
+            harness.state._db.endpoints,
+            holder_job_id.to_wire(),
+            "Job finalized",
+            0,
+        )
+
+    # Holder's termination must not touch the co-tenant's committed counters.
+    assert (
+        _query_worker(harness.state, worker_id).committed_cpu_millicores == baseline_cpu
+    ), "holder finalization leaked committed_cpu_millicores onto co-tenant's reservation"
+    assert (
+        _query_worker(harness.state, worker_id).committed_mem == baseline_mem
+    ), "holder finalization leaked committed_mem onto co-tenant's reservation"
 
 
 def test_max_failures_kills_direct_provider_tasks(state):

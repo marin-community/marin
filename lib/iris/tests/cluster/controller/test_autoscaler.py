@@ -29,7 +29,7 @@ from tests.cluster.providers.conftest import (
     make_mock_slice_handle,
     make_mock_worker_handle,
 )
-from iris.cluster.constraints import DeviceType
+from iris.cluster.constraints import DeviceType, WellKnownAttribute
 from iris.cluster.types import WorkerStatus
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_proto import duration_to_proto
@@ -645,6 +645,33 @@ class TestAutoscalerStatusReporting:
         assert status.HasField("last_routing_decision")
         assert "test-group" in status.last_routing_decision.routed_entries
 
+    def test_pending_hints_and_routing_proto_are_cached_between_evaluates(self):
+        """Dashboard polls reuse one proto + hint dict per evaluate() (#4844).
+
+        get_job_status calls this per pending job on every dashboard refresh.
+        Rebuilding the status proto each time was measurably slow on busy
+        clusters; repeated calls should return the same cached objects, and a
+        new evaluate() must invalidate the cache.
+        """
+        config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
+        group = ScalingGroup(config, make_mock_platform())
+        autoscaler = make_autoscaler({"test-group": group})
+
+        autoscaler.evaluate(make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8"))
+
+        # Cached: repeated reads return the same objects without rebuilding.
+        proto_first = autoscaler.get_last_routing_decision_proto()
+        hints_first = autoscaler.get_pending_hints()
+        assert proto_first is autoscaler.get_last_routing_decision_proto()
+        assert hints_first is autoscaler.get_pending_hints()
+        # get_status() reuses the same cached routing-decision proto.
+        assert autoscaler.get_status().last_routing_decision == proto_first
+
+        # Invalidated on next evaluate().
+        autoscaler.evaluate(make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5p-8"))
+        assert autoscaler.get_last_routing_decision_proto() is not proto_first
+        assert autoscaler.get_pending_hints() is not hints_first
+
 
 class TestAutoscalerBootstrapLogs:
     """Tests for bootstrap log reporting."""
@@ -1186,6 +1213,24 @@ class TestPerGroupWorkerConfig:
 
         assert wc is not None
         assert wc.worker_attributes["team"] == "euw4"
+
+    def test_derives_region_and_zone_from_scale_group_when_missing(self):
+        """Derived region and zone are injected when worker attrs omit them."""
+        base_wc = config_pb2.WorkerConfig(
+            docker_image="ghcr.io/marin-community/iris-worker:latest",
+            port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="east-group", max_slices=5, zones=["us-east5-a"])
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"east-group": group}, base_worker_config=base_wc)
+
+        wc = autoscaler._per_group_worker_config(group)
+
+        assert wc is not None
+        assert wc.worker_attributes[WellKnownAttribute.REGION] == "us-east5"
+        assert wc.worker_attributes[WellKnownAttribute.ZONE] == "us-east5-a"
 
 
 class TestGpuScaleGroupBugs:

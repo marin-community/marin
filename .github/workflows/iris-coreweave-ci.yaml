@@ -15,10 +15,12 @@ permissions:
   pull-requests: read   # needed for issue_comment to access PR metadata
   statuses: write       # post commit status from issue_comment trigger
 
-# Single concurrency group — only one CW CI run at a time across all PRs.
-# The warm cluster is shared; concurrent runs would conflict.
+# Shared concurrency group with marin-canary-ferry-cw.yaml — both rebuild/roll
+# the shared iris-ci controller and submit against the shared H100 in
+# US-WEST-04A. Only one run cluster-wide at a time. cancel-in-progress=false
+# so a mid-flight canary is not killed by a PR firing.
 concurrency:
-  group: iris-coreweave-ci
+  group: iris-coreweave-ci-shared
   cancel-in-progress: false
 
 jobs:
@@ -173,9 +175,9 @@ jobs:
           AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
           FSSPEC_S3: '{"endpoint_url": "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"}'
         run: |
-          IRIS_CONTROLLER_URL="http://localhost:${LOCAL_PORT}"
-          timeout 600 uv run tests/integration_test.py \
-            --controller-url "$IRIS_CONTROLLER_URL"
+          export IRIS_CONTROLLER_URL="http://localhost:${LOCAL_PORT}"
+          timeout 600 uv run pytest tests/test_integration_test.py \
+            -m integration -o "addopts=" --timeout=600 -v -s
 
       - name: Stop port-forward
         if: always()

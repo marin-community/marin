@@ -14,7 +14,6 @@ import heapq
 import inspect
 import logging
 import os
-import zlib
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
@@ -22,10 +21,11 @@ from itertools import groupby, islice
 from typing import Any, Protocol
 
 import msgspec
+import xxhash
 from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import url_to_fs
 
-from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
+from zephyr.external_sort import external_sort_merge
 
 from zephyr.dataset import (
     Dataset,
@@ -64,7 +64,7 @@ class Shard(Protocol):
 
     Implementations:
     - ListShard: backed by iterable references (source data, non-scatter)
-    - ScatterShard: backed by scatter Parquet files with predicate pushdown
+    - ScatterReader: backed by scatter zstd-chunk files with byte-range sidecar
     """
 
     def __iter__(self) -> Iterator: ...
@@ -564,7 +564,7 @@ def compute_plan(dataset: Dataset) -> PhysicalPlan:
 def deterministic_hash(obj: object) -> int:
     """Compute a deterministic hash for an object."""
     s = msgspec.msgpack.encode(obj, order="deterministic")
-    return zlib.adler32(s)
+    return xxhash.xxh3_64_intdigest(s)
 
 
 def make_windows(
@@ -634,31 +634,45 @@ def _merge_sorted_chunks(
         merge_key = key_fn
 
     # Check if external sort is needed BEFORE materializing all iterators.
-    # ScatterShard can decide using manifest stats (no file opens needed).
-    from zephyr.shuffle import ScatterShard
+    # ScatterReader can decide using manifest stats (no file opens needed).
+    from zephyr.shuffle import ScatterReader
 
     use_external = (
         external_sort_dir is not None
-        and isinstance(shard, ScatterShard)
+        and isinstance(shard, ScatterReader)
         and shard.needs_external_sort(_TaskResources.from_environment().memory_bytes)
     )
 
     if use_external:
+        from zephyr.external_sort import compute_fan_in, compute_write_batch_size
+
+        memory_limit = _TaskResources.from_environment().memory_bytes
+        # Per-iterator memory ~= compressed bytes for one chunk held by
+        # cat_file. Use the actual max compressed chunk size from the sidecar.
+        per_iter_bytes = shard.max_compressed_chunk_bytes
+        fan_in = compute_fan_in(per_iter_bytes, memory_limit)
+        write_batch_size = compute_write_batch_size(shard.avg_item_bytes)
         logger.info(
-            "External sort triggered for shard with %d iterators, spilling to %s",
+            "External sort triggered for shard with %d iterators, "
+            "fan_in=%d (per_iter≈%dKB), write_batch_size=%d, spilling to %s",
             sum(it.chunk_count for it in shard.iterators),
+            fan_in,
+            per_iter_bytes // 1024,
+            write_batch_size,
             external_sort_dir,
         )
         # Pass lazy generator — external_sort_merge consumes in batches without opening all files
-        merged_stream = external_sort_merge(shard.get_iterators(), merge_key, external_sort_dir)
+        merged_stream = external_sort_merge(
+            shard.get_iterators(),
+            merge_key,
+            external_sort_dir,
+            fan_in=fan_in,
+            write_batch_size=write_batch_size,
+        )
     else:
         chunk_iterators = list(shard.get_iterators())
         logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
-        if external_sort_dir is not None and len(chunk_iterators) > EXTERNAL_SORT_FAN_IN:
-            # Fallback: stats unavailable, use fan_in threshold
-            merged_stream = external_sort_merge(iter(chunk_iterators), merge_key, external_sort_dir)
-        else:
-            merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
+        merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
     yield from groupby(merged_stream, key=key_fn)
 
 
@@ -683,9 +697,8 @@ def _sorted_merge_join(
     Yields:
         Joined items according to join_type
     """
-    # Materialize left stream and tag both streams
-    left_items = list(left_stream)
-    left_tagged = (("left", left_key_fn(item), item) for item in left_items)
+    # Tag both streams with their side for the merged iteration
+    left_tagged = (("left", left_key_fn(item), item) for item in left_stream)
     right_tagged = (("right", right_key_fn(item), item) for item in right_stream)
 
     # Merge both sorted streams by key
@@ -828,16 +841,16 @@ def run_stage(
             return
 
         elif isinstance(op, Reduce):
-            # Build ScatterShard from scatter manifest if needed,
-            # then merge sorted chunks and reduce per key.
-            from zephyr.execution import ScatterShard, _build_scatter_shard_from_manifest
+            # Build ScatterReader directly from per-mapper sidecars, then
+            # merge sorted chunks and reduce per key.
+            from zephyr.execution import ScatterReader
 
             shard = ctx.shard
-            if not isinstance(shard, ScatterShard):
-                # Shard contains a single manifest path — read it to build ScatterShard
-                paths = list(shard)
-                assert len(paths) == 1, f"Expected single scatter manifest path, got {len(paths)}"
-                shard = _build_scatter_shard_from_manifest(paths[0], ctx.shard_idx)
+            if not isinstance(shard, ScatterReader):
+                # Shard contains every mapper's scatter-data path — reducer
+                # reads all sidecars in parallel and filters for its target.
+                scatter_paths = list(shard)
+                shard = ScatterReader.from_sidecars(scatter_paths, ctx.shard_idx)
             stream = _reduce_gen(
                 shard, op.key_fn, op.reducer_fn, sort_fn=op.sort_fn, external_sort_dir=external_sort_dir
             )

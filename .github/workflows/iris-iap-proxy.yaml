@@ -1,0 +1,66 @@
+name: Iris - IAP Proxy
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'infra/iris-iap-proxy/**'
+      - '.github/workflows/iris-iap-proxy.yaml'
+  pull_request:
+    paths:
+      - 'infra/iris-iap-proxy/**'
+      - '.github/workflows/iris-iap-proxy.yaml'
+
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build container image
+        uses: docker/build-push-action@v6
+        with:
+          context: infra/iris-iap-proxy
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        cluster: [marin, marin-dev]
+    concurrency:
+      group: iris-iap-proxy-deploy-${{ matrix.cluster }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.MARIN_CD_CLOUD_RUN_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          install_components: beta
+
+      - name: Deploy to Cloud Run
+        run: ./infra/iris-iap-proxy/deploy.sh ${{ matrix.cluster }}

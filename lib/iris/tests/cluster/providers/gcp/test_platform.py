@@ -930,12 +930,10 @@ def test_gcp_tpu_slice_os_login_prefers_external_ip_for_direct_ssh():
 
 
 # =============================================================================
-# Section 6: VM Slice Bootstrap Tests
+# Section 6: TPU/VM Bootstrap Tests
 #
-# Tests for _run_vm_slice_bootstrap with split timeouts and health probing.
+# Tests for bootstrap timeout sizing, diagnostics, and VM health probing.
 # =============================================================================
-
-
 def _make_vm_slice_for_bootstrap(
     gcp_service: InMemoryGcpService,
     zone: str = "us-central2-b",

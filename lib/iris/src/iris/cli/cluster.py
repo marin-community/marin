@@ -634,14 +634,24 @@ def controller(ctx):
     default=False,
     help="Start with an empty database, ignoring any remote checkpoint",
 )
+@click.option(
+    "--state-dir",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Override the local state dir (default: /var/cache/iris/controller, or /tmp/dry-run/{today} in dry-run)",
+)
 @click.pass_context
-def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_run, fresh):
+def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_run, fresh, state_dir):
     """Start a local controller process.
 
     Loads the cluster config, restores from checkpoint, and runs the full
     scheduling loop. Use --dry-run to suppress all side effects (no task
     dispatch, no VM changes, no checkpoint writes) while still serving the
     dashboard and RPC for inspection.
+
+    In --dry-run, the local state dir defaults to ``/tmp/dry-run/{today}``.
+    Pass ``--state-dir /tmp/...`` to resume from an existing local state dir
+    without re-downloading.
 
     Example (dry-run with checkpoint restore)::
 
@@ -662,6 +672,7 @@ def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_
         checkpoint_interval=checkpoint_interval,
         dry_run=dry_run,
         fresh=fresh,
+        state_dir=state_dir,
     )
 
 
