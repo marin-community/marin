@@ -346,6 +346,12 @@ def scenario_cmd(
     help="Default: logs/autoscaler-loadtest/run-<timestamp>",
 )
 @click.option(
+    "--snapshot",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Controller sqlite snapshot (passed to each scenario subprocess).",
+)
+@click.option(
     "--use-split-heartbeat/--no-use-split-heartbeat",
     "use_split_heartbeat",
     default=True,
@@ -366,6 +372,7 @@ def ablation_cmd(
     cpu_tasks_per_job: int,
     step_timeout_seconds: int,
     output_dir: Path | None,
+    snapshot: Path | None,
     use_split_heartbeat: bool,
     log_level: str,
 ) -> None:
@@ -383,6 +390,8 @@ def ablation_cmd(
 
     out = (output_dir or _default_output_dir()).resolve()
     common = ["--use-split-heartbeat"] if use_split_heartbeat else ["--no-use-split-heartbeat"]
+    if snapshot is not None:
+        common += ["--snapshot", str(snapshot)]
 
     results = run_series(
         steps=DEFAULT_STEPS,

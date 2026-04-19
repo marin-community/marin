@@ -67,18 +67,48 @@ class StepResult:
 
 
 def _cleanup() -> None:
-    """SIGTERM then SIGKILL any stray loadtest processes + scratch dirs.
+    """SIGTERM then SIGKILL any stray scenario / worker processes + scratch dirs.
 
-    pkill returns non-zero when no match; we ignore the exit code.
+    Patterns are deliberately chosen so they do NOT match this driver's own
+    process — if the user launches via ``uv run iris-loadtest ablation`` the
+    parent's argv contains ``iris-loadtest``, and a broad ``pkill -f
+    iris-loadtest`` would target the driver itself. Match only the child
+    shapes we actually spawn:
+
+    * ``iris.loadtest.cli`` — the ``-m`` module path used for scenario
+      subprocesses (see ``run_series``).
+    * ``iris.loadtest.synthetic_worker_main`` — synthetic worker subprocess.
+
+    pkill returns non-zero when no match; we ignore the exit code. We also
+    pass ``-P 1`` (descend only from init) is not portable, so we accept
+    the theoretical risk that a scenario child spawned ``iris.loadtest.cli``
+    in some indirect way — in practice the scenario child is the only one
+    that matches that pattern.
     """
+    self_pid = os.getpid()
+    patterns = ("iris.loadtest.cli", "iris.loadtest.synthetic_worker_main")
     for signame in ("TERM", "KILL"):
-        for pattern in ("iris-loadtest", "synthetic_worker", "loadtest.harness"):
-            subprocess.run(
-                ["pkill", f"-{signame}", "-f", pattern],
+        for pattern in patterns:
+            # pgrep to get matching pids so we can exclude self_pid. ``pkill``
+            # has no "exclude pid" flag; we replicate it via pgrep + kill.
+            pgrep = subprocess.run(
+                ["pgrep", "-f", pattern],
                 check=False,
-                stdout=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
+                text=True,
             )
+            for line in pgrep.stdout.splitlines():
+                try:
+                    pid = int(line.strip())
+                except ValueError:
+                    continue
+                if pid == self_pid:
+                    continue
+                try:
+                    os.kill(pid, signal.SIGTERM if signame == "TERM" else signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
         time.sleep(1 if signame == "TERM" else 0)
     for prefix in ("loadtest-db-", "loadtest-controller-state-"):
         for path in Path("/tmp").glob(f"{prefix}*"):
