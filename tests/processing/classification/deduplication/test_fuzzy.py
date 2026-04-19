@@ -158,26 +158,34 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
     test_rows = by_source_id(dups.sources[test_norm.main_output_dir].attr_dir, test_by_id)
 
     # Cross-source exact-text pairs: (train_arctic_1, test_contaminated_1) and
-    # (train_red_1, test_contaminated_2). Each pair forms a CC cluster of two
+    # (train_red_*, test_contaminated_2). Each pair forms a CC cluster of two
     # post-fix. Both members must appear in their respective source's attr tree,
     # share a dup_cluster_id, and together contain exactly one canonical.
-    for cluster_pair, a_source, b_source in (
-        ({"train_arctic_1", "test_contaminated_1"}, "train_arctic_1", "test_contaminated_1"),
-        ({"train_red_1", "test_contaminated_2"}, "train_red_1", "test_contaminated_2"),
+    #
+    # train_red_1 and train_red_dup share identical text, so they collapse to the
+    # same normalized id and whichever one wins normalize's exact-dedup pass is
+    # non-deterministic — accept either as the train-side survivor.
+    for a_candidates, b_candidates in (
+        ({"train_arctic_1"}, {"test_contaminated_1"}),
+        ({"train_red_1", "train_red_dup"}, {"test_contaminated_2"}),
     ):
-        assert a_source in train_rows, f"missing train row for {a_source}"
-        assert b_source in test_rows, f"missing test row for {b_source}"
+        a_present = a_candidates & train_rows.keys()
+        b_present = b_candidates & test_rows.keys()
+        assert len(a_present) == 1, f"expected one of {a_candidates} in train rows; got {a_present}"
+        assert len(b_present) == 1, f"expected one of {b_candidates} in test rows; got {b_present}"
+        a_source = next(iter(a_present))
+        b_source = next(iter(b_present))
         cluster_ids = {
             train_rows[a_source]["attributes"]["dup_cluster_id"],
             test_rows[b_source]["attributes"]["dup_cluster_id"],
         }
-        assert len(cluster_ids) == 1, f"{cluster_pair}: should share dup_cluster_id; got {cluster_ids}"
+        assert len(cluster_ids) == 1, f"({a_source}, {b_source}): should share dup_cluster_id; got {cluster_ids}"
         canonicals = [
             s
             for s, row in ((a_source, train_rows[a_source]), (b_source, test_rows[b_source]))
             if row["attributes"]["is_cluster_canonical"]
         ]
-        assert len(canonicals) == 1, f"{cluster_pair}: exactly one canonical expected; got {canonicals}"
+        assert len(canonicals) == 1, f"({a_source}, {b_source}): exactly one canonical expected; got {canonicals}"
 
 
 def test_fuzzy_dups_rejects_param_mismatch(fox_corpus):
