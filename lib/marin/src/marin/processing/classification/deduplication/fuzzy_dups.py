@@ -5,13 +5,26 @@
 
 Loads MinHash bucket attrs from each input, runs LSH-graph connected
 components globally across all inputs, and writes per-source attribute trees
-that mark duplicates. Each source's attr tree is co-partitioned with its
-underlying ``NormalizedData``, so :mod:`marin.processing.classification.\
-consolidate` can join them directly.
+annotating every non-singleton cluster member. Each source's attr tree is
+co-partitioned with its underlying ``NormalizedData``, so
+:mod:`marin.processing.classification.consolidate` can join them directly.
 
-Per-document attr rows have schema ``{id: str, attributes: {dup_doc: True}}``
-and only duplicates are emitted, matching the existing behavior consumed by
-``consolidate(..., keep_if_missing=True)``.
+Per-document attr rows have schema::
+
+    {
+      id: str,
+      attributes: {
+        dup_cluster_id: str,         # CC component id — shared by all cluster members
+        is_cluster_canonical: bool,  # True for exactly one member per cluster
+      }
+    }
+
+Rows are emitted for every member of a non-singleton cluster (canonical +
+non-canonicals). Singletons get no row, preserving the
+``consolidate(..., keep_if_missing=True)`` pattern. This shape lets the
+canonical-selection policy live in consolidate (e.g. the default
+``keep is_cluster_canonical=True``, or any custom per-cluster reducer) rather
+than being baked in here.
 
 Combining multiple ``MinHashAttrData`` inputs is the foundation for iterative
 global dedup: re-running this job over the union of all per-dataset MinHash
@@ -173,35 +186,46 @@ def _emit_bucket_records(entries: list[dict[str, Any]]) -> Iterator[dict]:
 
 
 def _make_per_shard_writer(output_path: str, entries: list[dict[str, Any]], counter_prefix: str):
-    """Return a group_by reducer that writes per-shard duplicate-marker parquet files."""
+    """Return a group_by reducer that writes per-shard cluster-annotation parquet files.
+
+    Skips singletons entirely. For every non-singleton cluster member, writes
+    ``{id, attributes: {dup_cluster_id, is_cluster_canonical}}``. Rows are
+    already sorted by ``id`` thanks to the upstream ``group_by(sort_by=id)``.
+    """
 
     def aggregate(file_idx: int, records: Iterator[dict]) -> dict:
         entry = entries[file_idx]
         out_path = f"{output_path}/outputs/{entry['source_tag']}/{entry['basename']}"
 
-        total = 0
-        dups = 0
+        cluster_members = 0
+        canonicals = 0
 
-        def dup_records():
-            nonlocal total, dups
+        def cluster_member_rows():
+            nonlocal cluster_members, canonicals
             for record in records:
-                total += 1
-                counters.increment(f"{counter_prefix}/total")
-                if record["is_dup"]:
-                    dups += 1
-                    counters.increment(f"{counter_prefix}/dups")
-                    yield {"id": record["id"], "attributes": {"dup_doc": True}}
-                else:
-                    counters.increment(f"{counter_prefix}/unique")
+                if record["is_singleton"]:
+                    counters.increment(f"{counter_prefix}/singletons_skipped")
+                    continue
+                cluster_members += 1
+                counters.increment(f"{counter_prefix}/cluster_members")
+                if record["is_canonical"]:
+                    canonicals += 1
+                    counters.increment(f"{counter_prefix}/canonicals")
+                yield {
+                    "id": record["id"],
+                    "attributes": {
+                        "dup_cluster_id": record["component_id"],
+                        "is_cluster_canonical": record["is_canonical"],
+                    },
+                }
 
-        result = write_parquet_file(dup_records(), out_path)
+        result = write_parquet_file(cluster_member_rows(), out_path)
         return {
             **result,
             "file_idx": file_idx,
             "source_tag": entry["source_tag"],
-            "total": total,
-            "dups": dups,
-            "unique": total - dups,
+            "cluster_members": cluster_members,
+            "canonicals": canonicals,
         }
 
     return aggregate
@@ -216,19 +240,20 @@ def compute_fuzzy_dups_attrs(
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
 ) -> FuzzyDupsAttrData:
-    """Mark fuzzy duplicates across one or more ``MinHashAttrData`` inputs.
+    """Mark fuzzy-duplicate cluster membership across one or more ``MinHashAttrData`` inputs.
 
     All inputs must share identical :class:`MinHashParams`. The job builds a
     global LSH bucket graph across every input shard, runs connected
     components, and emits a per-source attribute tree under
     ``<output_path>/outputs/source_NNN/`` with one parquet file per source
-    shard (filenames preserved from the source). Each row marks a duplicate:
-    ``{id: str, attributes: {dup_doc: True}}``.
+    shard (filenames preserved from the source). Each row annotates one
+    cluster member with ``{id: str, attributes: {dup_cluster_id: str,
+    is_cluster_canonical: bool}}``; singletons are omitted.
 
-    For each connected component, exactly one document is treated as the
-    canonical survivor (the rest are marked duplicates). The choice is
-    determined by ``connected_components`` and is currently order-sensitive
-    across re-runs (see TODO).
+    Exactly one member per cluster has ``is_cluster_canonical=True`` — the
+    one CC's Hash-to-Min picked as the natural canonical (min ``id_norm``).
+    Consolidate may honor that flag (default policy) or ignore it and apply
+    a custom per-``dup_cluster_id`` policy.
 
     Args:
         inputs: ``MinHashAttrData`` artifacts to fuzzy-dedup together.
@@ -283,13 +308,19 @@ def compute_fuzzy_dups_attrs(
 
     aggregator = _make_per_shard_writer(output_path, entries, counter_prefix="dedup/fuzzy/document")
 
+    # CC's Hash-to-Min guarantees component_id == min(id_norm) across a cluster,
+    # so `component_id == id_norm` cheaply identifies the natural canonical.
+    # `preserve_singletons=True` wires singletons as self-links, so a node is a
+    # singleton iff its adjacency_list is exactly [id_norm] — no cluster peers.
     shard_pipeline = (
         Dataset.from_list(cc_files)
         .load_parquet()
         .map(
             lambda r: {
                 "id": _strip_cc_prefix(r["record_id"]),
-                "is_dup": r["component_id"] != r["id_norm"],
+                "component_id": r["component_id"],
+                "is_canonical": r["component_id"] == r["id_norm"],
+                "is_singleton": len(r["adjacency_list"]) == 1 and r["adjacency_list"][0] == r["id_norm"],
                 "file_idx": r["file_idx"],
             }
         )
@@ -308,10 +339,14 @@ def compute_fuzzy_dups_attrs(
         src_dir: FuzzyDupsPerSource(attr_dir=f"{output_path}/outputs/{tag}") for src_dir, tag in source_tag.items()
     }
 
-    total = sum(r["total"] for r in shard_results)
-    dups = sum(r["dups"] for r in shard_results)
-    unique = total - dups
-    logger.info("Fuzzy dups: total=%d dups=%d unique=%d", total, dups, unique)
+    cluster_members = sum(r["cluster_members"] for r in shard_results)
+    clusters = sum(r["canonicals"] for r in shard_results)  # one canonical per cluster
+    logger.info(
+        "Fuzzy dups: %d cluster members across %d clusters (non-canonicals to drop by default: %d)",
+        cluster_members,
+        clusters,
+        cluster_members - clusters,
+    )
 
     return FuzzyDupsAttrData(
         params=params,

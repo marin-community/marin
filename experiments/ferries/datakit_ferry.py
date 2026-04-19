@@ -100,12 +100,15 @@ def build_steps(run_id: str) -> list[StepSpec]:
             output_path=output_path,
             filetype="parquet",
             filters=[
+                # Default fuzzy-dedup policy: keep the CC-picked canonical of each
+                # cluster, drop the rest. Singletons have no attr row, so
+                # keep_if_missing=True passes them through.
                 FilterConfig(
-                    type=FilterType.REMOVE_DOC,
+                    type=FilterType.KEEP_DOC,
                     attribute_path=Artifact.load(deduped, FuzzyDupsAttrData)
                     .sources[Artifact.load(normalized, NormalizedData).main_output_dir]
                     .attr_dir,
-                    name="dup_doc",
+                    name="is_cluster_canonical",
                     attribute_filetype="parquet",
                     keep_if_missing=True,
                 ),
