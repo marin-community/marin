@@ -21,8 +21,9 @@ from experiments.grug.moe.launch import (
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 GATE1_CONFIGS: list[tuple[int, float]] = [
-    (512, 2.19e17),
-    (768, 1.70e18),
+    # d512/d768 have num_kv_heads=1, can't halve. Only d1024+ works.
+    (1024, 9.00e18),
+    (1280, 2.83e19),
 ]
 
 
