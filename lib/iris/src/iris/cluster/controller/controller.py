@@ -105,7 +105,7 @@ from iris.cluster.controller.transitions import (
     SchedulingEvent,
     TaskUpdate,
 )
-from iris.cluster.controller.worker_health import HealthSignal, WorkerHealthTracker
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.log_store import CONTROLLER_LOG_KEY
 from iris.cluster.providers.types import find_free_port, resolve_external_host
 from iris.log_server.client import LogPusher, LogServiceProxy, RemoteLogHandler
@@ -2295,8 +2295,9 @@ class Controller:
                 ping_snapshots: dict[WorkerId, job_pb2.WorkerResourceSnapshot | None] = {}
                 for result in results:
                     if result.error is not None:
-                        self._health.bump(result.worker_id, HealthSignal.RPC_FAILURE)
+                        self._health.ping(result.worker_id, healthy=False)
                     else:
+                        self._health.ping(result.worker_id, healthy=True)
                         ping_snapshots[result.worker_id] = result.resource_snapshot if update_resources else None
 
                 self._transitions.update_worker_pings(ping_snapshots)
@@ -2438,15 +2439,14 @@ class Controller:
                 unhealthy = self._health.workers_over_threshold()
                 if unhealthy:
                     logger.warning(
-                        "Failing %d workers over health-score threshold %.1f: %s",
+                        "Failing %d workers over health threshold: %s",
                         len(unhealthy),
-                        self._health.threshold,
-                        [(str(wid), round(score, 2)) for wid, score in unhealthy[:10]],
+                        [str(wid) for wid in unhealthy[:10]],
                     )
                     removed.extend(
                         self._terminate_workers(
-                            [str(wid) for wid, _ in unhealthy],
-                            reason=f"worker health score >= {self._health.threshold:.1f}",
+                            [str(wid) for wid in unhealthy],
+                            reason="worker health threshold exceeded",
                             sibling_reason="unhealthy worker failed, slice terminated",
                         )
                     )
@@ -2522,7 +2522,7 @@ class Controller:
     ) -> list[str]:
         """Process failed heartbeats: update accumulator and return primary failed worker IDs."""
         for batch, _error in failure_entries:
-            self._health.bump(batch.worker_id, HealthSignal.RPC_FAILURE)
+            self._health.ping(batch.worker_id, healthy=False)
         failure_result = self._transitions.fail_heartbeats_batch(failure_entries)
         acc.all_tasks_to_kill.update(failure_result.tasks_to_kill)
         acc.all_task_kill_workers.update(failure_result.task_kill_workers)

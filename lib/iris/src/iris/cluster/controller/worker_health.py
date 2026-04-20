@@ -1,150 +1,105 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""In-memory worker health score with exponential decay.
+"""In-memory worker health tracking with ping-based decay.
 
-Accumulates failure evidence across heterogeneous signals (heartbeat/ping RPC
-failures, build failures) into a per-worker score that decays exponentially
-with time. The reaper thread reads scores and terminates workers whose
-aggregate score crosses the threshold.
+Tracks two independent failure modes per worker:
 
-``TASK_STATE_WORKER_FAILED`` is deliberately *not* a tracker signal: a worker
-that actually died will also fail its next ping/heartbeat RPC, so observing
-it via both paths would double-count the same failure.
+- Consecutive ping failures: incremented by any failed ping or heartbeat RPC,
+  reset to zero by any successful ping. Ten consecutive failures trip the
+  termination threshold.
+- Build failures: monotonic counter for BUILDING→FAILED transitions. Ten build
+  failures trip the termination threshold independently.
 
-Lives entirely in memory. A dying worker recurs within one signal cycle,
-so losing accumulated evidence on controller restart doesn't meaningfully
-delay termination.
+The ping-based decay means no clock management is needed: healthy pings
+naturally reset the failure count, and the tracker needs no time parameters.
+
+Lives entirely in memory. A failing worker recurs within one ping cycle,
+so losing evidence on controller restart doesn't meaningfully delay termination.
 """
 
-import enum
 import logging
-import math
 import threading
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from iris.cluster.types import WorkerId
-from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 
-
-class HealthSignal(enum.StrEnum):
-    """Failure signals that move the worker health score."""
-
-    RPC_FAILURE = "rpc_failure"
-    TASK_BUILD_FAILED = "task_build_failed"
-
-
-SIGNAL_WEIGHT: Mapping[HealthSignal, float] = {
-    HealthSignal.RPC_FAILURE: 1.0,
-    HealthSignal.TASK_BUILD_FAILED: 0.5,
-}
-"""Per-signal additive weight.
-
-RPC_FAILURE carries unit weight — this preserves today's 10-strike heartbeat
-behavior (10 consecutive RPC failures trip the threshold).
-
-TASK_BUILD_FAILED is a weaker signal (0.5): a user-visible FAILED originating
-from a task still in BUILDING usually means the worker couldn't pull the image
-or set up the environment — a soft hint at disk / network trouble, but it can
-also be a broken Dockerfile or a user-side build command. Half weight means
-~20 build failures on one worker cross the threshold by themselves, while
-mixing with RPC failures still reaps promptly."""
-
-HEALTH_SCORE_THRESHOLD = 10.0
-
-HEALTH_SCORE_HALF_LIFE_S = 300.0
+PING_FAILURE_THRESHOLD = 10
+BUILD_FAILURE_THRESHOLD = 10
 
 
 @dataclass(slots=True)
-class _Entry:
-    score: float
-    updated_ms: int
+class _WorkerState:
+    consecutive_ping_failures: int = 0
+    build_failures: int = 0
 
 
 class WorkerHealthTracker:
-    """Tracks per-worker failure scores with exponential decay.
+    """Tracks per-worker failure counts for termination decisions.
 
-    Thread-safe: bumped from the ping/heartbeat and task-update threads,
+    Thread-safe: written from ping/heartbeat and task-update threads,
     read from the reaper thread.
     """
 
     def __init__(
         self,
         *,
-        half_life_s: float = HEALTH_SCORE_HALF_LIFE_S,
-        threshold: float = HEALTH_SCORE_THRESHOLD,
-        weights: Mapping[HealthSignal, float] = SIGNAL_WEIGHT,
-        clock: Callable[[], int] = lambda: Timestamp.now().epoch_ms(),
+        ping_threshold: int = PING_FAILURE_THRESHOLD,
+        build_threshold: int = BUILD_FAILURE_THRESHOLD,
     ) -> None:
-        assert half_life_s > 0, "half_life_s must be positive"
-        assert threshold > 0, "threshold must be positive"
-        self._lam = math.log(2) / half_life_s
-        self._threshold = threshold
-        self._weights = dict(weights)
-        self._clock = clock
+        assert ping_threshold > 0
+        assert build_threshold > 0
+        self._ping_threshold = ping_threshold
+        self._build_threshold = build_threshold
         self._lock = threading.Lock()
-        self._entries: dict[WorkerId, _Entry] = {}
+        self._states: dict[WorkerId, _WorkerState] = {}
 
-    @property
-    def threshold(self) -> float:
-        return self._threshold
-
-    def bump(self, worker_id: WorkerId, signal: HealthSignal) -> float:
-        """Record a failure signal for a worker. Returns the new score."""
-        weight = self._weights[signal]
-        now = self._clock()
+    def ping(self, worker_id: WorkerId, *, healthy: bool) -> None:
+        """Record a ping outcome. A healthy ping resets the consecutive failure count."""
         with self._lock:
-            entry = self._entries.get(worker_id)
-            decayed = self._decay(entry.score, now - entry.updated_ms) if entry else 0.0
-            new_score = decayed + weight
-            self._entries[worker_id] = _Entry(new_score, now)
+            state = self._states.setdefault(worker_id, _WorkerState())
+            if healthy:
+                state.consecutive_ping_failures = 0
+            else:
+                state.consecutive_ping_failures += 1
+            failures = state.consecutive_ping_failures
         logger.debug(
-            "Worker %s health bump: signal=%s weight=%.1f score=%.2f",
+            "Worker %s ping=%s consecutive_ping_failures=%d",
             worker_id,
-            signal.value,
-            weight,
-            new_score,
+            "ok" if healthy else "fail",
+            failures,
         )
-        return new_score
 
-    def current_score(self, worker_id: WorkerId) -> float:
-        now = self._clock()
+    def build_failed(self, worker_id: WorkerId) -> None:
+        """Record a BUILDING→FAILED transition."""
         with self._lock:
-            entry = self._entries.get(worker_id)
-            if entry is None:
-                return 0.0
-            return self._decay(entry.score, now - entry.updated_ms)
+            state = self._states.setdefault(worker_id, _WorkerState())
+            state.build_failures += 1
+            failures = state.build_failures
+        logger.debug("Worker %s build_failures=%d", worker_id, failures)
 
-    def workers_over_threshold(self) -> list[tuple[WorkerId, float]]:
-        """Return (worker_id, score) pairs whose current score meets the threshold."""
-        now = self._clock()
-        out: list[tuple[WorkerId, float]] = []
+    def workers_over_threshold(self) -> list[WorkerId]:
+        """Return IDs of workers that have exceeded a termination threshold."""
         with self._lock:
-            for wid, entry in self._entries.items():
-                score = self._decay(entry.score, now - entry.updated_ms)
-                if score >= self._threshold:
-                    out.append((wid, score))
-        return out
+            return [
+                wid
+                for wid, s in self._states.items()
+                if s.consecutive_ping_failures >= self._ping_threshold or s.build_failures >= self._build_threshold
+            ]
 
     def forget(self, worker_id: WorkerId) -> None:
         with self._lock:
-            self._entries.pop(worker_id, None)
+            self._states.pop(worker_id, None)
 
     def forget_many(self, worker_ids: Iterable[WorkerId]) -> None:
         with self._lock:
             for wid in worker_ids:
-                self._entries.pop(wid, None)
+                self._states.pop(wid, None)
 
-    def snapshot(self) -> dict[WorkerId, float]:
-        """Current decayed scores for every tracked worker (for diagnostics)."""
-        now = self._clock()
+    def snapshot(self) -> dict[WorkerId, tuple[int, int]]:
+        """Current (consecutive_ping_failures, build_failures) per worker (for diagnostics)."""
         with self._lock:
-            return {wid: self._decay(entry.score, now - entry.updated_ms) for wid, entry in self._entries.items()}
-
-    def _decay(self, score: float, dt_ms: int) -> float:
-        if dt_ms <= 0:
-            return score
-        return score * math.exp(-self._lam * dt_ms / 1000.0)
+            return {wid: (s.consecutive_ping_failures, s.build_failures) for wid, s in self._states.items()}

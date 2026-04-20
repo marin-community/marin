@@ -45,7 +45,7 @@ from iris.cluster.controller.schema import (
     JobDetailRow,
     WorkerDetailRow,
 )
-from iris.cluster.controller.worker_health import HealthSignal, WorkerHealthTracker
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
@@ -1875,9 +1875,8 @@ class ControllerTransitions:
                     # runtime (disk full, DNS / registry unreachable, transient
                     # network hiccup). User-code failures only appear once the task
                     # has reached RUNNING. Treat the BUILDING -> FAILED transition
-                    # as a weak health signal — see SIGNAL_WEIGHT for rationale.
                     if prior_state == job_pb2.TASK_STATE_BUILDING and worker_id is not None:
-                        self._health.bump(WorkerId(str(worker_id)), HealthSignal.TASK_BUILD_FAILED)
+                        self._health.build_failed(WorkerId(str(worker_id)))
                 if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state in EXECUTING_TASK_STATES:
                     # A worker that truly died will also miss its next ping/heartbeat
                     # RPC, which bumps the tracker on the observer side. We don't
