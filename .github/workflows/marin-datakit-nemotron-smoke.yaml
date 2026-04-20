@@ -7,8 +7,6 @@ on:
 
 permissions:
   contents: read
-  issues: write    # claude triage files issues
-  id-token: write  # claude-code-action OIDC
 
 jobs:
   datakit-nemotron-smoke:
@@ -127,40 +125,6 @@ jobs:
           .venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job list --json 2>/dev/null | jq '.[0:5]' || true
 
-      # The canary-triage skill handles multiple lanes; CANARY_LANE selects
-      # datakit-nemotron-smoke vs datakit-smoke vs tpu.
-      - name: Claude triage
-        id: claude_triage
-        if: (failure() || cancelled()) && github.event_name == 'schedule'
-        uses: anthropics/claude-code-action@v1
-        timeout-minutes: 30
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
-          prompt: |
-            Read .agents/skills/canary-triage/SKILL.md and follow it.
-          claude_args: |
-            --model opus
-            --max-turns 500
-            --allowedTools "Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*)"
-        env:
-          CANARY_LANE: datakit-nemotron-smoke
-          CANARY_JOB_ID: ${{ steps.submit.outputs.job_id }}
-          CANARY_RUN_ID: ${{ env.SMOKE_RUN_ID }}
-          IRIS_CONFIG: ${{ env.IRIS_CONFIG }}
-          WANDB_ENTITY: ${{ env.WANDB_ENTITY }}
-          WANDB_PROJECT: ${{ env.WANDB_PROJECT }}
-          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
-          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-      - name: Upload Slack message
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v4
-        with:
-          name: slack-message
-          path: slack_message.md
-          retention-days: 1
-          if-no-files-found: ignore
-
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. See the datakit-smoke workflow for rationale.
   notify-slack:
@@ -168,21 +132,10 @@ jobs:
     if: always() && (needs.datakit-nemotron-smoke.result == 'failure' || needs.datakit-nemotron-smoke.result == 'cancelled') && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - name: Download Slack message
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: slack-message
-
       - name: Notify Slack
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          FALLBACK_TEXT: ":red_circle: *Datakit Nemotron Smoke failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TEXT: ":red_circle: *Datakit Nemotron Smoke failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         run: |
-          if [ -f slack_message.md ]; then
-            TEXT=$(cat slack_message.md)
-          else
-            TEXT="$FALLBACK_TEXT"
-          fi
           PAYLOAD=$(python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))" <<< "$TEXT")
           curl -sf -X POST -H 'Content-Type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL"
