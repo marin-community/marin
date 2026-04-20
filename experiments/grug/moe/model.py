@@ -73,6 +73,8 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    # Separate norm for router/shared: "none", "separate_router", "separate_shared".
+    mlp_norm_split: str = "none"
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -346,11 +348,14 @@ class MoEMLP(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "B S D"],
+        router_input: Float[Array, "B S D"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
+        # Use separate router input if provided, otherwise use x_flat for routing.
+        r_flat = rearrange(router_input, "b s d -> (b s) d") if router_input is not None else x_flat
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
-        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+        router_logits = jnp.einsum("td,de->te", r_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
@@ -414,15 +419,31 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    # Optional separate norms for router or shared expert.
+    rms_router: RMSNorm | None
+    gn_router: GatedNorm | None
+    rms_shared: RMSNorm | None
+    gn_shared: GatedNorm | None
+    cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
-        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
+        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key, gn_router_key, gn_shared_key = random.split(key, 7)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
             shared = DenseMLP.init(
                 cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
             )
+        rms_router = None
+        gn_router = None
+        if cfg.mlp_norm_split == "separate_router":
+            rms_router = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+            gn_router = GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_router_key)
+        rms_shared = None
+        gn_shared = None
+        if cfg.mlp_norm_split == "separate_shared" and shared is not None:
+            rms_shared = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+            gn_shared = GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_shared_key)
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
@@ -431,6 +452,11 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            rms_router=rms_router,
+            gn_router=gn_router,
+            rms_shared=rms_shared,
+            gn_shared=gn_shared,
+            cfg=cfg,
         )
 
     @named_call
@@ -442,9 +468,19 @@ class Block(eqx.Module):
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
+
+        if self.cfg.mlp_norm_split == "separate_router":
+            router_in = self.gn_router(self.rms_router(x))
+            mlp_out, router_stats = self.mlp(mlp_in, router_input=router_in)
+        else:
+            mlp_out, router_stats = self.mlp(mlp_in)
+
         if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            if self.cfg.mlp_norm_split == "separate_shared":
+                shared_in = self.gn_shared(self.rms_shared(x))
+                mlp_out = mlp_out + self.shared(shared_in, activation=ActivationFunctionEnum.silu)
+            else:
+                mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
         return x, router_stats
 
