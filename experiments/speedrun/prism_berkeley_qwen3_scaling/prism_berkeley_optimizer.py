@@ -1,10 +1,13 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 from dataclasses import dataclass
 from functools import partial
-from typing import Literal, NamedTuple, Optional
+from typing import Literal, NamedTuple
 
 import chex
 import jax
@@ -127,7 +130,7 @@ def _init_sketch_cache(params, *, sketch_size: int, seed: int):
     keys = jax.random.split(jax.random.PRNGKey(seed), len(leaves))
 
     sketches = []
-    for leaf, key in zip(leaves, keys):
+    for leaf, key in zip(leaves, keys, strict=True):
         if isinstance(leaf, haliax.nn.Linear) and leaf.weight is not None and leaf.weight.array is not None:
             sketches.append(_make_default_sketch(tuple(leaf.weight.array.shape), sketch_size, key))
         else:
@@ -288,7 +291,9 @@ def scale_with_prism_berkeley(
 
             return dataclasses.replace(
                 layer,
-                weight=dataclasses.replace(layer.weight, array=transformed_weight_array.astype(layer.weight.array.dtype)),
+                weight=dataclasses.replace(
+                    layer.weight, array=transformed_weight_array.astype(layer.weight.array.dtype)
+                ),
             )
 
         transformed_updates = map_flattened_linear_layers(transform_linear_layer, updates, state.sketch_cache)
@@ -309,7 +314,7 @@ class PrismBerkeleyConfig(OptimizerConfig):
     nesterov: bool = True
     backend_steps: int = 5
     weight_decay: float = 0.0
-    adam_weight_decay: Optional[float] = None
+    adam_weight_decay: float | None = None
     beta1: float = 0.9
     beta2: float = 0.95
     epsilon: float = 1e-8

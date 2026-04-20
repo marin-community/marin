@@ -1,8 +1,12 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-from typing import Any, Callable, Literal, TypeVar
+from typing import Any, Literal, TypeVar
+from collections.abc import Callable
 
 import chex
 import equinox as eqx
@@ -20,7 +24,6 @@ from haliax.tree_util import scan_aware_tree_map
 from levanter.models.linear import has_linear_like_marker
 import levanter.tracker
 from levanter.utils.jax_utils import is_inexact_arrayish
-
 
 T = TypeVar("T")
 
@@ -58,7 +61,12 @@ def tree_gaussian_like(key, tree):
     """
     leaves, structure = jax.tree_util.tree_flatten(tree)
     keys = jax.random.split(key, len(leaves))
-    rand_n = lambda x, key: jax.random.normal(key, x.shape) if is_inexact_arrayish(x) else None
+
+    def rand_n(x, key):
+        if is_inexact_arrayish(x):
+            return jax.random.normal(key, x.shape)
+        return None
+
     g = jax.tree_util.tree_map(rand_n, leaves, list(keys))
     g = jax.tree_util.tree_unflatten(structure, g)
 
@@ -200,11 +208,16 @@ def map_flattened_linear_layers(
     is_leaf: Callable | None = None,
 ):
     """
-    Apply a function to all Linear layers in a PyTree, flattening articulated input/output dims into single dims, then
-    unflattening them back into the original structure. This method also takes care of vmapping over scan layers.
+    Apply a function to all Linear layers in a PyTree.
 
-    The linear layers will be passed to the function `f` and the result will be used to replace the original linear layer.
-    The linear layers passed to `f` will be flattened into 2D (named) arrays, and the result will be unflattened back into the original shape.
+    This helper flattens articulated input/output dims into single dims, applies
+    `f`, then unflattens the result back into the original structure. It also
+    takes care of vmapping over scan layers.
+
+    The linear layers will be passed to the function `f` and the result will be
+    used to replace the original linear layer. The linear layers passed to `f`
+    will be flattened into 2D named arrays, and the result will be unflattened
+    back into the original shape.
     The bias term, if any, will be passed as a 1D named arrays.
     The weight array will not be None, but the bias array may be None.
 
@@ -224,9 +237,17 @@ def map_flattened_linear_layers(
     orig_is_leaf = is_leaf
 
     if is_leaf is None:
-        is_leaf = lambda x: isinstance(x, hax.nn.Linear) or x is None
+
+        def is_linear_or_none(x):
+            return isinstance(x, hax.nn.Linear) or x is None
+
     else:
-        is_leaf = lambda x: isinstance(x, hax.nn.Linear) or orig_is_leaf(x) or x is None  # type: ignore
+        assert orig_is_leaf is not None
+
+        def is_linear_or_none(x):
+            return isinstance(x, hax.nn.Linear) or orig_is_leaf(x) or x is None
+
+    is_leaf = is_linear_or_none
 
     def map_fn(p, *rest_p):
         if isinstance(p, hax.nn.Linear):
