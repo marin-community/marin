@@ -15,14 +15,20 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
-from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.evaluation.evaluators.levanter_tpu_evaluator import LevanterTpuEvaluator
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 
 logger = logging.getLogger(__name__)
 
 
-class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
-    """For `Evaluator`s that runs inference with Levanter's Lm Eval Harness on TPUs."""
+class LevanterLmEvalEvaluator(Evaluator):
+    """Runs inference with Levanter's Lm Eval Harness on TPUs."""
+
+    @staticmethod
+    def model_name_or_path(model: ModelConfig) -> str:
+        """Return a reference Levanter can read without staging to local disk."""
+        if model.path is None:
+            return model.name
+        return model.path
 
     def evaluate(
         self,

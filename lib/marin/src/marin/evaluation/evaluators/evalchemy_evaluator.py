@@ -669,7 +669,7 @@ _patch_autoconfig_for_gcs()
         """Run evalchemy in-process using runpy instead of a subprocess.
 
         Executes the evalchemy CLI entrypoint (eval.eval) directly in the current
-        process. This ensures that when the Ray worker dies (due to error or preemption),
+        process. This ensures that when the worker dies (due to error or preemption),
         all TPU handles die with it — no orphaned subprocesses.
 
         Args:

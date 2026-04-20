@@ -41,7 +41,6 @@ class LMEvaluationHarnessEvaluator(Evaluator):
     @classmethod
     @contextmanager
     def _stage_remote_tokenizer_dir(cls, remote_dir: str) -> Iterator[str | None]:
-        # context manager so this deletes even with ray's process pooling
         with tempfile.TemporaryDirectory(prefix="marin-tokenizer-") as local_dir:
             copied_any = False
             for filename in cls.TOKENIZER_FILENAMES:
