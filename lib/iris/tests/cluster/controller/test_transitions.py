@@ -31,6 +31,7 @@ from iris.cluster.controller.schema import (
     EndpointRow,
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
+from iris.cluster.controller.worker_health import SIGNAL_WEIGHT, HealthSignal
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -2232,8 +2233,6 @@ def test_failed_from_building_bumps_health_tracker(state):
     reflects infrastructure trouble (image pull, disk, DNS) rather than user
     code. The tracker should see a TASK_BUILD_FAILED bump for that worker.
     """
-    from iris.cluster.controller.worker_health import SIGNAL_WEIGHT, HealthSignal
-
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
     req = make_job_request("job1", max_retries_failure=5)
     tasks = submit_job(state, "j1", req)

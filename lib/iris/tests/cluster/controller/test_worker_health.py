@@ -55,29 +55,30 @@ def test_bump_adds_weight_to_decayed_score(tracker: WorkerHealthTracker, clock: 
 
 
 def test_spaced_bumps_never_cross_threshold(clock: FakeClock) -> None:
-    """A failure every half-life converges to 2.0 — must stay under threshold.
+    """One failure per hour with 1-hour half-life converges to 2.0 — stays under threshold.
 
-    Without decay a spaced bump per half-life would eventually reap any worker
-    that's simply been around long enough. The geometric series 1/(1-0.5) caps
-    at 2.0, well below threshold 10.0.
+    Without decay, any worker alive long enough would eventually be reaped.
+    The geometric series 1/(1-0.5) caps at 2.0, well below threshold 10.0.
     """
-    tracker = WorkerHealthTracker(half_life_s=60.0, threshold=10.0, clock=clock)
+    tracker = WorkerHealthTracker(half_life_s=3600.0, threshold=10.0, clock=clock)
     wid = WorkerId("w-1")
     for _ in range(100):
         tracker.bump(wid, HealthSignal.RPC_FAILURE)
-        clock.advance(60.0)
+        clock.advance(3600.0)
     assert tracker.current_score(wid) < 3.0
     assert tracker.workers_over_threshold() == []
 
 
 def test_ten_rpc_failures_cross_threshold(tracker: WorkerHealthTracker) -> None:
-    """Preserves the legacy 10-strike RPC behavior."""
+    """Preserves the legacy 10-strike RPC behavior: 9 are not enough, 10th trips."""
     wid = WorkerId("w-1")
-    for _ in range(10):
+    for _ in range(9):
         tracker.bump(wid, HealthSignal.RPC_FAILURE)
+    assert tracker.workers_over_threshold() == []
+    tracker.bump(wid, HealthSignal.RPC_FAILURE)
     over = tracker.workers_over_threshold()
     assert [w for w, _ in over] == [wid]
-    assert over[0][1] >= 10.0
+    assert over[0][1] == pytest.approx(10.0)
 
 
 def test_build_failures_alone_need_twenty_to_cross(tracker: WorkerHealthTracker) -> None:

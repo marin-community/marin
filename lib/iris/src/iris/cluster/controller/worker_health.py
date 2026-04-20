@@ -64,10 +64,6 @@ class _Entry:
     updated_ms: int
 
 
-def _now_ms() -> int:
-    return Timestamp.now().epoch_ms()
-
-
 class WorkerHealthTracker:
     """Tracks per-worker failure scores with exponential decay.
 
@@ -81,7 +77,7 @@ class WorkerHealthTracker:
         half_life_s: float = HEALTH_SCORE_HALF_LIFE_S,
         threshold: float = HEALTH_SCORE_THRESHOLD,
         weights: Mapping[HealthSignal, float] = SIGNAL_WEIGHT,
-        clock: Callable[[], int] = _now_ms,
+        clock: Callable[[], int] = lambda: Timestamp.now().epoch_ms(),
     ) -> None:
         assert half_life_s > 0, "half_life_s must be positive"
         assert threshold > 0, "threshold must be positive"

@@ -143,7 +143,7 @@ _SLOW_HEARTBEAT_MS = 5000
 # full data-prune interval, which is typically 1 hour).
 _HISTORY_CLEANUP_INTERVAL_S = 60.0
 
-_REAPER_INTERVAL_S = 30.0
+_REAPER_INTERVAL = 30.0
 
 
 class SchedulingOutcome(enum.Enum):
@@ -2427,7 +2427,7 @@ class Controller:
         """
         if isinstance(self._provider, K8sTaskProvider) or self._config.dry_run:
             return
-        limiter = RateLimiter(interval_seconds=_REAPER_INTERVAL_S)
+        limiter = RateLimiter(interval_seconds=_REAPER_INTERVAL)
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
                 break
