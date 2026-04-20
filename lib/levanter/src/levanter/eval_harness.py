@@ -42,7 +42,8 @@ from haliax import NamedArray
 from jax.sharding import PartitionSpec
 
 import levanter.tracker
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from levanter.data.packing import (
     PromptCompletion,
     greedy_pack_prompt_completions,
@@ -56,7 +57,6 @@ from levanter.inference.utils import INVALID
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
 from levanter.utils.background_iterable import BackgroundIterator
-from levanter.tokenizers import MarinTokenizer
 from levanter.utils.py_utils import set_global_rng_seeds
 
 try:
@@ -1665,8 +1665,8 @@ def _iterate_tokenized_requests(
         combined_batch = [combined_texts[i] for i in batch_indices]
         context_batch = [contexts[i] for i in batch_indices]
         # Tokenize batched inputs
-        combined_encodings = tokenizer(combined_batch, add_special_tokens=False)  # pyrefly: ignore[not-callable]
-        context_encodings = tokenizer(context_batch, add_special_tokens=False)  # pyrefly: ignore[not-callable]
+        combined_encodings = {"input_ids": tokenizer.encode_batch(combined_batch)}
+        context_encodings = {"input_ids": tokenizer.encode_batch(context_batch)}
 
         for off in range(len(batch_indices)):
             i = batch_indices[off]
