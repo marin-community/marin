@@ -20,6 +20,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from connectrpc.request import RequestContext
 from google.protobuf.json_format import MessageToJson
@@ -41,6 +42,14 @@ DEFAULT_SLOW_SAMPLES = 50
 DEFAULT_DISCOVERY_SAMPLES = 20
 DEFAULT_DISCOVERY_INTERVAL = 30.0
 DEFAULT_REQUEST_PREVIEW_BYTES = 1024
+
+
+@dataclass(frozen=True, slots=True)
+class _CallMetadata:
+    """Caller-identifying fields lifted from the RPC headers."""
+
+    peer: str = ""
+    user_agent: str = ""
 
 
 class RpcStatsCollector:
@@ -136,7 +145,7 @@ class RpcStatsCollector:
         error_code: str,
         error_message: str,
     ) -> stats_pb2.RpcCallSample:
-        peer, user_agent = _extract_call_metadata(ctx)
+        meta = _extract_call_metadata(ctx)
         identity = get_verified_identity()
         caller = identity.user_id if identity is not None else ""
         preview = _render_preview(request, self._request_preview_bytes)
@@ -144,8 +153,8 @@ class RpcStatsCollector:
             method=method,
             timestamp=time_pb2.Timestamp(epoch_ms=timestamp_ms),
             duration_ms=duration_ms,
-            peer=peer,
-            user_agent=user_agent,
+            peer=meta.peer,
+            user_agent=meta.user_agent,
             caller=caller,
             error_code=error_code,
             error_message=_truncate(error_message, 512),
@@ -207,21 +216,21 @@ def _percentile_ms(counts, pct: float) -> float:
     return lower
 
 
-def _extract_call_metadata(ctx: RequestContext | None) -> tuple[str, str]:
+def _extract_call_metadata(ctx: RequestContext | None) -> _CallMetadata:
     if ctx is None:
-        return ("", "")
+        return _CallMetadata()
     try:
         headers: Mapping[str, str] = ctx.request_headers()
     except Exception:
         # Stats hot path must not crash the RPC; log so silent breakage
         # is still visible in debug-level server logs.
         logger.debug("Failed to read request headers for stats", exc_info=True)
-        return ("", "")
+        return _CallMetadata()
     user_agent = headers.get("user-agent", "") or headers.get("grpc-user-agent", "")
     # x-forwarded-for may be a comma-separated chain; take the first hop.
     forwarded = headers.get("x-forwarded-for", "")
     peer = forwarded.split(",", 1)[0].strip() if forwarded else headers.get("x-real-ip", "")
-    return (peer, user_agent)
+    return _CallMetadata(peer=peer, user_agent=user_agent)
 
 
 def _render_preview(request: Message | None, max_bytes: int) -> str:
