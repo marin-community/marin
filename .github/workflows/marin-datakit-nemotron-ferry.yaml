@@ -1,4 +1,4 @@
-name: Marin - Datakit Nemotron Smoke
+name: Marin - Datakit Nemotron Ferry
 
 on:
   schedule:
@@ -9,15 +9,15 @@ permissions:
   contents: read
 
 jobs:
-  datakit-nemotron-smoke:
+  datakit-nemotron-ferry:
     runs-on: ubuntu-latest
     timeout-minutes: 1440  # 24h — nemotron medium is ~3.4 TiB
     concurrency:
-      group: datakit-nemotron-smoke
+      group: datakit-nemotron-ferry
       cancel-in-progress: true
     env:
-      SMOKE_RUN_ID: datakit-nemotron-smoke-${{ github.run_id }}-${{ github.run_attempt }}
-      FERRY_STATUS_PATH: gs://marin-tmp-eu-west4/ttl=1d/ci/datakit-nemotron-smoke-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
+      SMOKE_RUN_ID: datakit-nemotron-ferry-${{ github.run_id }}-${{ github.run_attempt }}
+      FERRY_STATUS_PATH: gs://marin-tmp-eu-west4/ttl=1d/ci/datakit-nemotron-ferry-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/examples/marin.yaml
@@ -61,7 +61,7 @@ jobs:
           chmod 600 ~/.ssh/google_compute_engine
           chmod 644 ~/.ssh/google_compute_engine.pub
 
-      - name: Submit datakit nemotron smoke ferry
+      - name: Submit datakit nemotron ferry
         id: submit
         shell: bash -l {0}
         run: |
@@ -83,7 +83,7 @@ jobs:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
-      - name: Wait for datakit nemotron smoke ferry
+      - name: Wait for datakit nemotron ferry
         shell: bash -l {0}
         run: |
           JOB_ID="${{ steps.submit.outputs.job_id }}"
@@ -128,14 +128,14 @@ jobs:
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. See the datakit-smoke workflow for rationale.
   notify-slack:
-    needs: datakit-nemotron-smoke
-    if: always() && (needs.datakit-nemotron-smoke.result == 'failure' || needs.datakit-nemotron-smoke.result == 'cancelled') && github.event_name == 'schedule'
+    needs: datakit-nemotron-ferry
+    if: always() && (needs.datakit-nemotron-ferry.result == 'failure' || needs.datakit-nemotron-ferry.result == 'cancelled') && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - name: Notify Slack
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          TEXT: ":red_circle: *Datakit Nemotron Smoke failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TEXT: ":red_circle: *Datakit Nemotron Ferry failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         run: |
           PAYLOAD=$(python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))" <<< "$TEXT")
           curl -sf -X POST -H 'Content-Type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL"
