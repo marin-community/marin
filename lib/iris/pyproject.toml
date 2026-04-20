@@ -35,6 +35,10 @@ controller = [
     "pyarrow>=19.0.0",
     "kubernetes>=31.0.0",
 ]
+log-server = [
+    "duckdb>=1.0.0",
+    "pyarrow>=19.0.0",
+]
 worker = []
 
 [project.scripts]

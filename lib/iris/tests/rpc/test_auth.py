@@ -478,7 +478,7 @@ def test_hash_token_is_sha256_hex():
 
 @pytest.fixture
 def jwt_manager():
-    from iris.cluster.controller.auth import JwtTokenManager
+    from iris.rpc.auth import JwtTokenManager
 
     return JwtTokenManager(signing_key="test-signing-key-abcdef1234567890")
 
@@ -491,7 +491,7 @@ def test_jwt_token_manager_roundtrip(jwt_manager):
 
 
 def test_jwt_token_manager_rejects_wrong_key():
-    from iris.cluster.controller.auth import JwtTokenManager
+    from iris.rpc.auth import JwtTokenManager
 
     manager_a = JwtTokenManager(signing_key="key-a-abcdef1234567890abcdef")
     manager_b = JwtTokenManager(signing_key="key-b-abcdef1234567890abcdef")
@@ -514,8 +514,9 @@ def test_jwt_token_manager_expired(jwt_manager):
 
 
 def test_jwt_token_manager_load_revocations(tmp_path):
-    from iris.cluster.controller.auth import JwtTokenManager, create_api_key, revoke_api_key
+    from iris.cluster.controller.auth import _load_revocations_from_db, create_api_key, revoke_api_key
     from iris.cluster.controller.db import ControllerDB
+    from iris.rpc.auth import JwtTokenManager
     from rigging.timing import Timestamp
 
     db = ControllerDB(db_dir=tmp_path)
@@ -547,7 +548,7 @@ def test_jwt_token_manager_load_revocations(tmp_path):
         now=now,
     )
 
-    manager.load_revocations(db)
+    _load_revocations_from_db(manager, db)
 
     revoked_token = manager.create_token(user_id="alice", role="user", key_id="k-revoked")
     active_token = manager.create_token(user_id="alice", role="user", key_id="k-active")

@@ -105,7 +105,7 @@ from iris.cluster.controller.transitions import (
     SchedulingEvent,
     TaskUpdate,
 )
-from iris.cluster.log_store import CONTROLLER_LOG_KEY
+from iris.log_server.store import CONTROLLER_LOG_KEY
 from iris.cluster.providers.types import find_free_port, resolve_external_host
 from iris.log_server.client import LogPusher, LogServiceProxy, RemoteLogHandler
 from iris.log_server.main import build_log_server_asgi

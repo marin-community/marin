@@ -13,7 +13,7 @@ from pathlib import Path
 import uvicorn
 
 from iris.chaos import chaos
-from iris.cluster.log_store import worker_log_key
+from iris.log_server.store import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.log_server.client import LogPusher, RemoteLogHandler
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage

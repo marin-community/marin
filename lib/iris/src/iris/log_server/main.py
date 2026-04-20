@@ -27,7 +27,7 @@ from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.routing import Mount
 
 from iris.log_server.server import LogServiceImpl
-from iris.rpc.auth import AuthInterceptor, NullAuthInterceptor
+from iris.rpc.auth import AuthInterceptor, JwtTokenManager, NullAuthInterceptor
 from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, ConcurrencyLimitInterceptor, RequestTimingInterceptor
 from iris.rpc.logging_connect import LogServiceWSGIApplication
 from iris.rpc.stats import RpcStatsCollector
@@ -106,11 +106,6 @@ def _build_auth_interceptors(signing_key: str | None, strict: bool) -> tuple[Int
     """
     if not signing_key:
         return (NullAuthInterceptor(),)
-    # Local import: JwtTokenManager lives in controller.auth to stay close
-    # to the DB-backed token issuance path. The log server only needs the
-    # verifier half.
-    from iris.cluster.controller.auth import JwtTokenManager
-
     verifier = JwtTokenManager(signing_key)
     if strict:
         return (AuthInterceptor(verifier=verifier),)

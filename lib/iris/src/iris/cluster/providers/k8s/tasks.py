@@ -25,7 +25,7 @@ from pathlib import Path
 
 from iris.cluster.controller.transitions import ClusterCapacity, DirectProviderSyncResult, SchedulingEvent
 from iris.cluster.controller.transitions import DirectProviderBatch, RunningTaskEntry, TaskUpdate
-from iris.cluster.log_store._types import LogPusherProtocol, TaskAttempt, task_log_key
+from iris.log_server.store._types import LogPusherProtocol, TaskAttempt, task_log_key
 from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity

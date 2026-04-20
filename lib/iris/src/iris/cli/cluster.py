@@ -640,8 +640,19 @@ def controller(ctx):
     type=click.Path(path_type=Path),
     help="Override the local state dir (default: /var/cache/iris/controller, or /tmp/dry-run/{today} in dry-run)",
 )
+@click.option(
+    "--log-service-address",
+    default=None,
+    envvar="IRIS_LOG_SERVICE_ADDRESS",
+    help=(
+        "URL of a standalone log server (e.g. http://log-server:10001). When omitted, "
+        "the controller starts an in-process LogServiceImpl."
+    ),
+)
 @click.pass_context
-def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_run, fresh, state_dir):
+def controller_serve(
+    ctx, host, port, checkpoint_path, checkpoint_interval, dry_run, fresh, state_dir, log_service_address
+):
     """Start a local controller process.
 
     Loads the cluster config, restores from checkpoint, and runs the full
@@ -673,6 +684,7 @@ def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_
         dry_run=dry_run,
         fresh=fresh,
         state_dir=state_dir,
+        log_service_address=log_service_address,
     )
 
 

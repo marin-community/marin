@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from threading import Lock
 
-from iris.cluster.log_store._types import REGEX_META_RE, LogReadResult
+from iris.log_server.store._types import REGEX_META_RE, LogReadResult
 from iris.cluster.types import TaskAttempt
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
@@ -142,7 +142,7 @@ class MemStore:
             return any(r[1] == key for r in self._rows)
 
     def cursor(self, key: str):
-        from iris.cluster.log_store import LogCursor
+        from iris.log_server.store import LogCursor
 
         return LogCursor(self, key)
 

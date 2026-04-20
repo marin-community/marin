@@ -40,7 +40,6 @@ from iris.cluster.controller.budget import (
 )
 from iris.rpc.proto_utils import priority_band_name
 from iris.cluster.controller.auth import (
-    DEFAULT_JWT_TTL_SECONDS,
     ControllerAuth,
     create_api_key,
     list_api_keys,
@@ -48,6 +47,7 @@ from iris.cluster.controller.auth import (
     revoke_login_keys_for_user,
 )
 from iris.rpc.auth import (
+    DEFAULT_JWT_TTL_SECONDS,
     AuthzAction,
     authorize,
     authorize_resource_owner,
@@ -97,7 +97,7 @@ from iris.cluster.controller.transitions import (
     task_updates_from_proto,
 )
 from iris.cluster.controller.provider import ProviderError
-from iris.cluster.log_store import build_log_source, worker_log_key
+from iris.log_server.store import build_log_source, worker_log_key
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import (

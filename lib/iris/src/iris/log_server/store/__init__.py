@@ -8,7 +8,7 @@ Exports ``LogStore`` as the environment-appropriate implementation:
 - Production: DuckDB-backed ``DuckDBLogStore``
 
 All consumers should import from this package:
-``from iris.cluster.log_store import LogStore, LogCursor, ...``
+``from iris.log_server.store import LogStore, LogCursor, ...``
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import os
 
-from iris.cluster.log_store._types import (
+from iris.log_server.store._types import (
     CONTROLLER_LOG_KEY,
     LogReadResult,
     _EST_BYTES_PER_ROW,
@@ -42,9 +42,9 @@ def _has_duckdb() -> bool:
 
 
 if _is_test_environment() or not _has_duckdb():
-    from iris.cluster.log_store.mem_store import MemStore as LogStore
+    from iris.log_server.store.mem_store import MemStore as LogStore
 else:
-    from iris.cluster.log_store.duckdb_store import DuckDBLogStore as LogStore
+    from iris.log_server.store.duckdb_store import DuckDBLogStore as LogStore
 
 
 class LogCursor:

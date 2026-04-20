@@ -14,12 +14,11 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.auth import (
     WORKER_USER,
     ControllerAuth,
-    JwtTokenManager,
     create_api_key,
     create_controller_auth,
     list_api_keys,
 )
-from iris.rpc.auth import VerifiedIdentity, hash_token
+from iris.rpc.auth import JwtTokenManager, VerifiedIdentity, hash_token
 from rigging.timing import Timestamp
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl

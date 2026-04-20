@@ -11,7 +11,7 @@ import logging
 import subprocess
 from dataclasses import dataclass, field
 
-from iris.cluster.log_store import build_log_source
+from iris.log_server.store import build_log_source
 from iris.cluster.types import JobName
 from iris.rpc import logging_pb2
 from iris.rpc import job_pb2

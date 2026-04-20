@@ -21,8 +21,8 @@ from tempfile import TemporaryDirectory
 
 import click
 
-from iris.cluster.log_store import task_log_key
-from iris.cluster.log_store.duckdb_store import DuckDBLogStore as LogStore
+from iris.log_server.store import task_log_key
+from iris.log_server.store.duckdb_store import DuckDBLogStore as LogStore
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import logging_pb2
 

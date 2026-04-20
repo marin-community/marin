@@ -14,17 +14,16 @@ import dataclasses
 import logging
 import secrets
 import time
-
-import jwt
+from collections.abc import Callable
 
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import API_KEY_PROJECTION, ApiKeyRow
 from iris.rpc import config_pb2
 from iris.rpc.auth import (
     GcpAccessTokenVerifier,
+    JwtTokenManager,
     StaticTokenVerifier,
     TokenVerifier,
-    VerifiedIdentity,
     hash_token,
 )
 from rigging.timing import Timestamp
@@ -32,7 +31,6 @@ from rigging.timing import Timestamp
 logger = logging.getLogger(__name__)
 
 WORKER_USER = "system:worker"
-DEFAULT_JWT_TTL_SECONDS = 86400 * 30  # 30 days
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +113,7 @@ def revoke_login_keys_for_user(db: ControllerDB, user_id: str, now: Timestamp) -
 
 
 # ---------------------------------------------------------------------------
-# JWT token manager
+# JWT signing-key storage and DB-backed hooks for the rpc-layer JwtTokenManager
 # ---------------------------------------------------------------------------
 
 
@@ -149,107 +147,43 @@ def _get_or_create_signing_key(db: ControllerDB) -> str:
         return rows[0].value
 
 
-# Minimum interval between last_used_at writes for the same key (seconds).
-_TOUCH_INTERVAL_SECONDS = 300  # 5 minutes
+def _db_touch_callback(db: ControllerDB) -> Callable[[str, float], None]:
+    """Build a touch callback that writes last_used_at to api_keys."""
 
-
-class JwtTokenManager:
-    """Creates and verifies HMAC-SHA256 JWT tokens.
-
-    Verification is a pure crypto operation followed by an in-memory
-    revocation check — no DB hit on the hot path. An optional DB reference
-    enables sampled last_used_at write-back (at most once per key per
-    ``_TOUCH_INTERVAL_SECONDS``).
-    """
-
-    def __init__(self, signing_key: str, db: ControllerDB | None = None):
-        self._signing_key = signing_key
-        self._revoked_jtis: set[str] = set()
-        self._db = db
-        # Tracks the last wall-clock time we wrote last_used_at per jti.
-        self._last_touched: dict[str, float] = {}
-
-    @property
-    def signing_key(self) -> str:
-        """HMAC secret used to sign and verify JWTs. Do not log or serialize."""
-        return self._signing_key
-
-    def create_token(
-        self,
-        user_id: str,
-        role: str,
-        key_id: str,
-        ttl_seconds: int = DEFAULT_JWT_TTL_SECONDS,
-    ) -> str:
-        now = time.time()
-        payload = {
-            "sub": user_id,
-            "role": role,
-            "jti": key_id,
-            "iat": int(now),
-            "exp": int(now + ttl_seconds),
-        }
-        return jwt.encode(payload, self._signing_key, algorithm="HS256")
-
-    def verify(self, token: str) -> VerifiedIdentity:
-        """Verify JWT signature and claims, check revocation.
-
-        On success, updates ``last_used_at`` in the DB at most once per key
-        per ``_TOUCH_INTERVAL_SECONDS`` to avoid hot-path DB writes.
-        """
+    def _touch(jti: str, now_seconds: float) -> None:
         try:
-            payload = jwt.decode(token, self._signing_key, algorithms=["HS256"])
-        except jwt.ExpiredSignatureError as exc:
-            raise ValueError("Token has expired") from exc
-        except jwt.InvalidTokenError as exc:
-            raise ValueError(f"Invalid token: {exc}") from exc
-
-        jti = payload.get("jti", "")
-        if jti in self._revoked_jtis:
-            raise ValueError("Token has been revoked")
-
-        self._maybe_touch(jti)
-
-        return VerifiedIdentity(
-            user_id=payload["sub"],
-            role=payload.get("role", "user"),
-        )
-
-    def _maybe_touch(self, jti: str) -> None:
-        """Write last_used_at to DB if enough time has elapsed since the last write."""
-        if not self._db or not jti:
-            return
-        now = time.time()
-        last = self._last_touched.get(jti, 0.0)
-        if now - last < _TOUCH_INTERVAL_SECONDS:
-            return
-        self._last_touched[jti] = now
-        try:
-            touch_api_key(self._db, jti, Timestamp.from_seconds(now))
+            touch_api_key(db, jti, Timestamp.from_seconds(now_seconds))
         except Exception:
             logger.debug("Failed to update last_used_at for key %s", jti, exc_info=True)
 
-    def revoke(self, jti: str) -> None:
-        """Add a JTI to the in-memory revocation set."""
-        self._revoked_jtis.add(jti)
+    return _touch
 
-    def load_revocations(self, db: ControllerDB) -> None:
-        """Load revoked key_ids from api_keys into the revocation set.
 
-        Only loads keys that haven't expired yet — expired JWTs are rejected
-        by signature verification anyway, so their JTIs don't need tracking.
-        """
-        now_ms = int(time.time() * 1000)
-        table = db.api_keys_table
-        with db.snapshot() as q:
-            rows = q.raw(
-                f"SELECT key_id FROM {table}"
-                " WHERE revoked_at_ms IS NOT NULL"
-                " AND (expires_at_ms IS NULL OR expires_at_ms > ?)",
-                (now_ms,),
-                decoders={"key_id": str},
-            )
-            self._revoked_jtis = {row.key_id for row in rows}
+def _load_revocations_from_db(mgr: JwtTokenManager, db: ControllerDB) -> None:
+    """Populate the manager's revocation set from the api_keys table.
+
+    Only loads keys that haven't expired yet — expired JWTs are rejected by
+    signature verification anyway, so their JTIs don't need tracking.
+    """
+    now_ms = int(time.time() * 1000)
+    table = db.api_keys_table
+    with db.snapshot() as q:
+        rows = q.raw(
+            f"SELECT key_id FROM {table}"
+            " WHERE revoked_at_ms IS NOT NULL"
+            " AND (expires_at_ms IS NULL OR expires_at_ms > ?)",
+            (now_ms,),
+            decoders={"key_id": str},
+        )
+    mgr.add_revocations(row.key_id for row in rows)
+
+
+def build_jwt_manager_for_controller(db: ControllerDB) -> JwtTokenManager:
+    """Build a JwtTokenManager wired to the controller DB for touch + revocations."""
+    signing_key = _get_or_create_signing_key(db)
+    mgr = JwtTokenManager(signing_key, touch_callback=_db_touch_callback(db))
+    _load_revocations_from_db(mgr, db)
+    return mgr
 
 
 # ---------------------------------------------------------------------------
@@ -286,9 +220,7 @@ def create_controller_auth(
             db.ensure_user("anonymous", now, role="admin")
             db.set_user_role("anonymous", "admin")
 
-            signing_key = _get_or_create_signing_key(db)
-            jwt_mgr = JwtTokenManager(signing_key, db=db)
-            jwt_mgr.load_revocations(db)
+            jwt_mgr = build_jwt_manager_for_controller(db)
 
             worker_token = _create_worker_jwt(db, jwt_mgr, now)
             logger.info("Authentication disabled — null-auth mode (workers use JWT)")
@@ -303,9 +235,7 @@ def create_controller_auth(
     worker_token: str | None = None
 
     if db:
-        signing_key = _get_or_create_signing_key(db)
-        jwt_mgr = JwtTokenManager(signing_key, db=db)
-        jwt_mgr.load_revocations(db)
+        jwt_mgr = build_jwt_manager_for_controller(db)
 
         if provider == "static":
             _preload_static_tokens(auth_config.static, db, now)
