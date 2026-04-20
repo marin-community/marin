@@ -16,7 +16,7 @@ Architecture:
 Usage:
     uv run iris --cluster=marin job run \\
         --cpu 2 --memory 10GB --enable-extra-resources -- \\
-        uv run python scripts/storage/distributed_scan.py \\
+        uv run python scripts/ops/storage/distributed_scan.py \\
         --staging-dir gs://marin-us-central2/tmp/storage-scan \\
         --workers 128
 """
@@ -652,7 +652,7 @@ def run_distributed(
             print(f"    {e}")
 
     print(f"\nParquet output: {staging_dir}")
-    print(f"  Run report with: uv run scripts/storage/cleanup.py report --parquet-dir {staging_dir}")
+    print(f"  Run report with: uv run scripts/ops/storage/cleanup.py report --parquet-dir {staging_dir}")
 
 
 # ---------------------------------------------------------------------------
@@ -677,7 +677,7 @@ def main(
 
         uv run iris --cluster=marin job run \\
             --cpu 2 --memory 10GB --enable-extra-resources -- \\
-            uv run python scripts/storage/distributed_scan.py \\
+            uv run python scripts/ops/storage/distributed_scan.py \\
             --staging-dir gs://marin-us-central2/tmp/storage-scan \\
             --workers 128
     """

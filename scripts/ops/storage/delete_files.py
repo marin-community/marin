@@ -19,10 +19,10 @@ object (bucket, name, size_bytes, storage_class) to stdout so callers can pipe
 to head/wc/awk without buffering the full delete set.
 
 Usage:
-    uv run scripts/storage/delete_files.py \\
+    uv run scripts/ops/storage/delete_files.py \\
         --scan-parquet gs://marin-us-central2/storage-scan/YYYY-MM-DD/ \\
-        --protect-rules scripts/storage/purge/protect_rules.json \\
-        --delete-rules scripts/storage/purge/delete_rules.json \\
+        --protect-rules scripts/ops/storage/purge/protect_rules.json \\
+        --delete-rules scripts/ops/storage/purge/delete_rules.json \\
         [--dry-run]
 """
 
