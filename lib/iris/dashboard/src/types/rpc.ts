@@ -547,3 +547,38 @@ export interface GetSchedulerStateResponse {
   totalPending: number
   totalRunning: number
 }
+
+// -- RPC Statistics (iris.stats.StatsService) --
+
+export interface RpcMethodStats {
+  method: string
+  count?: string
+  errorCount?: string
+  totalDurationMs?: number
+  maxDurationMs?: number
+  p50Ms?: number
+  p95Ms?: number
+  p99Ms?: number
+  bucketUpperBoundsMs?: string[]
+  bucketCounts?: string[]
+  lastCall?: ProtoTimestamp
+}
+
+export interface RpcCallSample {
+  method: string
+  timestamp?: ProtoTimestamp
+  durationMs?: number
+  peer?: string
+  userAgent?: string
+  caller?: string
+  errorCode?: string
+  errorMessage?: string
+  requestPreview?: string
+}
+
+export interface GetRpcStatsResponse {
+  methods?: RpcMethodStats[]
+  slowSamples?: RpcCallSample[]
+  discoverySamples?: RpcCallSample[]
+  collectorStartedAt?: ProtoTimestamp
+}

@@ -51,7 +51,7 @@ class ClusterClient(Protocol):
         self,
         job_id: JobName,
         timeout: float = 300.0,
-        poll_interval: float = 2.0,
+        poll_interval: float = 30.0,
     ) -> job_pb2.JobStatus: ...
 
     def wait_for_job_with_streaming(
@@ -59,7 +59,7 @@ class ClusterClient(Protocol):
         job_id: JobName,
         *,
         timeout: float,
-        poll_interval: float,
+        poll_interval: float = 30.0,
         since_ms: int = 0,
         min_level: str = "",
     ) -> job_pb2.JobStatus: ...

@@ -148,3 +148,9 @@ class MemStore:
 
     def close(self) -> None:
         pass
+
+    def _compact_step(self) -> None:
+        # MemStore has no pending buffer — writes are visible to readers
+        # immediately. Present for interface parity with DuckDBLogStore so
+        # test fixtures can force a sync point uniformly.
+        pass

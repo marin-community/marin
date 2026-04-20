@@ -34,7 +34,7 @@ Task sets are configured in [`task_configs.py`](https://github.com/marin-communi
 !!! note
 
     See [`levanter_lm_eval_evaluator.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/evaluation/evaluators/levanter_lm_eval_evaluator.py) for the default evaluator implementation.
-    Additional evaluators (including HELM, Alpaca, and other backends) live in [`lib/marin/src/marin/evaluation/evaluators`](https://github.com/marin-community/marin/tree/main/lib/marin/src/marin/evaluation/evaluators).
+    Additional evaluators live in [`lib/marin/src/marin/evaluation/evaluators`](https://github.com/marin-community/marin/tree/main/lib/marin/src/marin/evaluation/evaluators).
 
 ### Reported metrics
 

@@ -37,14 +37,14 @@ from rigging.filesystem import filesystem as marin_filesystem
 
 from marin.evaluation.evaluation_config import WANDB_PROJECT, EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
-from marin.evaluation.utils import is_remote_path, upload_to_gcs
 from marin.inference.vllm_server import resolve_model_name_or_path
+from marin.evaluation.utils import is_remote_path, upload_to_gcs
 
 logger = logging.getLogger(__name__)
 
 # Evalchemy git repo and commit to use
 EVALCHEMY_REPO = "https://github.com/teetone/evalchemy.git"
-EVALCHEMY_COMMIT = "010412c"  # 2026-03-14 commit
+EVALCHEMY_COMMIT = "7f24168"  # 2026-03-31: Added OlympiadBench Physics, coverage for science
 
 
 # Evalchemy benchmarks that have hardcoded n_repeat values and their paths.
@@ -66,7 +66,6 @@ N_REPEAT_BENCHMARK_PATHS = {
     "JEEBench": "eval/chat_benchmarks/JEEBench/eval_instruct.py",
     "HLE": "eval/chat_benchmarks/HLE/eval_instruct.py",
     "AIME26": "eval/chat_benchmarks/AIME26/eval_instruct.py",
-    "OlympiadBench": "eval/chat_benchmarks/OlympiadBench/eval_instruct.py",
 }
 
 
@@ -973,6 +972,31 @@ _patch_autoconfig_for_gcs()
                     cwd=evalchemy_path,
                     log_file=log_file,
                 )
+
+                # Verify results were actually written — evalchemy can return 0
+                # but silently fail to write results (e.g. sympy hang during scoring).
+                results_files = glob.glob(os.path.join(result_dir, "*", "results_*.json"))
+                if returncode == 0 and not results_files:
+                    # Log what's actually in the result dir for debugging
+                    all_files = []
+                    for root, _, files in os.walk(result_dir):
+                        for f in files:
+                            all_files.append(os.path.join(root, f))
+                    log_tail = ""
+                    if os.path.exists(log_file):
+                        with open(log_file, "r") as lf:
+                            content = lf.read()
+                            log_tail = content[-3000:] if len(content) > 3000 else content
+                    logger.error(
+                        f"Evalchemy returned exit code 0 for {eval_task.name} but no results_*.json "
+                        f"found in {result_dir}. Scoring likely hung or crashed silently.\n"
+                        f"Files in result_dir: {all_files}\n"
+                        f"=== Last 3000 chars of evalchemy log ===\n{log_tail}"
+                    )
+                    raise RuntimeError(
+                        f"Evalchemy returned success for {eval_task.name} but no results_*.json "
+                        f"found in {result_dir}. Scoring likely hung or crashed silently."
+                    )
 
                 if returncode != 0:
                     # Read log file contents to include in the error message

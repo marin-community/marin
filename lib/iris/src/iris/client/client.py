@@ -249,7 +249,7 @@ class Job:
     def wait(
         self,
         timeout: float = 300.0,
-        poll_interval: float = 5.0,
+        poll_interval: float = 30.0,
         *,
         raise_on_failure: bool = True,
         stream_logs: bool = False,
@@ -260,7 +260,10 @@ class Job:
 
         Args:
             timeout: Maximum wait time in seconds
-            poll_interval: Maximum time between status checks
+            poll_interval: Upper bound on the state-poll backoff. The loop
+                starts at 100ms and grows exponentially until it reaches this
+                cap (default 30s), so long-running jobs cost ~1 state RPC per
+                ``poll_interval``.
             raise_on_failure: If True, raise JobFailedError on any non-SUCCESS terminal state
             stream_logs: If True, stream logs from all tasks interleaved
             since_ms: Only show logs after this epoch millisecond timestamp

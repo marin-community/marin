@@ -25,9 +25,29 @@ def _make_entry(data: str, epoch_ms: int = 0) -> logging_pb2.LogEntry:
 # =============================================================================
 
 
+def _make_log_store(**kwargs) -> DuckDBLogStore:
+    """Build a LogStore whose get_logs sees recent writes synchronously.
+
+    In production, reads are served from ``_pending_table``, an Arrow
+    snapshot of ``_pending`` refreshed by the bg thread every
+    ``compact_interval_sec`` (default 1s). Tests do append+get_logs
+    back-to-back and need writes visible immediately — wrap get_logs to
+    call ``_compact_step`` first so the snapshot reflects all writes.
+    """
+    store = DuckDBLogStore(**kwargs)
+    original_get_logs = store.get_logs
+
+    def get_logs(*args, **kwargs):
+        store._compact_step()
+        return original_get_logs(*args, **kwargs)
+
+    store.get_logs = get_logs  # type: ignore[method-assign]
+    return store
+
+
 @pytest.fixture()
 def log_store():
-    store = LogStore()
+    store = _make_log_store()
     yield store
     store.close()
 
@@ -115,12 +135,12 @@ def test_get_logs_tail_concurrent(log_store: LogStore):
 def test_persistent_log_dir(tmp_path: Path):
     """Append, close, reopen with same dir, read logs."""
     log_dir = tmp_path / "logs"
-    store1 = DuckDBLogStore(log_dir=log_dir)
+    store1 = _make_log_store(log_dir=log_dir)
     entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(5)]
     store1.append(KEY, entries)
     store1.close()
 
-    store2 = DuckDBLogStore(log_dir=log_dir)
+    store2 = _make_log_store(log_dir=log_dir)
     result = store2.get_logs(KEY)
     assert len(result.entries) == 5
     assert [e.data for e in result.entries] == [f"line-{i}" for i in range(5)]
@@ -165,11 +185,11 @@ def test_cursor_round_trip(log_store: LogStore):
 def test_has_logs_no_known_attempts(tmp_path: Path):
     """has_logs works across store instances."""
     log_dir = tmp_path / "logs"
-    store1 = DuckDBLogStore(log_dir=log_dir)
+    store1 = _make_log_store(log_dir=log_dir)
     store1.append(KEY, [_make_entry("hello")])
     store1.close()
 
-    store2 = DuckDBLogStore(log_dir=log_dir)
+    store2 = _make_log_store(log_dir=log_dir)
     assert store2.has_logs(KEY)
     assert not store2.has_logs(task_log_key(TaskAttempt(task_id=TASK_ID, attempt_id=99)))
     store2.close()
@@ -336,7 +356,7 @@ def test_cursor_with_since_ms(log_store: LogStore):
 def test_gc_drops_oldest_segments_by_count(tmp_path: Path):
     """When local segments exceed max_local_segments, oldest are removed."""
     log_dir = tmp_path / "logs"
-    store = DuckDBLogStore(
+    store = _make_log_store(
         log_dir=log_dir,
         max_local_segments=2,
         max_local_bytes=10 * 1024**3,  # effectively unlimited
@@ -361,7 +381,7 @@ def test_gc_drops_oldest_segments_by_count(tmp_path: Path):
 def test_gc_drops_oldest_segments_by_bytes(tmp_path: Path):
     """When local parquet bytes exceed max_local_bytes, oldest are removed."""
     log_dir = tmp_path / "logs"
-    store = DuckDBLogStore(
+    store = _make_log_store(
         log_dir=log_dir,
         max_local_segments=100,  # effectively unlimited
         segment_target_bytes=1,  # seal after every append
@@ -400,7 +420,7 @@ def test_compaction_merges_tmps_into_log(tmp_path: Path):
     """Compaction merges all tmp_*.parquet files into a single logs_*.parquet,
     preserves data, and unlinks the sources."""
     log_dir = tmp_path / "logs"
-    store = DuckDBLogStore(log_dir=log_dir)
+    store = _make_log_store(log_dir=log_dir)
     try:
         for batch in range(5):
             entries = [_make_entry(f"batch{batch}-{i}", epoch_ms=batch * 100 + i) for i in range(10)]
@@ -426,7 +446,7 @@ def test_compaction_merges_tmps_into_log(tmp_path: Path):
 def test_compaction_skips_single_tmp(tmp_path: Path):
     """One tmp isn't worth rewriting — compaction leaves it alone."""
     log_dir = tmp_path / "logs"
-    store = DuckDBLogStore(log_dir=log_dir)
+    store = _make_log_store(log_dir=log_dir)
     try:
         store.append(KEY, [_make_entry("only", epoch_ms=0)])
         store._force_flush()
@@ -442,10 +462,84 @@ def test_compaction_skips_single_tmp(tmp_path: Path):
         store.close()
 
 
-def test_recovery_reads_both_tmp_and_log(tmp_path: Path):
-    """After restart, a dir with mixed tmp_ and logs_ files is fully readable."""
+def test_close_compacts_and_offloads_single_tmp(tmp_path: Path):
+    """close() with exactly one tmp must still produce a logs_ segment and
+    offload it to remote storage. Regression: the < 2 tmp skip in the
+    steady-state compaction path was inherited by close(), so a low-volume
+    shutdown left data only in local tmp_*.parquet and lost it on a fresh
+    restart with empty local storage."""
     log_dir = tmp_path / "logs"
-    store1 = DuckDBLogStore(log_dir=log_dir)
+    remote_dir = tmp_path / "remote"
+    remote_dir.mkdir()
+    store = _make_log_store(log_dir=log_dir, remote_log_dir=str(remote_dir))
+    store.append(KEY, [_make_entry("only", epoch_ms=0)])
+    store._force_flush()
+    assert len(sorted(log_dir.glob("tmp_*.parquet"))) == 1
+    assert len(sorted(log_dir.glob("logs_*.parquet"))) == 0
+
+    store.close()
+
+    assert sorted(log_dir.glob("tmp_*.parquet")) == []
+    local_logs = sorted(log_dir.glob("logs_*.parquet"))
+    assert len(local_logs) == 1
+    remote_logs = sorted(remote_dir.glob("logs_*.parquet"))
+    assert len(remote_logs) == 1
+    assert remote_logs[0].name == local_logs[0].name
+
+
+def test_startup_drops_tmps_covered_by_log(tmp_path: Path):
+    """A compaction crash between ``rename(logs_)`` and ``unlink(tmp_)``
+    leaves both on disk with overlapping ranges. Restart must drop the
+    now-redundant tmps or reads double-count those rows."""
+    log_dir = tmp_path / "logs"
+    store1 = _make_log_store(log_dir=log_dir)
+    for batch in range(3):
+        store1.append(KEY, [_make_entry(f"b{batch}-{i}", epoch_ms=batch * 10 + i) for i in range(3)])
+        store1._force_flush()
+
+    # Snapshot the tmp bytes before compaction destroys them.
+    tmps_before_compact = sorted(log_dir.glob("tmp_*.parquet"))
+    assert len(tmps_before_compact) == 3
+    saved_tmps = {p.name: p.read_bytes() for p in tmps_before_compact}
+
+    store1._force_compaction()
+    store1.close()
+    assert len(sorted(log_dir.glob("logs_*.parquet"))) == 1
+    assert sorted(log_dir.glob("tmp_*.parquet")) == []
+
+    # Simulate a mid-compaction crash: rename landed, unlink didn't.
+    for name, data in saved_tmps.items():
+        (log_dir / name).write_bytes(data)
+    assert len(sorted(log_dir.glob("tmp_*.parquet"))) == 3
+    assert len(sorted(log_dir.glob("logs_*.parquet"))) == 1
+
+    store2 = _make_log_store(log_dir=log_dir)
+    try:
+        assert sorted(log_dir.glob("tmp_*.parquet")) == []
+        assert len(sorted(log_dir.glob("logs_*.parquet"))) == 1
+        result = store2.get_logs(KEY)
+        assert len(result.entries) == 9
+        assert [e.data for e in result.entries] == [
+            "b0-0",
+            "b0-1",
+            "b0-2",
+            "b1-0",
+            "b1-1",
+            "b1-2",
+            "b2-0",
+            "b2-1",
+            "b2-2",
+        ]
+    finally:
+        store2.close()
+
+
+def test_recovery_reads_both_tmp_and_log(tmp_path: Path):
+    """After a non-graceful exit, a dir with mixed tmp_ and logs_ files is
+    fully readable. Emulates a crash by halting the bg thread without going
+    through close() (which would compact the trailing tmp into a logs_)."""
+    log_dir = tmp_path / "logs"
+    store1 = _make_log_store(log_dir=log_dir)
     try:
         # Two flushes, then compact -> produces one logs_ file.
         for batch in range(2):
@@ -456,12 +550,17 @@ def test_recovery_reads_both_tmp_and_log(tmp_path: Path):
         store1.append(KEY, [_make_entry(f"new-{i}", epoch_ms=100 + i) for i in range(3)])
         store1._force_flush()
     finally:
-        store1.close()
+        # Simulate crash: stop bg thread and release DuckDB without the
+        # shutdown-compaction path close() runs.
+        store1._stop.set()
+        store1._wake.set()
+        store1._bg_thread.join()
+        store1._pool.close()
 
     assert len(sorted(log_dir.glob("logs_*.parquet"))) == 1
     assert len(sorted(log_dir.glob("tmp_*.parquet"))) == 1
 
-    store2 = DuckDBLogStore(log_dir=log_dir)
+    store2 = _make_log_store(log_dir=log_dir)
     try:
         result = store2.get_logs(KEY)
         assert len(result.entries) == 9
@@ -488,13 +587,15 @@ def test_recovery_reads_both_tmp_and_log(tmp_path: Path):
 def test_flush_creates_parquet_segment(tmp_path: Path):
     """Verify that sealing the buffer writes a Parquet file."""
     log_dir = tmp_path / "logs"
-    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
+    store = _make_log_store(log_dir=log_dir, segment_target_bytes=1)
     try:
         entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(10)]
         store.append(KEY, entries)
         # Wait for background flush.
         store._force_flush()
-        parquet_files = list(log_dir.glob("tmp_*.parquet"))
+        # Accept either a tmp_ segment or a compacted logs_ one — the bg
+        # thread may roll a tmp into a log before we glob the directory.
+        parquet_files = list(log_dir.glob("*.parquet"))
         assert len(parquet_files) >= 1
     finally:
         store.close()
@@ -503,7 +604,7 @@ def test_flush_creates_parquet_segment(tmp_path: Path):
 def test_cursor_continuity_across_flush(tmp_path: Path):
     """Cursor from pre-flush read correctly filters post-flush entries."""
     log_dir = tmp_path / "logs"
-    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
+    store = _make_log_store(log_dir=log_dir, segment_target_bytes=1)
     try:
         entries1 = [_make_entry(f"batch1-{i}", epoch_ms=i) for i in range(10)]
         store.append(KEY, entries1)
@@ -526,14 +627,14 @@ def test_cursor_continuity_across_flush(tmp_path: Path):
 def test_seq_recovery_on_restart(tmp_path: Path):
     """After close and reopen, sequence numbers don't collide."""
     log_dir = tmp_path / "logs"
-    store1 = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
+    store1 = _make_log_store(log_dir=log_dir, segment_target_bytes=1)
     entries1 = [_make_entry(f"s1-{i}", epoch_ms=i) for i in range(10)]
     store1.append(KEY, entries1)
     result1 = store1.get_logs(KEY)
     cursor1 = result1.cursor
     store1.close()
 
-    store2 = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
+    store2 = _make_log_store(log_dir=log_dir, segment_target_bytes=1)
     entries2 = [_make_entry(f"s2-{i}", epoch_ms=100 + i) for i in range(5)]
     store2.append(KEY, entries2)
 
@@ -551,7 +652,7 @@ def test_seq_recovery_on_restart(tmp_path: Path):
 def test_concurrent_read_write(tmp_path: Path):
     """Concurrent appends and reads don't crash or corrupt data."""
     log_dir = tmp_path / "logs"
-    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=50 * _EST_BYTES_PER_ROW)
+    store = _make_log_store(log_dir=log_dir, segment_target_bytes=50 * _EST_BYTES_PER_ROW)
     errors: list[Exception] = []
 
     def writer():
@@ -586,7 +687,7 @@ def test_concurrent_read_write(tmp_path: Path):
 def test_each_flush_writes_a_new_segment(tmp_path: Path):
     """Every flush produces its own parquet — the write path is append-only."""
     log_dir = tmp_path / "logs"
-    store = DuckDBLogStore(log_dir=log_dir)
+    store = _make_log_store(log_dir=log_dir)
     try:
         for batch in range(5):
             entries = [_make_entry(f"batch{batch}-{i}", epoch_ms=batch * 100 + i) for i in range(10)]
@@ -607,7 +708,7 @@ def test_each_flush_writes_a_new_segment(tmp_path: Path):
 def test_cursor_continuity_across_segments(tmp_path: Path):
     """Cursors remain valid across the N-segment boundary the new write path produces."""
     log_dir = tmp_path / "logs"
-    store = DuckDBLogStore(log_dir=log_dir)
+    store = _make_log_store(log_dir=log_dir)
     try:
         entries1 = [_make_entry(f"batch1-{i}", epoch_ms=i) for i in range(10)]
         store.append(KEY, entries1)
@@ -630,7 +731,7 @@ def test_cursor_continuity_across_segments(tmp_path: Path):
 def test_connection_pool_memory_limit(tmp_path: Path):
     """DuckDB connections respect the configured memory limit."""
     log_dir = tmp_path / "logs"
-    store = DuckDBLogStore(log_dir=log_dir, duckdb_memory_limit="64MB")
+    store = _make_log_store(log_dir=log_dir, duckdb_memory_limit="64MB")
     try:
         entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(100)]
         store.append(KEY, entries)
@@ -644,7 +745,7 @@ def test_concurrent_reads_span_all_sources(tmp_path: Path):
     """Concurrent reads crossing parquet + chunks + pending don't collide on
     the per-cursor RAM table registrations."""
     log_dir = tmp_path / "logs"
-    store = DuckDBLogStore(log_dir=log_dir, duckdb_memory_limit="64MB")
+    store = _make_log_store(log_dir=log_dir, duckdb_memory_limit="64MB")
     errors: list[Exception] = []
 
     for batch in range(5):
@@ -680,7 +781,7 @@ def test_sealed_buffers_readable_before_flush(tmp_path: Path):
     """Data in sealed buffers is still readable even before Parquet flush completes."""
     log_dir = tmp_path / "logs"
     # Use a large flush interval so time-based sealing won't trigger.
-    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=10 * 1024 * 1024, flush_interval_sec=9999)
+    store = _make_log_store(log_dir=log_dir, segment_target_bytes=10 * 1024 * 1024, flush_interval_sec=9999)
 
     entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(10)]
     # Append to head buffer only (segment_target_bytes is large, won't seal).
@@ -711,7 +812,7 @@ def _make_store_with_segments(log_dir: Path, num_segments: int, rows_per_segment
 
     Uses segment_target_bytes=1 so every seal creates a new file.
     """
-    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
+    store = _make_log_store(log_dir=log_dir, segment_target_bytes=1)
     for batch in range(num_segments):
         entries = [
             _make_entry(
@@ -744,7 +845,7 @@ def test_read_caps_to_newest_segments(tmp_path: Path, monkeypatch):
     from iris.cluster.log_store import duckdb_store as mod
 
     log_dir = tmp_path / "logs"
-    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
+    store = _make_log_store(log_dir=log_dir, segment_target_bytes=1)
     try:
         num_segments = 6
         for batch in range(num_segments):
@@ -773,7 +874,7 @@ def test_tail_accumulates_matches_across_segments(tmp_path: Path):
     """Filter matches spread across older segments are returned when newer
     segments have fewer than max_lines matches."""
     log_dir = tmp_path / "logs"
-    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
+    store = _make_log_store(log_dir=log_dir, segment_target_bytes=1)
     try:
         # Write 4 segments. Each has 2 MATCH rows.
         for batch in range(4):

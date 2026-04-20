@@ -154,8 +154,20 @@ def mock_controller() -> MockController:
 
 @pytest.fixture
 def log_service(state, tmp_path) -> LogServiceImpl:
-    """LogServiceImpl with its own internal log store."""
+    """LogServiceImpl with its own internal log store.
+
+    Wraps ``fetch_logs`` to run the bg compact step first so push→fetch in
+    the same test is synchronously visible. The production path relies on the
+    1s bg tick; tests can't afford that wait.
+    """
     svc = LogServiceImpl(log_dir=tmp_path / "log_service_logs")
+    original_fetch = svc.fetch_logs
+
+    def fetch_logs(request, ctx):
+        svc._log_store._compact_step()
+        return original_fetch(request, ctx)
+
+    svc.fetch_logs = fetch_logs  # type: ignore[method-assign]
     yield svc
     svc.close()
 

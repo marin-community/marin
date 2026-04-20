@@ -44,8 +44,11 @@ from iris.log_server.client import LogServiceProxy
 from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.controller_connect import ControllerServiceWSGIApplication
-from iris.rpc.interceptors import ConcurrencyLimitInterceptor, RequestTimingInterceptor
+from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, ConcurrencyLimitInterceptor, RequestTimingInterceptor
 from iris.rpc.logging_connect import LogServiceWSGIApplication
+from iris.rpc.stats import RpcStatsCollector
+from iris.rpc.stats_connect import StatsServiceWSGIApplication
+from iris.rpc.stats_service import RpcStatsService
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +248,10 @@ class ControllerDashboard:
         self._auth_verifier = auth_verifier
         self._auth_provider = auth_provider
         self._auth_optional = auth_optional
+        # In-process RPC statistics. Fed by RequestTimingInterceptor on the
+        # ControllerService chain only; LogService's chatty FetchLogs traffic
+        # would dominate the numbers if included.
+        self._stats_collector = RpcStatsCollector(slow_threshold_ms=SLOW_RPC_THRESHOLD_MS)
         self._app = self._create_app()
 
     @property
@@ -256,14 +263,31 @@ class ControllerDashboard:
         return self._app
 
     def _create_app(self) -> ASGIApp:
-        interceptors = [RequestTimingInterceptor(include_traceback=bool(os.environ.get("IRIS_DEBUG")))]
+        # Two timing interceptors: only the controller chain feeds the stats
+        # collector, so the panel stays a clean view of ControllerService
+        # traffic. The log server runs in a subprocess and will gain its own
+        # collector separately; the controller-side LogService mount is a
+        # legacy proxy whose forwarded calls would just add noise here.
+        include_tb = bool(os.environ.get("IRIS_DEBUG"))
+        controller_timing = RequestTimingInterceptor(include_traceback=include_tb, collector=self._stats_collector)
+        log_timing = RequestTimingInterceptor(include_traceback=include_tb)
         if self._auth_provider is not None and self._auth_verifier is not None:
-            interceptors.insert(0, _DashboardAuthInterceptor(self._auth_verifier, optional=self._auth_optional))
+            auth_interceptor = _DashboardAuthInterceptor(self._auth_verifier, optional=self._auth_optional)
         else:
             # Null-auth mode: no provider configured. Verify worker tokens
             # when present but treat everything as anonymous/admin.
-            interceptors.insert(0, NullAuthInterceptor(verifier=self._auth_verifier))
-        rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
+            auth_interceptor = NullAuthInterceptor(verifier=self._auth_verifier)
+        controller_interceptors = [auth_interceptor, controller_timing]
+        rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=controller_interceptors)
+
+        # StatsService: reuses the auth interceptor (so non-admins can't read
+        # sampled request previews) but skips RequestTimingInterceptor so the
+        # stats endpoint itself doesn't pollute the numbers it reports.
+        stats_wsgi_app = StatsServiceWSGIApplication(
+            service=RpcStatsService(self._stats_collector),
+            interceptors=[auth_interceptor],
+        )
+        stats_app = WSGIMiddleware(stats_wsgi_app)
 
         # PushLogs is kept on the controller as a forwarding proxy: older workers
         # cached /system/log-server -> controller URL, so we must accept their
@@ -272,7 +296,7 @@ class ControllerDashboard:
         # push_logs() calls the remote LogService over RPC.
         # Cap concurrent FetchLogs RPCs to avoid evicting the page cache with
         # parallel DuckDB scans. See duckdb_store.py for working-set caps.
-        log_interceptors = [*interceptors, ConcurrencyLimitInterceptor({"FetchLogs": 4})]
+        log_interceptors = [auth_interceptor, log_timing, ConcurrencyLimitInterceptor({"FetchLogs": 4})]
         log_wsgi_app = LogServiceWSGIApplication(service=self._log_service, interceptors=log_interceptors)
         log_app = WSGIMiddleware(log_wsgi_app)
 
@@ -306,6 +330,7 @@ class ControllerDashboard:
             Route(PROXY_ROUTE, _proxy_actor_rpc, methods=["POST"]),
             Mount(log_wsgi_app.path, app=log_app),
             Mount(rpc_wsgi_app.path, app=rpc_app),
+            Mount(stats_wsgi_app.path, app=stats_app),
             static_files_mount(),
         ]
 
