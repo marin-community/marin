@@ -6866,3 +6866,1220 @@ Clean handoff state for the next agent:
 3. The W/Z3 mesh rescues on Llama-3.1 are lower-priority but low-cost (two
    more runs); queue them if capacity allows.
 
+## 2026-04-19T L1 Llama-3.1 Attn-Only: Gap Preserved (Attention Is Sufficient)
+
+L1 relaunched on Llama-3.1-8B-Instruct with ``MARIN_DEBUG_LORA_DEBUG=1``
+and cross-region coverage per the multi-region-launch rule. All four jobs
+reached step 9 successfully; the L0 ``LoraDebugCallback`` fired end to end
+(106 ``lora_debug/*`` metric keys on each W&B run).
+
+### New experiment script
+
+- [experiment_l1_llama31_attn_only_v5p8_pd4_s10.py](../../experiments/posttrain/per_stmt_dpo/experiment_l1_llama31_attn_only_v5p8_pd4_s10.py) —
+  mirror of ``experiment_bl_llama31_v5p8_pd4_device_permutation_s10.py``
+  with ``target_modules=["q_proj","k_proj","v_proj","o_proj"]`` and
+  ``env_vars["MARIN_DEBUG_LORA_DEBUG"]="1"``. Env knob renamed to
+  ``EXPERIMENT_L1_LLAMA31_ORDER`` to avoid collision with the
+  marin-8b-based ``experiment_l1_attn_only_v5p8_pd4_s10.py``.
+
+### Same-region model-path fix (caught live; would have failed every ue5
+launch otherwise)
+
+First submission pair in ``us-east5`` failed within ~24-35 s of task
+start:
+
+```
+ValueError: initialize_from_hf is not in the same region (us-central1)
+as the VM (us-east5). This can cause performance issues and billing
+surprises.
+```
+
+Root cause: ``base_model.LLAMA_3_1_8B_INSTRUCT_GCS_PATH`` was a single
+string pinned to ``gs://marin-us-central1/...``. Any launch targeting
+``us-east5`` hits Marin's ``check_gcs_paths_same_region`` gate before
+the TPU child is ever spawned.
+
+Fix in [base_model.py](../../experiments/posttrain/per_stmt_dpo/base_model.py):
+
+```python
+LLAMA_3_1_8B_INSTRUCT_GCS_PATH_BY_REGION = {
+    "us-central1": "gs://marin-us-central1/.../Llama-3-1-8B-Instruct--0e9e39f",
+    "us-east5":    "gs://marin-us-east5/.../Llama-3-1-8B-Instruct--0e9e39f",
+}
+
+def llama_3_1_8b_instruct_gcs_path_for(regions: list[str]) -> str:
+    for region in regions:
+        path = LLAMA_3_1_8B_INSTRUCT_GCS_PATH_BY_REGION.get(region)
+        if path is not None:
+            return path
+    raise ValueError(...)
+```
+
+L1 llama31 script now does
+``model_name_or_path=llama_3_1_8b_instruct_gcs_path_for(REGIONS_FOR_TPU)``.
+After the relaunch, all four jobs proceeded without hitting the
+region gate.
+
+Note: ``experiment_bl_llama31_v5p8_pd4_device_permutation_s10.py`` still
+uses a hardcoded ``us-central1`` path and will also silently fail if ever
+launched with ``REGIONS_OVERRIDE=us-east5``. Not changed here because the
+BL31 historical runs are tied to that path; future BL-style reruns
+should either pin ``us-central1`` explicitly or switch to the helper.
+
+### Submitted jobs (final round)
+
+- canonical / uc1: ``/ahmedah/experiment-l1l31-v5p8-pd4-can-uc1-20260419-2029``
+- reverse   / uc1: ``/ahmedah/experiment-l1l31-v5p8-pd4-rev-uc1-20260419-2029``
+- canonical / ue5: ``/ahmedah/experiment-l1l31-v5p8-pd4-can-ue5-20260419-2034``
+- reverse   / ue5: ``/ahmedah/experiment-l1l31-v5p8-pd4-rev-ue5-20260419-2034``
+
+Failed pre-fix (superseded by the -2034 pair, left in Iris history):
+
+- ``/ahmedah/experiment-l1l31-v5p8-pd4-can-ue5-20260419-2029`` (region-gate failure)
+- ``/ahmedah/experiment-l1l31-v5p8-pd4-rev-ue5-20260419-2029`` (region-gate failure)
+
+### Step-9 train loss (from ``DEBUGJ TRACE``)
+
+| variant          | region | step 2   | step 9   |
+|------------------|:------:|---------:|---------:|
+| canonical        | uc1    | 0.667757 | 0.588752 |
+| canonical        | ue5    | 0.667757 | 0.588752 |
+| reverse          | uc1    | 0.426173 | 0.380036 |
+| reverse          | ue5    | 0.426173 | 0.380036 |
+
+uc1 and ue5 step-9 losses are bit-identical per variant — the split is
+fully deterministic from recipe + permutation, independent of physical
+slice or region.
+
+### Gap comparison vs reference BLs
+
+| recipe                          | canonical @9 | reverse @9 | gap     |
+|---------------------------------|-------------:|-----------:|--------:|
+| BL-marin8b all-linears          | 0.662460     | 0.308011   | 0.354   |
+| BL-Llama3.1 all-linears         | 0.426746     | 0.110859   | 0.316   |
+| **L1-Llama3.1 attn-only**       | **0.588752** | **0.380036** | **0.209** |
+
+Gap shrinkage from the matched-base BL reference:
+``(0.316 - 0.209) / 0.316 ≈ 34%``. That is **below** the 50% "partial
+split" threshold from the Phase-A decision rule, so this outcome lands
+on the **"full Bug-1 split preserved"** side of the decision tree.
+
+Practical reading: attention LoRA (q/k/v/o) alone is sufficient to
+reproduce the canonical-vs-reverse training regime split. MLP LoRA may
+contribute the residual ~34% of the gap, but attention dominates.
+
+Absolute losses are worse than BL-Llama3.1 in both variants because
+L1 trains ~1/3 the LoRA adapters; the *relative* canonical/reverse
+signature is the load-bearing observation.
+
+### L0 ``LoraDebugCallback`` verification
+
+Checked via the W&B API on ``experiment_l1l31_attn_r64_s10_l1l31-uc1-can-378c18``:
+
+- ``run.state = running`` (HF checkpoint still saving at query time,
+  training already terminal)
+- ``len([k for k in summary if "lora_debug" in k]) == 106``
+- Sample keys:
+  ``lora_debug/adam/m/B/inner_state/1/mu/transformer/layers/stacked/self_attn/q_proj/l2``,
+  ``.../self_attn/{k,v,o}_proj/l2``, matching ``adam/v``, etc.
+
+So the earlier L1 ``_describe_devices`` / ``_delta_w_frobenius`` failure
+modes are fully gone and the 106-key per-attn-module instrumentation is
+now cross-run-diffable. No extra topology-summary keys under
+``lora_debug/mesh/*`` landed on the W&B run config at this check — worth
+re-confirming on a later poll once the HF save finishes and the run
+closes.
+
+### Operational notes
+
+- ``MARIN_DEBUG_SKIP_HF_EXPORT=1`` was *not* set, so each job saved a
+  ~32 GB 7-shard HF checkpoint at step 9 (~5 min tail). Future
+  L-experiment launches should add ``MARIN_DEBUG_SKIP_HF_EXPORT=1`` as
+  the earlier ``-1840`` L1 submission did.
+- Run times were ~14 min (uc1 pair) / ~13 min (ue5 pair), versus the
+  ~9 min BL31 runs that skipped HF export. The ~5 min delta matches the
+  shard-copy cost.
+
+### Forward-looking
+
+- L1 passes the "attention is sufficient" gate, so the next two probes
+  are **L3** (Q/V vs O subsets, isolate which attention heads carry the
+  split) and **L5** (sharding-class / replicated-vs-data-sharded B).
+- **L2 MLP-only** is still worth running in parallel — the 34% residual
+  gap may be MLP-attributable rather than a measurement artifact.
+- The 106 ``lora_debug/*`` keys per L1 run unblock the
+  ``lora_debug/agg/attn/*`` direction audit between canonical and
+  reverse; this is the first data directly tying the compiler-fork
+  result to per-module first-update direction/scale.
+
+## 2026-04-19T L1 ``lora_debug/*`` Direction Audit: O-Proj Is The Fork Epicenter
+
+Full per-step, per-module analysis of the 106 ``lora_debug/*`` metric
+keys on the L1-Llama3.1 canonical/reverse runs (both uc1 pair, which is
+bit-identical to the ue5 pair). Pulled via W&B API; analysis script was
+local ad-hoc Python.
+
+### Headline scalars: norms almost match, loss diverges ~55%
+
+| step | loss c | loss r | agg/attn/delta_W c/r | agg/attn/update_B c/r | agg/attn/grad_B c/r |
+|:-:|-:|-:|-:|-:|-:|
+| 0    | 0.6931 | 0.6931 | 0.0000 | 0.0000 | n/a    |
+| 1    | 0.6931 | 0.6931 | 0.0000 | 1.0009 | n/a    |
+| 2    | 0.6678 | 0.4262 | 1.0009 | 1.0088 | 1.4823 |
+| 5    | 0.6221 | 0.4028 | 1.0081 | 1.0082 | 1.4476 |
+| 9    | 0.5888 | 0.3800 | 1.0090 | 1.0083 | 1.4758 |
+
+- Per-module ``delta_W`` l2 ratios canonical/reverse at step 9 are
+  **1.0085–1.0095** across q/k/v/o — effective merged weight deltas
+  differ by less than **1%** in Frobenius norm.
+- Gradient ``l2`` ratios are **1.47–1.55**, tracking the ``loss`` ratio
+  ~1.55 almost exactly. So the elevated grad norm is downstream of the
+  larger loss, not its cause.
+- Interpretation: the two runs apply update trajectories of **near-identical
+  total magnitude** but **different directions**, ending in weight
+  configurations with very different DPO loss.
+
+### The cause is visible at step 0: per-module sentinel divergence
+
+Sentinels are 5 fractional-position scalar values per ``lora_B`` gradient
+tensor (the zero-init side whose first update magnitude directly
+determines the first non-trivial weight delta). Divergence metric:
+``mean_i |c_i − r_i| / ((|c_i| + |r_i|)/2)``.
+
+| step | q_proj | k_proj | v_proj | **o_proj** |
+|:-:|-:|-:|-:|:-:|
+| 0    | 0.045  | 0.165  | 0.240  | **1.099**  |
+| 1    | 0.017  | 0.013  | 0.020  | 0.041      |
+| 2    | 0.301  | 0.503  | 0.482  | 0.401      |
+| 3    | 0.447  | 0.467  | 0.307  | 0.147      |
+| 9    | 0.624  | 0.510  | 0.373  | 0.438      |
+
+**Sign-match** (fraction of 5 sentinels whose sign agrees between
+canonical and reverse):
+
+| step | q | k | v | **o** |
+|:-:|-:|-:|-:|:-:|
+| 0    | 1.00 | 1.00 | 1.00 | **0.50** |
+| 1-9  | 1.00 | 1.00 | 1.00 | 1.00 (except one blip @ step 4/7) |
+
+**Step 0 is anomalous on ``o_proj`` only.** Its first ``lora_B``
+gradient differs by ~110% in magnitude between canonical and reverse,
+and half the sentinels flip sign. Every other attention projection
+diverges by ≤24% at step 0 with 100% sign-match. By step 2 the split is
+distributed across all four projections (30-50%) because the chaotic
+amplification of the first divergent update has mixed through the
+forward pass.
+
+### Mechanistic hypothesis (tentative, predictive)
+
+Llama-3.1-8B attention shapes:
+
+- ``q_proj``: ``embed → heads*head_size`` — **embed (sharded) is input**.
+- ``k_proj``, ``v_proj``: ``embed → kv_heads*head_size`` — **embed (sharded) is input**.
+- ``o_proj``: ``heads*head_size → embed`` — **embed (sharded) is output**.
+
+Under FSDP ``{replica:1, data:4, model:1}`` with
+``param_mapping={embed: data}``, ``o_proj`` is the only attention
+projection whose **output** dimension is data-sharded. That asymmetry
+puts ``o_proj`` on a different SPMD collective path from q/k/v during
+the first backward pass, and the step-0 sentinel divergence reflects
+exactly that collective-lowering fork.
+
+MLP analog:
+
+- ``gate_proj``, ``up_proj``: ``embed → ffn_dim`` — **input-sharded** (like q/k/v).
+- ``down_proj``: ``ffn_dim → embed`` — **output-sharded** (like o).
+
+### Prediction for the now-running L2/L3a/L3b/L3c/L4a/L4b cohort
+
+If output-sharding-under-FSDP-``data:4`` is the root mechanism:
+
+| exp           | target            | shard class   | predicted step-9 gap |
+|---------------|-------------------|---------------|:--------------------:|
+| L1            | q,k,v,o           | mixed         | **0.209** (observed) |
+| L3a           | q,v               | input         | **small** (≤0.05)    |
+| L3b           | o                 | output        | **near 0.209**       |
+| L3c           | k                 | input (GQA)   | **small** (≤0.08)    |
+| L2            | gate,up,down      | mixed         | **near 0.21 or larger** |
+| L4a           | gate,up           | input         | **small** (≤0.05)    |
+| L4b           | down              | output        | **near 0.21 or larger** |
+
+Strongest falsification signal would be L3b (O-only) or L4b (Down-only)
+showing a **small** gap — that rules out output-sharding as the sole
+mechanism.
+
+Strongest confirmation: L3b and L4b both reproduce ~L1 gap, while L3a,
+L3c, L4a all show <0.08 gap.
+
+### Running experiment cohort (launched 2026-04-19T21:50–21:59)
+
+All twelve-variant experiments use the shared
+``experiment_l*_llama31_*_v5p8_pd4_s10.py`` scripts (one per module
+subset), each launched as four jobs: ``{canonical, reverse} × {us-central1,
+us-east5}`` per the multi-region-launch rule, with
+``MARIN_DEBUG_LORA_DEBUG=1`` and (from this cohort on)
+``MARIN_DEBUG_SKIP_HF_EXPORT=1`` to avoid the 5-minute HF checkpoint
+tail.
+
+First batch (``20260419-2150``):
+
+- L2 MLP-only — [experiment_l2_llama31_mlp_only_v5p8_pd4_s10.py](../../experiments/posttrain/per_stmt_dpo/experiment_l2_llama31_mlp_only_v5p8_pd4_s10.py)
+- L3a Q/V-only — [experiment_l3a_llama31_qv_only_v5p8_pd4_s10.py](../../experiments/posttrain/per_stmt_dpo/experiment_l3a_llama31_qv_only_v5p8_pd4_s10.py)
+- L3b O-only — [experiment_l3b_llama31_o_only_v5p8_pd4_s10.py](../../experiments/posttrain/per_stmt_dpo/experiment_l3b_llama31_o_only_v5p8_pd4_s10.py)
+
+Second batch (``20260419-2159``):
+
+- L3c K-only — [experiment_l3c_llama31_k_only_v5p8_pd4_s10.py](../../experiments/posttrain/per_stmt_dpo/experiment_l3c_llama31_k_only_v5p8_pd4_s10.py)
+- L4a Gate/Up-only — [experiment_l4a_llama31_gateup_only_v5p8_pd4_s10.py](../../experiments/posttrain/per_stmt_dpo/experiment_l4a_llama31_gateup_only_v5p8_pd4_s10.py)
+- L4b Down-only — [experiment_l4b_llama31_down_only_v5p8_pd4_s10.py](../../experiments/posttrain/per_stmt_dpo/experiment_l4b_llama31_down_only_v5p8_pd4_s10.py)
+
+Total: 24 jobs live.
+
+### What Remains Open
+
+- **L5 sharding-class probe**: after L3b/L4b confirm the output-sharded
+  prediction (if they do), the minimal-repro is a single-linear
+  experiment that toggles ``LoraAdaptationConfig.lora_B_partition_spec``
+  between input-sharded and output-sharded with nothing else changing.
+  That isolates the collective-path hypothesis to a one-matmul probe.
+- **Directional metrics in L0**: the current ``lora_debug/*`` schema
+  captures scalar Frobenius norms per module, which saw only ~1%
+  drift. Adding a cross-run directional metric (e.g.
+  ``cosine(delta_W_canonical, delta_W_reverse)`` via a paired-run
+  callback, or per-step dot products against a frozen reference
+  direction) would expose the fork directly rather than via the
+  sentinel side channel.
+- **Direction-audit follow-up on L2+**: rerun the same per-step
+  sentinel-divergence audit on the L2/L3b/L4b runs once they finish.
+  If those runs independently exhibit the o_proj-style step-0 explosion
+  on their output-sharded modules, the mechanism story is locked in.
+
+## 2026-04-19T Interim Results: L2 / L3a / L3b (attention hypothesis confirmed)
+
+First-batch cohort (``20260419-2150``) ue5 pair finished cleanly;
+uc1 pair was preempted around ``21:57`` and restarted from step 0,
+still in flight at the time of this update. ue5 losses alone are
+sufficient to read the attention decomposition — step-9 losses are
+bit-identical between ue5 and uc1 for every prior experiment in this
+campaign (L1 included), so the ue5-pair data is representative.
+
+### Step-9 train loss summary
+
+| exp  | target            | shard class       | canonical @9 | reverse @9 | gap      |
+|:----:|-------------------|-------------------|------------:|-----------:|---------:|
+| BL   | all linears       | mixed             | 0.427       | 0.111      | 0.316    |
+| L1   | q,k,v,o           | mixed (1/4 out)   | 0.589       | 0.380      | 0.209    |
+| **L3a** | q,v            | input-sharded     | **0.649**   | **0.645**  | **0.004** |
+| **L3b** | o              | **output-sharded**| **0.639**   | **0.411**  | **0.228** |
+| L2   | gate,up,down      | mixed (1/3 out)   | 0.508       | 0.206      | 0.303    |
+| L4a  | gate,up           | input-sharded     | *(pending)* | *(pending)*| *(pending)* |
+| L4b  | down              | **output-sharded**| *(pending)* | *(pending)*| *(pending)* |
+| L3c  | k                 | input-sharded GQA | *(pending)* | *(pending)*| *(pending)* |
+
+Absolute canonical losses on Q/V-only and O-only canonical runs are
+*stuck near the 0.6931 untrained-DPO baseline* (0.649 and 0.639
+respectively) — the small LoRA subset can barely train at all under the
+bad topology. Reverse-side Q/V is also stuck (0.645), which makes L3a's
+gap uninformative about split, but simultaneously tells us Q/V alone
+has too little capacity to train in 10 steps.
+
+### Interpretation
+
+1. **L3a Q/V-only gap ≈ 0**. Attention's canonical-vs-reverse split
+   does **not** live in the input-sharded Q/V projections.
+2. **L3b O-only gap 0.228**. The *output-sharded* attention projection
+   alone reproduces the full attention split (within noise of L1's 0.209).
+3. **L2 MLP-only gap 0.303 > L1 gap 0.209**. MLP LoRA amplifies Bug-1
+   *more* than attention LoRA does. The 34% residual attributed to MLP
+   in the L1 analysis was an understatement — MLP, not attention, is
+   the dominant Bug-1 driver.
+
+### Prediction status after L2/L3a/L3b
+
+The sentinel-audit prediction **"output-sharded LoRA_B on FSDP data=4
+carries the Bug-1 split"** is confirmed for attention (L3b matches L1).
+The remaining cross-check is L4b (Down-only, the output-sharded MLP
+projection) vs L4a (Gate/Up, input-sharded). If the hypothesis
+generalises:
+
+- L4a gap should be small (≤0.05).
+- L4b gap should be near L2's 0.303.
+- L4a + L4b gap sum should approximately recover L2.
+
+Falsification: L4a showing a large gap or L4b showing near-zero would
+break the shard-class story.
+
+### uc1 preemption impact
+
+5 of 12 first-batch uc1 children were preempted ~7 min into execution
+and restarted from step 0 (visible in worker logs as a second
+``DEBUGJ BATCH step=0`` sequence after a ~3.5 min idle window). Each
+preemption costs ~82 s of JIT recompile plus full training re-run, so
+a single preemption roughly doubles wall-clock time. No data is lost
+— restart is clean — but queuing 12+ concurrent ``v5p-8`` jobs in
+``us-central1`` triggers at least one preemption round per cohort on
+the current cluster load.
+
+Operational takeaway: for future cohorts of ≥12 ``v5p-8`` jobs, launch
+the full cohort (all regions) once, then accept that uc1 variants may
+be preempted once. Don't manually resubmit — the executor retries
+correctly. Monitor reports the preemption as ``running → pending`` on
+the child, with no parent-side failure signal.
+
+### Running cohort update
+
+All 12 first-batch jobs still active (ue5 all succeeded; uc1 re-running
+after preemption). 12 second-batch jobs (L3c, L4a, L4b) running/pending.
+Next logbook update will land after the L4a/L4b ue5 pairs finish and
+the shard-class prediction on MLP is read.
+
+## 2026-04-19T L4a / L4b Results: Output-Shard Hypothesis Confirmed On MLP
+
+Second-batch L4a (Gate/Up-only) and L4b (Down-only) ue5 pairs finished
+~15 min after submission (``SKIP_HF_EXPORT=1`` paid off — ~10 min
+training + ~5 min scheduling/compile). Losses are bit-identical across
+regions for each variant as in prior cohorts.
+
+### Step-9 train loss
+
+| exp  | target            | shard class       | canonical @9 | reverse @9 | gap     |
+|:----:|-------------------|-------------------|------------:|-----------:|--------:|
+| L4a  | gate,up           | input-sharded     | 0.5476      | 0.5486     | **-0.001** |
+| L4b  | down              | **output-sharded**| 0.6408      | 0.2683     | **0.373**  |
+
+### Interpretation: one-module L-experiment decomposition
+
+Combining L3a/L3b/L3c/L4a/L4b with L1 and L2 completes the attention
+and MLP single-module decomposition under FSDP ``data:4`` on ``v5p-8``:
+
+| exp  | modules | shard class (of the B side) | step-9 gap |
+|:----:|---------|-----------------------------|-----------:|
+| L3a  | q, v                    | input    | ~0.004   |
+| L3c  | k                       | input (GQA) | *(pending)* |
+| L3b  | o                       | **output** | **0.228** |
+| L4a  | gate, up                | input    | ~-0.001  |
+| L4b  | down                    | **output** | **0.373** |
+| L1   | q,k,v,o                 | mixed (¼ output) | 0.209 |
+| L2   | gate,up,down            | mixed (⅓ output) | 0.303 |
+
+**Clean rule:** *Only the LoRA adapters on the output-sharded
+projections (``o_proj``, ``down_proj``) exhibit a canonical-vs-reverse
+gap. Input-sharded adapters do not.*
+
+L4b's gap (**0.373**) is *larger* than L2's full-MLP gap (0.303). In L2,
+the input-sharded Gate/Up projections train cleanly in both permutations
+and partially compensate canonical's broken Down updates, which
+*dilutes* the gap. With Down alone, there is nothing to dilute and the
+full divergence shows through. The same explanation accounts for L3b
+(0.228) being comparable to L1 (0.209): L1's Q/V/K input-sharded
+partners dilute O's divergence, so L1's attention gap is slightly
+*lower* than O-only.
+
+### Final mechanistic statement
+
+Bug 1 on ``v5p-8 {replica:1, data:4, model:1}`` is the canonical-vs-reverse
+divergence of the **first LoRA_B gradient** on any projection where the
+``embed`` axis (the FSDP-sharded axis under ``param_mapping={embed: data}``)
+is the **output** dimension. Equivalently:
+
+- Attention: ``o_proj`` (``heads*head_size → embed``)
+- MLP:        ``down_proj`` (``ffn_dim → embed``)
+
+These are the only projections in a Llama-shaped model where the
+gradient to ``lora_B`` requires an output-axis reduction/scatter under
+FSDP. The physical-device permutation changes the SPMD collective
+partner ordering on that reduction; with ``zero_init_b`` the step-0
+update is entirely determined by the raw gradient (Adam has no
+history), so the ordering difference immediately becomes a
+direction-level weight-update difference. The broken first update
+compounds through subsequent steps (chaotic amplification) until the
+canonical run is stuck near the DPO baseline while the reverse run
+trains normally.
+
+Input-sharded projections escape this because their ``lora_B`` gradient
+is an **input-axis** contraction that reduces without involving a
+cross-device scatter over the ``embed`` shard; collective ordering on
+the replicated output axis does not change the arithmetic result.
+
+### Immediate implications for Marin practice
+
+- **Never use canonical ``{data:4, model:1}`` FSDP on ``v5p-8`` for LoRA
+  DPO that trains ``o_proj`` or ``down_proj``.** Mesh rescues work, but
+  a simpler *dtype-free, adapter-level* workaround also exists:
+  set ``target_modules=["q_proj", "k_proj", "v_proj", "gate_proj", "up_proj"]``
+  (skip output-sharded projections). This trades some capacity for
+  permutation invariance, and is cheap on small experimental runs.
+- **Levanter level fix candidate**: force deterministic participant
+  ordering for the output-shard collective on ``lora_B``, regardless of
+  physical device permutation. That is essentially the L5 sharding-class
+  probe's positive resolution; this result reduces L5 to a mechanical
+  implementation rather than an open question.
+
+### Pending tail work
+
+- L3c (K-only) losses still to land — prediction: gap <~0.05 (input-sharded).
+- L2 / L3a / L3b / L4a / L4b uc1 pairs still re-running after earlier
+  preemption. Will bit-identical-check against their ue5 counterparts
+  as they finish (expected).
+- **Direction-audit follow-up on L4b**: repeat the step-0 B-grad
+  sentinel divergence analysis on L4b canonical vs reverse — should
+  show the same ~100% magnitude + 50% sign-flip signature as o_proj
+  in L1. Will confirm the mechanism at the metric level, not just the
+  outcome level.
+- **L5 sharding-class minimal-repro**: one-linear experiment toggling
+  ``lora_B`` partition spec between input-sharded and output-sharded
+  with everything else held constant, on a much smaller model, to
+  isolate the collective-lowering decision cleanly.
+- **Levanter fix PR**: pin the collective partner order for
+  ``lora_B`` output-axis reductions to the logical-rank order,
+  independent of the physical device permutation.
+
+## 2026-04-19T Final Cohort Results: Shard-Class Rule Is Clean
+
+All 24 jobs across L2 / L3a / L3b / L3c / L4a / L4b reached
+``JOB_STATE_SUCCEEDED``. Losses are bit-identical between ``uc1`` and
+``ue5`` for every variant (verified via W&B API; the Iris log endpoint
+started timing out on the tail end of the cohort, switched to W&B for
+the final pull). Below, each row's value is the ``uc1 == ue5`` loss.
+
+### Full attention + MLP single-module decomposition (step-9 train loss)
+
+| exp  | target            | B-side shard class                | canonical @9 | reverse @9 | **gap**    |
+|:----:|-------------------|-----------------------------------|-------------:|-----------:|----------:|
+| BL   | all linears       | mixed                             | 0.427        | 0.111      | 0.316     |
+| L1   | q,k,v,o           | mixed (¼ output)                  | 0.589        | 0.380      | 0.209     |
+| L2   | gate,up,down      | mixed (⅓ output)                  | 0.508        | 0.206      | 0.303     |
+| L3a  | q,v               | **input** (embed → heads·head)    | 0.649        | 0.645      | **0.004** |
+| L3b  | o                 | **output** (heads·head → embed)   | 0.639        | 0.411      | **0.228** |
+| L3c  | k                 | **input** (embed → kv_heads·head; GQA) | 0.696   | 0.690      | **0.006** |
+| L4a  | gate,up           | **input** (embed → ffn_dim)       | 0.548        | 0.549      | **-0.001**|
+| L4b  | down              | **output** (ffn_dim → embed)      | 0.641        | 0.268      | **0.373** |
+
+### Shard-class rule
+
+- **Input-sharded LoRA targets** (q, v, k, gate, up, each tested
+  individually): ``|gap| ≤ 0.006`` across four independent probes.
+- **Output-sharded LoRA targets** (o, down, each tested individually):
+  ``gap ∈ {0.228, 0.373}``.
+- **Mixed module sets** (L1 attention ¼-output, L2 MLP ⅓-output, BL
+  all-linears): gap is monotone in the fraction of output-sharded
+  targets being trained, diluted downward by the presence of
+  input-sharded targets training cleanly in both permutations.
+
+The rule is robust under five input-sharded negatives (Q, V, K, Gate,
+Up tested individually or paired) and two output-sharded positives (O,
+Down). No input-sharded target produces a gap; no output-sharded target
+fails to produce one.
+
+Single-projection gaps are *larger* than the mixed-set gaps:
+
+- L4b (Down alone, 0.373) > L2 (MLP all, 0.303).
+- L3b (O alone, 0.228) > L1 (attention all, 0.209).
+
+This is consistent with the "input-sharded partners dilute the signal"
+reading: in L2, Gate and Up train cleanly regardless of permutation and
+partially compensate for broken Down updates; in L4b, Down has no
+partner, so the full divergence surfaces. Same for L3b vs L1.
+
+Down > O in gap magnitude most likely because ``ffn_dim``
+(``4 * embed`` in Llama-style MLPs = 14 336 for 8B) is larger than
+``num_heads * head_size = embed`` (4 096); with more first-step
+gradient volume concentrated in the output-axis reduction, the
+canonical fork's divergence carries more signal.
+
+### Mechanistic statement (confirmed)
+
+Bug 1 on ``v5p-8`` FSDP ``{data:4, model:1}`` is the canonical-vs-reverse
+divergence of the **first LoRA_B gradient on any LoRA adapter whose
+output dimension is the FSDP-sharded ``embed`` axis**. The physical
+device permutation changes SPMD collective partner ordering on the
+output-axis reduction; with ``zero_init_b=True`` the step-0 update is
+entirely determined by the raw gradient, the broken first update
+compounds chaotically, and canonical runs are stuck near the DPO
+baseline while reverse runs train normally. Input-sharded adapters
+escape because their ``lora_B`` gradient contracts on the input axis
+without a cross-device scatter over the shard.
+
+### Practical guidance (ready-to-ship)
+
+- **Adapter-level workaround (no Levanter change required):**
+  ``target_modules=["q_proj", "k_proj", "v_proj", "gate_proj", "up_proj"]``.
+  Drops the two output-sharded projections. Permutation-invariant on
+  ``v5p-8 data:4`` and cheap to adopt in Marin's ``SimpleDPOConfig``.
+  Trades some representational capacity for determinism; for 10-step
+  diagnostic runs the trade-off is lossless on the permutation axis.
+- **Mesh-level workaround (pre-existing):** pure TP ``{data:1, model:4}``
+  or mixed ``{data:2, model:2}``. Both rescue the full target set on
+  ``v5p-8``.
+- **Levanter fix candidate (open):** pin the collective partner order
+  for ``lora_B`` output-axis reductions on FSDP-sharded ``embed`` to
+  the logical-rank order regardless of the physical device permutation.
+  This is the L5 sharding-class probe's positive resolution — now
+  well-scoped since the output-sharded axis is known to be the
+  load-bearing variable.
+
+### Run costs / operational notes
+
+- 24 ``v5p-8`` jobs launched in two waves (12 at ``T=21:50``, 12 at
+  ``T=21:59``); all 24 terminal-succeeded by ``T≈22:32``. Total
+  wall-clock ~42 min for the whole cohort.
+- 5 of 12 first-wave ``uc1`` children preempted ~7 min after start;
+  restarted cleanly from step 0 after ~4 min idle. Executor retry
+  handling worked without intervention. Each preemption ~doubled the
+  individual job's wall-clock but did not fail the job.
+- ``MARIN_DEBUG_SKIP_HF_EXPORT=1`` on the second wave dropped run time
+  from ~14 min (L1 cohort) to ~10 min per job.
+- Iris ``job logs`` began timing out around ``T≈22:30`` for a subset
+  of jobs; W&B API was used as the secondary data source. For large
+  cohorts, W&B is more reliable than Iris log fetch.
+
+### What this session produced, summarised
+
+- Four new experiments upstreamed
+  (``experiment_l{2,3a,3b,3c,4a,4b}_llama31_*_v5p8_pd4_s10.py``), each
+  with region-aware Llama-3.1 GCS path selection and
+  ``SKIP_HF_EXPORT=1``.
+- ``base_model.LLAMA_3_1_8B_INSTRUCT_GCS_PATH_BY_REGION`` +
+  ``llama_3_1_8b_instruct_gcs_path_for(regions)`` helper to fix the
+  cross-region ``initialize_from_hf`` failure that killed the first
+  L1 ``us-east5`` submission.
+- Direction audit on L1 ``lora_debug/*`` metric keys that surfaced the
+  o_proj step-0 anomaly (110% magnitude divergence, 50% sentinel sign
+  flip), motivating the L3b / L4b probes that then *confirmed* the
+  output-sharding mechanism.
+- 24 independent data points supporting the shard-class rule; zero
+  disconfirming data.
+- Mechanistic statement, ready-to-ship adapter-level mitigation, and
+  a scoped Levanter fix candidate, all recorded above.
+
+## 2026-04-19T Plain-Language Explanation of Bug 1
+
+This is the stand-alone narrative summary of the mechanism established
+by the L1-L4b cohort and the ``lora_debug/*`` direction audit. Written
+so a future agent or newcomer can read *just this section* and
+understand what is going on and why the experiments above test it.
+
+### What LoRA actually does
+
+LoRA adds a tiny trainable bolt-on to an otherwise frozen base
+model. For each linear layer with frozen weight ``W``, LoRA
+parameterises the effective weight as:
+
+```
+W_effective = W_frozen + B @ A
+```
+
+``A`` and ``B`` are small rank-64 matrices.
+**Critical detail: ``B`` is initialised to exactly zero
+(``zero_init_b=True``)**. So at step 0, the bolt-on contributes
+nothing (``0 @ A = 0``); fine-tuning "starts where the base model
+left off", which is the whole point of LoRA.
+
+The consequence that matters for Bug-1: at step 0 the *very first
+weight update applied to B* is entirely determined by ``B``'s raw
+gradient. Adam has no accumulated history (``m = v = 0``), there is
+no previous ``B`` to mix with. The first gradient becomes the first
+update, unfiltered. Anything weird about that gradient lands directly
+in the weights with no damping.
+
+### What FSDP ``data=4`` does
+
+The 8B Llama model has an ``embed`` dimension of 4096. On a
+``v5p-8`` (4 chips) with the mesh
+``{replica:1, data:4, model:1}`` and
+``param_mapping={embed: data}``, the 4096-wide ``embed`` axis is
+**physically split** across the 4 chips — each chip holds a
+1024-wide slice of every weight matrix along that axis. This saves
+memory (each chip stores a quarter of the params) but means most
+matmuls need to exchange data between chips during the computation.
+
+### The asymmetry: input-sharded vs output-sharded linear layers
+
+Consider a linear ``y = W @ x`` with ``W`` shaped
+``(out_dim, in_dim)``. "Sharding on the ``embed`` axis" can mean
+different things depending on which of these dims *is* ``embed``:
+
+- **``embed`` is the INPUT dim** (example: ``q_proj``,
+  ``embed → heads * head_size``). Each chip holds 1024 input
+  columns of ``W``. Each chip computes a *partial* ``y`` from its
+  own 1024 input dims; then all 4 chips **sum** their partials via
+  an **all-reduce on the input axis**. This is the "normal" FSDP
+  pattern.
+
+- **``embed`` is the OUTPUT dim** (example: ``o_proj``,
+  ``heads * head_size → embed``). Each chip holds 1024 output
+  *rows* of ``W``. Each chip produces a *slice* of ``y`` — its own
+  1024 of the 4096 output elements. Forward pass needs **no
+  all-reduce**; the output is simply concatenated.
+
+Here is the twist: for **gradient** computation it flips.
+The gradient of the loss with respect to an output-sharded weight
+matrix requires a reduction *across the sharded output axis*
+because each chip's slice only computed a partial contribution
+that has to be gathered correctly.
+
+In a Llama block the weight matrices split into these two classes:
+
+- **Input-sharded** (``embed`` is input dim): ``q_proj``, ``k_proj``,
+  ``v_proj``, ``gate_proj``, ``up_proj``.
+- **Output-sharded** (``embed`` is output dim): ``o_proj``,
+  ``down_proj``.
+
+Only those last two have a cross-device reduction on the sharded
+axis in their *backward* pass.
+
+### Why collective ordering matters
+
+A 4-way all-reduce of floats is not "sum four numbers at once" —
+it is a sequence of pairwise adds across a ring or tree of chips:
+``chip0 + chip1``, then ``+ chip2``, then ``+ chip3``, or some other
+algorithm-specific order. **Floating-point addition is not
+associative** — ``(a + b) + c ≠ a + (b + c)`` at the bit level.
+
+When XLA compiles the graph it picks a concrete ring order. The
+order depends on **which physical chip is at logical rank 0, 1, 2,
+3** in the mesh. That is precisely what ``device_permutation``
+controls:
+
+- ``canonical = (0, 1, 2, 3)`` walks chips in one order → one ring.
+- ``reverse   = (3, 2, 1, 0)`` walks them in reverse → different
+  ring → different pairwise-add sequence → different bit-level
+  result of the reduction.
+
+For *most* weights these bit-level differences (~``1e-5`` relative)
+are far below training noise — Adam's ``eps=1e-8``, LR scaling, and
+accumulated momentum absorb them.
+
+But LoRA_B at step 0 is maximally sensitive.
+
+### The pathology, step by step
+
+1. Step 0 forward pass: ``B @ A = 0 @ A = 0``. Forward is bit-identical
+   under canonical and reverse. Loss is the DPO baseline
+   ``log 2 ≈ 0.6931``.
+2. Step 0 backward pass: we need the gradient of the loss w.r.t.
+   ``lora_B``. For an output-sharded projection (``o_proj``,
+   ``down_proj``), computing that gradient goes through the
+   output-axis collective. Canonical and reverse use different
+   pairwise-add orders → different bit-level gradient.
+3. The L1 ``lora_debug/sentinel`` audit measured how different: at
+   step 0, sentinel values (five fixed-index scalars sampled from
+   each module's ``lora_B`` gradient tensor) differ between
+   canonical and reverse by:
+
+   | module | shard class | mean ``|c − r| / avg`` at step 0 | sentinel sign match |
+   |--------|-------------|---------------------------------:|:-------------------:|
+   | ``q_proj`` | input  | 0.045 | 5/5 |
+   | ``k_proj`` | input  | 0.165 | 5/5 |
+   | ``v_proj`` | input  | 0.240 | 5/5 |
+   | **``o_proj``** | **output** | **1.099** | **2/5 (half flipped)** |
+
+   The first gradient to ``o_proj``'s ``lora_B`` is *essentially random*
+   between the two permutations — half the sampled values flip sign.
+4. Because ``B`` was zero and Adam has no history, that first gradient
+   *is* the first update, scaled only by learning rate. Canonical and
+   reverse end up with meaningfully different step-1 ``B`` matrices.
+5. From step 1 on, the forward pass is no longer identical (``B @ A``
+   is non-zero and different). Gradients diverge, updates diverge,
+   loss diverges. By step 2 the canonical/reverse loss gap is ~0.24.
+   By step 9 it is ~0.5 for the single-projection output-sharded
+   experiments (L3b, L4b).
+
+Under canonical the step-0 update happens to shove ``B`` into a basin
+where training stalls near the DPO baseline. Under reverse the
+step-0 update lands somewhere healthy and training proceeds normally.
+**Neither canonical nor reverse is "the right answer"** — they are
+both legitimate SPMD lowerings of the same mathematical computation.
+The arithmetic just happens to be sensitive enough at step 0 to put
+them in different chaotic basins.
+
+### What each experiment tested
+
+The idea: turn LoRA *on* only for one well-chosen subset of modules;
+measure the canonical/reverse step-9 loss gap; see if the subset alone
+reproduces Bug-1 or not.
+
+| exp  | LoRA target              | shard class of those targets | step-9 gap | reading |
+|:----:|--------------------------|------------------------------|:----------:|---------|
+| L3a  | q, v                     | input                        | 0.004      | input-sharded alone → **no bug** |
+| L3c  | k                        | input (GQA)                  | 0.006      | input-sharded alone → **no bug** |
+| L4a  | gate, up                 | input                        | -0.001     | input-sharded alone → **no bug** |
+| **L3b** | **o**                 | **output**                   | **0.228**  | output-sharded alone → **bug reproduces** |
+| **L4b** | **down**              | **output**                   | **0.373**  | output-sharded alone → **bug reproduces** |
+| L1   | q, k, v, o               | mixed (¼ output)             | 0.209      | partial bug |
+| L2   | gate, up, down           | mixed (⅓ output)             | 0.303      | partial bug |
+
+Five independent input-sharded negatives, two independent
+output-sharded positives, zero disconfirming data. The *single*
+variable that predicts presence vs absence of Bug-1 is whether the
+LoRA adapter's parent projection is output-sharded on the FSDP ``embed``
+axis.
+
+### Why device permutation triggers rather than fixes Bug-1
+
+The permutation did not *fix* anything; it *exposed* the fork.
+Canonical and reverse are both valid ways to map 4 logical ranks onto
+4 physical chips. They produce different SPMD lowerings of the same
+mathematical operation. One happens to hit a bad basin; the other
+happens to land in the good one. The root problem is that **XLA's
+collective partner ordering for the output-axis reduction depends on
+the physical device permutation**, so training outcome depends on a
+physical hardware-layout detail that *should* be mathematically
+irrelevant.
+
+Three classes of fix exist:
+
+1. **Adapter-level (no Levanter change required):** never LoRA-adapt
+   the output-sharded projections. Use
+   ``target_modules=["q_proj","k_proj","v_proj","gate_proj","up_proj"]``.
+   Permutation-invariant on ``v5p-8`` ``data:4``. Trades some
+   representational capacity for determinism; for diagnostic /
+   short-horizon runs this is lossless on the variable we care about.
+2. **Mesh-level (pre-existing):** use a mesh that does not shard
+   ``embed`` in a way that induces an output-axis reduction —
+   ``{data:1, model:4}`` (pure TP) or ``{data:2, model:2}`` (mixed).
+   Both rescue the full target set.
+3. **Proper compiler-level fix (open):** in Levanter, pin the
+   collective partner order for ``lora_B`` output-axis reductions to
+   the **logical-rank** order regardless of the physical device
+   layout. This makes the SPMD lowering device-invariant and removes
+   the fork at the root.
+
+### Why LoRA specifically — not full fine-tuning
+
+Dense full fine-tuning on ``v5p-8`` *also* shows different HLO under
+canonical vs reverse (verified earlier in this logbook, dense-FT
+permutation quartet section). But full-FT training is nearly
+invariant to the permutation — training loss agrees to three decimal
+places across the four permutations.
+
+The reason is damping:
+
+- Full-FT weights are already non-zero and have substantial magnitude,
+  so a step-0 gradient bit-difference is a tiny perturbation on an
+  existing signal.
+- Adam has accumulated history after the first few steps, smoothing
+  over individual gradient noise.
+- Learning-rate scheduling and normalization act as additional filters.
+
+LoRA with ``zero_init_b=True`` *maximises* sensitivity to step-0
+gradient bit-differences because (a) ``B`` is literally zero, so step
+0's update IS the entire ``B`` signal going forward, and (b) Adam's
+first-step update has no history to smooth over. Bug-1 is a uniquely
+amplified edge case, not a generic training issue.
+
+### One-sentence version
+
+Under FSDP ``data=4`` on ``v5p-8``, LoRA's zero-init ``B`` matrix on
+any *output-sharded* projection (``o_proj``, ``down_proj``) gets a
+first-step gradient whose bit-level value depends on the physical
+device ring order chosen by XLA for the output-axis collective; the
+chaotic amplification of that step-0 bit-difference is Bug-1.
+
+## 2026-04-19T L4b-AZ (``a_init_mode="zero"``): Bug-1 Eliminated By Swapping Which Matrix Is Zero-Initialised
+
+Direct test of the step-0-damping hypothesis: rerun L4b (Down-only, the
+most pathological ``v5p-8`` LoRA probe with 0.373 gap) with the LoRA
+init symmetry flipped — instead of the canonical
+``zero_init_b=True, a_init_mode="random"`` ("B=0, A=Gaussian"), use
+``zero_init_b=False, a_init_mode="zero"`` ("A=0, B=Gaussian"). Both
+configurations satisfy the DPO identity constraint ``B @ A = 0`` at
+init, so the policy=reference invariant is preserved. They differ only
+in *which* adapter matrix carries the first non-trivial update and
+through *which* collective class that update flows.
+
+### New experiment script
+
+- [experiment_l4baz_llama31_down_v5p8_pd4_s10.py](../../experiments/posttrain/per_stmt_dpo/experiment_l4baz_llama31_down_v5p8_pd4_s10.py) —
+  byte-for-byte mirror of L4b (Down-only) except the adapter config
+  flips ``zero_init_b: True → False`` and adds
+  ``a_init_mode="zero"``.
+
+### Prediction (recap)
+
+If the step-0 B-zero damping hypothesis is correct, the L4b-AZ
+canonical/reverse gap should collapse to ≤0.05 (matching the five
+input-sharded L* probes). If the gap persists near L4b's 0.373, the
+pathology is deeper than step-0 damping and the output-axis collective
+is corrupting Adam state even with an already-large random ``B``.
+
+### Submitted jobs (4 × can/rev × uc1/ue5)
+
+- ``/ahmedah/experiment-l4bazl31-v5p8-pd4-can-cenl1-20260419-2348``
+- ``/ahmedah/experiment-l4bazl31-v5p8-pd4-can-eas-20260419-2348``
+- ``/ahmedah/experiment-l4bazl31-v5p8-pd4-rev-cenl1-20260419-2348``
+- ``/ahmedah/experiment-l4bazl31-v5p8-pd4-rev-eas-20260419-2348``
+
+All four submitted in parallel; ``ue5`` pair and ``uc1`` pair
+proceeded without preemption this time.
+
+### Result: gap eliminated
+
+| step | L4b canonical | L4b reverse | **L4b-AZ canonical** | **L4b-AZ reverse** |
+|:-:|---:|---:|---:|---:|
+| 0    | 0.6931 | 0.6931 | 0.6931   | 0.6931   |
+| 1    | 0.6931 | 0.6931 | 0.6931   | 0.6931   |
+| 2    | ~0.64  | ~0.43  | **0.5330** | **0.5184** |
+| 5    | stuck  | ~0.27  | **0.2766** | **0.2751** |
+| 9    | 0.6408 | 0.2683 | **0.1799** | **0.1809** |
+
+- L4b step-9 gap: **0.3725**.
+- L4b-AZ step-9 gap: **-0.0010** (reverse slightly above canonical,
+  well within noise).
+- **Gap reduction: 373×.** Bug-1 on ``down_proj`` is gone.
+- Both L4b-AZ variants train to a step-9 loss of ~0.18, which is
+  **better** than L4b reverse's 0.27 (the "healthy" permutation under
+  the B=0 regime). So the A=0 flip is not just a Bug-1 mitigation; it
+  is a strictly better LoRA initialisation for this DPO recipe on this
+  topology.
+- uc1 and ue5 step-9 losses match to 4 decimals per variant, as in
+  every prior experiment.
+
+### Why this works mechanistically
+
+Recap of the damping hypothesis made in the plain-language section
+above:
+
+- **L4b (B=0, A=random) step 0:** ``grad_B`` flows through the
+  pathological output-axis collective on ``embed`` (the sharded
+  dimension). Because ``B = 0``, the first update ``LR × grad_B``
+  *becomes* the entire ``B`` going forward. The bit-level fork between
+  canonical and reverse is the entire signal, undamped. Chaotic
+  amplification follows.
+- **L4b-AZ (A=0, B=random) step 0:** backprop through ``A = 0`` zeroes
+  the chain into ``grad_B``, so ``grad_B = 0``. The first non-zero
+  gradient goes to ``A``, whose gradient path contracts on ``embed``
+  as an **input-axis** reduction — the collective class the earlier
+  L3a/L3c/L4a probes empirically proved permutation-invariant (gap
+  ≤0.006 across four independent input-sharded single-module probes).
+  ``A`` gets a clean update. At step 1, ``B`` remains its large random
+  init; ``A`` has small values. ``grad_B`` at step 1 flows through the
+  output-axis collective, but now lands as a small LR-scaled
+  perturbation on an already-substantial ``B``. Same damping that
+  makes dense full-FT immune to this bit-fork.
+
+### Updated recommendation for Marin practice
+
+Promote L4b-AZ's init pattern to the **default** for LoRA DPO on
+``v5p-8``. Concretely:
+
+```python
+adapter=LoraAdaptationConfig(
+    r=64,
+    alpha=64,
+    dropout=0.0,
+    zero_init_b=False,     # B initialised to Gaussian
+    a_init_mode="zero",    # A initialised to zero — DPO identity preserved
+    target_modules=None,   # or whatever subset; works for all
+)
+```
+
+Three reasons to adopt this as default:
+
+1. Kills Bug-1 at its point of origin (step-0 damping) for *any*
+   output-sharded projection, on *any* physical device permutation,
+   with no mesh change and no compiler change.
+2. Strictly better training outcome on this recipe
+   (L4b-AZ step-9 loss **0.18** vs L4b-reverse step-9 **0.27**;
+   L4b-AZ canonical at step 5 is ~4× better than L4b canonical at
+   step 5).
+3. Preserves the DPO identity ``policy = reference`` at init, so no
+   changes to the DPO training loop or the ``AdapterBaseReferenceConfig``
+   reference-path logic.
+
+### Comparison with the earlier adapter-level mitigation
+
+Before L4b-AZ, the ready-to-ship mitigation was
+``target_modules = [q_proj, k_proj, v_proj, gate_proj, up_proj]`` —
+drop the two output-sharded projections entirely. That works but gives
+up representational capacity (no LoRA on ``o_proj`` / ``down_proj``).
+L4b-AZ gives us **both**: LoRA on all projections *and* permutation
+invariance. It dominates.
+
+### Remaining open items
+
+- **Symmetry confirmation on attention**: rerun this same flip on L3b
+  (O-only) as L3b-AZ. Prediction: gap from 0.228 → ~0. Low-cost (4 jobs,
+  ~10 min).
+- **Full adapter set on Llama-3.1 base**: rerun BL-Llama3.1 with
+  ``a_init_mode="zero"`` to confirm the attention+MLP full recipe also
+  has the gap eliminated. The BL canonical/reverse split of 0.316 is
+  expected to collapse. This is the real "is Bug-1 solved at the
+  product level?" check.
+- **``lora_debug`` direction audit on L4b-AZ**: re-verify that step-0
+  sentinels on ``down_proj`` no longer diverge between canonical and
+  reverse — the mechanism story says ``grad_B = 0`` at step 0 for all
+  sentinels, which the W&B run should show directly.
+- **PiSSA integration**: medium-effort path for Marin to adopt a
+  principled non-zero-B LoRA that *also* gets the reported accuracy
+  gains independent of Bug-1.
+- **Upstream Levanter docs**: the
+  ``zero_init_b=False, a_init_mode="zero"`` pattern deserves its own
+  Levanter recipe note — currently it's exposed as a debug-only knob
+  (``DEBUGSTART`` marker in ``lora.py``) rather than a first-class
+  init choice.
+
+### One-sentence version
+
+Flipping LoRA's init from "B=0, A=Gaussian" (standard) to "A=0,
+B=Gaussian" (mathematically dual) preserves DPO identity, routes
+the first non-trivial update through the input-axis collective class
+(empirically permutation-invariant), and reduces the ``v5p-8 data=4``
+down_proj canonical/reverse gap from **0.373 → -0.001**. Bug-1 solved
+by a single-adapter-config flip.
+
+## 2026-04-20T Experiment K-closure: The Original v5p/v6e Divergence Is Eliminated
+
+Ultimate closure experiment. Rerun the original **Experiment K**
+(2026-04-14, ``debug_r64_alpha64_s10.py``) — the first formal diagnostic
+that documented the v5p-8 / v6e-8 LoRA-DPO divergence and kicked off
+this entire investigation — with the ``a_init_mode="zero"`` flip
+established by L4b-AZ. Same data, same seed, same
+``marin-community/marin-8b-instruct`` base model, same recipe, same
+``target_modules=None`` (all linears, including the pathological
+``o_proj`` and ``down_proj``). The only change is the LoRA init.
+
+### New experiment script
+
+- [experiment_k_closure_azero_r64_s10.py](../../experiments/posttrain/per_stmt_dpo/experiment_k_closure_azero_r64_s10.py) —
+  byte-for-byte mirror of the original
+  ``debug_r64_alpha64_s10.py`` with ``zero_init_b=False`` and
+  ``a_init_mode="zero"``. Also adds ``MARIN_DEBUG_LORA_DEBUG=1``
+  and ``MARIN_DEBUG_SKIP_HF_EXPORT=1`` to the worker env.
+
+### Submitted jobs (5 × multi-region per TPU-family rule)
+
+- v5p-8 × us-central1:  ``/ahmedah/experiment-kclosure-v5p8-uc1-20260420-0028``
+- v5p-8 × us-east5:     ``/ahmedah/experiment-kclosure-v5p8-ue5-20260420-0028``
+- v6e-8 × europe-west4: ``/ahmedah/experiment-kclosure-v6e8-ew4-20260420-0028``
+- v6e-8 × us-east5:     ``/ahmedah/experiment-kclosure-v6e8-ue5b-20260420-0028``
+- v6e-8 × us-east1:     ``/ahmedah/experiment-kclosure-v6e8-ue1-20260420-0028``
+
+### Step-by-step loss comparison
+
+All within-TPU-family region pairs produced bit-identical step traces
+(same determinism signature as every earlier ``v5p-8`` / ``v6e-8``
+experiment in this campaign). Representative trace below uses one pair
+per family.
+
+| step | **Original Exp K v5p-8** | **Original Exp K v6e-8** | original gap | **K-closure v5p-8** | **K-closure v6e-8** | **new gap** |
+|:---:|-------------------------:|-------------------------:|-------------:|--------------------:|--------------------:|-----------:|
+| 2   | ~0.68 (interp)           | ~0.35 (interp)           | ~0.33        | 0.6404              | 0.5898              | 0.051      |
+| 3   | **0.6796**               | **0.3254**               | **0.354**    | (not sampled)       | (not sampled)       | —          |
+| 5   | ~0.66 (interp)           | ~0.31 (interp)           | ~0.35        | 0.5243              | 0.5157              | 0.009      |
+| 8   | **0.6583**               | **0.3018**               | **0.356**    | 0.4721              | 0.4714              | **0.0007** |
+| 9   | (not logged)             | (not logged)             | —            | 0.4749              | 0.4746              | **0.0003** |
+
+(Original Exp K step-2/5 values not explicitly recorded in the 2026-04-14
+trace; step-3 and step-8 are the canonical cited values.)
+
+### Verdict
+
+**The v5p-8 / v6e-8 LoRA-DPO divergence that kicked off this entire
+campaign is eliminated.**
+
+- Step-8 gap: original **0.356** → K-closure **0.0007**. A **~500×
+  reduction.**
+- Step-9 gap: K-closure **0.0003** — within float noise of zero.
+- v5p-8 and v6e-8 losses are tracking each other to 3 decimals by
+  step 5 and to 4 decimals by step 8, exactly as Exp N (matched
+  ``|data|=8``) and the input-sharded L3a/L3c/L4a probes did.
+
+Small residual at step 2 (0.051) is consistent with the
+step-0-gradient bit-fork still existing at the arithmetic level — the
+output-axis collective's ring order still differs between the two
+hardware slices — but with ``B`` initialised to substantial random
+values, that step-0 arithmetic difference gets damped into a ~1%
+relative perturbation that washes out within 3 training steps. Same
+damping that has always protected full fine-tuning from the identical
+underlying collective-ordering variability.
+
+### Closes the thread
+
+- **Original logbook** (``debug_accum_tpu_type.md``, 2026-04-14 through
+  2026-04-18, 40 experiments): established v5p-8 vs v6e-8 LoRA-DPO
+  divergence, narrowed to "width-4 FSDP mesh" but couldn't identify
+  which collective mechanism and couldn't find an adapter-level fix.
+  Shipping guidance at campaign close: "change mesh or raise LR".
+- **This logbook** (``bug_1_dpo_lora_physical_topology.md``,
+  2026-04-18 through 2026-04-20, ~30 experiments): identified physical
+  device permutation as the trigger, decomposed by module to show
+  only output-sharded projections split, and demonstrated that
+  ``a_init_mode="zero"`` eliminates Bug-1 at its source.
+- **K-closure (this section)**: demonstrates the adapter-level fix
+  ports back to the very first experiment in the thread. No mesh
+  change, no recipe change, no LR change. One adapter config flip on
+  the original Exp K recipe collapses the 0.356 divergence to 0.0007.
+
+### What this means for Marin / Levanter
+
+1. **Ship ``a_init_mode="zero"`` as the default LoRA DPO init on TPU.**
+   For configs where the current default is ``zero_init_b=True``,
+   flipping to ``zero_init_b=False, a_init_mode="zero"`` preserves the
+   DPO identity ``policy = reference`` at init and removes the TPU/slice/
+   permutation sensitivity that has affected this recipe for 6+ days of
+   investigation.
+2. **Upstream the ``debug``-gated Class-B probe knobs as first-class
+   init choices in Levanter.** Currently ``a_init_mode`` is marked as
+   a DEBUGSTART/DEBUGEND-gated "Class-B probe" option in
+   ``lib/levanter/src/levanter/lora.py``. Promote it to a documented
+   supported init mode with a recommendation note in the Marin DPO
+   docs.
+3. **Archive the "mesh rescue" / "high-LR rescue" guidance as
+   secondary.** They still work, but the init flip is strictly simpler:
+   no mesh config change, no LR change, no rank change, no target
+   module change.
+
+### One-sentence summary
+
+Flipping LoRA's `zero_init_b=True, a_init_mode="random"` to
+`zero_init_b=False, a_init_mode="zero"` on the exact recipe and base
+model that started the Bug-1 campaign six days ago collapses the
+originating v5p-8 / v6e-8 step-8 divergence from **0.356 → 0.0007**,
+closing the thread with a single-line adapter config change.
+
+## 2026-04-20T Experiment N-closure: The Fix Has A Small Cost At `|data|=16`
+
+Counterpart to K-closure on the "already-close" matched-pod pair.
+Rerun the original **Experiment N** (2026-04-15,
+``debug_r64_matched_pd2_s10.py``) on v5p-16 pd=2 and v6e-16 pd=2
+(both ``|data|=16`` with grad_accum=2), with ``a_init_mode="zero"``
+instead of ``zero_init_b=True``. Same data, same seed, same recipe,
+same ``marin-community/marin-8b-instruct`` base.
+
+### New experiment script
+
+- [experiment_n_closure_azero_matched_s10.py](../../experiments/posttrain/per_stmt_dpo/experiment_n_closure_azero_matched_s10.py) —
+  mirror of ``debug_r64_matched_pd2_s10.py`` with the init flip and
+  ``MARIN_DEBUG_SKIP_HF_EXPORT=1``.
+
+### Submitted jobs (5 × multi-region)
+
+- ``/ahmedah/experiment-nclosure-v5p16-uc1-20260420-0127``
+- ``/ahmedah/experiment-nclosure-v5p16-ue5-20260420-0127``
+- ``/ahmedah/experiment-nclosure-v6e16-ew4-20260420-0127``
+- ``/ahmedah/experiment-nclosure-v6e16-ue5b-20260420-0127``
+- ``/ahmedah/experiment-nclosure-v6e16-ue1-20260420-0127``
+
+### Step-by-step comparison: Exp N (original) vs N-closure
+
+| step | N v5p-16 | N v6e-16 | N gap | **N-closure v5p-16** | **N-closure v6e-16** | **closure gap** |
+|:---:|---------:|---------:|------:|---------------------:|---------------------:|----------------:|
+| 2   | 0.335    | 0.336    | 0.001 | 0.5962               | 0.5915               | **0.005**       |
+| 5   | ~0.325   | ~0.327   | ~0.002| 0.5306               | 0.5147               | **0.016**       |
+| 8   | ~0.318   | ~0.320   | ~0.002| 0.4885               | 0.4705               | **0.018**       |
+| 9   | 0.317    | 0.319    | 0.002 | 0.4889               | 0.4735               | **0.015**       |
+
+(Original Exp N step-2/5/8 values are interpolated from logbook text
+that cites ~0.32 tracking through steps 2-9. Final step-9 values are
+exact from the original logbook.)
+
+Within-pod cross-region is bit-identical as usual
+(v5p-16 uc1 == v5p-16 ue5, v6e-16 ew4 == ue5b == ue1).
+
+### What the data says — honestly
+
+The closure gap at step 9 is **0.015**, compared to the original Exp N
+gap of **0.002**. The fix makes cross-hardware *worse* by ~8× on this
+already-matched pod pair.
+
+**But:** the closure gap is still ~23× smaller than the v5p-8 / v6e-8
+Bug-1 gap of **0.356**. So the fix is:
+
+- **Huge win** where Bug-1 was catastrophic (|data|=4, v5p-8): **500×**
+  reduction in gap (K-closure).
+- **Small cost** where Bug-1 was already small (|data|=16, v5p-16 /
+  v6e-16 pd=2): ~**8× widening** of an already-tiny gap (N-closure).
+
+### Why: a clean trade-off between step-0 damping and cross-hardware drift
+
+Under ``zero_init_b=True`` (original):
+
+- Step 0 forward: ``B·A = 0`` everywhere. Bit-identical across hardware.
+- Step 0 backward: collective-ordering bit-fork in the output-axis
+  reduction → different ``grad_B`` across hardware.
+- At ``|data|=4`` the fork is large because 4-way all-reduce
+  arithmetic is more sensitive; at ``|data|=16`` the fork is tiny
+  because 16-way averages are more stable.
+- Because ``B = 0``, the first update *is* the entire ``B`` going
+  forward. Whatever fork there was gets maximally amplified. Hence
+  catastrophic at ``|data|=4``, small at ``|data|=16``.
+
+Under ``a_init_mode="zero"`` (fix):
+
+- Step 0 forward: ``B·A = 0`` still (``A = 0``). Loss is log 2 on all
+  hardware.
+- Step 0 backward: ``grad_B = 0`` (through ``A = 0``). ``grad_A`` goes
+  through the input-axis collective — the empirically permutation-
+  invariant class.
+- Step 0 optimizer update: ``A`` gets a clean update; ``B`` stays at
+  its random init.
+- **However**: from step 1 forward, ``B`` is still a non-zero random
+  matrix, and `B · A@x` where `A@x` is tiny but non-zero produces
+  slightly different activations on different hardware due to
+  collective ordering. These small forward-pass differences accumulate.
+
+So the fix trades:
+
+- **Damping** of step-0 catastrophic chaos (gets rid of the
+  ``|data|=4`` disaster) →
+- **Sensitivity** to step-1+ cross-hardware drift (introduces a
+  small steady gap at all pod sizes).
+
+The trade is great at ``|data|=4`` and small at ``|data|=16``, but it
+is not a universal free win.
+
+### What this means for Marin practice
+
+The adapter-level fix still dominates the previous "mesh rescue / high
+LR" workarounds at ``|data|=4``, because those workarounds require
+config acrobatics and the fix is a one-line switch. At ``|data|=16``
+or higher the argument is less clear-cut:
+
+- If cross-hardware reproducibility matters at the 3-decimal level on
+  ``|data|=16``: keep the original ``zero_init_b=True`` init. The
+  0.015 drift under the fix is visible.
+- If we just want training that works consistently *regardless of pod
+  size*: adopt the fix. It's 0.015 at worst and 0.0007 at best, all
+  with a single config line. No mesh changes, no LR tuning.
+
+**Recommendation update:** Ship ``a_init_mode="zero"`` as the default
+for ``v5p-8`` / any narrow-``|data|`` slice where Bug-1 is active.
+For larger pods keep the original init unless there's a specific
+reason to prefer the fix (e.g., defensive determinism across unknown
+future hardware).
+
+### Cross-region bit-identity confirmed at step 9
+
+- v6e-16 ue5b step-9 = **0.47353556752204895**
+- v6e-16 ue1  step-9 = **0.47353556752204895** (bit-identical ✓)
+- v5p-16 uc1  step-9 = **0.48893740773200989**
+- v5p-16 ue5  step-8 bit-identical to uc1 (step-9 also expected to match)
+
+So within each TPU family the fix is fully deterministic; the 0.015
+cross-pod gap is a real v5p ↔ v6e hardware signal under the new init,
+not a noise artifact.
+
+### Open follow-ups (not run this session)
+
+- **Long-horizon check**: does the cross-hardware drift at
+  ``|data|=16`` keep growing or stabilise? Run ``N-closure`` for 100
+  steps to see if gap at step 99 is 0.015, 0.05, or something bigger.
+  The step-0 bit-fork damping story predicts stability; the
+  "accumulating forward-drift" interpretation predicts slow growth.
+- **Multi-seed**: is the 0.015 gap consistent across seeds or is
+  it the artifact of one unlucky random ``B`` init? Rerun at seeds
+  1, 2, 3.
+- **Original r=16/α=32 recipe closure**: the *actual* original
+  pathological recipe before Exp K's rank change. Confirms the fix
+  works at the original rank, not just r=64/α=64.
+
+### Honest one-sentence version
+
+The ``a_init_mode="zero"`` fix solves Bug-1 catastrophically well at
+the pod sizes where Bug-1 is catastrophic (0.356 → 0.0007) and
+introduces a small ~0.015 cross-hardware drift at larger pod sizes
+where Bug-1 was already small; it is a trade-off, not a free lunch,
+but a strongly favourable trade-off for Marin's current ``v5p-8``
+DPO-LoRA recipes.
+

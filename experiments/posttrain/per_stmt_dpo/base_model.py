@@ -60,3 +60,31 @@ docstring note (added 2026-04-19) pointing readers here.
 # iris worker image does not ship ``marin.download``, so the path is declared
 # as a plain string rather than via ``output_path_of(llama_3_1_8b_instruct)``.
 LLAMA_3_1_8B_INSTRUCT_GCS_PATH = "gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f"
+
+# Per-region GCS copies. Marin enforces a same-region check on
+# ``initialize_from_hf`` to prevent cross-region egress billing surprises, so
+# experiments launching in ``us-east5`` must pick the ``us-east5`` copy even
+# though contents are byte-identical.
+LLAMA_3_1_8B_INSTRUCT_GCS_PATH_BY_REGION = {
+    "us-central1": "gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f",
+    "us-east5": "gs://marin-us-east5/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f",
+}
+
+
+def llama_3_1_8b_instruct_gcs_path_for(regions: list[str]) -> str:
+    """Pick the same-region GCS copy for the first region in ``regions``.
+
+    Marin's ``check_gcs_paths_same_region`` rejects cross-region model loads,
+    so scripts that accept a list of acceptable regions must pick a model
+    path matching the region where the VM actually schedules. Callers that
+    constrain to a single region via ``REGIONS_OVERRIDE`` should pass that
+    single-region list here.
+    """
+    for region in regions:
+        path = LLAMA_3_1_8B_INSTRUCT_GCS_PATH_BY_REGION.get(region)
+        if path is not None:
+            return path
+    raise ValueError(
+        f"No same-region Llama-3.1-8B-Instruct GCS copy for regions={regions}; "
+        f"known regions: {sorted(LLAMA_3_1_8B_INSTRUCT_GCS_PATH_BY_REGION)}"
+    )
