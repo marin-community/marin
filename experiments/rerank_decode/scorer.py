@@ -232,3 +232,118 @@ class KVCacheScorer(Scorer):
 
         self._past_key_values = out.past_key_values
         self._prefix_tokens.extend(accepted_ids)
+
+
+class LevanterScorer(Scorer):
+    """Scorer backed by Levanter's paged-KV ``ScoringEngine``.
+
+    Prefills the prompt once into an anchor slot. Each ``score`` call clones
+    the anchor N times (sharing the prompt's KV pages) and runs a single
+    teacher-forced forward over all candidate suffixes. ``accept`` extends
+    the anchor's KV with the selected completion's tokens so subsequent
+    ``score`` calls benefit from the extended prefix cache.
+
+    Requires Levanter's TrainerConfig-based TPU initialization (device mesh,
+    axis mappings). Mirrors the setup used in ``experiments/rerank_decode/tpu/``.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        *,
+        model_config,
+        max_batch_size: int,
+        max_prompt_len: int,
+        max_completion_len: int,
+        page_size: int = 32,
+        max_pages: int | None = None,
+    ):
+        """Initialize a Levanter-backed scorer.
+
+        Args:
+            model_name: HuggingFace repo id or path for the scoring model.
+            model_config: An instance of an ``LmConfig`` subclass matching the model
+                family (e.g. ``LlamaConfig()`` for Llama, ``Qwen3Config()`` for Qwen).
+                Used to build the HF checkpoint converter and select ``model_type``.
+        """
+        import jax.numpy as jnp
+        import jmp
+
+        import haliax as hax
+        import levanter
+        from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
+        from levanter.distributed import RayConfig
+        from levanter.inference.scoring import ScoringEngine, ScoringEngineConfig
+        from levanter.tracker import NoopConfig
+        from levanter.trainer import TrainerConfig
+        from levanter.utils.tree_utils import inference_mode
+
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        trainer_config = TrainerConfig(
+            tracker=NoopConfig(),
+            ray=RayConfig(auto_start_cluster=False),
+            mp=jmp.get_policy("c=bf16"),
+            per_device_eval_parallelism=1,
+        )
+        levanter.initialize(trainer_config)
+        self._trainer_config = trainer_config
+        self._param_axis_mapping = trainer_config.parameter_axis_mapping
+        self._compute_axis_mapping = trainer_config.compute_axis_mapping
+        self._hax = hax
+
+        with trainer_config.use_device_mesh(), hax.axis_mapping(self._param_axis_mapping):
+            converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
+            converter = converter.replaced(reference_checkpoint=RepoRef.from_string(model_name))
+            model = converter.load_pretrained(
+                model_config.model_type,
+                ref=RepoRef.from_string(model_name),
+                dtype=jnp.bfloat16,
+                axis_mapping=self._param_axis_mapping,
+            )
+            self._model = inference_mode(model, True)
+
+            engine_config = ScoringEngineConfig(
+                max_seq_len=max_prompt_len + max_completion_len,
+                max_batch_size=max_batch_size,
+                max_completion_len=max_completion_len,
+                page_size=page_size,
+                max_pages=max_pages,
+                compute_dtype=jnp.bfloat16,
+            )
+            self._engine = ScoringEngine.from_model_with_config(
+                self._model, self.tokenizer, engine_config, axis_resources=self._compute_axis_mapping
+            )
+        self._cached_prompt_text: str | None = None
+        self._cached_prompt_ids: list[int] | None = None
+
+    def reset(self) -> None:
+        with self._trainer_config.use_device_mesh(), self._hax.axis_mapping(self._compute_axis_mapping):
+            self._engine.reset()
+        self._cached_prompt_text = None
+        self._cached_prompt_ids = None
+
+    def _prompt_ids_for(self, prompt: str) -> list[int]:
+        if self._cached_prompt_text == prompt and self._cached_prompt_ids is not None:
+            return list(self._cached_prompt_ids)
+
+        prompt_ids = self.tokenizer.encode(prompt, add_special_tokens=False)
+        self._cached_prompt_text = prompt
+        self._cached_prompt_ids = list(prompt_ids)
+        return prompt_ids
+
+    def score(self, prompt: str, completions: list[str]) -> list[float]:
+        prompt_ids = self._prompt_ids_for(prompt)
+        completion_ids = [self.tokenizer.encode(c, add_special_tokens=False) for c in completions]
+        with self._trainer_config.use_device_mesh(), self._hax.axis_mapping(self._compute_axis_mapping):
+            return self._engine.score(prompt_ids, completion_ids)
+
+    def accept(self, prompt: str, completion: str) -> None:
+        prompt_ids = self._prompt_ids_for(prompt)
+        completion_ids = self.tokenizer.encode(completion, add_special_tokens=False)
+        with self._trainer_config.use_device_mesh(), self._hax.axis_mapping(self._compute_axis_mapping):
+            self._engine.accept(prompt_ids, completion_ids)
+        self._cached_prompt_text = prompt + completion
+        self._cached_prompt_ids = prompt_ids + completion_ids

@@ -10,8 +10,9 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from experiments.rerank_decode.scorer import KVCacheScorer, VLLMLogprobScorer
+from experiments.rerank_decode.scorer import KVCacheScorer, LevanterScorer, VLLMLogprobScorer
 from experiments.rerank_decode.serve import launch_vllm_server, wait_for_server, shutdown_servers
+from levanter.models.qwen import QwenConfig
 
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 VLLM_PORT = 8192
@@ -29,9 +30,18 @@ def reference_model():
     return model
 
 
+@pytest.fixture(scope="module")
+def _kv_scorer():
+    scorer = KVCacheScorer(MODEL, device="cuda")
+    yield scorer
+    scorer.reset()
+
+
 @pytest.fixture
-def kv_scorer():
-    return KVCacheScorer(MODEL, device="cuda")
+def kv_scorer(_kv_scorer):
+    _kv_scorer.reset()
+    yield _kv_scorer
+    _kv_scorer.reset()
 
 
 @pytest.fixture(scope="module")
@@ -48,6 +58,27 @@ def vllm_server():
 def vllm_scorer(vllm_server):
     client = openai.Client(base_url=f"http://localhost:{VLLM_PORT}/v1", api_key="none")
     return VLLMLogprobScorer(client=client, model=MODEL)
+
+
+@pytest.fixture(scope="module")
+def _levanter_scorer():
+    scorer = LevanterScorer(
+        MODEL,
+        model_config=QwenConfig(),
+        max_batch_size=4,
+        max_prompt_len=128,
+        max_completion_len=64,
+        max_pages=64,
+    )
+    yield scorer
+    scorer.reset()
+
+
+@pytest.fixture
+def levanter_scorer(_levanter_scorer):
+    _levanter_scorer.reset()
+    yield _levanter_scorer
+    _levanter_scorer.reset()
 
 
 def ground_truth_logprobs(reference_model, tokenizer, prompt: str, completion: str) -> float:
@@ -182,6 +213,120 @@ def test_reuse_across_prompts_with_reset(reference_model, tokenizer, kv_scorer):
     for prompt, completion in prompts_and_completions:
         kv_scorer.reset()
         score = kv_scorer.score(prompt, [completion])[0]
+        expected = ground_truth_logprobs(reference_model, tokenizer, prompt, completion)
+        assert abs(expected - score) < 0.5, f"prompt={prompt!r}: expected {expected:.4f}, got {score:.4f}"
+
+
+# --- LevanterScorer tests ---
+
+
+@pytest.mark.timeout(600)
+def test_levanter_single_completion(reference_model, tokenizer, levanter_scorer):
+    prompt = "The capital of France is"
+    completion = " Paris, a beautiful city."
+
+    expected = ground_truth_logprobs(reference_model, tokenizer, prompt, completion)
+    actual = levanter_scorer.score(prompt, [completion])[0]
+
+    assert abs(expected - actual) < 0.5, f"expected {expected:.4f}, got {actual:.4f}"
+
+
+@pytest.mark.timeout(600)
+def test_levanter_multiple_completions(reference_model, tokenizer, levanter_scorer):
+    prompt = "Hello"
+    completions = [", world!", " there!", " everyone, how are you?"]
+
+    expected = [
+        ground_truth_logprobs(reference_model, tokenizer, prompt, c)
+        for c in completions
+    ]
+    actual = levanter_scorer.score(prompt, completions)
+
+    for i, (e, a) in enumerate(zip(expected, actual)):
+        assert abs(e - a) < 0.5, f"completion {i}: expected {e:.4f}, got {a:.4f}"
+
+
+@pytest.mark.timeout(600)
+def test_levanter_eos_token(reference_model, tokenizer, levanter_scorer):
+    prompt = "Hello, world!"
+    eos = tokenizer.eos_token
+    completion = eos
+
+    expected = ground_truth_logprobs(reference_model, tokenizer, prompt, completion)
+    actual = levanter_scorer.score(prompt, [completion])[0]
+
+    assert abs(expected - actual) < 0.5, f"expected {expected:.4f}, got {actual:.4f}"
+
+
+@pytest.mark.timeout(600)
+def test_levanter_completion_with_eos(reference_model, tokenizer, levanter_scorer):
+    prompt = "What is 2+2?"
+    eos = tokenizer.eos_token
+    completion = " 4" + eos
+
+    expected = ground_truth_logprobs(reference_model, tokenizer, prompt, completion)
+    actual = levanter_scorer.score(prompt, [completion])[0]
+
+    assert abs(expected - actual) < 0.5, f"expected {expected:.4f}, got {actual:.4f}"
+
+
+@pytest.mark.timeout(600)
+def test_levanter_accept_then_score(reference_model, tokenizer, levanter_scorer):
+    prompt = "Once upon a"
+    chunk1 = " time there"
+    chunk2 = " was a dragon"
+
+    score1 = levanter_scorer.score(prompt, [chunk1])[0]
+    expected1 = ground_truth_logprobs(reference_model, tokenizer, prompt, chunk1)
+    assert abs(expected1 - score1) < 0.5, f"chunk1: expected {expected1:.4f}, got {score1:.4f}"
+
+    levanter_scorer.accept(prompt, chunk1)
+    prompt2 = prompt + chunk1
+    score2 = levanter_scorer.score(prompt2, [chunk2])[0]
+    expected2 = ground_truth_logprobs(reference_model, tokenizer, prompt2, chunk2)
+    assert abs(expected2 - score2) < 0.5, f"chunk2: expected {expected2:.4f}, got {score2:.4f}"
+
+
+@pytest.mark.timeout(600)
+def test_levanter_accept_multiple_chunks(reference_model, tokenizer, levanter_scorer):
+    prompt = "The"
+    chunks = [" quick", " brown", " fox"]
+
+    current_prompt = prompt
+    for chunk in chunks:
+        score = levanter_scorer.score(current_prompt, [chunk])[0]
+        expected = ground_truth_logprobs(reference_model, tokenizer, current_prompt, chunk)
+        assert abs(expected - score) < 0.5, f"'{chunk}': expected {expected:.4f}, got {score:.4f}"
+
+        levanter_scorer.accept(current_prompt, chunk)
+        current_prompt += chunk
+
+
+@pytest.mark.timeout(600)
+def test_levanter_reuse_across_prompts(reference_model, tokenizer, levanter_scorer):
+    prompts_and_completions = [
+        ("The capital of France is", " Paris"),
+        ("Hello", ", world!"),
+        ("Once upon a", " time there was"),
+    ]
+
+    for prompt, completion in prompts_and_completions:
+        score = levanter_scorer.score(prompt, [completion])[0]
+        expected = ground_truth_logprobs(reference_model, tokenizer, prompt, completion)
+        assert abs(expected - score) < 0.5, f"prompt={prompt!r}: expected {expected:.4f}, got {score:.4f}"
+
+
+@pytest.mark.timeout(600)
+def test_levanter_reuse_across_prompts_with_reset(reference_model, tokenizer, levanter_scorer):
+    prompts_and_completions = [
+        ("The capital of France is", " Paris"),
+        ("Hello", ", world!"),
+        ("Once upon a", " time there was"),
+    ]
+
+    for prompt, completion in prompts_and_completions:
+        levanter_scorer.reset()
+        score = levanter_scorer.score(prompt, [completion])[0]
         expected = ground_truth_logprobs(reference_model, tokenizer, prompt, completion)
         assert abs(expected - score) < 0.5, f"prompt={prompt!r}: expected {expected:.4f}, got {score:.4f}"
 
