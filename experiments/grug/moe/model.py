@@ -152,17 +152,27 @@ class CausalSelfAttention(eqx.Module):
         if use_paired_heads:
             # Halve heads, double seq: (B, S, H, D) -> (B, 2S, H/2, D)
             # Requires num_heads and num_kv_heads both divisible by 2.
-            # Unshard head axis before rearranging to avoid cross-axis reshape errors.
-            q = reshard(q, P(("data", "expert"), None, None, None))
-            k = reshard(k, P(("data", "expert"), None, None, None))
-            v = reshard(v, P(("data", "expert"), None, None, None))
-            q = rearrange(q, "b s (h2 two) d -> b (s two) h2 d", two=2)
-            k = rearrange(k, "b s (m2 two) d -> b (s two) m2 d", two=2)
-            v = rearrange(v, "b s (m2 two) d -> b (s two) m2 d", two=2)
-            # Reshard with model axis on the halved heads.
-            q = reshard(q, P(("data", "expert"), None, "model", None))
-            k = reshard(k, P(("data", "expert"), None, "model", None))
-            v = reshard(v, P(("data", "expert"), None, "model", None))
+            # Use transpose to avoid cross-axis reshape sharding errors.
+            # (B, S, H, D) -> (B, S, H/2, 2, D) -> (B, H/2, 2, S, D) -> ...
+            # Simpler: split head dim, interleave into seq via transpose.
+            b, s, n, d = q.shape
+            m = k.shape[2]
+
+            def _pair_heads(x, heads):
+                # (B, S, H, D) -> (B, S, H/2, 2, D) -> (B, 2, S, H/2, D) -> (B, 2S, H/2, D)
+                x = x.reshape(b, s, heads // 2, 2, d)
+                x = x.transpose(0, 3, 1, 2, 4)  # (B, 2, S, H/2, D)
+                return x.reshape(b, 2 * s, heads // 2, d)
+
+            def _unpair_heads(x, heads):
+                # (B, 2S, H/2, D) -> (B, 2, S, H/2, D) -> (B, S, H/2, 2, D) -> (B, S, H, D)
+                x = x.reshape(b, 2, s, heads // 2, d)
+                x = x.transpose(0, 2, 3, 1, 4)  # (B, S, H/2, 2, D)
+                return x.reshape(b, s, heads, d)
+
+            q = reshard(_pair_heads(q, n), P(("data", "expert"), None, "model", None))
+            k = reshard(_pair_heads(k, m), P(("data", "expert"), None, "model", None))
+            v = reshard(_pair_heads(v, m), P(("data", "expert"), None, "model", None))
             attn_out = attention(q, k, v, mask)
             # XSA on paired output
             aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
@@ -171,9 +181,7 @@ class CausalSelfAttention(eqx.Module):
             v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
             attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
             # Reshape back: (B, 2S, H/2, D) -> (B, S, H, D)
-            attn_out = reshard(attn_out, P(("data", "expert"), None, None, None))
-            attn_out = rearrange(attn_out, "b (s two) h2 d -> b s (h2 two) d", two=2)
-            attn_out = reshard(attn_out, P(("data", "expert"), None, "model", None))
+            attn_out = reshard(_unpair_heads(attn_out, n), P(("data", "expert"), None, "model", None))
         else:
             attn_out = attention(q, k, v, mask)
             aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
