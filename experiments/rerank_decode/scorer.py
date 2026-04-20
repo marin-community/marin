@@ -272,7 +272,6 @@ class LevanterScorer(Scorer):
         import haliax as hax
         import levanter
         from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
-        from levanter.distributed import RayConfig
         from levanter.inference.scoring import ScoringEngine, ScoringEngineConfig
         from levanter.tracker import NoopConfig
         from levanter.trainer import TrainerConfig
@@ -284,7 +283,6 @@ class LevanterScorer(Scorer):
 
         trainer_config = TrainerConfig(
             tracker=NoopConfig(),
-            ray=RayConfig(auto_start_cluster=False),
             mp=jmp.get_policy("c=bf16"),
             per_device_eval_parallelism=1,
         )
