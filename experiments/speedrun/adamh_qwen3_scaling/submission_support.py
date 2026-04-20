@@ -99,6 +99,17 @@ def _get_step_times(run_id: str, entity: str, project: str) -> list[float]:
     ]
 
 
+def _resolve_wandb_entity(entity: str | None) -> str:
+    if entity is not None:
+        return entity
+
+    default_entity = wandb.Api().default_entity
+    if default_entity is not None:
+        return default_entity
+
+    raise ValueError("Could not infer a W&B entity. Set tracker.entity or configure a default W&B entity.")
+
+
 def speedrun_results(config: SpeedrunResultsConfig) -> None:
     wandb_run_id = config.wandb_run_id.split("/")[-1]
     step_times = _get_step_times(wandb_run_id, config.wandb_entity, config.wandb_project)
@@ -164,7 +175,7 @@ def default_speedrun(name: str, config: SpeedrunConfig, *, tags: list[str] | Non
         fn=speedrun_results,
         config=SpeedrunResultsConfig(
             wandb_run_id=train_step,
-            wandb_entity=tracker.entity or "marin-community",
+            wandb_entity=_resolve_wandb_entity(tracker.entity),
             wandb_project=tracker.project or "marin",
             speedrun_config=config,
             output_path=output_path_of(train_step, "speedrun_results.json"),
