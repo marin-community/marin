@@ -8,10 +8,8 @@ creates N tasks). Tasks are the unit of scheduling and execution. Job state is
 aggregated from task states.
 """
 
-import functools
 import json
 import logging
-import os
 import re
 import secrets
 import threading
@@ -964,40 +962,6 @@ def _inject_resource_constraints(
     return new_request
 
 
-_RPC_CACHE_TTL_S = max(0, int(os.environ.get("IRIS_JOB_STATUS_CACHE_TTL_MS", "0"))) / 1000.0
-
-
-def _cache_rpc(fn):
-    """Cache an RPC's response by its serialized request for ``_RPC_CACHE_TTL_S``.
-
-    No-op when the env var is unset or 0. Cache is per-decorated-method and
-    bounded to 1024 entries (FIFO eviction).
-    """
-    if _RPC_CACHE_TTL_S <= 0:
-        return fn
-
-    cache: dict[bytes, tuple[float, Any]] = {}
-    lock = threading.Lock()
-    max_entries = 1024
-
-    @functools.wraps(fn)
-    def wrapper(self, request, *args, **kwargs):
-        key = request.SerializeToString(deterministic=True)
-        now = time.monotonic()
-        with lock:
-            hit = cache.get(key)
-            if hit is not None and (now - hit[0]) < _RPC_CACHE_TTL_S:
-                return hit[1]
-        response = fn(self, request, *args, **kwargs)
-        with lock:
-            if len(cache) >= max_entries:
-                cache.pop(next(iter(cache)))
-            cache[key] = (now, response)
-        return response
-
-    return wrapper
-
-
 class ControllerServiceImpl:
     """ControllerService RPC implementation.
 
@@ -1229,13 +1193,6 @@ class ControllerServiceImpl:
         cheap: one job row read + one GROUP BY query vs loading every task,
         attempt, and worker address.
         """
-        return self._get_job_status_impl(request)
-
-    @_cache_rpc
-    def _get_job_status_impl(
-        self,
-        request: controller_pb2.Controller.GetJobStatusRequest,
-    ) -> controller_pb2.Controller.GetJobStatusResponse:
         job = _read_job(self._db, JobName.from_wire(request.job_id))
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
@@ -1444,13 +1401,6 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> controller_pb2.Controller.ListJobsResponse:
         """List jobs with SQL-level filtering, sorting, and pagination."""
-        return self._list_jobs_impl(request)
-
-    @_cache_rpc
-    def _list_jobs_impl(
-        self,
-        request: controller_pb2.Controller.ListJobsRequest,
-    ) -> controller_pb2.Controller.ListJobsResponse:
         query = _query_from_list_jobs_request(request)
 
         state_ids = _resolve_state_filter(query.state_filter)

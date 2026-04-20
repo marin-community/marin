@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import queue
 import sqlite3
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -279,7 +278,7 @@ class TransactionCursor:
 class ControllerDB:
     """Thread-safe SQLite wrapper with typed query and migration helpers."""
 
-    _READ_POOL_SIZE = int(os.environ.get("IRIS_DB_READ_POOL_SIZE", "32"))
+    _READ_POOL_SIZE = 32
     DB_FILENAME = "controller.sqlite3"
     AUTH_DB_FILENAME = "auth.sqlite3"
     PROFILES_DB_FILENAME = "profiles.sqlite3"
@@ -410,12 +409,6 @@ class ControllerDB:
         conn.execute("PRAGMA synchronous = NORMAL")
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA foreign_keys = ON")
-        mmap_bytes = os.environ.get("IRIS_DB_MMAP_BYTES")
-        if mmap_bytes:
-            conn.execute(f"PRAGMA mmap_size = {int(mmap_bytes)}")
-        cache_kb = os.environ.get("IRIS_DB_CACHE_KB")
-        if cache_kb:
-            conn.execute(f"PRAGMA cache_size = -{int(cache_kb)}")
 
     def optimize(self) -> None:
         """Run PRAGMA optimize to refresh statistics for tables with stale data.

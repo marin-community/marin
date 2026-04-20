@@ -6,13 +6,12 @@
 import atexit
 import enum
 import logging
-import os
 import queue as queue_mod
 import sys
 import tempfile
 import threading
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -81,7 +80,6 @@ from iris.cluster.controller.budget import (
     resource_value,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.heartbeat_manager import HeartbeatManager, heartbeat_inmemory_enabled
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.scheduler import (
@@ -169,18 +167,6 @@ _HEALTH_SUMMARY_INTERVAL = RateLimiter(interval_seconds=30)
 
 # Log a detailed per-phase scheduling trace every this many rounds.
 _SCHEDULING_TRACE_INTERVAL = 50
-
-
-# When set, the scheduler and task-updater loops call ``time.sleep(0)`` between
-# phases so RPC / heartbeat / autoscaler threads can make progress on busy
-# controllers.
-_YIELD = os.environ.get("IRIS_CONTROLLER_YIELD", "").lower() in ("1", "true", "yes")
-
-
-def _yield() -> None:
-    if _YIELD:
-        time.sleep(0)
-
 
 # Taint attribute injected onto claimed workers to prevent non-reservation
 # jobs from landing on them.  Non-reservation jobs get a NOT_EXISTS constraint
@@ -1148,11 +1134,6 @@ class Controller:
         self._poll_thread: ManagedThread | None = None
         self._task_update_queue: queue_mod.Queue[HeartbeatApplyRequest] = queue_mod.Queue()
 
-        # In-memory (RAM) heartbeat store; when enabled, the ping loop uses this
-        # as its source of truth for liveness / failure counts and skips DB
-        # writes on successful pings. Gated by IRIS_HEARTBEAT_INMEMORY.
-        self._heartbeat_manager: HeartbeatManager | None = HeartbeatManager() if heartbeat_inmemory_enabled() else None
-
         self._autoscaler: Autoscaler | None = autoscaler
 
         self._heartbeat_iteration = 0
@@ -1164,9 +1145,6 @@ class Controller:
         # avoiding expensive scheduler work on every CLI poll.
         self._scheduling_diagnostics: dict[str, str] = {}
         self._scheduling_round: int = 0
-
-        # Bounded sample of scheduler tick durations (ms) for diagnostics.
-        self._scheduler_tick_durations_ms: deque[float] = deque(maxlen=1024)
 
         # Set to True once start() is called. Used to gate operations that
         # are only valid before the controller loops begin (e.g. LoadCheckpoint).
@@ -1395,10 +1373,7 @@ class Controller:
 
             self._enforce_execution_timeouts()
 
-            tick_start = time.monotonic()
             outcome = self._run_scheduling()
-            self._scheduler_tick_durations_ms.append((time.monotonic() - tick_start) * 1000.0)
-
             if outcome == SchedulingOutcome.ASSIGNMENTS_MADE:
                 backoff.reset()
 
@@ -1786,7 +1761,6 @@ class Controller:
             self._scheduling_diagnostics = {}
             return SchedulingOutcome.NO_PENDING_TASKS
 
-        _yield()
         order = self._compute_scheduling_order(
             gated.schedulable_task_ids,
             state.pending_tasks,
@@ -1794,12 +1768,10 @@ class Controller:
             trace=trace,
         )
 
-        _yield()
         all_assignments, context, tainted_jobs = self._run_scheduler_pass(
             order, gated, state, claims, timer, trace=trace
         )
 
-        _yield()
         preemptions = self._apply_preemptions(order, tainted_jobs, all_assignments, claims, context)
 
         self._cache_scheduling_diagnostics(context, tainted_jobs, all_assignments, order.ordered_task_ids)
@@ -2291,13 +2263,8 @@ class Controller:
         """Fast ping loop for liveness detection.
 
         Sends Ping RPCs to all healthy workers every heartbeat_interval. Tracks
-        consecutive failures (either via the DB-backed ``ping_failures`` dict
-        or, when enabled, via the in-memory ``HeartbeatManager``). When the
-        threshold is exceeded, removes the worker and cascades task failures.
-
-        When the in-memory manager is active, successful pings are NOT
-        written to the ``workers`` table — the only DB writes from this
-        loop are ``fail_workers_batch`` calls on threshold crossings.
+        consecutive failures in-memory. When threshold is exceeded, removes the
+        worker and cascades task failures.
 
         Both the ping loop and provider loop (when active) may race to fail a
         worker. This is safe: fail_workers_batch, on_worker_failed, and
@@ -2305,11 +2272,8 @@ class Controller:
         """
         ping_interval_s = self._config.heartbeat_interval.to_seconds()
         limiter = RateLimiter(interval_seconds=ping_interval_s)
-        threshold = self._config.heartbeat_failure_threshold
-        hbm = self._heartbeat_manager
-        # Local fallback failure counter, used only when hbm is None. When hbm
-        # is active, hbm.record_failure is the single source of truth.
         ping_failures: dict[str, int] = {}
+        threshold = self._config.heartbeat_failure_threshold
         # Refresh resource snapshots every ~60s; other cycles just note liveness.
         resource_update_every = max(1, round(60.0 / ping_interval_s))
         cycle = 0
@@ -2329,40 +2293,26 @@ class Controller:
                 for result in results:
                     wid_str = str(result.worker_id)
                     if result.error is not None:
-                        if hbm is not None:
-                            new_fail_count = hbm.record_failure(wid_str)
-                        else:
-                            new_fail_count = ping_failures.get(wid_str, 0) + 1
-                            ping_failures[wid_str] = new_fail_count
-                        if new_fail_count >= threshold:
+                        ping_failures[wid_str] = ping_failures.get(wid_str, 0) + 1
+                        if ping_failures[wid_str] >= threshold:
                             dead_workers.append(wid_str)
                             logger.warning(
                                 "Ping loop: worker %s exceeded failure threshold (%d)",
                                 wid_str,
-                                new_fail_count,
+                                ping_failures[wid_str],
                             )
                     else:
-                        if hbm is not None:
-                            hbm.record_alive(wid_str)
-                        else:
-                            ping_failures.pop(wid_str, None)
-                            ping_snapshots[result.worker_id] = result.resource_snapshot if update_resources else None
+                        ping_failures.pop(wid_str, None)
+                        ping_snapshots[result.worker_id] = result.resource_snapshot if update_resources else None
 
-                # No DB write on successful pings when the in-memory manager is active.
-                if hbm is None:
-                    self._transitions.update_worker_pings(ping_snapshots)
+                self._transitions.update_worker_pings(ping_snapshots)
 
                 if dead_workers:
                     failure_result = self._transitions.fail_workers_batch(
                         dead_workers, reason="ping failure threshold exceeded"
                     )
-                    if hbm is not None:
-                        hbm.note_db_failure_write(len(failure_result.removed_workers))
                     for wid, addr in failure_result.removed_workers:
-                        if hbm is not None:
-                            hbm.remove(str(wid))
-                        else:
-                            ping_failures.pop(str(wid), None)
+                        ping_failures.pop(str(wid), None)
                         self._provider.on_worker_failed(wid, addr)
 
                     if self._autoscaler and failure_result.removed_workers:
@@ -2371,13 +2321,8 @@ class Controller:
                         sibling_failures = self._transitions.fail_workers_batch(
                             sibling_ids, reason="sibling worker failed, slice terminated"
                         )
-                        if hbm is not None:
-                            hbm.note_db_failure_write(len(sibling_failures.removed_workers))
                         for wid, addr in sibling_failures.removed_workers:
-                            if hbm is not None:
-                                hbm.remove(str(wid))
-                            else:
-                                ping_failures.pop(str(wid), None)
+                            ping_failures.pop(str(wid), None)
                             self._provider.on_worker_failed(wid, addr)
                         failure_result.tasks_to_kill.update(sibling_failures.tasks_to_kill)
                         failure_result.task_kill_workers.update(sibling_failures.task_kill_workers)
@@ -2385,13 +2330,11 @@ class Controller:
                     if failure_result.tasks_to_kill:
                         self.kill_tasks_on_workers(failure_result.tasks_to_kill, failure_result.task_kill_workers)
 
+                # Clean up stale entries
                 active_ids = {str(wid) for wid, _ in workers}
-                if hbm is not None:
-                    hbm.retain_only(active_ids)
-                else:
-                    for wid in list(ping_failures):
-                        if wid not in active_ids:
-                            del ping_failures[wid]
+                for wid in list(ping_failures):
+                    if wid not in active_ids:
+                        del ping_failures[wid]
 
             except Exception:
                 logger.exception("Ping loop iteration failed")
@@ -2444,7 +2387,6 @@ class Controller:
                 continue
             try:
                 results = self._transitions.apply_heartbeats_batch(requests)
-                _yield()
                 all_tasks_to_kill: set[JobName] = set()
                 all_task_kill_workers: dict[JobName, WorkerId] = {}
                 for result in results:
@@ -2471,17 +2413,7 @@ class Controller:
             return
         threshold_ms = HEARTBEAT_STALENESS_THRESHOLD.to_ms()
         workers = healthy_active_workers_with_attributes(self._db)
-        hbm = self._heartbeat_manager
-        if hbm is not None:
-            # Absence from the map means "no data yet", NOT failure. Only
-            # reap workers with a tracked age that exceeds the threshold.
-            stale = []
-            for w in workers:
-                age = hbm.age_ms(str(w.worker_id))
-                if age is not None and age > threshold_ms:
-                    stale.append(w)
-        else:
-            stale = [w for w in workers if w.last_heartbeat.age_ms() > threshold_ms]
+        stale = [w for w in workers if w.last_heartbeat.age_ms() > threshold_ms]
         if not stale:
             return
         stale_samples = [

@@ -277,10 +277,6 @@ class ScalingGroup:
         # can be terminated in a single cycle, up to the token budget.
         self._scale_down_bucket = TokenBucket(capacity=scale_down_rate_limit, refill_period=Duration.from_minutes(1))
 
-        # Per-tick dirty flag. Mutators mark the row dirty; the owning
-        # Autoscaler flushes once per tick via ``take_pending_row_update``.
-        self._db_dirty: bool = False
-
         # Upsert scaling group row so it exists for future updates
         if self._db is not None:
             with self._db.transaction() as cur:
@@ -321,29 +317,23 @@ class ScalingGroup:
     def _db_update_group(self) -> None:
         if self._db is None:
             return
-        self._db_dirty = True
-
-    def take_pending_row_update(self) -> tuple[str, tuple] | None:
-        """Return SQL+params for this group's pending row update and clear the flag."""
-        if not self._db_dirty:
-            return None
-        self._db_dirty = False
-        return (
-            "UPDATE scaling_groups SET "
-            "consecutive_failures=?, backoff_until_ms=?, last_scale_up_ms=?, "
-            "last_scale_down_ms=?, quota_exceeded_until_ms=?, quota_reason=?, updated_at_ms=? "
-            "WHERE name=?",
-            (
-                self._consecutive_failures,
-                self._backoff_until.as_timestamp().epoch_ms() if self._backoff_until else 0,
-                self._last_scale_up.epoch_ms(),
-                self._last_scale_down.epoch_ms(),
-                self._quota_exceeded_until.as_timestamp().epoch_ms() if self._quota_exceeded_until else 0,
-                self._quota_reason,
-                Timestamp.now().epoch_ms(),
-                self.name,
-            ),
-        )
+        with self._db.transaction() as cur:
+            cur.execute(
+                "UPDATE scaling_groups SET "
+                "consecutive_failures=?, backoff_until_ms=?, last_scale_up_ms=?, "
+                "last_scale_down_ms=?, quota_exceeded_until_ms=?, quota_reason=?, updated_at_ms=? "
+                "WHERE name=?",
+                (
+                    self._consecutive_failures,
+                    self._backoff_until.as_timestamp().epoch_ms() if self._backoff_until else 0,
+                    self._last_scale_up.epoch_ms(),
+                    self._last_scale_down.epoch_ms(),
+                    self._quota_exceeded_until.as_timestamp().epoch_ms() if self._quota_exceeded_until else 0,
+                    self._quota_reason,
+                    Timestamp.now().epoch_ms(),
+                    self.name,
+                ),
+            )
 
     def _db_clear_slices(self) -> None:
         if self._db is None:

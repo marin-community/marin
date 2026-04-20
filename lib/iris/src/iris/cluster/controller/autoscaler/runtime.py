@@ -20,8 +20,6 @@ The run_once() flow splits into two phases:
 from __future__ import annotations
 
 import logging
-import os
-import time
 from collections import deque
 from collections.abc import Sequence
 
@@ -66,16 +64,6 @@ SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
 
 # After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
 DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
-
-
-# When set, the autoscaler calls ``time.sleep(0)`` between per-group steps so
-# other threads (RPCs, heartbeat, scheduler) can make progress on busy controllers.
-_YIELD = os.environ.get("IRIS_CONTROLLER_YIELD", "").lower() in ("1", "true", "yes")
-
-
-def _yield() -> None:
-    if _YIELD:
-        time.sleep(0)
 
 
 class Autoscaler:
@@ -139,9 +127,6 @@ class Autoscaler:
 
         # Thread management
         self._threads = threads if threads is not None else get_thread_container()
-
-        # Bounded sample of recent tick durations (ms) for diagnostics.
-        self._tick_durations_ms: deque[float] = deque(maxlen=1024)
 
     @classmethod
     def from_config(
@@ -515,27 +500,11 @@ class Autoscaler:
         timestamp = timestamp or Timestamp.now()
         self._last_evaluation = timestamp
 
-        t0 = time.monotonic()
         decisions = self.evaluate(demand_entries, timestamp)
-        _yield()
         if decisions:
             logger.info("Autoscaler decisions: %s", [(d.scale_group, d.action.value, d.reason) for d in decisions])
         self.execute(decisions, timestamp)
-        _yield()
-        self._flush_group_rows()
-        self._tick_durations_ms.append((time.monotonic() - t0) * 1000.0)
         return decisions
-
-    def _flush_group_rows(self) -> None:
-        """Flush all per-tick ``scaling_groups`` UPDATEs in one transaction."""
-        if self._db is None:
-            return
-        pending = [stmt for g in self._groups.values() if (stmt := g.take_pending_row_update()) is not None]
-        if not pending:
-            return
-        with self._db.transaction() as cur:
-            for sql, params in pending:
-                cur.execute(sql, params)
 
     def run_once(
         self,
