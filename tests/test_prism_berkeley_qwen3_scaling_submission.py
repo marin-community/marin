@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from experiments.speedrun.prism_berkeley_qwen3_scaling.materialize_submission import SweepRun, select_best_runs
+from experiments.speedrun.prism_berkeley_qwen3_scaling.prism_berkeley_sweep import build_config
+from experiments.speedrun.prism_berkeley_qwen3_scaling.submission_support import default_speedrun
 
 
 def test_select_best_runs_chooses_lowest_bpb_per_size_and_ignores_non_finished():
@@ -83,3 +85,9 @@ def test_select_best_runs_skips_finished_runs_without_metric():
     ]
     selected = select_best_runs(runs)
     assert selected["130m"].run_name == "qwen3_130m_prism_berkeley_4096_lrx1-bbb222"
+
+
+def test_default_speedrun_accepts_archived_tokenized_dataset():
+    _, config = build_config("130m")
+    steps = default_speedrun("prism-berkeley-qwen3-130m-test", config)
+    assert len(steps) == 2
