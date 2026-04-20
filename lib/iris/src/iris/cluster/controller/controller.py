@@ -2530,12 +2530,11 @@ class Controller:
             log_level = logging.ERROR if result.action == HeartbeatAction.WORKER_FAILED else logging.WARNING
             logger.log(
                 log_level,
-                "Heartbeat RPC failure: worker=%s address=%s action=%s failures=%d last_success_age_s=%s "
+                "Heartbeat RPC failure: worker=%s address=%s action=%s last_success_age_s=%s "
                 "expected=%d run=%d kill=%d error=%s",
                 batch.worker_id,
                 batch.worker_address or "<missing>",
                 result.action.value,
-                result.consecutive_failures,
                 last_success_age_s,
                 len(batch.running_tasks),
                 len(batch.tasks_to_run),

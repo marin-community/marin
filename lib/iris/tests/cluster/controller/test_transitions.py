@@ -12,7 +12,6 @@ They focus on:
 
 import threading
 
-import pytest
 
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
@@ -2086,7 +2085,6 @@ def test_fail_heartbeat_requeues_dispatch_for_retry(state):
 
     worker = _query_worker(state, worker_id)
     assert _query_worker(state, worker.worker_id).healthy
-    assert worker.consecutive_failures == 1
 
     # Task stays ASSIGNED — we don't know if the worker received it
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED

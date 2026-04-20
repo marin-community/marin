@@ -265,7 +265,6 @@ class HeartbeatApplyResult(TxResult):
 class HeartbeatFailureResult(TxResult):
     worker_removed: bool = False
     action: HeartbeatAction = HeartbeatAction.TRANSIENT_FAILURE
-    consecutive_failures: int = 0
     last_heartbeat_age_ms: int | None = None
 
 
@@ -2233,7 +2232,7 @@ class ControllerTransitions:
         tasks_to_kill: set[JobName] = set()
         task_kill_workers: dict[JobName, WorkerId] = {}
         row = cur.execute(
-            "SELECT consecutive_failures, last_heartbeat_ms FROM workers WHERE worker_id = ? AND active = 1",
+            "SELECT last_heartbeat_ms FROM workers WHERE worker_id = ? AND active = 1",
             (str(worker_id),),
         ).fetchone()
         if row is None:
@@ -2245,15 +2244,6 @@ class ControllerTransitions:
         now_ms = now_ms or Timestamp.now().epoch_ms()
         last_heartbeat_ms = row["last_heartbeat_ms"]
         last_heartbeat_age_ms = None if last_heartbeat_ms is None else max(0, now_ms - int(last_heartbeat_ms))
-        # Counter is retained for observability (dashboard, status RPCs). Termination
-        # is driven by the in-memory WorkerHealthTracker + reaper thread, not by this
-        # counter. force_remove is the explicit immediate-kill path used by the reaper
-        # and by slice-sibling cleanup.
-        failures = int(row["consecutive_failures"]) + 1
-        cur.execute(
-            "UPDATE workers SET consecutive_failures = ? WHERE worker_id = ?",
-            (failures, str(worker_id)),
-        )
         if force_remove:
             cur.execute(
                 "UPDATE workers SET healthy = 0 WHERE worker_id = ?",
@@ -2273,7 +2263,6 @@ class ControllerTransitions:
             task_kill_workers=task_kill_workers,
             worker_removed=force_remove,
             action=action,
-            consecutive_failures=failures,
             last_heartbeat_age_ms=last_heartbeat_age_ms,
         )
 
@@ -3265,7 +3254,6 @@ class ControllerTransitions:
             - snapshot was returned by begin_heartbeat for this worker
             - The heartbeat RPC failed (timeout, connection refused, etc.)
         Postconditions:
-            - worker.consecutive_failures incremented
             - Buffered dispatches (tasks_to_run, tasks_to_kill) are re-queued for the
               next heartbeat. We cannot tell whether the worker received the previous
               heartbeat (RPC timeout ≠ delivery failure), so we re-send the same
