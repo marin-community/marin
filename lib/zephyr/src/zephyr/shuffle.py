@@ -332,20 +332,64 @@ class ScatterReader:
             return 0
         return max(length for file_iter in self.iterators for _, length in file_iter.chunks)
 
-    def needs_external_sort(self, memory_limit: int, memory_fraction: float = 0.5) -> bool:
+    _MAX_IN_MEMORY_ITERATORS = 10_000
+
+    def needs_external_sort(self, memory_limit: int, memory_fraction: float = 0.33) -> bool:
         """Return True if opening all chunks at once would blow the budget."""
         total_chunks = self.total_chunks
         if total_chunks == 0:
             return False
+
+        # Too many open iterators -- force external sort regardless of memory.
+        if total_chunks > self._MAX_IN_MEMORY_ITERATORS:
+            logger.info(
+                "needs_external_sort: total_chunks=%d > %d -> forced external sort",
+                total_chunks,
+                self._MAX_IN_MEMORY_ITERATORS,
+            )
+            return True
+
         if self.avg_item_bytes <= 0:
             raise ValueError(
                 "avg_item_bytes not available in scatter manifest. "
                 "Re-run the scatter stage with a version that records avg_item_bytes."
             )
-        # Heuristic: assume each open chunk could hold up to max_chunk_rows
-        # items in the worst case (e.g. if downstream materialises chunks).
-        estimated = total_chunks * self.max_chunk_rows * self.avg_item_bytes
-        return estimated > memory_limit * memory_fraction
+        # Estimate merge memory per open iterator:
+        #
+        # 1. Compressed chunk blob: fetched via range GET, held in a BytesIO.
+        # 2. Decompressed frame: zstd stream_reader decompresses the full
+        #    frame into an internal buffer (~max_chunk_rows * avg_item_bytes).
+        # 3. One unpickled sub-batch: _SUB_BATCH_SIZE Python objects in memory.
+        #    Python object overhead is fixed per item (~500 bytes for a dict:
+        #    object header, hash table, key/value strings) so the multiplier
+        #    scales inversely with item size.
+        _FIXED_OVERHEAD_PER_ITEM = 512
+        in_memory_multiplier = (self.avg_item_bytes + _FIXED_OVERHEAD_PER_ITEM) / self.avg_item_bytes
+        total_compressed = sum(length for it in self.iterators for _, length in it.chunks)
+        avg_compressed = total_compressed / total_chunks
+        avg_decompressed = self.max_chunk_rows * self.avg_item_bytes
+        sub_batch_mem = _SUB_BATCH_SIZE * self.avg_item_bytes * in_memory_multiplier
+        per_iterator = avg_compressed + avg_decompressed + sub_batch_mem
+        estimated = total_chunks * per_iterator
+        budget = memory_limit * memory_fraction
+        triggered = estimated > budget
+        logger.info(
+            "needs_external_sort: %d chunks x %.1f MB/iter "
+            "(%.1f MB compressed + %.1f MB decompressed + %.1f MB sub-batch [%.1fx]) "
+            "= %.1f GB estimated vs %.1f GB budget (%.1f GB * %.2f) -> %s",
+            total_chunks,
+            per_iterator / 1e6,
+            avg_compressed / 1e6,
+            avg_decompressed / 1e6,
+            sub_batch_mem / 1e6,
+            in_memory_multiplier,
+            estimated / 1e9,
+            budget / 1e9,
+            memory_limit / 1e9,
+            memory_fraction,
+            triggered,
+        )
+        return triggered
 
 
 # ---------------------------------------------------------------------------
