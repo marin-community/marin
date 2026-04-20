@@ -125,15 +125,15 @@ class Scatter:
 
 @dataclass
 class CombineMeta:
-    """Aggregate M mapper manifests into R reducer manifests.
+    """Aggregate mapper manifests into per-reducer manifests.
 
-    Runs as a single-task stage between ``Scatter`` and ``Reduce``. Reads all
-    mapper ``.scatter_meta`` files once and emits one ``reducer-YYYY.scatter_meta``
-    per reducer. Each reducer then loads exactly one manifest file, avoiding
-    the M-way fan-out that ``Reduce`` would otherwise perform.
+    Runs as ``num_combine_tasks`` parallel tasks between ``Scatter`` and
+    ``Reduce``. Each task owns a strided subset of reducer shards, bounding
+    per-task memory to ``(R/K) x M``. ``num_combine_tasks<=0`` means "auto".
     """
 
     num_output_shards: int
+    num_combine_tasks: int = -1
 
 
 @dataclass
@@ -445,12 +445,8 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
 
         elif isinstance(op, GroupByOp):
             num_shards = op.num_output_shards if op.num_output_shards is not None else -1
-            # Three-stage lowering: M mappers → 1 combine task → R reducers.
-            # Scatter's stage output_shards=1 concentrates all M mapper paths
-            # into a single input shard for the combine task, which inverts
-            # them into R per-reducer manifests. The combine stage's
-            # output_shards=R replicates the combine output to every reducer
-            # — reducers then pick their manifest by shard_idx.
+            # M mappers → K combine tasks → R reducers. K is sized at
+            # stage-launch time from the combine-task memory budget.
             state.add_op(
                 Scatter(
                     key_fn=op.key_fn,
@@ -458,11 +454,11 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
                     sort_fn=op.sort_fn,
                     combiner_fn=op.combiner_fn,
                 ),
-                output_shards=1,
+                output_shards=None,  # resolved to K at runtime
             )
             state.end_stage()
             state.add_op(
-                CombineMeta(num_output_shards=num_shards),
+                CombineMeta(num_output_shards=num_shards, num_combine_tasks=-1),
                 output_shards=num_shards if num_shards > 0 else None,
             )
             state.end_stage()
@@ -865,30 +861,29 @@ def run_stage(
             return
 
         elif isinstance(op, CombineMeta):
-            # CombineMeta output (a single combine directory path) is emitted
-            # by the IO writer once combine_sidecars finishes; the writer
-            # extracts the op and handles the call directly. Forward the
-            # input stream so _write_stage_output sees the mapper paths.
+            # The IO writer calls combine_sidecars directly; forward the
+            # input stream (mapper paths) to _write_stage_output.
             yield from stream
             return
 
         elif isinstance(op, Reduce):
-            # Build ScatterReader from the single reducer manifest produced
-            # by CombineMeta, then merge sorted chunks and reduce per key.
             from zephyr.execution import ScatterReader
             from zephyr.shuffle import reducer_manifest_path
 
             shard = ctx.shard
             if not isinstance(shard, ScatterReader):
+                # Upstream CombineMeta fans out K copies of the output dir
+                # (one per combine task); all copies are identical.
                 items = list(shard)
-                if not items:
+                dirs = {item for item in items if item}
+                if not dirs:
                     shard = ScatterReader(iterators=[], max_chunk_rows=0, avg_item_bytes=0.0)
                 else:
-                    if len(items) != 1:
+                    if len(dirs) != 1:
                         raise ValueError(
-                            f"Reduce shard {ctx.shard_idx} expected exactly 1 combine output dir, got {items}"
+                            f"Reduce shard {ctx.shard_idx} expected a single combine output dir, got {dirs}"
                         )
-                    manifest_path = reducer_manifest_path(items[0], ctx.shard_idx)
+                    manifest_path = reducer_manifest_path(next(iter(dirs)), ctx.shard_idx)
                     shard = ScatterReader.from_combined_manifest(manifest_path)
             stream = _reduce_gen(
                 shard, op.key_fn, op.reducer_fn, sort_fn=op.sort_fn, external_sort_dir=external_sort_dir

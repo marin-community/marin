@@ -527,3 +527,22 @@ def test_group_by_combiner_integration(integration_ctx):
         {"key": "a", "ids": [1, 2]},
         {"key": "b", "ids": [3, 4]},
     ]
+
+
+def test_group_by_with_multiple_combine_tasks(zephyr_ctx, monkeypatch):
+    """Force K>1 via a tiny memory budget so the combine stage splits into
+    multiple parallel tasks; output must match the K=1 path."""
+    from zephyr import execution
+
+    # 1-byte budget forces _auto_combine_tasks to cap K at R (== num_shards).
+    monkeypatch.setattr(execution, "_COMBINE_TASK_MEM_BUDGET", 1)
+
+    data = [{"k": i % 4, "v": i} for i in range(40)]
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["k"],
+        reducer=lambda key, items: {"k": key, "sum": sum(x["v"] for x in items)},
+        num_output_shards=4,
+    )
+    results = sorted(zephyr_ctx.execute(ds).results, key=lambda x: x["k"])
+    expected = [{"k": k, "sum": sum(v for v in range(40) if v % 4 == k)} for k in range(4)]
+    assert results == expected

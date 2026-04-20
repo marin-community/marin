@@ -11,7 +11,6 @@ from zephyr.plan import deterministic_hash
 from zephyr.shuffle import (
     ScatterFileIterator,
     ScatterReader,
-    _COMBINE_DONE_MARKER,
     _write_chunk_frame,
     _write_scatter,
     combine_sidecars,
@@ -252,13 +251,58 @@ def test_combine_sidecars_matches_per_mapper_read(tmp_path):
         ), f"shard {shard_idx} content mismatch between from_sidecars and from_combined_manifest"
 
 
-def test_combine_sidecars_writes_done_marker(tmp_path):
-    """A .combine_done file lands in the output dir only after all manifests
-    are written, so reducers can distinguish a completed combine from a
-    crashed partial write."""
-    scatter_paths, _ = _build_many_mappers(tmp_path, num_mappers=2, num_output_shards=2, items_per_mapper=8)
-    combine_sidecars(scatter_paths, num_output_shards=2, out_dir=str(tmp_path))
-    assert (tmp_path / _COMBINE_DONE_MARKER).exists()
+def test_combine_sidecars_sharded_tasks_match_single_task(tmp_path):
+    """Running combine_sidecars as K=3 parallel tasks produces identical
+    reducer manifests to K=1, and each task writes a disjoint subset."""
+    num_mappers = 4
+    num_shards = 7  # deliberately not divisible by K
+    scatter_paths, _ = _build_many_mappers(tmp_path, num_mappers, num_shards, items_per_mapper=12)
+
+    # Single-task reference.
+    ref_dir = tmp_path / "ref"
+    ref_dir.mkdir()
+    combine_sidecars(scatter_paths, num_output_shards=num_shards, out_dir=str(ref_dir))
+
+    # Sharded run with K=3.
+    sharded_dir = tmp_path / "sharded"
+    sharded_dir.mkdir()
+    K = 3
+    for task_idx in range(K):
+        combine_sidecars(
+            scatter_paths,
+            num_output_shards=num_shards,
+            out_dir=str(sharded_dir),
+            task_idx=task_idx,
+            num_combine_tasks=K,
+        )
+
+    for shard_idx in range(num_shards):
+        ref = list(ScatterReader.from_combined_manifest(reducer_manifest_path(str(ref_dir), shard_idx)))
+        sharded = list(ScatterReader.from_combined_manifest(reducer_manifest_path(str(sharded_dir), shard_idx)))
+        assert sorted(ref, key=lambda x: x["v"]) == sorted(
+            sharded, key=lambda x: x["v"]
+        ), f"shard {shard_idx} content differs between K=1 and K={K}"
+
+
+def test_combine_sidecars_sharded_task_only_writes_its_subset(tmp_path):
+    """Each sharded task writes only its strided subset of reducer manifests."""
+    num_shards = 6
+    scatter_paths, _ = _build_many_mappers(tmp_path, num_mappers=2, num_output_shards=num_shards, items_per_mapper=8)
+
+    # Only run task_idx=1 of K=3 (owns shards {1, 4}).
+    combine_sidecars(
+        scatter_paths,
+        num_output_shards=num_shards,
+        out_dir=str(tmp_path),
+        task_idx=1,
+        num_combine_tasks=3,
+    )
+    for shard_idx in range(num_shards):
+        manifest = tmp_path / f"reducer-{shard_idx:04d}.scatter_meta"
+        if shard_idx in (1, 4):
+            assert manifest.exists(), f"task_idx=1 should have written shard {shard_idx}"
+        else:
+            assert not manifest.exists(), f"task_idx=1 should NOT have written shard {shard_idx}"
 
 
 def test_combine_sidecars_preserves_stats(tmp_path):

@@ -3,34 +3,23 @@
 
 """Scatter/shuffle support for Zephyr pipelines.
 
-Each source-shard's scatter output is a single binary file
-(``mapper-XXXX.shuffle``) containing a sequence of zstd-compressed frames.
-Within one chunk's zstd frame, items are written in sub-batches of
-``_SUB_BATCH_SIZE`` — each sub-batch is a single ``pickle.dump(list_of_items)``
-into the zstd stream. This amortises per-item pickle/zstd dispatch over a
-sub-batch while still letting the reader stream sub-batches lazily without
-materialising the full chunk.
+Each source shard's scatter output is a ``mapper-XXXX.shuffle`` binary file
+containing zstd-compressed frames; each frame is a sequence of
+``pickle.dump``ed sub-batches of up to ``_SUB_BATCH_SIZE`` items.
 
-Two manifest flavours live alongside the data files in the same directory,
-sharing the ``.scatter_meta`` suffix and differing only in prefix:
+Two manifest flavours share the ``.scatter_meta`` suffix in the same
+directory:
 
-* **Mapper manifest** (``mapper-XXXX.scatter_meta``): written by each mapper
-  next to its ``.shuffle`` file. Maps ``target_shard -> [(offset, length)]``
-  byte ranges plus per-shard ``max_chunk_rows`` and a global
-  ``avg_item_bytes`` estimate.
-* **Reducer manifest** (``reducer-YYYY.scatter_meta``): written once per
-  reducer by the ``CombineMeta`` stage. Inverts the mapper manifests into a
-  single pre-filtered list of ``{path, ranges, max_chunk_rows,
-  avg_item_bytes}`` entries for reducer ``YYYY``. Reducers load exactly one
-  manifest instead of M.
+* ``mapper-XXXX.scatter_meta`` — written by each mapper. Maps
+  ``target_shard -> [(offset, length)]`` plus per-shard ``max_chunk_rows``
+  and a global ``avg_item_bytes``.
+* ``reducer-YYYY.scatter_meta`` — written by the ``CombineMeta`` stage.
+  Pre-filtered list of ``{path, ranges, max_chunk_rows, avg_item_bytes}``
+  entries for reducer ``YYYY``, so reducers read one file instead of M.
 
-On read, each chunk is fetched with a single ``cat_file`` range GET (one
-HTTP request, no per-chunk file handle), then streamed via
-``pickle.load`` on a length-bounded zstd reader. Per-iterator memory stays
-near-constant: one buffered item plus the zstd decoder state plus the
-chunk's compressed bytes (typically a few MB). This bound is essential for
-skewed shuffles where one reducer pulls disproportionate data and the
-external-sort fan-in opens hundreds of chunk iterators at once.
+Chunks are fetched via a single ``cat_file`` range GET and streamed through
+a zstd decoder, so per-iterator memory stays near-constant — important for
+skewed shuffles where the external-sort fan-in opens many chunk iterators.
 """
 
 from __future__ import annotations
@@ -96,21 +85,14 @@ _MAPPER_PREFIX = "mapper-"
 _REDUCER_PREFIX = "reducer-"
 _SCATTER_DATA_SUFFIX = ".shuffle"
 _SCATTER_META_SUFFIX = ".scatter_meta"
-_COMBINE_DONE_MARKER = ".combine_done"
 
-# Number of parallel manifest reads/writes issued by combine_sidecars and by
-# reducers building their ScatterReader. Manifests are small JSON files and
-# the work is GCS GET/PUT-bound, so a modest pool keeps latency low without
-# thrashing.
+# Parallelism for manifest reads/writes — GCS GET/PUT-bound.
 _MANIFEST_IO_CONCURRENCY = 32
-# Number of items sampled from the first flush to estimate avg_item_bytes.
 _SCATTER_SAMPLE_SIZE = 100
-# Fraction of total memory budgeted for read-side decompression buffers.
 _SCATTER_READ_BUFFER_FRACTION = 0.25
 
 _ZSTD_COMPRESS_LEVEL = 3
-# Items per pickle.dump call within a chunk. Larger = faster (less per-call
-# dispatch overhead), smaller = lower per-iterator read memory.
+# Items per pickle.dump within a chunk; trades write speed for read memory.
 _SUB_BATCH_SIZE = 1024
 
 
@@ -135,10 +117,6 @@ def reducer_manifest_path(stage_dir: str, shard_idx: int) -> str:
     return f"{stage_dir}/{_REDUCER_PREFIX}{shard_idx:04d}{_SCATTER_META_SUFFIX}"
 
 
-def _combine_done_path(stage_dir: str) -> str:
-    return f"{stage_dir}/{_COMBINE_DONE_MARKER}"
-
-
 @functools.cache
 def _manifest_decoder() -> msgspec.json.Decoder:
     return msgspec.json.Decoder()
@@ -159,15 +137,7 @@ def _write_mapper_manifest(data_path: str, sidecar: dict) -> None:
 
 @dataclass(frozen=True)
 class _SidecarSlice:
-    """One reducer's slice of a mapper sidecar.
-
-    A full sidecar is ~hundreds of KB and carries byte ranges for every
-    target shard (tens of thousands on large jobs). A reducer only consumes
-    its own shard's ranges plus two scalars, so the worker extracts just
-    those fields and discards the parsed dict before returning. This keeps
-    the reducer's resident memory proportional to the number of mappers
-    instead of mappers * sidecar size.
-    """
+    """One reducer's slice of a mapper sidecar (freed eagerly to bound memory)."""
 
     path: str
     ranges: tuple[tuple[int, int], ...]
@@ -176,26 +146,13 @@ class _SidecarSlice:
 
 
 def _read_mapper_manifest(path: str) -> dict:
-    """Read a mapper's ``.manifest`` file as a dict.
-
-    Uses ``fs.cat_file`` + ``msgspec.json`` — one direct GET returning bytes
-    is ~25% faster than going through ``TextIOWrapper(BufferedFile)`` for
-    small manifests.
-    """
+    """Read a mapper's manifest as a dict (``cat_file`` + ``msgspec.json``)."""
     meta_path = mapper_manifest_path(path)
     fs, fs_path = url_to_fs(meta_path)
     return _manifest_decoder().decode(fs.cat_file(fs_path))
 
 
 def _sidecar_slice_from_manifest(path: str, meta: dict, shard_key: str) -> _SidecarSlice | None:
-    """Extract a per-reducer slice from a parsed mapper manifest.
-
-    Returns ``None`` if the manifest has no ranges for ``shard_key``. Once a
-    shard has ranges, ``max_chunk_rows[shard_key]`` and ``avg_item_bytes``
-    must also be present — ``ScatterWriter`` records both in the same
-    ``_flush`` that appends to ``shards[shard_key]``. A missing field means
-    the manifest is corrupt or from an incompatible version.
-    """
     ranges_raw = meta.get("shards", {}).get(shard_key)
     if not ranges_raw:
         return None
@@ -218,12 +175,10 @@ def _read_sidecar_slice(path: str, shard_key: str) -> _SidecarSlice | None:
 
 
 def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -> list[_SidecarSlice]:
-    """Read every mapper manifest concurrently and return per-shard slices.
+    """Read every mapper manifest and return slices for ``target_shard``.
 
-    Used by the legacy per-reducer read path (``ScatterReader.from_sidecars``).
-    The ``CombineMeta`` stage replaces this with a single manifest read per
-    reducer; this helper remains for tests and for callers bypassing the
-    combine stage.
+    Used by ``ScatterReader.from_sidecars``; the ``CombineMeta`` stage
+    replaces this with a single pre-built manifest per reducer.
     """
     shard_key = str(target_shard)
     ordered: list[_SidecarSlice | None] = [None] * len(scatter_paths)
@@ -239,41 +194,23 @@ def combine_sidecars(
     scatter_paths: list[str],
     num_output_shards: int,
     out_dir: str,
+    task_idx: int = 0,
+    num_combine_tasks: int = 1,
 ) -> str:
-    """Invert M mapper manifests into R reducer manifests.
+    """Invert mapper manifests into this task's slice of reducer manifests.
 
-    Reads every ``mapper-XXXX.scatter_meta`` in ``scatter_paths`` concurrently,
-    buckets each mapper's per-reducer byte ranges by target shard, and writes
-    R ``reducer-YYYY.scatter_meta`` files under ``out_dir`` — each containing
-    a pre-filtered list of ``{path, ranges, max_chunk_rows, avg_item_bytes}``
-    entries for one reducer.
-
-    A ``.combine_done`` marker is written last so reducers can distinguish a
-    completed combine from a partial write after a worker crash mid-run.
-
-    Args:
-        scatter_paths: List of mapper ``.shuffle`` data paths (one per mapper
-            source shard). Mapper manifest paths are derived via
-            :func:`mapper_manifest_path`.
-        num_output_shards: R — the number of reducer manifests to emit.
-        out_dir: Directory where reducer manifests are written. Typically the
-            same directory that holds the mapper files.
-
-    Returns:
-        ``out_dir`` (for convenience — callers pass this through as the
-        combine stage's single-chunk output).
+    Task ``task_idx`` of ``num_combine_tasks`` owns target shards in
+    ``range(task_idx, num_output_shards, num_combine_tasks)`` — a strided
+    slice so every task reads the full M mappers but only holds/writes
+    ``ceil(R/K)`` reducers' ranges. Peak memory is the inverted
+    ``(R/K) x M`` entry matrix plus the per-parse manifest buffer.
     """
     if num_output_shards < 0:
         raise ValueError(f"num_output_shards must be >= 0, got {num_output_shards}")
+    if num_combine_tasks < 1 or not (0 <= task_idx < num_combine_tasks):
+        raise ValueError(f"invalid task_idx={task_idx} / num_combine_tasks={num_combine_tasks}")
 
-    # Stream manifests through as they complete: workers parse each mapper
-    # manifest and return only the per-reducer entries, then the main thread
-    # buckets them into ``per_reducer`` and the parsed dict is freed. This
-    # keeps combine-task resident memory proportional to the inverted RxM
-    # range matrix rather than also holding every mapper's full manifest at
-    # once — important on large jobs where individual mapper manifests can
-    # be hundreds of KB each. Bucketing stays single-threaded to avoid
-    # defaultdict race on the first insert for a target shard.
+    owned_targets = set(range(task_idx, num_output_shards, num_combine_tasks))
     per_reducer: dict[int, list[dict]] = defaultdict(list)
 
     def _extract_entries(path: str) -> list[tuple[int, dict]]:
@@ -285,11 +222,14 @@ def combine_sidecars(
         for shard_key, ranges in shards.items():
             if not ranges:
                 continue
+            target = int(shard_key)
+            if target not in owned_targets:
+                continue
             if shard_key not in max_rows_map:
                 raise ValueError(f"Manifest for {path} has ranges for shard {shard_key} but no max_chunk_rows entry.")
             out.append(
                 (
-                    int(shard_key),
+                    target,
                     {
                         "path": path,
                         "ranges": ranges,
@@ -300,9 +240,7 @@ def combine_sidecars(
             )
         return out
 
-    with log_time(
-        f"combine_sidecars: reading {len(scatter_paths)} mapper manifests (concurrency={_MANIFEST_IO_CONCURRENCY})"
-    ):
+    with log_time(f"combine_sidecars[{task_idx}/{num_combine_tasks}]: reading {len(scatter_paths)} mapper manifests"):
         with concurrent.futures.ThreadPoolExecutor(max_workers=_MANIFEST_IO_CONCURRENCY) as pool:
             futures = [pool.submit(_extract_entries, p) for p in scatter_paths]
             for fut in concurrent.futures.as_completed(futures):
@@ -317,24 +255,17 @@ def combine_sidecars(
         with open_url(manifest_path, "wb") as f:
             f.write(payload)
 
-    with log_time(
-        f"combine_sidecars: writing {num_output_shards} reducer manifests " f"(concurrency={_MANIFEST_IO_CONCURRENCY})"
-    ):
+    with log_time(f"combine_sidecars[{task_idx}/{num_combine_tasks}]: writing {len(owned_targets)} reducer manifests"):
         with concurrent.futures.ThreadPoolExecutor(max_workers=_MANIFEST_IO_CONCURRENCY) as pool:
-            for _ in pool.map(_write_reducer_manifest, range(num_output_shards)):
+            for _ in pool.map(_write_reducer_manifest, sorted(owned_targets)):
                 pass
 
-    # Done marker is written last so a reducer seeing it knows all R manifest
-    # files are present; otherwise a crashed combine could leave a partial
-    # directory that a retrying worker silently misreads.
-    done_path = _combine_done_path(out_dir)
-    with open_url(done_path, "wb") as f:
-        f.write(b"")
-
     logger.info(
-        "combine_sidecars: %d mappers -> %d reducer manifests under %s",
+        "combine_sidecars[%d/%d]: %d mappers -> %d reducer manifests under %s",
+        task_idx,
+        num_combine_tasks,
         len(scatter_paths),
-        num_output_shards,
+        len(owned_targets),
         out_dir,
     )
     return out_dir
@@ -406,10 +337,8 @@ def _iter_chunk(fs: Any, fs_path: str, offset: int, length: int) -> Iterator:
 class ScatterReader:
     """All scatter chunks for one target shard, across all source files.
 
-    Construct via :meth:`from_combined_manifest` for production use (single
-    manifest read per reducer, written by the ``CombineMeta`` stage), or
-    :meth:`from_sidecars` when bypassing the combine stage. Fields may also
-    be passed directly for testing.
+    Prefer :meth:`from_combined_manifest` (one read per reducer, written by
+    ``CombineMeta``); :meth:`from_sidecars` bypasses the combine stage.
     """
 
     def __init__(
@@ -424,14 +353,7 @@ class ScatterReader:
 
     @classmethod
     def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> ScatterReader:
-        """Build a ScatterReader by reading every mapper's ``.manifest`` directly.
-
-        Each reducer reads all M mapper manifests in parallel and filters for
-        its own ``target_shard``. Prefer :meth:`from_combined_manifest` in
-        production pipelines — a ``CombineMeta`` stage aggregates the M
-        mapper manifests once into per-reducer manifests, so each reducer
-        only reads a single file.
-        """
+        """Build a ScatterReader by reading every mapper manifest directly."""
         iterators: list[ScatterFileIterator] = []
         max_rows = 0
         weighted_bytes = 0.0
@@ -463,13 +385,7 @@ class ScatterReader:
 
     @classmethod
     def from_combined_manifest(cls, manifest_path: str) -> ScatterReader:
-        """Build a ScatterReader from a single reducer manifest.
-
-        The manifest (written by ``combine_sidecars``) contains one entry per
-        contributing mapper file with its byte ranges for this reducer,
-        plus ``max_chunk_rows`` and ``avg_item_bytes`` already resolved —
-        no per-mapper filtering or weighted averaging is needed at read time.
-        """
+        """Build a ScatterReader from one pre-built reducer manifest."""
         fs, fs_path = url_to_fs(manifest_path)
         with log_time(f"Reading combined manifest {manifest_path}"):
             payload = _manifest_decoder().decode(fs.cat_file(fs_path))
