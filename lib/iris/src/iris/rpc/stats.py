@@ -26,15 +26,36 @@ from connectrpc.request import RequestContext
 from google.protobuf.json_format import MessageToJson
 from google.protobuf.message import Message
 
+from iris.cluster.redaction import redact_json_preview
 from iris.rpc import stats_pb2, time_pb2
 from iris.rpc.auth import get_verified_identity
 
 logger = logging.getLogger(__name__)
 
-# Bucket upper bounds in milliseconds. A trailing 0 sentinel means "+inf".
-# Kept static so the dashboard can render consistent histograms across
-# restarts without needing to read them back.
-BUCKET_UPPER_BOUNDS_MS: tuple[int, ...] = (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 0)
+
+def _make_bucket_bounds() -> tuple[int, ...]:
+    """Log-scale bucket upper bounds in ms with a +inf sentinel (trailing 0).
+
+    Buckets sit at 2**(k/3) — three buckets per octave, base ≈ 1.26 — from
+    1 ms up to ~60 s. That is an order of magnitude tighter than the legacy
+    1/2/5/10/... scale, so percentile estimates stay tight without bloating
+    storage (roughly 30 finite buckets). Rounded to integers and deduped.
+    """
+    bounds: list[int] = []
+    for k in range(0, 50):
+        b = round(2.0 ** (k / 3.0))
+        if b > 60000:
+            break
+        if not bounds or b > bounds[-1]:
+            bounds.append(b)
+    bounds.append(0)  # +inf sentinel
+    return tuple(bounds)
+
+
+# A trailing 0 sentinel in the tuple means "+inf". Kept static so the
+# dashboard can render consistent histograms across restarts without
+# needing to read them back.
+BUCKET_UPPER_BOUNDS_MS: tuple[int, ...] = _make_bucket_bounds()
 
 # Default sample ring sizes. Tuned so the whole structure stays <1 MB even
 # with many methods; request previews are capped separately below.
@@ -241,6 +262,7 @@ def _render_preview(request: Message | None, max_bytes: int) -> str:
     except Exception:
         logger.debug("Failed to render request preview for %s", type(request).__name__, exc_info=True)
         return ""
+    rendered = redact_json_preview(rendered)
     return _truncate(rendered, max_bytes)
 
 

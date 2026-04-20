@@ -31,7 +31,7 @@ def _ctx() -> Mock:
 def test_collector_records_counts_and_histogram():
     collector = RpcStatsCollector(slow_threshold_ms=1000)
 
-    for d in (0.5, 3, 12, 70, 900, 1500, 20000):
+    for d in (0.5, 3, 12, 70, 900, 1500, 200000):
         collector.record(method="ListJobs", duration_ms=d, request=_request(), ctx=_ctx())
 
     snap = collector.snapshot_proto()
@@ -43,12 +43,13 @@ def test_collector_records_counts_and_histogram():
     # Buckets echoed for the UI and sum to count.
     assert list(m.bucket_upper_bounds_ms) == list(BUCKET_UPPER_BOUNDS_MS)
     assert sum(m.bucket_counts) == 7
-    # Bucket placements: 0.5 → ≤1, 3 → ≤5, 12 → ≤20, 70 → ≤100, 900 → ≤1000, 1500 → ≤2000, 20000 → +inf.
-    assert m.bucket_counts[0] == 1  # ≤1
-    assert m.bucket_counts[-1] == 1  # +inf
+    # 0.5ms lands in the first bucket (≤1ms); 200000ms is above the largest
+    # finite bound (~52s) and falls into the +inf sentinel bucket.
+    assert m.bucket_counts[0] == 1
+    assert m.bucket_counts[-1] == 1
     # p99 picks up the large tail; p50 stays small.
     assert m.p99_ms >= m.p95_ms >= m.p50_ms
-    assert m.max_duration_ms == 20000
+    assert m.max_duration_ms == 200000
 
 
 def test_collector_captures_slow_samples_and_respects_bound():
