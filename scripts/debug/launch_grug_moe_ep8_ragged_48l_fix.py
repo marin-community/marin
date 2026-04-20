@@ -37,7 +37,6 @@ ragged_ep8_fix = ExecutorStep(
             dataclasses.replace(
                 _baseline_model,
                 moe_implementation="ragged_all_to_all",
-                use_array_stacked_blocks=True,
                 num_layers=48,
             )
         ),
@@ -57,7 +56,6 @@ ragged_ep8_fix = ExecutorStep(
             name=None,
         ),
         optimizer=versioned(_baseline_optimizer),
-        priority_band="production",
         grug_trainer=versioned(
             GrugTrainerConfig(
                 z_loss_weight=1e-4,

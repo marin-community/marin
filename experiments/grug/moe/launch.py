@@ -14,7 +14,6 @@ from datetime import timedelta
 
 import jmp
 from fray.cluster import ResourceConfig
-from fray.v2.types import PriorityBand
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LmDataConfig
@@ -59,7 +58,6 @@ class GrugMoeLaunchConfig:
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
     expert_parallel: int = 1
-    priority_band: PriorityBand | None = None
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
@@ -114,7 +112,6 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         optimizer=config.optimizer,
         trainer=grug_trainer,
         eval=config.eval,
-        priority_band=config.priority_band,
     )
     run_grug(run_config)
 
@@ -140,7 +137,6 @@ _baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_f
 _baseline_model = dataclasses.replace(
     _baseline_model,
     moe_implementation="ring",
-    use_array_stacked_blocks=True,
     num_layers=_BASELINE_NUM_LAYERS_OVERRIDE or _baseline_model.num_layers,
 )
 
@@ -185,7 +181,6 @@ baseline_moe = ExecutorStep(
             name=None,
         ),
         optimizer=versioned(_baseline_optimizer),
-        priority_band="production",
         grug_trainer=versioned(
             GrugTrainerConfig(
                 z_loss_weight=1e-4,
