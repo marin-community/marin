@@ -123,8 +123,8 @@ def test_fail_heartbeat_returns_transient_and_worker_stays_alive(state, worker_m
         assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("worker1",)) is not None
 
 
-def test_ping_failures_accumulate_in_health_tracker(tmp_path, worker_metadata):
-    """Ten consecutive ping failures via _handle_failed_heartbeats trip the tracker threshold."""
+def test_ping_failures_accumulate_and_terminate_inline(tmp_path, worker_metadata):
+    """Ten consecutive ping failures via _handle_failed_heartbeats terminates the worker inline."""
     db = ControllerDB(db_dir=tmp_path)
     config = ControllerConfig(remote_state_dir="file:///tmp/iris-test-state", local_state_dir=tmp_path)
     controller = Controller(config=config, provider=FakeProvider(), db=db)
@@ -142,9 +142,14 @@ def test_ping_failures_accumulate_in_health_tracker(tmp_path, worker_metadata):
     for _ in range(9):
         controller._handle_failed_heartbeats([(batch, "connection refused")], acc)
     assert controller._health.workers_over_threshold() == []
+    with db.snapshot() as q:
+        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("worker1",)) is not None
 
+    # 10th failure crosses threshold — worker is terminated inline.
     controller._handle_failed_heartbeats([(batch, "connection refused")], acc)
-    assert controller._health.workers_over_threshold() == [WorkerId("worker1")]
+    assert controller._health.workers_over_threshold() == []
+    with db.snapshot() as q:
+        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("worker1",)) is None
 
     controller.stop()
     db.close()

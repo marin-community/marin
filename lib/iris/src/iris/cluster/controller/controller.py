@@ -98,7 +98,6 @@ from iris.cluster.controller.transitions import (
     ClusterCapacity,
     ControllerTransitions,
     DIRECT_PROVIDER_PROMOTION_RATE,
-    HeartbeatAction,
     HeartbeatApplyRequest,
     ReservationClaim,
     SchedulingEvent,
@@ -2515,21 +2514,25 @@ class Controller:
         failure_entries: list[tuple],
         acc: _SyncFailureAccumulator,
     ) -> list[str]:
-        """Process failed heartbeats: update accumulator and return primary failed worker IDs."""
+        """Process failed heartbeats: update health tracker, log, and immediately
+        terminate any workers that just crossed the ping threshold.
+
+        Workers over threshold are terminated inline (not deferred to the reaper)
+        so that their tasks are re-queued without waiting up to _REAPER_INTERVAL seconds.
+        _terminate_workers handles slice siblings, so the return value is always empty
+        (callers need not invoke _handle_sibling_worker_failures separately).
+        """
         for batch, _error in failure_entries:
             self._health.ping(batch.worker_id, healthy=False)
         failure_result = self._transitions.fail_heartbeats_batch(failure_entries)
         acc.all_tasks_to_kill.update(failure_result.tasks_to_kill)
         acc.all_task_kill_workers.update(failure_result.task_kill_workers)
 
-        primary_failed_workers: list[str] = []
         for (batch, error), result in zip(failure_entries, failure_result.results, strict=False):
             last_success_age_s = (
                 "unknown" if result.last_heartbeat_age_ms is None else f"{result.last_heartbeat_age_ms / 1000.0:.1f}"
             )
-            log_level = logging.ERROR if result.action == HeartbeatAction.WORKER_FAILED else logging.WARNING
-            logger.log(
-                log_level,
+            logger.warning(
                 "Heartbeat RPC failure: worker=%s address=%s action=%s last_success_age_s=%s "
                 "expected=%d run=%d kill=%d error=%s",
                 batch.worker_id,
@@ -2541,15 +2544,26 @@ class Controller:
                 len(batch.tasks_to_kill),
                 error,
             )
-            if result.action == HeartbeatAction.WORKER_FAILED:
-                acc.fail_count += 1
-                acc.terminal_failed_workers.append(batch.worker_id)
-                self._provider.on_worker_failed(batch.worker_id, batch.worker_address)
-                primary_failed_workers.append(str(batch.worker_id))
-            elif result.action == HeartbeatAction.TRANSIENT_FAILURE:
-                acc.fail_count += 1
-                acc.transient_failed_workers.append(batch.worker_id)
-        return primary_failed_workers
+            acc.fail_count += 1
+            acc.transient_failed_workers.append(batch.worker_id)
+
+        unhealthy = self._health.workers_over_threshold()
+        if unhealthy:
+            logger.warning(
+                "Failing %d workers over ping threshold: %s",
+                len(unhealthy),
+                [str(wid) for wid in unhealthy[:10]],
+            )
+            removed = self._terminate_workers(
+                [str(wid) for wid in unhealthy],
+                reason="worker ping threshold exceeded",
+                sibling_reason="unhealthy worker failed, slice terminated",
+            )
+            self._health.forget_many(removed)
+            acc.fail_count += len(removed)
+            acc.terminal_failed_workers.extend(removed)
+
+        return []
 
     def _handle_sibling_worker_failures(
         self,
