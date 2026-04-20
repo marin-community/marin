@@ -4,11 +4,17 @@ The Iris log server is a standalone process that owns the log store (DuckDB +
 Parquet tiers on disk, GCS archive). Controllers and workers push logs to it
 and fetch logs from it over RPC.
 
-There are two deployment modes:
+There are three deployment modes:
 
 - **In-process (default for tests, CI, local dev):** the controller starts a
   ``LogServiceImpl`` on a free port and advertises it via
   ``/system/log-server``. No extra container required.
+- **Sidecar on the controller VM:** the controller VM runs a second Docker
+  container on the same host. The controller container receives
+  ``IRIS_LOG_SERVICE_ADDRESS=http://localhost:<port>`` from the bootstrap
+  script and resolves the sidecar automatically. Enable with
+  ``controller.enable_log_server_sidecar: true`` in cluster YAML. See
+  [Sidecar mode](#sidecar-mode) below.
 - **External (recommended for production):** the log server runs as its own
   container on its own host, and the controller is pointed at it with
   ``--log-service-address``.
@@ -80,6 +86,48 @@ When ``--log-service-address`` is set the controller:
 
 When ``--log-service-address`` is omitted, the controller falls back to the
 in-process log server. This is the default for tests, CI, and local dev.
+
+## Sidecar mode
+
+On a VM-backed controller (``controller.gcp`` or ``controller.manual``), you
+can colocate the log server with the controller instead of managing a
+separate VM. Cluster YAML:
+
+```yaml
+controller:
+  image: ghcr.io/marin-community/iris-controller:latest
+  enable_log_server_sidecar: true       # opt-in; default false
+  gcp:
+    zone: us-central1-a
+storage:
+  remote_state_dir: gs://your-bucket/iris/state
+```
+
+The sidecar has no other knobs:
+
+- image: same registry and tag as ``controller.image``, with the last path
+  segment ``iris-controller`` swapped to ``iris-log-server``;
+- port: ``10002`` (host networking);
+- archive URI: ``{storage.remote_state_dir}/logs``.
+
+With the sidecar enabled, the bootstrap script on the controller VM runs a
+second ``iris-log-server`` container with
+``--network=host --restart=unless-stopped`` and points the controller
+container at it via ``IRIS_LOG_SERVICE_ADDRESS=http://localhost:10002`` for
+the controller's own pushes.
+
+Workers connect directly to the sidecar rather than tunnelling through the
+controller: when ``log_service_address`` is a loopback URL, the controller
+advertises ``http://<controller-host>:10002`` via ``/system/log-server`` —
+same VM, the sidecar's port, so no dashboard hop. Your controller VM's
+firewall must allow port ``10002`` from the same network range that already
+reaches the controller's own port.
+
+**Stage 1 caveat — JWT signing key.** The sidecar currently starts without
+the controller's JWT signing key, so it runs in null-auth mode and accepts
+anonymous pushes. Strict-auth clusters should keep the sidecar disabled
+until the standalone ``iris log-server deploy`` flow lands (Stage 2) with
+a key handoff mechanism.
 
 ## Sharing the JWT signing key
 

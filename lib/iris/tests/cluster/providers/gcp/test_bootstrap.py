@@ -8,6 +8,9 @@ from __future__ import annotations
 import pytest
 
 from iris.cluster.providers.gcp.bootstrap import (
+    LogServerSidecarConfig,
+    _derive_log_server_image,
+    build_controller_bootstrap_script,
     build_controller_bootstrap_script_from_config,
     build_worker_bootstrap_script,
     render_template,
@@ -205,3 +208,136 @@ def test_gcp_provider_resolve_image_requires_zone_for_ghcr() -> None:
 
     with pytest.raises(ValueError, match="zone is required"):
         provider.resolve_image("ghcr.io/org/img:v1")
+
+
+# --- Log-server sidecar tests ---
+
+
+@pytest.mark.parametrize(
+    "controller_image, expected",
+    [
+        (
+            "ghcr.io/marin-community/iris-controller:latest",
+            "ghcr.io/marin-community/iris-log-server:latest",
+        ),
+        (
+            "ghcr.io/marin-community/iris-controller:abc123",
+            "ghcr.io/marin-community/iris-log-server:abc123",
+        ),
+        (
+            "us-docker.pkg.dev/proj/repo/iris-controller:v1",
+            "us-docker.pkg.dev/proj/repo/iris-log-server:v1",
+        ),
+        # Non-derivable tag passes through unchanged.
+        ("registry.example.com/custom-image:v1", "registry.example.com/custom-image:v1"),
+    ],
+)
+def test_derive_log_server_image(controller_image: str, expected: str) -> None:
+    assert _derive_log_server_image(controller_image) == expected
+
+
+def test_build_controller_bootstrap_script_without_sidecar_omits_sidecar_lines() -> None:
+    """Default bootstrap (no sidecar) has no log-server container or env var."""
+    script = build_controller_bootstrap_script(
+        docker_image="gcr.io/test/iris-controller:latest",
+        port=10000,
+    )
+    assert "iris-log-server" not in script
+    assert "IRIS_LOG_SERVICE_ADDRESS" not in script
+    assert "# No log-server sidecar" in script
+
+
+def test_build_controller_bootstrap_script_with_sidecar_adds_container_and_env() -> None:
+    """Sidecar bootstrap launches the log-server container and injects env var."""
+    sidecar = LogServerSidecarConfig(
+        image="gcr.io/test/iris-log-server:latest",
+        port=10002,
+        remote_log_dir="gs://bucket/iris/state/logs",
+    )
+    script = build_controller_bootstrap_script(
+        docker_image="gcr.io/test/iris-controller:latest",
+        port=10000,
+        sidecar=sidecar,
+    )
+
+    # Sidecar pull + run
+    assert "Pulling log-server sidecar image: gcr.io/test/iris-log-server:latest" in script
+    assert "sudo docker run -d --name iris-log-server" in script
+    assert "--remote-log-dir gs://bucket/iris/state/logs" in script
+    assert "--port 10002" in script
+
+    # Controller picks up the sidecar via env var
+    assert "-e IRIS_LOG_SERVICE_ADDRESS=http://localhost:10002" in script
+
+
+def test_build_controller_bootstrap_script_from_config_enables_sidecar() -> None:
+    """When enable_log_server_sidecar is set, from_config derives image + remote dir."""
+    config = config_pb2.IrisClusterConfig()
+    config.controller.image = "ghcr.io/marin-community/iris-controller:latest"
+    config.controller.enable_log_server_sidecar = True
+    config.controller.gcp.zone = "us-central1-a"
+    config.controller.gcp.port = 10000
+    config.platform.gcp.project_id = "hai-gcp-models"
+    config.storage.remote_state_dir = "gs://bucket/iris/state"
+
+    script = build_controller_bootstrap_script_from_config(
+        config,
+        resolve_image=lambda image, zone=None: image,
+    )
+
+    # Image derived from controller image by stage swap
+    assert "ghcr.io/marin-community/iris-log-server:latest" in script
+    # Remote log dir defaults to storage.remote_state_dir/logs
+    assert "--remote-log-dir gs://bucket/iris/state/logs" in script
+    # Controller picks up the sidecar via env var (default port)
+    assert "-e IRIS_LOG_SERVICE_ADDRESS=http://localhost:10002" in script
+
+
+def test_build_controller_bootstrap_script_from_config_sidecar_disabled_by_default() -> None:
+    """Existing configs (no sidecar opt-in) render without any log-server container."""
+    config = config_pb2.IrisClusterConfig()
+    config.controller.image = "ghcr.io/marin-community/iris-controller:latest"
+    config.controller.gcp.zone = "us-central1-a"
+    config.controller.gcp.port = 10000
+    config.platform.gcp.project_id = "hai-gcp-models"
+    config.storage.remote_state_dir = "gs://bucket/iris/state"
+
+    script = build_controller_bootstrap_script_from_config(
+        config,
+        resolve_image=lambda image, zone=None: image,
+    )
+
+    assert "iris-log-server" not in script
+    assert "IRIS_LOG_SERVICE_ADDRESS" not in script
+
+
+def test_build_controller_bootstrap_script_from_config_sidecar_requires_remote_state_dir() -> None:
+    """Enabling the sidecar without storage.remote_state_dir fails."""
+    config = config_pb2.IrisClusterConfig()
+    config.controller.image = "ghcr.io/marin-community/iris-controller:latest"
+    config.controller.enable_log_server_sidecar = True
+    config.controller.gcp.zone = "us-central1-a"
+    config.controller.gcp.port = 10000
+    # No storage.remote_state_dir.
+
+    with pytest.raises(ValueError, match="remote_state_dir"):
+        build_controller_bootstrap_script_from_config(
+            config,
+            resolve_image=lambda image, zone=None: image,
+        )
+
+
+def test_build_controller_bootstrap_script_from_config_sidecar_requires_controller_image() -> None:
+    """Sidecar enabled with a non-derivable controller image fails."""
+    config = config_pb2.IrisClusterConfig()
+    config.controller.image = "registry.example.com/custom-controller:v1"  # no 'iris-controller'
+    config.controller.enable_log_server_sidecar = True
+    config.controller.gcp.zone = "us-central1-a"
+    config.controller.gcp.port = 10000
+    config.storage.remote_state_dir = "gs://bucket/iris/state"
+
+    with pytest.raises(ValueError, match="iris-controller"):
+        build_controller_bootstrap_script_from_config(
+            config,
+            resolve_image=lambda image, zone=None: image,
+        )
