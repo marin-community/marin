@@ -27,12 +27,44 @@ class GrugMoeAdamHConfig(OptimizerConfig):
     max_grad_norm: float | None = 1.0
     adam_lr: float = 6e-4
     expert_lr: float | None = None
+    # If set, linear decay stops when LR reaches this fraction of peak, then holds constant.
+    # Overrides the normal schedule. 0 = disabled (use normal schedule).
+    constant_final_lr_ratio: float = 0.0
+
+    def _constant_final_schedule(self, num_train_steps, peak_lr):
+        """Warmup → linear decay → hold constant at constant_final_lr_ratio * peak."""
+        warmup_steps = int(self.warmup * num_train_steps) if isinstance(self.warmup, float) else self.warmup
+        floor_lr = self.constant_final_lr_ratio * peak_lr
+        # Linear decay from peak to floor. Decay ends when it hits the floor.
+        # With ratio R, decay covers (1 - R) of the LR range over (total - warmup) steps.
+        decay_steps = num_train_steps - warmup_steps
+        # How many steps until we hit the floor: decay_steps * (1 - R) / 1 ... no.
+        # linear_schedule goes from peak to floor over decay_steps. We want it to
+        # hit floor at some step < decay_steps, then hold. The simplest: compute
+        # when linear_schedule(peak, 0, decay_steps) hits floor_lr, then hold.
+        # peak * (1 - t/decay_steps) = floor_lr → t = decay_steps * (1 - floor_lr/peak)
+        # = decay_steps * (1 - R)
+        actual_decay_steps = max(1, int(decay_steps * (1.0 - self.constant_final_lr_ratio)))
+        warmup = optax.linear_schedule(0.0, peak_lr, warmup_steps)
+        decay = optax.linear_schedule(peak_lr, floor_lr, actual_decay_steps)
+        hold = optax.constant_schedule(floor_lr)
+        return optax.join_schedules(
+            [warmup, decay, hold],
+            [warmup_steps, warmup_steps + actual_decay_steps],
+        )
 
     def build(self, num_train_steps):
-        learning_rate_schedule = self.lr_scheduler(num_train_steps)
-        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+        if self.constant_final_lr_ratio > 0:
+            learning_rate_schedule = self._constant_final_schedule(num_train_steps, self.learning_rate)
+            adam_lr_schedule = self._constant_final_schedule(num_train_steps, self.adam_lr)
+        else:
+            learning_rate_schedule = self.lr_scheduler(num_train_steps)
+            adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
         expert_lr_val = self.expert_lr if self.expert_lr is not None else self.learning_rate
-        expert_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=expert_lr_val)
+        if self.constant_final_lr_ratio > 0:
+            expert_lr_schedule = self._constant_final_schedule(num_train_steps, expert_lr_val)
+        else:
+            expert_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=expert_lr_val)
 
         def optimizer(learning_rate, adam_lr, expert_lr):
             def adamh_transform():
