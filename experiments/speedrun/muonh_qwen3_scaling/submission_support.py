@@ -14,7 +14,7 @@ from enum import Enum
 
 import wandb
 from levanter.models.lm_model import LmConfig
-from marin.execution.executor import ExecutorStep, output_path_of
+from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from rigging.filesystem import open_url
 
 from experiments.defaults import default_train
@@ -37,7 +37,7 @@ class SpeedrunConfig:
     description: str
     model_config: LmConfig
     train_config: SimpleTrainConfig
-    tokenized_dataset: str
+    tokenized_dataset: str | InputName
 
     @property
     def vocab_size(self) -> int:
@@ -103,11 +103,15 @@ def speedrun_results(config: SpeedrunResultsConfig) -> None:
     wandb_run_id = config.wandb_run_id.split("/")[-1]
     step_times = _get_step_times(wandb_run_id, config.wandb_entity, config.wandb_project)
     if not step_times:
-        raise ValueError(f"No throughput/duration history found for {config.wandb_entity}/{config.wandb_project}/{wandb_run_id}.")
+        raise ValueError(
+            f"No throughput/duration history found for {config.wandb_entity}/{config.wandb_project}/{wandb_run_id}."
+        )
 
     run = wandb.Api().run(f"{config.wandb_entity}/{config.wandb_project}/{wandb_run_id}")
     context_length = config.speedrun_config.train_config.train_seq_len or config.speedrun_config.model_config.max_seq_len
-    flops_per_token = config.speedrun_config.model_config.flops_per_token(config.speedrun_config.vocab_size, context_length)
+    flops_per_token = config.speedrun_config.model_config.flops_per_token(
+        config.speedrun_config.vocab_size, context_length
+    )
     model_flops = config.speedrun_config.compute_model_flops()
     model_size = config.speedrun_config.model_config.total_trainable_params(config.speedrun_config.vocab_size)
     device_flops = config.speedrun_config.train_config.resources.device_flops()
@@ -120,16 +124,20 @@ def speedrun_results(config: SpeedrunResultsConfig) -> None:
     run_info = {
         **config.speedrun_config.as_json_dict(),
         "model_size": model_size,
-        "total_tokens": config.speedrun_config.train_config.train_batch_size
-        * config.speedrun_config.train_config.num_train_steps
-        * context_length,
+        "total_tokens": (
+            config.speedrun_config.train_config.train_batch_size
+            * config.speedrun_config.train_config.num_train_steps
+            * context_length
+        ),
         "model_flops": model_flops,
         "model_flops_per_token": flops_per_token,
         "num_devices": run.summary.get("num_devices"),
         "num_chips": config.speedrun_config.train_config.resources.chip_count(),
         "device_flops": device_flops,
         "training_time": runtime_seconds,
-        "training_hardware_flops": runtime_seconds * config.speedrun_config.train_config.resources.chip_count() * device_flops,
+        "training_hardware_flops": (
+            runtime_seconds * config.speedrun_config.train_config.resources.chip_count() * device_flops
+        ),
         "eval/paloma/c4_en/bpb": run.summary.get("eval/paloma/c4_en/bpb"),
         "run_completion_timestamp": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
         "wandb_run_link": f"https://wandb.ai/{config.wandb_entity}/{config.wandb_project}/runs/{wandb_run_id}",
@@ -139,9 +147,10 @@ def speedrun_results(config: SpeedrunResultsConfig) -> None:
 
 
 def default_speedrun(name: str, config: SpeedrunConfig, *, tags: list[str] | None = None) -> list[ExecutorStep]:
+    resolved_tokenized_dataset = _resolve_tokenized_dataset(config.tokenized_dataset)
     train_step = default_train(
         name=f"speedrun/{name}",
-        tokenized=config.tokenized_dataset,
+        tokenized=resolved_tokenized_dataset,
         model_config=config.model_config,
         train_config=config.train_config,
         tags=["speedrun", *(tags or [])],
@@ -162,3 +171,9 @@ def default_speedrun(name: str, config: SpeedrunConfig, *, tags: list[str] | Non
         ),
     )
     return [train_step, results_step]
+
+
+def _resolve_tokenized_dataset(tokenized_dataset: str | InputName) -> InputName:
+    if not isinstance(tokenized_dataset, str):
+        return tokenized_dataset
+    return InputName.hardcoded(tokenized_dataset)

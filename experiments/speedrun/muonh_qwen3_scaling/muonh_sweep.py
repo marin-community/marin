@@ -37,7 +37,9 @@ def _filtered_optimizer_config(optimizer_config: dict[str, object], optimizer_cl
     return {key: value for key, value in optimizer_config.items() if key in accepted_keys}
 
 
-def _to_qwen3_from_llama(llama_cfg: LlamaConfig, *, seq_len_override: int = 4096, hybrid_norm: bool = True) -> Qwen3Config:
+def _to_qwen3_from_llama(
+    llama_cfg: LlamaConfig, *, seq_len_override: int = 4096, hybrid_norm: bool = True
+) -> Qwen3Config:
     return Qwen3Config(
         max_seq_len=seq_len_override,
         hidden_dim=llama_cfg.hidden_dim,

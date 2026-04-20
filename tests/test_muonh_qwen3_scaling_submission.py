@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 from experiments.speedrun.muonh_qwen3_scaling.materialize_submission import SweepRun, select_best_runs
 
 
@@ -55,3 +58,28 @@ def test_select_best_runs_chooses_lowest_bpb_per_size_and_ignores_non_finished()
     assert selected["130m"].learning_rate == 0.02
     assert selected["300m"].run_name == "qwen3_300m_muonh_4096_lrx0_75-ddd444"
     assert selected["300m"].c4_en_bpb == 1.06
+
+
+def test_select_best_runs_skips_finished_runs_without_metric():
+    runs = [
+        SweepRun(
+            run_name="qwen3_130m_muonh_4096_lrx0_5-aaa111",
+            size="130m",
+            state="finished",
+            learning_rate=0.01,
+            c4_en_bpb=None,
+            c4_en_loss=None,
+            run_info={"run_name": "missing-metric"},
+        ),
+        SweepRun(
+            run_name="qwen3_130m_muonh_4096_lrx1-bbb222",
+            size="130m",
+            state="finished",
+            learning_rate=0.02,
+            c4_en_bpb=1.18,
+            c4_en_loss=3.83,
+            run_info={"run_name": "best"},
+        ),
+    ]
+    selected = select_best_runs(runs)
+    assert selected["130m"].run_name == "qwen3_130m_muonh_4096_lrx1-bbb222"
