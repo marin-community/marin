@@ -729,6 +729,7 @@ def test_exec_in_container(smoke_cluster):
 # ============================================================================
 
 
+@pytest.mark.timeout(120)
 def test_checkpoint_restore():
     """Controller restart resumes from checkpoint: completed jobs visible, cluster functional.
 
