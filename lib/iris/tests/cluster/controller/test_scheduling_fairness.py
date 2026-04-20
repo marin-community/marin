@@ -9,7 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from iris.cluster.controller.budget import UserTask, compute_effective_band, interleave_by_user
-from iris.cluster.controller.controller import Controller, ControllerConfig, SchedulingOutcome, _schedulable_tasks
+from iris.cluster.controller.controller import ControllerConfig, SchedulingOutcome, _schedulable_tasks
 from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
@@ -281,7 +281,7 @@ def test_zero_budget_means_unlimited():
             assert band == job_pb2.PRIORITY_BAND_INTERACTIVE
 
 
-def test_unplaceable_tasks_do_not_starve_placeable_tasks():
+def test_unplaceable_tasks_do_not_starve_placeable_tasks(controller_factory):
     """A user's CPU task is scheduled even when they have many unplaceable TPU tasks.
 
     Regression test: a per-user input cap (max_tasks_per_user_per_cycle) applied before
@@ -296,7 +296,7 @@ def test_unplaceable_tasks_do_not_starve_placeable_tasks():
             remote_state_dir=f"file://{tmpdir}/remote",
             local_state_dir=tmpdir / "local",
         )
-        ctrl = Controller(config=config, provider=FakeProvider())
+        ctrl = controller_factory(config=config, provider=FakeProvider())
 
         # Submit OLD_CAP+2 unplaceable TPU tasks for alice (no TPU workers will be registered)
         for i in range(OLD_CAP + 2):

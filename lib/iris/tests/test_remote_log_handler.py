@@ -279,12 +279,19 @@ class _FakeLogServiceClient:
 
 @pytest.fixture
 def tracked_log_service_client(monkeypatch):
-    """Patch LogServiceClientSync to track every constructed instance."""
+    """Patch LogServiceClientSync to track instances built for the test sentinel.
+
+    Tests use ``http://h:1`` as a sentinel address so this fixture filters on
+    it — any other address (e.g., from a leaked LogPusher in a prior test
+    that re-resolves mid-run) still gets a working fake but is not recorded.
+    """
     created: list[_FakeLogServiceClient] = []
+    sentinel = "http://h:1"
 
     def factory(address, timeout_ms=10_000, interceptors=()):
         c = _FakeLogServiceClient(address, timeout_ms=timeout_ms, interceptors=interceptors)
-        created.append(c)
+        if address == sentinel:
+            created.append(c)
         return c
 
     monkeypatch.setattr(client_mod, "LogServiceClientSync", factory)

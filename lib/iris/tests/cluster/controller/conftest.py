@@ -154,6 +154,29 @@ def mock_controller() -> MockController:
 
 
 @pytest.fixture
+def controller_factory():
+    """Factory for ``Controller`` instances that tears them down after the test.
+
+    ``Controller.__init__`` spawns daemon threads (notably ``LogPusher`` drain
+    threads) that otherwise outlive the test and can re-resolve their RPC
+    clients against later tests' monkeypatched factories. Tests that build
+    real controllers should go through this fixture so ``.stop()`` runs.
+    """
+    from iris.cluster.controller.controller import Controller
+
+    created: list[Controller] = []
+
+    def _factory(*args, **kwargs) -> Controller:
+        ctrl = Controller(*args, **kwargs)
+        created.append(ctrl)
+        return ctrl
+
+    yield _factory
+    for ctrl in created:
+        ctrl.stop()
+
+
+@pytest.fixture
 def log_service(state, tmp_path) -> LogServiceImpl:
     """LogServiceImpl with its own internal log store.
 
