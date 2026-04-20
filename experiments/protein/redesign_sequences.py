@@ -21,7 +21,7 @@ Setup (once)::
 Usage::
 
     uv run python -m experiments.protein.redesign_sequences \\
-        --output gs://marin-us-east5/protein-mpnn-redesigns/v1/redesigns.jsonl \\
+        --output gs://marin-us-east5/protein-structure/protein-mpnn-redesigns/v1/redesigns.jsonl \\
         --temperature 0.1 \\
         --seed 0
 
@@ -136,6 +136,46 @@ class RedesignResult:
     mpnn_score: float | None
 
 
+def _filter_pdb_for_mpnn(pdb_text: str, chain_letter: str) -> str:
+    """Reduce a PDB to exactly the residues `_parse_chain` would return, and renumber
+    them contiguously starting at 1.
+
+    Matches `_parse_chain`'s filters: only ATOM records (drops HETATMs such as
+    MSE/selenomethionine), model 1 only, alt_loc blank or "A", residue in
+    STANDARD_AA_3LETTER, and restricted to `chain_letter`. Renumbering is
+    required because ProteinMPNN uses PDB residue numbers as positional indices
+    and inserts `X` into output sequences for any numbering gap — renumbering
+    eliminates gaps so MPNN's output length matches `_parse_chain`'s residue list.
+    """
+    kept: list[str] = []
+    in_model_1 = True
+    residue_key_to_new_num: dict[tuple[str, int, str], int] = {}
+    for line in pdb_text.splitlines():
+        if line.startswith("MODEL "):
+            in_model_1 = int(line[10:14].strip() or "1") == 1
+            continue
+        if line.startswith("ENDMDL"):
+            in_model_1 = False
+            continue
+        if not in_model_1 or not line.startswith("ATOM  "):
+            continue
+        alt_loc = line[16].strip()
+        res_name = line[17:20].strip()
+        if line[21] != chain_letter or alt_loc not in ("", "A") or res_name not in STANDARD_AA_3LETTER:
+            continue
+        res_seq = int(line[22:26].strip())
+        i_code = line[26]
+        res_key = (line[21], res_seq, i_code.strip())
+        if res_key not in residue_key_to_new_num:
+            residue_key_to_new_num[res_key] = len(residue_key_to_new_num) + 1
+        new_num = residue_key_to_new_num[res_key]
+        # Rewrite columns 23-26 (1-indexed) with the new residue number and blank the insertion code.
+        rewritten = line[:22] + f"{new_num:>4d}" + " " + line[27:]
+        kept.append(rewritten)
+    kept.append("END")
+    return "\n".join(kept) + "\n"
+
+
 def _run_proteinmpnn_one_target(
     target: ProteinTarget,
     *,
@@ -152,23 +192,23 @@ def _run_proteinmpnn_one_target(
     pdb_text = _fetch_pdb_text(target.pdb_id, assembly=target.assembly)
     native_chain = _parse_chain(pdb_text, chain_id=target.chain_id)
 
+    # ProteinMPNN `--chain_id` selects chains to *design*. If None, we
+    # design the first chain actually present (matching `_parse_chain`'s
+    # behavior). We identify that by re-reading the PDB's first chain.
+    first_chain_letter = next(
+        (line[21] for line in pdb_text.splitlines() if line.startswith("ATOM  ")),
+        None,
+    )
+    if first_chain_letter is None:
+        raise RuntimeError(f"No ATOM records in {target.pdb_id} — cannot run ProteinMPNN.")
+    chain_for_design = (target.chain_id or first_chain_letter).strip()
+
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
         pdb_path = tmp / f"{target.name}.pdb"
-        pdb_path.write_text(pdb_text, encoding="utf-8")
+        pdb_path.write_text(_filter_pdb_for_mpnn(pdb_text, chain_for_design), encoding="utf-8")
         out_folder = tmp / "mpnn_out"
         out_folder.mkdir()
-
-        # ProteinMPNN `--chain_id` selects chains to *design*. If None, we
-        # design the first chain actually present (matching `_parse_chain`'s
-        # behavior). We identify that by re-reading the PDB's first chain.
-        first_chain_letter = next(
-            (line[21] for line in pdb_text.splitlines() if line.startswith("ATOM  ")),
-            None,
-        )
-        if first_chain_letter is None:
-            raise RuntimeError(f"No ATOM records in {target.pdb_id} — cannot run ProteinMPNN.")
-        chain_for_design = (target.chain_id or first_chain_letter).strip()
 
         cmd = [
             sys.executable,

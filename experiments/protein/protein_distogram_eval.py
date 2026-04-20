@@ -627,7 +627,7 @@ def distogram_eval_benchmark(
         from experiments.protein.protein_distogram_eval import distogram_eval_benchmark
         bench = distogram_eval_benchmark(
             PROTEIN_TOKENIZER,
-            redesigns_source="gs://marin-us-east5/protein-mpnn-redesigns/v1/redesigns.jsonl",
+            redesigns_source="gs://marin-us-east5/protein-structure/protein-mpnn-redesigns/v1/redesigns.jsonl",
         )
 
         protein_docs_data = dataclasses.replace(

@@ -67,7 +67,7 @@ sequence, score against native CA-CA distances):
 ```bash
 # 1. Run the redesign script (local, CPU is fine):
 uv run python -m experiments.protein.redesign_sequences \
-    --output gs://marin-us-east5/protein-mpnn-redesigns/v1/redesigns.jsonl \
+    --output gs://marin-us-east5/protein-structure/protein-mpnn-redesigns/v1/redesigns.jsonl \
     --temperature 0.1 --seed 0
 
 # 2. Next training run picks up the redesigns automatically via

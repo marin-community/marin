@@ -93,7 +93,7 @@ val_component = dataclasses.replace(
 # `experiments/protein/redesign_sequences.py`. If the file doesn't exist yet
 # (redesign script not run), the benchmark silently skips redesigned targets,
 # so it's safe to reference unconditionally.
-PROTEIN_MPNN_REDESIGNS_SOURCE = "gs://marin-us-east5/protein-mpnn-redesigns/v1/redesigns.jsonl"
+PROTEIN_MPNN_REDESIGNS_SOURCE = "gs://marin-us-east5/protein-structure/protein-mpnn-redesigns/v1/redesigns.jsonl"
 distogram_eval = distogram_eval_benchmark(
     PROTEIN_TOKENIZER,
     redesigns_source=PROTEIN_MPNN_REDESIGNS_SOURCE,
