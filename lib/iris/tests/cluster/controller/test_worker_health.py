@@ -19,26 +19,19 @@ def tracker() -> WorkerHealthTracker:
     return WorkerHealthTracker(ping_threshold=10, build_threshold=10)
 
 
-def test_nine_ping_failures_do_not_trip(tracker: WorkerHealthTracker) -> None:
+def test_ping_failure_threshold_boundary(tracker: WorkerHealthTracker) -> None:
+    """9 consecutive failures are not enough; 10th trips; a healthy ping resets and requires 10 more."""
     wid = WorkerId("w-1")
     for _ in range(9):
         tracker.ping(wid, healthy=False)
     assert tracker.workers_over_threshold() == []
-
-
-def test_tenth_ping_failure_trips(tracker: WorkerHealthTracker) -> None:
-    wid = WorkerId("w-1")
-    for _ in range(10):
-        tracker.ping(wid, healthy=False)
+    tracker.ping(wid, healthy=False)
     assert tracker.workers_over_threshold() == [wid]
 
-
-def test_healthy_ping_resets_consecutive_failures(tracker: WorkerHealthTracker) -> None:
-    wid = WorkerId("w-1")
+    tracker.forget(wid)
     for _ in range(9):
         tracker.ping(wid, healthy=False)
-    tracker.ping(wid, healthy=True)
-    # Need 10 more consecutive failures after the reset.
+    tracker.ping(wid, healthy=True)  # reset
     for _ in range(9):
         tracker.ping(wid, healthy=False)
     assert tracker.workers_over_threshold() == []
@@ -46,27 +39,17 @@ def test_healthy_ping_resets_consecutive_failures(tracker: WorkerHealthTracker) 
     assert tracker.workers_over_threshold() == [wid]
 
 
-def test_nineteen_build_failures_do_not_trip(tracker: WorkerHealthTracker) -> None:
+def test_build_failure_threshold_boundary(tracker: WorkerHealthTracker) -> None:
+    """9 build failures are not enough; 10th trips; healthy pings do not reset the counter."""
     wid = WorkerId("w-1")
     for _ in range(9):
         tracker.build_failed(wid)
     assert tracker.workers_over_threshold() == []
-
-
-def test_tenth_build_failure_trips(tracker: WorkerHealthTracker) -> None:
-    wid = WorkerId("w-1")
-    for _ in range(10):
-        tracker.build_failed(wid)
+    tracker.build_failed(wid)
     assert tracker.workers_over_threshold() == [wid]
 
-
-def test_build_failures_not_reset_by_healthy_ping(tracker: WorkerHealthTracker) -> None:
-    """Build failures are monotonic — a healthy ping does not clear them."""
-    wid = WorkerId("w-1")
-    for _ in range(10):
-        tracker.build_failed(wid)
     tracker.ping(wid, healthy=True)
-    assert tracker.workers_over_threshold() == [wid]
+    assert tracker.workers_over_threshold() == [wid]  # not reset by healthy ping
 
 
 def test_ping_and_build_failures_are_independent(tracker: WorkerHealthTracker) -> None:
