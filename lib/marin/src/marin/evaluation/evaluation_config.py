@@ -34,7 +34,7 @@ class EvaluationConfig:
 
     resource_config: ResourceConfig
     """
-    Additional keyword arguments to pass to the Ray resources.
+    Resources to allocate for the eval step (passed to @remote).
     """
 
     model_name: str | None
