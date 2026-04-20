@@ -2253,6 +2253,10 @@ class ControllerTransitions:
             tasks_to_kill.update(removal.tasks_to_kill)
             task_kill_workers.update(removal.task_kill_workers)
         else:
+            cur.execute(
+                "UPDATE workers SET consecutive_failures = consecutive_failures + 1 WHERE worker_id = ?",
+                (str(worker_id),),
+            )
             for req in drained_dispatch.tasks_to_run:
                 enqueue_run_dispatch(cur, str(worker_id), req.SerializeToString(), now_ms)
             for task_id in drained_dispatch.tasks_to_kill:
