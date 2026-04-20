@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
-from fray.v1.job import create_job_ctx, fray_default_job_ctx
+from fray.v2 import LocalClient, set_current_client
 
 from marin.datakit.normalize import NormalizedData, generate_id, normalize_to_parquet
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs
@@ -17,7 +17,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
 
 @pytest.fixture(autouse=True)
 def flow_backend_ctx():
-    with fray_default_job_ctx(create_job_ctx("sync")):
+    with set_current_client(LocalClient()):
         yield
 
 
