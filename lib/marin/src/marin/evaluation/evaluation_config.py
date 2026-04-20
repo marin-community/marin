@@ -71,11 +71,6 @@ class EvaluationConfig:
     Whether to discover the latest HF checkpoint in the model path.
     """
 
-    launch_with_ray: bool = False
-    """
-    Deprecated. Eval dispatch now uses Fray @remote via the executor.
-    """
-
     max_eval_instances: int | None = None
     """
     Maximum number of evaluation instances to run.

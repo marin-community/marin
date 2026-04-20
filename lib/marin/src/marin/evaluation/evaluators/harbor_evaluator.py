@@ -24,13 +24,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fray.v1.cluster import ResourceConfig
 from rigging.filesystem import open_url
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.utils import download_from_gcs, is_remote_path, upload_to_gcs
-from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
+from marin.inference.vllm_server import VllmEnvironment
 from marin.utils import fsspec_exists, fsspec_glob
 
 logger = logging.getLogger(__name__)
@@ -278,55 +277,6 @@ class HarborEvaluator(Evaluator):
                 dataset=dataset,
                 version=version,
             )
-
-    def launch_evaluate_with_ray(
-        self,
-        model: ModelConfig,
-        evals: list[EvalTaskConfig],
-        output_path: str,
-        resource_config: ResourceConfig,
-        max_eval_instances: int | None = None,
-        wandb_tags: list[str] | None = None,
-    ) -> None:
-        """Launch Harbor evaluation with Fray.
-
-        For local models (`model.path` is set), this runs on the provided TPU/GPU
-        resources so vLLM can serve the model. For API models it runs in-process.
-        """
-
-        if model.path is None:
-            self.evaluate(
-                model=model,
-                evals=evals,
-                output_path=output_path,
-                max_eval_instances=max_eval_instances,
-                wandb_tags=wandb_tags,
-            )
-            return
-
-        mode_str = resolve_vllm_mode(None)
-        pip_packages = VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else ()
-
-        env_vars = env_vars_from_keys(HARBOR_EVAL_ENV_KEYS)
-        env_vars.setdefault("VLLM_ALLOW_LONG_MAX_MODEL_LEN", "1")
-        env_vars.setdefault("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1")
-        env_vars.setdefault("VLLM_TPU_SKIP_PRECOMPILE", "1")
-
-        launch_evaluate_with_ray(
-            evaluator=self,
-            job_name="harbor-vllm-eval",
-            model=model,
-            evals=evals,
-            output_path=output_path,
-            resource_config=resource_config,
-            max_eval_instances=max_eval_instances,
-            wandb_tags=wandb_tags,
-            extras=("harbor", "tpu", "vllm"),
-            pip_packages=pip_packages,
-            env_vars=env_vars,
-            max_retries_failure=0,
-            max_retries_preemption=10,
-        )
 
     def _run_eval_inner(
         self,

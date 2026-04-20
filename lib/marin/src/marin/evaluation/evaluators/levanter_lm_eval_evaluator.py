@@ -17,27 +17,12 @@ from levanter.trainer import TrainerConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.evaluators.levanter_tpu_evaluator import LevanterTpuEvaluator
-from fray.v1.cluster.ray.deps import build_runtime_env_for_packages
 
 logger = logging.getLogger(__name__)
 
 
 class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
     """For `Evaluator`s that runs inference with Levanter's Lm Eval Harness on TPUs."""
-
-    def get_runtime_env(self) -> dict:
-        """
-        Returns the runtime environment to run the evaluator on the Ray cluster.
-        """
-        return build_runtime_env_for_packages(
-            extra=["eval", "tpu"],
-            pip_packages=["statsmodels==0.14.4"],
-            env_vars={
-                "TOKENIZERS_PARALLELISM": "false",
-                "HF_DATASETS_TRUST_REMOTE_CODE": "1",
-                "HF_ALLOW_CODE_EVAL": "1",
-            },
-        )
 
     def evaluate(
         self,
