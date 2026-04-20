@@ -435,10 +435,13 @@ def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Autoscaler tab shows scale groups."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/autoscaler")
     wait_for_dashboard_ready(smoke_page)
+    # Wait for actual scale group content, not just the tab heading ("Autoscaler")
+    # which appears before the API response loads.
     smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('Autoscaler') || "
-        "document.body.textContent.includes('Scale Group') || "
-        "document.body.textContent.includes('scale group')",
+        "() => !document.body.textContent.includes('Loading') && "
+        "(document.body.textContent.includes('Scale Group') || "
+        "document.body.textContent.includes('scale group') || "
+        "document.body.textContent.includes('local-cpu'))",
         timeout=10000,
     )
     smoke_screenshot("autoscaler-tab", "Autoscaler tab showing scale group configuration")
