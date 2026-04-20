@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import experiments.speedrun.adamh_qwen3_scaling.submission_support as submission_support
 from experiments.speedrun.adamh_qwen3_scaling.materialize_submission import SweepRun, select_best_runs
 from experiments.speedrun.adamh_qwen3_scaling.adamh_sweep import build_config
 from experiments.speedrun.adamh_qwen3_scaling.submission_support import default_speedrun
@@ -89,7 +90,12 @@ def test_select_best_runs_skips_finished_runs_without_metric():
     assert selected["130m"].run_name == "qwen3_130m_adamh_4096_lrx1-bbb222"
 
 
-def test_default_speedrun_accepts_archived_tokenized_dataset():
+def test_default_speedrun_accepts_archived_tokenized_dataset(monkeypatch):
+    def _unexpected_api_call(*args, **kwargs):
+        raise AssertionError("default_speedrun should not require W&B API access during graph construction")
+
+    monkeypatch.setattr(submission_support.wandb, "Api", _unexpected_api_call)
     _, config = build_config("130m")
     steps = default_speedrun("adamh-qwen3-130m-test", config)
     assert len(steps) == 2
+    assert steps[1].config.wandb_entity is None
