@@ -262,7 +262,7 @@ def combine_sidecars(
     # Stream manifests through as they complete: workers parse each mapper
     # manifest and return only the per-reducer entries, then the main thread
     # buckets them into ``per_reducer`` and the parsed dict is freed. This
-    # keeps combine-task resident memory proportional to the inverted R×M
+    # keeps combine-task resident memory proportional to the inverted RxM
     # range matrix rather than also holding every mapper's full manifest at
     # once — important on large jobs where individual mapper manifests can
     # be hundreds of KB each. Bucketing stays single-threaded to avoid
