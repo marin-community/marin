@@ -68,7 +68,7 @@ jobs:
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
             --region=europe-west4 \
-            --memory=3G --disk=4G --cpu=1 --extra=cpu \
+            --memory=3G --disk=5G --cpu=1 --extra=cpu \
             --priority production \
             -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
             -e FERRY_STATUS_PATH "$FERRY_STATUS_PATH" \

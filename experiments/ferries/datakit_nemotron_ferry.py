@@ -97,7 +97,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         text_field="text",
         id_field="id",
         input_path=medium_input,
-        worker_resources=ResourceConfig(cpu=2, ram="16g", disk="20g"),
+        worker_resources=ResourceConfig(cpu=2, ram="16g", disk="5g"),
         max_workers=512,
         override_output_path=f"{base}/normalize",
     )
@@ -108,7 +108,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         fn=lambda output_path: compute_minhash_attrs(
             source=Artifact.load(normalized, NormalizedData),
             output_path=output_path,
-            worker_resources=ResourceConfig(cpu=5, ram="16g", disk="10g"),
+            worker_resources=ResourceConfig(cpu=5, ram="16g", disk="5g"),
             max_workers=512,
         ),
         override_output_path=f"{base}/minhash",
@@ -123,7 +123,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
             output_path=output_path,
             max_parallelism=512,
             cc_max_iterations=3,
-            worker_resources=ResourceConfig(cpu=1, ram="16g", disk="10g"),
+            worker_resources=ResourceConfig(cpu=1, ram="16g", disk="5g"),
         ),
         override_output_path=f"{base}/fuzzy_dups",
     )
@@ -146,7 +146,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
                     keep_if_missing=True,
                 ),
             ],
-            worker_resources=ResourceConfig(cpu=1, ram="16g"),
+            worker_resources=ResourceConfig(cpu=1, ram="16g", disk="5g"),
             max_workers=512,
         ),
         override_output_path=f"{base}/consolidate",
