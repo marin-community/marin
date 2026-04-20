@@ -10,7 +10,7 @@ single ``pickle.dump(list_of_items)`` into the zstd stream. This amortises
 per-item pickle/zstd dispatch over a sub-batch while still letting the
 reader stream sub-batches lazily without materialising the full chunk.
 
-A JSON sidecar (``.scatter_meta``) maps ``target_shard -> [(offset, length)]``
+A msgpack sidecar (``.scatter_meta``) maps ``target_shard -> [(offset, length)]``
 byte ranges into the data file, plus per-shard ``max_chunk_rows`` and a global
 ``avg_item_bytes`` estimate. Sidecars from all source shards are aggregated
 into a single ``scatter_metadata`` manifest at the end of the scatter stage,
@@ -28,8 +28,8 @@ external-sort fan-in opens hundreds of chunk iterators at once.
 from __future__ import annotations
 
 import concurrent.futures
+import functools
 import io
-import json
 import logging
 import os
 import pickle
@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import cloudpickle
+import msgspec
 import zstandard as zstd
 from rigging.filesystem import open_url, url_to_fs
 from rigging.timing import log_time
@@ -87,7 +88,7 @@ _SCATTER_META_SUFFIX = ".scatter_meta"
 _SCATTER_DATA_SUFFIX = ".shuffle"
 
 # Number of parallel sidecar reads each reducer issues when building its
-# ScatterReader. Sidecars are small JSON files (a few KB) and reads are
+# ScatterReader. Sidecars are small msgpack files (a few KB) and reads are
 # GCS GET-bound, so a modest pool keeps latency low without thrashing.
 _SIDECAR_READ_CONCURRENCY = 32
 # Number of items sampled from the first flush to estimate avg_item_bytes.
@@ -106,6 +107,16 @@ _SUB_BATCH_SIZE = 1024
 # ---------------------------------------------------------------------------
 
 
+@functools.cache
+def _sidecar_encoder() -> msgspec.msgpack.Encoder:
+    return msgspec.msgpack.Encoder()
+
+
+@functools.cache
+def _sidecar_decoder() -> msgspec.msgpack.Decoder:
+    return msgspec.msgpack.Decoder()
+
+
 def _scatter_meta_path(data_path: str) -> str:
     """``shard-0000.shuffle`` -> ``shard-0000.scatter_meta``."""
     stem, _ = os.path.splitext(data_path)
@@ -114,9 +125,9 @@ def _scatter_meta_path(data_path: str) -> str:
 
 def _write_scatter_meta(data_path: str, sidecar: dict) -> None:
     meta_path = _scatter_meta_path(data_path)
-    payload = json.dumps(sidecar)
+    payload = _sidecar_encoder().encode(sidecar)
     with log_time(f"Writing scatter meta for {data_path} to {meta_path}", level=logging.DEBUG):
-        with open_url(meta_path, "w") as f:
+        with open_url(meta_path, "wb") as f:
             f.write(payload)
 
 
@@ -151,11 +162,11 @@ def _read_sidecar_slice(path: str, shard_key: str) -> _SidecarSlice | None:
 
     Uses ``fs.cat_file`` rather than ``open_url`` — one direct GET returning
     bytes is ~25% faster than going through ``TextIOWrapper(BufferedFile)``
-    for small sidecars, and ``json.loads`` accepts bytes directly.
+    for small sidecars, and msgpack decodes bytes directly.
     """
     meta_path = _scatter_meta_path(path)
     fs, fs_path = url_to_fs(meta_path)
-    meta = json.loads(fs.cat_file(fs_path))
+    meta = _sidecar_decoder().decode(fs.cat_file(fs_path))
     ranges_raw = meta.get("shards", {}).get(shard_key)
     if not ranges_raw:
         return None
