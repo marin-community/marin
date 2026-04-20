@@ -1785,7 +1785,11 @@ def _resolve_combine_output_shards(stage, auto_shard_count: int | None):
     combine_op: CombineMeta | None = next((op for op in stage.operations if isinstance(op, CombineMeta)), None)
     if combine_op is None or combine_op.num_output_shards > 0:
         return stage
-    if auto_shard_count is None or auto_shard_count <= 0:
+    # ``auto_shard_count`` comes from ``len(shards)`` captured before the
+    # preceding Scatter stage. ``0`` is a valid value (empty right-plan of a
+    # join, or a filtered-down source), producing zero reducers and an empty
+    # downstream stage — don't raise on it.
+    if auto_shard_count is None:
         raise ValueError(
             "CombineMeta stage has num_output_shards<=0 but no mapper count is available "
             "(no preceding Scatter stage recorded)."

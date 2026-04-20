@@ -256,36 +256,51 @@ def combine_sidecars(
         ``out_dir`` (for convenience — callers pass this through as the
         combine stage's single-chunk output).
     """
-    if num_output_shards <= 0:
-        raise ValueError(f"num_output_shards must be > 0, got {num_output_shards}")
+    if num_output_shards < 0:
+        raise ValueError(f"num_output_shards must be >= 0, got {num_output_shards}")
 
-    with log_time(
-        f"combine_sidecars: reading {len(scatter_paths)} mapper manifests " f"(concurrency={_MANIFEST_IO_CONCURRENCY})"
-    ):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=_MANIFEST_IO_CONCURRENCY) as pool:
-            per_mapper: list[tuple[str, dict]] = list(
-                zip(scatter_paths, pool.map(_read_mapper_manifest, scatter_paths), strict=True)
-            )
-
+    # Stream manifests through as they complete: workers parse each mapper
+    # manifest and return only the per-reducer entries, then the main thread
+    # buckets them into ``per_reducer`` and the parsed dict is freed. This
+    # keeps combine-task resident memory proportional to the inverted R×M
+    # range matrix rather than also holding every mapper's full manifest at
+    # once — important on large jobs where individual mapper manifests can
+    # be hundreds of KB each. Bucketing stays single-threaded to avoid
+    # defaultdict race on the first insert for a target shard.
     per_reducer: dict[int, list[dict]] = defaultdict(list)
-    for path, meta in per_mapper:
+
+    def _extract_entries(path: str) -> list[tuple[int, dict]]:
+        meta = _read_mapper_manifest(path)
         shards = meta.get("shards", {})
         max_rows_map = meta.get("max_chunk_rows", {})
         avg_bytes = float(meta.get("avg_item_bytes", 0.0))
+        out: list[tuple[int, dict]] = []
         for shard_key, ranges in shards.items():
             if not ranges:
                 continue
-            target = int(shard_key)
             if shard_key not in max_rows_map:
                 raise ValueError(f"Manifest for {path} has ranges for shard {shard_key} but no max_chunk_rows entry.")
-            per_reducer[target].append(
-                {
-                    "path": path,
-                    "ranges": ranges,
-                    "max_chunk_rows": int(max_rows_map[shard_key]),
-                    "avg_item_bytes": avg_bytes,
-                }
+            out.append(
+                (
+                    int(shard_key),
+                    {
+                        "path": path,
+                        "ranges": ranges,
+                        "max_chunk_rows": int(max_rows_map[shard_key]),
+                        "avg_item_bytes": avg_bytes,
+                    },
+                )
             )
+        return out
+
+    with log_time(
+        f"combine_sidecars: reading {len(scatter_paths)} mapper manifests (concurrency={_MANIFEST_IO_CONCURRENCY})"
+    ):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_MANIFEST_IO_CONCURRENCY) as pool:
+            futures = [pool.submit(_extract_entries, p) for p in scatter_paths]
+            for fut in concurrent.futures.as_completed(futures):
+                for target, entry in fut.result():
+                    per_reducer[target].append(entry)
 
     def _write_reducer_manifest(shard_idx: int) -> None:
         entries = per_reducer.get(shard_idx, [])
