@@ -44,6 +44,7 @@ from rigging.timing import ExponentialBackoff, log_time
 
 from zephyr.dataset import Dataset
 from zephyr.plan import (
+    CombineMeta,
     Join,
     PhysicalOp,
     PhysicalPlan,
@@ -114,6 +115,8 @@ from zephyr.shuffle import (  # noqa: E402
     ScatterReader,  # noqa: F401 — re-exported for plan.py and external callers
     ScatterWriter,  # noqa: F401 — re-exported for external callers
     _write_scatter,
+    combine_sidecars,
+    mapper_data_path,
 )
 
 # ---------------------------------------------------------------------------
@@ -142,10 +145,14 @@ class CounterSnapshot:
 class TaskResult:
     """Result of a single worker task.
 
-    Always contains a ListShard. For non-scatter stages, refs are
-    PickleDiskChunks. For scatter stages, refs contain file paths
-    (the actual metadata lives in ``.scatter_meta`` sidecar files
-    read lazily by reducers).
+    Always contains a ListShard. Refs vary by stage type:
+
+    - Normal stages: ``PickleDiskChunk`` refs.
+    - Scatter stages: ``MemChunk`` with mapper data paths (metadata lives in
+      ``mapper-XXXX.scatter_meta`` sidecars next to each data file, read
+      lazily by ``CombineMeta`` or reducers).
+    - CombineMeta stages: ``MemChunk`` with the combine output directory;
+      reducers resolve their ``reducer-YYYY.scatter_meta`` inside it.
     """
 
     shard: ListShard
@@ -216,13 +223,18 @@ def _write_stage_output(
     stage_dir: str,
     shard_idx: int,
     scatter_op: Scatter | None,
+    combine_op: CombineMeta | None,
     total_shards: int,
 ) -> TaskResult:
     """Write stage output to disk.
 
-    For scatter stages (``scatter_op`` is set), writes Parquet with envelope
-    wrapping and ``.scatter_meta`` sidecars. Returns TaskResult with compact
-    scatter metadata.
+    For scatter stages (``scatter_op`` is set), writes a ``.shuffle`` data
+    file and a ``mapper-XXXX.scatter_meta`` manifest, returning a
+    ``TaskResult`` whose shard wraps the data path.
+
+    For combine stages (``combine_op`` is set), reads all mapper manifests
+    and writes R reducer manifests into the mapper directory, returning a
+    ``TaskResult`` whose shard wraps that directory path.
 
     For non-scatter stages, batches items into pickle chunk files. Returns
     TaskResult with a ListShard.
@@ -235,7 +247,7 @@ def _write_stage_output(
         full_gen = itertools.chain([first_item], stage_gen)
 
         num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
-        data_path = f"{stage_dir}/shard-{shard_idx:04d}.shuffle"
+        data_path = mapper_data_path(stage_dir, shard_idx)
         shard = _write_scatter(
             full_gen,
             source_shard,
@@ -246,6 +258,20 @@ def _write_stage_output(
             combiner_fn=scatter_op.combiner_fn,
         )
         return TaskResult(shard=shard)
+
+    if combine_op is not None:
+        # The input stream is the flat list of mapper ``.shuffle`` paths —
+        # drain it, then emit R reducer manifests into the mappers' own
+        # directory so every shuffle-related file lives together.
+        scatter_paths = [p for p in stage_gen if p]
+        if not scatter_paths:
+            return TaskResult(shard=ListShard(refs=[]))
+        out_dir = os.path.dirname(scatter_paths[0])
+        assert all(
+            os.path.dirname(p) == out_dir for p in scatter_paths
+        ), f"combine inputs span multiple directories: {set(os.path.dirname(p) for p in scatter_paths)}"
+        combine_sidecars(scatter_paths, combine_op.num_output_shards, out_dir)
+        return TaskResult(shard=ListShard(refs=[MemChunk(items=[out_dir])]))
 
     def chunk_path_fn(idx: int) -> str:
         return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.pkl"
@@ -828,12 +854,29 @@ class ZephyrCoordinator:
                 default=-1,
             )
 
+            # GroupByOp with ``num_output_shards=None`` defers sizing to the
+            # source shard count. Scatter resolves this per-task at write time
+            # from ``ShardTask.total_shards``; CombineMeta needs the same
+            # count at stage-launch time so it can both emit R reducer
+            # manifests and replicate them to R downstream shards. We capture
+            # the mapper count just before the Scatter stage runs and use it
+            # for the next CombineMeta stage.
+            pending_combine_auto_shards: int | None = None
+
             for stage_idx, stage in enumerate(plan.stages):
                 stage_label = f"stage{stage_idx}-{stage.stage_name(max_length=40)}"
 
                 if stage.stage_type == StageType.RESHARD:
                     shards = _reshard_refs(shards, stage.output_shards or len(shards))
                     continue
+
+                stage_has_scatter = any(isinstance(op, Scatter) for op in stage.operations)
+                if stage_has_scatter:
+                    pending_combine_auto_shards = len(shards)
+
+                stage = _resolve_combine_output_shards(stage, pending_combine_auto_shards)
+                if any(isinstance(op, CombineMeta) for op in stage.operations):
+                    pending_combine_auto_shards = None
 
                 # Compute aux data for joins
                 aux_per_shard = self._compute_join_aux(stage.operations, shards, stage_idx)
@@ -849,12 +892,18 @@ class ZephyrCoordinator:
 
                 # Collect and regroup results for next stage
                 result_refs = self._collect_results()
-                stage_is_scatter = any(isinstance(op, Scatter) for op in stage.operations)
+                # Both Scatter and CombineMeta are shuffle-boundary stages —
+                # their outputs are gathered across all tasks and replicated
+                # to every downstream task. Scatter with output_shards=1
+                # collapses M mapper paths into a single combine input;
+                # CombineMeta with output_shards=R replicates the combine
+                # output dir to every reducer.
+                stage_is_shuffle_boundary = any(isinstance(op, (Scatter, CombineMeta)) for op in stage.operations)
                 shards = _regroup_result_refs(
                     result_refs,
                     len(shards),
                     output_shard_count=stage.output_shards,
-                    is_scatter=stage_is_scatter,
+                    is_shuffle_boundary=stage_is_shuffle_boundary,
                     scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{output_stage_name}",
                 )
 
@@ -889,11 +938,19 @@ class ZephyrCoordinator:
                 continue
 
             right_refs = _build_source_shards(op.right_plan.source_items)
+            right_pending_combine: int | None = None
 
             for stage_idx, right_stage in enumerate(op.right_plan.stages):
                 if right_stage.stage_type == StageType.RESHARD:
                     right_refs = _reshard_refs(right_refs, right_stage.output_shards or len(right_refs))
                     continue
+
+                if any(isinstance(o, Scatter) for o in right_stage.operations):
+                    right_pending_combine = len(right_refs)
+
+                right_stage = _resolve_combine_output_shards(right_stage, right_pending_combine)
+                if any(isinstance(o, CombineMeta) for o in right_stage.operations):
+                    right_pending_combine = None
 
                 join_stage_label = f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}"
                 right_tasks = _compute_tasks_from_shards(right_refs, right_stage, stage_name=join_stage_label)
@@ -901,12 +958,12 @@ class ZephyrCoordinator:
                 self._start_stage(join_stage_label, right_tasks)
                 self._wait_for_stage()
                 raw = self._collect_results()
-                right_is_scatter = any(isinstance(op, Scatter) for op in right_stage.operations)
+                right_is_shuffle_boundary = any(isinstance(o, (Scatter, CombineMeta)) for o in right_stage.operations)
                 right_refs = _regroup_result_refs(
                     raw,
                     len(right_refs),
                     output_shard_count=right_stage.output_shards,
-                    is_scatter=right_is_scatter,
+                    is_shuffle_boundary=right_is_shuffle_boundary,
                     scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{join_output_stage_name}",
                 )
 
@@ -1286,32 +1343,44 @@ def _regroup_result_refs(
     result_refs: dict[int, TaskResult],
     input_shard_count: int,
     output_shard_count: int | None = None,
-    is_scatter: bool = False,
+    is_shuffle_boundary: bool = False,
     scatter_manifest_dir: str = "",
 ) -> list[Shard]:
     """Regroup worker output refs by output shard index without loading data.
 
-    Non-scatter: each worker's ListShard maps to its own index (identity).
-    Scatter: passes the list of scatter data-file paths to every reducer.
-    Each reducer reads the per-mapper ``.scatter_meta`` sidecars in parallel
-    to build its own ``ScatterReader`` without coordinator-side consolidation.
+    Non-shuffle-boundary stages: each worker's ListShard maps to its own
+    index (identity).
+
+    Shuffle-boundary stages (``Scatter`` and ``CombineMeta``): gather every
+    worker's output refs into a single ``MemChunk`` and replicate it to
+    ``output_shard_count`` downstream shards. With ``output_shard_count=1``
+    this concentrates M mapper paths into a single combine-task input;
+    with ``output_shard_count=R`` it fans the single combine output dir
+    out to every reducer, which then selects its own
+    ``reducer-YYYY.scatter_meta`` by ``shard_idx``.
     """
+    if is_shuffle_boundary:
+        # Shuffle boundaries ignore the input task count entirely: the stage's
+        # ``output_shards`` is authoritative so a Scatter can gather M mappers
+        # into 1 combine input and a CombineMeta can fan 1 output out to R
+        # reducers. The coordinator never reads the manifest payloads —
+        # Scatter yields mapper data paths, CombineMeta yields the combine
+        # output directory, and downstream workers resolve their per-shard
+        # slice at read time.
+        if output_shard_count is None:
+            raise ValueError("Shuffle-boundary stages must specify output_shard_count")
+        all_items: list[Any] = []
+        for result in result_refs.values():
+            all_items.extend(result.shard)
+
+        shared_refs = MemChunk(items=all_items)
+        return [ListShard(refs=[shared_refs]) for _ in range(output_shard_count)]
+
     num_output = max(max(result_refs.keys(), default=0) + 1, input_shard_count)
     if output_shard_count is not None:
         num_output = max(num_output, output_shard_count)
 
-    if is_scatter:
-        # Collect all scatter file paths from all workers. The coordinator
-        # does NOT read the sidecars or write a consolidated manifest —
-        # reducers do their own parallel sidecar reads.
-        all_paths: list[str] = []
-        for result in result_refs.values():
-            all_paths.extend(result.shard)
-
-        shared_refs = MemChunk(items=all_paths)
-        return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
-
-    # Non-scatter: each result's shard maps to its own index
+    # Non-shuffle-boundary: each result's shard maps to its own index
     return [result_refs[idx].shard if idx in result_refs else ListShard(refs=[]) for idx in range(num_output)]
 
 
@@ -1701,6 +1770,29 @@ class ZephyrContext:
     def shutdown(self) -> None:
         """Shutdown the coordinator job and all child actors."""
         self._terminate_coordinator_job()
+
+
+def _resolve_combine_output_shards(stage, auto_shard_count: int | None):
+    """Fill in a CombineMeta stage's output size when ``num_output_shards``
+    was left as auto (from ``GroupByOp(num_output_shards=None)``).
+
+    Returns a new stage with updated ``output_shards`` and a patched
+    ``CombineMeta`` op whose ``num_output_shards`` matches — both the regroup
+    call and ``combine_sidecars`` need the resolved value.
+    """
+    from dataclasses import replace
+
+    combine_op: CombineMeta | None = next((op for op in stage.operations if isinstance(op, CombineMeta)), None)
+    if combine_op is None or combine_op.num_output_shards > 0:
+        return stage
+    if auto_shard_count is None or auto_shard_count <= 0:
+        raise ValueError(
+            "CombineMeta stage has num_output_shards<=0 but no mapper count is available "
+            "(no preceding Scatter stage recorded)."
+        )
+    patched_op = replace(combine_op, num_output_shards=auto_shard_count)
+    new_ops = [patched_op if op is combine_op else op for op in stage.operations]
+    return replace(stage, operations=new_ops, output_shards=auto_shard_count)
 
 
 def _reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:

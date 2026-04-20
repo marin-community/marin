@@ -31,7 +31,7 @@ from zephyr.execution import (
     _worker_ctx_var,
     _write_stage_output,
 )
-from zephyr.plan import Scatter, StageContext, run_stage
+from zephyr.plan import CombineMeta, Scatter, StageContext, run_stage
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +161,7 @@ def execute_shard(task_file: str, result_file: str) -> None:
         stage_dir = f"{chunk_prefix}/{execution_id}/{task.stage_name}"
         external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
         scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
+        combine_op = next((op for op in task.operations if isinstance(op, CombineMeta)), None)
 
         result_or_error = _write_stage_output(
             run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir),
@@ -168,6 +169,7 @@ def execute_shard(task_file: str, result_file: str) -> None:
             stage_dir=stage_dir,
             shard_idx=task.shard_idx,
             scatter_op=scatter_op,
+            combine_op=combine_op,
             total_shards=task.total_shards,
         )
     except Exception as e:
