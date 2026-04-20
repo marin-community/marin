@@ -123,7 +123,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
             output_path=output_path,
             max_parallelism=512,
             cc_max_iterations=3,
-            worker_resources=ResourceConfig(cpu=1, ram="32g", disk="10g"),
+            worker_resources=ResourceConfig(cpu=1, ram="16g", disk="10g"),
         ),
         override_output_path=f"{base}/fuzzy_dups",
     )
@@ -163,6 +163,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
                 cache_path=output_path,
                 tokenizer="gpt2",
                 max_workers=512,
+                worker_resources=ResourceConfig(ram="16g", disk="5g"),
             )
         ),
         override_output_path=f"{base}/tokens",
