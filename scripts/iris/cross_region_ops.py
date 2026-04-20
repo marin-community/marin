@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import sqlite3
+import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -321,37 +322,64 @@ def download_checkpoint(config: IrisConfig, outdir: Path, checkpoint_dir: str | 
     return db_path
 
 
-def load_attempt_regions(db_path: Path) -> tuple[dict[tuple[str, int], str], dict[str, str]]:
-    logging.info(f"Loading task attempt regions from {db_path}")
+@dataclass(frozen=True)
+class AttemptWindow:
+    """Time bounds and worker region for a single task attempt.
+
+    `region` is ``None`` when the attempt's worker row was purged from the
+    controller DB (ON DELETE CASCADE on `worker_attributes`). We still keep the
+    window so we can bucket matching log lines as "attempt matched, region
+    unknown" instead of silently fabricating a region from the current worker.
+    """
+
+    started_at_ms: int
+    finished_at_ms: int
+    region: str | None
+
+
+# Grace margin (milliseconds) added to an attempt's upper bound when matching
+# log lines. Checkpoint writes flush asynchronously and their log lines can
+# land a few seconds after `finished_at_ms`; a wider grace would start to
+# overlap with a subsequent resubmission of the same (task_id, attempt_id).
+ATTEMPT_WINDOW_GRACE_MS = 30_000
+
+
+def load_attempt_windows(db_path: Path) -> dict[tuple[str, int], AttemptWindow]:
+    """Load (started_at_ms, finished_at_ms, region) for every attempt.
+
+    We only return attempts that actually started (``started_at_ms IS NOT NULL``).
+    In-flight attempts get ``finished_at_ms`` set to "now" so log lines from the
+    currently-running worker still match.
+    """
+    logging.info(f"Loading task attempt windows from {db_path}")
     conn = sqlite3.connect(db_path)
-    attempt_region: dict[tuple[str, int], str] = {}
-    current_region: dict[str, str] = {}
+    now_ms = int(time.time() * 1000)
+    attempts: dict[tuple[str, int], AttemptWindow] = {}
 
-    for task_id, attempt_id, region in conn.execute(
+    for task_id, attempt_id, started_at_ms, finished_at_ms, region in conn.execute(
         """
-        SELECT ta.task_id, ta.attempt_id, wa.str_value
-        FROM task_attempts ta
-        JOIN worker_attributes wa
-          ON wa.worker_id = ta.worker_id
-         AND wa.key = 'region'
-        """
+        SELECT ta.task_id,
+               ta.attempt_id,
+               ta.started_at_ms,
+               COALESCE(ta.finished_at_ms, :now_ms) AS finished_at_ms,
+               wa.str_value AS region
+          FROM task_attempts ta
+     LEFT JOIN worker_attributes wa
+            ON wa.worker_id = ta.worker_id
+           AND wa.key = 'region'
+         WHERE ta.started_at_ms IS NOT NULL
+        """,
+        {"now_ms": now_ms},
     ):
-        attempt_region[(task_id, attempt_id)] = region
+        attempts[(task_id, attempt_id)] = AttemptWindow(
+            started_at_ms=int(started_at_ms),
+            finished_at_ms=int(finished_at_ms),
+            region=region,
+        )
 
-    for task_id, region in conn.execute(
-        """
-        SELECT t.task_id, wa.str_value
-        FROM tasks t
-        JOIN worker_attributes wa
-          ON wa.worker_id = t.current_worker_id
-         AND wa.key = 'region'
-        WHERE t.current_worker_id IS NOT NULL
-        """
-    ):
-        current_region[task_id] = region
-
-    logging.info(f"Loaded {len(attempt_region)} attempt regions and {len(current_region)} current regions")
-    return attempt_region, current_region
+    missing_region = sum(1 for a in attempts.values() if a.region is None)
+    logging.info(f"Loaded {len(attempts)} attempt windows ({missing_region} with unknown worker region)")
+    return attempts
 
 
 def analyze(
@@ -359,7 +387,7 @@ def analyze(
     db_path: Path,
     window: TimeWindow,
 ) -> dict:
-    attempt_region, current_region = load_attempt_regions(db_path)
+    attempts = load_attempt_windows(db_path)
     bucket_cache: dict[str, str | None] = {}
 
     total_lines = 0
@@ -368,6 +396,12 @@ def analyze(
     matched_path_mentions = 0
     cross_region_lines = 0
     cross_region_path_mentions = 0
+    # Coverage counters for the time-window join. See the docstring on
+    # `AttemptWindow` for why these exist — we no longer silently fall back to
+    # the current worker's region, so we surface the drops here instead.
+    lines_no_attempt_match = 0  # (task_id, attempt_id) not in DB at all
+    lines_outside_attempt_window = 0  # attempt exists but epoch_ms outside [start, finish+grace]
+    lines_matched_attempt_worker_unknown = 0  # attempt matched but worker_attributes was cascaded away
 
     op_type_counts = Counter()
     cross_region_op_type_counts = Counter()
@@ -422,10 +456,28 @@ def analyze(
             continue
         total_path_mentions += len(paths)
 
-        worker_region = attempt_region.get((task_id, attempt_id)) or current_region.get(task_id)
-        if worker_region is None:
+        # Attempt match must be both (a) present in the DB and (b) contain
+        # `epoch_ms` within its execution window. `attempt_id` is re-used across
+        # resubmissions of a task with the same name, so a raw (task_id,
+        # attempt_id) hit is not enough — without the time bound we'd flag log
+        # lines from a prior, deleted attempt against the current attempt's
+        # worker region (the bug this script's rewrite fixes).
+        attempt = attempts.get((task_id, attempt_id))
+        if attempt is None:
             unmatched_tasks[task_id] += 1
+            lines_no_attempt_match += 1
             continue
+        if not (attempt.started_at_ms <= epoch_ms <= attempt.finished_at_ms + ATTEMPT_WINDOW_GRACE_MS):
+            lines_outside_attempt_window += 1
+            continue
+        if attempt.region is None:
+            # Attempt matched, but its worker row was cascaded away before this
+            # report ran, so we don't know what region actually executed it.
+            # Counting it as cross-region from *any* fallback would re-introduce
+            # the old bug; surface it instead.
+            lines_matched_attempt_worker_unknown += 1
+            continue
+        worker_region = attempt.region
 
         matched_lines += 1
         matched_path_mentions += len(paths)
@@ -490,6 +542,9 @@ def analyze(
     logging.info("Analysis complete:")
     logging.info(f"  Total log lines with gs:// paths: {total_lines}")
     logging.info(f"  Matched to task regions: {matched_lines} ({100*matched_lines//total_lines if total_lines else 0}%)")
+    logging.info(f"  Lines with no attempt in DB: {lines_no_attempt_match}")
+    logging.info(f"  Lines outside attempt window (likely prior attempt): {lines_outside_attempt_window}")
+    logging.info(f"  Lines with attempt matched but worker region unknown: {lines_matched_attempt_worker_unknown}")
     logging.info(f"  Cross-region log lines: {cross_region_lines}")
     logging.info(f"  Cross-region path mentions: {cross_region_path_mentions}")
     logging.info(f"  Region pairs found: {len(pair_counts)}")
@@ -504,6 +559,9 @@ def analyze(
         "total_gs_path_mentions": total_path_mentions,
         "matched_gs_log_lines": matched_lines,
         "matched_gs_path_mentions": matched_path_mentions,
+        "lines_no_attempt_match": lines_no_attempt_match,
+        "lines_outside_attempt_window": lines_outside_attempt_window,
+        "lines_matched_attempt_worker_unknown": lines_matched_attempt_worker_unknown,
         "cross_region_log_lines": cross_region_lines,
         "cross_region_path_mentions": cross_region_path_mentions,
         "all_op_type_counts": dict(op_type_counts),
@@ -553,6 +611,15 @@ def write_markdown(summary: dict, path: Path) -> None:
                 ["Log lines with gs:// paths", total],
                 ["Path mentions", summary["total_gs_path_mentions"]],
                 ["Lines matched to worker region", f"{matched} ({match_pct}%)"],
+                ["Lines with no attempt in DB", summary.get("lines_no_attempt_match", 0)],
+                [
+                    "Lines outside attempt window (prior attempt)",
+                    summary.get("lines_outside_attempt_window", 0),
+                ],
+                [
+                    "Lines matched but worker region unknown",
+                    summary.get("lines_matched_attempt_worker_unknown", 0),
+                ],
                 ["Cross-region lines", summary["cross_region_log_lines"]],
                 ["Cross-region path mentions", summary["cross_region_path_mentions"]],
             ],
