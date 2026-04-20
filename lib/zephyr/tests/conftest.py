@@ -68,6 +68,13 @@ def zephyr_ctx(local_client, tmp_path_factory):
 # --- Multi-backend fixtures (integration tests) ---
 
 
+def _parent_holder_entrypoint():
+    """Long-running no-op that keeps the integration-test parent job alive."""
+    import time
+
+    time.sleep(3600)
+
+
 @pytest.fixture(params=["local", "iris"], scope="session")
 def integration_client(request):
     """Parametrized fixture providing Local and Iris clients.
@@ -80,16 +87,28 @@ def integration_client(request):
         client.shutdown(wait=True)
     elif request.param == "iris":
         from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
-        from iris.cluster.types import JobName
+        from iris.cluster.types import Entrypoint, ResourceSpec
 
         iris_cluster = request.getfixturevalue("iris_cluster")
         iris_client = IrisClient.remote(iris_cluster, workspace=ZEPHYR_ROOT)
         client = FrayIrisClient.from_iris_client(iris_client)
 
-        ctx = IrisContext(job_id=JobName.root("test-user", "test"), client=iris_client)
-        with iris_ctx_scope(ctx):
-            yield client
-        client.shutdown(wait=True)
+        # Submit a long-running parent job so child submissions have a live
+        # parent row in the controller DB. Absent parents are rejected with
+        # FAILED_PRECONDITION, so simulating a parent context without a real
+        # parent no longer works.
+        parent_job = iris_client.submit(
+            entrypoint=Entrypoint.from_callable(_parent_holder_entrypoint),
+            name="test",
+            resources=ResourceSpec(cpu=1, memory="512m"),
+        )
+        try:
+            ctx = IrisContext(job_id=parent_job.job_id, client=iris_client)
+            with iris_ctx_scope(ctx):
+                yield client
+        finally:
+            iris_client.terminate(parent_job.job_id)
+            client.shutdown(wait=True)
     else:
         raise ValueError(f"Unknown backend: {request.param}")
 
