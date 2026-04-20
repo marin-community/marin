@@ -2265,11 +2265,12 @@ class Controller:
         return [(w.worker_id, w.address) for w in workers]
 
     def _run_ping_loop(self, stop_event: threading.Event) -> None:
-        """Fast ping loop for liveness detection.
+        """Fast ping loop for liveness detection and prompt worker termination.
 
-        Sends Ping RPCs to all healthy workers every heartbeat_interval and
-        bumps the WorkerHealthTracker on failures. Termination is the reaper
-        thread's job — this loop only observes.
+        Sends Ping RPCs to all healthy workers every heartbeat_interval,
+        bumps the WorkerHealthTracker on failures, and immediately terminates
+        workers that cross the ping threshold so their tasks are re-queued
+        without waiting for the 30s reaper interval.
         """
         ping_interval_s = self._config.heartbeat_interval.to_seconds()
         limiter = RateLimiter(interval_seconds=ping_interval_s)
@@ -2295,6 +2296,20 @@ class Controller:
                         ping_snapshots[result.worker_id] = result.resource_snapshot if update_resources else None
 
                 self._transitions.update_worker_pings(ping_snapshots)
+
+                unhealthy = self._health.workers_over_threshold()
+                if unhealthy:
+                    logger.warning(
+                        "Ping loop: failing %d workers over ping threshold: %s",
+                        len(unhealthy),
+                        [str(wid) for wid in unhealthy[:10]],
+                    )
+                    removed = self._terminate_workers(
+                        [str(wid) for wid in unhealthy],
+                        reason="worker ping threshold exceeded",
+                        sibling_reason="unhealthy worker failed, slice terminated",
+                    )
+                    self._health.forget_many(removed)
 
             except Exception:
                 logger.exception("Ping loop iteration failed")
@@ -2415,10 +2430,11 @@ class Controller:
         )
 
     def _run_reaper_loop(self, stop_event: threading.Event) -> None:
-        """Periodically terminate workers that are stale or over the health threshold.
+        """Periodically reap stale workers and catch any that slipped past the ping loop.
 
-        Owns all worker termination decisions so the ping/poll/heartbeat threads
-        never block on DB writes or RPC fanout for kills.
+        The ping loop is the primary termination path for workers over threshold.
+        This loop handles stale workers (heartbeat older than HEARTBEAT_STALENESS_THRESHOLD)
+        and acts as a belt-and-suspenders fallback for the health threshold check.
         """
         if isinstance(self._provider, K8sTaskProvider) or self._config.dry_run:
             return
