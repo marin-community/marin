@@ -1,10 +1,13 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 from dataclasses import dataclass
 from functools import partial
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import chex
 import jax
@@ -15,7 +18,10 @@ from optax import tree_utils as otu
 import haliax as hax
 
 from levanter.optim.config import OptimizerConfig
-from experiments.speedrun.muonremez_qwen3_scaling.optimizer_helpers import label_linear_like_module, map_flattened_linear_layers
+from experiments.speedrun.muonremez_qwen3_scaling.optimizer_helpers import (
+    label_linear_like_module,
+    map_flattened_linear_layers,
+)
 from levanter.utils.jax_utils import leaf_key_paths
 
 
@@ -46,7 +52,7 @@ class MuonRemezConfig(OptimizerConfig):
     momentum: float = 0.95
     nesterov: bool = True
     backend_steps: int = 7
-    adam_weight_decay: Optional[float] = None
+    adam_weight_decay: float | None = None
     beta1: float = 0.9
     beta2: float = 0.95
     epsilon: float = 1e-8
