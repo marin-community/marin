@@ -328,13 +328,20 @@ class DatasetComponentBase(ChoiceRegistry):
 @DatasetComponentBase.register_subclass("cached")
 @dataclass(frozen=True)
 class DatasetComponent(DatasetComponentBase):
-    """A single cache-backed dataset component with optional source."""
+    """A single cache-backed dataset component with optional source.
+
+    Attributes:
+        loss_weight_fn: Optional function ``tokens -> loss_weight`` applied per example. If set,
+            replaces the default uniform loss weight (``jnp.ones_like(tokens)``). Only supported
+            when packing is enabled.
+    """
 
     source: LmDatasetSourceConfigBase | None = None
     cache_dir: str | None = None
     format: LmDatasetFormatBase = field(default_factory=TextLmDatasetFormat)
     pack: bool | int | Literal["pad"] | None = None
     tags: list[str] | None = None
+    loss_weight_fn: Callable[[jax.Array], jax.Array] | None = None
 
 
 @DatasetComponentBase.register_subclass("direct")
@@ -358,7 +365,12 @@ def _effective_pack(component: DatasetComponent) -> bool | int | Literal["pad"]:
 
 
 class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
-    """Packed version of token dataset using GreedyPrepackedDataset."""
+    """Packed version of token dataset using GreedyPrepackedDataset.
+
+    Args:
+        loss_weight_fn: Optional function ``tokens -> loss_weight`` used to compute per-position
+            loss weights for each packed example. Defaults to uniform weights (``ones_like``).
+    """
 
     def __init__(
         self,
@@ -367,6 +379,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         max_segments_per_example: int = 64,
         slice_strategy: Literal["left", "right", "raise"] = "left",
         block_cross_document_attention: bool = True,
+        loss_weight_fn: Callable[[jax.Array], jax.Array] | None = None,
     ):
         self.packed: GreedyPrepackedDataset[dict] = GreedyPrepackedDataset(
             cache.store.tree,
@@ -383,7 +396,10 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         def _create_lm_example(e: tuple[dict, dict]) -> GrugLmExample:
             example, seg_ids = e
             tokens = example["input_ids"]
-            loss_weight = jnp.ones_like(tokens, dtype=jnp.float32)
+            if loss_weight_fn is not None:
+                loss_weight = loss_weight_fn(tokens).astype(jnp.float32)
+            else:
+                loss_weight = jnp.ones_like(tokens, dtype=jnp.float32)
             seg_ids_raw = seg_ids["input_ids"]
             out = GrugLmExample.causal(
                 tokens=tokens,
@@ -469,8 +485,11 @@ def dataset_for_component(
                 Pos,
                 max_segments_per_example=max_segments,
                 block_cross_document_attention=block_cross_document_attention,
+                loss_weight_fn=component.loss_weight_fn,
             )
         else:
+            if component.loss_weight_fn is not None:
+                raise ValueError("DatasetComponent.loss_weight_fn is only supported when packing is enabled.")
             return CausalLmDataset(
                 TokenSeqDataset(cache, Pos.size),
                 Pos,
