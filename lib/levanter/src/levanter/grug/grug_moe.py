@@ -25,7 +25,7 @@ import jax.numpy as jnp
 from haliax.jax_utils import named_call, tree_checkpoint_name
 from jax import shard_map
 from jax.sharding import PartitionSpec as P, get_abstract_mesh
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Bool, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
 from levanter.utils.activation import ActivationFunctionEnum
@@ -242,6 +242,75 @@ def _local_permute_from_counts(
     return sorted_inputs, sorted_indices, group_sizes
 
 
+def _clip_receiver_group_sizes(
+    global_group_sizes: Int[Array, "S E"],
+    *,
+    local_expert_size: int,
+    receiver_capacity: int,
+) -> Int[Array, "S E"]:
+    """Clip sender->expert group sizes so each receiver shard stays within capacity."""
+    num_senders = int(global_group_sizes.shape[0])
+    num_experts = int(global_group_sizes.shape[1])
+    if num_experts % local_expert_size != 0:
+        raise ValueError(f"num_experts={num_experts} must be divisible by local_expert_size={local_expert_size}")
+    num_receivers = num_experts // local_expert_size
+    if num_receivers != num_senders:
+        raise ValueError(f"sender/receiver shard mismatch: num_senders={num_senders}, num_receivers={num_receivers}")
+
+    clipped_by_receiver: list[jax.Array] = []
+    for receiver_index in range(num_receivers):
+        start = receiver_index * local_expert_size
+        stop = start + local_expert_size
+        receiver_counts = global_group_sizes[:, start:stop]
+        receiver_totals = jnp.sum(receiver_counts, axis=0, dtype=jnp.int32)
+        accepted_totals = _prefix_cap_counts(receiver_totals, capacity=receiver_capacity)
+        remaining = accepted_totals
+        accepted_rows: list[jax.Array] = []
+        for sender_index in range(num_senders):
+            # Greedy first-sender-wins: earlier shards get priority when capacity is scarce.
+            accepted = jnp.minimum(receiver_counts[sender_index], remaining)
+            accepted_rows.append(accepted)
+            remaining = remaining - accepted
+        clipped_by_receiver.append(jnp.stack(accepted_rows, axis=0))
+
+    return jnp.concatenate(clipped_by_receiver, axis=1)
+
+
+def _expert_prefix_keep_mask(
+    group_sizes: Int[Array, "E"],
+    accepted_group_sizes: Int[Array, "E"],
+    *,
+    total_size: int,
+) -> Bool[Array, "T"]:
+    segment_ends = jnp.cumsum(group_sizes, dtype=jnp.int32)
+    segment_starts = jnp.concatenate((jnp.array([0], dtype=segment_ends.dtype), segment_ends[:-1]))
+    positions = jnp.arange(total_size, dtype=jnp.int32)
+    expert_index = jnp.searchsorted(segment_ends, positions, side="right")
+    # Explicitly clip overflow positions to the last segment rather than
+    # depending on implicit out-of-bounds `jnp.take` behavior. Those clipped
+    # positions will have local_rank >= accepted, so they are masked out.
+    expert_index = jnp.minimum(expert_index, group_sizes.shape[0] - 1)
+    local_rank = positions - segment_starts[expert_index]
+    accepted = accepted_group_sizes[expert_index]
+    return local_rank < accepted
+
+
+def _compact_by_keep_mask(inputs: jax.Array, keep_mask: Bool[Array, "T"]) -> jax.Array:
+    total_size = inputs.shape[0]
+    positions = jnp.arange(total_size, dtype=jnp.int32)
+    sort_key = jnp.where(keep_mask, positions, positions + total_size)
+    compacted = _sort_activations(inputs, jnp.argsort(sort_key))
+    valid = positions < jnp.sum(keep_mask.astype(jnp.int32), dtype=jnp.int32)
+    return jnp.where(valid[:, None], compacted, 0)
+
+
+def _expand_from_keep_mask(compacted: jax.Array, keep_mask: Bool[Array, "T"]) -> jax.Array:
+    keep_i32 = keep_mask.astype(jnp.int32)
+    compact_index = jnp.cumsum(keep_i32, dtype=jnp.int32) - 1
+    gathered = jnp.take(compacted, jnp.maximum(compact_index, 0), axis=0)
+    return jnp.where(keep_mask[:, None], gathered, 0)
+
+
 def _moe_mlp_ep_ring_local(
     x_local: Float[Array, "TL D"],
     selected_experts_local: Int[Array, "TL K"],
@@ -359,9 +428,9 @@ def _moe_mlp_ep_ragged_a2a_local(
     tokens_per_shard = x_local.shape[0]
     topk = selected_experts_local.shape[1]
     assignments_per_shard = tokens_per_shard * topk
-    # Ragged A2A does not clip overloaded receivers, so size the receive buffer
-    # for the worst case where every shard routes every assignment here.
-    recv_capacity = max(local_experts, assignments_per_shard * ep_size)
+    local_capacity = int(math.ceil(capacity_factor * assignments_per_shard))
+    local_capacity = max(local_experts, local_capacity)
+    recv_capacity = local_capacity
 
     with jax.named_scope("dispatch"):
         sorted_x, sorted_indices, group_sizes = _permute_by_global_expert(
@@ -369,8 +438,21 @@ def _moe_mlp_ep_ragged_a2a_local(
             selected_experts_local,
             num_experts=num_experts,
         )
-        shard_counts = jnp.sum(group_sizes.reshape(ep_size, local_experts), axis=1).astype(jnp.int32)
-        all_shard_counts = jax.lax.all_gather(shard_counts, "expert")
+        all_group_sizes = jax.lax.all_gather(group_sizes.astype(jnp.int32), "expert")
+        clipped_group_sizes = _clip_receiver_group_sizes(
+            all_group_sizes,
+            local_expert_size=local_experts,
+            receiver_capacity=local_capacity,
+        )
+        sender_group_sizes = clipped_group_sizes[shard_id]
+        keep_mask = _expert_prefix_keep_mask(
+            group_sizes.astype(jnp.int32),
+            sender_group_sizes,
+            total_size=assignments_per_shard,
+        )
+        sorted_x = _compact_by_keep_mask(sorted_x, keep_mask)
+
+        all_shard_counts = jnp.sum(clipped_group_sizes.reshape(ep_size, ep_size, local_experts), axis=2)
         input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(all_shard_counts, shard_id)
         dispatch_out_shape = jnp.zeros((recv_capacity, x_local.shape[1]), dtype=x_local.dtype)
         x_dispatched = jax.lax.ragged_all_to_all(
@@ -382,10 +464,9 @@ def _moe_mlp_ep_ragged_a2a_local(
             recv_sizes,
             axis_name="expert",
         )
-        global_group_sizes = jax.lax.all_gather(group_sizes.astype(jnp.int32), "expert")
         x_dispatch, local_sorted_indices, local_group_sizes = _local_permute_from_counts(
             x_dispatched,
-            global_group_sizes,
+            clipped_group_sizes,
             local_expert_size=local_experts,
             shard_index=shard_id,
         )
@@ -411,6 +492,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             return_recv_sizes,
             axis_name="expert",
         )
+        returned = _expand_from_keep_mask(returned, keep_mask)
         out_local = _unpermute_from_global_expert(
             returned,
             sorted_indices,
@@ -418,7 +500,9 @@ def _moe_mlp_ep_ragged_a2a_local(
             tokens_per_shard=tokens_per_shard,
             topk=topk,
         ).astype(x_local.dtype)
-    return out_local, jnp.array(0, dtype=jnp.int32)
+        dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(sender_group_sizes, dtype=jnp.int32)
+        dropped_total = jax.lax.psum(dropped_local, ("data", "expert"))
+    return out_local, dropped_total
 
 
 @named_call

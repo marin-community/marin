@@ -28,6 +28,7 @@ worker_provider: {}
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
+  use_split_heartbeat: false  # Stay on legacy heartbeat path until split mode burns in elsewhere.
   gcp:
     service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
     zone: us-central1-a
@@ -148,7 +149,14 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: tpu-ubuntu2204-base
     sizes:
-      32: { buffer_slices: 0, max_slices: 4 }
+      32:   { buffer_slices: 0, max_slices: 4 }
+      64:   { buffer_slices: 0, max_slices: 4 }
+      128:  { buffer_slices: 0, max_slices: 4 }
+      256:  { buffer_slices: 0, max_slices: 4 }
+      512:  { buffer_slices: 0, max_slices: 4 }
+      1024: { buffer_slices: 0, max_slices: 4 }
+      2048: { buffer_slices: 1, max_slices: 4 }
+      4096: { buffer_slices: 0, max_slices: 4 }
 
 # ---------------------------------------------------------------------------
 # Non-TPU scale groups (not part of tpu_pools)
@@ -162,7 +170,7 @@ scale_groups:
     priority: 500
     resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
     buffer_slices: 0
-    max_slices: 4
+    max_slices: 6
     slice_template:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com

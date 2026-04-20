@@ -24,6 +24,7 @@ from iris.cluster.providers.gcp.service import (
     TpuCreateRequest,
     VmCreateRequest,
 )
+from iris.cluster.providers.types import QuotaExhaustedError
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,9 @@ class GcpFakeBackend:
             op = self.operations.get(op_name)
             if op is None:
                 return httpx.Response(404, json={"error": {"code": 404, "message": "Operation not found"}})
+            # If the operation has an injected error, surface it
+            if "error" in op:
+                return httpx.Response(200, json={"name": op_name, "done": True, "error": op["error"]})
             # Complete the operation and make TPU READY with endpoints
             tpu_key = op.get("tpu_key")
             if tpu_key and tpu_key in self.tpus:
@@ -504,3 +508,44 @@ def test_serial_port_output(svc: CloudGcpService, backend: GcpFakeBackend):
 
     output = svc.vm_get_serial_port_output("serial-vm", ZONE_EU, start=0)
     assert output == "serial output"
+
+
+# ========================================================================
+# TPU operation error classification (issue #4664)
+# ========================================================================
+
+
+def test_tpu_create_lro_resource_exhausted_raises_quota_error(svc: CloudGcpService, backend: GcpFakeBackend):
+    """LRO finishing with code=8 (RESOURCE_EXHAUSTED) raises QuotaExhaustedError,
+    not generic InfraError. This lets the autoscaler log it without a stack trace."""
+    # Inject a pending operation whose poll returns an error with code 8
+    op_name = f"projects/{PROJECT}/locations/{ZONE_EU}/operations/op-tpu-stockout"
+    backend.operations[op_name] = {
+        "name": op_name,
+        "done": True,
+        "error": {
+            "code": 8,
+            "message": 'There is no more capacity in the zone "europe-west4-b"',
+        },
+    }
+
+    # Patch the POST to return this operation name
+    orig_handle = backend._handle_tpu
+
+    def _patched_tpu(method, url, body):
+        if method == "POST" and "/nodes" in url and "nodeId=" in url:
+            return httpx.Response(200, json={"name": op_name, "done": False})
+        return orig_handle(method, url, body)
+
+    backend._handle_tpu = _patched_tpu
+
+    with pytest.raises(QuotaExhaustedError, match="no more capacity"):
+        svc.tpu_create(
+            TpuCreateRequest(
+                name="stockout-tpu",
+                zone=ZONE_EU,
+                accelerator_type="v5litepod-16",
+                runtime_version="v2-alpha-tpuv5-lite",
+                capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+            )
+        )

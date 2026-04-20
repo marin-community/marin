@@ -232,6 +232,8 @@ message TaskStatus {
   bool can_be_scheduled = 17;         // Whether task is currently schedulable
   // field 18 was log_directory, removed
   string container_id = 19;           // Platform container identifier (Docker container ID, K8s pod name)
+  // Historical resource snapshots (oldest first). Populated only in GetTaskStatus detail view.
+  repeated ResourceUsage resource_history = 20;
 }
 
 // Record of a single task execution attempt
@@ -529,10 +531,7 @@ message WorkerMetadata {
   // using format: key1=value1,key2=value2 (e.g., taint:maintenance=true,pool=large-jobs)
   map<string, AttributeValue> attributes = 40;
 
-  // DEPRECATED: No longer used for worker identification.
-  // Worker identity is now set via RegisterRequest.worker_id.
-  // Field kept for proto wire compatibility but ignored by the controller.
-  string vm_address = 41;
+  reserved 41;  // was vm_address, removed
 
   // Git commit hash baked into the worker image at build time (IRIS_GIT_HASH).
   // Allows the controller to surface per-worker version info for debugging.
@@ -578,6 +577,12 @@ message RunTaskRequest {
   repeated string ports = 8;
   int32 attempt_id = 9;
   repeated Constraint constraints = 10; // Original job constraints for child-job inheritance metadata
+
+  // Per-task task container image. When empty, the worker uses its
+  // cluster-configured default_task_image. Used for jobs that need a
+  // custom runtime (e.g. an image with runsc/skopeo for sandboxing
+  // untrusted child workloads).
+  string task_image = 11;
 }
 
 // Lean task status reported by the worker during heartbeat.

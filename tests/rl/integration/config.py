@@ -23,7 +23,6 @@ import jax.random as jrandom
 import jmp
 import numpy as np
 from levanter.checkpoint import CheckpointerConfig
-from levanter.distributed import RayConfig
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.openai import InferenceServerConfig
@@ -220,7 +219,6 @@ def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
             base_path=Path(output_dir) / "checkpoints",
             save_interval=datetime.timedelta(seconds=10),
         ),
-        ray=RayConfig(auto_start_cluster=False),
     )
 
 

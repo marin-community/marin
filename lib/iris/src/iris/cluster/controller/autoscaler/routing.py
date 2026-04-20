@@ -7,11 +7,16 @@ from __future__ import annotations
 
 import difflib
 import math
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from iris.cluster.constraints import (
+    Constraint,
     ConstraintIndex,
     DeviceType,
+    PlacementRequirements,
+    extract_placement_requirements,
     get_device_type_enum,
     routing_constraints,
     soft_constraint_score,
@@ -224,50 +229,137 @@ def _format_variants(variants: frozenset[str] | None) -> str:
     return ",".join(sorted(variants))
 
 
-def _diagnose_no_matching_group(entry: DemandEntry, groups: list[ScalingGroup]) -> str:
-    """Produce a concise, actionable reason when no group matches a demand entry."""
+# GCP zones end with -{single letter}, e.g. us-central1-a.
+_ZONE_PATTERN = re.compile(r".+-[a-z]$")
 
-    normalized = entry.normalized
-    device_type = normalized.device_type or DeviceType.CPU
-    device_matches = []
-    for group in groups:
-        if group.matches_device_requirement(device_type, normalized.device_variants):
-            device_matches.append(group)
 
-    variants_str = _format_variants(normalized.device_variants)
+def _looks_like_zone(value: str) -> bool:
+    return bool(_ZONE_PATTERN.fullmatch(value))
+
+
+def _diagnose(
+    placement: PlacementRequirements,
+    groups: Sequence[ScalingGroup],
+) -> str:
+    """Explain why no scaling group satisfies a placement requirement.
+
+    Layered analysis (device → preemptible → zone → region) with zone/region
+    confusion heuristics and fuzzy-match hints. Returned string has no prefix;
+    callers prepend their own (e.g. "no_matching_group: ") when needed.
+    """
+    device_type = placement.device_type or DeviceType.CPU
+    device_matches = [g for g in groups if g.matches_device_requirement(device_type, placement.device_variants)]
+    variants_str = _format_variants(placement.device_variants)
+
     if not device_matches:
-        return f"no_matching_group: no groups with device {device_type.value}:{variants_str}"
+        available = ", ".join(g.name for g in groups)
+        return f"no scaling group provides device {device_type.value}:{variants_str} (available: {available})"
 
-    if normalized.preemptible is not None:
+    if placement.preemptible is not None:
         preempt_matches = [
-            group
-            for group in device_matches
-            if (group.config.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE) == normalized.preemptible
+            g
+            for g in device_matches
+            if (g.config.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE) == placement.preemptible
         ]
         if not preempt_matches:
-            want = "preemptible" if normalized.preemptible else "non-preemptible"
-            return f"no_matching_group: no {want} groups for device {device_type.value}:{variants_str}"
+            want = "preemptible" if placement.preemptible else "non-preemptible"
+            return f"no {want} group provides device {device_type.value}:{variants_str}"
         device_matches = preempt_matches
 
-    if normalized.required_zones:
-        available_zones = {group.zone for group in device_matches} - {None}
-        requested = sorted(normalized.required_zones)
-        message = f"no_matching_group: no groups in zone {', '.join(requested)}"
-        for requested_zone in requested:
-            close = difflib.get_close_matches(requested_zone, available_zones, n=1, cutoff=0.7)
-            if close:
-                message += f" (did you mean {close[0]}?)"
-        return message
+    if placement.required_zones:
+        available_zones = {g.zone for g in device_matches} - {None}
+        available_regions = {g.region for g in device_matches} - {None}
+        requested = sorted(placement.required_zones)
+        parts = [f"no groups in zone {', '.join(requested)}"]
+        for z in requested:
+            if not _looks_like_zone(z) and z in available_regions:
+                parts.append(f"'{z}' looks like a region, not a zone; use a region constraint instead")
+            else:
+                close = difflib.get_close_matches(z, available_zones, n=1, cutoff=0.7)
+                if close:
+                    parts.append(f"did you mean {close[0]}?")
+        return "; ".join(parts)
 
-    if normalized.required_regions:
-        requested = sorted(normalized.required_regions)
-        region_message = f"no_matching_group: no groups in region {', '.join(requested)}"
-        return region_message
+    if placement.required_regions:
+        available_regions = {g.region for g in device_matches} - {None}
+        available_zones = {g.zone for g in device_matches} - {None}
+        requested = sorted(placement.required_regions)
+        parts = [f"no groups in region {', '.join(requested)}"]
+        for r in requested:
+            if _looks_like_zone(r) and r in available_zones:
+                parts.append(f"'{r}' looks like a zone, not a region; use a zone constraint instead")
+            else:
+                close = difflib.get_close_matches(r, available_regions, n=1, cutoff=0.7)
+                if close:
+                    parts.append(f"did you mean {close[0]}?")
+        return "; ".join(parts)
 
-    return (
-        "no_matching_group: no groups match device="
-        f"{device_type.value}:{_format_variants(normalized.device_variants)}"
-    )
+    available = ", ".join(g.name for g in groups)
+    return f"no scaling group matches constraints (available: {available})"
+
+
+@dataclass(frozen=True)
+class GroupFeasibility:
+    """Result of the job_feasibility predicate.
+
+    `feasible` is the subset of groups whose hard routing constraints match
+    and (if coscheduled) have a compatible num_vms. Non-empty means the job
+    can, in principle, be scheduled; an autoscaler tick may still need to
+    grow a group before capacity appears.
+
+    `reason` is populated iff `feasible` is empty, with a user-facing
+    explanation suitable for rejecting the job at submit time.
+    """
+
+    feasible: list[ScalingGroup]
+    reason: str | None
+
+
+def job_feasibility(
+    groups: Sequence[ScalingGroup],
+    constraints: Sequence[Constraint],
+    replicas: int | None = None,
+) -> GroupFeasibility:
+    """Answer: can any scaling group ever host this job shape?
+
+    Ignores runtime availability (quota, cooldown, in-flight capacity) — that
+    is the autoscaler's job on each tick. This predicate gates LaunchJob at
+    submit time so jobs that can never be scheduled fail fast.
+
+    Args:
+        groups: scaling groups to consider.
+        constraints: the job's hard + soft routing constraints.
+        replicas: for coscheduled jobs, the required replica count; None for
+            non-coscheduled jobs. When set, groups must also have num_vms that
+            divides replicas evenly.
+    """
+    groups_list = list(groups)
+    if not groups_list:
+        return GroupFeasibility(feasible=[], reason=None)
+
+    group_attrs = {g.name: g.to_attributes() for g in groups_list}
+    group_index = ConstraintIndex.build(group_attrs)
+    hard_cs, _ = split_hard_soft(routing_constraints(constraints))
+    matching_names = group_index.matching_entities(hard_cs)
+    matching = [g for g in groups_list if g.name in matching_names]
+
+    if not matching:
+        placement = extract_placement_requirements(constraints)
+        return GroupFeasibility(feasible=[], reason=_diagnose(placement, groups_list))
+
+    if replicas is not None:
+        compatible = [g for g in matching if g.num_vms > 0 and replicas % g.num_vms == 0]
+        if not compatible:
+            sizes = {g.name: g.num_vms for g in matching}
+            reason = (
+                f"job requires {replicas} coscheduled replicas but no matching scaling group "
+                f"has a compatible size (replicas must be an exact multiple of num_vms); "
+                f"matching group sizes: {sizes}"
+            )
+            return GroupFeasibility(feasible=[], reason=reason)
+        matching = compatible
+
+    return GroupFeasibility(feasible=matching, reason=None)
 
 
 def _diagnose_no_capacity(
@@ -418,7 +510,7 @@ def route_demand(
             reason = (
                 f"tier_blocked: {pre_tier_count} matching group(s) blocked by quota-pool tier monotonicity"
                 if pre_tier_count > 0
-                else _diagnose_no_matching_group(entry, sorted_groups)
+                else f"no_matching_group: {_diagnose(entry.normalized, sorted_groups)}"
             )
             unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue

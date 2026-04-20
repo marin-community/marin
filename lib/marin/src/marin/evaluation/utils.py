@@ -3,10 +3,8 @@
 
 import logging
 import os
-import subprocess
 import time
 
-import psutil
 from fsspec.callbacks import TqdmCallback
 from fsspec.implementations.local import LocalFileSystem
 from rigging.filesystem import filesystem as marin_filesystem
@@ -60,42 +58,6 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
     logger.info(f"Uploaded {local_path} to {gcs_path}.")
 
 
-def kill_process_on_port(port: int) -> None:
-    for conn in psutil.net_connections(kind="inet"):
-        laddr = getattr(conn, "laddr", None)
-        if not laddr or getattr(laddr, "port", None) != port:
-            continue
-        pid = getattr(conn, "pid", None)
-        if pid is None:
-            continue
-        try:
-            proc = psutil.Process(pid)
-            print(f"Killing process {proc.name()} (PID {pid}) on port {port}")
-            proc.kill()
-        except psutil.NoSuchProcess:
-            print(f"Process {pid} no longer exists.")
-        except psutil.AccessDenied:
-            print(f"Access denied killing PID {pid} on port {port}.")
-        except Exception as e:
-            print(f"Error killing PID {pid} on port {port}: {e}")
-
-
-def set_cuda_visible_devices():
-    """Sets the CUDA_VISIBLE_DEVICES environment variable based on available GPUs."""
-    # Run `nvidia-smi` to get the number of available GPUs
-    result = subprocess.run(["nvidia-smi", "--list-gpus"], stdout=subprocess.PIPE, text=True)
-    gpu_list = result.stdout.strip().split("\n")
-
-    # Get the indices of all detected GPUs
-    available_gpus = [str(i) for i in range(len(gpu_list))]
-
-    if available_gpus:
-        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(available_gpus)
-        print(f"Auto-selected GPUs: {os.environ['CUDA_VISIBLE_DEVICES']}")
-    else:
-        print("No available GPUs found.")
-
-
 def discover_checkpoints(base_path: str, initial_glob_pattern: str, is_checkpoint_dir_pattern: list[str]) -> list[str]:
     """
     Discover the checkpoints in the given path, sorted by the last modified time. (Most recent last)
@@ -127,15 +89,3 @@ def discover_hf_checkpoints(base_path: str):
     """
 
     return discover_checkpoints(base_path, "**/config.json", ["config.json", "tokenizer_config.json"])
-
-
-def discover_levanter_checkpoints(base_path: str):
-    """
-    Discover the Levanter checkpoints in the given path, sorted by the last modified time. (Most recent last)
-    Args:
-        base_path:  Fsspec Path to the directory containing the checkpoints, possibly in nested directories.
-    Returns:
-        List of paths to the checkpoints, sorted by the last modified time.
-    """
-
-    return discover_checkpoints(base_path, "**/metadata.json", ["metadata.json", "model"])

@@ -13,7 +13,6 @@ from fray.v2.types import ResourceConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.layers.attention import AttentionBackend
-from levanter.distributed import RayConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -245,7 +244,6 @@ def _build_rl_job_config(
             axes={"context": 1, "model": 1},
             shared_mapping={"mlp": "model", "heads": "model", "position": "context"},
         ),
-        ray=RayConfig(auto_start_cluster=False),
     )
 
     opt_config = AdamConfig(

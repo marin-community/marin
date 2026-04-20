@@ -113,6 +113,23 @@ export function formatWorkerDevice(metadata: { gpuCount?: number; gpuName?: stri
   return 'CPU'
 }
 
+/** Human-readable name for a `PRIORITY_BAND_*` enum value. */
+export function bandDisplayName(band: string | undefined): string {
+  if (!band) return 'Unknown'
+  const name = band.replace(/^PRIORITY_BAND_/, '')
+  return name.charAt(0) + name.slice(1).toLowerCase()
+}
+
+/** Tailwind text color class for a `PRIORITY_BAND_*` enum value. */
+export function bandColor(band: string | undefined): string {
+  if (!band) return 'text-text-muted'
+  const name = band.replace(/^PRIORITY_BAND_/, '')
+  if (name === 'PRODUCTION') return 'text-status-danger'
+  if (name === 'INTERACTIVE') return 'text-accent'
+  if (name === 'BATCH') return 'text-text-muted'
+  return 'text-text-muted'
+}
+
 /** Format a DeviceConfig proto as a human-readable string. */
 export function formatDeviceConfig(device: { tpu?: { variant?: string; topology?: string; count?: number }; gpu?: { variant?: string; count?: number; memoryGb?: number } } | null | undefined): string | null {
   if (!device) return null

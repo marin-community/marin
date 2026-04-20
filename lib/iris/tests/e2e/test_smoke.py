@@ -11,27 +11,21 @@ has workers across CPU, TPU coscheduling, and multi-region scale groups.
 import logging
 import os
 import re
-import subprocess
 import time
 import uuid
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from connectrpc.errors import ConnectError
 from iris.client.client import IrisClient
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
-from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.types import (
     Entrypoint,
     ReservationEntry,
     ResourceSpec,
     gpu_device,
 )
-from iris.cluster.worker.env_probe import DefaultEnvironmentProvider
-from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2, logging_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
@@ -98,36 +92,18 @@ def _add_coscheduling_group_4vm(config: config_pb2.IrisClusterConfig) -> None:
     sg.slice_template.local.SetInParent()
 
 
-def _add_multi_region_groups(config: config_pb2.IrisClusterConfig) -> None:
-    """Two CPU scale groups in different regions for constraint routing tests."""
-    for name, region in [("cpu-region-a", "us-central1"), ("cpu-region-b", "europe-west4")]:
-        sg = config.scale_groups[name]
-        sg.name = name
-        sg.num_vms = 1
-        sg.buffer_slices = 1
-        sg.max_slices = 2
-        sg.resources.cpu_millicores = 8000
-        sg.resources.memory_bytes = 16 * 1024**3
-        sg.resources.disk_bytes = 50 * 1024**3
-        sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
-        sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
-        sg.slice_template.local.SetInParent()
-        sg.worker.attributes[WellKnownAttribute.REGION] = region
-
-
 # Total local-mode workers:
-# 2 (local-cpu) + 2 (cosched_2) + 4 (cosched_4) + 2 (region-a + region-b) = 10
-SMOKE_WORKER_COUNT = 10
+# 2 (local-cpu) + 2 (cosched_2) + 4 (cosched_4) = 8
+SMOKE_WORKER_COUNT = 8
 
 
 def _make_smoke_config() -> config_pb2.IrisClusterConfig:
-    """Build a local config with CPU, TPU (coscheduling), and multi-region workers."""
+    """Build a local config with CPU and TPU (coscheduling) workers."""
     config = load_config(DEFAULT_CONFIG)
     config.scale_groups.clear()
     _add_cpu_group(config, num_workers=2)
     _add_coscheduling_group(config)
     _add_coscheduling_group_4vm(config)
-    _add_multi_region_groups(config)
     return make_local_config(config)
 
 
@@ -366,10 +342,17 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
 
 def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
     """Constraint chips rendered on job detail."""
+    # Use soft constraints to avoid submit-time routing feasibility rejection;
+    # the test only checks that constraint chips render on the dashboard.
     constraints = [
-        Constraint(key="region", op=ConstraintOp.EQ, value="local"),
-        Constraint(key="env-tag", op=ConstraintOp.EXISTS),
-        Constraint(key="device-variant", op=ConstraintOp.IN, values=("v5p-8", "v6e-4")),
+        Constraint.create(key="region", op=ConstraintOp.EQ, value="local", mode=job_pb2.CONSTRAINT_MODE_PREFERRED),
+        Constraint.create(key="env-tag", op=ConstraintOp.EXISTS),
+        Constraint.create(
+            key="device-variant",
+            op=ConstraintOp.IN,
+            values=["v5p-8", "v6e-4"],
+            mode=job_pb2.CONSTRAINT_MODE_PREFERRED,
+        ),
     ]
     with smoke_cluster.launched_job(TestJobs.quick, "smoke-constraints", constraints=constraints) as job:
         time.sleep(3)
@@ -488,29 +471,6 @@ def test_dashboard_job_detail_with_logs(smoke_cluster, verbose_job, smoke_page, 
         "job-detail-logs",
         "Job detail page showing task table and combined job-level log viewer with log lines",
     )
-
-
-def test_dashboard_scheduler_tab(smoke_cluster, smoke_page, smoke_screenshot):
-    """Scheduler tab shows pending queue, user budgets, and running tasks."""
-    running = smoke_cluster.submit(TestJobs.sleep, "smoke-sched-running", 300)
-    smoke_cluster.wait_for_state(running, job_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
-
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/scheduler")
-    wait_for_dashboard_ready(smoke_page)
-    smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('Pending Queue') || "
-        "document.body.textContent.includes('User Budgets')",
-        timeout=10000,
-    )
-    assert_visible(smoke_page, "text=Pending Queue")
-    assert_visible(smoke_page, "text=User Budgets")
-    assert_visible(smoke_page, "text=Running Tasks")
-    smoke_screenshot(
-        "scheduler-tab",
-        "Scheduler tab showing pending queue, user budgets, and running tasks",
-    )
-
-    smoke_cluster.kill(running)
 
 
 # ============================================================================
@@ -764,70 +724,6 @@ def test_exec_in_container(smoke_cluster):
     smoke_cluster.kill(job)
 
 
-@pytest.mark.timeout(180)
-def test_worker_restart_preserves_task(smoke_cluster):
-    """Restarting a worker preserves its running task via container adoption.
-
-    Submits a task that logs every second, restarts the worker running it,
-    then verifies the task is still RUNNING and eventually succeeds. Fetches
-    logs to confirm continuity across the restart.
-    """
-    # Use shorter duration in local mode (restart is a no-op there)
-    is_local = not smoke_cluster.is_cloud
-    task_duration = 30 if is_local else 90
-
-    job = smoke_cluster.submit(TestJobs.log_periodic, "smoke-restart", task_duration, 1.0)
-    smoke_cluster.wait_for_state(job, job_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
-
-    # Wait for task itself to be RUNNING (not just BUILDING)
-    deadline = time.monotonic() + smoke_cluster.job_timeout
-    while time.monotonic() < deadline:
-        task = smoke_cluster.task_status(job, task_index=0)
-        if task.state == job_pb2.TASK_STATE_RUNNING:
-            break
-        time.sleep(0.5)
-    assert task.state == job_pb2.TASK_STATE_RUNNING, f"Task stuck in {job_pb2.TaskState.Name(task.state)}"
-
-    # Let a few ticks log before we restart
-    time.sleep(3)
-
-    # Find the worker running this task
-    worker_id = task.worker_id
-    assert worker_id, "Task has no worker_id"
-
-    # Restart the worker via the controller RPC
-    restart_resp = smoke_cluster.controller_client.restart_worker(
-        controller_pb2.Controller.RestartWorkerRequest(worker_id=worker_id),
-        timeout_ms=60_000,
-    )
-    assert restart_resp.accepted, f"Restart rejected: {restart_resp.error}"
-
-    # In cloud mode, wait for the worker to come back as healthy after real restart.
-    # In local mode, restart_worker is a no-op so the worker stays healthy.
-    if not is_local:
-        worker_back = False
-        deadline = time.monotonic() + 120
-        while time.monotonic() < deadline:
-            time.sleep(5)
-            workers_resp = smoke_cluster.controller_client.list_workers(controller_pb2.Controller.ListWorkersRequest())
-            for w in workers_resp.workers:
-                if w.worker_id == worker_id and w.healthy:
-                    worker_back = True
-                    break
-            if worker_back:
-                break
-        assert worker_back, f"Worker {worker_id} did not re-register within 120s"
-
-    # Wait for the job to complete — the task should either be adopted by
-    # the new worker (RUNNING → SUCCEEDED) or retried by the controller
-    # (WORKER_FAILED → re-scheduled → SUCCEEDED). Either path validates
-    # that the restart didn't permanently break the task.
-    final = smoke_cluster.wait(job, timeout=120)
-    assert (
-        final.state == job_pb2.JOB_STATE_SUCCEEDED
-    ), f"Job should succeed after restart, got {job_pb2.JobState.Name(final.state)}"
-
-
 # ============================================================================
 # Checkpoint / restore
 # ============================================================================
@@ -910,10 +806,8 @@ def test_stress_50_tasks(smoke_cluster):
 
 
 # ============================================================================
-# GPU metadata (local-only, creates standalone cluster with mocked nvidia-smi)
+# Standalone cluster helpers
 # ============================================================================
-
-_NVIDIA_SMI_H100_8X = "\n".join(["NVIDIA H100 80GB HBM3, 81559"] * 8)
 
 
 def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
@@ -934,77 +828,7 @@ def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
     return make_local_config(config)
 
 
-def test_gpu_worker_metadata(tmp_path):
-    """Mocked nvidia-smi registers GPU metadata on worker.
-
-    Creates a standalone local cluster (not the shared smoke_cluster) with a
-    manually started worker using mocked nvidia-smi output. This test only
-    works in local mode — it doesn't run against real GPU/TPU clusters.
-    """
-    config = _make_controller_only_config()
-
-    with connect_cluster(config) as url:
-        original_run = subprocess.run
-        with patch(
-            "iris.cluster.worker.env_probe.subprocess.run",
-            side_effect=lambda cmd, *a, **kw: (
-                subprocess.CompletedProcess(args=cmd, returncode=0, stdout=_NVIDIA_SMI_H100_8X, stderr="")
-                if isinstance(cmd, list) and cmd and cmd[0] == "nvidia-smi"
-                else original_run(cmd, *a, **kw)
-            ),
-        ):
-            env_provider = DefaultEnvironmentProvider()
-            threads = ThreadContainer(name="test-gpu-worker")
-            cache_dir = tmp_path / "cache"
-            cache_dir.mkdir()
-
-            worker_config = WorkerConfig(
-                host="127.0.0.1",
-                port=0,
-                cache_dir=cache_dir,
-                controller_address=url,
-                worker_id=f"test-gpu-worker-{uuid.uuid4().hex[:8]}",
-                poll_interval=Duration.from_seconds(0.1),
-            )
-            worker = Worker(
-                worker_config,
-                container_runtime=ProcessRuntime(cache_dir=cache_dir),
-                environment_provider=env_provider,
-                threads=threads,
-            )
-            worker.start()
-
-            try:
-                controller_client = ControllerServiceClientSync(address=url, timeout_ms=10000)
-                deadline = time.monotonic() + 15.0
-                workers = []
-                while time.monotonic() < deadline:
-                    request = controller_pb2.Controller.ListWorkersRequest()
-                    response = controller_client.list_workers(request)
-                    workers = [w for w in response.workers if w.healthy]
-                    if workers:
-                        break
-                    time.sleep(0.5)
-
-                assert workers, "Worker did not register within timeout"
-                w = workers[0]
-                meta = w.metadata
-                assert meta.gpu_count == 8
-                assert "H100" in meta.gpu_name
-                assert meta.gpu_memory_mb == 81559
-                assert meta.device.gpu.count == 8
-                assert "H100" in meta.device.gpu.variant
-
-                attrs = meta.attributes
-                assert WellKnownAttribute.GPU_VARIANT in attrs
-                assert "H100" in attrs[WellKnownAttribute.GPU_VARIANT].string_value
-                assert WellKnownAttribute.GPU_COUNT in attrs
-                assert attrs[WellKnownAttribute.GPU_COUNT].int_value == 8
-
-                controller_client.close()
-            finally:
-                worker.stop()
-                threads.stop(timeout=Duration.from_seconds(5.0))
+# GPU metadata test lives in tests/test_gpu_metadata.py
 
 
 # ============================================================================

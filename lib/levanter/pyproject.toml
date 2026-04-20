@@ -10,7 +10,7 @@ module-name = "levanter"
 
 [project]
 name = "marin-levanter"
-version = "1.2"
+version = "0.99"
 description = "Scalable Training for Foundation Models with Named Tensors and JAX"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,7 +34,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "marin-haliax>=1.4.dev450",
+    "marin-haliax",
     "equinox>=0.11.7,!=0.12.0",
     "jax>=0.8.0",
     "marin-fray",

@@ -249,7 +249,7 @@ class Job:
     def wait(
         self,
         timeout: float = 300.0,
-        poll_interval: float = 5.0,
+        poll_interval: float = 30.0,
         *,
         raise_on_failure: bool = True,
         stream_logs: bool = False,
@@ -260,7 +260,10 @@ class Job:
 
         Args:
             timeout: Maximum wait time in seconds
-            poll_interval: Maximum time between status checks
+            poll_interval: Upper bound on the state-poll backoff. The loop
+                starts at 100ms and grows exponentially until it reaches this
+                cap (default 30s), so long-running jobs cost ~1 state RPC per
+                ``poll_interval``.
             raise_on_failure: If True, raise JobFailedError on any non-SUCCESS terminal state
             stream_logs: If True, stream logs from all tasks interleaved
             since_ms: Only show logs after this epoch millisecond timestamp
@@ -564,6 +567,9 @@ class IrisClient:
         reservation: list[ReservationEntry] | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+        task_image: str | None = None,
+        priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+        submit_argv: list[str] | None = None,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -582,6 +588,10 @@ class IrisClient:
             timeout: Per-task timeout (None = no timeout)
             user: Optional explicit user override for top-level jobs
             reservation: Resource entries to pre-provision before scheduling (None = no reservation)
+            task_image: Optional override for the task container image. When None,
+                the worker uses its cluster-configured default_task_image. Used for
+                jobs that need a custom runtime (e.g. an image with runsc/skopeo
+                for sandboxing untrusted child workloads).
 
         Returns:
             Job handle for the submitted job
@@ -674,6 +684,9 @@ class IrisClient:
                 reservation=reservation_proto,
                 preemption_policy=preemption_policy,
                 existing_job_policy=existing_job_policy,
+                task_image=task_image,
+                priority_band=priority_band,
+                submit_argv=submit_argv,
             )
         except ConnectError as e:
             if e.code == Code.ALREADY_EXISTS:

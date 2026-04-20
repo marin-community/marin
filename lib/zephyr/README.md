@@ -16,7 +16,7 @@ pipeline = (
     .map(lambda x: transform_record(x))
     .write_jsonl("gs://output/data-{shard:05d}-of-{total:05d}.jsonl.gz")
 )
-list(ctx.execute(pipeline))
+ctx.execute(pipeline)
 ```
 
 ## Key Patterns
@@ -44,7 +44,7 @@ list(ctx.execute(pipeline))
 **Execution (`ZephyrContext`):**
 - `ZephyrContext(max_workers=N)` — auto-detects backend (Ray, Iris, or local) via `fray.v2.current_client()`
 - `ZephyrContext(client=LocalClient())` — explicit local backend (testing)
-- `list(ctx.execute(pipeline))` — runs the pipeline and returns results
+- `ctx.execute(pipeline)` — runs the pipeline; returns a `ZephyrExecutionResult(results, counters)`
 
 ## Real Usage
 
@@ -60,7 +60,7 @@ pipeline = (
     .filter(lambda x: x is not None)
     .write_jsonl(f"{output}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
 )
-list(ctx.execute(pipeline))
+ctx.execute(pipeline)
 ```
 
 **Dataset Sampling:**
@@ -73,7 +73,7 @@ pipeline = (
     .map(lambda path: sample_file(path, weights))
     .write_jsonl(f"{output}/sampled-{{shard:05d}}.jsonl.gz")
 )
-list(ctx.execute(pipeline))
+ctx.execute(pipeline)
 ```
 
 **Parallel Downloads:**
@@ -83,7 +83,7 @@ from zephyr import Dataset, ZephyrContext
 tasks = [(config, fs, src, dst) for src, dst in file_pairs]
 ctx = ZephyrContext(max_workers=32)
 pipeline = Dataset.from_list(tasks).map(lambda t: download(*t))
-list(ctx.execute(pipeline))
+ctx.execute(pipeline)
 ```
 
 ## Installation

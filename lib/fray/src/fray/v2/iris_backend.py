@@ -571,6 +571,7 @@ class FrayIrisClient:
                 max_retries_failure=request.max_retries_failure,
                 max_retries_preemption=request.max_retries_preemption,
                 existing_job_policy=policy,
+                task_image=request.resources.image,
             )
         except IrisJobAlreadyExists as e:
             raise FrayJobAlreadyExists(request.name) from e
@@ -640,6 +641,7 @@ class FrayIrisClient:
 
         iris_resources = convert_resources(resources)
         iris_constraints = convert_constraints(resources)
+        iris_environment = convert_environment(None, device=resources.device)
 
         coscheduling = resolve_coscheduling(resources.device, count)
 
@@ -655,10 +657,12 @@ class FrayIrisClient:
             entrypoint=entrypoint,
             name=name,
             resources=iris_resources,
+            environment=iris_environment,
             ports=["actor"],
             constraints=iris_constraints if iris_constraints else None,
             coscheduling=coscheduling,
             replicas=count,  # Create N replicas in a single job
+            task_image=resources.image,
             **retry_kwargs,
         )
 

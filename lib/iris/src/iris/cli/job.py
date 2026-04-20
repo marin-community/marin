@@ -28,11 +28,14 @@ from iris.client.client import Job, JobFailedError
 from iris.cluster.constraints import (
     Constraint,
     WellKnownAttribute,
+    device_variant_constraint,
     infer_preemptible_constraint,
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.types import (
+    TERMINAL_TASK_STATES,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
@@ -45,7 +48,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import job_pb2
 from iris.rpc.auth import TokenProvider
-from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
+from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, job_state_friendly, priority_band_value, task_state_friendly
 from iris.time_proto import timestamp_from_proto
 from rigging.timing import Duration, Timestamp
 
@@ -320,16 +323,60 @@ def build_resources(
     memory: str = "1GB",
     disk: str = "5GB",
 ) -> ResourceSpec:
-    """Build ResourceSpec from CLI arguments."""
+    """Build ResourceSpec from CLI arguments.
+
+    When ``tpu`` contains multiple comma-separated variants, the first one is
+    used as the canonical device (its chip count drives resource accounting),
+    and the alternatives are surfaced separately via ``build_tpu_alternatives``
+    so the caller can attach a ``device_variant_constraint`` accepting any of
+    them. All variants must have the same ``vm_count``.
+    """
     spec = ResourceSpec(cpu=cpu, memory=memory, disk=disk)
 
     if tpu:
-        spec.device = tpu_device(tpu)
+        primary, _ = _parse_tpu_alternatives(tpu)
+        spec.device = tpu_device(primary)
     elif gpu:
         variant, count = parse_gpu_spec(gpu)
         spec.device = gpu_device(variant, count)
 
     return spec
+
+
+def _parse_tpu_alternatives(tpu_arg: str) -> tuple[str, list[str]]:
+    """Split a ``--tpu`` value into (primary, alternatives).
+
+    The CLI accepts a comma-separated list (e.g. ``v6e-4,v5litepod-4``) so a
+    single job can be schedulable on any of the listed variants. The first
+    variant is canonical; the rest are alternatives. All listed variants must
+    share the same ``vm_count`` so multinode coscheduling stays consistent.
+    """
+    variants = [v.strip() for v in tpu_arg.split(",") if v.strip()]
+    if not variants:
+        raise click.BadParameter("--tpu must specify at least one TPU variant")
+    if len(variants) == 1:
+        return variants[0], []
+
+    primary = variants[0]
+    alternatives = variants[1:]
+    primary_topo = get_tpu_topology(primary)
+    for alt in alternatives:
+        alt_topo = get_tpu_topology(alt)
+        if alt_topo.vm_count != primary_topo.vm_count:
+            raise click.BadParameter(
+                f"TPU alternative {alt!r} has vm_count={alt_topo.vm_count} "
+                f"but primary {primary!r} has vm_count={primary_topo.vm_count}. "
+                f"All TPU alternatives must share the same vm_count."
+            )
+    return primary, alternatives
+
+
+def build_tpu_alternatives(tpu_arg: str | None) -> list[str]:
+    """Return the list of all TPU variants requested via ``--tpu``."""
+    if not tpu_arg:
+        return []
+    primary, alternatives = _parse_tpu_alternatives(tpu_arg)
+    return [primary, *alternatives]
 
 
 # Thresholds above which the entrypoint job is considered "extra-resource-heavy"
@@ -505,7 +552,9 @@ def run_iris_job(
     zone: str | None = None,
     user: str | None = None,
     reserve: tuple[str, ...] | None = None,
+    priority: str | None = None,
     token_provider: TokenProvider | None = None,
+    submit_argv: list[str] | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -525,13 +574,18 @@ def run_iris_job(
     job_name = job_name or generate_job_name(command)
     extras = extras or []
 
-    replicas, coscheduling = resolve_multinode_defaults(tpu, gpu, replicas)
+    tpu_variants = build_tpu_alternatives(tpu)
+    primary_tpu = tpu_variants[0] if tpu_variants else None
+
+    replicas, coscheduling = resolve_multinode_defaults(primary_tpu, gpu, replicas)
 
     constraints: list[Constraint] = []
     if regions:
         constraints.append(region_constraint(list(regions)))
     if zone:
         constraints.append(zone_constraint(zone))
+    if len(tpu_variants) > 1:
+        constraints.append(device_variant_constraint(tpu_variants))
 
     # Executor heuristic: small CPU-only CLI jobs (no accelerators, 1 replica,
     # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
@@ -552,7 +606,10 @@ def run_iris_job(
     logger.info(f"Command: {' '.join(command)}")
     logger.info(f"Resources: cpu={resources.cpu:g}, memory={resources.memory}, disk={resources.disk}")
     if resources.device and resources.device.HasField("tpu"):
-        logger.info(f"TPU: {resources.device.tpu.variant}")
+        if len(tpu_variants) > 1:
+            logger.info(f"TPU: {resources.device.tpu.variant} (alternatives: {', '.join(tpu_variants[1:])})")
+        else:
+            logger.info(f"TPU: {resources.device.tpu.variant}")
     if resources.device and resources.device.HasField("gpu"):
         gpu_dev = resources.device.gpu
         logger.info(f"GPU: {gpu_dev.count}x {gpu_dev.variant or 'any'}")
@@ -568,6 +625,11 @@ def run_iris_job(
         logger.info(f"Reservation: {len(reservation)} entries")
 
     logger.info(f"Using controller: {controller_url}")
+    priority_band = job_pb2.PRIORITY_BAND_UNSPECIFIED
+    if priority is not None:
+        priority_band = priority_band_value(priority)
+        logger.info(f"Priority band: {priority}")
+
     return _submit_and_wait_job(
         controller_url=controller_url,
         job_name=job_name,
@@ -584,7 +646,9 @@ def run_iris_job(
         coscheduling=coscheduling,
         user=user,
         reservation=reservation,
+        priority_band=priority_band,
         token_provider=token_provider,
+        submit_argv=submit_argv,
     )
 
 
@@ -604,7 +668,9 @@ def _submit_and_wait_job(
     coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
     reservation: list[ReservationEntry] | None = None,
+    priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     token_provider: TokenProvider | None = None,
+    submit_argv: list[str] | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -626,6 +692,8 @@ def _submit_and_wait_job(
         timeout=Duration.from_seconds(timeout) if timeout else None,
         user=user,
         reservation=reservation,
+        priority_band=priority_band,
+        submit_argv=submit_argv,
     )
 
     logger.info(f"Job submitted: {job.job_id}")
@@ -696,7 +764,16 @@ Examples:
     type=(str, str),
     help="Set environment variables for the job (KEY VALUE). Can be repeated.",
 )
-@click.option("--tpu", type=str, help="TPU type to request (e.g., v5litepod-16). Requires --enable-extra-resources.")
+@click.option(
+    "--tpu",
+    type=str,
+    help=(
+        "TPU type to request (e.g., v5litepod-16). Pass a comma-separated list "
+        "(e.g., v6e-4,v5litepod-4) to allow scheduling on any of the listed "
+        "variants — useful when capacity is contested. All variants must share "
+        "the same vm_count. Requires --enable-extra-resources."
+    ),
+)
 @click.option(
     "--gpu",
     type=str,
@@ -738,6 +815,12 @@ Examples:
     ),
 )
 @click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES, case_sensitive=False),
+    default=None,
+    help="Priority band for scheduling (default: interactive). Lower bands run first; batch jobs yield to interactive.",
+)
+@click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
     help="Terminate the job on Ctrl+C (default: terminate). Tunnel failures never kill the job.",
@@ -763,6 +846,7 @@ def run(
     zone: str | None,
     extra: tuple[str, ...],
     reserve: tuple[str, ...],
+    priority: str | None,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
 ):
@@ -775,6 +859,8 @@ def run(
     if not command:
         raise click.UsageError("No command provided after --")
 
+    submit_argv = redact_submit_argv(list(sys.argv))
+
     # ignore_unknown_options silently passes typo'd flags (e.g. --reservation
     # instead of --reserve) into cmd. Catch any flags that leaked through
     # before the actual command starts — these were meant for iris, not the
@@ -783,7 +869,7 @@ def run(
         if not arg.startswith("-"):
             break
         raise click.UsageError(
-            f"Unknown option {arg!r}. " f"Iris options must come before '--'. Did you mean a different flag?"
+            f"Unknown option {arg!r}. Iris options must come before '--'. Did you mean a different flag?"
         )
 
     env_vars_dict = load_env_vars(env_vars)
@@ -809,7 +895,9 @@ def run(
             regions=region or None,
             zone=zone,
             reserve=reserve or None,
+            priority=priority,
             token_provider=ctx.obj.get("token_provider"),
+            submit_argv=submit_argv,
         )
     except Exception:
         bundle = ctx.obj.get("provider_bundle")
@@ -917,20 +1005,6 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
     click.echo(tabulate(rows, headers=headers, tablefmt="plain"))
 
 
-# Mirrors iris.cluster.controller.db.TERMINAL_TASK_STATES. Duplicated here to
-# avoid a CLI → controller.db import dependency just for the constant.
-_TERMINAL_TASK_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.TASK_STATE_SUCCEEDED,
-        job_pb2.TASK_STATE_FAILED,
-        job_pb2.TASK_STATE_KILLED,
-        job_pb2.TASK_STATE_UNSCHEDULABLE,
-        job_pb2.TASK_STATE_WORKER_FAILED,
-        job_pb2.TASK_STATE_PREEMPTED,
-    }
-)
-
-
 def _task_index(task_id: str) -> str:
     last = task_id.rsplit("/", 1)[-1]
     return last or task_id
@@ -984,7 +1058,7 @@ def build_job_summary(
                 # Only surface exit_code once the task is terminal. Proto scalar
                 # defaults mean a RUNNING/ASSIGNED/BUILDING task would otherwise
                 # report exit=0 and look like a clean success.
-                "exit_code": int(t.exit_code) if t.state in _TERMINAL_TASK_STATES else None,
+                "exit_code": int(t.exit_code) if t.state in TERMINAL_TASK_STATES else None,
                 "duration_ms": _task_duration_ms(t),
                 "memory_mb": int(usage.memory_mb) if usage.memory_mb else 0,
                 "memory_peak_mb": int(usage.memory_peak_mb) if usage.memory_peak_mb else 0,
@@ -1078,7 +1152,7 @@ def summary(ctx, job_id: str, json_output: bool) -> None:
     default=0,
     help="Maximum number of log lines to return (0 = server default, currently 1000).",
 )
-@click.option("--tail", is_flag=True, help="Return the most recent lines instead of the earliest.")
+@click.option("--tail/--no-tail", default=True, help="Return the most recent lines instead of the earliest.")
 @click.option(
     "--level",
     type=click.Choice(["debug", "info", "warning", "error", "critical"], case_sensitive=False),

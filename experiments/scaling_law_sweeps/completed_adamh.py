@@ -49,7 +49,7 @@ from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, InputName
 from marin.processing.tokenize import get_vocab_size_for_tokenizer
 from marin.scaling_laws import CandidateConfig, pick_v4_type
-from marin.scaling_laws.tpu_utils import V4_CORES_PER_CHIP
+from marin.scaling_laws.tpu_utils import V4_SPEC
 
 # --- Constants ---
 SEQ_LEN: int = 4096
@@ -66,7 +66,7 @@ def _round_to_power_of_two(x: float) -> int:
 def _compute_tensor_parallel_size(tpu_type: str, batch_size: int, hidden_dim: int, max_tp: int = 4) -> int:
     """Compute TP degree when batch_size < num_chips on the selected TPU."""
     cores = int(tpu_type.split("-")[1])
-    num_chips = cores // V4_CORES_PER_CHIP
+    num_chips = cores // V4_SPEC.cores_per_chip
     min_tp = 1 if batch_size >= num_chips else _round_to_power_of_two(math.ceil(num_chips / batch_size))
     tp = min_tp
 

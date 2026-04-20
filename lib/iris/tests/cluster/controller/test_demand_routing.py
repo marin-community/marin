@@ -17,9 +17,13 @@ from iris.cluster.controller.autoscaler.routing import (
 )
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.constraints import (
+    Constraint,
+    ConstraintOp,
     DeviceType,
     PlacementRequirements,
     WellKnownAttribute,
+    region_constraint,
+    zone_constraint,
 )
 from iris.rpc import config_pb2
 from iris.rpc import job_pb2
@@ -622,10 +626,7 @@ class TestPreemptibleRouting:
 class TestRegionRouting:
     def test_route_demand_filters_by_required_region(self):
         config_west = make_scale_group_config(name="west", max_slices=5, priority=10, zones=["us-west4-b"])
-        config_west.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
-
         config_eu = make_scale_group_config(name="eu", max_slices=5, priority=10, zones=["europe-west4-b"])
-        config_eu.worker.attributes[WellKnownAttribute.REGION] = "europe-west4"
 
         west = ScalingGroup(config_west, make_mock_platform())
         eu = ScalingGroup(config_eu, make_mock_platform())
@@ -645,7 +646,6 @@ class TestRegionRouting:
 
     def test_route_demand_unmet_when_no_group_matches_region(self):
         config_eu = make_scale_group_config(name="eu", max_slices=5, priority=10, zones=["europe-west4-b"])
-        config_eu.worker.attributes[WellKnownAttribute.REGION] = "europe-west4"
         eu = ScalingGroup(config_eu, make_mock_platform())
 
         demand = make_demand_entries(
@@ -671,7 +671,6 @@ class TestRegionRouting:
             zones=["us-west4-b"],
             capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
         )
-        config_west_preemptible.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
 
         config_west_ondemand = make_scale_group_config(
             name="west-ondemand",
@@ -680,7 +679,6 @@ class TestRegionRouting:
             zones=["us-west4-b"],
             capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
         )
-        config_west_ondemand.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
 
         config_eu_preemptible = make_scale_group_config(
             name="eu-preemptible",
@@ -689,7 +687,6 @@ class TestRegionRouting:
             zones=["europe-west4-b"],
             capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
         )
-        config_eu_preemptible.worker.attributes[WellKnownAttribute.REGION] = "europe-west4"
 
         west_preemptible = ScalingGroup(config_west_preemptible, make_mock_platform())
         west_ondemand = ScalingGroup(config_west_ondemand, make_mock_platform())
@@ -719,12 +716,7 @@ class TestRegionRouting:
 class TestZoneRouting:
     def test_route_demand_filters_by_required_zone(self):
         config_a = make_scale_group_config(name="zone-a", max_slices=5, priority=10, zones=["us-central2-a"])
-        config_a.worker.attributes[WellKnownAttribute.REGION] = "us-central2"
-        config_a.worker.attributes[WellKnownAttribute.ZONE] = "us-central2-a"
-
         config_b = make_scale_group_config(name="zone-b", max_slices=5, priority=10, zones=["us-central2-b"])
-        config_b.worker.attributes[WellKnownAttribute.REGION] = "us-central2"
-        config_b.worker.attributes[WellKnownAttribute.ZONE] = "us-central2-b"
 
         zone_a = ScalingGroup(config_a, make_mock_platform())
         zone_b = ScalingGroup(config_b, make_mock_platform())
@@ -744,8 +736,6 @@ class TestZoneRouting:
 
     def test_route_demand_unmet_when_no_group_matches_zone(self):
         config_a = make_scale_group_config(name="zone-a", max_slices=5, priority=10, zones=["us-central2-a"])
-        config_a.worker.attributes[WellKnownAttribute.REGION] = "us-central2"
-        config_a.worker.attributes[WellKnownAttribute.ZONE] = "us-central2-a"
         zone_a = ScalingGroup(config_a, make_mock_platform())
 
         demand = make_demand_entries(
@@ -765,8 +755,6 @@ class TestZoneRouting:
     def test_zone_typo_suggests_close_match(self):
         """A zone typo like 'europe-west4b' triggers a 'did you mean' suggestion."""
         config = make_scale_group_config(name="eu", max_slices=5, priority=10, zones=["europe-west4-b"])
-        config.worker.attributes[WellKnownAttribute.REGION] = "europe-west4"
-        config.worker.attributes[WellKnownAttribute.ZONE] = "europe-west4-b"
         eu = ScalingGroup(config, make_mock_platform())
 
         demand = make_demand_entries(
@@ -801,7 +789,7 @@ class TestZoneRouting:
 
         assert len(result.unmet_entries) == 1
         reason = result.unmet_entries[0].reason
-        assert "no groups with device" in reason
+        assert "no scaling group provides device" in reason
         assert "tpu" in reason
 
     def test_reason_string_is_concise(self):
@@ -815,7 +803,6 @@ class TestZoneRouting:
                 priority=10,
                 zones=[zone],
             )
-            config.worker.attributes[WellKnownAttribute.ZONE] = zone
             groups.append(ScalingGroup(config, make_mock_platform()))
 
         demand = make_demand_entries(
@@ -1290,7 +1277,7 @@ class TestRoutingBinPacking:
 
 
 class TestCheckCoschedulingFeasibility:
-    """Tests for Autoscaler.check_coscheduling_feasibility()."""
+    """Tests for Autoscaler.job_feasibility() with replicas (coscheduled jobs)."""
 
     def _make_constraints(self):
         return make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")[0].constraints
@@ -1308,19 +1295,19 @@ class TestCheckCoschedulingFeasibility:
         """Replicas == num_vms is feasible."""
         config = make_scale_group_config(name="group-4", max_slices=5, num_vms=4)
         autoscaler = self._make_autoscaler({"group-4": ScalingGroup(config, make_mock_platform())})
-        assert autoscaler.check_coscheduling_feasibility(4, self._make_constraints()) is None
+        assert autoscaler.job_feasibility(self._make_constraints(), replicas=4) is None
 
     def test_feasible_exact_multiple(self):
         """Replicas that are an exact multiple of num_vms are feasible."""
         config = make_scale_group_config(name="group-4", max_slices=5, num_vms=4)
         autoscaler = self._make_autoscaler({"group-4": ScalingGroup(config, make_mock_platform())})
-        assert autoscaler.check_coscheduling_feasibility(8, self._make_constraints()) is None
+        assert autoscaler.job_feasibility(self._make_constraints(), replicas=8) is None
 
     def test_infeasible_not_a_multiple(self):
         """Replicas that aren't a multiple of any group's num_vms are rejected."""
         config = make_scale_group_config(name="group-3", max_slices=5, num_vms=3)
         autoscaler = self._make_autoscaler({"group-3": ScalingGroup(config, make_mock_platform())})
-        result = autoscaler.check_coscheduling_feasibility(8, self._make_constraints())
+        result = autoscaler.job_feasibility(self._make_constraints(), replicas=8)
         assert result is not None
         assert "8" in result
 
@@ -1330,14 +1317,103 @@ class TestCheckCoschedulingFeasibility:
             name="gpu-group", max_slices=5, num_vms=8, accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU
         )
         autoscaler = self._make_autoscaler({"gpu-group": ScalingGroup(config, make_mock_platform())})
-        result = autoscaler.check_coscheduling_feasibility(8, self._make_constraints())
+        result = autoscaler.job_feasibility(self._make_constraints(), replicas=8)
         assert result is not None
-        assert "no scaling group matches" in result
+        assert "no scaling group provides" in result
 
     def test_no_groups_returns_none(self):
         """Returns None when there are no groups (no validation possible)."""
         autoscaler = self._make_autoscaler({})
-        assert autoscaler.check_coscheduling_feasibility(8, []) is None
+        assert autoscaler.job_feasibility([], replicas=8) is None
+
+
+# ---------------------------------------------------------------------------
+# Routing feasibility (submit-time constraint validation)
+# ---------------------------------------------------------------------------
+
+
+class TestCheckRoutingFeasibility:
+    """Tests for Autoscaler.job_feasibility() (non-coscheduled jobs)."""
+
+    def _make_autoscaler(self, groups):
+        from iris.cluster.controller.autoscaler import Autoscaler
+
+        return Autoscaler(
+            scale_groups=groups,
+            evaluation_interval=Duration.from_seconds(0.1),
+            platform=make_mock_platform(),
+        )
+
+    def _tpu_constraints(self, variant: str = "v5p-8") -> list[Constraint]:
+        return make_demand_entries(1, device_type=DeviceType.TPU, device_variant=variant)[0].constraints
+
+    def test_feasible_matching_group(self):
+        """Returns None when a group matches the constraints."""
+        config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=4)
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        assert autoscaler.job_feasibility(self._tpu_constraints()) is None
+
+    def test_infeasible_wrong_device_type(self):
+        """Rejects when no group has the requested device type."""
+        config = make_scale_group_config(
+            name="gpu-group", max_slices=5, num_vms=4, accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU
+        )
+        autoscaler = self._make_autoscaler({"gpu-group": ScalingGroup(config, make_mock_platform())})
+        result = autoscaler.job_feasibility(self._tpu_constraints())
+        assert result is not None
+        assert "tpu" in result
+
+    def test_infeasible_wrong_region(self):
+        """Rejects when no group is in the requested region."""
+        config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=4, zones=["us-central1-a"])
+        constraints = self._tpu_constraints()
+        constraints.append(region_constraint(["europe-west4"]))
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        result = autoscaler.job_feasibility(constraints)
+        assert result is not None
+        assert "region" in result
+
+    def test_infeasible_zone_used_as_region(self):
+        """Detects when a zone value is specified as a region constraint."""
+        config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=4, zones=["us-central1-a"])
+        constraints = self._tpu_constraints()
+        # User mistakenly passes a zone value as a region constraint
+        constraints.append(region_constraint(["us-central1-a"]))
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        result = autoscaler.job_feasibility(constraints)
+        assert result is not None
+        assert "looks like a zone" in result
+
+    def test_infeasible_region_used_as_zone(self):
+        """Detects when a region value is specified as a zone constraint."""
+        config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=4, zones=["us-central1-a"])
+        constraints = self._tpu_constraints()
+        # User mistakenly passes a region value as a zone constraint
+        constraints.append(zone_constraint("us-central1"))
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        result = autoscaler.job_feasibility(constraints)
+        assert result is not None
+        assert "looks like a region" in result
+
+    def test_soft_constraint_does_not_reject(self):
+        """Soft constraints that don't match any group should not cause rejection."""
+        config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=4, zones=["us-central1-a"])
+        constraints = self._tpu_constraints()
+        # Add a soft region constraint for a region that doesn't exist
+        soft = Constraint.create(
+            key=WellKnownAttribute.REGION,
+            op=ConstraintOp.EQ,
+            value="europe-west4",
+            mode=job_pb2.CONSTRAINT_MODE_PREFERRED,
+        )
+        constraints.append(soft)
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        assert autoscaler.job_feasibility(constraints) is None
+
+    def test_no_groups_returns_none(self):
+        """Returns None when there are no groups (no validation possible)."""
+        autoscaler = self._make_autoscaler({})
+        assert autoscaler.job_feasibility([]) is None
 
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,6 @@ __all__ = [
     "optim",
     "tracker",
     "trainer",
-    "visualization",
     "grug",
     "current_tracker",
     "initialize",
@@ -32,7 +31,6 @@ import levanter.models as models
 import levanter.optim as optim
 import levanter.tracker as tracker
 import levanter.trainer as trainer
-import levanter.visualization as visualization
 import levanter.grug as grug
 from levanter.tracker import current_tracker
 from levanter.trainer import initialize
