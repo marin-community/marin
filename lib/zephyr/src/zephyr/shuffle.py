@@ -261,19 +261,19 @@ def _iter_chunk(fs: Any, fs_path: str, offset: int, length: int) -> Iterator:
 class ScatterReader:
     """All scatter chunks for one target shard, across all source files.
 
-    Construct via :meth:`from_manifest` for production use, or pass fields
+    Construct via :meth:`from_sidecars` for production use, or pass fields
     directly for testing.
     """
 
     def __init__(
         self,
-        iterators: list[ScatterFileIterator] | None = None,
-        max_chunk_rows: int = 100_000,
-        avg_item_bytes: float = 0.0,
+        iterators: list[ScatterFileIterator],
+        max_chunk_rows: int,
+        avg_item_bytes: float,
     ) -> None:
-        self.iterators: list[ScatterFileIterator] = iterators if iterators is not None else []
-        self.max_chunk_rows: int = max_chunk_rows
-        self.avg_item_bytes: float = avg_item_bytes
+        self.iterators = iterators
+        self.max_chunk_rows = max_chunk_rows
+        self.avg_item_bytes = avg_item_bytes
 
     @classmethod
     def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> ScatterReader:
@@ -301,10 +301,16 @@ class ScatterReader:
                     weighted_bytes += slice_.avg_item_bytes * count
                     total_chunks_for_avg += count
 
-        if max_rows == 0:
-            max_rows = 100_000
         avg_item_bytes = weighted_bytes / total_chunks_for_avg if total_chunks_for_avg > 0 else 0.0
 
+        logger.info(
+            "ScatterReader for shard %d: %d files, %d total chunks, " "max_chunk_rows=%d, avg_item_bytes=%.1f",
+            target_shard,
+            len(iterators),
+            sum(it.chunk_count for it in iterators),
+            max_rows,
+            avg_item_bytes,
+        )
         return cls(iterators=iterators, max_chunk_rows=max_rows, avg_item_bytes=avg_item_bytes)
 
     def __iter__(self) -> Iterator:
