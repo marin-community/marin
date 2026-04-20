@@ -345,7 +345,7 @@ def test_handle_failed_heartbeats_logs_diagnostics(tmp_path, worker_metadata, ca
     assert "worker=worker1" in caplog.text
     assert "address=10.0.0.1:10001" in caplog.text
     assert "action=transient_failure" in caplog.text
-    assert "failures=1/10" in caplog.text
+    assert "failures=1" in caplog.text
     assert "last_success_age_s=" in caplog.text
     assert "deadline exceeded after 12000ms" in caplog.text
 

@@ -87,8 +87,6 @@ RESERVATION_HOLDER_JOB_NAME = ":reservation:"
 Uses colons to clearly distinguish from user-created jobs and avoid
 accidental collision with normal job names."""
 
-HEARTBEAT_FAILURE_THRESHOLD = 10
-"""Consecutive heartbeat failures before marking worker as failed."""
 
 FAIL_HEARTBEATS_CHUNK_SIZE = 10
 """Number of worker failures processed per transaction in
@@ -268,7 +266,6 @@ class HeartbeatFailureResult(TxResult):
     worker_removed: bool = False
     action: HeartbeatAction = HeartbeatAction.TRANSIENT_FAILURE
     consecutive_failures: int = 0
-    failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD
     last_heartbeat_age_ms: int | None = None
 
 
@@ -972,12 +969,10 @@ class ControllerTransitions:
     def __init__(
         self,
         db: ControllerDB,
-        heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD,
         user_budget_defaults: UserBudgetDefaults | None = None,
         health: WorkerHealthTracker | None = None,
     ):
         self._db = db
-        self._heartbeat_failure_threshold = heartbeat_failure_threshold
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
         self._health = health or WorkerHealthTracker()
 
@@ -2245,7 +2240,6 @@ class ControllerTransitions:
             return HeartbeatFailureResult(
                 worker_removed=True,
                 action=HeartbeatAction.WORKER_FAILED,
-                failure_threshold=self._heartbeat_failure_threshold,
             )
 
         now_ms = now_ms or Timestamp.now().epoch_ms()
@@ -2280,7 +2274,6 @@ class ControllerTransitions:
             worker_removed=force_remove,
             action=action,
             consecutive_failures=failures,
-            failure_threshold=self._heartbeat_failure_threshold,
             last_heartbeat_age_ms=last_heartbeat_age_ms,
         )
 

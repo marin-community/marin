@@ -92,7 +92,6 @@ from iris.cluster.controller.scheduler import (
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import (
-    HEARTBEAT_FAILURE_THRESHOLD,
     HEARTBEAT_STALENESS_THRESHOLD,
     RESERVATION_HOLDER_JOB_NAME,
     Assignment,
@@ -919,9 +918,6 @@ class ControllerConfig:
     GIL starvation of the heartbeat thread. Coscheduled jobs are exempt (they need
     all tasks for atomic assignment). Set to 0 for unlimited."""
 
-    heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD
-    """Consecutive heartbeat failures before marking worker as dead."""
-
     autoscaler_enabled: bool = False
     worker_access_address: str = ""
 
@@ -1098,7 +1094,6 @@ class Controller:
         self._health = WorkerHealthTracker()
         self._transitions = ControllerTransitions(
             db=self._db,
-            heartbeat_failure_threshold=config.heartbeat_failure_threshold,
             user_budget_defaults=config.user_budget_defaults,
             health=self._health,
         )
@@ -2535,13 +2530,12 @@ class Controller:
             log_level = logging.ERROR if result.action == HeartbeatAction.WORKER_FAILED else logging.WARNING
             logger.log(
                 log_level,
-                "Heartbeat RPC failure: worker=%s address=%s action=%s failures=%d/%d last_success_age_s=%s "
+                "Heartbeat RPC failure: worker=%s address=%s action=%s failures=%d last_success_age_s=%s "
                 "expected=%d run=%d kill=%d error=%s",
                 batch.worker_id,
                 batch.worker_address or "<missing>",
                 result.action.value,
                 result.consecutive_failures,
-                result.failure_threshold,
                 last_success_age_s,
                 len(batch.running_tasks),
                 len(batch.tasks_to_run),
