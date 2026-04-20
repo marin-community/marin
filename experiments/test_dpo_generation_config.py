@@ -14,7 +14,7 @@ Expected content: {"eos_token_id": [128001, 128009], "bos_token_id": 128000}
 from levanter.data.text import PreferenceChatLmDatasetFormat
 
 from experiments.defaults import default_dpo, default_tokenize
-from experiments.llama import LLAMA3_CHAT_STOP_TOKEN_IDS, llama_8b
+from experiments.llama import llama3_chat_stop_token_ids, llama_8b
 from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.preference_datasets import get_preference_dataset
 from experiments.simple_dpo_config import SimpleDPOConfig
@@ -65,7 +65,7 @@ dpo_config = SimpleDPOConfig(
     steps_per_eval=2,
     steps_per_checkpoint=2,
     steps_per_hf_export=2,
-    hf_generation_eos_token_ids=LLAMA3_CHAT_STOP_TOKEN_IDS,
+    hf_generation_eos_token_ids=llama3_chat_stop_token_ids(marin_tokenizer),
     seed=0,
 )
 

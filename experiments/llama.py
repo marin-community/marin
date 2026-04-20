@@ -8,6 +8,7 @@ Specifies a sequence of Llama 3 models from small to large.
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig
 from levanter.utils.activation import ActivationFunctionEnum
+from transformers import AutoTokenizer
 
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
@@ -18,13 +19,30 @@ llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 llama3_tokenizer_vocab_size = 128_256
 llama3_instruct_tokenizer = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 
-# Llama 3 chat stop token IDs for generation_config.json.
-# The chat template ends every turn (user, assistant, system) with <|eot_id|> (128009),
-# but the tokenizer's eos_token is <|end_of_text|> (128001), which is the pre-training
+# Stop-token strings for the Llama-3 chat format.
+#
+# The chat template ends every turn (user, assistant, system) with <|eot_id|>,
+# but the tokenizer's eos_token is <|end_of_text|>, which is the pre-training
 # document boundary. Both must be listed as stop tokens so vLLM stops on either.
 # Determined by running: tokenizer.apply_chat_template([...], tokenize=True)
-# and observing the last token of the assistant turn is 128009.
-LLAMA3_CHAT_STOP_TOKEN_IDS = [128001, 128009]
+# and observing the last token of the assistant turn is <|eot_id|>.
+#
+# These are strings rather than hardcoded IDs so that derived tokenizers with
+# smaller vocabularies (e.g. 32K/64K variants) resolve to their own IDs for the
+# same special tokens.
+LLAMA3_CHAT_STOP_TOKENS = ["<|end_of_text|>", "<|eot_id|>"]
+
+
+def llama3_chat_stop_token_ids(tokenizer_name: str = llama3_tokenizer) -> list[int]:
+    """Resolve the Llama-3 chat stop tokens to integer IDs for a given tokenizer.
+
+    Works with any Llama-3-family tokenizer that preserves ``<|end_of_text|>``
+    and ``<|eot_id|>`` — base Llama-3, the Marin tokenizer, and future derived
+    32K/64K variants all qualify.
+    """
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    return tokenizer.convert_tokens_to_ids(LLAMA3_CHAT_STOP_TOKENS)
+
 
 # Llama3 instruct trainable chat template
 # Slight modification of https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct/blob/main/tokenizer_config.json

@@ -177,7 +177,13 @@ See [Levanter's documentation on Chat Templates](https://levanter.readthedocs.io
 for more information on how this works.
 """
 
+# Special-token renames applied when building the Marin tokenizer.
+#
+# Keyed by the *original* token string in the base Llama-3 tokenizer so the
+# mapping is robust to vocab-size changes: derived 32K/64K tokenizers keep the
+# reserved-special-token set at different integer IDs, but the original token
+# strings are preserved.
 MARIN_CUSTOM_SPECIAL_TOKENS = {
-    128002: "<|start_think|>",  # Originally "<|reserved_special_token_0|>"
-    128003: "<|end_think|>",  # Originally "<|reserved_special_token_1|>"
+    "<|reserved_special_token_0|>": "<|start_think|>",
+    "<|reserved_special_token_1|>": "<|end_think|>",
 }

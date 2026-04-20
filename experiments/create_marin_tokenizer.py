@@ -24,18 +24,30 @@ from experiments.marin_models import marin_tokenizer as marin_tokenizer_hf_path
 
 def _inject_special_tokens(
     tokenizer: PreTrainedTokenizer,
-    new_tokens: dict[int, str],
+    new_tokens: dict[str, str],
 ):
     """
     Inject special tokens into the tokenizer config.
 
     Args:
         tokenizer: The tokenizer to modify
-        new_tokens: A dictionary of token_id -> token_str
+        new_tokens: A dictionary of original_token_str -> new_token_str. The
+            original token must already exist in the tokenizer's vocabulary; its
+            integer ID is looked up here so the caller does not need to hardcode
+            vocab-specific IDs (which change across 32K/64K/128K variants).
 
     Returns:
         A new tokenizer instance
     """
+    # Resolve original token strings to IDs once so downstream JSON edits are
+    # keyed by ID (the on-disk representation).
+    renames_by_id: dict[int, str] = {}
+    for original_name, new_name in new_tokens.items():
+        original_id = tokenizer.convert_tokens_to_ids(original_name)
+        if original_id is None or original_id == tokenizer.unk_token_id:
+            raise ValueError(f"Tokenizer does not have special token {original_name!r}; cannot rename to {new_name!r}.")
+        renames_by_id[original_id] = new_name
+
     # Create a temporary directory that may be RAM-based
     with tempfile.TemporaryDirectory() as temp_path:
         # Save the original tokenizer to temp directory
@@ -45,7 +57,7 @@ def _inject_special_tokens(
         tokenizer_config_path = os.path.join(temp_path, "tokenizer_config.json")
         with open(tokenizer_config_path, "r") as f:
             tokenizer_config = json.load(f)
-        for token_id, token_str in new_tokens.items():
+        for token_id, token_str in renames_by_id.items():
             tokenizer_config["added_tokens_decoder"][str(token_id)]["content"] = token_str
         with open(tokenizer_config_path, "w") as f:
             json.dump(tokenizer_config, f)
@@ -59,8 +71,8 @@ def _inject_special_tokens(
             if "added_tokens" in tokenizer_json:
                 for at in tokenizer_json["added_tokens"]:
                     tid = at.get("id")
-                    if tid in new_tokens:
-                        at["content"] = new_tokens[tid]
+                    if tid in renames_by_id:
+                        at["content"] = renames_by_id[tid]
             # Persist the file back
             with open(tokenizer_json_path, "w") as f:
                 json.dump(tokenizer_json, f)
@@ -218,9 +230,11 @@ def chat_template_checks(marin_tokenizer: PreTrainedTokenizer):
 
 def special_tokens_injection_check(marin_tokenizer: PreTrainedTokenizer):
     """Test that special tokens are correctly replaced."""
-    for token_id, token_str in MARIN_CUSTOM_SPECIAL_TOKENS.items():
-        assert marin_tokenizer.decode(token_id) == token_str
-        assert marin_tokenizer.convert_tokens_to_ids([token_str]) == [token_id]
+    llama3_tokenizer = load_llama3_tokenizer()
+    for original_name, new_name in MARIN_CUSTOM_SPECIAL_TOKENS.items():
+        original_id = llama3_tokenizer.convert_tokens_to_ids(original_name)
+        assert marin_tokenizer.decode(original_id) == new_name
+        assert marin_tokenizer.convert_tokens_to_ids([new_name]) == [original_id]
 
 
 def run_all_tests(marin_tokenizer: PreTrainedTokenizer):

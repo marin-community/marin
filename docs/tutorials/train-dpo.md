@@ -92,14 +92,18 @@ Set `hf_generation_eos_token_ids` to write a `generation_config.json` alongside
 each saved checkpoint. The tokenizer's `eos_token_id` is auto-added if not
 already in the list.
 
-For Llama 3 models, use the predefined constant:
+For Llama 3 models, resolve the chat stop tokens against the tokenizer you are
+training with:
 
 ```python
-from experiments.llama import LLAMA3_CHAT_STOP_TOKEN_IDS
+from experiments.llama import llama3_chat_stop_token_ids
+from experiments.marin_models import marin_tokenizer
 
 dpo_config = SimpleDPOConfig(
     ...
-    hf_generation_eos_token_ids=LLAMA3_CHAT_STOP_TOKEN_IDS,  # [128001, 128009]
+    # Resolved against `marin_tokenizer` so it works for any Llama-3-family
+    # tokenizer (128K, derived 32K/64K, etc.).
+    hf_generation_eos_token_ids=llama3_chat_stop_token_ids(marin_tokenizer),
 )
 ```
 
