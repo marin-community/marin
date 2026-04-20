@@ -73,6 +73,8 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    # Disable a specific GatedNorm position: "none", "embed", "final", "attn", "mlp".
+    disable_gated_norm: str = "none"
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -438,10 +440,13 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        disable_gn: str = "none",
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        normed = self.rms_attn(x)
+        attn_in = normed if disable_gn == "attn" else self.attn_gated_norm(normed)
         x = x + self.attn(attn_in, mask)
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        normed = self.rms_mlp(x)
+        mlp_in = normed if disable_gn == "mlp" else self.mlp_gated_norm(normed)
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -490,7 +495,9 @@ class Transformer(eqx.Module):
         batch_spec = _batch_spec()
         cfg = self.config
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
-        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        dgn = cfg.disable_gated_norm
+        normed = self.embed_norm(hidden)
+        hidden = normed if dgn == "embed" else self.embed_gated_norm(normed)
 
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
@@ -499,7 +506,7 @@ class Transformer(eqx.Module):
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask, dgn)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
@@ -509,7 +516,8 @@ class Transformer(eqx.Module):
             "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
             "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
         }
-        hidden = self.final_gated_norm(self.final_norm(hidden))
+        normed = self.final_norm(hidden)
+        hidden = normed if dgn == "final" else self.final_gated_norm(normed)
         return hidden, router_metrics
 
     @named_call
