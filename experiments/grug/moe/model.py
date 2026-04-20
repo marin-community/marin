@@ -73,6 +73,7 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    partial_rope_mode: str = "none"  # "none", "every_layer", "every_4th"
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -130,7 +131,12 @@ class CausalSelfAttention(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        use_partial_rope: bool = False,
+    ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
@@ -140,7 +146,15 @@ class CausalSelfAttention(eqx.Module):
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
         q = rms_norm(q)
         k = rms_norm(k)
-        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+        if use_partial_rope:
+            half = head_dim // 2
+            q_rot, q_pass = q[..., :half], q[..., half:]
+            k_rot, k_pass = k[..., :half], k[..., half:]
+            q_rot, k_rot = apply_rotary_embedding(q_rot, k_rot, seq_len=seq_len, head_dim=half, rope=self.cfg.rope)
+            q = jnp.concatenate([q_rot, q_pass], axis=-1)
+            k = jnp.concatenate([k_rot, k_pass], axis=-1)
+        else:
+            q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
@@ -438,9 +452,10 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        use_partial_rope: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask)
+        x = x + self.attn(attn_in, mask, use_partial_rope=use_partial_rope)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -499,7 +514,10 @@ class Transformer(eqx.Module):
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            partial_rope = cfg.partial_rope_mode == "every_layer" or (
+                cfg.partial_rope_mode == "every_4th" and i % 4 == 3
+            )
+            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask, partial_rope)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
