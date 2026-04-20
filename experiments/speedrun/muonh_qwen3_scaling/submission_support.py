@@ -85,7 +85,7 @@ class SpeedrunConfig:
 @dataclass(frozen=True)
 class SpeedrunResultsConfig:
     wandb_run_id: str
-    wandb_entity: str
+    wandb_entity: str | None
     wandb_project: str
     speedrun_config: SpeedrunConfig
     output_path: str
@@ -104,7 +104,14 @@ def _resolve_wandb_entity(entity: str | None) -> str:
     if entity is not None:
         return entity
 
-    default_entity = wandb.Api().default_entity
+    settings_entity = wandb.Settings().entity
+    if settings_entity is not None:
+        return settings_entity
+
+    try:
+        default_entity = wandb.Api().default_entity
+    except wandb.errors.UsageError as exc:
+        raise ValueError("Could not infer a W&B entity. Set tracker.entity or configure a default W&B entity.") from exc
     if default_entity is not None:
         return default_entity
 
@@ -113,13 +120,14 @@ def _resolve_wandb_entity(entity: str | None) -> str:
 
 def speedrun_results(config: SpeedrunResultsConfig) -> None:
     wandb_run_id = config.wandb_run_id.split("/")[-1]
-    step_times = _get_step_times(wandb_run_id, config.wandb_entity, config.wandb_project)
+    wandb_entity = _resolve_wandb_entity(config.wandb_entity)
+    step_times = _get_step_times(wandb_run_id, wandb_entity, config.wandb_project)
     if not step_times:
         raise ValueError(
-            f"No throughput/duration history found for {config.wandb_entity}/{config.wandb_project}/{wandb_run_id}."
+            f"No throughput/duration history found for {wandb_entity}/{config.wandb_project}/{wandb_run_id}."
         )
 
-    run = wandb.Api().run(f"{config.wandb_entity}/{config.wandb_project}/{wandb_run_id}")
+    run = wandb.Api().run(f"{wandb_entity}/{config.wandb_project}/{wandb_run_id}")
     context_length = config.speedrun_config.train_config.train_seq_len or config.speedrun_config.model_config.max_seq_len
     flops_per_token = config.speedrun_config.model_config.flops_per_token(
         config.speedrun_config.vocab_size, context_length
@@ -152,7 +160,7 @@ def speedrun_results(config: SpeedrunResultsConfig) -> None:
         ),
         "eval/paloma/c4_en/bpb": run.summary.get("eval/paloma/c4_en/bpb"),
         "run_completion_timestamp": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
-        "wandb_run_link": f"https://wandb.ai/{config.wandb_entity}/{config.wandb_project}/runs/{wandb_run_id}",
+        "wandb_run_link": f"https://wandb.ai/{wandb_entity}/{config.wandb_project}/runs/{wandb_run_id}",
     }
     with open_url(config.output_path, "w") as f:
         json.dump({"runs": [{"run_info": run_info}]}, f, indent=2, sort_keys=True)
@@ -176,7 +184,7 @@ def default_speedrun(name: str, config: SpeedrunConfig, *, tags: list[str] | Non
         fn=speedrun_results,
         config=SpeedrunResultsConfig(
             wandb_run_id=train_step,
-            wandb_entity=_resolve_wandb_entity(tracker.entity),
+            wandb_entity=tracker.entity,
             wandb_project=tracker.project or "marin",
             speedrun_config=config,
             output_path=output_path_of(train_step, "speedrun_results.json"),
