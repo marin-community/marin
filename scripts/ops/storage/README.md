@@ -24,7 +24,7 @@ prep  ──>  server (human triage)  ──>  compute (manifest)  ──>  clea
 
 ## Architecture
 
-All state lives in `scripts/storage/purge/`:
+All state lives in `scripts/ops/storage/purge/`:
 
 ```
 purge/
@@ -57,16 +57,16 @@ are persisted as JSON files and loaded into DuckDB tables on startup.
 
 ```bash
 # See step status
-uv run scripts/storage/prep.py plan
+uv run scripts/ops/storage/prep.py plan
 
 # Run all prep steps
-uv run scripts/storage/prep.py run
+uv run scripts/ops/storage/prep.py run
 
 # Run a single step
-uv run scripts/storage/prep.py prep scan-objects --scan-workers 64
+uv run scripts/ops/storage/prep.py prep scan-objects --scan-workers 64
 
 # Force re-scan (ignore cached markers)
-uv run scripts/storage/prep.py run --force
+uv run scripts/ops/storage/prep.py run --force
 ```
 
 ### Steps
@@ -92,14 +92,14 @@ pricing and a 30% CUD discount.
 
 ```bash
 # Local development
-uv run scripts/storage/server.py --dev
+uv run scripts/ops/storage/server.py --dev
 
 # Production (deployed via Docker)
-uv run scripts/storage/deploy.py deploy
+uv run scripts/ops/storage/deploy.py deploy
 ```
 
 The dashboard is a FastAPI app serving a Vue frontend from
-`scripts/storage/dashboard/`. It provides:
+`scripts/ops/storage/dashboard/`. It provides:
 
 - **Overview** (`/api/overview`) — Per-region storage breakdown by class with
   monthly cost estimates.
@@ -133,13 +133,13 @@ staging prefix that the container downloads on cold start.
 
 ```bash
 # See step status
-uv run scripts/storage/compute.py plan
+uv run scripts/ops/storage/compute.py plan
 
 # Compute the deletion manifest
-uv run scripts/storage/compute.py run
+uv run scripts/ops/storage/compute.py run
 
 # Force recompute (e.g. after changing rules)
-uv run scripts/storage/compute.py run --force
+uv run scripts/ops/storage/compute.py run --force
 ```
 
 Evaluates delete rules against protect rules and the `dir_summary` table,
@@ -166,13 +166,13 @@ Inspect with standard tools:
 
 ```bash
 # Quick look
-column -t -s, scripts/storage/purge/deletion_manifest.csv | head -20
+column -t -s, scripts/ops/storage/purge/deletion_manifest.csv | head -20
 
 # Sort by size
-sort -t, -k4 -rn scripts/storage/purge/deletion_manifest.csv | head
+sort -t, -k4 -rn scripts/ops/storage/purge/deletion_manifest.csv | head
 
 # Filter to one bucket
-grep marin-eu-west4 scripts/storage/purge/deletion_manifest.csv
+grep marin-eu-west4 scripts/ops/storage/purge/deletion_manifest.csv
 ```
 
 ### Steps
@@ -187,16 +187,16 @@ validation.
 
 ```bash
 # See step status
-uv run scripts/storage/cleanup.py plan
+uv run scripts/ops/storage/cleanup.py plan
 
 # Dry run (no mutations)
-uv run scripts/storage/cleanup.py run --dry-run
+uv run scripts/ops/storage/cleanup.py run --dry-run
 
 # Execute cleanup
-uv run scripts/storage/cleanup.py run
+uv run scripts/ops/storage/cleanup.py run
 
 # Run a single step
-uv run scripts/storage/cleanup.py run --only cleanup.delete_cold_objects
+uv run scripts/ops/storage/cleanup.py run --only cleanup.delete_cold_objects
 ```
 
 ### Steps
