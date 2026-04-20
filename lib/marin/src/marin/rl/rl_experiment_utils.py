@@ -23,11 +23,11 @@ from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, InputName, output_path_of, this_output_path
 from marin.execution.remote import remote
 from marin.rl.curriculum import CurriculumConfig
+from marin.rl.objectives import ObjectiveSpec
 from marin.rl.environments.inference_ctx import VLLMSamplingConfig, vLLMInferenceContextConfig
 from marin.rl.placement import marin_prefix_for_region, resolve_launcher_region, singleton_region_list
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
-from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
@@ -69,7 +69,8 @@ class RLExperimentConfig:
     """Shared configuration for RL experiments."""
 
     model_config: ModelConfig
-    rl_loss: RLLossModule
+    objective: ObjectiveSpec
+    scorer_vocab_tile_size: int | None
     experiment_name_suffix: str
 
     # trainer params
@@ -276,7 +277,8 @@ def _build_rl_job_config(
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=opt_config,
-            rl_loss=config.rl_loss,
+            objective=config.objective,
+            scorer_vocab_tile_size=config.scorer_vocab_tile_size,
             replay_buffer=ReplayBufferConfig(
                 capacity=config.replay_buffer_capacity,
                 alpha=config.replay_buffer_alpha,

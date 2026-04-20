@@ -11,6 +11,7 @@ from marin.execution.artifact import PathMetadata
 from marin.execution.executor import ExecutorStep, output_path_of
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.model_utils import is_hf_checkpoint
+from marin.rl.objectives import make_rloo_objective
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
     RLExperimentConfig,
@@ -23,7 +24,6 @@ from marin.rl.rl_experiment_utils import (
     launcher_region_for_rl_experiment,
     make_rl_step,
 )
-from marin.rl.rl_losses import RLOOLoss
 
 MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 
@@ -70,7 +70,7 @@ def _test_config(
             artifact=MODEL_NAME,
             config_class_path=config_class_path(LlamaConfig),
         ),
-        rl_loss=RLOOLoss(
+        objective=make_rloo_objective(
             kl_coef=0.0,
             clip_epsilon_low=0.2,
             clip_epsilon_high=0.28,
@@ -78,8 +78,8 @@ def _test_config(
             do_trainer_inference_mismatch_importance_sampling=True,
             tis_importance_sampling_ratio_max=2.0,
             do_overlong_filtering=True,
-            vocab_tile_size=32064,
         ),
+        scorer_vocab_tile_size=32064,
         experiment_name_suffix="test",
         train_tpu_type=train_tpu_type,
         inference_tpu_type=inference_tpu_type,
