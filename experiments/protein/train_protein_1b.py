@@ -21,6 +21,7 @@ from levanter.data.text import LmDataConfig, TextLmDatasetFormat
 from levanter.models.llama import LlamaConfig
 
 from experiments.defaults import default_tokenize, default_train
+from experiments.protein.protein_distogram_eval import distogram_eval_benchmark
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.v2 import ResourceConfig
 from marin.execution.executor import executor_main, versioned
@@ -85,8 +86,27 @@ val_component = dataclasses.replace(
     pack=True,
 )
 
+# -- Protein distogram benchmark (loss-based eval on specific PDB targets) --
+# See experiments/protein/protein_distogram_eval.py for how to add targets.
+#
+# `redesigns_source` points at the JSONL produced by
+# `experiments/protein/redesign_sequences.py`. If the file doesn't exist yet
+# (redesign script not run), the benchmark silently skips redesigned targets,
+# so it's safe to reference unconditionally.
+PROTEIN_MPNN_REDESIGNS_SOURCE = "gs://marin-us-east5/protein-mpnn-redesigns/v1/redesigns.jsonl"
+distogram_eval = distogram_eval_benchmark(
+    PROTEIN_TOKENIZER,
+    redesigns_source=PROTEIN_MPNN_REDESIGNS_SOURCE,
+)
+
 protein_docs_data = LmDataConfig(
-    components={"protein-docs-cd": train_component, "protein-docs-cd-val": val_component},
+    components={
+        "protein-docs-cd": train_component,
+        "protein-docs-cd-val": val_component,
+        **distogram_eval.components,
+    },
+    # Only the main training corpus has non-zero train weight. The distogram
+    # components are validation-only and do not contribute to training mixtures.
     train_weights={"protein-docs-cd": 1.0, "protein-docs-cd-val": 0.0},
     tokenizer=PROTEIN_TOKENIZER,
     cache_dir=None,
@@ -128,6 +148,7 @@ protein_model_1b = default_train(
 if __name__ == "__main__":
     executor_main(
         steps=[
+            *distogram_eval.build_steps,
             protein_model_1b,
         ]
     )
