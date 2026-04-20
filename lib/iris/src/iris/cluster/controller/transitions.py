@@ -1878,9 +1878,10 @@ class ControllerTransitions:
                     if prior_state == job_pb2.TASK_STATE_BUILDING and worker_id is not None:
                         self._health.bump(WorkerId(str(worker_id)), HealthSignal.TASK_BUILD_FAILED)
                 if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state in EXECUTING_TASK_STATES:
+                    # A worker that truly died will also miss its next ping/heartbeat
+                    # RPC, which bumps the tracker on the observer side. We don't
+                    # double-count that signal here.
                     preemption_count += 1
-                    if worker_id is not None:
-                        self._health.bump(WorkerId(str(worker_id)), HealthSignal.TASK_WORKER_FAILED)
                 if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state == job_pb2.TASK_STATE_ASSIGNED:
                     task_state = job_pb2.TASK_STATE_PENDING
                     terminal_ms = None

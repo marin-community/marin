@@ -1,13 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for WorkerHealthTracker."""
+"""Behavioral tests for WorkerHealthTracker.
 
-import math
+These tests exercise the three pieces of non-obvious behavior:
+
+- Exponential decay of accumulated score
+- Weight differences between signals observable through threshold crossing
+- Forget / snapshot APIs consumed by the reaper
+"""
 
 import pytest
 
-from iris.cluster.controller.worker_health import SIGNAL_WEIGHT, HealthSignal, WorkerHealthTracker
+from iris.cluster.controller.worker_health import HealthSignal, WorkerHealthTracker
 from iris.cluster.types import WorkerId
 
 
@@ -32,51 +37,32 @@ def tracker(clock: FakeClock) -> WorkerHealthTracker:
     return WorkerHealthTracker(half_life_s=60.0, threshold=10.0, clock=clock)
 
 
-def test_unknown_worker_score_is_zero(tracker: WorkerHealthTracker) -> None:
-    assert tracker.current_score(WorkerId("w-1")) == 0.0
-    assert tracker.workers_over_threshold() == []
-
-
-def test_single_bump_adds_weight(tracker: WorkerHealthTracker) -> None:
-    score = tracker.bump(WorkerId("w-1"), HealthSignal.RPC_FAILURE)
-    assert score == pytest.approx(1.0)
-    assert tracker.current_score(WorkerId("w-1")) == pytest.approx(1.0)
-
-
-def test_repeated_bumps_accumulate_without_time_advance(tracker: WorkerHealthTracker) -> None:
-    wid = WorkerId("w-1")
-    for _ in range(10):
-        tracker.bump(wid, HealthSignal.RPC_FAILURE)
-    assert tracker.current_score(wid) == pytest.approx(10.0)
-    over = tracker.workers_over_threshold()
-    assert over == [(wid, pytest.approx(10.0))]
-
-
-def test_score_decays_with_time(tracker: WorkerHealthTracker, clock: FakeClock) -> None:
+def test_score_halves_every_half_life(tracker: WorkerHealthTracker, clock: FakeClock) -> None:
     wid = WorkerId("w-1")
     tracker.bump(wid, HealthSignal.RPC_FAILURE)
-    # Half-life is 60s; after 60s, score should halve.
     clock.advance(60.0)
     assert tracker.current_score(wid) == pytest.approx(0.5)
-    # After another 60s (total 120s, two half-lives), score is 0.25.
     clock.advance(60.0)
     assert tracker.current_score(wid) == pytest.approx(0.25)
 
 
-def test_decayed_score_accumulates_correctly(tracker: WorkerHealthTracker, clock: FakeClock) -> None:
+def test_bump_adds_weight_to_decayed_score(tracker: WorkerHealthTracker, clock: FakeClock) -> None:
+    """New bumps are added on top of the already-decayed score, not reset to weight."""
     wid = WorkerId("w-1")
-    tracker.bump(wid, HealthSignal.RPC_FAILURE)  # score=1 at t=0
-    clock.advance(60.0)  # score decays to 0.5
-    new = tracker.bump(wid, HealthSignal.RPC_FAILURE)  # 0.5 + 1.0 = 1.5
-    assert new == pytest.approx(1.5)
-    assert tracker.current_score(wid) == pytest.approx(1.5)
+    tracker.bump(wid, HealthSignal.RPC_FAILURE)
+    clock.advance(60.0)  # 1.0 -> 0.5
+    assert tracker.bump(wid, HealthSignal.RPC_FAILURE) == pytest.approx(1.5)
 
 
-def test_spaced_bumps_stay_below_threshold(clock: FakeClock) -> None:
-    """Evidence spread over many half-lives should not accumulate indefinitely."""
+def test_spaced_bumps_never_cross_threshold(clock: FakeClock) -> None:
+    """A failure every half-life converges to 2.0 — must stay under threshold.
+
+    Without decay a spaced bump per half-life would eventually reap any worker
+    that's simply been around long enough. The geometric series 1/(1-0.5) caps
+    at 2.0, well below threshold 10.0.
+    """
     tracker = WorkerHealthTracker(half_life_s=60.0, threshold=10.0, clock=clock)
     wid = WorkerId("w-1")
-    # A bump every full half-life: score converges to 2.0 (geometric series 1/(1-0.5)).
     for _ in range(100):
         tracker.bump(wid, HealthSignal.RPC_FAILURE)
         clock.advance(60.0)
@@ -84,52 +70,29 @@ def test_spaced_bumps_stay_below_threshold(clock: FakeClock) -> None:
     assert tracker.workers_over_threshold() == []
 
 
-def test_rapid_bumps_cross_threshold(tracker: WorkerHealthTracker) -> None:
+def test_ten_rpc_failures_cross_threshold(tracker: WorkerHealthTracker) -> None:
+    """Preserves the legacy 10-strike RPC behavior."""
     wid = WorkerId("w-1")
-    for signal in [
-        HealthSignal.RPC_FAILURE,
-        HealthSignal.TASK_WORKER_FAILED,
-    ] * 6:
-        tracker.bump(wid, signal)
-    # 12 bumps of weight 1.0 with no decay = 12.0 >= 10.0
+    for _ in range(10):
+        tracker.bump(wid, HealthSignal.RPC_FAILURE)
     over = tracker.workers_over_threshold()
-    assert len(over) == 1
-    assert over[0][0] == wid
+    assert [w for w, _ in over] == [wid]
     assert over[0][1] >= 10.0
 
 
-def test_build_failed_is_weak_signal(tracker: WorkerHealthTracker) -> None:
-    """BUILD failures should weigh less than RPC / worker-failed signals."""
-    assert SIGNAL_WEIGHT[HealthSignal.TASK_BUILD_FAILED] < SIGNAL_WEIGHT[HealthSignal.RPC_FAILURE]
-    assert SIGNAL_WEIGHT[HealthSignal.TASK_BUILD_FAILED] < SIGNAL_WEIGHT[HealthSignal.TASK_WORKER_FAILED]
+def test_build_failures_alone_need_twenty_to_cross(tracker: WorkerHealthTracker) -> None:
+    """BUILD_FAILED has half weight: threshold requires ~2x as many hits."""
     wid = WorkerId("w-1")
-    score = tracker.bump(wid, HealthSignal.TASK_BUILD_FAILED)
-    assert score == pytest.approx(SIGNAL_WEIGHT[HealthSignal.TASK_BUILD_FAILED])
-
-
-def test_build_failed_alone_needs_many_to_cross_threshold(tracker: WorkerHealthTracker) -> None:
-    """A worker that only ever reports build failures must accumulate many before reaping.
-
-    With weight 0.5 and threshold 10.0, it takes 20 build failures in one
-    half-life to trip the reaper on this signal alone.
-    """
-    wid = WorkerId("w-1")
-    # 19 build failures: under threshold.
     for _ in range(19):
         tracker.bump(wid, HealthSignal.TASK_BUILD_FAILED)
     assert tracker.workers_over_threshold() == []
-    # One more crosses.
     tracker.bump(wid, HealthSignal.TASK_BUILD_FAILED)
-    over = tracker.workers_over_threshold()
-    assert len(over) == 1
-    assert over[0][0] == wid
-    assert over[0][1] >= 10.0
+    assert [w for w, _ in tracker.workers_over_threshold()] == [wid]
 
 
-def test_build_failed_mixes_with_stronger_signals(tracker: WorkerHealthTracker) -> None:
-    """Build failures combined with RPC failures cross threshold faster than either alone."""
+def test_build_and_rpc_failures_combine(tracker: WorkerHealthTracker) -> None:
+    """8 RPC (weight 1.0) + 4 BUILD (weight 0.5) = 10.0 -> trips threshold."""
     wid = WorkerId("w-1")
-    # 8 RPC failures (weight 1.0 each) + 4 build failures (weight 0.5 each) = 10.0
     for _ in range(8):
         tracker.bump(wid, HealthSignal.RPC_FAILURE)
     for _ in range(4):
@@ -139,7 +102,7 @@ def test_build_failed_mixes_with_stronger_signals(tracker: WorkerHealthTracker) 
     assert over[0][1] == pytest.approx(10.0)
 
 
-def test_forget_drops_worker(tracker: WorkerHealthTracker) -> None:
+def test_forget_removes_worker_from_threshold_list(tracker: WorkerHealthTracker) -> None:
     wid = WorkerId("w-1")
     for _ in range(10):
         tracker.bump(wid, HealthSignal.RPC_FAILURE)
@@ -149,48 +112,28 @@ def test_forget_drops_worker(tracker: WorkerHealthTracker) -> None:
     assert tracker.workers_over_threshold() == []
 
 
-def test_forget_many_drops_multiple(tracker: WorkerHealthTracker) -> None:
+def test_forget_many_drops_listed_workers_only(tracker: WorkerHealthTracker) -> None:
     a, b, c = WorkerId("a"), WorkerId("b"), WorkerId("c")
     for wid in (a, b, c):
         for _ in range(10):
             tracker.bump(wid, HealthSignal.RPC_FAILURE)
-    assert len(tracker.workers_over_threshold()) == 3
     tracker.forget_many([a, c])
-    remaining = tracker.workers_over_threshold()
-    assert [wid for wid, _ in remaining] == [b]
+    assert [wid for wid, _ in tracker.workers_over_threshold()] == [b]
 
 
-def test_multiple_workers_tracked_independently(tracker: WorkerHealthTracker, clock: FakeClock) -> None:
+def test_per_worker_scores_are_independent(tracker: WorkerHealthTracker, clock: FakeClock) -> None:
     a, b = WorkerId("a"), WorkerId("b")
     tracker.bump(a, HealthSignal.RPC_FAILURE)
-    clock.advance(30.0)
+    clock.advance(60.0)  # a decays to 0.5
     tracker.bump(b, HealthSignal.RPC_FAILURE)
-    # A has decayed ~ exp(-ln2 * 0.5) ≈ 0.707
-    assert tracker.current_score(a) == pytest.approx(math.exp(-math.log(2) * 0.5))
+    assert tracker.current_score(a) == pytest.approx(0.5)
     assert tracker.current_score(b) == pytest.approx(1.0)
 
 
-def test_snapshot_returns_decayed_scores(tracker: WorkerHealthTracker, clock: FakeClock) -> None:
+def test_snapshot_reports_decayed_scores(tracker: WorkerHealthTracker, clock: FakeClock) -> None:
+    """snapshot() is used by diagnostics — must return decayed, not stored, values."""
     a, b = WorkerId("a"), WorkerId("b")
     tracker.bump(a, HealthSignal.RPC_FAILURE)
     tracker.bump(b, HealthSignal.RPC_FAILURE)
     clock.advance(60.0)
-    snap = tracker.snapshot()
-    assert snap == {a: pytest.approx(0.5), b: pytest.approx(0.5)}
-
-
-def test_threshold_exposed_on_tracker() -> None:
-    tracker = WorkerHealthTracker(half_life_s=60.0, threshold=7.5)
-    assert tracker.threshold == 7.5
-
-
-@pytest.mark.parametrize("bad_half_life", [0.0, -1.0])
-def test_non_positive_half_life_rejected(bad_half_life: float) -> None:
-    with pytest.raises(AssertionError):
-        WorkerHealthTracker(half_life_s=bad_half_life, threshold=10.0)
-
-
-@pytest.mark.parametrize("bad_threshold", [0.0, -1.0])
-def test_non_positive_threshold_rejected(bad_threshold: float) -> None:
-    with pytest.raises(AssertionError):
-        WorkerHealthTracker(half_life_s=60.0, threshold=bad_threshold)
+    assert tracker.snapshot() == {a: pytest.approx(0.5), b: pytest.approx(0.5)}
