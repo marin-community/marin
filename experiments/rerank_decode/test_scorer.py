@@ -117,7 +117,7 @@ def prompt_logprobs(reference_model, tokenizer, prompt: str) -> float:
 # --- KVCacheScorer tests ---
 
 
-def test_single_completion(reference_model, tokenizer, kv_scorer):
+def test_kvcache_single_completion(reference_model, tokenizer, kv_scorer):
     prompt = "The capital of France is"
     completion = " Paris, a beautiful city."
 
@@ -127,7 +127,7 @@ def test_single_completion(reference_model, tokenizer, kv_scorer):
     assert abs(expected - actual) < 0.5, f"expected {expected:.4f}, got {actual:.4f}"
 
 
-def test_multiple_completions(reference_model, tokenizer, kv_scorer):
+def test_kvcache_multiple_completions(reference_model, tokenizer, kv_scorer):
     prompt = "Hello"
     completions = [", world!", " there!", " everyone, how are you?"]
 
@@ -141,7 +141,7 @@ def test_multiple_completions(reference_model, tokenizer, kv_scorer):
         assert abs(e - a) < 0.5, f"completion {i}: expected {e:.4f}, got {a:.4f}"
 
 
-def test_eos_token(reference_model, tokenizer, kv_scorer):
+def test_kvcache_eos_token(reference_model, tokenizer, kv_scorer):
     prompt = "Hello, world!"
     eos = tokenizer.eos_token
     completion = eos
@@ -152,7 +152,7 @@ def test_eos_token(reference_model, tokenizer, kv_scorer):
     assert abs(expected - actual) < 0.5, f"expected {expected:.4f}, got {actual:.4f}"
 
 
-def test_completion_with_eos(reference_model, tokenizer, kv_scorer):
+def test_kvcache_completion_with_eos(reference_model, tokenizer, kv_scorer):
     prompt = "What is 2+2?"
     eos = tokenizer.eos_token
     completion = " 4" + eos
@@ -163,7 +163,7 @@ def test_completion_with_eos(reference_model, tokenizer, kv_scorer):
     assert abs(expected - actual) < 0.5, f"expected {expected:.4f}, got {actual:.4f}"
 
 
-def test_accept_then_score(reference_model, tokenizer, kv_scorer):
+def test_kvcache_accept_then_score(reference_model, tokenizer, kv_scorer):
     """Test that accept() correctly extends the KV cache for subsequent scoring."""
     prompt = "Once upon a"
     chunk1 = " time there"
@@ -179,7 +179,7 @@ def test_accept_then_score(reference_model, tokenizer, kv_scorer):
     assert abs(expected2 - score2) < 0.5, f"chunk2: expected {expected2:.4f}, got {score2:.4f}"
 
 
-def test_accept_multiple_chunks(reference_model, tokenizer, kv_scorer):
+def test_kvcache_accept_multiple_chunks(reference_model, tokenizer, kv_scorer):
     """Test multiple rounds of accept + score."""
     prompt = "The"
     chunks = [" quick", " brown", " fox"]
@@ -194,7 +194,7 @@ def test_accept_multiple_chunks(reference_model, tokenizer, kv_scorer):
         current_prompt += chunk
 
 
-def test_reuse_across_prompts_asserts(reference_model, tokenizer, kv_scorer):
+def test_kvcache_reuse_across_prompts_asserts(reference_model, tokenizer, kv_scorer):
     """Test that reusing a scorer across prompts without reset raises AssertionError."""
     kv_scorer.score("The capital of France is", [" Paris"])
 
@@ -202,7 +202,7 @@ def test_reuse_across_prompts_asserts(reference_model, tokenizer, kv_scorer):
         kv_scorer.score("Hello", [", world!"])
 
 
-def test_reuse_across_prompts_with_reset(reference_model, tokenizer, kv_scorer):
+def test_kvcache_reuse_across_prompts_with_reset(reference_model, tokenizer, kv_scorer):
     """Test that a scorer produces correct results when reset between prompts."""
     prompts_and_completions = [
         ("The capital of France is", " Paris"),
