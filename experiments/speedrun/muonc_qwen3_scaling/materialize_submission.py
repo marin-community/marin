@@ -34,9 +34,9 @@ class SweepRun:
     size: str
     state: str
     learning_rate: float
-    c4_en_bpb: float
+    c4_en_bpb: float | None
     c4_en_loss: float | None
-    run_info: dict[str, object]
+    run_info: dict[str, object] = field(default_factory=dict)
     optimizer_config: dict[str, object] = field(default_factory=dict)
     raw_results: dict[str, object] | None = None
     source_results_path: str = ""
@@ -48,7 +48,7 @@ class SweepRun:
 def select_best_runs(runs: list[SweepRun]) -> dict[str, SweepRun]:
     best_by_size: dict[str, SweepRun] = {}
     for run in runs:
-        if run.state != "finished":
+        if run.state != "finished" or run.c4_en_bpb is None:
             continue
         current = best_by_size.get(run.size)
         if current is None or run.c4_en_bpb < current.c4_en_bpb:
@@ -79,11 +79,17 @@ def _fetch_runs() -> list[SweepRun]:
         size = match.group(1)
         tracker = run.config["trainer"]["tracker"]
         results_path = f"{tracker['replicate_path']}/speedrun_results.json"
-        raw_results = _fetch_results_json(results_path)
-        run_info = raw_results["runs"][0]["run_info"]
         optimizer_config = run.config["optimizer"]
-        c4_en_bpb = float(run.summary["eval/paloma/c4_en/bpb"])
-        c4_en_loss_raw = run.summary.get("eval/paloma/c4_en/loss")
+        raw_results: dict[str, object] | None = None
+        run_info: dict[str, object] = {}
+        c4_en_bpb: float | None = None
+        c4_en_loss_raw: object | None = None
+
+        if run.state == "finished":
+            raw_results = _fetch_results_json(results_path)
+            run_info = raw_results["runs"][0]["run_info"]
+            c4_en_bpb = float(run.summary["eval/paloma/c4_en/bpb"])
+            c4_en_loss_raw = run.summary.get("eval/paloma/c4_en/loss")
 
         collected.append(
             SweepRun(
@@ -121,10 +127,7 @@ def _serializable_run(run: SweepRun) -> dict[str, object]:
 
 
 def _write_selection_summary(runs: list[SweepRun], selected: dict[str, SweepRun]) -> None:
-    all_runs = {
-        size: [_serializable_run(run) for run in runs if run.size == size]
-        for size in SIZES
-    }
+    all_runs = {size: [_serializable_run(run) for run in runs if run.size == size] for size in SIZES}
     selected_runs = {
         size: {
             **_serializable_run(run),

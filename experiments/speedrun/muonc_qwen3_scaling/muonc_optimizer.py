@@ -1,10 +1,13 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 from dataclasses import dataclass
 from functools import partial
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -57,15 +60,16 @@ class MuonCConfig(OptimizerConfig):
     nesterov: bool = True
     backend_steps: int = 5  # Number of steps for Newton-Schulz orthogonalization
     weight_decay: float = 0.0
-    adam_weight_decay: Optional[float] = None
+    adam_weight_decay: float | None = None
     beta1: float = 0.9
     beta2: float = 0.95
     epsilon: float = 1e-8
     muon_epsilon: float = 1e-8
     adamc_weight_decay: bool = False
     max_grad_norm: float = 1.0
-    # Kimi scales the learning rate for every d_1 * d_2 module by 0.2 * jnp.sqrt{\max{d_1, d_2}}, instead of the jnp.sqrt{\max{1, d_1/d_2}} as in the original nanogpt speedrun.
-    # When this scaling is enabled, it is recommended to use learning rate and weight decay similar to adam
+    # Kimi scales each d_1 * d_2 module by 0.2 * sqrt(max(d_1, d_2))
+    # instead of sqrt(max(1, d_1 / d_2)) from the original nanogpt speedrun.
+    # When this scaling is enabled, use Adam-like learning rate and weight decay.
     use_kimi_scaling: bool = False
     coefficient_type: CoefficientType = "quintic"  # Type of Newton-Schulz coefficients to use
 
@@ -145,10 +149,8 @@ class MuonCConfig(OptimizerConfig):
             if "Embedding" in path_str or "lm_head" in path_str:
                 return "adamw"
             elif isinstance(param, haliax.nn.Linear):
-                # muon for linear layers
-                assert (
-                    param._out_first or use_kimi_scaling
-                )  # if we don't use kimi's version of scaling, then we need to assume out_first to ensure we are scaling like Out/In
+                if not use_kimi_scaling:
+                    assert param._out_first, "MuonC expects out-first linears without Kimi scaling."
                 return label_linear_like_module(param, weight_label="muon", bias_label="adamw")
             else:
                 return "adamw"
