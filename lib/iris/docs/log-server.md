@@ -112,16 +112,16 @@ The sidecar has no other knobs:
 
 With the sidecar enabled, the bootstrap script on the controller VM runs a
 second ``iris-log-server`` container with
-``--network=host --restart=unless-stopped`` and points the controller
-container at it via ``IRIS_LOG_SERVICE_ADDRESS=http://localhost:10002`` for
-the controller's own pushes.
+``--network=host --restart=unless-stopped``, discovers the VM's primary
+internal IP via ``hostname -I``, and sets
+``IRIS_LOG_SERVICE_ADDRESS=http://<vm-ip>:10002`` on the controller
+container. The controller advertises that same URL via
+``/system/log-server``, so the controller's own pushes and workers'
+pushes all resolve the log server through a single URL.
 
-Workers connect directly to the sidecar rather than tunnelling through the
-controller: when ``log_service_address`` is a loopback URL, the controller
-advertises ``http://<controller-host>:10002`` via ``/system/log-server`` —
-same VM, the sidecar's port, so no dashboard hop. Your controller VM's
-firewall must allow port ``10002`` from the same network range that already
-reaches the controller's own port.
+Your controller VM's firewall must allow port ``10002`` from the same
+network range that reaches the controller's own port, since workers hit
+the sidecar directly.
 
 **Stage 1 caveat — JWT signing key.** The sidecar currently starts without
 the controller's JWT signing key, so it runs in null-auth mode and accepts

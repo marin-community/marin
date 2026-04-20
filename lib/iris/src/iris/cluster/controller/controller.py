@@ -15,7 +15,6 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from urllib.parse import urlparse
 
 import uvicorn
 
@@ -983,33 +982,6 @@ class ControllerConfig:
     Either way, all controller code accesses the log server via RPC clients."""
 
 
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})
-
-
-def _advertised_log_service_address(log_service_address: str, *, controller_url: str) -> str:
-    """Return the address workers should use for ``/system/log-server``.
-
-    When the controller's log service address points at a colocated sidecar
-    (``http://localhost:10002``), remote workers can't reach ``localhost``.
-    We substitute the controller VM's host (the same host workers already
-    resolve from the controller's own URL), keeping the sidecar's port so
-    workers connect directly to the sidecar rather than tunnelling through
-    the controller.
-
-    Non-loopback addresses pass through unchanged.
-    """
-    parsed = urlparse(log_service_address)
-    if parsed.hostname not in _LOOPBACK_HOSTS:
-        return log_service_address
-    controller_host = urlparse(controller_url).hostname
-    if not controller_host:
-        return log_service_address
-    scheme = parsed.scheme or "http"
-    port = parsed.port
-    netloc = f"{controller_host}:{port}" if port else controller_host
-    return f"{scheme}://{netloc}"
-
-
 def _log_client_interceptors(config: "ControllerConfig") -> tuple:
     """Return Connect interceptors for controller-originated LogService RPCs.
 
@@ -1312,16 +1284,11 @@ class Controller:
         )
 
         # Register log server endpoint so workers can resolve it via ListEndpoints.
-        # For a loopback-bound log server (a sidecar colocated on the controller
-        # VM), advertise the controller's own URL — workers push through the
-        # dashboard's LogService proxy, which forwards to the sidecar. The
-        # controller itself keeps using the loopback URL for its own pushes.
-        advertised_log_address = _advertised_log_service_address(
-            self._log_service_address,
-            controller_url=self.url,
-        )
-        self._service._system_endpoints["/system/log-server"] = advertised_log_address
-        logger.info("Registered system endpoint /system/log-server -> %s", advertised_log_address)
+        # The sidecar bootstrap sets IRIS_LOG_SERVICE_ADDRESS to the VM's
+        # routable host (not loopback), so the same URL works for the
+        # controller's own pushes and for remote workers.
+        self._service._system_endpoints["/system/log-server"] = self._log_service_address
+        logger.info("Registered system endpoint /system/log-server -> %s", self._log_service_address)
 
     def stop(self) -> None:
         """Stop all background components gracefully.

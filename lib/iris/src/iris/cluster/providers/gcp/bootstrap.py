@@ -14,7 +14,6 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
 
 import yaml
 from google.protobuf.json_format import MessageToDict
@@ -261,38 +260,7 @@ def build_worker_bootstrap_script(
 
 CONTROLLER_CONTAINER_NAME = "iris-controller"
 LOG_SERVER_CONTAINER_NAME = "iris-log-server"
-DEFAULT_LOG_SERVER_PORT = 10002
-
-
-@dataclass(frozen=True)
-class LogServerSidecarConfig:
-    """Configuration for the log-server sidecar container.
-
-    The sidecar runs alongside the controller container on the same VM and
-    is reached via ``http://localhost:<port>``. The controller container
-    receives ``IRIS_LOG_SERVICE_ADDRESS`` pointing at the sidecar so its
-    existing log-service-address plumbing resolves without any code changes.
-    """
-
-    image: str
-    port: int
-    remote_log_dir: str
-
-
-def _derive_log_server_image(controller_image: str) -> str:
-    """Derive the log-server image tag from a controller image tag.
-
-    Images are built from the same Dockerfile as separate stages
-    (``iris-controller`` vs ``iris-log-server``), pushed to the same
-    registry with the same tag. So we just swap the last path segment.
-
-    >>> _derive_log_server_image("ghcr.io/marin-community/iris-controller:abc")
-    'ghcr.io/marin-community/iris-log-server:abc'
-    """
-    if "/" in controller_image:
-        prefix, _, leaf = controller_image.rpartition("/")
-        return f"{prefix}/{leaf.replace('iris-controller', 'iris-log-server', 1)}"
-    return controller_image.replace("iris-controller", "iris-log-server", 1)
+LOG_SERVER_PORT = 10002
 
 
 CONTROLLER_BOOTSTRAP_SCRIPT = """
@@ -514,6 +482,12 @@ for i in $(seq 1 30); do
     fi
     sleep 2
 done
+
+# Discover this VM's primary internal IP. The controller advertises this URL
+# to workers via /system/log-server, and uses it itself for its own pushes —
+# so the controller and workers agree on a single log-server URL.
+LOG_SERVER_HOST=$(hostname -I | awk '{print $1}')
+echo "[iris-controller] [4a/5] Log-server URL: http://$LOG_SERVER_HOST:{{ log_server_port }}"
 """
 
 
@@ -522,36 +496,27 @@ def _build_config_setup(config_yaml: str, log_prefix: str) -> str:
     return render_template(CONFIG_SETUP_TEMPLATE, config_yaml=config_yaml, log_prefix=log_prefix)
 
 
-def _build_sidecar_setup(sidecar: LogServerSidecarConfig) -> str:
-    """Generate the log-server sidecar bootstrap fragment."""
-    return render_template(
-        SIDECAR_SETUP_TEMPLATE,
-        log_server_image=sidecar.image,
-        log_server_container=LOG_SERVER_CONTAINER_NAME,
-        log_server_port=sidecar.port,
-        log_server_remote_dir=sidecar.remote_log_dir,
-    )
-
-
 def build_controller_bootstrap_script(
     docker_image: str,
     port: int,
     config_yaml: str = "",
     fresh: bool = False,
-    sidecar: LogServerSidecarConfig | None = None,
+    *,
+    log_server_image: str = "",
+    log_server_remote_dir: str = "",
 ) -> str:
     """Build bootstrap script for controller VM.
 
-    Args:
-        docker_image: Docker image to run
-        port: Controller port
-        config_yaml: Optional YAML config to write to /etc/iris/config.yaml
-        fresh: When True, pass ``--fresh`` to the controller serve command so
-            it starts with an empty local database and skips checkpoint restore.
-        sidecar: When set, the bootstrap additionally pulls and runs a
-            log-server container on the same VM and points the controller at
-            it via ``IRIS_LOG_SERVICE_ADDRESS``.
+    When ``log_server_image`` and ``log_server_remote_dir`` are both set, the
+    bootstrap additionally pulls and runs an ``iris-log-server`` container on
+    the same VM (host networking on :LOG_SERVER_PORT) and sets
+    ``IRIS_LOG_SERVICE_ADDRESS=http://localhost:<port>`` on the controller
+    container so its existing log-service-address plumbing resolves without
+    any code changes.
     """
+    if bool(log_server_image) != bool(log_server_remote_dir):
+        raise ValueError("log_server_image and log_server_remote_dir must be set together")
+
     if config_yaml:
         config_setup = _build_config_setup(config_yaml, log_prefix="[iris-controller]")
         config_volume = "-v /etc/iris/config.yaml:/etc/iris/config.yaml:ro"
@@ -561,9 +526,17 @@ def build_controller_bootstrap_script(
         config_volume = ""
         config_flag = ""
 
-    if sidecar is not None:
-        sidecar_setup = _build_sidecar_setup(sidecar)
-        log_service_address_env = f"-e IRIS_LOG_SERVICE_ADDRESS=http://localhost:{sidecar.port}"
+    if log_server_image:
+        sidecar_setup = render_template(
+            SIDECAR_SETUP_TEMPLATE,
+            log_server_image=log_server_image,
+            log_server_container=LOG_SERVER_CONTAINER_NAME,
+            log_server_port=LOG_SERVER_PORT,
+            log_server_remote_dir=log_server_remote_dir,
+        )
+        # Shell interpolation of LOG_SERVER_HOST (set earlier in the bootstrap
+        # via `hostname -I`) so the controller and workers share one URL.
+        log_service_address_env = f"-e IRIS_LOG_SERVICE_ADDRESS=http://$LOG_SERVER_HOST:{LOG_SERVER_PORT}"
     else:
         sidecar_setup = "# No log-server sidecar"
         log_service_address_env = ""
@@ -582,42 +555,6 @@ def build_controller_bootstrap_script(
     )
 
 
-def _resolve_sidecar(
-    config: config_pb2.IrisClusterConfig,
-    resolve_image: Callable[[str, str | None], str],
-    zone: str | None,
-) -> LogServerSidecarConfig | None:
-    """Return a sidecar config if enabled on this cluster, else None.
-
-    The sidecar has no configurable knobs: the image is always derived from
-    ``controller.image`` (same registry/tag, ``iris-controller`` →
-    ``iris-log-server``), the port is always 10002, and the archive URI is
-    always ``{storage.remote_state_dir}/logs``.
-    """
-    ctrl = config.controller
-    if not ctrl.enable_log_server_sidecar:
-        return None
-
-    raw_image = _derive_log_server_image(ctrl.image)
-    if not raw_image or raw_image == ctrl.image:
-        raise ValueError(
-            "controller.enable_log_server_sidecar is true but no log-server image "
-            "could be derived from controller.image="
-            f"{ctrl.image!r} (expected a tag containing 'iris-controller')."
-        )
-    image = resolve_image(raw_image, zone)
-
-    remote_state_dir = config.storage.remote_state_dir.rstrip("/")
-    if not remote_state_dir:
-        raise ValueError(
-            "controller.enable_log_server_sidecar is true but storage.remote_state_dir "
-            "is not set; the sidecar needs a remote archive URI."
-        )
-    remote_log_dir = f"{remote_state_dir}/logs"
-
-    return LogServerSidecarConfig(image=image, port=DEFAULT_LOG_SERVER_PORT, remote_log_dir=remote_log_dir)
-
-
 def build_controller_bootstrap_script_from_config(
     config: config_pb2.IrisClusterConfig,
     resolve_image: Callable[[str, str | None], str],
@@ -625,25 +562,47 @@ def build_controller_bootstrap_script_from_config(
 ) -> str:
     """Build controller bootstrap script from the full cluster config.
 
-    Args:
-        config: Full cluster configuration.
-        resolve_image: Resolves a container image tag for the target registry.
-        fresh: When True, pass ``--fresh`` to the controller serve command so
-            it starts with an empty local database and skips checkpoint restore.
+    The log-server sidecar has no configurable knobs: when
+    ``controller.enable_log_server_sidecar`` is set, the image is derived
+    from ``controller.image`` (``iris-controller`` → ``iris-log-server`` on
+    the last path segment, same registry/tag) and the archive URI is
+    ``{storage.remote_state_dir}/logs``.
     """
     # Local import to avoid circular dependency (config.py imports from bootstrap)
     from iris.cluster.config import config_to_dict
 
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)
-    port = config.controller.gcp.port or config.controller.manual.port or 10000
-    image = config.controller.image
-
     ctrl = config.controller
-    zone: str | None = None
-    if ctrl.HasField("gcp") and ctrl.gcp.zone:
-        zone = ctrl.gcp.zone
+    port = ctrl.gcp.port or ctrl.manual.port or 10000
+    zone = ctrl.gcp.zone if ctrl.HasField("gcp") and ctrl.gcp.zone else None
+    image = resolve_image(ctrl.image, zone)
 
-    image = resolve_image(image, zone)
-    sidecar = _resolve_sidecar(config, resolve_image, zone)
+    log_server_image = ""
+    log_server_remote_dir = ""
+    if ctrl.enable_log_server_sidecar:
+        prefix, sep, leaf = ctrl.image.rpartition("/")
+        derived_leaf = leaf.replace("iris-controller", "iris-log-server", 1)
+        if derived_leaf == leaf:
+            raise ValueError(
+                "controller.enable_log_server_sidecar is true but the log-server image can't "
+                f"be derived from controller.image={ctrl.image!r} (expected 'iris-controller' "
+                "in the last path segment)."
+            )
+        log_server_image = resolve_image(f"{prefix}{sep}{derived_leaf}", zone)
 
-    return build_controller_bootstrap_script(image, port, config_yaml, fresh=fresh, sidecar=sidecar)
+        remote_state_dir = config.storage.remote_state_dir.rstrip("/")
+        if not remote_state_dir:
+            raise ValueError(
+                "controller.enable_log_server_sidecar is true but storage.remote_state_dir "
+                "is not set; the sidecar needs a remote archive URI."
+            )
+        log_server_remote_dir = f"{remote_state_dir}/logs"
+
+    return build_controller_bootstrap_script(
+        image,
+        port,
+        config_yaml,
+        fresh=fresh,
+        log_server_image=log_server_image,
+        log_server_remote_dir=log_server_remote_dir,
+    )
