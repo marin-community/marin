@@ -17,6 +17,57 @@ from zephyr.dataset import Dataset
 from zephyr.execution import CounterSnapshot, ZephyrContext, zephyr_worker_ctx
 
 
+def test_counter_flusher(tmp_path):
+    """Counter file flushed during shard execution reflects actual counter increments."""
+    import cloudpickle
+    import zephyr.subprocess_worker as sw
+
+    from zephyr import counters
+    from zephyr.execution import ListShard, ShardTask
+    from zephyr.plan import Map
+    from zephyr.shuffle import MemChunk
+
+    original_interval = sw.SUBPROCESS_COUNTER_FLUSH_INTERVAL
+    sw.SUBPROCESS_COUNTER_FLUSH_INTERVAL = 0.01  # flush aggressively during the test
+
+    try:
+
+        def counting_map(stream):
+            for item in stream:
+                counters.increment("items", 1)
+                time.sleep(0.05)  # longer than flush interval — guarantees ≥1 flush
+                yield item
+
+        chunk_prefix = str(tmp_path / "chunks")
+        execution_id = "test-exec"
+        task = ShardTask(
+            shard_idx=0,
+            total_shards=1,
+            shard=ListShard(refs=[MemChunk([1, 2, 3])]),
+            operations=[Map(fn=counting_map)],
+            stage_name="test",
+        )
+
+        task_file = str(tmp_path / "task.pkl")
+        result_file = str(tmp_path / "result.pkl")
+        counter_file = f"{result_file}.counters"
+
+        with open(task_file, "wb") as f:
+            cloudpickle.dump((task, chunk_prefix, execution_id), f)
+
+        sw.execute_shard(task_file, result_file)
+
+        assert Path(counter_file).exists(), "counter file was never written — flusher did not run"
+        with open(counter_file, "rb") as f:
+            flushed = cloudpickle.load(f)
+        assert flushed.get("items", 0) > 0, (
+            f"counter file is empty ({flushed!r}); flusher likely held a dummy context "
+            "instead of the real one created from the task file"
+        )
+    finally:
+        sw.SUBPROCESS_COUNTER_FLUSH_INTERVAL = original_interval
+
+
 def test_simple_map(zephyr_ctx):
     """Map pipeline produces correct results."""
     ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
