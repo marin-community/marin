@@ -8,15 +8,10 @@ Subcommands:
 - ``scenario NAME`` — run one of the canonical scenarios.
 - ``ablation``      — sweep toggle combinations against prod-scale.
 - ``list``          — list scenarios and toggle flags.
-
-Toggle flags set environment variables read by the controller / autoscaler /
-service at import time; all ``iris.loadtest.*`` imports are deferred until
-after env vars have been populated.
 """
 
 from __future__ import annotations
 
-import os
 import shutil
 import sys
 import tempfile
@@ -27,46 +22,12 @@ from pathlib import Path
 
 import click
 
-# NOTE: deliberate lack of iris.loadtest imports at module scope. The
-# controller and autoscaler paths read several env vars once at import — we
-# set those env vars from CLI flags and only THEN import the harness.
-
 SCENARIOS = ("burst", "api-timeouts", "incident", "fleet-wide", "prod-scale")
 
 
 def _default_output_dir() -> Path:
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     return Path(f"logs/autoscaler-loadtest/run-{ts}")
-
-
-def _apply_fix_env(
-    *,
-    sqlite_tuning: bool,
-    controller_yield: bool,
-    job_status_cache: bool,
-    cache_ttl_ms: int,
-    heartbeat_inmemory: bool,
-) -> list[str]:
-    """Populate os.environ for each enabled toggle; return a label list.
-
-    Must run BEFORE any iris.loadtest import — the controller / autoscaler
-    / service read these env vars once at import time.
-    """
-    labels: list[str] = []
-    if sqlite_tuning:
-        os.environ["IRIS_DB_MMAP_BYTES"] = "268435456"
-        os.environ["IRIS_DB_CACHE_KB"] = "1048576"
-        labels.append("sqlite-tuning")
-    if controller_yield:
-        os.environ["IRIS_CONTROLLER_YIELD"] = "1"
-        labels.append("controller-yield")
-    if job_status_cache:
-        os.environ["IRIS_JOB_STATUS_CACHE_TTL_MS"] = str(cache_ttl_ms)
-        labels.append(f"job-status-cache:{cache_ttl_ms}ms")
-    if heartbeat_inmemory:
-        os.environ["IRIS_HEARTBEAT_INMEMORY"] = "1"
-        labels.append("heartbeat-inmemory")
-    return labels
 
 
 def _common_options(func):
@@ -109,28 +70,6 @@ def _common_options(func):
             type=str,
             multiple=True,
             help="Override scenario probe mix (repeatable). Format: name:hz (e.g. list_jobs:1)",
-        ),
-        # Toggle flags
-        click.option("--sqlite-tuning/--no-sqlite-tuning", default=False),
-        click.option(
-            "--controller-yield/--no-controller-yield",
-            "controller_yield",
-            default=False,
-            help="Set IRIS_CONTROLLER_YIELD=1 so scheduler + autoscaler loops sleep(0) between phases.",
-        ),
-        click.option("--job-status-cache/--no-job-status-cache", default=False),
-        click.option("--cache-ttl-ms", type=int, default=1000, show_default=True),
-        click.option(
-            "--heartbeat-inmemory/--no-heartbeat-inmemory",
-            "heartbeat_inmemory",
-            default=False,
-            help="Set IRIS_HEARTBEAT_INMEMORY=1 so the ping loop tracks liveness in RAM and skips DB writes on success.",
-        ),
-        click.option(
-            "--use-split-heartbeat/--no-use-split-heartbeat",
-            "use_split_heartbeat",
-            default=True,
-            help="When True, controller uses direct StartTasks/StopTasks; False uses legacy heartbeat path.",
         ),
         click.option(
             "--log-level",
@@ -197,8 +136,6 @@ def _run_scenario(
     snapshot: Path,
     latency_seconds: float,
     probe_tokens: tuple[str, ...],
-    fix_labels: list[str],
-    use_split_heartbeat: bool = True,
 ) -> int:
     """Execute a scenario end-to-end. Env vars must already be populated."""
     # Deferred imports: env gates are read at import time.
@@ -214,7 +151,7 @@ def _run_scenario(
         synthetic_worker_building_seconds=dwell_seconds,
         synthetic_worker_running_seconds=dwell_seconds,
         heartbeat_interval_seconds=5.0,
-        use_split_heartbeat=use_split_heartbeat,
+        use_split_heartbeat=True,
     )
 
     probe_specs = parse_probe_specs(list(probe_tokens)) if probe_tokens else None
@@ -257,7 +194,6 @@ def _run_scenario(
         duration_s=float(duration),
         preload_workers=preload_workers if scenario == "prod-scale" else 0,
         burst_jobs=burst_jobs if scenario in ("incident", "fleet-wide", "prod-scale") else 0,
-        fixes=fix_labels,
         probe_mix=probe_mix_str,
     )
     summary_path = write_summary(result, config=run_config, out_dir=output_dir, harness=None, probe_path=probe_path)
@@ -283,23 +219,10 @@ def scenario_cmd(
     snapshot: Path | None,
     latency_seconds: float,
     probe_tokens: tuple[str, ...],
-    sqlite_tuning: bool,
-    controller_yield: bool,
-    job_status_cache: bool,
-    cache_ttl_ms: int,
-    heartbeat_inmemory: bool,
-    use_split_heartbeat: bool,
     log_level: str,
 ) -> None:
     """Run one of the canonical scenarios (burst/api-timeouts/incident/fleet-wide/prod-scale)."""
     _configure_logging(log_level)
-    fix_labels = _apply_fix_env(
-        sqlite_tuning=sqlite_tuning,
-        controller_yield=controller_yield,
-        job_status_cache=job_status_cache,
-        cache_ttl_ms=cache_ttl_ms,
-        heartbeat_inmemory=heartbeat_inmemory,
-    )
 
     # Deferred import: DEFAULT_SNAPSHOT_PATH is safe to import without gates.
     from iris.loadtest.configs import DEFAULT_SNAPSHOT_PATH
@@ -320,8 +243,6 @@ def scenario_cmd(
         snapshot=snap,
         latency_seconds=latency_seconds,
         probe_tokens=probe_tokens,
-        fix_labels=fix_labels,
-        use_split_heartbeat=use_split_heartbeat,
     )
     sys.exit(rc)
 

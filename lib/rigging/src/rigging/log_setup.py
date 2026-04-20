@@ -151,13 +151,57 @@ def get_global_buffer() -> LogRingBuffer:
 
 _configured = False
 _fault_handler_installed = False
+_sigint_dump_installed = False
 
 # Environment variable to disable automatic faulthandler installation.
 # Useful for tests or environments that install their own signal handlers.
 FAULTHANDLER_DISABLE_ENV = "RIGGING_DISABLE_FAULTHANDLER"
 
 
-def install_fault_handler(*, sigusr_dump: bool = True) -> bool:
+def install_sigint_dump() -> bool:
+    """Dump all-thread tracebacks on SIGINT, then raise KeyboardInterrupt.
+
+    Turns a bare Ctrl-C during a hang (e.g. startup blocking on I/O) into a
+    diagnostic: first SIGINT prints a traceback for every thread to stderr and
+    restores the default handler, so a second Ctrl-C force-terminates. User
+    code that later calls ``signal.signal(SIGINT, ...)`` (graceful shutdown
+    paths, etc.) replaces this handler — that's intentional.
+
+    Idempotent. No-op when ``RIGGING_DISABLE_FAULTHANDLER`` is set or when the
+    current SIGINT handler is not the interpreter default (something else
+    already claimed it).
+    """
+    global _sigint_dump_installed
+    if _sigint_dump_installed:
+        return True
+    if os.environ.get(FAULTHANDLER_DISABLE_ENV):
+        return False
+    if not hasattr(signal, "SIGINT"):
+        return False
+
+    try:
+        existing = signal.getsignal(signal.SIGINT)
+    except (ValueError, OSError):
+        return False
+    # signal.default_int_handler is what Python installs by default; SIG_DFL
+    # appears when the process inherits no handler. Anything else means a
+    # caller has already taken SIGINT and we must not stomp on it.
+    if existing not in (signal.default_int_handler, signal.SIG_DFL, None):
+        return False
+
+    def _dump_and_raise(_signum, _frame):
+        sys.stderr.write("\n--- SIGINT received; dumping tracebacks for all threads ---\n")
+        sys.stderr.flush()
+        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        raise KeyboardInterrupt()
+
+    signal.signal(signal.SIGINT, _dump_and_raise)
+    _sigint_dump_installed = True
+    return True
+
+
+def install_fault_handler(*, sigusr_dump: bool = True, sigint_dump: bool = True) -> bool:
     """Install :mod:`faulthandler` so fatal-signal tracebacks reach stderr.
 
     Dumps a Python traceback to stderr when the process is killed by
@@ -172,6 +216,9 @@ def install_fault_handler(*, sigusr_dump: bool = True) -> bool:
             user signal that dumps a traceback for every thread on demand
             (``kill -USR1 <pid>``). Callers that need ``SIGUSR1`` for their
             own purposes can pass ``False``.
+        sigint_dump: If True, also install :func:`install_sigint_dump` so
+            Ctrl-C prints a traceback before aborting. Pass ``False`` for
+            processes that must preserve the default SIGINT behavior.
 
     Returns:
         True if faulthandler was enabled by this call (or already enabled);
@@ -200,6 +247,9 @@ def install_fault_handler(*, sigusr_dump: bool = True) -> bool:
         # already installed something and we must not stomp on it.
         if existing in (signal.SIG_DFL, None):
             faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True, chain=False)
+
+    if sigint_dump:
+        install_sigint_dump()
 
     _fault_handler_installed = True
     return True

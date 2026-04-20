@@ -25,18 +25,12 @@ from iris.loadtest.scenarios import ScenarioResult
 
 @dataclass(frozen=True)
 class RunConfig:
-    """Echo of the knobs a scenario was launched with.
-
-    Carried separately from :class:`ScenarioResult` so the CLI can show the
-    caller exactly what they asked for (including which fix flags were on)
-    without rummaging through argparse state.
-    """
+    """Echo of the knobs a scenario was launched with."""
 
     scenario: str
     duration_s: float
     preload_workers: int
     burst_jobs: int
-    fixes: list[str]
     probe_mix: str = "default"
 
 
@@ -89,8 +83,6 @@ def render_summary(
     lines.append(f"  duration_s        : {config.duration_s:.0f}")
     lines.append(f"  preload_workers   : {config.preload_workers}")
     lines.append(f"  burst_jobs        : {config.burst_jobs}")
-    fixes = config.fixes or ["none"]
-    lines.append(f"  fixes             : [{', '.join(fixes)}]")
     lines.append(f"  probes            : {config.probe_mix}")
     lines.append("")
 

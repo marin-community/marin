@@ -29,49 +29,8 @@ from pathlib import Path
 
 import click
 
-# Ordered toggle set. Each step contributes CLI flags that the prod-scale
-# scenario subprocess interprets; click takes the last occurrence of a bool
-# toggle, so later steps can override earlier ones (e.g. split-heartbeat
-# flips on at step 4 after the legacy-path baseline + tuning toggles).
-#
-# Split-heartbeat is ordered before heartbeat-inmemory because RAM HBM is
-# only consulted on the split-heartbeat ping loop — reversing the order
-# would make RAM HBM a silent no-op.
 DEFAULT_STEPS: list[tuple[str, list[str]]] = [
-    ("0-baseline", ["--no-use-split-heartbeat"]),
-    ("1-sqlite-tuning", ["--no-use-split-heartbeat", "--sqlite-tuning"]),
-    (
-        "2-controller-yield",
-        ["--no-use-split-heartbeat", "--sqlite-tuning", "--controller-yield"],
-    ),
-    (
-        "3-job-status-cache",
-        [
-            "--no-use-split-heartbeat",
-            "--sqlite-tuning",
-            "--controller-yield",
-            "--job-status-cache",
-        ],
-    ),
-    (
-        "4-split-heartbeat",
-        [
-            "--use-split-heartbeat",
-            "--sqlite-tuning",
-            "--controller-yield",
-            "--job-status-cache",
-        ],
-    ),
-    (
-        "5-heartbeat-inmemory",
-        [
-            "--use-split-heartbeat",
-            "--sqlite-tuning",
-            "--controller-yield",
-            "--job-status-cache",
-            "--heartbeat-inmemory",
-        ],
-    ),
+    ("0-baseline", []),
 ]
 
 # Slow-log categories the harness emits via ``slow_log``. Tracked so the
