@@ -34,7 +34,7 @@ DRY_RUN_STATE_DIR_ROOT = Path("/tmp/dry-run")
 HOURLY_CHECKPOINT_SECONDS = 3600.0
 
 # When set, the controller connects to a standalone log server at this URL
-# instead of starting an in-process one. See ``lib/iris/docs/log-server.md``.
+# instead of starting an in-process one.
 LOG_SERVICE_ADDRESS_ENV_VAR = "IRIS_LOG_SERVICE_ADDRESS"
 
 
