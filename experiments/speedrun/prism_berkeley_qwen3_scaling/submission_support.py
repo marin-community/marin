@@ -19,6 +19,7 @@ from rigging.filesystem import open_url
 
 from experiments.defaults import default_train
 from experiments.llama import llama3_tokenizer_vocab_size
+from experiments.prebuilt_caches import fineweb_edu_subcache_10B, fineweb_edu_subcache_10M
 from experiments.simple_train_config import SimpleTrainConfig
 
 logger = logging.getLogger(__name__)
@@ -187,4 +188,11 @@ def default_speedrun(name: str, config: SpeedrunConfig, *, tags: list[str] | Non
 def _resolve_tokenized_dataset(tokenized_dataset: str | InputName) -> InputName:
     if not isinstance(tokenized_dataset, str):
         return tokenized_dataset
-    return InputName.hardcoded(tokenized_dataset)
+    if tokenized_dataset.startswith("gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-"):
+        return fineweb_edu_subcache_10B
+    if tokenized_dataset.startswith("gs://marin-us-central1/tokenized/subcache/fineweb-edu-10M-"):
+        return fineweb_edu_subcache_10M
+    raise ValueError(
+        f"Unsupported raw tokenized dataset path {tokenized_dataset!r}. "
+        "Use a prebuilt cache step or dataset config with tokenizer metadata."
+    )
