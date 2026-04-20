@@ -84,6 +84,8 @@ class GrugModelConfig:
     partial_key_offset: str = "none"
     # Partial rope on non-PKO layers: only rotate half the head dims.
     use_partial_rope: bool = False
+    # Force the last layer to use long sliding window + PKO.
+    last_layer_pko: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -575,10 +577,13 @@ class Transformer(eqx.Module):
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
 
         pko_mode = cfg.partial_key_offset
+        num_blocks = len(self.blocks)
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
-            layer_mask = long_mask if i % 4 == 3 else short_mask
-            use_pko = (pko_mode == "every_layer") or (pko_mode == "every_4th" and i % 4 == 3)
+            is_last = i == num_blocks - 1
+            is_long = i % 4 == 3 or (cfg.last_layer_pko and is_last)
+            layer_mask = long_mask if is_long else short_mask
+            use_pko = (pko_mode == "every_layer") or (pko_mode == "every_4th" and is_long)
             partial_rope = cfg.use_partial_rope and not use_pko
             hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask, use_pko, partial_rope)
             moe_router_stats.append(router_stats)
