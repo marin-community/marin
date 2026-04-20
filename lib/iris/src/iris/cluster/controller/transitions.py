@@ -1869,6 +1869,14 @@ class ControllerTransitions:
                     task_error = "Scheduling timeout exceeded"
                 if update.new_state == job_pb2.TASK_STATE_FAILED:
                     failure_count += 1
+                    # A FAILED originating while the task was still BUILDING almost
+                    # always means the worker couldn't pull the image or set up the
+                    # runtime (disk full, DNS / registry unreachable, transient
+                    # network hiccup). User-code failures only appear once the task
+                    # has reached RUNNING. Treat the BUILDING -> FAILED transition
+                    # as a weak health signal — see SIGNAL_WEIGHT for rationale.
+                    if prior_state == job_pb2.TASK_STATE_BUILDING and worker_id is not None:
+                        self._health.bump(WorkerId(str(worker_id)), HealthSignal.TASK_BUILD_FAILED)
                 if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state in EXECUTING_TASK_STATES:
                     preemption_count += 1
                     if worker_id is not None:

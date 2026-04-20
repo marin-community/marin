@@ -12,6 +12,8 @@ They focus on:
 
 import threading
 
+import pytest
+
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -2221,6 +2223,64 @@ def test_worker_failed_from_building_counts_as_preemption(state):
     # Real preemption: worker had started processing the task
     assert _query_task(state, task.task_id).preemption_count == 1
     assert _query_task(state, task.task_id).failure_count == 0
+
+
+def test_failed_from_building_bumps_health_tracker(state):
+    """FAILED originating from BUILDING is a weak worker-health signal.
+
+    A task that never reaches RUNNING and then reports FAILED almost always
+    reflects infrastructure trouble (image pull, disk, DNS) rather than user
+    code. The tracker should see a TASK_BUILD_FAILED bump for that worker.
+    """
+    from iris.cluster.controller.worker_health import SIGNAL_WEIGHT, HealthSignal
+
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    req = make_job_request("job1", max_retries_failure=5)
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_id)])
+    transition_task(state, task.task_id, job_pb2.TASK_STATE_BUILDING)
+    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_BUILDING
+
+    # Sanity: no health score yet.
+    assert state._health.current_score(worker_id) == 0.0
+
+    transition_task(
+        state,
+        task.task_id,
+        job_pb2.TASK_STATE_FAILED,
+        error="image pull failed",
+    )
+
+    # Failure counted as user retry (task re-enters PENDING).
+    assert _query_task(state, task.task_id).failure_count == 1
+    # Worker picks up a small health bump (weight < 1.0). Allow for decay
+    # between the bump and the read — the default half-life is 5 min, but the
+    # read happens within ms so the score should be essentially the weight.
+    score = state._health.current_score(worker_id)
+    assert score == pytest.approx(SIGNAL_WEIGHT[HealthSignal.TASK_BUILD_FAILED], rel=1e-3)
+    assert score < SIGNAL_WEIGHT[HealthSignal.RPC_FAILURE]
+
+
+def test_failed_from_running_does_not_bump_health_tracker(state):
+    """FAILED from RUNNING is treated as user code and must NOT move the score."""
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    req = make_job_request("job1", max_retries_failure=5)
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    dispatch_task(state, task, worker_id)
+    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
+
+    transition_task(
+        state,
+        task.task_id,
+        job_pb2.TASK_STATE_FAILED,
+        error="user code raised",
+    )
+
+    assert state._health.current_score(worker_id) == 0.0
 
 
 def test_fail_workers_by_ids_cascades_tasks(state):

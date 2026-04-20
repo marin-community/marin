@@ -31,15 +31,26 @@ class HealthSignal(enum.StrEnum):
 
     RPC_FAILURE = "rpc_failure"
     TASK_WORKER_FAILED = "task_worker_failed"
+    TASK_BUILD_FAILED = "task_build_failed"
 
 
 SIGNAL_WEIGHT: Mapping[HealthSignal, float] = {
     HealthSignal.RPC_FAILURE: 1.0,
     HealthSignal.TASK_WORKER_FAILED: 1.0,
+    HealthSignal.TASK_BUILD_FAILED: 0.5,
 }
-"""Per-signal additive weight. Equal weights preserve today's 10-strike
-heartbeat behavior (10 consecutive RPC failures trip the threshold) and
-extend it uniformly to task-level failures."""
+"""Per-signal additive weight.
+
+RPC_FAILURE and TASK_WORKER_FAILED carry equal unit weight — this preserves
+today's 10-strike heartbeat behavior (10 consecutive RPC failures trip the
+threshold) and extends it uniformly to task-level worker failures.
+
+TASK_BUILD_FAILED is a weaker signal (0.5): a user-visible FAILED originating
+from a task still in BUILDING usually means the worker couldn't pull the image
+or set up the environment — a soft hint at disk / network trouble, but it can
+also be a broken Dockerfile or a user-side build command. Half weight means
+~20 build failures on one worker cross the threshold by themselves, while
+mixing with stronger signals still reaps promptly."""
 
 HEALTH_SCORE_THRESHOLD = 10.0
 

@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from iris.cluster.controller.worker_health import HealthSignal, WorkerHealthTracker
+from iris.cluster.controller.worker_health import SIGNAL_WEIGHT, HealthSignal, WorkerHealthTracker
 from iris.cluster.types import WorkerId
 
 
@@ -96,6 +96,47 @@ def test_rapid_bumps_cross_threshold(tracker: WorkerHealthTracker) -> None:
     assert len(over) == 1
     assert over[0][0] == wid
     assert over[0][1] >= 10.0
+
+
+def test_build_failed_is_weak_signal(tracker: WorkerHealthTracker) -> None:
+    """BUILD failures should weigh less than RPC / worker-failed signals."""
+    assert SIGNAL_WEIGHT[HealthSignal.TASK_BUILD_FAILED] < SIGNAL_WEIGHT[HealthSignal.RPC_FAILURE]
+    assert SIGNAL_WEIGHT[HealthSignal.TASK_BUILD_FAILED] < SIGNAL_WEIGHT[HealthSignal.TASK_WORKER_FAILED]
+    wid = WorkerId("w-1")
+    score = tracker.bump(wid, HealthSignal.TASK_BUILD_FAILED)
+    assert score == pytest.approx(SIGNAL_WEIGHT[HealthSignal.TASK_BUILD_FAILED])
+
+
+def test_build_failed_alone_needs_many_to_cross_threshold(tracker: WorkerHealthTracker) -> None:
+    """A worker that only ever reports build failures must accumulate many before reaping.
+
+    With weight 0.5 and threshold 10.0, it takes 20 build failures in one
+    half-life to trip the reaper on this signal alone.
+    """
+    wid = WorkerId("w-1")
+    # 19 build failures: under threshold.
+    for _ in range(19):
+        tracker.bump(wid, HealthSignal.TASK_BUILD_FAILED)
+    assert tracker.workers_over_threshold() == []
+    # One more crosses.
+    tracker.bump(wid, HealthSignal.TASK_BUILD_FAILED)
+    over = tracker.workers_over_threshold()
+    assert len(over) == 1
+    assert over[0][0] == wid
+    assert over[0][1] >= 10.0
+
+
+def test_build_failed_mixes_with_stronger_signals(tracker: WorkerHealthTracker) -> None:
+    """Build failures combined with RPC failures cross threshold faster than either alone."""
+    wid = WorkerId("w-1")
+    # 8 RPC failures (weight 1.0 each) + 4 build failures (weight 0.5 each) = 10.0
+    for _ in range(8):
+        tracker.bump(wid, HealthSignal.RPC_FAILURE)
+    for _ in range(4):
+        tracker.bump(wid, HealthSignal.TASK_BUILD_FAILED)
+    over = tracker.workers_over_threshold()
+    assert len(over) == 1
+    assert over[0][1] == pytest.approx(10.0)
 
 
 def test_forget_drops_worker(tracker: WorkerHealthTracker) -> None:
