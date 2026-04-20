@@ -4,9 +4,9 @@
 """Standalone log server process.
 
 Hosts LogServiceImpl on a dedicated port, separate from the controller.
-Started as a subprocess by the controller's main() entry point in
-production; the Controller also spawns this app in-thread for local/test
-mode via ``build_log_server_asgi``.
+Deployed as a standalone container (see ``lib/iris/Dockerfile`` ``log-server``
+stage and ``lib/iris/docs/log-server.md``), or hosted in-thread by the
+Controller for local/test mode via ``build_log_server_asgi``.
 
 Usage:
     python -m iris.log_server.main --port 10001 --log-dir /var/cache/iris/logs --remote-log-dir gs://bucket/logs
