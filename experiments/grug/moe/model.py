@@ -152,36 +152,34 @@ class CausalSelfAttention(eqx.Module):
         if use_paired_heads:
             # Halve heads, double seq: (B, S, H, D) -> (B, 2S, H/2, D)
             # Requires num_heads and num_kv_heads both divisible by 2.
-            # Use transpose to avoid cross-axis reshape sharding errors.
-            # (B, S, H, D) -> (B, S, H/2, 2, D) -> (B, H/2, 2, S, D) -> ...
-            # Simpler: split head dim, interleave into seq via transpose.
+            # Use jax.lax.reshape with explicit out_sharding to avoid sharding inference errors.
             b, s, n, d = q.shape
             m = k.shape[2]
+            batch_p = P(("data", "expert"), None, None, None)
 
-            def _pair_heads(x, heads):
-                # (B, S, H, D) -> (B, S, H/2, 2, D) -> (B, 2, S, H/2, D) -> (B, 2S, H/2, D)
-                x = x.reshape(b, s, heads // 2, 2, d)
-                x = x.transpose(0, 3, 1, 2, 4)  # (B, 2, S, H/2, D)
-                return x.reshape(b, 2 * s, heads // 2, d)
+            def _pair(x, h):
+                # (B, S, H, D) -> (B, S, H/2, 2, D) -> transpose -> (B, 2, S, H/2, D) -> (B, 2S, H/2, D)
+                x = jax.lax.reshape(x, (b, s, h // 2, 2, d), out_sharding=batch_p)
+                x = x.transpose(0, 3, 1, 2, 4)
+                return jax.lax.reshape(x, (b, 2 * s, h // 2, d), out_sharding=batch_p)
 
-            def _unpair_heads(x, heads):
-                # (B, 2S, H/2, D) -> (B, 2, S, H/2, D) -> (B, S, H/2, 2, D) -> (B, S, H, D)
-                x = x.reshape(b, 2, s, heads // 2, d)
-                x = x.transpose(0, 2, 3, 1, 4)  # (B, S, H/2, 2, D)
-                return x.reshape(b, s, heads, d)
+            def _unpair(x, h):
+                # (B, 2S, H/2, D) -> (B, 2, S, H/2, D) -> transpose -> (B, S, H/2, 2, D) -> (B, S, H, D)
+                x = jax.lax.reshape(x, (b, 2, s, h // 2, d), out_sharding=batch_p)
+                x = x.transpose(0, 2, 3, 1, 4)
+                return jax.lax.reshape(x, (b, s, h, d), out_sharding=batch_p)
 
-            q = reshard(_pair_heads(q, n), P(("data", "expert"), None, "model", None))
-            k = reshard(_pair_heads(k, m), P(("data", "expert"), None, "model", None))
-            v = reshard(_pair_heads(v, m), P(("data", "expert"), None, "model", None))
+            q = _pair(q, n)
+            k = _pair(k, m)
+            v = _pair(v, m)
             attn_out = attention(q, k, v, mask)
             # XSA on paired output
             aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-            aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
             dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
             v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
             attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
             # Reshape back: (B, 2S, H/2, D) -> (B, S, H, D)
-            attn_out = reshard(_unpair_heads(attn_out, n), P(("data", "expert"), None, "model", None))
+            attn_out = _unpair(attn_out, n)
         else:
             attn_out = attention(q, k, v, mask)
             aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
