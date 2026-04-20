@@ -83,7 +83,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
         train_config=train,
         tokenized_dataset=selected["tokenized_dataset"],
     )
-    return selected["source_run_name"], config
+    return f"{selected['source_run_name']}-submission", config
 
 
 def main() -> None:
