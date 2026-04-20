@@ -426,7 +426,7 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
     with tempfile.TemporaryDirectory() as tmpdir:
         cache_dir = tmpdir
 
-        tokenizer = load_tokenizer("stanford-crfm/marin-tokenizer")
+        tokenizer = load_tokenizer("marin-community/marin-tokenizer")
 
         component = DatasetComponent(
             source=UrlDatasetSourceConfig(train_urls=[dummy_chat_data]),
