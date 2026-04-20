@@ -45,6 +45,7 @@ from iris.cluster.controller.schema import (
     JobDetailRow,
     WorkerDetailRow,
 )
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
@@ -86,8 +87,6 @@ RESERVATION_HOLDER_JOB_NAME = ":reservation:"
 Uses colons to clearly distinguish from user-created jobs and avoid
 accidental collision with normal job names."""
 
-HEARTBEAT_FAILURE_THRESHOLD = 10
-"""Consecutive heartbeat failures before marking worker as failed."""
 
 FAIL_HEARTBEATS_CHUNK_SIZE = 10
 """Number of worker failures processed per transaction in
@@ -266,8 +265,6 @@ class HeartbeatApplyResult(TxResult):
 class HeartbeatFailureResult(TxResult):
     worker_removed: bool = False
     action: HeartbeatAction = HeartbeatAction.TRANSIENT_FAILURE
-    consecutive_failures: int = 0
-    failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD
     last_heartbeat_age_ms: int | None = None
 
 
@@ -971,12 +968,12 @@ class ControllerTransitions:
     def __init__(
         self,
         db: ControllerDB,
-        heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD,
         user_budget_defaults: UserBudgetDefaults | None = None,
+        health: WorkerHealthTracker | None = None,
     ):
         self._db = db
-        self._heartbeat_failure_threshold = heartbeat_failure_threshold
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
+        self._health = health or WorkerHealthTracker()
 
     def _record_transaction(
         self,
@@ -1867,7 +1864,17 @@ class ControllerTransitions:
                     task_error = "Scheduling timeout exceeded"
                 if update.new_state == job_pb2.TASK_STATE_FAILED:
                     failure_count += 1
+                    # A FAILED originating while the task was still BUILDING almost
+                    # always means the worker couldn't pull the image or set up the
+                    # runtime (disk full, DNS / registry unreachable, transient
+                    # network hiccup). User-code failures only appear once the task
+                    # has reached RUNNING. Treat the BUILDING -> FAILED transition
+                    if prior_state == job_pb2.TASK_STATE_BUILDING and worker_id is not None:
+                        self._health.build_failed(WorkerId(str(worker_id)))
                 if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state in EXECUTING_TASK_STATES:
+                    # A worker that truly died will also miss its next ping/heartbeat
+                    # RPC, which bumps the tracker on the observer side. We don't
+                    # double-count that signal here.
                     preemption_count += 1
                 if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state == job_pb2.TASK_STATE_ASSIGNED:
                     task_state = job_pb2.TASK_STATE_PENDING
@@ -1999,7 +2006,10 @@ class ControllerTransitions:
                 actions.append(("job_terminated", job_id.to_wire(), {}))
             self._record_transaction(cur, "apply_task_updates", actions)
 
-        return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
+        return TxResult(
+            tasks_to_kill=tasks_to_kill,
+            task_kill_workers=task_kill_workers,
+        )
 
     def apply_task_updates(self, req: HeartbeatApplyRequest) -> TxResult:
         """Apply a batch of worker task updates atomically."""
@@ -2222,43 +2232,41 @@ class ControllerTransitions:
         tasks_to_kill: set[JobName] = set()
         task_kill_workers: dict[JobName, WorkerId] = {}
         row = cur.execute(
-            "SELECT consecutive_failures, last_heartbeat_ms FROM workers WHERE worker_id = ? AND active = 1",
+            "SELECT last_heartbeat_ms FROM workers WHERE worker_id = ? AND active = 1",
             (str(worker_id),),
         ).fetchone()
         if row is None:
             return HeartbeatFailureResult(
                 worker_removed=True,
                 action=HeartbeatAction.WORKER_FAILED,
-                failure_threshold=self._heartbeat_failure_threshold,
             )
 
         now_ms = now_ms or Timestamp.now().epoch_ms()
         last_heartbeat_ms = row["last_heartbeat_ms"]
         last_heartbeat_age_ms = None if last_heartbeat_ms is None else max(0, now_ms - int(last_heartbeat_ms))
-        failures = int(row["consecutive_failures"]) + 1
-        cur.execute(
-            "UPDATE workers SET consecutive_failures = ?, healthy = CASE WHEN ? >= ? THEN 0 ELSE healthy END "
-            "WHERE worker_id = ?",
-            (failures, failures, self._heartbeat_failure_threshold, str(worker_id)),
-        )
-        should_remove = force_remove or failures >= self._heartbeat_failure_threshold
-        if should_remove:
+        if force_remove:
+            cur.execute(
+                "UPDATE workers SET healthy = 0 WHERE worker_id = ?",
+                (str(worker_id),),
+            )
             removal = self._remove_failed_worker(cur, worker_id, error, now_ms=now_ms)
             tasks_to_kill.update(removal.tasks_to_kill)
             task_kill_workers.update(removal.task_kill_workers)
         else:
+            cur.execute(
+                "UPDATE workers SET consecutive_failures = consecutive_failures + 1 WHERE worker_id = ?",
+                (str(worker_id),),
+            )
             for req in drained_dispatch.tasks_to_run:
                 enqueue_run_dispatch(cur, str(worker_id), req.SerializeToString(), now_ms)
             for task_id in drained_dispatch.tasks_to_kill:
                 enqueue_kill_dispatch(cur, str(worker_id), task_id, now_ms)
-        action = HeartbeatAction.WORKER_FAILED if should_remove else HeartbeatAction.TRANSIENT_FAILURE
+        action = HeartbeatAction.WORKER_FAILED if force_remove else HeartbeatAction.TRANSIENT_FAILURE
         return HeartbeatFailureResult(
             tasks_to_kill=tasks_to_kill,
             task_kill_workers=task_kill_workers,
-            worker_removed=should_remove,
+            worker_removed=force_remove,
             action=action,
-            consecutive_failures=failures,
-            failure_threshold=self._heartbeat_failure_threshold,
             last_heartbeat_age_ms=last_heartbeat_age_ms,
         )
 
@@ -3250,14 +3258,14 @@ class ControllerTransitions:
             - snapshot was returned by begin_heartbeat for this worker
             - The heartbeat RPC failed (timeout, connection refused, etc.)
         Postconditions:
-            - worker.consecutive_failures incremented
-            - If threshold exceeded: worker pruned, ALL tasks cascade to WORKER_FAILED
-            - If worker still healthy: buffered dispatches (tasks_to_run, tasks_to_kill)
-              are re-queued for the next heartbeat. We cannot tell whether the worker
-              received the previous heartbeat (RPC timeout ≠ delivery failure), so we
-              re-send the same RunTaskRequests with the same attempt_ids. If the worker
-              did receive them, it will reject re-sends as benign duplicates. If it
-              did not, it will start them fresh.
+            - Buffered dispatches (tasks_to_run, tasks_to_kill) are re-queued for the
+              next heartbeat. We cannot tell whether the worker received the previous
+              heartbeat (RPC timeout ≠ delivery failure), so we re-send the same
+              RunTaskRequests with the same attempt_ids. If the worker did receive
+              them, it will reject re-sends as benign duplicates. If it did not, it
+              will start them fresh.
+            - Worker termination decisions are made by the reaper thread based on the
+              aggregate health score (bumped by the caller on RPC failure), not here.
 
         Note: we intentionally do NOT fire WORKER_FAILED for tasks_to_run here.
         The heartbeat may have timed out on the controller side but the worker may

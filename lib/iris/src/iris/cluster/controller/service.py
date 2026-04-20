@@ -231,10 +231,8 @@ def worker_status_message(w: WorkerDetailRow) -> str:
     """Build a human-readable status message for unhealthy workers."""
     if w.healthy:
         return ""
-    if w.consecutive_failures > 0:
-        age = w.last_heartbeat.age_ms()
-        return f"Heartbeat timeout ({w.consecutive_failures} failures, last seen {age // 1000}s ago)"
-    return "Unhealthy (no failures recorded)"
+    age = w.last_heartbeat.age_ms()
+    return f"Unhealthy (last seen {age // 1000}s ago)"
 
 
 _WORKER_TARGET_PREFIX = "/system/worker/"
