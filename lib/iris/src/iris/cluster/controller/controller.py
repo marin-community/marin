@@ -2426,8 +2426,6 @@ class Controller:
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
                 break
-            if self._checkpoint_paused.is_set():
-                continue
             try:
                 removed = list(self._reap_stale_workers())
                 unhealthy = self._health.workers_over_threshold()
