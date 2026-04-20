@@ -70,7 +70,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from iris.cluster.log_store._types import _EST_BYTES_PER_ROW, REGEX_META_RE, LogReadResult
+from iris.log_server.store._types import _EST_BYTES_PER_ROW, REGEX_META_RE, LogReadResult
 from iris.cluster.types import TaskAttempt
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
@@ -553,7 +553,7 @@ class DuckDBLogStore:
 
     def cursor(self, key: str):
         """Return a stateful cursor for incremental reads on *key*."""
-        from iris.cluster.log_store import LogCursor
+        from iris.log_server.store import LogCursor
 
         return LogCursor(self, key)
 

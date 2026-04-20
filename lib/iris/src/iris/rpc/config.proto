@@ -364,6 +364,22 @@ message ControllerVmConfig {
   iris.time.Duration worker_timeout = 12;  // Default: 60s
   int32 heartbeat_failure_threshold = 13;  // Consecutive heartbeat failures before marking worker dead (default: 10)
   bool use_split_heartbeat = 14;  // Default: true. Set false to use the legacy monolithic heartbeat path.
+
+  // When true on a VM-backed controller (GCP / Manual), the bootstrap script
+  // runs a sidecar log-server container on the same VM and points the
+  // controller container at it via IRIS_LOG_SERVICE_ADDRESS. When false
+  // (default), the controller hosts an in-process log server — current
+  // behavior. Ignored by the K8s controller path. The sidecar image is
+  // derived from `image` (s/iris-controller/iris-log-server/ on the last
+  // path segment), binds 10002 on loopback, and archives to
+  // "{storage.remote_state_dir}/logs".
+  //
+  // Stage 1 caveat: the controller's JWT signing key is not yet shared
+  // with the sidecar, so the sidecar currently runs in null-auth mode.
+  // Strict-auth clusters should wait for Stage 2 (standalone `iris
+  // log-server deploy`) before enabling this.
+  bool enable_log_server_sidecar = 15;
+
   oneof controller {
     GcpControllerConfig gcp = 1;
     ManualControllerConfig manual = 2;

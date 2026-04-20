@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from iris.cluster.log_store import LogStore, _EST_BYTES_PER_ROW, task_log_key
-from iris.cluster.log_store.duckdb_store import DuckDBLogStore
+from iris.log_server.store import LogStore, _EST_BYTES_PER_ROW, task_log_key
+from iris.log_server.store.duckdb_store import DuckDBLogStore
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import logging_pb2
 
@@ -842,7 +842,7 @@ def test_tail_finds_match_in_oldest_of_capped_window(tmp_path: Path):
 def test_read_caps_to_newest_segments(tmp_path: Path, monkeypatch):
     """A single read never scans past _MAX_PARQUET_BYTES_PER_READ of segments;
     matches in older (outside-budget) segments are not visible to this call."""
-    from iris.cluster.log_store import duckdb_store as mod
+    from iris.log_server.store import duckdb_store as mod
 
     log_dir = tmp_path / "logs"
     store = _make_log_store(log_dir=log_dir, segment_target_bytes=1)

@@ -205,3 +205,41 @@ def test_gcp_provider_resolve_image_requires_zone_for_ghcr() -> None:
 
     with pytest.raises(ValueError, match="zone is required"):
         provider.resolve_image("ghcr.io/org/img:v1")
+
+
+# --- Log-server sidecar validation ---
+
+
+def _sidecar_config() -> config_pb2.IrisClusterConfig:
+    config = config_pb2.IrisClusterConfig()
+    config.controller.image = "ghcr.io/marin-community/iris-controller:latest"
+    config.controller.enable_log_server_sidecar = True
+    config.controller.gcp.zone = "us-central1-a"
+    config.controller.gcp.port = 10000
+    config.platform.gcp.project_id = "hai-gcp-models"
+    config.storage.remote_state_dir = "gs://bucket/iris/state"
+    return config
+
+
+def test_controller_bootstrap_sidecar_requires_remote_state_dir() -> None:
+    """Sidecar needs a remote archive URI; without storage.remote_state_dir we fail fast."""
+    config = _sidecar_config()
+    config.storage.remote_state_dir = ""
+
+    with pytest.raises(ValueError, match="remote_state_dir"):
+        build_controller_bootstrap_script_from_config(
+            config,
+            resolve_image=lambda image, zone=None: image,
+        )
+
+
+def test_controller_bootstrap_sidecar_requires_iris_controller_image_name() -> None:
+    """Sidecar image is derived from the controller image; non-derivable names fail fast."""
+    config = _sidecar_config()
+    config.controller.image = "registry.example.com/custom-controller:v1"  # no 'iris-controller'
+
+    with pytest.raises(ValueError, match="iris-controller"):
+        build_controller_bootstrap_script_from_config(
+            config,
+            resolve_image=lambda image, zone=None: image,
+        )

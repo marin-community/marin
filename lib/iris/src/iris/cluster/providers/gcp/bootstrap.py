@@ -13,11 +13,11 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 
 import yaml
 from google.protobuf.json_format import MessageToDict
 
-from collections.abc import Callable
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -259,6 +259,9 @@ def build_worker_bootstrap_script(
 # ============================================================================
 
 CONTROLLER_CONTAINER_NAME = "iris-controller"
+LOG_SERVER_CONTAINER_NAME = "iris-log-server"
+LOG_SERVER_PORT = 10002
+
 
 CONTROLLER_BOOTSTRAP_SCRIPT = """
 set -e
@@ -337,6 +340,11 @@ else
     exit 1
 fi
 
+# Create cache directory (shared between controller and sidecar)
+sudo mkdir -p /var/cache/iris
+
+{{ sidecar_setup }}
+
 # Stop existing controller if running.
 # Use `docker kill` (SIGKILL) instead of `docker stop` (SIGTERM) because the
 # controller's SIGTERM handler runs autoscaler.shutdown() → terminate_all(),
@@ -349,9 +357,6 @@ if sudo docker ps -a --format '{{.Names}}' | grep -q "^{{ container_name }}$"; t
     sudo docker rm {{ container_name }} 2>/dev/null || true
 fi
 
-# Create cache directory
-sudo mkdir -p /var/cache/iris
-
 # Start controller container with restart policy.
 # Raise the open-file soft limit so the controller can handle many concurrent
 # worker connections (endpoint RPCs, heartbeats, gcloud subprocesses, etc.).
@@ -361,6 +366,7 @@ sudo docker run -d --name {{ container_name }} \\
     --ulimit nofile=65536:524288 \\
     --ulimit core=0:0 \\
     -v /var/cache/iris:/var/cache/iris \\
+    {{ log_service_address_env }} \\
     {{ config_volume }} \\
     {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.controller.main serve \\
@@ -425,6 +431,66 @@ echo "{{ log_prefix }} Config written to /etc/iris/config.yaml"
 """
 
 
+# Sidecar bootstrap runs BEFORE the controller container so the controller
+# can reach the log server immediately on startup. The sidecar is started
+# with --restart=unless-stopped and survives controller restarts.
+SIDECAR_SETUP_TEMPLATE = """
+echo "[iris-controller] [4a/5] Pulling log-server sidecar image: {{ log_server_image }}"
+if echo "{{ log_server_image }}" | grep -q -- "-docker.pkg.dev/"; then
+    AR_HOST=$(echo "{{ log_server_image }}" | cut -d/ -f1)
+    if command -v gcloud &> /dev/null; then
+        sudo gcloud auth configure-docker "$AR_HOST" -q || true
+    fi
+fi
+if ! sudo docker pull {{ log_server_image }}; then
+    echo "[iris-controller] [4a/5] ERROR: log-server image pull failed"
+    exit 1
+fi
+
+if sudo docker ps -a --format '{{.Names}}' | grep -q "^{{ log_server_container }}$"; then
+    echo "[iris-controller] [4a/5] Replacing existing log-server container..."
+    sudo docker kill {{ log_server_container }} 2>/dev/null || true
+    sudo docker rm {{ log_server_container }} 2>/dev/null || true
+fi
+
+sudo mkdir -p /var/cache/iris/logs
+
+# Sidecar uses host networking so the controller reaches it at
+# http://localhost:{{ log_server_port }}.
+sudo docker run -d --name {{ log_server_container }} \\
+    --network=host \\
+    --restart=unless-stopped \\
+    --ulimit core=0:0 \\
+    -v /var/cache/iris:/var/cache/iris \\
+    {{ log_server_image }} \\
+    --port {{ log_server_port }} \\
+    --log-dir /var/cache/iris/logs \\
+    --remote-log-dir {{ log_server_remote_dir }}
+
+echo "[iris-controller] [4a/5] Waiting for log-server sidecar to become healthy..."
+# Log server answers 404 on /, so any HTTP response means it's up.
+for i in $(seq 1 30); do
+    code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:{{ log_server_port }}/" 2>/dev/null || echo 000)
+    if echo "$code" | grep -qE "^[2345]"; then
+        echo "[iris-controller] [4a/5] Log-server sidecar is healthy (HTTP $code)"
+        break
+    fi
+    if [ "$i" = "30" ]; then
+        echo "[iris-controller] [4a/5] ERROR: log-server sidecar failed to become healthy"
+        sudo docker logs {{ log_server_container }} 2>&1 | tail -200
+        exit 1
+    fi
+    sleep 2
+done
+
+# Discover this VM's primary internal IP. The controller advertises this URL
+# to workers via /system/log-server, and uses it itself for its own pushes —
+# so the controller and workers agree on a single log-server URL.
+LOG_SERVER_HOST=$(hostname -I | awk '{print $1}')
+echo "[iris-controller] [4a/5] Log-server URL: http://$LOG_SERVER_HOST:{{ log_server_port }}"
+"""
+
+
 def _build_config_setup(config_yaml: str, log_prefix: str) -> str:
     """Generate config setup script fragment with given log prefix."""
     return render_template(CONFIG_SETUP_TEMPLATE, config_yaml=config_yaml, log_prefix=log_prefix)
@@ -435,16 +501,22 @@ def build_controller_bootstrap_script(
     port: int,
     config_yaml: str = "",
     fresh: bool = False,
+    *,
+    log_server_image: str = "",
+    log_server_remote_dir: str = "",
 ) -> str:
     """Build bootstrap script for controller VM.
 
-    Args:
-        docker_image: Docker image to run
-        port: Controller port
-        config_yaml: Optional YAML config to write to /etc/iris/config.yaml
-        fresh: When True, pass ``--fresh`` to the controller serve command so
-            it starts with an empty local database and skips checkpoint restore.
+    When ``log_server_image`` and ``log_server_remote_dir`` are both set, the
+    bootstrap additionally pulls and runs an ``iris-log-server`` container on
+    the same VM (host networking on :LOG_SERVER_PORT) and sets
+    ``IRIS_LOG_SERVICE_ADDRESS=http://localhost:<port>`` on the controller
+    container so its existing log-service-address plumbing resolves without
+    any code changes.
     """
+    if bool(log_server_image) != bool(log_server_remote_dir):
+        raise ValueError("log_server_image and log_server_remote_dir must be set together")
+
     if config_yaml:
         config_setup = _build_config_setup(config_yaml, log_prefix="[iris-controller]")
         config_volume = "-v /etc/iris/config.yaml:/etc/iris/config.yaml:ro"
@@ -453,6 +525,21 @@ def build_controller_bootstrap_script(
         config_setup = "# No config file provided"
         config_volume = ""
         config_flag = ""
+
+    if log_server_image:
+        sidecar_setup = render_template(
+            SIDECAR_SETUP_TEMPLATE,
+            log_server_image=log_server_image,
+            log_server_container=LOG_SERVER_CONTAINER_NAME,
+            log_server_port=LOG_SERVER_PORT,
+            log_server_remote_dir=log_server_remote_dir,
+        )
+        # Shell interpolation of LOG_SERVER_HOST (set earlier in the bootstrap
+        # via `hostname -I`) so the controller and workers share one URL.
+        log_service_address_env = f"-e IRIS_LOG_SERVICE_ADDRESS=http://$LOG_SERVER_HOST:{LOG_SERVER_PORT}"
+    else:
+        sidecar_setup = "# No log-server sidecar"
+        log_service_address_env = ""
 
     return render_template(
         CONTROLLER_BOOTSTRAP_SCRIPT,
@@ -463,6 +550,8 @@ def build_controller_bootstrap_script(
         config_volume=config_volume,
         config_flag=config_flag,
         fresh_flag="--fresh" if fresh else "",
+        sidecar_setup=sidecar_setup,
+        log_service_address_env=log_service_address_env,
     )
 
 
@@ -473,24 +562,47 @@ def build_controller_bootstrap_script_from_config(
 ) -> str:
     """Build controller bootstrap script from the full cluster config.
 
-    Args:
-        config: Full cluster configuration.
-        resolve_image: Resolves a container image tag for the target registry.
-        fresh: When True, pass ``--fresh`` to the controller serve command so
-            it starts with an empty local database and skips checkpoint restore.
+    The log-server sidecar has no configurable knobs: when
+    ``controller.enable_log_server_sidecar`` is set, the image is derived
+    from ``controller.image`` (``iris-controller`` → ``iris-log-server`` on
+    the last path segment, same registry/tag) and the archive URI is
+    ``{storage.remote_state_dir}/logs``.
     """
     # Local import to avoid circular dependency (config.py imports from bootstrap)
     from iris.cluster.config import config_to_dict
 
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)
-    port = config.controller.gcp.port or config.controller.manual.port or 10000
-    image = config.controller.image
-
     ctrl = config.controller
-    zone: str | None = None
-    if ctrl.HasField("gcp") and ctrl.gcp.zone:
-        zone = ctrl.gcp.zone
+    port = ctrl.gcp.port or ctrl.manual.port or 10000
+    zone = ctrl.gcp.zone if ctrl.HasField("gcp") and ctrl.gcp.zone else None
+    image = resolve_image(ctrl.image, zone)
 
-    image = resolve_image(image, zone)
+    log_server_image = ""
+    log_server_remote_dir = ""
+    if ctrl.enable_log_server_sidecar:
+        prefix, sep, leaf = ctrl.image.rpartition("/")
+        derived_leaf = leaf.replace("iris-controller", "iris-log-server", 1)
+        if derived_leaf == leaf:
+            raise ValueError(
+                "controller.enable_log_server_sidecar is true but the log-server image can't "
+                f"be derived from controller.image={ctrl.image!r} (expected 'iris-controller' "
+                "in the last path segment)."
+            )
+        log_server_image = resolve_image(f"{prefix}{sep}{derived_leaf}", zone)
 
-    return build_controller_bootstrap_script(image, port, config_yaml, fresh=fresh)
+        remote_state_dir = config.storage.remote_state_dir.rstrip("/")
+        if not remote_state_dir:
+            raise ValueError(
+                "controller.enable_log_server_sidecar is true but storage.remote_state_dir "
+                "is not set; the sidecar needs a remote archive URI."
+            )
+        log_server_remote_dir = f"{remote_state_dir}/logs"
+
+    return build_controller_bootstrap_script(
+        image,
+        port,
+        config_yaml,
+        fresh=fresh,
+        log_server_image=log_server_image,
+        log_server_remote_dir=log_server_remote_dir,
+    )

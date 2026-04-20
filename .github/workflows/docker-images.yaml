@@ -167,6 +167,9 @@ jobs:
           - image: iris-controller
             target: controller
             context: lib/iris
+          - image: iris-log-server
+            target: log-server
+            context: lib/iris
           - image: iris-task
             target: task
             context: .

@@ -31,6 +31,7 @@ worker_provider: {}
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   use_split_heartbeat: true # try out split heartbeats on dev
+  enable_log_server_sidecar: true
   gcp:
     service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
     zone: us-central1-a

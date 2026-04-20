@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from iris.cluster.log_store import LogStore
+from iris.log_server.store import LogStore
 from iris.rpc import logging_pb2
 
 logger = logging.getLogger(__name__)

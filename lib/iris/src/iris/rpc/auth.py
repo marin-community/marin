@@ -15,18 +15,26 @@ pass through as the anonymous admin user.
 import hashlib
 import logging
 import time
+from collections.abc import Callable, Iterable
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
 from http.cookies import SimpleCookie
 from typing import Protocol
 
+import jwt
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "iris_session"
+
+# Default TTL for JWT tokens issued by JwtTokenManager.
+DEFAULT_JWT_TTL_SECONDS = 86400 * 30  # 30 days
+
+# Minimum interval between touch_callback invocations for the same key (seconds).
+_TOUCH_INTERVAL_SECONDS = 300  # 5 minutes
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +207,103 @@ class GcpAccessTokenVerifier:
                 raise ValueError(f"User {email} does not have access to project {self._project_id}")
 
         return VerifiedIdentity(user_id=email, role="user")
+
+
+class JwtTokenManager:
+    """Creates and verifies HMAC-SHA256 JWT tokens.
+
+    Verification is a pure crypto operation followed by an in-memory
+    revocation check — no I/O on the hot path. An optional ``touch_callback``
+    fires at most once per ``_TOUCH_INTERVAL_SECONDS`` per JTI, giving the
+    caller a sampled hook for updating external state (e.g. ``last_used_at``
+    in a database) without adding per-RPC writes.
+    """
+
+    def __init__(
+        self,
+        signing_key: str,
+        *,
+        touch_callback: Callable[[str, float], None] | None = None,
+    ):
+        self._signing_key = signing_key
+        self._revoked_jtis: set[str] = set()
+        self._touch_callback = touch_callback
+        # Tracks the last wall-clock time the touch callback fired per jti.
+        self._last_touched: dict[str, float] = {}
+
+    @property
+    def signing_key(self) -> str:
+        """HMAC secret used to sign and verify JWTs. Do not log or serialize."""
+        return self._signing_key
+
+    def create_token(
+        self,
+        user_id: str,
+        role: str,
+        key_id: str,
+        ttl_seconds: int = DEFAULT_JWT_TTL_SECONDS,
+    ) -> str:
+        now = time.time()
+        payload = {
+            "sub": user_id,
+            "role": role,
+            "jti": key_id,
+            "iat": int(now),
+            "exp": int(now + ttl_seconds),
+        }
+        return jwt.encode(payload, self._signing_key, algorithm="HS256")
+
+    def verify(self, token: str) -> VerifiedIdentity:
+        """Verify JWT signature and claims, check revocation.
+
+        On success, invokes ``touch_callback`` at most once per key per
+        ``_TOUCH_INTERVAL_SECONDS`` to avoid hot-path side effects.
+        """
+        try:
+            payload = jwt.decode(token, self._signing_key, algorithms=["HS256"])
+        except jwt.ExpiredSignatureError as exc:
+            raise ValueError("Token has expired") from exc
+        except jwt.InvalidTokenError as exc:
+            raise ValueError(f"Invalid token: {exc}") from exc
+
+        jti = payload.get("jti", "")
+        if jti in self._revoked_jtis:
+            raise ValueError("Token has been revoked")
+
+        self._maybe_touch(jti)
+
+        return VerifiedIdentity(
+            user_id=payload["sub"],
+            role=payload.get("role", "user"),
+        )
+
+    def _maybe_touch(self, jti: str) -> None:
+        """Fire the touch callback if enough time has elapsed since the last fire."""
+        if self._touch_callback is None or not jti:
+            return
+        now = time.time()
+        last = self._last_touched.get(jti, 0.0)
+        if now - last < _TOUCH_INTERVAL_SECONDS:
+            return
+        self._last_touched[jti] = now
+        try:
+            self._touch_callback(jti, now)
+        except Exception:
+            logger.debug("Touch callback failed for key %s", jti, exc_info=True)
+
+    def revoke(self, jti: str) -> None:
+        """Add a JTI to the in-memory revocation set."""
+        self._revoked_jtis.add(jti)
+
+    def add_revocations(self, jtis: Iterable[str]) -> None:
+        """Replace the in-memory revocation set with the given JTIs.
+
+        Callers are expected to load the revocation set from their backing
+        store (e.g. the controller's api_keys table). Expired JWTs are
+        rejected by signature verification anyway, so only active revocations
+        need to be tracked here.
+        """
+        self._revoked_jtis = set(jtis)
 
 
 class CompositeTokenVerifier:

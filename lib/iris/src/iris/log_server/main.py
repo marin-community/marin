@@ -4,9 +4,9 @@
 """Standalone log server process.
 
 Hosts LogServiceImpl on a dedicated port, separate from the controller.
-Started as a subprocess by the controller's main() entry point in
-production; the Controller also spawns this app in-thread for local/test
-mode via ``build_log_server_asgi``.
+Deployed as a standalone container (see ``lib/iris/Dockerfile`` ``log-server``
+stage), or hosted in-thread by the Controller for local/test mode via
+``build_log_server_asgi``.
 
 Usage:
     python -m iris.log_server.main --port 10001 --log-dir /var/cache/iris/logs --remote-log-dir gs://bucket/logs
@@ -27,7 +27,7 @@ from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.routing import Mount
 
 from iris.log_server.server import LogServiceImpl
-from iris.rpc.auth import AuthInterceptor, NullAuthInterceptor
+from iris.rpc.auth import AuthInterceptor, JwtTokenManager, NullAuthInterceptor
 from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, ConcurrencyLimitInterceptor, RequestTimingInterceptor
 from iris.rpc.logging_connect import LogServiceWSGIApplication
 from iris.rpc.stats import RpcStatsCollector
@@ -106,11 +106,6 @@ def _build_auth_interceptors(signing_key: str | None, strict: bool) -> tuple[Int
     """
     if not signing_key:
         return (NullAuthInterceptor(),)
-    # Local import: JwtTokenManager lives in controller.auth to stay close
-    # to the DB-backed token issuance path. The log server only needs the
-    # verifier half.
-    from iris.cluster.controller.auth import JwtTokenManager
-
     verifier = JwtTokenManager(signing_key)
     if strict:
         return (AuthInterceptor(verifier=verifier),)

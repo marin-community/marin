@@ -128,6 +128,25 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 CMD [".venv/bin/python", "-m", "iris.cluster.worker.main", "serve", "--host", "0.0.0.0", "--port", "10001"]
 
 
+# ── Stage: log-server ────────────────────────────────────────────────
+FROM deps AS log-server
+
+# Log-server needs DuckDB + pyarrow for the on-disk log store.
+RUN uv sync --extra log-server --inexact
+
+LABEL org.opencontainers.image.description="Iris log server image"
+
+# Default port; override with --port at run time.
+EXPOSE 10002
+
+# The server answers 404 on /; any HTTP response means uvicorn is up.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -sf -o /dev/null -w "%{http_code}" http://localhost:10002/ | grep -qE "^[23456]" || exit 1
+
+ENTRYPOINT [".venv/bin/python", "-m", "iris.log_server.main"]
+CMD ["--port", "10002", "--log-dir", "/var/cache/iris/logs", "--remote-log-dir", "gs://iris-logs/logs"]
+
+
 # ── Stage: task ──────────────────────────────────────────────────────
 # Base task image for Iris jobs. No application source — bundle is mounted at
 # runtime via bind mount to /app. Build context must be the marin repo root.

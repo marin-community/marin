@@ -10,7 +10,7 @@ import pytest
 from iris.cluster.controller.transitions import ClusterCapacity, RunningTaskEntry, SchedulingEvent
 import time
 
-from iris.cluster.log_store._types import TaskAttempt, task_log_key
+from iris.log_server.store._types import TaskAttempt, task_log_key
 from iris.log_server.server import LogServiceImpl
 from iris.rpc import logging_pb2
 from iris.cluster.providers.k8s.tasks import (

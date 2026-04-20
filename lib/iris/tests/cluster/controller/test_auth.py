@@ -12,7 +12,7 @@ from starlette.testclient import TestClient
 from iris.cluster.bundle import BundleStore
 from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.auth import (
-    JwtTokenManager,
+    _db_touch_callback,
     _get_or_create_signing_key,
     create_api_key,
     list_api_keys,
@@ -24,7 +24,7 @@ from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import ControllerTransitions
-from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, hash_token, resolve_auth
+from iris.rpc.auth import SESSION_COOKIE, JwtTokenManager, StaticTokenVerifier, hash_token, resolve_auth
 from rigging.timing import Timestamp
 
 _TEST_TOKEN = "valid-test-token"
@@ -296,7 +296,7 @@ def test_jwt_create_and_verify(db: ControllerDB):
     db.ensure_user("bob", now, role="user")
 
     signing_key = _get_or_create_signing_key(db)
-    mgr = JwtTokenManager(signing_key, db=db)
+    mgr = JwtTokenManager(signing_key, touch_callback=_db_touch_callback(db))
 
     create_api_key(db, key_id="k-bob", key_hash="jwt:k-bob", key_prefix="jwt", user_id="bob", name="test", now=now)
 

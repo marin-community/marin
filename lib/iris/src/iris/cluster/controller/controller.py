@@ -105,12 +105,12 @@ from iris.cluster.controller.transitions import (
     SchedulingEvent,
     TaskUpdate,
 )
-from iris.cluster.log_store import CONTROLLER_LOG_KEY
+from iris.log_server.store import CONTROLLER_LOG_KEY
 from iris.cluster.providers.types import find_free_port, resolve_external_host
 from iris.log_server.client import LogPusher, LogServiceProxy, RemoteLogHandler
 from iris.log_server.main import build_log_server_asgi
 from iris.log_server.server import LogServiceImpl
-from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider
+from iris.rpc.auth import AuthInterceptor, AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider
 from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS
 from iris.rpc.stats import RpcStatsCollector
 from iris.cluster.types import (
@@ -1190,10 +1190,15 @@ class Controller:
             remote_log_dir=f"{self._config.remote_state_dir.rstrip('/')}/logs",
         )
 
-        # Wrap the verifier in NullAuthInterceptor so anonymous calls are
-        # still accepted in null-auth/test mode, matching the dashboard's
-        # behaviour. Real workers attach JWTs that the verifier validates.
-        interceptors = (NullAuthInterceptor(verifier=self._config.auth_verifier),)
+        # Match the dashboard's auth posture: when the controller has a real
+        # auth provider, require JWTs on PushLogs/FetchLogs so anonymous
+        # callers can't read or write logs. Otherwise (null-auth / tests),
+        # accept anonymous but still verify bearer tokens when present.
+        strict = self._config.auth_provider is not None and self._config.auth_verifier is not None
+        if strict:
+            interceptors = (AuthInterceptor(verifier=self._config.auth_verifier),)
+        else:
+            interceptors = (NullAuthInterceptor(verifier=self._config.auth_verifier),)
         # Stats collector for the in-process log server. Snapshot is reachable
         # via /iris.stats.StatsService/GetRpcStats on the log-server port.
         self._log_stats_collector = RpcStatsCollector(slow_threshold_ms=SLOW_RPC_THRESHOLD_MS)
@@ -1279,6 +1284,9 @@ class Controller:
         )
 
         # Register log server endpoint so workers can resolve it via ListEndpoints.
+        # The sidecar bootstrap sets IRIS_LOG_SERVICE_ADDRESS to the VM's
+        # routable host (not loopback), so the same URL works for the
+        # controller's own pushes and for remote workers.
         self._service._system_endpoints["/system/log-server"] = self._log_service_address
         logger.info("Registered system endpoint /system/log-server -> %s", self._log_service_address)
 

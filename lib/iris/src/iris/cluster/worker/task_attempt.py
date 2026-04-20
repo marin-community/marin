@@ -38,7 +38,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
-from iris.cluster.log_store._types import task_log_key
+from iris.log_server.store._types import task_log_key
 from iris.log_server.client import LogPusher
 from iris.logging import str_to_log_level
 from rigging.log_setup import parse_log_level
