@@ -36,6 +36,7 @@ external-sort fan-in opens hundreds of chunk iterators at once.
 from __future__ import annotations
 
 import concurrent.futures
+import functools
 import io
 import logging
 import os
@@ -138,13 +139,19 @@ def _combine_done_path(stage_dir: str) -> str:
     return f"{stage_dir}/{_COMBINE_DONE_MARKER}"
 
 
-_MANIFEST_DECODER = msgspec.json.Decoder()
-_MANIFEST_ENCODER = msgspec.json.Encoder()
+@functools.cache
+def _manifest_decoder() -> msgspec.json.Decoder:
+    return msgspec.json.Decoder()
+
+
+@functools.cache
+def _manifest_encoder() -> msgspec.json.Encoder:
+    return msgspec.json.Encoder()
 
 
 def _write_mapper_manifest(data_path: str, sidecar: dict) -> None:
     meta_path = mapper_manifest_path(data_path)
-    payload = _MANIFEST_ENCODER.encode(sidecar)
+    payload = _manifest_encoder().encode(sidecar)
     with log_time(f"Writing mapper manifest for {data_path} to {meta_path}", level=logging.DEBUG):
         with open_url(meta_path, "wb") as f:
             f.write(payload)
@@ -177,7 +184,7 @@ def _read_mapper_manifest(path: str) -> dict:
     """
     meta_path = mapper_manifest_path(path)
     fs, fs_path = url_to_fs(meta_path)
-    return _MANIFEST_DECODER.decode(fs.cat_file(fs_path))
+    return _manifest_decoder().decode(fs.cat_file(fs_path))
 
 
 def _sidecar_slice_from_manifest(path: str, meta: dict, shard_key: str) -> _SidecarSlice | None:
@@ -305,7 +312,7 @@ def combine_sidecars(
     def _write_reducer_manifest(shard_idx: int) -> None:
         entries = per_reducer.get(shard_idx, [])
         manifest_path = reducer_manifest_path(out_dir, shard_idx)
-        payload = _MANIFEST_ENCODER.encode({"entries": entries})
+        payload = _manifest_encoder().encode({"entries": entries})
         ensure_parent_dir(manifest_path)
         with open_url(manifest_path, "wb") as f:
             f.write(payload)
@@ -465,7 +472,7 @@ class ScatterReader:
         """
         fs, fs_path = url_to_fs(manifest_path)
         with log_time(f"Reading combined manifest {manifest_path}"):
-            payload = _MANIFEST_DECODER.decode(fs.cat_file(fs_path))
+            payload = _manifest_decoder().decode(fs.cat_file(fs_path))
 
         entries = payload.get("entries", [])
         iterators: list[ScatterFileIterator] = []
