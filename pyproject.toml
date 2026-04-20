@@ -99,6 +99,11 @@ exclude = ["marin/", "scripts/"]
 
 # Pyrefly type checker configuration
 [tool.pyrefly]
+# Worktrees often live under hidden parent directories (e.g. `.codex/worktrees/*`).
+# Disable pyrefly's built-in exclude heuristics so hidden ancestors do not exclude
+# the entire project when running from those paths.
+disable-project-excludes-heuristics = true
+
 project-includes = [
     "lib/marin/src/**/*.py",
     "lib/levanter/src/**/*.py",
@@ -127,10 +132,6 @@ disable-search-path-heuristics = true
 # which would auto-detect workspace members as site packages and exclude them
 skip-interpreter-query = true
 use-ignore-files = false
-# Worktrees often live under hidden parent directories (e.g. `.codex/worktrees/*`).
-# Disable pyrefly's built-in exclude heuristics so hidden ancestors do not exclude
-# the entire project when running from those paths.
-disable-project-excludes-heuristics = true
 
 # Exclude non-production code from type checking
 project-excludes = [
@@ -222,5 +223,7 @@ markers = [
 ]
 testpaths = ["tests", "experiments"]
 
-# Don't run TPU or slow tests by default
-addopts = "--session-timeout=480 -m 'not tpu_ci and not slow'"
+# Don't run TPU, slow, or integration tests by default. Integration tests
+# require external infrastructure (Iris cluster, GCS, gated HF repos, etc.)
+# and are run from dedicated CI workflows.
+addopts = "--session-timeout=480 -m 'not tpu_ci and not slow and not integration'"

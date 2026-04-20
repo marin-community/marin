@@ -300,4 +300,4 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
         .write_jsonl(f"{output_base}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
     )
     ctx = ZephyrContext(name="transform-wikipedia")
-    list(ctx.execute(pipeline))
+    ctx.execute(pipeline)

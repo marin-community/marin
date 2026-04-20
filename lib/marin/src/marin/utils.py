@@ -4,6 +4,7 @@
 import functools
 import logging
 import os
+import subprocess
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import fields, is_dataclass
@@ -36,27 +37,6 @@ def fsspec_exists(file_path):
     # Use fsspec to check if the file exists
     fs = url_to_fs(file_path)[0]
     return fs.exists(file_path)
-
-
-def fsspec_rm(path: str):
-    """
-    Check if a file/directory exists in a fsspec filesystem. If it exists, remove it (recursively).
-
-    Args:
-        path (str): The path of the file
-
-    Returns:
-        bool: True if the file existed (and was removed or already gone), False if it never existed.
-    """
-    fs = url_to_fs(path)[0]
-    if fs.exists(path):
-        try:
-            fs.rm(path, recursive=True)
-        except FileNotFoundError as e:
-            logger.info("File already removed (race condition): %s", e)
-        return True
-
-    return False
 
 
 def fsspec_glob(file_path):
@@ -109,19 +89,6 @@ def fsspec_isdir(dir_path):
     """
     fs, _ = url_to_fs(dir_path)
     return fs.isdir(dir_path)
-
-
-def fsspec_cpdir(dir_path: str, target_path: str) -> None:
-    """
-    Recursively copies all contents of dir_path to target_path.
-
-    Args:
-        dir_path (str): The path of the directory to copy.
-        target_path (str): The target path.
-    """
-
-    fs = fsspec.core.get_fs_token_paths(target_path, mode="wb")[0]
-    fs.put(os.path.join(dir_path, "*"), target_path, recursive=True)
 
 
 _HF_RETRY_KEYWORDS = (
@@ -181,26 +148,6 @@ def load_dataset_with_backoff(
     return call_with_hf_backoff(
         lambda: datasets.load_dataset(**dataset_kwargs),
         context=context,
-        max_attempts=max_attempts,
-        initial_delay=initial_delay,
-        max_delay=max_delay,
-    )
-
-
-def load_tokenizer_with_backoff(
-    tokenizer_name: str,
-    *,
-    context: str | None = None,
-    max_attempts: int = 6,
-    initial_delay: float = 2.0,
-    max_delay: float = 60.0,
-):
-    from levanter.tokenizers import load_tokenizer
-
-    load_context = context or f"tokenizer={tokenizer_name}"
-    return call_with_hf_backoff(
-        lambda: load_tokenizer(tokenizer_name),
-        context=load_context,
         max_attempts=max_attempts,
         initial_delay=initial_delay,
         max_delay=max_delay,
@@ -310,11 +257,9 @@ def _hacky_remove_tpu_lockfile():
     except FileNotFoundError:
         pass
     except PermissionError:
-        try:
-            os.system("sudo rm -f /tmp/libtpu_lockfile")
-        except Exception:
-            logger.error("Failed to remove lockfile")
-            pass
+        result = subprocess.run(["sudo", "rm", "-f", "/tmp/libtpu_lockfile"], capture_output=True)
+        if result.returncode != 0:
+            logger.error("Failed to remove lockfile: %s", result.stderr.decode(errors="replace"))
 
 
 def get_directory_friendly_name(name: str) -> str:

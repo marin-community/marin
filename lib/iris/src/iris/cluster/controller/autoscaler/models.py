@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from iris.cluster.constraints import PlacementRequirements
+from iris.cluster.constraints import Constraint, PlacementRequirements
 from iris.rpc import job_pb2
 
 
@@ -35,7 +35,7 @@ class DemandEntry:
     task_ids: list[str]
     coschedule_group_id: str | None
     normalized: PlacementRequirements
-    constraints: list[job_pb2.Constraint]
+    constraints: list[Constraint]
     resources: job_pb2.ResourceSpecProto
     invalid_reason: str | None = None
 

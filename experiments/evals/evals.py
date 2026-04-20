@@ -11,6 +11,7 @@ from collections.abc import Sequence
 
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
+from marin.evaluation.evaluators.harbor_evaluator import HARBOR_EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.run import evaluate
 from marin.execution.remote import remote
 from marin.execution.executor import (
@@ -39,6 +40,9 @@ from experiments.evals.task_configs import (
     OPEN_LM_LEADERBOARD_MCQ,
 )
 
+EVAL_DEPENDENCY_GROUPS = ["eval", "vllm", "tpu"]
+EVALCHEMY_DEPENDENCY_GROUPS = ["evalchemy", "vllm", "tpu"]
+
 logger = logging.getLogger(__name__)
 
 
@@ -63,7 +67,7 @@ def evaluate_lm_evaluation_harness(
     """
     return ExecutorStep(
         name=f"evaluation/lm_evaluation_harness/{model_name}",
-        fn=evaluate,
+        fn=remote(evaluate, resources=resource_config, pip_dependency_groups=EVAL_DEPENDENCY_GROUPS),
         config=EvaluationConfig(
             evaluator="lm_evaluation_harness",
             model_name=model_name,
@@ -71,7 +75,6 @@ def evaluate_lm_evaluation_harness(
             evaluation_path=this_output_path(),
             evals=evals,
             max_eval_instances=max_eval_instances,
-            launch_with_ray=True,
             discover_latest_checkpoint=discover_latest_checkpoint,
             engine_kwargs=engine_kwargs,
             resource_config=resource_config,
@@ -139,7 +142,7 @@ def evaluate_levanter_lm_evaluation_harness(
     logger.info(f"Running evals on the following tasks: {evals}")
     return ExecutorStep(
         name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}",
-        fn=evaluate,
+        fn=remote(evaluate, resources=resource_config, pip_dependency_groups=EVAL_DEPENDENCY_GROUPS),
         config=EvaluationConfig(
             evaluator="levanter_lm_evaluation_harness",
             model_name=None,  # imputed automatically
@@ -404,7 +407,7 @@ def evaluate_harbor(
         dataset: Harbor dataset name (e.g., "aime", "terminal-bench", "swebench-verified")
         version: Dataset version (e.g., "1.0", "2.0")
         max_eval_instances: Limit number of tasks to run
-        resource_config: Resource configuration for Ray
+        resource_config: Resource configuration for direct Iris execution
         apply_chat_template: Whether to apply chat template (not used by Harbor)
         wandb_tags: Tags for W&B logging
         generation_params: Generation parameters (not used by Harbor)
@@ -438,12 +441,17 @@ def evaluate_harbor(
         }
     }
 
-    # When model_path is set, the evaluator launches a fray sub-job for vLLM serving
-    # with the correct resources. The outer executor step runs on CPU.
+    # When model_path is set, the evaluator launches a colocated vLLM server on
+    # the accelerator resources. The outer executor step runs on CPU for API models.
     dispatch_resources = ResourceConfig.with_cpu() if model_path else resource_config
     return ExecutorStep(
         name=f"evaluation/harbor/{model_name}-{dataset}-{version}",
-        fn=remote(evaluate, resources=dispatch_resources, pip_dependency_groups=["harbor"]),
+        fn=remote(
+            evaluate,
+            resources=dispatch_resources,
+            env_vars=env_vars_from_keys(HARBOR_EVAL_ENV_KEYS),
+            pip_dependency_groups=["harbor"],
+        ),
         config=EvaluationConfig(
             evaluator="harbor",
             model_name=model_name,
@@ -451,7 +459,6 @@ def evaluate_harbor(
             evaluation_path=this_output_path(),
             evals=[],  # Harbor uses dataset directly, not evals
             max_eval_instances=max_eval_instances,
-            launch_with_ray=True,
             discover_latest_checkpoint=False,
             engine_kwargs=engine_kwargs,
             resource_config=resource_config,
@@ -500,7 +507,7 @@ def evaluate_evalchemy(
     seed_suffix = f"_seed{seed}" if seed is not None else ""
     return ExecutorStep(
         name=f"evaluation/evalchemy/{model_name}/{task_names}{seed_suffix}",
-        fn=evaluate,
+        fn=remote(evaluate, resources=resource_config, pip_dependency_groups=EVALCHEMY_DEPENDENCY_GROUPS),
         config=EvaluationConfig(
             evaluator="evalchemy",
             model_name=model_name,
@@ -508,7 +515,6 @@ def evaluate_evalchemy(
             evaluation_path=this_output_path(),
             evals=evals,
             max_eval_instances=max_eval_instances,
-            launch_with_ray=True,
             discover_latest_checkpoint=discover_latest_checkpoint,
             engine_kwargs=engine_kwargs,
             generation_params=generation_params,

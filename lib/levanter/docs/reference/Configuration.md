@@ -463,11 +463,9 @@ trainer:
 
 
 
-### Distributed and Ray
+### Distributed
 
 ::: levanter.distributed.DistributedConfig
-
-::: levanter.distributed.RayConfig
 
 ### Model Averaging
 

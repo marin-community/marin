@@ -280,11 +280,6 @@ class ProcessedAudioCache(AsyncDataset[AudioTextDict]):
     async def get_batch(self, indices: Sequence[int]) -> Sequence[AudioTextDict]:
         return await self.cache.get_batch(indices)
 
-    # def _convert_to_example(self, storage: AudioTextStorageBatch) -> AudioTextDict:
-    #     storage["input_features"] = storage["input_features"].reshape(storage["audio_shape"])
-    #     del storage["audio_shape"]
-    #     return storage
-
     @staticmethod
     def build_or_load(
         cache_dir: str,
@@ -440,16 +435,6 @@ class AudioTextDataset(MappedAsyncDataset[AudioTextDict, AudioTextExample]):
             return out
 
         super().__init__(self.dataset, _convert_example)
-
-    # def __iter__(self) -> Iterator[AudioTextExample]:
-    #
-    #
-    #     with use_cpu_device():
-    #
-    #
-    #         for example in self.dataset:
-    #             converted_example = _convert_example(example)
-    #             yield converted_example
 
 
 @dataclass

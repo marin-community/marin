@@ -98,7 +98,7 @@ def test_fused_execution_with_batch():
     )
 
     ctx = ZephyrContext(name="test_fusion")
-    result = list(ctx.execute(ds))
+    result = ctx.execute(ds).results
     assert result == [[6, 8], [10, 12]]
 
 

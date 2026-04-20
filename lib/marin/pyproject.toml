@@ -5,19 +5,17 @@ requires-python = ">=3.11,<3.13"
 
 [project]
 name = "marin"
-version = "0.1.0"
+version = "0.99"
 
 requires-python = ">=3.11"
 dependencies = [
     "braceexpand",
     "cryptography>=45",
     "datasets<4.0.0",
-    "ddsketch",
     "deepdiff",
     "draccus>=0.11.5",
     "fasteners>=0.19",
     "flask",
-    "floret",
     "marin-fray",
     "marin-rigging",
     "fsspec>=2025.3.0",
@@ -30,7 +28,6 @@ dependencies = [
     "jaxopt>=0.8.3",
     "marin-levanter[serve]",
     "lxml[html_clean]",
-    "lz4",
     "markdownify==0.12.1",
     "multiprocess==0.70.16",
     "numpy",
@@ -72,7 +69,7 @@ lint = [
     "ruff==0.14.3",
     "black==25.9.0",
     "mypy>=1.4.1",
-    "pyrefly==0.40.0",
+    "pyrefly>=0.42.0",
     "types-PyYAML",
     "types-requests",
     "types-six",

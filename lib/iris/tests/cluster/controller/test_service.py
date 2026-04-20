@@ -11,10 +11,16 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from iris.cluster.constraints import WellKnownAttribute, device_variant_constraint
+from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.log_server.server import LogServiceImpl
-from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
+from iris.cluster.controller.codec import constraints_from_json
+from iris.cluster.controller.transitions import (
+    Assignment,
+    ControllerTransitions,
+    HeartbeatApplyRequest,
+    TaskUpdate,
+)
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
@@ -115,8 +121,66 @@ def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state)
 
     job = _query_job(state, JobName.root("test-user", "bundle-job"))
     assert job is not None
-    assert job.request.bundle_blob == b""
-    assert len(job.request.bundle_id) == 64
+    assert len(job.bundle_id) == 64
+
+
+def test_launch_job_rejects_tpu_chip_count_mismatch(service):
+    """A job requesting fewer chips than the variant's chips_per_vm is rejected."""
+    request = make_job_request("bad-tpu-chip-count")
+    request.resources.device.CopyFrom(tpu_device("v6e-8", count=4))
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+    assert "chip count mismatch" in exc_info.value.message
+
+
+def test_launch_job_rejects_mixed_vm_shape_alternatives(service):
+    """device-variant IN constraint with mismatched chips_per_vm is rejected."""
+    request = make_job_request("mixed-tpu-variants")
+    request.resources.device.CopyFrom(tpu_device("v6e-4"))
+    # User-provided IN constraint that mixes a 4-chip/VM and an 8-chip/VM variant.
+    request.constraints.append(device_variant_constraint(["v6e-4", "v6e-8"]).to_proto())
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+    # Mismatched shapes necessarily imply a chip-count mismatch for at least one
+    # candidate, so the per-candidate count check fires first.
+    assert "chip count mismatch" in exc_info.value.message
+    assert "v6e-8" in exc_info.value.message
+
+
+def test_launch_job_rejects_variant_override_with_smaller_primary(service):
+    """Explicit device-variant constraint overrides the primary; chip count must match it.
+
+    Regression for Codex review: primary v6e-4 (chips_per_vm=4) with an explicit
+    `device-variant EQ v6e-8` constraint would schedule onto a single v6e-8 VM
+    while reserving only 4 of its 8 chips — the exact partial-VM collision we
+    want to block. The validator must check chip count against every effective
+    candidate, not just the primary.
+    """
+    request = make_job_request("variant-override-mismatch")
+    request.resources.device.CopyFrom(tpu_device("v6e-4"))
+    request.constraints.append(device_variant_constraint(["v6e-8"]).to_proto())
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+    assert "chip count mismatch" in exc_info.value.message
+
+
+def test_launch_job_accepts_same_shape_alternatives(service):
+    """Alternatives sharing vm_count/chips_per_vm (e.g. v4-8 + v5p-8) are accepted."""
+    request = make_job_request("matched-tpu-variants")
+    request.resources.device.CopyFrom(tpu_device("v4-8"))
+    request.constraints.append(device_variant_constraint(["v4-8", "v5p-8"]).to_proto())
+
+    response = service.launch_job(request, None)
+    assert response.job_id == JobName.root("test-user", "matched-tpu-variants").to_wire()
 
 
 def test_launch_job_rejects_duplicate_name(service):
@@ -314,7 +378,7 @@ def test_get_job_status_not_found(service):
 
 def test_redact_request_env_vars_does_not_mutate_original():
     """Verify redact_request_env_vars returns a copy and does not mutate the input."""
-    from iris.cluster.controller.service import REDACTED_VALUE, redact_request_env_vars
+    from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 
     original = controller_pb2.Controller.LaunchJobRequest(
         name="/test-user/job",
@@ -328,9 +392,48 @@ def test_redact_request_env_vars_does_not_mutate_original():
     assert redacted.environment.env_vars["SAFE"] == "ok"
 
 
+def test_submit_argv_roundtrips_through_get_job_status(service):
+    """submit_argv set on LaunchJob must survive storage and reconstruction."""
+    job_name = JobName.root("test-user", "submit-argv-test")
+    launch_req = controller_pb2.Controller.LaunchJobRequest(
+        name=job_name.to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        submit_argv=["iris", "job", "run", "-e", "LOG_LEVEL", "info", "--", "python", "t.py"],
+    )
+    service.launch_job(launch_req, None)
+
+    response = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=job_name.to_wire()), None)
+    assert list(response.request.submit_argv) == [
+        "iris",
+        "job",
+        "run",
+        "-e",
+        "LOG_LEVEL",
+        "info",
+        "--",
+        "python",
+        "t.py",
+    ]
+
+
+def test_submit_argv_empty_when_omitted(service):
+    """Programmatic submissions without submit_argv should reconstruct as empty."""
+    job_name = JobName.root("test-user", "submit-argv-empty")
+    launch_req = controller_pb2.Controller.LaunchJobRequest(
+        name=job_name.to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+    )
+    service.launch_job(launch_req, None)
+
+    response = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=job_name.to_wire()), None)
+    assert list(response.request.submit_argv) == []
+
+
 def test_get_job_status_redacts_sensitive_env_vars(service):
     """Verify get_job_status redacts env var values whose keys match sensitive patterns."""
-    from iris.cluster.controller.service import REDACTED_VALUE
+    from iris.cluster.redaction import REDACTED_VALUE
 
     job_name = JobName.root("test-user", "redact-test")
     launch_req = controller_pb2.Controller.LaunchJobRequest(
@@ -671,6 +774,21 @@ def test_launch_job_rejects_child_of_failed_parent(service, state):
     assert "terminated" in exc_info.value.message.lower() or "failed" in exc_info.value.message.lower()
 
 
+def test_launch_job_rejects_child_of_absent_parent(service):
+    """Reject child submissions when the parent row is missing from the DB.
+
+    Simulates a controller restart where the checkpoint did not capture the
+    parent row but running processes keep submitting descendants. Previously
+    the guard only rejected terminated parents, leaving absent-parent children
+    inserted with `parent_job_id = NULL` and an orphaned `depth`.
+    """
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(make_job_request("/test-user/absent-parent/new-child"), None)
+
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+    assert "absent" in exc_info.value.message.lower() or "not found" in exc_info.value.message.lower()
+
+
 # =============================================================================
 # Job List Tests
 # =============================================================================
@@ -710,7 +828,7 @@ def test_list_jobs_sql_pagination(service):
         service.launch_job(make_job_request(f"job-{i}"), None)
 
     # Request page of 2
-    request = controller_pb2.Controller.ListJobsRequest(offset=0, limit=2)
+    request = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(offset=0, limit=2))
     response = service.list_jobs(request, None)
 
     assert len(response.jobs) == 2
@@ -718,7 +836,7 @@ def test_list_jobs_sql_pagination(service):
     assert response.has_more is True
 
     # Second page
-    request2 = controller_pb2.Controller.ListJobsRequest(offset=2, limit=2)
+    request2 = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(offset=2, limit=2))
     response2 = service.list_jobs(request2, None)
 
     assert len(response2.jobs) == 2
@@ -731,7 +849,7 @@ def test_list_jobs_sql_pagination(service):
     assert page1_ids.isdisjoint(page2_ids)
 
     # Last page
-    request3 = controller_pb2.Controller.ListJobsRequest(offset=4, limit=2)
+    request3 = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(offset=4, limit=2))
     response3 = service.list_jobs(request3, None)
 
     assert len(response3.jobs) == 1
@@ -747,7 +865,9 @@ def test_list_jobs_state_filter(service):
     )
 
     # Filter to killed only
-    request = controller_pb2.Controller.ListJobsRequest(state_filter="killed", limit=10)
+    request = controller_pb2.Controller.ListJobsRequest(
+        query=controller_pb2.Controller.JobQuery(state_filter="killed", limit=10)
+    )
     response = service.list_jobs(request, None)
 
     assert len(response.jobs) == 1
@@ -759,7 +879,7 @@ def test_list_jobs_name_filter(service):
     service.launch_job(make_job_request("alpha-job"), None)
     service.launch_job(make_job_request("beta-job"), None)
 
-    request = controller_pb2.Controller.ListJobsRequest(name_filter="alpha")
+    request = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(name_filter="alpha"))
     response = service.list_jobs(request, None)
 
     assert len(response.jobs) == 1
@@ -948,15 +1068,15 @@ def test_launch_job_injects_device_constraints_from_tpu_resource(service, state)
     service.launch_job(request, None)
 
     job = _query_job(state, JobName.root("test-user", "tpu-job"))
-    stored_constraints = list(job.request.constraints)
+    stored_constraints = constraints_from_json(job.constraints_json)
     keys = {c.key for c in stored_constraints}
     assert WellKnownAttribute.DEVICE_TYPE in keys
     assert WellKnownAttribute.DEVICE_VARIANT in keys
 
     dt = next(c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_TYPE)
-    assert dt.value.string_value == "tpu"
+    assert dt.values[0].value == "tpu"
     dv = next(c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_VARIANT)
-    assert dv.value.string_value == "v5litepod-16"
+    assert dv.values[0].value == "v5litepod-16"
 
 
 def test_launch_job_user_constraints_override_auto(service, state):
@@ -975,17 +1095,17 @@ def test_launch_job_user_constraints_override_auto(service, state):
     service.launch_job(request, None)
 
     job = _query_job(state, JobName.root("test-user", "multi-variant-job"))
-    stored_constraints = list(job.request.constraints)
+    stored_constraints = constraints_from_json(job.constraints_json)
 
     # device-variant should be the user's IN constraint, not the auto EQ
     dv_constraints = [c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_VARIANT]
     assert len(dv_constraints) == 1
-    assert dv_constraints[0].op == job_pb2.CONSTRAINT_OP_IN
+    assert dv_constraints[0].op == ConstraintOp.IN
 
     # device-type should still be auto-injected
     dt_constraints = [c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_TYPE]
     assert len(dt_constraints) == 1
-    assert dt_constraints[0].value.string_value == "tpu"
+    assert dt_constraints[0].values[0].value == "tpu"
 
 
 def test_launch_job_cpu_resource_no_constraints_injected(service, state):
@@ -1000,7 +1120,7 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
     service.launch_job(request, None)
 
     job = _query_job(state, JobName.root("test-user", "cpu-job"))
-    assert len(job.request.constraints) == 0
+    assert len(constraints_from_json(job.constraints_json)) == 0
 
 
 # =============================================================================

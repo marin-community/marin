@@ -167,6 +167,7 @@ def create_run_task_request(
     num_tasks: int = 1,
     ports: list[str] | None = None,
     attempt_id: int = 0,
+    task_image: str = "",
 ):
     def test_fn():
         print("Hello from test")
@@ -193,6 +194,7 @@ def create_run_task_request(
         bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         resources=resources,
         ports=ports or [],
+        task_image=task_image,
     )
     request.timeout.CopyFrom(duration_to_proto(Duration.from_seconds(300)))
     return request

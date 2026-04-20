@@ -24,23 +24,23 @@ import sys
 from datetime import datetime, timezone
 import threading
 import time
+import traceback
 import uuid
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import cloudpickle
-import pyarrow as pa
 from rigging.filesystem import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from fray.v2.client import JobHandle
 from fray.v2.types import Entrypoint, JobRequest
 from rigging.filesystem import marin_temp_bucket
-from rigging.timing import ExponentialBackoff
+from rigging.timing import ExponentialBackoff, log_time
 
 from zephyr.dataset import Dataset
 from zephyr.plan import (
@@ -53,7 +53,7 @@ from zephyr.plan import (
     StageType,
     compute_plan,
 )
-from zephyr.writers import ensure_parent_dir
+from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
@@ -111,13 +111,9 @@ class PickleDiskChunk:
 from zephyr.shuffle import (  # noqa: E402
     ListShard,
     MemChunk,
-    ScatterParquetIterator,  # noqa: F401 — re-exported for external callers
-    ScatterShard,  # noqa: F401 — re-exported for plan.py and external callers
-    _build_scatter_shard_from_manifest,  # noqa: F401 — re-exported for plan.py
-    _make_envelope,
-    _write_parquet_scatter,
-    _write_scatter_manifest,
-    _SCATTER_MANIFEST_NAME,
+    ScatterReader,  # noqa: F401 — re-exported for plan.py and external callers
+    ScatterWriter,  # noqa: F401 — re-exported for external callers
+    _write_scatter,
 )
 
 # ---------------------------------------------------------------------------
@@ -171,16 +167,12 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
     exec_dir = f"{prefix}/{execution_id}"
     fs = url_to_fs(exec_dir)[0]
 
-    # TODO: use log_time util when possible
-    t_0 = time.monotonic()
-    if fs.exists(exec_dir):
-        try:
-            fs.rm(exec_dir, recursive=True)
-        except Exception as e:
-            logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
-        finally:
-            elapsed = time.monotonic() - t_0
-            logger.info(f"Cleaned up execution directory {exec_dir} in {elapsed:.1f}s")
+    with log_time(f"Cleaning up execution directory {exec_dir}"):
+        if fs.exists(exec_dir):
+            try:
+                fs.rm(exec_dir, recursive=True)
+            except Exception as e:
+                logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
 
 
 def _write_pickle_chunks(
@@ -192,8 +184,7 @@ def _write_pickle_chunks(
 
     Returns a ListShard containing PickleDiskChunk references.
     """
-    # TODO: make chunk_size configurable per writer
-    chunk_size = 100_000
+    chunk_size = INTERMEDIATE_CHUNK_SIZE
     chunks: list[Iterable] = []
     batch: list = []
     pidx = 0
@@ -237,36 +228,22 @@ def _write_stage_output(
     TaskResult with a ListShard.
     """
     if scatter_op is not None:
-        # Peek first item to test Arrow serializability
         first_item = next(stage_gen, None)
         if first_item is None:
             return TaskResult(shard=ListShard(refs=[]))
 
         full_gen = itertools.chain([first_item], stage_gen)
 
-        use_pickle_envelope = False
-        try:
-            test_envelope = _make_envelope([first_item], 0, 0)
-            pa.RecordBatch.from_pylist(test_envelope)
-            logger.info("Using Parquet for scatter serialization for shard %d", source_shard)
-        except Exception:
-            use_pickle_envelope = True
-            logger.info(
-                "Using Parquet with pickle envelope for scatter serialization for shard %d",
-                source_shard,
-            )
-
         num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
-        parquet_path = f"{stage_dir}/shard-{shard_idx:04d}.parquet"
-        shard = _write_parquet_scatter(
+        data_path = f"{stage_dir}/shard-{shard_idx:04d}.shuffle"
+        shard = _write_scatter(
             full_gen,
             source_shard,
-            parquet_path,
+            data_path,
             key_fn=scatter_op.key_fn,
             num_output_shards=num_output_shards,
             sort_fn=scatter_op.sort_fn,
             combiner_fn=scatter_op.combiner_fn,
-            pickled=use_pickle_envelope,
         )
         return TaskResult(shard=shard)
 
@@ -518,7 +495,8 @@ class ZephyrCoordinator:
             dead,
         )
         if retried:
-            logger.warning("[%s] Shards retried (shard: attempts): %s", self._execution_id, retried)
+            attempts_histogram = dict(sorted(Counter(retried.values()).items()))
+            logger.warning("[%s] Shards retried (attempts: shard count): %s", self._execution_id, attempts_histogram)
 
     def _record_shard_failure(self, worker_id: str, error_info: str | None = None) -> bool:
         """Record a failure for the worker's in-flight shard. Must be called with lock held.
@@ -892,9 +870,6 @@ class ZephyrCoordinator:
             for items in materialized:
                 flat_result.extend(items)
 
-            # Signal workers to shut down now that all stages are complete.
-            self.shutdown()
-
             return flat_result
         finally:
             with self._lock:
@@ -975,14 +950,6 @@ class ZephyrCoordinator:
             self._chunk_prefix = prefix
             self._execution_id = execution_id
 
-    def get_chunk_config(self) -> dict:
-        """Return chunk storage configuration for workers."""
-        with self._lock:
-            return {
-                "prefix": self._chunk_prefix,
-                "execution_id": self._execution_id,
-            }
-
     def start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
         """Load a new stage's tasks into the queue (legacy compat)."""
         self._start_stage(stage_name, tasks, is_last_stage=is_last_stage)
@@ -991,14 +958,6 @@ class ZephyrCoordinator:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""
         with self._lock:
             self._check_worker_heartbeats(timeout)
-
-    def collect_results(self) -> dict[int, TaskResult]:
-        """Return results for the completed stage (legacy compat)."""
-        return self._collect_results()
-
-    def signal_done(self) -> None:
-        """Signal workers that no more stages will be submitted (legacy compat)."""
-        self._shutdown_event.set()
 
 
 # ---------------------------------------------------------------------------
@@ -1186,7 +1145,13 @@ class ZephyrWorker:
             # Unpack task and config
             task, attempt, config = response
 
-            logger.info("[%s] Executing task for shard %d (attempt %d)", self._worker_id, task.shard_idx, attempt)
+            logger.info(
+                "[%s] Executing task for stage %s shard %d (attempt %d)",
+                self._worker_id,
+                task.stage_name,
+                task.shard_idx,
+                attempt,
+            )
             try:
                 t_0 = time.monotonic()
                 result, task_counters = self._execute_shard(task, config)
@@ -1212,8 +1177,6 @@ class ZephyrWorker:
                 task_count += 1
             except Exception as e:
                 logger.error("Worker %s error on shard %d: %s", self._worker_id, task.shard_idx, e)
-                import traceback
-
                 coordinator.report_error.remote(
                     self._worker_id,
                     task.shard_idx,
@@ -1329,25 +1292,23 @@ def _regroup_result_refs(
     """Regroup worker output refs by output shard index without loading data.
 
     Non-scatter: each worker's ListShard maps to its own index (identity).
-    Scatter: writes a consolidated scatter manifest combining all sidecar
-    metadata into a single file, then gives each reducer a shard containing
-    just the manifest path.
+    Scatter: passes the list of scatter data-file paths to every reducer.
+    Each reducer reads the per-mapper ``.scatter_meta`` sidecars in parallel
+    to build its own ``ScatterReader`` without coordinator-side consolidation.
     """
     num_output = max(max(result_refs.keys(), default=0) + 1, input_shard_count)
     if output_shard_count is not None:
         num_output = max(num_output, output_shard_count)
 
     if is_scatter:
-        # Collect all scatter file paths from all workers
+        # Collect all scatter file paths from all workers. The coordinator
+        # does NOT read the sidecars or write a consolidated manifest —
+        # reducers do their own parallel sidecar reads.
         all_paths: list[str] = []
         for result in result_refs.values():
             all_paths.extend(result.shard)
 
-        # Write consolidated manifest and point reducers at it
-        manifest_path = f"{scatter_manifest_dir}/{_SCATTER_MANIFEST_NAME}"
-        _write_scatter_manifest(all_paths, manifest_path)
-        shared_refs = MemChunk(items=[manifest_path])
-
+        shared_refs = MemChunk(items=all_paths)
         return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
 
     # Non-scatter: each result's shard maps to its own index
@@ -1357,6 +1318,25 @@ def _regroup_result_refs(
 # ---------------------------------------------------------------------------
 # Coordinator-as-Job infrastructure
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ZephyrExecutionResult:
+    """Result of running a Zephyr pipeline.
+
+    This is also the wire format pickled by ``_run_coordinator_job`` into the
+    result file, so callers of ``ZephyrContext.execute`` receive it as-is.
+
+    Attributes:
+        results: Flat list of items produced by the terminal stage of the
+            pipeline (e.g. output file paths for write stages).
+        counters: Aggregated counter values from the run, including built-in
+            zephyr counters (e.g. ``zephyr/records_in``) and any user counters
+            recorded via ``zephyr.counters.increment``.
+    """
+
+    results: list
+    counters: dict[str, int]
 
 
 @dataclass(frozen=True)
@@ -1441,10 +1421,12 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
 
     try:
         results = coordinator.run_pipeline.submit(config.plan, config.execution_id).result()
+        counters = coordinator.get_counters.remote().result(timeout=10.0) or {}
+        payload = ZephyrExecutionResult(results=results, counters=counters)
 
         ensure_parent_dir(result_path)
         with open_url(result_path, "wb") as f:
-            f.write(cloudpickle.dumps(results))
+            f.write(cloudpickle.dumps(payload))
     except Exception as e:
         # Persist the exception so the caller can recover the original type
         # (important for non-retryable error detection).
@@ -1500,9 +1482,7 @@ class ZephyrContext:
             min(max_workers, num_shards), computed at first execute(). If None,
             defaults to os.cpu_count() for LocalClient, or 128 for distributed clients.
         resources: Resource config per worker.
-        coordinator_resources: Resource config for the coordinator job. The coordinator
-            accumulates scatter manifests for all shards in memory; increase ram for
-            large pipelines (many shards). Defaults to 5 GB.
+        coordinator_resources: Resource config for the coordinator job. Defaults to 2 GB.
         chunk_storage_prefix: Storage prefix for intermediate chunks. If None, defaults
             to MARIN_PREFIX/tmp/zephyr or /tmp/zephyr.
         name: Descriptive name for this context, used in actor group names for debugging.
@@ -1517,7 +1497,9 @@ class ZephyrContext:
     client: Client | None = None
     max_workers: int | None = None
     resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
-    coordinator_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="5g"))
+    coordinator_resources: ResourceConfig = field(
+        default_factory=lambda: ResourceConfig(cpu=1, ram="2g", preemptible=False)
+    )
     chunk_storage_prefix: str | None = None
     name: str = ""
     no_workers_timeout: float | None = None
@@ -1592,7 +1574,7 @@ class ZephyrContext:
         dataset: Dataset,
         verbose: bool = False,
         dry_run: bool = False,
-    ) -> Sequence:
+    ) -> ZephyrExecutionResult:
         """Execute a dataset pipeline.
 
         Submits a coordinator *job* that creates coordinator and worker
@@ -1600,12 +1582,19 @@ class ZephyrContext:
         disk. If the coordinator job dies (e.g., VM preemption), the
         pipeline is retried up to ``max_execution_retries`` times.
         Application errors (``ZephyrWorkerError``) are never retried.
+
+        Returns:
+            A ``ZephyrExecutionResult`` containing the flat list of results
+            produced by the terminal stage and the aggregated counters from
+            the run. Callers that only care about the results should access
+            ``.results``; counters are exposed for callers that want to
+            persist or surface them.
         """
         plan = compute_plan(dataset)
         if verbose or dry_run:
             _print_plan(dataset.operations, plan)
         if dry_run:
-            return []
+            return ZephyrExecutionResult(results=[], counters={})
 
         # NOTE: pipeline ID incremented on clean completion only
         self._pipeline_id += 1
@@ -1665,10 +1654,10 @@ class ZephyrContext:
 
                 # Read results written by the coordinator job.
                 # This must succeed — the job completed successfully.
-                result = _read_coordinator_result(result_path)
-                if isinstance(result, Exception):
-                    raise result
-                return result
+                payload = _read_coordinator_result(result_path)
+                if isinstance(payload, Exception):
+                    raise payload
+                return payload
 
             except _NON_RETRYABLE_ERRORS:
                 raise

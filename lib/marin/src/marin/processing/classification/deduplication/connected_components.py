@@ -142,7 +142,7 @@ def connected_components(
             num_output_shards=num_reduce_shards,
         ).write_parquet(f"{output_dir}/it_0/part-{{shard:05d}}.parquet"),
         verbose=True,
-    )
+    ).results
 
     def _get_write_shard_and_count_fn(iteration: int):
         # NOTE: this function exists to make the iteration number closure capture explicit
@@ -170,17 +170,15 @@ def connected_components(
     for i in range(1, max_iterations + 1):  # type: ignore[bad-assignment]
         logger.info(f"Connected components iteration {i}...")
 
-        shard_results = list(
-            ctx.execute(
-                Dataset.from_list(curr_it)
-                .load_parquet()
-                .map(lambda record: CCNode(**record))
-                .flat_map(_emit_messages)
-                .group_by(key=lambda x: x["key"], reducer=_reduce_node_step, num_output_shards=num_reduce_shards)
-                .map_shard(_get_write_shard_and_count_fn(i)),
-                verbose=True,
-            )
-        )
+        shard_results = ctx.execute(
+            Dataset.from_list(curr_it)
+            .load_parquet()
+            .map(lambda record: CCNode(**record))
+            .flat_map(_emit_messages)
+            .group_by(key=lambda x: x["key"], reducer=_reduce_node_step, num_output_shards=num_reduce_shards)
+            .map_shard(_get_write_shard_and_count_fn(i)),
+            verbose=True,
+        ).results
 
         curr_it = [r["path"] for r in shard_results]
         num_changes = sum(r["num_changes"] for r in shard_results)

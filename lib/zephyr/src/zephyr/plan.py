@@ -14,7 +14,6 @@ import heapq
 import inspect
 import logging
 import os
-import zlib
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
@@ -22,15 +21,18 @@ from itertools import groupby, islice
 from typing import Any, Protocol
 
 import msgspec
+import xxhash
 from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import url_to_fs
 
-from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
+from zephyr.external_sort import external_sort_merge
 
 from zephyr.dataset import (
     Dataset,
+    FileEntry,
     FilterOp,
     FlatMapOp,
+    GlobSource,
     GroupByOp,
     JoinOp,
     LoadFileOp,
@@ -43,6 +45,7 @@ from zephyr.dataset import (
     TakePerShardOp,
     WindowOp,
     WriteOp,
+    resolve_glob,
 )
 from zephyr.expr import Expr
 from zephyr.readers import InputFileSpec
@@ -61,7 +64,7 @@ class Shard(Protocol):
 
     Implementations:
     - ListShard: backed by iterable references (source data, non-scatter)
-    - ScatterShard: backed by scatter Parquet files with predicate pushdown
+    - ScatterReader: backed by scatter zstd-chunk files with byte-range sidecar
     """
 
     def __iter__(self) -> Iterator: ...
@@ -106,6 +109,7 @@ class Write:
     skip_existing: bool = False
     # Writer-specific parameters
     levanter_metadata: dict | None = None
+    levanter_batch_size: int | None = None
     schema: Any = None  # For parquet
 
 
@@ -204,8 +208,8 @@ def _load_file_gen(stream: Iterator) -> Iterator:
         try:
             yield from load_file(spec)
         except Exception as e:
-            logger.exception(f"Failed to load from {spec}")
-            raise RuntimeError(f"Failed to load from {spec}: {e}") from e
+            e.add_note(f"While loading from {spec}")
+            raise
 
 
 def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
@@ -421,6 +425,7 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
                     writer_type=op.writer_type,
                     skip_existing=op.skip_existing,
                     levanter_metadata=op.levanter_metadata,
+                    levanter_batch_size=op.levanter_batch_size,
                     schema=op.schema,
                 )
             )
@@ -468,14 +473,14 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
 
 
 def _compute_file_pushdown(
-    paths: list[str],
+    files: list[FileEntry],
     load_op: LoadFileOp,
     operations: list,
 ) -> tuple[list[SourceItem], list]:
     """Create source items for file pipeline with pushdown optimizations applied.
 
     Args:
-        paths: List of file paths to load
+        files: List of FileEntry objects (path + size from bulk listing)
         load_op: The LoadFileOp specifying format and default columns
         operations: Full operations list (first op is LoadFileOp)
 
@@ -508,13 +513,13 @@ def _compute_file_pushdown(
         SourceItem(
             shard_idx=i,
             data=InputFileSpec(
-                path=path,
+                path=entry.path,
                 format=load_op.format,
                 columns=select_columns,
                 filter_expr=filter_expr,
             ),
         )
-        for i, path in enumerate(paths)
+        for i, entry in enumerate(files)
     ]
 
     # Build final operations list: LoadFileOp + remaining ops
@@ -526,15 +531,30 @@ def _compute_file_pushdown(
 def compute_plan(dataset: Dataset) -> PhysicalPlan:
     """Compute physical execution plan from logical dataset."""
     operations = list(dataset.operations)
+    source = dataset.source
 
-    if operations and isinstance(operations[0], LoadFileOp):
+    # Resolve lazy glob sources into concrete FileEntry objects (with sizes).
+    if isinstance(source, GlobSource):
+        file_entries = resolve_glob(source)
+        if operations and isinstance(operations[0], LoadFileOp):
+            source_items, operations = _compute_file_pushdown(
+                file_entries,
+                operations[0],
+                operations[1:],
+            )
+        else:
+            # from_files() without load_file() — source items are plain paths
+            source_items = [SourceItem(shard_idx=i, data=entry.path) for i, entry in enumerate(file_entries)]
+    elif operations and isinstance(operations[0], LoadFileOp):
+        # Non-glob source (e.g. from_list of paths) — wrap as FileEntry without sizes
+        entries = [FileEntry(spec=InputFileSpec(path=p), size=0) for p in source]
         source_items, operations = _compute_file_pushdown(
-            list(dataset.source),
+            entries,
             operations[0],
             operations[1:],
         )
     else:
-        source_list = list(dataset.source)
+        source_list = list(source)
         source_items = [SourceItem(shard_idx=i, data=item) for i, item in enumerate(source_list)]
 
     stages = _fuse_operations(operations)
@@ -544,7 +564,7 @@ def compute_plan(dataset: Dataset) -> PhysicalPlan:
 def deterministic_hash(obj: object) -> int:
     """Compute a deterministic hash for an object."""
     s = msgspec.msgpack.encode(obj, order="deterministic")
-    return zlib.adler32(s)
+    return xxhash.xxh3_64_intdigest(s)
 
 
 def make_windows(
@@ -614,31 +634,45 @@ def _merge_sorted_chunks(
         merge_key = key_fn
 
     # Check if external sort is needed BEFORE materializing all iterators.
-    # ScatterShard can decide using manifest stats (no file opens needed).
-    from zephyr.shuffle import ScatterShard
+    # ScatterReader can decide using manifest stats (no file opens needed).
+    from zephyr.shuffle import ScatterReader
 
     use_external = (
         external_sort_dir is not None
-        and isinstance(shard, ScatterShard)
+        and isinstance(shard, ScatterReader)
         and shard.needs_external_sort(_TaskResources.from_environment().memory_bytes)
     )
 
     if use_external:
+        from zephyr.external_sort import compute_fan_in, compute_write_batch_size
+
+        memory_limit = _TaskResources.from_environment().memory_bytes
+        # Per-iterator memory ~= compressed bytes for one chunk held by
+        # cat_file. Use the actual max compressed chunk size from the sidecar.
+        per_iter_bytes = shard.max_compressed_chunk_bytes
+        fan_in = compute_fan_in(per_iter_bytes, memory_limit)
+        write_batch_size = compute_write_batch_size(shard.avg_item_bytes)
         logger.info(
-            "External sort triggered for shard with %d iterators, spilling to %s",
+            "External sort triggered for shard with %d iterators, "
+            "fan_in=%d (per_iter≈%dKB), write_batch_size=%d, spilling to %s",
             sum(it.chunk_count for it in shard.iterators),
+            fan_in,
+            per_iter_bytes // 1024,
+            write_batch_size,
             external_sort_dir,
         )
         # Pass lazy generator — external_sort_merge consumes in batches without opening all files
-        merged_stream = external_sort_merge(shard.get_iterators(), merge_key, external_sort_dir)
+        merged_stream = external_sort_merge(
+            shard.get_iterators(),
+            merge_key,
+            external_sort_dir,
+            fan_in=fan_in,
+            write_batch_size=write_batch_size,
+        )
     else:
         chunk_iterators = list(shard.get_iterators())
         logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
-        if external_sort_dir is not None and len(chunk_iterators) > EXTERNAL_SORT_FAN_IN:
-            # Fallback: stats unavailable, use fan_in threshold
-            merged_stream = external_sort_merge(iter(chunk_iterators), merge_key, external_sort_dir)
-        else:
-            merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
+        merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
     yield from groupby(merged_stream, key=key_fn)
 
 
@@ -663,9 +697,8 @@ def _sorted_merge_join(
     Yields:
         Joined items according to join_type
     """
-    # Materialize left stream and tag both streams
-    left_items = list(left_stream)
-    left_tagged = (("left", left_key_fn(item), item) for item in left_items)
+    # Tag both streams with their side for the merged iteration
+    left_tagged = (("left", left_key_fn(item), item) for item in left_stream)
     right_tagged = (("right", right_key_fn(item), item) for item in right_stream)
 
     # Merge both sorted streams by key
@@ -746,6 +779,7 @@ def run_stage(
 
     configure_logging(level=logging.INFO)
 
+    from zephyr import counters
     from zephyr.writers import write_binary_file, write_jsonl_file, write_levanter_cache, write_parquet_file
 
     stream: Iterator = iter(ctx.shard)
@@ -772,6 +806,7 @@ def run_stage(
 
                 if fs.exists(test_path):
                     logger.info(f"Skipping write, output exists: {output_path}")
+                    counters.increment("zephyr/partitions_skipped")
                     yield output_path
                     return
 
@@ -782,7 +817,10 @@ def run_stage(
                 result = write_parquet_file(stream, output_path, schema=op.schema)["path"]
             elif op.writer_type == "levanter_cache":
                 metadata = op.levanter_metadata if op.levanter_metadata is not None else {}
-                result = write_levanter_cache(stream, output_path, metadata=metadata)["path"]
+                kwargs: dict[str, Any] = {"metadata": metadata}
+                if op.levanter_batch_size is not None:
+                    kwargs["batch_size"] = op.levanter_batch_size
+                result = write_levanter_cache(stream, output_path, **kwargs)["path"]
             elif op.writer_type == "binary":
                 result = write_binary_file(stream, output_path)["path"]
             elif op.writer_type == "vortex":
@@ -803,16 +841,16 @@ def run_stage(
             return
 
         elif isinstance(op, Reduce):
-            # Build ScatterShard from scatter manifest if needed,
-            # then merge sorted chunks and reduce per key.
-            from zephyr.execution import ScatterShard, _build_scatter_shard_from_manifest
+            # Build ScatterReader directly from per-mapper sidecars, then
+            # merge sorted chunks and reduce per key.
+            from zephyr.execution import ScatterReader
 
             shard = ctx.shard
-            if not isinstance(shard, ScatterShard):
-                # Shard contains a single manifest path — read it to build ScatterShard
-                paths = list(shard)
-                assert len(paths) == 1, f"Expected single scatter manifest path, got {len(paths)}"
-                shard = _build_scatter_shard_from_manifest(paths[0], ctx.shard_idx)
+            if not isinstance(shard, ScatterReader):
+                # Shard contains every mapper's scatter-data path — reducer
+                # reads all sidecars in parallel and filters for its target.
+                scatter_paths = list(shard)
+                shard = ScatterReader.from_sidecars(scatter_paths, ctx.shard_idx)
             stream = _reduce_gen(
                 shard, op.key_fn, op.reducer_fn, sort_fn=op.sort_fn, external_sort_dir=external_sort_dir
             )

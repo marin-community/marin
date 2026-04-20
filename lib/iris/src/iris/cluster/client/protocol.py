@@ -36,6 +36,9 @@ class ClusterClient(Protocol):
         reservation: job_pb2.ReservationConfig | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+        task_image: str | None = None,
+        priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+        submit_argv: list[str] | None = None,
     ) -> JobName: ...
 
     def get_job_status(self, job_id: JobName) -> job_pb2.JobStatus: ...
@@ -48,7 +51,7 @@ class ClusterClient(Protocol):
         self,
         job_id: JobName,
         timeout: float = 300.0,
-        poll_interval: float = 2.0,
+        poll_interval: float = 30.0,
     ) -> job_pb2.JobStatus: ...
 
     def wait_for_job_with_streaming(
@@ -56,7 +59,7 @@ class ClusterClient(Protocol):
         job_id: JobName,
         *,
         timeout: float,
-        poll_interval: float,
+        poll_interval: float = 30.0,
         since_ms: int = 0,
         min_level: str = "",
     ) -> job_pb2.JobStatus: ...

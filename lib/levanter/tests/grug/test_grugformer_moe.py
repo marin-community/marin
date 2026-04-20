@@ -9,7 +9,14 @@ import jax.numpy as jnp
 from jax._src import config as jax_config
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
 
-from levanter.grug.grug_moe import MoeImplementation, _shard_a2a_params, moe_mlp
+import levanter.grug.grug_moe as grug_moe
+from levanter.grug.grug_moe import (
+    MoeImplementation,
+    _compact_by_keep_mask,
+    _expand_from_keep_mask,
+    _shard_a2a_params,
+    moe_mlp,
+)
 from levanter.utils.activation import ActivationFunctionEnum
 
 
@@ -298,7 +305,65 @@ def test_functional_moe_mlp_accepts_enum_and_callable_activation():
     np.testing.assert_allclose(np.asarray(y_callable), np.asarray(y_enum), rtol=1e-5, atol=1e-5)
 
 
-def test_moe_mlp_reports_positive_drop_count_in_ep_when_over_capacity():
+def test_compact_and_expand_from_keep_mask_roundtrip():
+    inputs = jnp.array(
+        [
+            [1.0, 10.0],
+            [2.0, 20.0],
+            [3.0, 30.0],
+            [4.0, 40.0],
+            [5.0, 50.0],
+        ],
+        dtype=jnp.float32,
+    )
+    keep_mask = jnp.array([True, False, True, True, False])
+
+    compacted = _compact_by_keep_mask(inputs, keep_mask)
+    expanded = _expand_from_keep_mask(compacted, keep_mask)
+
+    np.testing.assert_allclose(
+        np.asarray(compacted),
+        np.asarray(
+            [
+                [1.0, 10.0],
+                [3.0, 30.0],
+                [4.0, 40.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+            ],
+        ),
+        rtol=0,
+        atol=0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(expanded),
+        np.asarray(
+            [
+                [1.0, 10.0],
+                [0.0, 0.0],
+                [3.0, 30.0],
+                [4.0, 40.0],
+                [0.0, 0.0],
+            ],
+        ),
+        rtol=0,
+        atol=0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(expanded)[np.asarray(keep_mask)],
+        np.asarray(inputs)[np.asarray(keep_mask)],
+        rtol=0,
+        atol=0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(expanded)[~np.asarray(keep_mask)],
+        np.zeros((2, 2), dtype=np.float32),
+        rtol=0,
+        atol=0,
+    )
+
+
+def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
         pytest.skip("requires an even number of >=2 devices")
@@ -333,6 +398,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ep_when_over_capacity():
             combine_weights,
             w_up_gate,
             w_down,
+            implementation="ring",
             mesh=None,
             report_capacity_overflow=True,
         )
@@ -340,3 +406,76 @@ def test_moe_mlp_reports_positive_drop_count_in_ep_when_over_capacity():
     assert out.shape == (tokens, hidden_dim)
     assert dropped.shape == ()
     assert int(dropped) > 0
+
+
+def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
+    mesh = _make_ep_mesh_or_none()
+    if mesh is None:
+        pytest.skip("requires an even number of >=2 devices")
+
+    tokens = len(jax.devices()) * 8
+    hidden_dim = 16
+    intermediate_dim = 24
+    num_experts = 4
+    topk = 2
+
+    key = jax.random.key(15)
+    x = jax.random.normal(key, (tokens, hidden_dim), dtype=jnp.float32)
+    selected_experts = jnp.zeros((tokens, topk), dtype=jnp.int32)
+    combine_weights = jnp.full((tokens, topk), 0.5, dtype=jnp.float32)
+    w_up_gate = jax.random.normal(
+        jax.random.key(16), (num_experts, hidden_dim, 2 * intermediate_dim), dtype=jnp.float32
+    )
+    w_down = jax.random.normal(jax.random.key(17), (num_experts, intermediate_dim, hidden_dim), dtype=jnp.float32)
+
+    with jax.set_mesh(mesh):
+        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+        x = jax.sharding.reshard(x, batch_sharding)
+        selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
+        combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+        w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
+        w_down = jax.sharding.reshard(w_down, expert_sharding)
+
+        out, dropped = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="ragged_all_to_all",
+            mesh=None,
+            report_capacity_overflow=True,
+        )
+
+    assert out.shape == (tokens, hidden_dim)
+    assert dropped.shape == ()
+    assert int(dropped) > 0
+
+
+def test_ragged_a2a_receiver_clipping_respects_capacity():
+    group_sizes = jnp.array(
+        [
+            [3, 1, 0, 0],
+            [2, 0, 4, 1],
+        ],
+        dtype=jnp.int32,
+    )
+
+    clipped = grug_moe._clip_receiver_group_sizes(
+        group_sizes,
+        local_expert_size=2,
+        receiver_capacity=3,
+    )
+
+    np.testing.assert_array_equal(
+        np.asarray(clipped),
+        np.asarray(
+            [
+                [3, 0, 0, 0],
+                [0, 0, 3, 0],
+            ],
+            dtype=np.int32,
+        ),
+    )
+    assert int(jnp.sum(clipped)) < int(jnp.sum(group_sizes))
