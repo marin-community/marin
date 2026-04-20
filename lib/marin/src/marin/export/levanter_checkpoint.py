@@ -7,14 +7,15 @@ from dataclasses import dataclass
 from typing import Any
 
 import levanter.infra.cli_helpers
-from fray.v1.cluster import (
+from fray.v2 import current_client
+from fray.v2.types import (
     CpuConfig,
     Entrypoint,
-    EnvironmentConfig,
+    GpuConfig,
     JobRequest,
     ResourceConfig,
     TpuConfig,
-    current_cluster,
+    create_environment,
 )
 from levanter.checkpoint import discover_latest_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef
@@ -109,16 +110,21 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
     if isinstance(config.resources.device, TpuConfig):
         assert config.resources.replicas == 1, "Export currently works on single slices at present."
 
+    extras: list[str] = []
+    if isinstance(config.resources.device, TpuConfig):
+        extras.append("tpu")
+    elif isinstance(config.resources.device, GpuConfig):
+        extras.append("gpu")
+
+    client = current_client()
     job_request = JobRequest(
         name="convert-checkpoint-to-hf",
         entrypoint=Entrypoint.from_callable(_run_with_lockfile),
         resources=config.resources,
-        environment=EnvironmentConfig.create(env_vars=env),
+        environment=create_environment(env_vars=env, extras=extras),
     )
-
-    cluster = current_cluster()
-    job_id = cluster.launch(job_request)
-    cluster.wait(job_id, raise_on_failure=True)
+    job = client.submit(job_request)
+    job.wait(raise_on_failure=True)
 
 
 def convert_checkpoint_to_hf_step(
