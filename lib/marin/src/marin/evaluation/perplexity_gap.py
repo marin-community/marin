@@ -3,6 +3,7 @@
 
 import os
 from dataclasses import dataclass, field
+from typing import Any
 
 from fray.v2 import current_client
 from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
@@ -17,7 +18,7 @@ from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.executor import ExecutorStep, InputName, this_output_path
+from marin.execution.executor import ExecutorStep, InputName, VersionedValue, this_output_path, versioned
 from marin.processing.tokenize import HfDatasetSpec
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
@@ -54,6 +55,7 @@ class ModelPerplexityGapConfig:
     max_docs_per_dataset: int | None = 256
     max_doc_bytes: int | None = 32_768
     wandb_tags: list[str] | None = None
+    cache_key: dict[str, Any] | VersionedValue[dict[str, Any]] = field(default_factory=dict, repr=False)
 
 
 def raw_text_dataset(
@@ -102,6 +104,20 @@ def default_model_perplexity_gap(
             max_docs_per_dataset=max_docs_per_dataset,
             max_doc_bytes=max_doc_bytes,
             wandb_tags=wandb_tags,
+            cache_key=versioned(
+                {
+                    "name": name,
+                    "model_a": _cache_key_for_model(model_a),
+                    "model_b": _cache_key_for_model(model_b),
+                    "datasets": {dataset_name: _cache_key_for_dataset(ds) for dataset_name, ds in datasets.items()},
+                    "resource_config": resource_config,
+                    "per_device_batch_size": per_device_batch_size,
+                    "max_eval_length": max_eval_length,
+                    "max_docs_per_dataset": max_docs_per_dataset,
+                    "max_doc_bytes": max_doc_bytes,
+                    "wandb_tags": wandb_tags,
+                }
+            ),
         ),
     )
 
@@ -188,3 +204,36 @@ def _default_step_name(model_a: GapFinderModelConfig, model_b: GapFinderModelCon
     left = ckpt_path_to_step_name(model_a.checkpoint_path)
     right = ckpt_path_to_step_name(model_b.checkpoint_path)
     return f"{left}-vs-{right}"
+
+
+def _cache_key_for_model(config: GapFinderModelConfig) -> dict[str, Any]:
+    checkpoint_path: str | None
+    if isinstance(config.checkpoint_path, InputName):
+        checkpoint_path = None
+    else:
+        checkpoint_path = config.checkpoint_path
+
+    return {
+        "checkpoint_path": checkpoint_path,
+        "checkpoint_is_hf": config.checkpoint_is_hf,
+        "model": config.model,
+        "tokenizer": config.tokenizer,
+        "tokenizer_backend": config.tokenizer_backend.value,
+        "trust_remote_code": config.trust_remote_code,
+    }
+
+
+def _cache_key_for_dataset(dataset: RawTextEvaluationDataset) -> dict[str, Any]:
+    input_path: str | None
+    if isinstance(dataset.input_path, (InputName, ExecutorStep)) or dataset.input_path is None:
+        input_path = None
+    else:
+        input_path = dataset.input_path
+
+    return {
+        "input_path": input_path,
+        "hf_dataset_id": dataset.hf_dataset_id,
+        "hf_dataset_name": dataset.hf_dataset_name,
+        "text_key": dataset.text_key,
+        "tags": dataset.tags,
+    }

@@ -5,6 +5,7 @@ import json
 import math
 import os
 import tempfile
+from typing import Any
 
 import jax
 import numpy as np
@@ -18,6 +19,7 @@ from levanter.analysis.perplexity_gap import (
     TokenizedDocument,
     _truncate_text_to_byte_limit,
     tokenize_text_with_byte_spans,
+    write_report_files,
 )
 from levanter.checkpoint import save_checkpoint
 from levanter.data.text import DatasetComponent, TextLmDatasetFormat, UrlDatasetSourceConfig
@@ -26,9 +28,13 @@ from levanter.main.perplexity_gap import (
     GapFinderConfig,
     GapFinderModelConfig,
     _accumulate_token_losses,
+    _check_finite_losses,
+    _log_report_artifact,
     main,
 )
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
+from levanter.tracker import current_tracker
+from levanter.tracker.tracker import DictTracker
 from levanter.tokenizers import load_tokenizer
 from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
@@ -114,6 +120,49 @@ def test_gap_report_builder_records_per_model_literal_boundaries():
     assert literal_row["model_a_token_boundaries"] == "|abc|"
     assert literal_row["model_b_token_boundaries"] == "|a|bc|"
     assert literal_row["example_dataset"] == "paloma/example"
+
+
+def test_write_report_files_and_log_artifact_bundle():
+    summary: dict[str, Any] = {
+        "model_a": "a",
+        "model_b": "b",
+        "datasets": [],
+        "dataset_groups": [],
+        "pattern_buckets": [],
+        "top_documents": {"model_a_worse": [], "model_b_worse": []},
+        "top_segments": {"model_a_worse": [], "model_b_worse": []},
+        "top_literals": {"model_a_worse": [], "model_b_worse": []},
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        summary_path, html_path = write_report_files(tmpdir, summary)
+        assert os.path.exists(summary_path)
+        assert os.path.exists(html_path)
+
+    tracker = DictTracker()
+    captured: dict[str, Any] = {}
+
+    def capture_artifact(artifact_path, *, name=None, type=None):
+        captured["name"] = name
+        captured["type"] = type
+        captured["files"] = sorted(os.listdir(artifact_path))
+        with open(os.path.join(artifact_path, "summary.json")) as f:
+            captured["summary"] = json.load(f)
+
+    tracker.log_artifact = capture_artifact  # type: ignore[method-assign]
+
+    with current_tracker(tracker):
+        _log_report_artifact(summary)
+
+    assert captured["name"] == "perplexity_gap_report"
+    assert captured["type"] == "perplexity_gap_report"
+    assert captured["files"] == ["report.html", "summary.json"]
+    assert captured["summary"]["model_a"] == "a"
+
+
+def test_check_finite_losses_raises_on_non_finite_values():
+    with pytest.raises(ValueError, match="checkpoint and tokenizer are incompatible"):
+        _check_finite_losses("bad-model", np.asarray([[float("nan")]], dtype=np.float64))
 
 
 def test_truncate_text_to_byte_limit_respects_utf8_boundaries():

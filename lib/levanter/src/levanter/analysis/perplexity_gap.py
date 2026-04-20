@@ -293,17 +293,7 @@ class GapReportBuilder:
 
     def write(self) -> dict[str, Any]:
         summary = self.build_summary()
-        summary_path = os.path.join(self.output_path, "summary.json")
-        html_path = os.path.join(self.output_path, "report.html")
-        fs, _, _ = fsspec.get_fs_token_paths(summary_path)
-        fs.makedirs(self.output_path, exist_ok=True)
-
-        with open_url(summary_path, "w") as f:
-            json.dump(summary, f, indent=2, sort_keys=True)
-
-        with open_url(html_path, "w") as f:
-            f.write(render_report_html(summary))
-
+        write_report_files(self.output_path, summary)
         return summary
 
     def _register_hierarchy(self, tag: str, dataset_name: str) -> None:
@@ -638,6 +628,21 @@ def render_report_html(summary: dict[str, Any]) -> str:
         "</body></html>",
     ]
     return "".join(parts)
+
+
+def write_report_files(output_path: str, summary: dict[str, Any]) -> tuple[str, str]:
+    summary_path = os.path.join(output_path, "summary.json")
+    html_path = os.path.join(output_path, "report.html")
+    fs, _, _ = fsspec.get_fs_token_paths(summary_path)
+    fs.makedirs(output_path, exist_ok=True)
+
+    with open_url(summary_path, "w") as f:
+        json.dump(summary, f, indent=2, sort_keys=True)
+
+    with open_url(html_path, "w") as f:
+        f.write(render_report_html(summary))
+
+    return summary_path, html_path
 
 
 def _format_cell(value: Any) -> str:

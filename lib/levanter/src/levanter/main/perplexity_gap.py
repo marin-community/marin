@@ -4,6 +4,7 @@
 import dataclasses
 import logging
 import os
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -26,6 +27,7 @@ from levanter.analysis.perplexity_gap import (
     batch_chunks,
     iter_raw_text_documents,
     tokenize_text_with_byte_spans,
+    write_report_files,
 )
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
@@ -95,6 +97,7 @@ class _ModelRunner:
 
         for chunk_batch in batch_chunks(chunks, batch_size=self.eval_batch_size, max_eval_length=self.eval_length):
             batch_losses = self._score_chunk_batch(chunk_batch)
+            _check_finite_losses(self.label, batch_losses)
             for row, chunk in enumerate(chunk_batch):
                 actual_len = len(chunk.token_ids)
                 if actual_len <= 1:
@@ -197,6 +200,7 @@ def main(config: GapFinderConfig) -> None:
 
         summary = report.write()
         levanter.tracker.log(_summary_scalars(summary), step=0)
+        _log_report_artifact(summary)
 
     levanter.tracker.current_tracker().finish()
 
@@ -339,6 +343,29 @@ def _summary_scalars(summary: dict[str, Any]) -> dict[str, float]:
             continue
         scalars[f"gap/patterns/{row['name']}/bpb_gap"] = float(row["gap_bpb"])
     return scalars
+
+
+def _check_finite_losses(label: str, losses: np.ndarray) -> None:
+    if np.isfinite(losses).all():
+        return
+
+    raise ValueError(
+        f"Non-finite losses while scoring {label}. "
+        "This usually means the checkpoint and tokenizer are incompatible."
+    )
+
+
+def _log_report_artifact(summary: dict[str, Any]) -> None:
+    if jax.process_index() != 0:
+        return
+
+    with tempfile.TemporaryDirectory(prefix="perplexity-gap-report-") as tmpdir:
+        write_report_files(tmpdir, summary)
+        levanter.tracker.current_tracker().log_artifact(
+            tmpdir,
+            name="perplexity_gap_report",
+            type="perplexity_gap_report",
+        )
 
 
 if __name__ == "__main__":
