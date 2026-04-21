@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import heapq
-import html
 import itertools
 import json
 import os
@@ -604,33 +603,34 @@ def bucket_for_segment(segment: str) -> str:
     return "text/punctuation"
 
 
-def render_report_html(summary: dict[str, Any]) -> str:
+def render_report_markdown(summary: dict[str, Any]) -> str:
     def section(title: str, rows: Sequence[dict[str, Any]], note: str | None = None) -> str:
         if not rows:
-            return f"<h2>{html.escape(title)}</h2><p>No rows.</p>"
+            return f"## {title}\n\nNo rows.\n"
 
         headers = list(rows[0].keys())
-        table = "<table><thead><tr>" + "".join(f"<th>{html.escape(h)}</th>" for h in headers) + "</tr></thead><tbody>"
+        table = [
+            "| " + " | ".join(_escape_markdown_table_cell(h) for h in headers) + " |",
+            "| " + " | ".join("---" for _ in headers) + " |",
+        ]
         for row in rows:
-            table += "<tr>" + "".join(f"<td>{html.escape(_format_cell(row[h]))}</td>" for h in headers) + "</tr>"
-        table += "</tbody></table>"
-        note_html = f"<p>{html.escape(note)}</p>" if note is not None else ""
-        return f"<h2>{html.escape(title)}</h2>{note_html}{table}"
+            table.append("| " + " | ".join(_format_markdown_cell(row[h]) for h in headers) + " |")
+
+        parts = [f"## {title}"]
+        if note is not None:
+            parts.extend(["", note])
+        parts.extend(["", *table, ""])
+        return "\n".join(parts)
 
     literal_note = (
         "Representative token boundaries come from the highest-gap occurrence for each literal. "
-        "An ellipsis means the token continues outside the literal boundary in that example."
+        "`|` marks token boundaries for each model; an ellipsis means the token continues outside "
+        "the literal boundary in that example."
     )
     parts = [
-        "<html><head><meta charset='utf-8'><style>"
-        "body{font-family:sans-serif;max-width:1200px;margin:24px auto;padding:0 16px;}"
-        "table{border-collapse:collapse;width:100%;margin:12px 0 28px 0;font-size:14px;}"
-        "th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;vertical-align:top;}"
-        "th{background:#f5f5f5;}"
-        "code{font-family:monospace;}"
-        "</style></head><body>",
-        f"<h1>Perplexity Gap Report</h1><p><strong>Model A:</strong> {html.escape(summary['model_a'])}<br>"
-        f"<strong>Model B:</strong> {html.escape(summary['model_b'])}</p>",
+        "# Perplexity Gap Report\n",
+        f"**Model A:** {_escape_markdown_text(str(summary['model_a']))}\n",
+        f"**Model B:** {_escape_markdown_text(str(summary['model_b']))}\n",
         section("Datasets", summary["datasets"]),
         section("Dataset Groups", summary["dataset_groups"]),
         section("Pattern Buckets", summary["pattern_buckets"]),
@@ -640,24 +640,23 @@ def render_report_html(summary: dict[str, Any]) -> str:
         section("Top Segments: Model B Worse", summary["top_segments"]["model_b_worse"]),
         section("Top Literals: Model A Worse", summary["top_literals"]["model_a_worse"], note=literal_note),
         section("Top Literals: Model B Worse", summary["top_literals"]["model_b_worse"], note=literal_note),
-        "</body></html>",
     ]
-    return "".join(parts)
+    return "\n".join(parts)
 
 
 def write_report_files(output_path: str, summary: dict[str, Any]) -> tuple[str, str]:
     summary_path = os.path.join(output_path, "summary.json")
-    html_path = os.path.join(output_path, "report.html")
+    report_path = os.path.join(output_path, "report.md")
     fs, _, _ = fsspec.get_fs_token_paths(summary_path)
     fs.makedirs(output_path, exist_ok=True)
 
     with open_url(summary_path, "w") as f:
         json.dump(summary, f, indent=2, sort_keys=True)
 
-    with open_url(html_path, "w") as f:
-        f.write(render_report_html(summary))
+    with open_url(report_path, "w") as f:
+        f.write(render_report_markdown(summary))
 
-    return summary_path, html_path
+    return summary_path, report_path
 
 
 def _format_cell(value: Any) -> str:
@@ -666,6 +665,18 @@ def _format_cell(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.6f}"
     return str(value)
+
+
+def _format_markdown_cell(value: Any) -> str:
+    return _escape_markdown_table_cell(_format_cell(value))
+
+
+def _escape_markdown_table_cell(value: str) -> str:
+    return _escape_markdown_text(value).replace("\r", " ").replace("\n", "<br>")
+
+
+def _escape_markdown_text(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("|", "\\|")
 
 
 def _push_top_positive(

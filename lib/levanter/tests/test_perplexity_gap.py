@@ -21,6 +21,7 @@ from levanter.analysis.perplexity_gap import (
     _truncate_text_to_byte_limit,
     batch_chunks,
     chunk_tokenized_document,
+    render_report_markdown,
     tokenize_text_with_byte_spans,
     write_report_files,
 )
@@ -138,9 +139,10 @@ def test_write_report_files_and_log_artifact_bundle():
     }
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        summary_path, html_path = write_report_files(tmpdir, summary)
+        summary_path, report_path = write_report_files(tmpdir, summary)
         assert os.path.exists(summary_path)
-        assert os.path.exists(html_path)
+        assert os.path.exists(report_path)
+        assert report_path.endswith("report.md")
 
     tracker = DictTracker()
     captured: dict[str, Any] = {}
@@ -159,8 +161,37 @@ def test_write_report_files_and_log_artifact_bundle():
 
     assert captured["name"] == "perplexity_gap_report"
     assert captured["type"] == "perplexity_gap_report"
-    assert captured["files"] == ["report.html", "summary.json"]
+    assert captured["files"] == ["report.md", "summary.json"]
     assert captured["summary"]["model_a"] == "a"
+
+
+def test_render_report_markdown_escapes_table_boundaries():
+    summary: dict[str, Any] = {
+        "model_a": "a|model",
+        "model_b": "b",
+        "datasets": [{"name": "data|set", "documents": 1, "gap_bpb": 1.25}],
+        "dataset_groups": [],
+        "pattern_buckets": [],
+        "top_documents": {"model_a_worse": [], "model_b_worse": []},
+        "top_segments": {"model_a_worse": [], "model_b_worse": []},
+        "top_literals": {
+            "model_a_worse": [
+                {
+                    "name": "abc",
+                    "model_a_token_boundaries": "|ab|c|",
+                    "model_b_token_boundaries": "|a|bc|",
+                }
+            ],
+            "model_b_worse": [],
+        },
+    }
+
+    markdown = render_report_markdown(summary)
+
+    assert "# Perplexity Gap Report" in markdown
+    assert "**Model A:** a\\|model" in markdown
+    assert "data\\|set" in markdown
+    assert "\\|ab\\|c\\|" in markdown
 
 
 def test_check_finite_losses_raises_on_non_finite_values():
