@@ -13,6 +13,7 @@ import logging
 import os
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import click
@@ -30,7 +31,9 @@ from iris.cluster.constraints import (
     WellKnownAttribute,
     device_variant_constraint,
     infer_preemptible_constraint,
+    merge_constraints,
     region_constraint,
+    routing_constraints,
     zone_constraint,
 )
 from iris.cluster.redaction import redact_submit_argv
@@ -601,6 +604,16 @@ def run_iris_job(
         reservation = []
         for spec in reserve:
             reservation.extend(parse_reservation_spec(spec))
+        # Propagate job-level routing constraints onto each reservation entry.
+        # The controller's claim loop only evaluates entry-level constraints, so
+        # without this the job's --region/--zone would not gate worker claims
+        # (see issue #4988). Entry-specified constraints win for canonical keys.
+        job_routing = routing_constraints(constraints)
+        if job_routing:
+            reservation = [
+                replace(entry, constraints=merge_constraints(job_routing, entry.constraints or []))
+                for entry in reservation
+            ]
 
     logger.info(f"Submitting job: {job_name}")
     logger.info(f"Command: {' '.join(command)}")
