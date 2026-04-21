@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TypeVar
 
 import fsspec
@@ -26,27 +26,18 @@ def _get_fs_and_plain_path(path: str) -> tuple[AbstractFileSystem, str]:
     return fs, plain_path
 
 
-def _checkpoint_candidates(checkpoint_path: str, *, additional_paths: list[str] | None = None) -> list[str]:
-    if _is_checkpoint_dir(checkpoint_path):
-        return [checkpoint_path]
-
-    all_roots = [checkpoint_path] + (additional_paths or [])
-
+def _checkpoint_candidates(checkpoint_search_paths: Sequence[str]) -> list[str]:
     candidates: list[tuple[int, str, str]] = []
-    for root in all_roots:
-        candidates.extend(_scan_checkpoint_root(root))
+    for search_path in checkpoint_search_paths:
+        candidates.extend(_scan_checkpoint_root(search_path))
 
     candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
     ordered_candidates = [candidate for _, _, candidate in candidates]
-    if checkpoint_path not in ordered_candidates:
-        ordered_candidates.append(checkpoint_path)
 
+    for search_path in checkpoint_search_paths:
+        if search_path not in ordered_candidates:
+            ordered_candidates.append(search_path)
     return ordered_candidates
-
-
-def _is_checkpoint_dir(checkpoint_path: str) -> bool:
-    fs, plain_path = _get_fs_and_plain_path(checkpoint_path)
-    return fs.exists(os.path.join(plain_path, "metadata.json"))
 
 
 def _scan_checkpoint_root(root_path: str) -> list[tuple[int, str, str]]:
@@ -91,22 +82,21 @@ def _scan_checkpoint_root(root_path: str) -> list[tuple[int, str, str]]:
 def restore_grug_state_from_checkpoint(
     state: StateT,
     *,
-    checkpoint_path: str | None,
+    checkpoint_search_paths: Sequence[str],
     load_checkpoint_setting: bool | None,
     mesh: jax.sharding.Mesh | None,
     allow_partial: bool,
-    additional_checkpoint_paths: list[str] | None = None,
     _load_fn: Callable[..., StateT] = load_checkpoint,
 ) -> StateT:
-    if checkpoint_path is None:
+    if not checkpoint_search_paths:
         if load_checkpoint_setting:
-            raise FileNotFoundError("load_checkpoint=True but no checkpoint path is configured.")
+            raise FileNotFoundError("load_checkpoint=True but no checkpoint search paths are configured.")
         return state
 
     if load_checkpoint_setting is False:
         return state
 
-    candidates = _checkpoint_candidates(checkpoint_path, additional_paths=additional_checkpoint_paths or [])
+    candidates = _checkpoint_candidates(checkpoint_search_paths)
     last_error: FileNotFoundError | None = None
 
     for candidate in candidates:
@@ -118,8 +108,8 @@ def restore_grug_state_from_checkpoint(
                 allow_partial=allow_partial,
                 load_fn=_load_fn,
             )
-            if candidate != checkpoint_path:
-                logger.info("Loaded checkpoint %s from %s", checkpoint_path, candidate)
+            if candidate not in checkpoint_search_paths:
+                logger.info("Loaded checkpoint from %s while searching %s", candidate, checkpoint_search_paths)
             return loaded
         except FileNotFoundError as exc:
             last_error = exc
@@ -128,14 +118,15 @@ def restore_grug_state_from_checkpoint(
             )
 
     if load_checkpoint_setting is True:
+        search_path_summary = ", ".join(checkpoint_search_paths)
         attempted = ", ".join(candidates)
         if last_error is None:
-            raise FileNotFoundError(f"Could not find checkpoint at {checkpoint_path}")
+            raise FileNotFoundError(f"Could not find checkpoint under any of: {search_path_summary}")
         raise FileNotFoundError(
-            f"Could not load a checkpoint from {checkpoint_path}. Attempted: {attempted}"
+            f"Could not load a checkpoint from search paths {search_path_summary}. Attempted: {attempted}"
         ) from last_error
 
-    logger.info(f"Checkpoint not found at {checkpoint_path}. Starting from scratch.")
+    logger.info("Checkpoint not found under %s. Starting from scratch.", checkpoint_search_paths)
     return state
 
 

@@ -34,7 +34,7 @@ def test_restore_prefers_highest_step_over_latest_timestamp(tmp_path: Path):
 
     loaded = restore_grug_state_from_checkpoint(
         {"state": "init"},
-        checkpoint_path=str(checkpoint_root),
+        checkpoint_search_paths=[str(checkpoint_root)],
         load_checkpoint_setting=True,
         mesh=None,
         allow_partial=False,
@@ -61,7 +61,7 @@ def test_restore_falls_back_to_older_checkpoint_when_latest_fails(tmp_path: Path
 
     loaded = restore_grug_state_from_checkpoint(
         {"state": "init"},
-        checkpoint_path=str(checkpoint_root),
+        checkpoint_search_paths=[str(checkpoint_root)],
         load_checkpoint_setting=None,
         mesh=None,
         allow_partial=False,
@@ -86,7 +86,7 @@ def test_restore_raises_when_required_and_no_checkpoint_loads(tmp_path: Path):
     with pytest.raises(FileNotFoundError, match="Could not load a checkpoint"):
         restore_grug_state_from_checkpoint(
             {"state": "init"},
-            checkpoint_path=str(checkpoint_root),
+            checkpoint_search_paths=[str(checkpoint_root)],
             load_checkpoint_setting=True,
             mesh=None,
             allow_partial=False,
@@ -94,7 +94,7 @@ def test_restore_raises_when_required_and_no_checkpoint_loads(tmp_path: Path):
         )
 
 
-def test_restore_discovers_candidates_across_additional_paths(tmp_path: Path):
+def test_restore_discovers_candidates_across_search_paths(tmp_path: Path):
     permanent_root = tmp_path / "checkpoints"
     temp_root = tmp_path / "checkpoints-temp"
 
@@ -109,20 +109,19 @@ def test_restore_discovers_candidates_across_additional_paths(tmp_path: Path):
 
     loaded = restore_grug_state_from_checkpoint(
         {"state": "init"},
-        checkpoint_path=str(permanent_root),
+        checkpoint_search_paths=[str(permanent_root), str(temp_root)],
         load_checkpoint_setting=True,
         mesh=None,
         allow_partial=False,
-        additional_checkpoint_paths=[str(temp_root)],
         _load_fn=fake_load,
     )
 
-    # step-150 from temp root should be preferred (highest step)
+    # step-150 from temp root should be preferred (highest step).
     assert attempted == [str(temp_root / "step-150")]
     assert loaded == {"loaded_from": str(temp_root / "step-150")}
 
 
-def test_restore_respects_explicit_checkpoint_path_with_additional_paths(tmp_path: Path):
+def test_restore_respects_explicit_checkpoint_path_as_single_search_path(tmp_path: Path):
     permanent_root = tmp_path / "checkpoints"
     temp_root = tmp_path / "checkpoints-temp"
     explicit_checkpoint = permanent_root / "step-100"
@@ -138,11 +137,10 @@ def test_restore_respects_explicit_checkpoint_path_with_additional_paths(tmp_pat
 
     loaded = restore_grug_state_from_checkpoint(
         {"state": "init"},
-        checkpoint_path=str(explicit_checkpoint),
+        checkpoint_search_paths=[str(explicit_checkpoint)],
         load_checkpoint_setting=True,
         mesh=None,
         allow_partial=False,
-        additional_checkpoint_paths=[str(temp_root)],
         _load_fn=fake_load,
     )
 
@@ -167,11 +165,10 @@ def test_restore_falls_back_from_temp_to_permanent(tmp_path: Path):
 
     loaded = restore_grug_state_from_checkpoint(
         {"state": "init"},
-        checkpoint_path=str(permanent_root),
+        checkpoint_search_paths=[str(permanent_root), str(temp_root)],
         load_checkpoint_setting=None,
         mesh=None,
         allow_partial=False,
-        additional_checkpoint_paths=[str(temp_root)],
         _load_fn=fake_load,
     )
 
@@ -197,7 +194,7 @@ def test_restore_supports_legacy_wrapped_and_current_checkpoint_formats(tmp_path
 
     loaded_legacy = restore_grug_state_from_checkpoint(
         template_state,
-        checkpoint_path=str(checkpoint_root),
+        checkpoint_search_paths=[str(checkpoint_root)],
         load_checkpoint_setting=True,
         mesh=None,
         allow_partial=False,
@@ -210,7 +207,7 @@ def test_restore_supports_legacy_wrapped_and_current_checkpoint_formats(tmp_path
 
     loaded_current = restore_grug_state_from_checkpoint(
         template_state,
-        checkpoint_path=str(checkpoint_root),
+        checkpoint_search_paths=[str(checkpoint_root)],
         load_checkpoint_setting=True,
         mesh=None,
         allow_partial=False,
