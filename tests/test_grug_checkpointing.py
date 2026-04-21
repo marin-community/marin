@@ -122,6 +122,34 @@ def test_restore_discovers_candidates_across_additional_paths(tmp_path: Path):
     assert loaded == {"loaded_from": str(temp_root / "step-150")}
 
 
+def test_restore_respects_explicit_checkpoint_path_with_additional_paths(tmp_path: Path):
+    permanent_root = tmp_path / "checkpoints"
+    temp_root = tmp_path / "checkpoints-temp"
+    explicit_checkpoint = permanent_root / "step-100"
+
+    _write_checkpoint_metadata(explicit_checkpoint, step=100, timestamp="2026-03-17T00:00:00")
+    _write_checkpoint_metadata(temp_root / "step-150", step=150, timestamp="2026-03-17T06:00:00")
+
+    attempted: list[str] = []
+
+    def fake_load(state, path, *, discover_latest, axis_mapping, mesh, allow_partial):
+        attempted.append(path)
+        return {"loaded_from": path}
+
+    loaded = restore_grug_state_from_checkpoint(
+        {"state": "init"},
+        checkpoint_path=str(explicit_checkpoint),
+        load_checkpoint_setting=True,
+        mesh=None,
+        allow_partial=False,
+        additional_checkpoint_paths=[str(temp_root)],
+        _load_fn=fake_load,
+    )
+
+    assert attempted == [str(explicit_checkpoint)]
+    assert loaded == {"loaded_from": str(explicit_checkpoint)}
+
+
 def test_restore_falls_back_from_temp_to_permanent(tmp_path: Path):
     permanent_root = tmp_path / "checkpoints"
     temp_root = tmp_path / "checkpoints-temp"

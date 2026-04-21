@@ -27,6 +27,9 @@ def _get_fs_and_plain_path(path: str) -> tuple[AbstractFileSystem, str]:
 
 
 def _checkpoint_candidates(checkpoint_path: str, *, additional_paths: list[str] | None = None) -> list[str]:
+    if _is_checkpoint_dir(checkpoint_path):
+        return [checkpoint_path]
+
     all_roots = [checkpoint_path] + (additional_paths or [])
 
     candidates: list[tuple[int, str, str]] = []
@@ -39,6 +42,11 @@ def _checkpoint_candidates(checkpoint_path: str, *, additional_paths: list[str] 
         ordered_candidates.append(checkpoint_path)
 
     return ordered_candidates
+
+
+def _is_checkpoint_dir(checkpoint_path: str) -> bool:
+    fs, plain_path = _get_fs_and_plain_path(checkpoint_path)
+    return fs.exists(os.path.join(plain_path, "metadata.json"))
 
 
 def _scan_checkpoint_root(root_path: str) -> list[tuple[int, str, str]]:
