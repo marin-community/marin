@@ -20,6 +20,7 @@ from levanter.callbacks._metrics import (
     pbar_logger,
 )
 from levanter.callbacks.state_adapter import CallbackStateView, StateCallbackRunner
+from levanter.callbacks.straggler import StragglerReporter, compute_rank_stats, update_ewma
 from levanter.callbacks.profiler import _flush_while_waiting, profile
 from levanter.data import DataLoader
 from levanter.metrics import LossFunctionWithMetrics, unwrap_metrics
@@ -252,4 +253,7 @@ __all__ = [
     "pbar_logger",
     "CallbackStateView",
     "StateCallbackRunner",
+    "StragglerReporter",
+    "compute_rank_stats",
+    "update_ewma",
 ]
