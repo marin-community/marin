@@ -12,12 +12,10 @@ def test_default_tokenize_with_dataset_name():
         name="dummy",
         dataset=HfDatasetSpec(id="cnn_dailymail", name="3.0.0"),
         tokenizer="gpt2",
-        tags=("eval", "news"),
     )
     assert isinstance(step.config, HfTokenizeConfig)
     assert step.config.id == "cnn_dailymail"
     assert step.config.name == "3.0.0"
-    assert step.config.tags == ["eval", "news"]
 
 
 def test_default_tokenize_with_hf_bucket_path_uses_filesystem_tokenize_config():
@@ -26,12 +24,10 @@ def test_default_tokenize_with_hf_bucket_path_uses_filesystem_tokenize_config():
         name="dummy",
         dataset=bucket_path,
         tokenizer="gpt2",
-        tags=("bucket",),
     )
 
     assert isinstance(step.config, TokenizeConfig)
     assert step.config.train_paths == [bucket_path]
-    assert step.config.tags == ["bucket"]
 
 
 def test_default_download_with_hf_bucket_path_uses_bucket_prefix():
