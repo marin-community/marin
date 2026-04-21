@@ -400,7 +400,7 @@ eval_fasttext_topic = StepSpec(
     name="eval_fasttext_topic",
     output_path_prefix=_OUTPUT_PREFIX,
     deps=[fasttext_topic, oracle_topic],
-    hash_attrs={"v": 1},
+    hash_attrs={"v": 2},
     fn=remote(
         lambda output_path: evaluate_fasttext_topic(
             output_path=output_path,

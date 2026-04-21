@@ -457,6 +457,9 @@ _FASTTEXT_TO_DISPLAY_ALIASES: dict[str, str] = {
     "software_development": "Software Dev.",
     "history_and_geography": "History",
     "science_math_and_technology": "Science & Tech.",
+    # ``hardare`` is a literal typo in the Dolma-3 fasttext model's labels.
+    "electronics_and_hardare": "Hardware",
+    "travel_and_tourism": "Travel",
 }
 
 
