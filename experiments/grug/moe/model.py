@@ -73,6 +73,7 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    use_sandwich_norm: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -414,15 +415,22 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    rms_post_mlp: RMSNorm | None
+    post_mlp_gated_norm: GatedNorm | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
-        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
+        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key, gn_post_key = random.split(key, 6)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
             shared = DenseMLP.init(
                 cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
             )
+        rms_post = None
+        gn_post = None
+        if cfg.use_sandwich_norm:
+            rms_post = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+            gn_post = GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_post_key)
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
@@ -431,6 +439,8 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            rms_post_mlp=rms_post,
+            post_mlp_gated_norm=gn_post,
         )
 
     @named_call
@@ -445,6 +455,8 @@ class Block(eqx.Module):
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+        if self.post_mlp_gated_norm is not None:
+            mlp_out = self.post_mlp_gated_norm(self.rms_post_mlp(mlp_out))
         x = x + mlp_out
         return x, router_stats
 
