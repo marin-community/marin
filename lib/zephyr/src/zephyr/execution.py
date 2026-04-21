@@ -545,13 +545,15 @@ class ZephyrCoordinator:
                 errors = self._shard_errors.get(shard_idx, [])
                 error_detail = f"\nLast error:\n{errors[-1]}" if errors else ""
                 logger.error(
-                    "Shard %d has failed %d times (max %d), aborting pipeline.",
+                    "Shard %d has failed %d times (max %d), last failure on worker %s, aborting pipeline.",
                     shard_idx,
                     error_attempts,
                     MAX_SHARD_FAILURES,
+                    worker_id,
                 )
                 self._fatal_error = (
-                    f"Shard {shard_idx} failed {error_attempts} times " f"(max {MAX_SHARD_FAILURES}).{error_detail}"
+                    f"Shard {shard_idx} failed {error_attempts} times "
+                    f"(max {MAX_SHARD_FAILURES}), last failure on worker {worker_id}.{error_detail}"
                 )
                 return True
 
