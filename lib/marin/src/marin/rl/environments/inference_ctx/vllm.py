@@ -2,15 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gc
+import inspect
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
+from typing import Any
 
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import load_tokenizer
+from marin.rl.decoding import DecodingConfig, DecodingStrategy
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
 from marin.rl.environments.inference_ctx.render import Llama3Renderer, Message, Qwen3Renderer, Renderer
@@ -120,8 +123,77 @@ class vLLMInferenceContext(BaseInferenceContext):
         self.sampling_config = inference_config.sampling_params
         self._use_final_only = inference_config.mode == InferenceMode.ASYNC
 
-        # Initialize the appropriate renderer based on model type
+        # Initialize the appropriate renderer based on model type.
         self.renderer = self._get_renderer(self.canonical_model_name, self.tokenizer)
+
+    def resolve_decoding(self, decoding: DecodingConfig) -> DecodingConfig:
+        """Bake vLLM fallback sampling defaults into the applied decoding trace."""
+        top_k = decoding.top_k
+        if top_k is None and self.sampling_config.top_k >= 0:
+            top_k = self.sampling_config.top_k
+
+        stop_strings = decoding.stop_strings
+        if stop_strings is None and decoding.stop_token_ids is None and self.sampling_config.stop is not None:
+            stop_strings = list(self.sampling_config.stop)
+
+        if top_k == decoding.top_k and stop_strings == decoding.stop_strings:
+            return decoding
+        return replace(decoding, top_k=top_k, stop_strings=stop_strings)
+
+    @staticmethod
+    def _sampling_params_supports_argument(argument_name: str) -> bool:
+        """Return whether the installed vLLM SamplingParams accepts an argument."""
+        if SamplingParams is None:
+            return False
+        try:
+            return argument_name in inspect.signature(SamplingParams.__init__).parameters
+        except (TypeError, ValueError):
+            logger.warning("Could not inspect vLLM SamplingParams.__init__; treating %s as unsupported", argument_name)
+            return False
+
+    def _sampling_params_from_decoding(self, decoding: DecodingConfig, n: int):
+        """Translate shared decoding config into vLLM SamplingParams."""
+        if SamplingParams is None:
+            raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
+
+        decoding = self.resolve_decoding(decoding)
+        kwargs: dict[str, Any] = {
+            "temperature": 0.0 if decoding.strategy == DecodingStrategy.GREEDY else decoding.temperature,
+            "n": n,
+            "max_tokens": decoding.max_output_tokens,
+            "logprobs": 1,
+            "include_stop_str_in_output": self.sampling_config.include_stop_str_in_output,
+        }
+        if decoding.top_k is not None:
+            kwargs["top_k"] = decoding.top_k
+        if decoding.top_p is not None:
+            kwargs["top_p"] = decoding.top_p
+        if decoding.min_p is not None:
+            kwargs["min_p"] = decoding.min_p
+        if decoding.repetition_penalty is not None:
+            kwargs["repetition_penalty"] = decoding.repetition_penalty
+        if decoding.presence_penalty is not None:
+            kwargs["presence_penalty"] = decoding.presence_penalty
+        if decoding.frequency_penalty is not None:
+            kwargs["frequency_penalty"] = decoding.frequency_penalty
+        if decoding.min_output_tokens is not None:
+            kwargs["min_tokens"] = decoding.min_output_tokens
+        if decoding.stop_strings is not None:
+            kwargs["stop"] = decoding.stop_strings
+        elif decoding.stop_token_ids is not None:
+            if not self._sampling_params_supports_argument("stop_token_ids"):
+                raise ValueError(
+                    "This vLLM SamplingParams implementation does not support stop_token_ids; "
+                    "configure stop_strings instead."
+                )
+            kwargs["stop_token_ids"] = decoding.stop_token_ids
+        if decoding.seed is not None:
+            kwargs["seed"] = decoding.seed
+        if decoding.ignore_eos:
+            kwargs["ignore_eos"] = True
+        if self._use_final_only and RequestOutputKind is not None:
+            kwargs["output_kind"] = RequestOutputKind.FINAL_ONLY
+        return SamplingParams(**kwargs)
 
     @staticmethod
     def _get_renderer(model_name: str, tokenizer) -> Renderer:
@@ -325,37 +397,19 @@ class vLLMInferenceContext(BaseInferenceContext):
     def batch_completions(
         self,
         prompts: list[str] | list[list[dict]],
-        temperature: float,
         n: int,
-        max_tokens: int | None = None,
-        top_k: int | None = None,
-        stop: list[str] | None = None,
+        decoding: DecodingConfig,
         system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
         """Batch completions from the inference server.
 
         Args:
             prompts: Either a list of strings or a list of message lists (with few-shot examples)
-            temperature: Sampling temperature
             n: Number of completions per prompt
-            max_tokens: Maximum tokens to generate
-            stop: Stop sequences
+            decoding: Sampling configuration
             system_prompt: Optional system prompt (only used if prompts are strings)
         """
-        if SamplingParams is None:
-            raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
-        kwargs = {
-            "temperature": temperature,
-            "n": n,
-            "max_tokens": max_tokens or self.sampling_config.max_tokens,
-            "top_k": top_k or self.sampling_config.top_k,
-            "stop": stop or self.sampling_config.stop,
-            "logprobs": 1,
-            "include_stop_str_in_output": self.sampling_config.include_stop_str_in_output,
-        }
-        if self._use_final_only and RequestOutputKind is not None:
-            kwargs["output_kind"] = RequestOutputKind.FINAL_ONLY
-        sampling_params = SamplingParams(**kwargs)
+        sampling_params = self._sampling_params_from_decoding(decoding, n)
 
         # Convert prompts to message lists if they aren't already
         message_lists: list[list[Message]] = []

@@ -6,10 +6,15 @@
 import sys
 from dataclasses import dataclass
 from types import ModuleType, SimpleNamespace
+from unittest.mock import AsyncMock
 
 import numpy as np
 import pytest
 from levanter.inference.openai import ChatMessage
+from marin.rl.decoding import DecodingConfig, DecodingStrategy
+from openai.types.chat import ChatCompletion, ChatCompletionMessage
+from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
+from transformers import AutoTokenizer
 from marin.rl.environments.inference_ctx import (
     MODEL_MAPPINGS,
     MODEL_TRANSPOSE_KEYS,
@@ -21,9 +26,6 @@ from marin.rl.environments.inference_ctx import (
 )
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
 from marin.rl.environments.inference_ctx.vllm import InferenceMode
-from openai.types.chat import ChatCompletionMessage
-from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
-from transformers import AutoTokenizer
 
 _LLAMA3_MODEL_ID = "NousResearch/Meta-Llama-3-8B-Instruct"
 
@@ -223,7 +225,7 @@ def test_create_rollout_from_choice_end_to_end(inference_ctx, llama3_tokenizer):
         env_name="math_env",
         env_example_id="ex_001",
         reward=reward,
-        temperature=1.0,
+        decoding=DecodingConfig(temperature=1.0),
     )
 
     # Verify metadata
@@ -245,6 +247,337 @@ def test_create_rollout_from_choice_end_to_end(inference_ctx, llama3_tokenizer):
     # Verify token rewards
     assert len(rollout.token_rewards) == len(expected_response_tokens)
     np.testing.assert_array_equal(rollout.token_rewards, np.full(len(expected_response_tokens), reward))
+
+
+def _chat_completion_from_choice(choice: Choice) -> ChatCompletion:
+    return ChatCompletion(
+        id="chatcmpl-test",
+        choices=[choice],
+        created=1234567890,
+        model="test-model",
+        object="chat.completion",
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+
+def _test_levanter_context(tokenizer, dummy_server, client) -> LevanterInferenceContext:
+    class _TestLevanterInferenceContext(LevanterInferenceContext):
+        def __init__(self):
+            self.tokenizer = tokenizer
+            self._stop_tokens = None
+            self.max_tokens = 100
+            self.mesh = None
+            self.axis_mapping = {}
+            self._inference_server = dummy_server
+
+        def openai_client(self):
+            return client
+
+    return _TestLevanterInferenceContext()
+
+
+def test_levanter_batch_completions_forwards_seed(gpt2_tokenizer, dummy_server):
+    choice = create_choice_with_logprobs(gpt2_tokenizer, "hello")
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=_chat_completion_from_choice(choice))
+    mock_client.close = AsyncMock()
+
+    ctx = _test_levanter_context(gpt2_tokenizer, dummy_server, mock_client)
+    completions = ctx.batch_completions(
+        prompts=["prompt"],
+        n=2,
+        decoding=DecodingConfig(temperature=0.7, seed=123),
+    )
+
+    assert len(completions) == 1
+    assert mock_client.chat.completions.create.await_args.kwargs["seed"] == 123
+
+
+def test_levanter_batch_completions_rejects_unsupported_decoding_fields(gpt2_tokenizer, dummy_server):
+    mock_client = AsyncMock()
+    mock_client.close = AsyncMock()
+    ctx = _test_levanter_context(gpt2_tokenizer, dummy_server, mock_client)
+
+    with pytest.raises(ValueError, match=r"top_p.*ignore_eos"):
+        ctx.batch_completions(
+            prompts=["prompt"],
+            n=1,
+            decoding=DecodingConfig(
+                temperature=1.0,
+                top_p=0.9,
+                ignore_eos=True,
+            ),
+        )
+
+
+def test_create_rollout_from_choice_records_resolved_levanter_stop_tokens(gpt2_tokenizer):
+    ctx = LevanterInferenceContext(
+        LevanterInferenceContextConfig(
+            inference_server_config=None,
+            tokenizer=gpt2_tokenizer,
+            stop_tokens=[42],
+            max_tokens=100,
+            mesh=None,
+            axis_mapping={},
+        )
+    )
+
+    choice = create_choice_with_logprobs(gpt2_tokenizer, "hello")
+    rollout = ctx.create_rollout_from_choice(
+        prompt="test prompt",
+        choice=choice,
+        env_name="mock",
+        env_example_id="example",
+        reward=1.0,
+        decoding=DecodingConfig(temperature=1.0),
+    )
+
+    assert rollout.decoding.stop_token_ids == (42,)
+
+
+def test_vllm_resolve_decoding_includes_sampling_fallbacks(monkeypatch):
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_llm_engine",
+        staticmethod(lambda _config: object()),
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
+        lambda _path: SimpleNamespace(get_vocab=lambda: {}),
+    )
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_renderer",
+        staticmethod(lambda model_name, _tokenizer: model_name),
+    )
+
+    ctx = vLLMInferenceContext(
+        vLLMInferenceContextConfig(
+            model_name="test-model",
+            max_model_len=1024,
+            tensor_parallel_size=4,
+            gpu_memory_utilization=0.9,
+            sampling_params=VLLMSamplingConfig(top_k=16, stop=["<stop>"]),
+        )
+    )
+
+    resolved = ctx.resolve_decoding(DecodingConfig(temperature=1.0))
+
+    assert resolved.top_k == 16
+    assert resolved.stop_strings == ["<stop>"]
+
+
+def test_vllm_sampling_params_maps_shared_decoding_fields(monkeypatch):
+    calls = {}
+
+    class FakeSamplingParams:
+        def __init__(
+            self,
+            *,
+            temperature,
+            n,
+            max_tokens,
+            logprobs,
+            include_stop_str_in_output,
+            top_k=None,
+            top_p=None,
+            min_p=None,
+            repetition_penalty=None,
+            presence_penalty=None,
+            frequency_penalty=None,
+            min_tokens=None,
+            stop=None,
+            stop_token_ids=None,
+            seed=None,
+            ignore_eos=False,
+            output_kind=None,
+        ):
+            calls["kwargs"] = {
+                "temperature": temperature,
+                "n": n,
+                "max_tokens": max_tokens,
+                "logprobs": logprobs,
+                "include_stop_str_in_output": include_stop_str_in_output,
+                "top_k": top_k,
+                "top_p": top_p,
+                "min_p": min_p,
+                "repetition_penalty": repetition_penalty,
+                "presence_penalty": presence_penalty,
+                "frequency_penalty": frequency_penalty,
+                "min_tokens": min_tokens,
+                "stop": stop,
+                "stop_token_ids": stop_token_ids,
+                "seed": seed,
+                "ignore_eos": ignore_eos,
+                "output_kind": output_kind,
+            }
+            self.max_tokens = max_tokens
+
+    class FakeRenderer:
+        def build_generation_prompt(self, _messages):
+            return [1, 2, 3]
+
+    class FakeLLM:
+        def generate(self, prompts, sampling_params):
+            calls["prompts"] = prompts
+            calls["sampling_params"] = sampling_params
+            return []
+
+    class FakeTokensPrompt:
+        def __init__(self, prompt_token_ids):
+            self.prompt_token_ids = prompt_token_ids
+
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.SamplingParams", FakeSamplingParams)
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.TokensPrompt", FakeTokensPrompt)
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_llm_engine",
+        staticmethod(lambda _config: FakeLLM()),
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
+        lambda _path: SimpleNamespace(get_vocab=lambda: {}),
+    )
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_renderer",
+        staticmethod(lambda _model_name, _tokenizer: FakeRenderer()),
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.RequestOutputKind",
+        SimpleNamespace(FINAL_ONLY="final-only"),
+    )
+
+    ctx = vLLMInferenceContext(
+        vLLMInferenceContextConfig(
+            model_name="test-model",
+            max_model_len=1024,
+            tensor_parallel_size=4,
+            gpu_memory_utilization=0.9,
+            sampling_params=VLLMSamplingConfig(include_stop_str_in_output=True),
+            mode=InferenceMode.ASYNC,
+        )
+    )
+
+    result = ctx.batch_completions(
+        prompts=["hello"],
+        n=2,
+        decoding=DecodingConfig(
+            strategy=DecodingStrategy.GREEDY,
+            temperature=0.7,
+            top_k=8,
+            top_p=0.91,
+            min_p=0.05,
+            repetition_penalty=1.1,
+            presence_penalty=0.2,
+            frequency_penalty=0.3,
+            max_output_tokens=64,
+            min_output_tokens=4,
+            stop_strings=["<stop>"],
+            ignore_eos=True,
+            seed=123,
+        ),
+    )
+
+    assert result == []
+    assert [prompt.prompt_token_ids for prompt in calls["prompts"]] == [[1, 2, 3]]
+    assert calls["kwargs"] == {
+        "temperature": 0.0,
+        "n": 2,
+        "max_tokens": 64,
+        "logprobs": 1,
+        "include_stop_str_in_output": True,
+        "top_k": 8,
+        "top_p": 0.91,
+        "min_p": 0.05,
+        "repetition_penalty": 1.1,
+        "presence_penalty": 0.2,
+        "frequency_penalty": 0.3,
+        "min_tokens": 4,
+        "stop": ["<stop>"],
+        "stop_token_ids": None,
+        "seed": 123,
+        "ignore_eos": True,
+        "output_kind": "final-only",
+    }
+
+
+def test_vllm_sampling_params_passes_stop_token_ids_when_supported(monkeypatch):
+    calls = {}
+
+    class FakeSamplingParams:
+        def __init__(self, *, temperature, n, max_tokens, logprobs, include_stop_str_in_output, stop_token_ids=None):
+            calls["stop_token_ids"] = stop_token_ids
+            self.max_tokens = max_tokens
+
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.SamplingParams", FakeSamplingParams)
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_llm_engine",
+        staticmethod(lambda _config: object()),
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
+        lambda _path: SimpleNamespace(get_vocab=lambda: {}),
+    )
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_renderer",
+        staticmethod(lambda _model_name, _tokenizer: SimpleNamespace(build_generation_prompt=lambda _messages: [])),
+    )
+
+    ctx = vLLMInferenceContext(
+        vLLMInferenceContextConfig(
+            model_name="test-model",
+            max_model_len=1024,
+            tensor_parallel_size=4,
+            gpu_memory_utilization=0.9,
+            sampling_params=VLLMSamplingConfig(),
+        )
+    )
+
+    sampling_params = ctx._sampling_params_from_decoding(
+        DecodingConfig(temperature=1.0, stop_token_ids=[7, 8]),
+        n=1,
+    )
+
+    assert sampling_params.max_tokens == 512
+    assert calls["stop_token_ids"] == [7, 8]
+
+
+def test_vllm_sampling_params_rejects_stop_token_ids_when_unsupported(monkeypatch):
+    class FakeSamplingParams:
+        def __init__(self, *, temperature, n, max_tokens, logprobs, include_stop_str_in_output):
+            self.max_tokens = max_tokens
+
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.SamplingParams", FakeSamplingParams)
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_llm_engine",
+        staticmethod(lambda _config: object()),
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
+        lambda _path: SimpleNamespace(get_vocab=lambda: {}),
+    )
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_renderer",
+        staticmethod(lambda _model_name, _tokenizer: SimpleNamespace(build_generation_prompt=lambda _messages: [])),
+    )
+
+    ctx = vLLMInferenceContext(
+        vLLMInferenceContextConfig(
+            model_name="test-model",
+            max_model_len=1024,
+            tensor_parallel_size=4,
+            gpu_memory_utilization=0.9,
+            sampling_params=VLLMSamplingConfig(),
+        )
+    )
+
+    with pytest.raises(ValueError, match="does not support stop_token_ids"):
+        ctx._sampling_params_from_decoding(DecodingConfig(temperature=1.0, stop_token_ids=[7]), n=1)
 
 
 def test_vllm_inference_context_uses_canonical_model_name(monkeypatch):

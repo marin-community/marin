@@ -20,6 +20,7 @@ from levanter.checkpoint import CheckpointDebugConfig
 from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
+from marin.rl.decoding import DecodingConfig
 from marin.rl.environments import EnvConfig
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
@@ -71,12 +72,13 @@ def _default_rl_loss() -> RLOOLoss:
 
 def build_math500_curriculum(run_id: str, config: RLExperimentConfig, eval_frequency: int) -> CurriculumConfig:
     sampling_params = SamplingParams(
-        temperature=1.0,
         n_prompts=config.n_prompts,
         n_generations_per_prompt=config.n_generations_per_prompt,
-        max_output_tokens=config.max_output_tokens,
-        top_k=config.inference_top_k,
-        stop_tokens=None,
+        train_decoding=DecodingConfig(
+            temperature=1.0,
+            max_output_tokens=config.max_output_tokens,
+            top_k=config.inference_top_k,
+        ),
     )
 
     return CurriculumConfig(

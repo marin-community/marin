@@ -24,6 +24,8 @@ import jax
 import jax.random as jrandom
 from levanter.inference.openai import ChatCompletionRequest, ChatMessage
 from levanter.tokenizers import load_tokenizer
+
+from marin.rl.decoding import DecodingConfig, stop_strings_for_decoding
 from marin.rl.environments import EnvConfig, load_environment_from_spec
 from rigging.log_setup import configure_logging
 
@@ -42,7 +44,8 @@ logger = logging.getLogger(__name__)
 @click.option("--temperature", type=float, default=1.0, help="Sampling temperature")
 @click.option("--max-tokens", type=int, default=1024, help="Maximum tokens to generate")
 @click.option("--model-name", default="test-model", help="Model name for requests")
-@click.option("--stop-tokens", type=int, multiple=True, help="Stop token IDs")
+@click.option("--stop-string", "stop_strings", multiple=True, help="Stop string")
+@click.option("--stop-token-id", "stop_token_ids", type=int, multiple=True, help="Stop token ID")
 @click.option("--seed", type=int, default=42, help="Random seed")
 def export_environment_prompts(
     env_class: str,
@@ -55,7 +58,8 @@ def export_environment_prompts(
     temperature: float,
     max_tokens: int,
     model_name: str,
-    stop_tokens: tuple[int, ...],
+    stop_strings: tuple[str, ...],
+    stop_token_ids: tuple[int, ...],
     seed: int = 42,
 ):
     """Export prompts from an environment as OpenAI chat completion requests."""
@@ -91,10 +95,14 @@ def export_environment_prompts(
 
     logger.info(f"Sampled {len(examples)} examples from {len(available_examples)} available")
 
-    # Convert stop tokens to strings if provided
-    stop_strings = None
-    if stop_tokens:
-        stop_strings = [tokenizer.decode([token]) for token in stop_tokens]
+    decoding = DecodingConfig(
+        temperature=temperature,
+        max_output_tokens=max_tokens,
+        stop_strings=list(stop_strings) or None,
+        stop_token_ids=list(stop_token_ids) or None,
+        seed=seed,
+    )
+    stop_sequences = stop_strings_for_decoding(decoding, tokenizer)
 
     # Create ChatCompletionRequest objects
     requests = []
@@ -112,7 +120,7 @@ def export_environment_prompts(
             temperature=temperature,
             n=n_generations,
             logprobs=True,  # Always enable for debugging
-            stop=stop_strings,
+            stop=stop_sequences,
             seed=seed + i,  # Unique seed per request
         )
 

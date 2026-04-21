@@ -16,6 +16,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 import numpy as np
+from marin.rl.decoding import SamplingParams
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
 from rigging.filesystem import url_to_fs
@@ -60,28 +61,6 @@ class LessonDependency:
     reward_threshold: float = 0.0
     """Reward threshold that dependency must reach before this lesson activates.
     By default (0.0), only wait for dependency to plateau."""
-
-
-@dataclass
-class SamplingParams:
-    """Parameters for sampling rollouts from an environment."""
-
-    temperature: float = 1.0
-    top_k: int | None = None
-    n_prompts: int = 8
-    n_generations_per_prompt: int = 4
-    max_output_tokens: int = 512
-    stop_tokens: list[int] | None = None
-
-    def __post_init__(self):
-        if self.temperature < 1e-4:
-            logger.warning(
-                "SamplingParams.temperature is very low (%f). Greedy decoding is generally "
-                "not useful for RL training as it limits exploration.",
-                self.temperature,
-            )
-        if self.top_k == 1:
-            logger.warning("SamplingParams.top_k is 1. Greedy decoding is generally not useful for RL training.")
 
 
 @dataclass

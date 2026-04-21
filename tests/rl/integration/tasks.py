@@ -6,6 +6,8 @@
 import time
 
 import numpy as np
+
+from marin.rl.decoding import DecodingConfig
 from marin.rl.types import Rollout, RolloutBatch, RolloutGroup, RolloutMetadata
 
 from tests.rl.integration.config import (
@@ -112,6 +114,7 @@ def create_cats_rollout_batch(
             response_logprobs=individual_logprobs,
             token_rewards=token_rewards,
             episode_reward=episode_reward,
+            decoding=DecodingConfig(temperature=1.0).as_trace(),
             metadata=RolloutMetadata(
                 worker_id=worker_id,
                 timestamp=time.time(),
@@ -302,6 +305,7 @@ def create_sequential_digits_rollout_batch(
             response_logprobs=individual_logprobs,
             token_rewards=token_rewards,
             episode_reward=episode_reward,
+            decoding=DecodingConfig(temperature=1.0).as_trace(),
             metadata=RolloutMetadata(
                 worker_id=worker_id,
                 timestamp=time.time(),

@@ -277,6 +277,7 @@ def create_vllm_inference_config():
 def create_test_curriculum_config(actor_name: str = "test_curriculum"):
     """Create a minimal CurriculumConfig for testing."""
     from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
+    from marin.rl.decoding import DecodingConfig
     from marin.rl.environments import EnvConfig
 
     return CurriculumConfig(
@@ -288,7 +289,9 @@ def create_test_curriculum_config(actor_name: str = "test_curriculum"):
                     env_args={"task_type": "cats", "seed": 42},
                 ),
                 sampling_params=SamplingParams(
-                    temperature=1.0, n_prompts=4, n_generations_per_prompt=4, max_output_tokens=32
+                    n_prompts=4,
+                    n_generations_per_prompt=4,
+                    train_decoding=DecodingConfig(temperature=1.0, max_output_tokens=32),
                 ),
             )
         },

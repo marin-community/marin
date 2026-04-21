@@ -3,6 +3,7 @@
 
 import numpy as np
 import pytest
+from marin.rl.decoding import DecodingConfig
 from marin.rl.rl_losses import RLOOLoss, compute_ppo_loss_objective, compute_rloo_advantages
 from marin.rl.types import Rollout
 
@@ -28,8 +29,7 @@ def create_test_rollout(
         response_logprobs=response_logprobs,
         token_rewards=token_rewards,
         episode_reward=episode_reward,
-        temperature=1.0,
-        top_k=None,
+        decoding=DecodingConfig(temperature=1.0).as_trace(),
         is_truncated=False,
     )
 
