@@ -36,6 +36,7 @@ from iris.cluster.constraints import (
 from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec, is_job_finished
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import job_pb2
+from rigging.timing import ExponentialBackoff
 
 from fray.v2.actor import (
     ActorContext,
@@ -477,7 +478,7 @@ class IrisActorGroup:
         """
         target = count if count is not None else self._count
         start = time.monotonic()
-        sleep_secs = 0.5
+        backoff = ExponentialBackoff(initial=0.1, maximum=5.0)
 
         while True:
             self.discover_new(target=target)
@@ -487,28 +488,29 @@ class IrisActorGroup:
 
             # Fail fast if the underlying job has terminated (e.g. crash, OOM,
             # missing interpreter). Without this check we'd spin for the full
-            # timeout waiting for endpoints that will never appear.
+            # timeout waiting for endpoints that will never appear. Use the
+            # lightweight state-only RPC and fetch the full status only when we
+            # actually need the error message.
             client = self._get_client()
-            job_status = client.status(self._job_id)
-            if is_job_finished(job_status.state):
-                error = job_status.error or "unknown error"
+            state = client.job_state(self._job_id)
+            if is_job_finished(state):
+                error = client.status(self._job_id).error or "unknown error"
                 raise RuntimeError(
                     f"Actor job {self._job_id} finished before all actors registered "
                     f"({len(self._discovered_names)}/{target} ready). "
-                    f"Job state={job_status.state}, error={error}"
+                    f"Job state={state}, error={error}"
                 )
 
             elapsed = time.monotonic() - start
             if elapsed >= timeout:
                 raise TimeoutError(f"Only {len(self._discovered_names)}/{target} actors ready after {timeout}s")
 
-            time.sleep(sleep_secs)
+            time.sleep(backoff.next_interval())
 
     def is_done(self) -> bool:
         """Return True if the Iris worker job has permanently terminated."""
         client = self._get_client()
-        job_status = client.status(self._job_id)
-        return is_job_finished(job_status.state)
+        return is_job_finished(client.job_state(self._job_id))
 
     def shutdown(self) -> None:
         """Terminate the actor job."""
