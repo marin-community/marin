@@ -23,6 +23,7 @@ from levanter.analysis.perplexity_gap import (
     chunk_tokenized_document,
     render_report_markdown,
     tokenize_text_with_byte_spans,
+    worst_document_rows,
     write_report_files,
 )
 from levanter.checkpoint import save_checkpoint
@@ -153,8 +154,17 @@ def test_gap_report_builder_previews_worst_region():
 
     assert target in doc_row["preview"]
     assert doc_row["preview"].startswith("\u2026")
+    assert doc_row["model_a_bpb"] > doc_row["model_b_bpb"]
+    assert doc_row["worst_bucket"] == "text/word"
+    assert doc_row["worst_text"] == target
+    assert doc_row["worst_gap_bpb"] > 0.0
     assert target in segment_row["doc_preview"]
     assert segment_row["doc_preview"].startswith("\u2026")
+
+    worst_rows = worst_document_rows(summary)
+    assert worst_rows[0]["direction"] == "model_a_worse"
+    assert worst_rows[0]["rank"] == 1
+    assert worst_rows[0]["worst_text"] == target
 
 
 def test_write_report_files_and_log_artifact_bundle():
@@ -164,16 +174,26 @@ def test_write_report_files_and_log_artifact_bundle():
         "datasets": [],
         "dataset_groups": [],
         "pattern_buckets": [],
-        "top_documents": {"model_a_worse": [], "model_b_worse": []},
+        "top_documents": {
+            "model_a_worse": [{"dataset": "tiny/raw", "row_index": 3, "gap_bpb": 0.5}],
+            "model_b_worse": [],
+        },
         "top_segments": {"model_a_worse": [], "model_b_worse": []},
         "top_literals": {"model_a_worse": [], "model_b_worse": []},
     }
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        summary_path, report_path = write_report_files(tmpdir, summary)
+        summary_path, report_path, worst_documents_path = write_report_files(tmpdir, summary)
         assert os.path.exists(summary_path)
         assert os.path.exists(report_path)
+        assert os.path.exists(worst_documents_path)
         assert report_path.endswith("report.md")
+        assert worst_documents_path.endswith("worst_documents.jsonl")
+        with open(worst_documents_path) as f:
+            worst_rows = [json.loads(line) for line in f]
+        assert worst_rows == [
+            {"dataset": "tiny/raw", "direction": "model_a_worse", "gap_bpb": 0.5, "rank": 1, "row_index": 3}
+        ]
 
     tracker = DictTracker()
     captured: dict[str, Any] = {}
@@ -184,6 +204,8 @@ def test_write_report_files_and_log_artifact_bundle():
         captured["files"] = sorted(os.listdir(artifact_path))
         with open(os.path.join(artifact_path, "summary.json")) as f:
             captured["summary"] = json.load(f)
+        with open(os.path.join(artifact_path, "worst_documents.jsonl")) as f:
+            captured["worst_documents"] = [json.loads(line) for line in f]
 
     tracker.log_artifact = capture_artifact  # type: ignore[method-assign]
 
@@ -192,8 +214,9 @@ def test_write_report_files_and_log_artifact_bundle():
 
     assert captured["name"] == "perplexity_gap_report"
     assert captured["type"] == "perplexity_gap_report"
-    assert captured["files"] == ["report.md", "summary.json"]
+    assert captured["files"] == ["report.md", "summary.json", "worst_documents.jsonl"]
     assert captured["summary"]["model_a"] == "a"
+    assert captured["worst_documents"][0]["direction"] == "model_a_worse"
 
 
 def test_render_report_markdown_escapes_table_boundaries():

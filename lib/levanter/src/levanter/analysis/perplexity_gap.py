@@ -72,6 +72,20 @@ class LiteralExample:
     model_b_token_boundaries: str
 
 
+@dataclass(frozen=True)
+class WorstSegment:
+    delta_bits: float
+    char_start: int
+    char_end: int
+    bytes: int
+    bucket: str
+    text: str
+
+    @property
+    def gap_bpb(self) -> float:
+        return self.delta_bits / self.bytes
+
+
 @dataclass
 class GapAggregate:
     total_loss_a: float = 0.0
@@ -150,6 +164,8 @@ class GapReportBuilder:
 
         delta_bits = (loss_a - loss_b) * LOG2E
         gap_bpb = delta_bits / num_bytes if num_bytes > 0 else 0.0
+        model_a_bpb = loss_a * LOG2E / num_bytes if num_bytes > 0 else None
+        model_b_bpb = loss_b * LOG2E / num_bytes if num_bytes > 0 else None
 
         if num_bytes <= 0:
             return
@@ -157,8 +173,8 @@ class GapReportBuilder:
         prefix_a = np.concatenate(([0.0], np.cumsum(per_byte_loss_a, dtype=np.float64)))
         prefix_b = np.concatenate(([0.0], np.cumsum(per_byte_loss_b, dtype=np.float64)))
         byte_offsets = char_to_byte_offsets(document.text)
-        worst_positive_segment: tuple[float, int, int] | None = None
-        worst_negative_segment: tuple[float, int, int] | None = None
+        worst_positive_segment: WorstSegment | None = None
+        worst_negative_segment: WorstSegment | None = None
 
         for match in _SEGMENT_RE.finditer(document.text):
             segment = match.group(0)
@@ -174,16 +190,24 @@ class GapReportBuilder:
             segment_loss_b = float(prefix_b[byte_end] - prefix_b[byte_start])
             segment_bytes = int(byte_end - byte_start)
             segment_delta_bits = (segment_loss_a - segment_loss_b) * LOG2E
-            if segment_delta_bits > 0.0 and (
-                worst_positive_segment is None or segment_delta_bits > worst_positive_segment[0]
-            ):
-                worst_positive_segment = (segment_delta_bits, match.start(), match.end())
-            if segment_delta_bits < 0.0 and (
-                worst_negative_segment is None or segment_delta_bits < worst_negative_segment[0]
-            ):
-                worst_negative_segment = (segment_delta_bits, match.start(), match.end())
             bucket = bucket_for_segment(segment)
             visible = render_visible(segment)
+            segment_summary = WorstSegment(
+                delta_bits=segment_delta_bits,
+                char_start=match.start(),
+                char_end=match.end(),
+                bytes=segment_bytes,
+                bucket=bucket,
+                text=visible,
+            )
+            if segment_delta_bits > 0.0 and (
+                worst_positive_segment is None or segment_delta_bits > worst_positive_segment.delta_bits
+            ):
+                worst_positive_segment = segment_summary
+            if segment_delta_bits < 0.0 and (
+                worst_negative_segment is None or segment_delta_bits < worst_negative_segment.delta_bits
+            ):
+                worst_negative_segment = segment_summary
 
             self.bucket_stats[bucket].add(loss_a=segment_loss_a, loss_b=segment_loss_b, num_bytes=segment_bytes)
             if segment_bytes <= 32:
@@ -240,7 +264,7 @@ class GapReportBuilder:
         elif delta_bits < 0.0:
             preview_span = worst_negative_segment
         preview = (
-            preview_text_window(document.text, preview_span[1], preview_span[2])
+            preview_text_window(document.text, preview_span.char_start, preview_span.char_end)
             if preview_span is not None
             else preview_text(document.text)
         )
@@ -249,8 +273,13 @@ class GapReportBuilder:
             "shard": document.shard_name,
             "row_index": int(document.row_index),
             "bytes": int(num_bytes),
+            "model_a_bpb": model_a_bpb,
+            "model_b_bpb": model_b_bpb,
             "gap_bpb": gap_bpb,
             "delta_bits": delta_bits,
+            "worst_bucket": preview_span.bucket if preview_span is not None else None,
+            "worst_text": preview_span.text if preview_span is not None else None,
+            "worst_gap_bpb": preview_span.gap_bpb if preview_span is not None else None,
             "preview": preview,
         }
         _push_top_positive(self._top_docs_positive, delta_bits, doc_record, self.top_k_docs, self._heap_counter)
@@ -688,9 +717,10 @@ def render_report_markdown(summary: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def write_report_files(output_path: str, summary: dict[str, Any]) -> tuple[str, str]:
+def write_report_files(output_path: str, summary: dict[str, Any]) -> tuple[str, str, str]:
     summary_path = os.path.join(output_path, "summary.json")
     report_path = os.path.join(output_path, "report.md")
+    worst_documents_path = os.path.join(output_path, "worst_documents.jsonl")
     fs, _, _ = fsspec.get_fs_token_paths(summary_path)
     fs.makedirs(output_path, exist_ok=True)
 
@@ -700,7 +730,21 @@ def write_report_files(output_path: str, summary: dict[str, Any]) -> tuple[str, 
     with open_url(report_path, "w") as f:
         f.write(render_report_markdown(summary))
 
-    return summary_path, report_path
+    with open_url(worst_documents_path, "w") as f:
+        for row in worst_document_rows(summary):
+            f.write(json.dumps(row, sort_keys=True))
+            f.write("\n")
+
+    return summary_path, report_path, worst_documents_path
+
+
+def worst_document_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for direction in ("model_a_worse", "model_b_worse"):
+        documents = summary["top_documents"][direction]
+        for rank, row in enumerate(documents, start=1):
+            rows.append({"direction": direction, "rank": rank, **row})
+    return rows
 
 
 def _format_cell(value: Any) -> str:
