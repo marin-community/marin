@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -234,8 +234,8 @@ class Job:
 
     @property
     def state(self) -> job_pb2.JobState:
-        """Get current job state (shortcut for status().state)."""
-        return self.status().state
+        """Get current job state via the lightweight state-only RPC."""
+        return cast(job_pb2.JobState, self.state_only())
 
     def tasks(self) -> list[Task]:
         """Get all tasks for this job.
@@ -705,6 +705,17 @@ class IrisClient:
             JobStatus proto with current state
         """
         return self._cluster_client.get_job_status(job_id)
+
+    def job_state(self, job_id: JobName) -> int:
+        """Lightweight state query that avoids loading tasks/attempts/workers.
+
+        Prefer this over ``status(job_id).state`` for polling loops.
+        """
+        states = self._cluster_client.get_job_states([job_id])
+        wire_id = job_id.to_wire()
+        if wire_id not in states:
+            raise KeyError(f"Job {wire_id} not found")
+        return states[wire_id]
 
     def terminate(self, job_id: JobName) -> None:
         """Terminate a running job.
