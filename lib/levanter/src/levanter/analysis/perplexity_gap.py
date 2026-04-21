@@ -463,19 +463,30 @@ def tokenize_text_with_byte_spans(tokenizer: MarinTokenizer, hf_tokenizer: Any, 
     )
 
 
-def chunk_tokenized_document(document: TokenizedDocument, max_eval_length: int) -> list[TokenizedChunk]:
+def chunk_tokenized_document(
+    document: TokenizedDocument,
+    max_eval_length: int,
+    *,
+    doc_index: int = -1,
+) -> list[TokenizedChunk]:
+    if max_eval_length <= 1:
+        raise ValueError(f"max_eval_length must be greater than 1, got {max_eval_length}.")
+
     chunks: list[TokenizedChunk] = []
     total_tokens = len(document.token_ids)
-    for start in range(0, total_tokens, max_eval_length):
+    stride = max_eval_length - 1
+    for start in range(0, total_tokens, stride):
         end = min(start + max_eval_length, total_tokens)
         chunks.append(
             TokenizedChunk(
-                doc_index=-1,
+                doc_index=doc_index,
                 token_ids=document.token_ids[start:end],
                 byte_starts=document.byte_starts[start:end],
                 byte_ends=document.byte_ends[start:end],
             )
         )
+        if end == total_tokens:
+            break
     return chunks
 
 
@@ -508,6 +519,10 @@ def batch_chunks(
 ) -> Iterator[list[TokenizedChunk]]:
     current: list[TokenizedChunk] = []
     for chunk in chunks:
+        if len(chunk.token_ids) > max_eval_length:
+            raise ValueError(
+                f"Tokenized chunk length {len(chunk.token_ids)} exceeds max_eval_length {max_eval_length}."
+            )
         current.append(chunk)
         if len(current) == batch_size:
             yield current

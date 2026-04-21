@@ -16,8 +16,11 @@ import haliax
 from levanter.analysis.perplexity_gap import (
     GapReportBuilder,
     RawTextDocument,
+    TokenizedChunk,
     TokenizedDocument,
     _truncate_text_to_byte_limit,
+    batch_chunks,
+    chunk_tokenized_document,
     tokenize_text_with_byte_spans,
     write_report_files,
 )
@@ -189,6 +192,34 @@ def test_accumulate_token_losses_matches_naive_interval_scatter():
         expected[start:end] += float(loss) / (end - start)
 
     assert np.allclose(out, expected)
+
+
+def test_chunk_tokenized_document_overlaps_boundary_context():
+    document = TokenizedDocument(
+        token_ids=np.arange(7, dtype=np.int32),
+        byte_starts=np.arange(7, dtype=np.int32),
+        byte_ends=np.arange(1, 8, dtype=np.int32),
+        num_bytes=7,
+    )
+
+    chunks = chunk_tokenized_document(document, max_eval_length=4, doc_index=2)
+
+    assert [chunk.token_ids.tolist() for chunk in chunks] == [[0, 1, 2, 3], [3, 4, 5, 6]]
+    assert [chunk.doc_index for chunk in chunks] == [2, 2]
+    target_byte_starts = np.concatenate([chunk.byte_starts[1:] for chunk in chunks])
+    assert target_byte_starts.tolist() == [1, 2, 3, 4, 5, 6]
+
+
+def test_batch_chunks_rejects_oversized_chunks():
+    chunk = TokenizedChunk(
+        doc_index=0,
+        token_ids=np.arange(4, dtype=np.int32),
+        byte_starts=np.arange(4, dtype=np.int32),
+        byte_ends=np.arange(1, 5, dtype=np.int32),
+    )
+
+    with pytest.raises(ValueError, match="exceeds max_eval_length"):
+        list(batch_chunks([chunk], batch_size=1, max_eval_length=3))
 
 
 @pytest.mark.entry

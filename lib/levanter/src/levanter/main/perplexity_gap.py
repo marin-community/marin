@@ -25,12 +25,13 @@ from levanter.analysis.perplexity_gap import (
     TokenizedChunk,
     TokenizedDocument,
     batch_chunks,
+    chunk_tokenized_document,
     iter_raw_text_documents,
     tokenize_text_with_byte_spans,
     write_report_files,
 )
 from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.data.text import DatasetComponent
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
@@ -84,16 +85,7 @@ class _ModelRunner:
         for doc_index, doc in enumerate(tokenized):
             if doc.num_bytes <= 0 or len(doc.token_ids) <= 1:
                 continue
-            for start in range(0, len(doc.token_ids), self.eval_length):
-                end = min(start + self.eval_length, len(doc.token_ids))
-                chunks.append(
-                    TokenizedChunk(
-                        doc_index=doc_index,
-                        token_ids=doc.token_ids[start:end],
-                        byte_starts=doc.byte_starts[start:end],
-                        byte_ends=doc.byte_ends[start:end],
-                    )
-                )
+            chunks.extend(chunk_tokenized_document(doc, self.eval_length, doc_index=doc_index))
 
         for chunk_batch in batch_chunks(chunks, batch_size=self.eval_batch_size, max_eval_length=self.eval_length):
             batch_losses = self._score_chunk_batch(chunk_batch)
@@ -260,7 +252,7 @@ def _load_model_runner(
 
     if spec.checkpoint_is_hf:
         model_config = spec.model
-        if not hasattr(model_config, "hf_checkpoint_converter"):
+        if not isinstance(model_config, HFCompatConfig):
             raise ValueError(f"Model config {type(model_config).__name__} cannot load HF checkpoints.")
         converter = model_config.hf_checkpoint_converter()
         converter = converter.replaced(reference_checkpoint=spec.checkpoint_path, tokenizer=tokenizer)

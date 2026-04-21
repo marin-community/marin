@@ -11,6 +11,7 @@ from levanter.data.text import DatasetComponent, HfDatasetSourceConfig, TextLmDa
 from levanter.main.perplexity_gap import (
     GapFinderConfig as LevanterGapFinderConfig,
     GapFinderModelConfig as LevanterGapFinderModelConfig,
+    main as gap_main,
 )
 from levanter.models.lm_model import LmConfig
 from levanter.tokenizers import TokenizerBackend
@@ -123,8 +124,6 @@ def default_model_perplexity_gap(
 
 
 def do_find_perplexity_gap(config: LevanterGapFinderConfig) -> None:
-    from levanter.main.perplexity_gap import main as gap_main
-
     gap_main(config)
 
 
