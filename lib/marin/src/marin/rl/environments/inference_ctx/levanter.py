@@ -12,6 +12,7 @@ import asyncio
 from dataclasses import dataclass, replace
 import logging
 import threading
+from typing import Any
 import haliax as hax
 from jax.sharding import Mesh
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
@@ -26,6 +27,17 @@ from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
 
 logger = logging.getLogger(__name__)
+
+UNSUPPORTED_LEVANTER_DECODING_FIELDS = (
+    "top_k",
+    "top_p",
+    "min_p",
+    "repetition_penalty",
+    "presence_penalty",
+    "frequency_penalty",
+    "min_output_tokens",
+    "ignore_eos",
+)
 
 
 @dataclass
@@ -96,27 +108,32 @@ class LevanterInferenceContext(BaseInferenceContext):
     def _validate_supported_decoding(decoding: DecodingConfig) -> None:
         """Reject decoding fields the current Levanter RL path does not honor."""
         unsupported_fields: list[str] = []
-        if decoding.top_k is not None:
-            unsupported_fields.append("top_k")
-        if decoding.top_p is not None:
-            unsupported_fields.append("top_p")
-        if decoding.min_p is not None:
-            unsupported_fields.append("min_p")
-        if decoding.repetition_penalty is not None:
-            unsupported_fields.append("repetition_penalty")
-        if decoding.presence_penalty is not None:
-            unsupported_fields.append("presence_penalty")
-        if decoding.frequency_penalty is not None:
-            unsupported_fields.append("frequency_penalty")
-        if decoding.min_output_tokens is not None:
-            unsupported_fields.append("min_output_tokens")
-        if decoding.ignore_eos:
-            unsupported_fields.append("ignore_eos")
+        for field_name in UNSUPPORTED_LEVANTER_DECODING_FIELDS:
+            field_value = getattr(decoding, field_name)
+            if field_name == "ignore_eos":
+                if field_value:
+                    unsupported_fields.append(field_name)
+                continue
+            if field_value is not None:
+                unsupported_fields.append(field_name)
 
         if unsupported_fields:
-            raise ValueError(
-                "Levanter RL inference does not support the following decoding fields: " + ", ".join(unsupported_fields)
-            )
+            raise ValueError(f"Levanter RL inference does not support: {', '.join(unsupported_fields)}")
+
+    def _completion_request_kwargs(self, decoding: DecodingConfig, n: int) -> dict[str, Any]:
+        """Translate shared decoding into the subset the Levanter RL wrapper actually honors."""
+        decoding = self.resolve_decoding(decoding)
+        self._validate_supported_decoding(decoding)
+        temperature = 0.0 if decoding.strategy == DecodingStrategy.GREEDY else decoding.temperature
+        return {
+            "logprobs": True,
+            "max_tokens": decoding.max_output_tokens,
+            "temperature": temperature,
+            "n": n,
+            # The Levanter OpenAI surface only accepts string stop sequences.
+            "stop": stop_strings_for_decoding(decoding, self.tokenizer),
+            "seed": decoding.seed,
+        }
 
     # TODO: add support for ChatCompletion style [ { role, content} ] messages
     def batch_completions(
@@ -128,13 +145,7 @@ class LevanterInferenceContext(BaseInferenceContext):
     ) -> list[ChatCompletion]:
         """Call OpenAI API in batches with concurrency control."""
         del system_prompt
-        decoding = self.resolve_decoding(decoding)
-        self._validate_supported_decoding(decoding)
-        max_tokens = decoding.max_output_tokens if decoding.max_output_tokens is not None else self.max_tokens
-        stop = stop_strings_for_decoding(decoding, self.tokenizer)
-        if stop is None and self._stop_tokens:
-            stop = [self.tokenizer.decode([tok]) for tok in self._stop_tokens]
-        temperature = 0.0 if decoding.strategy == DecodingStrategy.GREEDY else decoding.temperature
+        request_kwargs = self._completion_request_kwargs(decoding, n)
 
         # Async batch processing
         loop = asyncio.new_event_loop()
@@ -145,12 +156,7 @@ class LevanterInferenceContext(BaseInferenceContext):
             return await client.chat.completions.create(
                 model=getattr(self._inference_server.config, "model_name", "test-model"),
                 messages=[{"role": "user", "content": prompt}],
-                logprobs=True,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                n=n,
-                stop=stop,
-                seed=decoding.seed,
+                **request_kwargs,
                 timeout=30,
             )
 
