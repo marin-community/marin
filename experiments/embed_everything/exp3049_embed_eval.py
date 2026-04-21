@@ -17,26 +17,32 @@ All steps run on CPU via Iris (@remote). Output goes to temp buckets
 """
 
 import logging
+import os
 
-from fray.v2 import ResourceConfig
-from rigging.filesystem import marin_prefix, marin_temp_bucket
+# Pin data region before any rigging/marin imports so marin_prefix() picks it up
+# when not externally set (e.g., via `iris job run`).
+DATA_REGION = "europe-west4"
+os.environ.setdefault("MARIN_PREFIX", "gs://marin-eu-west4")
 
-from experiments.embed_everything.embed import LUXICAL_MODEL, embed_documents
-from experiments.embed_everything.evaluate import (
+from fray.v2 import ResourceConfig  # noqa: E402
+from rigging.filesystem import marin_prefix, marin_temp_bucket  # noqa: E402
+
+from experiments.embed_everything.embed import LUXICAL_MODEL, embed_documents  # noqa: E402
+from experiments.embed_everything.evaluate import (  # noqa: E402
     evaluate_quality_mlp,
     evaluate_quality_probe,
     evaluate_topic_clusters,
     evaluate_topic_reduced,
 )
-from experiments.embed_everything.oracle import OracleBackend, label_quality, label_topics
-from experiments.embed_everything.sample import (
+from experiments.embed_everything.oracle import OracleBackend, label_quality, label_topics  # noqa: E402
+from experiments.embed_everything.sample import (  # noqa: E402
     sample_quality_documents_binary,
     sample_quality_documents_nemotron,
     sample_topic_documents,
 )
-from marin.execution.remote import remote
-from marin.execution.step_runner import StepRunner
-from marin.execution.step_spec import StepSpec
+from marin.execution.remote import remote  # noqa: E402
+from marin.execution.step_runner import StepRunner  # noqa: E402
+from marin.execution.step_spec import StepSpec  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +81,7 @@ sample_quality = StepSpec(
             nemotron_base_path=f"{marin_prefix()}/{NEMOTRON_REL_PATH}",
             n_per_bucket=N_PER_BUCKET,
         ),
-        resources=ResourceConfig.with_cpu(),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
     ),
 )
 
@@ -89,7 +95,7 @@ sample_quality_binary = StepSpec(
             dolma_base_path=f"{marin_prefix()}/{DOLMA_REL_PATH}",
             n_per_bucket=N_PER_BUCKET,
         ),
-        resources=ResourceConfig.with_cpu(),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
     ),
 )
 
@@ -103,7 +109,7 @@ sample_topic = StepSpec(
             dolma_base_path=f"{marin_prefix()}/{DOLMA_REL_PATH}",
             n_per_source=N_PER_SOURCE,
         ),
-        resources=ResourceConfig.with_cpu(),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
     ),
 )
 
@@ -122,7 +128,7 @@ oracle_quality = StepSpec(
             input_path=sample_quality.output_path,
             backend=ORACLE_BACKEND,
         ),
-        resources=ResourceConfig.with_cpu(),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
         pip_dependency_groups=["oracle"],
     ),
 )
@@ -138,7 +144,7 @@ oracle_topic = StepSpec(
             input_path=sample_topic.output_path,
             backend=ORACLE_BACKEND,
         ),
-        resources=ResourceConfig.with_cpu(),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
         pip_dependency_groups=["oracle"],
     ),
 )
@@ -161,7 +167,7 @@ embed_quality = StepSpec(
             output_filename="quality_embeddings.npz",
             label_field="quality_bucket",
         ),
-        resources=ResourceConfig.with_cpu(),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
         pip_dependency_groups=["cpu", "embed"],
     ),
 )
@@ -180,7 +186,7 @@ embed_topic = StepSpec(
             output_filename="topic_embeddings.npz",
             label_field="source_label",
         ),
-        resources=ResourceConfig.with_cpu(),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
         pip_dependency_groups=["cpu", "embed"],
     ),
 )
@@ -199,7 +205,7 @@ eval_quality = StepSpec(
             embeddings_path=embed_quality.output_path,
             oracle_path=oracle_quality.output_path,
         ),
-        resources=ResourceConfig.with_cpu(),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
     ),
 )
 
@@ -215,7 +221,7 @@ eval_topic = StepSpec(
             oracle_path=oracle_topic.output_path,
             n_clusters=N_TOPIC_CLUSTERS,
         ),
-        resources=ResourceConfig.with_cpu(),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
     ),
 )
 
@@ -234,7 +240,7 @@ eval_quality_mlp = StepSpec(
             embeddings_path=embed_quality.output_path,
             oracle_path=oracle_quality.output_path,
         ),
-        resources=ResourceConfig.with_cpu(),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
     ),
 )
 
@@ -250,7 +256,7 @@ eval_topic_reduced = StepSpec(
             oracle_path=oracle_topic.output_path,
             n_clusters=N_TOPIC_CLUSTERS,
         ),
-        resources=ResourceConfig.with_cpu(),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
         pip_dependency_groups=["dimred"],
     ),
 )
