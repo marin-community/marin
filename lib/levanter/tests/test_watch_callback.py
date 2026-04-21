@@ -109,6 +109,65 @@ def test_watch_callback_inside_step_matches_compute_helper():
         assert jnp.allclose(jnp.asarray(callback_stats[key]), jnp.asarray(helper_stats[key]))
 
 
+def test_compute_watch_stats_zero_counts():
+    """Zero-count and zero-fraction metrics are computed correctly."""
+    grads = {"w": jnp.array([0.0, 0.0, 1.0, 0.0])}
+
+    stats = compute_watch_stats(
+        watch_targets=["grads"],
+        include_norms=False,
+        include_per_parameter_norms=False,
+        include_histogram=False,
+        split_scan_layers=False,
+        include_zero_counts=True,
+        grads=grads,
+    )
+
+    assert stats["grad/zero_count/w"] == 3
+    assert jnp.isclose(stats["grad/zero_fraction/w"], 0.75)
+    assert stats["grad/zero_count/total"] == 3
+    assert jnp.isclose(stats["grad/zero_fraction/total"], 0.75)
+
+
+def test_compute_watch_stats_zero_counts_multiple_params():
+    """Zero metrics aggregate correctly across multiple parameters."""
+    # w: 2 zeros out of 4, b: 1 zero out of 2 => total 3/6 = 0.5
+    grads = {"w": jnp.array([0.0, 1.0, 0.0, 2.0]), "b": jnp.array([0.0, 3.0])}
+
+    stats = compute_watch_stats(
+        watch_targets=["grads"],
+        include_norms=False,
+        include_per_parameter_norms=False,
+        include_histogram=False,
+        split_scan_layers=False,
+        include_zero_counts=True,
+        grads=grads,
+    )
+
+    assert stats["grad/zero_count/w"] == 2
+    assert jnp.isclose(stats["grad/zero_fraction/w"], 0.5)
+    assert stats["grad/zero_count/b"] == 1
+    assert jnp.isclose(stats["grad/zero_fraction/b"], 0.5)
+    assert stats["grad/zero_count/total"] == 3
+    assert jnp.isclose(stats["grad/zero_fraction/total"], 0.5)
+
+
+def test_zero_counts_disabled_by_default():
+    """Zero metrics are not present when include_zero_counts is False."""
+    grads = {"w": jnp.array([0.0, 1.0])}
+
+    stats = compute_watch_stats(
+        watch_targets=["grads"],
+        include_norms=True,
+        include_per_parameter_norms=True,
+        include_histogram=False,
+        split_scan_layers=False,
+        grads=grads,
+    )
+
+    assert not any("zero" in key for key in stats)
+
+
 def test_invalid_watch_target_raises_value_error():
     with pytest.raises(ValueError, match="Invalid watch targets"):
         compute_watch_stats(

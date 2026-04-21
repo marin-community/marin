@@ -35,6 +35,7 @@ def compute_watch_stats(
     include_per_parameter_norms: bool,
     include_histogram: bool,
     split_scan_layers: bool,
+    include_zero_counts: bool = False,
     params: PyTree | None = None,
     grads: PyTree | None = None,
     updates: PyTree | None = None,
@@ -49,6 +50,7 @@ def compute_watch_stats(
         include_per_parameter_norms: Whether to include per-parameter norms.
         include_histogram: Whether to include histograms.
         split_scan_layers: Whether stacked scan layers are split for logging.
+        include_zero_counts: Whether to include zero-count and zero-fraction metrics.
         params: Parameter tree for the ``params`` target.
         grads: Gradient tree for the ``grads`` target.
         updates: Update tree for the ``updates`` target.
@@ -79,6 +81,7 @@ def compute_watch_stats(
                 include_histogram=include_histogram,
                 include_norms=include_norms,
                 include_per_parameter_norms=include_per_parameter_norms,
+                include_zero_counts=include_zero_counts,
             )
             to_log.update(stats)
             continue
@@ -105,6 +108,7 @@ def compute_watch_stats(
                     include_histogram=include_histogram,
                     include_norms=include_norms,
                     include_per_parameter_norms=include_per_parameter_norms,
+                    include_zero_counts=include_zero_counts,
                 )
                 to_log.update(this_stats)
 
@@ -121,13 +125,18 @@ class WatchConfig:
     include_norms: bool = True
     include_per_parameter_norms: bool = True
     include_histograms: bool = False
+    include_zero_counts: bool = False
     split_scan_layers: bool = True
 
     interval: int = 10
 
     @property
     def is_enabled(self) -> bool:
-        return len(self.watch_targets) > 0 and self.interval > 0 and (self.include_norms or self.include_histograms)
+        return (
+            len(self.watch_targets) > 0
+            and self.interval > 0
+            and (self.include_norms or self.include_histograms or self.include_zero_counts)
+        )
 
     def build(self) -> "WatchCallback":
         return WatchCallback(
@@ -135,6 +144,7 @@ class WatchConfig:
             include_norms=self.include_norms,
             include_per_parameter_norms=self.include_per_parameter_norms,
             include_histogram=self.include_histograms,
+            include_zero_counts=self.include_zero_counts,
             split_scan_layers=self.split_scan_layers,
         )
 
@@ -160,6 +170,7 @@ class WatchCallback(JitCallback[S, M, dict[str, jax.Array | Histogram]]):
         include_norms: bool = True,
         include_per_parameter_norms: bool = True,
         include_histogram: bool = False,
+        include_zero_counts: bool = False,
         split_scan_layers: bool = True,
     ):
         if isinstance(watch_targets, str):
@@ -171,6 +182,7 @@ class WatchCallback(JitCallback[S, M, dict[str, jax.Array | Histogram]]):
         self.include_norms = include_norms
         self.include_per_parameter_norms = include_per_parameter_norms
         self.include_histogram = include_histogram
+        self.include_zero_counts = include_zero_counts
         self.split_scan_layers = split_scan_layers
 
         # Validate watch targets
@@ -182,6 +194,7 @@ class WatchCallback(JitCallback[S, M, dict[str, jax.Array | Histogram]]):
             include_norms=self.include_norms,
             include_per_parameter_norms=self.include_per_parameter_norms,
             include_histogram=self.include_histogram,
+            include_zero_counts=self.include_zero_counts,
             split_scan_layers=self.split_scan_layers,
             params=state.trainable_model,
             grads=inside_info.grads,
