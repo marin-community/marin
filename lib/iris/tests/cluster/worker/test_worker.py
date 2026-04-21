@@ -198,29 +198,6 @@ def test_tpu_bad_node_stderr_promotes_to_worker_failed(mock_worker, mock_runtime
     assert "Couldn't open iommu group" in final_task.error
 
 
-def test_sigsegv_promotes_to_worker_failed(mock_worker, mock_runtime):
-    """Exit 139 (SIGSEGV) -> WORKER_FAILED so retries use the preemption budget."""
-    mock_handle = create_mock_container_handle(
-        status_sequence=[
-            ContainerStatus(phase=ContainerPhase.RUNNING),
-            ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=139),
-        ]
-    )
-    mock_runtime.create_container = Mock(return_value=mock_handle)
-
-    request = create_run_task_request()
-    task_id = mock_worker.submit_task(request)
-
-    task = mock_worker.get_task(task_id)
-    task.thread.join(timeout=15.0)
-
-    final_task = mock_worker.get_task(task_id)
-    assert final_task.status == job_pb2.TASK_STATE_WORKER_FAILED
-    assert final_task.exit_code == 139
-    assert final_task.error is not None
-    assert "SIGSEGV" in final_task.error
-
-
 def test_non_tpu_stderr_still_maps_to_failed(mock_worker, mock_runtime):
     """Non-zero exit with unrelated stderr stays FAILED (no false promotion)."""
     user_stderr = [

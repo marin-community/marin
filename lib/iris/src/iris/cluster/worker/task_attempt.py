@@ -846,27 +846,22 @@ class TaskAttempt:
                         error = f"{error}. stderr: {stderr_line}"
                     if status.oom_killed:
                         self._append_log(source="error", data="Container was OOM killed by the kernel")
-                    # Promote known infra-flavored exits to WORKER_FAILED so they consume
-                    # the preemption budget (default 100) rather than the failure budget
-                    # (default 0). A SIGSEGV in the container process is almost never user
-                    # logic — it's a C extension / libtpu / glibc fault, much closer to a
-                    # bad worker than a user bug.
+                    # Promote known TPU bad-node signatures to WORKER_FAILED.
                     tpu_pattern = detect_tpu_init_failure(stderr_tail[-_TPU_STDERR_TAIL_LINES:])
-                    is_sigsegv = status.exit_code == 139 and not status.oom_killed
-                    if tpu_pattern is not None or is_sigsegv:
-                        reason = f"TPU init failure ({tpu_pattern!r})" if tpu_pattern else "SIGSEGV"
+                    if tpu_pattern is not None:
                         logger.warning(
-                            "Task %s: %s; promoting FAILED -> WORKER_FAILED",
+                            "Task %s: TPU bad-node signature %r; promoting FAILED -> WORKER_FAILED",
                             self.task_id,
-                            reason,
+                            tpu_pattern,
                         )
                         self._append_log(
                             source="error",
-                            data=f"iris: {reason} detected; reporting as worker failure",
+                            data=f"iris: TPU bad-node signature detected ({tpu_pattern!r}); "
+                            "reporting as worker failure",
                         )
                         self.transition_to(
                             job_pb2.TASK_STATE_WORKER_FAILED,
-                            error=f"{reason}: {error}",
+                            error=f"TPU init failure ({tpu_pattern!r}): {error}",
                             exit_code=status.exit_code or -1,
                         )
                     else:

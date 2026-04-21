@@ -62,6 +62,16 @@ logger = logging.getLogger(__name__)
 # unbounded. `_check_worker_group` backstops if workers fully exhaust Iris retries.
 MAX_SHARD_FAILURES = 3
 
+# Per-task retry budget requested from Iris for worker actor tasks
+# (ActorConfig.max_task_retries → Iris's max_retries_failure). Worker crashes
+# are usually infra-flavored — SIGSEGV from a C extension / libtpu / glibc, a
+# flaky node, a transient OOM on a big chunk — not user logic. We pay the
+# coordinator-side `MAX_SHARD_FAILURES` budget to catch real user bugs, so the
+# Iris-side budget can be generous. 100 matches Iris's default preemption
+# budget; a persistently crashing worker will still be caught by
+# `_check_worker_group` once the group exits terminally.
+WORKER_MAX_TASK_RETRIES = 100
+
 
 class ShardFailureKind(enum.StrEnum):
     """TASK failures count toward MAX_SHARD_FAILURES; INFRA failures (preemption) do not."""
@@ -1438,7 +1448,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
             name=worker_name,
             count=actual_workers,
             resources=config.worker_resources,
-            actor_config=ActorConfig(max_task_retries=10),
+            actor_config=ActorConfig(max_task_retries=WORKER_MAX_TASK_RETRIES),
         )
         worker_group.wait_ready(count=1, timeout=3600.0)
 
