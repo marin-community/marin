@@ -75,8 +75,10 @@ VALIDATION_DATASETS = {
     "val_downstream": "bolinas-dna/genomes-v5-validation-intervals-v15_255_255",
 }
 
-REFERENCE_TPU_TYPE = "v5p-8"
-TRANSFER_TPU_TYPE = "v5p-8"
+# Default TPU types per sweep. Overridable via env vars `<SWEEP>_TPU_TYPES` (CSV for
+# multi-type fallback scheduling). Resolved at run() time via `_tpu_types_from_env`.
+REFERENCE_TPU_TYPES: tuple[str, ...] = ("v5p-8",)
+TRANSFER_TPU_TYPES: tuple[str, ...] = ("v5p-8",)
 
 # Reference sweep sizing
 REFERENCE_HIDDEN_SIZE = 512  # ~25M params with vocab_size=7
@@ -231,9 +233,10 @@ def run_smoke_test():
     """Run ~20-step infrastructure validation with the sweep's exact config."""
     mixture = _build_data_mixture()
     model_config = _build_model_config(REFERENCE_HIDDEN_SIZE)
+    tpu_types = _tpu_types_from_env("REFERENCE", REFERENCE_TPU_TYPES)
 
     train_config = SimpleTrainConfig(
-        resources=ResourceConfig.with_tpu(REFERENCE_TPU_TYPE),
+        resources=ResourceConfig.with_tpu(tpu_types),
         train_batch_size=32,
         num_train_steps=20,
         learning_rate=1e-3,
@@ -306,6 +309,7 @@ def _build_base_train_config(
     base_tags: tuple[str, ...],
     checkpointer: CheckpointerConfig,
     steps_per_eval: int,
+    tpu_types: tuple[str, ...],
 ) -> TrainLmOnPodConfig:
     """Build TrainLmOnPodConfig with placeholder optimizer values.
 
@@ -356,7 +360,7 @@ def _build_base_train_config(
 
     return TrainLmOnPodConfig(
         train_config=inner,
-        resources=ResourceConfig.with_tpu(REFERENCE_TPU_TYPE),
+        resources=ResourceConfig.with_tpu(tpu_types),
         output_path=this_output_path(),
     )
 
@@ -566,6 +570,7 @@ def run_reference_tuning_sweep():
     num_loops = NUM_LOOPS
     suggestions_per_loop = SUGGESTIONS_PER_LOOP
     initializer_ranges = _get_initializer_ranges()
+    tpu_types = _tpu_types_from_env("REFERENCE", REFERENCE_TPU_TYPES)
 
     for epochs in EPOCHS:
         for init_range in initializer_ranges:
@@ -590,6 +595,7 @@ def run_reference_tuning_sweep():
                 base_tags=base_tags,
                 checkpointer=_final_checkpoint_only(num_steps),
                 steps_per_eval=num_steps // 2,  # 3 evals per run: step 0 (forced), midpoint, final
+                tpu_types=tpu_types,
             )
 
             previous_update_step = None
@@ -731,6 +737,9 @@ class TransferSweepAxis:
     low: float
     high: float
     log_scale: bool
+    # Optional asymmetric lower-tail extension: (start, count). Adds `count` linearly-spaced
+    # points from `start` up to (but excluding) the lowest symmetric grid point.
+    extend_below: tuple[float, int] | None = None
 
 
 # Feasibility bounds for sweep — derived from heuristic constraints, not hardcoded separately.
@@ -739,12 +748,20 @@ TRANSFER_BOUNDS: dict[str, tuple[float, float]] = {
     "beta2": (DNA_SCALING_HEURISTIC.min_beta2, DNA_SCALING_HEURISTIC.max_beta2),
 }
 
+# Per-axis lower-tail extensions beyond the symmetric grid. beta2's transferred center
+# (~0.976) is close to the upper bound, so the symmetric grid only reaches ~0.95; extend
+# downward to probe the region near the reference value (~0.907).
+TRANSFER_EXTEND_BELOW: dict[str, tuple[float, int]] = {
+    "beta2": (0.7, 3),
+}
+
 TRANSFER_SWEEP_AXES = tuple(
     TransferSweepAxis(
         field=field,
         low=TRANSFER_BOUNDS[field][0],
         high=TRANSFER_BOUNDS[field][1],
         log_scale=(field == "learning_rate"),
+        extend_below=TRANSFER_EXTEND_BELOW.get(field),
     )
     for field in ("learning_rate", "beta2")
 )
@@ -777,6 +794,19 @@ def _build_transfer_grid(axis: TransferSweepAxis, center: float, num_points: int
         above = [center + (i + 1) * (high - center) / n_above for i in range(n_above)]
 
     grid = [*below, center, *above]
+    if axis.extend_below is not None:
+        start, count = axis.extend_below
+        lowest = min(grid)
+        assert axis.low <= start < lowest, (
+            f"extend_below start {start} must satisfy axis.low ({axis.low}) <= start < lowest grid point ({lowest}) "
+            f"for {axis.field}"
+        )
+        step = (lowest - start) / count
+        extension = [start + i * step for i in range(count)]
+        # HACK: append (rather than sort-merge) so symmetric-grid points keep their original
+        # enumerate() indices in run names — preserves wandb run names for runs that existed
+        # before the extension was added. Callers that want sorted output must sort explicitly.
+        grid = [*grid, *extension]
     assert all(axis.low <= v <= axis.high for v in grid), f"Grid values outside bounds for {axis.field}: {grid}"
     return grid
 
@@ -822,7 +852,7 @@ def _print_transfer_preview():
         grid = _build_transfer_grid(axis, center)
         off_center = [v for v in grid if v != center]
         print(f"  {axis.field}  bounds=[{axis.low:.6g}, {axis.high:.6g}]  center={center:.6g}  log={axis.log_scale}")
-        print(f"    grid ({len(grid)} points, {len(off_center)} off-center): {[f'{v:.6g}' for v in grid]}")
+        print(f"    grid ({len(grid)} points, {len(off_center)} off-center): {[f'{v:.6g}' for v in sorted(grid)]}")
     print()
 
     total = (
@@ -861,12 +891,19 @@ def _build_scaled_train_step(
     tpu_type: str | Sequence[str],
     checkpointer: CheckpointerConfig,
     run_eval_harness: bool,
+    per_device_parallelism: int | None = None,
 ) -> ExecutorStep:
     """Build an ExecutorStep for a single scaled (transfer or parameter-scaling) run.
 
     `tpu_type` may be a list when flexible fallback scheduling is desired.
+    `per_device_parallelism`, when set, caps the per-device microbatch and enables
+    gradient accumulation when `batch_size > per_device_parallelism * num_devices`.
     """
     steps_per_eval = max(1, num_train_steps // 32)
+
+    trainer_kwargs: dict = {}
+    if per_device_parallelism is not None:
+        trainer_kwargs["per_device_parallelism"] = per_device_parallelism
 
     inner = TrainLmConfig(
         data=data_mixture,
@@ -889,6 +926,7 @@ def _build_scaled_train_step(
             checkpointer=checkpointer,
             mesh=MeshConfig(axes={"replica": 1, "data": -1, "model": 1}),
             allow_nondivisible_batch_size=True,
+            **trainer_kwargs,
         ),
     )
     if run_eval_harness:
@@ -940,6 +978,7 @@ def run_transfer_validation_sweep():
     model_config = _build_model_config(TRANSFER_HIDDEN_SIZE, REFERENCE_HPARAMS.initializer_range)
     num_params = model_config.total_trainable_params(DNA_SCALING_HEURISTIC.vocab_size)
     wandb_group = f"dna-bolinas-transfer-sweep-{version}"
+    tpu_types = _tpu_types_from_env("TRANSFER", TRANSFER_TPU_TYPES)
 
     base_tags = (
         "sweep",
@@ -965,7 +1004,7 @@ def run_transfer_validation_sweep():
             tags=tags,
             batch_size=TRANSFER_BATCH_SIZE,
             num_train_steps=num_steps,
-            tpu_type=TRANSFER_TPU_TYPE,
+            tpu_type=tpu_types,
             checkpointer=checkpointer,
             run_eval_harness=False,
         )
@@ -1016,7 +1055,7 @@ def run_transfer_validation_sweep():
     # TODO: Remove this filter — temporary hack to run a subset of steps
     # _skip = ("-negative-control", "-positive-control", *[f"-learning_rate-{i}" for i in range(TRANSFER_NUM_POINTS)])
     # all_steps = [s for s in all_steps if not any(s.name.endswith(k) for k in _skip)]
-    all_steps = [s for s in all_steps if "-beta2-" in s.name]
+    all_steps = [s for s in all_steps if any(s.name.endswith(f"-beta2-{i}") for i in (7, 8, 9))]
 
     all_steps = _get_transfer_steps(all_steps)
 
@@ -1031,6 +1070,11 @@ SCALING_VERSION = "v0.5"
 SCALING_TPU_TYPES: tuple[str, ...] = ("v6e-8",)
 SCALING_BATCH_SIZE = 1536
 SCALING_WARMUP_STEPS = 100
+# Per-device microbatch that fit on v6e-8 for all SCALING_HIDDEN_SIZES at SCALING_BATCH_SIZE=1536
+# (1536 / 8 = 192). Pinning this keeps per-device memory identical across slice types and
+# enables gradient accumulation on smaller slices: v6e-8 → 1 step, v6e-4 → 2 steps. The global
+# batch size is unchanged, so DNA_SCALING_HEURISTIC's transferred optimizer stays valid.
+SCALING_PER_DEVICE_PARALLELISM = 192
 
 # Total training tokens available: sum of examples across CDS/upstream/downstream mixtures,
 # each example = DNA_BASE_SEQ_LEN + 1 BOS = 256 tokens. Source: exp109 .md.
@@ -1059,6 +1103,11 @@ def _csv_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     if not raw:
         return default
     return tuple(s.strip() for s in raw.split(","))
+
+
+def _tpu_types_from_env(sweep: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """Read `<SWEEP>_TPU_TYPES` CSV env var, falling back to `default`."""
+    return _csv_env(f"{sweep}_TPU_TYPES", default)
 
 
 def _get_scaling_hidden_sizes() -> tuple[int, ...]:
@@ -1100,7 +1149,7 @@ def run_parameter_scaling_sweep():
     checkpointer = _periodic_checkpoint(keep_every=max(1, num_steps // 3), interval_hours=1)
     wandb_group = f"dna-bolinas-scaling-sweep-{version}"
 
-    tpu_types = _csv_env("TPU_TYPES", SCALING_TPU_TYPES)
+    tpu_types = _tpu_types_from_env("SCALING", SCALING_TPU_TYPES)
     hidden_sizes = _get_scaling_hidden_sizes()
     all_steps: list[ExecutorStep] = []
     for hidden_size in hidden_sizes:
@@ -1130,6 +1179,7 @@ def run_parameter_scaling_sweep():
                 tpu_type=tpu_types,
                 checkpointer=checkpointer,
                 run_eval_harness=True,
+                per_device_parallelism=SCALING_PER_DEVICE_PARALLELISM,
             )
         )
 
