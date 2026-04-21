@@ -706,11 +706,16 @@ class IrisClient:
         """Lightweight state query that avoids loading tasks/attempts/workers.
 
         Prefer this over ``status(job_id).state`` for polling loops.
+
+        Raises:
+            ConnectError: with ``Code.NOT_FOUND`` if the job is unknown to the
+                controller, mirroring ``status()``/``get_job_status()`` so
+                callers can handle missing jobs uniformly.
         """
         states = self._cluster_client.get_job_states([job_id])
         wire_id = job_id.to_wire()
         if wire_id not in states:
-            raise KeyError(f"Job {wire_id} not found")
+            raise ConnectError(Code.NOT_FOUND, f"Job {wire_id} not found")
         return cast(job_pb2.JobState, states[wire_id])
 
     def terminate(self, job_id: JobName) -> None:
