@@ -13,11 +13,14 @@ worker disk. Each model binary is ~4 GB — expect a one-time cold-start cost
 per fresh Iris worker.
 """
 
+import contextlib
 import logging
 import os
 import re
+from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
+import numpy as np
 from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 
@@ -25,6 +28,30 @@ if TYPE_CHECKING:
     import fasttext
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _fasttext_numpy2_shim() -> Iterator[None]:
+    """Make ``np.array(..., copy=False)`` fall back to ``copy=None`` for this call.
+
+    fasttext 0.9.3's ``predict`` does ``np.array(probs, copy=False)``, which
+    numpy 2.0+ raises on. ``copy=None`` restores the pre-2.0 "avoid copy if
+    possible" behaviour. We're single-threaded in the sampling loop, so the
+    global patch is safe for the scope; the try/finally restores the symbol.
+    """
+    original = np.array
+
+    def patched(*args: object, **kwargs: object):
+        if kwargs.get("copy") is False:
+            kwargs["copy"] = None
+        return original(*args, **kwargs)
+
+    np.array = patched  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        np.array = original  # type: ignore[assignment]
+
 
 DOLMA3_QUALITY_MODEL = "allenai/dolma3-fasttext-quality-classifier"
 DOLMA3_TOPIC_MODEL = "allenai/dolma3-fasttext-weborganizer-topic-classifier"
@@ -109,23 +136,24 @@ def score_documents_fasttext_quality(
     logger.info("Scoring %d documents with %s", len(docs), model_repo)
 
     rows: list[dict] = []
-    for i, doc in enumerate(docs):
-        text = _preprocess(doc["text"])
-        pred_labels, pred_probs = model.predict(text, k=-1)  # full distribution
-        prob_by_label = dict(zip(pred_labels, pred_probs, strict=True))
+    with _fasttext_numpy2_shim():
+        for i, doc in enumerate(docs):
+            text = _preprocess(doc["text"])
+            pred_labels, pred_probs = model.predict(text, k=-1)  # full distribution
+            prob_by_label = dict(zip(pred_labels, pred_probs, strict=True))
 
-        rows.append(
-            {
-                "doc_id": doc["doc_id"],
-                "split": doc.get("split", "unknown"),
-                "quality_bucket": doc.get("quality_bucket", "unknown"),
-                "fasttext_quality_label": _strip_fasttext_prefix(pred_labels[0]),
-                "fasttext_quality_score": float(prob_by_label.get(positive_label, 0.0)),
-            }
-        )
+            rows.append(
+                {
+                    "doc_id": doc["doc_id"],
+                    "split": doc.get("split", "unknown"),
+                    "quality_bucket": doc.get("quality_bucket", "unknown"),
+                    "fasttext_quality_label": _strip_fasttext_prefix(pred_labels[0]),
+                    "fasttext_quality_score": float(prob_by_label.get(positive_label, 0.0)),
+                }
+            )
 
-        if (i + 1) % 100 == 0:
-            logger.info("Quality scoring progress: %d/%d", i + 1, len(docs))
+            if (i + 1) % 100 == 0:
+                logger.info("Quality scoring progress: %d/%d", i + 1, len(docs))
 
     write_parquet_file(rows, os.path.join(output_path, output_filename))
     logger.info("Wrote %d quality predictions to %s", len(rows), output_path)
@@ -151,22 +179,23 @@ def classify_documents_fasttext_topic(
     logger.info("Classifying %d documents with %s", len(docs), model_repo)
 
     rows: list[dict] = []
-    for i, doc in enumerate(docs):
-        text = _preprocess(doc["text"])
-        pred_labels, pred_probs = model.predict(text, k=1)
+    with _fasttext_numpy2_shim():
+        for i, doc in enumerate(docs):
+            text = _preprocess(doc["text"])
+            pred_labels, pred_probs = model.predict(text, k=1)
 
-        rows.append(
-            {
-                "doc_id": doc["doc_id"],
-                "split": doc.get("split", "unknown"),
-                "source_label": doc.get("source_label", "unknown"),
-                "fasttext_topic": _strip_fasttext_prefix(pred_labels[0]),
-                "fasttext_topic_confidence": float(pred_probs[0]),
-            }
-        )
+            rows.append(
+                {
+                    "doc_id": doc["doc_id"],
+                    "split": doc.get("split", "unknown"),
+                    "source_label": doc.get("source_label", "unknown"),
+                    "fasttext_topic": _strip_fasttext_prefix(pred_labels[0]),
+                    "fasttext_topic_confidence": float(pred_probs[0]),
+                }
+            )
 
-        if (i + 1) % 100 == 0:
-            logger.info("Topic classification progress: %d/%d", i + 1, len(docs))
+            if (i + 1) % 100 == 0:
+                logger.info("Topic classification progress: %d/%d", i + 1, len(docs))
 
     write_parquet_file(rows, os.path.join(output_path, output_filename))
     logger.info("Wrote %d topic predictions to %s", len(rows), output_path)
