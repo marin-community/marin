@@ -3,16 +3,24 @@
 
 """Oracle labeling of documents using Claude and OpenAI.
 
-Provides quality scoring (0-5 discrete rubric) and topic classification
-from a fixed taxonomy, with support for multiple LLM backends.
+Provides quality scoring (0-5 discrete rubric) and topic classification from a
+fixed taxonomy. Uses provider-native structured outputs so the response shape
+is enforced end-to-end:
+
+- Anthropic: forced tool-use whose ``input_schema`` is the Pydantic model's
+  JSON schema. Claude must emit a tool call; the tool input is validated on
+  our side via ``schema.model_validate``.
+- OpenAI:   ``beta.chat.completions.parse(response_format=<PydanticModel>)``
+  which returns an already-parsed Pydantic instance.
 """
 
-import json
 import logging
 import os
 import time
 from enum import StrEnum
+from typing import Literal, TypeVar, get_args
 
+from pydantic import BaseModel, Field
 from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 
@@ -21,6 +29,9 @@ logger = logging.getLogger(__name__)
 MAX_DOC_CHARS = 8000
 MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 2.0
+# Leaves room for a long `reasoning` field plus tool-call overhead on
+# Anthropic. The previous 256 occasionally truncated reasoning strings.
+MAX_RESPONSE_TOKENS = 1024
 
 
 class OracleBackend(StrEnum):
@@ -28,28 +39,18 @@ class OracleBackend(StrEnum):
     OPENAI = "openai"
 
 
-# FineWeb-Edu style quality rubric (discrete 0-5)
-QUALITY_PROMPT = """\
-You are an expert document quality evaluator. \
-Score the following document on a 0-5 scale based on its educational and informational value.
+# ---------------------------------------------------------------------------
+# Structured-output schemas
+# ---------------------------------------------------------------------------
+# Provider-enforced via tool-use / response_format so the LLM cannot return
+# an out-of-range score or an off-taxonomy topic. Pydantic validates on our
+# side as a second layer, catching any provider-side schema drift.
+#
+# Note: we deliberately omit numeric bounds (ge/le) on `score` because
+# OpenAI's strict structured-output mode does not support
+# minimum/maximum. The 0-5 rubric is enforced by the prompt instead.
 
-Scoring rubric:
-0 - Unintelligible, spam, or purely navigational content with no informational value.
-1 - Low quality: mostly ads, SEO content, or very shallow content with minimal useful information.
-2 - Below average: some useful information but poorly written, disorganized, or mostly redundant.
-3 - Average: reasonably informative content that covers a topic adequately but without depth or insight.
-4 - Good: well-written, informative content that provides useful knowledge or analysis on a topic.
-5 - Excellent: high-quality, educational content with depth, clarity, and insight.
-
-Respond with ONLY a JSON object: {{"score": <int>, "reasoning": "<brief explanation>"}}
-
-Document:
----
-{text}
----"""
-
-# Fixed taxonomy for topic classification
-TOPIC_TAXONOMY = [
+TopicLiteral = Literal[
     "mathematics",
     "computer_science",
     "natural_science",
@@ -66,6 +67,44 @@ TOPIC_TAXONOMY = [
     "code",
     "other",
 ]
+TOPIC_TAXONOMY: tuple[str, ...] = get_args(TopicLiteral)
+
+
+class QualityLabel(BaseModel):
+    score: int = Field(description="Quality score from 0 (unintelligible) to 5 (excellent).")
+    reasoning: str = Field(description="Brief explanation for the score.")
+
+
+class TopicLabel(BaseModel):
+    topic: TopicLiteral = Field(description="Best-fitting topic label from the taxonomy.")
+    reasoning: str = Field(description="Brief explanation for the topic assignment.")
+
+
+LabelSchema = TypeVar("LabelSchema", bound=BaseModel)
+
+
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
+# Structured outputs enforce the response shape, so the prompts describe only
+# the task — no "respond in JSON" instruction needed.
+
+QUALITY_PROMPT = """\
+You are an expert document quality evaluator. \
+Score the following document on a 0-5 scale based on its educational and informational value.
+
+Scoring rubric:
+0 - Unintelligible, spam, or purely navigational content with no informational value.
+1 - Low quality: mostly ads, SEO content, or very shallow content with minimal useful information.
+2 - Below average: some useful information but poorly written, disorganized, or mostly redundant.
+3 - Average: reasonably informative content that covers a topic adequately but without depth or insight.
+4 - Good: well-written, informative content that provides useful knowledge or analysis on a topic.
+5 - Excellent: high-quality, educational content with depth, clarity, and insight.
+
+Document:
+---
+{text}
+---"""
 
 TOPIC_PROMPT = """\
 You are an expert document classifier. \
@@ -73,8 +112,6 @@ Assign the most appropriate topic label to the following document.
 
 Available topics:
 {topics}
-
-Respond with ONLY a JSON object: {{"topic": "<topic_label>", "reasoning": "<brief explanation>"}}
 
 Document:
 ---
@@ -89,38 +126,76 @@ def _truncate_text(text: str, max_chars: int = MAX_DOC_CHARS) -> str:
     return text[:max_chars] + "\n[... truncated ...]"
 
 
-def _call_claude(prompt: str, model: str = "claude-sonnet-4-20250514") -> str:
-    """Call Claude API and return the response text."""
+# ---------------------------------------------------------------------------
+# Structured LLM calls
+# ---------------------------------------------------------------------------
+# Temperature is intentionally left at provider defaults (Anthropic=1.0,
+# OpenAI=1.0). For classification tasks temp=0 is the usual reproducibility
+# default, but single-sample non-determinism is an accepted noise source for
+# this experiment; revisit with multi-sample majority vote if
+# oracle-self-agreement becomes a bottleneck.
+
+
+def _call_claude_structured(
+    prompt: str,
+    schema: type[LabelSchema],
+    model: str = "claude-sonnet-4-20250514",
+) -> LabelSchema:
+    """Call Claude with forced tool-use to get a schema-conformant response."""
     import anthropic
 
     client = anthropic.Anthropic()
+    tool_name = f"record_{schema.__name__.lower()}"
     response = client.messages.create(
         model=model,
-        max_tokens=256,
+        max_tokens=MAX_RESPONSE_TOKENS,
+        tools=[
+            {
+                "name": tool_name,
+                "description": f"Record the {schema.__name__} for the document.",
+                "input_schema": schema.model_json_schema(),
+            }
+        ],
+        tool_choice={"type": "tool", "name": tool_name},
         messages=[{"role": "user", "content": prompt}],
     )
-    return response.content[0].text
+    for block in response.content:
+        if block.type == "tool_use":
+            return schema.model_validate(block.input)
+    raise RuntimeError(f"No tool_use block in Claude response: {response.content!r}")
 
 
-def _call_openai(prompt: str, model: str = "gpt-4o-mini") -> str:
-    """Call OpenAI API and return the response text."""
+def _call_openai_structured(
+    prompt: str,
+    schema: type[LabelSchema],
+    model: str = "gpt-4o-mini",
+) -> LabelSchema:
+    """Call OpenAI with response_format=schema; return a parsed Pydantic instance."""
     import openai
 
     client = openai.OpenAI()
-    response = client.chat.completions.create(
+    response = client.beta.chat.completions.parse(
         model=model,
-        max_tokens=256,
+        max_tokens=MAX_RESPONSE_TOKENS,
         messages=[{"role": "user", "content": prompt}],
+        response_format=schema,
     )
-    return response.choices[0].message.content
+    message = response.choices[0].message
+    if message.parsed is None:
+        raise RuntimeError(f"OpenAI returned no parsed output (refusal={message.refusal!r})")
+    return message.parsed
 
 
-def _call_llm(prompt: str, backend: OracleBackend) -> str:
-    """Call the appropriate LLM backend with retries."""
-    call_fn = _call_claude if backend == OracleBackend.CLAUDE else _call_openai
+def _call_llm_structured(
+    prompt: str,
+    schema: type[LabelSchema],
+    backend: OracleBackend,
+) -> LabelSchema:
+    """Dispatch to the right backend with exponential-backoff retries."""
+    call_fn = _call_claude_structured if backend == OracleBackend.CLAUDE else _call_openai_structured
     for attempt in range(MAX_RETRIES):
         try:
-            return call_fn(prompt)
+            return call_fn(prompt, schema)
         except Exception:
             if attempt == MAX_RETRIES - 1:
                 raise
@@ -128,15 +203,6 @@ def _call_llm(prompt: str, backend: OracleBackend) -> str:
             logger.warning("LLM call failed (attempt %d/%d), retrying in %.1fs", attempt + 1, MAX_RETRIES, wait)
             time.sleep(wait)
     raise RuntimeError("Unreachable")
-
-
-def _parse_json_response(response: str) -> dict:
-    """Extract JSON from LLM response, handling markdown code blocks."""
-    text = response.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    return json.loads(text)
 
 
 def label_quality(
@@ -155,10 +221,9 @@ def label_quality(
         prompt = QUALITY_PROMPT.format(text=truncated)
 
         try:
-            response = _call_llm(prompt, backend)
-            parsed = _parse_json_response(response)
-            doc["oracle_quality_score"] = int(parsed["score"])
-            doc["oracle_quality_reasoning"] = parsed.get("reasoning", "")
+            label = _call_llm_structured(prompt, QualityLabel, backend)
+            doc["oracle_quality_score"] = label.score
+            doc["oracle_quality_reasoning"] = label.reasoning
             doc["oracle_backend"] = str(backend)
         except Exception:
             logger.exception("Failed to label document %s", doc.get("doc_id", i))
@@ -181,15 +246,11 @@ def label_topics(
     output_path: str,
     input_path: str,
     backend: OracleBackend = OracleBackend.CLAUDE,
-    taxonomy: list[str] | None = None,
 ) -> None:
-    """Assign a topic label from a fixed taxonomy to each document using an LLM oracle."""
-    if taxonomy is None:
-        taxonomy = list(TOPIC_TAXONOMY)
-
+    """Assign a topic label from the fixed taxonomy to each document."""
     input_file = os.path.join(input_path, "topic_samples.parquet")
     docs = list(load_parquet(input_file))
-    topics_str = "\n".join(f"- {t}" for t in taxonomy)
+    topics_str = "\n".join(f"- {t}" for t in TOPIC_TAXONOMY)
     logger.info("Labeling %d documents for topics with backend=%s", len(docs), backend)
 
     labeled: list[dict] = []
@@ -198,16 +259,9 @@ def label_topics(
         prompt = TOPIC_PROMPT.format(text=truncated, topics=topics_str)
 
         try:
-            response = _call_llm(prompt, backend)
-            parsed = _parse_json_response(response)
-            topic = parsed["topic"]
-            if topic not in taxonomy:
-                logger.warning(
-                    "LLM returned unknown topic '%s' for doc %s, mapping to 'other'", topic, doc.get("doc_id", i)
-                )
-                topic = "other"
-            doc["oracle_topic"] = topic
-            doc["oracle_topic_reasoning"] = parsed.get("reasoning", "")
+            label = _call_llm_structured(prompt, TopicLabel, backend)
+            doc["oracle_topic"] = label.topic
+            doc["oracle_topic_reasoning"] = label.reasoning
             doc["oracle_backend"] = str(backend)
         except Exception:
             logger.exception("Failed to label document %s", doc.get("doc_id", i))
