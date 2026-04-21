@@ -50,22 +50,35 @@ class OracleBackend(StrEnum):
 # OpenAI's strict structured-output mode does not support
 # minimum/maximum. The 0-5 rubric is enforced by the prompt instead.
 
+# Allen AI WebOrganizer 24-class topic taxonomy. Human-readable strings are
+# kept verbatim (including ``&`` and ``.``) so the fasttext WebOrganizer topic
+# classifier's outputs can be mapped back to these labels after normalization.
+# Source: https://huggingface.co/WebOrganizer/TopicClassifier
 TopicLiteral = Literal[
-    "mathematics",
-    "computer_science",
-    "natural_science",
-    "engineering",
-    "medicine_health",
-    "social_science",
-    "humanities",
-    "law",
-    "business_finance",
-    "news_journalism",
-    "creative_writing",
-    "reference_encyclopedia",
-    "web_forum_discussion",
-    "code",
-    "other",
+    "Adult",
+    "Art & Design",
+    "Software Dev.",
+    "Crime & Law",
+    "Education & Jobs",
+    "Hardware",
+    "Entertainment",
+    "Social Life",
+    "Fashion & Beauty",
+    "Finance & Business",
+    "Food & Dining",
+    "Games",
+    "Health",
+    "History",
+    "Home & Hobbies",
+    "Industrial",
+    "Literature",
+    "Politics",
+    "Religion",
+    "Science & Tech.",
+    "Software",
+    "Sports & Fitness",
+    "Transportation",
+    "Travel",
 ]
 TOPIC_TAXONOMY: tuple[str, ...] = get_args(TopicLiteral)
 

@@ -29,10 +29,17 @@ from rigging.filesystem import marin_prefix, marin_temp_bucket  # noqa: E402
 
 from experiments.embed_everything.embed import LUXICAL_MODEL, embed_documents  # noqa: E402
 from experiments.embed_everything.evaluate import (  # noqa: E402
+    evaluate_fasttext_quality,
+    evaluate_fasttext_topic,
     evaluate_quality_mlp,
     evaluate_quality_probe,
     evaluate_topic_clusters,
     evaluate_topic_reduced,
+    evaluate_topic_supervised,
+)
+from experiments.embed_everything.fasttext_baseline import (  # noqa: E402
+    classify_documents_fasttext_topic,
+    score_documents_fasttext_quality,
 )
 from experiments.embed_everything.oracle import OracleBackend, label_quality, label_topics  # noqa: E402
 from experiments.embed_everything.sample import (  # noqa: E402
@@ -53,9 +60,12 @@ logger = logging.getLogger(__name__)
 EMBEDDING_MODEL = LUXICAL_MODEL
 N_PER_BUCKET = 200
 N_PER_SOURCE = 67
-N_TOPIC_CLUSTERS = 15
+# WebOrganizer's 24-class topic taxonomy (see experiments.embed_everything.oracle.TopicLiteral).
+N_TOPIC_CLUSTERS = 24
 ORACLE_BACKEND = OracleBackend.CLAUDE
-PROMPT_VERSION = "v1"
+# Bumped to v2 when the oracle switched to structured outputs and the topic
+# taxonomy moved to the WebOrganizer 24-class set. Invalidates v1 cached labels.
+PROMPT_VERSION = "v2"
 
 # Known relative paths for input data (relative to marin_prefix()).
 # The actual GCS prefix is resolved at runtime inside each lambda.
@@ -262,6 +272,90 @@ eval_topic_reduced = StepSpec(
 )
 
 # ---------------------------------------------------------------------------
+# Supervised topic probe (logistic regression on embeddings) — apples-to-apples
+# counterpart to the fasttext topic classifier.
+# ---------------------------------------------------------------------------
+
+eval_topic_supervised = StepSpec(
+    name="eval_topic_supervised",
+    output_path_prefix=_OUTPUT_PREFIX,
+    deps=[embed_topic, oracle_topic],
+    hash_attrs={"v": 1},
+    fn=remote(
+        lambda output_path: evaluate_topic_supervised(
+            output_path=output_path,
+            embeddings_path=embed_topic.output_path,
+            oracle_path=oracle_topic.output_path,
+        ),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+    ),
+)
+
+# ---------------------------------------------------------------------------
+# Fasttext baselines (Allen AI Dolma 3 classifiers) — Helw150's skill-issue bar.
+# ---------------------------------------------------------------------------
+
+fasttext_quality = StepSpec(
+    name="fasttext_quality",
+    output_path_prefix=_OUTPUT_PREFIX,
+    deps=[sample_quality],
+    hash_attrs={"model": "allenai/dolma3-fasttext-quality-classifier", "v": 1},
+    fn=remote(
+        lambda output_path: score_documents_fasttext_quality(
+            output_path=output_path,
+            input_path=sample_quality.output_path,
+        ),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+        pip_dependency_groups=["fasttext"],
+    ),
+)
+
+fasttext_topic = StepSpec(
+    name="fasttext_topic",
+    output_path_prefix=_OUTPUT_PREFIX,
+    deps=[sample_topic],
+    hash_attrs={"model": "allenai/dolma3-fasttext-weborganizer-topic-classifier", "v": 1},
+    fn=remote(
+        lambda output_path: classify_documents_fasttext_topic(
+            output_path=output_path,
+            input_path=sample_topic.output_path,
+        ),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+        pip_dependency_groups=["fasttext"],
+    ),
+)
+
+eval_fasttext_quality = StepSpec(
+    name="eval_fasttext_quality",
+    output_path_prefix=_OUTPUT_PREFIX,
+    deps=[fasttext_quality, oracle_quality],
+    hash_attrs={"v": 1},
+    fn=remote(
+        lambda output_path: evaluate_fasttext_quality(
+            output_path=output_path,
+            fasttext_path=fasttext_quality.output_path,
+            oracle_path=oracle_quality.output_path,
+        ),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+    ),
+)
+
+eval_fasttext_topic = StepSpec(
+    name="eval_fasttext_topic",
+    output_path_prefix=_OUTPUT_PREFIX,
+    deps=[fasttext_topic, oracle_topic],
+    hash_attrs={"v": 1},
+    fn=remote(
+        lambda output_path: evaluate_fasttext_topic(
+            output_path=output_path,
+            fasttext_path=fasttext_topic.output_path,
+            oracle_path=oracle_topic.output_path,
+        ),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+    ),
+)
+
+# ---------------------------------------------------------------------------
 # All steps in topological order for StepRunner
 # ---------------------------------------------------------------------------
 
@@ -277,6 +371,11 @@ ALL_STEPS = [
     eval_topic,
     eval_quality_mlp,
     eval_topic_reduced,
+    eval_topic_supervised,
+    fasttext_quality,
+    fasttext_topic,
+    eval_fasttext_quality,
+    eval_fasttext_topic,
 ]
 
 if __name__ == "__main__":

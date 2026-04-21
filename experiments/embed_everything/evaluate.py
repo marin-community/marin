@@ -12,11 +12,14 @@ Topic clustering: K-Means on embeddings -> ARI/NMI against oracle topic labels.
 import json
 import logging
 import os
+import re
 import tempfile
 
 import numpy as np
 from rigging.filesystem import open_url
 from zephyr.readers import load_parquet
+
+from experiments.embed_everything.oracle import TOPIC_TAXONOMY
 
 logger = logging.getLogger(__name__)
 
@@ -422,3 +425,254 @@ def evaluate_topic_reduced(
     )
 
     _write_json(output, os.path.join(output_path, "topic_reduced_results.json"))
+
+
+# ---------------------------------------------------------------------------
+# Fasttext baselines
+# ---------------------------------------------------------------------------
+
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _canonical_topic(label: str) -> str:
+    """Collapse a topic label to an order-preserving canonical form for matching."""
+    return _NON_ALNUM_RE.sub("", label.lower())
+
+
+def _build_topic_canonical_map() -> dict[str, str]:
+    """Map canonicalized WebOrganizer labels back to their display form."""
+    return {_canonical_topic(name): name for name in TOPIC_TAXONOMY}
+
+
+def evaluate_fasttext_quality(
+    output_path: str,
+    fasttext_path: str,
+    oracle_path: str,
+) -> None:
+    """Correlate fasttext quality scores with oracle scores on the test split.
+
+    No probe is trained: fasttext's score is already a per-doc prediction, so
+    Spearman/Kendall between that score and the oracle 0-5 rubric is the
+    head-to-head comparison with ``evaluate_quality_probe``.
+    """
+    from scipy import stats
+
+    fasttext_file = os.path.join(fasttext_path, "quality_fasttext_scores.parquet")
+    oracle_file = os.path.join(oracle_path, "quality_labeled.parquet")
+
+    ft_rows = list(load_parquet(fasttext_file))
+    oracle_docs = list(load_parquet(oracle_file))
+    oracle_by_id = {d["doc_id"]: d for d in oracle_docs}
+
+    scores: list[float] = []
+    oracle_scores: list[float] = []
+    test_buckets: list[str] = []
+
+    for row in ft_rows:
+        if row.get("split") != "test":
+            continue
+        oracle = oracle_by_id.get(row["doc_id"])
+        if oracle is None or oracle.get("oracle_quality_score", -1) == -1:
+            continue
+        scores.append(float(row["fasttext_quality_score"]))
+        oracle_scores.append(float(oracle["oracle_quality_score"]))
+        test_buckets.append(oracle.get("quality_bucket", "unknown"))
+
+    if len(scores) < 2:
+        logger.error("Not enough test-split fasttext predictions to evaluate (%d)", len(scores))
+        return
+
+    spearman_r, spearman_p = stats.spearmanr(oracle_scores, scores)
+    kendall_tau, kendall_p = stats.kendalltau(oracle_scores, scores)
+
+    test_ordinals = np.array([QUALITY_ORDINAL.get(b, 2) for b in test_buckets], dtype=float)
+    bucket_spearman, _ = stats.spearmanr(test_ordinals, scores)
+
+    results = {
+        "task": "fasttext_quality",
+        "n_test": len(scores),
+        "spearman_rho": float(spearman_r),
+        "spearman_p": float(spearman_p),
+        "kendall_tau": float(kendall_tau),
+        "kendall_p": float(kendall_p),
+        "bucket_ordinal_spearman": float(bucket_spearman),
+    }
+    logger.info(
+        "Fasttext quality baseline: Spearman=%.4f, Kendall=%.4f (n_test=%d)",
+        spearman_r,
+        kendall_tau,
+        len(scores),
+    )
+    _write_json(results, os.path.join(output_path, "fasttext_quality_results.json"))
+
+
+def evaluate_fasttext_topic(
+    output_path: str,
+    fasttext_path: str,
+    oracle_path: str,
+) -> None:
+    """Compare fasttext topic predictions to oracle topic labels on test split.
+
+    Reports top-1 accuracy, macro-F1, per-class F1, and a confusion matrix over
+    the WebOrganizer 24-class taxonomy. Both sides are normalized by
+    ``_canonical_topic`` before comparison so punctuation/whitespace variants
+    (e.g., fasttext's ``art_design`` vs oracle's ``Art & Design``) align.
+    """
+    from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
+
+    fasttext_file = os.path.join(fasttext_path, "topic_fasttext_predictions.parquet")
+    oracle_file = os.path.join(oracle_path, "topic_labeled.parquet")
+
+    ft_rows = list(load_parquet(fasttext_file))
+    oracle_docs = list(load_parquet(oracle_file))
+    oracle_by_id = {d["doc_id"]: d for d in oracle_docs}
+
+    canonical_to_display = _build_topic_canonical_map()
+    unmatched_fasttext_labels: set[str] = set()
+
+    y_true: list[str] = []
+    y_pred: list[str] = []
+    for row in ft_rows:
+        if row.get("split") != "test":
+            continue
+        oracle = oracle_by_id.get(row["doc_id"])
+        if oracle is None or oracle.get("oracle_topic") == "labeling_failed":
+            continue
+
+        ft_raw = str(row["fasttext_topic"])
+        ft_display = canonical_to_display.get(_canonical_topic(ft_raw))
+        if ft_display is None:
+            unmatched_fasttext_labels.add(ft_raw)
+            ft_display = "unknown"
+
+        y_true.append(oracle["oracle_topic"])
+        y_pred.append(ft_display)
+
+    if len(y_true) < 2:
+        logger.error("Not enough test-split fasttext predictions to evaluate (%d)", len(y_true))
+        return
+
+    label_order = list(TOPIC_TAXONOMY) + (["unknown"] if "unknown" in y_pred else [])
+    acc = accuracy_score(y_true, y_pred)
+    macro_f1 = f1_score(y_true, y_pred, labels=list(TOPIC_TAXONOMY), average="macro", zero_division=0)
+    per_class = classification_report(y_true, y_pred, labels=list(TOPIC_TAXONOMY), output_dict=True, zero_division=0)
+    conf = confusion_matrix(y_true, y_pred, labels=label_order).tolist()
+
+    results = {
+        "task": "fasttext_topic",
+        "n_test": len(y_true),
+        "accuracy": float(acc),
+        "macro_f1": float(macro_f1),
+        "per_class": per_class,
+        "confusion_matrix": {
+            "labels": label_order,
+            "matrix": conf,
+        },
+        "unmatched_fasttext_labels": sorted(unmatched_fasttext_labels),
+    }
+    logger.info(
+        "Fasttext topic baseline: accuracy=%.4f, macro-F1=%.4f (n_test=%d, unmatched=%d)",
+        acc,
+        macro_f1,
+        len(y_true),
+        len(unmatched_fasttext_labels),
+    )
+    if unmatched_fasttext_labels:
+        logger.warning(
+            "Fasttext labels not in WebOrganizer taxonomy (after normalization): %s", unmatched_fasttext_labels
+        )
+    _write_json(results, os.path.join(output_path, "fasttext_topic_results.json"))
+
+
+def evaluate_topic_supervised(
+    output_path: str,
+    embeddings_path: str,
+    oracle_path: str,
+) -> None:
+    """Train a supervised logistic-regression topic classifier on embeddings.
+
+    Counterpart to ``evaluate_topic_clusters``'s unsupervised K-Means eval: this
+    is an apples-to-apples comparison against the fasttext topic classifier,
+    which is itself a supervised classifier.
+    """
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
+    from sklearn.preprocessing import LabelEncoder
+
+    emb_file = os.path.join(embeddings_path, "topic_embeddings.npz")
+    emb_data = _load_npz(emb_file)
+    embeddings = emb_data["embeddings"]
+    doc_ids = emb_data["doc_ids"].tolist()
+    splits = emb_data["splits"].tolist()
+
+    oracle_file = os.path.join(oracle_path, "topic_labeled.parquet")
+    oracle_docs = list(load_parquet(oracle_file))
+    oracle_by_id = {d["doc_id"]: d for d in oracle_docs}
+
+    train_emb, train_labels = [], []
+    test_emb, test_labels = [], []
+    for i, doc_id in enumerate(doc_ids):
+        oracle = oracle_by_id.get(doc_id)
+        if oracle is None or oracle.get("oracle_topic") == "labeling_failed":
+            continue
+        label = oracle["oracle_topic"]
+        if splits[i] == "train":
+            train_emb.append(embeddings[i])
+            train_labels.append(label)
+        else:
+            test_emb.append(embeddings[i])
+            test_labels.append(label)
+
+    if not train_emb or not test_emb:
+        logger.error("Insufficient topic data: %d train, %d test", len(train_emb), len(test_emb))
+        return
+
+    # Encode labels from the full taxonomy so held-out classes get a stable index.
+    le = LabelEncoder().fit(list(TOPIC_TAXONOMY))
+    # Any labels not in the taxonomy will break transform — surface them loudly.
+    unseen = sorted(set(train_labels + test_labels) - set(TOPIC_TAXONOMY))
+    if unseen:
+        raise ValueError(f"Oracle produced topic labels outside the taxonomy: {unseen}")
+
+    X_train = np.array(train_emb)
+    X_test = np.array(test_emb)
+    y_train = le.transform(train_labels)
+    y_test = le.transform(test_labels)
+
+    clf = LogisticRegression(max_iter=5000, n_jobs=-1, random_state=42)
+    clf.fit(X_train, y_train)
+    y_pred = clf.predict(X_test)
+
+    acc = accuracy_score(y_test, y_pred)
+    macro_f1 = f1_score(y_test, y_pred, average="macro", zero_division=0)
+    per_class = classification_report(
+        le.inverse_transform(y_test),
+        le.inverse_transform(y_pred),
+        labels=list(TOPIC_TAXONOMY),
+        output_dict=True,
+        zero_division=0,
+    )
+    conf = confusion_matrix(y_test, y_pred, labels=list(range(len(TOPIC_TAXONOMY)))).tolist()
+
+    results = {
+        "task": "topic_supervised",
+        "n_train": int(X_train.shape[0]),
+        "n_test": int(X_test.shape[0]),
+        "embedding_dim": int(X_train.shape[1]),
+        "accuracy": float(acc),
+        "macro_f1": float(macro_f1),
+        "per_class": per_class,
+        "confusion_matrix": {
+            "labels": list(TOPIC_TAXONOMY),
+            "matrix": conf,
+        },
+    }
+    logger.info(
+        "Supervised topic probe: accuracy=%.4f, macro-F1=%.4f (n_train=%d, n_test=%d, d=%d)",
+        acc,
+        macro_f1,
+        X_train.shape[0],
+        X_test.shape[0],
+        X_train.shape[1],
+    )
+    _write_json(results, os.path.join(output_path, "topic_supervised_results.json"))

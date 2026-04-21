@@ -192,6 +192,11 @@ dimred = [
     "umap-learn",
 ]
 
+fasttext = [
+    "fasttext",
+    "huggingface-hub",
+]
+
 math = ["pylatexenc", "sympy"]
 
 [[tool.uv.index]]
