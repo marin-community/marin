@@ -13,7 +13,6 @@ import logging
 import os
 import sys
 import time
-from dataclasses import replace
 from pathlib import Path
 
 import click
@@ -31,9 +30,7 @@ from iris.cluster.constraints import (
     WellKnownAttribute,
     device_variant_constraint,
     infer_preemptible_constraint,
-    merge_constraints,
     region_constraint,
-    routing_constraints,
     zone_constraint,
 )
 from iris.cluster.redaction import redact_submit_argv
@@ -601,19 +598,20 @@ def run_iris_job(
 
     reservation: list[ReservationEntry] | None = None
     if reserve:
+        # --reserve is mutually exclusive with --region/--zone: the controller's
+        # claim loop only evaluates each reservation entry's own constraints, so
+        # job-level routing constraints would not gate worker claims (#4988).
+        # A caller who needs a specific region/zone should name it directly; a
+        # caller who uses a reservation is by definition not picking the region.
+        if regions or zone:
+            raise click.UsageError(
+                "--reserve cannot be combined with --region or --zone. "
+                "Use --region/--zone to target a specific location, or --reserve "
+                "to claim from a reservation (which chooses the location for you)."
+            )
         reservation = []
         for spec in reserve:
             reservation.extend(parse_reservation_spec(spec))
-        # Propagate job-level routing constraints onto each reservation entry.
-        # The controller's claim loop only evaluates entry-level constraints, so
-        # without this the job's --region/--zone would not gate worker claims
-        # (see issue #4988). Entry-specified constraints win for canonical keys.
-        job_routing = routing_constraints(constraints)
-        if job_routing:
-            reservation = [
-                replace(entry, constraints=merge_constraints(job_routing, entry.constraints or []))
-                for entry in reservation
-            ]
 
     logger.info(f"Submitting job: {job_name}")
     logger.info(f"Command: {' '.join(command)}")

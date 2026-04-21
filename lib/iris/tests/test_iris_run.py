@@ -5,6 +5,7 @@
 
 import sys
 
+import click
 import pytest
 
 from iris.cli.job import (
@@ -175,44 +176,37 @@ def test_run_iris_job_passes_reservation(monkeypatch):
         assert entry.resources.device.gpu.count == 8
 
 
-def test_run_iris_job_propagates_region_to_reservation_entries(monkeypatch):
-    """--region must gate --reserve worker claims (regression for #4988).
+@pytest.mark.parametrize(
+    "regions, zone",
+    [
+        (("us-central1",), None),
+        (None, "us-central1-a"),
+        (("us-central1",), "us-central1-a"),
+    ],
+)
+def test_run_iris_job_rejects_reserve_with_region_or_zone(monkeypatch, regions, zone):
+    """--reserve is mutually exclusive with --region/--zone (regression for #4988).
 
-    Without propagation, the controller's claim loop only evaluates the
-    entry's own constraints and would claim workers in any region.
+    The controller's claim loop only evaluates each reservation entry's own
+    constraints, so job-level routing would silently fail to gate worker claims.
+    Reject the combination at submit time instead.
     """
-    captured: dict[str, object] = {}
 
-    def _fake_submit_and_wait_job(**kwargs):
-        captured.update(kwargs)
-        return 0
+    def _fail_if_called(**kwargs):
+        raise AssertionError("submission must not happen when --reserve conflicts with --region/--zone")
 
-    monkeypatch.setattr("iris.cli.job._submit_and_wait_job", _fake_submit_and_wait_job)
+    monkeypatch.setattr("iris.cli.job._submit_and_wait_job", _fail_if_called)
 
-    exit_code = run_iris_job(
-        controller_url="http://controller:10000",
-        command=[sys.executable, "-c", "print('ok')"],
-        env_vars={},
-        wait=False,
-        regions=("us-central1",),
-        zone="us-central1-a",
-        reserve=("2:v5litepod-16",),
-    )
-
-    assert exit_code == 0
-    reservation = captured["reservation"]
-    assert reservation is not None
-    assert len(reservation) == 2
-    for entry in reservation:
-        keys = {c.key for c in entry.constraints or []}
-        assert WellKnownAttribute.REGION in keys
-        assert WellKnownAttribute.ZONE in keys
-        region = next(c for c in entry.constraints if c.key == WellKnownAttribute.REGION)
-        assert region.op == ConstraintOp.EQ
-        assert region.values[0].value == "us-central1"
-        zone = next(c for c in entry.constraints if c.key == WellKnownAttribute.ZONE)
-        assert zone.op == ConstraintOp.EQ
-        assert zone.values[0].value == "us-central1-a"
+    with pytest.raises(click.UsageError, match="--reserve cannot be combined with --region or --zone"):
+        run_iris_job(
+            controller_url="http://controller:10000",
+            command=[sys.executable, "-c", "print('ok')"],
+            env_vars={},
+            wait=False,
+            regions=regions,
+            zone=zone,
+            reserve=("2:v5litepod-16",),
+        )
 
 
 def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):
