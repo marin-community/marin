@@ -227,6 +227,13 @@ Iris maintains two independent retry budgets per task:
 | Failure | `failure_count` | `max_retries_failure` | 0 (no retries) | `FAILED` |
 | Preemption | `preemption_count` | `max_retries_preemption` | 100 | `WORKER_FAILED`, `PREEMPTED` |
 
+The worker promotes certain infra-flavored container exits from `FAILED` to
+`WORKER_FAILED` so they consume the preemption budget instead of the failure
+budget: TPU bad-node stderr signatures (see
+`lib/iris/src/iris/cluster/worker/tpu_health.py`) and exit 139 (SIGSEGV),
+which almost always indicates a C extension / libtpu / glibc fault rather
+than user logic.
+
 ### Retry flow
 
 1. Worker reports terminal state via heartbeat.
