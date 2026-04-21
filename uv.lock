@@ -4726,6 +4726,10 @@ math = [
 oracle = [
     { name = "anthropic" },
 ]
+probe = [
+    { name = "scikit-learn" },
+    { name = "scipy" },
+]
 rl = [
     { name = "prime" },
     { name = "sympy" },
@@ -4870,6 +4874,8 @@ requires-dist = [
     { name = "requests" },
     { name = "resiliparse", specifier = ">=0.17.2", index = "https://marin-community.github.io/chatnoir-resiliparse/simple" },
     { name = "s3fs", specifier = ">=2024" },
+    { name = "scikit-learn", marker = "extra == 'probe'" },
+    { name = "scipy", marker = "extra == 'probe'" },
     { name = "sentence-transformers", marker = "extra == 'embed'" },
     { name = "sqlalchemy", marker = "extra == 'evalchemy'" },
     { name = "sympy", marker = "extra == 'evalchemy'", specifier = ">=1.12.1,<1.14" },
@@ -4894,7 +4900,7 @@ requires-dist = [
     { name = "wandb" },
     { name = "warcio" },
 ]
-provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "evalchemy", "vizier", "vllm", "harbor", "dedup", "embed", "oracle", "dimred", "fasttext", "math"]
+provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "evalchemy", "vizier", "vllm", "harbor", "dedup", "embed", "oracle", "dimred", "fasttext", "probe", "math"]
 
 [package.metadata.requires-dev]
 dev = [

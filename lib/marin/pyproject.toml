@@ -197,6 +197,11 @@ fasttext = [
     "huggingface-hub",
 ]
 
+probe = [
+    "scikit-learn",
+    "scipy",
+]
+
 math = ["pylatexenc", "sympy"]
 
 [[tool.uv.index]]

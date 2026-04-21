@@ -261,6 +261,7 @@ def _build_model_steps(em: EmbedModel) -> list[StepSpec]:
                 oracle_path=oracle_quality.output_path,
             ),
             resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+            pip_dependency_groups=["probe"],
         ),
     )
 
@@ -276,6 +277,7 @@ def _build_model_steps(em: EmbedModel) -> list[StepSpec]:
                 oracle_path=oracle_quality.output_path,
             ),
             resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+            pip_dependency_groups=["probe"],
         ),
     )
 
@@ -292,6 +294,7 @@ def _build_model_steps(em: EmbedModel) -> list[StepSpec]:
                 n_clusters=N_TOPIC_CLUSTERS,
             ),
             resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+            pip_dependency_groups=["probe"],
         ),
     )
 
@@ -308,7 +311,7 @@ def _build_model_steps(em: EmbedModel) -> list[StepSpec]:
                 n_clusters=N_TOPIC_CLUSTERS,
             ),
             resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
-            pip_dependency_groups=["dimred"],
+            pip_dependency_groups=["probe", "dimred"],
         ),
     )
 
@@ -324,6 +327,7 @@ def _build_model_steps(em: EmbedModel) -> list[StepSpec]:
                 oracle_path=oracle_topic.output_path,
             ),
             resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+            pip_dependency_groups=["probe"],
         ),
     )
 
