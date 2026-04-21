@@ -73,6 +73,7 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    use_cached_attn: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -438,8 +439,9 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        attn_in_override: Float[Array, "B S D"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        attn_in = attn_in_override if attn_in_override is not None else self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
@@ -497,9 +499,15 @@ class Transformer(eqx.Module):
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
 
         moe_router_stats: list[dict[str, jax.Array]] = []
+        num_blocks = len(self.blocks)
+        cached_attn_in: Float[Array, "B S D"] | None = None
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            # Cache the attn input from the 3rd-to-last layer and reuse for last 2.
+            if cfg.use_cached_attn and i == num_blocks - 3:
+                cached_attn_in = block.attn_gated_norm(block.rms_attn(hidden))
+            override = cached_attn_in if (cfg.use_cached_attn and i >= num_blocks - 2) else None
+            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask, override)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
