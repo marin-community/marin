@@ -222,17 +222,36 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 
 ### Connecting
 
-```bash
-# Port-forward (keep terminal open)
-kubectl --kubeconfig ~/.kube/coreweave-iris \
-  port-forward -n iris svc/iris-controller-svc 10000:10000
+Preferred — let the CLI open the tunnel for you:
 
-# Then: iris --controller-url=http://localhost:10000 ...
-# Or config-based: iris --config=lib/iris/examples/coreweave.yaml ...
+```bash
+iris --cluster=coreweave-ci job logs /runner/my-job    # auto-tunnels
+iris cluster list                                      # see available cluster names
 ```
 
-Namespaces: `iris` (main dev), `iris-ci` (persistent CI), `iris-canary` (GPU canary, ephemeral).
-Configs: `coreweave.yaml`, `coreweave-ci.yaml`, `coreweave-canary.yaml`.
+`--cluster=NAME` resolves to a config under `lib/iris/examples/` and establishes
+a `kubectl port-forward` to the controller service before each call, tearing it
+down on exit. The CLI prints `Establishing tunnel to controller... Tunnel
+ready: 127.0.0.1:<port> -> <svc>:10000`.
+
+Requires the `iris[controller]` extras (`duckdb`, `pyarrow`, `kubernetes`) in
+your venv — otherwise the CLI fails with `ImportError: Install
+iris[controller] to use CloudK8sService` before it can tunnel. If you see
+that error, `uv pip install 'marin-iris[controller]'` inside the venv.
+
+Fallback — manual port-forward (use if you don't have the extras or need to
+keep the tunnel up across many calls):
+
+```bash
+kubectl --kubeconfig ~/.kube/coreweave-iris \
+  port-forward -n <namespace> svc/<service_name> 10000:10000 &
+iris --controller-url=http://localhost:10000 ...
+```
+
+| Cluster name      | Namespace | Service                  | Config file          |
+|-------------------|-----------|--------------------------|----------------------|
+| `coreweave`       | `iris`    | `iris-controller-svc`    | `coreweave.yaml`     |
+| `coreweave-ci`    | `iris-ci` | `iris-ci-controller-svc` | `coreweave-ci.yaml`  |
 
 ### KubernetesProvider vs Worker Daemons
 
