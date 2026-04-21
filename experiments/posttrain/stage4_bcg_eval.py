@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E501
 
-"""M2 Stage 4 — BCG eval pipeline via OpenAI Batch API.
+"""M2 Stage 4 — tension-point eval pipeline via OpenAI Batch API.
 
-Given paired-rubric tension points and a judge/generator model, measures
-Behavioral Conflict Gap (BCG) per tension point:
+Legacy filename: this script originally centered Behavioral Conflict Gap
+(BCG), but the current primary outputs are Joint Satisfaction Rate (JSR)
+and Balanced Joint Score (BJS). BCG is still emitted as a deprecated
+diagnostic field for backwards comparison only.
 
-    BCG = min(marginal_A_adherence, marginal_B_adherence)
-          - joint_adherence_at_corner
+Given paired-rubric tension points and a judge/generator model, compute
+per-point metrics:
 
-where marginal_A_adherence is the mean A_rubric score over samples
-(0-10 scale, scaled to 0-1 for metric math) and joint_adherence is the
-fraction of samples that score >= threshold on BOTH rubrics.
+    JSR = fraction of samples that score >= threshold on BOTH rubrics
+    BJS = harmonic_mean(mean_A_score, mean_B_score) / 10
+    BCG = min(mean_A_score, mean_B_score) - JSR * 10   [deprecated]
 
 Two batch stages:
 
@@ -73,7 +76,7 @@ from openai import OpenAI
 
 # Importable sibling.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import batch_lib as bl  # noqa: E402
+import batch_lib as bl
 
 logger = logging.getLogger("stage4_bcg_eval")
 
@@ -109,6 +112,13 @@ Return strict JSON:
 }
 
 No prose outside the JSON."""
+
+
+def balanced_joint_score(mean_a: float, mean_b: float) -> float:
+    """Return the harmonic mean of the marginal rubric scores, scaled to [0, 1]."""
+    if mean_a <= 0 or mean_b <= 0:
+        return 0.0
+    return (2 * mean_a * mean_b) / (mean_a + mean_b) / 10.0
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -214,9 +224,7 @@ def cmd_generate_submit(args) -> int:
     logger.info("Loaded %d paired-rubric records.", len(rubrics))
 
     requests = build_generate_requests(rubrics, args.model, args.samples)
-    logger.info(
-        "Built %d generation requests (model=%s, samples=%d)", len(requests), args.model, args.samples
-    )
+    logger.info("Built %d generation requests (model=%s, samples=%d)", len(requests), args.model, args.samples)
 
     client = OpenAI()
     state = bl.submit(
@@ -295,9 +303,7 @@ def cmd_generate_collect(args) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def build_score_requests(
-    rubrics: list[dict], generations: list[dict], judge_model: str
-) -> list[dict]:
+def build_score_requests(rubrics: list[dict], generations: list[dict], judge_model: str) -> list[dict]:
     rubric_by_key = {(r["pair_id"], r["tension_point_idx"]): r for r in rubrics}
     requests = []
     for gen in generations:
@@ -322,9 +328,7 @@ def build_score_requests(
             )
             requests.append(
                 bl.build_request(
-                    custom_id=score_custom_id(
-                        gen["pair_id"], gen["tension_point_idx"], gen["sample_idx"], side
-                    ),
+                    custom_id=score_custom_id(gen["pair_id"], gen["tension_point_idx"], gen["sample_idx"], side),
                     model=judge_model,
                     messages=[
                         {"role": "system", "content": SCORE_SYSTEM_PROMPT},
@@ -425,13 +429,12 @@ def cmd_score_collect(args) -> int:
 
 
 # --------------------------------------------------------------------------- #
-# Compute stage — BCG metrics
+# Compute stage — primary JSR/BJS metrics plus deprecated BCG
 # --------------------------------------------------------------------------- #
 
 
 def cmd_compute(args) -> int:
     rubrics = load_jsonl(args.rubrics)
-    generations = load_jsonl(generations_path(args.job_root))
     scores = load_jsonl(scores_path(args.job_root))
 
     if not scores:
@@ -470,8 +473,11 @@ def cmd_compute(args) -> int:
             joints.append(int(a >= threshold and b >= threshold))
         joint_rate = sum(joints) / len(joints) if joints else 0.0
 
-        # BCG: min(marginal_A, marginal_B) - joint*10
-        # (scale joint to 0-10 for comparability with marginal scores)
+        bjs = balanced_joint_score(mean_a, mean_b)
+        weakest_marginal = min(mean_a, mean_b)
+
+        # Deprecated diagnostic: dimensionally incoherent, kept only so
+        # older summaries can still be compared against new metrics.
         bcg = min(mean_a, mean_b) - joint_rate * 10
 
         per_point.append(
@@ -483,6 +489,8 @@ def cmd_compute(args) -> int:
                 "mean_A_score": round(mean_a, 3),
                 "mean_B_score": round(mean_b, 3),
                 "joint_satisfaction_rate": round(joint_rate, 3),
+                "balanced_joint_score": round(bjs, 3),
+                "weakest_marginal_score": round(weakest_marginal, 3),
                 "bcg": round(bcg, 3),
             }
         )
@@ -494,9 +502,9 @@ def cmd_compute(args) -> int:
             "threshold": threshold,
             "mean_marginal_A": round(sum(p["mean_A_score"] for p in per_point) / len(per_point), 3),
             "mean_marginal_B": round(sum(p["mean_B_score"] for p in per_point) / len(per_point), 3),
-            "mean_joint_satisfaction": round(
-                sum(p["joint_satisfaction_rate"] for p in per_point) / len(per_point), 3
-            ),
+            "mean_joint_satisfaction": round(sum(p["joint_satisfaction_rate"] for p in per_point) / len(per_point), 3),
+            "mean_balanced_joint_score": round(sum(p["balanced_joint_score"] for p in per_point) / len(per_point), 3),
+            "mean_weakest_marginal": round(sum(p["weakest_marginal_score"] for p in per_point) / len(per_point), 3),
             "mean_bcg": round(sum(p["bcg"] for p in per_point) / len(per_point), 3),
             "bcg_gt_2_0": sum(1 for p in per_point if p["bcg"] > 2.0),
             "bcg_gt_3_0": sum(1 for p in per_point if p["bcg"] > 3.0),
@@ -514,7 +522,7 @@ def cmd_compute(args) -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(summary, f, indent=2)
-    logger.info("Wrote BCG summary to %s", out_path)
+    logger.info("Wrote summary (JSR/BJS primary, BCG deprecated) to %s", out_path)
     logger.info("Aggregate: %s", json.dumps(aggregate, indent=2))
     return 0
 
@@ -549,7 +557,7 @@ def build_parser() -> argparse.ArgumentParser:
     common(s_col)
     s_col.add_argument("--poll-interval", type=int, default=60)
 
-    c_cmd = sub.add_parser("compute", help="compute BCG summary from generations + scores")
+    c_cmd = sub.add_parser("compute", help="compute JSR/BJS summary from generations + scores")
     common(c_cmd)
     c_cmd.add_argument("--threshold", type=int, default=7, help="score >= threshold counts as honoring rubric")
 

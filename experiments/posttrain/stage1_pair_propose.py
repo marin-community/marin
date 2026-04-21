@@ -1,5 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E501
 
 """M2 Stage 1: propose typed clause-pair edges over the 46 OpenAI Model Spec statements.
 
@@ -14,7 +15,7 @@ the pair as one of:
     possible_shadowing    — one statement's conditions are a subset of the other's
 
 This is the "proposal layer" per gpt5_paper_plan.md. Recall matters more than
-precision; Stage 2 (ideation mining) and Stage 4 (trade-off validation) will
+precision; Stage 2 (tension atlas) and Stage 4 (trade-off validation) will
 do the actual filtering.
 
 Usage:
@@ -159,7 +160,7 @@ def load_understanding(understanding_path: Path) -> Understanding:
             spectrum=tuple(a.get("spectrum", []) or []),
             why_it_matters=a.get("why_it_matters", ""),
         )
-        for a in (u.get("variation_axes") or [])
+        for a in u.get("variation_axes") or []
     )
     return Understanding(
         behavior_understanding=u.get("understanding", ""),
@@ -452,7 +453,12 @@ def main() -> int:
                 remaining = (len(todo) - total_done) / rate if rate > 0 else float("inf")
                 logger.info(
                     "progress: %d/%d ok=%d err=%d  rate=%.2f/s  eta=%.0fs",
-                    total_done, len(todo), n_ok, n_err, rate, remaining,
+                    total_done,
+                    len(todo),
+                    n_ok,
+                    n_err,
+                    rate,
+                    remaining,
                 )
 
     logger.info("done: ok=%d err=%d elapsed=%.1fs  output=%s", n_ok, n_err, time.time() - t_start, args.output)

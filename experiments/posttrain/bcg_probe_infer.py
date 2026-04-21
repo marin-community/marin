@@ -29,7 +29,6 @@ from marin.alignment.inference_config import VLLMConfig
 from marin.execution.executor import ExecutorStep, executor_main
 from rigging.filesystem import REGION_TO_DATA_BUCKET
 
-
 SPEC_PATH = str(Path(__file__).parent / "specs" / "openai_model_spec.jsonl")
 
 SUPPORTED_REGIONS = ("us-central1", "us-east5", "us-east1", "europe-west4")
@@ -72,23 +71,26 @@ TARGETS: dict[str, EvalTarget] = {
         name="bcg_probe_tune_lora_lr1e5_seed0_step1699",
         description="Marin tune_lora DPO lr=1e-5 seed0 step-1699 on 50 BCG-probe prompts",
         model_relative_path=(
-            "checkpoints/dpo/tune_lora/"
-            "bloom_speceval_v2_marin_lr1e5_seed0_b64_v5p8-41586d/hf-reexport-r3/step-1699"
+            "checkpoints/dpo/tune_lora/" "bloom_speceval_v2_marin_lr1e5_seed0_b64_v5p8-41586d/hf-reexport-r3/step-1699"
         ),
     ),
 }
 
 
-EVAL_CONFIG = EvalConfig(
-    prompt_format=PromptFormat.MARIN,
-    temperature=0.7,
-    max_tokens=1500,
-    n=4,  # 4 samples per prompt for BCG marginal/joint estimation
-    inference_batch_size=64,
-    judge_workers=64,  # not used (no judge step)
-    judge_batch_size=8,  # not used
-    judge_max_tokens=1000,  # not used
-)
+def _make_eval_config(n_samples: int) -> EvalConfig:
+    return EvalConfig(
+        prompt_format=PromptFormat.MARIN,
+        temperature=0.7,
+        max_tokens=1500,
+        n=n_samples,
+        inference_batch_size=64,
+        judge_workers=64,  # not used (no judge step)
+        judge_batch_size=8,  # not used
+        judge_max_tokens=1000,  # not used
+    )
+
+
+EVAL_CONFIG = _make_eval_config(4)
 
 
 def _normalize_region(region: str) -> str:
@@ -134,6 +136,7 @@ def build_inference_steps(
     tpu_type: str,
     prompts_relative_path: str,
     step_suffix: str = "",
+    n_samples: int = 4,
 ) -> list[ExecutorStep]:
     target = TARGETS[target_key]
     prompts_path = _regional_path(region, prompts_relative_path)
@@ -143,7 +146,7 @@ def build_inference_steps(
         target_model=_target_vllm_config(target, region, tpu_type),
         prompts=prompts_path,
         spec=SPEC_PATH,
-        eval_config=EVAL_CONFIG,
+        eval_config=_make_eval_config(n_samples),
         judge_model="gpt-4.1",  # unused — we only include eval_steps[:1]
     )
     # Inference only — paired-rubric scoring happens in stage4_bcg_eval.py.
@@ -167,12 +170,18 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         "--prompts-relative-path",
         default=PROMPTS_RELATIVE_PATH_DEFAULT,
         help="Region-relative prompts path. Default: 50-point probe set. "
-             "Use 'alignment/bcg_full_2573_prompts' for the full atlas.",
+        "Use 'alignment/bcg_full_2573_prompts' for the full atlas.",
     )
     parser.add_argument(
         "--step-suffix",
         default="",
         help="Suffix appended to the executor step name so full-atlas runs do not collide with probe outputs.",
+    )
+    parser.add_argument(
+        "--n-samples",
+        type=int,
+        default=4,
+        help="Samples per prompt. Default 4 (BCG probe/full-atlas). Use 10 for the M2 seed gate.",
     )
     return parser.parse_known_args()
 
@@ -181,12 +190,14 @@ if __name__ == "__main__":
     args, executor_args = parse_args()
     sys.argv = [sys.argv[0], *executor_args]
     region = _normalize_region(args.region)
-    steps = build_inference_steps(args.target, region, args.tpu_type, args.prompts_relative_path, args.step_suffix)
+    steps = build_inference_steps(
+        args.target, region, args.tpu_type, args.prompts_relative_path, args.step_suffix, args.n_samples
+    )
     target = TARGETS[args.target]
     executor_main(
         steps=steps,
         description=(
             f"BCG inference: {target.description} on {args.tpu_type} @ {region} "
-            f"prompts={args.prompts_relative_path}"
+            f"prompts={args.prompts_relative_path} n={args.n_samples}"
         ),
     )

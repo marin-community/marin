@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E501
 
-"""Full-atlas BCG comparison: scatter + radar + markdown table.
+"""Full-atlas joint-satisfaction comparison: markdown table + scatter + radar.
 
-Reads the three full-atlas bcg_summary.json files:
-    stage4_output/bcg_M0_full/
-    stage4_output/bcg_M1_full/
-    stage4_output/full_oracle_n3/
+Reads the cached full-atlas summaries:
+    stage4_output/bcg_M0_full/bcg_summary.json
+    stage4_output/bcg_M1_full/bcg_summary.json
+    stage4_output/full_oracle_n3/bcg_summary.json
+
+Those files were produced by the legacy Stage 4 pipeline. This script keeps the
+existing path layout, but treats Joint Satisfaction Rate (JSR) and Balanced
+Joint Score (BJS) as the primary metrics. BCG is retained only as a deprecated
+diagnostic field.
 
 Produces:
     stage4_output/comparison_full.md
     stage4_output/comparison_full.csv
     stage4_output/comparison_full.json
-    stage4_output/comparison_full.png           (M0 BCG vs M1 BCG scatter)
-    stage4_output/comparison_radar_full.png     (per-family profile)
+    stage4_output/comparison_full.png       (M0 BJS vs M1 BJS scatter)
+    stage4_output/comparison_radar_full.png (oracle-feasible family profile)
 
 Usage:
     uv run --with matplotlib python experiments/posttrain/stage4_full_plots.py
@@ -24,14 +30,16 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import sys
 from collections import defaultdict
 from pathlib import Path
 
-import numpy as np
 import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
+
+matplotlib.use("Agg")
 
 
 OUTPUT_DIR = Path("experiments/posttrain/stage4_output")
@@ -42,46 +50,84 @@ MODELS = [
     ("M1", OUTPUT_DIR / "bcg_M1_full", "M1 DPO LoRA lr=1e-5 (N=3)"),
 ]
 
-COLOR = {"oracle": "#1f77b4", "M0": "#2ca02c", "M1": "#d62728"}
+MODEL_COLOR = {"oracle": "#1f77b4", "M0": "#2ca02c", "M1": "#d62728"}
+SLICE_ORDER = ["feasible", "marginal", "infeasible"]
+SLICE_LABEL = {
+    "feasible": "Feasible",
+    "marginal": "Marginal",
+    "infeasible": "Infeasible",
+}
+SLICE_COLOR = {
+    "feasible": "#2ca02c",
+    "marginal": "#ff7f0e",
+    "infeasible": "#7f7f7f",
+}
+FEASIBLE_JSR = 2 / 3
+ZERO_TOL = 1e-9
 
 FAMILIES: dict[str, list[str]] = {
     "Warmth / Tone": [
-        "be_empathetic", "be_kind", "be_engaging", "be_creative",
-        "be_rationally_optimistic", "be_clear",
+        "be_empathetic",
+        "be_kind",
+        "be_engaging",
+        "be_creative",
+        "be_rationally_optimistic",
+        "be_clear",
         "do_not_make_unprompted_personal_comments",
-        "ask_clarifying_questions", "avoid_being_condescending",
+        "ask_clarifying_questions",
+        "avoid_being_condescending",
     ],
     "Safety / Hazard": [
-        "avoid_info_hazards", "do_not_encourage_self_harm",
-        "prevent_imminent_harm", "avoid_extremist_content",
-        "avoid_hateful_content", "comply_with_laws",
+        "avoid_info_hazards",
+        "do_not_encourage_self_harm",
+        "prevent_imminent_harm",
+        "avoid_extremist_content",
+        "avoid_hateful_content",
+        "comply_with_laws",
         "sexual_content_involving_minors",
-        "do_not_facilitate_illicit_behavior", "avoid_abuse",
+        "do_not_facilitate_illicit_behavior",
+        "avoid_abuse",
     ],
     "Calibration / Truth": [
-        "avoid_errors", "express_uncertainty", "do_not_lie",
-        "avoid_sycophancy", "highlight_misalignments",
+        "avoid_errors",
+        "express_uncertainty",
+        "do_not_lie",
+        "avoid_sycophancy",
+        "highlight_misalignments",
         "assume_objective_pov",
     ],
     "Privacy / Privilege": [
-        "protect_privacy", "protect_privileged_messages",
-        "follow_all_applicable_instructions", "ignore_untrusted_data",
+        "protect_privacy",
+        "protect_privileged_messages",
+        "follow_all_applicable_instructions",
+        "ignore_untrusted_data",
         "assume_best_intentions",
     ],
     "Style / Structure": [
-        "refusal_style", "formatting", "be_thorough_but_efficient",
-        "support_programmatic_use", "avoid_overstepping",
-        "letter_and_spirit", "transformation_exception", "be_professional",
-        "support_mental_health", "avoid_regulated_advice",
-        "no_topic_off_limits", "present_perspectives",
-        "avoid_targeted_political_manipulation", "uphold_fairness",
-        "no_agenda", "no_erotica_or_gore", "respect_creators",
+        "refusal_style",
+        "formatting",
+        "be_thorough_but_efficient",
+        "support_programmatic_use",
+        "avoid_overstepping",
+        "letter_and_spirit",
+        "transformation_exception",
+        "be_professional",
+        "support_mental_health",
+        "avoid_regulated_advice",
+        "no_topic_off_limits",
+        "present_perspectives",
+        "avoid_targeted_political_manipulation",
+        "uphold_fairness",
+        "no_agenda",
+        "no_erotica_or_gore",
+        "respect_creators",
     ],
 }
+
 STMT_TO_FAMILY: dict[str, str] = {}
-for fam, stmts in FAMILIES.items():
-    for s in stmts:
-        STMT_TO_FAMILY[s] = fam
+for family, statements in FAMILIES.items():
+    for statement in statements:
+        STMT_TO_FAMILY[statement] = family
 
 
 def load_summary(job_root: Path) -> dict | None:
@@ -92,95 +138,272 @@ def load_summary(job_root: Path) -> dict | None:
     return json.loads(path.read_text())
 
 
+def point_key(point: dict) -> tuple[str, int]:
+    return point["pair_id"], point["tension_point_idx"]
+
+
+def balanced_joint_score(mean_a: float, mean_b: float) -> float:
+    if mean_a <= 0 or mean_b <= 0:
+        return 0.0
+    return (2 * mean_a * mean_b) / (mean_a + mean_b) / 10.0
+
+
+def feasibility_slice(oracle_jsr: float | None) -> str:
+    if oracle_jsr is None:
+        return "unknown"
+    if math.isclose(oracle_jsr, 0.0, abs_tol=ZERO_TOL):
+        return "infeasible"
+    if oracle_jsr >= FEASIBLE_JSR - ZERO_TOL:
+        return "feasible"
+    return "marginal"
+
+
+def enrich_summaries(raw_summaries: dict[str, dict]) -> dict[str, dict]:
+    oracle_summary = raw_summaries.get("oracle")
+    oracle_points = {}
+    if oracle_summary is not None:
+        oracle_points = {point_key(p): p for p in oracle_summary.get("per_point", [])}
+
+    enriched: dict[str, dict] = {}
+    for key, _, display in MODELS:
+        raw = raw_summaries.get(key)
+        if raw is None:
+            continue
+        enriched_points = []
+        for point in raw.get("per_point", []):
+            entry = dict(point)
+            entry["balanced_joint_score"] = round(balanced_joint_score(point["mean_A_score"], point["mean_B_score"]), 3)
+            entry["weakest_marginal_score"] = round(min(point["mean_A_score"], point["mean_B_score"]), 3)
+            oracle_point = oracle_points.get(point_key(point))
+            oracle_jsr = oracle_point["joint_satisfaction_rate"] if oracle_point is not None else None
+            entry["oracle_joint_satisfaction_rate"] = oracle_jsr
+            entry["feasibility_slice"] = feasibility_slice(oracle_jsr)
+            enriched_points.append(entry)
+        enriched[key] = {
+            "display": display,
+            "per_point": enriched_points,
+        }
+    return enriched
+
+
+def aggregate_points(points: list[dict]) -> dict:
+    if not points:
+        return {}
+    return {
+        "n_tension_points": len(points),
+        "mean_marginal_A": round(sum(p["mean_A_score"] for p in points) / len(points), 3),
+        "mean_marginal_B": round(sum(p["mean_B_score"] for p in points) / len(points), 3),
+        "mean_joint_satisfaction": round(sum(p["joint_satisfaction_rate"] for p in points) / len(points), 3),
+        "mean_balanced_joint_score": round(sum(p["balanced_joint_score"] for p in points) / len(points), 3),
+        "mean_weakest_marginal": round(sum(p["weakest_marginal_score"] for p in points) / len(points), 3),
+        "mean_bcg": round(sum(p["bcg"] for p in points) / len(points), 3),
+    }
+
+
+def add_aggregates(summaries: dict[str, dict]) -> None:
+    for summary in summaries.values():
+        points = summary["per_point"]
+        summary["aggregate"] = aggregate_points(points)
+        summary["by_slice"] = {
+            slice_name: aggregate_points([p for p in points if p["feasibility_slice"] == slice_name])
+            for slice_name in SLICE_ORDER
+        }
+
+
+def format_float(value: float | int | None, digits: int = 3) -> str:
+    if value is None:
+        return "—"
+    return f"{value:.{digits}f}"
+
+
+def format_ratio(improved: int, regressed: int) -> str:
+    if regressed == 0:
+        return "inf" if improved > 0 else "—"
+    return f"{improved / regressed:.2f}x"
+
+
+def shared_points(
+    summaries: dict[str, dict], left_key: str, right_key: str, slice_name: str | None = None
+) -> list[tuple[dict, dict]]:
+    left_points = {point_key(p): p for p in summaries[left_key]["per_point"]}
+    right_points = {point_key(p): p for p in summaries[right_key]["per_point"]}
+    shared = []
+    for key in sorted(set(left_points) & set(right_points)):
+        left = left_points[key]
+        right = right_points[key]
+        if slice_name is not None and left["feasibility_slice"] != slice_name:
+            continue
+        shared.append((left, right))
+    return shared
+
+
+def delta_stats(summaries: dict[str, dict], field: str, slice_name: str | None = None) -> dict:
+    shared = shared_points(summaries, "M0", "M1", slice_name=slice_name)
+    deltas = [right[field] - left[field] for left, right in shared]
+    improved = sum(delta > ZERO_TOL for delta in deltas)
+    regressed = sum(delta < -ZERO_TOL for delta in deltas)
+    ties = len(deltas) - improved - regressed
+    return {
+        "n": len(deltas),
+        "improved": improved,
+        "regressed": regressed,
+        "ties": ties,
+        "ratio": format_ratio(improved, regressed),
+        "mean_delta": round(sum(deltas) / len(deltas), 3) if deltas else None,
+    }
+
+
+def representative_rows(summaries: dict[str, dict], improved: bool) -> list[tuple[dict, dict]]:
+    shared = shared_points(summaries, "M0", "M1", slice_name="feasible")
+    shared = [
+        (left, right)
+        for left, right in shared
+        if (right["joint_satisfaction_rate"] - left["joint_satisfaction_rate"] > ZERO_TOL) == improved
+    ]
+
+    def sort_key(pair: tuple[dict, dict]) -> tuple[float, float, float]:
+        left, right = pair
+        delta_jsr = right["joint_satisfaction_rate"] - left["joint_satisfaction_rate"]
+        delta_bjs = right["balanced_joint_score"] - left["balanced_joint_score"]
+        oracle_jsr = left["oracle_joint_satisfaction_rate"] or 0.0
+        return delta_jsr, delta_bjs, oracle_jsr
+
+    shared.sort(key=sort_key, reverse=improved)
+    return shared[:10]
+
+
+def family_agg(per_point: list[dict], field: str) -> dict[str, float]:
+    bucket: dict[str, list[float]] = defaultdict(list)
+    for point in per_point:
+        statement_a, _, statement_b = point["pair_id"].partition("__")
+        families = {STMT_TO_FAMILY.get(statement_a), STMT_TO_FAMILY.get(statement_b)}
+        families.discard(None)
+        for family in families:
+            bucket[family].append(point[field])
+    return {family: sum(values) / len(values) if values else float("nan") for family, values in bucket.items()}
+
+
+def feasible_family_counts(oracle_points: list[dict]) -> dict[str, int]:
+    counts = {family: 0 for family in FAMILIES}
+    for point in oracle_points:
+        if point["feasibility_slice"] != "feasible":
+            continue
+        statement_a, _, statement_b = point["pair_id"].partition("__")
+        families = {STMT_TO_FAMILY.get(statement_a), STMT_TO_FAMILY.get(statement_b)}
+        families.discard(None)
+        for family in families:
+            counts[family] += 1
+    return counts
+
+
 def write_markdown_table(summaries: dict[str, dict], out_path: Path) -> None:
+    oracle_summary = summaries["oracle"]
+    total_points = oracle_summary["aggregate"]["n_tension_points"]
+    slice_counts = {
+        slice_name: oracle_summary["by_slice"][slice_name].get("n_tension_points", 0) for slice_name in SLICE_ORDER
+    }
     lines = []
-    lines.append("# BCG Comparison — Full Atlas (N=3 samples per prompt, 2573 tension points)")
+    lines.append(f"# Joint Satisfaction Comparison — Full Atlas (N=3 screen, {total_points} tension points)")
     lines.append("")
-    lines.append("## Aggregate metrics")
+    lines.append(
+        "BCG is retained only as a deprecated diagnostic. The primary metrics here are joint satisfaction rate (JSR), balanced joint score (BJS), and oracle feasibility slices."
+    )
     lines.append("")
-    lines.append("| model | n_points | mean marginal A | mean marginal B | joint rate | **mean BCG** |")
-    lines.append("|---|---:|---:|---:|---:|---:|")
-    for key, _, display in MODELS:
-        s = summaries.get(key)
-        if s is None:
-            lines.append(f"| {display} | — | — | — | — | — |")
+    lines.append("## Aggregate metrics (all points)")
+    lines.append("")
+    lines.append("| model | n_points | JSR | BJS | weakest marginal | mean A | mean B |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|")
+    for key, _, _ in MODELS:
+        summary = summaries.get(key)
+        if summary is None:
             continue
-        a = s.get("aggregate", {})
+        agg = summary["aggregate"]
         lines.append(
-            f"| {display} | {a.get('n_tension_points', '-')} | "
-            f"{a.get('mean_marginal_A', '-'):.2f} | "
-            f"{a.get('mean_marginal_B', '-'):.2f} | "
-            f"{a.get('mean_joint_satisfaction', '-'):.3f} | "
-            f"**{a.get('mean_bcg', '-'):.2f}** |"
+            f"| {summary['display']} | {agg.get('n_tension_points', 0)} | "
+            f"{format_float(agg.get('mean_joint_satisfaction'))} | "
+            f"{format_float(agg.get('mean_balanced_joint_score'))} | "
+            f"{format_float(agg.get('mean_weakest_marginal'))} | "
+            f"{format_float(agg.get('mean_marginal_A'))} | "
+            f"{format_float(agg.get('mean_marginal_B'))} |"
         )
 
     lines.append("")
-    lines.append("## BCG distribution")
+    lines.append("## Oracle feasibility decomposition")
     lines.append("")
-    lines.append("| model | BCG > 2 | BCG > 3 | BCG > 4 |")
-    lines.append("|---|---:|---:|---:|")
-    for key, _, display in MODELS:
-        s = summaries.get(key)
-        if s is None:
-            lines.append(f"| {display} | — | — | — |")
+    lines.append("| slice | n_points | share |")
+    lines.append("|---|---:|---:|")
+    for slice_name in SLICE_ORDER:
+        count = slice_counts[slice_name]
+        share = count / total_points if total_points else 0.0
+        lines.append(f"| {SLICE_LABEL[slice_name]} | {count} | {share:.1%} |")
+
+    lines.append("")
+    lines.append("## Feasible-slice metrics (headline slice)")
+    lines.append("")
+    lines.append("| model | n_points | JSR | BJS | weakest marginal |")
+    lines.append("|---|---:|---:|---:|---:|")
+    for key, _, _ in MODELS:
+        summary = summaries.get(key)
+        if summary is None:
             continue
-        a = s.get("aggregate", {})
+        agg = summary["by_slice"]["feasible"]
         lines.append(
-            f"| {display} | {a.get('bcg_gt_2_0', '-')} | "
-            f"{a.get('bcg_gt_3_0', '-')} | {a.get('bcg_gt_4_0', '-')} |"
+            f"| {summary['display']} | {agg.get('n_tension_points', 0)} | "
+            f"{format_float(agg.get('mean_joint_satisfaction'))} | "
+            f"{format_float(agg.get('mean_balanced_joint_score'))} | "
+            f"{format_float(agg.get('mean_weakest_marginal'))} |"
         )
 
-    # DPO delta analysis
-    m0 = summaries.get("M0") or {}
-    m1 = summaries.get("M1") or {}
-    oracle = summaries.get("oracle") or {}
-    m0_pts = {(p["pair_id"], p["tension_point_idx"]): p for p in m0.get("per_point", [])}
-    m1_pts = {(p["pair_id"], p["tension_point_idx"]): p for p in m1.get("per_point", [])}
-    oracle_pts = {(p["pair_id"], p["tension_point_idx"]): p for p in oracle.get("per_point", [])}
-    common = sorted(set(m0_pts) & set(m1_pts))
-
-    if common:
-        deltas = [(m1_pts[k]["bcg"] - m0_pts[k]["bcg"], k) for k in common]
-        deltas.sort(reverse=True)
-        dpo_worse = sum(1 for d, _ in deltas if d > 0.5)
-        dpo_better = sum(1 for d, _ in deltas if d < -0.5)
-        dpo_neutral = len(common) - dpo_worse - dpo_better
-        lines.append("")
-        lines.append("## DPO delta (M1 BCG − M0 BCG)")
-        lines.append("")
-        lines.append(
-            f"Over **{len(common)}** common tension points: "
-            f"DPO **worsened** trade-off on **{dpo_worse}** pairs (Δ > 0.5), "
-            f"**improved** on **{dpo_better}** (Δ < −0.5), "
-            f"**neutral** on **{dpo_neutral}** (|Δ| ≤ 0.5)."
-        )
-        lines.append("")
-        lines.append("### Top 15 pairs where DPO worsened the trade-off")
-        lines.append("")
-        lines.append("| Δ(M1−M0) | pair | tension | M0 BCG | M1 BCG | oracle BCG |")
-        lines.append("|---:|---|---|---:|---:|---:|")
-        for d, k in deltas[:15]:
-            oracle_bcg = oracle_pts.get(k, {}).get("bcg")
-            oracle_str = f"{oracle_bcg:.2f}" if oracle_bcg is not None else "—"
-            tname = (m1_pts[k].get("tension_name", "") or "")[:60]
+    lines.append("")
+    lines.append("## DPO effect on shared tension points")
+    lines.append("")
+    lines.append("| metric | slice | n_shared | improved | regressed | ties | win/loss | mean delta |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|")
+    for metric_name, field in [
+        ("JSR", "joint_satisfaction_rate"),
+        ("BJS", "balanced_joint_score"),
+    ]:
+        for slice_name in [None, "feasible"]:
+            stats = delta_stats(summaries, field, slice_name=slice_name)
+            slice_label = "All" if slice_name is None else SLICE_LABEL[slice_name]
             lines.append(
-                f"| {d:+.2f} | `{k[0]}` | {tname} "
-                f"| {m0_pts[k]['bcg']:.2f} | {m1_pts[k]['bcg']:.2f} | {oracle_str} |"
+                f"| {metric_name} | {slice_label} | {stats['n']} | {stats['improved']} | "
+                f"{stats['regressed']} | {stats['ties']} | {stats['ratio']} | {format_float(stats['mean_delta'])} |"
             )
+
+    worsened = representative_rows(summaries, improved=False)
+    improved = representative_rows(summaries, improved=True)
+
+    if worsened:
         lines.append("")
-        lines.append("### Top 15 pairs where DPO improved the trade-off")
+        lines.append("## Representative feasible regressions")
         lines.append("")
-        lines.append("| Δ(M1−M0) | pair | tension | M0 BCG | M1 BCG | oracle BCG |")
-        lines.append("|---:|---|---|---:|---:|---:|")
-        for d, k in deltas[::-1][:15]:
-            if d > -0.5:
-                break
-            oracle_bcg = oracle_pts.get(k, {}).get("bcg")
-            oracle_str = f"{oracle_bcg:.2f}" if oracle_bcg is not None else "—"
-            tname = (m1_pts[k].get("tension_name", "") or "")[:60]
+        lines.append("| pair | tension | oracle JSR | M0 JSR | M1 JSR | M0 BJS | M1 BJS |")
+        lines.append("|---|---|---:|---:|---:|---:|---:|")
+        for left, right in worsened:
             lines.append(
-                f"| {d:+.2f} | `{k[0]}` | {tname} "
-                f"| {m0_pts[k]['bcg']:.2f} | {m1_pts[k]['bcg']:.2f} | {oracle_str} |"
+                f"| `{left['pair_id']}` | {(left['tension_name'] or '')[:60]} | "
+                f"{format_float(left['oracle_joint_satisfaction_rate'])} | "
+                f"{format_float(left['joint_satisfaction_rate'])} | "
+                f"{format_float(right['joint_satisfaction_rate'])} | "
+                f"{format_float(left['balanced_joint_score'])} | "
+                f"{format_float(right['balanced_joint_score'])} |"
+            )
+
+    if improved:
+        lines.append("")
+        lines.append("## Representative feasible improvements")
+        lines.append("")
+        lines.append("| pair | tension | oracle JSR | M0 JSR | M1 JSR | M0 BJS | M1 BJS |")
+        lines.append("|---|---|---:|---:|---:|---:|---:|")
+        for left, right in improved:
+            lines.append(
+                f"| `{left['pair_id']}` | {(left['tension_name'] or '')[:60]} | "
+                f"{format_float(left['oracle_joint_satisfaction_rate'])} | "
+                f"{format_float(left['joint_satisfaction_rate'])} | "
+                f"{format_float(right['joint_satisfaction_rate'])} | "
+                f"{format_float(left['balanced_joint_score'])} | "
+                f"{format_float(right['balanced_joint_score'])} |"
             )
 
     out_path.write_text("\n".join(lines) + "\n")
@@ -188,145 +411,159 @@ def write_markdown_table(summaries: dict[str, dict], out_path: Path) -> None:
 
 
 def write_csv(summaries: dict[str, dict], out_path: Path) -> None:
-    m0 = summaries.get("M0") or {}
-    m1 = summaries.get("M1") or {}
-    oracle = summaries.get("oracle") or {}
-    m0_pts = {(p["pair_id"], p["tension_point_idx"]): p for p in m0.get("per_point", [])}
-    m1_pts = {(p["pair_id"], p["tension_point_idx"]): p for p in m1.get("per_point", [])}
-    oracle_pts = {(p["pair_id"], p["tension_point_idx"]): p for p in oracle.get("per_point", [])}
-    keys = sorted(set(m0_pts) | set(m1_pts) | set(oracle_pts))
+    oracle_points = {point_key(p): p for p in summaries["oracle"]["per_point"]}
+    m0_points = {point_key(p): p for p in summaries["M0"]["per_point"]}
+    m1_points = {point_key(p): p for p in summaries["M1"]["per_point"]}
+    keys = sorted(set(oracle_points) | set(m0_points) | set(m1_points))
 
-    def g(pts, k, field):
-        return pts.get(k, {}).get(field)
+    def get(points: dict[tuple[str, int], dict], key: tuple[str, int], field: str):
+        point = points.get(key)
+        return None if point is None else point.get(field)
 
-    with out_path.open("w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow([
-            "pair_id", "tension_point_idx", "tension_name",
-            "M0_bcg", "M0_mean_A", "M0_mean_B", "M0_joint",
-            "M1_bcg", "M1_mean_A", "M1_mean_B", "M1_joint",
-            "oracle_bcg", "oracle_mean_A", "oracle_mean_B", "oracle_joint",
-            "M1_minus_M0",
-        ])
-        for k in keys:
-            pid, tp = k
-            tname = (m1_pts.get(k) or m0_pts.get(k) or oracle_pts.get(k) or {}).get("tension_name", "")
-            m0_bcg = g(m0_pts, k, "bcg")
-            m1_bcg = g(m1_pts, k, "bcg")
-            delta = (m1_bcg - m0_bcg) if (m0_bcg is not None and m1_bcg is not None) else None
-            w.writerow([
-                pid, tp, tname,
-                m0_bcg, g(m0_pts, k, "mean_A_score"), g(m0_pts, k, "mean_B_score"), g(m0_pts, k, "joint_satisfaction_rate"),
-                m1_bcg, g(m1_pts, k, "mean_A_score"), g(m1_pts, k, "mean_B_score"), g(m1_pts, k, "joint_satisfaction_rate"),
-                g(oracle_pts, k, "bcg"), g(oracle_pts, k, "mean_A_score"), g(oracle_pts, k, "mean_B_score"), g(oracle_pts, k, "joint_satisfaction_rate"),
-                delta,
-            ])
+    with out_path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(
+            [
+                "pair_id",
+                "tension_point_idx",
+                "tension_name",
+                "feasibility_slice",
+                "oracle_joint",
+                "oracle_bjs",
+                "M0_joint",
+                "M0_bjs",
+                "M0_weakest",
+                "M1_joint",
+                "M1_bjs",
+                "M1_weakest",
+                "delta_joint",
+                "delta_bjs",
+                "delta_weakest",
+                "oracle_bcg",
+                "M0_bcg",
+                "M1_bcg",
+            ]
+        )
+        for key in keys:
+            pair_id, tension_point_idx = key
+            ref = oracle_points.get(key) or m0_points.get(key) or m1_points.get(key) or {}
+            m0_joint = get(m0_points, key, "joint_satisfaction_rate")
+            m1_joint = get(m1_points, key, "joint_satisfaction_rate")
+            m0_bjs = get(m0_points, key, "balanced_joint_score")
+            m1_bjs = get(m1_points, key, "balanced_joint_score")
+            m0_weakest = get(m0_points, key, "weakest_marginal_score")
+            m1_weakest = get(m1_points, key, "weakest_marginal_score")
+            writer.writerow(
+                [
+                    pair_id,
+                    tension_point_idx,
+                    ref.get("tension_name", ""),
+                    ref.get("feasibility_slice", "unknown"),
+                    get(oracle_points, key, "joint_satisfaction_rate"),
+                    get(oracle_points, key, "balanced_joint_score"),
+                    m0_joint,
+                    m0_bjs,
+                    m0_weakest,
+                    m1_joint,
+                    m1_bjs,
+                    m1_weakest,
+                    None if m0_joint is None or m1_joint is None else round(m1_joint - m0_joint, 3),
+                    None if m0_bjs is None or m1_bjs is None else round(m1_bjs - m0_bjs, 3),
+                    None if m0_weakest is None or m1_weakest is None else round(m1_weakest - m0_weakest, 3),
+                    get(oracle_points, key, "bcg"),
+                    get(m0_points, key, "bcg"),
+                    get(m1_points, key, "bcg"),
+                ]
+            )
     print(f"wrote {out_path}")
 
 
 def plot_scatter(summaries: dict[str, dict], out_path: Path) -> None:
-    m0 = summaries.get("M0") or {}
-    m1 = summaries.get("M1") or {}
-    oracle = summaries.get("oracle") or {}
-    m0_pts = {(p["pair_id"], p["tension_point_idx"]): p["bcg"] for p in m0.get("per_point", [])}
-    m1_pts = {(p["pair_id"], p["tension_point_idx"]): p["bcg"] for p in m1.get("per_point", [])}
-    oracle_pts = {(p["pair_id"], p["tension_point_idx"]): p["bcg"] for p in oracle.get("per_point", [])}
-    common = sorted(set(m0_pts) & set(m1_pts))
-    if not common:
+    shared = shared_points(summaries, "M0", "M1")
+    if not shared:
         return
-    xs = np.array([m0_pts[k] for k in common])
-    ys = np.array([m1_pts[k] for k in common])
-    oracles = np.array([oracle_pts.get(k, np.nan) for k in common])
 
     fig, ax = plt.subplots(figsize=(8, 8))
-    if np.all(np.isfinite(oracles)):
-        sc = ax.scatter(xs, ys, c=oracles, cmap="viridis", s=22, alpha=0.55,
-                        edgecolors="black", linewidths=0.2)
-        cb = plt.colorbar(sc, ax=ax)
-        cb.set_label("oracle BCG (gpt-5.1)")
-    else:
-        ax.scatter(xs, ys, s=22, alpha=0.55, edgecolors="black", linewidths=0.2)
-    lo = min(xs.min(), ys.min()) - 0.5
-    hi = max(xs.max(), ys.max()) + 0.5
-    ax.plot([lo, hi], [lo, hi], "--", color="gray", alpha=0.5, linewidth=1)
-    ax.axhline(0, color="black", linewidth=0.5, alpha=0.3)
-    ax.axvline(0, color="black", linewidth=0.5, alpha=0.3)
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(lo, hi)
-    ax.set_xlabel("M0 BCG (SFT)")
-    ax.set_ylabel("M1 BCG (DPO LoRA lr=1e-5)")
+    for slice_name in SLICE_ORDER:
+        subset = [(left, right) for left, right in shared if left["feasibility_slice"] == slice_name]
+        if not subset:
+            continue
+        xs = np.array([left["balanced_joint_score"] for left, _ in subset])
+        ys = np.array([right["balanced_joint_score"] for _, right in subset])
+        ax.scatter(
+            xs,
+            ys,
+            s=24,
+            alpha=0.55,
+            c=SLICE_COLOR[slice_name],
+            label=f"{SLICE_LABEL[slice_name]} (n={len(subset)})",
+            edgecolors="black",
+            linewidths=0.2,
+        )
+
+    ax.plot([0, 1], [0, 1], "--", color="gray", alpha=0.6, linewidth=1)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("M0 balanced joint score")
+    ax.set_ylabel("M1 balanced joint score")
     ax.set_title(
-        f"Full atlas BCG: M0 vs M1 (n={len(common)} tension points)\n"
-        "Points above diagonal = DPO worsened trade-off"
+        f"Full atlas BJS: M0 vs M1 (n={len(shared)} shared points)\n" "Points above diagonal = DPO improves balance"
     )
     ax.grid(True, alpha=0.3)
+    ax.legend(loc="lower right", fontsize=9)
     fig.tight_layout()
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
     print(f"wrote {out_path}")
 
 
-def family_agg(per_point: list[dict], field: str) -> dict[str, float]:
-    """Mean of `field` per family across tension points whose pair involves
-    any statement in the family."""
-    bucket: dict[str, list[float]] = defaultdict(list)
-    for p in per_point:
-        a, _, b = p["pair_id"].partition("__")
-        fams = {STMT_TO_FAMILY.get(a), STMT_TO_FAMILY.get(b)}
-        fams.discard(None)
-        for f in fams:
-            bucket[f].append(p[field])
-    return {fam: (sum(v) / len(v) if v else float("nan")) for fam, v in bucket.items()}
-
-
-def radar_subplot(ax, axes: list[str], model_rows, title: str):
-    N = len(axes)
-    angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
+def radar_subplot(ax, axis_labels: list[str], model_rows: list[tuple[str, list[float], str]], title: str) -> None:
+    count = len(axis_labels)
+    angles = np.linspace(0, 2 * np.pi, count, endpoint=False).tolist()
     angles += angles[:1]
     for label, values, color in model_rows:
-        v = list(values) + [values[0]]
-        ax.plot(angles, v, "o-", linewidth=2, label=label, color=color)
-        ax.fill(angles, v, alpha=0.15, color=color)
+        closed_values = [*list(values), values[0]]
+        ax.plot(angles, closed_values, "o-", linewidth=2, label=label, color=color)
+        ax.fill(angles, closed_values, alpha=0.12, color=color)
     ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(axes, fontsize=9)
+    ax.set_xticklabels(axis_labels, fontsize=9)
     ax.set_title(title, y=1.08, fontsize=12, fontweight="bold")
 
 
 def plot_radar(summaries: dict[str, dict], out_path: Path) -> None:
-    axes = list(FAMILIES.keys())
-    rows_joint = []
-    rows_bcg = []
-    n_per_fam = None
-    for key, _, display in MODELS:
-        s = summaries.get(key)
-        if s is None:
-            continue
-        pp = s.get("per_point", [])
-        js = family_agg(pp, "joint_satisfaction_rate")
-        bc = family_agg(pp, "bcg")
-        rows_joint.append((display, [js.get(a, 0.0) for a in axes], COLOR[key]))
-        rows_bcg.append((display, [bc.get(a, 0.0) for a in axes], COLOR[key]))
-        if n_per_fam is None:
-            n_per_fam = {a: sum(1 for p in pp if STMT_TO_FAMILY.get(p["pair_id"].partition("__")[0]) == a or STMT_TO_FAMILY.get(p["pair_id"].partition("__")[2]) == a) for a in axes}
+    axis_names = list(FAMILIES.keys())
+    oracle_points = summaries["oracle"]["per_point"]
+    family_counts = feasible_family_counts(oracle_points)
+    axis_labels = [f"{name}\n(n={family_counts[name]})" for name in axis_names]
 
-    axis_labels = [f"{a}\n(n={n_per_fam.get(a, 0)})" for a in axes]
+    rows_jsr = []
+    rows_bjs = []
+    for key, _, _ in MODELS:
+        summary = summaries[key]
+        feasible_points = [p for p in summary["per_point"] if p["feasibility_slice"] == "feasible"]
+        jsr = family_agg(feasible_points, "joint_satisfaction_rate")
+        bjs = family_agg(feasible_points, "balanced_joint_score")
+        rows_jsr.append((summary["display"], [jsr.get(name, 0.0) for name in axis_names], MODEL_COLOR[key]))
+        rows_bjs.append((summary["display"], [bjs.get(name, 0.0) for name in axis_names], MODEL_COLOR[key]))
 
     fig = plt.figure(figsize=(14, 7))
     ax1 = fig.add_subplot(1, 2, 1, projection="polar")
     ax1.set_ylim(0, 1)
     ax1.set_yticks([0.2, 0.4, 0.6, 0.8])
     ax1.set_yticklabels([".2", ".4", ".6", ".8"], fontsize=8, color="gray")
-    radar_subplot(ax1, axis_labels, rows_joint, "Joint satisfaction rate (higher = better)")
+    radar_subplot(ax1, axis_labels, rows_jsr, "Feasible-slice joint satisfaction rate")
     ax1.legend(loc="lower left", bbox_to_anchor=(-0.25, -0.1), fontsize=9)
 
     ax2 = fig.add_subplot(1, 2, 2, projection="polar")
-    max_bcg = max(max(v) for _, v, _ in rows_bcg) if rows_bcg else 3
-    ax2.set_ylim(0, max(max_bcg + 0.5, 3))
-    radar_subplot(ax2, axis_labels, rows_bcg, "Mean BCG (lower = better)")
+    ax2.set_ylim(0, 1)
+    ax2.set_yticks([0.2, 0.4, 0.6, 0.8])
+    ax2.set_yticklabels([".2", ".4", ".6", ".8"], fontsize=8, color="gray")
+    radar_subplot(ax2, axis_labels, rows_bjs, "Feasible-slice balanced joint score")
 
     fig.suptitle(
-        "Full atlas (N=3, 2573 prompts): model profile per semantic family",
-        fontsize=14, fontweight="bold",
+        "Full atlas profile by semantic family (oracle-feasible slice)",
+        fontsize=14,
+        fontweight="bold",
     )
     fig.tight_layout()
     fig.savefig(out_path, dpi=140, bbox_inches="tight")
@@ -335,14 +572,17 @@ def plot_radar(summaries: dict[str, dict], out_path: Path) -> None:
 
 
 def main() -> int:
-    summaries: dict[str, dict] = {}
+    raw_summaries: dict[str, dict] = {}
     for key, job_root, _ in MODELS:
-        s = load_summary(job_root)
-        if s is not None:
-            summaries[key] = s
-    if not summaries:
-        print("no summaries available", file=sys.stderr)
+        summary = load_summary(job_root)
+        if summary is not None:
+            raw_summaries[key] = summary
+    if set(raw_summaries) != {"oracle", "M0", "M1"}:
+        print("missing one or more required summaries", file=sys.stderr)
         return 2
+
+    summaries = enrich_summaries(raw_summaries)
+    add_aggregates(summaries)
 
     (OUTPUT_DIR / "comparison_full.json").write_text(json.dumps(summaries, indent=2))
     write_markdown_table(summaries, OUTPUT_DIR / "comparison_full.md")
