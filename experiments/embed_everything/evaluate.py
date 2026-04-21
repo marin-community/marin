@@ -240,8 +240,16 @@ def _load_topic_data(
     embeddings_path: str,
     oracle_path: str,
 ) -> tuple[np.ndarray, np.ndarray, int, list[str]] | None:
-    """Load and align topic embeddings with oracle labels, returning scaled features and encoded labels."""
-    from sklearn.preprocessing import LabelEncoder, StandardScaler
+    """Load and align topic embeddings with oracle labels, returning L2-normalized features.
+
+    Embeddings come from ``normalize_embeddings=True`` in ``embed.py`` and are
+    already unit-norm; we re-normalize defensively so downstream Euclidean
+    K-Means is equivalent to cosine K-Means: for unit vectors
+    ``||a-b||^2 = 2 - 2*cos(a,b)``, so argmin-Euclidean = argmax-cosine.
+    Previous revisions applied StandardScaler here, which stripped the
+    spherical geometry and degraded topic NMI.
+    """
+    from sklearn.preprocessing import LabelEncoder
 
     emb_file = os.path.join(embeddings_path, "topic_embeddings.npz")
     emb_data = _load_npz(emb_file)
@@ -270,10 +278,11 @@ def _load_topic_data(
     y_true = le.fit_transform(valid_labels)
     n_true_clusters = len(le.classes_)
 
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    norms = np.linalg.norm(X, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    X_normalized = X / norms
 
-    return X_scaled, y_true, n_true_clusters, valid_labels
+    return X_normalized, y_true, n_true_clusters, valid_labels
 
 
 def evaluate_topic_clusters(
@@ -298,14 +307,15 @@ def evaluate_topic_clusters(
     loaded = _load_topic_data(embeddings_path, oracle_path)
     if loaded is None:
         return
-    X_scaled, y_true, n_true_clusters, true_labels = loaded
+    X_norm, y_true, n_true_clusters, true_labels = loaded
 
     if len(true_labels) < n_clusters:
         logger.error("Too few valid documents (%d) for %d clusters", len(true_labels), n_clusters)
         return
 
+    # K-Means on unit vectors == cosine K-Means for assignment purposes.
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-    y_pred = kmeans.fit_predict(X_scaled)
+    y_pred = kmeans.fit_predict(X_norm)
 
     ari = adjusted_rand_score(y_true, y_pred)
     nmi = normalized_mutual_info_score(y_true, y_pred)
@@ -325,7 +335,7 @@ def evaluate_topic_clusters(
         "homogeneity": float(homogeneity),
         "completeness": float(completeness),
         "v_measure": float(v_measure),
-        "embedding_dim": int(X_scaled.shape[1]),
+        "embedding_dim": int(X_norm.shape[1]),
     }
 
     logger.info("Topic clustering results: ARI=%.4f, NMI=%.4f, V-measure=%.4f", ari, nmi, v_measure)
@@ -354,32 +364,37 @@ def evaluate_topic_reduced(
     loaded = _load_topic_data(embeddings_path, oracle_path)
     if loaded is None:
         return
-    X_scaled, y_true, n_true_clusters, true_labels = loaded
+    X_norm, y_true, n_true_clusters, true_labels = loaded
 
     if len(true_labels) < n_clusters:
         logger.error("Too few valid documents (%d) for %d clusters", len(true_labels), n_clusters)
         return
 
     def _cluster_and_score(X_reduced: np.ndarray) -> tuple[float, float]:
+        # Re-normalize after reduction so K-Means on the reduced space remains
+        # cosine-equivalent (PCA/UMAP outputs are not unit-norm in general).
+        reduced_norms = np.linalg.norm(X_reduced, axis=1, keepdims=True)
+        reduced_norms[reduced_norms == 0] = 1.0
+        X_unit = X_reduced / reduced_norms
         kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        y_pred = kmeans.fit_predict(X_reduced)
+        y_pred = kmeans.fit_predict(X_unit)
         ari = adjusted_rand_score(y_true, y_pred)
         nmi = normalized_mutual_info_score(y_true, y_pred)
         return float(ari), float(nmi)
 
     configs = []
 
-    # Baseline: no reduction
-    ari, nmi = _cluster_and_score(X_scaled)
-    configs.append({"method": "baseline", "n_components": int(X_scaled.shape[1]), "ari": ari, "nmi": nmi})
-    logger.info("Baseline (d=%d): ARI=%.4f, NMI=%.4f", X_scaled.shape[1], ari, nmi)
+    # Baseline: no reduction (already unit-norm from _load_topic_data).
+    ari, nmi = _cluster_and_score(X_norm)
+    configs.append({"method": "baseline", "n_components": int(X_norm.shape[1]), "ari": ari, "nmi": nmi})
+    logger.info("Baseline (d=%d): ARI=%.4f, NMI=%.4f", X_norm.shape[1], ari, nmi)
 
     # PCA sweep
     for n_comp in PCA_COMPONENTS:
-        if n_comp >= X_scaled.shape[1]:
+        if n_comp >= X_norm.shape[1]:
             continue
         pca = PCA(n_components=n_comp, random_state=42)
-        X_reduced = pca.fit_transform(X_scaled)
+        X_reduced = pca.fit_transform(X_norm)
         ari, nmi = _cluster_and_score(X_reduced)
         explained_var = float(np.sum(pca.explained_variance_ratio_))
         configs.append(
@@ -399,7 +414,7 @@ def evaluate_topic_reduced(
 
         for n_comp in UMAP_COMPONENTS:
             reducer = umap.UMAP(n_components=n_comp, random_state=42)
-            X_reduced = reducer.fit_transform(X_scaled)
+            X_reduced = reducer.fit_transform(X_norm)
             ari, nmi = _cluster_and_score(X_reduced)
             configs.append({"method": "umap", "n_components": n_comp, "ari": ari, "nmi": nmi})
             logger.info("UMAP (d=%d): ARI=%.4f, NMI=%.4f", n_comp, ari, nmi)
