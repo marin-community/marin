@@ -32,7 +32,7 @@ from experiments.domain_phase_mix.qsplit240_replay import (
     resolve_qsplit240_eval_cache_path_for_current_region,
 )
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import BATCH_SIZE, SEQ_LEN
-from experiments.evals.task_configs import MMLU_5_SHOT, MMLU_PRO_5_SHOT, MMLU_SL_VERB_5_SHOT
+from experiments.evals.task_configs import MMLU_5_SHOT, MMLU_SL_VERB_5_SHOT
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,6 @@ shard_execution_name_prefix = qsplit240_replay_common.shard_execution_name_prefi
 QSPLIT240_300M_EVAL_TASKS = (
     MMLU_5_SHOT,
     MMLU_SL_VERB_5_SHOT,
-    MMLU_PRO_5_SHOT,
     EvalTaskConfig("arc_easy", 10),
     EvalTaskConfig("piqa", 10),
     EvalTaskConfig("sciq", 0, task_alias="sciq_0shot"),
