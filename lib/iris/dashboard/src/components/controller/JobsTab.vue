@@ -303,19 +303,41 @@ const effectiveTotalCount = computed(() => showStarredOnly.value ? filteredStarr
 
 const flattenedJobs = computed(() => flattenLoadedJobTree(effectiveJobs.value, childJobsByParent.value, expandedJobs.value))
 
+// Whether a row should render the expand toggle. In starred-only mode we
+// may have fetched the job via GetJobStatus against an older controller
+// that doesn't populate `has_children`; show the toggle defensively for
+// top-level rows and let `loadChildJobs` reveal whether it actually has
+// children.
+function showExpandToggle(job: JobStatus, depth: number): boolean {
+  if (job.hasChildren) return true
+  if (showStarredOnly.value && depth === 0) return true
+  return false
+}
+
 // -- Interactions --
-function toggleExpanded(job: JobStatus) {
+async function toggleExpanded(job: JobStatus) {
   const next = new Set(expandedJobs.value)
   if (next.has(job.jobId)) {
     next.delete(job.jobId)
-  } else {
-    next.add(job.jobId)
-    if (!childJobsByParent.value.has(job.jobId)) {
-      void loadChildJobs(job.jobId)
-    }
+    expandedJobs.value = next
+    saveExpandedJobs()
+    return
   }
+  next.add(job.jobId)
   expandedJobs.value = next
   saveExpandedJobs()
+  if (!childJobsByParent.value.has(job.jobId)) {
+    await loadChildJobs(job.jobId)
+    // Defensive: auto-collapse if the load returned no children, so the
+    // expanded arrow doesn't dangle over an empty list (matters when the
+    // server doesn't populate hasChildren on GetJobStatus responses).
+    if ((childJobsByParent.value.get(job.jobId) ?? []).length === 0) {
+      const reset = new Set(expandedJobs.value)
+      reset.delete(job.jobId)
+      expandedJobs.value = reset
+      saveExpandedJobs()
+    }
+  }
 }
 
 function handleSort(field: SortField) {
@@ -567,7 +589,7 @@ function sortIndicator(field: SortField): string {
           >
             <span class="inline-flex items-center gap-1">
               <button
-                v-if="node.job.hasChildren"
+                v-if="showExpandToggle(node.job, node.depth)"
                 class="text-text-muted hover:text-text select-none w-4 text-center text-xs"
                 @click.stop="toggleExpanded(node.job)"
               >
