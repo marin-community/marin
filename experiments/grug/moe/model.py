@@ -73,7 +73,8 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
-    use_value_embed: bool = False
+    # Value embed mode: "none", "every_other" (odd layers + last), "every_4th" (i%4==3 + last).
+    value_embed_mode: str = "none"
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -512,11 +513,14 @@ class Transformer(eqx.Module):
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
 
         def _has_ve(i: int) -> bool:
-            # Value embed on odd layers + last layer.
-            if not cfg.use_value_embed:
+            if cfg.value_embed_mode == "none":
                 return False
             last = cfg.num_layers - 1
-            return i % 2 == 1 or i == last
+            if cfg.value_embed_mode == "every_other":
+                return i % 2 == 1 or i == last
+            if cfg.value_embed_mode == "every_4th":
+                return i % 4 == 3 or i == last
+            return False
 
         blocks = tuple(Block.init(cfg, has_value_embed=_has_ve(i), key=block_keys[i]) for i in range(cfg.num_layers))
         return Transformer(
@@ -550,7 +554,7 @@ class Transformer(eqx.Module):
 
         moe_router_stats: list[dict[str, jax.Array]] = []
         # Pass token_ids to blocks that have value embeddings.
-        ve_ids = token_ids if cfg.use_value_embed else None
+        ve_ids = token_ids if cfg.value_embed_mode != "none" else None
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
             hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask, ve_ids)
