@@ -220,13 +220,13 @@ class ValueEmbed(eqx.Module):
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "ValueEmbed":
-        k_embed, k_gate = random.split(key)
+        k_embed, _k_gate = random.split(key)
         m, h = cfg.num_kv_heads, cfg.inferred_head_dim
         return ValueEmbed(
             embed=reshard(_init_weight(k_embed, (cfg.vocab_size, m * h), cfg.initializer_std), Pembed_vocab),
-            gate=reshard(_init_weight(k_gate, (cfg.hidden_dim, m), cfg.initializer_std), P(None, None)),
-            ve_lambda=jnp.zeros(()),
-            v_lambda=jnp.ones(()),
+            gate=reshard(jnp.zeros((cfg.hidden_dim, m)), P(None, None)),
+            ve_lambda=jnp.full((), 0.2),
+            v_lambda=jnp.full((), 0.8),
         )
 
     def __call__(
