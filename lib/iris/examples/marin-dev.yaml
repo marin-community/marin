@@ -35,7 +35,7 @@ controller:
     service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
     zone: us-central1-a
     machine_type: e2-highmem-4
-    boot_disk_size_gb: 100
+    boot_disk_size_gb: 500
     port: 10000
 
 tpu_pools:

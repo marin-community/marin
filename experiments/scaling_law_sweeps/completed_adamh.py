@@ -102,7 +102,7 @@ class CompletedAdamHHeuristic:
     """
 
     name: str = "completed-adamh"
-    tokenizer: str = "stanford-crfm/marin-tokenizer"
+    tokenizer: str = "marin-community/marin-tokenizer"
 
     @property
     def vocab_size(self) -> int:

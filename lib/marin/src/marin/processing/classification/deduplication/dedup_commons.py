@@ -9,7 +9,6 @@ import pyarrow as pa
 import pyarrow.json as pa_json
 import wandb
 
-from fray.v2 import ResourceConfig
 from marin.utilities.wandb_utils import init_wandb
 from marin.utils import fsspec_glob, rebase_file_path
 from zephyr import counters, write_parquet_file
@@ -18,7 +17,6 @@ from zephyr.readers import SUPPORTED_EXTENSIONS, open_file
 logger = logging.getLogger(__name__)
 
 DEFAULT_FILETYPES: list[str] = ["jsonl", "jsonl.gz", "jsonl.zst", "parquet"]
-DEFAULT_COORDINATOR_RESOURCES: ResourceConfig = ResourceConfig(cpu=1, ram="5g")
 
 
 class DedupMode(StrEnum):

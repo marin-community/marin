@@ -45,10 +45,7 @@ from zephyr import Dataset, ZephyrContext, counters, write_parquet_file
 from marin.execution.artifact import Artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.connected_components import connected_components
-from marin.processing.classification.deduplication.dedup_commons import (
-    DEFAULT_COORDINATOR_RESOURCES,
-    _load_batches,
-)
+from marin.processing.classification.deduplication.dedup_commons import _load_batches
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
 from marin.utils import fsspec_glob
 
@@ -283,12 +280,14 @@ def compute_fuzzy_dups_attrs(
         params,
     )
 
-    ctx = ZephyrContext(
-        name="fuzzy-dups",
-        max_workers=max_parallelism,
-        resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
-        coordinator_resources=coordinator_resources or DEFAULT_COORDINATOR_RESOURCES,
-    )
+    ctx_kwargs: dict = {
+        "name": "fuzzy-dups",
+        "max_workers": max_parallelism,
+        "resources": worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+    }
+    if coordinator_resources is not None:
+        ctx_kwargs["coordinator_resources"] = coordinator_resources
+    ctx = ZephyrContext(**ctx_kwargs)
 
     # Cap shard count at max_parallelism. Each group reads its attr files
     # sequentially and emits bucket records; file_idx is preserved on the entry

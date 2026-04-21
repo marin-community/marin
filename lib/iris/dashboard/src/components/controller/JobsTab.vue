@@ -125,7 +125,6 @@ async function loadChildJobs(parentJobId: string) {
         parentJobId,
         sortField: SORT_FIELD_MAP[sortField.value],
         sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
-        stateFilter: stateFilter.value || undefined,
       } satisfies JobQuery,
     })
     const nextChildren = new Map(childJobsByParent.value)

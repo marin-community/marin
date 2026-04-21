@@ -405,10 +405,9 @@ class CoreweaveControllerConfig(_message.Message):
     def __init__(self, port: _Optional[int] = ..., service_name: _Optional[str] = ..., scale_group: _Optional[str] = ...) -> None: ...
 
 class ControllerVmConfig(_message.Message):
-    __slots__ = ("image", "worker_timeout", "heartbeat_failure_threshold", "use_split_heartbeat", "gcp", "manual", "local", "coreweave")
+    __slots__ = ("image", "worker_timeout", "use_split_heartbeat", "gcp", "manual", "local", "coreweave")
     IMAGE_FIELD_NUMBER: _ClassVar[int]
     WORKER_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
-    HEARTBEAT_FAILURE_THRESHOLD_FIELD_NUMBER: _ClassVar[int]
     USE_SPLIT_HEARTBEAT_FIELD_NUMBER: _ClassVar[int]
     GCP_FIELD_NUMBER: _ClassVar[int]
     MANUAL_FIELD_NUMBER: _ClassVar[int]
@@ -416,13 +415,12 @@ class ControllerVmConfig(_message.Message):
     COREWEAVE_FIELD_NUMBER: _ClassVar[int]
     image: str
     worker_timeout: _time_pb2.Duration
-    heartbeat_failure_threshold: int
     use_split_heartbeat: bool
     gcp: GcpControllerConfig
     manual: ManualControllerConfig
     local: LocalControllerConfig
     coreweave: CoreweaveControllerConfig
-    def __init__(self, image: _Optional[str] = ..., worker_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_failure_threshold: _Optional[int] = ..., use_split_heartbeat: _Optional[bool] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ..., local: _Optional[_Union[LocalControllerConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweaveControllerConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, image: _Optional[str] = ..., worker_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., use_split_heartbeat: _Optional[bool] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ..., local: _Optional[_Union[LocalControllerConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweaveControllerConfig, _Mapping]] = ...) -> None: ...
 
 class AutoscalerConfig(_message.Message):
     __slots__ = ("evaluation_interval", "scale_up_delay", "scale_down_delay", "startup_grace_period", "heartbeat_grace_period")

@@ -231,10 +231,8 @@ def worker_status_message(w: WorkerDetailRow) -> str:
     """Build a human-readable status message for unhealthy workers."""
     if w.healthy:
         return ""
-    if w.consecutive_failures > 0:
-        age = w.last_heartbeat.age_ms()
-        return f"Heartbeat timeout ({w.consecutive_failures} failures, last seen {age // 1000}s ago)"
-    return "Unhealthy (no failures recorded)"
+    age = w.last_heartbeat.age_ms()
+    return f"Unhealthy (last seen {age // 1000}s ago)"
 
 
 _WORKER_TARGET_PREFIX = "/system/worker/"
@@ -1084,10 +1082,20 @@ class ControllerServiceImpl:
                     f"{priority_band_name(user_budget.max_band)})",
                 )
 
-        # Reject submissions if the parent job has already terminated
+        # Reject submissions whose parent is absent or already terminated.
+        # Absent parents can appear after a controller restart restores from a
+        # checkpoint that did not capture the parent row; accepting the child
+        # anyway would insert an orphan with `parent_job_id = NULL` and a
+        # `depth` computed from the name path, which the dashboard `WHERE
+        # depth = 1` query never surfaces.
         if job_id.parent:
             parent_state = _job_state(self._db, job_id.parent)
-            if parent_state is not None and parent_state in TERMINAL_JOB_STATES:
+            if parent_state is None:
+                raise ConnectError(
+                    Code.FAILED_PRECONDITION,
+                    f"Cannot submit job: parent job {job_id.parent} is absent from the database",
+                )
+            if parent_state in TERMINAL_JOB_STATES:
                 raise ConnectError(
                     Code.FAILED_PRECONDITION,
                     f"Cannot submit job: parent job {job_id.parent} has terminated "

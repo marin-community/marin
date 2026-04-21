@@ -79,5 +79,14 @@ def paloma_tokenized(
     return paloma_steps
 
 
+def paloma_raw_validation_sets(*, paloma_raw: ExecutorStep = paloma):
+    from marin.evaluation.perplexity_gap import raw_text_dataset
+
+    return {
+        os.path.join("paloma", dataset): raw_text_dataset(paloma_raw.cd(f"{path_part}/val/val*.jsonl.gz"))
+        for dataset, path_part in PALOMA_DATASETS_TO_DIR.items()
+    }
+
+
 if __name__ == "__main__":
     executor_main(steps=[paloma, *paloma_tokenized().values()])

@@ -2,12 +2,12 @@
 
 # Traditional dance brings together diverse communities in Indonesia
 
-Published: June 22, 2011    
+Published: June 22, 2011
 
 More than 1,000 spectators crowded into the venue to watch Balija's 80 performers.  
 View the slideshow.
 
-*Photo: AFSC / Rella Johan* 
+*Photo: AFSC / Rella Johan*
 
 \[Updated\] A standing-room-only crowd of more than 1,000 people packed the Vredenburg Fort hall in Yogyakarta, Indonesia recently to enjoy the results of a unique collaboration by disparate groups who synthesized traditional cultural arts. 
 
@@ -36,7 +36,7 @@ AFSC is a Quaker organization devoted to service, development, and peace program
 
 ### Where we work
 
-AFSC has offices around the world. To see a complete list see the Where We Work page.              
+AFSC has offices around the world. To see a complete list see the Where We Work page.
 
 ### Get AFSC's newsletter
 

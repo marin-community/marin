@@ -12,6 +12,7 @@ They focus on:
 
 import threading
 
+
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -32,7 +33,6 @@ from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
-    HEARTBEAT_FAILURE_THRESHOLD,
     HeartbeatAction,
     HeartbeatApplyRequest,
     MAX_REPLICAS_PER_JOB,
@@ -1963,15 +1963,17 @@ def test_requeued_task_maintains_priority_position(state):
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
-    # Submit a deep job and a shallow job
+    # Submit a deep job (under an explicit parent tree) and a shallow job
+    submit_job(state, "tree", make_job_request("tree"), timestamp_ms=500)
     submit_job(state, "/test-user/tree/deep", make_job_request("deep"), timestamp_ms=1000)
     submit_job(state, "shallow", make_job_request("shallow"), timestamp_ms=2000)
 
     # Initially: deep job comes first
     pending = _schedulable_tasks(state)
-    assert len(pending) == 2
+    assert len(pending) == 3
     assert pending[0].job_id == JobName.from_string("/test-user/tree/deep")
-    assert pending[1].job_id == JobName.root("test-user", "shallow")
+    assert pending[1].job_id == JobName.root("test-user", "tree")
+    assert pending[2].job_id == JobName.root("test-user", "shallow")
 
     # Dispatch and fail the deep job's task (with retries enabled)
     deep_req = make_job_request("deep")
@@ -2006,9 +2008,11 @@ def test_requeued_task_maintains_priority_position(state):
 
 
 def test_fail_heartbeat_clears_dispatch_when_worker_fails(state):
-    """Dispatch buffer is cleared when worker hits failure threshold.
+    """Dispatch buffer is cleared when the reaper force-removes a worker.
 
-    When consecutive heartbeat failures hit the threshold:
+    Worker termination is now driven by the reaper thread (via
+    force_remove=True) rather than an inline threshold check. When a worker
+    is force-removed:
     1. Worker is marked unhealthy
     2. Running tasks transition to WORKER_FAILED
     3. Pending dispatch buffer is cleared (not orphaned)
@@ -2038,11 +2042,9 @@ def test_fail_heartbeat_clears_dispatch_when_worker_fails(state):
     assert not queued_run
     assert not queued_kill
 
-    # Simulate repeated failures up to threshold
-    state.set_worker_consecutive_failures_for_test(worker_id, HEARTBEAT_FAILURE_THRESHOLD - 1)
-
-    # This fail_heartbeat should trigger worker failure
-    state.fail_heartbeat(snapshot, "Connection refused")
+    # Simulate the reaper force-removing the worker (what happens when the
+    # health tracker crosses threshold).
+    state.record_heartbeat_failure(worker_id, "Connection refused", snapshot, force_remove=True)
 
     # Verify worker is now unhealthy
     worker = _query_worker(state, worker_id)
@@ -2085,7 +2087,6 @@ def test_fail_heartbeat_requeues_dispatch_for_retry(state):
 
     worker = _query_worker(state, worker_id)
     assert _query_worker(state, worker.worker_id).healthy
-    assert worker.consecutive_failures == 1
 
     # Task stays ASSIGNED — we don't know if the worker received it
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
@@ -2222,6 +2223,56 @@ def test_worker_failed_from_building_counts_as_preemption(state):
     # Real preemption: worker had started processing the task
     assert _query_task(state, task.task_id).preemption_count == 1
     assert _query_task(state, task.task_id).failure_count == 0
+
+
+def test_failed_from_building_bumps_health_tracker(state):
+    """FAILED originating from BUILDING increments the build failure counter.
+
+    A task that never reaches RUNNING and then reports FAILED almost always
+    reflects infrastructure trouble (image pull, disk, DNS) rather than user
+    code. The tracker should record one build failure for that worker.
+    """
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    req = make_job_request("job1", max_retries_failure=5)
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_id)])
+    transition_task(state, task.task_id, job_pb2.TASK_STATE_BUILDING)
+    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_BUILDING
+
+    assert state._health.snapshot().get(worker_id) is None
+
+    transition_task(
+        state,
+        task.task_id,
+        job_pb2.TASK_STATE_FAILED,
+        error="image pull failed",
+    )
+
+    assert _query_task(state, task.task_id).failure_count == 1
+    _, build_failures = state._health.snapshot()[worker_id]
+    assert build_failures == 1
+
+
+def test_failed_from_running_does_not_bump_health_tracker(state):
+    """FAILED from RUNNING is treated as user code and must NOT move the score."""
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    req = make_job_request("job1", max_retries_failure=5)
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    dispatch_task(state, task, worker_id)
+    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
+
+    transition_task(
+        state,
+        task.task_id,
+        job_pb2.TASK_STATE_FAILED,
+        error="user code raised",
+    )
+
+    assert state._health.snapshot().get(worker_id) is None
 
 
 def test_fail_workers_by_ids_cascades_tasks(state):

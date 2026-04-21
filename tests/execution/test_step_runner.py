@@ -372,6 +372,31 @@ def test_runner_max_concurrent(tmp_path: Path):
     assert train_artifact.tokens_seen > 0
 
 
+def test_runner_raises_clear_error_for_unmet_deps(tmp_path: Path):
+    """When the iterable omits a dependency, the runner must name the offending step and
+    its unmet dep paths — not crash with ``TypeError: unhashable type: 'list'``."""
+
+    dep = StepSpec(
+        name="missing_upstream",
+        override_output_path=(tmp_path / "missing_upstream").as_posix(),
+        fn=lambda output_path: PathMetadata(path=output_path),
+    )
+    downstream = StepSpec(
+        name="downstream",
+        override_output_path=(tmp_path / "downstream").as_posix(),
+        deps=[dep],
+        fn=lambda output_path: PathMetadata(path=output_path),
+    )
+
+    runner = StepRunner()
+    with pytest.raises(RuntimeError, match=r"Iterable exhausted .* unsatisfied dependencies") as exc_info:
+        runner.run([downstream])
+
+    message = str(exc_info.value)
+    assert downstream.name_with_hash in message
+    assert dep.output_path in message
+
+
 def test_runner_preserves_underlying_step_exception(tmp_path: Path):
     """The top-level runner error should retain the original failing exception as a cause."""
 

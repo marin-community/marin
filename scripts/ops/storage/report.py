@@ -16,9 +16,9 @@ This keeps the working set in the low millions of rows regardless of how
 many billions of objects the scan produced.
 
 Usage (standalone):
-    uv run scripts/storage/report.py [PARQUET_DIR]
+    uv run scripts/ops/storage/report.py [PARQUET_DIR]
 
-The default parquet directory is scripts/storage/purge/objects_parquet/.
+The default parquet directory is scripts/ops/storage/purge/objects_parquet/.
 """
 
 from __future__ import annotations
@@ -731,8 +731,8 @@ def main(parquet_dir: str, output: str | None) -> None:
     to /tmp/storage-scan-cache via gcloud rsync).
 
     Examples:
-        uv run scripts/storage/report.py gs://marin-us-central2/tmp/storage-scan-v7
-        uv run scripts/storage/report.py ./local_parquet -o report.md
+        uv run scripts/ops/storage/report.py gs://marin-us-central2/tmp/storage-scan-v7
+        uv run scripts/ops/storage/report.py ./local_parquet -o report.md
     """
     conn = load_parquet_db(parquet_dir)
     report = generate_report(conn)

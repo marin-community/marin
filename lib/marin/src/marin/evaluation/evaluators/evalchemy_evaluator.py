@@ -32,11 +32,10 @@ import sys
 import traceback
 from collections.abc import Sequence
 from typing import ClassVar
-from fray.v1.cluster import ResourceConfig
 from rigging.filesystem import filesystem as marin_filesystem
 
 from marin.evaluation.evaluation_config import WANDB_PROJECT, EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.inference.vllm_server import resolve_model_name_or_path
 from marin.evaluation.utils import is_remote_path, upload_to_gcs
 
@@ -670,7 +669,7 @@ _patch_autoconfig_for_gcs()
         """Run evalchemy in-process using runpy instead of a subprocess.
 
         Executes the evalchemy CLI entrypoint (eval.eval) directly in the current
-        process. This ensures that when the Ray worker dies (due to error or preemption),
+        process. This ensures that when the worker dies (due to error or preemption),
         all TPU handles die with it — no orphaned subprocesses.
 
         Args:
@@ -1058,34 +1057,3 @@ _patch_autoconfig_for_gcs()
                 shutil.rmtree(self.RESULTS_PATH)
             if local_config_dir and os.path.exists(local_config_dir):
                 shutil.rmtree(local_config_dir, ignore_errors=True)
-
-    def launch_evaluate_with_ray(
-        self,
-        model: ModelConfig,
-        evals: Sequence[EvalTaskConfig],
-        output_path: str,
-        resource_config: ResourceConfig,
-        max_eval_instances: int | None = None,
-        wandb_tags: list[str] | None = None,
-    ) -> None:
-        """Launch evaluation on Ray cluster with TPU resources."""
-        env_vars = {"HF_ALLOW_CODE_EVAL": "1"}
-        wandb_api_key = os.environ.get("WANDB_API_KEY")
-        if wandb_api_key:
-            env_vars["WANDB_API_KEY"] = wandb_api_key
-        wandb_entity = os.environ.get("WANDB_ENTITY")
-        if wandb_entity:
-            env_vars["WANDB_ENTITY"] = wandb_entity
-
-        launch_evaluate_with_ray(
-            evaluator=self,
-            job_name="evalchemy-tpu-evaluation",
-            model=model,
-            evals=evals,
-            output_path=output_path,
-            resource_config=resource_config,
-            max_eval_instances=max_eval_instances,
-            wandb_tags=wandb_tags,
-            extras=("evalchemy", "tpu", "vllm"),
-            env_vars=env_vars,
-        )

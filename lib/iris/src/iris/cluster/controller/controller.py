@@ -92,25 +92,25 @@ from iris.cluster.controller.scheduler import (
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import (
-    HEARTBEAT_FAILURE_THRESHOLD,
-    HEARTBEAT_STALENESS_THRESHOLD,
     RESERVATION_HOLDER_JOB_NAME,
     Assignment,
     ClusterCapacity,
     ControllerTransitions,
     DIRECT_PROVIDER_PROMOTION_RATE,
-    HeartbeatAction,
     HeartbeatApplyRequest,
     ReservationClaim,
     SchedulingEvent,
     TaskUpdate,
 )
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.log_store import CONTROLLER_LOG_KEY
 from iris.cluster.providers.types import find_free_port, resolve_external_host
 from iris.log_server.client import LogPusher, LogServiceProxy, RemoteLogHandler
 from iris.log_server.main import build_log_server_asgi
 from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider
+from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS
+from iris.rpc.stats import RpcStatsCollector
 from iris.cluster.types import (
     JobName,
     WorkerStatus,
@@ -914,9 +914,6 @@ class ControllerConfig:
     GIL starvation of the heartbeat thread. Coscheduled jobs are exempt (they need
     all tasks for atomic assignment). Set to 0 for unlimited."""
 
-    heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD
-    """Consecutive heartbeat failures before marking worker as dead."""
-
     autoscaler_enabled: bool = False
     worker_access_address: str = ""
 
@@ -1090,10 +1087,11 @@ class Controller:
         self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger("iris").addHandler(self._log_handler)
 
+        self._health = WorkerHealthTracker()
         self._transitions = ControllerTransitions(
             db=self._db,
-            heartbeat_failure_threshold=config.heartbeat_failure_threshold,
             user_budget_defaults=config.user_budget_defaults,
+            health=self._health,
         )
         self._scheduler = Scheduler()
 
@@ -1192,7 +1190,14 @@ class Controller:
         # still accepted in null-auth/test mode, matching the dashboard's
         # behaviour. Real workers attach JWTs that the verifier validates.
         interceptors = (NullAuthInterceptor(verifier=self._config.auth_verifier),)
-        app = build_log_server_asgi(self._log_service, interceptors=interceptors)
+        # Stats collector for the in-process log server. Snapshot is reachable
+        # via /iris.stats.StatsService/GetRpcStats on the log-server port.
+        self._log_stats_collector = RpcStatsCollector(slow_threshold_ms=SLOW_RPC_THRESHOLD_MS)
+        app = build_log_server_asgi(
+            self._log_service,
+            interceptors=interceptors,
+            stats_collector=self._log_stats_collector,
+        )
         log_server_config = uvicorn.Config(
             app,
             host=self._config.host,
@@ -1513,7 +1518,11 @@ class Controller:
                 logger.exception("Profile loop iteration failed")
 
     def _profile_all_running_tasks(self) -> None:
-        """Capture CPU and memory profiles for every running task and store in the DB."""
+        """Capture CPU profiles (py-spy) for every running task and store in the DB.
+
+        Memory profiling via memray is currently disabled because memray attach
+        has been triggering segfaults in target processes.
+        """
         workers = healthy_active_workers_with_attributes(self._db)
         if not workers:
             return
@@ -1534,12 +1543,7 @@ class Controller:
         )
         self._dispatch_profiles(profile_targets, cpu_profile_type, "cpu", self._config.profile_duration)
 
-        memory_profile_type = job_pb2.ProfileType(
-            memory=job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.STATS),
-        )
-        self._dispatch_profiles(profile_targets, memory_profile_type, "memory", self._config.profile_duration)
-
-        logger.info("Profile round (cpu+memory): captured for %d tasks", len(profile_targets))
+        logger.info("Profile round (cpu): captured for %d tasks", len(profile_targets))
 
     def _dispatch_profiles(
         self,
@@ -2251,20 +2255,14 @@ class Controller:
         return [(w.worker_id, w.address) for w in workers]
 
     def _run_ping_loop(self, stop_event: threading.Event) -> None:
-        """Fast ping loop for liveness detection.
+        """Fast ping loop for liveness detection and prompt worker termination.
 
-        Sends Ping RPCs to all healthy workers every heartbeat_interval. Tracks
-        consecutive failures in-memory. When threshold is exceeded, removes the
-        worker and cascades task failures.
-
-        Both the ping loop and provider loop (when active) may race to fail a
-        worker. This is safe: fail_workers_batch, on_worker_failed, and
-        terminate_slices_for_workers are all idempotent.
+        Sends Ping RPCs to all healthy workers every heartbeat_interval,
+        bumps the WorkerHealthTracker on failures, and immediately terminates
+        workers that cross the ping threshold.
         """
         ping_interval_s = self._config.heartbeat_interval.to_seconds()
         limiter = RateLimiter(interval_seconds=ping_interval_s)
-        ping_failures: dict[str, int] = {}
-        threshold = self._config.heartbeat_failure_threshold
         # Refresh resource snapshots every ~60s; other cycles just note liveness.
         resource_update_every = max(1, round(60.0 / ping_interval_s))
         cycle = 0
@@ -2273,59 +2271,34 @@ class Controller:
             if not limiter.wait(cancel=stop_event):
                 break
             try:
-                self._reap_stale_workers()
                 workers = self._get_active_worker_addresses()
                 results = self._provider.ping_workers(workers)
                 update_resources = cycle % resource_update_every == 0
                 cycle += 1
 
-                dead_workers: list[str] = []
                 ping_snapshots: dict[WorkerId, job_pb2.WorkerResourceSnapshot | None] = {}
                 for result in results:
-                    wid_str = str(result.worker_id)
                     if result.error is not None:
-                        ping_failures[wid_str] = ping_failures.get(wid_str, 0) + 1
-                        if ping_failures[wid_str] >= threshold:
-                            dead_workers.append(wid_str)
-                            logger.warning(
-                                "Ping loop: worker %s exceeded failure threshold (%d)",
-                                wid_str,
-                                ping_failures[wid_str],
-                            )
+                        self._health.ping(result.worker_id, healthy=False)
                     else:
-                        ping_failures.pop(wid_str, None)
+                        self._health.ping(result.worker_id, healthy=True)
                         ping_snapshots[result.worker_id] = result.resource_snapshot if update_resources else None
 
                 self._transitions.update_worker_pings(ping_snapshots)
 
-                if dead_workers:
-                    failure_result = self._transitions.fail_workers_batch(
-                        dead_workers, reason="ping failure threshold exceeded"
+                unhealthy = self._health.workers_over_threshold()
+                if unhealthy:
+                    logger.warning(
+                        "Ping loop: failing %d workers over ping threshold: %s",
+                        len(unhealthy),
+                        [str(wid) for wid in unhealthy[:10]],
                     )
-                    for wid, addr in failure_result.removed_workers:
-                        ping_failures.pop(str(wid), None)
-                        self._provider.on_worker_failed(wid, addr)
-
-                    if self._autoscaler and failure_result.removed_workers:
-                        actually_removed = [str(wid) for wid, _ in failure_result.removed_workers]
-                        sibling_ids = self._autoscaler.terminate_slices_for_workers(actually_removed)
-                        sibling_failures = self._transitions.fail_workers_batch(
-                            sibling_ids, reason="sibling worker failed, slice terminated"
-                        )
-                        for wid, addr in sibling_failures.removed_workers:
-                            ping_failures.pop(str(wid), None)
-                            self._provider.on_worker_failed(wid, addr)
-                        failure_result.tasks_to_kill.update(sibling_failures.tasks_to_kill)
-                        failure_result.task_kill_workers.update(sibling_failures.task_kill_workers)
-
-                    if failure_result.tasks_to_kill:
-                        self.kill_tasks_on_workers(failure_result.tasks_to_kill, failure_result.task_kill_workers)
-
-                # Clean up stale entries
-                active_ids = {str(wid) for wid, _ in workers}
-                for wid in list(ping_failures):
-                    if wid not in active_ids:
-                        del ping_failures[wid]
+                    removed = self._terminate_workers(
+                        [str(wid) for wid in unhealthy],
+                        reason="worker ping threshold exceeded",
+                        sibling_reason="unhealthy worker failed, slice terminated",
+                    )
+                    self._health.forget_many(removed)
 
             except Exception:
                 logger.exception("Ping loop iteration failed")
@@ -2388,67 +2361,38 @@ class Controller:
             except Exception:
                 logger.exception("Task updater loop iteration failed")
 
-    def _reap_stale_workers(self) -> None:
-        """Fail workers whose last heartbeat exceeds the staleness threshold.
+    def _terminate_workers(self, worker_ids: list[str], reason: str, sibling_reason: str) -> list[WorkerId]:
+        """Fail the given workers, terminate their slice siblings, and kill running tasks.
 
-        On controller restart from checkpoint, workers carry their old
-        last_heartbeat_ms but consecutive_failures=0 and healthy=1.  If the
-        backing VMs were preempted during the outage, we'd otherwise wait for
-        10 RPC timeouts per worker before marking them dead.  This check
-        short-circuits that by failing any worker that hasn't heartbeated in
-        HEARTBEAT_STALENESS_THRESHOLD (15 minutes).
+        Returns the set of worker_ids that were actually removed (primary + siblings),
+        so callers can drop them from in-memory state like the health tracker.
         """
-        if isinstance(self._provider, K8sTaskProvider):
-            return
-        if self._config.dry_run:
-            return
-        threshold_ms = HEARTBEAT_STALENESS_THRESHOLD.to_ms()
-        workers = healthy_active_workers_with_attributes(self._db)
-        stale = [w for w in workers if w.last_heartbeat.age_ms() > threshold_ms]
-        if not stale:
-            return
-        stale_samples = [
-            {
-                "worker_id": str(w.worker_id),
-                "age_s": int(w.last_heartbeat.age_ms() / 1000),
-                "address": w.address,
-            }
-            for w in stale[:10]
-        ]
-
-        logger.warning(
-            "Failing %d workers with stale heartbeats (threshold=%ds): %s",
-            len(stale),
-            HEARTBEAT_STALENESS_THRESHOLD.to_seconds(),
-            stale_samples,
-        )
-        failure_result = self._transitions.fail_workers_batch(
-            [str(w.worker_id) for w in stale],
-            reason=f"heartbeat stale (>{int(HEARTBEAT_STALENESS_THRESHOLD.to_seconds())}s since last heartbeat)",
-        )
+        failure_result = self._transitions.fail_workers_batch(worker_ids, reason=reason)
+        removed: list[WorkerId] = []
         for wid, addr in failure_result.removed_workers:
             self._provider.on_worker_failed(wid, addr)
+            removed.append(wid)
         if self._autoscaler:
             sibling_worker_ids = self._autoscaler.terminate_slices_for_workers(
                 [str(wid) for wid, _ in failure_result.removed_workers]
             )
             sibling_failures = self._transitions.fail_workers_batch(
                 sibling_worker_ids,
-                reason="stale worker failed, slice terminated",
+                reason=sibling_reason,
             )
             for wid, addr in sibling_failures.removed_workers:
                 self._provider.on_worker_failed(wid, addr)
+                removed.append(wid)
             failure_result.tasks_to_kill.update(sibling_failures.tasks_to_kill)
             failure_result.task_kill_workers.update(sibling_failures.task_kill_workers)
         if failure_result.tasks_to_kill:
             self.kill_tasks_on_workers(failure_result.tasks_to_kill, failure_result.task_kill_workers)
+        return removed
 
     def _sync_all_execution_units(self) -> None:
         if self._config.dry_run:
             return
         round_timer = Timer()
-
-        self._reap_stale_workers()
 
         with slow_log(logger, "provider sync phase 1 (snapshot)", threshold_ms=100):
             batches = self._transitions.drain_dispatch_all()
@@ -2510,41 +2454,54 @@ class Controller:
         failure_entries: list[tuple],
         acc: _SyncFailureAccumulator,
     ) -> list[str]:
-        """Process failed heartbeats: update accumulator and return primary failed worker IDs."""
+        """Process failed heartbeats: update health tracker, log, and immediately
+        terminate any workers that just crossed the ping threshold.
+
+        _terminate_workers handles slice siblings, so the return value is always empty
+        (callers need not invoke _handle_sibling_worker_failures separately).
+        """
+        for batch, _error in failure_entries:
+            self._health.ping(batch.worker_id, healthy=False)
         failure_result = self._transitions.fail_heartbeats_batch(failure_entries)
         acc.all_tasks_to_kill.update(failure_result.tasks_to_kill)
         acc.all_task_kill_workers.update(failure_result.task_kill_workers)
 
-        primary_failed_workers: list[str] = []
         for (batch, error), result in zip(failure_entries, failure_result.results, strict=False):
             last_success_age_s = (
                 "unknown" if result.last_heartbeat_age_ms is None else f"{result.last_heartbeat_age_ms / 1000.0:.1f}"
             )
-            log_level = logging.ERROR if result.action == HeartbeatAction.WORKER_FAILED else logging.WARNING
-            logger.log(
-                log_level,
-                "Heartbeat RPC failure: worker=%s address=%s action=%s failures=%d/%d last_success_age_s=%s "
+            logger.warning(
+                "Heartbeat RPC failure: worker=%s address=%s action=%s last_success_age_s=%s "
                 "expected=%d run=%d kill=%d error=%s",
                 batch.worker_id,
                 batch.worker_address or "<missing>",
                 result.action.value,
-                result.consecutive_failures,
-                result.failure_threshold,
                 last_success_age_s,
                 len(batch.running_tasks),
                 len(batch.tasks_to_run),
                 len(batch.tasks_to_kill),
                 error,
             )
-            if result.action == HeartbeatAction.WORKER_FAILED:
-                acc.fail_count += 1
-                acc.terminal_failed_workers.append(batch.worker_id)
-                self._provider.on_worker_failed(batch.worker_id, batch.worker_address)
-                primary_failed_workers.append(str(batch.worker_id))
-            elif result.action == HeartbeatAction.TRANSIENT_FAILURE:
-                acc.fail_count += 1
-                acc.transient_failed_workers.append(batch.worker_id)
-        return primary_failed_workers
+            acc.fail_count += 1
+            acc.transient_failed_workers.append(batch.worker_id)
+
+        unhealthy = self._health.workers_over_threshold()
+        if unhealthy:
+            logger.warning(
+                "Failing %d workers over ping threshold: %s",
+                len(unhealthy),
+                [str(wid) for wid in unhealthy[:10]],
+            )
+            removed = self._terminate_workers(
+                [str(wid) for wid in unhealthy],
+                reason="worker ping threshold exceeded",
+                sibling_reason="unhealthy worker failed, slice terminated",
+            )
+            self._health.forget_many(removed)
+            acc.fail_count += len(removed)
+            acc.terminal_failed_workers.extend(removed)
+
+        return []
 
     def _handle_sibling_worker_failures(
         self,
