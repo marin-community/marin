@@ -126,6 +126,37 @@ def test_gap_report_builder_records_per_model_literal_boundaries():
     assert literal_row["example_dataset"] == "paloma/example"
 
 
+def test_gap_report_builder_previews_worst_region():
+    report = GapReportBuilder(model_a_name="a", model_b_name="b", output_path="/tmp/report")
+    prefix = "safe " * 40
+    target = "needle"
+    suffix = " tail" * 40
+    text = prefix + target + suffix
+    document = RawTextDocument(
+        dataset_name="paloma/example",
+        tags=("paloma/example",),
+        shard_name="docs",
+        row_index=0,
+        text=text,
+    )
+    loss_a = np.zeros(len(text), dtype=np.float64)
+    loss_b = np.zeros(len(text), dtype=np.float64)
+    target_start = text.index(target)
+    target_end = target_start + len(target)
+    loss_a[target_start:target_end] = 1.0
+
+    report.add_document(document=document, per_byte_loss_a=loss_a, per_byte_loss_b=loss_b)
+
+    summary = report.build_summary()
+    doc_row = summary["top_documents"]["model_a_worse"][0]
+    segment_row = next(row for row in summary["top_segments"]["model_a_worse"] if row["text"] == target)
+
+    assert target in doc_row["preview"]
+    assert doc_row["preview"].startswith("\u2026")
+    assert target in segment_row["doc_preview"]
+    assert segment_row["doc_preview"].startswith("\u2026")
+
+
 def test_write_report_files_and_log_artifact_bundle():
     summary: dict[str, Any] = {
         "model_a": "a",

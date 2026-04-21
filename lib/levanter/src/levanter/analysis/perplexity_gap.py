@@ -150,17 +150,6 @@ class GapReportBuilder:
 
         delta_bits = (loss_a - loss_b) * LOG2E
         gap_bpb = delta_bits / num_bytes if num_bytes > 0 else 0.0
-        doc_record = {
-            "dataset": document.dataset_name,
-            "shard": document.shard_name,
-            "row_index": int(document.row_index),
-            "bytes": int(num_bytes),
-            "gap_bpb": gap_bpb,
-            "delta_bits": delta_bits,
-            "preview": preview_text(document.text),
-        }
-        _push_top_positive(self._top_docs_positive, delta_bits, doc_record, self.top_k_docs, self._heap_counter)
-        _push_top_negative(self._top_docs_negative, delta_bits, doc_record, self.top_k_docs, self._heap_counter)
 
         if num_bytes <= 0:
             return
@@ -168,6 +157,8 @@ class GapReportBuilder:
         prefix_a = np.concatenate(([0.0], np.cumsum(per_byte_loss_a, dtype=np.float64)))
         prefix_b = np.concatenate(([0.0], np.cumsum(per_byte_loss_b, dtype=np.float64)))
         byte_offsets = char_to_byte_offsets(document.text)
+        worst_positive_segment: tuple[float, int, int] | None = None
+        worst_negative_segment: tuple[float, int, int] | None = None
 
         for match in _SEGMENT_RE.finditer(document.text):
             segment = match.group(0)
@@ -183,6 +174,14 @@ class GapReportBuilder:
             segment_loss_b = float(prefix_b[byte_end] - prefix_b[byte_start])
             segment_bytes = int(byte_end - byte_start)
             segment_delta_bits = (segment_loss_a - segment_loss_b) * LOG2E
+            if segment_delta_bits > 0.0 and (
+                worst_positive_segment is None or segment_delta_bits > worst_positive_segment[0]
+            ):
+                worst_positive_segment = (segment_delta_bits, match.start(), match.end())
+            if segment_delta_bits < 0.0 and (
+                worst_negative_segment is None or segment_delta_bits < worst_negative_segment[0]
+            ):
+                worst_negative_segment = (segment_delta_bits, match.start(), match.end())
             bucket = bucket_for_segment(segment)
             visible = render_visible(segment)
 
@@ -201,6 +200,8 @@ class GapReportBuilder:
                         segment_text=segment,
                         segment_byte_start=byte_start,
                         segment_byte_end=byte_end,
+                        segment_char_start=match.start(),
+                        segment_char_end=match.end(),
                         segment_delta_bits=segment_delta_bits,
                         tokenized_a=tokenized_a,
                         tokenized_b=tokenized_b,
@@ -216,7 +217,7 @@ class GapReportBuilder:
                 "delta_bits": segment_delta_bits,
                 "gap_bpb": segment_delta_bits / segment_bytes,
                 "text": visible,
-                "doc_preview": preview_text(document.text),
+                "doc_preview": preview_text_window(document.text, match.start(), match.end()),
             }
             _push_top_positive(
                 self._top_segments_positive,
@@ -232,6 +233,28 @@ class GapReportBuilder:
                 self.top_k_segments,
                 self._heap_counter,
             )
+
+        preview_span = None
+        if delta_bits > 0.0:
+            preview_span = worst_positive_segment
+        elif delta_bits < 0.0:
+            preview_span = worst_negative_segment
+        preview = (
+            preview_text_window(document.text, preview_span[1], preview_span[2])
+            if preview_span is not None
+            else preview_text(document.text)
+        )
+        doc_record = {
+            "dataset": document.dataset_name,
+            "shard": document.shard_name,
+            "row_index": int(document.row_index),
+            "bytes": int(num_bytes),
+            "gap_bpb": gap_bpb,
+            "delta_bits": delta_bits,
+            "preview": preview,
+        }
+        _push_top_positive(self._top_docs_positive, delta_bits, doc_record, self.top_k_docs, self._heap_counter)
+        _push_top_negative(self._top_docs_negative, delta_bits, doc_record, self.top_k_docs, self._heap_counter)
 
     def build_summary(self) -> dict[str, Any]:
         dataset_rows = [stats.as_dict(name) for name, stats in sorted(self.dataset_stats.items())]
@@ -308,6 +331,8 @@ class GapReportBuilder:
         segment_text: str,
         segment_byte_start: int,
         segment_byte_end: int,
+        segment_char_start: int,
+        segment_char_end: int,
         segment_delta_bits: float,
         tokenized_a: TokenizedDocument,
         tokenized_b: TokenizedDocument,
@@ -315,7 +340,7 @@ class GapReportBuilder:
         candidate = LiteralExample(
             abs_delta_bits=abs(segment_delta_bits),
             dataset_name=document.dataset_name,
-            doc_preview=preview_text(document.text),
+            doc_preview=preview_text_window(document.text, segment_char_start, segment_char_end),
             model_a_token_boundaries=render_token_boundaries(
                 segment_text=segment_text,
                 segment_byte_start=segment_byte_start,
@@ -542,6 +567,25 @@ def preview_text(text: str, limit: int = 120) -> str:
     if len(preview) > limit:
         preview = preview[: limit - 1] + "\u2026"
     return preview
+
+
+def preview_text_window(text: str, start: int, end: int, limit: int = 120) -> str:
+    if limit <= 2:
+        raise ValueError(f"limit must be greater than 2, got {limit}.")
+    if len(text) <= limit:
+        return visible_text(text)
+
+    start = min(max(start, 0), len(text))
+    end = min(max(end, start), len(text))
+    center = (start + end) // 2
+    content_limit = limit - 2
+    window_start = max(0, center - content_limit // 2)
+    window_end = min(len(text), window_start + content_limit)
+    window_start = max(0, window_end - content_limit)
+
+    prefix = "\u2026" if window_start > 0 else ""
+    suffix = "\u2026" if window_end < len(text) else ""
+    return prefix + visible_text(text[window_start:window_end]) + suffix
 
 
 def visible_text(text: str) -> str:
