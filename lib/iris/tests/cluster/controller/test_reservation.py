@@ -31,7 +31,6 @@ from iris.cluster.controller.scheduler import JobRequirements, Scheduler, Schedu
 from iris.cluster.controller.db import task_row_can_be_scheduled
 from iris.cluster.controller.schema import WorkerRow
 from iris.cluster.controller.transitions import (
-    HEARTBEAT_FAILURE_THRESHOLD,
     RESERVATION_HOLDER_JOB_NAME,
     Assignment,
     ControllerTransitions,
@@ -1417,8 +1416,7 @@ def test_holder_task_worker_death_no_failure_record(state):
         # Kill the worker — holder task must NOT go through WORKER_FAILED.
         batch = state.drain_dispatch(worker_id)
         assert batch is not None
-        for _ in range(HEARTBEAT_FAILURE_THRESHOLD):
-            state.record_heartbeat_failure(worker_id, "simulated crash", batch)
+        state.record_heartbeat_failure(worker_id, "simulated crash", batch, force_remove=True)
 
         holder_task = _query_task_with_attempts(state, holder_task.task_id)
         assert holder_task is not None

@@ -68,7 +68,7 @@ class CAdamCHeuristic:
     """C-AdamC scaling heuristic using CautiousConfig optimizer."""
 
     name: str = "c-adamc"
-    tokenizer: str = "stanford-crfm/marin-tokenizer"
+    tokenizer: str = "marin-community/marin-tokenizer"
 
     @property
     def vocab_size(self) -> int:

@@ -8,7 +8,7 @@ Serves a Vue frontend and JSON API endpoints from the DuckDB object catalog
 populated by the purge workflow.
 
 Usage:
-    uv run scripts/storage/server.py [--port 8000] [--dev]
+    uv run scripts/ops/storage/server.py [--port 8000] [--dev]
 """
 
 from __future__ import annotations
@@ -1418,7 +1418,7 @@ def main(port: int, host: str, dev: bool) -> None:
             host=host,
             port=port,
             reload=True,
-            reload_dirs=["scripts/storage"],
+            reload_dirs=["scripts/ops/storage"],
             log_level="debug",
             access_log=True,
         )

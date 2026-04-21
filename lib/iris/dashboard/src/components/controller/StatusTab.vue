@@ -9,6 +9,7 @@ import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import ProfileButtons from '@/components/shared/ProfileButtons.vue'
+import RpcStatsPanel from '@/components/controller/RpcStatsPanel.vue'
 
 const { data, loading, error, refresh } = useControllerRpc<GetProcessStatusResponse>('GetProcessStatus')
 const { profiling, profile } = useProfileAction(controllerRpcCall, '/system/process')
@@ -102,6 +103,12 @@ const totalBytes = computed(() => {
 
     <!-- Process profiling -->
     <ProfileButtons :profiling="profiling" @profile="profile" />
+
+    <!-- RPC statistics -->
+    <div>
+      <h3 class="text-sm font-semibold text-text mb-3">RPC Statistics</h3>
+      <RpcStatsPanel />
+    </div>
 
     <!-- Process logs -->
     <div>

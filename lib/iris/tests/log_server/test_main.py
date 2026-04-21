@@ -18,6 +18,7 @@ from starlette.testclient import TestClient
 
 from iris.log_server.main import build_log_server_asgi
 from iris.log_server.server import LogServiceImpl
+from iris.rpc.stats import RpcStatsCollector
 
 
 @pytest.fixture
@@ -87,3 +88,34 @@ def test_fetch_logs_concurrency_cap_enforced_by_interceptor(service: LogServiceI
 
     assert all(r.status_code == 200 for r in responses)
     assert peak == limit
+
+
+def test_stats_collector_records_log_server_calls(service: LogServiceImpl):
+    """Stats collector wired into the log server records FetchLogs calls and
+    the StatsService endpoint serves the snapshot.
+    """
+    collector = RpcStatsCollector(slow_threshold_ms=1000)
+    app = build_log_server_asgi(service, stats_collector=collector)
+
+    with TestClient(app) as client:
+        for _ in range(3):
+            r = client.post(
+                "/iris.logging.LogService/FetchLogs",
+                json={"source": "/does/not/matter"},
+                headers={"Content-Type": "application/json"},
+            )
+            assert r.status_code == 200
+
+        snap = client.post(
+            "/iris.stats.StatsService/GetRpcStats",
+            json={},
+            headers={"Content-Type": "application/json"},
+        )
+    assert snap.status_code == 200
+    body = snap.json()
+    methods = {m["method"]: m for m in body.get("methods", [])}
+    assert "FetchLogs" in methods
+    assert int(methods["FetchLogs"]["count"]) == 3
+    # Stats endpoint reads itself via a separate interceptor chain (no timing),
+    # so it must NOT appear in the snapshot.
+    assert "GetRpcStats" not in methods

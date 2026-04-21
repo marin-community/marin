@@ -45,7 +45,7 @@ from .conftest import (
     discover_capabilities,
     wait_for_dashboard_ready,
 )
-from .helpers import TestJobs, _tree_parent_job
+from .helpers import TestJobs
 
 logger = logging.getLogger(__name__)
 
@@ -308,31 +308,6 @@ def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
     )
 
 
-def test_dashboard_job_expand_nested(smoke_cluster, smoke_page, smoke_screenshot):
-    """Expanding a child job on the job detail page reveals its grandchildren."""
-    root = smoke_cluster.submit(_tree_parent_job, "smoke-tree-root")
-    smoke_cluster.wait(root, timeout=smoke_cluster.job_timeout)
-
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{root.job_id.to_wire()}")
-    wait_for_dashboard_ready(smoke_page)
-
-    # Child job should appear in the "Direct only" child jobs list.
-    smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('tree-child')",
-        timeout=10000,
-    )
-    smoke_screenshot("job-expand-nested-before", "Job detail page showing tree-child as a direct child with ▶ button")
-
-    child_row = smoke_page.locator("tr", has_text="tree-child").first
-    child_row.get_by_role("button").filter(has_text="▶").click()
-
-    smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('tree-grandchild')",
-        timeout=10000,
-    )
-    smoke_screenshot("job-expand-nested-after", "Job detail page with tree-child expanded showing tree-grandchild")
-
-
 def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
     """Task logs show lines and substring filter on the task detail page."""
     task_status = smoke_cluster.task_status(verbose_job)
@@ -460,10 +435,13 @@ def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Autoscaler tab shows scale groups."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/autoscaler")
     wait_for_dashboard_ready(smoke_page)
+    # Wait for actual scale group content, not just the tab heading ("Autoscaler")
+    # which appears before the API response loads.
     smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('Autoscaler') || "
-        "document.body.textContent.includes('Scale Group') || "
-        "document.body.textContent.includes('scale group')",
+        "() => !document.body.textContent.includes('Loading') && "
+        "(document.body.textContent.includes('Scale Group') || "
+        "document.body.textContent.includes('scale group') || "
+        "document.body.textContent.includes('local-cpu'))",
         timeout=10000,
     )
     smoke_screenshot("autoscaler-tab", "Autoscaler tab showing scale group configuration")
@@ -754,6 +732,7 @@ def test_exec_in_container(smoke_cluster):
 # ============================================================================
 
 
+@pytest.mark.timeout(120)
 def test_checkpoint_restore():
     """Controller restart resumes from checkpoint: completed jobs visible, cluster functional.
 

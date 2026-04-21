@@ -41,7 +41,7 @@ from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.scaling_laws import ScalingFit, predict_optimal_config
-from marin.scaling_laws.tpu_utils import pick_v5p_type, HBM_PER_CHIP_GIB
+from marin.scaling_laws.tpu_utils import V5P_SPEC, pick_v5p_type
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 logging.basicConfig(level=logging.INFO)
@@ -118,7 +118,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
     # Compute TPU type and gradient accumulation settings
     max_cores = int(MAX_TPU_TYPE.split("-")[1])
     num_chips = max_cores // 2
-    max_memory = num_chips * HBM_PER_CHIP_GIB * 1024**3
+    max_memory = num_chips * V5P_SPEC.hbm_per_chip_gib * 1024**3
 
     per_device_parallelism: int | None = None
     if estimated_memory <= max_memory:

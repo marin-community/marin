@@ -362,7 +362,8 @@ message CoreweaveControllerConfig {
 message ControllerVmConfig {
   string image = 10;            // Controller docker image (shared by all controller types)
   iris.time.Duration worker_timeout = 12;  // Default: 60s
-  int32 heartbeat_failure_threshold = 13;  // Consecutive heartbeat failures before marking worker dead (default: 10)
+  reserved 13;                  // removed: heartbeat_failure_threshold (now hardcoded via PING_FAILURE_THRESHOLD)
+  bool use_split_heartbeat = 14;  // Default: true. Set false to use the legacy monolithic heartbeat path.
   oneof controller {
     GcpControllerConfig gcp = 1;
     ManualControllerConfig manual = 2;

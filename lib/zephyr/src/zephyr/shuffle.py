@@ -10,7 +10,7 @@ single ``pickle.dump(list_of_items)`` into the zstd stream. This amortises
 per-item pickle/zstd dispatch over a sub-batch while still letting the
 reader stream sub-batches lazily without materialising the full chunk.
 
-A JSON sidecar (``.scatter_meta``) maps ``target_shard -> [(offset, length)]``
+A msgpack sidecar (``.scatter_meta``) maps ``target_shard -> [(offset, length)]``
 byte ranges into the data file, plus per-shard ``max_chunk_rows`` and a global
 ``avg_item_bytes`` estimate. Sidecars from all source shards are aggregated
 into a single ``scatter_metadata`` manifest at the end of the scatter stage,
@@ -28,8 +28,8 @@ external-sort fan-in opens hundreds of chunk iterators at once.
 from __future__ import annotations
 
 import concurrent.futures
+import functools
 import io
-import json
 import logging
 import os
 import pickle
@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import cloudpickle
+import msgspec
 import zstandard as zstd
 from rigging.filesystem import open_url, url_to_fs
 from rigging.timing import log_time
@@ -87,7 +88,7 @@ _SCATTER_META_SUFFIX = ".scatter_meta"
 _SCATTER_DATA_SUFFIX = ".shuffle"
 
 # Number of parallel sidecar reads each reducer issues when building its
-# ScatterReader. Sidecars are small JSON files (a few KB) and reads are
+# ScatterReader. Sidecars are small msgpack files (a few KB) and reads are
 # GCS GET-bound, so a modest pool keeps latency low without thrashing.
 _SIDECAR_READ_CONCURRENCY = 32
 # Number of items sampled from the first flush to estimate avg_item_bytes.
@@ -106,6 +107,16 @@ _SUB_BATCH_SIZE = 1024
 # ---------------------------------------------------------------------------
 
 
+@functools.cache
+def _sidecar_encoder() -> msgspec.msgpack.Encoder:
+    return msgspec.msgpack.Encoder()
+
+
+@functools.cache
+def _sidecar_decoder() -> msgspec.msgpack.Decoder:
+    return msgspec.msgpack.Decoder()
+
+
 def _scatter_meta_path(data_path: str) -> str:
     """``shard-0000.shuffle`` -> ``shard-0000.scatter_meta``."""
     stem, _ = os.path.splitext(data_path)
@@ -114,35 +125,85 @@ def _scatter_meta_path(data_path: str) -> str:
 
 def _write_scatter_meta(data_path: str, sidecar: dict) -> None:
     meta_path = _scatter_meta_path(data_path)
-    payload = json.dumps(sidecar)
+    payload = _sidecar_encoder().encode(sidecar)
     with log_time(f"Writing scatter meta for {data_path} to {meta_path}", level=logging.DEBUG):
-        with open_url(meta_path, "w") as f:
+        with open_url(meta_path, "wb") as f:
             f.write(payload)
 
 
-def _read_sidecars_parallel(scatter_paths: list[str]) -> list[tuple[str, dict]]:
-    """Read every ``.scatter_meta`` sidecar concurrently, preserving input order.
+@dataclass(frozen=True)
+class _SidecarSlice:
+    """One reducer's slice of a mapper sidecar.
 
-    Each reducer calls this to build its ``ScatterReader`` directly from the
-    per-mapper sidecars, without going through a coordinator-written manifest.
+    A full sidecar is ~hundreds of KB and carries byte ranges for every
+    target shard (tens of thousands on large jobs). A reducer only consumes
+    its own shard's ranges plus two scalars, so the worker extracts just
+    those fields and discards the parsed dict before returning. This keeps
+    the reducer's resident memory proportional to the number of mappers
+    instead of mappers * sidecar size.
+    """
+
+    path: str
+    ranges: tuple[tuple[int, int], ...]
+    max_chunk_rows: int
+    avg_item_bytes: float
+
+
+def _read_sidecar_slice(path: str, shard_key: str) -> _SidecarSlice | None:
+    """Read one sidecar and extract only the fields for ``shard_key``.
+
+    Returns ``None`` if the sidecar has no ranges for this shard. The parsed
+    dict is released when this function returns. Once we confirm this shard
+    has ranges, ``max_chunk_rows[shard_key]`` and ``avg_item_bytes`` must
+    also be present — ``ScatterWriter`` records both in the same ``_flush``
+    that appends to ``shards[shard_key]``. A missing field here means the
+    sidecar is corrupt or was written by an incompatible version, and we
+    fail rather than silently substituting zero.
+
+    Uses ``fs.cat_file`` rather than ``open_url`` — one direct GET returning
+    bytes is ~25% faster than going through ``TextIOWrapper(BufferedFile)``
+    for small sidecars, and msgpack decodes bytes directly.
+    """
+    meta_path = _scatter_meta_path(path)
+    fs, fs_path = url_to_fs(meta_path)
+    meta = _sidecar_decoder().decode(fs.cat_file(fs_path))
+    ranges_raw = meta.get("shards", {}).get(shard_key)
+    if not ranges_raw:
+        return None
+    max_rows_map = meta.get("max_chunk_rows", {})
+    if shard_key not in max_rows_map:
+        raise ValueError(f"Sidecar {meta_path} has ranges for shard {shard_key} but no max_chunk_rows entry.")
+    if "avg_item_bytes" not in meta:
+        raise ValueError(f"Sidecar {meta_path} has ranges for shard {shard_key} but no avg_item_bytes.")
+    ranges = tuple((int(off), int(length)) for off, length in ranges_raw)
+    return _SidecarSlice(
+        path=path,
+        ranges=ranges,
+        max_chunk_rows=int(max_rows_map[shard_key]),
+        avg_item_bytes=float(meta["avg_item_bytes"]),
+    )
+
+
+def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -> list[_SidecarSlice]:
+    """Read every sidecar concurrently and return per-shard slices in input order.
+
+    Extraction happens inside the worker so full sidecar dicts never
+    accumulate in the reducer process. Sidecars with no ranges for
+    ``target_shard`` are dropped.
 
     TODO(rav): each reducer subprocess re-reads every sidecar even though only
     one shard's byte ranges are used. A worker-level sidecar cache (or a shared
     read across colocated reducers) would avoid the redundant GCS GETs when
     many reducers run on the same host.
     """
-
-    def _read_entry(path: str) -> tuple[str, dict]:
-        meta_path = _scatter_meta_path(path)
-        with open_url(meta_path, "r") as f:
-            return path, json.loads(f.read())
-
-    results: dict[str, dict] = {}
+    shard_key = str(target_shard)
+    ordered: list[_SidecarSlice | None] = [None] * len(scatter_paths)
     with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
-        for path, meta in pool.map(_read_entry, scatter_paths):
-            results[path] = meta
-
-    return [(path, results[path]) for path in scatter_paths]
+        futures = {pool.submit(_read_sidecar_slice, p, shard_key): i for i, p in enumerate(scatter_paths)}
+        for fut in concurrent.futures.as_completed(futures):
+            idx = futures[fut]
+            ordered[idx] = fut.result()
+    return [s for s in ordered if s is not None]
 
 
 # ---------------------------------------------------------------------------
@@ -211,22 +272,19 @@ def _iter_chunk(fs: Any, fs_path: str, offset: int, length: int) -> Iterator:
 class ScatterReader:
     """All scatter chunks for one target shard, across all source files.
 
-    Replaces the former ScatterShard dataclass + ScatterFileIterator assembly
-    + ``_build_scatter_shard_from_manifest`` builder function.
-
-    Construct via :meth:`from_manifest` for production use, or pass fields
+    Construct via :meth:`from_sidecars` for production use, or pass fields
     directly for testing.
     """
 
     def __init__(
         self,
-        iterators: list[ScatterFileIterator] | None = None,
-        max_chunk_rows: int = 100_000,
-        avg_item_bytes: float = 0.0,
+        iterators: list[ScatterFileIterator],
+        max_chunk_rows: int,
+        avg_item_bytes: float,
     ) -> None:
-        self.iterators: list[ScatterFileIterator] = iterators if iterators is not None else []
-        self.max_chunk_rows: int = max_chunk_rows
-        self.avg_item_bytes: float = avg_item_bytes
+        self.iterators = iterators
+        self.max_chunk_rows = max_chunk_rows
+        self.avg_item_bytes = avg_item_bytes
 
     @classmethod
     def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> ScatterReader:
@@ -237,8 +295,6 @@ class ScatterReader:
         is needed, which eliminates a serialization bottleneck when there are
         thousands of mappers.
         """
-        shard_key = str(target_shard)
-
         iterators: list[ScatterFileIterator] = []
         max_rows = 0
         weighted_bytes = 0.0
@@ -248,32 +304,24 @@ class ScatterReader:
             f"Building ScatterReader for target shard {target_shard} "
             f"from {len(scatter_paths)} sidecars (concurrency={_SIDECAR_READ_CONCURRENCY})"
         ):
-            for path, meta in _read_sidecars_parallel(scatter_paths):
-                shards = meta.get("shards", {})
-                ranges = shards.get(shard_key)
-                if not ranges:
-                    continue
-
-                iterators.append(
-                    ScatterFileIterator(
-                        path=path,
-                        chunks=tuple((int(off), int(length)) for off, length in ranges),
-                    )
-                )
-
-                per_shard_max = meta.get("max_chunk_rows", {})
-                max_rows = max(max_rows, per_shard_max.get(shard_key, 0))
-
-                ab = meta.get("avg_item_bytes", 0.0)
-                if ab > 0:
-                    count = len(ranges)
-                    weighted_bytes += ab * count
+            for slice_ in _read_sidecar_slices_parallel(scatter_paths, target_shard):
+                iterators.append(ScatterFileIterator(path=slice_.path, chunks=slice_.ranges))
+                max_rows = max(max_rows, slice_.max_chunk_rows)
+                if slice_.avg_item_bytes > 0:
+                    count = len(slice_.ranges)
+                    weighted_bytes += slice_.avg_item_bytes * count
                     total_chunks_for_avg += count
 
-        if max_rows == 0:
-            max_rows = 100_000
         avg_item_bytes = weighted_bytes / total_chunks_for_avg if total_chunks_for_avg > 0 else 0.0
 
+        logger.info(
+            "ScatterReader for shard %d: %d files, %d total chunks, " "max_chunk_rows=%d, avg_item_bytes=%.1f",
+            target_shard,
+            len(iterators),
+            sum(it.chunk_count for it in iterators),
+            max_rows,
+            avg_item_bytes,
+        )
         return cls(iterators=iterators, max_chunk_rows=max_rows, avg_item_bytes=avg_item_bytes)
 
     def __iter__(self) -> Iterator:
@@ -295,24 +343,64 @@ class ScatterReader:
             return 0
         return max(length for file_iter in self.iterators for _, length in file_iter.chunks)
 
-    def needs_external_sort(self, memory_limit: int, memory_fraction: float = 0.5) -> bool:
+    _MAX_IN_MEMORY_ITERATORS = 10_000
+
+    def needs_external_sort(self, memory_limit: int, memory_fraction: float = 0.33) -> bool:
         """Return True if opening all chunks at once would blow the budget."""
         total_chunks = self.total_chunks
         if total_chunks == 0:
             return False
+
+        # Too many open iterators -- force external sort regardless of memory.
+        if total_chunks > self._MAX_IN_MEMORY_ITERATORS:
+            logger.info(
+                "needs_external_sort: total_chunks=%d > %d -> forced external sort",
+                total_chunks,
+                self._MAX_IN_MEMORY_ITERATORS,
+            )
+            return True
+
         if self.avg_item_bytes <= 0:
             raise ValueError(
                 "avg_item_bytes not available in scatter manifest. "
                 "Re-run the scatter stage with a version that records avg_item_bytes."
             )
-        # Heuristic: assume each open chunk could hold up to max_chunk_rows
-        # items in the worst case (e.g. if downstream materialises chunks).
-        estimated = total_chunks * self.max_chunk_rows * self.avg_item_bytes
-        return estimated > memory_limit * memory_fraction
-
-
-# Backward-compatible alias so plan.py isinstance checks still work.
-ScatterShard = ScatterReader
+        # Estimate merge memory per open iterator:
+        #
+        # 1. Compressed chunk blob: fetched via range GET, held in a BytesIO.
+        # 2. Decompressed frame: zstd stream_reader decompresses the full
+        #    frame into an internal buffer (~max_chunk_rows * avg_item_bytes).
+        # 3. One unpickled sub-batch: _SUB_BATCH_SIZE Python objects in memory.
+        #    Python object overhead is fixed per item (~500 bytes for a dict:
+        #    object header, hash table, key/value strings) so the multiplier
+        #    scales inversely with item size.
+        _FIXED_OVERHEAD_PER_ITEM = 512
+        in_memory_multiplier = (self.avg_item_bytes + _FIXED_OVERHEAD_PER_ITEM) / self.avg_item_bytes
+        total_compressed = sum(length for it in self.iterators for _, length in it.chunks)
+        avg_compressed = total_compressed / total_chunks
+        avg_decompressed = self.max_chunk_rows * self.avg_item_bytes
+        sub_batch_mem = _SUB_BATCH_SIZE * self.avg_item_bytes * in_memory_multiplier
+        per_iterator = avg_compressed + avg_decompressed + sub_batch_mem
+        estimated = total_chunks * per_iterator
+        budget = memory_limit * memory_fraction
+        triggered = estimated > budget
+        logger.info(
+            "needs_external_sort: %d chunks x %.1f MB/iter "
+            "(%.1f MB compressed + %.1f MB decompressed + %.1f MB sub-batch [%.1fx]) "
+            "= %.1f GB estimated vs %.1f GB budget (%.1f GB * %.2f) -> %s",
+            total_chunks,
+            per_iterator / 1e6,
+            avg_compressed / 1e6,
+            avg_decompressed / 1e6,
+            sub_batch_mem / 1e6,
+            in_memory_multiplier,
+            estimated / 1e9,
+            budget / 1e9,
+            memory_limit / 1e9,
+            memory_fraction,
+            triggered,
+        )
+        return triggered
 
 
 # ---------------------------------------------------------------------------
