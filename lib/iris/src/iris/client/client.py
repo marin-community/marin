@@ -710,7 +710,7 @@ class IrisClient:
         states = self._cluster_client.get_job_states([job_id])
         wire_id = job_id.to_wire()
         if wire_id not in states:
-            raise KeyError(f"Job {wire_id} not found")
+            raise ConnectError(Code.NOT_FOUND, f"Job {wire_id} not found")
         return cast(job_pb2.JobState, states[wire_id])
 
     def terminate(self, job_id: JobName) -> None:
