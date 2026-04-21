@@ -488,12 +488,14 @@ def main(config: TrainDpoConfig):
         else:
             train_loader = train_loader.iter_from_step(0)
 
-        last_info = trainer.train(state, train_loader)
+        trainer.train(state, train_loader)
 
+        # Ensure the final checkpoint's async GCS write completes before the
+        # process exits.  Without this, preemption (or a normal exit race) can
+        # kill the process while the write is still in flight, silently losing
+        # the only checkpoint at the target training step.
         if trainer.config.checkpointer is not None:
-            trainer.run_hooks(last_info, force=True)
-            checkpointer = trainer.config.checkpointer.create(trainer.run_id)
-            checkpointer.wait_until_finished()
+            trainer._checkpointer.wait_until_finished()
 
     trainer.tracker.finish()
 

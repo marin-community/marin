@@ -319,6 +319,13 @@ def main(config: TrainLmConfig):
         ## OK, actually run training!
         trainer.train(state, train_loader)
 
+        # Ensure the final checkpoint's async GCS write completes before the
+        # process exits.  Without this, preemption (or a normal exit race) can
+        # kill the process while the write is still in flight, silently losing
+        # the only checkpoint at the target training step.
+        if trainer.config.checkpointer is not None:
+            trainer._checkpointer.wait_until_finished()
+
     # This isn't necessary except when Levanter is run in a subprocess (as happens w/ ray)
     trainer.tracker.finish()
 
