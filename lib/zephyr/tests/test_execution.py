@@ -500,9 +500,52 @@ def test_report_error_requeues_until_max_shard_failures(actor_context, tmp_path)
     assert "final-error" in coord._fatal_error
 
 
-def test_heartbeat_death_aborts_at_max_shard_failures(actor_context, tmp_path):
-    """When a shard's worker keeps dying (heartbeat timeout), abort after
-    MAX_SHARD_FAILURES re-queues instead of retrying forever."""
+def test_heartbeat_timeouts_do_not_count_toward_shard_failures(actor_context, tmp_path):
+    """Heartbeat-timeout requeues (preemption) must not consume MAX_SHARD_FAILURES."""
+    from unittest.mock import MagicMock
+
+    from zephyr.execution import (
+        MAX_SHARD_FAILURES,
+        CounterSnapshot,
+        ListShard,
+        ShardTask,
+        TaskResult,
+        ZephyrCoordinator,
+    )
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord.start_stage("test", [task])
+    coord.register_worker("worker-0", MagicMock())
+
+    # Far more heartbeat timeouts than MAX_SHARD_FAILURES — must not abort.
+    for _ in range(MAX_SHARD_FAILURES * 5):
+        pulled = coord.pull_task("worker-0")
+        assert pulled is not None and pulled != "SHUTDOWN"
+        coord._last_seen["worker-0"] = 0.0
+        coord.check_heartbeats(timeout=0.0)
+        assert coord._fatal_error is None
+
+    # Task-error budget is untouched; a successful completion closes the shard.
+    assert coord._task_error_attempts[0] == 0
+    pulled = coord.pull_task("worker-0")
+    assert pulled is not None and pulled != "SHUTDOWN"
+    _task, attempt, _config = pulled
+    coord.report_result("worker-0", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
+    assert coord._completed_shards == 1
+    assert coord._fatal_error is None
+
+
+def test_worker_reregistration_does_not_count_toward_shard_failures(actor_context, tmp_path):
+    """Preemption-driven worker re-registration requeues without burning MAX_SHARD_FAILURES."""
     from unittest.mock import MagicMock
 
     from zephyr.execution import (
@@ -525,12 +568,56 @@ def test_heartbeat_death_aborts_at_max_shard_failures(actor_context, tmp_path):
     coord.start_stage("test", [task])
     coord.register_worker("worker-0", MagicMock())
 
-    for _i in range(MAX_SHARD_FAILURES):
+    for _ in range(MAX_SHARD_FAILURES * 5):
         pulled = coord.pull_task("worker-0")
         assert pulled is not None and pulled != "SHUTDOWN"
-        # Simulate worker death via heartbeat timeout
+        # Simulate preemption + Iris reconstruction: worker re-registers while
+        # a task is still recorded as in-flight on the old handle.
+        coord.register_worker("worker-0", MagicMock())
+        assert "worker-0" not in coord._in_flight
+        assert coord._fatal_error is None
+
+    assert coord._task_error_attempts[0] == 0
+
+
+def test_report_error_still_aborts_at_max_shard_failures_after_preemptions(actor_context, tmp_path):
+    """Task errors still abort at MAX_SHARD_FAILURES even after many survived preemptions."""
+    from unittest.mock import MagicMock
+
+    from zephyr.execution import (
+        MAX_SHARD_FAILURES,
+        ListShard,
+        ShardTask,
+        ZephyrCoordinator,
+    )
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord.start_stage("test", [task])
+    coord.register_worker("worker-0", MagicMock())
+
+    # Several preemption cycles first — these must not count.
+    for _ in range(5):
+        pulled = coord.pull_task("worker-0")
+        assert pulled is not None and pulled != "SHUTDOWN"
         coord._last_seen["worker-0"] = 0.0
         coord.check_heartbeats(timeout=0.0)
+
+    assert coord._fatal_error is None
+
+    # Now MAX_SHARD_FAILURES explicit task errors should abort.
+    for i in range(MAX_SHARD_FAILURES):
+        pulled = coord.pull_task("worker-0")
+        assert pulled is not None and pulled != "SHUTDOWN"
+        coord.report_error("worker-0", 0, f"boom-{i}")
 
     assert coord._fatal_error is not None
     assert "Shard 0" in coord._fatal_error
