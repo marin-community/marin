@@ -153,7 +153,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
             base_path=checkpoint_base,
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
-            keep=[{"every": 1000}],
+            keep=[{"every": 10000}],
         ),
     )
 
