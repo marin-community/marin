@@ -114,8 +114,15 @@ DEFAULT_COMPACTION_INTERVAL_SEC = 600.0  # merge small tmp parquets into one arc
 DEFAULT_MAX_TMP_SEGMENTS_BEFORE_COMPACT = 10
 
 # Default caps for local Parquet retention.
-DEFAULT_MAX_LOCAL_SEGMENTS = 50
-DEFAULT_MAX_LOCAL_BYTES = 5 * 1024**3  # 5 GB
+# The read path has no remote fallback yet (see module docstring TODO): once a
+# parquet is GC'd locally, its rows are unreachable via FetchLogs even though
+# they're durable on GCS. Sized to keep ~2 weeks of the production `marin`
+# cluster's ingest (~6-7 GB/day, ~30 GB bucket total at 2026-04-21) fully
+# local. The per-read working set is still bounded by _MAX_PARQUET_BYTES_PER_READ
+# (2.5 GB, newest-first), so raising the retention cap does not affect query
+# time — verified via lib/iris/scripts/benchmark_log_store.py --corpus-dir.
+DEFAULT_MAX_LOCAL_SEGMENTS = 1000
+DEFAULT_MAX_LOCAL_BYTES = 100 * 1024**3  # 100 GB
 
 _ROW_GROUP_SIZE = 16_384
 
