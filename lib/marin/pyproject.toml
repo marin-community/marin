@@ -44,7 +44,7 @@ dependencies = [
     "toml",
     "tqdm",
     "tqdm-loggable",
-    "wandb",
+    "wandb>0.24.0",
     "warcio",
     "marin-zephyr",
 ]

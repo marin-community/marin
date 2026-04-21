@@ -47,7 +47,7 @@ dependencies = [
     "transformers>=4.57.1,<5.0",
     "chex>=0.1.86",
     "optax>=0.1.9,<0.2.7",
-    "wandb>=0.17.8",
+    "wandb>0.24.0",
     "draccus>=0.11.5",
     "pyarrow>=11.0.0",
     "zstandard>=0.18.0",
