@@ -357,18 +357,26 @@ class JaggedArrayStore:
 
         @return: new JaggedArrayStore with resolved tensorstores
         """
-        offsets = ts.open(_unshaped_spec(self.offsets))
-        data = ts.open(_unshaped_spec(self.data))
-        shapes = future_from_value(None) if self.shapes is None else ts.open(_unshaped_spec(self.shapes.spec()))
+        offsets = ts.open(_unshaped_spec(self.offsets, retain_context=False), **_reload_kwargs())
+        data = ts.open(_unshaped_spec(self.data, retain_context=False), **_reload_kwargs())
+        shapes = (
+            future_from_value(None)
+            if self.shapes is None
+            else ts.open(_unshaped_spec(self.shapes, retain_context=False), **_reload_kwargs())
+        )
 
         offsets, data, shapes = await asyncio.gather(offsets, data, shapes)
 
         return JaggedArrayStore(offsets, data, shapes, self.item_rank)
 
     def reload(self) -> "JaggedArrayStore":
-        offsets = ts.open(_unshaped_spec(self.offsets))
-        data = ts.open(_unshaped_spec(self.data))
-        shapes = None if self.shapes is None else ts.open(_unshaped_spec(self.shapes.spec())).result()
+        offsets = ts.open(_unshaped_spec(self.offsets, retain_context=False), **_reload_kwargs())
+        data = ts.open(_unshaped_spec(self.data, retain_context=False), **_reload_kwargs())
+        shapes = (
+            None
+            if self.shapes is None
+            else ts.open(_unshaped_spec(self.shapes, retain_context=False), **_reload_kwargs()).result()
+        )
 
         offsets = offsets.result()
         data = data.result()
@@ -381,16 +389,6 @@ class JaggedArrayStore:
     async def get_item_async(self, item):
         if isinstance(item, slice):
             raise NotImplementedError("Slicing not supported")
-            len_self = await self.num_rows_async()
-            start, stop, step = item.indices(len_self)
-            if step != 1:
-                raise ValueError("JaggedArrayStore doesn't support slicing with step != 1")
-            shapes = None if self.shapes is None else self.shapes[start:stop]
-            # NB: JaggedArray not JaggedArrayStore
-            # TODO: use a transformed TS?
-            data_start, data_stop, offsets = await self._bounds_for_rows_async(start, stop)
-            new_offsets = offsets - offsets[0]
-            return JaggedArray(new_offsets, await self.data[data_start:data_stop].read(), shapes)
         else:
             try:
                 start, stop, _ = await self._bounds_for_rows_async(item, item + 1)
@@ -404,8 +402,7 @@ class JaggedArrayStore:
                 # ts raises a value error for an index out of bounds OUT_OF_RANGE
                 if "OUT_OF_RANGE" in str(e):
                     raise IndexError(f"JaggedArrayStore index out of range: {item}") from e
-                else:
-                    raise e
+                raise
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[np.ndarray]:
         # get indices
@@ -451,20 +448,7 @@ class JaggedArrayStore:
 
     def __getitem__(self, item):
         if isinstance(item, slice):
-            # raise NotImplementedError("Slicing not supported")
-            # # TODO: do we need to avoid reading len(self)?
-            # start, stop, step = item.indices(len(self))
-            # if step != 1:
-            #     raise ValueError("JaggedArrayStore doesn't support slicing with step != 1")
-            # shapes = None if self.shapes is None else self.shapes[start:stop]
-            # # NB: JaggedArray not JaggedArrayStore
-            # # TODO: use a transformed TS?
-            # data_start, data_stop, offsets = self._bounds_for_rows(start, stop)
-            # new_offsets = offsets - offsets[0]
-            # return JaggedArray(new_offsets, self.data[data_start:data_stop].read().result(), shapes)
             start, stop, step = item.indices(len(self))
-            # for now, just read the data into a list
-
             return self.get_batch_sync(list(range(start, stop, step)))
         else:
             try:
@@ -479,8 +463,7 @@ class JaggedArrayStore:
                 # ts raises a value error for an index out of bounds OUT_OF_RANGE
                 if "OUT_OF_RANGE" in str(e):
                     raise IndexError(f"JaggedArrayStore index out of range: {item}") from e
-                else:
-                    raise e
+                raise
 
     def _bounds_for_rows(self, start, stop):
         num_rows = self.num_rows
@@ -555,9 +538,17 @@ class JaggedArrayStore:
         return data_start, data_stop, offsets
 
 
-def _unshaped_spec(store: ts.TensorStore) -> ts.Spec:
-    spec = store.spec(retain_context=True)
+def _unshaped_spec(store: ts.TensorStore, *, retain_context: bool = True) -> ts.Spec:
+    spec = store.spec(retain_context=retain_context)
     return spec
+
+
+def _reload_kwargs() -> dict:
+    """Fresh context + recheck so reload picks up mutations from the writer."""
+    return {
+        "context": ts.Context({"cache_pool": _READ_CACHE_SETTINGS}),
+        "recheck_cached_data": True,
+    }
 
 
 def _ts_open_kwargs(mode: str) -> dict:

@@ -26,8 +26,8 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
 )
 from levanter.store import SerialCacheWriter, TreeCache
+from levanter.tokenizers import load_tokenizer
 from tqdm_loggable.auto import tqdm
-from transformers import AutoTokenizer
 
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
@@ -43,7 +43,7 @@ class SliceCacheConfig(TokenizeConfigBase):
     input_config: LmDatasetSourceConfigBase
     num_tokens: int
     cache_path: str = THIS_OUTPUT_PATH
-    tokenizer: str = "stanford-crfm/marin-tokenizer"
+    tokenizer: str = "marin-community/marin-tokenizer"
     seed: int = 42
 
     def as_lm_dataset_source_config(
@@ -66,7 +66,7 @@ def _do_slice_cache(
     This only works for datasets with input ids right now. Luckily this is all the datasets we care about atm.
     """
     key = PRNGKey(cfg.seed)
-    tokenizer = AutoTokenizer.from_pretrained(cfg.tokenizer)
+    tokenizer = load_tokenizer(cfg.tokenizer)
     split = "train"
     train_set = cfg.input_config.load_cache(split, tokenizer)
 
@@ -213,7 +213,7 @@ def slice_cache(
     input_config: LmDatasetSourceConfigBase,
     num_tokens: int,
     seed: int = 42,
-    tokenizer_spec: str = "stanford-crfm/marin-tokenizer",
+    tokenizer_spec: str = "marin-community/marin-tokenizer",
 ) -> ExecutorStep[SliceCacheConfig]:
     """High-level function to slice a Levanter cache.
 

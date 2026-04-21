@@ -1825,54 +1825,6 @@
       "severity": "warn"
     },
     {
-      "line": 76,
-      "column": 9,
-      "stop_line": 103,
-      "stop_column": 22,
-      "path": "lib/marin/src/marin/rl/math_utils.py",
-      "code": -2,
-      "name": "bad-assignment",
-      "description": "`int` is not assignable to `int` (caused by inconsistent types when breaking cycles)",
-      "concise_description": "`int` is not assignable to `int` (caused by inconsistent types when breaking cycles)",
-      "severity": "error"
-    },
-    {
-      "line": 89,
-      "column": 25,
-      "stop_line": 89,
-      "stop_column": 57,
-      "path": "lib/marin/src/marin/rl/math_utils.py",
-      "code": -2,
-      "name": "unsupported-operation",
-      "description": "`+` is not supported between `None` and `Literal[1]`\n  Argument `None` is not assignable to parameter `value` with type `int` in function `int.__radd__`",
-      "concise_description": "`+` is not supported between `None` and `Literal[1]`",
-      "severity": "error"
-    },
-    {
-      "line": 550,
-      "column": 13,
-      "stop_line": 550,
-      "stop_column": 21,
-      "path": "lib/marin/src/marin/rl/math_utils.py",
-      "code": -2,
-      "name": "bad-assignment",
-      "description": "`float` is not assignable to variable `x` with type `str`",
-      "concise_description": "`float` is not assignable to variable `x` with type `str`",
-      "severity": "error"
-    },
-    {
-      "line": 586,
-      "column": 16,
-      "stop_line": 586,
-      "stop_column": 20,
-      "path": "lib/marin/src/marin/rl/math_utils.py",
-      "code": -2,
-      "name": "bad-return",
-      "description": "Returned type `None` is not assignable to declared return type `str`",
-      "concise_description": "Returned type `None` is not assignable to declared return type `str`",
-      "severity": "error"
-    },
-    {
       "line": 199,
       "column": 15,
       "stop_line": 199,

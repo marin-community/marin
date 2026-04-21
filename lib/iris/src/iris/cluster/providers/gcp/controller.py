@@ -30,6 +30,7 @@ from iris.cluster.providers.types import (
 from iris.cluster.providers.remote_exec import resolve_current_os_login_user
 from iris.cluster.service_mode import ServiceMode
 from iris.rpc import config_pb2
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
 
@@ -73,11 +74,12 @@ class GcpControllerProvider:
             )
         return f"{vms[0].internal_address}:{port}"
 
-    def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+    def start_controller(self, config: config_pb2.IrisClusterConfig, *, fresh: bool = False) -> str:
         address, _vm = vm_start_controller(
             self.worker_provider,
             config,
             resolve_image=self.worker_provider.resolve_image,
+            fresh=fresh,
         )
         return address
 
@@ -117,7 +119,6 @@ class GcpControllerProvider:
             project=self.worker_provider.project_id,
             label_prefix=self.worker_provider.label_prefix,
             ssh_config=self.worker_provider.ssh_config,
-            service_account=self.controller_service_account,
             local_port=local_port,
         )
 
@@ -223,52 +224,34 @@ def _build_tunnel_ssh_cmd(
     return cmd
 
 
-@contextmanager
-def _gcp_tunnel(
+_TRANSIENT_SSH_ERROR_MARKERS = (
+    "connection reset by peer",
+    "connection refused",
+    "connection timed out",
+    "no route to host",
+    "network is unreachable",
+)
+
+
+def _is_transient_ssh_error(error: str) -> bool:
+    normalized = error.lower()
+    return any(marker in normalized for marker in _TRANSIENT_SSH_ERROR_MARKERS)
+
+
+def _establish_tunnel(
+    *,
     project: str,
-    label_prefix: str,
+    zone: str,
+    vm_name: str,
+    local_port: int,
     ssh_config: config_pb2.SshConfig | None,
-    service_account: str | None = None,
-    local_port: int | None = None,
-    timeout: float = 60.0,
-) -> Iterator[str]:
-    """SSH tunnel to the controller VM, yielding the local URL.
+    effective_service_account: str | None,
+    timeout: float,
+) -> subprocess.Popen:
+    """Start an SSH tunnel subprocess and wait for the port to be ready.
 
-    Binds explicitly to 127.0.0.1 to avoid conflicts with other processes
-    that may be listening on the same port on a different address family (IPv6).
-    Picks a free port automatically if none is specified.
+    Returns the running Popen; raises RuntimeError on failure.
     """
-    effective_service_account = ssh_impersonate_service_account(ssh_config, service_account)
-    key_file = ssh_key_file(ssh_config, effective_service_account)
-    _check_gcloud_ssh_key(key_file)
-
-    if local_port is None:
-        local_port = find_free_port(start=10000)
-
-    labels = Labels(label_prefix)
-    label_filter = f"labels.{labels.iris_controller}=true AND status=RUNNING"
-    cmd = [
-        "gcloud",
-        "compute",
-        "instances",
-        "list",
-        f"--project={project}",
-        f"--filter={label_filter}",
-        "--format=value(name,zone)",
-        "--limit=1",
-    ]
-    if effective_service_account:
-        cmd.append(f"--impersonate-service-account={effective_service_account}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0 or not result.stdout.strip():
-        raise RuntimeError(f"No controller VM found (label={labels.iris_controller}=true, project={project})")
-
-    parts = result.stdout.strip().split()
-    vm_name = parts[0]
-    zone = parts[1] if len(parts) > 1 else ""
-
-    logger.info("Establishing SSH tunnel to %s (zone=%s)...", vm_name, zone)
-
     auth_mode = _ssh_auth_mode(ssh_config)
     cmd = _build_tunnel_ssh_cmd(
         project=project,
@@ -312,13 +295,77 @@ def _gcp_tunnel(
         else:
             raise RuntimeError(f"SSH tunnel failed to establish: {stderr}")
 
-    try:
-        if not wait_for_port(local_port, host="127.0.0.1", timeout=timeout):
-            stderr = proc.stderr.read().decode() if proc.stderr else ""
-            proc.terminate()
-            proc.wait()
-            raise RuntimeError(f"SSH tunnel failed to establish: {stderr}")
+    if not wait_for_port(local_port, host="127.0.0.1", timeout=timeout):
+        stderr = proc.stderr.read().decode() if proc.stderr else ""
+        proc.terminate()
+        proc.wait()
+        raise RuntimeError(f"SSH tunnel failed to establish: {stderr}")
 
+    return proc
+
+
+@contextmanager
+def _gcp_tunnel(
+    project: str,
+    label_prefix: str,
+    ssh_config: config_pb2.SshConfig | None,
+    local_port: int | None = None,
+    timeout: float = 60.0,
+) -> Iterator[str]:
+    """SSH tunnel to the controller VM, yielding the local URL.
+
+    Binds explicitly to 127.0.0.1 to avoid conflicts with other processes
+    that may be listening on the same port on a different address family (IPv6).
+    Picks a free port automatically if none is specified.
+    """
+    effective_service_account = ssh_impersonate_service_account(ssh_config)
+    key_file = ssh_key_file(ssh_config, effective_service_account)
+    _check_gcloud_ssh_key(key_file)
+
+    if local_port is None:
+        local_port = find_free_port(start=10000)
+
+    labels = Labels(label_prefix)
+    label_filter = f"labels.{labels.iris_controller}=true AND status=RUNNING"
+    cmd = [
+        "gcloud",
+        "compute",
+        "instances",
+        "list",
+        f"--project={project}",
+        f"--filter={label_filter}",
+        "--format=value(name,zone)",
+        "--limit=1",
+    ]
+    if effective_service_account:
+        cmd.append(f"--impersonate-service-account={effective_service_account}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0 or not result.stdout.strip():
+        raise RuntimeError(f"No controller VM found (label={labels.iris_controller}=true, project={project})")
+
+    parts = result.stdout.strip().split()
+    vm_name = parts[0]
+    zone = parts[1] if len(parts) > 1 else ""
+
+    logger.info("Establishing SSH tunnel to %s (zone=%s)...", vm_name, zone)
+
+    proc = retry_with_backoff(
+        lambda: _establish_tunnel(
+            project=project,
+            zone=zone,
+            vm_name=vm_name,
+            local_port=local_port,
+            ssh_config=ssh_config,
+            effective_service_account=effective_service_account,
+            timeout=timeout,
+        ),
+        retryable=lambda e: isinstance(e, RuntimeError) and _is_transient_ssh_error(str(e)),
+        max_attempts=3,
+        backoff=ExponentialBackoff(initial=5.0, maximum=30.0, factor=2.0),
+        operation=f"SSH tunnel to {vm_name}",
+    )
+
+    try:
         logger.info("Tunnel ready: 127.0.0.1:%d -> %s:10000", local_port, vm_name)
         yield f"http://127.0.0.1:{local_port}"
     finally:

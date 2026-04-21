@@ -79,7 +79,7 @@ class ManualStandaloneWorkerHandle(RemoteExecWorkerBase):
     def status(self) -> WorkerStatus:
         return WorkerStatus(state=CloudWorkerState.RUNNING)
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         if self._on_terminate:
             self._on_terminate()
 
@@ -174,7 +174,7 @@ class ManualSliceHandle:
 
         return SliceStatus(state=state, worker_count=len(self._hosts), workers=workers)
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         if self._terminated:
             return
         self._terminated = True
@@ -428,11 +428,12 @@ class ManualControllerProvider:
         port = manual.port or 10000
         return f"{manual.host}:{port}"
 
-    def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+    def start_controller(self, config: config_pb2.IrisClusterConfig, *, fresh: bool = False) -> str:
         address, _vm = vm_start_controller(
             self.worker_provider,
             config,
             resolve_image=self.worker_provider.resolve_image,
+            fresh=fresh,
         )
         return address
 

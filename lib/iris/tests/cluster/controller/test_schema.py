@@ -12,16 +12,20 @@ import pytest
 from iris.cluster.controller.schema import (
     JOBS,
     MAIN_TABLES,
+    PROFILES_TABLES,
     generate_full_ddl,
 )
 
 
 def _create_db() -> sqlite3.Connection:
-    """Create an in-memory SQLite DB with the full MAIN_TABLES schema."""
+    """Create an in-memory SQLite DB with the full schema registry."""
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     ddl = generate_full_ddl(MAIN_TABLES)
     conn.executescript(ddl)
+    conn.execute("ATTACH ':memory:' AS profiles")
+    profiles_ddl = generate_full_ddl(PROFILES_TABLES)
+    conn.executescript(profiles_ddl)
     return conn
 
 
@@ -107,12 +111,13 @@ def test_projection_decode() -> None:
     conn.execute("INSERT INTO users (user_id, created_at_ms) VALUES ('u1', 1000)")
     conn.execute(
         "INSERT INTO jobs ("
-        "  job_id, user_id, root_job_id, depth, request_proto, state,"
+        "  job_id, user_id, root_job_id, depth, state,"
         "  submitted_at_ms, root_submitted_at_ms, num_tasks, is_reservation_holder"
         ") VALUES ("
-        "  '/u1/test-job', 'u1', '/u1/test-job', 0, X'', 1, 2000, 2000, 5, 0"
+        "  '/u1/test-job', 'u1', '/u1/test-job', 0, 1, 2000, 2000, 5, 0"
         ")"
     )
+    conn.execute("INSERT INTO job_config (job_id, name) VALUES ('/u1/test-job', 'test-job')")
     conn.commit()
 
     proj = JOBS.projection("job_id", "state", "num_tasks")
@@ -144,18 +149,21 @@ def _normalize_sql(sql: str) -> str:
 
 
 def _extract_schema(conn: sqlite3.Connection) -> list[tuple[str, str, str]]:
-    """Extract (type, name, normalized_sql) from sqlite_master, sorted and filtered."""
-    rows = conn.execute("SELECT type, name, sql FROM sqlite_master ORDER BY type, name").fetchall()
+    """Extract (type, name, normalized_sql) from sqlite_master and profiles.sqlite_master."""
     result = []
-    for row in rows:
-        obj_type, name, sql = row[0], row[1], row[2]
-        # Skip auto-created entries
-        if name == "sqlite_sequence":
+    for schema in ("main", "profiles"):
+        try:
+            rows = conn.execute(f"SELECT type, name, sql FROM {schema}.sqlite_master ORDER BY type, name").fetchall()
+        except sqlite3.OperationalError:
             continue
-        if name.startswith("sqlite_autoindex_"):
-            continue
-        normalized = _normalize_sql(sql) if sql else ""
-        result.append((obj_type, name, normalized))
+        for row in rows:
+            obj_type, name, sql = row[0], row[1], row[2]
+            if name == "sqlite_sequence":
+                continue
+            if name.startswith("sqlite_autoindex_"):
+                continue
+            normalized = _normalize_sql(sql) if sql else ""
+            result.append((obj_type, name, normalized))
     return sorted(result)
 
 
@@ -164,8 +172,9 @@ def _run_all_migrations() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.execute("PRAGMA foreign_keys = ON")
 
-    # Attach an in-memory auth DB (required by 0012_separate_auth_db)
+    # Attach in-memory DBs for schemas that migrations expect
     conn.execute("ATTACH ':memory:' AS auth")
+    conn.execute("ATTACH ':memory:' AS profiles")
 
     # The migration runner creates schema_migrations first
     conn.execute(

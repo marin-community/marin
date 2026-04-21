@@ -40,6 +40,12 @@ def dummy_entrypoint():
     pass
 
 
+def _sleep_entrypoint():
+    import time
+
+    time.sleep(300)
+
+
 @pytest.mark.timeout(60)
 def test_child_job_inherits_parent_env(cluster):
     """Child jobs inherit the parent's explicit env vars from JobInfo.env."""
@@ -47,19 +53,27 @@ def test_child_job_inherits_parent_env(cluster):
     resources = ResourceSpec(cpu=1, memory="1g")
     parent_env = {"MY_CUSTOM_VAR": "hello", "WANDB_API_KEY": "secret"}
 
-    parent_context = IrisContext(
-        job_id=JobName.root("test-user", "parent-job"),
-        client=cluster.client,
-    )
+    # Submit a long-running parent so the controller has a live row for its
+    # hierarchy. Child submissions are rejected with FAILED_PRECONDITION when
+    # the parent row is missing or terminated, so the parent must stay alive
+    # until the child has been submitted.
+    parent_job = cluster.client.submit(Entrypoint.from_callable(_sleep_entrypoint), "parent-job", resources)
+    try:
+        parent_context = IrisContext(
+            job_id=parent_job.job_id,
+            client=cluster.client,
+        )
 
-    with (
-        iris_ctx_scope(parent_context),
-        patch("iris.client.client.get_job_info", return_value=_parent_job_info(parent_env)),
-    ):
-        job = cluster.client.submit(entrypoint, "child-job", resources)
+        with (
+            iris_ctx_scope(parent_context),
+            patch("iris.client.client.get_job_info", return_value=_parent_job_info(parent_env)),
+        ):
+            job = cluster.client.submit(entrypoint, "child-job", resources)
 
-    job.wait(timeout=30)
-    assert job.job_id == JobName.root("test-user", "parent-job").child("child-job")
+        job.wait(timeout=30)
+        assert job.job_id == parent_job.job_id.child("child-job")
+    finally:
+        cluster.kill(parent_job)
 
 
 def _chain_job(output_file: str, child_spec: dict | None = None):

@@ -598,6 +598,10 @@ class RayProxyMethod:
         object_ref = self._ray_handle._proxy_call.remote(self._method_name, args, kwargs)
         return RayActorFuture(object_ref)
 
+    def submit(self, *args: Any, **kwargs: Any) -> ActorFuture:
+        """Long-running operation path. Same as remote() for Ray backend."""
+        return self.remote(*args, **kwargs)
+
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         object_ref = self._ray_handle._proxy_call.remote(self._method_name, args, kwargs)
         return ray.get(object_ref)

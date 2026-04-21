@@ -20,15 +20,15 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3 # Use a more recent version
+        uses: actions/checkout@v5 # Use a more recent version
 
       - name: Set up Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@v1
+        uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v1
+        uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
@@ -51,7 +51,7 @@ jobs:
         run: uv pip install -e .
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -60,7 +60,7 @@ jobs:
       - name: Run GPT-2 Small Integration Test
         run: |
           # The launch script handles TPU creation and deletion
-          uv run --package levanter --frozen python infra/launch.py --foreground --tpu_name levanter-itest-${{ github.run_id }} \
+          uv run --package marin-levanter --frozen python infra/launch.py --foreground --tpu_name levanter-itest-${{ github.run_id }} \
               --zone us-central2-b --tpu_type v4-32 --preemptible \
               --run_id ${{ github.run_id }} \
               --docker_registry ghcr --github_user ${{ github.actor }} \

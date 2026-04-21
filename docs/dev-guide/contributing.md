@@ -49,8 +49,6 @@ Before opening a pull request:
 7. Make sure the PR body references an issue with `Fixes #NNNN` or `Part of #NNNN`.
 8. After pushing, verify the relevant GitHub CI checks pass before considering the PR ready for review.
 
-For the end-to-end branch and fork workflow, follow the PR steps in [Submitting to the Marin Speedrun](../tutorials/submitting-speedrun.md#submit). The same GitHub push and PR process applies to non-speedrun changes.
-
 ## Guidelines
 
 Please see the [guidelines](../explanations/guidelines.md) for principles and practices for Marin.
@@ -58,22 +56,4 @@ Please see the [guidelines](../explanations/guidelines.md) for principles and pr
 
 # Data browser
 
-Marin comes with a [data browser](https://github.com/marin-community/marin/tree/main/data_browser) that makes it easy to
-view datasets (in various formats) and experiments produced by the executor.
-After installing the necessary dependencies, the recommended development loop is:
-
-```bash
-cd data_browser
-uv sync
-npm install
-uv run python run-dev.py --config conf/local.conf
-```
-
-If you only need the backend API, run:
-
-```bash
-cd data_browser
-DEV=true uv run python server.py --config conf/local.conf
-```
-
-For more details, see the [data browser tutorial](../tutorials/data-browser.md).
+The data browser lives in its own repository: [marin-community/data_browser](https://github.com/marin-community/data_browser). See its README for setup and development instructions.

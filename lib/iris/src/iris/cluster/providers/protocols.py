@@ -35,8 +35,12 @@ class ControllerProvider(Protocol):
         """
         ...
 
-    def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
-        """Start or discover existing controller. Returns address (host:port)."""
+    def start_controller(self, config: config_pb2.IrisClusterConfig, *, fresh: bool = False) -> str:
+        """Start or discover existing controller. Returns address (host:port).
+
+        If fresh=True, the controller starts with an empty database instead
+        of restoring from a remote checkpoint.
+        """
         ...
 
     def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:

@@ -5,6 +5,17 @@ Start with the shared practices below. Consult subproject manuals for directory-
 - `lib/levanter/AGENTS.md` — Levanter (JAX training library)
 - `lib/marin/AGENTS.md` — Marin (pipeline framework)
 - `lib/iris/AGENTS.md` — Iris (job orchestration)
+- `lib/zephyr/AGENTS.md` — Zephyr (dataset processing)
+- `lib/fray/AGENTS.md` — Fray (distributed execution)
+
+## Operational Guides
+
+For debugging and operating live infrastructure, read the relevant OPS.md:
+
+- `lib/iris/OPS.md` — cluster lifecycle, job/task management, profiling, SQL queries, GCP/CoreWeave operations
+- `lib/zephyr/OPS.md` — pipeline debugging, straggler diagnosis, coordinator queries, diagnostic patterns
+
+Zephyr OPS.md references Iris OPS.md for shared infrastructure commands — read Iris first when debugging zephyr jobs on Iris.
 
 ## Workflow Playbooks
 
@@ -28,7 +39,7 @@ uv run pyrefly
 ```
 
 - Python >=3.11. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
-- NEVER stop, restart, or bounce a Ray or Iris cluster unless the user gives express permission.
+- NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
 - In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
 

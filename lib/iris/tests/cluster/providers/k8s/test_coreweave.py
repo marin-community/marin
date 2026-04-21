@@ -23,6 +23,7 @@ from iris.cluster.providers.k8s.controller import (
     _CONTROLLER_MEMORY_REQUEST,
 )
 from iris.cluster.providers.k8s.fake import InMemoryK8sService
+from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.providers.types import (
     Labels,
     InfraError,
@@ -49,7 +50,7 @@ def _auto_ready_deployment(k8s: InMemoryK8sService, name: str, timeout: float = 
     """Wait for deployment to appear in the in-memory store, then mark it available."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        dep = k8s.get_json("deployment", name)
+        dep = k8s.get_json(K8sResource.DEPLOYMENTS, name)
         if dep is not None:
             dep.setdefault("status", {})["availableReplicas"] = dep.get("spec", {}).get("replicas", 1)
             return
@@ -125,7 +126,7 @@ def _make_cluster_config(
     )
     # Add the controller's scale group so start_controller can validate it
     sg = config.scale_groups[controller_scale_group]
-    sg.min_slices = 0
+    sg.buffer_slices = 0
     sg.max_slices = 10
     sg.slice_template.CopyFrom(
         config_pb2.SliceConfig(
@@ -148,14 +149,14 @@ def test_start_controller_creates_all_resources():
     address = provider.start_controller(cluster_config)
 
     assert address == "iris-controller-svc.iris.svc.cluster.local:10000"
-    assert k8s.get_json("secret", "iris-s3-credentials") is not None
-    assert k8s.get_json("configmap", "iris-cluster-config") is not None
-    assert k8s.get_json("deployment", "iris-controller") is not None
-    assert k8s.get_json("service", "iris-controller-svc") is not None
+    assert k8s.get_json(K8sResource.SECRETS, "iris-s3-credentials") is not None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is not None
+    assert k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is not None
+    assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is not None
 
     # Verify Deployment nodeSelector targets the configured scale group
     iris_labels = Labels("iris")
-    dep = k8s.get_json("deployment", "iris-controller")
+    dep = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
     deploy_spec = dep["spec"]
     node_selector = deploy_spec["template"]["spec"]["nodeSelector"]
     assert node_selector == {iris_labels.iris_scale_group: "cpu-erapids"}
@@ -186,8 +187,8 @@ def test_start_controller_reconciles_when_already_available():
     assert address == "iris-controller-svc.iris.svc.cluster.local:10000"
 
     # ConfigMap and Service should all be reconciled
-    assert k8s.get_json("configmap", "iris-cluster-config") is not None
-    assert k8s.get_json("service", "iris-controller-svc") is not None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is not None
+    assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is not None
 
     t.join(timeout=5)
     provider.shutdown()
@@ -206,10 +207,10 @@ def test_stop_controller_deletes_resources():
 
     provider.stop_controller(cluster_config)
 
-    assert k8s.get_json("deployment", "iris-controller") is None
-    assert k8s.get_json("service", "iris-controller-svc") is None
-    assert k8s.get_json("configmap", "iris-cluster-config") is None
-    assert k8s.get_json("secret", "iris-s3-credentials") is None
+    assert k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is None
+    assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is None
+    assert k8s.get_json(K8sResource.SECRETS, "iris-s3-credentials") is None
     provider.shutdown()
 
 
@@ -235,7 +236,7 @@ def test_stop_all_only_stops_controller():
     targets = provider.stop_all(cluster_config)
 
     assert targets == ["controller"]
-    assert k8s.get_json("deployment", "iris-controller") is None
+    assert k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is None
     provider.shutdown()
 
 
@@ -250,7 +251,7 @@ def test_stop_all_dry_run():
 
     assert targets == ["controller"]
     # Deployment should still exist
-    assert k8s.get_json("deployment", "iris-controller") is not None
+    assert k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is not None
     provider.shutdown()
 
 
@@ -269,21 +270,21 @@ def test_rbac_isolation_across_namespaces():
     provider_b.ensure_rbac()
 
     # Each gets a namespace-qualified ClusterRole and ClusterRoleBinding
-    assert k8s.get_json("clusterrole", "iris-controller-alpha") is not None
-    assert k8s.get_json("clusterrole", "iris-controller-beta") is not None
+    assert k8s.get_json(K8sResource.CLUSTER_ROLES, "iris-controller-alpha") is not None
+    assert k8s.get_json(K8sResource.CLUSTER_ROLES, "iris-controller-beta") is not None
 
     # Binding references the correct ClusterRole and namespace
-    binding_a = k8s.get_json("clusterrolebinding", "iris-controller-alpha")
+    binding_a = k8s.get_json(K8sResource.CLUSTER_ROLE_BINDINGS, "iris-controller-alpha")
     assert binding_a["roleRef"]["name"] == "iris-controller-alpha"
     assert binding_a["subjects"][0]["namespace"] == "alpha"
 
     # Stopping alpha cleans up its RBAC without affecting beta
     provider_a.stop_controller(_make_cluster_config())
 
-    assert k8s.get_json("clusterrole", "iris-controller-alpha") is None
-    assert k8s.get_json("clusterrolebinding", "iris-controller-alpha") is None
-    assert k8s.get_json("clusterrole", "iris-controller-beta") is not None
-    assert k8s.get_json("clusterrolebinding", "iris-controller-beta") is not None
+    assert k8s.get_json(K8sResource.CLUSTER_ROLES, "iris-controller-alpha") is None
+    assert k8s.get_json(K8sResource.CLUSTER_ROLE_BINDINGS, "iris-controller-alpha") is None
+    assert k8s.get_json(K8sResource.CLUSTER_ROLES, "iris-controller-beta") is not None
+    assert k8s.get_json(K8sResource.CLUSTER_ROLE_BINDINGS, "iris-controller-beta") is not None
 
     provider_a.shutdown()
     provider_b.shutdown()
@@ -323,7 +324,7 @@ def test_start_controller_deployment_command_references_config_json():
 
     provider.start_controller(cluster_config)
 
-    dep = k8s.get_json("deployment", "iris-controller")
+    dep = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
     container = dep["spec"]["template"]["spec"]["containers"][0]
     # Must reference config.json, not config.yaml
     config_args = [arg for arg in container["command"] if "config" in arg and arg.startswith("--config")]
@@ -352,7 +353,7 @@ def test_configmap_strips_kubeconfig_path():
 
     provider.start_controller(cluster_config)
 
-    cm = k8s.get_json("configmap", "iris-cluster-config")
+    cm = k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config")
     cm_data = json.loads(cm["data"]["config.json"])
     cw_config_data = cm_data.get("platform", {}).get("coreweave", {})
     assert "kubeconfig_path" not in cw_config_data
@@ -379,7 +380,7 @@ def test_controller_deployment_includes_endpoint_url():
 
     provider.start_controller(cluster_config)
 
-    dep = k8s.get_json("deployment", "iris-controller")
+    dep = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
     container = dep["spec"]["template"]["spec"]["containers"][0]
     env_by_name = {e["name"]: e for e in container["env"]}
     assert "AWS_ENDPOINT_URL" in env_by_name
@@ -453,7 +454,7 @@ def test_start_controller_detects_crash_loop_backoff():
     )
 
     def simulate_crash_loop():
-        _wait_for_condition(lambda: k8s.get_json("deployment", "iris-controller") is not None, timeout=10)
+        _wait_for_condition(lambda: k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is not None, timeout=10)
         k8s.apply_json(
             {
                 "kind": "Pod",
@@ -500,7 +501,7 @@ def test_start_controller_detects_image_pull_failure():
     cluster_config = _make_cluster_config()
 
     def simulate_image_pull_failure():
-        _wait_for_condition(lambda: k8s.get_json("deployment", "iris-controller") is not None, timeout=10)
+        _wait_for_condition(lambda: k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is not None, timeout=10)
         k8s.apply_json(
             {
                 "kind": "Pod",
@@ -548,7 +549,7 @@ def test_start_controller_crash_loop_includes_logs():
     crash_logs = "ValueError: bad config key\nTraceback ...\n"
 
     def simulate_crash_loop():
-        _wait_for_condition(lambda: k8s.get_json("deployment", "iris-controller") is not None, timeout=10)
+        _wait_for_condition(lambda: k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is not None, timeout=10)
         k8s.apply_json(
             {
                 "kind": "Pod",
@@ -603,9 +604,9 @@ def test_start_controller_skips_s3_for_gs_storage(monkeypatch):
 
     assert address == "iris-controller-svc.iris.svc.cluster.local:10000"
     # No S3 secret should be created
-    assert k8s.get_json("secret", "iris-s3-credentials") is None
+    assert k8s.get_json(K8sResource.SECRETS, "iris-s3-credentials") is None
     # Controller Deployment should have no S3 env vars
-    dep = k8s.get_json("deployment", "iris-controller")
+    dep = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
     container = dep["spec"]["template"]["spec"]["containers"][0]
     env_names = [e["name"] for e in container["env"]]
     assert "AWS_ACCESS_KEY_ID" not in env_names
@@ -620,7 +621,7 @@ def test_ensure_nodepools_scales_multihost_groups_by_num_vms():
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
     sg = cluster_config.scale_groups["h100-16x"]
-    sg.min_slices = 0
+    sg.buffer_slices = 0
     sg.max_slices = 1
     sg.slice_template.CopyFrom(
         config_pb2.SliceConfig(
@@ -632,7 +633,7 @@ def test_ensure_nodepools_scales_multihost_groups_by_num_vms():
 
     provider.ensure_nodepools(cluster_config)
 
-    h100_pool = k8s.get_json("nodepool", "iris-h100-16x")
+    h100_pool = k8s.get_json(K8sResource.NODE_POOLS, "iris-h100-16x")
     assert h100_pool is not None
     assert h100_pool["spec"]["minNodes"] == 0
     assert h100_pool["spec"]["maxNodes"] == 2
@@ -644,7 +645,7 @@ def test_ensure_nodepools_keeps_one_multihost_slice_warm():
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
     sg = cluster_config.scale_groups["h100-16x"]
-    sg.min_slices = 0
+    sg.buffer_slices = 0
     sg.max_slices = 1
     sg.slice_template.CopyFrom(
         config_pb2.SliceConfig(
@@ -672,7 +673,7 @@ def test_ensure_nodepools_keeps_one_multihost_slice_warm():
 
     provider.ensure_nodepools(cluster_config)
 
-    h100_pool = k8s.get_json("nodepool", "iris-h100-16x")
+    h100_pool = k8s.get_json(K8sResource.NODE_POOLS, "iris-h100-16x")
     assert h100_pool["spec"]["targetNodes"] == 2
     provider.shutdown()
 

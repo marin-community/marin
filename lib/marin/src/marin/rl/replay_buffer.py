@@ -129,9 +129,8 @@ class ReplayBuffer:
         current_step: int,
         current_time: float,
     ) -> bool:
-        # we can receive "future" rollouts if the training worker crashed and restarted.
-        # these can introduce unexpected non-determinism into our process, so we explicitly
-        # disallow them.
+        # We can receive "future" rollouts if the training worker crashed and restarted.
+        # These can introduce unexpected non-determinism, so we explicitly disallow them.
         min_step = current_step - self.max_rollout_step_delay
         max_step = current_step
         if rollout_step < min_step or rollout_step > max_step:

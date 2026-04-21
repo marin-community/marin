@@ -3,45 +3,45 @@
 
 """Tests for worker heartbeat timeout handling, health checks, and unified heartbeat path."""
 
+import logging
 import time
 
+import iris.cluster.controller.worker_provider as worker_provider_module
 import pytest
-from iris.cluster.controller.controller import Controller, ControllerConfig
+from iris.cluster.controller.controller import Controller, ControllerConfig, _SyncFailureAccumulator
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import (
     TASK_DETAIL_PROJECTION,
     WORKER_DETAIL_PROJECTION,
 )
-from iris.cluster.log_store import LogStore
 from tests.cluster.controller.conftest import FakeProvider
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
-    HEARTBEAT_STALENESS_THRESHOLD,
+    DispatchBatch,
     HeartbeatAction,
     HeartbeatApplyRequest,
-    DispatchBatch,
     RunningTaskEntry,
     TaskUpdate,
 )
+from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2
+from iris.rpc import controller_pb2
+from iris.rpc import job_pb2
 from rigging.timing import Duration, Timestamp
 
 
 @pytest.fixture
 def state(tmp_path):
     db = ControllerDB(db_dir=tmp_path)
-    log_store = LogStore(log_dir=tmp_path / "logs")
-    s = ControllerTransitions(db=db, log_store=log_store)
+    s = ControllerTransitions(db=db)
     yield s
-    log_store.close()
     db.close()
 
 
 @pytest.fixture
 def worker_metadata():
-    return cluster_pb2.WorkerMetadata(
+    return job_pb2.WorkerMetadata(
         hostname="test-host",
         ip_address="192.168.1.1",
         cpu_count=8,
@@ -97,7 +97,7 @@ def test_complete_heartbeat_success(state, worker_metadata):
     _register_worker(state, "worker1", worker_metadata)
     snapshot = _make_snapshot("worker1")
 
-    response = cluster_pb2.HeartbeatResponse(worker_healthy=True)
+    response = job_pb2.HeartbeatResponse(worker_healthy=True)
     result = state.complete_heartbeat(snapshot, response)
 
     assert result.action == HeartbeatAction.OK
@@ -110,39 +110,48 @@ def test_complete_heartbeat_success(state, worker_metadata):
     assert worker.healthy
 
 
-def test_fail_heartbeat_below_threshold(state, worker_metadata):
-    """RPC failure below threshold returns TRANSIENT_FAILURE, worker stays alive."""
+def test_fail_heartbeat_returns_transient_and_worker_stays_alive(state, worker_metadata):
+    """RPC failure without force_remove returns TRANSIENT_FAILURE; worker remains in DB."""
     _register_worker(state, "worker1", worker_metadata)
     snapshot = _make_snapshot("worker1")
 
     action = state.fail_heartbeat(snapshot, "connection refused")
+
     assert action == HeartbeatAction.TRANSIENT_FAILURE
-
     with state._db.snapshot() as q:
-        worker = WORKER_DETAIL_PROJECTION.decode_one(
-            q.fetchall("SELECT * FROM workers WHERE worker_id = ? LIMIT 1", ("worker1",)),
-        )
-    assert worker is not None
-    assert worker.consecutive_failures == 1
+        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("worker1",)) is not None
 
 
-def test_fail_heartbeat_at_threshold(tmp_path, worker_metadata):
-    """RPC failures at threshold return WORKER_FAILED and prune the worker."""
+def test_ping_failures_accumulate_and_terminate_inline(tmp_path, worker_metadata):
+    """Ten consecutive ping failures via _handle_failed_heartbeats terminates the worker inline."""
     db = ControllerDB(db_dir=tmp_path)
-    log_store = LogStore(log_dir=tmp_path / "logs")
-    state = ControllerTransitions(db=db, log_store=log_store, heartbeat_failure_threshold=3)
-    _register_worker(state, "worker1", worker_metadata)
-    snapshot = _make_snapshot("worker1")
+    config = ControllerConfig(remote_state_dir="file:///tmp/iris-test-state", local_state_dir=tmp_path)
+    controller = Controller(config=config, provider=FakeProvider(), db=db)
+    state = controller.state
+    _register_worker(state, "worker1", worker_metadata, address="10.0.0.1:10001")
 
-    for _i in range(2):
-        action = state.fail_heartbeat(snapshot, "timeout")
-        assert action == HeartbeatAction.TRANSIENT_FAILURE
+    batch = DispatchBatch(
+        worker_id=WorkerId("worker1"),
+        worker_address="10.0.0.1:10001",
+        running_tasks=[],
+        tasks_to_run=[],
+        tasks_to_kill=[],
+    )
+    acc = _SyncFailureAccumulator()
+    for _ in range(9):
+        controller._handle_failed_heartbeats([(batch, "connection refused")], acc)
+    assert controller._health.workers_over_threshold() == []
+    with db.snapshot() as q:
+        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("worker1",)) is not None
 
-    action = state.fail_heartbeat(snapshot, "timeout")
-    assert action == HeartbeatAction.WORKER_FAILED
-
-    with state._db.snapshot() as q:
+    # 10th failure crosses threshold — worker is terminated inline.
+    controller._handle_failed_heartbeats([(batch, "connection refused")], acc)
+    assert controller._health.workers_over_threshold() == []
+    with db.snapshot() as q:
         assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("worker1",)) is None
+
+    controller.stop()
+    db.close()
 
 
 def test_complete_heartbeat_unhealthy_worker_increments_failures(state, worker_metadata):
@@ -150,7 +159,7 @@ def test_complete_heartbeat_unhealthy_worker_increments_failures(state, worker_m
     _register_worker(state, "worker1", worker_metadata)
     snapshot = _make_snapshot("worker1")
 
-    response = cluster_pb2.HeartbeatResponse(
+    response = job_pb2.HeartbeatResponse(
         worker_healthy=False,
         health_error="disk free space 2.1% below threshold 5%",
     )
@@ -161,16 +170,13 @@ def test_complete_heartbeat_unhealthy_worker_increments_failures(state, worker_m
         assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("worker1",)) is not None
 
 
-def test_unhealthy_worker_cascades_to_tasks(tmp_path):
-    """An unhealthy worker's running tasks are marked WORKER_FAILED after threshold.
-
-    complete_heartbeat resets consecutive_failures before checking health, so we
-    use heartbeat_failure_threshold=1 to trigger removal on the first unhealthy report.
-    """
+def test_fail_workers_batch_cascades_to_running_tasks(tmp_path):
+    """When the reaper force-fails a worker via fail_workers_batch, its running
+    tasks cascade to TASK_STATE_WORKER_FAILED. This is the primitive the
+    reaper uses when the health tracker crosses threshold."""
     db = ControllerDB(db_dir=tmp_path)
-    log_store = LogStore(log_dir=tmp_path / "logs")
-    state = ControllerTransitions(db=db, log_store=log_store, heartbeat_failure_threshold=1)
-    worker_metadata = cluster_pb2.WorkerMetadata(
+    state = ControllerTransitions(db=db)
+    worker_metadata = job_pb2.WorkerMetadata(
         hostname="test-host",
         ip_address="192.168.1.1",
         cpu_count=8,
@@ -182,7 +188,7 @@ def test_unhealthy_worker_cascades_to_tasks(tmp_path):
     job_id = JobName.from_wire("/user/test-job")
     state.submit_job(
         job_id,
-        cluster_pb2.Controller.LaunchJobRequest(
+        controller_pb2.Controller.LaunchJobRequest(
             name="/user/test-job",
             replicas=1,
         ),
@@ -198,92 +204,140 @@ def test_unhealthy_worker_cascades_to_tasks(tmp_path):
                 TaskUpdate(
                     task_id=task_id,
                     attempt_id=0,
-                    new_state=cluster_pb2.TASK_STATE_RUNNING,
+                    new_state=job_pb2.TASK_STATE_RUNNING,
                 )
             ],
         )
     )
 
-    snapshot = _make_snapshot("worker1", running_tasks=[RunningTaskEntry(task_id, 0)])
-    response = cluster_pb2.HeartbeatResponse(
-        worker_healthy=False,
-        health_error="tempfile write failed",
-        tasks=[
-            cluster_pb2.Controller.WorkerTaskStatus(
-                task_id=task_id.to_wire(),
-                attempt_id=0,
-                state=cluster_pb2.TASK_STATE_RUNNING,
-            )
-        ],
-    )
-    result = state.complete_heartbeat(snapshot, response)
-    assert result.action == HeartbeatAction.WORKER_FAILED
+    result = state.fail_workers_batch(["worker1"], reason="health score exceeded threshold")
+    assert [wid for wid, _ in result.removed_workers] == [WorkerId("worker1")]
 
     with state._db.snapshot() as q:
         task = TASK_DETAIL_PROJECTION.decode_one(
             q.fetchall("SELECT * FROM tasks WHERE task_id = ? LIMIT 1", (task_id.to_wire(),)),
         )
     assert task is not None
-    assert task.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    assert task.state == job_pb2.TASK_STATE_WORKER_FAILED
 
 
-def test_reap_stale_workers_removes_old_heartbeat(tmp_path, worker_metadata):
-    """Workers restored from checkpoint with heartbeat older than the staleness
-    threshold are failed immediately by the heartbeat loop's reap pass."""
+class _FakeStub:
+    """Stub that returns a canned HeartbeatResponse."""
+
+    def __init__(self, response: job_pb2.HeartbeatResponse):
+        self._response = response
+
+    async def heartbeat(
+        self,
+        request: job_pb2.HeartbeatRequest,
+        *,
+        timeout_ms: int | None = None,
+    ) -> job_pb2.HeartbeatResponse:
+        return self._response
+
+
+class _RaisingStub:
+    def __init__(self, exc: Exception):
+        self._exc = exc
+
+    async def heartbeat(
+        self,
+        request: job_pb2.HeartbeatRequest,
+        *,
+        timeout_ms: int | None = None,
+    ) -> job_pb2.HeartbeatResponse:
+        raise self._exc
+
+
+class _FakeStubFactory:
+    def __init__(self, stub: _FakeStub):
+        self._stub = stub
+
+    def get_stub(self, address: str) -> _FakeStub:
+        return self._stub
+
+    def evict(self, address: str) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+def test_handle_failed_heartbeats_logs_diagnostics(tmp_path, worker_metadata, caplog):
     db = ControllerDB(db_dir=tmp_path)
-    log_store = LogStore(log_dir=tmp_path / "logs")
     config = ControllerConfig(remote_state_dir="file:///tmp/iris-test-state", local_state_dir=tmp_path)
     controller = Controller(config=config, provider=FakeProvider(), db=db)
     state = controller.state
+    _register_worker(state, "worker1", worker_metadata, address="10.0.0.1:10001")
 
-    # Register a worker with a timestamp well beyond the staleness threshold.
-    stale_ts = Timestamp.from_ms(Timestamp.now().epoch_ms() - HEARTBEAT_STALENESS_THRESHOLD.to_ms() - 60_000)
-    state.register_or_refresh_worker(
-        worker_id=WorkerId("stale-worker"),
-        address="10.0.0.1:10001",
-        metadata=worker_metadata,
-        ts=stale_ts,
-    )
-    # Register a fresh worker that should survive.
-    state.register_or_refresh_worker(
-        worker_id=WorkerId("fresh-worker"),
-        address="10.0.0.2:10001",
-        metadata=worker_metadata,
-        ts=Timestamp.now(),
-    )
-
-    with db.snapshot() as q:
-        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("stale-worker",)) is not None
-        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("fresh-worker",)) is not None
-
-    controller._reap_stale_workers()
-
-    with db.snapshot() as q:
-        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("stale-worker",)) is None
-        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("fresh-worker",)) is not None
-
-    log_store.close()
-    db.close()
-
-
-def test_reap_stale_workers_no_op_when_all_fresh(tmp_path, worker_metadata):
-    """When all workers have recent heartbeats, no workers are reaped."""
-    db = ControllerDB(db_dir=tmp_path)
-    log_store = LogStore(log_dir=tmp_path / "logs")
-    config = ControllerConfig(remote_state_dir="file:///tmp/iris-test-state", local_state_dir=tmp_path)
-    controller = Controller(config=config, provider=FakeProvider(), db=db)
-
-    controller.state.register_or_refresh_worker(
+    batch = DispatchBatch(
         worker_id=WorkerId("worker1"),
-        address="10.0.0.1:10001",
-        metadata=worker_metadata,
-        ts=Timestamp.now(),
+        worker_address="10.0.0.1:10001",
+        running_tasks=[RunningTaskEntry(JobName.from_wire("/user/test-job/0"), 0)],
+        tasks_to_run=[],
+        tasks_to_kill=[],
+    )
+    acc = _SyncFailureAccumulator()
+    with caplog.at_level(logging.WARNING):
+        primary_failed_workers = controller._handle_failed_heartbeats(
+            [(batch, "deadline exceeded after 12000ms")],
+            acc,
+        )
+
+    assert primary_failed_workers == []
+    assert acc.fail_count == 1
+    assert "worker=worker1" in caplog.text
+    assert "address=10.0.0.1:10001" in caplog.text
+    assert "action=transient_failure" in caplog.text
+    assert "last_success_age_s=" in caplog.text
+    assert "deadline exceeded after 12000ms" in caplog.text
+
+    controller.stop()
+
+
+def test_rpc_worker_stub_factory_default_timeout(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _RecordingClient:
+        def __init__(self, address: str, timeout_ms: int):
+            captured["address"] = address
+            captured["timeout_ms"] = timeout_ms
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(worker_provider_module, "WorkerServiceClient", _RecordingClient)
+
+    factory = RpcWorkerStubFactory()
+    factory.get_stub("host:8080")
+
+    assert captured["address"] == "http://host:8080"
+    assert captured["timeout_ms"] == 10_000
+
+    factory.close()
+
+
+def test_heartbeat_failure_error_includes_rpc_context():
+    provider = WorkerProvider(
+        stub_factory=_FakeStubFactory(_RaisingStub(RuntimeError("deadline exceeded"))),
+    )
+    batch = DispatchBatch(
+        worker_id=WorkerId("w1"),
+        worker_address="host:8080",
+        running_tasks=[RunningTaskEntry(JobName.from_wire("/user/test-job/0"), 0)],
+        tasks_to_run=[],
+        tasks_to_kill=[],
     )
 
-    controller._reap_stale_workers()
+    results = provider.sync([batch])
 
-    with db.snapshot() as q:
-        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("worker1",)) is not None
+    assert len(results) == 1
+    _, apply_req, error = results[0]
+    assert apply_req is None
+    assert error is not None
+    assert "heartbeat RPC failed:" in error
+    assert "worker=w1" in error
+    assert "address=host:8080" in error
+    assert "expected=1" in error
 
-    log_store.close()
-    db.close()
+    provider.close()

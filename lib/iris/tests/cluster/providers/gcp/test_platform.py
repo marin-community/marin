@@ -327,18 +327,18 @@ def test_gcp_validate_vm_slice_config_requires_machine_type():
         _validate_slice_config(cfg)
 
 
-def test_gcp_validate_vm_slice_config_rejects_preemptible():
-    """VM slice mode rejects preemptible instances."""
+def test_gcp_validate_vm_slice_config_rejects_non_on_demand():
+    """VM slice mode rejects non-on-demand capacity types."""
     cfg = config_pb2.SliceConfig(
         name_prefix="test",
         num_vms=1,
-        preemptible=True,
+        capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
     cfg.gcp.machine_type = "n2-standard-4"
 
-    with pytest.raises(ValueError, match="does not support preemptible"):
+    with pytest.raises(ValueError, match="only supports capacity_type on-demand"):
         _validate_slice_config(cfg)
 
 
@@ -366,6 +366,7 @@ def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -408,6 +409,7 @@ def test_gcp_create_vm_slice_mode_with_long_prefix_uses_valid_slice_id():
         name_prefix="smoke-cpu_vm_e2_standard_4_ondemand-europe-west4-b",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -438,6 +440,7 @@ def test_gcp_vm_slice_os_login_sets_metadata_and_uses_gcloud_default_user():
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -467,6 +470,7 @@ def test_gcp_vm_slice_os_login_uses_service_account_impersonation():
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -475,7 +479,7 @@ def test_gcp_vm_slice_os_login_uses_service_account_impersonation():
 
     handle = platform.create_slice(cfg)
     status = handle.describe()
-    assert status.workers[0]._remote_exec.impersonate_service_account == cfg.gcp.service_account
+    assert status.workers[0]._remote_exec.impersonate_service_account is None
 
 
 def test_gcp_vm_slice_os_login_prefers_explicit_ssh_impersonation_account():
@@ -492,6 +496,7 @@ def test_gcp_vm_slice_os_login_prefers_explicit_ssh_impersonation_account():
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -598,6 +603,7 @@ def test_gcp_list_slices_skips_inactive_vm_instances():
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -625,6 +631,7 @@ def test_gcp_list_slices_preserves_vm_slice_discovery():
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -857,7 +864,7 @@ def test_gcp_tpu_slice_os_login_resolves_user_from_service_account():
         handle = platform.create_slice(cfg)
         status = handle.describe()
 
-    resolve_user.assert_called_with(impersonate_service_account=cfg.gcp.service_account)
+    resolve_user.assert_called_with(impersonate_service_account=None)
     assert status.workers[0]._remote_exec.user == "svc-user"
 
 
@@ -923,12 +930,10 @@ def test_gcp_tpu_slice_os_login_prefers_external_ip_for_direct_ssh():
 
 
 # =============================================================================
-# Section 6: VM Slice Bootstrap Tests
+# Section 6: TPU/VM Bootstrap Tests
 #
-# Tests for _run_vm_slice_bootstrap with split timeouts and health probing.
+# Tests for bootstrap timeout sizing, diagnostics, and VM health probing.
 # =============================================================================
-
-
 def _make_vm_slice_for_bootstrap(
     gcp_service: InMemoryGcpService,
     zone: str = "us-central2-b",

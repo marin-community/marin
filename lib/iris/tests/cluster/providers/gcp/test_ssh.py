@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import threading
 from unittest.mock import patch
 
@@ -50,19 +51,24 @@ def provisioner():
     return OsLoginKeyProvisioner()
 
 
-@patch("iris.cluster.providers.gcp.ssh.subprocess.run")
+@patch(
+    "iris.cluster.providers.gcp.ssh.subprocess.run",
+    return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+)
 @patch("iris.cluster.providers.gcp.ssh.os.path.exists", return_value=False)
 @patch("iris.cluster.providers.gcp.ssh.os.makedirs")
 def test_ensure_key_generates_and_registers(mock_makedirs, mock_exists, mock_run, provisioner):
     provisioner.ensure_key("/tmp/test_key", "sa@project.iam.gserviceaccount.com")
 
-    assert mock_run.call_count == 2
+    # keygen + purge list + add = 3 calls
+    assert mock_run.call_count == 3
     keygen_call = mock_run.call_args_list[0]
     assert "ssh-keygen" in keygen_call.args[0]
     assert "/tmp/test_key" in keygen_call.args[0]
 
-    register_call = mock_run.call_args_list[1]
-    assert "os-login" in register_call.args[0]
+    register_call = mock_run.call_args_list[2]
+    assert "ssh-keys" in register_call.args[0]
+    assert "add" in register_call.args[0]
     assert "--impersonate-service-account=sa@project.iam.gserviceaccount.com" in register_call.args[0]
 
 
@@ -77,7 +83,10 @@ def test_ensure_key_skips_when_valid(mock_exists, mock_run, provisioner):
     mock_run.assert_not_called()
 
 
-@patch("iris.cluster.providers.gcp.ssh.subprocess.run")
+@patch(
+    "iris.cluster.providers.gcp.ssh.subprocess.run",
+    return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+)
 @patch("iris.cluster.providers.gcp.ssh.os.path.exists", return_value=True)
 @patch("iris.cluster.providers.gcp.ssh.time.monotonic", return_value=100000.0)
 def test_ensure_key_reregisters_on_expiry(mock_monotonic, mock_exists, mock_run, provisioner):
@@ -86,23 +95,30 @@ def test_ensure_key_reregisters_on_expiry(mock_monotonic, mock_exists, mock_run,
 
     provisioner.ensure_key("/tmp/test_key", "sa@project.iam.gserviceaccount.com")
 
-    # Should only register (not keygen, since key exists)
-    assert mock_run.call_count == 1
-    assert "os-login" in mock_run.call_args.args[0]
+    # Should only register (not keygen, since key exists): purge list + add = 2 calls
+    assert mock_run.call_count == 2
+    assert "add" in mock_run.call_args.args[0]
 
 
-@patch("iris.cluster.providers.gcp.ssh.subprocess.run")
+@patch(
+    "iris.cluster.providers.gcp.ssh.subprocess.run",
+    return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+)
 @patch("iris.cluster.providers.gcp.ssh.os.path.exists", return_value=False)
 @patch("iris.cluster.providers.gcp.ssh.os.makedirs")
 def test_ensure_key_no_impersonate_sa(mock_makedirs, mock_exists, mock_run, provisioner):
     provisioner.ensure_key("/tmp/test_key", None)
 
-    register_call = mock_run.call_args_list[1]
+    register_call = mock_run.call_args_list[2]
     cmd = register_call.args[0]
+    assert "add" in cmd
     assert not any("--impersonate-service-account" in arg for arg in cmd)
 
 
-@patch("iris.cluster.providers.gcp.ssh.subprocess.run")
+@patch(
+    "iris.cluster.providers.gcp.ssh.subprocess.run",
+    return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+)
 @patch("iris.cluster.providers.gcp.ssh.os.path.exists", return_value=False)
 @patch("iris.cluster.providers.gcp.ssh.os.makedirs")
 def test_ensure_key_thread_safety(mock_makedirs, mock_exists, mock_run, provisioner):
@@ -156,7 +172,63 @@ def test_ssh_key_file_os_login_provisions(mock_provisioner):
 
 
 @patch("iris.cluster.providers.gcp.ssh._os_login_key_provisioner")
+def test_ssh_key_file_os_login_uses_config_sa_as_fallback(mock_provisioner):
+    """When no explicit SA is passed, ssh_key_file falls back to the config's impersonate_service_account."""
+    cfg = _os_login_config()
+    cfg.impersonate_service_account = "sa-from-config@project.iam.gserviceaccount.com"
+    result = ssh_key_file(cfg)
+    assert result is not None
+    mock_provisioner.ensure_key.assert_called_once()
+    call_args = mock_provisioner.ensure_key.call_args
+    assert call_args.args[1] == "sa-from-config@project.iam.gserviceaccount.com"
+
+
+@patch("iris.cluster.providers.gcp.ssh._os_login_key_provisioner")
 def test_ssh_key_file_none_config(mock_provisioner):
     result = ssh_key_file(None)
     assert result is None
     mock_provisioner.ensure_key.assert_not_called()
+
+
+# -- _purge_stale_keys --------------------------------------------------------
+
+
+@patch("iris.cluster.providers.gcp.ssh.time.time", return_value=1_700_000_000.0)
+@patch("iris.cluster.providers.gcp.ssh.subprocess.run")
+def test_purge_stale_keys_removes_expired_and_no_expiry(mock_run, mock_time, provisioner):
+    """Expired keys and keys with no expiration (0) are removed; future keys are kept."""
+    now_us = int(1_700_000_000.0 * 1e6)
+    expired_us = now_us - 1_000_000
+    future_us = now_us + 86_400_000_000
+
+    list_output = "\n".join(
+        [
+            f"SHA256:expired {expired_us}",
+            "SHA256:no_expiry",  # no second column → expirationTimeUsec absent
+            "SHA256:no_expiry_zero 0",
+            f"SHA256:future {future_us}",
+        ]
+    )
+    mock_run.return_value = subprocess.CompletedProcess([], 0, stdout=list_output, stderr="")
+
+    provisioner._purge_stale_keys("sa@test.iam.gserviceaccount.com")
+
+    # list call + 3 removes (expired, no_expiry, no_expiry_zero) = 4 calls total
+    assert mock_run.call_count == 4
+    remove_calls = mock_run.call_args_list[1:]
+    removed_keys = {arg for c in remove_calls for arg in c.args[0] if arg.startswith("--key=")}
+    assert removed_keys == {
+        "--key=SHA256:expired",
+        "--key=SHA256:no_expiry",
+        "--key=SHA256:no_expiry_zero",
+    }
+
+
+@patch("iris.cluster.providers.gcp.ssh.subprocess.run")
+def test_purge_stale_keys_list_failure_is_nonfatal(mock_run, provisioner):
+    """If listing keys fails, the purge logs a warning and returns without error."""
+    mock_run.return_value = subprocess.CompletedProcess([], 1, stdout="", stderr="some error")
+
+    provisioner._purge_stale_keys(None)  # should not raise
+
+    assert mock_run.call_count == 1  # only the list call

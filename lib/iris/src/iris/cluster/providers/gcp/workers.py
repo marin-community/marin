@@ -11,9 +11,9 @@ and TPU slices via GcpService.
 from __future__ import annotations
 
 import logging
-import subprocess
 import threading
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 import time
 import urllib.error
 import urllib.request
@@ -32,6 +32,8 @@ from iris.cluster.providers.gcp.handles import (
     _build_gce_resource_name,
 )
 from iris.cluster.providers.gcp.service import (
+    CAPACITY_TYPE_LABEL,
+    CAPACITY_TYPE_RESERVED_VALUE,
     CloudGcpService,
     GcpService,
     TpuCreateRequest,
@@ -45,6 +47,7 @@ from iris.cluster.providers.types import (
     generate_slice_suffix,
 )
 from iris.cluster.service_mode import ServiceMode
+from iris.cluster.types import get_tpu_topology
 from iris.cluster.worker.env_probe import construct_worker_id
 from iris.cluster.providers.remote_exec import GceRemoteExec
 from iris.rpc import config_pb2
@@ -64,6 +67,14 @@ def _spawn_bootstrap_thread(
             bootstrap_fn()
         except Exception as e:
             logger.error("Bootstrap failed for slice %s: %s", handle.slice_id, e)
+            try:
+                handle.cleanup_bootstrap_failure()
+            except Exception as cleanup_error:
+                logger.warning(
+                    "Failed bootstrap cleanup for slice %s: %s",
+                    handle.slice_id,
+                    cleanup_error,
+                )
             with handle._bootstrap_lock:
                 handle._bootstrap_state = CloudSliceState.FAILED
 
@@ -74,6 +85,94 @@ DEFAULT_MACHINE_TYPE = "n2-standard-4"
 DEFAULT_BOOT_DISK_SIZE_GB = 50
 # pd-ssd provides ~6000 IOPS vs ~38 on pd-standard, critical for controller DB
 DEFAULT_BOOT_DISK_TYPE = "pd-ssd"
+DEFAULT_TPU_CLOUD_READY_TIMEOUT = 600.0
+DEFAULT_TPU_BOOTSTRAP_TIMEOUT = 600.0
+RESERVED_TPU_ASSIGN_TIMEOUT = 4 * 60 * 60.0
+RESERVED_TPU_PROVISION_TIMEOUT = 2 * 60 * 60.0
+TPU_BOOTSTRAP_PROGRESS_LOG_INTERVAL = 60.0
+TPU_BOOTSTRAP_DIAGNOSTIC_LIMIT = 8
+
+
+def _default_tpu_cloud_ready_timeout(worker_count: int) -> float:
+    """Return a cloud READY timeout sized for TPU pod startup."""
+    if worker_count >= 256:
+        return 1800.0
+    if worker_count >= 64:
+        return 900.0
+    return DEFAULT_TPU_CLOUD_READY_TIMEOUT
+
+
+def _default_tpu_bootstrap_timeout(worker_count: int) -> float:
+    """Return a worker health timeout sized for TPU pod bootstrap."""
+    if worker_count >= 256:
+        return 1800.0
+    if worker_count >= 64:
+        return 900.0
+    return DEFAULT_TPU_BOOTSTRAP_TIMEOUT
+
+
+def _summarize_missing_workers(
+    missing_workers: list[str],
+    last_probe_errors: dict[str, str],
+    limit: int = TPU_BOOTSTRAP_DIAGNOSTIC_LIMIT,
+) -> str:
+    """Summarize missing TPU workers and their last probe errors for logs."""
+    if not missing_workers:
+        return "none"
+
+    rendered: list[str] = []
+    for worker_id in missing_workers[:limit]:
+        probe_error = last_probe_errors.get(worker_id)
+        if probe_error:
+            rendered.append(f"{worker_id} ({probe_error})")
+        else:
+            rendered.append(worker_id)
+
+    if len(missing_workers) > limit:
+        rendered.append(f"... +{len(missing_workers) - limit} more")
+
+    return ", ".join(rendered)
+
+
+def _wait_for_queued_resource_activation(
+    gcp_service: GcpService,
+    handle: GcpSliceHandle,
+    poll_interval: float,
+) -> None:
+    """Wait for a reserved TPU queued resource to be assigned and provisioned."""
+    assign_deadline = Deadline.from_now(Duration.from_seconds(RESERVED_TPU_ASSIGN_TIMEOUT))
+    provision_deadline: Deadline | None = None
+
+    while True:
+        qr = gcp_service.queued_resource_describe(handle.slice_id, handle.zone)
+        if qr is None:
+            raise InfraError(f"Queued resource {handle.slice_id} not found")
+        if qr.state == "ACTIVE":
+            logger.info("Queued resource %s is ACTIVE, proceeding to TPU bootstrap", handle.slice_id)
+            return
+        if qr.state in ("FAILED", "SUSPENDED", "DELETING"):
+            raise InfraError(f"Queued resource {handle.slice_id} entered state {qr.state}")
+
+        if qr.state == "PROVISIONING":
+            if provision_deadline is None:
+                logger.info(
+                    "Queued resource %s entered PROVISIONING; allowing up to %ss for ACTIVE",
+                    handle.slice_id,
+                    RESERVED_TPU_PROVISION_TIMEOUT,
+                )
+                provision_deadline = Deadline.from_now(Duration.from_seconds(RESERVED_TPU_PROVISION_TIMEOUT))
+            elif provision_deadline.expired():
+                raise InfraError(
+                    f"Queued resource {handle.slice_id} did not become ACTIVE "
+                    f"within {RESERVED_TPU_PROVISION_TIMEOUT}s after entering PROVISIONING"
+                )
+        elif assign_deadline.expired():
+            raise InfraError(
+                f"Queued resource {handle.slice_id} did not enter PROVISIONING " f"within {RESERVED_TPU_ASSIGN_TIMEOUT}s"
+            )
+
+        logger.info("Queued resource %s is %s, waiting...", handle.slice_id, qr.state)
+        time.sleep(poll_interval)
 
 
 def _gcp_instance_metadata(
@@ -101,8 +200,8 @@ def _validate_slice_config(config: config_pb2.SliceConfig) -> None:
             missing.append("gcp.machine_type")
         if config.num_vms != 1:
             violations.append("GCP VM slice mode requires num_vms=1")
-        if config.preemptible:
-            violations.append("GCP VM slice mode does not support preemptible instances")
+        if config.capacity_type != config_pb2.CAPACITY_TYPE_ON_DEMAND:
+            violations.append("GCP VM slice mode only supports capacity_type on-demand")
         if config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
             violations.append("GCP VM slice mode requires accelerator_type=cpu")
         if config.accelerator_variant:
@@ -236,7 +335,7 @@ class GcpWorkerProvider:
             zone=zone,
             vm_name=config.name,
             ssh_key_file=ssh_key_file(self._ssh_config),
-            impersonate_service_account=ssh_impersonate_service_account(self._ssh_config, request.service_account),
+            impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
         )
 
         return GcpStandaloneWorkerHandle(
@@ -284,10 +383,19 @@ class GcpWorkerProvider:
     ) -> GcpSliceHandle:
         """Create a TPU slice via GcpService.
 
-        When worker_config is provided the bootstrap script is passed as TPU
-        metadata (startup-script) so each worker VM self-bootstraps on first
-        boot. Bootstrap progress is monitored via health endpoint polling.
+        Routes to the queued resources API for reserved capacity, or the
+        standard tpu-vm create API for preemptible/on-demand.
         """
+        if config.capacity_type == config_pb2.CAPACITY_TYPE_RESERVED:
+            return self._create_reserved_tpu_slice(config, worker_config)
+        return self._create_standard_tpu_slice(config, worker_config)
+
+    def _create_standard_tpu_slice(
+        self,
+        config: config_pb2.SliceConfig,
+        worker_config: config_pb2.WorkerConfig | None = None,
+    ) -> GcpSliceHandle:
+        """Create a TPU slice via gcloud compute tpus tpu-vm create."""
         gcp = config.gcp
         slice_id = _build_gce_resource_name(config.name_prefix, generate_slice_suffix())
 
@@ -303,10 +411,11 @@ class GcpWorkerProvider:
             zone=gcp.zone,
             accelerator_type=config.accelerator_variant,
             runtime_version=gcp.runtime_version,
+            capacity_type=config.capacity_type,
             labels=dict(config.labels),
             metadata=metadata,
-            preemptible=config.preemptible,
             service_account=gcp.service_account or None,
+            network="default",
         )
 
         logger.info("Creating TPU slice: %s (type=%s, zone=%s)", slice_id, config.accelerator_variant, gcp.zone)
@@ -338,6 +447,81 @@ class GcpWorkerProvider:
 
         return handle
 
+    def _create_reserved_tpu_slice(
+        self,
+        config: config_pb2.SliceConfig,
+        worker_config: config_pb2.WorkerConfig | None = None,
+    ) -> GcpSliceHandle:
+        """Create a TPU slice via gcloud alpha compute tpus queued-resources create."""
+        gcp = config.gcp
+        slice_id = _build_gce_resource_name(config.name_prefix, generate_slice_suffix())
+
+        # Add capacity-type label for slice rediscovery on controller restart
+        labels = dict(config.labels)
+        labels[CAPACITY_TYPE_LABEL] = CAPACITY_TYPE_RESERVED_VALUE
+
+        metadata = _gcp_instance_metadata(self._ssh_config)
+        if worker_config:
+            worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
+            worker_config.slice_id = slice_id
+            startup_script = build_worker_bootstrap_script(worker_config)
+            metadata["startup-script"] = startup_script
+
+        request = TpuCreateRequest(
+            name=slice_id,
+            zone=gcp.zone,
+            accelerator_type=config.accelerator_variant,
+            runtime_version=gcp.runtime_version,
+            capacity_type=config.capacity_type,
+            labels=labels,
+            metadata=metadata,
+            service_account=gcp.service_account or None,
+            network="default",
+        )
+
+        logger.info(
+            "Creating reserved TPU slice (queued resource): %s (type=%s, zone=%s)",
+            slice_id,
+            config.accelerator_variant,
+            gcp.zone,
+        )
+        try:
+            self._gcp.queued_resource_create(request)
+        except InfraError:
+            self._best_effort_delete_queued_resource(slice_id, gcp.zone)
+            raise
+
+        handle = GcpSliceHandle(
+            _slice_id=slice_id,
+            _zone=gcp.zone,
+            _project_id=self._project_id,
+            _labels=labels,
+            _created_at=Timestamp.now(),
+            _label_prefix=self._label_prefix,
+            _accelerator_variant=config.accelerator_variant,
+            _gcp_service=self._gcp,
+            _ssh_config=self._ssh_config,
+            _service_account=request.service_account,
+            _bootstrapping=worker_config is not None,
+            _is_queued_resource=True,
+        )
+
+        if worker_config:
+            _spawn_bootstrap_thread(
+                handle,
+                lambda: _run_tpu_bootstrap(self._gcp, self._project_id, handle, worker_config),
+            )
+
+        return handle
+
+    def _best_effort_delete_queued_resource(self, name: str, zone: str) -> None:
+        """Try to delete a queued resource that may have been partially created."""
+        logger.info("Best-effort cleanup of queued resource %s in %s", name, zone)
+        try:
+            self._gcp.queued_resource_delete(name, zone)
+        except InfraError as e:
+            logger.warning("Cleanup of queued resource %s failed: %s", name, e)
+
     def _create_vm_slice(
         self,
         config: config_pb2.SliceConfig,
@@ -360,6 +544,7 @@ class GcpWorkerProvider:
         startup_script: str | None = None
         if worker_config:
             worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
+            worker_config.slice_id = slice_id
             worker_config.worker_id = construct_worker_id(slice_id, 0)
             startup_script = build_worker_bootstrap_script(worker_config)
 
@@ -494,6 +679,33 @@ class GcpWorkerProvider:
                     _ssh_config=self._ssh_config,
                     _service_account=tpu.service_account,
                     _state=tpu.state,
+                    _is_queued_resource=tpu.labels.get(CAPACITY_TYPE_LABEL) == CAPACITY_TYPE_RESERVED_VALUE,
+                )
+            )
+
+        # Discover queued resources (reserved TPUs) not yet visible as TPU VMs.
+        # These are in QUEUED/PROVISIONING/WAITING_FOR_RESOURCES and need handles
+        # so the controller doesn't orphan them on restart.
+        tpu_names = {h.slice_id for h in handles}
+        qr_infos = self._gcp.queued_resource_list(zones=[], labels=managed_labels)
+        for qr in qr_infos:
+            if qr.name in tpu_names:
+                continue
+            if qr.state in ("FAILED", "SUSPENDED", "DELETING"):
+                continue
+            handles.append(
+                GcpSliceHandle(
+                    _slice_id=qr.name,
+                    _zone=qr.zone,
+                    _project_id=self._project_id,
+                    _labels=qr.labels
+                    or {CAPACITY_TYPE_LABEL: CAPACITY_TYPE_RESERVED_VALUE, self._iris_labels.iris_managed: "true"},
+                    _created_at=Timestamp.now(),
+                    _label_prefix=self._label_prefix,
+                    _accelerator_variant="",
+                    _gcp_service=self._gcp,
+                    _ssh_config=self._ssh_config,
+                    _is_queued_resource=True,
                 )
             )
 
@@ -536,7 +748,7 @@ class GcpWorkerProvider:
                 zone=vm.zone,
                 vm_name=vm.name,
                 ssh_key_file=ssh_key_file(self._ssh_config),
-                impersonate_service_account=ssh_impersonate_service_account(self._ssh_config, vm.service_account),
+                impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
             )
             handles.append(
                 GcpStandaloneWorkerHandle(
@@ -568,17 +780,52 @@ def _run_tpu_bootstrap(
     handle: GcpSliceHandle,
     worker_config: config_pb2.WorkerConfig,
     poll_interval: float = 10.0,
-    cloud_ready_timeout: float = 600.0,
-    bootstrap_timeout: float = 600.0,
+    cloud_ready_timeout: float | None = None,
+    bootstrap_timeout: float | None = None,
+    queued_resource_poll_interval: float = 60.0,
 ) -> None:
     """Monitor TPU startup-script bootstrap via health endpoint polling.
 
+    Phase 0 (reserved only): Wait for queued resource to become ACTIVE.
     Phase 1: Wait for cloud READY with all worker IPs.
     Phase 2: Poll worker health endpoints until all respond healthy.
     On timeout: query Cloud Logging for [iris-init] entries for diagnostics.
     """
-    deadline = Deadline.from_now(Duration.from_seconds(cloud_ready_timeout))
-    while not deadline.expired():
+    try:
+        worker_count = get_tpu_topology(handle._accelerator_variant).vm_count
+    except ValueError as e:
+        raise InfraError(
+            f"Unknown TPU topology '{handle._accelerator_variant}' for slice {handle.slice_id}. "
+            "Cannot size bootstrap timeouts."
+        ) from e
+
+    effective_cloud_ready_timeout = cloud_ready_timeout
+    if effective_cloud_ready_timeout is None:
+        effective_cloud_ready_timeout = _default_tpu_cloud_ready_timeout(worker_count)
+
+    effective_bootstrap_timeout = bootstrap_timeout
+    if effective_bootstrap_timeout is None:
+        effective_bootstrap_timeout = _default_tpu_bootstrap_timeout(worker_count)
+
+    logger.info(
+        "Using TPU bootstrap timeouts for %s: cloud_ready_timeout=%ss bootstrap_timeout=%ss worker_count=%d",
+        handle.slice_id,
+        effective_cloud_ready_timeout,
+        effective_bootstrap_timeout,
+        worker_count,
+    )
+
+    # Phase 0: If this is a queued resource (reserved TPU), wait for ACTIVE
+    # before polling the TPU VM state. The queued resource may sit in QUEUED
+    # or PROVISIONING for an extended period.
+    if handle.is_queued_resource:
+        _wait_for_queued_resource_activation(gcp_service, handle, queued_resource_poll_interval)
+
+    # Phase 1: once the QR is ACTIVE (or immediately for non-queued TPUs),
+    # wait for the TPU VM to reach READY with all worker IPs.
+    cloud_deadline = Deadline.from_now(Duration.from_seconds(effective_cloud_ready_timeout))
+
+    while not cloud_deadline.expired():
         cloud_status = handle._describe_cloud()
         if cloud_status.state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
             raise InfraError(f"Slice {handle.slice_id} entered {cloud_status.state} while waiting for cloud READY")
@@ -594,12 +841,14 @@ def _run_tpu_bootstrap(
             )
         time.sleep(poll_interval)
     else:
-        raise InfraError(f"Slice {handle.slice_id} did not reach cloud READY within {cloud_ready_timeout}s")
+        raise InfraError(f"Slice {handle.slice_id} did not reach cloud READY within {effective_cloud_ready_timeout}s")
 
     workers = cloud_status.workers
     worker_addrs = [(w.worker_id, w.internal_address) for w in workers]
     healthy_workers: set[str] = set()
-    health_deadline = Deadline.from_now(Duration.from_seconds(bootstrap_timeout))
+    last_probe_errors: dict[str, str] = {}
+    health_deadline = Deadline.from_now(Duration.from_seconds(effective_bootstrap_timeout))
+    next_progress_log = time.monotonic() + TPU_BOOTSTRAP_PROGRESS_LOG_INTERVAL
 
     logger.info(
         "Polling health endpoints for %d workers in slice %s",
@@ -618,15 +867,34 @@ def _run_tpu_bootstrap(
                 )
                 if resp.status == 200:
                     healthy_workers.add(worker_id)
+                    last_probe_errors.pop(worker_id, None)
                     logger.info("Worker %s is healthy", worker_id)
-            except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
-                pass
+            except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError) as e:
+                last_probe_errors[worker_id] = str(e).strip() or type(e).__name__
 
         if len(healthy_workers) == len(worker_addrs):
             break
+        if time.monotonic() >= next_progress_log:
+            missing_workers = [worker_id for worker_id, _addr in worker_addrs if worker_id not in healthy_workers]
+            logger.info(
+                "TPU bootstrap progress for %s: %d/%d workers healthy; missing=%s",
+                handle.slice_id,
+                len(healthy_workers),
+                len(worker_addrs),
+                _summarize_missing_workers(missing_workers, last_probe_errors),
+            )
+            next_progress_log = time.monotonic() + TPU_BOOTSTRAP_PROGRESS_LOG_INTERVAL
         time.sleep(poll_interval)
     else:
-        _fetch_bootstrap_logs(project_id, handle)
+        missing_workers = [worker_id for worker_id, _addr in worker_addrs if worker_id not in healthy_workers]
+        logger.error(
+            "TPU bootstrap stalled for %s: %d/%d workers healthy; missing=%s",
+            handle.slice_id,
+            len(healthy_workers),
+            len(worker_addrs),
+            _summarize_missing_workers(missing_workers, last_probe_errors),
+        )
+        _fetch_bootstrap_logs(gcp_service, handle)
         raise InfraError(
             f"TPU slice {handle.slice_id} bootstrap timed out: "
             f"{len(healthy_workers)}/{len(worker_addrs)} workers healthy"
@@ -637,38 +905,21 @@ def _run_tpu_bootstrap(
         handle._bootstrap_state = CloudSliceState.READY
 
 
-def _fetch_bootstrap_logs(project_id: str, handle: GcpSliceHandle) -> None:
+def _fetch_bootstrap_logs(gcp_service: GcpService, handle: GcpSliceHandle) -> None:
     """Fetch [iris-init] log entries from Cloud Logging for diagnostics."""
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+    cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
     log_filter = (
         f'resource.type="gce_instance" '
         f'textPayload:"[iris-init]" '
-        f'labels."compute.googleapis.com/resource_name":"{handle._slice_id}"'
+        f'labels."compute.googleapis.com/resource_name":"{handle._slice_id}" '
+        f'timestamp>="{cutoff_str}"'
     )
-    cmd = [
-        "gcloud",
-        "logging",
-        "read",
-        log_filter,
-        f"--project={project_id}",
-        "--freshness=30m",
-        "--limit=200",
-        "--format=value(textPayload)",
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    except subprocess.TimeoutExpired:
-        logger.warning("Cloud Logging query timed out for %s", handle.slice_id)
-        return
-
-    if result.returncode == 0 and result.stdout.strip():
-        logger.error("Bootstrap logs for %s:\n%s", handle.slice_id, result.stdout)
+    texts = gcp_service.logging_read(log_filter, limit=200)
+    if texts:
+        logger.error("Bootstrap logs for %s:\n%s", handle.slice_id, "\n".join(texts))
     else:
-        logger.warning(
-            "Could not fetch Cloud Logging for %s (rc=%d): %s",
-            handle.slice_id,
-            result.returncode,
-            result.stderr.strip(),
-        )
+        logger.warning("No Cloud Logging entries found for %s", handle.slice_id)
 
 
 def _probe_worker_health(address: str, port: int) -> bool:

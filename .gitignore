@@ -212,9 +212,6 @@ archive/
 # wandb logs
 wandb
 
-# Generated leaderboard data
-marin/speedrun/static/data/runs.json
-
 # Ignore generated credentials from google-github-actions/auth
 gha-creds-*.json
 
@@ -238,7 +235,4 @@ scr/*
 .codex
 .entire
 
-# Generated protobuf and Connect RPC files (rebuilt by hatch build hook)
-lib/iris/src/iris/rpc/*_pb2.py
-lib/iris/src/iris/rpc/*_pb2.pyi
-lib/iris/src/iris/rpc/*_connect.py
+.worktrees

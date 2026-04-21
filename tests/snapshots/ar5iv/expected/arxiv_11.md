@@ -79,7 +79,8 @@ and the corresponding transport cross sections are given by
 
 $$\\sigma^{tr}\_{nl\\rightarrow nl^{\\prime}}=\\int d\\Omega(1-\\cos\\theta)\\frac{d\\sigma\_{nl\\rightarrow nl^{\\prime}}}{d\\Omega}\\quad.$$  
 
-(12)   
+(12)
+
 In order to treat the long distance behaviour of the $\\mu p+$H interaction properly, the effect of electron screening must be taken into account. This is done by multiplying the matrix elements $\\langle L^{\\prime}l^{\\prime}JM|V|LlJM\\rangle$ in Eq. (6) by the screening factor
 
 $$F(R)=(1+2R+2R^{2})e^{-2R}$$  

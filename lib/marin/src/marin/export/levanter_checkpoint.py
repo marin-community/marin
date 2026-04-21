@@ -7,14 +7,15 @@ from dataclasses import dataclass
 from typing import Any
 
 import levanter.infra.cli_helpers
-from fray.v1.cluster import (
+from fray.v2 import current_client
+from fray.v2.types import (
     CpuConfig,
     Entrypoint,
-    EnvironmentConfig,
+    GpuConfig,
     JobRequest,
     ResourceConfig,
     TpuConfig,
-    current_cluster,
+    create_environment,
 )
 from levanter.checkpoint import discover_latest_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef
@@ -30,10 +31,18 @@ from marin.execution.executor import (
     ensure_versioned,
     this_output_path,
 )
-from marin.training.training import _add_default_env_variables, _add_run_env_variables
+from marin.training.run_environment import add_run_env_variables
+from marin.training.training import _add_default_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
+
+
+# Default CPU resources for checkpoint export. The HF conversion streams one weight tensor
+# at a time, so a moderate RAM/disk budget is sufficient; `ResourceConfig.with_cpu()`'s
+# 128m/1g defaults are too small though.
+def _default_export_resources() -> ResourceConfig:
+    return ResourceConfig.with_cpu(cpu=8, ram="64g", disk="64g")
 
 
 @dataclass(frozen=True)
@@ -45,7 +54,7 @@ class ConvertCheckpointStepConfig:
     checkpoint_path: str | InputName | VersionedValue[str]
     trainer: TrainerConfig
     model: LmConfig
-    resources: ResourceConfig = dataclasses.field(default_factory=ResourceConfig.with_cpu)
+    resources: ResourceConfig = dataclasses.field(default_factory=_default_export_resources)
     output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore[arg-type]
     upload_to_hf: bool | str | RepoRef = False
     tokenizer: str | None = None
@@ -89,7 +98,7 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
         {},
         default_launch_config.env_for_accel(config.resources.device.variant),
     )
-    env = _add_run_env_variables(env)
+    env = add_run_env_variables(env)
 
     def convert_task():
         export_lm_to_hf.main(convert_config)
@@ -101,16 +110,21 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
     if isinstance(config.resources.device, TpuConfig):
         assert config.resources.replicas == 1, "Export currently works on single slices at present."
 
+    extras: list[str] = []
+    if isinstance(config.resources.device, TpuConfig):
+        extras.append("tpu")
+    elif isinstance(config.resources.device, GpuConfig):
+        extras.append("gpu")
+
+    client = current_client()
     job_request = JobRequest(
         name="convert-checkpoint-to-hf",
         entrypoint=Entrypoint.from_callable(_run_with_lockfile),
         resources=config.resources,
-        environment=EnvironmentConfig.create(env_vars=env),
+        environment=create_environment(env_vars=env, extras=extras),
     )
-
-    cluster = current_cluster()
-    job_id = cluster.launch(job_request)
-    cluster.wait(job_id, raise_on_failure=True)
+    job = client.submit(job_request)
+    job.wait(raise_on_failure=True)
 
 
 def convert_checkpoint_to_hf_step(
@@ -138,7 +152,8 @@ def convert_checkpoint_to_hf_step(
             ``train_step.cd("checkpoints/ckpt-210388")``.
         trainer: TrainerConfig that matches the topology the checkpoint was saved with.
         model: Model configuration that produced the checkpoint.
-        resources: Hardware resources to use when running the conversion. Defaults to CPU-only execution.
+        resources: Hardware resources to use when running the conversion. Defaults to CPU-only
+            execution (8 CPU, 64g RAM, 64g disk); override when using an accelerator.
         upload_to_hf: Optional HuggingFace repo reference (bool, repo-id string, or RepoRef).
         tokenizer: Optional tokenizer override. Defaults to the tokenizer specified by ``model``.
         override_vocab_size: If provided, resizes the vocabulary before exporting.
@@ -160,7 +175,7 @@ def convert_checkpoint_to_hf_step(
         checkpoint_path=checkpoint_value,
         trainer=trainer,
         model=model,
-        resources=resources or ResourceConfig.with_cpu(),
+        resources=resources or _default_export_resources(),
         upload_to_hf=upload_to_hf,
         tokenizer=tokenizer,
         override_vocab_size=override_vocab_size,

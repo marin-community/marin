@@ -7,10 +7,7 @@ description: Monitor/babysit a job continuously and recover on failure. Use when
 
 Monitor a job continuously and recover on failure. For **Zephyr pipelines**,
 delegate to **babysit-zephyr** instead. Otherwise, follow this skill — Iris is
-the default execution backend.
-
-**Ray is deprecated.** If the user asks to run or babysit a Ray job, tell them
-Ray is no longer supported and they should use Iris instead.
+the execution backend.
 
 ## Required Info
 
@@ -112,6 +109,14 @@ Track `restart_count` to detect flapping. State file allows resume after context
 
    Treat RUNNING as controller-level signal only; confirm allocation via expected
    W&B run when possible.
+
+3a. ON TERMINAL STATE / OOM-LIKE SIGNAL — get a structured per-task summary
+   (final state, exit, duration, peak memory) instead of grepping logs:
+
+   uv run iris --config <CONFIG> job summary --json <JOB_ID>
+
+   Fast postmortem: e.g. "13/14 shards peaked near the container memory limit
+   and failed with exit 137" → cgroup OOM, raise `--memory` on resubmit.
 
 4. PRINT W&B RUN IDS/LINKS (once per training run)
 5. REPORT PROGRESS (format: ~<current>/<exact_max>)

@@ -14,7 +14,7 @@ import levanter.main.train_lm as train_lm
 import tiny_test_corpus
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text import DirectDatasetComponent, GrugLmExample, LmDataConfig
-from levanter.distributed import DistributedConfig, RayConfig
+from levanter.distributed import DistributedConfig
 from levanter.tracker import NoopConfig
 
 
@@ -41,7 +41,6 @@ def test_train_lm():
                     tracker=NoopConfig(),
                     require_accelerator=False,
                     distributed=DistributedConfig(initialize_jax_distributed=False),
-                    ray=RayConfig(auto_start_cluster=False),
                 ),
             )
             train_lm.main(config)
@@ -76,7 +75,6 @@ def test_train_lm_fp8():
                     tracker=NoopConfig(),
                     require_accelerator=False,
                     distributed=DistributedConfig(initialize_jax_distributed=False),
-                    ray=RayConfig(auto_start_cluster=False),
                 ),
             )
             train_lm.main(config)
@@ -121,7 +119,6 @@ def test_train_lm_direct_dataset():
                     tracker=NoopConfig(),
                     require_accelerator=False,
                     distributed=DistributedConfig(initialize_jax_distributed=False),
-                    ray=RayConfig(auto_start_cluster=False),
                 ),
             )
             train_lm.main(config)

@@ -44,12 +44,12 @@ jobs:
       actions: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -92,24 +92,17 @@ jobs:
       actions: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
-
-      - name: Post initial comment
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh issue comment ${{ github.event.issue.number }} \
-            --body "🤖 I'm looking into this issue. I'll post a task list shortly with my plan and progress."
 
       - name: Triage Issue
         uses: anthropics/claude-code-action@v1
@@ -122,29 +115,32 @@ jobs:
             Read AGENTS.md, .agents/skills/fix-issue/SKILL.md, and .agents/skills/pull-request/SKILL.md.
             Then analyze issue #${{ github.event.issue.number }}.
 
-            ## Progress tracking
+            ## Comment management (critical)
 
-            After initial analysis, post a 🤖-prefixed comment with a task list using GitHub checkbox syntax:
+            You must use a SINGLE comment for all your progress updates. Follow this exact pattern:
 
+            1. Post your initial plan as a new comment:
+               `gh issue comment ${{ github.event.issue.number }} --body '🤖 **Plan:** ...'`
+
+            2. For ALL subsequent updates, edit that same comment in place:
+               `gh issue comment ${{ github.event.issue.number }} --edit-last --body '🤖 **Plan:** ...'`
+
+            NEVER post a second comment to update progress. Always use --edit-last after the first comment.
+            Check off completed items and add status notes as you progress.
+
+            Use GitHub checkbox syntax for your plan:
             ```
             🤖 **Plan:**
-            - [ ] Step 1 description
-            - [ ] Step 2 description
-            - ...
+            - [x] Completed step
+            - [ ] Pending step
             ```
-
-            To update the task list, edit your last comment in place:
-            `gh issue comment <number> --edit-last --body '...'`
-
-            Check off completed items and add status notes as you progress.
-            Update the task list at least after each major milestone (e.g., root cause identified,
-            fix implemented, tests passing, PR opened).
 
             ## Respond based on scope
 
-            - **Small/clear changes**: open a PR following the fix-issue skill workflow.
-            - **Large changes** (multi-module design work): post a 🤖-prefixed research comment with root cause, relevant code links, and proposed approach.
-            - **Experiments/research questions**: post a 🤖-prefixed comment with concise feedback on the idea.
+            - **Small, self-contained bug fixes (<100 lines changed)**: open a PR following the fix-issue skill workflow.
+            - **Anything larger** (new features, multi-module changes, design work, research questions, >100 lines):
+              do NOT open a PR. Instead, update your comment with root cause analysis, relevant code links,
+              and a proposed approach for a human to review before implementation begins.
 
             ## PR format (critical)
 
@@ -152,13 +148,13 @@ jobs:
             PR descriptions are plain text — no markdown headers, no bullet lists, no emoji,
             no "## Summary" or "## Test plan" sections. Violations will be rejected.
 
-            Always produce output — either a PR or a comment. Never silently exit.
+            Always produce output — either a PR or an analysis comment. Never silently exit.
           claude_args: |
             --model opus
             --max-turns 250
             --permission-mode acceptEdits
             --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
-            --system-prompt "You can commit and push changes. Use MCP tools if available, falling back to git and gh. Always commit and push, even if tests fail. Never post partial or placeholder comments. To update the task list, use gh issue comment <number> --edit-last --body '...'."
+            --system-prompt "You can commit and push changes. Use MCP tools if available, falling back to git and gh. Always commit and push, even if tests fail. Never post multiple comments — post one comment, then use --edit-last for all updates."
 
   autofix:
     if: |
@@ -178,13 +174,13 @@ jobs:
       actions: read
     steps:
       - name: Checkout PR branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 

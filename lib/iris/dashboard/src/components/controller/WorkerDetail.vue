@@ -2,7 +2,7 @@
 import { computed, onMounted, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
-import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
 import type {
   GetWorkerStatusResponse,
@@ -10,7 +10,7 @@ import type {
   WorkerResourceSnapshot,
   LogEntry,
 } from '@/types/rpc'
-import { timestampMs, formatBytes, formatDuration, formatRelativeTime, formatRate, logLevelClass, formatLogTime, formatWorkerDevice } from '@/utils/formatting'
+import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime, formatRate, logLevelClass, formatLogTime, formatWorkerDevice } from '@/utils/formatting'
 
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -41,7 +41,7 @@ const workerLogEntries = computed(() => data.value?.workerLogEntries ?? [])
 const attributes = computed(() => worker.value?.metadata?.attributes ?? {})
 
 // Sparkline data from resource history
-const cpuHistory = computed(() => resourceHistory.value.map((s) => s.cpuPercent ?? 0))
+const cpuHistory = computed(() => resourceHistory.value.map((s) => s.hostCpuPercent ?? 0))
 const memoryHistory = computed(() =>
   resourceHistory.value.map((s) => parseInt(s.memoryUsedBytes ?? '0', 10))
 )
@@ -50,8 +50,8 @@ const runningTaskCount = computed(() => worker.value?.runningJobIds?.length ?? 0
 
 const cpuDisplay = computed(() => {
   const cr = currentResources.value
-  if (!cr?.cpuPercent) return '-'
-  return `${Math.round(cr.cpuPercent)}%`
+  if (!cr?.hostCpuPercent) return '-'
+  return `${Math.round(cr.hostCpuPercent)}%`
 })
 
 const memoryDisplay = computed(() => {
@@ -71,7 +71,7 @@ const taskColumns: Column[] = [
   { key: 'duration', label: 'Duration', align: 'right' },
 ]
 
-useAutoRefresh(fetchWorker, 5_000)
+useAutoRefresh(fetchWorker, DEFAULT_REFRESH_MS)
 onMounted(fetchWorker)
 
 // Re-fetch when navigating between workers (Vue Router reuses the component).
@@ -299,9 +299,7 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
             </template>
             <template #cell-cpu="{ row }">
               <span class="font-mono text-xs">
-                {{ (row as TaskStatus).resourceUsage?.cpuPercent != null
-                  ? Math.round((row as TaskStatus).resourceUsage!.cpuPercent!) + '%'
-                  : '-' }}
+                {{ formatCpuMillicores((row as TaskStatus).resourceUsage?.cpuMillicores) }}
               </span>
             </template>
             <template #cell-duration="{ row }">

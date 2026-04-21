@@ -59,15 +59,32 @@ export function flattenJobTree(
 }
 
 export function jobsWithChildren(jobList: JobStatus[]): Set<string> {
-  const jobByName = new Map(jobList.map(job => [job.name, job]))
   const parents = new Set<string>()
-
   for (const job of jobList) {
-    const parentName = getParentJobName(job.name)
-    if (parentName && jobByName.has(parentName)) {
-      parents.add(parentName)
+    if (job.hasChildren) {
+      parents.add(job.name)
+    }
+  }
+  return parents
+}
+
+export function flattenLoadedJobTree(
+  rootJobs: JobStatus[],
+  childJobsByParent: ReadonlyMap<string, JobStatus[]>,
+  expandedJobIds: ReadonlySet<string>,
+): JobTreeNode[] {
+  const result: JobTreeNode[] = []
+
+  function walk(jobs: JobStatus[], depth: number) {
+    for (const job of jobs) {
+      result.push({ job, depth })
+      if (expandedJobIds.has(job.jobId)) {
+        const children = childJobsByParent.get(job.jobId) ?? []
+        walk(children, depth + 1)
+      }
     }
   }
 
-  return parents
+  walk(rootJobs, 0)
+  return result
 }

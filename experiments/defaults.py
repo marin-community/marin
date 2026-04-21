@@ -37,11 +37,9 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils import fsspec_utils
 
-from experiments.evals.task_configs import (
-    CORE_TASKS,
-    convert_to_levanter_task_config,
-)
-from experiments.paloma import paloma_tokenized
+from experiments.evals.task_configs import CORE_TASKS
+from marin.evaluation.evaluation_config import convert_to_levanter_task_config
+from experiments.paloma import paloma_raw_validation_sets, paloma_tokenized
 from experiments.simple_dpo_config import SimpleDPOConfig
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
@@ -116,13 +114,24 @@ def _truncate_wandb_name(name: str) -> str:
     return name
 
 
-def _resolve_hf_export_steps(steps_per_hf_export: int | None, steps_per_export: int) -> int | None:
+def _resolve_hf_export_steps(steps_per_hf_export: int | None, steps_per_export: int | None) -> int | None:
     """Resolve the HF export step interval: None means same as checkpoint, -1 means disabled."""
     if steps_per_hf_export is None:
         return steps_per_export
     if steps_per_hf_export == -1:
         return None
     return steps_per_hf_export
+
+
+def _checkpoint_keep(steps_per_export: int | None) -> list[dict]:
+    """Build the `keep` list for `CheckpointerConfig`.
+
+    None means keep no permanent intermediate checkpoints (only the final checkpoint
+    is saved at end-of-training, plus a rolling temporary checkpoint for resumption).
+    """
+    if steps_per_export is None:
+        return []
+    return [dict(every=steps_per_export)]
 
 
 def _validate_train_length(train_seq_len: int | None, model_config: LmConfig) -> int:
@@ -197,6 +206,9 @@ def default_tokenize(
     *,
     sample_count: int | VersionedValue[int] | None = None,
     is_validation: bool = False,
+    levanter_batch_size: int | None = None,
+    resources: ResourceConfig | None = None,
+    worker_resources: ResourceConfig | None = None,
 ) -> ExecutorStep:
     """
     Tokenizes a dataset using the specified tokenizer and Levanter's tokenization infrastructure.
@@ -219,6 +231,11 @@ def default_tokenize(
         An ExecutorStep that represents the tokenized dataset.
     """
 
+    # Common kwargs for config constructors
+    extra_kwargs: dict = {}
+    if worker_resources is not None:
+        extra_kwargs["worker_resources"] = worker_resources
+
     # sniff out if it's a HuggingFace dataset
     if isinstance(dataset, HfDatasetSpec):
         config = HfTokenizeConfig(
@@ -228,6 +245,8 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            levanter_batch_size=levanter_batch_size,
+            **extra_kwargs,
         )
     elif (
         isinstance(dataset, str)
@@ -241,6 +260,8 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            levanter_batch_size=levanter_batch_size,
+            **extra_kwargs,
         )
     else:
         config = TokenizeConfig(
@@ -250,6 +271,8 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            levanter_batch_size=levanter_batch_size,
+            **extra_kwargs,
         )
 
     return ExecutorStep(
@@ -257,7 +280,7 @@ def default_tokenize(
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=remote(
             tokenize,
-            resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
+            resources=resources or ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
             pip_dependency_groups=["cpu"],
             env_vars={
                 "TRANSFORMERS_NO_TORCH": "1",
@@ -278,6 +301,15 @@ def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> di
 
     validation_sets = dict(paloma_tokenized(base_path=base_path, tokenizer=tokenizer))
     validation_sets.update(uncheatable_eval_tokenized(base_path=base_path, tokenizer=tokenizer))
+    return validation_sets
+
+
+@lru_cache
+def default_raw_validation_sets() -> dict[str, Any]:
+    from experiments.evals.exp1600_uncheatable_evals import uncheatable_eval_raw_validation_sets
+
+    validation_sets = dict(paloma_raw_validation_sets())
+    validation_sets.update(uncheatable_eval_raw_validation_sets())
     return validation_sets
 
 
@@ -409,7 +441,7 @@ def default_train(
             steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
-                keep=[dict(every=steps_per_export)],
+                keep=_checkpoint_keep(steps_per_export),
             ),
             model_averaging=model_averaging,
             mesh=MeshConfig(
@@ -641,7 +673,7 @@ def default_dpo(
             steps_per_eval=dpo_config.steps_per_eval,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
-                keep=[dict(every=steps_per_export)],
+                keep=_checkpoint_keep(steps_per_export),
             ),
             model_averaging=None,
             mesh=MeshConfig(

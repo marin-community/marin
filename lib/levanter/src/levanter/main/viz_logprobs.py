@@ -25,7 +25,7 @@ from levanter.models.loss import next_token_loss
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
-from levanter.visualization import compute_and_diff_log_probs, compute_and_visualize_log_probs
+from levanter.analysis.visualization import compute_and_diff_log_probs, compute_and_visualize_log_probs
 
 
 logger = logging.getLogger(__name__)

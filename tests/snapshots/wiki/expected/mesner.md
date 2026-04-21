@@ -16,7 +16,7 @@ The band returned to Ireland in 2009.
 
 ## Solo work
 
-Mark Alfred now tours with Riverdance. 
+Mark Alfred now tours with Riverdance.
 
 ## InfoBox
 

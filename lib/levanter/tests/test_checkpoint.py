@@ -17,6 +17,7 @@ import jax
 import jax.tree_util as jtu
 import numpy as np
 import optax
+import pytest
 from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
 from jax import ShapeDtypeStruct
@@ -25,14 +26,18 @@ from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import (
+    CheckpointDebugConfig,
     Checkpointer,
     CheckpointerConfig,
     CheckpointInterval,
+    _collect_debug_checkpointer_state,
     _load_metadata,
     discover_latest_checkpoint,
     load_checkpoint,
     load_checkpoint_or_initialize,
+    register_debug_checkpointer_state_provider,
     save_checkpoint,
+    unregister_debug_checkpointer_state_provider,
 )
 from levanter.trainer_state import TrainerState
 
@@ -343,6 +348,51 @@ def test_checkpointer_config_no_temporary_base_path():
     assert config.expanded_temporary_path("run1") is None
 
 
+def test_checkpointer_config_propagates_debug_settings():
+    config = CheckpointerConfig(
+        base_path="/tmp/checkpoints",
+        delete_previous_temporary_checkpoint_after_save=False,
+        debug=CheckpointDebugConfig(
+            enabled=True,
+            log_interval=12.5,
+            dump_stacks_after=45.0,
+            tracemalloc_frames=17,
+            top_allocations=5,
+            force_gc_before_serialize=False,
+            flush_logs=False,
+        ),
+    )
+
+    checkpointer = config.create("run-1")
+
+    assert checkpointer.delete_previous_temporary_checkpoint_after_save is False
+    assert checkpointer.debug.enabled is True
+    assert checkpointer.debug.log_interval == 12.5
+    assert checkpointer.debug.dump_stacks_after == 45.0
+    assert checkpointer.debug.tracemalloc_frames == 17
+    assert checkpointer.debug.top_allocations == 5
+    assert checkpointer.debug.force_gc_before_serialize is False
+    assert checkpointer.debug.flush_logs is False
+
+
+def test_debug_checkpointer_state_providers_register_and_unregister():
+    provider_name = "unit-test-provider"
+    provider = lambda: {"weight_transfer": {"bytes": 123}}
+
+    try:
+        register_debug_checkpointer_state_provider(provider_name, provider)
+        assert _collect_debug_checkpointer_state()[provider_name] == {"weight_transfer": {"bytes": 123}}
+    finally:
+        unregister_debug_checkpointer_state_provider(provider_name)
+
+    assert provider_name not in _collect_debug_checkpointer_state()
+
+
+def test_checkpointer_config_rejects_invalid_debug_tracemalloc_settings():
+    with pytest.raises(AssertionError, match="checkpoint debug tracemalloc_frames must be positive"):
+        CheckpointerConfig(debug=CheckpointDebugConfig(tracemalloc_frames=0))
+
+
 def test_checkpointer_deletes_previous_checkpoints():
     fake_now = datetime.datetime(2021, 1, 1, 0, 0, 0)
 
@@ -443,6 +493,36 @@ def test_checkpointer_deletes_previous_checkpoints_under_relative_base_paths():
         checkpointer.wait_until_finished()
         # step 2 should delete step 1 if we're handling relative paths properly
         assert _get_checkpoint_steps(tmpdir) == [2]
+
+
+def test_checkpointer_can_keep_previous_temporary_checkpoint_after_save():
+    fake_now = datetime.datetime(2021, 1, 1, 0, 0, 0)
+    tick = 10
+
+    def advance_time(delta_seconds):
+        nonlocal fake_now
+        fake_now += timedelta(seconds=delta_seconds)
+
+    with tempfile.TemporaryDirectory(prefix="checkpoints") as tmpdir:
+        checkpointer = Checkpointer(
+            tmpdir,
+            timedelta(seconds=tick),
+            [],
+            dt_now_injection=lambda: fake_now,
+            delete_previous_temporary_checkpoint_after_save=False,
+        )
+
+        _on_step(checkpointer, 0)
+
+        advance_time(tick)
+        _on_step(checkpointer, 1)
+        checkpointer.wait_until_finished()
+        assert _get_checkpoint_steps(tmpdir) == [1]
+
+        advance_time(tick)
+        _on_step(checkpointer, 2)
+        checkpointer.wait_until_finished()
+        assert _get_checkpoint_steps(tmpdir) == [1, 2]
 
 
 def test_load_from_checkpoint_or_initialize():
@@ -578,7 +658,7 @@ def test_ocdbt_merges_files():
             # Check that manifest.ocdbt exists
             # The manifest should be in one of the checkpoint subdirectories
             checkpoint_dir = pathlib.Path(tmpdir)
-            checkpoint_files = list(checkpoint_dir.rglob("*"))
+            checkpoint_files = [path for path in checkpoint_dir.rglob("*") if path.is_file()]
             assert (
                 len(checkpoint_files) <= 25
             ), f"There should be fewer than 25 files in the checkpoint directory: {checkpoint_files}"

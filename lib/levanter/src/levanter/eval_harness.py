@@ -56,7 +56,7 @@ from levanter.inference.utils import INVALID
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
 from levanter.utils.background_iterable import BackgroundIterator
-from levanter.utils.hf_utils import HfTokenizer
+from levanter.tokenizers import MarinTokenizer
 from levanter.utils.py_utils import set_global_rng_seeds
 
 try:
@@ -347,7 +347,10 @@ class _LmEvalHarnessWorker:
     def _receive_payload(self):
         payload = broadcast_shard(
             self._dummy_batch,
-            hax.partitioning.infer_resource_partitions(self._dummy_batch),
+            hax.partitioning.infer_resource_partitions(
+                self._dummy_batch,
+                resource_mapping=self.axis_resources,
+            ),
         )
         return payload
 
@@ -358,7 +361,13 @@ class _LmEvalHarnessWorker:
 
     def _send_payload(self, payload):
         assert jax.process_index() == 0
-        out = broadcast_shard(payload, hax.partitioning.infer_resource_partitions(payload))
+        out = broadcast_shard(
+            payload,
+            hax.partitioning.infer_resource_partitions(
+                payload,
+                resource_mapping=self.axis_resources,
+            ),
+        )
         return out
 
     def process_loglikelihood(self, packed_request):
@@ -1282,7 +1291,7 @@ def _actually_run_eval_harness(
     config: LmEvalHarnessConfig,
     model: LmHeadModel,
     tasks_to_run: dict,
-    tokenizer: HfTokenizer,
+    tokenizer: MarinTokenizer,
     EvalBatch: haliax.Axis | int,
     axis_resources: ResourceMapping,
     mp: jmp.Policy | None,
@@ -1647,7 +1656,7 @@ def _adjust_config(task_dict, fewshot_random_seed=0):
 
 
 def _iterate_tokenized_requests(
-    requests: list[Instance], tokenizer: HfTokenizer, max_length: int, batch_size: int
+    requests: list[Instance], tokenizer: MarinTokenizer, max_length: int, batch_size: int
 ) -> Iterator[PromptCompletion]:
     """
     Tokenize the requests and yield them as PromptCompletions, for packing into LmExamples.
@@ -1665,8 +1674,8 @@ def _iterate_tokenized_requests(
         combined_batch = [combined_texts[i] for i in batch_indices]
         context_batch = [contexts[i] for i in batch_indices]
         # Tokenize batched inputs
-        combined_encodings = tokenizer(combined_batch, truncation=False, padding=False)
-        context_encodings = tokenizer(context_batch, truncation=False, padding=False)
+        combined_encodings = {"input_ids": tokenizer.encode_batch(combined_batch)}
+        context_encodings = {"input_ids": tokenizer.encode_batch(context_batch)}
 
         for off in range(len(batch_indices)):
             i = batch_indices[off]
@@ -1688,7 +1697,7 @@ def _iterate_tokenized_requests(
 
 def _pack_requests(
     requests: list[Instance],
-    tokenizer: HfTokenizer,
+    tokenizer: MarinTokenizer,
     Pos: hax.Axis,
     max_pack_size: int,
 ) -> list[LmExample]:

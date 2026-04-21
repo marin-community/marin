@@ -43,16 +43,16 @@ def test_collect_falls_back_when_git_unavailable(workspace):
 def test_collect_includes_generated_proto_files(workspace):
     rpc_dir = workspace / "src" / "iris" / "rpc"
     rpc_dir.mkdir(parents=True)
-    (rpc_dir / "cluster_pb2.py").write_text("# generated")
-    (rpc_dir / "cluster_pb2.pyi").write_text("# generated")
-    (rpc_dir / "cluster_connect.py").write_text("# generated")
+    (rpc_dir / "job_pb2.py").write_text("# generated")
+    (rpc_dir / "job_pb2.pyi").write_text("# generated")
+    (rpc_dir / "controller_connect.py").write_text("# generated")
 
     with _mock_git_files(workspace, "pyproject.toml", "src/main.py"):
         files = collect_workspace_files(workspace)
     rel = {str(f.relative_to(workspace)) for f in files}
-    assert "src/iris/rpc/cluster_pb2.py" in rel
-    assert "src/iris/rpc/cluster_pb2.pyi" in rel
-    assert "src/iris/rpc/cluster_connect.py" in rel
+    assert "src/iris/rpc/job_pb2.py" in rel
+    assert "src/iris/rpc/job_pb2.pyi" in rel
+    assert "src/iris/rpc/controller_connect.py" in rel
 
 
 def test_collect_respects_extra_exclude(workspace):

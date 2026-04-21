@@ -5,11 +5,6 @@
 
 The Dolma format is a JSONL file with a "text" field.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
-    lib/marin/src/marin/transform/evaluation/eval_to_dolma.py \
-    --input_path gs://marin-us-central2/raw/evaluation/ \
-    --output_path gs://marin-data/processed/evaluation/dolma
 """
 
 from dataclasses import dataclass

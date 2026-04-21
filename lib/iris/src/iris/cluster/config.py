@@ -28,7 +28,7 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.controller.worker_provider import WorkerProvider
-from iris.cluster.types import parse_memory_string
+from iris.cluster.types import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, parse_memory_string, tpu_variant_name
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 from iris.time_proto import duration_from_proto, duration_to_proto
@@ -66,6 +66,20 @@ _ACCELERATOR_TYPE_MAP = {
     "cpu": "ACCELERATOR_TYPE_CPU",
     "gpu": "ACCELERATOR_TYPE_GPU",
     "tpu": "ACCELERATOR_TYPE_TPU",
+}
+
+_CAPACITY_TYPE_MAP = {
+    "preemptible": "CAPACITY_TYPE_PREEMPTIBLE",
+    "on_demand": "CAPACITY_TYPE_ON_DEMAND",
+    "on-demand": "CAPACITY_TYPE_ON_DEMAND",
+    "reserved": "CAPACITY_TYPE_RESERVED",
+}
+
+# Reverse mapping for YAML serialization: proto enum name → friendly YAML name
+_CAPACITY_TYPE_REVERSE_MAP = {
+    "CAPACITY_TYPE_PREEMPTIBLE": "preemptible",
+    "CAPACITY_TYPE_ON_DEMAND": "on-demand",
+    "CAPACITY_TYPE_RESERVED": "reserved",
 }
 
 _COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
@@ -130,6 +144,11 @@ def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> Non
             raise ValueError(f"Scale group '{name}' has invalid disk_bytes={resources.disk_bytes}.")
         if resources.device_count < 0:
             raise ValueError(f"Scale group '{name}' has invalid device_count={resources.device_count}.")
+        if resources.capacity_type == config_pb2.CAPACITY_TYPE_UNSPECIFIED:
+            raise ValueError(
+                f"Scale group '{name}': resources.capacity_type is required "
+                "(one of: preemptible, on-demand, reserved)."
+            )
 
 
 def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
@@ -155,8 +174,8 @@ def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
             resources = sg_config.resources
             gcp_mode = template.gcp.mode
             if gcp_mode == config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM:
-                if resources.preemptible:
-                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices do not support preemptible instances.")
+                if resources.capacity_type != config_pb2.CAPACITY_TYPE_ON_DEMAND:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices only support capacity_type on-demand.")
                 if sg_config.num_vms != 1:
                     raise ValueError(f"Scale group '{name}': VM-backed GCP slices require num_vms=1.")
                 if resources.device_type != config_pb2.ACCELERATOR_TYPE_CPU:
@@ -197,7 +216,7 @@ def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
 def _validate_worker_settings(config: config_pb2.IrisClusterConfig) -> None:
     """Validate optional per-scale-group worker settings.
 
-    Well-known attributes (preemptible, device-type, device-variant) are now
+    Well-known attributes (device-type, device-variant, preemptible) are now
     auto-derived from resources, so we reject them in worker.attributes to
     prevent conflicting declarations.
     """
@@ -205,6 +224,8 @@ def _validate_worker_settings(config: config_pb2.IrisClusterConfig) -> None:
         WellKnownAttribute.PREEMPTIBLE,
         WellKnownAttribute.DEVICE_TYPE,
         WellKnownAttribute.DEVICE_VARIANT,
+        WellKnownAttribute.REGION,
+        WellKnownAttribute.ZONE,
     }
     for name, sg_config in config.scale_groups.items():
         if not sg_config.HasField("worker"):
@@ -212,37 +233,18 @@ def _validate_worker_settings(config: config_pb2.IrisClusterConfig) -> None:
 
         attributes = sg_config.worker.attributes
 
-        # Reject well-known keys that are now derived from resources
+        # Reject well-known keys that are derived elsewhere: device-type /
+        # device-variant / preemptible come from `resources`; region / zone
+        # come from `slice_template` (gcp.zone or coreweave.region).
         for attr_key in _well_known_resource_attrs:
             if attr_key in attributes:
                 raise ValueError(
-                    f"Scale group '{name}': worker.attributes.{attr_key} is now derived from "
-                    f"resources and must not be set explicitly. Remove it from worker.attributes."
-                )
-
-        region = attributes.get(WellKnownAttribute.REGION, "").strip()
-        if WellKnownAttribute.REGION in attributes and not region:
-            raise ValueError(f"Scale group '{name}': worker.attributes.region must be non-empty.")
-
-        zone_attr = attributes.get(WellKnownAttribute.ZONE, "").strip()
-        if WellKnownAttribute.ZONE in attributes and not zone_attr:
-            raise ValueError(f"Scale group '{name}': worker.attributes.zone must be non-empty.")
-        if zone_attr and sg_config.slice_template.HasField("gcp") and sg_config.slice_template.gcp.zone:
-            if zone_attr != sg_config.slice_template.gcp.zone:
-                raise ValueError(
-                    f"Scale group '{name}': worker.attributes.zone={zone_attr!r} must match "
-                    f"slice_template.gcp.zone={sg_config.slice_template.gcp.zone!r}."
+                    f"Scale group '{name}': worker.attributes.{attr_key} is derived automatically "
+                    f"(from resources or slice_template) and must not be set explicitly. "
+                    f"Remove it from worker.attributes."
                 )
 
         template = sg_config.slice_template
-        if region and template.HasField("gcp") and template.gcp.zone:
-            zone_region = template.gcp.zone.rsplit("-", 1)[0]
-            if region != zone_region:
-                raise ValueError(
-                    f"Scale group '{name}': worker.attributes.region={region!r} must match "
-                    f"slice_template.gcp.zone region {zone_region!r}."
-                )
-
         if (
             template.HasField("coreweave")
             and sg_config.resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU
@@ -265,7 +267,7 @@ def _derive_slice_config_from_resources(config: config_pb2.IrisClusterConfig) ->
     """Derive SliceConfig fields from ScaleGroupResources.
 
     Provider modules (gcp.py, local.py) read accelerator_type, accelerator_variant,
-    preemptible, and gpu_count from SliceConfig when calling cloud APIs. These fields
+    capacity_type, and gpu_count from SliceConfig when calling cloud APIs. These fields
     are now the canonical source in resources; this function populates SliceConfig
     so provider modules continue to work without modification.
 
@@ -281,7 +283,7 @@ def _derive_slice_config_from_resources(config: config_pb2.IrisClusterConfig) ->
         template.accelerator_type = resources.device_type
         if resources.device_variant:
             template.accelerator_variant = resources.device_variant
-        template.preemptible = resources.preemptible
+        template.capacity_type = resources.capacity_type
 
         if resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and resources.device_count > 0:
             template.gpu_count = resources.device_count
@@ -528,10 +530,6 @@ def apply_defaults(config: config_pb2.IrisClusterConfig) -> config_pb2.IrisClust
     for key, value in merged.defaults.task_env.items():
         merged.defaults.worker.task_env[key] = value
 
-    # Apply controller defaults
-    if not merged.controller.HasField("heartbeat_failure_threshold"):
-        merged.controller.heartbeat_failure_threshold = 10
-
     # Apply scale group defaults
     for group in merged.scale_groups.values():
         if not group.HasField("priority"):
@@ -579,11 +577,6 @@ def make_local_config(
     if not config.HasField("defaults"):
         config.defaults.CopyFrom(config_pb2.DefaultsConfig())
 
-    # Set fast controller timings for local testing.
-    # worker_timeout is derived: heartbeat_interval * heartbeat_failure_threshold
-    # = 0.5s * 3 = 1.5s effective timeout.
-    config.controller.heartbeat_failure_threshold = 3
-
     # Set fast autoscaler timings for local testing
     config.defaults.autoscaler.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.5)))
     config.defaults.autoscaler.scale_up_delay.CopyFrom(duration_to_proto(Duration.from_seconds(1)))
@@ -594,6 +587,116 @@ def make_local_config(
     return config
 
 
+def _expand_tpu_pools(data: dict) -> None:
+    """Expand ``tpu_pools`` into per-(size, zone) scale groups.
+
+    Each pool defines shared properties for a TPU family. The ``sizes`` map
+    lists per-size overrides (buffer_slices, max_slices, priority). For each
+    pool x size x zone the function emits a fully-specified scale group with
+    topology-derived fields (device_variant, num_vms, device_count) and
+    autoscaler allocation metadata (quota_pool, allocation_tier, priority).
+
+    Consumes the ``tpu_pools`` key from *data* and injects results into
+    ``data["scale_groups"]``.
+    """
+    tpu_pools = data.pop("tpu_pools", None)
+    if not tpu_pools:
+        return
+    if not isinstance(tpu_pools, dict):
+        raise ValueError("tpu_pools must be a mapping")
+
+    scale_groups = data.setdefault("scale_groups", {})
+
+    for pool_name, pool in tpu_pools.items():
+        if not isinstance(pool, dict):
+            raise ValueError(f"tpu_pools.{pool_name} must be a mapping")
+
+        family = pool.get("family")
+        if not family or family not in TPU_FAMILY_VARIANT_PREFIX:
+            raise ValueError(
+                f"tpu_pools.{pool_name}: 'family' must be one of {sorted(TPU_FAMILY_VARIANT_PREFIX)}, got {family!r}"
+            )
+
+        zones = pool.get("zones")
+        if not isinstance(zones, list) or not zones:
+            raise ValueError(f"tpu_pools.{pool_name}: 'zones' must be a non-empty list")
+        for z in zones:
+            if not isinstance(z, str) or not z.strip():
+                raise ValueError(f"tpu_pools.{pool_name}: each zone must be a non-empty string, got {z!r}")
+        if len(zones) != len(set(zones)):
+            raise ValueError(f"tpu_pools.{pool_name}: zones list contains duplicates: {zones}")
+
+        sizes = pool.get("sizes")
+        if not isinstance(sizes, dict) or not sizes:
+            raise ValueError(f"tpu_pools.{pool_name}: 'sizes' must be a non-empty mapping")
+
+        base_priority = pool.get("base_priority", 10)
+        base_resources = pool.get("resources", {})
+        base_slice_template = pool.get("slice_template", {})
+
+        # Validate all sizes against the topology table up front
+        sorted_sizes = sorted(sizes.keys(), key=lambda s: int(s))
+        for size in sorted_sizes:
+            variant = tpu_variant_name(family, int(size))
+            try:
+                get_tpu_topology(variant)
+            except ValueError:
+                raise ValueError(f"tpu_pools.{pool_name}.sizes.{size}: unknown TPU topology '{variant}'") from None
+
+        for tier_index, size in enumerate(sorted_sizes):
+            size_int = int(size)
+            size_overrides = sizes[size] or {}
+            variant = tpu_variant_name(family, size_int)
+            topo = get_tpu_topology(variant)
+
+            for zone in zones:
+                sg_name = f"tpu_{pool_name}_{size_int}-{zone}"
+
+                if sg_name in scale_groups:
+                    raise ValueError(
+                        f"tpu_pools.{pool_name}: expanded name '{sg_name}' collides with an existing scale group"
+                    )
+
+                # Build resources with topology-derived device fields
+                resources = copy.deepcopy(base_resources)
+                resources["device_type"] = "tpu"
+                resources["device_variant"] = variant
+                resources["device_count"] = topo.chips_per_vm
+
+                # Build slice template with zone injected
+                st = copy.deepcopy(base_slice_template)
+                gcp = st.setdefault("gcp", {})
+                gcp["zone"] = zone
+
+                sg = {
+                    "name": sg_name,
+                    "num_vms": topo.vm_count,
+                    "priority": size_overrides.get("priority", base_priority + tier_index * 10),
+                    "quota_pool": f"{pool_name}/{zone}",
+                    "allocation_tier": tier_index + 1,
+                    "resources": resources,
+                    "buffer_slices": size_overrides.get("buffer_slices", 0),
+                    "max_slices": size_overrides["max_slices"],
+                    "slice_template": st,
+                }
+
+                scale_groups[sg_name] = sg
+
+    # Merge all TPU pool zones into platform.gcp.zones
+    all_zones: set[str] = set()
+    for pool in (tpu_pools or {}).values():
+        if isinstance(pool, dict):
+            for z in pool.get("zones", []):
+                all_zones.add(z)
+    if all_zones:
+        platform = data.setdefault("platform", {})
+        platform_gcp = platform.get("gcp")
+        if isinstance(platform_gcp, dict):
+            existing = set(platform_gcp.get("zones", []))
+            existing.update(all_zones)
+            platform_gcp["zones"] = sorted(existing)
+
+
 def _expand_multi_zone_groups(data: dict) -> None:
     """Expand scale groups with `zones` into one group per zone.
 
@@ -601,15 +704,14 @@ def _expand_multi_zone_groups(data: dict) -> None:
     creates a copy of the scale group with:
     - name suffixed with -{zone} (e.g. tpu_v5e_16-europe-west4-b)
     - slice_template.gcp.zone set to the zone
-    - worker.attributes.zone and worker.attributes.region set automatically
-    - min_slices defaulted to 0 if not explicitly set
+    - buffer_slices defaulted to 0 if not explicitly set
 
     Also merges all expanded zones into platform.gcp.zones.
 
     Raises:
         ValueError: If zones is not a non-empty list of unique non-empty strings,
             if an expanded name collides with an existing scale group, or if
-            user-provided zone/region fields conflict with the expansion.
+            slice_template.gcp.zone is set while zones is also specified.
     """
     scale_groups = data.get("scale_groups")
     if not isinstance(scale_groups, dict):
@@ -649,28 +751,14 @@ def _expand_multi_zone_groups(data: dict) -> None:
 
         # Detect conflicts with user-provided fields that expansion will set
         existing_gcp_zone = (sg.get("slice_template") or {}).get("gcp", {}).get("zone")
-        existing_worker_attrs = (sg.get("worker") or {}).get("attributes", {})
-        existing_zone_attr = existing_worker_attrs.get(WellKnownAttribute.ZONE)
-        existing_region_attr = existing_worker_attrs.get(WellKnownAttribute.REGION)
 
         if existing_gcp_zone:
             raise ValueError(
                 f"Scale group '{name}': cannot set both 'zones' and 'slice_template.gcp.zone'. "
                 f"Remove slice_template.gcp.zone — it is set automatically by zone expansion."
             )
-        if existing_zone_attr:
-            raise ValueError(
-                f"Scale group '{name}': cannot set both 'zones' and 'worker.attributes.zone'. "
-                f"Remove worker.attributes.zone — it is set automatically by zone expansion."
-            )
-        if existing_region_attr:
-            raise ValueError(
-                f"Scale group '{name}': cannot set both 'zones' and 'worker.attributes.region'. "
-                f"Remove worker.attributes.region — it is set automatically by zone expansion."
-            )
 
         for zone in zones:
-            region = zone.rsplit("-", 1)[0]
             expanded_name = f"{name}-{zone}"
 
             if expanded_name in scale_groups:
@@ -690,14 +778,8 @@ def _expand_multi_zone_groups(data: dict) -> None:
             gcp = st.setdefault("gcp", {})
             gcp["zone"] = zone
 
-            # Set worker.attributes.zone and .region
-            worker = expanded_sg.setdefault("worker", {})
-            attrs = worker.setdefault("attributes", {})
-            attrs[WellKnownAttribute.ZONE] = zone
-            attrs[WellKnownAttribute.REGION] = region
-
-            if "min_slices" not in expanded_sg:
-                expanded_sg["min_slices"] = 0
+            if "buffer_slices" not in expanded_sg:
+                expanded_sg["buffer_slices"] = 0
 
             expanded[expanded_name] = expanded_sg
             all_expanded_zones.add(zone)
@@ -734,6 +816,7 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
         if "controller_address" in defaults_worker:
             defaults_worker["controller_address"] = os.path.expandvars(defaults_worker["controller_address"])
 
+    _expand_tpu_pools(data)
     _normalize_scale_group_resources(data)
     _expand_multi_zone_groups(data)
 
@@ -815,9 +898,10 @@ def _normalize_scale_group_resources(data: dict) -> None:
             raise ValueError(f"scale_groups.{name}.resources must be a mapping")
 
         # Proto field names derived from the ScaleGroupResources descriptor,
-        # plus user-friendly YAML aliases that get normalized below.
-        _YAML_ALIASES = {"cpu", "ram", "disk"}
-        allowed_keys = set(config_pb2.ScaleGroupResources.DESCRIPTOR.fields_by_name.keys()) | _YAML_ALIASES
+        # plus fields handled explicitly by normalization code below (may not
+        # yet appear in stale compiled protos).
+        _NORMALIZED_KEYS = {"cpu", "ram", "disk", "capacity_type"}
+        allowed_keys = set(config_pb2.ScaleGroupResources.DESCRIPTOR.fields_by_name.keys()) | _NORMALIZED_KEYS
         unknown_keys = set(resources.keys()) - allowed_keys
         if unknown_keys:
             unknown = ", ".join(sorted(unknown_keys))
@@ -863,24 +947,24 @@ def _normalize_scale_group_resources(data: dict) -> None:
         if device_count is not None:
             normalized["device_count"] = int(device_count)
 
-        preemptible = resources.get("preemptible")
-        if preemptible is not None:
-            if isinstance(preemptible, bool):
-                normalized["preemptible"] = preemptible
-            elif isinstance(preemptible, str):
-                lower = preemptible.strip().lower()
-                if lower == "true":
-                    normalized["preemptible"] = True
-                elif lower == "false":
-                    normalized["preemptible"] = False
-                else:
+        capacity_type = resources.get("capacity_type")
+        if capacity_type is not None:
+            if isinstance(capacity_type, str):
+                key = capacity_type.strip().lower().replace("-", "_")
+                mapped = _CAPACITY_TYPE_MAP.get(key)
+                if mapped is None:
+                    allowed = ", ".join(sorted(_CAPACITY_TYPE_MAP.keys()))
                     raise ValueError(
-                        f"scale_groups.{name}.resources.preemptible must be true or false, got {preemptible!r}"
+                        f"scale_groups.{name}.resources.capacity_type must be one of "
+                        f"{allowed}, got {capacity_type!r}"
                     )
+                normalized["capacity_type"] = mapped
+            elif isinstance(capacity_type, int):
+                normalized["capacity_type"] = capacity_type
             else:
                 raise ValueError(
-                    f"scale_groups.{name}.resources.preemptible must be bool or string,"
-                    f" got {type(preemptible).__name__}"
+                    f"scale_groups.{name}.resources.capacity_type must be a string, "
+                    f"got {type(capacity_type).__name__}"
                 )
 
         sg["resources"] = normalized
@@ -918,8 +1002,9 @@ def config_to_dict(config: config_pb2.IrisClusterConfig) -> dict:
                 normalized["device_variant"] = resources["device_variant"]
             if "device_count" in resources:
                 normalized["device_count"] = resources["device_count"]
-            if "preemptible" in resources:
-                normalized["preemptible"] = resources["preemptible"]
+            if "capacity_type" in resources:
+                raw_ct = resources["capacity_type"]
+                normalized["capacity_type"] = _CAPACITY_TYPE_REVERSE_MAP.get(raw_ct, raw_ct)
             sg["resources"] = normalized
     return data
 
@@ -1143,7 +1228,7 @@ def create_autoscaler(
     """
     # Local import: controller modules import config.py, creating a circular dependency.
     from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.controller.scaling_group import (
+    from iris.cluster.controller.autoscaler.scaling_group import (
         DEFAULT_SCALE_DOWN_RATE_LIMIT,
         DEFAULT_SCALE_UP_RATE_LIMIT,
         ScalingGroup,
@@ -1174,13 +1259,13 @@ def create_autoscaler(
         slice_template = group_config.slice_template
         cw_instance = slice_template.coreweave.instance_type if slice_template.HasField("coreweave") else ""
         logger.info(
-            "Scale group %s: device=%s:%s device_count=%d num_vms=%d min=%d max=%d instance=%s worker_attrs=%s",
+            "Scale group %s: device=%s:%s device_count=%d num_vms=%d buffer=%d max=%d instance=%s worker_attrs=%s",
             name,
             resources.device_type,
             resources.device_variant,
             resources.device_count,
             group_config.num_vms,
-            group_config.min_slices,
+            group_config.buffer_slices,
             group_config.max_slices,
             cw_instance or "n/a",
             worker_attrs or "none",
