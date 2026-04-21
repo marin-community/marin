@@ -38,7 +38,7 @@ def _make_steps() -> list[ExecutorStep]:
         for dim, budget in GATE1_CONFIGS:
             model, optimizer, batch, num_steps = build_from_heuristic(budget=budget, hidden_dim=dim)
             model = dataclasses.replace(model, value_embed_mode=mode)
-            run_id = f"value-embed-{mode.replace('_', '-')}-d{dim}-{budget:.2e}"
+            run_id = f"value-embed-v2-{mode.replace('_', '-')}-d{dim}-{budget:.2e}"
 
             steps.append(
                 ExecutorStep(
