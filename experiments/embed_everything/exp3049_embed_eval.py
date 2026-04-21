@@ -305,7 +305,9 @@ fasttext_quality = StepSpec(
             output_path=output_path,
             input_path=sample_quality.output_path,
         ),
-        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+        # 4 GB model + fasttext internal state peaks at ~3.4 GB resident.
+        # Default 4 GB RAM / 5 GB disk OOM-kills; bump both.
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION], ram="8g", disk="20g"),
         pip_dependency_groups=["fasttext"],
     ),
 )
@@ -320,7 +322,9 @@ fasttext_topic = StepSpec(
             output_path=output_path,
             input_path=sample_topic.output_path,
         ),
-        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+        # 4 GB model + fasttext internal state peaks at ~3.4 GB resident.
+        # Default 4 GB RAM / 5 GB disk OOM-kills; bump both.
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION], ram="8g", disk="20g"),
         pip_dependency_groups=["fasttext"],
     ),
 )
