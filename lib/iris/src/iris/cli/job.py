@@ -953,16 +953,16 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
     controller_url = require_controller_url(ctx)
     client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
 
-    states: list[job_pb2.JobState] | None = None
+    state_value: job_pb2.JobState | None = None
     if state is not None:
         state_lower = state.lower()
         if state_lower not in _STATE_MAP:
             valid = ", ".join(sorted(_STATE_MAP.keys()))
             raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}")
-        states = [_STATE_MAP[state_lower]]
+        state_value = _STATE_MAP[state_lower]
 
     prefix_name = JobName.from_wire(prefix) if prefix else None
-    jobs = client.list_jobs(states=states, prefix=prefix_name)
+    jobs = client.list_jobs(state=state_value, prefix=prefix_name)
 
     # Sort by submitted_at descending (most recent first)
     jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
