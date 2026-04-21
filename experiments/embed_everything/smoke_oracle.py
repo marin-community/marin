@@ -81,7 +81,10 @@ oracle_quality_smoke = StepSpec(
 )
 
 
-SMOKE_STEPS = [trim_quality_samples_smoke, oracle_quality_smoke]
+# StepRunner only tracks steps in the passed iterable; include the upstream
+# sample step so its on-disk STATUS_SUCCESS is picked up and it's skipped
+# rather than reported as unmet.
+SMOKE_STEPS = [sample_quality_binary_smoke, trim_quality_samples_smoke, oracle_quality_smoke]
 
 
 if __name__ == "__main__":
