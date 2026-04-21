@@ -8,12 +8,12 @@ Saves embeddings as .npz files alongside document metadata for downstream
 evaluation (linear probes, clustering).
 """
 
-import json
 import logging
 import os
 
 import numpy as np
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
+from zephyr.readers import load_parquet
 
 logger = logging.getLogger(__name__)
 
@@ -21,17 +21,6 @@ LUXICAL_MODEL = "DatologyAI/luxical-one"  # 192-dim
 ARCTIC_MODEL = "Snowflake/snowflake-arctic-embed-l"  # 1024-dim
 BGE_LARGE_MODEL = "BAAI/bge-large-en-v1.5"  # 1024-dim
 DEFAULT_BATCH_SIZE = 64
-
-
-def _read_jsonl(path: str) -> list[dict]:
-    """Read a JSONL file and return list of dicts."""
-    docs = []
-    with open_url(path) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                docs.append(json.loads(line))
-    return docs
 
 
 def _load_model(model_name: str):
@@ -85,13 +74,13 @@ def embed_documents(
     input_path: str,
     model_name: str = LUXICAL_MODEL,
     batch_size: int = DEFAULT_BATCH_SIZE,
-    input_filename: str = "quality_samples.jsonl",
+    input_filename: str = "quality_samples.parquet",
     output_filename: str = "quality_embeddings.npz",
     label_field: str = "quality_bucket",
 ) -> None:
     """Compute embeddings for sampled documents and save as .npz."""
     input_file = os.path.join(input_path, input_filename)
-    docs = _read_jsonl(input_file)
+    docs = list(load_parquet(input_file))
     logger.info("Embedding %d documents with model=%s", len(docs), model_name)
 
     model = _load_model(model_name)

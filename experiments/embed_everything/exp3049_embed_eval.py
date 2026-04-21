@@ -19,7 +19,7 @@ All steps run on CPU via Iris (@remote). Output goes to temp buckets
 import logging
 
 from fray.v2 import ResourceConfig
-from iris.marin_fs import marin_prefix, marin_temp_bucket
+from rigging.filesystem import marin_prefix, marin_temp_bucket
 
 from experiments.embed_everything.embed import LUXICAL_MODEL, embed_documents
 from experiments.embed_everything.evaluate import (
@@ -29,7 +29,7 @@ from experiments.embed_everything.evaluate import (
     evaluate_topic_reduced,
 )
 from experiments.embed_everything.oracle import OracleBackend, label_quality, label_topics
-from experiments.embed_everything.sample import sample_quality_documents, sample_topic_documents
+from experiments.embed_everything.sample import sample_quality_documents_nemotron, sample_topic_documents
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -64,9 +64,9 @@ _OUTPUT_PREFIX = marin_temp_bucket(ttl_days=7, prefix="embed-everything")
 sample_quality = StepSpec(
     name="sample_quality",
     output_path_prefix=_OUTPUT_PREFIX,
-    hash_attrs={"n_per_bucket": N_PER_BUCKET, "seed": 42, "v": 4},
+    hash_attrs={"n_per_bucket": N_PER_BUCKET, "seed": 42, "v": 5},
     fn=remote(
-        lambda output_path: sample_quality_documents(
+        lambda output_path: sample_quality_documents_nemotron(
             output_path=output_path,
             nemotron_base_path=f"{marin_prefix()}/{NEMOTRON_REL_PATH}",
             n_per_bucket=N_PER_BUCKET,
@@ -78,7 +78,7 @@ sample_quality = StepSpec(
 sample_topic = StepSpec(
     name="sample_topic",
     output_path_prefix=_OUTPUT_PREFIX,
-    hash_attrs={"n_per_source": N_PER_SOURCE, "seed": 42, "v": 4},
+    hash_attrs={"n_per_source": N_PER_SOURCE, "seed": 42, "v": 5},
     fn=remote(
         lambda output_path: sample_topic_documents(
             output_path=output_path,
@@ -97,7 +97,7 @@ oracle_quality = StepSpec(
     name="oracle_quality",
     output_path_prefix=_OUTPUT_PREFIX,
     deps=[sample_quality],
-    hash_attrs={"backend": str(ORACLE_BACKEND), "prompt_version": PROMPT_VERSION, "v": 3},
+    hash_attrs={"backend": str(ORACLE_BACKEND), "prompt_version": PROMPT_VERSION, "v": 4},
     fn=remote(
         lambda output_path: label_quality(
             output_path=output_path,
@@ -113,7 +113,7 @@ oracle_topic = StepSpec(
     name="oracle_topic",
     output_path_prefix=_OUTPUT_PREFIX,
     deps=[sample_topic],
-    hash_attrs={"backend": str(ORACLE_BACKEND), "prompt_version": PROMPT_VERSION, "v": 3},
+    hash_attrs={"backend": str(ORACLE_BACKEND), "prompt_version": PROMPT_VERSION, "v": 4},
     fn=remote(
         lambda output_path: label_topics(
             output_path=output_path,
@@ -139,7 +139,7 @@ embed_quality = StepSpec(
             output_path=output_path,
             input_path=sample_quality.output_path,
             model_name=EMBEDDING_MODEL,
-            input_filename="quality_samples.jsonl",
+            input_filename="quality_samples.parquet",
             output_filename="quality_embeddings.npz",
             label_field="quality_bucket",
         ),
@@ -158,7 +158,7 @@ embed_topic = StepSpec(
             output_path=output_path,
             input_path=sample_topic.output_path,
             model_name=EMBEDDING_MODEL,
-            input_filename="topic_samples.jsonl",
+            input_filename="topic_samples.parquet",
             output_filename="topic_embeddings.npz",
             label_field="source_label",
         ),

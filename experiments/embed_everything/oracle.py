@@ -13,7 +13,8 @@ import os
 import time
 from enum import StrEnum
 
-from iris.marin_fs import open_url
+from zephyr.readers import load_parquet
+from zephyr.writers import write_parquet_file
 
 logger = logging.getLogger(__name__)
 
@@ -138,32 +139,14 @@ def _parse_json_response(response: str) -> dict:
     return json.loads(text)
 
 
-def _read_jsonl(path: str) -> list[dict]:
-    """Read a JSONL file and return list of dicts."""
-    docs = []
-    with open_url(path) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                docs.append(json.loads(line))
-    return docs
-
-
-def _write_jsonl(docs: list[dict], path: str) -> None:
-    """Write list of dicts to a JSONL file."""
-    with open_url(path, "w") as f:
-        for doc in docs:
-            f.write(json.dumps(doc) + "\n")
-
-
 def label_quality(
     output_path: str,
     input_path: str,
     backend: OracleBackend = OracleBackend.CLAUDE,
 ) -> None:
     """Score each document on a 0-5 quality rubric using an LLM oracle."""
-    input_file = os.path.join(input_path, "quality_samples.jsonl")
-    docs = _read_jsonl(input_file)
+    input_file = os.path.join(input_path, "quality_samples.parquet")
+    docs = list(load_parquet(input_file))
     logger.info("Labeling %d documents for quality with backend=%s", len(docs), backend)
 
     labeled: list[dict] = []
@@ -188,7 +171,7 @@ def label_quality(
         if (i + 1) % 10 == 0:
             logger.info("Quality labeling progress: %d/%d", i + 1, len(docs))
 
-    _write_jsonl(labeled, os.path.join(output_path, "quality_labeled.jsonl"))
+    write_parquet_file(labeled, os.path.join(output_path, "quality_labeled.parquet"))
 
     failed = sum(1 for d in labeled if d["oracle_quality_score"] == -1)
     logger.info("Quality labeling complete: %d labeled, %d failed", len(labeled) - failed, failed)
@@ -204,8 +187,8 @@ def label_topics(
     if taxonomy is None:
         taxonomy = list(TOPIC_TAXONOMY)
 
-    input_file = os.path.join(input_path, "topic_samples.jsonl")
-    docs = _read_jsonl(input_file)
+    input_file = os.path.join(input_path, "topic_samples.parquet")
+    docs = list(load_parquet(input_file))
     topics_str = "\n".join(f"- {t}" for t in taxonomy)
     logger.info("Labeling %d documents for topics with backend=%s", len(docs), backend)
 
@@ -237,7 +220,7 @@ def label_topics(
         if (i + 1) % 10 == 0:
             logger.info("Topic labeling progress: %d/%d", i + 1, len(docs))
 
-    _write_jsonl(labeled, os.path.join(output_path, "topic_labeled.jsonl"))
+    write_parquet_file(labeled, os.path.join(output_path, "topic_labeled.parquet"))
 
     failed = sum(1 for d in labeled if d["oracle_topic"] == "labeling_failed")
     logger.info("Topic labeling complete: %d labeled, %d failed", len(labeled) - failed, failed)

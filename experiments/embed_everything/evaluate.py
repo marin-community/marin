@@ -15,7 +15,8 @@ import os
 import tempfile
 
 import numpy as np
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
+from zephyr.readers import load_parquet
 
 logger = logging.getLogger(__name__)
 
@@ -30,17 +31,6 @@ def _load_npz(path: str) -> dict[str, np.ndarray]:
     data = dict(np.load(local_path, allow_pickle=True))
     os.remove(local_path)
     return data
-
-
-def _read_jsonl(path: str) -> list[dict]:
-    """Read a JSONL file and return list of dicts."""
-    docs = []
-    with open_url(path) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                docs.append(json.loads(line))
-    return docs
 
 
 def _write_json(data: dict, path: str) -> None:
@@ -72,8 +62,8 @@ def _load_quality_data(
     doc_ids = emb_data["doc_ids"].tolist()
     splits = emb_data["splits"].tolist()
 
-    oracle_file = os.path.join(oracle_path, "quality_labeled.jsonl")
-    oracle_docs = _read_jsonl(oracle_file)
+    oracle_file = os.path.join(oracle_path, "quality_labeled.parquet")
+    oracle_docs = list(load_parquet(oracle_file))
     oracle_by_id = {d["doc_id"]: d for d in oracle_docs}
 
     train_emb, train_scores = [], []
@@ -255,8 +245,8 @@ def _load_topic_data(
     embeddings = emb_data["embeddings"]
     doc_ids = emb_data["doc_ids"].tolist()
 
-    oracle_file = os.path.join(oracle_path, "topic_labeled.jsonl")
-    oracle_docs = _read_jsonl(oracle_file)
+    oracle_file = os.path.join(oracle_path, "topic_labeled.parquet")
+    oracle_docs = list(load_parquet(oracle_file))
     oracle_by_id = {d["doc_id"]: d for d in oracle_docs}
 
     valid_emb = []

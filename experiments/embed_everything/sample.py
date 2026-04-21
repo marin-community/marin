@@ -7,14 +7,16 @@ Produces JSONL files with stratified train/test splits for downstream
 oracle labeling and embedding evaluation.
 """
 
-import gzip
-import hashlib
-import json
 import logging
 import os
 import random
+from itertools import islice
 
-from iris.marin_fs import open_url, url_to_fs
+from rigging.filesystem import url_to_fs
+from zephyr.readers import load_jsonl
+from zephyr.writers import write_parquet_file
+
+from marin.datakit.normalize import generate_id
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +51,7 @@ DOLMA_SOURCES = [
 
 TRAIN_FRACTION = 0.8
 RANDOM_SEED = 42
-MAX_FILES_PER_STRATUM = 3
+MAX_FILES_PER_STRATUM = 42
 
 # Mapping from Dolma source names to their file glob patterns
 DOLMA_SOURCE_PATTERNS: dict[str, list[str]] = {
@@ -70,28 +72,14 @@ DOLMA_SOURCE_PATTERNS: dict[str, list[str]] = {
     "wiki": ["wiki-*.json.gz"],
 }
 
-
-def _stable_doc_id(text: str, source: str) -> str:
-    """Generate a stable document ID from content hash."""
-    return hashlib.sha256(f"{source}:{text[:1000]}".encode()).hexdigest()[:16]
-
-
-def _read_gzipped_jsonl(gcs_path: str, max_records: int = 0):
-    """Stream JSONL records from a .json.gz or .jsonl.gz file on GCS.
-
-    Streams decompression to avoid loading multi-GiB files into memory.
-    If max_records > 0, stops after yielding that many records.
-    """
-    count = 0
-    with open_url(gcs_path, "rb") as raw:
-        with gzip.GzipFile(fileobj=raw) as gz:
-            for raw_line in gz:
-                line = raw_line.decode("utf-8").strip()
-                if line:
-                    yield json.loads(line)
-                    count += 1
-                    if max_records > 0 and count >= max_records:
-                        return
+# Binary quality strategy (Dolma): known-high = arxiv + wiki, known-low = cc_en_tail.
+# Complements the Nemotron graduated buckets by providing an unambiguous
+# high/low contrast. "Low" uses cc_en_tail rather than the full cc split
+# because Dolma's tail shard is its lowest-quality CC slice.
+DOLMA_QUALITY_BINARY_PATTERNS: dict[str, list[str]] = {
+    "high": ["arxiv-*.json.gz", "wiki-*.json.gz"],
+    "low": ["cc_en_tail-*.json.gz"],
+}
 
 
 def _sample_from_files(
@@ -127,28 +115,24 @@ def _sample_from_files(
             full_path = f"gs://{filepath}" if not filepath.startswith("gs://") else filepath
             # Read at most 10x the target sample size per file to bound memory/time
             max_per_file = n_per_stratum * 10
-            try:
-                for doc in _read_gzipped_jsonl(full_path, max_records=max_per_file):
-                    count += 1
-                    text = doc.get("text", "")
-                    if not text:
-                        continue
-                    record = {
-                        "doc_id": doc.get("id", _stable_doc_id(text, doc.get("source", "unknown"))),
-                        "text": text,
-                        "source": doc.get("source", "unknown"),
-                        label_field: label,
-                    }
-                    # Reservoir sampling
-                    if len(reservoir) < n_per_stratum:
-                        reservoir.append(record)
-                    else:
-                        j = rng.randint(0, count - 1)
-                        if j < n_per_stratum:
-                            reservoir[j] = record
-            except Exception:
-                logger.exception("Error reading %s", full_path)
-                continue
+            for doc in islice(load_jsonl(full_path), max_per_file):
+                count += 1
+                text = doc.get("text", "")
+                if not text:
+                    continue
+                record = {
+                    "doc_id": doc.get("id", generate_id(text)),
+                    "text": text,
+                    "source": doc.get("source", "unknown"),
+                    label_field: label,
+                }
+                # Reservoir sampling
+                if len(reservoir) < n_per_stratum:
+                    reservoir.append(record)
+                else:
+                    j = rng.randint(0, count - 1)
+                    if j < n_per_stratum:
+                        reservoir[j] = record
 
     logger.info("Sampled %d documents from %d total for label=%s", len(reservoir), count, label)
     return reservoir
@@ -169,21 +153,14 @@ def _train_test_split(docs: list[dict], train_fraction: float, seed: int) -> tup
     return train, test
 
 
-def _write_jsonl(docs: list[dict], output_path: str) -> None:
-    """Write documents to a JSONL file."""
-    with open_url(output_path, "w") as f:
-        for doc in docs:
-            f.write(json.dumps(doc) + "\n")
-
-
-def sample_quality_documents(
+def sample_quality_documents_nemotron(
     output_path: str,
     nemotron_base_path: str,
     n_per_bucket: int = 25,
     seed: int = RANDOM_SEED,
     train_fraction: float = TRAIN_FRACTION,
 ) -> None:
-    """Sample documents from each Nemotron CC quality bucket."""
+    """Sample documents from each Nemotron CC quality bucket (5-bucket graduated)."""
     all_docs: list[dict] = []
 
     for bucket_name, bucket_path in NEMOTRON_QUALITY_BUCKETS.items():
@@ -199,12 +176,53 @@ def sample_quality_documents(
 
     train, test = _train_test_split(all_docs, train_fraction, seed)
 
-    _write_jsonl(train + test, os.path.join(output_path, "quality_samples.jsonl"))
-    _write_jsonl(train, os.path.join(output_path, "quality_train.jsonl"))
-    _write_jsonl(test, os.path.join(output_path, "quality_test.jsonl"))
+    write_parquet_file(train + test, os.path.join(output_path, "quality_samples.parquet"))
+    write_parquet_file(train, os.path.join(output_path, "quality_train.parquet"))
+    write_parquet_file(test, os.path.join(output_path, "quality_test.parquet"))
 
     logger.info(
         "Sampled %d quality documents (%d train, %d test) to %s",
+        len(all_docs),
+        len(train),
+        len(test),
+        output_path,
+    )
+
+
+def sample_quality_documents_binary(
+    output_path: str,
+    dolma_base_path: str,
+    n_per_bucket: int = 25,
+    seed: int = RANDOM_SEED,
+    train_fraction: float = TRAIN_FRACTION,
+) -> None:
+    """Sample documents for a 2-bucket quality strategy from Dolma.
+
+    "high" draws from arxiv + wiki; "low" draws from cc_en_tail. Pairs with
+    sample_quality_documents_nemotron (5-bucket graduated) so downstream
+    evaluation can compare a clean high/low contrast against a graded signal.
+    """
+    all_docs: list[dict] = []
+
+    for bucket_name, patterns in DOLMA_QUALITY_BINARY_PATTERNS.items():
+        full_patterns = [os.path.join(dolma_base_path, p) for p in patterns]
+        docs = _sample_from_files(
+            file_patterns=full_patterns,
+            n_per_stratum=n_per_bucket,
+            label=bucket_name,
+            label_field="quality_bucket",
+            seed=seed + hash(bucket_name),
+        )
+        all_docs.extend(docs)
+
+    train, test = _train_test_split(all_docs, train_fraction, seed)
+
+    write_parquet_file(train + test, os.path.join(output_path, "quality_samples.parquet"))
+    write_parquet_file(train, os.path.join(output_path, "quality_train.parquet"))
+    write_parquet_file(test, os.path.join(output_path, "quality_test.parquet"))
+
+    logger.info(
+        "Sampled %d binary-quality documents (%d train, %d test) to %s",
         len(all_docs),
         len(train),
         len(test),
@@ -236,9 +254,9 @@ def sample_topic_documents(
 
     train, test = _train_test_split(all_docs, train_fraction, seed)
 
-    _write_jsonl(train + test, os.path.join(output_path, "topic_samples.jsonl"))
-    _write_jsonl(train, os.path.join(output_path, "topic_train.jsonl"))
-    _write_jsonl(test, os.path.join(output_path, "topic_test.jsonl"))
+    write_parquet_file(train + test, os.path.join(output_path, "topic_samples.parquet"))
+    write_parquet_file(train, os.path.join(output_path, "topic_train.parquet"))
+    write_parquet_file(test, os.path.join(output_path, "topic_test.parquet"))
 
     logger.info(
         "Sampled %d topic documents (%d train, %d test) to %s",
