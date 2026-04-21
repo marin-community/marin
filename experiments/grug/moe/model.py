@@ -86,6 +86,8 @@ class GrugModelConfig:
     use_partial_rope: bool = False
     # Force the last layer to use long sliding window + PKO.
     last_layer_pko: bool = False
+    # Reuse attention input from 3rd-to-last layer for last 2 layers.
+    use_cached_attn: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -516,8 +518,9 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         use_partial_key_offset: bool = False,
         use_partial_rope: bool = False,
+        attn_in_override: Float[Array, "B S D"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        attn_in = attn_in_override if attn_in_override is not None else self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(
             attn_in, mask, use_partial_key_offset=use_partial_key_offset, use_partial_rope=use_partial_rope
         )
@@ -578,6 +581,7 @@ class Transformer(eqx.Module):
 
         pko_mode = cfg.partial_key_offset
         num_blocks = len(self.blocks)
+        cached_attn_in: Float[Array, "B S D"] | None = None
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
             is_last = i == num_blocks - 1
@@ -585,7 +589,10 @@ class Transformer(eqx.Module):
             layer_mask = long_mask if is_long else short_mask
             use_pko = (pko_mode == "every_layer") or (pko_mode == "every_4th" and is_long)
             partial_rope = cfg.use_partial_rope and not use_pko
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask, use_pko, partial_rope)
+            if cfg.use_cached_attn and i == num_blocks - 3:
+                cached_attn_in = block.attn_gated_norm(block.rms_attn(hidden))
+            override = cached_attn_in if (cfg.use_cached_attn and i >= num_blocks - 2) else None
+            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask, use_pko, partial_rope, override)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
