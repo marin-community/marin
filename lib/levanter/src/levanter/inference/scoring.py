@@ -186,8 +186,6 @@ def _gather_scores(
 
     Returns raw ``[batch_size]`` fp32 array of combined per-candidate log-probs.
     """
-    Batch = hax.Axis("batch", batch_size)
-
     # fp32 log_softmax for numerical stability.
     log_probs = hax.nn.log_softmax(logits.astype(jnp.float32), axis=vocab_axis)
     target_na = hax.named(target_tokens, axis="position")
