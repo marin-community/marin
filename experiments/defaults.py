@@ -307,9 +307,20 @@ def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> di
 @lru_cache
 def default_raw_validation_sets() -> dict[str, Any]:
     from experiments.evals.exp1600_uncheatable_evals import uncheatable_eval_raw_validation_sets
+    from experiments.evals.raw_capability_eval_sets import capability_raw_validation_sets
 
     validation_sets = dict(paloma_raw_validation_sets())
     validation_sets.update(uncheatable_eval_raw_validation_sets())
+    validation_sets.update(capability_raw_validation_sets())
+    return validation_sets
+
+
+@lru_cache
+def extended_raw_validation_sets() -> dict[str, Any]:
+    from experiments.evals.raw_capability_eval_sets import opt_in_capability_raw_validation_sets
+
+    validation_sets = dict(default_raw_validation_sets())
+    validation_sets.update(opt_in_capability_raw_validation_sets())
     return validation_sets
 
 
