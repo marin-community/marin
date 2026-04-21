@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Type, cast
 
 import equinox as eqx
+import jax
 import jax.random as jrandom
 
 import haliax as hax
@@ -16,7 +17,9 @@ from haliax.nn.scan import Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.layers.attention import Attention, AttentionConfig, AttentionMask
+from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.layers.rotary import RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig, LlamaEmbedding, LlamaLMHeadModel, LlamaMlp, LlamaTransformer
 from levanter.models.lm_model import LmConfig, LmHeadModel
@@ -185,6 +188,32 @@ class QwenDecoderLayer(eqx.Module):
         output = residual + mlp_output
         return output
 
+    @named_call
+    def decode(
+        self,
+        x: NamedArray,
+        kv_cache: KvPageCache,
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        *,
+        key=None,
+    ) -> tuple[NamedArray, KvPageCache]:
+        k_attn, k_mlp = maybe_rng_split(key, 2)
+
+        residual = x
+        x = self.input_layernorm(x)
+        attn_output, kv_cache = self.self_attn.paged_decode(x, kv_cache, batch_info, pos_ids=pos_ids, key=k_attn)
+        x = residual + attn_output
+
+        residual = x
+        x = self.post_attention_layernorm(x)
+        mlp_output = self.mlp(x, key=k_mlp)
+        output = residual + mlp_output
+        return output, kv_cache
+
+    def initial_cache(self, spec: PageTableSpec, *, dtype) -> KvPageCache:
+        return self.self_attn.empty_page_cache(spec, dtype=dtype)
+
 
 # Modified transformer for Qwen
 class QwenTransformer(LlamaTransformer):
@@ -217,6 +246,42 @@ class QwenTransformer(LlamaTransformer):
         x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
         return x
+
+    @named_call
+    def decode(
+        self,
+        kv_cache: ListCache[KvPageCache],
+        x: NamedArray,
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        *,
+        key=None,
+    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+        keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
+        caches = list(kv_cache)
+        updated_caches: list[KvPageCache] = []
+
+        for i in range(self.config.num_layers):
+            with jax.named_scope("slice layer"):
+                layer = hax.tree_util.tree_map(lambda l: l["layer", i], self.layers.stacked)  # type: ignore
+            with jax.named_scope("slice cache"):
+                this_cache = caches[i]
+            x, this_cache = layer.decode(
+                x,
+                this_cache,
+                batch_info,
+                pos_ids=pos_ids,
+                key=keys[i] if keys is not None else None,
+            )
+            with jax.named_scope("update cache"):
+                updated_caches.append(this_cache)
+
+        x = self.norm(x)
+        return x, ListCache(updated_caches)
+
+    def initial_cache(self, spec: PageTableSpec, *, dtype) -> ListCache[KvPageCache]:
+        caches = [layer.initial_cache(spec, dtype=dtype) for layer in self.layers.unstacked()]
+        return ListCache(caches)
 
 
 # Modified LM head model for Qwen
@@ -288,6 +353,30 @@ class QwenLMHeadModel(LmHeadModel[QwenConfig], ModuleWithStateDictSerialization)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
         return {"transformer": "model", "embeddings": None}
+
+    def initial_cache(self, spec: PageTableSpec, *, dtype) -> ListCache[KvPageCache]:
+        return hax.auto_sharded(self.transformer.initial_cache(spec, dtype=dtype))
+
+    @named_call
+    def decode(
+        self,
+        input_ids: NamedArray,
+        kv_cache: ListCache[KvPageCache],
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        *,
+        key=None,
+    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+        x = self.embeddings.embed(input_ids)
+        k_t = maybe_rng_split(key, 1)[0] if key is not None else None
+        x, new_state = self.transformer.decode(kv_cache, x, batch_info, pos_ids, key=k_t)
+
+        if self.lm_head is not None:
+            logits = self.lm_head(x, key=None)
+        else:
+            logits = self.embeddings.unembed(x)
+
+        return logits, new_state
 
 
 # =====================
