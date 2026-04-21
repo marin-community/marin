@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+
 import equinox as eqx
 import haliax as hax
 import jax
@@ -18,7 +19,7 @@ from levanter.metrics import (
     unwrap_metrics,
 )
 from levanter.tracker import NoopConfig
-from levanter.trainer import Trainer, TrainerConfig, WrappedLossFunction
+from levanter.trainer import AnomalyTracker, Trainer, TrainerConfig, WrappedLossFunction
 
 # Use a batch size that remains divisible by the data-parallel axis on multi-device setups.
 Embed = hax.Axis("embed", size=8)
@@ -278,7 +279,19 @@ def test_trainer_train_step(loss_fn, per_device_parallelism, expected_metrics):
         trainer.train_step(state, batch)
 
         if expected_metrics is None:
-            train_metrics = {k: v for k, v in logged_metrics.items() if k.startswith("train/")}
+            # Anomaly metrics are always present; only check that no
+            # loss-function metrics were logged.
+            anomaly_keys = {
+                "train/is_nan",
+                "train/is_inf",
+                "train/is_spike",
+                "train/nan_count",
+                "train/inf_count",
+                "train/spike_count",
+            }
+            train_metrics = {
+                k: v for k, v in logged_metrics.items() if k.startswith("train/") and k not in anomaly_keys
+            }
             assert len(train_metrics) == 0
         else:
             for key, expected_val in expected_metrics.items():
@@ -318,3 +331,120 @@ def test_microbatching_metric_aggregation():
         assert jnp.allclose(logged_metrics["train/accuracy"], 0.95)
         assert jnp.allclose(logged_metrics["train/num_tokens"], 256.0)
         assert jnp.allclose(logged_metrics["train/max_logit"], 5.0)
+
+
+# --- AnomalyTracker unit tests ---
+
+
+def test_anomaly_tracker_nan_counting():
+    tracker = AnomalyTracker(spike_threshold=5.0, spike_ewma_alpha=0.1)
+    # Normal loss first
+    m = tracker.observe(1.0)
+    assert not m.is_nan and m.nan_count == 0
+
+    m = tracker.observe(float("nan"))
+    assert m.is_nan and m.nan_count == 1
+
+    m = tracker.observe(float("nan"))
+    assert m.is_nan and m.nan_count == 2
+
+
+def test_anomaly_tracker_inf_counting():
+    tracker = AnomalyTracker(spike_threshold=5.0, spike_ewma_alpha=0.1)
+    tracker.observe(1.0)
+
+    m = tracker.observe(float("inf"))
+    assert m.is_inf and m.inf_count == 1
+
+    m = tracker.observe(float("-inf"))
+    assert m.is_inf and m.inf_count == 2
+
+
+def test_anomaly_tracker_spike_detection():
+    tracker = AnomalyTracker(spike_threshold=3.0, spike_ewma_alpha=1.0)
+    # alpha=1.0 means EWMA = last value exactly.
+    tracker.observe(1.0)  # EWMA = 1.0
+
+    # 2.9x baseline -> not a spike
+    m = tracker.observe(2.9)
+    assert not m.is_spike
+
+    # After non-spike, EWMA updated to 2.9 (alpha=1.0)
+    # 8.8 > 2.9 * 3.0 = 8.7 -> spike
+    m = tracker.observe(8.8)
+    assert m.is_spike and m.spike_count == 1
+
+
+def test_anomaly_tracker_spike_does_not_update_ewma():
+    tracker = AnomalyTracker(spike_threshold=3.0, spike_ewma_alpha=1.0)
+    tracker.observe(1.0)  # EWMA = 1.0
+
+    # Spike (4.0 > 1.0 * 3.0)
+    m = tracker.observe(4.0)
+    assert m.is_spike
+
+    # EWMA should still be 1.0 (spike was excluded), so 2.9 is not a spike
+    m = tracker.observe(2.9)
+    assert not m.is_spike
+
+
+def test_anomaly_tracker_nan_inf_excluded_from_ewma():
+    tracker = AnomalyTracker(spike_threshold=5.0, spike_ewma_alpha=1.0)
+    tracker.observe(1.0)  # EWMA = 1.0
+
+    tracker.observe(float("nan"))
+    tracker.observe(float("inf"))
+
+    # EWMA should still be 1.0
+    m = tracker.observe(1.5)
+    assert not m.is_spike
+
+
+def test_anomaly_tracker_disabled_spike_detection():
+    tracker = AnomalyTracker(spike_threshold=0, spike_ewma_alpha=0.1)
+    tracker.observe(1.0)
+    m = tracker.observe(1000.0)
+    assert not m.is_spike
+
+
+def test_anomaly_tracker_metrics_dict():
+    tracker = AnomalyTracker(spike_threshold=5.0, spike_ewma_alpha=0.1)
+    m = tracker.observe(float("nan"))
+    d = tracker.metrics_dict(m)
+    assert d["train/is_nan"] == 1.0
+    assert d["train/nan_count"] == 1.0
+    assert d["train/is_inf"] == 0.0
+
+
+def test_trainer_logs_anomaly_metrics():
+    """Trainer.train_step emits anomaly counter metrics."""
+    model = SimpleModel.init(jax.random.PRNGKey(0))
+    Batch = hax.Axis("batch", size=4 * max(1, jax.device_count()))
+
+    config = TrainerConfig(
+        tracker=NoopConfig(),
+        seed=42,
+        num_train_steps=10,
+        train_batch_size=Batch.size,
+        per_device_parallelism=1,
+        id="test_anomaly",
+        crash_on_nan=False,
+        crash_on_inf=False,
+    )
+
+    optimizer = optax.sgd(0.01)
+    trainer = Trainer(config, optimizer, simple_loss_fn, add_default_hooks=False)
+
+    logged_metrics: dict = {}
+    trainer.tracker.log = lambda metrics, step=None, commit=None: logged_metrics.update(metrics)
+
+    with trainer:
+        batch = hax.random.normal(jax.random.PRNGKey(1), (Batch, Embed))
+        state = trainer.initial_state(jax.random.PRNGKey(0), model=model)
+        trainer.train_step(state, batch)
+
+        assert "train/nan_count" in logged_metrics
+        assert "train/inf_count" in logged_metrics
+        assert "train/spike_count" in logged_metrics
+        assert "train/is_nan" in logged_metrics
+        assert logged_metrics["train/nan_count"] == 0.0

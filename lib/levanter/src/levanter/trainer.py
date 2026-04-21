@@ -5,6 +5,7 @@ import atexit
 import copy
 import functools
 import logging as pylogging
+import math
 import os
 import sys
 import typing
@@ -33,7 +34,6 @@ import haliax as hax
 from rigging.filesystem import open_url
 import haliax.tree_util
 import jax
-import jax.numpy as jnp
 import jmp
 import numpy as np
 from draccus import field
@@ -83,6 +83,81 @@ DEFAULT_JAX_CONFIG: Dict[str, JsonAtom] = {
     "jax_threefry_partitionable": True,
     "jax_softmax_custom_jvp": True,
 }
+
+
+@dataclass
+class AnomalyMetrics:
+    """Snapshot of anomaly counters for a single step."""
+
+    is_nan: bool
+    is_inf: bool
+    is_spike: bool
+    nan_count: int
+    inf_count: int
+    spike_count: int
+
+
+class AnomalyTracker:
+    """Tracks NaN, Inf, and loss-spike events across training steps.
+
+    Spike detection uses an exponentially weighted moving average (EWMA) of
+    recent non-anomalous losses.  A step is flagged as a spike when
+    ``loss > ewma * spike_threshold``.  NaN/Inf losses are never folded into
+    the EWMA baseline.
+    """
+
+    def __init__(self, spike_threshold: float, spike_ewma_alpha: float) -> None:
+        self.spike_threshold = spike_threshold
+        self.spike_ewma_alpha = spike_ewma_alpha
+
+        self.nan_count: int = 0
+        self.inf_count: int = 0
+        self.spike_count: int = 0
+        self._ewma: float | None = None
+
+    def observe(self, loss: float) -> AnomalyMetrics:
+        """Record a loss value and return current anomaly metrics."""
+        is_nan = math.isnan(loss)
+        is_inf = math.isinf(loss)
+        is_spike = False
+
+        if is_nan:
+            self.nan_count += 1
+        elif is_inf:
+            self.inf_count += 1
+        else:
+            # Spike detection against EWMA baseline
+            if self._ewma is not None and self.spike_threshold > 0:
+                is_spike = loss > self._ewma * self.spike_threshold
+            if is_spike:
+                self.spike_count += 1
+            # Update EWMA with non-anomalous losses only
+            if not is_spike:
+                if self._ewma is None:
+                    self._ewma = loss
+                else:
+                    alpha = self.spike_ewma_alpha
+                    self._ewma = alpha * loss + (1 - alpha) * self._ewma
+
+        return AnomalyMetrics(
+            is_nan=is_nan,
+            is_inf=is_inf,
+            is_spike=is_spike,
+            nan_count=self.nan_count,
+            inf_count=self.inf_count,
+            spike_count=self.spike_count,
+        )
+
+    def metrics_dict(self, anomaly: AnomalyMetrics) -> Dict[str, float]:
+        """Return a dict suitable for ``levanter.tracker.log()``."""
+        return {
+            "train/is_nan": float(anomaly.is_nan),
+            "train/is_inf": float(anomaly.is_inf),
+            "train/is_spike": float(anomaly.is_spike),
+            "train/nan_count": float(anomaly.nan_count),
+            "train/inf_count": float(anomaly.inf_count),
+            "train/spike_count": float(anomaly.spike_count),
+        }
 
 
 # A note on the semantics of "step" vs "next_step":
@@ -296,6 +371,10 @@ class Trainer:
 
         self._cmanagers = []
         self._logged_jaxprs: set[str] = set()
+        self.anomaly_tracker = AnomalyTracker(
+            spike_threshold=config.spike_threshold,
+            spike_ewma_alpha=config.spike_ewma_alpha,
+        )
 
     @cached_property
     def loss_fn(self) -> WrappedLossFunction:
@@ -494,10 +573,17 @@ class Trainer:
 
             loss = result.loss.item()
 
-            if self.config.crash_on_nan and jnp.isnan(loss):
+            # Track anomalies and log metrics *before* optional crash so
+            # the final step is always diagnosable in the tracker.
+            anomaly = self.anomaly_tracker.observe(loss)
+            anomaly_metrics = self.anomaly_tracker.metrics_dict(anomaly)
+
+            if self.config.crash_on_nan and anomaly.is_nan:
+                levanter.tracker.log(anomaly_metrics, step=int(result.new_state.step) - 1)
                 raise RuntimeError("Loss is NaN")
 
-            if self.config.crash_on_inf and jnp.isinf(loss):
+            if self.config.crash_on_inf and anomaly.is_inf:
+                levanter.tracker.log(anomaly_metrics, step=int(result.new_state.step) - 1)
                 raise RuntimeError("Loss is Inf")
 
             info = StepInfo(result.new_state, loss, step_time())
@@ -507,8 +593,8 @@ class Trainer:
                 if hooks_this_time:
                     self.hooks.run_jit_hooks_outside_step(info, result.hook_infos)
 
-            # Log metrics from loss function and throughput metrics
-            metrics_to_log = {**result.loss_metrics, "throughput/hook_time": hook_time()}
+            # Log metrics from loss function, throughput, and anomaly counters
+            metrics_to_log = {**result.loss_metrics, "throughput/hook_time": hook_time(), **anomaly_metrics}
             levanter.tracker.log(metrics_to_log, step=info.step)
 
         return info
@@ -815,6 +901,13 @@ class TrainerConfig:
     # helpful checks
     crash_on_nan: bool = True
     crash_on_inf: bool = True
+
+    spike_threshold: float = 5.0
+    """Loss spike detection multiplier.  A step is flagged when
+    ``loss > ewma * spike_threshold``.  Set to 0 to disable spike detection."""
+    spike_ewma_alpha: float = 0.1
+    """Smoothing factor for the EWMA baseline used by spike detection.
+    Smaller values make the baseline more stable (longer memory)."""
 
     # config related to partitioning
     mesh: MeshConfig = MeshConfig()
