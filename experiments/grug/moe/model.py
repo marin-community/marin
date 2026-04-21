@@ -73,6 +73,7 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    use_value_embed: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -130,7 +131,13 @@ class CausalSelfAttention(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        value_embed: "ValueEmbed | None" = None,
+        token_ids: "Int[Array, 'B S'] | None" = None,
+    ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
@@ -142,6 +149,8 @@ class CausalSelfAttention(eqx.Module):
         k = rms_norm(k)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
+        if value_embed is not None and token_ids is not None:
+            v = value_embed(v, x, token_ids)
         attn_out = attention(q, k, v, mask)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
@@ -198,6 +207,37 @@ class GatedNorm(eqx.Module):
         gate_hidden = jax.nn.silu(gate_hidden)
         gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
         return x * gate.astype(x.dtype)
+
+
+class ValueEmbed(eqx.Module):
+    """Learned value embedding indexed by token ID, mixed into v before attention."""
+
+    embed: jax.Array  # [vocab_size, num_kv_heads * head_dim]
+    gate: jax.Array  # [hidden_dim, num_kv_heads]
+    ve_lambda: jax.Array  # scalar
+    v_lambda: jax.Array  # scalar
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "ValueEmbed":
+        k_embed, k_gate = random.split(key)
+        m, h = cfg.num_kv_heads, cfg.inferred_head_dim
+        return ValueEmbed(
+            embed=reshard(_init_weight(k_embed, (cfg.vocab_size, m * h), cfg.initializer_std), Pembed_vocab),
+            gate=reshard(_init_weight(k_gate, (cfg.hidden_dim, m), cfg.initializer_std), P(None, None)),
+            ve_lambda=jnp.zeros(()),
+            v_lambda=jnp.ones(()),
+        )
+
+    def __call__(
+        self, v: Float[Array, "B S M D"], x: Float[Array, "B S D"], token_ids: Int[Array, "B S"]
+    ) -> Float[Array, "B S M D"]:
+        head_dim = v.shape[-1]
+        # ve: [B, S, M*D] -> [B, S, M, D]
+        ve = self.embed.at[token_ids].get(out_sharding=_batch_spec())
+        ve = rearrange(ve, "b s (m d) -> b s m d", d=head_dim)
+        # gate: [B, S, M] -> [B, S, M, 1]
+        gate_out = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dm->bsm", x, self.gate))[..., None]
+        return self.v_lambda * v + self.ve_lambda * gate_out * ve
 
 
 class DenseMLP(eqx.Module):
@@ -414,15 +454,17 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    value_embed: ValueEmbed | None
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
-        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
+    def init(cfg: GrugModelConfig, *, has_value_embed: bool = False, key: PRNGKeyArray) -> "Block":
+        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key, ve_key = random.split(key, 6)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
             shared = DenseMLP.init(
                 cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
             )
+        ve = ValueEmbed.init(cfg, key=ve_key) if has_value_embed else None
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
@@ -431,6 +473,7 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            value_embed=ve,
         )
 
     @named_call
@@ -438,9 +481,10 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        token_ids: "Int[Array, 'B S'] | None" = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask)
+        x = x + self.attn(attn_in, mask, value_embed=self.value_embed, token_ids=token_ids)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -466,7 +510,15 @@ class Transformer(eqx.Module):
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
-        blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+
+        def _has_ve(i: int) -> bool:
+            # Value embed on odd layers + last layer.
+            if not cfg.use_value_embed:
+                return False
+            last = cfg.num_layers - 1
+            return i % 2 == 1 or i == last
+
+        blocks = tuple(Block.init(cfg, has_value_embed=_has_ve(i), key=block_keys[i]) for i in range(cfg.num_layers))
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -497,9 +549,11 @@ class Transformer(eqx.Module):
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
 
         moe_router_stats: list[dict[str, jax.Array]] = []
+        # Pass token_ids to blocks that have value embeddings.
+        ve_ids = token_ids if cfg.use_value_embed else None
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask, ve_ids)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
