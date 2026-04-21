@@ -39,6 +39,7 @@ from levanter.checkpoint import (
     save_checkpoint,
     unregister_debug_checkpointer_state_provider,
 )
+from levanter.trainer import TrainerConfig
 from levanter.trainer_state import TrainerState
 
 
@@ -346,6 +347,21 @@ def test_checkpointer_config_no_temporary_base_path():
     config = CheckpointerConfig()
     assert config.temporary_base_path is None
     assert config.expanded_temporary_path("run1") is None
+
+
+def test_trainer_config_checkpoint_search_paths():
+    config = dataclasses.replace(
+        TrainerConfig(),
+        checkpointer=CheckpointerConfig(
+            base_path="/tmp/test-perm",
+            temporary_base_path="/tmp/test-temp",
+            append_run_id_to_base_path=True,
+        ),
+    )
+    assert config.checkpoint_search_paths("run1") == ["/tmp/test-perm/run1", "/tmp/test-temp/run1"]
+
+    pinned_config = dataclasses.replace(config, load_checkpoint_path="/tmp/test-perm/run1/step-100")
+    assert pinned_config.checkpoint_search_paths("run1") == ["/tmp/test-perm/run1/step-100"]
 
 
 def test_checkpointer_config_propagates_debug_settings():
