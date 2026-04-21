@@ -89,12 +89,17 @@ def create_strong_tier_manifest_step(*, name_prefix: str, cells: list[ScalingStu
     )
 
 
-def build_launch_steps(*, resume_latest_checkpoints: bool) -> tuple[list[ScalingStudyCell], list[object]]:
+def build_launch_steps(
+    *,
+    resume_latest_checkpoints: bool,
+    tpu_regions_override: tuple[str, ...] | None = None,
+) -> tuple[list[ScalingStudyCell], list[object]]:
     """Build the full executor step graph for all new strong-tier submissions."""
     cells = build_strong_tier_cells()
     steps: list[object] = [create_strong_tier_manifest_step(name_prefix=NAME, cells=cells)]
     for cell in new_submission_cells(cells):
         spec = resolve_scale_spec(cell.scale)
+        effective_tpu_regions = tpu_regions_override or cell.tpu_regions
         if cell.path == ScalingStudyPath.QSPLIT_REPRESENTATIVE12:
             qsplit_artifacts = build_qsplit240_replay_launch_artifacts(
                 name_prefix=cell.name_prefix,
@@ -109,7 +114,7 @@ def build_launch_steps(*, resume_latest_checkpoints: bool) -> tuple[list[Scaling
                 model_config=spec.model_config,
                 optimizer_config=spec.optimizer_config,
                 tpu_type=cell.tpu_type,
-                tpu_regions=cell.tpu_regions,
+                tpu_regions=effective_tpu_regions,
                 tpu_zone=cell.tpu_zone,
                 eval_tasks=QSPLIT240_300M_EVAL_TASKS,
                 panel=cell.panel or "",
@@ -131,7 +136,7 @@ def build_launch_steps(*, resume_latest_checkpoints: bool) -> tuple[list[Scaling
                 target_budget=cell.target_budget,
                 target_budget_multiplier=cell.target_budget_multiplier,
                 tpu_type=cell.tpu_type,
-                tpu_regions=cell.tpu_regions,
+                tpu_regions=effective_tpu_regions,
                 tpu_zone=cell.tpu_zone,
                 eval_datasets_cache_path=EVAL_DATASETS_CACHE_PATH,
                 resume_latest_checkpoints=resume_latest_checkpoints,
@@ -148,6 +153,7 @@ def build_launch_steps(*, resume_latest_checkpoints: bool) -> tuple[list[Scaling
 def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
+    parser.add_argument("--tpu-regions", help="Comma-separated TPU regions override (e.g., us-east5)")
     parser.add_argument(
         "--resume-latest-checkpoints",
         action=argparse.BooleanOptionalAction,
@@ -160,7 +166,11 @@ def main() -> None:
     args, remaining = _parse_args()
     sys.argv = [sys.argv[0], *remaining]
 
-    cells, steps = build_launch_steps(resume_latest_checkpoints=args.resume_latest_checkpoints)
+    tpu_regions_override = tuple(args.tpu_regions.split(",")) if args.tpu_regions else None
+    cells, steps = build_launch_steps(
+        resume_latest_checkpoints=args.resume_latest_checkpoints,
+        tpu_regions_override=tpu_regions_override,
+    )
     if os.getenv("CI") is not None:
         logger.info(
             "Built strong-tier scaling-study graph in CI with %d total cells, %d new runs, and %d executor steps; "

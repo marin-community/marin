@@ -19,6 +19,9 @@ import pandas as pd
 from experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline import (
     build_run_spec as build_stratified_run_spec,
 )
+from experiments.domain_phase_mix.exploratory.two_phase_many.run_registry.build_run_registry import (
+    STRONG_TIER_PARENT_JOB_IDS,
+)
 from experiments.domain_phase_mix.qsplit240_replay import build_qsplit240_replay_run_specs
 from experiments.domain_phase_mix.scaling_study_recipes import (
     ScalingStudyCell,
@@ -30,8 +33,21 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 OUTPUT_LOGICAL_RUNS_CSV = SCRIPT_DIR / "strong_tier_logical_runs.csv"
 OUTPUT_CHILD_JOBS_CSV = SCRIPT_DIR / "strong_tier_child_jobs.csv"
 OUTPUT_SUMMARY_JSON = SCRIPT_DIR / "strong_tier_summary.json"
-STRONG_TIER_PARENT_JOB_ID = "/calvinxu/dm-strong-tier-scaling-study-20260415-235849"
 IRIS_CONFIG = "lib/iris/examples/marin.yaml"
+CHILD_JOB_COLUMNS = [
+    "parent_job_id",
+    "job_id",
+    "state",
+    "submitted_at_epoch_ms",
+    "task_count",
+    "completed_count",
+    "failure_count",
+    "preemption_count",
+    "pending_reason",
+    "tpu_variant",
+    "tpu_count",
+    "run_stem",
+]
 
 
 def _logical_family(cell: ScalingStudyCell) -> str:
@@ -86,7 +102,8 @@ def build_logical_runs() -> pd.DataFrame:
                     "registry_id": f"{family}:{cell.name_prefix}:{run_spec['run_name']}",
                     "family": family,
                     "scale": cell.scale.value,
-                    "study_parent_job_id": STRONG_TIER_PARENT_JOB_ID,
+                    "study_parent_job_id": pd.NA,
+                    "tracked_parent_job_ids": ",".join(STRONG_TIER_PARENT_JOB_IDS),
                     "study_cell_status": cell.status.value,
                     "study_path": cell.path.value,
                     "study_cohort": cell.cohort,
@@ -117,54 +134,57 @@ def build_logical_runs() -> pd.DataFrame:
 
 
 def build_child_jobs() -> pd.DataFrame:
-    command = [
-        "uv",
-        "run",
-        "iris",
-        "--config",
-        IRIS_CONFIG,
-        "job",
-        "list",
-        "--json",
-        "--prefix",
-        STRONG_TIER_PARENT_JOB_ID,
-    ]
-    result = subprocess.run(
-        command,
-        cwd=Path(__file__).resolve().parents[5],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    jobs = json.loads(result.stdout)
     rows: list[dict[str, Any]] = []
-    for job in jobs:
-        if job["job_id"] == STRONG_TIER_PARENT_JOB_ID:
-            continue
-        variant = job.get("resources", {}).get("device", {}).get("tpu", {}).get("variant")
-        count = job.get("resources", {}).get("device", {}).get("tpu", {}).get("count")
-        rows.append(
-            {
-                "parent_job_id": STRONG_TIER_PARENT_JOB_ID,
-                "job_id": job["job_id"],
-                "state": job["state"],
-                "submitted_at_epoch_ms": job.get("submitted_at", {}).get("epoch_ms"),
-                "task_count": job.get("task_count"),
-                "completed_count": job.get("completed_count"),
-                "failure_count": job.get("failure_count"),
-                "preemption_count": job.get("preemption_count"),
-                "pending_reason": job.get("pending_reason", ""),
-                "tpu_variant": variant,
-                "tpu_count": count,
-                "run_stem": str(job["job_id"]).rsplit("/", 1)[-1].split("-", 1)[0],
-            }
+    for parent_job_id in STRONG_TIER_PARENT_JOB_IDS:
+        command = [
+            "uv",
+            "run",
+            "iris",
+            "--config",
+            IRIS_CONFIG,
+            "job",
+            "list",
+            "--json",
+            "--prefix",
+            parent_job_id,
+        ]
+        result = subprocess.run(
+            command,
+            cwd=Path(__file__).resolve().parents[5],
+            capture_output=True,
+            text=True,
+            check=True,
         )
-    return pd.DataFrame(rows).sort_values(["state", "job_id"]).reset_index(drop=True)
+        jobs = json.loads(result.stdout)
+        for job in jobs:
+            if job["job_id"] == parent_job_id:
+                continue
+            variant = job.get("resources", {}).get("device", {}).get("tpu", {}).get("variant")
+            count = job.get("resources", {}).get("device", {}).get("tpu", {}).get("count")
+            rows.append(
+                {
+                    "parent_job_id": parent_job_id,
+                    "job_id": job["job_id"],
+                    "state": job["state"],
+                    "submitted_at_epoch_ms": job.get("submitted_at", {}).get("epoch_ms"),
+                    "task_count": job.get("task_count"),
+                    "completed_count": job.get("completed_count"),
+                    "failure_count": job.get("failure_count"),
+                    "preemption_count": job.get("preemption_count"),
+                    "pending_reason": job.get("pending_reason", ""),
+                    "tpu_variant": variant,
+                    "tpu_count": count,
+                    "run_stem": str(job["job_id"]).rsplit("/", 1)[-1].split("-", 1)[0],
+                }
+            )
+    if not rows:
+        return pd.DataFrame(columns=CHILD_JOB_COLUMNS)
+    return pd.DataFrame(rows, columns=CHILD_JOB_COLUMNS).sort_values(["state", "job_id"]).reset_index(drop=True)
 
 
 def build_summary(logical_runs: pd.DataFrame, child_jobs: pd.DataFrame) -> dict[str, Any]:
     return {
-        "parent_job_id": STRONG_TIER_PARENT_JOB_ID,
+        "tracked_parent_job_ids": list(STRONG_TIER_PARENT_JOB_IDS),
         "logical_run_count": len(logical_runs),
         "new_run_count": int(logical_runs["is_new_submission"].sum()),
         "reused_run_count": int(logical_runs["is_reused_submission"].sum()),
@@ -180,6 +200,12 @@ def build_summary(logical_runs: pd.DataFrame, child_jobs: pd.DataFrame) -> dict[
         },
         "logical_runs_by_family": {
             str(key): int(value) for key, value in logical_runs.groupby("family").size().sort_index().items()
+        },
+        "logical_runs_by_scale_path_status": {
+            "|".join(str(part) for part in key): int(value)
+            for key, value in (
+                logical_runs.groupby(["scale", "study_path", "study_cell_status"]).size().sort_index().items()
+            )
         },
         "child_job_count": len(child_jobs),
         "child_jobs_by_state": {

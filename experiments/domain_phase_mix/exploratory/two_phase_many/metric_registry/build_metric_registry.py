@@ -25,7 +25,15 @@ import fsspec
 import pandas as pd
 
 from experiments.domain_phase_mix.exploratory.two_phase_many import summarize_eval_signal_to_noise as snr
-from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import STRATIFIED_RUN_ID, STRATIFIED_RUN_NAME
+from experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline import (
+    build_run_spec as build_stratified_run_spec,
+)
+from experiments.domain_phase_mix.qsplit240_replay import build_qsplit240_replay_run_specs
+from experiments.domain_phase_mix.scaling_study_recipes import (
+    ScalingStudyCell,
+    ScalingStudyPath,
+    build_strong_tier_cells,
+)
 from experiments.domain_phase_mix.two_phase_many_observed_runs import load_original_qsplit240_with_core_baselines
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -43,9 +51,27 @@ MANUAL_BACKFILLS_CSV = SCRIPT_DIR / "manual_backfills.csv"
 SUMMARY_JSON = SCRIPT_DIR / "summary.json"
 DEFAULT_CHECKPOINT_BUCKET = "marin-us-east5"
 OBJECTIVE_METRIC = "eval/uncheatable_eval/bpb"
+STRATIFIED_RUN_ID = 3
+STRATIFIED_RUN_NAME = "baseline_stratified"
 QSPLIT240_300M_SOURCE_EXPERIMENT = "pinlin_calvin_xu/data_mixture/ngd3dm2_qsplit240_300m_6b"
 STRATIFIED_300M_SOURCE_EXPERIMENT = "pinlin_calvin_xu/data_mixture/ngd3dm2_stratified_300m_6b"
 STRICT_300M_SUCCESS_CSV = TWO_PHASE_MANY_DIR / "qsplit240_300m_6b_completed_vs_60m.csv"
+RUN_REGISTRY_LOGICAL_RUNS_CSV = TWO_PHASE_MANY_DIR / "run_registry" / "logical_runs.csv"
+SWARM_REFERENCE_60M_COHORT = "swarm_reference_60m"
+STRONG_TIER_FAMILIES = {
+    "strong_tier_qsplit_representative12",
+    "strong_tier_stratified",
+    "strong_tier_qsplit_baselines3_holdout",
+    "strong_tier_stratified_holdout",
+}
+STRONG_TIER_COHORT_BY_PATH = {
+    ScalingStudyPath.QSPLIT_REPRESENTATIVE12.value: "representative12",
+    ScalingStudyPath.STRATIFIED.value: "stratified",
+    ScalingStudyPath.QSPLIT_BASELINES3_HOLDOUT.value: "holdout_baselines3",
+    ScalingStudyPath.STRATIFIED_HOLDOUT.value: "holdout_stratified",
+}
+LM_EVAL_RESULTS_GLOB = "lm_eval_artifacts/lm_eval_harness_results*.json"
+LM_EVAL_METRIC_SUFFIX = ",none"
 
 LOCAL_SOURCE_CSVS = (
     (
@@ -80,6 +106,14 @@ LOCAL_SOURCE_CSVS = (
         55,
         "local_wandb_collect",
     ),
+    (
+        "local_two_phase_many_all_60m_1p2b_swarm_reference",
+        TWO_PHASE_MANY_DIR / "two_phase_many_all_60m_1p2b.csv",
+        "60m_1p2b",
+        SWARM_REFERENCE_60M_COHORT,
+        75,
+        "local_wandb_collect",
+    ),
 )
 
 METRIC_PREFIXES = ("eval/", "lm_eval/")
@@ -90,19 +124,37 @@ KNOWN_ID_COLUMNS = (
     "scale",
     "cohort",
     "source_cohort",
+    "study_path",
+    "study_panel",
+    "study_cell_status",
     "run_id",
     "run_name",
     "source_run_name",
     "source_experiment",
+    "source_name_prefix",
     "wandb_run_id",
     "wandb_run_name",
     "checkpoint_root",
     "status",
+    "experiment_budget",
+    "target_budget",
+    "target_budget_multiplier",
+    "num_train_steps",
+    "model_family",
     "trainer_seed",
     "data_seed",
     "candidate_source_experiment",
     "candidate_run_id",
     "candidate_run_name",
+    "has_objective_metric_value",
+    "has_checkpoint_root",
+    "has_checkpoint_backed_objective",
+    "analysis_attempt_root",
+    "analysis_executor_status",
+    "max_checkpoint_step",
+    "target_final_checkpoint_step",
+    "reached_target_step",
+    "is_perplexity_ready",
 )
 RUN_FIRST_VALUE_COLUMNS = (
     "run_id",
@@ -110,17 +162,35 @@ RUN_FIRST_VALUE_COLUMNS = (
     "scale",
     "cohort",
     "source_cohort",
+    "study_path",
+    "study_panel",
+    "study_cell_status",
     "source_run_name",
     "source_experiment",
+    "source_name_prefix",
     "wandb_run_id",
     "wandb_run_name",
     "checkpoint_root",
     "status",
+    "experiment_budget",
+    "target_budget",
+    "target_budget_multiplier",
+    "num_train_steps",
+    "model_family",
     "trainer_seed",
     "data_seed",
     "candidate_source_experiment",
     "candidate_run_id",
     "candidate_run_name",
+    "has_objective_metric_value",
+    "has_checkpoint_root",
+    "has_checkpoint_backed_objective",
+    "analysis_attempt_root",
+    "analysis_executor_status",
+    "max_checkpoint_step",
+    "target_final_checkpoint_step",
+    "reached_target_step",
+    "is_perplexity_ready",
 )
 FEWSHOT_TASK_RE = re.compile(r"^(?P<task>.+)_(?P<num_fewshot>[0-9]+)shot$")
 CONFLICT_TOLERANCE = 1e-10
@@ -234,6 +304,46 @@ def _read_checkpoint_eval_metrics(checkpoint_root: str) -> dict[str, float]:
             for key, value in summary.items():
                 if key.startswith(METRIC_PREFIXES) and isinstance(value, int | float):
                     metrics.setdefault(key, float(value))
+    for key, value in _read_lm_eval_harness_metrics(checkpoint_root).items():
+        metrics.setdefault(key, value)
+    return metrics
+
+
+def _lm_eval_artifact_step(path: str) -> int:
+    match = re.search(r"lm_eval_harness_results\.(\d+)\.json$", path)
+    if match is None:
+        return -1
+    return int(match.group(1))
+
+
+def _read_lm_eval_harness_metrics(checkpoint_root: str) -> dict[str, float]:
+    pattern = checkpoint_root.rstrip("/") + f"/{LM_EVAL_RESULTS_GLOB}"
+    fs, _, _ = fsspec.get_fs_token_paths(pattern)
+    matches = [match if str(match).startswith("gs://") else f"gs://{match}" for match in fs.glob(pattern)]
+    if not matches:
+        return {}
+
+    best_path = max(matches, key=lambda path: (_lm_eval_artifact_step(path), path))
+    with fsspec.open(best_path, "rt") as f:
+        payload = json.load(f)
+
+    results = payload.get("results", {})
+    if not isinstance(results, dict):
+        return {}
+
+    metrics: dict[str, float] = {}
+    for task_key, task_metrics in results.items():
+        if not isinstance(task_metrics, dict):
+            continue
+        for metric_key, value in task_metrics.items():
+            if not metric_key.endswith(LM_EVAL_METRIC_SUFFIX):
+                continue
+            metric_name = metric_key.removesuffix(LM_EVAL_METRIC_SUFFIX)
+            if metric_name.endswith("_stderr"):
+                continue
+            if not isinstance(value, int | float):
+                continue
+            metrics[f"lm_eval/{task_key}/{metric_name}"] = float(value)
     return metrics
 
 
@@ -293,6 +403,8 @@ def _source_frames(*, include_gcs: bool) -> list[SourceFrame]:
                 default_status="completed",
             )
         )
+
+    sources.extend(_strong_tier_source_frames())
 
     if not include_gcs:
         return sources
@@ -358,6 +470,142 @@ def _source_frames(*, include_gcs: bool) -> list[SourceFrame]:
             ),
         ]
     )
+    return sources
+
+
+def _strong_tier_family(cell: ScalingStudyCell) -> str:
+    if cell.path == ScalingStudyPath.QSPLIT_REPRESENTATIVE12:
+        return "strong_tier_qsplit_representative12"
+    if cell.path == ScalingStudyPath.STRATIFIED:
+        return "strong_tier_stratified"
+    if cell.path == ScalingStudyPath.QSPLIT_BASELINES3_HOLDOUT:
+        return "strong_tier_qsplit_baselines3_holdout"
+    if cell.path == ScalingStudyPath.STRATIFIED_HOLDOUT:
+        return "strong_tier_stratified_holdout"
+    raise ValueError(f"Unsupported strong-tier cell path: {cell.path!r}")
+
+
+def _strong_tier_run_specs(cell: ScalingStudyCell) -> list[dict[str, Any]]:
+    if cell.path in {ScalingStudyPath.QSPLIT_REPRESENTATIVE12, ScalingStudyPath.QSPLIT_BASELINES3_HOLDOUT}:
+        return [
+            spec.__dict__
+            for spec in build_qsplit240_replay_run_specs(
+                cohort=cell.cohort,
+                model_family=cell.model_family,
+                experiment_budget=cell.experiment_budget,
+                target_budget=cell.target_budget,
+                target_budget_multiplier=cell.target_budget_multiplier,
+                num_train_steps=cell.num_train_steps,
+                panel=cell.panel or "",
+            )
+        ]
+    return [
+        build_stratified_run_spec(
+            scale=cell.scale,
+            experiment_budget=cell.experiment_budget,
+            target_budget=cell.target_budget,
+            target_budget_multiplier=cell.target_budget_multiplier,
+            cohort=cell.cohort,
+        ).__dict__
+    ]
+
+
+def _flatten_phase_weights(phase_weights: dict[str, dict[str, float]]) -> dict[str, float]:
+    rows: dict[str, float] = {}
+    for phase_name, domain_weights in phase_weights.items():
+        for domain_name, weight in domain_weights.items():
+            rows[f"{phase_name}_{domain_name}"] = float(weight)
+    return rows
+
+
+def _strong_tier_expected_frame() -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for cell in build_strong_tier_cells():
+        family = _strong_tier_family(cell)
+        cohort = STRONG_TIER_COHORT_BY_PATH[cell.path.value]
+        for run_spec in _strong_tier_run_specs(cell):
+            rows.append(
+                {
+                    "registry_id": f"{family}:{cell.name_prefix}:{run_spec['run_name']}",
+                    "family": family,
+                    "scale": cell.scale.value,
+                    "cohort": cohort,
+                    "source_cohort": cell.cohort,
+                    "study_path": cell.path.value,
+                    "study_panel": cell.panel,
+                    "study_cell_status": cell.status.value,
+                    "source_experiment": cell.name_prefix,
+                    "source_name_prefix": cell.source_name_prefix,
+                    "run_id": int(run_spec["run_id"]),
+                    "run_name": str(run_spec["run_name"]),
+                    "candidate_run_id": run_spec.get("candidate_run_id"),
+                    "candidate_run_name": run_spec.get("candidate_run_name"),
+                    "candidate_source_experiment": run_spec.get("candidate_source_experiment"),
+                    "model_family": cell.model_family,
+                    "experiment_budget": cell.experiment_budget,
+                    "target_budget": cell.target_budget,
+                    "target_budget_multiplier": cell.target_budget_multiplier,
+                    "num_train_steps": cell.num_train_steps,
+                    **_flatten_phase_weights(run_spec["phase_weights"]),
+                }
+            )
+    return pd.DataFrame.from_records(rows)
+
+
+def _strong_tier_source_frames() -> list[SourceFrame]:
+    if not RUN_REGISTRY_LOGICAL_RUNS_CSV.exists():
+        return []
+
+    logical_runs = pd.read_csv(RUN_REGISTRY_LOGICAL_RUNS_CSV, low_memory=False)
+    logical_runs = logical_runs.loc[logical_runs["family"].isin(STRONG_TIER_FAMILIES)].copy()
+    if logical_runs.empty:
+        return []
+
+    expected = _strong_tier_expected_frame()
+    merge_columns = [
+        "registry_id",
+        "family",
+        "source_experiment",
+        "run_id",
+        "run_name",
+        "logical_status",
+        "checkpoint_root",
+        "wandb_run_id",
+        "source_status",
+        "has_objective_metric_value",
+        "has_checkpoint_root",
+        "has_checkpoint_backed_objective",
+        "analysis_attempt_root",
+        "analysis_executor_status",
+        "max_checkpoint_step",
+        "target_final_checkpoint_step",
+        "reached_target_step",
+        "is_perplexity_ready",
+    ]
+    merged = expected.merge(
+        logical_runs[merge_columns],
+        on=["registry_id", "family", "run_id", "run_name"],
+        how="left",
+        suffixes=("", "_logical"),
+    )
+    merged["source_experiment"] = merged["source_experiment_logical"].combine_first(merged["source_experiment"])
+    merged["status"] = merged["logical_status"].fillna("planned")
+    merged = merged.drop(columns=["source_experiment_logical", "logical_status"])
+    merged = _hydrate_checkpoint_eval_metrics(merged)
+
+    sources: list[SourceFrame] = []
+    for (scale, cohort), group in merged.groupby(["scale", "cohort"], sort=True):
+        sources.append(
+            SourceFrame(
+                source_name=f"run_registry_{cohort}_{scale}",
+                source_uri=str(RUN_REGISTRY_LOGICAL_RUNS_CSV),
+                source_kind="run_registry_checkpoint_metrics",
+                scale=str(scale),
+                default_cohort=str(cohort),
+                source_priority=95,
+                frame=group.reset_index(drop=True),
+            )
+        )
     return sources
 
 
@@ -432,8 +680,9 @@ def _normalized_cohort(source: SourceFrame) -> pd.Series:
     return normalized
 
 
-def _run_key(scale: str, cohort: pd.Series, run_name: pd.Series) -> pd.Series:
-    return scale + ":" + cohort.astype(str) + ":" + run_name.astype(str)
+def _run_key(scale: str, cohort: pd.Series, source_experiment: pd.Series, run_name: pd.Series) -> pd.Series:
+    normalized_source = source_experiment.fillna("<missing_source_experiment>").astype(str)
+    return scale + ":" + cohort.astype(str) + ":" + normalized_source + ":" + run_name.astype(str)
 
 
 def _artifact_row(source: SourceFrame) -> dict[str, Any]:
@@ -463,7 +712,9 @@ def _runs_from_source(source: SourceFrame) -> pd.DataFrame:
     rows["scale"] = source.scale
     rows["cohort"] = cohort
     rows["source_cohort"] = source_cohort
-    rows["registry_run_key"] = _run_key(source.scale, cohort, rows["run_name"])
+    if "source_experiment" not in rows.columns:
+        rows["source_experiment"] = pd.NA
+    rows["registry_run_key"] = _run_key(source.scale, cohort, rows["source_experiment"], rows["run_name"])
     rows["source_name"] = source.source_name
     rows["source_priority"] = source.source_priority
 
@@ -486,7 +737,9 @@ def _metrics_from_source(source: SourceFrame) -> pd.DataFrame:
     frame["scale"] = source.scale
     frame["cohort"] = cohort
     frame["source_cohort"] = source_cohort
-    frame["registry_run_key"] = _run_key(source.scale, cohort, frame["run_name"])
+    if "source_experiment" not in frame.columns:
+        frame["source_experiment"] = pd.NA
+    frame["registry_run_key"] = _run_key(source.scale, cohort, frame["source_experiment"], frame["run_name"])
 
     id_columns = [column for column in KNOWN_ID_COLUMNS if column in frame.columns]
     melted = frame.melt(
@@ -522,7 +775,14 @@ def _manual_backfill_metrics() -> pd.DataFrame:
     if missing:
         raise ValueError(f"{MANUAL_BACKFILLS_CSV} missing required columns: {missing}")
     rows = frame.copy()
-    rows["registry_run_key"] = _run_key(rows["scale"].astype(str), rows["cohort"].astype(str), rows["run_name"])
+    if "source_experiment" not in rows.columns:
+        rows["source_experiment"] = pd.NA
+    rows["registry_run_key"] = _run_key(
+        rows["scale"].astype(str),
+        rows["cohort"].astype(str),
+        rows["source_experiment"],
+        rows["run_name"],
+    )
     rows["original_metric_key"] = rows["canonical_metric_key"]
     metadata = pd.DataFrame.from_records(
         [canonicalize_metric_key(metric_key) for metric_key in rows["canonical_metric_key"]]

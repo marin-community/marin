@@ -17,7 +17,6 @@ import fsspec
 import pandas as pd
 from scipy import stats
 
-from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import STRATIFIED_RUN_NAME
 from experiments.domain_phase_mix.two_phase_many_observed_runs import (
     CORE_BASELINE_RUN_NAMES,
     load_original_qsplit240_with_core_baselines,
@@ -28,6 +27,7 @@ BASE_CSV = SCRIPT_DIR / "two_phase_many.csv"
 OUTPUT_CSV = SCRIPT_DIR / "qsplit240_300m_6b_completed_vs_60m.csv"
 OUTPUT_SUMMARY_JSON = SCRIPT_DIR / "qsplit240_300m_6b_completed_vs_60m_summary.json"
 OBJECTIVE_METRIC = "eval/uncheatable_eval/bpb"
+STRATIFIED_RUN_NAME = "baseline_stratified"
 QSPLIT240_300M_CHECKPOINT_PREFIX = "marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_qsplit240_300m_6b"
 STRATIFIED_60M_CHECKPOINT_PREFIX = (
     "marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_stratified_60m_1p2b"

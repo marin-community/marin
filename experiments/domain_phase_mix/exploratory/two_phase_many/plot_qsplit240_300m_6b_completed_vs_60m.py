@@ -26,6 +26,8 @@ plt.rcParams["text.usetex"] = False
 ROOT = Path(__file__).resolve().parent
 INPUT_CSV = ROOT / "qsplit240_300m_6b_completed_vs_60m.csv"
 INPUT_SUMMARY_JSON = ROOT / "qsplit240_300m_6b_completed_vs_60m_summary.json"
+INPUT_60M_ALL_RUNS_CSV = ROOT / "two_phase_many_all_60m_1p2b.csv"
+INPUT_LOGICAL_RUNS_CSV = ROOT / "run_registry" / "logical_runs.csv"
 OUTPUT_PNG = ROOT / "qsplit240_300m_6b_completed_vs_60m_rank_shift.png"
 OUTPUT_BPB_PNG = ROOT / "qsplit240_300m_6b_completed_vs_60m_bpb_correlation.png"
 OUTPUT_SELECTED_CSV = ROOT / "qsplit240_300m_6b_completed_vs_60m_rank_shift_selected.csv"
@@ -36,22 +38,27 @@ BASELINE_LABELS = {
     "baseline_unimax": "UniMax",
     "baseline_proportional": "Proportional",
 }
-PENDING_REFERENCE_ROWS = (
+EXTRA_REFERENCE_SPECS = (
     {
         "run_name": "baseline_olmix_loglinear_uncheatable_bpb",
         "label": "Olmix",
-        "bpb_60m": 1.068716,
+        "registry_run_name": "baseline_olmix_loglinear_uncheatable_bpb",
+        "note": "executor failed; final eval present",
     },
     {
         "run_name": "baseline_genericfamily_power_family_penalty_raw_optimum",
         "label": "GRP (Power-Family Penalty)",
-        "bpb_60m": 1.036191,
+        "registry_run_name": "baseline_genericfamily_power_family_penalty_raw_optimum_300m_6b",
+        "note": "executor still running; final eval present",
     },
 )
 ANNOTATION_OFFSET_POINTS = (4, -4)
 POSITIVE_COLOR = "#1a9850"
 NEGATIVE_COLOR = "#d73027"
 NEUTRAL_COLOR = "#4d4d4d"
+EXTRA_POINT_COLOR = "#2b2b2b"
+EXTRA_POINT_MARKER = "X"
+EXTRA_POINT_SIZE = 88
 
 
 def _display_label(run_name: str) -> str:
@@ -62,6 +69,38 @@ def _display_label(run_name: str) -> str:
     return run_name
 
 
+def _extra_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    frame_60m = pd.read_csv(INPUT_60M_ALL_RUNS_CSV)
+    logical_runs = pd.read_csv(INPUT_LOGICAL_RUNS_CSV)
+    rows: list[dict[str, object]] = []
+    for spec in EXTRA_REFERENCE_SPECS:
+        row_60m = frame_60m.loc[frame_60m["run_name"] == spec["run_name"]]
+        if row_60m.empty:
+            raise ValueError(f"Missing 60M row for {spec['run_name']}")
+        row_300m = logical_runs.loc[logical_runs["run_name"] == spec["registry_run_name"]]
+        if row_300m.empty:
+            raise ValueError(f"Missing registry row for {spec['registry_run_name']}")
+        bpb_60m = float(row_60m.iloc[0]["eval/uncheatable_eval/bpb"])
+        bpb_300m = float(row_300m.iloc[0]["objective_metric_value"])
+        rank_60m = int((frame["bpb_60m"] < bpb_60m).sum() + 1)
+        rank_300m = int((frame["bpb_300m_6b"] < bpb_300m).sum() + 1)
+        rows.append(
+            {
+                "run_name": spec["run_name"],
+                "label": spec["label"],
+                "group": "Extra 300M final",
+                "note": spec["note"],
+                "bpb_60m": bpb_60m,
+                "bpb_300m_6b": bpb_300m,
+                "bpb_delta": bpb_60m - bpb_300m,
+                "rank_60m_within_completed": rank_60m,
+                "rank_300m_6b": rank_300m,
+                "rank_shift": rank_60m - rank_300m,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _selected_rows(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     baselines = frame[frame["run_name"].isin(BASELINE_LABELS)].copy()
     mixtures = frame[frame["run_name"].str.startswith("run_")].copy()
@@ -70,10 +109,7 @@ def _selected_rows(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     selected["label"] = selected["run_name"].map(_display_label)
     selected["group"] = np.where(selected["run_name"].isin(BASELINE_LABELS), "Baseline", "Best 60M mixture")
     selected = selected.sort_values(["group", "rank_60m_within_completed"]).reset_index(drop=True)
-
-    pending = pd.DataFrame(PENDING_REFERENCE_ROWS)
-    pending["rank_60m_if_included"] = pending["bpb_60m"].apply(lambda value: int((frame["bpb_60m"] < value).sum() + 1))
-    return selected, pending
+    return selected, _extra_rows(frame)
 
 
 def _bar_colors(rank_shift: pd.Series) -> list[str]:
@@ -94,7 +130,7 @@ def _bpb_colors(bpb_values: pd.Series, *, vmin: float, vmax: float) -> list[tupl
     return [cmap(norm(float(value))) for value in bpb_values]
 
 
-def _plot_scatter(ax: plt.Axes, frame: pd.DataFrame, selected: pd.DataFrame) -> None:
+def _plot_scatter(ax: plt.Axes, frame: pd.DataFrame, selected: pd.DataFrame, extras: pd.DataFrame) -> None:
     cmap = plt.get_cmap("RdYlGn_r")
     norm = Normalize(vmin=frame["bpb_300m_6b"].min(), vmax=frame["bpb_300m_6b"].max())
     scatter = ax.scatter(
@@ -127,15 +163,37 @@ def _plot_scatter(ax: plt.Axes, frame: pd.DataFrame, selected: pd.DataFrame) -> 
             alpha=0.92,
         )
 
+    if not extras.empty:
+        ax.scatter(
+            extras["rank_60m_within_completed"],
+            extras["rank_300m_6b"],
+            s=EXTRA_POINT_SIZE,
+            marker=EXTRA_POINT_MARKER,
+            color=EXTRA_POINT_COLOR,
+            edgecolors="white",
+            linewidths=0.8,
+            zorder=4,
+        )
+        for _, row in extras.iterrows():
+            ax.annotate(
+                row["label"],
+                (row["rank_60m_within_completed"], row["rank_300m_6b"]),
+                xytext=ANNOTATION_OFFSET_POINTS,
+                textcoords="offset points",
+                fontsize=8,
+                alpha=0.95,
+                fontweight="semibold",
+            )
+
     cbar = plt.colorbar(scatter, ax=ax, fraction=0.046, pad=0.02)
     cbar.set_label("300M/6B BPB")
 
 
-def _plot_selected_bars(ax: plt.Axes, selected: pd.DataFrame, pending: pd.DataFrame) -> None:
-    movers = selected.sort_values("rank_shift").reset_index(drop=True)
+def _plot_selected_bars(ax: plt.Axes, selected: pd.DataFrame, extras: pd.DataFrame) -> None:
+    movers = pd.concat([selected, extras], ignore_index=True).sort_values(["group", "rank_shift"]).reset_index(drop=True)
     ax.barh(movers["label"], movers["rank_shift"], color=_bar_colors(movers["rank_shift"]), alpha=0.9)
     ax.axvline(0, color="0.4", linewidth=1.0)
-    ax.set_xlabel("Rank shift = 60M rank - 300M/6B rank")
+    ax.set_xlabel("Rank shift if included = 60M rank - 300M/6B rank")
     ax.set_title("Baselines + best 60M mixtures")
     ax.grid(axis="x", alpha=0.18, linewidth=0.6)
 
@@ -156,22 +214,8 @@ def _plot_selected_bars(ax: plt.Axes, selected: pd.DataFrame, pending: pd.DataFr
             color="0.25",
         )
 
-    pending_note = ", ".join(
-        f"{row['label']} (60M rank {int(row['rank_60m_if_included'])})" for _, row in pending.iterrows()
-    )
-    ax.text(
-        0.03,
-        0.03,
-        f"Pending 300M reruns: {pending_note}",
-        transform=ax.transAxes,
-        ha="left",
-        va="bottom",
-        fontsize=8.5,
-        bbox={"boxstyle": "round,pad=0.3", "facecolor": "white", "alpha": 0.9, "edgecolor": "0.8"},
-    )
 
-
-def _plot_bpb_scatter(ax: plt.Axes, frame: pd.DataFrame, selected: pd.DataFrame) -> None:
+def _plot_bpb_scatter(ax: plt.Axes, frame: pd.DataFrame, selected: pd.DataFrame, extras: pd.DataFrame) -> None:
     cmap = plt.get_cmap("RdYlGn_r")
     norm = Normalize(vmin=frame["bpb_300m_6b"].min(), vmax=frame["bpb_300m_6b"].max())
     scatter = ax.scatter(
@@ -204,13 +248,35 @@ def _plot_bpb_scatter(ax: plt.Axes, frame: pd.DataFrame, selected: pd.DataFrame)
             alpha=0.92,
         )
 
+    if not extras.empty:
+        ax.scatter(
+            extras["bpb_60m"],
+            extras["bpb_300m_6b"],
+            s=EXTRA_POINT_SIZE,
+            marker=EXTRA_POINT_MARKER,
+            color=EXTRA_POINT_COLOR,
+            edgecolors="white",
+            linewidths=0.8,
+            zorder=4,
+        )
+        for _, row in extras.iterrows():
+            ax.annotate(
+                row["label"],
+                (row["bpb_60m"], row["bpb_300m_6b"]),
+                xytext=ANNOTATION_OFFSET_POINTS,
+                textcoords="offset points",
+                fontsize=8,
+                alpha=0.95,
+                fontweight="semibold",
+            )
+
     cbar = plt.colorbar(scatter, ax=ax, fraction=0.046, pad=0.02)
     cbar.set_label("300M/6B BPB")
     ax.legend(loc="upper left", frameon=False, fontsize=8.5)
 
 
-def _plot_bpb_deltas(ax: plt.Axes, selected: pd.DataFrame, pending: pd.DataFrame, frame: pd.DataFrame) -> None:
-    movers = selected.sort_values("bpb_delta").reset_index(drop=True)
+def _plot_bpb_deltas(ax: plt.Axes, selected: pd.DataFrame, extras: pd.DataFrame, frame: pd.DataFrame) -> None:
+    movers = pd.concat([selected, extras], ignore_index=True).sort_values(["group", "bpb_delta"]).reset_index(drop=True)
     ax.barh(
         movers["label"],
         movers["bpb_delta"],
@@ -240,23 +306,11 @@ def _plot_bpb_deltas(ax: plt.Axes, selected: pd.DataFrame, pending: pd.DataFrame
             color="0.25",
         )
 
-    pending_note = ", ".join(f"{row['label']} (60M BPB {float(row['bpb_60m']):.3f})" for _, row in pending.iterrows())
-    ax.text(
-        0.03,
-        0.03,
-        f"Pending 300M reruns: {pending_note}",
-        transform=ax.transAxes,
-        ha="left",
-        va="bottom",
-        fontsize=8.5,
-        bbox={"boxstyle": "round,pad=0.3", "facecolor": "white", "alpha": 0.9, "edgecolor": "0.8"},
-    )
-
 
 def main() -> None:
     frame = pd.read_csv(INPUT_CSV)
     summary = json.loads(INPUT_SUMMARY_JSON.read_text())
-    selected, pending = _selected_rows(frame)
+    selected, extras = _selected_rows(frame)
     selected["bpb_delta"] = selected["bpb_60m"] - selected["bpb_300m_6b"]
 
     fig, (ax_scatter, ax_movers) = plt.subplots(
@@ -267,13 +321,13 @@ def main() -> None:
         constrained_layout=True,
     )
 
-    _plot_scatter(ax_scatter, frame, selected)
-    _plot_selected_bars(ax_movers, selected, pending)
+    _plot_scatter(ax_scatter, frame, selected, extras)
+    _plot_selected_bars(ax_movers, selected, extras)
 
     fig.suptitle(
         (
             "QSplit240 completed 300M/6B mixtures vs 60M swarm\n"
-            f"n={summary['n_completed']} shared completed runs, "
+            f"n={summary['n_completed']} strict-success shared runs, "
             f"Spearman={summary['spearman_rho']:.3f}, Kendall={summary['kendall_tau']:.3f}"
         ),
         fontsize=13,
@@ -289,13 +343,13 @@ def main() -> None:
         constrained_layout=True,
     )
 
-    _plot_bpb_scatter(ax_bpb_scatter, frame, selected)
-    _plot_bpb_deltas(ax_bpb_movers, selected, pending, frame)
+    _plot_bpb_scatter(ax_bpb_scatter, frame, selected, extras)
+    _plot_bpb_deltas(ax_bpb_movers, selected, extras, frame)
 
     fig_bpb.suptitle(
         (
             "QSplit240 completed 300M/6B mixtures vs 60M swarm\n"
-            f"n={summary['n_completed']} shared completed runs, "
+            f"n={summary['n_completed']} strict-success shared runs, "
             f"Pearson={summary['pearson_r']:.3f}, Spearman={summary['spearman_rho']:.3f}, "
             f"Kendall={summary['kendall_tau']:.3f}"
         ),
@@ -304,13 +358,6 @@ def main() -> None:
     fig_bpb.savefig(OUTPUT_BPB_PNG, dpi=220, bbox_inches="tight")
     plt.close(fig_bpb)
 
-    pending_out = pending.assign(
-        group="Pending 300M rerun",
-        rank_300m_6b=np.nan,
-        rank_shift=np.nan,
-        bpb_300m_6b=np.nan,
-        bpb_delta=np.nan,
-    )
     selected_out = selected[
         [
             "run_name",
@@ -324,7 +371,7 @@ def main() -> None:
             "rank_shift",
         ]
     ].copy()
-    pending_out = pending_out[
+    extras_out = extras[
         [
             "run_name",
             "label",
@@ -332,12 +379,13 @@ def main() -> None:
             "bpb_60m",
             "bpb_300m_6b",
             "bpb_delta",
-            "rank_60m_if_included",
+            "rank_60m_within_completed",
             "rank_300m_6b",
             "rank_shift",
+            "note",
         ]
-    ].rename(columns={"rank_60m_if_included": "rank_60m_within_completed"})
-    pd.concat([selected_out, pending_out], ignore_index=True).to_csv(OUTPUT_SELECTED_CSV, index=False)
+    ].copy()
+    pd.concat([selected_out, extras_out], ignore_index=True).to_csv(OUTPUT_SELECTED_CSV, index=False)
     print(f"Wrote {OUTPUT_PNG}")
     print(f"Wrote {OUTPUT_BPB_PNG}")
     print(f"Wrote {OUTPUT_SELECTED_CSV}")

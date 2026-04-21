@@ -1,13 +1,7 @@
 {
-  "child_job_count": 91,
-  "child_jobs_by_state": {
-    "JOB_STATE_PENDING": 87,
-    "JOB_STATE_RUNNING": 4
-  },
-  "child_jobs_by_tpu_variant": {
-    "v5p-32": 26,
-    "v5p-8": 65
-  },
+  "child_job_count": 0,
+  "child_jobs_by_state": {},
+  "child_jobs_by_tpu_variant": {},
   "holdout_run_count": 4,
   "logical_run_count": 121,
   "logical_runs_by_family": {
@@ -22,12 +16,29 @@
     "300m_6b": 39,
     "520m_10p4b": 39
   },
+  "logical_runs_by_scale_path_status": {
+    "130m_2p6b|qsplit_representative12|new": 36,
+    "130m_2p6b|stratified|new": 3,
+    "1_2b_24b|qsplit_baselines3_holdout|holdout_only": 3,
+    "1_2b_24b|stratified_holdout|holdout_only": 1,
+    "300m_6b|qsplit_representative12|new": 24,
+    "300m_6b|qsplit_representative12|reused": 12,
+    "300m_6b|stratified|new": 2,
+    "300m_6b|stratified|reused": 1,
+    "520m_10p4b|qsplit_representative12|new": 24,
+    "520m_10p4b|qsplit_representative12|reused": 12,
+    "520m_10p4b|stratified|new": 2,
+    "520m_10p4b|stratified|reused": 1
+  },
   "new_run_count": 91,
   "new_runs_by_scale": {
     "130m_2p6b": 39,
     "300m_6b": 26,
     "520m_10p4b": 26
   },
-  "parent_job_id": "/calvinxu/dm-strong-tier-scaling-study-20260415-235849",
-  "reused_run_count": 26
+  "reused_run_count": 26,
+  "tracked_parent_job_ids": [
+    "/calvinxu/dm-strong-tier-scaling-study-20260415-235849",
+    "/calvinxu/dm-strong-tier-scaling-study-20260416-1115"
+  ]
 }
