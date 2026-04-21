@@ -63,11 +63,11 @@ logger = logging.getLogger(__name__)
 MAX_SHARD_FAILURES = 3
 
 
-class ShardFailureKind(enum.Enum):
+class ShardFailureKind(enum.StrEnum):
     """TASK failures count toward MAX_SHARD_FAILURES; INFRA failures (preemption) do not."""
 
-    TASK = "task"
-    INFRA = "infra"
+    TASK = enum.auto()
+    INFRA = enum.auto()
 
 
 @dataclass(frozen=True)
