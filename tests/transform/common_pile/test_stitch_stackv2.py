@@ -189,9 +189,7 @@ def test_stitch_splits_mega_repo_when_max_chars_set(
     body = "x" * 50
     write_jsonl_gz(
         input_dir / "stack-0000.jsonl.gz",
-        [
-            _record(REPO_A_URL, f"dir/file_{i}.py", body) for i in range(3)
-        ],
+        [_record(REPO_A_URL, f"dir/file_{i}.py", body) for i in range(3)],
     )
 
     stitch_stackv2_repos(
