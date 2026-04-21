@@ -56,6 +56,12 @@ from experiments.pretraining_datasets.nsf_awards import (
     nsf_awards_download,
     nsf_awards_tokenized,
 )
+from experiments.pretraining_datasets.raw_technical_text import (
+    RAW_TECHNICAL_TEXT_TOKEN_COUNTS,
+    raw_technical_text_components,
+    raw_technical_text_components_llama3,
+    raw_technical_text_mixture_config_llama3,
+)
 from experiments.pretraining_datasets.simple import downloads as simple_downloads, tokenized as simple_tokenized
 
 # Re-export constants
@@ -70,10 +76,14 @@ __all__ = [
     "NEMOTRON_LLAMA3_OVERRIDES",
     "NEMOTRON_V2_DATASETS",
     "NEMOTRON_WEIGHTS",
+    "RAW_TECHNICAL_TEXT_TOKEN_COUNTS",
     "nemotron_mix",
     "nemotron_mix_block_shuffle",
     "nsf_awards_download",
     "nsf_awards_tokenized",
+    "raw_technical_text_components",
+    "raw_technical_text_components_llama3",
+    "raw_technical_text_mixture_config_llama3",
     "tokenize_dolma",
     "tokenize_dolmino",
     "tokenize_dolmino_math",
