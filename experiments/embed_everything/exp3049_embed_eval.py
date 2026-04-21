@@ -29,7 +29,11 @@ from experiments.embed_everything.evaluate import (
     evaluate_topic_reduced,
 )
 from experiments.embed_everything.oracle import OracleBackend, label_quality, label_topics
-from experiments.embed_everything.sample import sample_quality_documents_nemotron, sample_topic_documents
+from experiments.embed_everything.sample import (
+    sample_quality_documents_binary,
+    sample_quality_documents_nemotron,
+    sample_topic_documents,
+)
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -52,10 +56,10 @@ PROMPT_VERSION = "v1"
 NEMOTRON_REL_PATH = "raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl"
 DOLMA_REL_PATH = "raw/dolma/v1.7"
 
-# Output prefix: temp bucket with 7-day TTL.
-# marin_temp_bucket resolves to gs://marin-tmp-{region}/ttl=7d/... on GCP,
+# Output prefix: temp bucket with 30-day TTL.
+# marin_temp_bucket resolves to gs://marin-tmp-{region}/ttl=30d/... on GCP,
 # or {MARIN_PREFIX}/tmp/... locally.
-_OUTPUT_PREFIX = marin_temp_bucket(ttl_days=7, prefix="embed-everything")
+_OUTPUT_PREFIX = marin_temp_bucket(ttl_days=30, prefix="embed-everything")
 
 # ---------------------------------------------------------------------------
 # Step 1: Sample documents
@@ -69,6 +73,20 @@ sample_quality = StepSpec(
         lambda output_path: sample_quality_documents_nemotron(
             output_path=output_path,
             nemotron_base_path=f"{marin_prefix()}/{NEMOTRON_REL_PATH}",
+            n_per_bucket=N_PER_BUCKET,
+        ),
+        resources=ResourceConfig.with_cpu(),
+    ),
+)
+
+sample_quality_binary = StepSpec(
+    name="sample_quality_binary",
+    output_path_prefix=_OUTPUT_PREFIX,
+    hash_attrs={"n_per_bucket": N_PER_BUCKET, "seed": 42, "v": 1},
+    fn=remote(
+        lambda output_path: sample_quality_documents_binary(
+            output_path=output_path,
+            dolma_base_path=f"{marin_prefix()}/{DOLMA_REL_PATH}",
             n_per_bucket=N_PER_BUCKET,
         ),
         resources=ResourceConfig.with_cpu(),
@@ -243,6 +261,7 @@ eval_topic_reduced = StepSpec(
 
 ALL_STEPS = [
     sample_quality,
+    sample_quality_binary,
     sample_topic,
     oracle_quality,
     oracle_topic,
