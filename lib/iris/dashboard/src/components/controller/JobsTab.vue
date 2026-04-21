@@ -40,6 +40,7 @@ const router = useRouter()
 
 const EXPANDED_JOBS_KEY = 'iris.controller.expandedJobs'
 const STARRED_JOBS_KEY = 'iris.controller.starredJobs'
+const MAX_STARRED_JOBS = 10
 
 // -- State (hydrated from URL query params) --
 
@@ -74,6 +75,7 @@ const showStarredOnly = ref(queryStr(route.query.starred) === '1')
 const starredJobsData = ref<JobStatus[]>([])
 const starredLoading = ref(false)
 const starredError = ref<string | null>(null)
+const starLimitNotice = ref<string | null>(null)
 
 const JOB_STATES: JobState[] = [
   'pending', 'building', 'running', 'succeeded', 'failed', 'killed', 'worker_failed', 'unschedulable',
@@ -143,6 +145,11 @@ function toggleStar(job: JobStatus) {
   if (next.has(job.jobId)) {
     next.delete(job.jobId)
   } else {
+    if (next.size >= MAX_STARRED_JOBS) {
+      starLimitNotice.value = `You can star at most ${MAX_STARRED_JOBS} jobs — unstar one first.`
+      setTimeout(() => { starLimitNotice.value = null }, 4000)
+      return
+    }
     next.add(job.jobId)
   }
   starredJobIds.value = next
@@ -493,6 +500,14 @@ function sortIndicator(field: SortField): string {
     class="mb-4 px-4 py-3 text-sm text-status-danger bg-status-danger-bg rounded-lg border border-status-danger-border"
   >
     {{ effectiveError }}
+  </div>
+
+  <!-- Star-limit notice -->
+  <div
+    v-if="starLimitNotice"
+    class="mb-4 px-4 py-2 text-sm text-status-warning bg-status-warning-bg rounded-lg border border-status-warning-border"
+  >
+    {{ starLimitNotice }}
   </div>
 
   <!-- Loading -->
