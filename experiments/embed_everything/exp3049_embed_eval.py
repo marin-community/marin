@@ -51,6 +51,7 @@ from experiments.embed_everything.evaluate import (  # noqa: E402
     evaluate_quality_mlp,
     evaluate_quality_probe,
     evaluate_topic_clusters,
+    evaluate_topic_oracle_retest,
     evaluate_topic_reduced,
     evaluate_topic_supervised,
 )
@@ -63,6 +64,7 @@ from experiments.embed_everything.oracle import (  # noqa: E402
     label_quality,
     label_topics,
     relabel_quality_subset,
+    relabel_topic_subset,
 )
 from experiments.embed_everything.sample import (  # noqa: E402
     sample_quality_documents_binary,
@@ -390,6 +392,40 @@ eval_oracle_retest = StepSpec(
     ),
 )
 
+oracle_topic_retest = StepSpec(
+    name="oracle_topic_retest",
+    output_path_prefix=_OUTPUT_PREFIX,
+    deps=[oracle_topic],
+    hash_attrs={"n_docs": N_RETEST_DOCS, "seed": RETEST_SEED, "backend": str(ORACLE_BACKEND), "v": 1},
+    fn=remote(
+        lambda output_path: relabel_topic_subset(
+            output_path=output_path,
+            input_oracle_path=oracle_topic.output_path,
+            n_docs=N_RETEST_DOCS,
+            seed=RETEST_SEED,
+            backend=ORACLE_BACKEND,
+        ),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+        pip_dependency_groups=["oracle"],
+    ),
+)
+
+eval_topic_oracle_retest = StepSpec(
+    name="eval_topic_oracle_retest",
+    output_path_prefix=_OUTPUT_PREFIX,
+    deps=[oracle_topic, oracle_topic_retest],
+    hash_attrs={"v": 1},
+    fn=remote(
+        lambda output_path: evaluate_topic_oracle_retest(
+            output_path=output_path,
+            run1_path=oracle_topic.output_path,
+            run2_path=oracle_topic_retest.output_path,
+        ),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+        pip_dependency_groups=["probe"],
+    ),
+)
+
 # ---------------------------------------------------------------------------
 # Fasttext baselines (Allen AI Dolma 3 classifiers) — Helw150's skill-issue bar.
 # ---------------------------------------------------------------------------
@@ -473,6 +509,8 @@ ALL_STEPS: list[StepSpec] = [
     oracle_topic,
     oracle_quality_retest,
     eval_oracle_retest,
+    oracle_topic_retest,
+    eval_topic_oracle_retest,
     *MODEL_STEPS,
     fasttext_quality,
     fasttext_topic,

@@ -717,6 +717,82 @@ def evaluate_oracle_retest(
     _write_json(results, os.path.join(output_path, "oracle_retest_results.json"))
 
 
+def evaluate_topic_oracle_retest(
+    output_path: str,
+    run1_path: str,
+    run2_path: str,
+) -> None:
+    """Measure Claude's self-agreement on 24-class topic classification.
+
+    Exact agreement and **Cohen's κ** (chance-corrected) are the headline
+    numbers. With 24 classes, random agreement is ~1/24 ≈ 0.04, so even
+    modest exact-match rates can look impressive without κ to discount them.
+    Per-class agreement and a confusion matrix (run1 vs run2) let us see
+    which topics Claude is stable on.
+    """
+    from sklearn.metrics import cohen_kappa_score, confusion_matrix
+
+    run1_file = os.path.join(run1_path, "topic_labeled.parquet")
+    run2_file = os.path.join(run2_path, "topic_retest.parquet")
+
+    run1 = {d["doc_id"]: d for d in load_parquet(run1_file)}
+    run2_rows = list(load_parquet(run2_file))
+
+    y1: list[str] = []
+    y2: list[str] = []
+    for r2 in run2_rows:
+        r1 = run1.get(r2["doc_id"])
+        if r1 is None:
+            continue
+        t1 = r1.get("oracle_topic")
+        t2 = r2.get("oracle_topic")
+        if t1 in (None, "labeling_failed") or t2 in (None, "labeling_failed"):
+            continue
+        y1.append(t1)
+        y2.append(t2)
+
+    if len(y1) < 2:
+        logger.error("Too few topic retest pairs to evaluate (%d)", len(y1))
+        return
+
+    n = len(y1)
+    exact = sum(1 for a, b in zip(y1, y2, strict=True) if a == b) / n
+    kappa = float(cohen_kappa_score(y1, y2, labels=list(TOPIC_TAXONOMY)))
+    conf = confusion_matrix(y1, y2, labels=list(TOPIC_TAXONOMY)).tolist()
+
+    # Per-class agreement: among docs where run1==class c, what fraction does
+    # run2 also put in class c? Only meaningful when n_c >= some threshold.
+    per_class: dict[str, dict[str, float | int]] = {}
+    from collections import Counter
+
+    c1 = Counter(y1)
+    for cls in TOPIC_TAXONOMY:
+        indices = [i for i, y in enumerate(y1) if y == cls]
+        n_cls = len(indices)
+        if n_cls == 0:
+            continue
+        agree = sum(1 for i in indices if y2[i] == cls) / n_cls
+        per_class[cls] = {"n_run1": n_cls, "agreement": float(agree)}
+
+    results = {
+        "task": "topic_oracle_retest",
+        "n_pairs": n,
+        "exact_agreement_rate": float(exact),
+        "cohen_kappa": kappa,
+        "n_distinct_labels_run1": len(c1),
+        "per_class_agreement": per_class,
+        "confusion_matrix": {"labels": list(TOPIC_TAXONOMY), "matrix": conf},
+    }
+    logger.info(
+        "Topic oracle retest: exact=%.3f κ=%.4f (n=%d, distinct classes in run1=%d)",
+        exact,
+        kappa,
+        n,
+        len(c1),
+    )
+    _write_json(results, os.path.join(output_path, "topic_oracle_retest_results.json"))
+
+
 def evaluate_topic_supervised(
     output_path: str,
     embeddings_path: str,

@@ -313,6 +313,59 @@ def label_quality(
     logger.info("Quality labeling complete: %d labeled, %d failed", len(labeled) - failed, failed)
 
 
+def relabel_topic_subset(
+    output_path: str,
+    input_oracle_path: str,
+    n_docs: int = 200,
+    seed: int = 123,
+    backend: OracleBackend = OracleBackend.CLAUDE,
+) -> None:
+    """Re-label a random subset of an existing oracle_topic output.
+
+    Same pattern as ``relabel_quality_subset`` but for the 24-class
+    WebOrganizer topic taxonomy. Output: ``topic_retest.parquet`` with
+    ``oracle_topic`` (fresh call) and ``oracle_topic_prev`` (from run1).
+    """
+    import random
+
+    input_file = os.path.join(input_oracle_path, "topic_labeled.parquet")
+    all_docs = list(load_parquet(input_file))
+    valid = [d for d in all_docs if d.get("oracle_topic") not in (None, "labeling_failed")]
+    rng = random.Random(seed)
+    subset = rng.sample(valid, min(n_docs, len(valid)))
+    topics_str = "\n".join(f"- {t}" for t in TOPIC_TAXONOMY)
+    logger.info("Re-labeling %d topic docs (seed=%d, backend=%s)", len(subset), seed, backend)
+
+    relabeled: list[dict] = []
+    for i, doc in enumerate(subset):
+        truncated = _truncate_text(doc["text"])
+        prompt = TOPIC_PROMPT.format(text=truncated, topics=topics_str)
+
+        new_doc = {k: v for k, v in doc.items() if not k.startswith("oracle_")}
+        new_doc["oracle_topic_prev"] = doc.get("oracle_topic")
+
+        try:
+            label = _call_llm_structured(prompt, TopicLabel, backend)
+            new_doc["oracle_topic"] = label.topic
+            new_doc["oracle_topic_reasoning"] = label.reasoning
+            new_doc["oracle_backend"] = str(backend)
+        except Exception:
+            logger.exception("Failed to re-label topic for document %s", doc.get("doc_id", i))
+            new_doc["oracle_topic"] = "labeling_failed"
+            new_doc["oracle_topic_reasoning"] = "labeling_failed"
+            new_doc["oracle_backend"] = str(backend)
+
+        relabeled.append(new_doc)
+
+        if (i + 1) % 10 == 0:
+            logger.info("Topic retest progress: %d/%d", i + 1, len(subset))
+
+    write_parquet_file(relabeled, os.path.join(output_path, "topic_retest.parquet"))
+
+    failed = sum(1 for d in relabeled if d["oracle_topic"] == "labeling_failed")
+    logger.info("Topic retest complete: %d labeled, %d failed", len(relabeled) - failed, failed)
+
+
 def label_topics(
     output_path: str,
     input_path: str,
