@@ -446,17 +446,37 @@ def evaluate_topic_reduced(
 # Fasttext baselines
 # ---------------------------------------------------------------------------
 
-_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+_WHITESPACE_RE = re.compile(r"\s+")
+_NON_ALNUM_SPACE_RE = re.compile(r"[^a-z0-9 ]+")
+
+# The Dolma-3 fasttext topic classifier emits snake_case labels that don't
+# reduce to a few WebOrganizer display names by canonicalization alone — the
+# classifier's training-label form expanded three buckets. Verified empirically
+# against smoke output + the WebOrganizer project docs (24 topics total).
+_FASTTEXT_TO_DISPLAY_ALIASES: dict[str, str] = {
+    "software_development": "Software Dev.",
+    "history_and_geography": "History",
+    "science_math_and_technology": "Science & Tech.",
+}
 
 
 def _canonical_topic(label: str) -> str:
-    """Collapse a topic label to an order-preserving canonical form for matching."""
-    return _NON_ALNUM_RE.sub("", label.lower())
+    """Collapse a topic label to a form that matches across '&'/'and' and punctuation."""
+    lowered = label.lower().replace("&", " and ")
+    alnum = _NON_ALNUM_SPACE_RE.sub(" ", lowered)
+    return _WHITESPACE_RE.sub(" ", alnum).strip()
 
 
 def _build_topic_canonical_map() -> dict[str, str]:
     """Map canonicalized WebOrganizer labels back to their display form."""
     return {_canonical_topic(name): name for name in TOPIC_TAXONOMY}
+
+
+def _match_fasttext_to_display(raw_label: str, canonical_to_display: dict[str, str]) -> str | None:
+    """Map a raw fasttext topic label to its WebOrganizer display form, or None if unknown."""
+    if raw_label in _FASTTEXT_TO_DISPLAY_ALIASES:
+        return _FASTTEXT_TO_DISPLAY_ALIASES[raw_label]
+    return canonical_to_display.get(_canonical_topic(raw_label))
 
 
 def evaluate_fasttext_quality(
@@ -555,7 +575,7 @@ def evaluate_fasttext_topic(
             continue
 
         ft_raw = str(row["fasttext_topic"])
-        ft_display = canonical_to_display.get(_canonical_topic(ft_raw))
+        ft_display = _match_fasttext_to_display(ft_raw, canonical_to_display)
         if ft_display is None:
             unmatched_fasttext_labels.add(ft_raw)
             ft_display = "unknown"
