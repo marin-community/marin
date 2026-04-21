@@ -31,6 +31,7 @@ from levanter.models.llama import LlamaConfig
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.protein.create_protein_tokenizer import create_protein_tokenizer
+from experiments.protein.protein_distogram_eval import distogram_eval_benchmark
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.v2 import ResourceConfig
 from marin.execution.executor import executor_main, versioned
@@ -116,21 +117,44 @@ val_component = dataclasses.replace(
     loss_weight_fn=_distance_bin_only_loss_weight,
 )
 
+# -- Protein distogram benchmark (loss-based eval on specific PDB targets) --
+# See experiments/protein/protein_distogram_eval.py for how to add targets.
+# The eval components use `PrebuiltLmDatasetFormat` with a pre-computed
+# loss_weights column in the parquet, so the distance-mask loss_weight_fn
+# above does NOT apply to them — they see only the final GT distance-bin
+# position as their training target, which is what we want.
+PROTEIN_MPNN_REDESIGNS_SOURCE = "gs://marin-us-east5/protein-structure/protein-mpnn-redesigns/v1/redesigns.jsonl"
+distogram_eval = distogram_eval_benchmark(
+    PROTEIN_TOKENIZER,
+    redesigns_source=PROTEIN_MPNN_REDESIGNS_SOURCE,
+)
+
 protein_docs_data = LmDataConfig(
-    components={"protein-docs-cd": train_component, "protein-docs-cd-val": val_component},
+    components={
+        "protein-docs-cd": train_component,
+        "protein-docs-cd-val": val_component,
+        **distogram_eval.components,
+    },
+    # Only the main training corpus has non-zero train weight. The distogram
+    # components are validation-only.
     train_weights={"protein-docs-cd": 1.0, "protein-docs-cd-val": 0.0},
     tokenizer=PROTEIN_TOKENIZER,
     cache_dir=None,
     block_cross_document_attention=True,
 )
 
-# -- Training config (identical to the unmasked 1b run) --
+# -- Training config --
+#
+# LR bumped 3x from the prior 3.5e-4 unmasked run to 1.05e-3. The distance-masked
+# loss reduces the effective per-batch gradient signal (only ~1/6 of distance-statement
+# tokens contribute), so a bigger learning rate is warranted. Batch, warmup, and
+# step count kept the same as train_protein_1b.py for comparability.
 
 train_config = SimpleTrainConfig(
     resources=RESOURCES,
     train_batch_size=128,
     num_train_steps=50_000,
-    learning_rate=versioned(3.5e-4),
+    learning_rate=versioned(1.05e-3),
     weight_decay=0.01,
     warmup=0.1,
     train_seq_len=8192,
@@ -143,7 +167,7 @@ train_config = SimpleTrainConfig(
 # -- Train --
 
 protein_model_1b_distance_masked = default_train(
-    name="protein-contacts-1b-3.5e-4-distance-masked",
+    name="protein-contacts-1b-1.05e-3-distance-masked",
     tokenized=protein_docs_data,
     model_config=protein_llama_1b,
     train_config=train_config,
@@ -154,9 +178,22 @@ protein_model_1b_distance_masked = default_train(
     wandb_name=None,
 )
 
+# Allow levanter to auto-build tree-caches for the protein-distogram eval
+# components. Each (target, N) parquet → small levanter cache (seconds). We
+# parameterize each component's `cache_dir` off its build-step output path so
+# the cache lives inside the step's (versioned) output and is reused across
+# training runs. Marin's default is False to fail fast on missing caches for
+# big text tokenizations; for our pre-tokenized eval parquets the build is
+# trivial and auto-build is the right default.
+protein_model_1b_distance_masked = dataclasses.replace(
+    protein_model_1b_distance_masked,
+    config=dataclasses.replace(protein_model_1b_distance_masked.config, auto_build_caches=True),
+)
+
 if __name__ == "__main__":
     executor_main(
         steps=[
+            *distogram_eval.build_steps,
             protein_model_1b_distance_masked,
         ]
     )

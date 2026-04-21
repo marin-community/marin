@@ -479,6 +479,32 @@ def build_distogram_eval_data(config: BuildDistogramEvalDataConfig) -> None:
     with fsspec.open(out_path, "wb") as f:
         f.write(buf.getvalue())
 
+    # Pre-build the levanter tree-cache so training doesn't have to. During the
+    # last run, training-time cache builds were spawning sequential zephyr
+    # sub-pipelines (~37 s each, 72 datasets, 45 min total) that got killed every
+    # time the preemptible TPU worker was reclaimed, and the job never made it
+    # past the cache-build phase in 17 hours. By building the cache inside this
+    # (CPU, non-preemptible) ExecutorStep, the result persists at the step's
+    # versioned output_path and any training run just `TreeCache.load()`s it.
+    from levanter.data.sharded_datasource import UrlDataSource
+    from levanter.data.text.cache import build_lm_dataset_cache
+
+    # Matches the path that training will look for: LmDataConfig.build_caches()
+    # appends the split name to the component's cache_dir. Our DatasetComponent
+    # sets cache_dir = step/"cache", so the validation cache lives at
+    # {output_path}/cache/validation.
+    cache_dir = config.output_path.rstrip("/") + "/cache/validation"
+    logger.info("Building levanter tree-cache at %s", cache_dir)
+    build_lm_dataset_cache(
+        cache_dir=cache_dir,
+        source=UrlDataSource([out_path]),
+        format=PrebuiltLmDatasetFormat(loss_weights_key="loss_weights"),
+        tokenizer=tokenizer,
+        # Pre-tokenized examples: no BOS/EOS enforcement needed; we wrote them exactly.
+        enforce_eos=False,
+    )
+    logger.info("Cache build complete")
+
 
 # ---- ExecutorStep factory + benchmark assembly ----
 
@@ -661,15 +687,19 @@ def distogram_eval_benchmark(
             step = build_distogram_eval_step(target, n, tokenizer=tokenizer, n_pairs=n_pairs)
             build_steps.append(step)
             component_name = f"protein_dist_{target.name}_N{n}"
-            # `step / "data.parquet"` creates an InputName that marin's executor
-            # resolves to the concrete GCS path once the step has an output_path.
+            # `step / "..."` creates an InputName that marin's executor resolves
+            # to the concrete GCS path once the step has an output_path. We put
+            # the levanter tree-cache in a sibling subdir next to the parquet
+            # so each (target, N) gets its own cache and there's no sharing.
             parquet_ref = step / "data.parquet"
+            cache_dir_ref = step / "cache"
             components[component_name] = DatasetComponent(
                 source=UrlDatasetSourceConfig(
                     validation_urls=[parquet_ref],  # type: ignore[list-item]
                     format=PrebuiltLmDatasetFormat(loss_weights_key="loss_weights"),
                     tags=_tags_for(target, n),
                 ),
+                cache_dir=cache_dir_ref,  # type: ignore[arg-type]
                 format=PrebuiltLmDatasetFormat(loss_weights_key="loss_weights"),
                 tags=_tags_for(target, n),
             )
