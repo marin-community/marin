@@ -242,3 +242,13 @@ scr/*
 lib/iris/src/iris/rpc/*_pb2.py
 lib/iris/src/iris/rpc/*_pb2.pyi
 lib/iris/src/iris/rpc/*_connect.py
+
+# Marin BCG/tension-atlas experiment intermediates (2026-04-20)
+# Keep scripts, logbooks, JSON summaries, plots, and CSVs.
+# Exclude raw batch payloads, gzipped shards, and inference raw dumps.
+experiments/posttrain/stage1_inputs/**/checkpoints/
+experiments/posttrain/**/batch_jobs/
+experiments/posttrain/**/shard_*.jsonl.gz
+experiments/posttrain/**/inference_raw.jsonl.gz
+experiments/posttrain/**/output.jsonl
+experiments/posttrain/**/requests.jsonl

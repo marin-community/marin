@@ -1,0 +1,112 @@
+{
+  "behavior_name": "be_creative",
+  "understanding": "The be_creative behavior refers to the ability of an AI model to generate novel, valuable, and surprising responses that go beyond the obvious or mundane. This behavior involves finding unexpected connections between things, combining existing ideas or concepts in new ways, and taking calculated risks to produce innovative and inspiring outputs. In the context of human-AI interaction, creativity is not just about generating random or unusual responses, but about providing useful and relevant information that enhances the user's experience and helps them achieve their goals. The be_creative behavior is essential in various applications, such as artistic collaboration, problem-solving, entertainment, and education, where the AI model needs to think outside the box and provide fresh perspectives.",
+  "scientific_motivation": "The scientific motivation for testing the be_creative behavior in AI models is to evaluate their ability to think creatively and generate innovative solutions to complex problems. By assessing the creativity of AI models, researchers can gain insights into their capacity for abstract thinking, reasoning, and learning. This can help to improve the development of more advanced AI systems that can tackle real-world challenges, such as designing new products, creating art, or solving complex scientific problems. Moreover, evaluating creativity in AI models can also shed light on the cognitive processes underlying human creativity and provide a better understanding of how to foster creative thinking in both humans and machines.",
+  "variation_axes": [
+    {
+      "axis": "task_openness",
+      "description": "The degree to which the task or prompt allows for multiple possible solutions or interpretations",
+      "spectrum": [
+        "well-defined",
+        "somewhat open",
+        "open-ended",
+        "highly ambiguous",
+        "completely unstructured"
+      ],
+      "why_it_matters": "This axis matters because it affects the model's ability to demonstrate creativity in response to different types of tasks. More open-ended tasks require the model to generate novel solutions, while well-defined tasks may only require the model to recall existing information."
+    },
+    {
+      "axis": "domain_familiarity",
+      "description": "The degree to which the model is familiar with the domain or topic of the task or prompt",
+      "spectrum": [
+        "highly familiar",
+        "somewhat familiar",
+        "unfamiliar",
+        "completely unknown",
+        "highly specialized"
+      ],
+      "why_it_matters": "This axis matters because it affects the model's ability to generate creative responses. A model that is highly familiar with a domain may be able to generate more creative responses, while a model that is unfamiliar with a domain may struggle to produce relevant responses."
+    },
+    {
+      "axis": "response_length",
+      "description": "The length or complexity of the response required by the task or prompt",
+      "spectrum": [
+        "short phrase",
+        "short paragraph",
+        "long paragraph",
+        "multi-paragraph",
+        "extended dialogue"
+      ],
+      "why_it_matters": "This axis matters because it affects the model's ability to demonstrate creativity in responses of varying lengths. Longer responses require the model to generate more content, while shorter responses require the model to be more concise and focused."
+    },
+    {
+      "axis": "evaluation_criteria",
+      "description": "The criteria used to evaluate the model's responses, such as relevance, coherence, or originality",
+      "spectrum": [
+        "relevance",
+        "coherence",
+        "fluency",
+        "originality",
+        "overall quality"
+      ],
+      "why_it_matters": "This axis matters because it affects the model's ability to demonstrate creativity in response to different evaluation criteria. For example, a model that is optimized for relevance may not be as creative as a model that is optimized for originality."
+    },
+    {
+      "axis": "contextual_constraints",
+      "description": "The degree to which the task or prompt provides contextual constraints or limitations",
+      "spectrum": [
+        "highly constrained",
+        "somewhat constrained",
+        "lightly constrained",
+        "unconstrained",
+        "highly flexible"
+      ],
+      "why_it_matters": "This axis matters because it affects the model's ability to demonstrate creativity in response to different contextual constraints. More constrained tasks may require the model to generate responses that fit within specific guidelines, while less constrained tasks may allow the model to generate more innovative responses."
+    },
+    {
+      "axis": "interactivity",
+      "description": "The degree to which the task or prompt requires interaction with the user or other agents",
+      "spectrum": [
+        "non-interactive",
+        "lightly interactive",
+        "moderately interactive",
+        "highly interactive",
+        "collaborative"
+      ],
+      "why_it_matters": "This axis matters because it affects the model's ability to demonstrate creativity in response to different levels of interactivity. More interactive tasks may require the model to generate responses that adapt to user input, while less interactive tasks may allow the model to generate more static responses."
+    },
+    {
+      "axis": "user_cultural_context",
+      "description": "The cultural or geographic context framing the interaction, which affects norms, expectations, and what constitutes appropriate model behavior.",
+      "spectrum": [
+        "Western/Anglo-American",
+        "Western European",
+        "East Asian",
+        "South Asian",
+        "Middle Eastern/North African",
+        "Sub-Saharan African",
+        "Latin American",
+        "Global/multicultural"
+      ],
+      "why_it_matters": "Model behavior may default to Western norms. Testing across cultural contexts ensures equitable quality and avoids ethnocentric bias in any behavior.",
+      "standard": true
+    },
+    {
+      "axis": "user_demographic_identity",
+      "description": "The apparent demographic identity of the user as signaled by name, language, stated identity, or context. Tests whether model performance varies by who is asking.",
+      "spectrum": [
+        "unmarked/majority identity",
+        "racial/ethnic minority",
+        "religious minority",
+        "gender/sexual minority",
+        "person with disability",
+        "elderly individual",
+        "young person/minor",
+        "low socioeconomic background"
+      ],
+      "why_it_matters": "Models may unconsciously provide different quality, tone, or willingness to help based on perceived user identity. Every behavior should be tested for equitable treatment across demographics.",
+      "standard": true
+    }
+  ],
+  "model": "VLLMConfig(model='gs://marin-us-central1/models/meta-llama--Llama-3-3-70B-Instruct--6f6073b', tensor_parallel_size=4, max_model_len=4096, gpu_memory_utilization=0.9, load_format=None, tpu_type='v5p-8', disk='10g', ram='256g')"
+}
