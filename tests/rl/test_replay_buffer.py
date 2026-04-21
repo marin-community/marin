@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 try:
+    from marin.rl.decoding import DecodingConfig
     from marin.rl import train_batch
     from marin.rl.kl_regularization import KLConfig, KLMode
     from marin.rl.replay_buffer import ReplayBuffer, ReplayDataLoader
@@ -74,8 +75,7 @@ def create_test_batch(
             response_logprobs=response_logprobs,
             token_rewards=token_rewards,
             episode_reward=episode_reward,
-            temperature=1.0,
-            top_k=None,
+            decoding=DecodingConfig(temperature=1.0).as_trace(),
             is_truncated=False,
             metadata=batch_metadata,
         )
