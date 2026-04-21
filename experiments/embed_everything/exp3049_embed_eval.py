@@ -103,13 +103,16 @@ class EmbedModel:
     """One rung of the embedding-capacity ladder.
 
     slug is used in StepSpec names and GCS output paths; keep it short and
-    filesystem-safe (``[a-z0-9_]+``). ram/disk apply to the embed steps for
-    this model; larger sentence-transformers (Arctic, BGE) need more headroom
-    than the Luxical defaults.
+    filesystem-safe (``[a-z0-9_]+``). cpu/ram/disk apply to the embed steps
+    for this model; larger sentence-transformers (Arctic, BGE) need more
+    CPU + RAM headroom than Luxical to finish within a reasonable wallclock.
+    Measured empirically: 1024d sentence-transformer on 1 CPU is ~9 s/doc;
+    with cpu=8 it drops to ~2-3 s/doc via PyTorch intra-op parallelism.
     """
 
     slug: str
     model_name: str
+    cpu: float = 1
     ram: str = "4g"
     disk: str = "5g"
     pip_groups: list[str] = field(default_factory=lambda: ["cpu", "embed"])
@@ -117,8 +120,8 @@ class EmbedModel:
 
 EMBED_MODELS: list[EmbedModel] = [
     EmbedModel(slug="luxical", model_name=LUXICAL_MODEL),
-    EmbedModel(slug="arctic", model_name=ARCTIC_MODEL, ram="8g", disk="10g"),
-    EmbedModel(slug="bge_large", model_name=BGE_LARGE_MODEL, ram="8g", disk="10g"),
+    EmbedModel(slug="arctic", model_name=ARCTIC_MODEL, cpu=8, ram="16g", disk="10g"),
+    EmbedModel(slug="bge_large", model_name=BGE_LARGE_MODEL, cpu=8, ram="16g", disk="10g"),
 ]
 
 
@@ -226,7 +229,7 @@ def _build_model_steps(em: EmbedModel) -> list[StepSpec]:
                 output_filename="quality_embeddings.npz",
                 label_field="quality_bucket",
             ),
-            resources=ResourceConfig.with_cpu(regions=[DATA_REGION], ram=em.ram, disk=em.disk),
+            resources=ResourceConfig.with_cpu(regions=[DATA_REGION], cpu=em.cpu, ram=em.ram, disk=em.disk),
             pip_dependency_groups=em.pip_groups,
         ),
     )
@@ -245,7 +248,7 @@ def _build_model_steps(em: EmbedModel) -> list[StepSpec]:
                 output_filename="topic_embeddings.npz",
                 label_field="source_label",
             ),
-            resources=ResourceConfig.with_cpu(regions=[DATA_REGION], ram=em.ram, disk=em.disk),
+            resources=ResourceConfig.with_cpu(regions=[DATA_REGION], cpu=em.cpu, ram=em.ram, disk=em.disk),
             pip_dependency_groups=em.pip_groups,
         ),
     )
