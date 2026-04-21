@@ -13,6 +13,8 @@ from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
 from levanter.tokenizers import load_tokenizer
 
+from marin.rl.decoding import DecodingConfig
+
 try:
     import verifiers as vf
 
@@ -88,7 +90,7 @@ def test_prime_intellect_env_sample(tokenizer, inference_ctx, vf_env):
             inference_ctx=inference_ctx,
             n_examples=2,
             n_generations=2,
-            temperature=0.7,
+            decoding=DecodingConfig(temperature=0.7),
             prng_key=prng_key,
             mode="train",
         )
@@ -127,12 +129,29 @@ def test_prime_intellect_env_openai_client_called(tokenizer, inference_ctx, vf_e
             inference_ctx=inference_ctx,
             n_examples=1,
             n_generations=1,
-            temperature=1.0,
+            decoding=DecodingConfig(temperature=1.0),
             prng_key=prng_key,
         )
 
     # Verify we got rollout groups (which means generate() was called successfully)
     assert len(rollout_groups) >= 0
+
+
+def test_prime_intellect_env_records_resolved_decoding_trace(tokenizer, inference_ctx, vf_env):
+    env = PrimeIntellectEnv(env_id="primeintellect/gsm8k", env_args={})
+    inference_ctx._stop_tokens = [42]
+
+    with patch.object(env, "load_prime_intellect_env", return_value=vf_env), patch("subprocess.run"):
+        prng_key = jax.random.PRNGKey(7)
+        rollout_groups, _ = env.sample(
+            inference_ctx=inference_ctx,
+            n_examples=1,
+            n_generations=1,
+            decoding=DecodingConfig(temperature=1.0),
+            prng_key=prng_key,
+        )
+
+    assert rollout_groups[0].rollouts[0].decoding.stop_token_ids == (42,)
 
 
 def test_prime_intellect_env_tokenization(tokenizer, inference_ctx, vf_env):
@@ -145,7 +164,7 @@ def test_prime_intellect_env_tokenization(tokenizer, inference_ctx, vf_env):
             inference_ctx=inference_ctx,
             n_examples=2,
             n_generations=2,
-            temperature=0.8,
+            decoding=DecodingConfig(temperature=0.8),
             prng_key=prng_key,
         )
 

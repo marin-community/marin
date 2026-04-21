@@ -32,12 +32,13 @@ from jax.experimental import multihost_utils
 from levanter.inference.openai import InferenceServer
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import barrier_sync
 from levanter.tokenizers import MarinTokenizer
+from levanter.utils.jax_utils import barrier_sync
 from typing import Literal
 
 from levanter.utils.mesh import MeshConfig
 from marin.rl.curriculum import CurriculumConfig
+from marin.rl.decoding import DecodingConfig, resolve_decoding_for_mode
 from marin.rl.runtime import RLRuntimeHandles
 from marin.rl.run_state import RolloutTransferCounters
 from marin.rl.environments import MarinEnv
@@ -287,8 +288,7 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
                     lesson_id=lesson_id,
                     episode_reward=rollout.episode_reward,
                     env_example_id=rollout.env_example_id,
-                    temperature=rollout.temperature,
-                    top_k=rollout.top_k,
+                    decoding=rollout.decoding,
                 )
             )
 
@@ -510,23 +510,15 @@ class RolloutWorker:
         """Sample a batch of rollouts from the environment for the given lesson ID."""
         env = self._load_environment(lesson_id)
         lesson_config = self.config.curriculum_config.lessons[lesson_id]
-
-        # Get sampling params from lesson config
-        temperature = lesson_config.sampling_params.temperature
-        top_k = lesson_config.sampling_params.top_k
-        stop_tokens = lesson_config.sampling_params.stop_tokens
-        max_tokens = lesson_config.sampling_params.max_output_tokens
+        decoding = resolve_decoding_for_mode(lesson_config.sampling_params, mode)
 
         rollout_groups, metrics = env.sample(
             inference_ctx=self._policy_ctx,
             n_examples=n_examples,
             n_generations=n_generations,
-            temperature=temperature,
+            decoding=decoding,
             prng_key=rng,
             mode=mode,
-            max_tokens=max_tokens,
-            top_k=top_k,
-            stop=stop_tokens,
             system_prompt=self.config.system_prompt,
         )
 
@@ -745,8 +737,7 @@ class RolloutWorker:
         lesson_id: str,
         batch: RolloutBatch,
         n_generations: int,
-        temperature: float,
-        top_k: int | None,
+        decoding: DecodingConfig,
     ) -> dict[str, Any]:
         metrics = {}
         stats = _compute_batch_stats(batch, lesson_id)
@@ -759,8 +750,8 @@ class RolloutWorker:
         metrics[f"{prefix}/{lesson_id}/pass_at_one"] = stats.pass_at_one
         metrics[f"{prefix}/{lesson_id}/pass_at_{n_generations}"] = stats.pass_at_k
         metrics[f"{prefix}/{lesson_id}/avg_at_{n_generations}"] = stats.avg_at_k
-        metrics[f"{prefix}/{lesson_id}/temperature"] = temperature
-        metrics[f"{prefix}/{lesson_id}/top_k"] = top_k if top_k is not None else -1
+        metrics[f"{prefix}/{lesson_id}/temperature"] = decoding.temperature
+        metrics[f"{prefix}/{lesson_id}/top_k"] = decoding.top_k if decoding.top_k is not None else -1
         return metrics
 
     def _log_lesson_eval(
@@ -812,14 +803,16 @@ class RolloutWorker:
             raise RuntimeError(f"Eval batch for lesson {lesson_id} produced no rollouts")
 
         stats = _compute_batch_stats(batch, lesson_id)
-        sampling_params = self.config.curriculum_config.lessons[lesson_id].sampling_params
+        decoding = resolve_decoding_for_mode(
+            self.config.curriculum_config.lessons[lesson_id].sampling_params,
+            "eval",
+        )
         metrics = self._build_eval_metrics(
             prefix=f"inference.{eval_type}",
             lesson_id=lesson_id,
             batch=batch,
             n_generations=n_eval_generations,
-            temperature=sampling_params.temperature,
-            top_k=sampling_params.top_k,
+            decoding=decoding,
         )
         self._log_lesson_eval(
             lesson_id=lesson_id,
@@ -1073,8 +1066,7 @@ class RolloutWorker:
                     lesson_id=lesson_id,
                     batch=rollout_batch,
                     n_generations=lesson_config.sampling_params.n_generations_per_prompt,
-                    temperature=lesson_config.sampling_params.temperature,
-                    top_k=lesson_config.sampling_params.top_k,
+                    decoding=resolve_decoding_for_mode(lesson_config.sampling_params, "train"),
                 )
 
                 step += 1

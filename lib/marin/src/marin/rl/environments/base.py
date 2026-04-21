@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-import jax
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+import jax
+from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import RolloutGroup
 
@@ -25,12 +26,9 @@ class MarinEnv(ABC):
         inference_ctx: BaseInferenceContext,
         n_examples: int,
         n_generations: int,
-        temperature: float,
+        decoding: DecodingConfig,
         prng_key,
         mode: str = "train",
-        max_tokens: int | None = None,
-        top_k: int | None = None,
-        stop: list[str] | None = None,
         system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample examples, generate responses, and create rollouts.
@@ -39,12 +37,9 @@ class MarinEnv(ABC):
             inference_ctx: Context for generating responses from the model
             n_examples: Number of examples to sample
             n_generations: Number of generations per example
-            temperature: Sampling temperature for generation
+            decoding: Decoding configuration for generation
             prng_key: JAX random key for sampling
             mode: "train" or "eval" - which dataset to sample from
-            max_tokens: Maximum number of tokens to generate
-            top_k: Top-k sampling parameter
-            stop: Stop tokens to use for generation
             system_prompt: Optional system prompt to use for generation
 
         Returns:

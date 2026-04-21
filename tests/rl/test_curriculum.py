@@ -16,6 +16,7 @@ from marin.rl.curriculum import (
     is_plateaued,
     update_performance_stats,
 )
+from marin.rl.decoding import DecodingConfig, RolloutDecodingTrace
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
 
@@ -23,7 +24,10 @@ from marin.rl.types import RolloutStats
 def create_test_rollout_stats(episode_reward: float, lesson_id: str = "test") -> RolloutStats:
     """Helper to create rollout stats for testing."""
     return RolloutStats(
-        lesson_id=lesson_id, episode_reward=episode_reward, env_example_id="test_example", temperature=1.0, top_k=8
+        lesson_id=lesson_id,
+        episode_reward=episode_reward,
+        env_example_id="test_example",
+        decoding=DecodingConfig(temperature=1.0, top_k=8).as_trace(),
     )
 
 
@@ -862,7 +866,10 @@ def test_checkpoint_graduated_lessons(tmp_path):
 def test_rollout_stats_dataclass():
     """Test RolloutStats dataclass creation and serialization."""
     rollout_stats = RolloutStats(
-        lesson_id="test_lesson", episode_reward=1.5, env_example_id="example_123", temperature=1.0, top_k=8
+        lesson_id="test_lesson",
+        episode_reward=1.5,
+        env_example_id="example_123",
+        decoding=DecodingConfig(temperature=1.0, top_k=8).as_trace(),
     )
 
     assert rollout_stats.lesson_id == "test_lesson"
@@ -877,9 +884,11 @@ def test_rollout_stats_dataclass():
     assert stats_dict["episode_reward"] == 1.5
 
     # Test reconstruction
+    stats_dict["decoding"] = RolloutDecodingTrace(**stats_dict["decoding"])
     reconstructed = RolloutStats(**stats_dict)
     assert reconstructed.lesson_id == rollout_stats.lesson_id
     assert reconstructed.episode_reward == rollout_stats.episode_reward
+    assert reconstructed.decoding == rollout_stats.decoding
 
 
 def test_curriculum_update_lesson_stats():
