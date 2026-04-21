@@ -389,6 +389,7 @@ eval_fasttext_quality = StepSpec(
             oracle_path=oracle_quality.output_path,
         ),
         resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+        pip_dependency_groups=["probe"],
     ),
 )
 
@@ -404,6 +405,7 @@ eval_fasttext_topic = StepSpec(
             oracle_path=oracle_topic.output_path,
         ),
         resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+        pip_dependency_groups=["probe"],
     ),
 )
 
