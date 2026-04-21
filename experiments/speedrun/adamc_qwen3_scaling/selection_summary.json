@@ -1,0 +1,468 @@
+{
+  "all_runs": {
+    "130m": [
+      {
+        "c4_en_bpb": 1.187968611717224,
+        "c4_en_loss": 3.860055923461914,
+        "learning_rate": 0.004,
+        "num_train_steps": 4959,
+        "run_name": "qwen3_130m_adamc_4096_lrx0_5-ec0a7f",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_130m_adamc_4096_lrx0_5-ec0a7f/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 128,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_130m_adamc_4096_lrx0_5-ec0a7f"
+      },
+      {
+        "c4_en_bpb": 1.1843550205230713,
+        "c4_en_loss": 3.848308801651001,
+        "learning_rate": 0.006,
+        "num_train_steps": 4959,
+        "run_name": "qwen3_130m_adamc_4096_lrx0_75-10bec3",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_130m_adamc_4096_lrx0_75-10bec3/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 128,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_130m_adamc_4096_lrx0_75-10bec3"
+      },
+      {
+        "c4_en_bpb": 1.1818246841430664,
+        "c4_en_loss": 3.8400912284851074,
+        "learning_rate": 0.008,
+        "num_train_steps": 4959,
+        "run_name": "qwen3_130m_adamc_4096_lrx1-cdf262",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_130m_adamc_4096_lrx1-cdf262/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 128,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_130m_adamc_4096_lrx1-cdf262"
+      },
+      {
+        "c4_en_bpb": 1.180507779121399,
+        "c4_en_loss": 3.835812568664551,
+        "learning_rate": 0.01,
+        "num_train_steps": 4959,
+        "run_name": "qwen3_130m_adamc_4096_lrx1_25-2fb4aa",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_130m_adamc_4096_lrx1_25-2fb4aa/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 128,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_130m_adamc_4096_lrx1_25-2fb4aa"
+      },
+      {
+        "c4_en_bpb": 1.1805474758148191,
+        "c4_en_loss": 3.835944652557373,
+        "learning_rate": 0.012,
+        "num_train_steps": 4959,
+        "run_name": "qwen3_130m_adamc_4096_lrx1_5-b20c2b",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_130m_adamc_4096_lrx1_5-b20c2b/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 128,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_130m_adamc_4096_lrx1_5-b20c2b"
+      }
+    ],
+    "1_2b": [
+      {
+        "c4_en_bpb": 0.9476397633552552,
+        "c4_en_loss": 3.0790860652923584,
+        "learning_rate": 0.001,
+        "num_train_steps": 22888,
+        "run_name": "qwen3_1_2b_adamc_4096_lrx0_5-c26287",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_1_2b_adamc_4096_lrx0_5-c26287/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 256,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_1_2b_adamc_4096_lrx0_5-c26287"
+      },
+      {
+        "c4_en_bpb": 0.9455986618995668,
+        "c4_en_loss": 3.0724539756774902,
+        "learning_rate": 0.0015,
+        "num_train_steps": 22888,
+        "run_name": "qwen3_1_2b_adamc_4096_lrx0_75-2e3046",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_1_2b_adamc_4096_lrx0_75-2e3046/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 256,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_1_2b_adamc_4096_lrx0_75-2e3046"
+      },
+      {
+        "c4_en_bpb": 0.9424281120300292,
+        "c4_en_loss": 3.062152147293091,
+        "learning_rate": 0.002,
+        "num_train_steps": 22888,
+        "run_name": "qwen3_1_2b_adamc_4096_lrx1-f4b202",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_1_2b_adamc_4096_lrx1-f4b202/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 256,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_1_2b_adamc_4096_lrx1-f4b202"
+      },
+      {
+        "c4_en_bpb": 0.9412053823471068,
+        "c4_en_loss": 3.0581793785095215,
+        "learning_rate": 0.0025,
+        "num_train_steps": 22888,
+        "run_name": "qwen3_1_2b_adamc_4096_lrx1_25-f38d54",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_1_2b_adamc_4096_lrx1_25-f38d54/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 256,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_1_2b_adamc_4096_lrx1_25-f38d54"
+      },
+      {
+        "c4_en_bpb": 0.9397727847099304,
+        "c4_en_loss": 3.0535244941711426,
+        "learning_rate": 0.003,
+        "num_train_steps": 22888,
+        "run_name": "qwen3_1_2b_adamc_4096_lrx1_5-22a4a0",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_1_2b_adamc_4096_lrx1_5-22a4a0/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 256,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_1_2b_adamc_4096_lrx1_5-22a4a0"
+      }
+    ],
+    "300m": [
+      {
+        "c4_en_bpb": 1.0712296962738037,
+        "c4_en_loss": 3.480771780014038,
+        "learning_rate": 0.004,
+        "num_train_steps": 11444,
+        "run_name": "qwen3_300m_adamc_4096_lrx0_5-1b9e8d",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_300m_adamc_4096_lrx0_5-1b9e8d/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 128,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_300m_adamc_4096_lrx0_5-1b9e8d"
+      },
+      {
+        "c4_en_bpb": 1.0680627822875977,
+        "c4_en_loss": 3.47048282623291,
+        "learning_rate": 0.006,
+        "num_train_steps": 11444,
+        "run_name": "qwen3_300m_adamc_4096_lrx0_75-1b29d1",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_300m_adamc_4096_lrx0_75-1b29d1/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 128,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_300m_adamc_4096_lrx0_75-1b29d1"
+      },
+      {
+        "c4_en_bpb": 1.0671299695968628,
+        "c4_en_loss": 3.4674508571624756,
+        "learning_rate": 0.008,
+        "num_train_steps": 11444,
+        "run_name": "qwen3_300m_adamc_4096_lrx1-03e7b3",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_300m_adamc_4096_lrx1-03e7b3/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 128,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_300m_adamc_4096_lrx1-03e7b3"
+      },
+      {
+        "c4_en_bpb": 1.0662662982940674,
+        "c4_en_loss": 3.46464204788208,
+        "learning_rate": 0.01,
+        "num_train_steps": 11444,
+        "run_name": "qwen3_300m_adamc_4096_lrx1_25-7d34bd",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_300m_adamc_4096_lrx1_25-7d34bd/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 128,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_300m_adamc_4096_lrx1_25-7d34bd"
+      },
+      {
+        "c4_en_bpb": 1.0669053792953491,
+        "c4_en_loss": 3.466722249984741,
+        "learning_rate": 0.012,
+        "num_train_steps": 11444,
+        "run_name": "qwen3_300m_adamc_4096_lrx1_5-4da61f",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_300m_adamc_4096_lrx1_5-4da61f/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 128,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_300m_adamc_4096_lrx1_5-4da61f"
+      }
+    ],
+    "520m": [
+      {
+        "c4_en_bpb": 1.0072211027145386,
+        "c4_en_loss": 3.2726783752441406,
+        "learning_rate": 0.002,
+        "num_train_steps": 9918,
+        "run_name": "qwen3_520m_adamc_4096_lrx0_5-ffe956",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_520m_adamc_4096_lrx0_5-ffe956/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 256,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_520m_adamc_4096_lrx0_5-ffe956"
+      },
+      {
+        "c4_en_bpb": 1.00399911403656,
+        "c4_en_loss": 3.262208938598633,
+        "learning_rate": 0.003,
+        "num_train_steps": 9918,
+        "run_name": "qwen3_520m_adamc_4096_lrx0_75-e190ba",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_520m_adamc_4096_lrx0_75-e190ba/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 256,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_520m_adamc_4096_lrx0_75-e190ba"
+      },
+      {
+        "c4_en_bpb": 1.001445174217224,
+        "c4_en_loss": 3.253911256790161,
+        "learning_rate": 0.004,
+        "num_train_steps": 9918,
+        "run_name": "qwen3_520m_adamc_4096_lrx1-454bf7",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_520m_adamc_4096_lrx1-454bf7/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 256,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_520m_adamc_4096_lrx1-454bf7"
+      },
+      {
+        "c4_en_bpb": 1.0012493133544922,
+        "c4_en_loss": 3.25327467918396,
+        "learning_rate": 0.005,
+        "num_train_steps": 9918,
+        "run_name": "qwen3_520m_adamc_4096_lrx1_25-c200ac",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_520m_adamc_4096_lrx1_25-c200ac/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 256,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_520m_adamc_4096_lrx1_25-c200ac"
+      },
+      {
+        "c4_en_bpb": 0.999254822731018,
+        "c4_en_loss": 3.2467947006225586,
+        "learning_rate": 0.006,
+        "num_train_steps": 9918,
+        "run_name": "qwen3_520m_adamc_4096_lrx1_5-10ceb5",
+        "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_520m_adamc_4096_lrx1_5-10ceb5/speedrun_results.json",
+        "state": "finished",
+        "train_batch_size": 256,
+        "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_520m_adamc_4096_lrx1_5-10ceb5"
+      }
+    ]
+  },
+  "optimizer": "adamc",
+  "selected_runs": {
+    "130m": {
+      "author": {
+        "affiliation": "Georgia Tech",
+        "name": "William Held",
+        "url": "https://WilliamHeld.com"
+      },
+      "c4_en_bpb": 1.180507779121399,
+      "c4_en_loss": 3.835812568664551,
+      "description": "Qwen3 ~130m LR sweep with AdamC at lr=1.00e-2.",
+      "learning_rate": 0.01,
+      "num_train_steps": 4959,
+      "optimizer_config": {
+        "adamc_weight_decay": true,
+        "beta1": 0.9,
+        "beta2": 0.98,
+        "clip_update_norm": null,
+        "cooldown": null,
+        "cycle_length": null,
+        "cycles": null,
+        "decay": null,
+        "default_weight_decay_mask": null,
+        "epsilon": 1e-20,
+        "haps": null,
+        "learning_rate": 0.01,
+        "lr_schedule": "cosine",
+        "max_grad_norm": 1,
+        "min_lr_ratio": 0,
+        "nesterov": false,
+        "rewarmup": 0,
+        "skip_bad_steps": false,
+        "update_rms_clipping": null,
+        "warmup": 2000,
+        "warmup_before_decay": false,
+        "warmup_start_ratio": 0,
+        "weight_decay": 0.1,
+        "weight_decay_modules": null
+      },
+      "resources": {
+        "cpu": 32,
+        "device": {
+          "kind": "tpu",
+          "topology": null,
+          "variant": "v5p-32"
+        },
+        "device_alternatives": null,
+        "disk": "50g",
+        "preemptible": true,
+        "ram": "128g",
+        "regions": null,
+        "replicas": 4
+      },
+      "run_name": "qwen3_130m_adamc_4096_lrx1_25-2fb4aa",
+      "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_130m_adamc_4096_lrx1_25-2fb4aa/speedrun_results.json",
+      "state": "finished",
+      "tokenized_dataset": "gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-ac65f6",
+      "train_batch_size": 128,
+      "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_130m_adamc_4096_lrx1_25-2fb4aa"
+    },
+    "1_2b": {
+      "author": {
+        "affiliation": "Georgia Tech",
+        "name": "William Held",
+        "url": "https://WilliamHeld.com"
+      },
+      "c4_en_bpb": 0.9397727847099304,
+      "c4_en_loss": 3.0535244941711426,
+      "description": "Qwen3 ~1_2b LR sweep with AdamC at lr=3.00e-3.",
+      "learning_rate": 0.003,
+      "num_train_steps": 22888,
+      "optimizer_config": {
+        "adamc_weight_decay": true,
+        "beta1": 0.9,
+        "beta2": 0.98,
+        "clip_update_norm": null,
+        "cooldown": null,
+        "cycle_length": null,
+        "cycles": null,
+        "decay": null,
+        "default_weight_decay_mask": null,
+        "epsilon": 1e-25,
+        "haps": null,
+        "learning_rate": 0.003,
+        "lr_schedule": "cosine",
+        "max_grad_norm": 2,
+        "min_lr_ratio": 0,
+        "nesterov": false,
+        "rewarmup": 0,
+        "skip_bad_steps": false,
+        "update_rms_clipping": null,
+        "warmup": 1000,
+        "warmup_before_decay": false,
+        "warmup_start_ratio": 0,
+        "weight_decay": 0.2,
+        "weight_decay_modules": null
+      },
+      "resources": {
+        "cpu": 32,
+        "device": {
+          "kind": "tpu",
+          "topology": null,
+          "variant": "v5p-32"
+        },
+        "device_alternatives": null,
+        "disk": "50g",
+        "preemptible": true,
+        "ram": "128g",
+        "regions": null,
+        "replicas": 4
+      },
+      "run_name": "qwen3_1_2b_adamc_4096_lrx1_5-22a4a0",
+      "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_1_2b_adamc_4096_lrx1_5-22a4a0/speedrun_results.json",
+      "state": "finished",
+      "tokenized_dataset": "gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-ac65f6",
+      "train_batch_size": 256,
+      "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_1_2b_adamc_4096_lrx1_5-22a4a0"
+    },
+    "300m": {
+      "author": {
+        "affiliation": "Georgia Tech",
+        "name": "William Held",
+        "url": "https://WilliamHeld.com"
+      },
+      "c4_en_bpb": 1.0662662982940674,
+      "c4_en_loss": 3.46464204788208,
+      "description": "Qwen3 ~300m LR sweep with AdamC at lr=1.00e-2.",
+      "learning_rate": 0.01,
+      "num_train_steps": 11444,
+      "optimizer_config": {
+        "adamc_weight_decay": true,
+        "beta1": 0.9,
+        "beta2": 0.98,
+        "clip_update_norm": null,
+        "cooldown": null,
+        "cycle_length": null,
+        "cycles": null,
+        "decay": null,
+        "default_weight_decay_mask": null,
+        "epsilon": 1e-10,
+        "haps": null,
+        "learning_rate": 0.01,
+        "lr_schedule": "cosine",
+        "max_grad_norm": 1,
+        "min_lr_ratio": 0,
+        "nesterov": false,
+        "rewarmup": 0,
+        "skip_bad_steps": false,
+        "update_rms_clipping": null,
+        "warmup": 2000,
+        "warmup_before_decay": false,
+        "warmup_start_ratio": 0,
+        "weight_decay": 0.1,
+        "weight_decay_modules": null
+      },
+      "resources": {
+        "cpu": 32,
+        "device": {
+          "kind": "tpu",
+          "topology": null,
+          "variant": "v5p-8"
+        },
+        "device_alternatives": null,
+        "disk": "50g",
+        "preemptible": true,
+        "ram": "128g",
+        "regions": null,
+        "replicas": 1
+      },
+      "run_name": "qwen3_300m_adamc_4096_lrx1_25-7d34bd",
+      "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_300m_adamc_4096_lrx1_25-7d34bd/speedrun_results.json",
+      "state": "finished",
+      "tokenized_dataset": "gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-ac65f6",
+      "train_batch_size": 128,
+      "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_300m_adamc_4096_lrx1_25-7d34bd"
+    },
+    "520m": {
+      "author": {
+        "affiliation": "Georgia Tech",
+        "name": "William Held",
+        "url": "https://WilliamHeld.com"
+      },
+      "c4_en_bpb": 0.999254822731018,
+      "c4_en_loss": 3.2467947006225586,
+      "description": "Qwen3 ~520m LR sweep with AdamC at lr=6.00e-3.",
+      "learning_rate": 0.006,
+      "num_train_steps": 9918,
+      "optimizer_config": {
+        "adamc_weight_decay": true,
+        "beta1": 0.9,
+        "beta2": 0.98,
+        "clip_update_norm": null,
+        "cooldown": null,
+        "cycle_length": null,
+        "cycles": null,
+        "decay": null,
+        "default_weight_decay_mask": null,
+        "epsilon": 1e-10,
+        "haps": null,
+        "learning_rate": 0.006,
+        "lr_schedule": "cosine",
+        "max_grad_norm": 1,
+        "min_lr_ratio": 0,
+        "nesterov": false,
+        "rewarmup": 0,
+        "skip_bad_steps": false,
+        "update_rms_clipping": null,
+        "warmup": 1000,
+        "warmup_before_decay": false,
+        "warmup_start_ratio": 0,
+        "weight_decay": 0.2,
+        "weight_decay_modules": null
+      },
+      "resources": {
+        "cpu": 32,
+        "device": {
+          "kind": "tpu",
+          "topology": null,
+          "variant": "v5p-16"
+        },
+        "device_alternatives": null,
+        "disk": "50g",
+        "preemptible": true,
+        "ram": "128g",
+        "regions": null,
+        "replicas": 2
+      },
+      "run_name": "qwen3_520m_adamc_4096_lrx1_5-10ceb5",
+      "source_results_path": "gs://marin-us-central1/checkpoints/speedrun/qwen3_520m_adamc_4096_lrx1_5-10ceb5/speedrun_results.json",
+      "state": "finished",
+      "tokenized_dataset": "gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-ac65f6",
+      "train_batch_size": 256,
+      "wandb_url": "https://wandb.ai/marin-community/marin/runs/qwen3_520m_adamc_4096_lrx1_5-10ceb5"
+    }
+  },
+  "selection_metric": "eval/paloma/c4_en/bpb"
+}
