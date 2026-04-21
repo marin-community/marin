@@ -47,6 +47,7 @@ from experiments.embed_everything.embed import (  # noqa: E402
 from experiments.embed_everything.evaluate import (  # noqa: E402
     evaluate_fasttext_quality,
     evaluate_fasttext_topic,
+    evaluate_oracle_retest,
     evaluate_quality_mlp,
     evaluate_quality_probe,
     evaluate_topic_clusters,
@@ -57,7 +58,12 @@ from experiments.embed_everything.fasttext_baseline import (  # noqa: E402
     classify_documents_fasttext_topic,
     score_documents_fasttext_quality,
 )
-from experiments.embed_everything.oracle import OracleBackend, label_quality, label_topics  # noqa: E402
+from experiments.embed_everything.oracle import (  # noqa: E402
+    OracleBackend,
+    label_quality,
+    label_topics,
+    relabel_quality_subset,
+)
 from experiments.embed_everything.sample import (  # noqa: E402
     sample_quality_documents_binary,
     sample_quality_documents_nemotron,
@@ -343,6 +349,48 @@ for _em in EMBED_MODELS:
 
 
 # ---------------------------------------------------------------------------
+# Oracle test-retest: re-label a subset of docs to measure the single-run
+# noise floor so we know the ceiling on probe Spearman against this oracle.
+# ---------------------------------------------------------------------------
+
+N_RETEST_DOCS = 200
+RETEST_SEED = 123
+
+oracle_quality_retest = StepSpec(
+    name="oracle_quality_retest",
+    output_path_prefix=_OUTPUT_PREFIX,
+    deps=[oracle_quality],
+    hash_attrs={"n_docs": N_RETEST_DOCS, "seed": RETEST_SEED, "backend": str(ORACLE_BACKEND), "v": 1},
+    fn=remote(
+        lambda output_path: relabel_quality_subset(
+            output_path=output_path,
+            input_oracle_path=oracle_quality.output_path,
+            n_docs=N_RETEST_DOCS,
+            seed=RETEST_SEED,
+            backend=ORACLE_BACKEND,
+        ),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+        pip_dependency_groups=["oracle"],
+    ),
+)
+
+eval_oracle_retest = StepSpec(
+    name="eval_oracle_retest",
+    output_path_prefix=_OUTPUT_PREFIX,
+    deps=[oracle_quality, oracle_quality_retest],
+    hash_attrs={"v": 1},
+    fn=remote(
+        lambda output_path: evaluate_oracle_retest(
+            output_path=output_path,
+            run1_path=oracle_quality.output_path,
+            run2_path=oracle_quality_retest.output_path,
+        ),
+        resources=ResourceConfig.with_cpu(regions=[DATA_REGION]),
+        pip_dependency_groups=["probe"],
+    ),
+)
+
+# ---------------------------------------------------------------------------
 # Fasttext baselines (Allen AI Dolma 3 classifiers) — Helw150's skill-issue bar.
 # ---------------------------------------------------------------------------
 
@@ -423,6 +471,8 @@ ALL_STEPS: list[StepSpec] = [
     sample_topic,
     oracle_quality,
     oracle_topic,
+    oracle_quality_retest,
+    eval_oracle_retest,
     *MODEL_STEPS,
     fasttext_quality,
     fasttext_topic,

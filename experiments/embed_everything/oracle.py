@@ -218,6 +218,64 @@ def _call_llm_structured(
     raise RuntimeError("Unreachable")
 
 
+def relabel_quality_subset(
+    output_path: str,
+    input_oracle_path: str,
+    n_docs: int = 200,
+    seed: int = 123,
+    backend: OracleBackend = OracleBackend.CLAUDE,
+) -> None:
+    """Re-label a random subset of an existing oracle_quality output.
+
+    Used to estimate the oracle's test-retest noise floor so we can tell how
+    much headroom a probe's Spearman has against the single-run oracle. Reads
+    ``{input_oracle_path}/quality_labeled.parquet``, samples ``n_docs`` of the
+    successfully-labeled rows (not labeling_failed), strips their existing
+    scores, and re-calls ``label_quality`` with the same prompt/model. Output:
+    ``{output_path}/quality_retest.parquet`` with ``oracle_quality_score``
+    (the fresh score) and ``doc_id`` preserved so the eval can align to the
+    original run.
+    """
+    import random
+
+    input_file = os.path.join(input_oracle_path, "quality_labeled.parquet")
+    all_docs = list(load_parquet(input_file))
+    valid = [d for d in all_docs if d.get("oracle_quality_score", -1) != -1]
+    rng = random.Random(seed)
+    subset = rng.sample(valid, min(n_docs, len(valid)))
+    logger.info("Re-labeling %d docs (seed=%d, backend=%s)", len(subset), seed, backend)
+
+    relabeled: list[dict] = []
+    for i, doc in enumerate(subset):
+        truncated = _truncate_text(doc["text"])
+        prompt = QUALITY_PROMPT.format(text=truncated)
+
+        # Preserve everything except the prior oracle fields; those become _prev.
+        new_doc = {k: v for k, v in doc.items() if not k.startswith("oracle_")}
+        new_doc["oracle_quality_score_prev"] = doc.get("oracle_quality_score", -1)
+
+        try:
+            label = _call_llm_structured(prompt, QualityLabel, backend)
+            new_doc["oracle_quality_score"] = label.score
+            new_doc["oracle_quality_reasoning"] = label.reasoning
+            new_doc["oracle_backend"] = str(backend)
+        except Exception:
+            logger.exception("Failed to re-label document %s", doc.get("doc_id", i))
+            new_doc["oracle_quality_score"] = -1
+            new_doc["oracle_quality_reasoning"] = "labeling_failed"
+            new_doc["oracle_backend"] = str(backend)
+
+        relabeled.append(new_doc)
+
+        if (i + 1) % 10 == 0:
+            logger.info("Retest progress: %d/%d", i + 1, len(subset))
+
+    write_parquet_file(relabeled, os.path.join(output_path, "quality_retest.parquet"))
+
+    failed = sum(1 for d in relabeled if d["oracle_quality_score"] == -1)
+    logger.info("Retest complete: %d labeled, %d failed", len(relabeled) - failed, failed)
+
+
 def label_quality(
     output_path: str,
     input_path: str,

@@ -622,6 +622,101 @@ def evaluate_fasttext_topic(
     _write_json(results, os.path.join(output_path, "fasttext_topic_results.json"))
 
 
+def evaluate_oracle_retest(
+    output_path: str,
+    run1_path: str,
+    run2_path: str,
+) -> None:
+    """Measure the oracle's test-retest noise on the same subset of docs.
+
+    ``run1_path`` is the original oracle_quality output; ``run2_path`` is the
+    relabel_quality_subset output, which carries ``oracle_quality_score``
+    (fresh call) plus ``oracle_quality_score_prev`` (copied from run1 at
+    relabel time, redundant with run1 but kept for sanity).
+
+    The Spearman between the two runs is the **noise ceiling** on any probe
+    evaluated against run1: a probe can't rank-correlate with run1 better
+    than run1 rank-correlates with itself under re-sampling.
+    """
+    from scipy import stats
+
+    run1_file = os.path.join(run1_path, "quality_labeled.parquet")
+    run2_file = os.path.join(run2_path, "quality_retest.parquet")
+
+    run1 = {d["doc_id"]: d for d in load_parquet(run1_file)}
+    run2_rows = list(load_parquet(run2_file))
+
+    s1: list[int] = []
+    s2: list[int] = []
+    buckets: list[str] = []
+    for r2 in run2_rows:
+        r1 = run1.get(r2["doc_id"])
+        if r1 is None:
+            continue
+        if r1.get("oracle_quality_score", -1) == -1 or r2.get("oracle_quality_score", -1) == -1:
+            continue
+        s1.append(int(r1["oracle_quality_score"]))
+        s2.append(int(r2["oracle_quality_score"]))
+        buckets.append(r1.get("quality_bucket", "unknown"))
+
+    if len(s1) < 2:
+        logger.error("Too few retest pairs to evaluate (%d)", len(s1))
+        return
+
+    arr1 = np.array(s1, dtype=float)
+    arr2 = np.array(s2, dtype=float)
+    diff = arr2 - arr1
+
+    spearman_r, spearman_p = stats.spearmanr(arr1, arr2)
+    kendall_tau, kendall_p = stats.kendalltau(arr1, arr2)
+    mae = float(np.mean(np.abs(diff)))
+    exact = float(np.mean(diff == 0))
+    off_by_one = float(np.mean(np.abs(diff) <= 1))
+
+    per_bucket: dict[str, dict[str, float]] = {}
+    for b in sorted(set(buckets)):
+        mask = [bk == b for bk in buckets]
+        n = sum(mask)
+        if n == 0:
+            continue
+        d_sub = diff[mask]
+        per_bucket[b] = {
+            "n": int(n),
+            "exact_agreement": float(np.mean(d_sub == 0)),
+            "off_by_one": float(np.mean(np.abs(d_sub) <= 1)),
+            "mean_drift_run2_minus_run1": float(np.mean(d_sub)),
+            "mae": float(np.mean(np.abs(d_sub))),
+        }
+
+    results = {
+        "task": "oracle_retest",
+        "n_pairs": len(s1),
+        "spearman_rho": float(spearman_r),
+        "spearman_p": float(spearman_p),
+        "kendall_tau": float(kendall_tau),
+        "kendall_p": float(kendall_p),
+        "mae": mae,
+        "exact_agreement_rate": exact,
+        "off_by_one_rate": off_by_one,
+        "mean_drift_run2_minus_run1": float(np.mean(diff)),
+        "run1_score_mean": float(arr1.mean()),
+        "run2_score_mean": float(arr2.mean()),
+        "run1_score_std": float(arr1.std()),
+        "run2_score_std": float(arr2.std()),
+        "per_bucket": per_bucket,
+    }
+    logger.info(
+        "Oracle retest: Spearman=%.4f Kendall=%.4f exact=%.3f off_by_one=%.3f MAE=%.3f (n=%d)",
+        spearman_r,
+        kendall_tau,
+        exact,
+        off_by_one,
+        mae,
+        len(s1),
+    )
+    _write_json(results, os.path.join(output_path, "oracle_retest_results.json"))
+
+
 def evaluate_topic_supervised(
     output_path: str,
     embeddings_path: str,
