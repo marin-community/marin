@@ -37,7 +37,7 @@ from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
-EXPERIMENT_NAME = "exp_sft_qwen3_4b_selfinstill_ot3_math53k_n8_vr5_allvalid_round1"
+EXPERIMENT_NAME = "exp_sft_qwen3_4b_selfinstill_ot3_math53k_n8_vr5_allvalid_round1_8k_lr1e5_wd01"
 
 # Dataset configuration
 DATASET_ID = "teetone/qwen3_4b_openthoughts3_math53K_instill_n8_valredundancy5_allvalid_round1"
@@ -64,7 +64,7 @@ MICROBATCH_SIZE = 64  # No gradient accumulation
 
 # Fix at 4000 instead of using the number of epochs
 # NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * DATASET_SIZE / TRAIN_BATCH_SIZE)
-NUM_TRAIN_STEPS = 4000
+NUM_TRAIN_STEPS = 8000
 
 RESOURCES = ResourceConfig.with_tpu("v5p-64")
 
@@ -75,16 +75,16 @@ mixture_sft_config = SimpleSFTConfig(
     train_batch_size=TRAIN_BATCH_SIZE,
     per_device_parallelism=compute_per_device_parallelism(TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES),
     num_train_steps=NUM_TRAIN_STEPS,
-    learning_rate=2e-5,
+    learning_rate=1e-5,  # halved for 2x longer training
     max_seq_len=32768,  # 32K context length
     seed=42,
     steps_per_checkpoint=(DATASET_SIZE / TRAIN_BATCH_SIZE) // 4,  # Every quarter epoch
     lr_schedule="cosine",
-    warmup=0.03,  # warmup_ratio (same ratio, fewer absolute steps)
+    warmup=0.015,  # same absolute warmup steps (~120) over 8000 steps
     decay=0.9,
     min_lr_ratio=0.1,  # min_lr_rate from Open-R1 recipe (cosine_with_min_lr)
-    weight_decay=0.0,
-    max_grad_norm=0.2,  # From Open-R1 recipe
+    weight_decay=0.01,  # light regularization for longer training
+    max_grad_norm=1.0,  # relaxed clipping for stability
     beta1=0.9,
     beta2=0.999,
     pad_tokenizer_to_match_model=True,

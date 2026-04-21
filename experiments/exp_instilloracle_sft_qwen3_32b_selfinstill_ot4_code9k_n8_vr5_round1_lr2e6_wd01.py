@@ -13,17 +13,17 @@
 # limitations under the License.
 
 """
-Fine-tunes Qwen3-8B (Qwen/Qwen3-8B) on the self-instilled OpenThoughts4 Science dataset
-(teetone/qwen3_8b_openthoughts4_science26K_instill_n8_valredundancy5_round1).
+Fine-tunes Qwen3-32B (Qwen/Qwen3-32B) on the self-instilled OpenThoughts4 Code dataset
+(teetone/qwen3_32b_openthoughts4_code9K_instill_n8_valredundancy5_round1).
 
-Hyperparameter variant of the round1 experiment:
-- Lower LR (5e-6 vs 1e-5) for more stable training
-- Fewer steps (2000 vs 4000) to avoid overfitting
+Hyperparameter variant following the lr scaling pattern:
+- 4B: lr=2e-5, 8B: lr=1e-5 -> 5e-6 (tuned), 32B: lr=2e-6 (scaled down)
 - Weight decay 0.01 for regularization
 - Relaxed grad clipping (1.0 vs 0.2)
 - Slightly longer warmup (0.05 vs 0.03)
 """
 import dataclasses
+import math
 
 from levanter.data.text import ChatLmDatasetFormat
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
@@ -33,50 +33,52 @@ from experiments.posttrain.instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
     get_instruction_dataset,
 )
-from experiments.qwen3 import qwen3_8b, qwen3_8b_tokenizer
+from experiments.qwen3 import qwen3_32b, qwen3_32b_tokenizer
 from experiments.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
 from experiments.simple_sft_config import SimpleSFTConfig, compute_per_device_parallelism
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
-EXPERIMENT_NAME = "exp_sft_qwen3_8b_selfinstill_ot4_science26k_n8_vr5_round1_lr5e6_wd01_4ksteps"
+EXPERIMENT_NAME = "exp_sft_qwen3_32b_selfinstill_ot4_code9k_n8_vr5_round1_lr2e6_wd01"
 
 # Dataset configuration
-DATASET_ID = "teetone/qwen3_8b_openthoughts4_science26K_instill_n8_valredundancy5_round1"
-DATASET_SHORT_NAME = "qwen3_8b_ot4_science26k_n8_vr5_round1"
-DATASET_SIZE = 20_916
+DATASET_ID = "teetone/qwen3_32b_openthoughts4_code9K_instill_n8_valredundancy5_round1"
+DATASET_SHORT_NAME = "qwen3_32b_ot4_code9k_n8_vr5_round1"
+DATASET_SIZE = 4_927
 
 dataset_config = INSTRUCTION_DATASET_NAME_TO_CONFIG[DATASET_ID]
 dataset = get_instruction_dataset(DATASET_ID, splits=dataset_config.splits)
 
-tokenized_selfinstill_science = default_tokenize(
-    name=f"{DATASET_SHORT_NAME}_qwen3_8b_tokenizer",
+tokenized_selfinstill_code = default_tokenize(
+    name=f"{DATASET_SHORT_NAME}_qwen3_32b_tokenizer",
     dataset=dataset / "**/*.jsonl.gz",
-    tokenizer=qwen3_8b_tokenizer,
+    tokenizer=qwen3_32b_tokenizer,
     format=ChatLmDatasetFormat(chat_template=QWEN_3_CHAT_TEMPLATE),
 )
 
-tokenized_datasets = {DATASET_SHORT_NAME: tokenized_selfinstill_science}
+tokenized_datasets = {DATASET_SHORT_NAME: tokenized_selfinstill_code}
 mixture_weights = {DATASET_SHORT_NAME: DATASET_SIZE}
 
 # Training configuration
 TARGET_EPOCHS = 8
 TRAIN_BATCH_SIZE = 64
-MICROBATCH_SIZE = 32  # 2 gradient accumulation steps (v4-64 OOMs at 64)
+MICROBATCH_SIZE = 16  # gradient accumulation for 32B memory constraints
 
+# Fix at 4000 instead of using the number of epochs
+# NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * DATASET_SIZE / TRAIN_BATCH_SIZE)
 NUM_TRAIN_STEPS = 4000
 
 RESOURCES = ResourceConfig.with_tpu("v5p-64")
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
-    tokenizer=qwen3_8b_tokenizer,
-    initialize_from_hf="Qwen/Qwen3-8B",
+    tokenizer=qwen3_32b_tokenizer,
+    initialize_from_hf="Qwen/Qwen3-32B",
     train_batch_size=TRAIN_BATCH_SIZE,
     per_device_parallelism=compute_per_device_parallelism(TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES),
     num_train_steps=NUM_TRAIN_STEPS,
-    learning_rate=5e-6,
+    learning_rate=2e-6,
     max_seq_len=32768,  # 32K context length
     seed=42,
     steps_per_checkpoint=(DATASET_SIZE / TRAIN_BATCH_SIZE) // 4,  # Every quarter epoch
@@ -101,20 +103,20 @@ mixture_config = lm_mixture_data_config(
 )
 
 # Model config with 32K context length
-qwen3_8b_32k_tokens = dataclasses.replace(
-    qwen3_8b,
+qwen3_32b_32k_tokens = dataclasses.replace(
+    qwen3_32b,
     max_seq_len=32768,
     rope=DefaultRotaryEmbeddingsConfig(theta=1_000_000.0),
 )
 
-exp_instilloracle_sft_qwen3_8b_selfinstill_ot4_science26k_n8_vr5_round1_lr5e6_wd01 = default_sft(
+exp_instilloracle_sft_qwen3_32b_selfinstill_ot4_code9k_n8_vr5_round1_lr2e6_wd01 = default_sft(
     name=EXPERIMENT_NAME,
     tokenized=mixture_config,
-    model_config=qwen3_8b_32k_tokens,
+    model_config=qwen3_32b_32k_tokens,
     sft_config=mixture_sft_config,
-    tags=["qwen", "qwen3-8b", "openthoughts4", "science", "sft", "self-distillation"],
+    tags=["qwen", "qwen3-32b", "openthoughts4", "code", "sft", "self-distillation"],
 )
 
 
 if __name__ == "__main__":
-    executor_main(steps=[exp_instilloracle_sft_qwen3_8b_selfinstill_ot4_science26k_n8_vr5_round1_lr5e6_wd01])
+    executor_main(steps=[exp_instilloracle_sft_qwen3_32b_selfinstill_ot4_code9k_n8_vr5_round1_lr2e6_wd01])

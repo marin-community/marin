@@ -137,15 +137,22 @@ qwen3_8b_base = Qwen3Config(
     rope=DefaultRotaryEmbeddingsConfig(theta=1000000.0, factor=1.0),
 )
 
-# same as olmo 32b
+qwen3_32b_tokenizer = "Qwen/Qwen3-32B"
 qwen3_32b = Qwen3Config(
-    max_seq_len=4096,
+    # Matching defaults in https://huggingface.co/Qwen/Qwen3-32B/blob/main/config.json
+    max_seq_len=40960,
     hidden_dim=5120,
-    intermediate_dim=27648,
-    num_heads=40,
+    intermediate_dim=25600,
+    num_heads=64,
     num_kv_heads=8,
     num_layers=64,
-    rope=Llama3RotaryEmbeddingsConfig(),
+    head_dim=128,
+    activation_function=ActivationFunctionEnum.silu,
+    initializer_range=0.02,
+    layer_norm_epsilon=1e-6,
+    tie_word_embeddings=False,
+    reference_checkpoint="Qwen/Qwen3-32B",
+    rope=DefaultRotaryEmbeddingsConfig(theta=1000000.0, factor=1.0),
 )
 
 qwen2_5_1_5b_tokenizer = "Qwen/Qwen2.5-1.5B"
