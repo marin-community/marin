@@ -13,7 +13,7 @@ from pathlib import Path
 import click
 
 from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token, store_token
-from rigging.config_discovery import resolve_cluster_config
+from rigging.config_discovery import list_cluster_configs, resolve_cluster_config
 from rigging.log_setup import configure_logging
 from iris.rpc import config_pb2, job_pb2
 from iris.rpc import controller_pb2 as _controller_pb2
@@ -64,6 +64,25 @@ IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
     )
     if p is not None
 )
+
+
+def _format_available_clusters(prefix: str) -> str:
+    """Render ``prefix`` followed by the list of discoverable clusters.
+
+    Used by error messages so a user who passes ``--cluster=<typo>`` (or no
+    connection flags at all) sees the names they can actually use instead of a
+    generic "controller url required" message.
+    """
+    configs = list_cluster_configs(dirs=IRIS_CLUSTER_CONFIG_DIRS)
+    lines = [prefix]
+    if configs:
+        lines.append("Available clusters:")
+        for name, path in sorted(configs.items()):
+            lines.append(f"  {name:30s} {path}")
+    else:
+        lines.append("No cluster configurations found on this machine.")
+    lines.append("Use `iris cluster list` to refresh, or pass --controller-url / --config directly.")
+    return "\n".join(lines)
 
 
 def resolve_cluster_name(
@@ -176,7 +195,9 @@ def require_controller_url(ctx: click.Context) -> str:
             f"Could not connect to controller (config: {config_file}). "
             "Check that the controller is running and reachable."
         )
-    raise click.ClickException("Either --controller-url or --config is required")
+    raise click.ClickException(
+        _format_available_clusters("No controller specified. Pass --cluster=<name>, --controller-url, or --config.")
+    )
 
 
 @click.group()
@@ -217,7 +238,7 @@ def iris(
             logger.info("Resolved cluster %r to config: %s", cluster_name, resolved)
             config_file = str(resolved)
         except FileNotFoundError:
-            pass  # Fall through to token-only mode; error will surface if a command needs a controller
+            raise click.UsageError(_format_available_clusters(f"Unknown cluster {cluster_name!r}.")) from None
 
     # Validate mutually exclusive options
     if controller_url and config_file:
