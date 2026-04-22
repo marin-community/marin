@@ -8,13 +8,15 @@ import logging
 import os
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, TypeVar
 
 import equinox as eqx
 import fsspec
 import jax
+import jax.numpy as jnp
 import jmp
+import numpy as np
 
 import haliax as hax
 from haliax import Axis
@@ -32,12 +34,13 @@ from levanter.data.text import (
 )
 from levanter.eval import MaskedEvaluator, eval_masked_model
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig
+from levanter.models.lm_model import LmConfig, LmExample
 from levanter.tokenizers import load_tokenizer as load_marin_tokenizer
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
+from levanter.utils.tree_utils import inference_mode
 
 from fray.v2 import current_client
 from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
@@ -52,6 +55,10 @@ DEFAULT_TRACE_MASKED_EVAL_WANDB_PROJECT = "marin-analysis"
 DEFAULT_TRACE_MASKED_EVAL_WANDB_TAGS = ("trace_masked_eval",)
 CORRECT_OUTCOME_LABEL = "CORRECT"
 INCORRECT_OUTCOME_LABEL = "INCORRECT"
+DEFAULT_OUTCOME_JUDGE_PROMPT = (
+    "Given the trace above and any final patch shown, predict whether the attempted solution would pass the task.\n"
+    "Answer exactly one token: CORRECT or INCORRECT."
+)
 RESULTS_FILENAME = "results.json"
 TRACE_MASKED_EVAL_STATUS_PARTIAL = "partial"
 TRACE_MASKED_EVAL_STATUS_COMPLETED = "completed"
@@ -79,6 +86,7 @@ class TraceRowAdapterConfig:
     patch_prefix: str = "Final Patch:\n"
     positive_outcome_label: str = CORRECT_OUTCOME_LABEL
     negative_outcome_label: str = INCORRECT_OUTCOME_LABEL
+    outcome_prompt: str = DEFAULT_OUTCOME_JUDGE_PROMPT
     max_trace_messages: int | None = None
     preserve_initial_trace_messages: int = 0
     max_message_chars: int | None = None
@@ -95,6 +103,7 @@ class TraceMaskedEvalDatasetConfig:
     trace_format: TraceChatEvaluationFormat = field(default_factory=TraceChatEvaluationFormat)
     max_examples: int | None = None
     row_adapter: TraceRowAdapterConfig | None = None
+    contrastive_outcome: bool = False
 
 
 @dataclass
@@ -316,6 +325,8 @@ def _adapt_trace_row(
     row: Mapping[str, Any],
     trace_format: TraceChatEvaluationFormat,
     row_adapter: TraceRowAdapterConfig,
+    *,
+    include_outcome_label: bool = True,
 ) -> dict[str, Any]:
     input_messages_field = row_adapter.input_messages_field or trace_format.messages_field
     messages = _normalize_trace_messages(_lookup_field(row, input_messages_field))
@@ -339,31 +350,66 @@ def _adapt_trace_row(
     adapted = dict(row)
     if row_adapter.outcome_field is not None:
         label = _outcome_label(_lookup_field(row, row_adapter.outcome_field), row_adapter)
-        messages.append(
-            {
-                "role": "assistant",
-                "content": label,
-                "loss_tags": [row_adapter.outcome_loss_tag],
-            }
-        )
+        if include_outcome_label:
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": label,
+                    "loss_tags": [row_adapter.outcome_loss_tag],
+                }
+            )
         adapted["trace_outcome_label"] = label
 
     adapted[trace_format.messages_field] = messages
     return adapted
 
 
-def _source_for_dataset(dataset_config: TraceMaskedEvalDatasetConfig) -> ShardedDataSource[dict]:
+def _base_source_for_dataset(dataset_config: TraceMaskedEvalDatasetConfig) -> ShardedDataSource[dict]:
     source = dataset_config.source.get_shard_source(dataset_config.split)
     if source is None:
         raise ValueError(f"No shard source for split {dataset_config.split!r} in {dataset_config.source!r}")
-    if dataset_config.max_examples is None:
-        limited_source = source
-    else:
-        limited_source = FirstRowsShardedDataSource(source, dataset_config.max_examples)
+    if dataset_config.max_examples is not None:
+        return FirstRowsShardedDataSource(source, dataset_config.max_examples)
+    return source
 
+
+def _source_for_dataset(
+    dataset_config: TraceMaskedEvalDatasetConfig,
+    *,
+    include_outcome_label: bool = True,
+) -> ShardedDataSource[dict]:
+    limited_source = _base_source_for_dataset(dataset_config)
     if dataset_config.row_adapter is None:
         return limited_source
-    return limited_source.map(lambda row: _adapt_trace_row(row, dataset_config.trace_format, dataset_config.row_adapter))
+    return limited_source.map(
+        lambda row: _adapt_trace_row(
+            row,
+            dataset_config.trace_format,
+            dataset_config.row_adapter,
+            include_outcome_label=include_outcome_label,
+        )
+    )
+
+
+def _adapt_contrastive_outcome_row(
+    row: Mapping[str, Any],
+    trace_format: TraceChatEvaluationFormat,
+    row_adapter: TraceRowAdapterConfig,
+    candidate_label: str,
+) -> dict[str, Any]:
+    adapted = _adapt_trace_row(row, trace_format, row_adapter, include_outcome_label=False)
+    messages = [dict(message) for message in adapted[trace_format.messages_field]]
+    messages.append({"role": "user", "content": row_adapter.outcome_prompt})
+    messages.append(
+        {
+            "role": "assistant",
+            "content": candidate_label,
+            "loss_tags": [row_adapter.outcome_loss_tag],
+        }
+    )
+    adapted[trace_format.messages_field] = messages
+    adapted["trace_outcome_candidate_label"] = candidate_label
+    return adapted
 
 
 def _safe_name(name: str) -> str:
@@ -377,6 +423,7 @@ def _dataset_metadata(dataset_config: TraceMaskedEvalDatasetConfig) -> dict[str,
         "split": dataset_config.split,
         "max_examples": dataset_config.max_examples,
         "loss_tags": list(dataset_config.trace_format.loss_tags),
+        "contrastive_outcome": dataset_config.contrastive_outcome,
     }
     if dataset_config.row_adapter is not None:
         metadata["row_adapter"] = {
@@ -385,6 +432,7 @@ def _dataset_metadata(dataset_config: TraceMaskedEvalDatasetConfig) -> dict[str,
             "outcome_field": dataset_config.row_adapter.outcome_field,
             "patch_loss_tag": dataset_config.row_adapter.patch_loss_tag,
             "outcome_loss_tag": dataset_config.row_adapter.outcome_loss_tag,
+            "outcome_prompt": dataset_config.row_adapter.outcome_prompt,
             "max_trace_messages": dataset_config.row_adapter.max_trace_messages,
             "preserve_initial_trace_messages": dataset_config.row_adapter.preserve_initial_trace_messages,
             "max_message_chars": dataset_config.row_adapter.max_message_chars,
@@ -513,6 +561,155 @@ def _write_results(output_path: str, results: dict[str, object]) -> None:
     fs.mv(tmp_path, results_path)
 
 
+def _tokenizer_pad_id(tokenizer: Any) -> int:
+    for token_id in (tokenizer.pad_token_id, tokenizer.eos_token_id):
+        if token_id is not None:
+            return int(token_id)
+    return 0
+
+
+def _slice_array(array: np.ndarray, max_length: int, strategy: Literal["left", "right", "raise"]) -> np.ndarray:
+    if len(array) <= max_length:
+        return array
+    if strategy == "left":
+        return array[:max_length]
+    if strategy == "right":
+        return array[-max_length:]
+    if strategy == "raise":
+        raise ValueError(f"Contrastive outcome example has {len(array)} tokens, exceeding max length {max_length}.")
+    raise ValueError(f"Unsupported slice strategy {strategy!r}.")
+
+
+def _pad_array(array: np.ndarray, max_length: int, pad_value: int | float) -> np.ndarray:
+    if len(array) > max_length:
+        raise ValueError(f"Cannot pad array of length {len(array)} to shorter length {max_length}.")
+    if len(array) == max_length:
+        return array
+    pad_width = max_length - len(array)
+    return np.pad(array, (0, pad_width), constant_values=pad_value)
+
+
+def _shift_loss_mask(mask: np.ndarray) -> np.ndarray:
+    shifted = np.roll(mask.astype(np.float32), -1)
+    shifted[-1] = 0.0
+    return shifted
+
+
+def _prepare_contrastive_candidate(
+    row: Mapping[str, Any],
+    trace_format: TraceChatEvaluationFormat,
+    row_adapter: TraceRowAdapterConfig,
+    tokenizer: Any,
+    max_eval_length: int,
+    candidate_label: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    contrastive_format = replace(
+        trace_format,
+        loss_tags=(row_adapter.outcome_loss_tag,),
+        pack=None,
+        include_role_tags=False,
+        include_final_assistant_tag=False,
+    )
+    candidate_row = _adapt_contrastive_outcome_row(row, contrastive_format, row_adapter, candidate_label)
+    processed = contrastive_format.build_preprocessor(tokenizer)([candidate_row])[0]
+
+    input_ids = np.asarray(processed["input_ids"], dtype=np.int32)
+    outcome_mask = np.asarray(processed["trace_masks"][row_adapter.outcome_loss_tag], dtype=np.float32)
+    input_ids = _slice_array(input_ids, max_eval_length, trace_format.slice_strategy)
+    outcome_mask = _slice_array(outcome_mask, max_eval_length, trace_format.slice_strategy)
+    loss_weight = _shift_loss_mask(outcome_mask)
+
+    if np.sum(loss_weight) == 0:
+        raise ValueError(f"Contrastive outcome candidate {candidate_label!r} produced no scored label tokens.")
+
+    input_ids = _pad_array(input_ids, max_eval_length, _tokenizer_pad_id(tokenizer)).astype(np.int32)
+    loss_weight = _pad_array(loss_weight, max_eval_length, 0.0).astype(np.float32)
+    return input_ids, loss_weight
+
+
+def _binary_auroc(scores: Sequence[float], labels: Sequence[bool]) -> tuple[float, bool]:
+    positives = [score for score, label in zip(scores, labels, strict=True) if label]
+    negatives = [score for score, label in zip(scores, labels, strict=True) if not label]
+    if not positives or not negatives:
+        return 0.5, False
+
+    wins = 0.0
+    for positive in positives:
+        for negative in negatives:
+            if positive > negative:
+                wins += 1.0
+            elif positive == negative:
+                wins += 0.5
+    return wins / (len(positives) * len(negatives)), True
+
+
+def _sigmoid(value: float) -> float:
+    if value >= 0:
+        exp_neg = np.exp(-value)
+        return float(1.0 / (1.0 + exp_neg))
+    exp_value = np.exp(value)
+    return float(exp_value / (1.0 + exp_value))
+
+
+def _contrastive_outcome_summary(
+    *,
+    margins: Sequence[float],
+    normalized_margins: Sequence[float],
+    gold_is_correct: Sequence[bool],
+    correct_logprobs: Sequence[float],
+    incorrect_logprobs: Sequence[float],
+    correct_token_counts: Sequence[float],
+    incorrect_token_counts: Sequence[float],
+) -> dict[str, float]:
+    if not margins:
+        raise ValueError("Contrastive outcome metrics require at least one example.")
+
+    predictions = [margin > 0 for margin in margins]
+    accuracy = np.mean([prediction == label for prediction, label in zip(predictions, gold_is_correct, strict=True)])
+    normalized_predictions = [margin > 0 for margin in normalized_margins]
+    normalized_accuracy = np.mean(
+        [prediction == label for prediction, label in zip(normalized_predictions, gold_is_correct, strict=True)]
+    )
+    auroc, auroc_defined = _binary_auroc(margins, gold_is_correct)
+    normalized_auroc, normalized_auroc_defined = _binary_auroc(normalized_margins, gold_is_correct)
+    probabilities = [_sigmoid(margin) for margin in margins]
+    brier = np.mean(
+        [(probability - float(label)) ** 2 for probability, label in zip(probabilities, gold_is_correct, strict=True)]
+    )
+    normalized_probabilities = [_sigmoid(margin) for margin in normalized_margins]
+    normalized_brier = np.mean(
+        [
+            (probability - float(label)) ** 2
+            for probability, label in zip(normalized_probabilities, gold_is_correct, strict=True)
+        ]
+    )
+
+    return {
+        "accuracy": float(accuracy),
+        "auroc": float(auroc),
+        "auroc_defined": float(auroc_defined),
+        "brier": float(brier),
+        "normalized_accuracy": float(normalized_accuracy),
+        "normalized_auroc": float(normalized_auroc),
+        "normalized_auroc_defined": float(normalized_auroc_defined),
+        "normalized_brier": float(normalized_brier),
+        "examples": float(len(margins)),
+        "positive_examples": float(sum(gold_is_correct)),
+        "negative_examples": float(len(gold_is_correct) - sum(gold_is_correct)),
+        "positive_rate": float(np.mean(gold_is_correct)),
+        "mean_margin": float(np.mean(margins)),
+        "mean_normalized_margin": float(np.mean(normalized_margins)),
+        "mean_correct_logprob": float(np.mean(correct_logprobs)),
+        "mean_incorrect_logprob": float(np.mean(incorrect_logprobs)),
+        "mean_correct_label_tokens": float(np.mean(correct_token_counts)),
+        "mean_incorrect_label_tokens": float(np.mean(incorrect_token_counts)),
+    }
+
+
+def _prefixed_metrics(prefix: str, metrics: Mapping[str, float]) -> dict[str, float]:
+    return {f"{prefix}/{name}": value for name, value in metrics.items()}
+
+
 def _run_with_retries(
     operation_name: str,
     operation: Callable[[], T],
@@ -556,6 +753,108 @@ def _validate_eval_config(config: TraceMaskedEvalConfig) -> None:
         raise ValueError("dataset_eval_retry_max_delay must be at least dataset_eval_retry_initial_delay")
     if config.job_failure_max_retries < 0:
         raise ValueError("job_failure_max_retries must be non-negative")
+    for dataset_name, dataset_config in config.datasets.items():
+        if not dataset_config.contrastive_outcome:
+            continue
+        if dataset_config.row_adapter is None:
+            raise ValueError(f"Dataset {dataset_name!r} requires row_adapter for contrastive outcome evaluation")
+        if dataset_config.row_adapter.outcome_field is None:
+            raise ValueError(f"Dataset {dataset_name!r} requires outcome_field for contrastive outcome evaluation")
+
+
+def _score_contrastive_outcomes(
+    *,
+    model: Any,
+    dataset_config: TraceMaskedEvalDatasetConfig,
+    tokenizer: Any,
+    max_eval_length: int,
+    compute_axis_mapping: Mapping[str, Any] | None,
+    mp: jmp.Policy,
+    prefix: str,
+) -> dict[str, float]:
+    row_adapter = dataset_config.row_adapter
+    if row_adapter is None or row_adapter.outcome_field is None:
+        raise ValueError("Contrastive outcome evaluation requires a row adapter with an outcome field.")
+
+    Pos = model.Pos.resize(max_eval_length)
+    positive_label = row_adapter.positive_outcome_label
+    negative_label = row_adapter.negative_outcome_label
+    score_model = inference_mode(model, True)
+    score_model = mp.cast_to_compute(score_model)
+
+    @hax.named_jit(axis_resources=compute_axis_mapping)
+    def score_candidate(candidate_model, tokens, loss_weight):
+        example = LmExample.causal(
+            hax.named(tokens, Pos),
+            loss_weight=hax.named(loss_weight, Pos),
+            block_cross_document_attention=False,
+        )
+        per_pos_loss = candidate_model.compute_next_token_loss(example, reduction=None, reduction_axis=()).array
+        weights = example.loss_weight.array
+        loss_sum = jnp.sum(per_pos_loss * weights)
+        token_count = jnp.sum(weights)
+        return -loss_sum, token_count
+
+    start = time.perf_counter()
+    margins: list[float] = []
+    normalized_margins: list[float] = []
+    gold_is_correct: list[bool] = []
+    correct_logprobs: list[float] = []
+    incorrect_logprobs: list[float] = []
+    correct_token_counts: list[float] = []
+    incorrect_token_counts: list[float] = []
+
+    for row in _base_source_for_dataset(dataset_config):
+        gold_label = _outcome_label(_lookup_field(row, row_adapter.outcome_field), row_adapter)
+        correct_tokens, correct_loss_weight = _prepare_contrastive_candidate(
+            row,
+            dataset_config.trace_format,
+            row_adapter,
+            tokenizer,
+            max_eval_length,
+            positive_label,
+        )
+        incorrect_tokens, incorrect_loss_weight = _prepare_contrastive_candidate(
+            row,
+            dataset_config.trace_format,
+            row_adapter,
+            tokenizer,
+            max_eval_length,
+            negative_label,
+        )
+
+        correct_logprob, correct_token_count = score_candidate(
+            score_model, jnp.asarray(correct_tokens), jnp.asarray(correct_loss_weight)
+        )
+        incorrect_logprob, incorrect_token_count = score_candidate(
+            score_model, jnp.asarray(incorrect_tokens), jnp.asarray(incorrect_loss_weight)
+        )
+        correct_logprob = float(jax.device_get(correct_logprob))
+        incorrect_logprob = float(jax.device_get(incorrect_logprob))
+        correct_token_count = float(jax.device_get(correct_token_count))
+        incorrect_token_count = float(jax.device_get(incorrect_token_count))
+
+        correct_logprobs.append(correct_logprob)
+        incorrect_logprobs.append(incorrect_logprob)
+        correct_token_counts.append(correct_token_count)
+        incorrect_token_counts.append(incorrect_token_count)
+        margins.append(correct_logprob - incorrect_logprob)
+        normalized_margins.append(
+            (correct_logprob / max(correct_token_count, 1.0)) - (incorrect_logprob / max(incorrect_token_count, 1.0))
+        )
+        gold_is_correct.append(gold_label == positive_label)
+
+    metrics = _contrastive_outcome_summary(
+        margins=margins,
+        normalized_margins=normalized_margins,
+        gold_is_correct=gold_is_correct,
+        correct_logprobs=correct_logprobs,
+        incorrect_logprobs=incorrect_logprobs,
+        correct_token_counts=correct_token_counts,
+        incorrect_token_counts=incorrect_token_counts,
+    )
+    metrics["total_time"] = time.perf_counter() - start
+    return _prefixed_metrics(f"{prefix}/outcome_contrastive", metrics)
 
 
 def trace_masked_eval(config: TraceMaskedEvalConfig) -> None:
@@ -626,7 +925,10 @@ def trace_masked_eval(config: TraceMaskedEvalConfig) -> None:
                     current_dataset_name: str = dataset_name,
                     current_dataset_config: TraceMaskedEvalDatasetConfig = dataset_config,
                 ) -> dict[str, float]:
-                    source = _source_for_dataset(current_dataset_config)
+                    source = _source_for_dataset(
+                        current_dataset_config,
+                        include_outcome_label=not current_dataset_config.contrastive_outcome,
+                    )
                     cache_dir = os.path.join(config.output_path, "cache", _safe_name(current_dataset_name))
                     cache = build_trace_chat_dataset_cache(
                         cache_dir, source, current_dataset_config.trace_format, tokenizer
@@ -647,7 +949,21 @@ def trace_masked_eval(config: TraceMaskedEvalConfig) -> None:
                         axis_mapping=compute_axis_mapping,
                         mp=mp,
                     )
-                    return eval_masked_model(evaluator, model, prefix=f"trace_masked_eval/{current_dataset_name}")
+                    prefix = f"trace_masked_eval/{current_dataset_name}"
+                    metrics = eval_masked_model(evaluator, model, prefix=prefix)
+                    if current_dataset_config.contrastive_outcome:
+                        metrics.update(
+                            _score_contrastive_outcomes(
+                                model=model,
+                                dataset_config=current_dataset_config,
+                                tokenizer=tokenizer,
+                                max_eval_length=config.max_eval_length,
+                                compute_axis_mapping=compute_axis_mapping,
+                                mp=mp,
+                                prefix=prefix,
+                            )
+                        )
+                    return metrics
 
                 log_dict = _run_with_retries(
                     f"Trace dataset {dataset_name}",

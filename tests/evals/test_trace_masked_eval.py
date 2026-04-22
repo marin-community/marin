@@ -21,7 +21,9 @@ from marin.evaluation.trace_masked_eval import (
     TraceRowAdapterConfig,
     TraceMaskedEvalDatasetConfig,
     TraceMaskedEvalOnPodConfig,
+    _binary_auroc,
     _completed_dataset_metrics,
+    _contrastive_outcome_summary,
     _is_completed_dataset_result,
     _load_or_create_results,
     _record_dataset_result,
@@ -241,6 +243,101 @@ def test_trace_row_adapter_limits_large_trace_before_derived_targets():
         TraceRowAdapterConfig(max_trace_messages=1, preserve_initial_trace_messages=1),
     )
     assert preserve_only == [row["trajectory"][0]]
+
+
+def test_contrastive_outcome_row_adds_judge_prompt_without_gold_label():
+    row = {
+        "trajectory": [
+            {"role": "system", "content": "system context"},
+            {"role": "user", "content": "fix it"},
+            {"role": "assistant", "content": "done"},
+        ],
+        "patch": "diff --git a/a.py b/a.py",
+        "resolved": True,
+    }
+    trace_format = TraceChatEvaluationFormat(messages_field="messages", loss_tags=("outcome",))
+    row_adapter = TraceRowAdapterConfig(
+        input_messages_field="trajectory",
+        patch_field="patch",
+        outcome_field="resolved",
+    )
+
+    adapted_row = trace_masked_eval_module._adapt_contrastive_outcome_row(
+        row,
+        trace_format,
+        row_adapter,
+        row_adapter.negative_outcome_label,
+    )
+
+    messages = adapted_row["messages"]
+    assert adapted_row["trace_outcome_label"] == "CORRECT"
+    assert adapted_row["trace_outcome_candidate_label"] == "INCORRECT"
+    assert [message["role"] for message in messages[-3:]] == ["assistant", "user", "assistant"]
+    assert messages[-3]["content"].startswith("Final Patch:")
+    assert "predict whether" in messages[-2]["content"]
+    assert messages[-1] == {
+        "role": "assistant",
+        "content": "INCORRECT",
+        "loss_tags": ["outcome"],
+    }
+
+
+def test_prepare_contrastive_candidate_scores_candidate_label_tokens():
+    tokenizer = load_tokenizer("gpt2")
+    row = {
+        "trajectory": [{"role": "user", "content": "fix it"}],
+        "patch": "diff --git a/a.py b/a.py",
+        "resolved": False,
+    }
+    trace_format = TraceChatEvaluationFormat(
+        messages_field="messages",
+        chat_template=LLAMA_3_1_CHAT_TEMPLATE,
+        loss_tags=("outcome",),
+        slice_strategy="right",
+    )
+    row_adapter = TraceRowAdapterConfig(
+        input_messages_field="trajectory",
+        patch_field="patch",
+        outcome_field="resolved",
+    )
+
+    tokens, loss_weight = trace_masked_eval_module._prepare_contrastive_candidate(
+        row,
+        trace_format,
+        row_adapter,
+        tokenizer,
+        max_eval_length=128,
+        candidate_label="INCORRECT",
+    )
+
+    assert tokens.shape == (128,)
+    assert loss_weight.shape == (128,)
+    assert loss_weight.sum() > 0
+
+
+def test_contrastive_outcome_summary_reports_accuracy_and_auroc():
+    auroc, defined = _binary_auroc([2.0, -1.0, 1.0, -0.5], [True, False, True, False])
+    assert auroc == 1.0
+    assert defined
+
+    summary = _contrastive_outcome_summary(
+        margins=[2.0, -1.0, 1.0, -0.5],
+        normalized_margins=[2.0, -1.0, 1.0, -0.5],
+        gold_is_correct=[True, False, True, False],
+        correct_logprobs=[-1.0, -3.0, -2.0, -4.0],
+        incorrect_logprobs=[-3.0, -2.0, -3.0, -3.5],
+        correct_token_counts=[1.0, 1.0, 1.0, 1.0],
+        incorrect_token_counts=[1.0, 1.0, 1.0, 1.0],
+    )
+
+    assert summary["accuracy"] == 1.0
+    assert summary["auroc"] == 1.0
+    assert summary["auroc_defined"] == 1.0
+    assert summary["normalized_accuracy"] == 1.0
+    assert summary["normalized_auroc"] == 1.0
+    assert summary["normalized_auroc_defined"] == 1.0
+    assert summary["positive_examples"] == 2.0
+    assert summary["negative_examples"] == 2.0
 
 
 def test_run_with_retries_retries_transient_failures(monkeypatch):

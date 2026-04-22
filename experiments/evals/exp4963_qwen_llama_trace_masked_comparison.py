@@ -35,7 +35,7 @@ MAX_OUTCOME_MESSAGE_CHARS = 4096
 WANDB_GROUP = "exp4963-qwen-llama-trace-masked"
 
 LOCAL_LOSS_TAGS = ("assistant", "tool_call", "tool", "observation", "final_assistant")
-OUTCOME_LOSS_TAGS = ("patch", "outcome")
+OUTCOME_LOSS_TAGS = ("patch",)
 
 
 def trace_format(
@@ -116,6 +116,7 @@ def trace_datasets(chat_template: str) -> dict[str, TraceMaskedEvalDatasetConfig
                 patch_field="model_patch",
                 outcome_field="resolved",
             ),
+            contrastive_outcome=True,
         ),
         "swe_agent_nebius_outcome": TraceMaskedEvalDatasetConfig(
             source=HfDatasetSourceConfig(
@@ -130,6 +131,7 @@ def trace_datasets(chat_template: str) -> dict[str, TraceMaskedEvalDatasetConfig
                 patch_field="generated_patch",
                 outcome_field="target",
             ),
+            contrastive_outcome=True,
         ),
         "swe_smith_tool_outcome": TraceMaskedEvalDatasetConfig(
             source=HfDatasetSourceConfig(
@@ -144,6 +146,7 @@ def trace_datasets(chat_template: str) -> dict[str, TraceMaskedEvalDatasetConfig
                 patch_field="patch",
                 outcome_field="resolved",
             ),
+            contrastive_outcome=True,
         ),
         "swe_gym_openhands_sampled_outcome": TraceMaskedEvalDatasetConfig(
             source=HfDatasetSourceConfig(
@@ -158,6 +161,7 @@ def trace_datasets(chat_template: str) -> dict[str, TraceMaskedEvalDatasetConfig
                 patch_field="test_result.git_patch",
                 outcome_field="resolved",
             ),
+            contrastive_outcome=True,
         ),
         "coderforge_swebench_verified_outcome": TraceMaskedEvalDatasetConfig(
             source=HfDatasetSourceConfig(
@@ -172,6 +176,7 @@ def trace_datasets(chat_template: str) -> dict[str, TraceMaskedEvalDatasetConfig
                 patch_field="output_patch",
                 outcome_field="reward",
             ),
+            contrastive_outcome=True,
         ),
     }
 
