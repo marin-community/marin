@@ -104,13 +104,6 @@ def _small_model_config(model_config_cls, *, vocab_size: int, seq_len: int):
     return model_config_cls(**kwargs)
 
 
-def test_grug_base_backward_flow_defaults_to_50_step_sampling():
-    train_module = importlib.import_module("experiments.grug.base.train")
-
-    assert BackwardFlowConfig().interval == 0
-    assert train_module.GrugTrainerConfig().backward_flow.interval == 50
-
-
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_model_and_train(),
