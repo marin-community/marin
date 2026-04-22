@@ -23,6 +23,12 @@ near-constant: one buffered item plus the zstd decoder state plus the
 chunk's compressed bytes (typically a few MB). This bound is essential for
 skewed shuffles where one reducer pulls disproportionate data and the
 external-sort fan-in opens hundreds of chunk iterators at once.
+
+Write-side memory is bounded by a byte budget (``_SCATTER_WRITE_BUFFER_BYTES``)
+rather than a fixed row count. When the estimated total bytes across all
+shard buffers exceeds the budget, the largest buffer is flushed. This prevents
+OOM on skewed or large-item workloads where a row-count limit provides no
+reliable bound.
 """
 
 from __future__ import annotations
@@ -45,7 +51,7 @@ from rigging.filesystem import open_url, url_to_fs
 from rigging.timing import log_time
 
 from zephyr.plan import deterministic_hash
-from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir
+from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +106,18 @@ _ZSTD_COMPRESS_LEVEL = 3
 # Items per pickle.dump call within a chunk. Larger = faster (less per-call
 # dispatch overhead), smaller = lower per-iterator read memory.
 _SUB_BATCH_SIZE = 1024
+
+# Total byte budget for all shard buffers held by one ScatterWriter.
+# When the estimate exceeds this, the largest buffer is flushed. Byte-based
+# budgeting is safer than a fixed row count because item size varies widely
+# (a 100K-row limit is fine for tiny dicts but OOMs on large documents).
+_SCATTER_WRITE_BUFFER_BYTES = 256 * 1024 * 1024  # 256 MB
+
+# Conservative bytes-per-item estimate used before the first flush samples
+# actual sizes. 512 bytes covers a typical dict with a few string fields plus
+# Python object overhead; the estimate is replaced by the measured average
+# after the first sample is taken.
+_INITIAL_ITEM_BYTES_ESTIMATE = 512
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +465,10 @@ class ScatterWriter:
     Items are routed to target shards by ``key_fn``, buffered, optionally
     combined and sorted, then flushed as zstd frames. A JSON sidecar is
     written on close.
+
+    Flushing is byte-budget-based: when the estimated total bytes across all
+    shard buffers exceeds ``buffer_limit_bytes``, the largest buffer is flushed.
+    This bounds peak RSS regardless of item count or output shard count.
     """
 
     def __init__(
@@ -457,13 +479,14 @@ class ScatterWriter:
         source_shard: int = 0,
         sort_fn: Callable | None = None,
         combiner_fn: Callable | None = None,
+        buffer_limit_bytes: int = _SCATTER_WRITE_BUFFER_BYTES,
     ) -> None:
         self._data_path = data_path
         self._key_fn = key_fn
         self._num_output_shards = num_output_shards
         self._source_shard = source_shard
         self._combiner_fn = combiner_fn
-        self._chunk_size = INTERMEDIATE_CHUNK_SIZE
+        self._buffer_limit_bytes = buffer_limit_bytes
 
         if sort_fn is not None:
             captured_sort_fn = sort_fn
@@ -481,6 +504,10 @@ class ScatterWriter:
         self._avg_item_bytes: float = 0.0
         self._sampled_avg = False
         self._n_chunks_written = 0
+        # Running total of rows across all shard buffers; used with
+        # _item_bytes_estimate to gate byte-budget flushes.
+        self._total_buffer_rows: int = 0
+        self._item_bytes_estimate: float = _INITIAL_ITEM_BYTES_ESTIMATE
 
         ensure_parent_dir(data_path)
         fs, fs_path = url_to_fs(data_path)
@@ -495,6 +522,7 @@ class ScatterWriter:
             sample = buf[: min(len(buf), _SCATTER_SAMPLE_SIZE)]
             total_bytes = sum(len(pickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL)) for item in sample)
             self._avg_item_bytes = total_bytes / len(sample)
+            self._item_bytes_estimate = self._avg_item_bytes
             self._sampled_avg = True
 
         frame = _write_chunk_frame(buf)
@@ -514,13 +542,18 @@ class ScatterWriter:
             )
 
     def write(self, item: Any) -> None:
-        """Route a single item to its target shard buffer, flushing when full."""
+        """Route a single item to its target shard buffer, flushing when over budget."""
         key = self._key_fn(item)
         target = deterministic_hash(key) % self._num_output_shards
         self._buffers[target].append(item)
-        if len(self._buffers[target]) >= self._chunk_size:
-            self._flush(target, self._buffers[target])
-            self._buffers[target] = []
+        self._total_buffer_rows += 1
+
+        if self._total_buffer_rows * self._item_bytes_estimate > self._buffer_limit_bytes:
+            largest = max(self._buffers, key=lambda t: len(self._buffers[t]))
+            rows_flushed = len(self._buffers[largest])
+            self._flush(largest, self._buffers[largest])
+            self._buffers[largest] = []
+            self._total_buffer_rows -= rows_flushed
 
     def close(self) -> ListShard:
         """Flush remaining buffers, write sidecar, return ListShard."""
@@ -557,6 +590,7 @@ def _write_scatter(
     num_output_shards: int,
     sort_fn: Callable | None = None,
     combiner_fn: Callable | None = None,
+    buffer_limit_bytes: int = _SCATTER_WRITE_BUFFER_BYTES,
 ) -> ListShard:
     """Route items to target shards, buffer, sort, and append zstd chunks.
 
@@ -573,6 +607,7 @@ def _write_scatter(
         source_shard=source_shard,
         sort_fn=sort_fn,
         combiner_fn=combiner_fn,
+        buffer_limit_bytes=buffer_limit_bytes,
     )
     for item in items:
         writer.write(item)
