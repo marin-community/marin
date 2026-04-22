@@ -1062,8 +1062,13 @@ class ControllerServiceImpl:
             if user_budget is not None and band < user_budget.max_band:
                 raise ConnectError(
                     Code.PERMISSION_DENIED,
-                    f"User {job_id.user} cannot submit {priority_band_name(band)} jobs (max band: "
-                    f"{priority_band_name(user_budget.max_band)})",
+                    f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
+                    f"(max band: {priority_band_name(user_budget.max_band)}). "
+                    f"Resubmit with `--priority {priority_band_name(user_budget.max_band).lower()}` "
+                    f"(e.g. `--priority batch`) to launch opportunistically, or ping @Helw150 "
+                    f"if you believe your username ({job_id.user}) should have a higher band — "
+                    f"either to be added to the researcher list or to confirm your username is "
+                    f"registered correctly.",
                 )
 
         # Reject submissions whose parent is absent or already terminated.

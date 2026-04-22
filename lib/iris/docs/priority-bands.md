@@ -47,6 +47,29 @@ Per-user budget tracking lives in
 exceeds their budget, INTERACTIVE submissions are silently downgraded to BATCH.
 PRODUCTION is exempt — another reason to reserve it for vetted work.
 
+### Max-band caps
+
+Each user has a `max_band` recorded in the `user_budgets` table. Submissions at
+a higher band than `max_band` are **rejected** (not downgraded) with
+`PERMISSION_DENIED`. The seeded tiers are:
+
+- Admins — `PRODUCTION` (and everything below).
+- Listed researchers — `INTERACTIVE` (plus `BATCH`).
+- Everyone else (including new/unlisted users) — `BATCH` only.
+
+If you hit `User <name> cannot submit INTERACTIVE jobs (max band: BATCH)`:
+
+1. **Retry at BATCH** with `--priority batch`. Most research workloads run fine
+   opportunistically and are the polite default.
+2. **Check your username.** The `max_band` cap is keyed on the verified
+   identity the controller sees. If the username in the error message isn't
+   what you expect — e.g. it's an email local-part or an SSO id rather than
+   your GitHub handle — your identity probably doesn't match the `user_id`
+   seeded in the migration, and you'll land on the default tier.
+3. **Request an uplift.** If your work needs INTERACTIVE or PRODUCTION, ping
+   [@Helw150](https://github.com/Helw150) to be added to the appropriate tier
+   in a follow-up migration.
+
 ## See also
 
 - [`task-states.md`](task-states.md) — how preemption surfaces in task state
