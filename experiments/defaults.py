@@ -546,6 +546,7 @@ def default_train(
                 min_lr_ratio=(
                     train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
                 ),
+                initial_zero_lr_steps=train_config.initial_zero_lr_steps,
                 skip_bad_steps=train_config.skip_bad_steps,
             )
         ),
@@ -794,6 +795,7 @@ def default_dpo(
             decay=dpo_config.cooldown,
             lr_schedule=dpo_config.lr_schedule,
             min_lr_ratio=dpo_config.min_lr_ratio,
+            initial_zero_lr_steps=dpo_config.initial_zero_lr_steps,
             max_grad_norm=dpo_config.max_grad_norm,
         ),
         reference=reference,

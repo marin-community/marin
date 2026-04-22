@@ -157,7 +157,9 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
     weight_decay: float = 0.1
 
     min_lr_ratio: float = 0.1
-    """The lr scheduler operates on 4 stages: [warmup] - {[stable] - [decay]} x haps - [cooldown]"""
+    """The lr scheduler operates on 4 stages: [warmup] - {[stable] - [decay]} x haps - [cooldown]."""
+    initial_zero_lr_steps: int = 0
+    """If positive, keep the learning rate at exactly zero for this many initial steps."""
     warmup: int | float = 0.01
     """fraction of training steps to use as warmup, or steps to use. 0.0 means no warmup"""
     decay: int | float | None = None
@@ -281,6 +283,20 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
             return mask_fn
 
     def lr_scheduler(self, num_train_steps, override_lr=None):
+        zero_lr_steps = max(self.initial_zero_lr_steps, 0)
+        if zero_lr_steps >= num_train_steps:
+            return optax.constant_schedule(0.0)
+
+        if zero_lr_steps > 0:
+            main_schedule = self._build_main_lr_scheduler(num_train_steps - zero_lr_steps, override_lr)
+            return optax.join_schedules(
+                [optax.constant_schedule(0.0), main_schedule],
+                [zero_lr_steps],
+            )
+
+        return self._build_main_lr_scheduler(num_train_steps, override_lr)
+
+    def _build_main_lr_scheduler(self, num_train_steps, override_lr=None):
         if self.cooldown is not None:
             warnings.warn("cooldown is deprecated. Just use the normal schedule.", DeprecationWarning)
             cooldown_steps = _convert_frac_or_steps(self.cooldown, num_train_steps)

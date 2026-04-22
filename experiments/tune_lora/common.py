@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from typing import Literal
 
 from levanter.adaptation import LoraAdaptationConfig
 from levanter.dpo import ReferenceEvalCacheConfig
@@ -27,6 +28,8 @@ class LoraTuneSpec:
     train_batch_size: int = 64
     num_epochs: float = 1.0
     rank: int = 64
+    zero_init_b: bool = True
+    a_init_mode: Literal["random", "zero"] = "random"
 
 
 def bloom_speceval_v2_lora_config(spec: LoraTuneSpec) -> SimpleDPOConfig:
@@ -45,7 +48,8 @@ def bloom_speceval_v2_lora_config(spec: LoraTuneSpec) -> SimpleDPOConfig:
             r=spec.rank,
             alpha=spec.rank,
             dropout=0.0,
-            zero_init_b=True,
+            zero_init_b=spec.zero_init_b,
+            a_init_mode=spec.a_init_mode,
             target_modules=None,
         ),
         reference=AdapterBaseReferenceConfig(),

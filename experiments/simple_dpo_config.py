@@ -62,6 +62,7 @@ class SimpleDPOConfig:
     cooldown: float | None = None
     lr_schedule: str = "linear"
     min_lr_ratio: float = 0.0
+    initial_zero_lr_steps: int = 0
     max_grad_norm: float | None = 1
 
     steps_per_eval: int | None = None

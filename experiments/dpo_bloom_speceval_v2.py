@@ -18,11 +18,10 @@
 """
 Run DPO on the Bloom SpecEval v2 preference dataset (GPT-4.1 chosen vs Mixtral opposite-mode rejected).
 
-The preference data is pre-built by bloom's export_marin_preference.py and lives on GCS at:
-  train: gs://marin-us-central1/preference/bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite/train/
-  val:   gs://marin-us-central1/preference/bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite/val_deduped/
-
-This experiment tokenizes that data and runs DPO training.
+The preference data is pre-built by bloom's export_marin_preference.py. We access it via
+``mirrored(...)`` so tokenization and downstream DPO runs remain region-agnostic: the executor
+resolves the local Marin prefix first and copies once from another Marin regional bucket only when
+needed.
 """
 
 from levanter.data.text import PreferenceChatLmDatasetFormat
@@ -32,21 +31,23 @@ from experiments.llama import llama_8b
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_dpo_config import SimpleDPOConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, mirrored
 from marin.processing.tokenize import lm_data_config
 
-GCS_PREFIX = "gs://marin-us-central1/preference/bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite"
+PREFERENCE_PREFIX = "preference/bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite"
+TRAIN_DATA = mirrored(f"{PREFERENCE_PREFIX}/train/*.jsonl.gz", budget_gb=1)
+VAL_DATA = mirrored(f"{PREFERENCE_PREFIX}/val_deduped/shard-00000.jsonl.gz", budget_gb=1)
 
 tokenized_train = default_tokenize(
     name="bloom_speceval_v2_train_prefs_marin_tokenizer",
-    dataset=f"{GCS_PREFIX}/train/*.jsonl.gz",
+    dataset=TRAIN_DATA,
     tokenizer=marin_tokenizer,
     format=PreferenceChatLmDatasetFormat(),
 )
 
 tokenized_eval = default_tokenize(
     name="bloom_speceval_v2_val_deduped_prefs_marin_tokenizer",
-    dataset=f"{GCS_PREFIX}/val_deduped/shard-00000.jsonl.gz",
+    dataset=VAL_DATA,
     tokenizer=marin_tokenizer,
     format=PreferenceChatLmDatasetFormat(),
     is_validation=True,

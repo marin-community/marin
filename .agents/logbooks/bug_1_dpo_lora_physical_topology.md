@@ -8083,3 +8083,1254 @@ where Bug-1 was already small; it is a trade-off, not a free lunch,
 but a strongly favourable trade-off for Marin's current ``v5p-8``
 DPO-LoRA recipes.
 
+## 2026-04-20 Tune-LoRA 1e-5 exact rerun + flipped-init rerun launch
+
+User asked for the original archived Tune-LoRA ``lr=1e-5`` run to be
+recreated exactly, then rerun with the new flipped init
+(``zero_init_b=False, a_init_mode="zero"``).
+
+### Which archived run we matched
+
+I matched the **executor-native seed-0 ``lr=1e-5`` Tune-LoRA run**,
+because it is one of the two canonical top archived runs and the
+executor-native source script still exists in-tree.
+
+Archived source-of-truth run:
+
+- W&B:
+  ``https://wandb.ai/marin-community/dpo/runs/bloom_speceval_v2_marin_lr1e5_seed0_b64_v5p8-41586d``
+- Local archive:
+  ``scratch/wandb_dpo_data/tune_lora/bloom_speceval_v2_marin_lr1e5_seed0_b64_v5p8-41586d``
+- Original executor-native script:
+  [experiments/tune_lora/beta0p1_lr1e5_seed0_b64.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/tune_lora/beta0p1_lr1e5_seed0_b64.py)
+- Original launch pattern recorded in
+  [dpo-lora-codex.md](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/.agents/logbooks/dpo-lora-codex.md:2287)
+
+Archived run metadata confirms:
+
+- display name:
+  ``bloom_speceval_v2_marin_lr1e5_seed0_b64_v5p8-41586d``
+- project: ``marin-community/dpo``
+- history length: ``1700`` steps
+- final eval DPO loss:
+  ``0.006383000873029232``
+- final eval DPO accuracy:
+  ``0.992759108543396``
+
+### Exact baseline config we copied
+
+The baseline rerun uses the existing script unchanged:
+
+- [experiments/tune_lora/beta0p1_lr1e5_seed0_b64.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/tune_lora/beta0p1_lr1e5_seed0_b64.py)
+
+That script points at the shared Tune-LoRA builder in
+[experiments/tune_lora/common.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/tune_lora/common.py)
+with:
+
+- ``learning_rate=1e-5``
+- ``seed=0``
+- ``beta=0.1``
+- ``train_batch_size=64``
+- ``rank=64``
+- ``alpha=64``
+- ``dropout=0.0``
+- ``target_modules=None``
+- ``reference=AdapterBaseReferenceConfig()``
+- ``resources=v5p-8``
+- ``regions=us-central1, us-east5``
+
+The archived config JSON also confirms the original LoRA init was:
+
+- ``zero_init_b=True``
+- no ``a_init_mode`` field in the old archive (the knob did not exist yet,
+  so canonical behavior is the modern default ``a_init_mode="random"``)
+
+### Code change to allow the flipped rerun in Tune-LoRA
+
+I made a minimal patch to the shared Tune-LoRA helper:
+
+- [experiments/tune_lora/common.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/tune_lora/common.py)
+
+Change:
+
+- added ``zero_init_b`` and ``a_init_mode`` fields to ``LoraTuneSpec``
+- threaded them into ``LoraAdaptationConfig(...)``
+- left defaults at the archived canonical behavior:
+  - ``zero_init_b=True``
+  - ``a_init_mode="random"``
+
+This keeps the baseline rerun faithful while enabling the flipped-init
+variant without touching unrelated parts of the recipe.
+
+### Confirmation that ``a_init_mode="zero"`` exists and is live
+
+Current Levanter LoRA config already supports this knob:
+
+- [lib/levanter/src/levanter/lora.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/src/levanter/lora.py:157)
+- [lib/levanter/src/levanter/adaptation.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/src/levanter/adaptation.py:144)
+
+Verified locally with a direct config construction check:
+
+```text
+BASE True random
+FLIP False zero
+```
+
+Meaning:
+
+- canonical Tune-LoRA path still resolves to
+  ``zero_init_b=True, a_init_mode="random"``
+- flipped rerun resolves to
+  ``zero_init_b=False, a_init_mode="zero"``
+
+### New flipped rerun script
+
+Added:
+
+- [experiments/tune_lora/beta0p1_lr1e5_seed0_b64_azero.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/tune_lora/beta0p1_lr1e5_seed0_b64_azero.py)
+
+This script keeps everything from the archived seed-0 ``lr=1e-5`` run
+the same except the LoRA init:
+
+- ``zero_init_b=False``
+- ``a_init_mode="zero"``
+
+### Launch commands used
+
+Note: the original archived Iris command used ``--tpu`` without
+``--enable-extra-resources``. The current Iris CLI now requires
+``--enable-extra-resources`` whenever ``--tpu`` is present, so I added
+that single launcher-only compatibility flag. The training recipe itself
+is otherwise unchanged.
+
+Exact baseline rerun launch:
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run \
+  --enable-extra-resources \
+  --job-name bloom-speceval-v2-lora-beta0p1-lr1e5-seed0-b64-rerun-20260420 \
+  --tpu v5p-8 \
+  --region us-central1 \
+  --region us-east5 \
+  --no-wait -- \
+  uv run python experiments/tune_lora/beta0p1_lr1e5_seed0_b64.py
+```
+
+Exact flipped-init rerun launch:
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run \
+  --enable-extra-resources \
+  --job-name bloom-speceval-v2-lora-beta0p1-lr1e5-seed0-b64-azero-20260420 \
+  --tpu v5p-8 \
+  --region us-central1 \
+  --region us-east5 \
+  --no-wait -- \
+  uv run python experiments/tune_lora/beta0p1_lr1e5_seed0_b64_azero.py
+```
+
+### Iris job IDs
+
+Submitted parent jobs:
+
+- baseline rerun:
+  ``/ahmed/bloom-speceval-v2-lora-beta0p1-lr1e5-seed0-b64-rerun-20260420``
+- flipped-init rerun:
+  ``/ahmed/bloom-speceval-v2-lora-beta0p1-lr1e5-seed0-b64-azero-20260420``
+
+Initial Iris status check:
+
+- both parent jobs are ``running``
+- both have ``0`` failures / ``0`` preemptions
+- both are currently ``assigned`` to their single task
+
+### What we want to learn
+
+This pair is the cleanest applied test of whether the Bug-1 fix carries
+over to the original successful Tune-LoRA regime:
+
+- If baseline and ``a_init_mode="zero"`` track similarly:
+  the fix is probably safe to recommend broadly for the classic
+  Tune-LoRA recipe.
+- If the flipped rerun is materially better:
+  the fix improves not just the pathological narrow-pod case but also the
+  old best-known Tune-LoRA setup.
+- If the flipped rerun is materially worse:
+  the Bug-1 fix should stay targeted to the pathological topology regime
+  rather than becoming a blanket default.
+
+### Immediate failure of the first relaunch attempt
+
+Both first-attempt relaunches failed immediately at the executor layer
+before TPU startup:
+
+- baseline:
+  ``/ahmed/bloom-speceval-v2-lora-beta0p1-lr1e5-seed0-b64-rerun-20260420``
+- azero:
+  ``/ahmed/bloom-speceval-v2-lora-beta0p1-lr1e5-seed0-b64-azero-20260420``
+
+Shared failure:
+
+```text
+ValueError: Executor step 'tokenized/bloom_speceval_v2_train_prefs_marin_tokenizer'
+has cross-region GCS dependencies. Found regions {us-central1, us-east5}.
+us-central1: config.train_paths[0]=gs://marin-us-central1/preference/...
+us-east5: config.cache_path=gs://marin-us-east5/tokenized/...
+```
+
+Interpretation:
+
+- the Tune-LoRA pipeline still depended on the old
+  [experiments/dpo_bloom_speceval_v2.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/dpo_bloom_speceval_v2.py)
+  dataset definition
+- that file hardcoded raw source paths as
+  ``gs://marin-us-central1/...``
+- but the executor was free to place the tokenization cache/output in
+  another Marin region (here ``us-east5``)
+- the executor's cross-region guard correctly rejected that mixed
+  configuration
+
+### Why ``mirrored()`` is the right fix
+
+Per [experiments/AGENTS.md](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/AGENTS.md:6),
+hardcoded artifact paths that may be consumed cross-region should use
+``mirror://`` via ``mirrored(...)`` instead of raw ``gs://`` URLs.
+
+What ``mirrored(...)`` does in practice:
+
+- wraps a literal path in ``MirroredValue``
+- at config instantiation time the executor resolves it relative to the
+  **local** Marin prefix
+- before step execution the mirror filesystem checks the local regional
+  bucket first
+- if the object is missing locally, it copies it once from another Marin
+  regional bucket under a transfer budget
+- subsequent reads are local
+
+Implementation references:
+
+- [MirroredValue / mirrored()](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/marin/src/marin/execution/executor.py:939)
+- [experiments/AGENTS.md](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/AGENTS.md:6)
+- prior multiregion example:
+  [v6e8_probe_multiregion.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/tune_lora/v6e8_probe_multiregion.py:1)
+
+So the correct fix is **not** to special-case the launcher or pin
+everything to one region. The correct fix is to make the raw dataset
+inputs region-agnostic at the shared experiment-definition layer.
+
+### Shared dataset fix applied
+
+I patched
+[experiments/dpo_bloom_speceval_v2.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/dpo_bloom_speceval_v2.py)
+to replace the old hardcoded:
+
+- ``gs://marin-us-central1/preference/.../train/*.jsonl.gz``
+- ``gs://marin-us-central1/preference/.../val_deduped/shard-00000.jsonl.gz``
+
+with mirrored region-agnostic inputs:
+
+- ``mirrored("preference/bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite/train/*.jsonl.gz", budget_gb=1)``
+- ``mirrored("preference/bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite/val_deduped/shard-00000.jsonl.gz", budget_gb=1)``
+
+Verified locally after patch:
+
+```text
+MirroredValue(value='preference/bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite/train/*.jsonl.gz', budget_gb=1)
+MirroredValue(value='preference/bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite/val_deduped/shard-00000.jsonl.gz', budget_gb=1)
+```
+
+This matches the repo's newer multiregion pattern and is the exact fix
+Claude had used earlier for v6e probes.
+
+### Relaunch after the mirrored fix
+
+Fresh relaunches:
+
+- baseline mirrored retry:
+  ``/ahmed/bloom-speceval-v2-lora-beta0p1-lr1e5-seed0-b64-rerun-mirrored-20260420``
+- azero mirrored retry:
+  ``/ahmed/bloom-speceval-v2-lora-beta0p1-lr1e5-seed0-b64-azero-mirrored-20260420``
+
+Initial status after relaunch:
+
+- baseline mirrored retry: ``running`` / task ``assigned``
+- azero mirrored retry: ``pending``
+
+Most importantly, neither mirrored retry reproduced the immediate
+cross-region executor failure, so the fix addressed the actual root
+cause of the first launch failure.
+
+## 2026-04-21T David Hall Suggestion: ``LR=0`` For The First ~10 Steps
+
+### Context from discussion
+
+After the HLO / topology investigation, David Hall suggested a different
+framing:
+
+- maybe this is **not** an XLA bug in the strict sense
+- XLA may simply be choosing among multiple valid collective
+  decompositions / reduction orderings
+- the *real* problem may be that LoRA DPO is uniquely fragile to the
+  **first real parameter update**
+- a practical way to test that is:
+  - set **learning rate exactly to zero** for the first ~10 steps
+  - then switch to the normal LR schedule
+
+The back-and-forth was roughly:
+
+- David: "can't decide if this is a bug in xla or not; probably not;
+  wonder if ~10 steps of LR=0 would fix"
+- Ahmed: interpreted this as "not a bug" in the sense that XLA is free
+  to pick multiple numerically different but valid reductions, and XLA's
+  job is throughput rather than guarding LoRA-DPO-specific numerical
+  fragility
+- David clarified: yes, literally **start with LR=0**
+
+The key clarification is that David did **not** mean "use a smaller
+warmup LR." He meant:
+
+- for steps ``0..N-1``:
+  - still run forward / backward
+  - still compute gradients
+  - ideally still update optimizer moments
+  - but apply **zero parameter update**
+- at step ``N``:
+  - switch to the normal learning-rate schedule
+
+### Why this suggestion is conceptually strong
+
+This suggestion is tightly aligned with the strongest current Bug-1
+interpretation.
+
+What we already know:
+
+1. Bug-1 is **not** "full fine-tuning on v5p-8 is broken."
+2. The same logical program gets compiled into two different valid
+   communication forms depending on physical device order.
+3. Dense full FT tolerates that fork; LoRA does not.
+4. The strongest existing fix
+   (``zero_init_b=False, a_init_mode="zero"``)
+   works by changing the **very first live LoRA update geometry**.
+
+David's proposal is another way to probe the same pressure point:
+
+- if the whole catastrophe comes from the **first one or few real LoRA
+  updates**, then delaying those updates while still letting Adam see
+  gradients could let the optimizer's moment estimates stabilise before
+  the first actual move
+- if that works, the issue is less "XLA is wrong" and more "LoRA DPO is
+  unstable under perfectly legal numeric variation during optimizer
+  bootstrap"
+
+In that sense, the suggestion is a very clean discriminator between:
+
+- **persistent per-step numeric divergence**
+  vs
+- **first-update / optimizer-bootstrap fragility**
+
+### Important implementation subtlety
+
+There are two different things people often conflate:
+
+1. **True LR=0 warmup**
+   - compute gradients
+   - update Adam moments ``m`` and ``v``
+   - but multiply the parameter update by ``0``
+2. **Skip optimization entirely**
+   - compute gradients
+   - do **not** update parameters
+   - do **not** update Adam moments either
+
+David's phrase "warm up the gradient scale" strongly suggests he means
+**(1)**, not (2).
+
+That distinction matters:
+
+- If Adam moments accumulate during the zero-LR window, then the first
+  nonzero step is based on a better estimate of gradient scale /
+  variance.
+- If the optimizer state is frozen too, then we are merely delaying the
+  first update in wall-clock time, not warming anything up.
+
+So the experiment should be designed to preserve that distinction.
+
+### Mechanistic hypothesis behind the probe
+
+Hypothesis ``D-H1``:
+
+- Bug-1 is caused primarily by the **first real LoRA parameter update**
+  being taken from a numerically fragile state with no optimizer
+  history.
+- Different valid XLA collective lowerings perturb that first gradient
+  slightly.
+- Adam turns those small perturbations into different first updates.
+- Once the first update lands in a bad basin, the rest of training
+  follows it.
+- If we let Adam accumulate moments for ~10 steps while LR is zero, the
+  first nonzero update becomes more stable and Bug-1 should shrink or
+  disappear.
+
+Competing hypothesis ``D-H2``:
+
+- Bug-1 is not just the first update.
+- The topology/XLA path causes **persistent** numerically meaningful
+  differences every step.
+- In that case, LR=0 warmup will not remove the canonical/reverse split.
+
+### Concrete experiment sketch
+
+#### Experiment family: D1 (``lr0warmup``)
+
+Base recipe:
+
+- the canonical Bug-1 LoRA DPO recipe
+- same base model / LoRA config / batch / mesh / regions as the existing
+  Bug-1 canonical-vs-reverse probes
+- keep the standard init:
+  - ``zero_init_b=True``
+  - ``a_init_mode="random"``
+- do **not** combine with the ``a_init_mode="zero"`` fix in the first
+  probe; the point is to test whether LR bootstrap alone rescues the old
+  bad recipe
+
+Variants:
+
+1. **D1a canonical + true LR=0 for first 10 steps**
+   - bad physical order
+   - LR multiplier = 0 on steps ``0..9``
+   - normal schedule from step ``10`` onward
+2. **D1b reverse + true LR=0 for first 10 steps**
+   - good physical order
+   - same schedule change
+3. **D1c canonical baseline**
+   - the existing bad recipe
+4. **D1d reverse baseline**
+   - the existing good recipe
+
+Primary comparison:
+
+- compare ``canonical`` vs ``reverse`` gap at:
+  - step 2
+  - step 9
+  - optional longer horizon step 99
+
+Secondary comparison:
+
+- compare ``D1a`` vs the existing ``a_init_mode="zero"`` fix
+  on:
+  - early losses
+  - presence/absence of canonical/reverse bifurcation
+
+#### Optional control family: D2 (delay-without-moment-warmup)
+
+If implementation is easy, run a second pair:
+
+1. **D2a canonical + skip optimizer entirely for first 10 steps**
+2. **D2b reverse + skip optimizer entirely for first 10 steps**
+
+This is the control for the phrase "warm up the gradient scale."
+
+Interpretation:
+
+- if ``D1`` helps but ``D2`` does not:
+  Adam moment warmup is probably the load-bearing effect
+- if both help:
+  simply delaying the first real update is enough
+- if neither helps:
+  the problem is not just optimizer bootstrap
+
+### Exact success / failure criteria
+
+For the first pass, the decision rule should be simple:
+
+- **Strong support for D-H1**:
+  ``D1a canonical`` moves into the healthy regime and the
+  canonical/reverse gap shrinks dramatically relative to the old Bug-1
+  split
+- **Partial support**:
+  the gap shrinks materially but does not disappear
+- **Falsification of D-H1**:
+  canonical remains in the bad regime with a gap close to the old
+  baseline
+
+Useful practical threshold:
+
+- old Bug-1 step-9 gap: order ``~0.35``
+- call the probe a strong rescue if the gap drops below ``~0.05``
+
+### What we would learn from each outcome
+
+#### If D1 works
+
+Meaning:
+
+- strong evidence that Bug-1 is primarily a **bootstrap problem**
+- XLA is probably not "wrong" in the bug-report sense
+- LoRA DPO is too sensitive to the first real optimizer step under legal
+  numeric variation
+
+Practical fix options then become:
+
+- ship an LR=0 warmup window for narrow-pod TPU LoRA DPO
+- compare it against ``a_init_mode="zero"``
+- possibly combine both if the combo is even more stable
+
+At that point the engineering question is:
+
+- which fix is cleaner and cheaper?
+  - init change
+  - optimizer schedule change
+  - or both
+
+#### If D1 does not work
+
+Meaning:
+
+- the issue is not just first-update bootstrap
+- persistent per-step topology/XLA numeric differences remain the more
+  plausible explanation
+- the ``a_init_mode="zero"`` fix is then better understood as a
+  geometry-specific cancellation, not a generic optimizer warmup effect
+
+In that case the next best move would be:
+
+- stay with the init fix for practice
+- and treat LR=0 warmup as an informative negative result
+
+#### If D1 works only on the original Bug-1 recipe but not elsewhere
+
+Meaning:
+
+- the mechanism is real but recipe-local
+- the fix should be scoped to the problematic LoRA DPO regime rather than
+  generalised too aggressively
+
+### Suggested implementation shape
+
+The cleanest implementation is not to hack the global cosine schedule
+indirectly. Instead add an explicit "zero-LR prefix" knob with exact
+step semantics.
+
+Sketch:
+
+- add a config field such as ``initial_zero_lr_steps: int = 0``
+- during optimizer step computation:
+  - compute the normal schedule value ``lr_t``
+  - replace it with ``0`` if ``step < initial_zero_lr_steps``
+- ensure Adam moments are still updated during those steps
+
+That gives us a precise and reusable probe instead of overloading the
+existing warmup fraction semantics.
+
+### Recommendation
+
+This is worth running.
+
+Reason:
+
+- it is mechanistically sharp
+- it is cheap compared with more topology/HLO spelunking
+- and it directly tests whether the existing success of
+  ``a_init_mode="zero"`` is fundamentally about **which matrix moves
+  first** or more broadly about **preventing an unstable first update**
+
+If D1 works, we have a second, conceptually independent fix and a much
+clearer story:
+
+> Bug-1 is not "XLA brokenness." It is LoRA DPO first-update fragility
+> under valid numeric variation, and both the init flip and LR=0
+> warm-start reduce that fragility by damping optimizer bootstrap.
+
+## 2026-04-21T D1 launch plan: canonical/reverse ``LR=0`` warmup probe on ``v5p-8``
+
+User request:
+
+- run ``D1a`` and ``D1b`` on Iris now
+- keep the same baseline recipe as the original Bug-1 experiments at the top
+  of this logbook
+
+Implementation choice:
+
+- base launcher: the existing BL Bug-1 canonical-vs-reverse harness
+- same:
+  - ``v5p-8``
+  - LoRA ``r=64, alpha=64, zero_init_b=True``
+  - ``batch=64``
+  - canonical vs reverse explicit physical device order
+  - ``learning_rate=1e-6``
+  - ``lr_schedule="cosine"``
+  - ``warmup=0.1``
+  - standard mixed precision
+- new:
+  - add explicit optimizer knob ``initial_zero_lr_steps``
+  - set ``initial_zero_lr_steps=10`` for D1
+
+Code change made for this probe:
+
+- [lib/levanter/src/levanter/optim/config.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/src/levanter/optim/config.py)
+  now supports ``initial_zero_lr_steps`` by prepending an exact zero-LR
+  prefix to the normal schedule
+- [experiments/simple_dpo_config.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/simple_dpo_config.py)
+  now exposes ``initial_zero_lr_steps`` for simple DPO experiments
+- [experiments/defaults.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/defaults.py)
+  now threads that field into ``AdamConfig``
+- new dedicated launcher:
+  [experiment_d1_v5p8_pd4_lr0warmup_s20.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/posttrain/per_stmt_dpo/experiment_d1_v5p8_pd4_lr0warmup_s20.py)
+
+One deliberate deviation from the old 10-step Bug-1 baseline:
+
+- D1 uses ``num_train_steps=20``, not ``10``
+
+Reason:
+
+- if we literally used the old 10-step horizon with ``initial_zero_lr_steps=10``,
+  the entire run would take zero parameter updates and would not test David's
+  hypothesis
+- the 20-step D1 schedule is designed so that:
+  - steps ``0..9`` are the zero-LR bootstrap window
+  - steps ``10..19`` replay the original 10-step cosine schedule
+
+That means the direct post-bootstrap comparison to the old Bug-1 baseline is:
+
+- old baseline step ``9`` vs D1 step ``19``
+
+Planned runs:
+
+1. **D1a canonical**
+   - ``EXPERIMENT_D1_ORDER=canonical``
+   - expected to stay bad if topology differences are persistent
+   - expected to improve if Bug-1 is mainly first-update bootstrap fragility
+2. **D1b reverse**
+   - ``EXPERIMENT_D1_ORDER=reverse``
+   - control for whether the warmup changes both paths similarly
+
+Launch commands to submit next:
+
+```bash
+REGIONS_OVERRIDE=us-east5,us-central1 \
+EXPERIMENT_D1_ORDER=canonical \
+uv run iris --config lib/iris/examples/marin.yaml job run \
+  --enable-extra-resources \
+  --job-name experiment-d1-v5p8-pd4-canonical-$(date +%Y%m%d-%H%M%S) \
+  --tpu v5p-8 \
+  --region us-east5 \
+  --region us-central1 \
+  --no-wait \
+  -- \
+  uv run python experiments/posttrain/per_stmt_dpo/experiment_d1_v5p8_pd4_lr0warmup_s20.py
+```
+
+Submitted jobs:
+
+- ``D1a canonical``:
+  ``/ahmed/experiment-d1-v5p8-pd4-canonical-20260421-161122``
+- ``D1b reverse``:
+  ``/ahmed/experiment-d1-v5p8-pd4-reverse-20260421-161122``
+
+Immediate scheduler state after submit:
+
+- both jobs are ``JOB_STATE_PENDING``
+- no failures, no preemptions
+- current pending reason is TPU capacity wait, not an experiment/config error:
+  ``Scheduler: Insufficient TPUs (need 4, available 0) ... Waiting for workers in scale group 'tpu_v5p-preemptible_8-us-east5-a' to become ready``
+
+2026-04-21T launch correction:
+
+- the first ``D1b reverse`` submission was invalid
+- cause: ``EXPERIMENT_D1_ORDER=reverse`` was set on the local ``uv run iris``
+  invocation, which affects the local CLI process, not the remote Iris job
+  command
+- symptom: the reverse job's ``train_dpo`` child advertised the same
+  ``d1-canonical`` W&B run/output name as the canonical job
+- action taken:
+  - stopped ``/ahmed/experiment-d1-v5p8-pd4-reverse-20260421-161122``
+  - re-submitted reverse correctly with the env var inside the remote command
+
+Corrected reverse job:
+
+- ``/ahmed/experiment-d1-v5p8-pd4-reverse-fix-20260421-163451``
+
+Current valid D1 pair:
+
+- canonical:
+  ``/ahmed/experiment-d1-v5p8-pd4-canonical-20260421-161122``
+- reverse:
+  ``/ahmed/experiment-d1-v5p8-pd4-reverse-fix-20260421-163451``
+
+```bash
+REGIONS_OVERRIDE=us-east5,us-central1 \
+EXPERIMENT_D1_ORDER=reverse \
+uv run iris --config lib/iris/examples/marin.yaml job run \
+  --enable-extra-resources \
+  --job-name experiment-d1-v5p8-pd4-reverse-$(date +%Y%m%d-%H%M%S) \
+  --tpu v5p-8 \
+  --region us-east5 \
+  --region us-central1 \
+  --no-wait \
+  -- \
+  uv run python experiments/posttrain/per_stmt_dpo/experiment_d1_v5p8_pd4_lr0warmup_s20.py
+```
+
+2026-04-21T D1 schedule bug discovered and corrected:
+
+The first D1 evidence was invalid. The user noticed immediately from W&B that
+``optim/learning_rate`` was not zero during the supposed bootstrap window.
+
+This was a real bug, not a plotting artifact.
+
+What went wrong:
+
+- ``SimpleDPOConfig`` had the field ``initial_zero_lr_steps``
+- the D1 launcher correctly set
+  ``initial_zero_lr_steps=10``
+- ``lib/levanter/src/levanter/optim/config.py`` correctly implemented the zero-LR
+  prefix in ``OptimizerConfig.lr_scheduler(...)``
+- but ``experiments/defaults.py`` did **not** pass
+  ``dpo_config.initial_zero_lr_steps`` into the constructed ``AdamConfig(...)``
+
+That meant the live D1 jobs were silently using the ordinary Bug-1 baseline
+schedule:
+
+- no initial zero-LR prefix
+- ordinary warmup + cosine decay
+
+Concrete root-cause diff:
+
+```python
+optimizer=AdamConfig(
+    learning_rate=dpo_config.learning_rate,
+    weight_decay=dpo_config.weight_decay,
+    warmup=dpo_config.warmup,
+    decay=dpo_config.cooldown,
+    lr_schedule=dpo_config.lr_schedule,
+    min_lr_ratio=dpo_config.min_lr_ratio,
+    initial_zero_lr_steps=dpo_config.initial_zero_lr_steps,
+    max_grad_norm=dpo_config.max_grad_norm,
+)
+```
+
+File changed:
+
+- [experiments/defaults.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/defaults.py)
+
+Local verification after patch:
+
+- verified through the actual
+  ``SimpleDPOConfig -> default_dpo -> TrainDpoConfig -> AdamConfig`` path
+- effective schedule for D1 settings now evaluates to:
+  - steps ``0..10``: ``0.0``
+  - step ``11``: ``1e-6``
+  - then cosine decay on the remaining steps
+
+Interpretation:
+
+- the original ``D1a`` / ``D1b`` pair must not be used as evidence for David's
+  LR=0 bootstrap hypothesis
+- those runs tested only:
+  - the ordinary Bug-1 LoRA baseline
+  - plus the previously-discussed mesh permutation
+
+Action taken:
+
+1. stopped the invalid running pair:
+   - ``/ahmed/experiment-d1-v5p8-pd4-canonical-20260421-161122``
+   - ``/ahmed/experiment-d1-v5p8-pd4-reverse-fix-20260421-163451``
+2. relaunched a fresh corrected pair with distinct run tags to prevent W&B
+   confusion:
+   - ``/ahmed/experiment-d1-v5p8-pd4-canonical-zlrfix-20260421-1700``
+   - ``/ahmed/experiment-d1-v5p8-pd4-reverse-zlrfix-20260421-1700``
+
+Relaunch command pattern:
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run \
+  --job-name experiment-d1-v5p8-pd4-canonical-zlrfix-20260421-1700 \
+  -- \
+  bash -lc 'EXPERIMENT_D1_ORDER=canonical \
+    MARIN_DEBUG_RUN_TAG=d1-canonical-zlrfix \
+    REGIONS_OVERRIDE=us-east5,us-central1 \
+    uv run python experiments/posttrain/per_stmt_dpo/experiment_d1_v5p8_pd4_lr0warmup_s20.py'
+```
+
+and
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run \
+  --job-name experiment-d1-v5p8-pd4-reverse-zlrfix-20260421-1700 \
+  -- \
+  bash -lc 'EXPERIMENT_D1_ORDER=reverse \
+    MARIN_DEBUG_RUN_TAG=d1-reverse-zlrfix \
+    REGIONS_OVERRIDE=us-east5,us-central1 \
+    uv run python experiments/posttrain/per_stmt_dpo/experiment_d1_v5p8_pd4_lr0warmup_s20.py'
+```
+
+Status at this point:
+
+- the broken D1 pair was intentionally terminated
+- the corrected ``zlrfix`` pair is now the only valid evidence for the D1 probe
+
+2026-04-21T D1 corrected results (`zlrfix` pair):
+
+Both corrected D1 jobs finished successfully.
+
+Iris job status:
+
+- canonical:
+  - ``/ahmed/experiment-d1-v5p8-pd4-canonical-zlrfix-20260421-1700``
+  - child ``train_dpo``: ``JOB_STATE_SUCCEEDED``
+  - no failures, no preemptions
+- reverse:
+  - ``/ahmed/experiment-d1-v5p8-pd4-reverse-zlrfix-20260421-1700``
+  - child ``train_dpo``: ``JOB_STATE_SUCCEEDED``
+  - ``preemption_count=1`` on the child, but the job recovered and finished cleanly
+
+W&B runs:
+
+- canonical:
+  [experiment_d1_r64_s20_d1-canonical-zlrfix-f617b0](https://wandb.ai/marin-community/dpo/runs/experiment_d1_r64_s20_d1-canonical-zlrfix-f617b0)
+- reverse:
+  [experiment_d1_r64_v5p8_s20_d1-reverse-zlrfix-4e9f2d](https://wandb.ai/marin-community/dpo/runs/experiment_d1_r64_v5p8_s20_d1-reverse-zlrfix-4e9f2d)
+
+Most important validation:
+
+- these corrected runs **did** use the intended zero-LR prefix
+- W&B ``optim/learning_rate`` history is:
+  - steps ``0..10``: ``0``
+  - step ``11``: ``1e-6``
+  - then cosine decay
+
+Canonical first 14 steps:
+
+```text
+step 0  lr=0                  loss=0.693147
+step 1  lr=0                  loss=0.693147
+step 2  lr=0                  loss=0.693147
+step 3  lr=0                  loss=0.693147
+step 4  lr=0                  loss=0.693147
+step 5  lr=0                  loss=0.693147
+step 6  lr=0                  loss=0.693147
+step 7  lr=0                  loss=0.693147
+step 8  lr=0                  loss=0.693147
+step 9  lr=0                  loss=0.693147
+step 10 lr=0                  loss=0.693147
+step 11 lr=1.0000000e-06      loss=0.693147
+step 12 lr=9.6984627e-07      loss=0.686782
+step 13 lr=8.8302221e-07      loss=0.677995
+```
+
+Reverse first 14 steps:
+
+```text
+step 0  lr=0                  loss=0.693147
+step 1  lr=0                  loss=0.693147
+step 2  lr=0                  loss=0.693147
+step 3  lr=0                  loss=0.693147
+step 4  lr=0                  loss=0.693147
+step 5  lr=0                  loss=0.693147
+step 6  lr=0                  loss=0.693147
+step 7  lr=0                  loss=0.693147
+step 8  lr=0                  loss=0.693147
+step 9  lr=0                  loss=0.693147
+step 10 lr=0                  loss=0.693147
+step 11 lr=1.0000000e-06      loss=0.693147
+step 12 lr=9.6984627e-07      loss=0.324148
+step 13 lr=8.8302221e-07      loss=0.318302
+```
+
+Final train losses:
+
+- canonical step ``19``:
+  - ``train/loss = 0.657528``
+- reverse step ``19``:
+  - ``train/loss = 0.303038``
+
+Final validation summaries from the logs:
+
+- canonical:
+  - ``eval/full_val/dpo_loss = 0.69337``
+  - ``eval/full_val/dpo_accuracy = 0.5``
+- reverse:
+  - ``eval/full_val/dpo_loss = 0.59473``
+  - ``eval/full_val/dpo_accuracy = 1.0``
+
+Interpretation:
+
+- David's ``LR=0 for ~10 steps`` idea is now tested correctly
+- it does **not** collapse the canonical/reverse Bug-1 split
+- the first nonzero update still bifurcates immediately:
+  - canonical remains in the bad regime
+  - reverse immediately drops into the good regime
+
+So D1 falsifies the narrow claim:
+
+> “Bug 1 is mainly that the very first optimizer step is too early and Adam just needs gradient-scale warmup.”
+
+More precise takeaway:
+
+- merely letting Adam moments accumulate for ~10 zero-LR steps is **not enough**
+- the topology-sensitive difference still matters at the first real update
+- Bug 1 is therefore not just an optimizer-bootstrap timing issue
+- the remaining explanations should emphasize:
+  - true update direction differences
+  - topology-sensitive communication effects that persist into the first real step
+  - or LoRA geometry that remains fragile even after moment warmup
+
+2026-04-21T D1 Adam-moment rerun launched:
+
+Question raised after corrected D1:
+
+- the zero-LR warmup probe falsified the narrow “Adam just needs a few zero-LR
+  bootstrap steps” story
+- but we still did **not** have direct visibility into Adam's LoRA moments
+  (`mu`, `nu`) on canonical vs reverse for that probe
+
+Action:
+
+- updated
+  [experiment_d1_v5p8_pd4_lr0warmup_s20.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/posttrain/per_stmt_dpo/experiment_d1_v5p8_pd4_lr0warmup_s20.py)
+  so it forwards ``MARIN_DEBUG_LORA_DEBUG=1`` into the child TPU job's
+  ``env_vars`` when the parent launch environment sets it
+- this enables the existing
+  [levanter.callbacks.lora_debug](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/src/levanter/callbacks/lora_debug.py)
+  callback for D1
+
+What this should publish to W&B:
+
+- per-module LoRA Adam first-moment norms:
+  ``lora_debug/adam/m/.../l2``
+- per-module LoRA Adam second-moment norms:
+  ``lora_debug/adam/v/.../l2``
+- per-module effective Adam update norms:
+  ``lora_debug/adam/effective_update/.../l2``
+
+Fresh D1 moment jobs submitted:
+
+- canonical:
+  ``/ahmed/experiment-d1-v5p8-pd4-canonical-zlrmom-20260421-1915``
+- reverse:
+  ``/ahmed/experiment-d1-v5p8-pd4-reverse-zlrmom-20260421-1915``
+
+Launch pattern:
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run --no-wait \
+  --job-name experiment-d1-v5p8-pd4-canonical-zlrmom-20260421-1915 \
+  -- \
+  bash -lc 'EXPERIMENT_D1_ORDER=canonical \
+    MARIN_DEBUG_LORA_DEBUG=1 \
+    MARIN_DEBUG_RUN_TAG=d1-canonical-zlrmom \
+    REGIONS_OVERRIDE=us-east5,us-central1 \
+    uv run python experiments/posttrain/per_stmt_dpo/experiment_d1_v5p8_pd4_lr0warmup_s20.py'
+```
+
+and
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run --no-wait \
+  --job-name experiment-d1-v5p8-pd4-reverse-zlrmom-20260421-1915 \
+  -- \
+  bash -lc 'EXPERIMENT_D1_ORDER=reverse \
+    MARIN_DEBUG_LORA_DEBUG=1 \
+    MARIN_DEBUG_RUN_TAG=d1-reverse-zlrmom \
+    REGIONS_OVERRIDE=us-east5,us-central1 \
+    uv run python experiments/posttrain/per_stmt_dpo/experiment_d1_v5p8_pd4_lr0warmup_s20.py'
+```
+
+Immediate status after submit:
+
+- both jobs are ``JOB_STATE_PENDING``
+- no failures, no preemptions yet
+- these are the valid D1-moment jobs to inspect once the W&B ``lora_debug/*``
+  namespace appears
+
+2026-04-21T D1 Adam-moment rerun result:
+
+The Adam-moment rerun pair completed:
+
+- canonical:
+  [experiment_d1_r64_s20_d1-canonical-zlrmom-585787](https://wandb.ai/marin-community/dpo/runs/experiment_d1_r64_s20_d1-canonical-zlrmom-585787)
+- reverse:
+  [experiment_d1_r64_v5p8_s20_d1-reverse-zlrmom-5761e8](https://wandb.ai/marin-community/dpo/runs/experiment_d1_r64_v5p8_s20_d1-reverse-zlrmom-5761e8)
+
+Key result:
+
+- the canonical/reverse loss bifurcation still happens immediately at the first
+  real update after the zero-LR prefix
+- but the **Adam first- and second-moment norms are extremely similar**
+  between canonical and reverse on the probed LoRA-B modules
+
+Representative D1-moment history (steps 10, 11, 12, 13, 19):
+
+Canonical:
+
+```text
+step 10: loss=0.693147  m_o=0.16928  v_o=4.18e-05  m_down=0.32790  v_down=6.30e-04  m_q=0.12804  v_q=1.79e-04
+step 11: loss=0.693147  m_o=0.17867  v_o=4.51e-05  m_down=0.34460  v_down=6.73e-04  m_q=0.13504  v_q=1.93e-04
+step 12: loss=0.689029  m_o=0.18659  v_o=4.80e-05  m_down=0.35981  v_down=7.14e-04  m_q=0.14118  v_q=2.05e-04
+step 13: loss=0.678488  m_o=0.19387  v_o=5.09e-05  m_down=0.37415  v_down=7.57e-04  m_q=0.14681  v_q=2.20e-04
+step 19: loss=0.656821  m_o=0.22436  v_o=6.51e-05  m_down=0.43224  v_down=9.62e-04  m_q=0.16960  v_q=2.81e-04
+```
+
+Reverse:
+
+```text
+step 10: loss=0.693147  m_o=0.16879  v_o=4.16e-05  m_down=0.32764  v_down=6.31e-04  m_q=0.12764  v_q=1.77e-04
+step 11: loss=0.693147  m_o=0.17822  v_o=4.49e-05  m_down=0.34444  v_down=6.74e-04  m_q=0.13467  v_q=1.92e-04
+step 12: loss=0.325414  m_o=0.18617  v_o=4.78e-05  m_down=0.35972  v_down=7.16e-04  m_q=0.14083  v_q=2.04e-04
+step 13: loss=0.318148  m_o=0.19274  v_o=5.02e-05  m_down=0.37196  v_down=7.53e-04  m_q=0.14610  v_q=2.19e-04
+step 19: loss=0.304189  m_o=0.22127  v_o=6.24e-05  m_down=0.42460  v_down=9.40e-04  m_q=0.16813  v_q=2.81e-04
+```
+
+Interpretation:
+
+- D1 already showed that zero-LR moment warmup alone does not rescue canonical
+- the Adam-moment rerun sharpens that:
+  - this does **not** look like a large scalar mismatch in Adam bootstrap
+  - canonical and reverse accumulate very similar moment **magnitudes**
+  - yet the losses diverge immediately at the first real update
+
+Best current reading:
+
+- Bug 1 is probably **not** an “optimizer scale” issue
+- it is more likely a **directional** issue:
+  - the gradients / moments / effective updates may have similar norms
+  - but differ in sign pattern or elementwise direction on the fragile LoRA-B
+    tensors
+
+Consequence for next experiments:
+
+- the next probe should not be another scalar warmup or norm-only audit
+- it should inspect **signed elementwise values** around the first real update:
+  - gradient sentinels
+  - Adam ``mu`` sentinels
+  - effective Adam update sentinels
+  - especially on ``o_proj`` and ``down_proj`` where the Bug-1 LoRA story is
+    already strongest
+
+2026-04-21T D1 signed-Adam-sentinel follow-up (D1c / D1d):
+
+Decision:
+
+- the norm-only Adam rerun did its job: it ruled out a large scalar mismatch in
+  Adam bootstrap
+- the next discriminant has to be **directional**
+- therefore the next D1 rerun keeps the same corrected setup
+  (zero-LR prefix, 20 total steps, canonical vs reverse) and extends the
+  existing LoRA debug callback to emit **signed fixed-index values** from:
+  - Adam first moment ``mu``
+  - effective Adam update ``mu / (sqrt(nu) + eps)``
+
+Instrumentation patch:
+
+- updated
+  [lib/levanter/src/levanter/callbacks/lora_debug.py](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/src/levanter/callbacks/lora_debug.py)
+  so the callback now emits:
+  - ``lora_debug/sentinel/adam_m/<module>/idx_<frac>``
+  - ``lora_debug/sentinel/adam_effective_update/<module>/idx_<frac>``
+- by default these are enabled for ``lora_B`` only:
+  - ``include_sentinel_adam_m_b=True``
+  - ``include_sentinel_effective_update_b=True``
+  - A-side is still off by default because Bug 1 is already centered on the
+    fragile first live ``B`` update
+
+Why this is the right next probe:
+
+- if canonical and reverse have near-identical ``|m|`` and ``|v|`` but
+  different signed sentinel values in ``mu`` or in the effective Adam update,
+  then Bug 1 is likely a **direction/sign-pattern defect** rather than an
+  optimizer-scale defect
+- that would fit the current evidence:
+  - topology-sensitive XLA communication fork is real
+  - dense full FT sees the fork but is robust
+  - LoRA bifurcates
+  - zero-LR warmup does not fix it
+  - Adam norm magnitudes are nearly identical
+
+Planned fresh rerun pair:
+
+- ``D1c`` canonical signed-sentinel rerun
+- ``D1d`` reverse signed-sentinel rerun
+
+Both will use:
+
+- the corrected D1 launcher
+- ``MARIN_DEBUG_LORA_DEBUG=1``
+- 20 steps
+- 10 initial zero-LR steps
+- same Bug-1 LoRA baseline otherwise
+
+Primary W&B signals to inspect after launch:
+
+- ``lora_debug/sentinel/grad_B/...``
+- ``lora_debug/sentinel/adam_m/...``
+- ``lora_debug/sentinel/adam_effective_update/...``
+
+especially on:
+
+- ``o_proj``
+- ``down_proj``
+- ``q_proj``
+
+Immediate success criterion:
+
+- we want the first real post-warmup steps (roughly 11, 12, 13) for
+  canonical vs reverse with signed sentinel values visible in W&B
+
+Fresh signed-sentinel D1 jobs submitted:
+
+- canonical:
+  ``/ahmed/experiment-d1-v5p8-pd4-canonical-zlrmomsign-20260421-2115``
+- reverse:
+  ``/ahmed/experiment-d1-v5p8-pd4-reverse-zlrmomsign-20260421-2115``
+
+Launch commands:
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run --no-wait \
+  --job-name experiment-d1-v5p8-pd4-canonical-zlrmomsign-20260421-2115 \
+  -- \
+  bash -lc 'EXPERIMENT_D1_ORDER=canonical \
+    MARIN_DEBUG_LORA_DEBUG=1 \
+    MARIN_DEBUG_RUN_TAG=d1-canonical-zlrmomsign \
+    REGIONS_OVERRIDE=us-east5,us-central1 \
+    uv run python experiments/posttrain/per_stmt_dpo/experiment_d1_v5p8_pd4_lr0warmup_s20.py'
+```
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run --no-wait \
+  --job-name experiment-d1-v5p8-pd4-reverse-zlrmomsign-20260421-2115 \
+  -- \
+  bash -lc 'EXPERIMENT_D1_ORDER=reverse \
+    MARIN_DEBUG_LORA_DEBUG=1 \
+    MARIN_DEBUG_RUN_TAG=d1-reverse-zlrmomsign \
+    REGIONS_OVERRIDE=us-east5,us-central1 \
+    uv run python experiments/posttrain/per_stmt_dpo/experiment_d1_v5p8_pd4_lr0warmup_s20.py'
+```
+
+Status at submit time:
+
+- both jobs accepted cleanly by Iris
+- no launch-time config error
+- next check is whether the resulting W&B runs expose the new signed keys:
+  - ``lora_debug/sentinel/adam_m/...``
+  - ``lora_debug/sentinel/adam_effective_update/...``
+
+2026-04-22T D1c / D1d signed-sentinel result:
+
+The signed-sentinel rerun pair reached and finished the 20-step train loop.
+
+Runs:
+
+- canonical:
+  ``experiment_d1_s20_d1-canonical-zlrmomsign-bfe685``
+- reverse:
+  ``experiment_d1_r64_s20_d1-reverse-zlrmomsign-867d3e``
+
+Because the public W&B history API timed out repeatedly on these runs, the
+history comparison below was extracted directly from the worker-local
+``.wandb`` bundles using:
+
+- ``wandb.sdk.internal.datastore.DataStore``
+- ``wandb.proto.wandb_internal_pb2.Record``
+
+That bypassed GraphQL history pagination and gave the exact per-step history
+rows as recorded on the worker.
+
+Loss split remains immediate after the zero-LR prefix:
+
+| step | canonical loss | reverse loss |
+| --- | ---: | ---: |
+| 11 | 0.693147 | 0.693147 |
+| 12 | 0.689029 | 0.325414 |
+| 13 | 0.678488 | 0.318148 |
+
+Representative midpoint sentinel values (``idx_0.5``):
+
+| step | module | grad_B canonical | grad_B reverse | adam_m canonical | adam_m reverse |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 11 | ``q_proj`` | ``8.529e-05`` | ``8.681e-05`` | ``3.161e-05`` | ``3.146e-05`` |
+| 11 | ``o_proj`` | ``3.228e-04`` | ``3.226e-04`` | ``6.497e-05`` | ``6.512e-05`` |
+| 11 | ``down_proj`` | ``2.801e-06`` | ``8.106e-06`` | ``-3.053e-05`` | ``-3.014e-05`` |
+| 12 | ``q_proj`` | ``1.378e-04`` | ``7.185e-05`` | ``3.171e-05`` | ``3.164e-05`` |
+| 12 | ``o_proj`` | ``2.543e-04`` | ``1.401e-04`` | ``7.084e-05`` | ``7.096e-05`` |
+| 12 | ``down_proj`` | ``-1.648e-04`` | ``-9.422e-05`` | ``-2.737e-05`` | ``-2.682e-05`` |
+| 13 | ``q_proj`` | ``3.761e-05`` | ``3.576e-06`` | ``3.425e-05`` | ``3.460e-05`` |
+| 13 | ``o_proj`` | ``2.952e-04`` | ``1.910e-04`` | ``7.428e-05`` | ``7.580e-05`` |
+| 13 | ``down_proj`` | ``-2.050e-05`` | ``-1.055e-05`` | ``-3.145e-05`` | ``-3.217e-05`` |
+
+What this says:
+
+- the loss bifurcation still appears at the first real update
+- selected signed ``grad_B`` sentinels already differ in **magnitude** at step
+  12
+- selected signed Adam ``mu`` sentinels remain extremely close between
+  canonical and reverse
+- these probes do **not** currently show a clean sign-flip story on the sampled
+  indices
+
+Important instrumentation finding:
+
+- ``lora_debug/sentinel/adam_m/...`` keys were present in worker-side history
+- ``lora_debug/sentinel/adam_effective_update/...`` keys were **absent**
+- even the non-sentinel
+  ``lora_debug/adam/effective_update/.../l2`` family was absent from the
+  worker-local history stream
+
+So the signed-effective-update part of D1c / D1d is currently incomplete:
+
+- the code path intends to emit those keys
+- but they did not land in the recorded history
+- that is an instrumentation bug / emission gap, not model evidence
+
+Clarification of terms used in this section:
+
+- **sentinel**
+  a fixed scalar probe sampled from a large tensor, used so canonical vs
+  reverse can be compared at exactly the same tensor coordinates without
+  logging the full tensor
+- **emission**
+  the callback actually writes a metric into the per-step W&B history
+  (worker-local ``.wandb`` record stream), not just computes it in memory
+
+How sentinel indices are chosen:
+
+- flatten the tensor to 1-D
+- let ``n = flat.shape[0]``
+- for each configured fraction in ``sentinel_fractions = (0, 0.25, 0.5, 0.75, 1)``
+- compute:
+
+```python
+idx = round(frac * (n - 1))
+```
+
+- clamp to ``[0, n - 1]``
+
+So:
+
+- ``idx_0`` = first element
+- ``idx_0.25`` = about 25% through the flattened tensor
+- ``idx_0.5`` = midpoint element
+- ``idx_0.75`` = about 75% through
+- ``idx_1`` = last element
+
+Important subtlety:
+
+- this operates on the **fully flattened** LoRA tensor, including scan stacking
+- it is **not** “the midpoint of layer 0”; it is the midpoint of the entire
+  flattened stacked tensor
+
+Current best interpretation after D1c / D1d:
+
+- Bug 1 still does **not** look like an Adam bootstrap-scale problem
+- selected ``adam_m`` sentinels remain nearly identical across canonical and
+  reverse
+- the first obvious difference on these probes is in signed ``grad_B`` values,
+  mainly as a magnitude / pattern difference rather than a clean sampled sign
+  flip
+
+Immediate next step:
+
+- debug why ``adam_effective_update`` metrics are not emitted into history
+- then rerun the same short canonical / reverse pair
+- only after that decide whether we need denser sentinel coverage or true
+  full-tensor snapshots for ``o_proj`` / ``down_proj``

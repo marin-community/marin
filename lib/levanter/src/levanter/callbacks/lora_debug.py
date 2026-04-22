@@ -112,6 +112,18 @@ class LoraDebugConfig:
     the main cross-run diff target is ``lora_B`` (zero-init + tiny first
     update)."""
 
+    include_sentinel_adam_m_a: bool = False
+    include_sentinel_adam_m_b: bool = True
+    """Also dump fixed-index values for Adam first moments. B-side is on by
+    default for Bug-1 because the norm-only D1 rerun showed nearly identical
+    ``|m|`` across canonical/reverse, so we now care about sign/direction."""
+
+    include_sentinel_effective_update_a: bool = False
+    include_sentinel_effective_update_b: bool = True
+    """Also dump fixed-index values for ``m / (sqrt(v) + eps)``. This is the
+    signed unscaled Adam update direction, which is the highest-value next
+    probe after the D1 moment-norm reruns."""
+
     include_attn_mlp_rollups: bool = True
     """Emit ``lora_debug/agg/{attn,mlp}/*`` aggregates for H1 module-family
     ablations."""
@@ -409,6 +421,33 @@ def _emit_sentinels(
             # scan-layer-unpacked copy when we already aggregate).
 
 
+def _emit_module_sentinels(
+    out: dict[str, jax.Array],
+    tag: str,
+    arrs: list[tuple[str, jax.Array]],
+    cfg: LoraDebugConfig,
+) -> None:
+    """Emit fixed-index values from arrays already keyed by module path.
+
+    Unlike :func:`_emit_sentinels`, the incoming path is already the normalized
+    module key (e.g. ``.../q_proj``), so there is no need to peel off
+    ``lora_A`` / ``lora_B`` suffixes again.
+    """
+    for sentinel in cfg.sentinel_modules:
+        for mod_key, arr in arrs:
+            if not _suffix_for_sentinel(mod_key, sentinel):
+                continue
+            flat = arr.reshape(-1).astype(jnp.float32)
+            n = flat.shape[0]
+            for frac in cfg.sentinel_fractions:
+                idx = min(max(int(round(frac * (n - 1))), 0), n - 1) if n > 0 else 0
+                if n == 0:
+                    continue
+                out[f"lora_debug/sentinel/{tag}/{mod_key}/idx_{frac:g}"] = flat[idx]
+            out[f"lora_debug/sentinel/{tag}/{mod_key}/n"] = jnp.asarray(n, dtype=jnp.int32)
+            break
+
+
 def _emit_opt_state_stats(
     out: dict[str, jax.Array],
     opt_state: PyTree,
@@ -455,14 +494,34 @@ def _emit_opt_state_stats(
         elif slot == "v":
             nu_by_key[f"{factor}/{mod_key}"] = arr_f32
 
+    if cfg.include_sentinels:
+        adam_m_sentinels: list[tuple[str, jax.Array]] = []
+        for key, mu in mu_by_key.items():
+            factor, mod_key = key.split("/", 1)
+            if factor == "A" and not cfg.include_sentinel_adam_m_a:
+                continue
+            if factor == "B" and not cfg.include_sentinel_adam_m_b:
+                continue
+            adam_m_sentinels.append((mod_key, mu))
+        if adam_m_sentinels:
+            _emit_module_sentinels(out, "adam_m", adam_m_sentinels, cfg)
+
     if cfg.include_effective_adam_update:
         eps = cfg.adam_eps
+        effective_update_sentinels: list[tuple[str, jax.Array]] = []
         for key, mu in mu_by_key.items():
             nu = nu_by_key.get(key)
             if nu is None or nu.shape != mu.shape:
                 continue
             eff = mu / (jnp.sqrt(nu) + eps)
             out[f"lora_debug/adam/effective_update/{key}/l2"] = jnp.sqrt(jnp.sum(jnp.square(eff)))
+            factor, mod_key = key.split("/", 1)
+            if factor == "A" and cfg.include_sentinel_effective_update_a:
+                effective_update_sentinels.append((mod_key, eff))
+            elif factor == "B" and cfg.include_sentinel_effective_update_b:
+                effective_update_sentinels.append((mod_key, eff))
+        if cfg.include_sentinels and effective_update_sentinels:
+            _emit_module_sentinels(out, "adam_effective_update", effective_update_sentinels, cfg)
 
 
 # --- One-time topology summary ----------------------------------------------
