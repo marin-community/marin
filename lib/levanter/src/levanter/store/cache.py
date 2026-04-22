@@ -419,6 +419,8 @@ class ShardedTreeCache(AsyncDataset[T_co]):
         return True
 
     def __getitem__(self, item):
+        if isinstance(item, slice):
+            return self.get_batch_sync(item)
         shard_idx, local_idx = self._resolve_index(item)
         return self._stores[shard_idx][local_idx]
 
