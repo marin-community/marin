@@ -377,11 +377,14 @@ class ZephyrCoordinator:
         self._is_last_stage: bool = False
         self._initialized: bool = False
         self._pipeline_running: bool = False
-        # O(1) count of workers in READY or BUSY state, maintained by _set_worker_state.
-        self._alive_workers: int = 0
 
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
+        # Signaled on every state change that _wait_for_stage cares about
+        # (shard completed, task requeued, fatal error, worker registered).
+        # Allows _wait_for_stage to wake immediately instead of spinning up
+        # to its max 1-second poll interval.
+        self._stage_event = threading.Event()
 
         actor_ctx = current_actor()
         self._name = f"{actor_ctx.group_name}"
@@ -419,20 +422,6 @@ class ZephyrCoordinator:
         """Set the worker ActorGroup so the coordinator can detect permanent worker death."""
         self._worker_group = worker_group
 
-    def _set_worker_state(self, worker_id: str, new_state: WorkerState) -> None:
-        """Transition a worker's state and keep _alive_workers in sync.
-
-        Must be called with self._lock held.
-        """
-        old_state = self._worker_states.get(worker_id)
-        was_alive = old_state in {WorkerState.READY, WorkerState.BUSY}
-        is_alive = new_state in {WorkerState.READY, WorkerState.BUSY}
-        if was_alive and not is_alive:
-            self._alive_workers -= 1
-        elif not was_alive and is_alive:
-            self._alive_workers += 1
-        self._worker_states[worker_id] = new_state
-
     def register_worker(self, worker_id: str, worker_handle: ActorHandle) -> None:
         """Called by workers when they come online to register with coordinator.
 
@@ -443,19 +432,20 @@ class ZephyrCoordinator:
             if worker_id in self._worker_handles:
                 logger.info("Worker %s re-registering (likely reconstructed), updating handle", worker_id)
                 self._worker_handles[worker_id] = worker_handle
-                self._set_worker_state(worker_id, WorkerState.READY)
+                self._worker_states[worker_id] = WorkerState.READY
                 self._last_seen[worker_id] = time.monotonic()
                 # NOTE: if there was a task assigned to the worker, there's a race condition between marking
                 # the worker as unhealthy via heartbeat and re-registration. If we do not requeue we may silently
                 # lose tasks.
                 self._maybe_requeue_worker_task(worker_id)
-                return
+            else:
+                self._worker_handles[worker_id] = worker_handle
+                self._worker_states[worker_id] = WorkerState.READY
+                self._last_seen[worker_id] = time.monotonic()
 
-            self._worker_handles[worker_id] = worker_handle
-            self._set_worker_state(worker_id, WorkerState.READY)
-            self._last_seen[worker_id] = time.monotonic()
-
-            logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
+                logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
+        # Wake _wait_for_stage so it re-evaluates the alive-worker count.
+        self._stage_event.set()
 
     def _coordinator_loop(self) -> None:
         """Background loop for heartbeat checking and worker job monitoring."""
@@ -504,10 +494,10 @@ class ZephyrCoordinator:
 
     def _log_status(self) -> None:
         with self._lock:
-            alive = self._alive_workers
-            total_workers = len(self._worker_handles)
+            states = list(self._worker_states.values())
             retried = {idx: att for idx, att in self._task_attempts.items() if att > 0}
-        dead = total_workers - alive
+        alive = sum(1 for s in states if s in {WorkerState.READY, WorkerState.BUSY})
+        dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
         logger.info(
             "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
             self._execution_id,
@@ -517,7 +507,7 @@ class ZephyrCoordinator:
             len(self._in_flight),
             len(self._task_queue),
             alive,
-            total_workers,
+            len(self._worker_handles),
             dead,
         )
         if retried:
@@ -605,7 +595,7 @@ class ZephyrCoordinator:
         for worker_id, last in list(self._last_seen.items()):
             if now - last > timeout and self._worker_states.get(worker_id) not in {WorkerState.FAILED, WorkerState.DEAD}:
                 logger.warning(f"Zephyr worker {worker_id} failed to heartbeat within timeout ({now - last:.1f}s)")
-                self._set_worker_state(worker_id, WorkerState.FAILED)
+                self._worker_states[worker_id] = WorkerState.FAILED
                 self._maybe_requeue_worker_task(worker_id)
 
     def pull_task(self, worker_id: str) -> tuple[ShardTask, int, dict] | str | None:
@@ -618,10 +608,10 @@ class ZephyrCoordinator:
         """
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
-            self._set_worker_state(worker_id, WorkerState.READY)
+            self._worker_states[worker_id] = WorkerState.READY
 
             if self._shutdown_event.is_set():
-                self._set_worker_state(worker_id, WorkerState.DEAD)
+                self._worker_states[worker_id] = WorkerState.DEAD
                 return "SHUTDOWN"
 
             if self._fatal_error:
@@ -634,14 +624,14 @@ class ZephyrCoordinator:
                     # restarts the worker which re-registers and picks it up.
                     # _check_worker_group() detects permanent worker-job death
                     # as a failsafe so we never deadlock.
-                    self._set_worker_state(worker_id, WorkerState.DEAD)
+                    self._worker_states[worker_id] = WorkerState.DEAD
                     return "SHUTDOWN"
                 return None
 
             task = self._task_queue.popleft()
             attempt = self._task_attempts[task.shard_idx]
             self._in_flight[worker_id] = (task, attempt)
-            self._set_worker_state(worker_id, WorkerState.BUSY)
+            self._worker_states[worker_id] = WorkerState.BUSY
 
             config = {
                 "chunk_prefix": self._chunk_prefix,
@@ -687,11 +677,14 @@ class ZephyrCoordinator:
             self._results[shard_idx] = result
             self._completed_shards += 1
             self._in_flight.pop(worker_id, None)
-            self._set_worker_state(worker_id, WorkerState.READY)
+            self._worker_states[worker_id] = WorkerState.READY
             self._completed_counters.append(counter_snapshot)
             # Zero the in-flight counters but keep the generation watermark
             # so late heartbeats from this task are rejected.
             self._worker_counters[worker_id] = CounterSnapshot.empty(counter_snapshot.generation)
+        # Wake _wait_for_stage immediately so it advances to the next stage
+        # without waiting out the polling backoff interval.
+        self._stage_event.set()
 
     def report_error(self, worker_id: str, shard_idx: int, error_info: str) -> None:
         """Worker reports a task failure. Re-queues up to MAX_SHARD_FAILURES."""
@@ -699,7 +692,9 @@ class ZephyrCoordinator:
             self._last_seen[worker_id] = time.monotonic()
             self._assert_in_flight_consistent(worker_id, shard_idx)
             aborted = self._record_shard_failure(worker_id, ShardFailureKind.TASK, error_info)
-            self._set_worker_state(worker_id, WorkerState.DEAD if aborted else WorkerState.READY)
+            self._worker_states[worker_id] = WorkerState.DEAD if aborted else WorkerState.READY
+        # Wake _wait_for_stage so it re-evaluates the alive-worker count and fatal error.
+        self._stage_event.set()
 
     def heartbeat(self, worker_id: str, counter_snapshot: CounterSnapshot | None = None) -> None:
         self._last_seen[worker_id] = time.monotonic()
@@ -765,6 +760,8 @@ class ZephyrCoordinator:
             if self._fatal_error is None:
                 logger.error("Coordinator aborted: %s", reason)
                 self._fatal_error = reason
+        # Wake _wait_for_stage so it raises ZephyrWorkerError immediately.
+        self._stage_event.set()
 
     def _start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
         """Load a new stage's tasks into the queue."""
@@ -784,6 +781,9 @@ class ZephyrCoordinator:
             # Only reset in-flight worker snapshots; completed snapshots
             # accumulate across stages for full pipeline visibility.
             self._worker_counters = {}
+        # Clear after releasing the lock so _wait_for_stage can't miss
+        # a signal set between lock release and the clear call.
+        self._stage_event.clear()
 
     def _wait_for_stage(self) -> None:
         """Block until current stage completes or error occurs."""
@@ -792,7 +792,6 @@ class ZephyrCoordinator:
         start_time = time.monotonic()
         all_dead_since: float | None = None
         no_workers_timeout = self._no_workers_timeout
-        stage_done = threading.Event()
 
         while True:
             with self._lock:
@@ -805,9 +804,11 @@ class ZephyrCoordinator:
                 if completed >= total:
                     return
 
-                # _alive_workers is kept in sync by _set_worker_state on every
-                # state transition, avoiding a per-wakeup O(n_workers) scan.
-                alive_workers = self._alive_workers
+                # Count alive workers (READY or BUSY), not just total registered.
+                # Dead/failed workers stay in _worker_handles but can't make progress.
+                alive_workers = sum(
+                    1 for s in self._worker_states.values() if s in {WorkerState.READY, WorkerState.BUSY}
+                )
 
                 if alive_workers == 0:
                     now = time.monotonic()
@@ -834,7 +835,13 @@ class ZephyrCoordinator:
                 last_log_completed = completed
                 backoff.reset()
 
-            stage_done.wait(timeout=backoff.next_interval())
+            # Wait for a state-change signal (shard completed, error, worker registered)
+            # with a timeout as backstop for the alive-worker check and log lines.
+            # _stage_event is set by report_result/report_error/abort/register_worker,
+            # so the stage transition is detected within microseconds of the last
+            # shard completing rather than after up to the full backoff interval.
+            self._stage_event.wait(timeout=backoff.next_interval())
+            self._stage_event.clear()
 
     def _collect_results(self) -> dict[int, TaskResult]:
         """Return results for the completed stage."""
