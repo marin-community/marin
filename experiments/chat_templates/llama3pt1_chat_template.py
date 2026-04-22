@@ -59,8 +59,8 @@ LLAMA_3_1_CHAT_TEMPLATE = """{{- bos_token }}
         {%- set first_user_message = (messages[0]['content'] or '')|trim %}
         {%- set messages = messages[1:] %}
     {%- else %}
-        {{- raise_exception("Cannot put tools in the first user message when there's no first user message!") }}
-{%- endif %}
+        {%- set first_user_message = "" %}
+    {%- endif %}
     {{- '<|start_header_id|>user<|end_header_id|>\n\n' -}}
     {{- "Given the following functions, please respond with a JSON for a function call " }}
     {{- "with its proper arguments that best answers the given prompt.\n\n" }}
@@ -74,40 +74,55 @@ LLAMA_3_1_CHAT_TEMPLATE = """{{- bos_token }}
 {%- endif %}
 
 {%- for message in messages %}
-    {%- if not (message.role == 'ipython' or message.role == 'tool' or ('tool_calls' in message and message.tool_calls is not none)) %}
+    {%- if not (message.role == 'ipython' or message.role == 'tool' or (message.tool_calls is defined and message.tool_calls)) %}
         {%- if message.role == 'assistant' %}
             {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n' }}{% generation %}{{- (message['content'] or '') | trim + '<|eot_id|>' }}{% endgeneration %}
         {%- else %}
             {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ (message['content'] or '') | trim + '<|eot_id|>' }}
         {%- endif %}
-    {%- elif 'tool_calls' in message and message.tool_calls is not none %}
-        {%- if not message.tool_calls|length == 1 %}
-            {{- raise_exception("This model only supports single tool-calls at once!") }}
+    {%- elif message.tool_calls is defined and message.tool_calls %}
+        {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' -}}
+        {% generation %}
+        {%- if message.content %}
+            {{- message.content | trim }}
+            {{- "\n" }}
         {%- endif %}
-        {%- set tool_call = message.tool_calls[0].function %}
-        {%- if builtin_tools is defined and tool_call.name in builtin_tools %}
-            {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' -}}
-            {% generation %}{{- "<|python_tag|>" + tool_call.name + ".call(" }}
-            {%- for arg_name, arg_val in tool_call.arguments | items %}
-                {{- arg_name + '="' + arg_val + '"' }}
-                {%- if not loop.last %}
-                    {{- ", " }}
-                {%- endif %}
+        {%- for raw_tool_call in message.tool_calls %}
+            {%- if raw_tool_call.function is defined and raw_tool_call.function is not none %}
+                {%- set tool_call = raw_tool_call.function %}
+            {%- else %}
+                {%- set tool_call = raw_tool_call %}
+            {%- endif %}
+            {%- if builtin_tools is defined and tool_call.name in builtin_tools %}
+                {{- "<|python_tag|>" + tool_call.name + ".call(" }}
+                {%- for arg_name, arg_val in tool_call.arguments | items %}
+                    {{- arg_name + '="' + arg_val + '"' }}
+                    {%- if not loop.last %}
+                        {{- ", " }}
+                    {%- endif %}
                 {%- endfor %}
-            {{- ")" }}{% endgeneration %}
-        {%- else  %}
-            {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' -}}
-            {% generation %}{{- '{"name": "' + tool_call.name + '", ' }}
-            {{- '"parameters": ' }}
-            {{- tool_call.arguments | tojson }}
-            {{- "}" }}{% endgeneration %}
-        {%- endif %}
+                {{- ")" }}
+            {%- else  %}
+                {{- '{"name": "' + tool_call.name + '", ' }}
+                {{- '"parameters": ' }}
+                {%- if tool_call.arguments is string %}
+                    {{- tool_call.arguments }}
+                {%- else %}
+                    {{- tool_call.arguments | tojson }}
+                {%- endif %}
+                {{- "}" }}
+            {%- endif %}
+            {%- if not loop.last %}
+                {{- "\n" }}
+            {%- endif %}
+        {%- endfor %}
         {%- if builtin_tools is defined %}
             {#- This means we're in ipython mode #}
-            {% generation %}{{- "<|eom_id|>" }}{% endgeneration %}
+            {{- "<|eom_id|>" }}
         {%- else %}
-            {% generation %}{{- "<|eot_id|>" }}{% endgeneration %}
+            {{- "<|eot_id|>" }}
         {%- endif %}
+        {% endgeneration %}
     {%- elif message.role == "tool" or message.role == "ipython" %}
         {{- "<|start_header_id|>ipython<|end_header_id|>\n\n" }}
         {%- if message.content is none %}

@@ -142,6 +142,27 @@ class ProcessedChatDict(TypedDict):
     assistant_masks: np.ndarray
 
 
+class ProcessedTraceChatDict(TypedDict):
+    input_ids: np.ndarray
+    trace_masks: dict[str, np.ndarray]
+
+
+def _normalize_chat_message(message: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(message)
+    normalized.setdefault("content", "")
+    normalized.setdefault("reasoning_content", None)
+    normalized.setdefault("tool_calls", [])
+    if normalized["tool_calls"] is None:
+        normalized["tool_calls"] = []
+    return normalized
+
+
+def _normalize_chat_kwargs(kwargs: Mapping[str, Any] | None) -> dict[str, Any]:
+    kwargs_dict = dict(kwargs) if kwargs is not None else {}
+    kwargs_dict.setdefault("tools", None)
+    return kwargs_dict
+
+
 class ChatProcessor(BatchProcessor[dict, dict]):
     """
     Processor that converts chat data into token ids and assistant masks via chat templates.
@@ -179,7 +200,7 @@ class ChatProcessor(BatchProcessor[dict, dict]):
         chat_kwargs_list: list[Mapping[str, Any] | None] = []
         for example in batch:
             example_messages = example[self.messages_field]
-            normalized_messages = list(example_messages)
+            normalized_messages = [_normalize_chat_message(message) for message in example_messages]
 
             if self.system_prompt_field is not None and self.system_prompt_field in example:
                 system_content = example[self.system_prompt_field]
@@ -191,6 +212,7 @@ class ChatProcessor(BatchProcessor[dict, dict]):
                             raise ValueError("System prompt mapping must include 'content'.")
                     else:
                         system_message = {"role": "system", "content": system_content}
+                    system_message = _normalize_chat_message(system_message)
                     normalized_messages = [system_message, *normalized_messages]
 
             messages.append(normalized_messages)
@@ -210,13 +232,14 @@ class ChatProcessor(BatchProcessor[dict, dict]):
             tokenized = self.tokenizer.apply_chat_template_with_masks(
                 messages,
                 chat_template=self.chat_template,
+                **_normalize_chat_kwargs(None),
             )
         else:
             input_ids_batches: list[list[int]] = []
             assistant_mask_batches: list[list[int]] = []
 
             for conversation, example_kwargs in zip(messages, chat_kwargs_list):
-                kwargs_dict = dict(example_kwargs) if example_kwargs is not None else {}
+                kwargs_dict = _normalize_chat_kwargs(example_kwargs)
                 for forbidden in ("tokenize", "return_assistant_tokens_mask", "return_dict"):
                     if forbidden in kwargs_dict:
                         raise ValueError(f"chat_template_kwargs may not override '{forbidden}'.")
@@ -273,6 +296,264 @@ class ChatProcessor(BatchProcessor[dict, dict]):
             "messages_field": self.messages_field,
             "system_prompt_field": self.system_prompt_field,
             "chat_template_kwargs_field": self.chat_template_kwargs_field,
+        }
+
+
+@dataclass(frozen=True)
+class TraceChatEvaluationFormat:
+    """Evaluation-only configuration for multi-turn agent traces with named loss masks.
+
+    This format expects OpenAI-style conversation records. In addition to
+    rendering the conversation with the chat template, it emits one token mask
+    per configured loss tag. It is intentionally not an `LmDatasetFormatBase`:
+    trace masks are consumed by `MaskedEvaluator`, not by normal LM training or
+    `TaggedEvaluator`.
+    """
+
+    messages_field: str = "messages"
+    chat_template: str | None = None
+    system_prompt: str | None = None
+    chat_template_kwargs: str | None = "chat_template_kwargs"
+    pack: bool | int | Literal["pad"] | None = None
+    loss_tags: tuple[str, ...] = (
+        "assistant",
+        "tool",
+        "observation",
+        "action",
+        "tool_call",
+        "bash",
+        "patch",
+        "final_assistant",
+        "outcome",
+    )
+    message_loss_tags_field: str | None = "loss_tags"
+    include_role_tags: bool = True
+    include_final_assistant_tag: bool = True
+    slice_strategy: Literal["left", "right", "raise"] = "left"
+
+    def build_preprocessor(
+        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    ) -> BatchProcessor[dict, dict]:
+        del enforce_eos, enforce_bos
+        return TraceChatProcessor(
+            tokenizer,
+            messages_field=self.messages_field,
+            chat_template=self.chat_template,
+            system_prompt_field=self.system_prompt,
+            chat_template_kwargs_field=self.chat_template_kwargs,
+            loss_tags=self.loss_tags,
+            message_loss_tags_field=self.message_loss_tags_field,
+            include_role_tags=self.include_role_tags,
+            include_final_assistant_tag=self.include_final_assistant_tag,
+        )
+
+
+class TraceChatProcessor(BatchProcessor[dict, dict]):
+    """Processor that renders chat traces and emits named token masks."""
+
+    def __init__(
+        self,
+        tokenizer: MarinTokenizer,
+        chat_template: str | None = None,
+        messages_field: str = "messages",
+        system_prompt_field: str | None = "system",
+        chat_template_kwargs_field: str | None = "chat_template_kwargs",
+        loss_tags: Sequence[str] = (),
+        message_loss_tags_field: str | None = "loss_tags",
+        include_role_tags: bool = True,
+        include_final_assistant_tag: bool = True,
+    ):
+        if chat_template is None and tokenizer.chat_template is None:
+            raise ValueError("No chat template provided and tokenizer has no default chat template")
+        if not loss_tags:
+            raise ValueError("TraceChatProcessor requires at least one loss tag")
+
+        self.tokenizer = tokenizer
+        self.chat_template = chat_template or tokenizer.chat_template
+        self.messages_field = messages_field
+        self.system_prompt_field = system_prompt_field
+        self.chat_template_kwargs_field = chat_template_kwargs_field
+        self.loss_tags = tuple(loss_tags)
+        self.message_loss_tags_field = message_loss_tags_field
+        self.include_role_tags = include_role_tags
+        self.include_final_assistant_tag = include_final_assistant_tag
+
+        if self.chat_template is None:
+            raise ValueError("No chat template provided and tokenizer has no default chat template")
+
+    def __call__(self, batch: Sequence[dict]) -> Sequence[dict]:
+        out: list[dict] = []
+        for example in batch:
+            conversation, kwargs_dict = self._normalize_conversation(example)
+            tokenized = self.tokenizer.apply_chat_template_with_masks(
+                [conversation],
+                chat_template=self.chat_template,
+                **kwargs_dict,
+            )
+            input_ids = tokenized["input_ids"][0]
+            assistant_mask = tokenized["assistant_masks"][0]
+            spans = self._message_spans(conversation, len(input_ids), kwargs_dict)
+            masks = self._loss_masks(conversation, spans, assistant_mask, len(input_ids))
+
+            out.append(
+                {
+                    "input_ids": np.array(input_ids, dtype=np.int32),
+                    "trace_masks": {tag: np.array(masks[tag], dtype=np.int32) for tag in self.loss_tags},
+                }
+            )
+        return out
+
+    def _normalize_conversation(self, example: dict) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        example_messages = example[self.messages_field]
+        normalized_messages = [_normalize_chat_message(message) for message in example_messages]
+
+        if self.system_prompt_field is not None and self.system_prompt_field in example:
+            system_content = example[self.system_prompt_field]
+            if system_content is not None:
+                if isinstance(system_content, Mapping):
+                    system_message = dict(system_content)
+                    system_message["role"] = "system"
+                    if "content" not in system_message:
+                        raise ValueError("System prompt mapping must include 'content'.")
+                else:
+                    system_message = {"role": "system", "content": system_content}
+                system_message = _normalize_chat_message(system_message)
+                normalized_messages = [system_message, *normalized_messages]
+
+        if self.chat_template_kwargs_field is not None and self.chat_template_kwargs_field in example:
+            raw_kwargs = example[self.chat_template_kwargs_field]
+            if raw_kwargs is not None:
+                if not isinstance(raw_kwargs, Mapping):
+                    raise ValueError("chat_template_kwargs must be a mapping when present.")
+                kwargs_dict = _normalize_chat_kwargs(raw_kwargs)
+            else:
+                kwargs_dict = _normalize_chat_kwargs(None)
+        else:
+            kwargs_dict = _normalize_chat_kwargs(None)
+
+        for forbidden in ("tokenize", "return_assistant_tokens_mask", "return_dict"):
+            if forbidden in kwargs_dict:
+                raise ValueError(f"chat_template_kwargs may not override '{forbidden}'.")
+        kwargs_dict.pop("add_generation_prompt", None)
+        kwargs_dict.pop("chat_template", None)
+
+        return normalized_messages, kwargs_dict
+
+    def _message_spans(
+        self, conversation: list[dict[str, Any]], full_length: int, kwargs_dict: Mapping[str, Any]
+    ) -> list[tuple[int, int]]:
+        prefix_lengths = [0]
+        for end in range(1, len(conversation) + 1):
+            prefix = conversation[:end]
+            tokenized_prefix = self.tokenizer.apply_chat_template_with_masks(
+                [prefix],
+                chat_template=self.chat_template,
+                **kwargs_dict,
+            )
+            prefix_lengths.append(min(len(tokenized_prefix["input_ids"][0]), full_length))
+
+        spans: list[tuple[int, int]] = []
+        for start, end in zip(prefix_lengths[:-1], prefix_lengths[1:]):
+            spans.append((min(start, full_length), min(max(end, start), full_length)))
+        return spans
+
+    def _loss_masks(
+        self,
+        conversation: Sequence[Mapping[str, Any]],
+        spans: Sequence[tuple[int, int]],
+        assistant_mask: Sequence[int],
+        full_length: int,
+    ) -> dict[str, list[int]]:
+        masks = {tag: [0] * full_length for tag in self.loss_tags}
+        assistant_positions = np.asarray(assistant_mask, dtype=np.int32)
+
+        final_assistant_idx = self._final_assistant_index(conversation)
+        for idx, (message, (start, end)) in enumerate(zip(conversation, spans)):
+            if start >= end:
+                continue
+
+            tags = self._tags_for_message(message, idx == final_assistant_idx)
+            for tag in tags:
+                if tag not in masks:
+                    continue
+                mask = masks[tag]
+                for pos in range(start, end):
+                    if message.get("role") == "assistant" and pos < len(assistant_positions):
+                        mask[pos] = int(assistant_positions[pos])
+                    else:
+                        mask[pos] = 1
+
+        if "assistant" in masks:
+            masks["assistant"] = assistant_positions.astype(np.int32).tolist()
+
+        if "final_assistant" in masks and final_assistant_idx is not None:
+            start, end = spans[final_assistant_idx]
+            final_mask = [0] * full_length
+            for pos in range(start, end):
+                if pos < len(assistant_positions) and assistant_positions[pos]:
+                    final_mask[pos] = 1
+            masks["final_assistant"] = final_mask
+
+        return masks
+
+    def _tags_for_message(self, message: Mapping[str, Any], is_final_assistant: bool) -> set[str]:
+        tags: set[str] = set()
+
+        if self.message_loss_tags_field is not None and self.message_loss_tags_field in message:
+            raw_tags = message[self.message_loss_tags_field]
+            if raw_tags is None:
+                pass
+            elif isinstance(raw_tags, str):
+                tags.add(raw_tags)
+            else:
+                tags.update(str(tag) for tag in raw_tags)
+
+        if self.include_role_tags:
+            role = message.get("role")
+            if role == "assistant":
+                tags.add("assistant")
+                if message.get("tool_calls"):
+                    tags.add("tool_call")
+            elif role in {"tool", "function", "ipython"}:
+                tags.add("tool")
+                tags.add("observation")
+
+        if self.include_final_assistant_tag and is_final_assistant:
+            tags.add("final_assistant")
+
+        return tags
+
+    @staticmethod
+    def _final_assistant_index(conversation: Sequence[Mapping[str, Any]]) -> int | None:
+        for index in range(len(conversation) - 1, -1, -1):
+            if conversation[index].get("role") == "assistant":
+                return index
+        return None
+
+    @property
+    def output_exemplar(self):
+        return {
+            "input_ids": np.zeros((0,), dtype=np.int32),
+            "trace_masks": {tag: np.zeros((0,), dtype=np.int32) for tag in self.loss_tags},
+        }
+
+    @property
+    def num_cpus(self) -> int:
+        return 1
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "tokenizer": self.tokenizer.name_or_path,
+            "vocab_size": self.tokenizer.vocab_size,
+            "chat_template": self.chat_template,
+            "messages_field": self.messages_field,
+            "system_prompt_field": self.system_prompt_field,
+            "chat_template_kwargs_field": self.chat_template_kwargs_field,
+            "loss_tags": list(self.loss_tags),
+            "message_loss_tags_field": self.message_loss_tags_field,
+            "include_role_tags": self.include_role_tags,
+            "include_final_assistant_tag": self.include_final_assistant_tag,
         }
 
 

@@ -224,3 +224,62 @@ def named_lm_example_from_grug(
         loss_weight=hax.named(example.loss_weight, token_axes),
         attn_mask=named_attention_mask_from_grug(example.attn_mask, Pos, batch_axis=resolved_batch_axis),
     )
+
+
+@register_dataclass
+@dataclass(frozen=True)
+class TraceLmExample:
+    """A packed language-model example with multiple named trace loss masks.
+
+    `loss_masks` has shape `[target, position]` or `[batch, target, position]`.
+    Each target mask is aligned to next-token loss positions: a 1 at position
+    `t` means the loss for predicting token `t + 1` contributes to that target.
+    """
+
+    tokens: jax.Array
+    loss_masks: jax.Array
+    attn_mask: GrugAttentionMask = GrugAttentionMask.causal()
+
+
+def named_lm_example_from_trace(
+    example: TraceLmExample,
+    Pos: Axis,
+    Target: Axis,
+    batch_axis: AxisSelector | None = None,
+) -> tuple[LmExample, NamedArray]:
+    """Convert a raw trace example into `LmExample` plus named loss masks."""
+
+    if example.tokens.ndim == 1:
+        if example.tokens.shape[0] != Pos.size:
+            raise ValueError(f"TraceLmExample token length ({example.tokens.shape[0]}) must match Pos={Pos.size}.")
+        if example.loss_masks.shape != (Target.size, Pos.size):
+            raise ValueError(
+                f"TraceLmExample loss_masks shape {example.loss_masks.shape} must match {(Target.size, Pos.size)}."
+            )
+        token_axes: tuple[Axis, ...] = (Pos,)
+        mask_axes: tuple[Axis, ...] = (Target, Pos)
+        resolved_batch_axis: AxisSelector | None = None
+    elif example.tokens.ndim == 2:
+        Batch = _resolve_batch_axis(batch_axis, example.tokens.shape[0])
+        if example.tokens.shape[1] != Pos.size:
+            raise ValueError(f"TraceLmExample position length ({example.tokens.shape[1]}) must match Pos={Pos.size}.")
+        if example.loss_masks.shape != (Batch.size, Target.size, Pos.size):
+            raise ValueError(
+                f"TraceLmExample loss_masks shape {example.loss_masks.shape} must match "
+                f"{(Batch.size, Target.size, Pos.size)}."
+            )
+        token_axes = (Batch, Pos)
+        mask_axes = (Batch, Target, Pos)
+        resolved_batch_axis = Batch
+    else:
+        raise ValueError(f"TraceLmExample tokens must be rank-1 or rank-2, got rank={example.tokens.ndim}")
+
+    loss_masks = hax.named(example.loss_masks, mask_axes).astype(jnp.float32)
+    token_loss_weight = hax.any(loss_masks > 0, axis=Target).astype(jnp.float32)
+
+    lm_example = LmExample(
+        tokens=hax.named(example.tokens, token_axes),
+        loss_weight=token_loss_weight,
+        attn_mask=named_attention_mask_from_grug(example.attn_mask, Pos, batch_axis=resolved_batch_axis),
+    )
+    return lm_example, loss_masks
