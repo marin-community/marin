@@ -594,6 +594,43 @@ def test_load_from_checkpoint_or_initialize():
         )
 
 
+def test_load_from_checkpoint_or_initialize_searches_additional_paths():
+    In = Axis("in", 2)
+    Out = Axis("out", 1)
+
+    def init_fn(key):
+        return hax.nn.MLP.init(In, Out, 2, 1, key=key, use_bias=False, use_final_bias=False)
+
+    with use_test_mesh(), tempfile.TemporaryDirectory() as permanent_dir, tempfile.TemporaryDirectory() as temp_dir:
+        k0 = jax.random.PRNGKey(0)
+        k1 = jax.random.PRNGKey(1)
+        model0 = eqx.filter_jit(init_fn)(k0)
+        model1 = eqx.filter_jit(init_fn)(k1)
+
+        is_checkpointed = hax.tree_util.tree_map(lambda _: False, model0)
+        is_checkpointed = eqx.tree_at(lambda t: t.layers[-1], is_checkpointed, replace=True)
+
+        filtered = eqx.filter(model0, is_checkpointed)
+        save_checkpoint(filtered, step=0, checkpoint_path=temp_dir)
+
+        loaded = load_checkpoint_or_initialize(
+            init_fn,
+            permanent_dir,
+            additional_checkpoint_paths=[temp_dir],
+            is_checkpointed=is_checkpointed,
+            donate_args=False,
+        )(k1)
+
+        assert_trees_all_equal(
+            jax.tree_util.tree_leaves(arrays_only(eqx.filter(loaded, is_checkpointed))),
+            jax.tree_util.tree_leaves(arrays_only(eqx.filter(model0, is_checkpointed))),
+        )
+        assert_trees_all_equal(
+            jax.tree_util.tree_leaves(arrays_only(eqx.filter(loaded, is_checkpointed, inverse=True))),
+            jax.tree_util.tree_leaves(arrays_only(eqx.filter(model1, is_checkpointed, inverse=True))),
+        )
+
+
 def test_load_from_checkpoint_or_initialize_works_if_file_not_found():
     In = Axis("in", 2)
     Out = Axis("out", 1)

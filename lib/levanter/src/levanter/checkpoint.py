@@ -779,6 +779,7 @@ def load_checkpoint(
     tree: M,
     checkpoint_path: PathLike,
     *,
+    additional_checkpoint_paths: Sequence[PathLike] = (),
     subpath: Optional[str] = None,
     discover_latest=True,
     axis_mapping: Optional[haliax.partitioning.ResourceMapping] = None,
@@ -798,6 +799,7 @@ def load_checkpoint(
     Args:
         tree: an exemplar of the tree to load. Can be a PyTree[ShapeDTypeStruct] instead of a PyTree[Any]
         checkpoint_path: the path to load the checkpoint from
+        additional_checkpoint_paths: extra roots to search when discover_latest is True
         subpath: the subpath to load from the checkpoint
         discover_latest: whether to discover the latest checkpoint in the given path
         axis_mapping: the axis mapping to use for loading the checkpoint
@@ -807,20 +809,19 @@ def load_checkpoint(
         the loaded checkpoint, with the same structure as the exemplar tree
 
     """
-    fs: AbstractFileSystem
-    fs, _ = _get_fs_and_plain_path(checkpoint_path)
-
     checkpoint_path = str(checkpoint_path)
 
     if is_in_jit():
         logger.warning("Loading checkpoint in jit. This is not recommended and probably won't work.")
 
     if discover_latest:
-        discovered_checkpoint_path = discover_latest_checkpoint(checkpoint_path)  # type: ignore
+        discovered_checkpoint_path = discover_latest_checkpoint(checkpoint_path, *additional_checkpoint_paths)
     else:
+        if additional_checkpoint_paths:
+            raise ValueError("additional_checkpoint_paths only applies when discover_latest=True")
         discovered_checkpoint_path = checkpoint_path
 
-    if discovered_checkpoint_path is None or not fs.exists(discovered_checkpoint_path):
+    if discovered_checkpoint_path is None or not fsspec_utils.exists(discovered_checkpoint_path):
         raise FileNotFoundError(f"Could not find checkpoint at {checkpoint_path}")
 
     checkpoint_path = discovered_checkpoint_path
@@ -842,6 +843,7 @@ def load_checkpoint_or_initialize(
     init_fn: Callable[Sig, M],
     checkpoint_path: PathLike,
     *,
+    additional_checkpoint_paths: Sequence[PathLike] = (),
     subpath: Optional[str] = None,
     discover_latest=True,
     axis_mapping: Optional[haliax.partitioning.ResourceMapping] = None,
@@ -874,6 +876,7 @@ def load_checkpoint_or_initialize(
     Args:
         init_fn: a function to initialize if needed
         checkpoint_path: the path to load the checkpoint from
+        additional_checkpoint_paths: extra roots to search when discover_latest is True
         subpath: the subpath to load from the checkpoint
         discover_latest: whether to discover the latest checkpoint in the given path
         axis_mapping: the axis mapping to use for loading the checkpoint
@@ -921,6 +924,7 @@ def load_checkpoint_or_initialize(
                 loaded_state = load_checkpoint(
                     filtered_state_shape,
                     checkpoint_path,
+                    additional_checkpoint_paths=additional_checkpoint_paths,
                     subpath=subpath,
                     discover_latest=discover_latest,
                     axis_mapping=axis_mapping,
@@ -956,7 +960,7 @@ def discover_latest_checkpoint(checkpoint_path: PathLike, *additional_paths: Pat
     """
     all_paths = [str(checkpoint_path)] + [str(p) for p in additional_paths]
     best: Optional[str] = None
-    best_key: Optional[tuple] = None
+    best_key: tuple[datetime.datetime, int] | None = None
 
     for cp_path in all_paths:
         found = _discover_latest_checkpoint_single(cp_path)
@@ -966,6 +970,7 @@ def discover_latest_checkpoint(checkpoint_path: PathLike, *additional_paths: Pat
             metadata = _load_metadata(found)
             key = (datetime.datetime.fromisoformat(metadata["timestamp"]), metadata["step"])
         except Exception:
+            logger.exception("Error loading metadata for discovered checkpoint %s", found)
             continue
         if best_key is None or key > best_key:
             best = found

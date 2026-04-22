@@ -419,20 +419,22 @@ class Trainer:
         assert model_init is not None
 
         # first try to load a full trainer state checkpoint
-        checkpoint_path = self.checkpoint_path
+        checkpoint_search_paths = self.checkpoint_search_paths
+        checkpoint_path = checkpoint_search_paths[0]
 
         load_checkpoint = self.config.load_checkpoint
         # we don't save the full trainer state, so we need to filter out the non-trainable parameters
-        if load_checkpoint is True and not fsspec_utils.exists(checkpoint_path):
-            raise FileNotFoundError(f"Checkpoint {checkpoint_path} does not exist")
+        if load_checkpoint is True and not any(fsspec_utils.exists(path) for path in checkpoint_search_paths):
+            raise FileNotFoundError(f"Checkpoint search paths do not exist: {checkpoint_search_paths}")
         elif load_checkpoint is None:
-            load_checkpoint = levanter.checkpoint.is_checkpoint_path(checkpoint_path)
+            load_checkpoint = any(levanter.checkpoint.is_checkpoint_path(path) for path in checkpoint_search_paths)
 
         if load_checkpoint is False and self.config.initialize_from is not None:
             # we're not going to load a checkpoint from this run, so instead we can initialize from a different run
             logger.info(f"Initializing from {self.config.initialize_from}")
             load_checkpoint = True
             checkpoint_path = self.config.initialize_from
+            checkpoint_search_paths = [checkpoint_path]
             if not is_checkpoint_path(checkpoint_path):
                 raise ValueError(f"initialize_from must be a checkpoint path, got {checkpoint_path}")
 
@@ -456,6 +458,7 @@ class Trainer:
         state = load_checkpoint_or_initialize(
             init_state_and_model,
             checkpoint_path,
+            additional_checkpoint_paths=checkpoint_search_paths[1:],
             axis_mapping=self.parameter_axis_mapping,
             mesh=self.device_mesh,
             is_checkpointed=saveable_train_state,
@@ -466,11 +469,12 @@ class Trainer:
         return state
 
     @property
+    def checkpoint_search_paths(self) -> list[str]:
+        return self.config.checkpoint_search_paths(self.run_id)
+
+    @property
     def checkpoint_path(self) -> str:
-        checkpoint_path = self.config.load_checkpoint_path
-        if checkpoint_path is None:
-            checkpoint_path = self.config.checkpointer.expanded_path(self.run_id)
-        return checkpoint_path
+        return self.checkpoint_search_paths[0]
 
     def train_step(self, state: S, *batch: X, **batch_kwargs) -> StepInfo[S]:
         """
