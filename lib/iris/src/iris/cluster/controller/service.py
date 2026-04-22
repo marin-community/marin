@@ -1229,6 +1229,8 @@ class ControllerServiceImpl:
 
         resources = _resource_spec_from_job_row(job)
 
+        has_children = bool(_parent_ids_with_children(self._db, [job.job_id]))
+
         proto_job_status = job_pb2.JobStatus(
             job_id=job.job_id.to_wire(),
             state=job.state,
@@ -1242,6 +1244,7 @@ class ControllerServiceImpl:
             task_count=summary.task_count if summary else 0,
             completed_count=summary.completed_count if summary else 0,
             resources=resources,
+            has_children=has_children,
         )
         if job.started_at:
             proto_job_status.started_at.CopyFrom(timestamp_to_proto(job.started_at))

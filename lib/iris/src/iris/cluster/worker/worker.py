@@ -125,6 +125,13 @@ def worker_config_from_proto(
 class Worker:
     """Unified worker managing all components and lifecycle."""
 
+    # Grace period during which a freshly-submitted task is treated as
+    # "expected" by reconciliation, even if it hasn't yet appeared in the
+    # controller's expected_tasks list. Protects against the StartTasks →
+    # PollTasks race where the controller polls before its internal view
+    # catches up with the task it just assigned.
+    _RECENT_SUBMISSION_GRACE_SECONDS = 30.0
+
     def __init__(
         self,
         config: WorkerConfig,
@@ -176,6 +183,11 @@ class Worker:
         # Task state: maps (task_id, attempt_id) -> TaskAttempt.
         # Preserves all attempts so logs for historical attempts remain accessible.
         self._tasks: dict[tuple[str, int], TaskAttempt] = {}
+        # Freshly-submitted tasks -> monotonic submission time. Used by
+        # reconciliation to grant a grace period before a task becomes
+        # eligible for "unexpected, kill" if the controller hasn't yet
+        # listed it in expected_tasks. See _RECENT_SUBMISSION_GRACE_SECONDS.
+        self._recent_submissions: dict[tuple[str, int], float] = {}
         self._lock = threading.Lock()
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
@@ -586,6 +598,7 @@ class Worker:
         # Clear task tracking
         with self._lock:
             self._tasks.clear()
+            self._recent_submissions.clear()
 
         # Replace the task thread container so new tasks get a fresh group.
         self._task_threads = self._threads.create_child("tasks")
@@ -701,6 +714,7 @@ class Worker:
 
         with self._lock:
             self._tasks[key] = attempt
+            self._recent_submissions[key] = time.monotonic()
 
         # Start execution in a monitored non-daemon thread. When stop() is called,
         # the on_stop callback kills the container so attempt.run() exits promptly.
@@ -791,19 +805,33 @@ class Worker:
             finished_at=timestamp_to_proto(Timestamp.now()),
         )
 
+    def _prune_and_get_recent_submission_keys(self) -> set[tuple[str, int]]:
+        """Return keys submitted within the grace window, pruning stale entries.
+
+        Caller must hold ``self._lock``. Stale entries (older than the grace
+        window) are removed from ``self._recent_submissions`` so the dict
+        doesn't grow unbounded.
+        """
+        now = time.monotonic()
+        cutoff = now - self._RECENT_SUBMISSION_GRACE_SECONDS
+        stale = [key for key, ts in self._recent_submissions.items() if ts < cutoff]
+        for key in stale:
+            del self._recent_submissions[key]
+        return set(self._recent_submissions)
+
     def _reconcile_expected_tasks(
         self,
         expected_entries,
-        extra_expected_keys: set[tuple[str, int]] | None = None,
     ) -> tuple[list[job_pb2.WorkerTaskStatus], list[tuple[str, int]]]:
         """Build status entries for expected tasks; collect non-terminal local tasks
         not in the expected set as targets to kill.
 
         Caller must hold ``self._lock``.
 
-        ``extra_expected_keys`` keeps freshly-submitted tasks (e.g. ``tasks_to_run``
-        on the legacy heartbeat) from being killed when they aren't yet in the
-        controller's expected set.
+        Freshly-submitted tasks (``self._recent_submissions``) are protected
+        from reconciliation kills via the grace window, which covers the
+        StartTasks → PollTasks race where the controller polls before its
+        internal view catches up with a task it just assigned.
         """
         tasks: list[job_pb2.WorkerTaskStatus] = []
         expected_keys: set[tuple[str, int]] = set()
@@ -817,8 +845,7 @@ class Worker:
                 tasks.append(self._missing_task_status(task_id, expected_attempt_id))
             else:
                 tasks.append(self._encode_task_status(task, task_id))
-        if extra_expected_keys:
-            expected_keys |= extra_expected_keys
+        expected_keys |= self._prune_and_get_recent_submission_keys()
         tasks_to_kill: list[tuple[str, int]] = []
         for key, task in self._tasks.items():
             if key not in expected_keys and task.status not in self._TERMINAL_STATES:
@@ -851,8 +878,12 @@ class Worker:
            found on worker"). This happens when the worker has reset its state
            (_tasks.clear() in _reset_worker_state) between heartbeats — from
            the controller's perspective this is equivalent to a worker restart.
-        4. Kill unexpected tasks — any task in self._tasks that is NOT in
-           expected_tasks or tasks_to_run is killed (controller no longer wants it)
+        4. Kill unexpected tasks — any non-terminal task in self._tasks that is
+           NOT in expected_tasks and is not within the recent-submission grace
+           window is killed (controller no longer wants it). The grace window
+           keeps tasks just submitted via StartTasks or this heartbeat's
+           tasks_to_run from being killed when the controller hasn't yet
+           listed them in expected_tasks.
 
         The ordering guarantee between steps 1 and 3 is critical: a task that
         appears in both tasks_to_run and expected_tasks (which is always the case
@@ -891,12 +922,11 @@ class Worker:
                         logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
 
             with slow_log(logger, "heartbeat reconciliation", threshold_ms=200):
-                # tasks_to_run was just submitted above; carry those keys so a
-                # newly-assigned task isn't killed if the controller hasn't yet
-                # listed it in expected_tasks.
-                extra_keys = {(r.task_id, r.attempt_id) for r in request.tasks_to_run}
+                # tasks_to_run was just submitted above; those keys live in
+                # self._recent_submissions and are protected from the race by
+                # _reconcile_expected_tasks' grace-window logic.
                 with self._lock:
-                    tasks, tasks_to_kill = self._reconcile_expected_tasks(request.expected_tasks, extra_keys)
+                    tasks, tasks_to_kill = self._reconcile_expected_tasks(request.expected_tasks)
 
                 # Kill removed tasks asynchronously outside lock to avoid deadlock
                 for task_id, attempt_id in tasks_to_kill:
@@ -959,7 +989,12 @@ class Worker:
         return worker_pb2.Worker.StopTasksResponse()
 
     def handle_poll_tasks(self, request: worker_pb2.Worker.PollTasksRequest) -> worker_pb2.Worker.PollTasksResponse:
-        """Report status of expected tasks and kill unexpected tasks."""
+        """Report status of expected tasks and kill unexpected tasks.
+
+        Freshly-submitted tasks (via StartTasks) are protected from the
+        StartTasks → PollTasks race by the recent-submission grace window
+        applied in _reconcile_expected_tasks.
+        """
         with self._lock:
             tasks, tasks_to_kill = self._reconcile_expected_tasks(request.expected_tasks)
         for task_id, attempt_id in tasks_to_kill:
