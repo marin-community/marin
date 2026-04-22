@@ -906,6 +906,12 @@ class ControllerConfig:
     heartbeat_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     """How often to send heartbeats to workers."""
 
+    poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
+    """How often to reconcile worker task state via PollTasks. Reconciliation runs
+    inline at the end of each scheduling iteration so it observes a post-commit DB
+    view, eliminating the StartTasks/PollTasks race that arose when poll ran in a
+    separate thread (issue #5041)."""
+
     max_dispatch_parallelism: int = 32
     """Maximum number of concurrent RPC dispatch operations."""
 
@@ -1126,7 +1132,6 @@ class Controller:
         self._prune_thread: ManagedThread | None = None
         self._task_updater_thread: ManagedThread | None = None
         self._ping_thread: ManagedThread | None = None
-        self._poll_thread: ManagedThread | None = None
         self._task_update_queue: queue_mod.Queue[HeartbeatApplyRequest] = queue_mod.Queue()
 
         self._autoscaler: Autoscaler | None = autoscaler
@@ -1228,7 +1233,6 @@ class Controller:
             self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
             self._ping_thread = self._threads.spawn(self._run_ping_loop, name="ping-loop")
             self._task_updater_thread = self._threads.spawn(self._run_task_updater_loop, name="task-updater-loop")
-            self._poll_thread = self._threads.spawn(self._run_poll_loop, name="poll-loop")
             if not self._config.dry_run:
                 self._profile_thread = self._threads.spawn(self._run_profile_loop, name="profile-loop")
                 self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
@@ -1308,9 +1312,6 @@ class Controller:
         if self._task_updater_thread:
             self._task_updater_thread.stop()
             self._task_updater_thread.join(timeout=join_timeout)
-        if self._poll_thread:
-            self._poll_thread.stop()
-            self._poll_thread.join(timeout=join_timeout)
         if self._prune_thread:
             self._prune_thread.stop()
             self._prune_thread.join(timeout=join_timeout)
@@ -1351,6 +1352,11 @@ class Controller:
         Backs off from min to max interval when idle (no pending tasks or no
         assignments possible). Resets to min interval when woken by a new job
         submission or when assignments are made.
+
+        Reconciliation (PollTasks) runs inline at the end of each iteration,
+        gated by a rate limiter. Sharing this thread with scheduling guarantees
+        the poll's expected_tasks snapshot is taken after the same iteration's
+        StartTasks commits — see issue #5041 for the race that motivated this.
         """
         backoff = ExponentialBackoff(
             initial=self._config.scheduler_min_interval.to_seconds(),
@@ -1358,6 +1364,7 @@ class Controller:
             factor=2.0,
             jitter=0.1,
         )
+        poll_limiter = RateLimiter(interval_seconds=self._config.poll_interval.to_seconds())
         while not stop_event.is_set():
             interval = backoff.next_interval()
             woken = self._wake_event.wait(timeout=interval)
@@ -1374,6 +1381,12 @@ class Controller:
             outcome = self._run_scheduling()
             if outcome == SchedulingOutcome.ASSIGNMENTS_MADE:
                 backoff.reset()
+
+            if self._config.use_split_heartbeat and poll_limiter.should_run():
+                try:
+                    self._poll_all_workers()
+                except Exception:
+                    logger.exception("Inline poll reconciliation failed")
 
     def _run_prune_loop(self, stop_event: threading.Event) -> None:
         """Background pruning loop: history cleanup every 60s, full data prune on the configured interval."""
@@ -2324,21 +2337,6 @@ class Controller:
 
             except Exception:
                 logger.exception("Ping loop iteration failed")
-
-    def _run_poll_loop(self, stop_event: threading.Event) -> None:
-        """Periodic full-state reconciliation for split heartbeat mode.
-
-        Polls all workers via PollTasks every 60s and feeds results into the
-        task-updater queue for batched application.
-        """
-        limiter = RateLimiter(interval_seconds=60.0)
-        while not stop_event.is_set():
-            if not limiter.wait(cancel=stop_event):
-                break
-            try:
-                self._poll_all_workers()
-            except Exception:
-                logger.exception("Poll loop iteration failed")
 
     def _poll_all_workers(self) -> None:
         """Poll all workers for task state and feed results into the updater queue."""
