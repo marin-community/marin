@@ -3135,10 +3135,17 @@ class ControllerTransitions:
                 return {}, {}
 
             placeholders = ",".join("?" for _ in worker_ids)
+            # Reservation holders are virtual — they live on ``current_worker_id``
+            # only as a scheduling anchor and never get a RunTaskRequest. Sending
+            # them in PollTasksRequest.expected_tasks makes the worker reconcile
+            # against its _tasks dict, miss, and return WORKER_FAILED every cycle,
+            # which drains the holder's preemption budget and (post the build-
+            # failure health hook) reaps the claimed worker for a harmless miss.
             task_rows = snap.fetchall(
                 f"SELECT t.task_id, t.current_attempt_id, t.current_worker_id "
-                f"FROM tasks t "
+                f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id "
                 f"WHERE t.current_worker_id IN ({placeholders}) AND t.state IN (?, ?, ?) "
+                f"AND j.is_reservation_holder = 0 "
                 f"ORDER BY t.task_id ASC",
                 (*worker_ids, *ACTIVE_TASK_STATES),
             )
