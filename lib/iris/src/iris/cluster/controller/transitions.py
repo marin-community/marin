@@ -62,6 +62,37 @@ from rigging.timing import Duration, Timestamp
 logger = logging.getLogger(__name__)
 
 
+def log_event(
+    action: str,
+    entity_id: str,
+    *,
+    trigger: str | None = None,
+    **details: object,
+) -> None:
+    """Emit a semi-structured audit line for a controller state transition.
+
+    Each call produces one ``logger.info`` line of the shape::
+
+        event=<action> entity=<entity_id> trigger=<trigger> k=v ...
+
+    ``trigger`` names the upstream event when this is derived (e.g.
+    ``trigger=heartbeat_applied`` on cascaded job terminations); callers omit
+    it for externally-caused events and the line renders ``trigger=-``.
+
+    These lines are captured by the Iris log server and queried via the normal
+    ``iris process logs`` / log-store DuckDB interface — there is no SQLite
+    audit table.
+    """
+    extras = " ".join(f"{k}={v}" for k, v in details.items() if v is not None)
+    logger.info(
+        "event=%s entity=%s trigger=%s %s",
+        action,
+        entity_id,
+        trigger or "-",
+        extras,
+    )
+
+
 @dataclass(frozen=True)
 class ReservationClaim:
     """A claim binding a worker to a specific reservation entry.
@@ -142,12 +173,11 @@ class PruneResult:
 
     jobs_deleted: int = 0
     workers_deleted: int = 0
-    txn_actions_deleted: int = 0
     profiles_deleted: int = 0
 
     @property
     def total(self) -> int:
-        return self.jobs_deleted + self.workers_deleted + self.txn_actions_deleted + self.profiles_deleted
+        return self.jobs_deleted + self.workers_deleted + self.profiles_deleted
 
 
 class HeartbeatAction(enum.Enum):
@@ -975,26 +1005,6 @@ class ControllerTransitions:
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
         self._health = health or WorkerHealthTracker()
 
-    def _record_transaction(
-        self,
-        cur: Any,
-        kind: str,
-        actions: list[tuple[str, str, dict[str, object]]],
-        *,
-        payload: dict[str, object] | None = None,
-    ) -> None:
-        created_ms = Timestamp.now().epoch_ms()
-        cur.execute(
-            "INSERT INTO txn_log(kind, payload_json, created_at_ms) VALUES (?, ?, ?)",
-            (kind, json.dumps(payload or {}), created_ms),
-        )
-        txn_id = int(cur.lastrowid)
-        for action, entity_id, details in actions:
-            cur.execute(
-                "INSERT INTO txn_actions(txn_id, action, entity_id, details_json, created_at_ms) VALUES (?, ?, ?, ?, ?)",
-                (txn_id, action, entity_id, json.dumps(details), created_ms),
-            )
-
     def _recompute_job_state(self, cur: Any, job_id: JobName) -> int | None:
         row = cur.execute(
             f"SELECT j.state, j.started_at_ms, jc.max_task_failures "
@@ -1095,7 +1105,6 @@ class ControllerTransitions:
     ) -> SubmitJobResult:
         """Submit a job and expand its tasks in one DB transaction."""
         submitted_ms = ts.epoch_ms()
-        actions: list[tuple[str, str, dict[str, object]]] = []
         created_task_ids: list[JobName] = []
 
         with self._db.transaction() as cur:
@@ -1395,8 +1404,7 @@ class ControllerTransitions:
                             ),
                         )
 
-            actions.append(("job_submitted", job_id.to_wire(), {"num_tasks": replicas, "error": validation_error}))
-            self._record_transaction(cur, "submit_job", actions)
+        log_event("job_submitted", job_id.to_wire(), num_tasks=replicas, error=validation_error)
         return SubmitJobResult(job_id=job_id, task_ids=created_task_ids)
 
     def cancel_job(self, job_id: JobName, reason: str) -> TxResult:
@@ -1480,8 +1488,8 @@ class ControllerTransitions:
                 ),
             )
             self._db.endpoints.remove_by_job_ids(cur, [JobName.from_wire(jid) for jid in subtree_ids])
-            self._record_transaction(cur, "cancel_job", [("job_cancelled", job_id.to_wire(), {"reason": reason})])
-            return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
+        log_event("job_cancelled", job_id.to_wire(), reason=reason)
+        return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
     def register_or_refresh_worker(
         self,
@@ -1582,9 +1590,7 @@ class ControllerTransitions:
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (str(worker_id), key, value_type, str_value, int_value, float_value),
                 )
-            self._record_transaction(
-                cur, "register_worker", [("worker_registered", str(worker_id), {"address": address})]
-            )
+        log_event("worker_registered", str(worker_id), address=address)
         # Update in-memory attribute cache so scheduling sees the new worker immediately.
         attr_dict: dict[str, AttributeValue] = {}
         for key, value_type, str_value, int_value, float_value in attrs:
@@ -1729,9 +1735,8 @@ class ControllerTransitions:
                     "started_at_ms = COALESCE(started_at_ms, ?) WHERE job_id = ?",
                     (job_pb2.JOB_STATE_PENDING, job_pb2.JOB_STATE_RUNNING, now_ms, job_id_wire),
                 )
-            if accepted or rejected:
-                actions = [("assignment_queued", a.task_id.to_wire(), {"worker_id": str(a.worker_id)}) for a in accepted]
-                self._record_transaction(cur, "queue_assignments", actions)
+        for a in accepted:
+            log_event("assignment_queued", a.task_id.to_wire(), worker=str(a.worker_id))
         return AssignmentResult(
             tasks_to_kill=set(),
             has_real_dispatch=has_real_dispatch,
@@ -2000,10 +2005,9 @@ class ControllerTransitions:
                 task_kill_workers.update(final_task_kill_workers)
                 cascaded_jobs.add(job_id)
         if tasks_to_kill or cascaded_jobs:
-            actions: list[tuple[str, str, dict[str, object]]] = [("heartbeat_applied", str(req.worker_id), {})]
+            log_event("heartbeat_applied", str(req.worker_id))
             for job_id in cascaded_jobs:
-                actions.append(("job_terminated", job_id.to_wire(), {}))
-            self._record_transaction(cur, "apply_task_updates", actions)
+                log_event("job_terminated", job_id.to_wire(), trigger="heartbeat_applied")
 
         return TxResult(
             tasks_to_kill=tasks_to_kill,
@@ -2277,11 +2281,7 @@ class ControllerTransitions:
                 drained_dispatch,
                 force_remove=force_remove,
             )
-            self._record_transaction(
-                cur,
-                "heartbeat_failure",
-                [("worker_heartbeat_failed", str(worker_id), {"error": error})],
-            )
+        log_event("worker_heartbeat_failed", str(worker_id), error=error)
         if result.worker_removed:
             self._db.remove_worker_from_attr_cache(worker_id)
         return TxResult(tasks_to_kill=result.tasks_to_kill, task_kill_workers=result.task_kill_workers)
@@ -2302,11 +2302,7 @@ class ControllerTransitions:
                 snapshot,
                 force_remove=force_remove,
             )
-            self._record_transaction(
-                cur,
-                "heartbeat_failure",
-                [("worker_heartbeat_failed", str(worker_id), {"error": error})],
-            )
+        log_event("worker_heartbeat_failed", str(worker_id), error=error)
         if result.worker_removed:
             self._db.remove_worker_from_attr_cache(worker_id)
         return result
@@ -2342,7 +2338,6 @@ class ControllerTransitions:
 
         for chunk_start in range(0, len(failures), chunk_size):
             chunk = failures[chunk_start : chunk_start + chunk_size]
-            chunk_actions: list[tuple[str, str, dict[str, object]]] = []
             with self._db.transaction() as cur:
                 now_ms = Timestamp.now().epoch_ms()
                 for snapshot, error in chunk:
@@ -2355,17 +2350,11 @@ class ControllerTransitions:
                         now_ms=now_ms,
                     )
                     results.append(result)
-                    chunk_actions.append(("worker_heartbeat_failed", str(snapshot.worker_id), {"error": error}))
+                    log_event("worker_heartbeat_failed", str(snapshot.worker_id), error=error)
                     all_tasks_to_kill.update(result.tasks_to_kill)
                     all_task_kill_workers.update(result.task_kill_workers)
                     if result.worker_removed:
                         removed_workers.append((snapshot.worker_id, snapshot.worker_address))
-                self._record_transaction(
-                    cur,
-                    "heartbeat_failures_batch",
-                    chunk_actions,
-                    payload={"count": len(chunk_actions)},
-                )
 
         for worker_id, _ in removed_workers:
             self._db.remove_worker_from_attr_cache(worker_id)
@@ -2393,9 +2382,7 @@ class ControllerTransitions:
                 now_ms,
             )
             self._recompute_job_state(cur, JobName.from_wire(str(row["job_id"])))
-            self._record_transaction(
-                cur, "mark_task_unschedulable", [("task_unschedulable", task_id.to_wire(), {"reason": reason})]
-            )
+        log_event("task_unschedulable", task_id.to_wire(), reason=reason)
         return TxResult()
 
     def preempt_task(self, task_id: JobName, reason: str) -> TxResult:
@@ -2484,7 +2471,7 @@ class ControllerTransitions:
             if new_state == job_pb2.TASK_STATE_PREEMPTED:
                 tasks_to_kill.add(task_id)
 
-            self._record_transaction(cur, "preempt_task", [("task_preempted", task_id.to_wire(), {"reason": reason})])
+        log_event("task_preempted", task_id.to_wire(), reason=reason)
 
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
@@ -2613,11 +2600,8 @@ class ControllerTransitions:
                     )
                     tasks_to_kill.update(final_kill)
                     task_kill_workers.update(final_workers)
-            self._record_transaction(
-                cur,
-                "cancel_tasks_for_timeout",
-                [("task_timeout", tid.to_wire(), {"reason": reason}) for tid in tasks_to_kill],
-            )
+        for tid in tasks_to_kill:
+            log_event("task_timeout", tid.to_wire(), reason=reason)
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
     def drain_dispatch(self, worker_id: WorkerId) -> DispatchBatch | None:
@@ -2803,8 +2787,8 @@ class ControllerTransitions:
             ):
                 return False
             cur.execute("DELETE FROM jobs WHERE job_id = ?", (job_id.to_wire(),))
-            self._record_transaction(cur, "remove_finished_job", [("job_removed", job_id.to_wire(), {"state": state})])
-            return True
+        log_event("job_removed", job_id.to_wire(), state=state)
+        return True
 
     def remove_worker(self, worker_id: WorkerId) -> WorkerDetailRow | None:
         with self._db.transaction() as cur:
@@ -2812,7 +2796,7 @@ class ControllerTransitions:
             if row is None:
                 return None
             _remove_worker(cur, str(worker_id))
-            self._record_transaction(cur, "remove_worker", [("worker_removed", str(worker_id), {})])
+        log_event("worker_removed", str(worker_id))
         self._db.remove_worker_from_attr_cache(worker_id)
         return WORKER_DETAIL_PROJECTION.decode_one([row])
 
@@ -2965,7 +2949,6 @@ class ControllerTransitions:
         *,
         job_retention: Duration,
         worker_retention: Duration,
-        txn_action_retention: Duration,
         profile_retention: Duration,
         stop_event: threading.Event | None = None,
         pause_between_s: float = 1.0,
@@ -2979,7 +2962,6 @@ class ControllerTransitions:
         Args:
             job_retention: Delete terminal jobs whose finished_at is older than this.
             worker_retention: Delete inactive/unhealthy workers whose last heartbeat is older than this.
-            txn_action_retention: Delete txn_actions older than this.
             profile_retention: Delete task_profiles older than this.
             stop_event: If set, abort early (e.g. during shutdown).
             pause_between_s: Sleep between individual deletes to reduce lock contention.
@@ -2987,7 +2969,6 @@ class ControllerTransitions:
         now_ms = Timestamp.now().epoch_ms()
         job_cutoff_ms = now_ms - job_retention.to_ms()
         worker_cutoff_ms = now_ms - worker_retention.to_ms()
-        txn_cutoff_ms = now_ms - txn_action_retention.to_ms()
 
         terminal_states = tuple(TERMINAL_JOB_STATES)
         placeholders = ",".join("?" * len(terminal_states))
@@ -3012,7 +2993,7 @@ class ControllerTransitions:
                 # drops rows SQLite is about to delete for us.
                 self._db.endpoints.remove_by_job_ids(cur, [JobName.from_wire(str(job_id))])
                 cur.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
-                self._record_transaction(cur, "prune_old_data", [("job_pruned", str(job_id), {})])
+            log_event("job_pruned", str(job_id))
             jobs_deleted += 1
             time.sleep(pause_between_s)
 
@@ -3029,20 +3010,11 @@ class ControllerTransitions:
             worker_id = row["worker_id"]
             with self._db.transaction() as cur:
                 _remove_worker(cur, str(worker_id))
-                self._record_transaction(cur, "prune_old_data", [("worker_pruned", str(worker_id), {})])
+            log_event("worker_pruned", str(worker_id))
             workers_deleted += 1
             time.sleep(pause_between_s)
 
-        # 3. txn_actions: batch of 1000 per transaction (no CASCADE)
-        txn_actions_deleted = self._batch_delete(
-            "DELETE FROM txn_actions WHERE rowid IN "
-            "(SELECT rowid FROM txn_actions WHERE created_at_ms < ? LIMIT 1000)",
-            (txn_cutoff_ms,),
-            _stopped,
-            pause_between_s,
-        )
-
-        # 4. Task profiles: batch of 1000 per transaction
+        # 3. Task profiles: batch of 1000 per transaction
         profile_cutoff_ms = now_ms - profile_retention.to_ms()
         # 4a. Delete stale profiles by age.
         profiles_deleted = self._batch_delete(
@@ -3066,15 +3038,13 @@ class ControllerTransitions:
         result = PruneResult(
             jobs_deleted=jobs_deleted,
             workers_deleted=workers_deleted,
-            txn_actions_deleted=txn_actions_deleted,
             profiles_deleted=profiles_deleted,
         )
         if result.total > 0:
             logger.info(
-                "Pruned old data: %d jobs, %d workers, %d txn_actions, %d profiles",
+                "Pruned old data: %d jobs, %d workers, %d profiles",
                 result.jobs_deleted,
                 result.workers_deleted,
-                result.txn_actions_deleted,
                 result.profiles_deleted,
             )
             self._db.optimize()
@@ -3696,10 +3666,9 @@ class ControllerTransitions:
                         cascaded_jobs.add(task.job_id)
 
             if tasks_to_kill or cascaded_jobs:
-                actions: list[tuple[str, str, dict[str, object]]] = [("direct_provider_updates_applied", "direct", {})]
+                log_event("direct_provider_updates_applied", "direct")
                 for job_id in cascaded_jobs:
-                    actions.append(("job_terminated", job_id.to_wire(), {}))
-                self._record_transaction(cur, "apply_direct_provider_updates", actions)
+                    log_event("job_terminated", job_id.to_wire(), trigger="direct_provider_updates_applied")
 
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 

@@ -102,8 +102,6 @@ _CLONE_TABLES = [
     "task_resource_history",
     "endpoints",
     "reservation_claims",
-    "txn_log",
-    "txn_actions",
     "meta",
     "schema_migrations",
 ]

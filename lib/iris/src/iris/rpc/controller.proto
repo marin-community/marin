@@ -311,22 +311,6 @@ message Controller {
     iris.vm.AutoscalerStatus status = 1;
   }
 
-  // --- Transactions / Actions Log ---
-  message TransactionAction {
-    iris.time.Timestamp timestamp = 1;
-    string action = 2;
-    string entity_id = 3;
-    string details = 4;
-  }
-
-  message GetTransactionsRequest {
-    int32 limit = 1;  // 0 = default (50)
-  }
-
-  message GetTransactionsResponse {
-    repeated TransactionAction actions = 1;
-  }
-
   // --- Checkpoint ---
   message BeginCheckpointRequest {}
   message BeginCheckpointResponse {
@@ -593,9 +577,6 @@ service ControllerService {
 
   // Autoscaler
   rpc GetAutoscalerStatus(Controller.GetAutoscalerStatusRequest) returns (Controller.GetAutoscalerStatusResponse);
-
-  // Transactions / Actions Log
-  rpc GetTransactions(Controller.GetTransactionsRequest) returns (Controller.GetTransactionsResponse);
 
   rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
 

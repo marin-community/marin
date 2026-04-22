@@ -3147,7 +3147,6 @@ def test_prune_old_terminal_jobs(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
 
@@ -3179,7 +3178,6 @@ def test_prune_old_inactive_workers(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
 
@@ -3188,35 +3186,18 @@ def test_prune_old_inactive_workers(state):
     assert _query_worker(state, stale_wid) is None  # pruned
 
 
-def test_prune_old_txn_actions(state):
-    """Old txn_actions are pruned by the txn_action retention."""
-    register_worker(state, "w1", "host:8080", make_worker_metadata())
+def test_submit_job_emits_structured_audit_log(state, caplog):
+    """submit_job logs a structured event=job_submitted line for the log-store audit trail."""
+    import logging
 
-    # Submit a job to generate txn_actions, then backdate some
-    req = make_job_request("txn-test")
-    submit_job(state, "txn-test", req)
+    req = make_job_request("audit-me")
+    with caplog.at_level(logging.INFO, logger="iris.cluster.controller.transitions"):
+        submit_job(state, "audit-me", req)
 
-    # Backdate all existing txn_actions to epoch
-    state._db.execute("UPDATE txn_actions SET created_at_ms = 1000")
-
-    old_txn_count = state._db.fetchone("SELECT COUNT(*) as c FROM txn_actions")["c"]
-
-    assert old_txn_count > 0
-
-    result = state.prune_old_data(
-        job_retention=Duration.from_seconds(86400),
-        worker_retention=Duration.from_seconds(86400),
-        txn_action_retention=Duration.from_seconds(86400),
-        profile_retention=Duration.from_seconds(86400),
-    )
-
-    assert result.txn_actions_deleted == old_txn_count
-
-    remaining_txn_actions = state._db.fetchone("SELECT COUNT(*) as c FROM txn_actions")["c"]
-
-    # Incremental prune deletes old txn_actions in batches; no new aggregate
-    # action rows are recorded for txn_action cleanup.
-    assert remaining_txn_actions == 0
+    job_wire = JobName.root("test-user", "audit-me").to_wire()
+    expected = f"event=job_submitted entity={job_wire}"
+    messages = [r.getMessage() for r in caplog.records]
+    assert any(expected in msg for msg in messages), messages
 
 
 def test_prune_noop_when_nothing_old(state):
@@ -3225,7 +3206,6 @@ def test_prune_noop_when_nothing_old(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
 
@@ -3307,7 +3287,6 @@ def test_prune_old_data_short_circuits_when_nothing_prunable(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
 
