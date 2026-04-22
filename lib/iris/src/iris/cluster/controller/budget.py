@@ -5,15 +5,20 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
-import json
+from rigging.timing import Timestamp
 
-from iris.cluster.controller.db import ACTIVE_TASK_STATES, QuerySnapshot
+from iris.cluster.controller.db import ACTIVE_TASK_STATES, ControllerDB, QuerySnapshot
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2
+from iris.rpc import config_pb2, job_pb2
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -139,3 +144,59 @@ def interleave_by_user(
             break
         round_idx += 1
     return result
+
+
+# Bands accepted in user_budgets config entries. UNSPECIFIED is kept out of the
+# set so a missing/zeroed max_band field surfaces as a config error rather than
+# silently granting BATCH; callers must pick a real band.
+_VALID_TIER_BANDS = frozenset(
+    (
+        job_pb2.PRIORITY_BAND_PRODUCTION,
+        job_pb2.PRIORITY_BAND_INTERACTIVE,
+        job_pb2.PRIORITY_BAND_BATCH,
+    )
+)
+
+
+def reconcile_user_budget_tiers(
+    db: ControllerDB,
+    tiers: Iterable[config_pb2.UserBudgetTier],
+    now: Timestamp,
+) -> int:
+    """Upsert per-user budgets from cluster config into the user_budgets table.
+
+    Runs at controller startup after auth is resolved. Each tier entry lists
+    a set of user_ids that all receive the same budget_limit and max_band.
+    Tiers are applied in order, so later tiers override earlier ones for
+    users listed in both — lets ops promote a user by appending a later tier
+    without editing earlier ones.
+
+    This complements migration 0037 (which fixes prod DBs that already have
+    rows) by handling fresh DBs and listed users who haven't submitted yet:
+    those users would otherwise land on the :class:`UserBudgetDefaults` row
+    created via INSERT OR IGNORE at first submission time.
+
+    Returns the number of (user_id, tier) pairs applied; duplicate user_ids
+    across tiers are counted per-apply since the later tier overwrites.
+    """
+    count = 0
+    for tier in tiers:
+        if tier.max_band not in _VALID_TIER_BANDS:
+            raise ValueError(
+                f"UserBudgetTier.max_band must be one of PRODUCTION/INTERACTIVE/BATCH; "
+                f"got {tier.max_band} for users {list(tier.user_ids)}"
+            )
+        for user_id in tier.user_ids:
+            if not user_id:
+                raise ValueError("UserBudgetTier.user_ids contains an empty entry")
+            db.ensure_user(user_id, now)
+            db.set_user_budget(
+                user_id=user_id,
+                budget_limit=tier.budget_limit,
+                max_band=tier.max_band,
+                now=now,
+            )
+            count += 1
+    if count:
+        logger.info("Reconciled %d user budget assignment(s) from cluster config", count)
+    return count

@@ -175,3 +175,39 @@ scale_groups:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         mode: GCP_SLICE_MODE_VM
         machine_type: n2-highmem-2
+
+# ---------------------------------------------------------------------------
+# User budget tiers
+#
+# Reconciled into user_budgets on every controller start. Mirrors the one-shot
+# fixup in migrations/0037_user_budget_default.py so fresh DBs (and listed
+# users who haven't yet submitted a job) land on the intended tier instead of
+# UserBudgetDefaults (budget_limit=0, max_band=BATCH).
+#
+# Unlisted submitters stay on the default BATCH cap; see
+# docs/priority-bands.md → "Max-band caps" for the recovery path when an
+# unlisted user hits PERMISSION_DENIED on an INTERACTIVE submission.
+# ---------------------------------------------------------------------------
+user_budgets:
+  # Admins: standard budget, may submit PRIORITY_BAND_PRODUCTION for work that
+  # must not be downgraded. INTERACTIVE work still counts against the budget.
+  - user_ids: [runner, power, dlwh, rav, romain, held, larry]
+    budget_limit: 75000
+    max_band: PRIORITY_BAND_PRODUCTION
+  # Researchers: standard budget, capped at PRIORITY_BAND_INTERACTIVE.
+  - user_ids:
+      - ruili
+      - quevedo
+      - pc0618
+      - konwoo
+      - ahmedah
+      - ahmed
+      - rohith
+      - tim
+      - eczech
+      - tonyhlee
+      - kevin
+      - calvinxu
+      - moojink
+    budget_limit: 75000
+    max_band: PRIORITY_BAND_INTERACTIVE

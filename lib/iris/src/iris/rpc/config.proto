@@ -16,6 +16,7 @@ edition = "2023";
 
 package iris.config;
 
+import "job.proto";
 import "time.proto";
 
 // Enable explicit presence tracking for all fields to support HasField on scalars
@@ -446,6 +447,28 @@ message KubernetesProviderConfig {
 }
 
 // ============================================================================
+// USER BUDGETS
+// ============================================================================
+
+// Pre-seeds a row in the user_budgets table for each listed user at controller
+// startup. This is the source of truth for tier membership — the controller
+// upserts these into the DB on every start, so a DB wipe or a listed user
+// who hasn't yet submitted a job still lands on the intended budget + max
+// band. Tiers are applied in order; later tiers override earlier tiers for
+// the same user_id.
+message UserBudgetTier {
+  // Users assigned this tier. A user_id must match the authenticated identity
+  // the submitter presents (see AuthConfig); a mismatch silently drops the
+  // user to the INSERT OR IGNORE default row created at first job submission.
+  repeated string user_ids = 1;
+  // Max resource-value spend before tasks are downgraded to BATCH. 0 = unlimited.
+  int64 budget_limit = 2;
+  // Highest priority band this user is allowed to submit to. Submissions above
+  // this band are rejected with PERMISSION_DENIED.
+  iris.job.PriorityBand max_band = 3;
+}
+
+// ============================================================================
 // ROOT CLUSTER CONFIGURATION
 // ============================================================================
 
@@ -473,4 +496,9 @@ message IrisClusterConfig {
     KubernetesProviderConfig kubernetes_provider = 70;
     WorkerProviderConfig worker_provider = 71;
   }
+
+  // Per-user budget/max-band policy reconciled into the DB at every controller
+  // start. Unlisted users fall through to the default in UserBudgetDefaults
+  // (set at first job submission via INSERT OR IGNORE).
+  repeated UserBudgetTier user_budgets = 80;
 }
