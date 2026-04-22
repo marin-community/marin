@@ -39,18 +39,29 @@ explicitly when a variant should opt out. Positive intervals sample that often.
 
 ## 2) Mark module outputs
 
-At each module boundary you want in the graph, wrap the returned activation with
+At each named module boundary you want in the graph, wrap the returned activation with
 `log_backward_activation(..., site="out")`. For modules where you want to see what
 backward is sending *into* the module, also mark the input with `site="in"`:
 
 ```python
-from levanter.analysis.backward_flow import log_backward_activation
+from levanter.analysis.backward_flow import log_backward_activation, trace_backward_activation
 
 @named_call
 def __call__(self, x):
     x = log_backward_activation(x, site="in")
     out = ...
     return log_backward_activation(out, site="out")
+```
+
+For identity-only stream anchors, use `trace_backward_activation(...)` to add the probe
+name without a separate `jax.named_scope(...)` block:
+
+```python
+x = trace_backward_activation(x, "resid_in")
+x = x + self.attn(...)
+x = trace_backward_activation(x, "resid_post_attn")
+x = x + self.mlp(...)
+return trace_backward_activation(x, "resid_out")
 ```
 
 Good default patch points for a transformer-like Grug model:

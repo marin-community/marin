@@ -21,6 +21,7 @@ from levanter.analysis.backward_flow import (
     log_backward_activation,
     normalize_name_stack,
     render_backward_flow_html,
+    trace_backward_activation,
 )
 
 
@@ -86,6 +87,31 @@ def test_log_backward_activation_records_scaled_gradient_rms_when_configured():
     assert jnp.allclose(metrics["backward_flow/inner/out_gradient_rms"], jnp.array(4.0, dtype=jnp.float32))
     assert jnp.allclose(metrics["backward_flow/inner/out_gradient_rms_scaled"], jnp.array(40.0, dtype=jnp.float32))
     assert jnp.allclose(metrics["backward_flow/inner/out_gradient_max_abs_scaled"], jnp.array(40.0, dtype=jnp.float32))
+
+
+def test_trace_backward_activation_adds_named_scope_for_probe():
+    @jax.named_call
+    def inner(x):
+        return trace_backward_activation(x * 3, "resid_post_attn")
+
+    @jax.jit
+    def compute_grad(x):
+        with capture_backward_flow(BackwardFlowConfig(interval=1)):
+            with levanter.tracker.defer_tracker_for_jit() as metrics:
+                grad = jax.grad(lambda z: jnp.sum(inner(z) ** 2))(x)
+        return grad, metrics
+
+    grad, metrics = compute_grad(jnp.ones((3,), dtype=jnp.float32))
+
+    assert jnp.allclose(grad, jnp.full((3,), 18.0, dtype=jnp.float32))
+    assert "backward_flow/inner/resid_post_attn/out_activation_rms" in metrics
+    assert "backward_flow/inner/resid_post_attn/out_gradient_rms" in metrics
+    assert jnp.allclose(
+        metrics["backward_flow/inner/resid_post_attn/out_activation_rms"], jnp.array(3.0, dtype=jnp.float32)
+    )
+    assert jnp.allclose(
+        metrics["backward_flow/inner/resid_post_attn/out_gradient_rms"], jnp.array(6.0, dtype=jnp.float32)
+    )
 
 
 def test_log_backward_activation_allows_callers_to_skip_checkpoint_when_active():

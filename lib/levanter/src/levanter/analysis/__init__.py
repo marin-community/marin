@@ -21,6 +21,7 @@ __all__ = [
     "log_backward_activation",
     "normalize_name_stack",
     "render_backward_flow_html",
+    "trace_backward_activation",
     "summary_statistics_for_tree",
     "cb_compute_and_visualize_log_probs",
     "visualize_log_prob_diff",
@@ -43,6 +44,7 @@ from .backward_flow import (
     log_backward_activation,
     normalize_name_stack,
     render_backward_flow_html,
+    trace_backward_activation,
 )
 from .entropy import cb_compute_entropies, cb_compute_top2_gap, compute_entropy_histogram, compute_top2_gap_histogram
 from .tree_stats import summary_statistics_for_tree

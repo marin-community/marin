@@ -46,6 +46,9 @@ canonical Grug base template.
 - `log_backward_activation(x, site=...)`: a `custom_vjp` identity that leaves the
   forward value unchanged and logs activation stats in the forward pass and gradient
   stats in the backward pass
+- `trace_backward_activation(x, name, site=...)`: a convenience wrapper for
+  identity-only stream anchors that adds a `jax.named_scope(name)` around
+  `log_backward_activation(...)`
 - `normalize_name_stack(...)`: removes transform wrappers such as `jvp(...)` and
   `transpose(...)` so metric keys stay stable
 
@@ -72,6 +75,10 @@ def log_backward_activation(x: jax.Array, *, site: str = "out") -> jax.Array:
         return x
     name_stack = normalize_name_stack(str(source_info_util.current_name_stack()))
     return _tagged_identity(f"{context.prefix}/{name_stack}", site, x)
+
+def trace_backward_activation(x: jax.Array, name: str, *, site: str = "out") -> jax.Array:
+    with jax.named_scope(name):
+        return log_backward_activation(x, site=site)
 ```
 
 ### 2) JAXpr-to-DAG projection

@@ -14,7 +14,7 @@ from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
-from levanter.analysis.backward_flow import is_backward_flow_active, log_backward_activation
+from levanter.analysis.backward_flow import is_backward_flow_active, log_backward_activation, trace_backward_activation
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pbatch, Pembed_vocab, Plm_head, Plogits, unshard
@@ -149,14 +149,11 @@ class Block(eqx.Module):
 
     @named_call
     def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
-        with jax.named_scope("resid_in"):
-            x = log_backward_activation(x)
+        x = trace_backward_activation(x, "resid_in")
         x = x + self.attn(self.rms_attn(x), mask)
-        with jax.named_scope("resid_post_attn"):
-            x = log_backward_activation(x)
+        x = trace_backward_activation(x, "resid_post_attn")
         x = x + self.mlp(self.rms_mlp(x))
-        with jax.named_scope("resid_out"):
-            return log_backward_activation(x)
+        return trace_backward_activation(x, "resid_out")
 
 
 class Transformer(eqx.Module):

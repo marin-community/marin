@@ -213,6 +213,15 @@ def log_backward_activation(x: jax.Array, *, site: str = "out") -> jax.Array:
     return _tagged_identity_with_scale(f"{context.prefix}/{name_stack}", site, context.gradient_scale, x)
 
 
+def trace_backward_activation(x: jax.Array, name: str, *, site: str = "out") -> jax.Array:
+    """Return ``x`` unchanged while logging under an extra JAX named scope."""
+    if not name:
+        raise ValueError("name must be non-empty")
+
+    with jax.named_scope(name):
+        return log_backward_activation(x, site=site)
+
+
 @functools.partial(jax.custom_vjp, nondiff_argnums=(0, 1))
 def _tagged_identity(metric_prefix: str, site: str, x: jax.Array) -> jax.Array:
     return x
