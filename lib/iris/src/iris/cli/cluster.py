@@ -22,6 +22,11 @@ from iris.cli.build import (
 )
 from iris.cli.main import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
 from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
+from iris.cluster.controller.autoscaler.scaling_group import (
+    build_worker_config_for_group,
+    prepare_slice_config,
+)
+from iris.cluster.providers.types import Labels
 from iris.rpc import config_pb2
 from iris.rpc import vm_pb2
 from iris.rpc import job_pb2
@@ -422,12 +427,6 @@ def cluster_create_slice(ctx, scale_group_name: str):
     toward demand, won't be scaled down on idle, and survive
     ``iris cluster stop``. Remove with ``iris cluster delete-slice``.
     """
-    from iris.cluster.controller.autoscaler.scaling_group import (
-        build_worker_config_for_group,
-        prepare_slice_config,
-    )
-    from iris.cluster.providers.types import Labels
-
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for cluster create-slice")
@@ -492,8 +491,6 @@ def cluster_delete_slice(ctx, slice_id: str):
     Only slices tagged ``iris-{prefix}-manual=true`` are eligible —
     autoscaler-managed slices must go through the autoscaler.
     """
-    from iris.cluster.providers.types import Labels
-
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for cluster delete-slice")
