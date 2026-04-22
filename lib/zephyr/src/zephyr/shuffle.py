@@ -4,11 +4,13 @@
 """Scatter/shuffle support for Zephyr pipelines.
 
 Each source-shard's scatter output is a single binary file containing a
-sequence of zstd-compressed frames. Within one chunk's zstd frame, items
-are written in sub-batches of ``_SUB_BATCH_SIZE`` — each sub-batch is a
-single ``pickle.dump(list_of_items)`` into the zstd stream. This amortises
-per-item pickle/zstd dispatch over a sub-batch while still letting the
-reader stream sub-batches lazily without materialising the full chunk.
+sequence of zstd-compressed frames. Each frame starts with a one-byte format
+tag: ``\\x01`` for Arrow IPC and ``\\x00`` for cloudpickle sub-batches.
+
+Arrow IPC is used when the chunk items are Arrow-compatible (plain dicts with
+primitive or string values). For items that Arrow cannot represent (e.g.
+frozenset, custom classes), the writer falls back to cloudpickle sub-batches
+of ``_SUB_BATCH_SIZE`` items per ``pickle.dump`` call.
 
 A msgpack sidecar (``.scatter_meta``) maps ``target_shard -> [(offset, length)]``
 byte ranges into the data file, plus per-shard ``max_chunk_rows`` and a global
@@ -17,12 +19,10 @@ into a single ``scatter_metadata`` manifest at the end of the scatter stage,
 which reducers consume to build :class:`ScatterReader` instances.
 
 On read, each chunk is fetched with a single ``cat_file`` range GET (one
-HTTP request, no per-chunk file handle), then streamed via
-``pickle.load`` on a length-bounded zstd reader. Per-iterator memory stays
-near-constant: one buffered item plus the zstd decoder state plus the
-chunk's compressed bytes (typically a few MB). This bound is essential for
-skewed shuffles where one reducer pulls disproportionate data and the
-external-sort fan-in opens hundreds of chunk iterators at once.
+HTTP request, no per-chunk file handle). The format tag is inspected and the
+payload is dispatched to Arrow IPC or pickle deserialization accordingly.
+Per-iterator memory stays near-constant: bounded by the chunk's compressed
+bytes plus decompressed Arrow buffers or pickle state.
 """
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ from typing import Any
 
 import cloudpickle
 import msgspec
+import pyarrow as pa
 import zstandard as zstd
 from rigging.filesystem import open_url, url_to_fs
 from rigging.timing import log_time
@@ -100,6 +101,11 @@ _ZSTD_COMPRESS_LEVEL = 3
 # Items per pickle.dump call within a chunk. Larger = faster (less per-call
 # dispatch overhead), smaller = lower per-iterator read memory.
 _SUB_BATCH_SIZE = 1024
+
+# One-byte format tags written at the start of every chunk frame.
+# Arrow IPC is used when items are Arrow-compatible; pickle is the fallback.
+_FRAME_FORMAT_PICKLE = b"\x00"
+_FRAME_FORMAT_ARROW = b"\x01"
 
 
 # ---------------------------------------------------------------------------
@@ -249,19 +255,25 @@ class ScatterFileIterator:
 def _iter_chunk(fs: Any, fs_path: str, offset: int, length: int) -> Iterator:
     """Fetch one chunk's compressed bytes via cat_file and stream items.
 
-    Each chunk is a zstd frame containing a sequence of pickled sub-batches
-    (lists of up to ``_SUB_BATCH_SIZE`` items). The reader streams one
-    sub-batch at a time, so per-iterator memory is bounded by the
-    sub-batch size plus the chunk's compressed bytes.
+    Reads the one-byte format tag to dispatch to Arrow IPC or pickle
+    deserialization. Arrow chunks are decompressed in one shot and converted
+    via ``table.to_pylist()``. Pickle chunks are streamed sub-batch by
+    sub-batch via ``pickle.load``.
     """
     blob = fs.cat_file(fs_path, start=offset, end=offset + length)
-    with zstd.ZstdDecompressor().stream_reader(io.BytesIO(blob)) as reader:
-        while True:
-            try:
-                sub_batch = pickle.load(reader)
-            except EOFError:
-                return
-            yield from sub_batch
+    fmt, payload = blob[0:1], blob[1:]
+    if fmt == _FRAME_FORMAT_ARROW:
+        ipc_bytes = zstd.ZstdDecompressor().decompress(payload)
+        reader = pa.ipc.open_stream(pa.py_buffer(ipc_bytes))
+        yield from reader.read_all().to_pylist()
+    else:
+        with zstd.ZstdDecompressor().stream_reader(io.BytesIO(payload)) as reader:
+            while True:
+                try:
+                    sub_batch = pickle.load(reader)
+                except EOFError:
+                    return
+                yield from sub_batch
 
 
 # ---------------------------------------------------------------------------
@@ -426,19 +438,28 @@ def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> li
 
 
 def _write_chunk_frame(items: list) -> bytes:
-    """Encode a list of items as one zstd frame of pickled sub-batches.
+    """Encode a list of items as one zstd-compressed frame.
 
-    Items are split into sub-batches of ``_SUB_BATCH_SIZE`` and each
-    sub-batch is written as a single ``cloudpickle.dump(sublist)`` into the
-    same zstd stream. This batches per-call dispatch overhead while
-    keeping per-iterator read memory bounded by the sub-batch size.
+    Tries Arrow IPC first; falls back to cloudpickle sub-batches for types
+    Arrow cannot represent (e.g. frozenset, custom classes). The first byte
+    of the returned bytes is the format tag (``_FRAME_FORMAT_ARROW`` or
+    ``_FRAME_FORMAT_PICKLE``).
     """
-    raw = io.BytesIO()
-    cctx = zstd.ZstdCompressor(level=_ZSTD_COMPRESS_LEVEL)
-    with cctx.stream_writer(raw, closefd=False) as zf:
-        for i in range(0, len(items), _SUB_BATCH_SIZE):
-            cloudpickle.dump(items[i : i + _SUB_BATCH_SIZE], zf, protocol=pickle.HIGHEST_PROTOCOL)
-    return raw.getvalue()
+    try:
+        table = pa.Table.from_pylist(items)
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, table.schema) as writer:
+            writer.write_table(table)
+        cctx = zstd.ZstdCompressor(level=_ZSTD_COMPRESS_LEVEL)
+        return _FRAME_FORMAT_ARROW + cctx.compress(sink.getvalue().to_pybytes())
+    except Exception:
+        logger.debug("_write_chunk_frame: Arrow IPC not applicable, using pickle")
+        raw = io.BytesIO()
+        cctx = zstd.ZstdCompressor(level=_ZSTD_COMPRESS_LEVEL)
+        with cctx.stream_writer(raw, closefd=False) as zf:
+            for i in range(0, len(items), _SUB_BATCH_SIZE):
+                cloudpickle.dump(items[i : i + _SUB_BATCH_SIZE], zf, protocol=pickle.HIGHEST_PROTOCOL)
+        return _FRAME_FORMAT_PICKLE + raw.getvalue()
 
 
 class ScatterWriter:

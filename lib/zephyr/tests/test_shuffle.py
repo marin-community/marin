@@ -11,6 +11,8 @@ from zephyr.plan import deterministic_hash
 from zephyr.shuffle import (
     ScatterFileIterator,
     ScatterReader,
+    _FRAME_FORMAT_ARROW,
+    _FRAME_FORMAT_PICKLE,
     _write_chunk_frame,
     _write_scatter,
 )
@@ -192,6 +194,38 @@ def test_scatter_file_iterator_multiple_chunks(tmp_path):
     it = ScatterFileIterator(path=path, chunks=((0, len(frame_a)), (len(frame_a), len(frame_b))))
     chunks = [list(c) for c in it.get_chunk_iterators()]
     assert chunks == [chunk_a, chunk_b]
+
+
+# ---------------------------------------------------------------------------
+# Frame format: Arrow IPC vs pickle fallback
+# ---------------------------------------------------------------------------
+
+
+def test_write_chunk_frame_uses_arrow_for_plain_dicts():
+    """Plain dict items with primitive values use the Arrow IPC format tag."""
+    items = [{"k": i, "v": float(i)} for i in range(10)]
+    frame = _write_chunk_frame(items)
+    assert frame[0:1] == _FRAME_FORMAT_ARROW, "expected Arrow IPC format tag for Arrow-compatible dicts"
+
+
+def test_write_chunk_frame_falls_back_to_pickle_for_frozensets():
+    """Items containing frozensets cannot be Arrow-encoded and use pickle."""
+    items = [{"k": 0, "v": frozenset([1, 2, 3])}]
+    frame = _write_chunk_frame(items)
+    assert frame[0:1] == _FRAME_FORMAT_PICKLE, "expected pickle format tag for frozenset values"
+
+
+def test_arrow_roundtrip_end_to_end(tmp_path):
+    """Items written via the Arrow path round-trip correctly through scatter."""
+    items = [{"k": i % 3, "v": i, "label": f"item-{i}"} for i in range(30)]
+    scatter_paths = _build_shard(tmp_path, items, num_output_shards=3)
+
+    recovered = []
+    for shard_idx in range(3):
+        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
+        recovered.extend(list(shard))
+
+    assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
 
 
 # ---------------------------------------------------------------------------
