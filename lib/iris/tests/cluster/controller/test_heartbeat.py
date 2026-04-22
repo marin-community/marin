@@ -8,13 +8,12 @@ import time
 
 import iris.cluster.controller.worker_provider as worker_provider_module
 import pytest
-from iris.cluster.controller.controller import Controller, ControllerConfig, _SyncFailureAccumulator
+from iris.cluster.controller.controller import _SyncFailureAccumulator
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import (
     TASK_DETAIL_PROJECTION,
     WORKER_DETAIL_PROJECTION,
 )
-from tests.cluster.controller.conftest import FakeProvider
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -122,11 +121,14 @@ def test_fail_heartbeat_returns_transient_and_worker_stays_alive(state, worker_m
         assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("worker1",)) is not None
 
 
-def test_ping_failures_accumulate_and_terminate_inline(tmp_path, worker_metadata):
+def test_ping_failures_accumulate_and_terminate_inline(tmp_path, worker_metadata, make_controller):
     """Ten consecutive ping failures via _handle_failed_heartbeats terminates the worker inline."""
     db = ControllerDB(db_dir=tmp_path)
-    config = ControllerConfig(remote_state_dir="file:///tmp/iris-test-state", local_state_dir=tmp_path)
-    controller = Controller(config=config, provider=FakeProvider(), db=db)
+    controller = make_controller(
+        remote_state_dir="file:///tmp/iris-test-state",
+        local_state_dir=tmp_path,
+        db=db,
+    )
     state = controller.state
     _register_worker(state, "worker1", worker_metadata, address="10.0.0.1:10001")
 
@@ -149,9 +151,6 @@ def test_ping_failures_accumulate_and_terminate_inline(tmp_path, worker_metadata
     assert controller._health.workers_over_threshold() == []
     with db.snapshot() as q:
         assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("worker1",)) is None
-
-    controller.stop()
-    db.close()
 
 
 def test_complete_heartbeat_unhealthy_worker_increments_failures(state, worker_metadata):
@@ -263,10 +262,13 @@ class _FakeStubFactory:
         pass
 
 
-def test_handle_failed_heartbeats_logs_diagnostics(tmp_path, worker_metadata, caplog):
+def test_handle_failed_heartbeats_logs_diagnostics(tmp_path, worker_metadata, caplog, make_controller):
     db = ControllerDB(db_dir=tmp_path)
-    config = ControllerConfig(remote_state_dir="file:///tmp/iris-test-state", local_state_dir=tmp_path)
-    controller = Controller(config=config, provider=FakeProvider(), db=db)
+    controller = make_controller(
+        remote_state_dir="file:///tmp/iris-test-state",
+        local_state_dir=tmp_path,
+        db=db,
+    )
     state = controller.state
     _register_worker(state, "worker1", worker_metadata, address="10.0.0.1:10001")
 
@@ -291,8 +293,6 @@ def test_handle_failed_heartbeats_logs_diagnostics(tmp_path, worker_metadata, ca
     assert "action=transient_failure" in caplog.text
     assert "last_success_age_s=" in caplog.text
     assert "deadline exceeded after 12000ms" in caplog.text
-
-    controller.stop()
 
 
 def test_rpc_worker_stub_factory_default_timeout(monkeypatch):

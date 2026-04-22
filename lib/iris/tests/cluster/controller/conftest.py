@@ -47,6 +47,7 @@ from iris.cluster.controller.schema import (
     WorkerRow,
     tasks_with_attempts,
 )
+from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.provider import ProviderUnsupportedError
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -199,6 +200,50 @@ def make_controller_state(**kwargs):
         db.close()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+@pytest.fixture
+def make_controller(tmp_path):
+    """Factory for building ``Controller`` instances with automatic teardown.
+
+    ``Controller.__init__`` attaches a ``RemoteLogHandler`` to the ``iris``
+    logger and spawns a ``LogPusher`` drain thread. Without ``stop()``, those
+    leak across the test session and pull every ``iris.*`` log record into
+    their internal queue — which can then be flushed into another test's
+    monkeypatched ``LogServiceClientSync``. The factory tracks every
+    constructed controller and ``stop()``s them at fixture teardown.
+
+    Usage::
+
+        def test_foo(make_controller):
+            ctrl = make_controller(remote_state_dir="file:///tmp/iris-state")
+            ...
+    """
+    created: list[Controller] = []
+
+    def _factory(
+        config: ControllerConfig | None = None,
+        *,
+        provider=None,
+        db: ControllerDB | None = None,
+        **config_kwargs,
+    ) -> Controller:
+        if config is None:
+            config_kwargs.setdefault("remote_state_dir", f"file://{tmp_path}/remote")
+            config = ControllerConfig(**config_kwargs)
+        elif config_kwargs:
+            raise TypeError("make_controller: pass either a config or config kwargs, not both")
+        controller = Controller(
+            config=config,
+            provider=provider if provider is not None else FakeProvider(),
+            db=db,
+        )
+        created.append(controller)
+        return controller
+
+    yield _factory
+    for controller in created:
+        controller.stop()
 
 
 def make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:

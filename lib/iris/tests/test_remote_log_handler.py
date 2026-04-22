@@ -201,7 +201,11 @@ def test_log_pusher_flushes_at_batch_size(tracked_log_service_client):
         import time as _time
 
         _time.sleep(0.05)
-        assert tracked_log_service_client == [] or tracked_log_service_client[0].pushes == []
+        # Length checks only — don't let a (buggy) populated pushes list dump its
+        # entire proto repr into the failure output.
+        n_clients = len(tracked_log_service_client)
+        n_pushes = len(tracked_log_service_client[0].pushes) if n_clients else 0
+        assert n_clients == 0 or n_pushes == 0, f"expected no pushes before batch_size reached, got {n_pushes}"
 
         pusher.push("k", [entry])
         _wait_for(lambda: len(tracked_log_service_client) == 1 and len(tracked_log_service_client[0].pushes) == 1)

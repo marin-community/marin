@@ -1279,7 +1279,7 @@ class Controller:
         logger.info("Registered system endpoint /system/log-server -> %s", self._log_service_address)
 
     def stop(self) -> None:
-        """Stop all background components gracefully.
+        """Stop all background components gracefully. Idempotent.
 
         Shutdown ordering:
         1. Unregister atexit hook so it doesn't fire against a closed DB.
@@ -1287,6 +1287,9 @@ class Controller:
         3. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
         4. Stop remaining threads (server) and executors.
         """
+        if getattr(self, "_stopped", False):
+            return
+        self._stopped = True
         # Unregister atexit hook before closing DB connections.
         if self._atexit_registered:
             atexit.unregister(self._atexit_checkpoint)
