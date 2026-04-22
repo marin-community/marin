@@ -79,6 +79,49 @@ RUNNABLE_LONG_TAIL_PPL_SLICES: tuple[RunnableLongTailPplSlice, ...] = (
         split="test",
         notes="Keep VerilogEval reference implementations and formatting intact.",
     ),
+    # Game / music (issue #5062)
+    #
+    # Lichess games are mirrored on HF with one full PGN per row (header tags,
+    # movetext, NAGs, comments, variations, result marker). We pin a single early
+    # month as the config so the slice is deterministic and small; the only split
+    # this corpus ships is ``train``, which we treat as a diagnostic eval split
+    # (we never train on it). License is CC0 upstream.
+    RunnableLongTailPplSlice(
+        name="lichess_pgn_2013_06",
+        family=LongTailPplFamily.GAME_MUSIC,
+        source_url="https://huggingface.co/datasets/Icannos/lichess_games",
+        hf_dataset=HfDatasetSpec(id="Icannos/lichess_games", name="2013-06"),
+        text_key="text",
+        split="train",
+        notes="Preserve PGN header tags, movetext, NAGs, comments, and result markers verbatim.",
+    ),
+    # IrishMAN ships a dedicated ``validation`` split of ABC tunes; the column
+    # name is literally ``abc notation`` (with a space). License is MIT / public
+    # domain. We keep headers (``X:``/``T:``/``M:``/``L:``/``K:``/``Q:``), bar
+    # lines, inline ``%`` comments, repeats, chord symbols, and decorations
+    # verbatim so the gap-report byte buckets can attribute tokens to each.
+    RunnableLongTailPplSlice(
+        name="irishman_abc",
+        family=LongTailPplFamily.GAME_MUSIC,
+        source_url="https://huggingface.co/datasets/sander-wood/irishman",
+        hf_dataset=HfDatasetSpec(id="sander-wood/irishman"),
+        text_key="abc notation",
+        split="validation",
+        notes="Preserve ABC headers, bar lines, repeats, chord symbols, and decorations verbatim.",
+    ),
+    # MelodyHub exposes the same ABC surface form but with a task-prefixed
+    # ``input`` column, giving a different structural flavour (task tag + ABC
+    # body) than IrishMAN. Useful as a second ABC slice to separate structural
+    # PPL from plain-ABC PPL.
+    RunnableLongTailPplSlice(
+        name="melodyhub_abc_input",
+        family=LongTailPplFamily.GAME_MUSIC,
+        source_url="https://huggingface.co/datasets/sander-wood/melodyhub",
+        hf_dataset=HfDatasetSpec(id="sander-wood/melodyhub"),
+        text_key="input",
+        split="validation",
+        notes="ABC with task-tag prefixes; keep task markers and musical body together.",
+    ),
 )
 
 RUNNABLE_LONG_TAIL_PPL_REGISTRY: dict[str, RunnableLongTailPplSlice] = {

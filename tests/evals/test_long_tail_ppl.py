@@ -9,6 +9,11 @@ from experiments.evals.long_tail_ppl import (
     long_tail_raw_validation_sets,
     render_long_tail_ppl_registry_markdown,
 )
+from experiments.evals.long_tail_ppl_runnable import (
+    RUNNABLE_LONG_TAIL_PPL_REGISTRY,
+    runnable_long_tail_ppl_slices,
+    runnable_long_tail_raw_validation_sets,
+)
 from levanter.data.text import HfDatasetSourceConfig
 from marin.evaluation.perplexity_gap import _to_dataset_component, raw_text_dataset
 from marin.processing.tokenize import HfDatasetSpec
@@ -50,3 +55,44 @@ def test_hf_backed_raw_dataset_preserves_requested_split():
 def test_file_backed_raw_dataset_rejects_non_validation_split():
     with pytest.raises(ValueError, match="Hugging Face dataset sources"):
         raw_text_dataset("gs://example-bucket/eval.jsonl", split="test")
+
+
+def test_runnable_game_music_slices_are_registered():
+    game_music_slices = runnable_long_tail_ppl_slices(family=LongTailPplFamily.GAME_MUSIC)
+
+    names = {slice_.name for slice_ in game_music_slices}
+    assert {"lichess_pgn_2013_06", "irishman_abc", "melodyhub_abc_input"} <= names
+
+    pgn = RUNNABLE_LONG_TAIL_PPL_REGISTRY["long_tail_ppl_runnable/game_music/lichess_pgn_2013_06"]
+    assert pgn.hf_dataset == HfDatasetSpec(id="Icannos/lichess_games", name="2013-06")
+    assert pgn.text_key == "text"
+    # PGN only ships a ``train`` split; we still use it as a diagnostic eval.
+    assert pgn.split == "train"
+    assert "split:train" in pgn.tags
+
+    irishman = RUNNABLE_LONG_TAIL_PPL_REGISTRY["long_tail_ppl_runnable/game_music/irishman_abc"]
+    # IrishMAN's column is literally ``abc notation`` (with the space). Asserting
+    # the exact string catches drift if someone "normalizes" it.
+    assert irishman.text_key == "abc notation"
+    assert irishman.split == "validation"
+
+
+def test_runnable_game_music_datasets_round_trip_through_dataset_component():
+    datasets = runnable_long_tail_raw_validation_sets()
+
+    pgn_key = "long_tail_ppl_runnable/game_music/lichess_pgn_2013_06"
+    irishman_key = "long_tail_ppl_runnable/game_music/irishman_abc"
+
+    pgn_component = _to_dataset_component(datasets[pgn_key])
+    irishman_component = _to_dataset_component(datasets[irishman_key])
+
+    assert isinstance(pgn_component.source, HfDatasetSourceConfig)
+    assert pgn_component.source.id == "Icannos/lichess_games"
+    assert pgn_component.source.name == "2013-06"
+    assert pgn_component.source.splits == ["train"]
+    assert pgn_component.format.text_key == "text"
+
+    assert isinstance(irishman_component.source, HfDatasetSourceConfig)
+    assert irishman_component.source.id == "sander-wood/irishman"
+    assert irishman_component.source.splits == ["validation"]
+    assert irishman_component.format.text_key == "abc notation"
