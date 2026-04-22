@@ -31,8 +31,6 @@ def test_write_checkpoint_uploads_compressed(tmp_path, make_controller):
     assert result.task_count == 0
     assert result.worker_count == 0
 
-    controller._db.close()
-
 
 def test_begin_checkpoint_returns_remote_path(tmp_path, make_controller):
     """begin_checkpoint returns a remote path string."""
@@ -43,8 +41,6 @@ def test_begin_checkpoint_returns_remote_path(tmp_path, make_controller):
 
     assert path.startswith(f"file://{tmp_path}/remote/controller-state/")
     assert result.job_count == 0
-
-    controller._db.close()
 
 
 def test_atexit_checkpoint_writes_to_remote(tmp_path, make_controller):
@@ -58,8 +54,6 @@ def test_atexit_checkpoint_writes_to_remote(tmp_path, make_controller):
     timestamped_dirs = [d for d in remote_state.iterdir() if d.is_dir()]
     assert len(timestamped_dirs) >= 1
     assert (timestamped_dirs[0] / "controller.sqlite3.zst").exists()
-
-    controller._db.close()
 
 
 def test_download_checkpoint_to_local(tmp_path):
@@ -101,7 +95,6 @@ def test_write_checkpoint_roundtrip(tmp_path, make_controller):
     remote_dir = f"file://{tmp_path}/remote"
     controller = make_controller(remote_state_dir=remote_dir)
     write_checkpoint(controller._db, remote_dir)
-    controller._db.close()
 
     local_db_dir = tmp_path / "restored"
     download_checkpoint_to_local(remote_dir, local_db_dir)
@@ -122,8 +115,6 @@ def test_write_checkpoint_cleans_up_temp_file(tmp_path, make_controller):
     new_files = files_after - files_before
     sqlite_temps = [f for f in new_files if ".sqlite3" in f.name and f.name != ControllerDB.DB_FILENAME]
     assert len(sqlite_temps) == 0
-
-    controller._db.close()
 
 
 def test_local_db_exists_skips_remote_download(tmp_path):
@@ -212,8 +203,6 @@ def test_periodic_checkpoint_inline(tmp_path, make_controller):
     timestamped_dirs = [d for d in remote_state.iterdir() if d.is_dir()]
     assert len(timestamped_dirs) >= 1
     assert (timestamped_dirs[0] / "controller.sqlite3.zst").exists()
-
-    controller._db.close()
 
 
 def test_download_uncompressed_fallback(tmp_path):

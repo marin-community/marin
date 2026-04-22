@@ -63,7 +63,7 @@ dev = [
     "pytest-playwright>=0.6.2",
     "pytest-timeout",
     "pytest-xdist",
-    "pytest>=8.3.2",
+    "pytest>=8.4",
 ]
 
 [tool.hatch.build.hooks.custom]
