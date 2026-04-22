@@ -29,6 +29,9 @@ from marin.rl.placement import marin_prefix_for_region, singleton_region_list
 REGION = "us-central1"
 MAX_EXAMPLES_PER_DATASET = 32
 MAX_EVAL_LENGTH = 8192
+MAX_OUTCOME_TRACE_MESSAGES = 64
+PRESERVE_INITIAL_OUTCOME_TRACE_MESSAGES = 2
+MAX_OUTCOME_MESSAGE_CHARS = 4096
 WANDB_GROUP = "exp4963-qwen-llama-trace-masked"
 
 LOCAL_LOSS_TAGS = ("assistant", "tool_call", "tool", "observation", "final_assistant")
@@ -48,6 +51,22 @@ def trace_format(
         loss_tags=loss_tags,
         pack=4,
         slice_strategy=slice_strategy,
+    )
+
+
+def outcome_adapter(
+    *,
+    input_messages_field: str,
+    patch_field: str,
+    outcome_field: str,
+) -> TraceRowAdapterConfig:
+    return TraceRowAdapterConfig(
+        input_messages_field=input_messages_field,
+        patch_field=patch_field,
+        outcome_field=outcome_field,
+        max_trace_messages=MAX_OUTCOME_TRACE_MESSAGES,
+        preserve_initial_trace_messages=PRESERVE_INITIAL_OUTCOME_TRACE_MESSAGES,
+        max_message_chars=MAX_OUTCOME_MESSAGE_CHARS,
     )
 
 
@@ -92,7 +111,7 @@ def trace_datasets(chat_template: str) -> dict[str, TraceMaskedEvalDatasetConfig
             split="train",
             trace_format=outcome_fmt,
             max_examples=MAX_EXAMPLES_PER_DATASET,
-            row_adapter=TraceRowAdapterConfig(
+            row_adapter=outcome_adapter(
                 input_messages_field="trajectory",
                 patch_field="model_patch",
                 outcome_field="resolved",
@@ -106,7 +125,7 @@ def trace_datasets(chat_template: str) -> dict[str, TraceMaskedEvalDatasetConfig
             split="train",
             trace_format=outcome_fmt,
             max_examples=MAX_EXAMPLES_PER_DATASET,
-            row_adapter=TraceRowAdapterConfig(
+            row_adapter=outcome_adapter(
                 input_messages_field="trajectory",
                 patch_field="generated_patch",
                 outcome_field="target",
@@ -120,7 +139,7 @@ def trace_datasets(chat_template: str) -> dict[str, TraceMaskedEvalDatasetConfig
             split="tool",
             trace_format=outcome_fmt,
             max_examples=MAX_EXAMPLES_PER_DATASET,
-            row_adapter=TraceRowAdapterConfig(
+            row_adapter=outcome_adapter(
                 input_messages_field="messages",
                 patch_field="patch",
                 outcome_field="resolved",
@@ -134,7 +153,7 @@ def trace_datasets(chat_template: str) -> dict[str, TraceMaskedEvalDatasetConfig
             split="train.raw",
             trace_format=outcome_fmt,
             max_examples=MAX_EXAMPLES_PER_DATASET,
-            row_adapter=TraceRowAdapterConfig(
+            row_adapter=outcome_adapter(
                 input_messages_field="messages",
                 patch_field="test_result.git_patch",
                 outcome_field="resolved",
@@ -148,7 +167,7 @@ def trace_datasets(chat_template: str) -> dict[str, TraceMaskedEvalDatasetConfig
             split="train",
             trace_format=outcome_fmt,
             max_examples=MAX_EXAMPLES_PER_DATASET,
-            row_adapter=TraceRowAdapterConfig(
+            row_adapter=outcome_adapter(
                 input_messages_field="messages",
                 patch_field="output_patch",
                 outcome_field="reward",

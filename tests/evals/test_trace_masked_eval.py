@@ -193,6 +193,56 @@ def test_trace_row_adapter_adds_patch_and_outcome_targets(tmp_path):
     assert "INCORRECT" in outcome_text
 
 
+def test_trace_row_adapter_limits_large_trace_before_derived_targets():
+    row = {
+        "trajectory": [
+            {"role": "system", "content": "system context"},
+            {"role": "user", "content": "original task"},
+            {"role": "assistant", "content": "assistant " + ("a" * 20)},
+            {"role": "tool", "content": "tool " + ("b" * 20)},
+            {"role": "assistant", "content": "assistant " + ("c" * 20)},
+        ],
+        "patch": "diff --git " + ("d" * 20),
+        "resolved": True,
+    }
+    trace_format = TraceChatEvaluationFormat(messages_field="messages", loss_tags=("patch", "outcome"))
+    dataset_config = TraceMaskedEvalDatasetConfig(
+        source=UrlDatasetSourceConfig(train_urls=[]),
+        split="train",
+        trace_format=trace_format,
+        row_adapter=TraceRowAdapterConfig(
+            input_messages_field="trajectory",
+            patch_field="patch",
+            outcome_field="resolved",
+            max_trace_messages=3,
+            preserve_initial_trace_messages=1,
+            max_message_chars=6,
+            max_patch_chars=8,
+        ),
+    )
+
+    adapted_row = trace_masked_eval_module._adapt_trace_row(row, trace_format, dataset_config.row_adapter)
+
+    assert [message["role"] for message in adapted_row["messages"]] == [
+        "system",
+        "tool",
+        "assistant",
+        "assistant",
+        "assistant",
+    ]
+    assert adapted_row["messages"][0]["content"] == "ontext"
+    assert adapted_row["messages"][1]["content"] == "bbbbbb"
+    assert adapted_row["messages"][2]["content"] == "cccccc"
+    assert adapted_row["messages"][3]["content"] == "Final Patch:\ndddddddd"
+    assert adapted_row["messages"][4]["content"] == "CORRECT"
+
+    preserve_only = trace_masked_eval_module._limited_trace_messages(
+        row["trajectory"],
+        TraceRowAdapterConfig(max_trace_messages=1, preserve_initial_trace_messages=1),
+    )
+    assert preserve_only == [row["trajectory"][0]]
+
+
 def test_run_with_retries_retries_transient_failures(monkeypatch):
     calls = 0
     sleeps: list[float] = []
