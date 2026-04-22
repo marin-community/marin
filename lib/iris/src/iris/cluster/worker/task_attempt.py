@@ -898,7 +898,7 @@ class TaskAttempt:
     def _make_log_entry(self, *, source: str, data: str) -> logging_pb2.LogEntry:
         """Build a LogEntry proto from a source/data pair, parsing the level prefix."""
         level_name = parse_log_level(data)
-        level = str_to_log_level(level_name) if level_name else 0
+        level = str_to_log_level(level_name)
         entry = logging_pb2.LogEntry(source=source, data=data, level=level)
         entry.timestamp.epoch_ms = Timestamp.now().epoch_ms()
         return entry
