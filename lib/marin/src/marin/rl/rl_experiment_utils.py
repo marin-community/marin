@@ -24,7 +24,11 @@ from marin.execution.executor import ExecutorMainConfig, ExecutorStep, InputName
 from marin.execution.remote import remote
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.decoding import DecodingConfig
-from marin.rl.environments.inference_ctx import VLLMSamplingConfig, vLLMInferenceContextConfig
+from marin.rl.environments.inference_ctx import (
+    VLLMEngineConfig,
+    VLLMFallbackSamplingConfig,
+    vLLMInferenceContextConfig,
+)
 from marin.rl.placement import marin_prefix_for_region, resolve_launcher_region, singleton_region_list
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
@@ -193,14 +197,23 @@ def _resolve_config_class(config_class_path: str) -> type[HFCompatConfig]:
     return obj
 
 
-def _build_vllm_fallback_sampling_config(config: RLExperimentConfig) -> VLLMSamplingConfig:
+def _build_vllm_engine_config(config: RLExperimentConfig, model_path: str) -> VLLMEngineConfig:
+    """Return engine/runtime settings for the vLLM backend."""
+    return VLLMEngineConfig(
+        model_name=model_path,
+        canonical_model_name=config.model_config.name,
+        max_model_len=config.max_input_tokens + config.max_output_tokens,
+        tensor_parallel_size=config.inference_tensor_parallel_size,
+        gpu_memory_utilization=config.inference_gpu_memory_utilization,
+        load_format=_vllm_load_format_for_model_path(model_path),
+    )
+
+
+def _build_vllm_fallback_sampling_config(config: RLExperimentConfig) -> VLLMFallbackSamplingConfig:
     """Return backend fallback sampling defaults for non-RL/manual vLLM calls."""
-    return VLLMSamplingConfig(
-        temperature=1.0,
-        max_tokens=config.max_output_tokens,
-        stop=get_stop_tokens(config.model_config.type),
+    return VLLMFallbackSamplingConfig(
+        stop_strings=get_stop_tokens(config.model_config.type),
         include_stop_str_in_output=True,
-        logprobs=1,
     )
 
 
@@ -309,13 +322,8 @@ def _build_rl_job_config(
         tokenizer=model_path,
         inference_type="vllm",
         inference_config=vLLMInferenceContextConfig(
-            model_name=model_path,
-            canonical_model_name=config.model_config.name,
-            max_model_len=config.max_input_tokens + config.max_output_tokens,
-            tensor_parallel_size=config.inference_tensor_parallel_size,
-            gpu_memory_utilization=config.inference_gpu_memory_utilization,
-            sampling_params=_build_vllm_fallback_sampling_config(config),
-            load_format=_vllm_load_format_for_model_path(model_path),
+            engine=_build_vllm_engine_config(config, model_path),
+            fallback_sampling=_build_vllm_fallback_sampling_config(config),
         ),
         initial_checkpoint=model_path,
         rollout_storage=rollout_storage,

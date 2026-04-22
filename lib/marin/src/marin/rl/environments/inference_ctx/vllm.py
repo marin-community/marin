@@ -6,7 +6,7 @@ import inspect
 import logging
 import os
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
 
@@ -48,52 +48,40 @@ class InferenceMode(StrEnum):
     ASYNC = "async"
 
 
-@dataclass
-class VLLMSamplingConfig:
-    """Serializable sampling config that doesn't depend on vllm.
-
-    Replaces vllm.SamplingParams in config objects so they can be
-    serialized/deserialized on CPU workers without vllm installed.
-    Converted to vllm.SamplingParams inside the inference context.
-    """
-
-    temperature: float = 1.0
-    n: int = 1
-    max_tokens: int = 512
-    top_k: int = -1
-    stop: list[str] | None = None
-    include_stop_str_in_output: bool = False
-    logprobs: int | None = 1
-
-    def to_vllm(self):
-        """Convert to vllm.SamplingParams. Must be called where vllm is available."""
-        if SamplingParams is None:
-            raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
-        return SamplingParams(
-            temperature=self.temperature,
-            n=self.n,
-            max_tokens=self.max_tokens,
-            top_k=self.top_k,
-            stop=self.stop,
-            include_stop_str_in_output=self.include_stop_str_in_output,
-            logprobs=self.logprobs,
-        )
-
-
-@dataclass
-class vLLMInferenceContextConfig:
-    """Configuration for vLLM engine and sampling parameters."""
+@dataclass(frozen=True)
+class VLLMEngineConfig:
+    """Engine/runtime configuration for the vLLM backend."""
 
     model_name: str
     max_model_len: int
     tensor_parallel_size: int
     gpu_memory_utilization: float
-    sampling_params: VLLMSamplingConfig
     canonical_model_name: str | None = None
     mode: InferenceMode = InferenceMode.SYNC
     load_format: str = "auto"
     enforce_eager: bool = True
     kv_cache_metrics: bool = False
+
+
+@dataclass
+class VLLMFallbackSamplingConfig:
+    """Fallback decode/output defaults for non-RL or partially specified calls."""
+
+    top_k: int | None = None
+    stop_strings: list[str] | None = None
+    include_stop_str_in_output: bool = False
+
+    def __post_init__(self):
+        if self.top_k is not None and self.top_k <= 0:
+            raise ValueError("top_k must be positive when set")
+
+
+@dataclass
+class vLLMInferenceContextConfig:
+    """Configuration for vLLM engine/runtime settings and fallback sampling."""
+
+    engine: VLLMEngineConfig
+    fallback_sampling: VLLMFallbackSamplingConfig = field(default_factory=VLLMFallbackSamplingConfig)
 
 
 class vLLMInferenceContext(BaseInferenceContext):
@@ -103,7 +91,7 @@ class vLLMInferenceContext(BaseInferenceContext):
         self,
         inference_config: vLLMInferenceContextConfig,
     ):
-        self.llm = self._get_llm_engine(inference_config)
+        self.llm = self._get_llm_engine(inference_config.engine)
         # Mesh for the weight transfer client should be on the CPU and then
         # in sync_weights function, we will reshard to the TPU
         # self.mesh = jax.make_mesh(
@@ -113,13 +101,14 @@ class vLLMInferenceContext(BaseInferenceContext):
         # )
         self.mesh = None
         self.axis_mapping = {}
-        self.tokenizer = load_tokenizer(inference_config.model_name)
+        self.tokenizer = load_tokenizer(inference_config.engine.model_name)
         # Reverse vocab map for logprob token string display
         self._id_to_token: dict[int, str] = {v: k for k, v in self.tokenizer.get_vocab().items()}
-        self.model_name = inference_config.model_name
-        self.canonical_model_name = inference_config.canonical_model_name or inference_config.model_name
-        self.sampling_config = inference_config.sampling_params
-        self._use_final_only = inference_config.mode == InferenceMode.ASYNC
+        self.engine_config = inference_config.engine
+        self.model_name = self.engine_config.model_name
+        self.canonical_model_name = self.engine_config.canonical_model_name or self.engine_config.model_name
+        self.fallback_sampling = inference_config.fallback_sampling
+        self._use_final_only = self.engine_config.mode == InferenceMode.ASYNC
 
         # Initialize the appropriate renderer based on model type.
         self.renderer = self._get_renderer(self.canonical_model_name, self.tokenizer)
@@ -127,12 +116,12 @@ class vLLMInferenceContext(BaseInferenceContext):
     def resolve_decoding(self, decoding: DecodingConfig) -> DecodingConfig:
         """Bake vLLM fallback sampling defaults into the applied decoding trace."""
         top_k = decoding.top_k
-        if top_k is None and self.sampling_config.top_k >= 0:
-            top_k = self.sampling_config.top_k
+        if top_k is None and self.fallback_sampling.top_k is not None:
+            top_k = self.fallback_sampling.top_k
 
         stop_strings = decoding.stop_strings
-        if stop_strings is None and decoding.stop_token_ids is None and self.sampling_config.stop is not None:
-            stop_strings = list(self.sampling_config.stop)
+        if stop_strings is None and decoding.stop_token_ids is None and self.fallback_sampling.stop_strings is not None:
+            stop_strings = list(self.fallback_sampling.stop_strings)
 
         if top_k == decoding.top_k and stop_strings == decoding.stop_strings:
             return decoding
@@ -160,7 +149,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             "n": n,
             "max_tokens": decoding.max_output_tokens,
             "logprobs": 1,
-            "include_stop_str_in_output": self.sampling_config.include_stop_str_in_output,
+            "include_stop_str_in_output": self.fallback_sampling.include_stop_str_in_output,
         }
         if decoding.top_k is not None:
             kwargs["top_k"] = decoding.top_k
@@ -244,26 +233,26 @@ class vLLMInferenceContext(BaseInferenceContext):
             raise
 
     @staticmethod
-    def _get_llm_engine(inference_config: vLLMInferenceContextConfig):
+    def _get_llm_engine(engine_config: VLLMEngineConfig):
         vLLMInferenceContext._patch_tpu_inference_registry()
 
-        if inference_config.mode == InferenceMode.SYNC:
+        if engine_config.mode == InferenceMode.SYNC:
             if LLM is None:
                 raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
             llm_engine_cls = LLM
-        elif inference_config.mode == InferenceMode.ASYNC:
+        elif engine_config.mode == InferenceMode.ASYNC:
             llm_engine_cls = SyncVLLMWrapper
         else:
-            raise ValueError(f"Invalid inference mode: {inference_config.mode}")
+            raise ValueError(f"Invalid inference mode: {engine_config.mode}")
 
         return llm_engine_cls(
-            model=inference_config.model_name,
-            max_model_len=inference_config.max_model_len,
-            tensor_parallel_size=inference_config.tensor_parallel_size,
-            gpu_memory_utilization=inference_config.gpu_memory_utilization,
-            load_format=inference_config.load_format,
-            enforce_eager=inference_config.enforce_eager,
-            kv_cache_metrics=inference_config.kv_cache_metrics,
+            model=engine_config.model_name,
+            max_model_len=engine_config.max_model_len,
+            tensor_parallel_size=engine_config.tensor_parallel_size,
+            gpu_memory_utilization=engine_config.gpu_memory_utilization,
+            load_format=engine_config.load_format,
+            enforce_eager=engine_config.enforce_eager,
+            kv_cache_metrics=engine_config.kv_cache_metrics,
         )
 
     def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
