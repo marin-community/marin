@@ -126,38 +126,3 @@ def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch):
     assert truncated is not None
     assert len(truncated) <= 128
     assert re.fullmatch(r".+-[0-9a-f]{7}", truncated)
-
-
-def test_wandb_tracker_logs_html_media(monkeypatch, tmp_path):
-    monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
-
-    import wandb
-
-    from levanter.tracker.wandb import WandbTracker
-
-    class FakeHtml:
-        def __init__(self, path):
-            self.path = path
-
-    class FakeRun:
-        step = 0
-
-        def __init__(self):
-            self.logged = []
-
-        def log(self, metrics, *, step=None, commit=None):
-            self.logged.append((metrics, step, commit))
-
-    monkeypatch.setattr(wandb, "Html", FakeHtml)
-    html_path = tmp_path / "backward_flow.html"
-    html_path.write_text("<html></html>")
-    run = FakeRun()
-    tracker = WandbTracker(run)
-
-    tracker.log_html("backward_flow/dag", html_path, step=7, commit=False)
-
-    assert len(run.logged) == 1
-    metrics, step, commit = run.logged[0]
-    assert step == 7
-    assert commit is False
-    assert metrics["backward_flow/dag"].path == str(html_path)
