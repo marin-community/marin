@@ -183,6 +183,7 @@ def _run_proteinmpnn_one_target(
     temperature: float,
     seed: int,
     num_seq_per_target: int = 1,
+    method: str = "mpnn",
 ) -> list[RedesignResult]:
     """Run ProteinMPNN on a single target; return `num_seq_per_target` redesigns.
 
@@ -228,7 +229,13 @@ def _run_proteinmpnn_one_target(
             "--batch_size",
             "1",
         ]
-        logger.info("Running ProteinMPNN for %s: %s", target.name, " ".join(cmd))
+        if method == "soluble":
+            # SolubleMPNN: same codebase, different weights. Biases designs
+            # toward sequences compatible with soluble (non-membrane) proteins.
+            cmd.append("--use_soluble_model")
+        elif method != "mpnn":
+            raise ValueError(f"Unknown method {method!r}; expected 'mpnn' or 'soluble'.")
+        logger.info("Running ProteinMPNN (method=%s) for %s: %s", method, target.name, " ".join(cmd))
         subprocess.run(cmd, check=True, cwd=proteinmpnn_dir)
 
         fasta_path = out_folder / "seqs" / f"{target.name}.fa"
@@ -314,6 +321,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--num-redesigns", type=int, default=1, help="Redesigns per target.")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
+        "--method",
+        choices=["mpnn", "soluble"],
+        default="mpnn",
+        help="'mpnn' = stock ProteinMPNN. 'soluble' = SolubleMPNN (same repo, --use_soluble_model).",
+    )
+    parser.add_argument(
         "--targets",
         nargs="*",
         help="Optional subset of target names (from TARGETS). Default: all targets.",
@@ -343,6 +356,7 @@ def main(argv: list[str] | None = None) -> int:
                 temperature=args.temperature,
                 seed=args.seed,
                 num_seq_per_target=args.num_redesigns,
+                method=args.method,
             )
         except Exception:
             logger.exception("Failed to redesign %s; skipping.", target.name)
@@ -362,7 +376,7 @@ def main(argv: list[str] | None = None) -> int:
                     "pdb_id": target.pdb_id,
                     "chain_id": target.chain_id,
                     "assembly": target.assembly,
-                    "method": "mpnn",
+                    "method": args.method,  # "mpnn" or "soluble"
                     "temperature": args.temperature,
                     "redesign_idx": idx,
                     "sequence_3letter": r.redesigned_sequence_3letter,

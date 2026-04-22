@@ -68,7 +68,7 @@ import pyarrow.parquet as pq
 from transformers import AutoTokenizer
 
 from levanter.data.text import DatasetComponent, PrebuiltLmDatasetFormat, UrlDatasetSourceConfig
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution.executor import ExecutorStep, this_output_path, versioned
 
 logger = logging.getLogger(__name__)
 
@@ -388,6 +388,12 @@ class BuildDistogramEvalDataConfig:
     tokenizer: str
     n_pairs: int
     seed: int
+    # Every example is right-padded with `<pad>` to exactly this many tokens so
+    # it matches the training Pos axis. levanter's PrebuiltLmDataset requires
+    # the parquet rows to be Pos.size exactly (it doesn't honor DatasetComponent
+    # pack=True for PrebuiltLmDatasetFormat). Keeps things simple at the cost of
+    # 100 eval examples per target times 8192 tokens of mostly-pad (~3 MB per parquet).
+    max_seq_len: int = 8192
     # Optional sequence override (see ProteinTarget.sequence_override). When
     # set, the prompt's <begin_sequence> uses these residues; GT distances
     # still come from the PDB's CA coordinates.
@@ -454,15 +460,34 @@ def build_distogram_eval_data(config: BuildDistogramEvalDataConfig) -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(config.tokenizer)
     base_ids = _encode(tokenizer, _base_prompt_tokens(sequence_for_prompt, seeded))
+    pad_id = int(tokenizer.pad_token_id) if tokenizer.pad_token_id is not None else 0
 
     input_rows: list[list[int]] = []
     weight_rows: list[list[float]] = []
     for pair in pairs:
         tail_ids = _encode(tokenizer, _pair_tail_tokens(pair))
-        full = np.concatenate([base_ids, tail_ids]).astype(np.int32)
-        weights = np.zeros(full.shape[0], dtype=np.float32)
-        weights[-1] = 1.0  # loss only on the GT distance-bin token
-        input_rows.append(full.tolist())
+        real = np.concatenate([base_ids, tail_ids]).astype(np.int32)
+        if real.shape[0] > config.max_seq_len:
+            raise ValueError(
+                f"Eval example for {config.pdb_id} has {real.shape[0]} tokens, exceeds "
+                f"max_seq_len={config.max_seq_len}. Shorten the sequence or raise max_seq_len."
+            )
+        # Right-pad tokens to max_seq_len. Loss weight is nonzero only at the
+        # position whose prediction IS the GT <d_value>. levanter's convention
+        # is `loss_weight[i]` weights the loss of predicting `tokens[i+1]`, so
+        # to score the <d_value> prediction (and <d_value> is the last real
+        # token at index N-1) we set loss_weight[N-2] = 1 — not N-1, which
+        # would be silently zeroed by the causal mask (predicts tokens[N], out
+        # of bounds). Padding positions get weight 0 and have no effect on the
+        # loss. Causal attention means pad positions see the prompt but the
+        # prompt never sees the pads — no leakage.
+        if real.shape[0] < 2:
+            raise ValueError(f"Eval example too short ({real.shape[0]} tokens); need >=2")
+        padded = np.full(config.max_seq_len, pad_id, dtype=np.int32)
+        padded[: real.shape[0]] = real
+        weights = np.zeros(config.max_seq_len, dtype=np.float32)
+        weights[real.shape[0] - 2] = 1.0
+        input_rows.append(padded.tolist())
         weight_rows.append(weights.tolist())
 
     table = pa.table(
@@ -525,16 +550,22 @@ def build_distogram_eval_step(
             f"origin={target.sequence_origin}, N={n_prompt_contacts}, n_pairs={n_pairs})"
         ),
         fn=build_distogram_eval_data,
+        # versioned() is required for scalar fields to factor into the step's
+        # output-path hash. Plain dataclass fields are IGNORED by marin's hasher
+        # (only VersionedValue + InputName contribute), so without these wraps
+        # changes to n_pairs / n_prompt_contacts / max_seq_len / etc. would
+        # silently reuse stale caches under the same output-path suffix.
         config=BuildDistogramEvalDataConfig(
-            pdb_id=target.pdb_id,
-            chain_id=target.chain_id,
-            assembly=target.assembly,
-            n_prompt_contacts=n_prompt_contacts,
-            tokenizer=tokenizer,
-            n_pairs=n_pairs,
-            seed=0,
-            sequence_override=target.sequence_override,
-            sequence_origin=target.sequence_origin,
+            pdb_id=versioned(target.pdb_id),
+            chain_id=versioned(target.chain_id),
+            assembly=versioned(target.assembly),
+            n_prompt_contacts=versioned(n_prompt_contacts),
+            tokenizer=versioned(tokenizer),
+            n_pairs=versioned(n_pairs),
+            seed=versioned(0),
+            max_seq_len=versioned(8192),
+            sequence_override=versioned(target.sequence_override),
+            sequence_origin=target.sequence_origin,  # metadata only — fine to leave unversioned
         ),
     )
 

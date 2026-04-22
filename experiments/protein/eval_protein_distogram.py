@@ -527,7 +527,37 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument(
+        "--sequence-override-source",
+        default=None,
+        help=(
+            "Optional JSONL path (local or gs://) to a redesigns file produced by "
+            "`experiments.protein.redesign_sequences`. When set together with "
+            "--sequence-override-target-label, --sequence-override-method, and "
+            "--sequence-override-idx, the <begin_sequence> section of the prompt "
+            "uses the matching redesigned sequence instead of the native PDB "
+            "sequence. Ground-truth CA coordinates still come from the PDB."
+        ),
+    )
+    parser.add_argument(
+        "--sequence-override-target-label",
+        default=None,
+        help="target_label to match in the redesigns JSONL (e.g. 'top7').",
+    )
+    parser.add_argument(
+        "--sequence-override-method", default=None, help="method field to match (e.g. 'soluble' or 'mpnn')."
+    )
+    parser.add_argument("--sequence-override-idx", type=int, default=None, help="redesign_idx to match.")
     args = parser.parse_args(argv)
+
+    override_fields = (
+        args.sequence_override_source,
+        args.sequence_override_target_label,
+        args.sequence_override_method,
+        args.sequence_override_idx,
+    )
+    if any(x is not None for x in override_fields) and not all(x is not None for x in override_fields):
+        parser.error("--sequence-override-{source,target-label,method,idx} must all be set together.")
 
     os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
 
@@ -545,6 +575,52 @@ def main(argv: list[str] | None = None) -> int:
     gt_dist = gt_distance_matrix(structure)
     gt_contacts = ground_truth_contacts_by_type(structure)
     n_long = len(gt_contacts["<long-range-contact>"])
+
+    # --- 1b. Optional sequence override (for MPNN / SolubleMPNN redesigns) ---
+    sequence_for_prompt = list(structure.sequence)
+    override_info: dict | None = None
+    if args.sequence_override_source is not None:
+        import json as _json
+
+        with fsspec.open(args.sequence_override_source, "r") as f:
+            lines = [_json.loads(l) for l in f.read().splitlines() if l.strip()]
+        matches = [
+            r
+            for r in lines
+            if r.get("target_label") == args.sequence_override_target_label
+            and r.get("method") == args.sequence_override_method
+            and int(r.get("redesign_idx", -1)) == args.sequence_override_idx
+        ]
+        if not matches:
+            raise ValueError(
+                f"No redesigns record matched target_label={args.sequence_override_target_label!r} "
+                f"method={args.sequence_override_method!r} redesign_idx={args.sequence_override_idx} "
+                f"in {args.sequence_override_source}"
+            )
+        if len(matches) > 1:
+            raise ValueError(f"Ambiguous match ({len(matches)} records) for override.")
+        rec = matches[0]
+        redesigned = list(rec["sequence_3letter"])
+        if len(redesigned) != seq_len:
+            raise ValueError(f"Override sequence length {len(redesigned)} does not match PDB chain length {seq_len}.")
+        hamming = sum(a != b for a, b in zip(structure.sequence, redesigned, strict=True))
+        logger.info(
+            "Using sequence override (%s/%s #%d): Hamming distance to native = %d/%d",
+            args.sequence_override_target_label,
+            args.sequence_override_method,
+            args.sequence_override_idx,
+            hamming,
+            seq_len,
+        )
+        sequence_for_prompt = redesigned
+        override_info = {
+            "source": args.sequence_override_source,
+            "target_label": rec["target_label"],
+            "method": rec["method"],
+            "redesign_idx": rec["redesign_idx"],
+            "hamming_distance": hamming,
+            "mpnn_score": rec.get("mpnn_score"),
+        }
     max_n = max(args.prompt_contact_counts)
     if max_n > n_long:
         raise ValueError(
@@ -573,7 +649,7 @@ def main(argv: list[str] | None = None) -> int:
 
     for n_prompt in args.prompt_contact_counts:
         seeded = [("<long-range-contact>", i, j) for (i, j) in gt_contacts["<long-range-contact>"][:n_prompt]]
-        base_tokens = build_base_prompt_tokens(structure.sequence, seeded)
+        base_tokens = build_base_prompt_tokens(sequence_for_prompt, seeded)
         logger.info(
             "--- N=%d (seeded %d long-range contacts) | base prompt = %d tokens ---",
             n_prompt,
@@ -612,7 +688,8 @@ def main(argv: list[str] | None = None) -> int:
             bin_midpoints=DISTANCE_BIN_MIDPOINTS,
             bin_edges=DISTANCE_BIN_EDGES,
             atom_per_residue=np.array(structure.atom_per_residue),
-            sequence_3letter=np.array(structure.sequence),
+            sequence_3letter=np.array(structure.sequence),  # native
+            sequence_3letter_used_in_prompt=np.array(sequence_for_prompt),
         )
         per_n_summary.append(
             {
@@ -629,7 +706,9 @@ def main(argv: list[str] | None = None) -> int:
         "pdb_id": args.pdb_id.upper(),
         "chain_id": args.chain_id,
         "sequence_length": seq_len,
-        "sequence_3letter": structure.sequence,
+        "sequence_3letter": structure.sequence,  # native PDB sequence
+        "sequence_3letter_used_in_prompt": sequence_for_prompt,
+        "sequence_override": override_info,
         "atom_per_residue": structure.atom_per_residue,
         "inference": {
             "model": args.model,

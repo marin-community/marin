@@ -124,9 +124,15 @@ val_component = dataclasses.replace(
 # above does NOT apply to them — they see only the final GT distance-bin
 # position as their training target, which is what we want.
 PROTEIN_MPNN_REDESIGNS_SOURCE = "gs://marin-us-east5/protein-structure/protein-mpnn-redesigns/v1/redesigns.jsonl"
+# 100 pairs per (target, N) keeps a full eval pass fast. The default of 1000 made
+# eval take ~78 min on 132 datasets, longer than most training intervals. Drop
+# to 100 and the full eval runs in ~8 min — acceptable overhead at
+# steps_per_eval=1000 below.
+DISTOGRAM_EVAL_PAIRS_PER_TARGET = 100
 distogram_eval = distogram_eval_benchmark(
     PROTEIN_TOKENIZER,
     redesigns_source=PROTEIN_MPNN_REDESIGNS_SOURCE,
+    n_pairs=DISTOGRAM_EVAL_PAIRS_PER_TARGET,
 )
 
 protein_docs_data = LmDataConfig(
@@ -158,7 +164,7 @@ train_config = SimpleTrainConfig(
     weight_decay=0.01,
     warmup=0.1,
     train_seq_len=8192,
-    steps_per_eval=500,
+    steps_per_eval=1000,
     env_vars={
         "WANDB_ENTITY": "timodonnell",
     },

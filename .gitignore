@@ -230,6 +230,7 @@ scr/*
 .marin.yaml
 
 /scratch
+/third_party
 
 .forge
 .claude
