@@ -1122,7 +1122,7 @@ class ZephyrWorker:
     def _poll_loop(self, coordinator: ActorHandle) -> None:
         """Pure polling loop. Exits on SHUTDOWN signal, coordinator death, or shutdown event."""
         task_count = 0
-        backoff = ExponentialBackoff(initial=0.1, maximum=1.0)
+        backoff = ExponentialBackoff(initial=0.1, maximum=5.0)
 
         future: ActorFuture | None = None
         future_start = 0.0
