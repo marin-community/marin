@@ -14,6 +14,7 @@ from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
+from levanter.analysis.backward_flow import is_backward_flow_active, log_backward_activation
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pbatch, Pembed_vocab, Plm_head, Plogits, unshard
@@ -76,6 +77,7 @@ class CausalSelfAttention(eqx.Module):
 
     @named_call
     def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+        x = log_backward_activation(x, site="in")
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
 
@@ -85,7 +87,8 @@ class CausalSelfAttention(eqx.Module):
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         attn_out = attention(q, k, v, mask)
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=Pbatch)
+        out = jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=Pbatch)
+        return log_backward_activation(out)
 
 
 class MLP(eqx.Module):
@@ -103,9 +106,11 @@ class MLP(eqx.Module):
 
     @named_call
     def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+        x = log_backward_activation(x, site="in")
         up = jnp.einsum("bsh,hm->bsm", x, self.mlp_up)
         activated = jax.nn.relu(up)
-        return jnp.einsum("bsm,mh->bsh", activated, self.mlp_down, out_sharding=Pbatch)
+        out = jnp.einsum("bsm,mh->bsh", activated, self.mlp_down, out_sharding=Pbatch)
+        return log_backward_activation(out)
 
 
 class RMSNorm(eqx.Module):
@@ -144,9 +149,14 @@ class Block(eqx.Module):
 
     @named_call
     def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+        with jax.named_scope("resid_in"):
+            x = log_backward_activation(x)
         x = x + self.attn(self.rms_attn(x), mask)
+        with jax.named_scope("resid_post_attn"):
+            x = log_backward_activation(x)
         x = x + self.mlp(self.rms_mlp(x))
-        return x
+        with jax.named_scope("resid_out"):
+            return log_backward_activation(x)
 
 
 class Transformer(eqx.Module):
@@ -182,10 +192,16 @@ class Transformer(eqx.Module):
         if mask is None:
             mask = AttentionMask.causal()
 
-        hidden = self.token_embed.at[token_ids].get(out_sharding=Pbatch)
-        for block in self.blocks:
-            hidden = eqx.filter_checkpoint(block)(hidden, mask)
-        return self.final_norm(hidden)
+        with jax.named_scope("token_embed"):
+            hidden = self.token_embed.at[token_ids].get(out_sharding=Pbatch)
+            hidden = log_backward_activation(hidden)
+        for i, block in enumerate(self.blocks):
+            with jax.named_scope(f"block_{i}"):
+                block_fn = block if is_backward_flow_active() else eqx.filter_checkpoint(block)
+                hidden = block_fn(hidden, mask)
+        with jax.named_scope("final_norm"):
+            hidden = self.final_norm(hidden)
+            return log_backward_activation(hidden)
 
     @named_call
     def logits(

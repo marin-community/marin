@@ -32,6 +32,7 @@ from levanter.data.text import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
+from levanter.analysis.backward_flow import BackwardFlowConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 
@@ -226,7 +227,11 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
             model=_small_model_config(model_module.GrugModelConfig, vocab_size=vocab_size, seq_len=seq_len),
             data=data_config,
             resources=ResourceConfig.with_cpu(),
-            trainer=train_module.GrugTrainerConfig(trainer=trainer_config, log_every=1),
+            trainer=train_module.GrugTrainerConfig(
+                trainer=trainer_config,
+                log_every=1,
+                backward_flow=BackwardFlowConfig(interval=1),
+            ),
             eval=train_module.GrugEvalConfig(
                 eval_batch_size=1,
                 steps_per_eval=1,
@@ -261,3 +266,42 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
+    assert any(key.startswith("backward_flow/") for key in summary)
+
+    required_backward_flow_keys = [
+        "backward_flow/Transformer/token_embed/out_gradient_rms",
+        "backward_flow/Transformer/block_0/Block/resid_in/out_gradient_rms",
+        "backward_flow/Transformer/block_0/Block/CausalSelfAttention/in_gradient_rms",
+        "backward_flow/Transformer/block_0/Block/CausalSelfAttention/out_gradient_rms",
+        "backward_flow/Transformer/block_0/Block/resid_post_attn/out_gradient_rms",
+        "backward_flow/Transformer/block_0/Block/MLP/in_gradient_rms",
+        "backward_flow/Transformer/block_0/Block/MLP/out_gradient_rms",
+        "backward_flow/Transformer/block_0/Block/resid_out/out_gradient_rms",
+        "backward_flow/Transformer/final_norm/out_gradient_rms",
+        "backward_flow/Transformer/token_embed/out_gradient_rms_scaled",
+        "backward_flow/Transformer/block_0/Block/resid_in/out_gradient_rms_scaled",
+        "backward_flow/Transformer/block_0/Block/CausalSelfAttention/in_gradient_rms_scaled",
+        "backward_flow/Transformer/block_0/Block/CausalSelfAttention/in_gradient_max_abs_scaled",
+        "backward_flow/Transformer/block_0/Block/MLP/in_gradient_rms_scaled",
+        "backward_flow/compute_step_duration",
+        "backward_flow/artifact_write_duration",
+    ]
+    for key in required_backward_flow_keys:
+        assert key in summary
+
+    backward_flow_artifact = variant_tmp / "logs/test-grug-base-metrics/artifacts/backward_flow/step_0000000.html"
+    artifact_html = backward_flow_artifact.read_text(encoding="utf-8")
+    assert "class='flow-plate'" in artifact_html
+    assert "Transformer/block_0" in artifact_html
+    assert "resid_in" in artifact_html
+    assert "resid_out" in artifact_html
+    assert "<table" not in artifact_html
+    assert "scaled grad RMS" in artifact_html
+    assert "scaled max abs grad" in artifact_html
+    assert "max abs grad" in artifact_html
+    resid_skip_edge = "data-source='Transformer/block_0/Block/resid_post_attn'"
+    resid_skip_edge += " data-target='Transformer/block_0/Block/resid_out'"
+    assert resid_skip_edge in artifact_html
+    final_edge = "data-source='Transformer/block_1/Block/resid_out'"
+    final_edge += " data-target='Transformer/final_norm'"
+    assert final_edge in artifact_html

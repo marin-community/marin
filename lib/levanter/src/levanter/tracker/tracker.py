@@ -49,6 +49,9 @@ class Tracker(abc.ABC):
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         pass
 
+    def log_html(self, key: str, html_path, *, step: Optional[int], commit: Optional[bool] = None):
+        pass
+
     @abc.abstractmethod
     def finish(self):
         """
@@ -91,6 +94,10 @@ class CompositeTracker(Tracker):
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         for tracker in self.loggers:
             tracker.log_artifact(artifact_path, name=name, type=type)
+
+    def log_html(self, key: str, html_path, *, step: Optional[int], commit: Optional[bool] = None):
+        for tracker in self.loggers:
+            tracker.log_html(key, html_path, step=step, commit=commit)
 
     def finish(self):
         excs = []

@@ -9,6 +9,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
@@ -22,6 +23,16 @@ from jaxtyping import PRNGKeyArray
 
 import levanter.callbacks as callbacks
 import levanter.tracker
+from levanter.analysis.backward_flow import (
+    BackwardFlowConfig,
+    BackwardFlowGraph,
+    backward_flow_graph_from_jaxpr,
+    backward_flow_node_stats,
+    capture_backward_flow,
+    collapse_backward_flow_graph,
+    infer_backward_flow_render_hints,
+    render_backward_flow_html,
+)
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.data import AsyncDataset, DataLoader
@@ -42,6 +53,8 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.base.model import GrugModelConfig, Transformer
 
 logger = logging.getLogger(__name__)
+_BACKWARD_FLOW_METRICS_KEY = "_backward_flow"
+_BACKWARD_FLOW_BASELINE_DURATION_EMA_ALPHA = 0.1
 
 
 @dataclass(frozen=True)
@@ -54,6 +67,7 @@ class GrugTrainerConfig:
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
+    backward_flow: BackwardFlowConfig = field(default_factory=BackwardFlowConfig)
 
 
 @dataclass(frozen=True)
@@ -218,6 +232,65 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
     return log_mixture_stage
 
 
+def _build_backward_flow_graph(
+    *,
+    params: Transformer,
+    batch: GrugLmExample,
+    mp: jmp.Policy,
+    z_loss_weight: float,
+) -> BackwardFlowGraph:
+    z_loss = z_loss_weight if z_loss_weight > 0 else None
+
+    def loss_fn(model: Transformer) -> jax.Array:
+        compute_params = mp.cast_to_compute(model)
+        return compute_params.next_token_loss(
+            batch.tokens,
+            batch.loss_weight,
+            mask=batch.attn_mask,
+            reduction="mean",
+            logsumexp_weight=z_loss,
+        )
+
+    with capture_backward_flow(BackwardFlowConfig(interval=1)):
+        closed_jaxpr, _, _ = eqx.filter_make_jaxpr(jax.grad(loss_fn))(params)
+    return backward_flow_graph_from_jaxpr(closed_jaxpr)
+
+
+def _write_backward_flow_artifact(
+    *,
+    graph: BackwardFlowGraph,
+    backward_flow_metrics: dict[str, jax.Array],
+    log_dir,
+    run_id: str,
+    step: int,
+) -> None:
+    node_stats = backward_flow_node_stats(backward_flow_metrics)
+    collapsed_graph = collapse_backward_flow_graph(graph, node_stats)
+    if not collapsed_graph.nodes:
+        return
+
+    render_hints = infer_backward_flow_render_hints(collapsed_graph)
+    html = render_backward_flow_html(
+        collapsed_graph,
+        node_stats,
+        node_lanes=render_hints.node_lanes,
+        display_edges=render_hints.display_edges,
+        plates=render_hints.plates,
+        title=f"Backward Flow Step {step}",
+    )
+    artifact_dir = log_dir / run_id / "artifacts" / "backward_flow"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = artifact_dir / f"step_{step:07d}.html"
+    artifact_path.write_text(html)
+    tracker = levanter.tracker.current_tracker()
+    tracker.log_html("backward_flow/dag", artifact_path, step=step, commit=False)
+    tracker.log_artifact(
+        artifact_path,
+        name=f"backward_flow_step_{step:07d}",
+        type="backward_flow",
+    )
+
+
 @register_dataclass
 @dataclass(frozen=True)
 class GrugTrainState:
@@ -251,6 +324,7 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
+    backward_flow_config: BackwardFlowConfig | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -262,8 +336,14 @@ def _make_train_step(
     else:
         watch_targets = ()
 
-    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
-    def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
+    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_backward_flow", "compute_watch"))
+    def train_step(
+        state: GrugTrainState,
+        batch,
+        *,
+        compute_watch: bool = False,
+        compute_backward_flow: bool = False,
+    ):
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
             return compute_params.next_token_loss(
@@ -274,7 +354,14 @@ def _make_train_step(
                 logsumexp_weight=z_loss,
             )
 
-        loss, grads = jax.value_and_grad(loss_fn)(state.params)
+        backward_flow_stats = None
+        if backward_flow_config is not None and compute_backward_flow:
+            gradient_scale = jnp.sum(jnp.asarray(batch.loss_weight, dtype=jnp.float32))
+            with capture_backward_flow(backward_flow_config, gradient_scale=gradient_scale):
+                with levanter.tracker.defer_tracker_for_jit() as backward_flow_stats:
+                    loss, grads = jax.value_and_grad(loss_fn)(state.params)
+        else:
+            loss, grads = jax.value_and_grad(loss_fn)(state.params)
         updates, opt_state = optimizer.update(grads, state.opt_state, state.params)
         params = optax.apply_updates(state.params, updates)
 
@@ -312,7 +399,11 @@ def _make_train_step(
             ema_params=ema_params,
         )
 
-        return next_state, {"train/loss": loss}, watch_stats
+        metrics = {"train/loss": loss}
+        if backward_flow_stats is not None:
+            metrics[_BACKWARD_FLOW_METRICS_KEY] = backward_flow_stats
+
+        return next_state, metrics, watch_stats
 
     return train_step
 
@@ -329,12 +420,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
     optimizer = config.optimizer.build(trainer.num_train_steps)
     watch_config = trainer.watch
+    backward_flow_config = config.trainer.backward_flow if config.trainer.backward_flow.is_enabled else None
     train_step = _make_train_step(
         optimizer,
         trainer.mp,
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
+        backward_flow_config=backward_flow_config,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -444,6 +537,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
+        non_backward_flow_step_duration_ema: float | None = None
+        backward_flow_graph: BackwardFlowGraph | None = None
 
         # Main optimization loop.
         try:
@@ -456,11 +551,44 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
-                state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
+                compute_backward_flow = (
+                    backward_flow_config is not None
+                    and backward_flow_config.interval > 0
+                    and current_step % backward_flow_config.interval == 0
+                )
+                state, metrics, watch_stats = train_step(
+                    state,
+                    batch,
+                    compute_watch=compute_watch,
+                    compute_backward_flow=compute_backward_flow,
+                )
+                backward_flow_stats = metrics.get(_BACKWARD_FLOW_METRICS_KEY)
+                if backward_flow_stats is not None:
+                    metrics = {key: value for key, value in metrics.items() if key != _BACKWARD_FLOW_METRICS_KEY}
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
                 duration = time.perf_counter() - step_start
+                backward_flow_timing_metrics = None
+                if compute_backward_flow:
+                    backward_flow_timing_metrics = {"backward_flow/compute_step_duration": duration}
+                    if non_backward_flow_step_duration_ema is not None:
+                        baseline_duration = non_backward_flow_step_duration_ema
+                        backward_flow_timing_metrics.update(
+                            {
+                                "backward_flow/baseline_step_duration_ema": baseline_duration,
+                                "backward_flow/estimated_compute_overhead": duration - baseline_duration,
+                                "backward_flow/estimated_compute_overhead_ratio": duration / baseline_duration,
+                            }
+                        )
+                elif non_backward_flow_step_duration_ema is None:
+                    non_backward_flow_step_duration_ema = duration
+                else:
+                    alpha = _BACKWARD_FLOW_BASELINE_DURATION_EMA_ALPHA
+                    non_backward_flow_step_duration_ema = (1.0 - alpha) * non_backward_flow_step_duration_ema + (
+                        alpha * duration
+                    )
+
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
                     state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
@@ -471,6 +599,29 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
+                    if backward_flow_timing_metrics is not None:
+                        levanter.tracker.log(backward_flow_timing_metrics, step=step)
+                    if backward_flow_stats:
+                        levanter.tracker.log(backward_flow_stats, step=step)
+                        if backward_flow_graph is None:
+                            backward_flow_graph = _build_backward_flow_graph(
+                                params=state.params,
+                                batch=batch,
+                                mp=trainer.mp,
+                                z_loss_weight=config.trainer.z_loss_weight,
+                            )
+                        artifact_start = time.perf_counter()
+                        _write_backward_flow_artifact(
+                            graph=backward_flow_graph,
+                            backward_flow_metrics=backward_flow_stats,
+                            log_dir=trainer.log_dir,
+                            run_id=run_id,
+                            step=step,
+                        )
+                        levanter.tracker.log(
+                            {"backward_flow/artifact_write_duration": time.perf_counter() - artifact_start},
+                            step=step,
+                        )
 
                 if checkpointer is not None:
                     checkpointer.on_step(tree=state, step=int(state.step))
