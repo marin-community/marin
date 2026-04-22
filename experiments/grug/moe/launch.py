@@ -83,8 +83,11 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
     """Search all regional marin buckets for the latest checkpoint.
 
     Scans each region for checkpoint subdirectories with metadata.json,
-    reads the step number, and returns the gs:// path to the region
-    with the highest step. Returns None if no checkpoints found.
+    reads the step number. Returns the gs:// checkpoints directory of the
+    region with the highest step, but only if that region is different from
+    the local region and has a strictly higher step. Returns None if local
+    already has the best checkpoint (to avoid overriding the trainer's
+    normal checkpoint discovery, which also finds temporary checkpoints).
     """
     import json
 
@@ -95,6 +98,7 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
     parts = output_path.split("/", 3)
     if len(parts) < 4:
         return None
+    local_bucket = parts[2]
     suffix = parts[3]
     checkpoint_suffix = os.path.join(suffix, "checkpoints")
 
@@ -103,6 +107,7 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
     fs = gcsfs.GCSFileSystem()
     best_step = -1
     best_path = None
+    local_step = -1
 
     for bucket in REGION_TO_DATA_BUCKET.values():
         candidate = f"{bucket}/{checkpoint_suffix}"
@@ -116,18 +121,23 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
                 with fs.open(metadata_path) as f:
                     metadata = json.load(f)
                 step = int(metadata.get("step", -1))
-                # Verify the checkpoint has actual data (not just metadata).
-                # Real checkpoints have manifest.ocdbt or a d/ directory.
                 has_data = fs.exists(f"{subdir}/manifest.ocdbt") or fs.exists(f"{subdir}/d")
                 if not has_data:
                     continue
+                if bucket == local_bucket:
+                    local_step = max(local_step, step)
                 if step > best_step:
                     best_step = step
                     best_path = f"gs://{candidate}"
             except Exception:
                 continue
 
-    return best_path
+    # Only return cross-region path if it's strictly better than local.
+    # Otherwise let the trainer discover its own checkpoints (including
+    # temporary ones that may not have metadata.json).
+    if best_step > local_step and best_path and local_bucket not in best_path:
+        return best_path
+    return None
 
 
 def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
@@ -153,7 +163,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
             base_path=checkpoint_base,
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
-            keep=[{"every": 1000}],
+            keep=[{"every": 10000}],
         ),
     )
 
