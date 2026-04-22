@@ -16,6 +16,7 @@ from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
     build_memray_transform_cmd,
     build_pyspy_cmd,
+    build_pyspy_dump_cmd,
     resolve_cpu_spec,
     resolve_memory_spec,
 )
@@ -87,6 +88,23 @@ def test_build_pyspy_cmd_includes_subprocesses_flag_by_default():
     spec = resolve_cpu_spec(cfg, duration_seconds=5, pid="1")
     cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path="/tmp/out.svg")
     assert "--subprocesses" in cmd
+
+
+def test_build_pyspy_cmd_omits_subprocesses_when_disabled():
+    cfg = job_pb2.CpuProfile(format=job_pb2.CpuProfile.FLAMEGRAPH, rate_hz=100)
+    spec = resolve_cpu_spec(cfg, duration_seconds=5, pid="1")
+    cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path="/tmp/out.svg", subprocesses=False)
+    assert "--subprocesses" not in cmd
+
+
+def test_build_pyspy_dump_cmd_includes_subprocesses_flag_by_default():
+    cmd = build_pyspy_dump_cmd("123")
+    assert "--subprocesses" in cmd
+
+
+def test_build_pyspy_dump_cmd_omits_subprocesses_when_disabled():
+    cmd = build_pyspy_dump_cmd("123", subprocesses=False)
+    assert "--subprocesses" not in cmd
 
 
 # ---------------------------------------------------------------------------
