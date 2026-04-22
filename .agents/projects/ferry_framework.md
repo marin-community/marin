@@ -150,7 +150,7 @@ Every ferry launch/update should include a minimal run record with these fields:
 - `script`
 - `git_sha`
 - `cluster`
-- `ray_job_id`
+- `iris_job_id`
 - `wandb_run_id`
 - `wandb_url`
 - `start_time`
@@ -179,7 +179,7 @@ Rules:
 - handoff is allowed only with an explicit replacement owner and a state handoff containing:
   - current job status
   - latest error/signals
-  - last known Ray and W&B links
+  - last known Iris and W&B links
 
 ### Canary Freeze Policy
 
@@ -274,10 +274,8 @@ gh issue list \
 Launch shape (illustrative, to pin in recipe):
 
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py \
-  --no_wait \
-  --cluster us-central1 \
-  -- python experiments/ferries/daily.py --run_name "daily-125m-$(date +%F)"
+uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=4G --extra=cpu \
+  -- python -m experiments.ferries.daily --run_name "daily-125m-$(date +%F)"
 ```
 
 Monitoring handoff:
@@ -344,7 +342,7 @@ Phase-2:
 ## Resolved Decisions
 
 1. Ferry run closure uses a log-only PR (`docs/experiments/daily-ferry-log.md`); proposal/debug details live in issues.
-2. Default cluster for now is `us-central1` (Ray CLI cluster key; maps to zone `us-central1-a`).
+2. Default cluster for now is `marin` (Iris `--cluster` key, resolves to `lib/iris/examples/marin.yaml`).
 3. "Experiment-relevant issues" filter starts with label `experiment` only.
 4. "Max 2 knobs changed" remains policy guidance, not script-enforced.
 5. Discord automation is deferred to Phase 2.

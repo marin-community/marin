@@ -6,7 +6,7 @@ Before we start training, make sure you have gone through:
 
 - Basic [installation](installation.md)
 - Set up your [local GPU](local-gpu.md)
-- You need to make sure that your Ray GPU cluster is configured.
+- Ensure you can reach a shared Iris cluster (see [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)).
 
 This guide explains how to train a language model using Marin, with our examples reproducing the
 [DCLM](https://arxiv.org/pdf/2406.11794) 7B/1x and 1B/1x baselines.
@@ -146,11 +146,17 @@ The `default_train` function creates a training pipeline that:
 
 ## Launching the Training Job
 
-To train the model with experiment tracking:
+To train the model with experiment tracking, submit the script as a CPU-only
+Iris entrypoint job. `executor_main` inside the script spawns the TPU/GPU
+sub-tasks via Fray:
 
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py --env_vars WANDB_API_KEY ${YOUR_WANDB_API_KEY} -- python experiments/${YOUR_EXPERIMENT_SCRIPT}.py
+uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m experiments.${YOUR_EXPERIMENT_SCRIPT}
 ```
+
+See [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md) for the full `iris job run` reference (including `--no-wait` for detached submission and `iris job logs -f` for streaming).
 
 Following Marin's guidelines, name your experiment script `experiments/exp{GITHUB_ISSUE_NUMBER}_{DESCRIPTOR}.py`, where `GITHUB_ISSUE_NUMBER` is the issue number for your experiment and `DESCRIPTOR` is a brief description.
 

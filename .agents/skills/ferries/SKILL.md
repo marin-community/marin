@@ -39,7 +39,7 @@ Collect:
 1. Last ferry references:
 - issue URL
 - PR/commit URL
-- W&B run URL and Ray job ID
+- W&B run URL and Iris job ID
 2. Human objective for this interval:
 - standard integration pass
 - or explicit regression investigation
@@ -124,25 +124,21 @@ Then push the launch commit (no proposal PR by default).
 Before launch, confirm requester approval in-thread unless they already gave explicit "launch without asking" permission.
 
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py \
-  --no_wait \
-  --cluster us-central1 \
-  -- python experiments/ferries/daily.py
+uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=4G --extra=cpu \
+  -- python -m experiments.ferries.daily
 ```
 
 After launch, capture and post to the issue:
-- Ray job id
+- Iris job id (printed by `iris job run`, form `/<user>/iris-run-job-YYYYMMDD-HHMMSS`)
 - cluster
 - launch timestamp
 - W&B link(s) when available
 
 Optional deterministic daily rerun name:
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py \
-  --no_wait \
-  --cluster us-central1 \
-  -e FERRY_DATE="$(date +%Y%m%d-%H%M%S)-daily-ferry" \
-  -- python experiments/ferries/daily.py
+uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=4G --extra=cpu \
+  -e FERRY_DATE "$(date +%Y%m%d-%H%M%S)-daily-ferry" \
+  -- python -m experiments.ferries.daily
 ```
 
 #### 5) Monitor to terminal state
@@ -158,7 +154,7 @@ Follow the **babysit-job** skill with:
 Post in the ferry issue:
 - final status,
 - key metrics/regressions,
-- Ray job ID and W&B link(s),
+- Iris job ID and W&B link(s),
 - recommendation for next ferry.
 - Optional: post a manual Discord update for major run state changes.
 
@@ -174,7 +170,7 @@ Required terminal issue comment template:
 
 ```markdown
 Final status: <SUCCEEDED|FAILED|STOPPED>
-Ray job id: <job_id>
+Iris job id: <job_id>
 W&B link: <url>
 Final eval summary: <short summary + key metrics>
 Experiment link: <experiment JSON/browser link>
