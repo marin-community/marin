@@ -98,8 +98,17 @@ _SCATTER_DATA_SUFFIX = ".shuffle"
 # ScatterReader. Sidecars are small msgpack files (a few KB) and reads are
 # GCS GET-bound, so a modest pool keeps latency low without thrashing.
 _SIDECAR_READ_CONCURRENCY = 32
-# Number of items sampled from the first flush to estimate avg_item_bytes.
+# Items sampled on the first flush to establish an avg_item_bytes baseline.
 _SCATTER_SAMPLE_SIZE = 100
+# Items sampled on each subsequent flush to track item-size drift cheaply.
+_SCATTER_ONGOING_SAMPLE_SIZE = 10
+# How often (in items written) to re-sample one item's pickle size and update
+# the EMA estimate in write(). This is independent of flush-time sampling and
+# ensures the estimate tracks drift even when no flush has fired yet.
+_ESTIMATE_WRITE_SAMPLE_INTERVAL = 10
+# EMA weight given to each new observation. 0.3 converges to a 2x step-change
+# in item size within ~3 samples while staying stable under small fluctuations.
+_ESTIMATE_EMA_ALPHA = 0.3
 # Fraction of total memory budgeted for read-side decompression buffers.
 _SCATTER_READ_BUFFER_FRACTION = 0.25
 
@@ -532,12 +541,21 @@ class ScatterWriter:
             buf = _apply_combiner(buf, self._key_fn, self._combiner_fn)
         buf.sort(key=self._sort_key)
 
-        if not self._sampled_avg and buf:
-            sample = buf[: min(len(buf), _SCATTER_SAMPLE_SIZE)]
-            total_bytes = sum(len(pickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL)) for item in sample)
-            self._avg_item_bytes = total_bytes / len(sample)
+        if buf:
+            # Sample a subset of the buffer to update the byte-size estimate.
+            # First flush: larger sample for a good baseline. Subsequent flushes:
+            # smaller sample to track drift cheaply via EMA. This prevents OOM
+            # when early items are small but later items are large — the estimate
+            # stays current rather than being frozen at the first-flush value.
+            n = _SCATTER_SAMPLE_SIZE if not self._sampled_avg else _SCATTER_ONGOING_SAMPLE_SIZE
+            sample = buf[: min(len(buf), n)]
+            observed = sum(len(pickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL)) for item in sample) / len(sample)
+            if not self._sampled_avg:
+                self._avg_item_bytes = observed
+                self._sampled_avg = True
+            else:
+                self._avg_item_bytes = (1 - _ESTIMATE_EMA_ALPHA) * self._avg_item_bytes + _ESTIMATE_EMA_ALPHA * observed
             self._item_bytes_estimate = self._avg_item_bytes
-            self._sampled_avg = True
 
         frame = _write_chunk_frame(buf)
         offset = self._out.tell()
@@ -557,13 +575,21 @@ class ScatterWriter:
 
     def write(self, item: Any) -> None:
         """Route a single item to its target shard buffer, flushing when over budget."""
-        if self._total_buffer_rows == 0:
-            # Calibrate from the first item before any batching occurs. A
-            # hardcoded default (e.g. 512 B) can be orders of magnitude off for
-            # large documents, allowing millions of rows to accumulate before the
-            # first flush fires. One real measurement is far safer.
-            self._item_bytes_estimate = float(len(pickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL)))
-            self._first_item_bytes = self._item_bytes_estimate
+        if self._total_buffer_rows % _ESTIMATE_WRITE_SAMPLE_INTERVAL == 0:
+            # Periodically measure a single item's serialised size and apply EMA.
+            # This runs in write() — not just in _flush() — so the estimate tracks
+            # size drift even when no flush has fired yet (the flush EMA is a
+            # closed loop: if the estimate is too low no flush fires, so it never
+            # updates). Interval-based sampling amortises the pickle.dumps cost
+            # to 1-in-10 items while still catching step-changes within a few rows.
+            observed = float(len(pickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL)))
+            if self._total_buffer_rows == 0:
+                self._item_bytes_estimate = observed
+                self._first_item_bytes = observed
+            else:
+                self._item_bytes_estimate = (
+                    1 - _ESTIMATE_EMA_ALPHA
+                ) * self._item_bytes_estimate + _ESTIMATE_EMA_ALPHA * observed
 
         key = self._key_fn(item)
         target = deterministic_hash(key) % self._num_output_shards

@@ -200,6 +200,41 @@ def test_scatter_byte_budget_flushes_mid_write(tmp_path):
     assert total_chunks > 2, f"expected >2 chunks with 1-byte budget, got {total_chunks}"
 
 
+def test_scatter_estimate_tracks_skewed_items(tmp_path):
+    """Estimate updates after each flush so large late items still trigger budget flushes."""
+    num_shards = 1
+    data_path = str(tmp_path / "shard-0000.shuffle")
+
+    # Start with tiny items, then switch to large items. With a frozen estimate
+    # the budget check would never fire for the large items. With EMA updates it
+    # should: _item_bytes_estimate rises and eventually exceeds budget / rows.
+    small_items = [{"k": 0, "v": "x"} for _ in range(50)]
+    large_items = [{"k": 0, "v": "y" * 50_000} for _ in range(10)]
+
+    # Budget large enough that small items alone never flush, but one large
+    # item should push the estimate over threshold quickly.
+    budget = 10_000  # 10 KB — well under 10 * 50 KB large items
+    writer = ScatterWriter(
+        data_path=data_path,
+        key_fn=_key,
+        num_output_shards=num_shards,
+        buffer_limit_bytes=budget,
+    )
+    for item in small_items + large_items:
+        writer.write(item)
+    writer.close()
+
+    # All items must survive the skewed flush pattern.
+    scatter_paths = [data_path]
+    recovered = list(ScatterReader.from_sidecars(scatter_paths, 0))
+    all_items = small_items + large_items
+    assert sorted(recovered, key=lambda x: x["v"]) == sorted(all_items, key=lambda x: x["v"])
+
+    # The estimate must have been updated: mid-write flushes should have fired
+    # for the large items (not just at close).
+    assert writer._mid_write_flushes > 0, "expected mid-write flushes for large items"
+
+
 def test_scatter_byte_budget_preserves_all_items(tmp_path):
     """Items are not lost or duplicated when byte-budget flushes fire mid-write."""
     num_shards = 3
