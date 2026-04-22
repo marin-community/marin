@@ -54,7 +54,6 @@ from experiments.grug.base.model import GrugModelConfig, Transformer
 
 logger = logging.getLogger(__name__)
 _BACKWARD_FLOW_METRICS_KEY = "_backward_flow"
-_BACKWARD_FLOW_BASELINE_DURATION_EMA_ALPHA = 0.1
 _BACKWARD_FLOW_DEFAULT_INTERVAL = 50
 
 
@@ -540,7 +539,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
-        non_backward_flow_step_duration_ema: float | None = None
         backward_flow_graph: BackwardFlowGraph | None = None
 
         # Main optimization loop.
@@ -575,22 +573,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 backward_flow_timing_metrics = None
                 if compute_backward_flow:
                     backward_flow_timing_metrics = {"backward_flow/compute_step_duration": duration}
-                    if non_backward_flow_step_duration_ema is not None:
-                        baseline_duration = non_backward_flow_step_duration_ema
-                        backward_flow_timing_metrics.update(
-                            {
-                                "backward_flow/baseline_step_duration_ema": baseline_duration,
-                                "backward_flow/estimated_compute_overhead": duration - baseline_duration,
-                                "backward_flow/estimated_compute_overhead_ratio": duration / baseline_duration,
-                            }
-                        )
-                elif non_backward_flow_step_duration_ema is None:
-                    non_backward_flow_step_duration_ema = duration
-                else:
-                    alpha = _BACKWARD_FLOW_BASELINE_DURATION_EMA_ALPHA
-                    non_backward_flow_step_duration_ema = (1.0 - alpha) * non_backward_flow_step_duration_ema + (
-                        alpha * duration
-                    )
 
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):

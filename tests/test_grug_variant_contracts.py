@@ -288,6 +288,13 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_backward_flow_keys:
         assert key in summary
+    removed_backward_flow_keys = [
+        "backward_flow/baseline_step_duration_ema",
+        "backward_flow/estimated_compute_overhead",
+        "backward_flow/estimated_compute_overhead_ratio",
+    ]
+    for key in removed_backward_flow_keys:
+        assert key not in summary
 
     backward_flow_artifact = variant_tmp / "logs/test-grug-base-metrics/artifacts/backward_flow/step_0000000.html"
     artifact_html = backward_flow_artifact.read_text(encoding="utf-8")
