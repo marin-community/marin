@@ -2350,7 +2350,15 @@ class ControllerTransitions:
                         now_ms=now_ms,
                     )
                     results.append(result)
-                    log_event("worker_heartbeat_failed", str(snapshot.worker_id), error=error)
+                    log_event(
+                        "worker_heartbeat_failed",
+                        str(snapshot.worker_id),
+                        address=snapshot.worker_address or "-",
+                        rpc_action=result.action.value,
+                        last_success_age_ms=result.last_heartbeat_age_ms or "-",
+                        running=len(snapshot.running_tasks),
+                        error=error,
+                    )
                     all_tasks_to_kill.update(result.tasks_to_kill)
                     all_task_kill_workers.update(result.task_kill_workers)
                     if result.worker_removed:
