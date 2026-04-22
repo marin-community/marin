@@ -25,8 +25,8 @@ jobs:
           filters: |
             relevant:
               - 'lib/zephyr/**'
-              # Iris is being actively developed, to avoid bugs sneaking into zephyr, we trigger zephyr tests on iris change
               - 'lib/iris/**'
+              - 'lib/fray/**'
               - 'uv.lock'
               - '.github/workflows/zephyr-unit-tests.yaml'
 
