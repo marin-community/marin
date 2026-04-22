@@ -333,38 +333,6 @@ message Controller {
     repeated UserSummary users = 1;
   }
 
-  // --- Task/Job Logs (batch fetching) ---
-  message GetTaskLogsRequest {
-    string id = 1;                   // Job ID or Task ID (detected by trailing numeric)
-    bool include_children = 2;       // Include child jobs (only for job IDs)
-    int64 since_ms = 3;              // Only return logs after this timestamp (exclusive)
-    int64 max_total_lines = 4;       // Max lines total (0 = default 10000)
-    string substring = 5;             // Literal substring match on log data
-    int32 attempt_id = 6;            // Filter to specific attempt (-1 = all attempts)
-    string min_level = 7;            // Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
-    int64 cursor = 8;               // Autoincrement id cursor for incremental polling
-    bool tail = 9;                  // If true, return the last N lines instead of the first N
-  }
-
-  message TaskLogBatch {
-    string task_id = 1;
-    repeated iris.logging.LogEntry logs = 2;
-    string error = 3;                // If fetch failed for this task
-    string worker_id = 4;            // Worker that produced these logs
-  }
-
-  message GetTaskLogsResponse {
-    repeated TaskLogBatch task_logs = 1;
-    bool truncated = 2;              // True if max_total_lines hit
-
-    // Child job statuses (populated when include_children=true).
-    // Included on every response so the client can detect state transitions
-    // (e.g. child moved to FAILED) without a separate ListJobs RPC.
-    repeated iris.job.JobStatus child_job_statuses = 3;
-
-    int64 cursor = 4;               // Max autoincrement id seen (cursor for next poll)
-  }
-
   // --- Worker Detail (unified VM + worker view) ---
   message GetWorkerStatusRequest {
     string id = 1;  // VM ID or worker ID — resolved against both
@@ -579,10 +547,6 @@ service ControllerService {
   rpc GetAutoscalerStatus(Controller.GetAutoscalerStatusRequest) returns (Controller.GetAutoscalerStatusResponse);
 
   rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
-
-  // DEPRECATED: use LogService.FetchLogs with regex patterns instead.
-  // Forwards to LogService.FetchLogs internally. Scheduled for removal 2026-05-01.
-  rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);
 
   // Profiling (proxied to worker)
   rpc ProfileTask(iris.job.ProfileTaskRequest) returns (iris.job.ProfileTaskResponse);

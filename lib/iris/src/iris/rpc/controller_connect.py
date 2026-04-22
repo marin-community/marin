@@ -61,9 +61,6 @@ class ControllerService(Protocol):
     async def list_users(self, request: controller__pb2.Controller.ListUsersRequest, ctx: RequestContext) -> controller__pb2.Controller.ListUsersResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def get_task_logs(self, request: controller__pb2.Controller.GetTaskLogsRequest, ctx: RequestContext) -> controller__pb2.Controller.GetTaskLogsResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
     async def profile_task(self, request: job__pb2.ProfileTaskRequest, ctx: RequestContext) -> job__pb2.ProfileTaskResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -269,16 +266,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list_users,
-                ),
-                "/iris.cluster.ControllerService/GetTaskLogs": Endpoint.unary(
-                    method=MethodInfo(
-                        name="GetTaskLogs",
-                        service_name="iris.cluster.ControllerService",
-                        input=controller__pb2.Controller.GetTaskLogsRequest,
-                        output=controller__pb2.Controller.GetTaskLogsResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.get_task_logs,
                 ),
                 "/iris.cluster.ControllerService/ProfileTask": Endpoint.unary(
                     method=MethodInfo(
@@ -773,26 +760,6 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def get_task_logs(
-        self,
-        request: controller__pb2.Controller.GetTaskLogsRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> controller__pb2.Controller.GetTaskLogsResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetTaskLogs",
-                service_name="iris.cluster.ControllerService",
-                input=controller__pb2.Controller.GetTaskLogsRequest,
-                output=controller__pb2.Controller.GetTaskLogsResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
     async def profile_task(
         self,
         request: job__pb2.ProfileTaskRequest,
@@ -1223,8 +1190,6 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_users(self, request: controller__pb2.Controller.ListUsersRequest, ctx: RequestContext) -> controller__pb2.Controller.ListUsersResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def get_task_logs(self, request: controller__pb2.Controller.GetTaskLogsRequest, ctx: RequestContext) -> controller__pb2.Controller.GetTaskLogsResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def profile_task(self, request: job__pb2.ProfileTaskRequest, ctx: RequestContext) -> job__pb2.ProfileTaskResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def exec_in_container(self, request: controller__pb2.Controller.ExecInContainerRequest, ctx: RequestContext) -> controller__pb2.Controller.ExecInContainerResponse:
@@ -1410,16 +1375,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list_users,
-                ),
-                "/iris.cluster.ControllerService/GetTaskLogs": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="GetTaskLogs",
-                        service_name="iris.cluster.ControllerService",
-                        input=controller__pb2.Controller.GetTaskLogsRequest,
-                        output=controller__pb2.Controller.GetTaskLogsResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.get_task_logs,
                 ),
                 "/iris.cluster.ControllerService/ProfileTask": EndpointSync.unary(
                     method=MethodInfo(
@@ -1908,26 +1863,6 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.ListUsersRequest,
                 output=controller__pb2.Controller.ListUsersResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def get_task_logs(
-        self,
-        request: controller__pb2.Controller.GetTaskLogsRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> controller__pb2.Controller.GetTaskLogsResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetTaskLogs",
-                service_name="iris.cluster.ControllerService",
-                input=controller__pb2.Controller.GetTaskLogsRequest,
-                output=controller__pb2.Controller.GetTaskLogsResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

@@ -388,49 +388,6 @@ class Controller(_message.Message):
         USERS_FIELD_NUMBER: _ClassVar[int]
         users: _containers.RepeatedCompositeFieldContainer[Controller.UserSummary]
         def __init__(self, users: _Optional[_Iterable[_Union[Controller.UserSummary, _Mapping]]] = ...) -> None: ...
-    class GetTaskLogsRequest(_message.Message):
-        __slots__ = ("id", "include_children", "since_ms", "max_total_lines", "substring", "attempt_id", "min_level", "cursor", "tail")
-        ID_FIELD_NUMBER: _ClassVar[int]
-        INCLUDE_CHILDREN_FIELD_NUMBER: _ClassVar[int]
-        SINCE_MS_FIELD_NUMBER: _ClassVar[int]
-        MAX_TOTAL_LINES_FIELD_NUMBER: _ClassVar[int]
-        SUBSTRING_FIELD_NUMBER: _ClassVar[int]
-        ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
-        MIN_LEVEL_FIELD_NUMBER: _ClassVar[int]
-        CURSOR_FIELD_NUMBER: _ClassVar[int]
-        TAIL_FIELD_NUMBER: _ClassVar[int]
-        id: str
-        include_children: bool
-        since_ms: int
-        max_total_lines: int
-        substring: str
-        attempt_id: int
-        min_level: str
-        cursor: int
-        tail: bool
-        def __init__(self, id: _Optional[str] = ..., include_children: _Optional[bool] = ..., since_ms: _Optional[int] = ..., max_total_lines: _Optional[int] = ..., substring: _Optional[str] = ..., attempt_id: _Optional[int] = ..., min_level: _Optional[str] = ..., cursor: _Optional[int] = ..., tail: _Optional[bool] = ...) -> None: ...
-    class TaskLogBatch(_message.Message):
-        __slots__ = ("task_id", "logs", "error", "worker_id")
-        TASK_ID_FIELD_NUMBER: _ClassVar[int]
-        LOGS_FIELD_NUMBER: _ClassVar[int]
-        ERROR_FIELD_NUMBER: _ClassVar[int]
-        WORKER_ID_FIELD_NUMBER: _ClassVar[int]
-        task_id: str
-        logs: _containers.RepeatedCompositeFieldContainer[_logging_pb2.LogEntry]
-        error: str
-        worker_id: str
-        def __init__(self, task_id: _Optional[str] = ..., logs: _Optional[_Iterable[_Union[_logging_pb2.LogEntry, _Mapping]]] = ..., error: _Optional[str] = ..., worker_id: _Optional[str] = ...) -> None: ...
-    class GetTaskLogsResponse(_message.Message):
-        __slots__ = ("task_logs", "truncated", "child_job_statuses", "cursor")
-        TASK_LOGS_FIELD_NUMBER: _ClassVar[int]
-        TRUNCATED_FIELD_NUMBER: _ClassVar[int]
-        CHILD_JOB_STATUSES_FIELD_NUMBER: _ClassVar[int]
-        CURSOR_FIELD_NUMBER: _ClassVar[int]
-        task_logs: _containers.RepeatedCompositeFieldContainer[Controller.TaskLogBatch]
-        truncated: bool
-        child_job_statuses: _containers.RepeatedCompositeFieldContainer[_job_pb2.JobStatus]
-        cursor: int
-        def __init__(self, task_logs: _Optional[_Iterable[_Union[Controller.TaskLogBatch, _Mapping]]] = ..., truncated: _Optional[bool] = ..., child_job_statuses: _Optional[_Iterable[_Union[_job_pb2.JobStatus, _Mapping]]] = ..., cursor: _Optional[int] = ...) -> None: ...
     class GetWorkerStatusRequest(_message.Message):
         __slots__ = ("id",)
         ID_FIELD_NUMBER: _ClassVar[int]
