@@ -184,6 +184,7 @@ def main(config: SampleLmConfig):
                         max_num_tokens=jnp.array(len(toks) + config.max_new_tokens, dtype=jnp.int32),
                         stop_tokens=stop_ids,
                         temperature=jnp.array(config.temperature, dtype=jnp.float32),
+                        top_p=jnp.array(1.0, dtype=jnp.float32),
                         key=jrandom.fold_in(base_key, ridx),
                     )
                     reqs.append(

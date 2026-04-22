@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
 
 import haliax as hax
-import haliax.nn as hnn
 from haliax import AxisSelector, NamedArray
 
 __all__ = ["Sampler"]
@@ -37,6 +37,7 @@ class Sampler(eqx.Module):
         logits: NamedArray,
         temperatures: NamedArray | float | jnp.ndarray,
         *,
+        top_ps: NamedArray | float | jnp.ndarray | None = None,
         key: PRNGKeyArray,
     ) -> tuple[NamedArray, NamedArray]:
         """Sample token IDs and their log-probs.
@@ -46,6 +47,10 @@ class Sampler(eqx.Module):
                 Logits for each token in the vocabulary, with axes including *vocab_axis*.
             temperatures : NamedArray | float | jnp.ndarray
                 Temperature values for sampling. Scalar or named array with the same axes as *logits* except for the vocabulary axis.
+            top_ps : NamedArray | float | jnp.ndarray | None
+                Optional nucleus-sampling cutoff. When set, only the smallest prefix of
+                probability mass whose cumulative mass exceeds ``top_p`` remains
+                eligible for sampling.
             key : PRNGKeyArray
                 JAX random key for sampling.
 
@@ -67,15 +72,54 @@ class Sampler(eqx.Module):
         safe_t = hax.where(temperatures == 0, 1.0, temperatures).astype(jnp.float32)
         scaled_logits = logits_f32 / safe_t
 
-        samples = hax.random.categorical(key, scaled_logits, axis=self.Vocab)
+        sampling_logits = self._apply_top_p(scaled_logits, top_ps)
+        samples = hax.random.categorical(key, sampling_logits, axis=self.Vocab)
 
         # Where temperature == 0, fall back to greedy choice
         tokens = hax.where(temperatures == 0, greedy, samples)
 
-        # Compute log-prob of each sampled token: logit - log_sum_exp(logits)
-        oh = hnn.one_hot(tokens, self.Vocab)
-        selected_logits = hax.sum(scaled_logits * oh, axis=self.Vocab)
-        log_z = hnn.logsumexp(scaled_logits, axis=self.Vocab)
-        log_prob_tokens = selected_logits - log_z
+        vocab_axis = sampling_logits.resolve_axis(self.Vocab)
+        vocab_axis_index = sampling_logits.axes.index(vocab_axis)
+        sampling_logits_array = jnp.moveaxis(sampling_logits.array, vocab_axis_index, -1)
+        selected_logits = jnp.take_along_axis(
+            sampling_logits_array,
+            jnp.expand_dims(tokens.array.astype(jnp.int32), axis=-1),
+            axis=-1,
+        ).squeeze(-1)
+        log_z = jax.nn.logsumexp(sampling_logits_array, axis=-1)
+        log_prob_tokens = hax.named(selected_logits - log_z, tokens.axes)
 
         return tokens, log_prob_tokens
+
+    def _apply_top_p(
+        self,
+        scaled_logits: NamedArray,
+        top_ps: NamedArray | float | jnp.ndarray | None,
+    ) -> NamedArray:
+        """Apply nucleus sampling in vocabulary space and return masked logits."""
+        if top_ps is None:
+            return scaled_logits
+
+        vocab_axis = scaled_logits.resolve_axis(self.Vocab)
+        vocab_axis_index = scaled_logits.axes.index(vocab_axis)
+        logits_array = jnp.moveaxis(scaled_logits.array, vocab_axis_index, -1)
+        sorted_indices = jnp.argsort(logits_array, axis=-1)[..., ::-1]
+        sorted_logits = jnp.take_along_axis(logits_array, sorted_indices, axis=-1)
+        sorted_probs = jax.nn.softmax(sorted_logits, axis=-1)
+        cumulative_probs = jnp.cumsum(sorted_probs, axis=-1)
+
+        if isinstance(top_ps, NamedArray):
+            top_p_array = top_ps.array
+        else:
+            top_p_array = top_ps
+        threshold = jnp.clip(jnp.asarray(top_p_array, dtype=jnp.float32), min=0.0, max=1.0)[..., None]
+
+        keep_sorted = cumulative_probs <= threshold
+        keep_sorted = jnp.concatenate(
+            [jnp.ones_like(keep_sorted[..., :1], dtype=bool), keep_sorted[..., 1:]],
+            axis=-1,
+        )
+        filtered_sorted_logits = jnp.where(keep_sorted, sorted_logits, -jnp.inf)
+        inverse_permutation = jnp.argsort(sorted_indices, axis=-1)
+        filtered_logits = jnp.take_along_axis(filtered_sorted_logits, inverse_permutation, axis=-1)
+        return hax.named(jnp.moveaxis(filtered_logits, -1, vocab_axis_index), scaled_logits.axes)
