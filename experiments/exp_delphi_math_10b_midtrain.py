@@ -61,10 +61,14 @@ BASES: dict[str, dict] = {
     # ~1.9 B AdamH isoflop scan point at 3e20 FLOPs (compute-optimal).
     # Stands in for "1e20" — no optimal-training run exists at 1e20 FLOPs
     # in the AdamH scaling ladder, only the sweep points up to 3e20.
-    # mirror:// lets TPUs in any region read this ckpt by copying from
-    # whichever marin-* bucket has it (us-central2) into the local prefix.
+    # Direct gs:// path: Levanter's TensorStore loader doesn't understand
+    # mirror:// URLs. Cross-region read is acceptable under
+    # MARIN_I_WILL_PAY_FOR_ALL_FEES=1 (which disables the fsspec
+    # CrossRegionGuardedFS budget; TensorStore goes direct to GCS).
     "1e20-iso-d2048-L21": dict(
-        ckpt=("mirror://checkpoints/isoflop/" "isoflop-3e+20-d2048-L21-B128-adamh_scaling_v5/checkpoints/step-46915/"),
+        ckpt=(
+            "gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+20-d2048-L21-B128-adamh_scaling_v5/checkpoints/step-46915/"
+        ),
         hidden_dim=2048,
         peak_lr=4.483e-3,
         peak_adam_lr=7.382e-5,
@@ -74,7 +78,7 @@ BASES: dict[str, dict] = {
     # Canonical Delphi 1e21 v5 (~3.4 B). Seed replicates v5-seed42,
     # v5-seed62746, and v6 converge within 0.001 c4-en-loss of this run.
     "1e21-v5": dict(
-        ckpt=("mirror://" "adamh-scaling-ladder-nemotron-optimal-1e+21-v5-019021/checkpoints/step-21979/"),
+        ckpt=("gs://marin-us-central2/adamh-scaling-ladder-nemotron-optimal-1e+21-v5-019021/checkpoints/step-21979/"),
         hidden_dim=2560,
         peak_lr=7.425e-3,
         peak_adam_lr=4.314e-4,
