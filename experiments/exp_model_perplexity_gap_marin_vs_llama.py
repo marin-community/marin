@@ -3,12 +3,20 @@
 
 from fray.v2.types import ResourceConfig
 
+from experiments.bio_chem_notation import bio_chem_raw_validation_sets
 from experiments.defaults import default_raw_validation_sets
 from marin.evaluation.perplexity_gap import (
     GapFinderModelConfig,
     default_model_perplexity_gap,
 )
 from marin.execution.executor import executor_main
+
+
+def _all_validation_sets():
+    sets = dict(default_raw_validation_sets())
+    sets.update(bio_chem_raw_validation_sets())
+    return sets
+
 
 STEP = default_model_perplexity_gap(
     name="marin-8b-base-vs-llama-3.1-8b-base",
@@ -22,7 +30,7 @@ STEP = default_model_perplexity_gap(
         checkpoint_is_hf=True,
         tokenizer="meta-llama/Llama-3.1-8B",
     ),
-    datasets=default_raw_validation_sets(),
+    datasets=_all_validation_sets(),
     resource_config=ResourceConfig.with_tpu(
         "v5p-8",
         regions=["us-central1"],
@@ -43,5 +51,8 @@ STEP = default_model_perplexity_gap(
 if __name__ == "__main__":
     executor_main(
         [STEP],
-        description="Compare Marin 8B base and Llama 3.1 8B base on raw Paloma and uncheatable eval datasets.",
+        description=(
+            "Compare Marin 8B base and Llama 3.1 8B base on raw Paloma, "
+            "Uncheatable Eval, and the bio/chem notation slices (issue #5058)."
+        ),
     )
