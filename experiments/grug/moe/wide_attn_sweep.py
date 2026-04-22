@@ -36,7 +36,7 @@ def _make_steps() -> list[ExecutorStep]:
         model, optimizer, batch, num_steps = build_from_heuristic(budget=budget, hidden_dim=dim)
         new_heads = round(1.5 * dim / 128)
         new_kv = h._compute_kv_heads(new_heads, h.gqa_ratio)
-        model = dataclasses.replace(model, num_heads=new_heads, num_kv_heads=new_kv)
+        model = dataclasses.replace(model, num_heads=new_heads, num_kv_heads=new_kv, head_dim=128)
         run_id = f"wide-attn-1_5x-d{dim}-{budget:.2e}"
 
         steps.append(
