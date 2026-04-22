@@ -341,27 +341,6 @@ class Controller(_message.Message):
         STATUS_FIELD_NUMBER: _ClassVar[int]
         status: _vm_pb2.AutoscalerStatus
         def __init__(self, status: _Optional[_Union[_vm_pb2.AutoscalerStatus, _Mapping]] = ...) -> None: ...
-    class TransactionAction(_message.Message):
-        __slots__ = ("timestamp", "action", "entity_id", "details")
-        TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
-        ACTION_FIELD_NUMBER: _ClassVar[int]
-        ENTITY_ID_FIELD_NUMBER: _ClassVar[int]
-        DETAILS_FIELD_NUMBER: _ClassVar[int]
-        timestamp: _time_pb2.Timestamp
-        action: str
-        entity_id: str
-        details: str
-        def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., action: _Optional[str] = ..., entity_id: _Optional[str] = ..., details: _Optional[str] = ...) -> None: ...
-    class GetTransactionsRequest(_message.Message):
-        __slots__ = ("limit",)
-        LIMIT_FIELD_NUMBER: _ClassVar[int]
-        limit: int
-        def __init__(self, limit: _Optional[int] = ...) -> None: ...
-    class GetTransactionsResponse(_message.Message):
-        __slots__ = ("actions",)
-        ACTIONS_FIELD_NUMBER: _ClassVar[int]
-        actions: _containers.RepeatedCompositeFieldContainer[Controller.TransactionAction]
-        def __init__(self, actions: _Optional[_Iterable[_Union[Controller.TransactionAction, _Mapping]]] = ...) -> None: ...
     class BeginCheckpointRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...

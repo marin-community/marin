@@ -525,7 +525,7 @@ def _build_pod_manifest(
 
 def _kubectl_log_line_to_log_entry(kll: KubectlLogLine, attempt_id: int) -> logging_pb2.LogEntry:
     level_name = parse_log_level(kll.data)
-    level = str_to_log_level(level_name) if level_name else 0
+    level = str_to_log_level(level_name)
     entry = logging_pb2.LogEntry(source=kll.stream, data=kll.data, attempt_id=attempt_id, level=level)
     entry.timestamp.CopyFrom(timestamp_to_proto(Timestamp.from_seconds(kll.timestamp.timestamp())))
     return entry

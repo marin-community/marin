@@ -25,6 +25,8 @@ jobs:
           filters: |
             relevant:
               - 'lib/fray/**'
+              # fray imports from iris; run fray tests on any iris change so cross-layer breakage is caught here.
+              - 'lib/iris/**'
               - 'uv.lock'
               - '.github/workflows/fray-unit-tests.yaml'
 

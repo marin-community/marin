@@ -866,7 +866,6 @@ class ZephyrCoordinator:
 
                 # Build and submit tasks
                 tasks = _compute_tasks_from_shards(shards, stage, aux_per_shard, stage_name=stage_label)
-                output_stage_name = tasks[0].stage_name if tasks else stage_label
                 logger.info("[%s] Starting stage %s with %d tasks", self._execution_id, stage_label, len(tasks))
                 self._start_stage(stage_label, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
 
@@ -881,7 +880,6 @@ class ZephyrCoordinator:
                     len(shards),
                     output_shard_count=stage.output_shards,
                     is_scatter=stage_is_scatter,
-                    scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{output_stage_name}",
                 )
 
             # Flatten final results — each shard may involve I/O (unpickling from
@@ -923,7 +921,6 @@ class ZephyrCoordinator:
 
                 join_stage_label = f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}"
                 right_tasks = _compute_tasks_from_shards(right_refs, right_stage, stage_name=join_stage_label)
-                join_output_stage_name = right_tasks[0].stage_name if right_tasks else join_stage_label
                 self._start_stage(join_stage_label, right_tasks)
                 self._wait_for_stage()
                 raw = self._collect_results()
@@ -933,7 +930,6 @@ class ZephyrCoordinator:
                     len(right_refs),
                     output_shard_count=right_stage.output_shards,
                     is_scatter=right_is_scatter,
-                    scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{join_output_stage_name}",
                 )
 
             if len(shard_refs) != len(right_refs):
@@ -1126,7 +1122,7 @@ class ZephyrWorker:
     def _poll_loop(self, coordinator: ActorHandle) -> None:
         """Pure polling loop. Exits on SHUTDOWN signal, coordinator death, or shutdown event."""
         task_count = 0
-        backoff = ExponentialBackoff(initial=0.1, maximum=1.0)
+        backoff = ExponentialBackoff(initial=0.1, maximum=5.0)
 
         future: ActorFuture | None = None
         future_start = 0.0
@@ -1313,7 +1309,6 @@ def _regroup_result_refs(
     input_shard_count: int,
     output_shard_count: int | None = None,
     is_scatter: bool = False,
-    scatter_manifest_dir: str = "",
 ) -> list[Shard]:
     """Regroup worker output refs by output shard index without loading data.
 

@@ -15,7 +15,7 @@ import equinox as eqx
 import haliax as hax
 import jax
 from jax.sharding import Mesh
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import (
     HFCheckpointConverter,
     PYTORCH_WEIGHTS_INDEX_NAME,
@@ -116,6 +116,7 @@ def load_model_from_checkpoint(
     else:
         # Load from local Levanter checkpoint
         model = eqx.filter_eval_shape(model_config.build, vocab_axis, key=key)
-        model = load_checkpoint(model, checkpoint, subpath="model", axis_mapping=axis_mapping, mesh=mesh)
+        checkpoint_path = latest_checkpoint_path(checkpoint)
+        model = load_checkpoint(model, checkpoint_path, subpath="model", axis_mapping=axis_mapping, mesh=mesh)
         model = mp.cast_to_compute(model)
         return model

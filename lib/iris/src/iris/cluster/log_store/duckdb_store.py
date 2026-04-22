@@ -525,7 +525,7 @@ class DuckDBLogStore:
         regular expression and matched with DuckDB's ``regexp_matches()``.
         Otherwise it is treated as an exact key lookup.
         """
-        min_level_enum = str_to_log_level(min_level) if min_level else 0
+        min_level_enum = str_to_log_level(min_level)
         is_pattern = bool(REGEX_META_RE.search(key))
 
         if not is_pattern:

@@ -74,14 +74,12 @@ from iris.cluster.controller.schema import (
     JOB_ROW_PROJECTION,
     TASK_DETAIL_PROJECTION,
     TASK_ROW_PROJECTION,
-    TXN_ACTION_PROJECTION,
     WORKER_DETAIL_PROJECTION,
     AttemptRow,
     EndpointRow,
     JobDetailRow,
     JobRow,
     TaskDetailRow,
-    TransactionActionRow,
     WorkerDetailRow,
     WorkerRow,
     tasks_with_attempts,
@@ -120,9 +118,6 @@ from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp, Timer
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_TRANSACTION_LIMIT = 50
-
 
 DEFAULT_MAX_TOTAL_LINES = 100000
 
@@ -798,17 +793,6 @@ def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[JobDetailRow]:
         )
 
 
-def _transaction_actions(db: ControllerDB, limit: int = 100) -> list[TransactionActionRow]:
-    with db.read_snapshot() as q:
-        actions = TXN_ACTION_PROJECTION.decode(
-            q.fetchall(
-                f"SELECT {TXN_ACTION_PROJECTION.select_clause()} " "FROM txn_actions ta2 ORDER BY ta2.id DESC LIMIT ?",
-                (limit,),
-            ),
-        )
-    return list(reversed(actions))
-
-
 def _live_user_stats(db: ControllerDB) -> list[UserStats]:
     """Aggregate job/task counts per user for active (non-terminal) jobs."""
     active_states = ",".join(
@@ -1229,6 +1213,8 @@ class ControllerServiceImpl:
 
         resources = _resource_spec_from_job_row(job)
 
+        has_children = bool(_parent_ids_with_children(self._db, [job.job_id]))
+
         proto_job_status = job_pb2.JobStatus(
             job_id=job.job_id.to_wire(),
             state=job.state,
@@ -1242,6 +1228,7 @@ class ControllerServiceImpl:
             task_count=summary.task_count if summary else 0,
             completed_count=summary.completed_count if summary else 0,
             resources=resources,
+            has_children=has_children,
         )
         if job.started_at:
             proto_job_status.started_at.CopyFrom(timestamp_to_proto(job.started_at))
@@ -1959,27 +1946,6 @@ class ControllerServiceImpl:
             profile_data=resp.profile_data,
             error=resp.error,
         )
-
-    # --- Transactions ---
-
-    def get_transactions(
-        self,
-        request: controller_pb2.Controller.GetTransactionsRequest,
-        ctx: Any,
-    ) -> controller_pb2.Controller.GetTransactionsResponse:
-        """Get recent controller actions for the dashboard action log."""
-        limit = request.limit if request.limit > 0 else DEFAULT_TRANSACTION_LIMIT
-        actions = []
-        for action in _transaction_actions(self._db, limit=limit):
-            details_str = json.dumps(action.details) if action.details else ""
-            proto_action = controller_pb2.Controller.TransactionAction(
-                action=action.action,
-                entity_id=action.entity_id,
-                details=details_str,
-            )
-            proto_action.timestamp.CopyFrom(timestamp_to_proto(action.timestamp))
-            actions.append(proto_action)
-        return controller_pb2.Controller.GetTransactionsResponse(actions=actions)
 
     def list_users(
         self,

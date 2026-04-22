@@ -7,13 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from tests.cluster.controller.conftest import (
-    FakeProvider,
     make_job_request,
     make_worker_metadata,
     register_worker,
@@ -24,16 +21,8 @@ pytestmark = pytest.mark.timeout(15)
 
 
 @pytest.fixture
-def dry_run_controller(tmp_path):
-    db = ControllerDB(db_dir=tmp_path / "db")
-    config = ControllerConfig(
-        dry_run=True,
-        remote_state_dir=f"file://{tmp_path}/remote",
-        local_state_dir=tmp_path,
-    )
-    controller = Controller(config=config, provider=FakeProvider(), db=db)
-    yield controller
-    controller.stop()
+def dry_run_controller(make_controller):
+    return make_controller(dry_run=True)
 
 
 def test_dry_run_controller_starts_and_stops(dry_run_controller):

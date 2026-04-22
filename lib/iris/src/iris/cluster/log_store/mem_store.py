@@ -103,7 +103,7 @@ class MemStore:
         tail: bool = False,
         min_level: str = "",
     ) -> LogReadResult:
-        min_level_enum = str_to_log_level(min_level) if min_level else 0
+        min_level_enum = str_to_log_level(min_level)
         is_pattern = bool(REGEX_META_RE.search(key))
 
         if is_pattern:

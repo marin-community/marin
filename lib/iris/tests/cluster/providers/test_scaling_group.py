@@ -134,6 +134,21 @@ class TestScalingGroupVmGroupOwnership:
         assert group.get_slice("slice-001") is not None
         assert group.get_slice("slice-002") is not None
 
+    def test_reconcile_skips_manual_slices(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """Slices tagged iris_manual=true are never adopted by a ScalingGroup."""
+        labels = Labels("iris")
+        auto = make_fake_slice_handle("slice-auto")
+        manual = make_fake_slice_handle("slice-manual")
+        manual._labels[labels.iris_manual] = "true"
+
+        platform = make_mock_platform(slices_to_discover=[auto, manual])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+
+        assert group.slice_count() == 1
+        assert group.get_slice("slice-auto") is not None
+        assert group.get_slice("slice-manual") is None
+
     def test_scale_up_creates_and_tracks_vm_group(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Full lifecycle (begin + scale_up + complete) creates and tracks a slice."""
         platform = make_mock_platform()

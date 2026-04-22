@@ -118,21 +118,31 @@ SELECT slice_id, lifecycle, scale_group, worker_ids FROM slices WHERE lifecycle=
 -- Task attempt history (debugging retries)
 SELECT task_id, attempt_id, state, exit_code, error FROM task_attempts
 WHERE task_id LIKE '%<job_fragment>%' ORDER BY attempt_id;
+```
 
--- What the controller has been doing
-SELECT kind, count(*) FROM txn_log GROUP BY kind ORDER BY count(*) DESC LIMIT 10;
+Controller audit events (`event=<kind> action=<action> entity=<id> ...`) are
+emitted as structured `logger.info` lines — query them through
+`iris process logs` with a substring filter, not via SQL. Example:
+
+```bash
+iris process logs --since 24h | grep 'action=worker_heartbeat_failed'
 ```
 
 Full table list: `iris query "SELECT name FROM sqlite_master WHERE type='table'"`.
 
 ### Offline checkpoint analysis
 
-For slow queries, trigger a checkpoint and query offline. **Never run expensive queries against the live DB** — they stall the controller.
+For slow queries, query offline. **Never run expensive queries against the live DB** — they stall the controller.
 
 ```bash
-iris cluster controller checkpoint           # trigger fresh checkpoint
 # Download the checkpoint file (path printed by command above)
 sqlite3 /tmp/controller.sqlite3 "SELECT ..."
+```
+
+Prefer to use the last checkpoint from GCS. Only take a new controller checkpoint if this is too old:
+
+```bash
+iris cluster controller checkpoint
 ```
 
 ## Users & Auth
