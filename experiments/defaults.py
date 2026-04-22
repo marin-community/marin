@@ -312,13 +312,9 @@ def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> di
 @lru_cache
 def default_raw_validation_sets() -> dict[str, Any]:
     from experiments.evals.exp1600_uncheatable_evals import uncheatable_eval_raw_validation_sets
-    from experiments.exp5056_raw_web_markup_ppl import raw_web_markup_raw_validation_sets
 
     validation_sets = dict(paloma_raw_validation_sets())
     validation_sets.update(uncheatable_eval_raw_validation_sets())
-    # Surface-preserving web/markup/image-text slices (#5056, parent #5005).
-    # Empty until downloaders land; see experiments/exp5056_raw_web_markup_ppl.py.
-    validation_sets.update(raw_web_markup_raw_validation_sets())
     return validation_sets
 
 
