@@ -28,6 +28,12 @@ jobs:
               - 'lib/marin/**'
               - 'experiments/grug/**'
               - 'tests/**'
+              # marin sits at the top of the dependency stack; run on any upstream layer change.
+              - 'lib/haliax/**'
+              - 'lib/iris/**'
+              - 'lib/fray/**'
+              - 'lib/zephyr/**'
+              - 'lib/levanter/**'
               - 'uv.lock'
               - 'pyproject.toml'
               - '.github/workflows/marin-unit-tests.yaml'

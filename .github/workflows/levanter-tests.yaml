@@ -27,6 +27,10 @@ jobs:
             relevant:
               - 'lib/levanter/**'
               - 'lib/haliax/**'
+              # levanter depends on upstream layers (haliax, fray, zephyr, transitively iris).
+              - 'lib/iris/**'
+              - 'lib/fray/**'
+              - 'lib/zephyr/**'
               - 'uv.lock'
               - '.github/workflows/levanter-tests.yaml'
 
