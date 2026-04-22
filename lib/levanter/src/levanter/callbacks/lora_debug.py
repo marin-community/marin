@@ -264,6 +264,18 @@ def _module_key_from_arr_path(arr_path: str) -> str:
     return "/".join(segments)
 
 
+def _strip_adam_slot_segments(path: str) -> str:
+    """Remove Adam-slot path components (``mu`` / ``nu``) anywhere in the path.
+
+    Why: optax flattens ``ScaleByAdamState.mu`` / ``nu`` as sibling subtrees, so
+    the same parameter appears twice in the opt_state flatten — once under
+    ``.mu.<tree>``, once under ``.nu.<tree>``. Without stripping, the per-module
+    key for mu and nu differ by exactly that one segment, and the two halves
+    never pair up for the ``m / (sqrt(v) + eps)`` computation.
+    """
+    return "/".join(s for s in path.split("/") if s not in ("mu", "nu"))
+
+
 # --- Callback ----------------------------------------------------------------
 
 
@@ -473,10 +485,10 @@ def _emit_opt_state_stats(
             continue
 
         factor = "A" if "lora_A" in path_str else "B"
-        mod_key = _module_key_from_arr_path(path_str)
         arr_f32 = arr.astype(jnp.float32)
 
-        # Bucket Adam moments by inspecting the path for ``mu`` / ``nu``.
+        # Bucket Adam moments by inspecting the path for ``mu`` / ``nu``. Do
+        # this *before* stripping so the slot marker is still present.
         if "/mu/" in f"/{path_str}/" or path_str.endswith("/mu"):
             slot = "m"
         elif "/nu/" in f"/{path_str}/" or path_str.endswith("/nu"):
@@ -485,6 +497,10 @@ def _emit_opt_state_stats(
             continue  # scalar counter, not a tensor we want
         else:
             slot = "other"
+
+        # Module key must be slot-agnostic so mu and nu of the same parameter
+        # collapse to one pairing key; otherwise effective_update never emits.
+        mod_key = _module_key_from_arr_path(_strip_adam_slot_segments(path_str))
 
         key_prefix = f"lora_debug/adam/{slot}/{factor}/{mod_key}"
         out[f"{key_prefix}/l2"] = jnp.sqrt(jnp.sum(jnp.square(arr_f32)))
