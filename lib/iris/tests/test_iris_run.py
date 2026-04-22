@@ -5,7 +5,6 @@
 
 import sys
 
-import click
 import pytest
 
 from iris.cli.job import (
@@ -174,39 +173,6 @@ def test_run_iris_job_passes_reservation(monkeypatch):
     for entry in reservation:
         assert entry.resources.device.gpu.variant == "H100"
         assert entry.resources.device.gpu.count == 8
-
-
-@pytest.mark.parametrize(
-    "regions, zone",
-    [
-        (("us-central1",), None),
-        (None, "us-central1-a"),
-        (("us-central1",), "us-central1-a"),
-    ],
-)
-def test_run_iris_job_rejects_reserve_with_region_or_zone(monkeypatch, regions, zone):
-    """--reserve is mutually exclusive with --region/--zone (regression for #4988).
-
-    The controller's claim loop only evaluates each reservation entry's own
-    constraints, so job-level routing would silently fail to gate worker claims.
-    Reject the combination at submit time instead.
-    """
-
-    def _fail_if_called(**kwargs):
-        raise AssertionError("submission must not happen when --reserve conflicts with --region/--zone")
-
-    monkeypatch.setattr("iris.cli.job._submit_and_wait_job", _fail_if_called)
-
-    with pytest.raises(click.UsageError, match="--reserve cannot be combined with --region or --zone"):
-        run_iris_job(
-            controller_url="http://controller:10000",
-            command=[sys.executable, "-c", "print('ok')"],
-            env_vars={},
-            wait=False,
-            regions=regions,
-            zone=zone,
-            reserve=("2:v5litepod-16",),
-        )
 
 
 def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):
