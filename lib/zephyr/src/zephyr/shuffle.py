@@ -4,11 +4,14 @@
 """Scatter/shuffle support for Zephyr pipelines.
 
 Each source-shard's scatter output is a single binary file containing a
-sequence of zstd-compressed frames. Within one chunk's zstd frame, items
-are written in sub-batches of ``_SUB_BATCH_SIZE`` — each sub-batch is a
-single ``pickle.dump(list_of_items)`` into the zstd stream. This amortises
-per-item pickle/zstd dispatch over a sub-batch while still letting the
-reader stream sub-batches lazily without materialising the full chunk.
+sequence of zstd-compressed frames. Each frame starts with a one-byte format
+tag: ``\\x01`` for msgspec msgpack (the default) or ``\\x00`` for cloudpickle
+sub-batches (the fallback for types msgpack cannot represent, such as frozenset
+or user-defined classes).
+
+msgpack encodes the chunk as a single list, then zstd-compresses the result
+in one shot -- 2-5x faster to write and ~1.5x faster to read than the old
+per-sub-batch cloudpickle approach.
 
 A msgpack sidecar (``.scatter_meta``) maps ``target_shard -> [(offset, length)]``
 byte ranges into the data file, plus per-shard ``max_chunk_rows`` and a global
@@ -17,12 +20,9 @@ into a single ``scatter_metadata`` manifest at the end of the scatter stage,
 which reducers consume to build :class:`ScatterReader` instances.
 
 On read, each chunk is fetched with a single ``cat_file`` range GET (one
-HTTP request, no per-chunk file handle), then streamed via
-``pickle.load`` on a length-bounded zstd reader. Per-iterator memory stays
-near-constant: one buffered item plus the zstd decoder state plus the
-chunk's compressed bytes (typically a few MB). This bound is essential for
-skewed shuffles where one reducer pulls disproportionate data and the
-external-sort fan-in opens hundreds of chunk iterators at once.
+HTTP request, no per-chunk file handle). The format tag selects the
+deserialization path. Per-iterator memory is bounded by the chunk's compressed
+bytes plus the decompressed payload (one list in memory per chunk).
 """
 
 from __future__ import annotations
@@ -97,9 +97,12 @@ _SCATTER_SAMPLE_SIZE = 100
 _SCATTER_READ_BUFFER_FRACTION = 0.25
 
 _ZSTD_COMPRESS_LEVEL = 3
-# Items per pickle.dump call within a chunk. Larger = faster (less per-call
-# dispatch overhead), smaller = lower per-iterator read memory.
+# Items per cloudpickle.dump call in the pickle fallback path.
 _SUB_BATCH_SIZE = 1024
+
+# One-byte format tags written at the start of every chunk frame.
+_FRAME_FORMAT_PICKLE = b"\x00"
+_FRAME_FORMAT_MSGPACK = b"\x01"
 
 
 # ---------------------------------------------------------------------------
@@ -247,21 +250,23 @@ class ScatterFileIterator:
 
 
 def _iter_chunk(fs: Any, fs_path: str, offset: int, length: int) -> Iterator:
-    """Fetch one chunk's compressed bytes via cat_file and stream items.
+    """Fetch one chunk's bytes via cat_file and yield items.
 
-    Each chunk is a zstd frame containing a sequence of pickled sub-batches
-    (lists of up to ``_SUB_BATCH_SIZE`` items). The reader streams one
-    sub-batch at a time, so per-iterator memory is bounded by the
-    sub-batch size plus the chunk's compressed bytes.
+    Reads the format tag (first byte) to dispatch to msgpack or pickle
+    deserialization.
     """
     blob = fs.cat_file(fs_path, start=offset, end=offset + length)
-    with zstd.ZstdDecompressor().stream_reader(io.BytesIO(blob)) as reader:
-        while True:
-            try:
-                sub_batch = pickle.load(reader)
-            except EOFError:
-                return
-            yield from sub_batch
+    fmt, payload = blob[0:1], blob[1:]
+    if fmt == _FRAME_FORMAT_MSGPACK:
+        yield from _msgpack_decoder.decode(zstd.ZstdDecompressor().decompress(payload))
+    else:
+        with zstd.ZstdDecompressor().stream_reader(io.BytesIO(payload)) as reader:
+            while True:
+                try:
+                    sub_batch = pickle.load(reader)
+                except EOFError:
+                    return
+                yield from sub_batch
 
 
 # ---------------------------------------------------------------------------
@@ -425,20 +430,50 @@ def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> li
 # ---------------------------------------------------------------------------
 
 
-def _write_chunk_frame(items: list) -> bytes:
-    """Encode a list of items as one zstd frame of pickled sub-batches.
+_msgpack_encoder = msgspec.msgpack.Encoder()
+_msgpack_decoder = msgspec.msgpack.Decoder()
 
-    Items are split into sub-batches of ``_SUB_BATCH_SIZE`` and each
-    sub-batch is written as a single ``cloudpickle.dump(sublist)`` into the
-    same zstd stream. This batches per-call dispatch overhead while
-    keeping per-iterator read memory bounded by the sub-batch size.
+
+def _has_set_types(obj: Any, depth: int = 0) -> bool:
+    """Return True if obj contains frozenset or set at any nesting level.
+
+    msgspec silently converts frozenset/set to list, which is data loss.
+    Scanning only the first item (O(1) per chunk) is sufficient because all
+    items in a scatter chunk share the same schema.
     """
-    raw = io.BytesIO()
-    cctx = zstd.ZstdCompressor(level=_ZSTD_COMPRESS_LEVEL)
-    with cctx.stream_writer(raw, closefd=False) as zf:
-        for i in range(0, len(items), _SUB_BATCH_SIZE):
-            cloudpickle.dump(items[i : i + _SUB_BATCH_SIZE], zf, protocol=pickle.HIGHEST_PROTOCOL)
-    return raw.getvalue()
+    if isinstance(obj, (frozenset, set)):
+        return True
+    if depth >= 2:
+        return False
+    if isinstance(obj, dict):
+        return any(_has_set_types(v, depth + 1) for v in obj.values())
+    if isinstance(obj, (list, tuple)):
+        return any(_has_set_types(v, depth + 1) for v in obj[:5])
+    return False
+
+
+def _write_chunk_frame(items: list) -> bytes:
+    """Encode a list of items as one zstd-compressed frame.
+
+    Tries msgspec msgpack first (2-5x faster than cloudpickle). Falls back
+    to cloudpickle sub-batches for types msgpack cannot encode losslessly
+    (frozenset, set, user-defined classes). The first byte of the returned
+    bytes is the format tag (``_FRAME_FORMAT_MSGPACK`` or
+    ``_FRAME_FORMAT_PICKLE``).
+    """
+    try:
+        if items and _has_set_types(items[0]):
+            raise TypeError("item contains frozenset or set")
+        payload = _msgpack_encoder.encode(items)
+        return _FRAME_FORMAT_MSGPACK + zstd.ZstdCompressor(level=_ZSTD_COMPRESS_LEVEL).compress(payload)
+    except Exception:
+        logger.debug("_write_chunk_frame: msgpack not applicable, using pickle")
+        raw = io.BytesIO()
+        cctx = zstd.ZstdCompressor(level=_ZSTD_COMPRESS_LEVEL)
+        with cctx.stream_writer(raw, closefd=False) as zf:
+            for i in range(0, len(items), _SUB_BATCH_SIZE):
+                cloudpickle.dump(items[i : i + _SUB_BATCH_SIZE], zf, protocol=pickle.HIGHEST_PROTOCOL)
+        return _FRAME_FORMAT_PICKLE + raw.getvalue()
 
 
 class ScatterWriter:

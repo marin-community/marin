@@ -11,6 +11,8 @@ from zephyr.plan import deterministic_hash
 from zephyr.shuffle import (
     ScatterFileIterator,
     ScatterReader,
+    _FRAME_FORMAT_MSGPACK,
+    _FRAME_FORMAT_PICKLE,
     _write_chunk_frame,
     _write_scatter,
 )
@@ -192,6 +194,25 @@ def test_scatter_file_iterator_multiple_chunks(tmp_path):
     it = ScatterFileIterator(path=path, chunks=((0, len(frame_a)), (len(frame_a), len(frame_b))))
     chunks = [list(c) for c in it.get_chunk_iterators()]
     assert chunks == [chunk_a, chunk_b]
+
+
+# ---------------------------------------------------------------------------
+# Frame format: msgpack default, pickle fallback
+# ---------------------------------------------------------------------------
+
+
+def test_write_chunk_frame_uses_msgpack_for_plain_dicts():
+    """Plain dict items with primitive values use the msgpack format tag."""
+    items = [{"k": i, "v": float(i), "tag": f"t{i}"} for i in range(20)]
+    frame = _write_chunk_frame(items)
+    assert frame[0:1] == _FRAME_FORMAT_MSGPACK
+
+
+def test_write_chunk_frame_falls_back_to_pickle_for_frozensets():
+    """Items containing frozensets cannot be msgpack-encoded and use pickle."""
+    items = [{"k": 0, "v": frozenset([1, 2, 3])}]
+    frame = _write_chunk_frame(items)
+    assert frame[0:1] == _FRAME_FORMAT_PICKLE
 
 
 # ---------------------------------------------------------------------------
