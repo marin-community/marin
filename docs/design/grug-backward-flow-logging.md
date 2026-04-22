@@ -49,6 +49,8 @@ canonical Grug base template.
 - `trace_backward_activation(x, name, site=...)`: a convenience wrapper for
   identity-only stream anchors that adds a `jax.named_scope(name)` around
   `log_backward_activation(...)`
+- `BACKWARD_FLOW_SITE_IN` / `BACKWARD_FLOW_SITE_OUT`: named constants for the
+  metric-key site labels
 - `normalize_name_stack(...)`: removes transform wrappers such as `jvp(...)` and
   `transpose(...)` so metric keys stay stable
 
@@ -58,25 +60,35 @@ registry.
 
 ```python
 @functools.partial(jax.custom_vjp, nondiff_argnums=(0, 1))
-def _tagged_identity(metric_prefix: str, site: str, x: jax.Array) -> jax.Array:
+def _tagged_identity(metric_prefix: str, site: BackwardFlowSite, x: jax.Array) -> jax.Array:
     return x
 
-def _tagged_identity_fwd(metric_prefix: str, site: str, x: jax.Array):
-    levanter.tracker.jit_log(_tensor_metrics(metric_prefix, x, site=site, kind="activation"), step=None)
+def _tagged_identity_fwd(metric_prefix: str, site: BackwardFlowSite, x: jax.Array):
+    levanter.tracker.jit_log(
+        _tensor_metrics(metric_prefix, x, site=site, kind=BACKWARD_FLOW_KIND_ACTIVATION),
+        step=None,
+    )
     return x, None
 
-def _tagged_identity_bwd(metric_prefix: str, site: str, _residual: None, cotangent: jax.Array):
-    levanter.tracker.jit_log(_tensor_metrics(metric_prefix, cotangent, site=site, kind="gradient"), step=None)
+def _tagged_identity_bwd(metric_prefix: str, site: BackwardFlowSite, _residual: None, cotangent: jax.Array):
+    levanter.tracker.jit_log(
+        _tensor_metrics(metric_prefix, cotangent, site=site, kind=BACKWARD_FLOW_KIND_GRADIENT),
+        step=None,
+    )
     return (cotangent,)
 
-def log_backward_activation(x: jax.Array, *, site: str = "out") -> jax.Array:
+def log_backward_activation(
+    x: jax.Array, *, site: BackwardFlowSite = BACKWARD_FLOW_SITE_OUT
+) -> jax.Array:
     context = _ACTIVE_CONTEXT.get()
     if context is None:
         return x
     name_stack = normalize_name_stack(str(source_info_util.current_name_stack()))
     return _tagged_identity(f"{context.prefix}/{name_stack}", site, x)
 
-def trace_backward_activation(x: jax.Array, name: str, *, site: str = "out") -> jax.Array:
+def trace_backward_activation(
+    x: jax.Array, name: str, *, site: BackwardFlowSite = BACKWARD_FLOW_SITE_OUT
+) -> jax.Array:
     with jax.named_scope(name):
         return log_backward_activation(x, site=site)
 ```

@@ -40,17 +40,17 @@ explicitly when a variant should opt out. Positive intervals sample that often.
 ## 2) Mark module outputs
 
 At each named module boundary you want in the graph, wrap the returned activation with
-`log_backward_activation(..., site="out")`. For modules where you want to see what
-backward is sending *into* the module, also mark the input with `site="in"`:
+`log_backward_activation(...)`. For modules where you want to see what backward is
+sending *into* the module, mark the input with `BACKWARD_FLOW_SITE_IN`:
 
 ```python
-from levanter.analysis.backward_flow import log_backward_activation, trace_backward_activation
+from levanter.analysis.backward_flow import BACKWARD_FLOW_SITE_IN, log_backward_activation, trace_backward_activation
 
 @named_call
 def __call__(self, x):
-    x = log_backward_activation(x, site="in")
+    x = log_backward_activation(x, site=BACKWARD_FLOW_SITE_IN)
     out = ...
-    return log_backward_activation(out, site="out")
+    return log_backward_activation(out)
 ```
 
 For identity-only stream anchors, use `trace_backward_activation(...)` to add the probe
