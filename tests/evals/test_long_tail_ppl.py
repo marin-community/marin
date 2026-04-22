@@ -5,7 +5,9 @@ import pytest
 
 from experiments.evals.long_tail_ppl import (
     GAME_MUSIC_ISSUE,
+    PACKAGE_METADATA_ISSUE,
     LongTailPplFamily,
+    long_tail_ppl_slices,
     long_tail_raw_validation_sets,
     render_long_tail_ppl_registry_markdown,
 )
@@ -45,6 +47,30 @@ def test_hf_backed_raw_dataset_preserves_requested_split():
     assert component.format.text_key == "body"
     assert isinstance(component.source, HfDatasetSourceConfig)
     assert component.source.splits == ["test"]
+
+
+def test_package_metadata_family_covers_dod_surfaces():
+    """Issue #5061 DoD requires slices for registry JSON, dependency graph rows,
+    advisory text, release metadata, and lockfile-like records. Verify each surface
+    is registered at least once under the PACKAGE_METADATA family."""
+
+    slices = long_tail_ppl_slices(family=LongTailPplFamily.PACKAGE_METADATA)
+    surfaces = {slice_.surface_form for slice_ in slices}
+
+    required_surfaces = {
+        "registry_json",
+        "dependency_rows",
+        "dependency_edges",
+        "advisory_osv_json",
+        "release_metadata",
+        "lockfile",
+    }
+    missing = required_surfaces - surfaces
+    assert not missing, f"PACKAGE_METADATA family is missing DoD surfaces: {missing}"
+
+    for slice_ in slices:
+        assert slice_.issue_number == PACKAGE_METADATA_ISSUE
+        assert slice_.raw_relative_path.startswith("packages/")
 
 
 def test_file_backed_raw_dataset_rejects_non_validation_split():
