@@ -22,6 +22,7 @@ from marin.execution.artifact import PathMetadata
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, InputName, output_path_of, this_output_path
 from marin.execution.remote import remote
 from marin.rl.curriculum import CurriculumConfig
+from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx import VLLMSamplingConfig, vLLMInferenceContextConfig
 from marin.rl.placement import marin_prefix_for_region, resolve_launcher_region, singleton_region_list
 from marin.rl.replay_buffer import ReplayBufferConfig
@@ -91,11 +92,12 @@ class RLExperimentConfig:
     warmup: int = 0
     lr_schedule: str = "constant"
 
-    # sampling / tokens
+    # builder-side rollout defaults for curriculum construction
     max_input_tokens: int = 4096
     max_output_tokens: int = 512
     n_prompts: int = 64
     n_generations_per_prompt: int = 16
+    train_decoding_top_k: int | None = 4096  # Workaround for vllm-project/tpu-inference#1386
 
     # replay buffer
     replay_buffer_capacity: int = 4096
@@ -111,11 +113,9 @@ class RLExperimentConfig:
     weight_transfer_sync_interval_steps: int = 1
     max_weight_transfer_wait_time: int = 0
 
-    # inference context
+    # inference backend runtime config
     inference_tensor_parallel_size: int = 4
     inference_gpu_memory_utilization: float = 0.90
-    inference_top_k: int = 4096  # Workaround for vllm-project/tpu-inference#1386
-    inference_n: int = 8
 
     # run config (TPU slice info)
     train_tpu_type: str = "v5p-8"
@@ -190,6 +190,27 @@ def _resolve_config_class(config_class_path: str) -> type[HFCompatConfig]:
         raise TypeError(f"Resolved config class is not a type: {config_class_path}")
 
     return obj
+
+
+def _build_vllm_fallback_sampling_config(config: RLExperimentConfig) -> VLLMSamplingConfig:
+    """Return backend fallback sampling defaults for non-RL/manual vLLM calls."""
+    return VLLMSamplingConfig(
+        temperature=1.0,
+        max_tokens=config.max_output_tokens,
+        stop=get_stop_tokens(config.model_config.type),
+        include_stop_str_in_output=True,
+        logprobs=1,
+    )
+
+
+def default_train_decoding_for_experiment(config: RLExperimentConfig) -> DecodingConfig:
+    """Return builder-side rollout decoding defaults to bake into curriculum lessons."""
+    return DecodingConfig(
+        temperature=1.0,
+        max_output_tokens=config.max_output_tokens,
+        top_k=config.train_decoding_top_k,
+        stop_strings=get_stop_tokens(config.model_config.type),
+    )
 
 
 def _build_rl_job_config(
@@ -292,15 +313,7 @@ def _build_rl_job_config(
             max_model_len=config.max_input_tokens + config.max_output_tokens,
             tensor_parallel_size=config.inference_tensor_parallel_size,
             gpu_memory_utilization=config.inference_gpu_memory_utilization,
-            sampling_params=VLLMSamplingConfig(
-                temperature=1.0,
-                n=config.inference_n,
-                max_tokens=config.max_output_tokens,
-                stop=get_stop_tokens(config.model_config.type),
-                include_stop_str_in_output=True,
-                logprobs=1,
-                top_k=config.inference_top_k,
-            ),
+            sampling_params=_build_vllm_fallback_sampling_config(config),
             load_format=_vllm_load_format_for_model_path(model_path),
         ),
         initial_checkpoint=model_path,

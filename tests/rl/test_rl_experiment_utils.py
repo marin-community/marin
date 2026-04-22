@@ -16,6 +16,7 @@ from marin.rl.rl_experiment_utils import (
     RLExperimentConfig,
     RLStepConfig,
     _build_rl_job_config,
+    default_train_decoding_for_experiment,
     _run_rl_experiment_step,
     config_class_path,
     executor_main_config_for_rl_experiment,
@@ -193,6 +194,47 @@ def test_build_rl_job_config_resolves_runtime_output_paths(monkeypatch):
     assert job_config.rollout_storage.path == "gs://marin-us-central1/rl_testing/rl-test/rollouts"
     assert job_config.inference_config.load_format == "runai_streamer"
     assert job_config.inference_config.canonical_model_name == MODEL_NAME
+
+
+def test_build_rl_job_config_keeps_rollout_policy_out_of_vllm_fallback_sampling(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+
+    config = dataclasses.replace(
+        _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+        n_generations_per_prompt=16,
+        train_decoding_top_k=4096,
+    )
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=config,
+        curriculum=_test_curriculum(),
+        model_path=MODEL_NAME,
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+    )
+
+    assert job_config.inference_config.sampling_params.n == 1
+    assert job_config.inference_config.sampling_params.top_k == -1
+    assert job_config.inference_config.sampling_params.max_tokens == config.max_output_tokens
+
+
+def test_default_train_decoding_for_experiment_bakes_model_stop_strings():
+    config = dataclasses.replace(
+        _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+        max_output_tokens=128,
+        train_decoding_top_k=4096,
+    )
+
+    decoding = default_train_decoding_for_experiment(config)
+
+    assert decoding.temperature == 1.0
+    assert decoding.max_output_tokens == 128
+    assert decoding.top_k == 4096
+    assert decoding.stop_strings == ["<|eot_id|>"]
 
 
 def test_build_rl_job_config_uses_dummy_load_format_for_non_object_store_model_path(monkeypatch):
