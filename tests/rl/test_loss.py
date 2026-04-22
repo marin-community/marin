@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-
 from marin.rl.kl_regularization import KLConfig, KLMode, k2_from_log_ratio, k3_from_log_ratio, masked_response_mean
 from marin.rl.rl_losses import (
     RLOOLoss,
@@ -142,11 +141,11 @@ def test_ppo_objective(
     np.testing.assert_allclose(loss, expected_loss, atol=1e-6)
 
 
-def test_k3_helper_matches_legacy_formula():
+def test_k3_helper_matches_stable_closed_form():
     log_ratio = np.array([[-0.3, 0.0, 0.5]], dtype=np.float32)
-    expected = np.exp(-log_ratio) + log_ratio - 1.0
+    expected = np.expm1(-log_ratio) + log_ratio
 
-    np.testing.assert_allclose(k3_from_log_ratio(log_ratio), expected)
+    np.testing.assert_allclose(k3_from_log_ratio(log_ratio), expected, rtol=1e-6, atol=0.0)
 
 
 def test_k2_helper_matches_half_squared_log_ratio():
@@ -161,6 +160,15 @@ def test_k2_and_k3_zero_at_zero_log_ratio():
 
     np.testing.assert_allclose(k2_from_log_ratio(log_ratio), log_ratio)
     np.testing.assert_allclose(k3_from_log_ratio(log_ratio), log_ratio)
+
+
+def test_k3_helper_preserves_small_near_zero_values():
+    log_ratio = np.array([[-1e-4, 1e-4, -1e-5, 1e-5]], dtype=np.float32)
+    expected = 0.5 * np.square(log_ratio)
+    actual = np.asarray(k3_from_log_ratio(log_ratio))
+
+    assert np.all(actual > 0.0)
+    np.testing.assert_allclose(actual, expected, rtol=2e-3, atol=1e-15)
 
 
 def test_masked_response_mean_ignores_prompt_positions():

@@ -1,7 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""KL regularization helpers for RL objectives."""
+"""KL regularization helpers for RL objectives.
+
+The ``k2``/``k3`` names follow the sampled-KL estimator shorthand introduced in
+John Schulman's "Approximating KL Divergence" and reused in recent RLHF
+analyses such as "A Comedy of Estimators" and "Rethinking KL Regularization in
+RLHF".
+"""
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -11,7 +17,10 @@ import jax.numpy as jnp
 
 
 class KLMode(StrEnum):
-    """Supported KL regularization modes for trainer-side RL loss."""
+    """Supported trainer-side KL surrogates for the RL loss.
+
+    The ``k2``/``k3`` labels follow Schulman's sampled-KL estimator shorthand.
+    """
 
     NONE = "none"
     K3_LOSS = "k3_loss"
@@ -51,13 +60,13 @@ def token_log_ratio(current_logprobs: jax.Array, reference_logprobs: jax.Array) 
 
 
 def k2_from_log_ratio(log_ratio: jax.Array) -> jax.Array:
-    """Return the k2 KL surrogate for sampled tokens."""
+    """Return the quadratic ``k2`` KL surrogate for sampled tokens."""
     return 0.5 * jnp.square(log_ratio)
 
 
 def k3_from_log_ratio(log_ratio: jax.Array) -> jax.Array:
-    """Return the k3 KL surrogate for sampled tokens."""
-    return jnp.exp(-log_ratio) + log_ratio - 1.0
+    """Return the numerically stable ``k3`` KL surrogate for sampled tokens."""
+    return jnp.expm1(-log_ratio) + log_ratio
 
 
 def masked_response_mean(values: jax.Array, loss_masks: jax.Array) -> jax.Array:
