@@ -194,7 +194,7 @@ def test_user_budget_row_created_on_submit():
         )
         assert row is not None, "user_budgets row should be created on first job submission"
         assert row["budget_limit"] == 0  # default unlimited
-        assert row["max_band"] == job_pb2.PRIORITY_BAND_INTERACTIVE  # default
+        assert row["max_band"] == job_pb2.PRIORITY_BAND_BATCH  # default
 
 
 def test_default_band_is_interactive():

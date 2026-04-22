@@ -47,7 +47,7 @@ class UserBudgetDefaults:
     budget_limit: int = 0
     """Max budget value (0 = unlimited)."""
 
-    max_band: int = job_pb2.PRIORITY_BAND_INTERACTIVE
+    max_band: int = job_pb2.PRIORITY_BAND_BATCH
     """Default max priority band (proto int) for new users."""
 
 
