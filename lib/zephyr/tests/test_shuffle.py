@@ -201,7 +201,7 @@ def test_scatter_byte_budget_flushes_mid_write(tmp_path):
 
 
 def test_scatter_estimate_tracks_skewed_items(tmp_path):
-    """Estimate updates after each flush so large late items still trigger budget flushes."""
+    """Write-time EMA sampling catches large late items and triggers mid-write flushes."""
     num_shards = 1
     data_path = str(tmp_path / "shard-0000.shuffle")
 
