@@ -1878,6 +1878,13 @@ class ControllerTransitions:
                 if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state == job_pb2.TASK_STATE_ASSIGNED:
                     task_state = job_pb2.TASK_STATE_PENDING
                     terminal_ms = None
+                    # ASSIGNED -> WORKER_FAILED means the worker accepted the task but
+                    # couldn't bring it up (e.g. TPU iommu/vfio already held by another
+                    # process on the VM). Attribute the failure to the worker so a host
+                    # that keeps failing launches gets reaped; otherwise the task loops
+                    # forever without draining preemption budget.
+                    if worker_id is not None:
+                        self._health.build_failed(WorkerId(str(worker_id)))
                 if update.new_state == job_pb2.TASK_STATE_FAILED and failure_count <= int(
                     task_row["max_retries_failure"]
                 ):
