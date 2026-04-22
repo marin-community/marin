@@ -4,7 +4,7 @@ Distributed execution abstraction layer. Start with the shared instructions in `
 
 ## Key Docs
 
-- Archived: `.agents/project/20260130_fray_lite_design.md` — v2 API design (implemented; read code instead)
+- Archived: `.agents/projects/20260130_fray_lite_design.md` — v2 API design (implemented; read code instead)
 
 ## Source Layout
 
