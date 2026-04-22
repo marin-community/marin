@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Run reusable long-tail perplexity-gap reports for epic #5005.
+
+See https://github.com/marin-community/marin/issues/5005.
+"""
+
 from fray.v2.types import ResourceConfig
 
 from experiments.evals.long_tail_ppl_runnable import runnable_long_tail_raw_validation_sets
