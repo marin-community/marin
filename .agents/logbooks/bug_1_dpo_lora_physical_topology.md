@@ -9334,3 +9334,251 @@ Immediate next step:
 - then rerun the same short canonical / reverse pair
 - only after that decide whether we need denser sentinel coverage or true
   full-tensor snapshots for ``o_proj`` / ``down_proj``
+
+## CLAUDESKSTART — Next-Agent Handoff
+
+Last committed state on branch ``dpo-lora``:
+``31ad93bc6 [dpo] D1 LR=0 warmup probe + Tune-LoRA a_init_mode=zero rerun``.
+Working tree is clean.
+
+### Where we are
+
+The ``a_init_mode="zero"`` fix is shipped and eliminates Bug 1 at its
+source (K-closure: ``v5p`` / ``v6e`` step-8 gap ``0.356 → 0.0007``).
+**Everything below this line is root-cause investigation, not
+mitigation.** Marin practice should already be on the init flip; do not
+regress that default while poking at the mechanism.
+
+The still-open scientific question is **why** the first live ``lora_B``
+update on output-sharded projections (``o_proj``, ``down_proj``)
+bifurcates under physical device permutation. The current best
+interpretation from L1, zlrmom, and D1c/d is:
+
+- ``delta_W`` Frobenius norms agree canonical vs reverse to ~1 %
+- Adam ``m`` and ``v`` norms agree to ~1 %
+- signed ``adam_m`` sentinels at the five sampled fractions agree to ~1 %
+- but the loss bifurcates ~50 % immediately at the first non-zero step
+
+Conclusion: the defect is **directional / sign-pattern / coordinate
+structure**, not scale or marginal distribution. That rules out most of
+the scalar probes we have been reaching for.
+
+### Why the last round underperformed (read before planning the next one)
+
+Two problems with D1c / D1d that should not be repeated:
+
+1. **Emission gap**. ``lora_debug/sentinel/adam_effective_update/*`` and
+   the aggregate ``lora_debug/adam/effective_update/*/l2`` do **not**
+   land in the W&B history stream, even though the callback code path
+   intends to emit them. This was never smoke-tested before the TPU
+   rerun. Unforced error.
+2. **Wrong instrument for the question**. Five fixed-index sentinels
+   on a scan-stacked flattened tensor cannot distinguish a direction
+   defect from a distribution-shape agreement. Two tensors with
+   identical marginal statistics can differ by an arbitrary rotation,
+   coordinate permutation, or per-index sign flip, and 5 scalars from
+   the flat tensor will usually miss it. Histograms have the same
+   limitation at the tensor level.
+
+The direction question needs **both** tensors in the same analysis
+(canonical and reverse side by side). That means full-tensor capture,
+not more scalar summaries.
+
+### Priority 1 — Fix ``effective_update`` emission (~30 min)
+
+File:
+[lib/levanter/src/levanter/callbacks/lora_debug.py](../../lib/levanter/src/levanter/callbacks/lora_debug.py).
+
+Likely suspects:
+
+- ``_emit_opt_state_stats`` not matching the correct optax path
+  substring for ``mu`` / ``nu`` within the LoRA subtree (watch for
+  wrapper states like ``MaskedState`` / ``ScaleByScheduleState`` that
+  sit above ``ScaleByAdamState`` on only some of the parameter tree).
+- A key-prefix typo so the emission ends up under a key that isn't
+  read back by the W&B history API.
+- Sentinel fractions iterated for ``grad_B`` and ``adam_m`` but not
+  for ``adam_effective_update``.
+
+Smoke-test locally against a toy ``optax.adam(...).init(params)`` on a
+synthetic LoRA tree **before any TPU work**:
+
+```python
+out = {}
+_emit_opt_state_stats(state, params, out)
+assert any("effective_update" in k for k in out), sorted(out)[:20]
+```
+
+Do not launch Iris jobs until that assert passes and the emitted keys
+also appear in a local ``tracker.log_metrics(out)`` → W&B sync.
+
+### Priority 2 — Full-tensor GCS dump → offline cosine / sign-agreement (~half day)
+
+This is the probe that actually addresses the direction hypothesis.
+Histograms and sentinels both summarise to scalars and throw away the
+coordinate structure we need.
+
+**Config surface** (extend ``LoraDebugConfig``):
+
+- ``dump_tensors_at_steps: tuple[int, ...] = ()``
+  example value for the D1 post-warmup window: ``(11, 12, 13)``
+- ``dump_tensor_modules: tuple[str, ...] = ()``
+  example: ``("o_proj", "down_proj")``
+- ``dump_tensor_path: str | None = None``
+  GCS prefix, e.g.
+  ``gs://marin-us-central1/debug/bug_1_tensor_dump/20260422/{run_tag}/``
+
+**What to dump**, per module, per configured step, per variant
+(canonical / reverse):
+
+- ``grad_B`` (pre-optimizer)
+- Adam first moment ``mu`` (LoRA-B side only)
+- Adam second moment ``nu`` (LoRA-B side only)
+- effective update ``mu / (sqrt(nu) + eps)``
+
+**Object layout**:
+``{dump_tensor_path}/step_{N:04d}/{module}/{metric}.npy``
+
+**Shape notes** (important for the serializer):
+
+- ``o_proj`` / ``down_proj`` ``lora_B`` shape is
+  ``(layer, Embed, LORA_R)`` — single-Out axis.
+- ``q_proj`` ``lora_B`` shape is
+  ``(layer, Heads, HeadSize, LORA_R)`` — multi-Out axis; the multi-axis
+  bug that broke L0 originally was in this path. Use
+  ``LowRankLinear.merge()`` or ``hax.dot`` on ``LORA_R``, not a
+  hand-rolled einsum. Unwrap ``NamedArray`` via ``.array`` before
+  ``jnp.save``.
+
+**IO path**. The callback is inside a ``JitCallback``, so direct
+``jnp.save`` inside JIT does not work. Use ``jax.experimental.io_callback``
+(host-side, blocks JIT briefly at the dump steps only) or return the
+tensors out of the JIT region and write from a step-end hook. Gate
+everything on ``dump_tensors_at_steps`` so the dump path is a no-op at
+non-dump steps — do **not** write every step.
+
+**Volume estimate**. ``o_proj.lora_B`` at 8B Llama ≈ 32 layers × 4096 ×
+64 × 4 B ≈ 32 MB. 4 metrics × 2 modules × 3 steps × 2 variants ≈ 1.5 GB
+total. Trivial.
+
+**Offline analysis** (scratch notebook, not a committed script):
+
+```python
+for step in (11, 12, 13):
+    for mod in ("o_proj", "down_proj"):
+        for metric in ("grad_B", "mu", "effective_update"):
+            c = np.load(f"{prefix}/d1-canonical-tdump/step_{step:04d}/{mod}/{metric}.npy")
+            r = np.load(f"{prefix}/d1-reverse-tdump/step_{step:04d}/{mod}/{metric}.npy")
+            # per-layer cosine
+            c_ly = c.reshape(c.shape[0], -1)
+            r_ly = r.reshape(r.shape[0], -1)
+            cos = (c_ly * r_ly).sum(-1) / (
+                np.linalg.norm(c_ly, axis=-1) * np.linalg.norm(r_ly, axis=-1) + 1e-12
+            )
+            sign_agree = (np.sign(c) == np.sign(r)).mean()
+            rel_diff = np.linalg.norm(c - r) / (np.linalg.norm(c) + 1e-12)
+            ...
+```
+
+**Decision criteria**:
+
+- ``cosine < 0.5`` on ``o_proj`` / ``down_proj`` at step 11 while
+  ``> 0.95`` on ``q_proj``: direction fork confirmed at the coordinate
+  level. Topology hypothesis stands.
+- ``cosine ≈ 1`` everywhere but loss still diverges: the defect is
+  downstream of these tensors — look at ``lora_A`` interaction or
+  forward-pass activations, not more optimizer state.
+- ``sign_agree < 0.6`` on a specific layer range: the permutation
+  effect is layer-localised and the next probe is per-layer, not
+  per-module.
+
+### Priority 3 — Targeted histograms (optional complementary probe)
+
+Per the Codex suggestion. Infrastructure already exists:
+
+- [lib/levanter/src/levanter/tracker/histogram.py](../../lib/levanter/src/levanter/tracker/histogram.py)
+- [lib/levanter/src/levanter/callbacks/watch.py](../../lib/levanter/src/levanter/callbacks/watch.py)
+- ``split_scan_layers=True`` already supported in watch for per-layer
+  histogram emission
+
+Enable **targeted** histograms for LoRA-B opt state on
+``o_proj`` / ``down_proj`` / ``q_proj`` only, split by scan layer,
+steps 11-13 only. Do **not** turn on the generic ``watch`` callback
+without a filter — it emits too many leaves.
+
+This is secondary because histograms cannot by themselves distinguish
+a direction defect (identical marginal distributions + different
+coordinate structure is compatible with any amount of directional
+disagreement). Run it alongside P2, not instead of it.
+
+### What not to do
+
+- More sentinels at different fractions. Same blind spot; will produce
+  more "norms agree, sentinels mostly agree, loss diverges" rows in
+  the logbook.
+- Rerunning any D1 / zlrmom / zlrmomsign variant before P1 emission
+  fix lands and is verified.
+- Treating W&B as the sink for direction questions. For this
+  investigation the sink is GCS + offline numpy, and the summary is a
+  scalar per-layer cosine, not a per-step scalar time-series.
+- Adding more Adam-norm probes. L1 and zlrmom already proved norms
+  agree.
+- Editing any of the 51 historical ``experiment_*.py`` files in
+  ``per_stmt_dpo/`` to retrofit ``a_init_mode="zero"`` — historical
+  results are tied to their original init. The breadcrumb note on
+  each of those files is sufficient.
+- Regressing the ``a_init_mode="zero"`` default. This is shipped
+  mitigation; breaking it for an investigation rerun would be a real
+  user-facing regression.
+
+### Recommended single rerun shape after P1 + P2
+
+One clean pair of Iris jobs:
+
+- launcher:
+  [experiment_d1_v5p8_pd4_lr0warmup_s20.py](../../experiments/posttrain/per_stmt_dpo/experiment_d1_v5p8_pd4_lr0warmup_s20.py)
+- 20 steps, 10-step zero-LR prefix (unchanged)
+- ``EXPERIMENT_D1_ORDER`` = ``canonical`` / ``reverse``
+- ``MARIN_DEBUG_LORA_DEBUG=1``
+- new ``dump_tensors_at_steps=(11, 12, 13)``,
+  ``dump_tensor_modules=("o_proj", "down_proj")``,
+  ``dump_tensor_path=gs://marin-us-central1/debug/bug_1_tensor_dump/<date>/<variant>/``
+- run tags: ``d1-canonical-tdump`` / ``d1-reverse-tdump`` (avoids W&B
+  display-name collision with prior zlrmomsign pair)
+- regions: ``us-east5,us-central1`` per the standing multi-region rule
+- launch via ``bash -lc '...env vars... uv run python ...'`` inside
+  the Iris command so env vars land on the TPU worker, not the local
+  CLI (see the D1b fix note around
+  ``2026-04-21T launch correction`` above for why)
+
+Expected wall-clock ~15 min per variant including capacity wait.
+
+### Quick reference
+
+- branch: ``dpo-lora`` at ``31ad93bc6``
+- last verified good mitigation:
+  ``zero_init_b=False, a_init_mode="zero"`` — keep shipping this
+- canonical launcher:
+  [experiment_d1_v5p8_pd4_lr0warmup_s20.py](../../experiments/posttrain/per_stmt_dpo/experiment_d1_v5p8_pd4_lr0warmup_s20.py)
+- callback to extend:
+  [lib/levanter/src/levanter/callbacks/lora_debug.py](../../lib/levanter/src/levanter/callbacks/lora_debug.py)
+- optimizer knob already in place:
+  [lib/levanter/src/levanter/optim/config.py](../../lib/levanter/src/levanter/optim/config.py) → ``initial_zero_lr_steps``
+- existing GCS debug prefix pattern:
+  ``gs://marin-us-central1/debug/bug_1_*/``
+- Iris config:
+  ``lib/iris/examples/marin.yaml``
+- do **not** use ``EXPERIMENT_BL_ORDER`` on D1 — the knob is
+  ``EXPERIMENT_D1_ORDER``
+- do **not** set env vars on the local ``uv run iris ...`` process
+  expecting them to reach the TPU worker — they won't; wrap the
+  remote command in ``bash -lc '...'`` with the env vars inside
+
+### One-sentence summary for the next agent
+
+Fix the ``effective_update`` emission gap in ``lora_debug.py`` first
+(verify keys land locally), then add a full-tensor GCS dump hook for
+``o_proj.lora_B`` and ``down_proj.lora_B`` at steps 11-13 and run
+offline cosine / sign-agreement analysis — that is the probe that
+actually answers the direction question that L1, zlrmom, and D1c/d all
+pointed at without resolving.
