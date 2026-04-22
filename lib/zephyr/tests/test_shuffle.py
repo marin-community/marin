@@ -11,6 +11,7 @@ from zephyr.plan import deterministic_hash
 from zephyr.shuffle import (
     ScatterFileIterator,
     ScatterReader,
+    ScatterWriter,
     _write_chunk_frame,
     _write_scatter,
 )
@@ -169,6 +170,52 @@ def test_scatter_handles_arbitrary_python_objects(tmp_path):
         return (x["k"], repr(x["v"]))
 
     assert sorted(recovered, key=_ord) == sorted(items, key=_ord)
+
+
+# ---------------------------------------------------------------------------
+# Byte-budget flushing
+# ---------------------------------------------------------------------------
+
+
+def test_scatter_byte_budget_flushes_mid_write(tmp_path):
+    """A tiny byte budget forces flushes during write, not only at close."""
+    num_shards = 2
+    items = [{"k": i % num_shards, "v": i} for i in range(200)]
+    data_path = str(tmp_path / "shard-0000.shuffle")
+
+    # Budget of 1 byte forces a flush on every write after the first.
+    writer = ScatterWriter(
+        data_path=data_path,
+        key_fn=_key,
+        num_output_shards=num_shards,
+        buffer_limit_bytes=1,
+    )
+    for item in items:
+        writer.write(item)
+    writer.close()
+
+    # Multiple chunks must have been written (not just the close-time flush).
+    scatter_paths = [data_path]
+    total_chunks = sum(ScatterReader.from_sidecars(scatter_paths, s).total_chunks for s in range(num_shards))
+    assert total_chunks > 2, f"expected >2 chunks with 1-byte budget, got {total_chunks}"
+
+
+def test_scatter_byte_budget_preserves_all_items(tmp_path):
+    """Items are not lost or duplicated when byte-budget flushes fire mid-write."""
+    num_shards = 3
+    items = [{"k": i % num_shards, "v": i} for i in range(300)]
+    scatter_paths = _build_shard(
+        tmp_path,
+        items,
+        num_output_shards=num_shards,
+    )
+
+    recovered = []
+    for shard_idx in range(num_shards):
+        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
+        recovered.extend(list(shard))
+
+    assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
 
 
 # ---------------------------------------------------------------------------
