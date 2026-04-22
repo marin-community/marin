@@ -21,6 +21,7 @@ from rigging.filesystem import (
     marin_prefix,
     marin_region,
     marin_temp_bucket,
+    marin_temp_bucket_for_prefix,
     open_url,
     region_from_metadata,
     region_from_prefix,
@@ -134,6 +135,18 @@ def test_marin_temp_bucket_from_env_prefix():
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-east1/scratch"}),
     ):
         assert marin_temp_bucket(ttl_days=3, prefix="zephyr") == "gs://marin-tmp-us-east1/ttl=3d/zephyr"
+
+
+def test_marin_temp_bucket_for_prefix_uses_source_region():
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
+    ):
+        assert marin_temp_bucket_for_prefix(
+            ttl_days=14,
+            source_prefix="gs://marin-us-east5/experiments/grug/run",
+            prefix="checkpoints-temp/marin-us-east5/experiments/grug/run/checkpoints",
+        ) == ("gs://marin-tmp-us-east5/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/run/checkpoints")
 
 
 def test_marin_temp_bucket_falls_back_to_marin_prefix_when_no_region():

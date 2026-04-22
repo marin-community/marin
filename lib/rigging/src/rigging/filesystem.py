@@ -157,6 +157,12 @@ def marin_region() -> str | None:
     return region_from_metadata() or region_from_prefix(os.environ.get("MARIN_PREFIX", ""))
 
 
+def _append_path_prefix(path: str, prefix: str) -> str:
+    if prefix:
+        return f"{path}/{prefix.strip('/')}"
+    return path
+
+
 def marin_temp_bucket(ttl_days: int, prefix: str = "") -> str:
     """Return a path on region-local temp storage. Never returns ``None``.
 
@@ -186,16 +192,26 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "") -> str:
             bucket = REGION_TO_TMP_BUCKET.get(region)
             if bucket:
                 path = f"gs://{bucket}/ttl={ttl_days}d"
-                if prefix:
-                    path = f"{path}/{prefix.strip('/')}"
-                return path
+                return _append_path_prefix(path, prefix)
 
     if "://" not in mp:
         mp = f"file://{mp}"
     path = f"{mp}/tmp"
-    if prefix:
-        path = f"{path}/{prefix.strip('/')}"
-    return path
+    return _append_path_prefix(path, prefix)
+
+
+def marin_temp_bucket_for_prefix(ttl_days: int, source_prefix: str, prefix: str = "") -> str:
+    """Return temp storage in the same region as ``source_prefix`` when possible.
+
+    This is useful when configuring a remote job from a launcher that may be in
+    a different region than the job output path.
+    """
+    region = region_from_prefix(source_prefix)
+    if region:
+        bucket = REGION_TO_TMP_BUCKET.get(region)
+        if bucket:
+            return _append_path_prefix(f"gs://{bucket}/ttl={ttl_days}d", prefix)
+    return marin_temp_bucket(ttl_days, prefix=prefix)
 
 
 # ---------------------------------------------------------------------------
