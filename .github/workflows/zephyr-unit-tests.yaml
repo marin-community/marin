@@ -25,6 +25,7 @@ jobs:
           filters: |
             relevant:
               - 'lib/zephyr/**'
+              - 'lib/iris/**'
               - 'lib/fray/**'
               - 'uv.lock'
               - '.github/workflows/zephyr-unit-tests.yaml'
