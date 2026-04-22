@@ -1,9 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from iris.rpc import job_pb2, time_pb2
+from iris.cli.token_store import store_token
+from iris.rpc import controller_pb2, job_pb2, time_pb2
 
 from marin.mcp.babysitter import (
+    IrisBabysitter,
+    IrisConnectionConfig,
+    _job_summary_payload,
+    _token_provider,
     classify_diagnosis,
     parse_zephyr_progress,
     task_status_to_json,
@@ -12,6 +17,21 @@ from marin.mcp.babysitter import (
 
 def _timestamp(epoch_ms: int):
     return time_pb2.Timestamp(epoch_ms=epoch_ms)
+
+
+class _ListJobsController:
+    def __init__(self, jobs: list[job_pb2.JobStatus]):
+        self.jobs = jobs
+
+    def list_jobs(self, _request):
+        return controller_pb2.Controller.ListJobsResponse(jobs=self.jobs, has_more=False)
+
+
+def _service_with_controller(controller):
+    service = object.__new__(IrisBabysitter)
+    service.config = IrisConnectionConfig(controller_url="http://controller", cluster="test")
+    service.controller = controller
+    return service
 
 
 def test_task_status_json_includes_attempts_timestamps_and_usage():
@@ -69,6 +89,52 @@ def test_task_status_json_includes_attempts_timestamps_and_usage():
     assert payload["attempts"][0]["state"] == "preempted"
     assert payload["attempts"][0]["is_worker_failure"] is True
     assert payload["attempts"][1]["exit_code"] == 137
+
+
+def test_job_summary_payload_preserves_summary_task_fields():
+    job = job_pb2.JobStatus(
+        job_id="/alice/train",
+        name="train",
+        state=job_pb2.JOB_STATE_RUNNING,
+        task_count=1,
+    )
+    running_task = job_pb2.TaskStatus(
+        task_id="/alice/train/0",
+        state=job_pb2.TASK_STATE_RUNNING,
+        exit_code=0,
+    )
+
+    payload = _job_summary_payload(job, [running_task])
+
+    assert payload["tasks"][0]["index"] == "0"
+    assert payload["tasks"][0]["exit_code"] is None
+    assert "resource_requests" in payload
+
+
+def test_jobs_with_prefix_excludes_string_prefix_siblings():
+    service = _service_with_controller(
+        _ListJobsController(
+            [
+                job_pb2.JobStatus(job_id="/alice/train"),
+                job_pb2.JobStatus(job_id="/alice/train/child"),
+                job_pb2.JobStatus(job_id="/alice/train-v2"),
+            ]
+        )
+    )
+
+    jobs = service._jobs_with_prefix("/alice/train")
+
+    assert [job.job_id for job in jobs] == ["/alice/train", "/alice/train/child"]
+
+
+def test_token_provider_loads_iris_token_store(tmp_path):
+    store_path = tmp_path / "tokens.json"
+    store_token("iris-prod", "https://controller.example.com", "stored-token", store_path=store_path)
+
+    provider = _token_provider("iris-prod", store_path=store_path)
+
+    assert provider is not None
+    assert provider.get_token() == "stored-token"
 
 
 def test_parse_zephyr_progress_keeps_latest_stage_snapshot():

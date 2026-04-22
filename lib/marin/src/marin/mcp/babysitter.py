@@ -8,10 +8,12 @@ import base64
 import re
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 from iris.cli.bug_report import gather_bug_report
 from iris.cli.job import build_job_summary
+from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token
 from iris.cluster.log_store import build_log_source
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
 from iris.cluster.types import JobName
@@ -51,7 +53,6 @@ class IrisConnectionConfig:
 
     controller_url: str
     cluster: str = "default"
-    iris_token: str | None = None
     timeout_ms: int = 30_000
 
 
@@ -391,7 +392,7 @@ class IrisBabysitter:
 
     def __init__(self, config: IrisConnectionConfig):
         self.config = config
-        self.token_provider = _token_provider(config.iris_token)
+        self.token_provider = _token_provider(config.cluster)
         interceptors = [AuthTokenInjector(self.token_provider)] if self.token_provider else []
         self.controller = ControllerServiceClientSync(
             config.controller_url,
@@ -423,6 +424,7 @@ class IrisBabysitter:
         jobs: list[dict[str, Any]] = []
         offset = 0
         capped_limit = max(1, limit)
+        prefix_job = JobName.from_wire(prefix) if prefix else None
         while len(jobs) < capped_limit:
             query = controller_pb2.Controller.JobQuery(
                 state_filter=state_filter,
@@ -434,7 +436,7 @@ class IrisBabysitter:
             )
             response = self.controller.list_jobs(controller_pb2.Controller.ListJobsRequest(query=query))
             for job in response.jobs:
-                if prefix and not job.job_id.startswith(prefix):
+                if prefix_job is not None and not _job_matches_prefix(job.job_id, prefix_job):
                     continue
                 jobs.append(job_status_to_json(job))
                 if len(jobs) >= capped_limit:
@@ -447,9 +449,7 @@ class IrisBabysitter:
     def job_summary(self, job_id: str) -> dict[str, Any]:
         job_response = self.controller.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=job_id))
         tasks_response = self.controller.list_tasks(controller_pb2.Controller.ListTasksRequest(job_id=job_id))
-        summary = build_job_summary(job_response.job, list(tasks_response.tasks))
-        summary.update(job_status_to_json(job_response.job, tasks_response.tasks))
-        return self.envelope(summary)
+        return self.envelope(_job_summary_payload(job_response.job, list(tasks_response.tasks)))
 
     def job_tree(self, job_id: str) -> dict[str, Any]:
         root = JobName.from_wire(job_id)
@@ -620,6 +620,7 @@ class IrisBabysitter:
     def _jobs_with_prefix(self, prefix: str) -> list[job_pb2.JobStatus]:
         jobs: list[job_pb2.JobStatus] = []
         offset = 0
+        root = JobName.from_wire(prefix)
         while True:
             query = controller_pb2.Controller.JobQuery(
                 sort_field=controller_pb2.Controller.JOB_SORT_FIELD_DATE,
@@ -628,16 +629,30 @@ class IrisBabysitter:
                 limit=MAX_LIST_JOBS_PAGE_SIZE,
             )
             response = self.controller.list_jobs(controller_pb2.Controller.ListJobsRequest(query=query))
-            jobs.extend(job for job in response.jobs if job.job_id.startswith(prefix))
+            jobs.extend(job for job in response.jobs if _job_matches_prefix(job.job_id, root))
             if not response.has_more:
                 return jobs
             offset += len(response.jobs)
 
 
-def _token_provider(token: str | None) -> TokenProvider | None:
-    if not token:
+def _job_summary_payload(job: job_pb2.JobStatus, tasks: list[job_pb2.TaskStatus]) -> dict[str, Any]:
+    summary = build_job_summary(job, tasks)
+    for key, value in job_status_to_json(job).items():
+        summary.setdefault(key, value)
+    return summary
+
+
+def _job_matches_prefix(job_id: str, prefix: JobName) -> bool:
+    return prefix.is_ancestor_of(JobName.from_wire(job_id), include_self=True)
+
+
+def _token_provider(cluster: str, *, store_path: Path | None = None) -> TokenProvider | None:
+    credential = load_token(cluster, store_path=store_path)
+    if credential is None:
+        credential = load_any_token(store_path=store_path)
+    if credential is None:
         return None
-    return StaticTokenProvider(token)
+    return StaticTokenProvider(credential.token)
 
 
 def _normalize_state_filter(state: str) -> str:
@@ -769,19 +784,18 @@ def build_server(service: IrisBabysitter, *, host: str = "127.0.0.1", port: int 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run the Marin Iris/Zephyr babysitting MCP server.")
     parser.add_argument("--controller-url", required=True, help="Iris controller URL.")
-    parser.add_argument("--cluster", default="default", help="Cluster label returned in tool responses.")
-    parser.add_argument("--iris-token", default=None, help="Bearer token for Iris controllers with auth enabled.")
+    parser.add_argument("--cluster", default=None, help="Cluster label and Iris token-store key.")
     parser.add_argument("--timeout-ms", type=int, default=30_000, help="Controller RPC timeout in milliseconds.")
     parser.add_argument("--transport", choices=("stdio", "sse", "streamable-http"), default="stdio")
     parser.add_argument("--host", default="127.0.0.1", help="HTTP host for SSE/streamable-http transports.")
     parser.add_argument("--port", type=int, default=8000, help="HTTP port for SSE/streamable-http transports.")
     args = parser.parse_args(argv)
+    cluster = args.cluster or cluster_name_from_url(args.controller_url)
 
     service = IrisBabysitter(
         IrisConnectionConfig(
             controller_url=args.controller_url,
-            cluster=args.cluster,
-            iris_token=args.iris_token,
+            cluster=cluster,
             timeout_ms=args.timeout_ms,
         )
     )
