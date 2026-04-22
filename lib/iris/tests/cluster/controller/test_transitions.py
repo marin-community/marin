@@ -2225,6 +2225,40 @@ def test_worker_failed_from_building_counts_as_preemption(state):
     assert _query_task(state, task.task_id).failure_count == 0
 
 
+def test_worker_failed_from_assigned_bumps_health_tracker(state):
+    """ASSIGNED -> WORKER_FAILED attributes the failure to the worker.
+
+    Regression for the TPU-iommu co-schedule loop: the task retries to PENDING
+    (no preemption-budget cost) but the health tracker must still bump so that
+    a host that repeatedly fails launches eventually crosses the threshold and
+    gets reaped.
+    """
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    req = make_job_request("job1")
+    req.max_retries_preemption = 5
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_id)])
+    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
+    assert state._health.snapshot().get(worker_id) is None
+
+    transition_task(
+        state,
+        task.task_id,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        error='TPU init failure ("Couldn\'t open iommu group")',
+    )
+
+    # Task retries without consuming preemption budget...
+    t = _query_task(state, task.task_id)
+    assert t.state == job_pb2.TASK_STATE_PENDING
+    assert t.preemption_count == 0
+    # ...but the worker is charged a build failure.
+    _, build_failures = state._health.snapshot()[worker_id]
+    assert build_failures == 1
+
+
 def test_failed_from_building_bumps_health_tracker(state):
     """FAILED originating from BUILDING increments the build failure counter.
 

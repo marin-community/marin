@@ -1878,6 +1878,13 @@ class ControllerTransitions:
                 if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state == job_pb2.TASK_STATE_ASSIGNED:
                     task_state = job_pb2.TASK_STATE_PENDING
                     terminal_ms = None
+                    # ASSIGNED -> WORKER_FAILED means the worker accepted the task but
+                    # couldn't bring it up (e.g. TPU iommu/vfio already held by another
+                    # process on the VM). Attribute the failure to the worker so a host
+                    # that keeps failing launches gets reaped; otherwise the task loops
+                    # forever without draining preemption budget.
+                    if worker_id is not None:
+                        self._health.build_failed(WorkerId(str(worker_id)))
                 if update.new_state == job_pb2.TASK_STATE_FAILED and failure_count <= int(
                     task_row["max_retries_failure"]
                 ):
@@ -3128,10 +3135,17 @@ class ControllerTransitions:
                 return {}, {}
 
             placeholders = ",".join("?" for _ in worker_ids)
+            # Reservation holders are virtual — they live on ``current_worker_id``
+            # only as a scheduling anchor and never get a RunTaskRequest. Sending
+            # them in PollTasksRequest.expected_tasks makes the worker reconcile
+            # against its _tasks dict, miss, and return WORKER_FAILED every cycle,
+            # which drains the holder's preemption budget and (post the build-
+            # failure health hook) reaps the claimed worker for a harmless miss.
             task_rows = snap.fetchall(
                 f"SELECT t.task_id, t.current_attempt_id, t.current_worker_id "
-                f"FROM tasks t "
+                f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id "
                 f"WHERE t.current_worker_id IN ({placeholders}) AND t.state IN (?, ?, ?) "
+                f"AND j.is_reservation_holder = 0 "
                 f"ORDER BY t.task_id ASC",
                 (*worker_ids, *ACTIVE_TASK_STATES),
             )

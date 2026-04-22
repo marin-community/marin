@@ -53,6 +53,7 @@ from rigging.timing import Timestamp
 from tests.cluster.controller.conftest import (
     FakeProvider,
     hydrate_worker_attributes as _with_attrs,
+    make_job_request,
     query_job as _query_job,
     query_job_row as _query_job_row,
     query_task as _query_task,
@@ -60,6 +61,7 @@ from tests.cluster.controller.conftest import (
     query_tasks_for_job as _query_tasks_for_job,
     query_worker as _query_worker,
     schedulable_tasks as _schedulable_tasks,
+    submit_job as _submit_job_tasks,
     worker_running_tasks as _worker_running_tasks,
 )
 
@@ -1434,6 +1436,49 @@ def test_holder_task_worker_death_no_failure_record(state):
         assert holder_task.attempts[-1].state == job_pb2.TASK_STATE_WORKER_FAILED
         assert holder_task.state == job_pb2.TASK_STATE_PENDING, "no active worker after death"
         assert task_row_can_be_scheduled(holder_task), "holder task must be schedulable again"
+
+
+def test_get_running_tasks_for_poll_excludes_reservation_holders(state):
+    """get_running_tasks_for_poll must filter reservation-holder tasks.
+
+    Regression: the ping/poll loop feeds its output directly into
+    PollTasksRequest.expected_tasks. Holders are virtual — they never reach
+    the worker's _tasks dict — so including them makes the worker reconcile,
+    miss, and return WORKER_FAILED("Task not found on worker") every cycle.
+    That drains the holder's preemption budget and (with the ASSIGNED→
+    WORKER_FAILED health hook) reaps the claimed worker every few minutes.
+
+    Produced observed ~51 attempts/hour per holder in production.
+    """
+    request = _make_job_request_with_reservation(
+        reservation_entries=[_make_reservation_entry(_cpu_device())],
+    )
+    parent_job_id = _submit_job(state, "res-job", request)
+    holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
+
+    holder_tasks = _query_tasks_for_job(state, holder_job_id)
+    assert len(holder_tasks) == 1
+    holder_task = holder_tasks[0]
+
+    real_request = make_job_request("real-job")
+    (real_task,) = _submit_job_tasks(state, "real-job", real_request)
+
+    worker_id = _register_worker(state, "w1")
+    state.queue_assignments(
+        [
+            Assignment(task_id=holder_task.task_id, worker_id=worker_id),
+            Assignment(task_id=real_task.task_id, worker_id=worker_id),
+        ]
+    )
+
+    running, _addresses = state.get_running_tasks_for_poll()
+
+    task_ids = {entry.task_id for entry in running.get(worker_id, [])}
+    assert real_task.task_id in task_ids, "real task must still appear for polling"
+    assert holder_task.task_id not in task_ids, (
+        "reservation holder must be excluded — worker has no in-memory state "
+        "for virtual holders, so polling them produces bogus WORKER_FAILEDs"
+    )
 
 
 def test_holder_task_removed_from_worker_when_parent_succeeds(state):
