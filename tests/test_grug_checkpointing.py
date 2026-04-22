@@ -27,9 +27,8 @@ def test_restore_prefers_highest_step_over_latest_timestamp(tmp_path: Path):
 
     attempted: list[str] = []
 
-    def fake_load(state, path, *, discover_latest, axis_mapping, mesh, allow_partial):
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
         attempted.append(path)
-        assert discover_latest is False
         return {"loaded_from": path}
 
     loaded = restore_grug_state_from_checkpoint(
@@ -52,9 +51,8 @@ def test_restore_falls_back_to_older_checkpoint_when_latest_fails(tmp_path: Path
 
     attempted: list[str] = []
 
-    def fake_load(state, path, *, discover_latest, axis_mapping, mesh, allow_partial):
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
         attempted.append(path)
-        assert discover_latest is False
         if path.endswith("step-100"):
             raise FileNotFoundError(path)
         return {"loaded_from": path}
@@ -80,7 +78,7 @@ def test_restore_raises_when_required_and_no_checkpoint_loads(tmp_path: Path):
     checkpoint_root = tmp_path / "checkpoints"
     _write_checkpoint_metadata(checkpoint_root / "step-100", step=100, timestamp="2026-03-17T10:00:00")
 
-    def fake_load(state, path, *, discover_latest, axis_mapping, mesh, allow_partial):
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
         raise FileNotFoundError(path)
 
     with pytest.raises(FileNotFoundError, match="Could not load a checkpoint"):
@@ -103,7 +101,7 @@ def test_restore_discovers_candidates_across_search_paths(tmp_path: Path):
 
     attempted: list[str] = []
 
-    def fake_load(state, path, *, discover_latest, axis_mapping, mesh, allow_partial):
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
         attempted.append(path)
         return {"loaded_from": path}
 
@@ -131,7 +129,7 @@ def test_restore_respects_explicit_checkpoint_path_as_single_search_path(tmp_pat
 
     attempted: list[str] = []
 
-    def fake_load(state, path, *, discover_latest, axis_mapping, mesh, allow_partial):
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
         attempted.append(path)
         return {"loaded_from": path}
 
@@ -157,7 +155,7 @@ def test_restore_falls_back_from_temp_to_permanent(tmp_path: Path):
 
     attempted: list[str] = []
 
-    def fake_load(state, path, *, discover_latest, axis_mapping, mesh, allow_partial):
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
         attempted.append(path)
         if "step-150" in path:
             raise FileNotFoundError(path)

@@ -420,7 +420,6 @@ class Trainer:
 
         # first try to load a full trainer state checkpoint
         checkpoint_search_paths = self.checkpoint_search_paths
-        checkpoint_path = checkpoint_search_paths[0]
 
         load_checkpoint = self.config.load_checkpoint
         # we don't save the full trainer state, so we need to filter out the non-trainable parameters
@@ -457,8 +456,7 @@ class Trainer:
 
         state = load_checkpoint_or_initialize(
             init_state_and_model,
-            checkpoint_path,
-            additional_checkpoint_paths=checkpoint_search_paths[1:],
+            checkpoint_search_paths,
             axis_mapping=self.parameter_axis_mapping,
             mesh=self.device_mesh,
             is_checkpointed=saveable_train_state,

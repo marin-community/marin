@@ -207,7 +207,6 @@ def test_checkpoint_simple():
         restored_state = load_checkpoint(
             rep_state,
             checkpoint_path=tmpdir,
-            discover_latest=False,
         )
 
         assert_trees_all_equal(
@@ -246,7 +245,7 @@ def test_checkpoint_steps():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         save_checkpoint(state, step=3, checkpoint_path=tmpdir)
-        restored_state = load_checkpoint(rep_state, checkpoint_path=tmpdir, discover_latest=False)
+        restored_state = load_checkpoint(rep_state, checkpoint_path=tmpdir)
 
         assert_trees_all_equal(
             jax.tree_util.tree_leaves(arrays_only(restored_state)),
@@ -562,10 +561,14 @@ def test_load_from_checkpoint_or_initialize():
         filtered = eqx.filter(model0, is_checkpointed)
         save_checkpoint(filtered, step=0, checkpoint_path=tmpdir)
 
-        loaded = load_checkpoint_or_initialize(init_fn, tmpdir, is_checkpointed=is_checkpointed, donate_args=False)(k1)
+        loaded = load_checkpoint_or_initialize(init_fn, [tmpdir], is_checkpointed=is_checkpointed, donate_args=False)(
+            k1
+        )
         assert not any(jax.tree_util.tree_leaves(eqx.filter(loaded, lambda x: isinstance(x, ShapeDtypeStruct))))
 
-        loaded2 = load_checkpoint(eqx.filter(model1, is_checkpointed), tmpdir, discover_latest=True)
+        latest_checkpoint = discover_latest_checkpoint(tmpdir)
+        assert latest_checkpoint is not None
+        loaded2 = load_checkpoint(eqx.filter(model1, is_checkpointed), latest_checkpoint)
         loaded2 = eqx.combine(loaded2, model1)
 
         assert_trees_all_equal(
@@ -615,8 +618,7 @@ def test_load_from_checkpoint_or_initialize_searches_additional_paths():
 
         loaded = load_checkpoint_or_initialize(
             init_fn,
-            permanent_dir,
-            additional_checkpoint_paths=[temp_dir],
+            [permanent_dir, temp_dir],
             is_checkpointed=is_checkpointed,
             donate_args=False,
         )(k1)
@@ -647,9 +649,9 @@ def test_load_from_checkpoint_or_initialize_works_if_file_not_found():
         is_checkpointed = jtu.tree_map(lambda _: False, model0)
         is_checkpointed = eqx.tree_at(lambda t: t.layers[-1], is_checkpointed, replace=True)
 
-        loaded = load_checkpoint_or_initialize(init_fn, "kanmfklafnmjlkanfjklanfjkh", is_checkpointed=is_checkpointed)(
-            k1
-        )
+        loaded = load_checkpoint_or_initialize(
+            init_fn, ["kanmfklafnmjlkanfjklanfjkh"], is_checkpointed=is_checkpointed
+        )(k1)
 
         assert not any(jax.tree_util.tree_leaves(eqx.filter(loaded, lambda x: isinstance(x, ShapeDtypeStruct))))
         # should be the same as model1
@@ -684,7 +686,7 @@ def test_load_from_checkpoint_allows_partial_checkpoints():
 
         loaded = load_checkpoint_or_initialize(
             init_fn,
-            tmpdir,
+            [tmpdir],
             is_checkpointed=is_checkpointed,
             allow_partial=True,
         )(k1, True)
@@ -767,7 +769,6 @@ def test_backward_compatibility_with_ocdbt():
         restored_state = load_checkpoint(
             rep_state,
             checkpoint_path=tmpdir,
-            discover_latest=False,
         )
 
         # Verify the data was loaded correctly

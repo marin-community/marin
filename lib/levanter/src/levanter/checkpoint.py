@@ -476,40 +476,26 @@ class Checkpointer:
     def load_checkpoint(
         self,
         state: M,
-        path: Optional[PathLike] = None,
+        checkpoint_path: PathLike,
         *,
-        discover_latest: bool = True,
         axis_mapping: Optional[haliax.partitioning.ResourceMapping] = None,
         mesh: Optional[haliax.partitioning.Mesh] = None,
-    ) -> Optional[M]:
-        if path is None:
-            # When temporary_base_path is set, discover the newest checkpoint across both roots
-            if discover_latest and self.temporary_base_path is not None:
-                latest = discover_latest_checkpoint(self.base_path, self.temporary_base_path)
-                if latest is not None:
-                    return load_checkpoint(state, latest, discover_latest=False, axis_mapping=axis_mapping, mesh=mesh)
-                return None
-            path = self.base_path
-        return load_checkpoint(state, path, discover_latest=discover_latest, axis_mapping=axis_mapping, mesh=mesh)
+    ) -> M:
+        return load_checkpoint(state, checkpoint_path, axis_mapping=axis_mapping, mesh=mesh)
 
     def load_model(
         self,
         model: M,
-        path: Optional[str] = None,
+        checkpoint_path: PathLike,
         *,
-        discover_latest: bool = True,
         axis_mapping: Optional[haliax.partitioning.ResourceMapping] = None,
         mesh: Optional[haliax.partitioning.Mesh] = None,
-    ) -> Optional[M]:
+    ) -> M:
         """
         Convenience method/holdover from  previous API for loading checkpoints.
-        Loads just the model assuming the model is in the `model` subdir of the discovered checkpoint.
+        Loads just the model assuming the model is in the `model` subdir of the checkpoint.
         """
-        ret_dict = self.load_checkpoint(
-            {"model": model}, path, discover_latest=discover_latest, axis_mapping=axis_mapping, mesh=mesh
-        )
-        if ret_dict is None:
-            return None
+        ret_dict = self.load_checkpoint({"model": model}, checkpoint_path, axis_mapping=axis_mapping, mesh=mesh)
         return ret_dict["model"]
 
     def on_step(self, *, tree: PyTree, step: int, force: bool = False):
@@ -779,9 +765,7 @@ def load_checkpoint(
     tree: M,
     checkpoint_path: PathLike,
     *,
-    additional_checkpoint_paths: Sequence[PathLike] = (),
     subpath: Optional[str] = None,
-    discover_latest=True,
     axis_mapping: Optional[haliax.partitioning.ResourceMapping] = None,
     mesh: Optional[jax.sharding.Mesh] = None,
     allow_partial: bool = False,
@@ -792,16 +776,14 @@ def load_checkpoint(
     Supports both OCDBT (new format) and non-OCDBT (old format) checkpoints through automatic
     format detection.
 
-    If discover_latest is True, then the latest checkpoint in a subdirectory of the given path
-    will be loaded. If subpath is not None, then the checkpoint loads only that subpath of the
-    checkpoint. This is useful for loading, e.g., just the model and not the entire training state.
+    This function expects ``checkpoint_path`` to already point at a concrete checkpoint directory.
+    Use ``discover_latest_checkpoint`` or ``latest_checkpoint_path`` before calling when accepting
+    a parent directory.
 
     Args:
         tree: an exemplar of the tree to load. Can be a PyTree[ShapeDTypeStruct] instead of a PyTree[Any]
-        checkpoint_path: the path to load the checkpoint from
-        additional_checkpoint_paths: extra roots to search when discover_latest is True
+        checkpoint_path: the concrete checkpoint directory to load from
         subpath: the subpath to load from the checkpoint
-        discover_latest: whether to discover the latest checkpoint in the given path
         axis_mapping: the axis mapping to use for loading the checkpoint
         mesh: the mesh to use for loading the checkpoint
         allow_partial: if True, allow partial loading of the checkpoint. If False, all parameters must be present in the checkpoint.
@@ -814,17 +796,8 @@ def load_checkpoint(
     if is_in_jit():
         logger.warning("Loading checkpoint in jit. This is not recommended and probably won't work.")
 
-    if discover_latest:
-        discovered_checkpoint_path = discover_latest_checkpoint(checkpoint_path, *additional_checkpoint_paths)
-    else:
-        if additional_checkpoint_paths:
-            raise ValueError("additional_checkpoint_paths only applies when discover_latest=True")
-        discovered_checkpoint_path = checkpoint_path
-
-    if discovered_checkpoint_path is None or not fsspec_utils.exists(discovered_checkpoint_path):
+    if not fsspec_utils.exists(checkpoint_path):
         raise FileNotFoundError(f"Could not find checkpoint at {checkpoint_path}")
-
-    checkpoint_path = discovered_checkpoint_path
 
     logger.info(f"Loading checkpoint from {checkpoint_path}")
 
@@ -841,9 +814,8 @@ def load_checkpoint(
 
 def load_checkpoint_or_initialize(
     init_fn: Callable[Sig, M],
-    checkpoint_path: PathLike,
+    checkpoint_search_paths: Sequence[PathLike],
     *,
-    additional_checkpoint_paths: Sequence[PathLike] = (),
     subpath: Optional[str] = None,
     discover_latest=True,
     axis_mapping: Optional[haliax.partitioning.ResourceMapping] = None,
@@ -855,10 +827,10 @@ def load_checkpoint_or_initialize(
     allow_partial: bool = False,
 ) -> Callable[Sig, M]:
     """
-    Load a checkpoint from a given path. If discover_latest is True, then the latest checkpoint
-    in a subdirectory of the given path will be loaded. If subpath is not None, then the checkpoint
-    loads only that subpath of the checkpoint. This is useful for loading, e.g., just the model and not
-    the entire training state.
+    Load from checkpoint search paths, or initialize from scratch when no checkpoint is available.
+    If discover_latest is True, the latest checkpoint across the search paths will be loaded. If
+    subpath is not None, only that subpath of the checkpoint is loaded. This is useful for loading,
+    e.g., just the model and not the entire training state.
 
     This function supports "partial" checkpoint loading, where only a subset of the parameters of the
     state is loaded from the checkpoint. This is useful for initializing just some parameters.
@@ -875,10 +847,9 @@ def load_checkpoint_or_initialize(
 
     Args:
         init_fn: a function to initialize if needed
-        checkpoint_path: the path to load the checkpoint from
-        additional_checkpoint_paths: extra roots to search when discover_latest is True
+        checkpoint_search_paths: paths to search for a checkpoint. If discover_latest is False, this must contain exactly one concrete checkpoint path.
         subpath: the subpath to load from the checkpoint
-        discover_latest: whether to discover the latest checkpoint in the given path
+        discover_latest: whether to discover the latest checkpoint in the search paths
         axis_mapping: the axis mapping to use for loading the checkpoint
         mesh: the mesh to use for loading the checkpoint
         is_checkpointed: a FilterSpec that specifies which parameters are checkpointed
@@ -892,6 +863,9 @@ def load_checkpoint_or_initialize(
         loaded state.
 
     """
+    if len(checkpoint_search_paths) == 0:
+        raise ValueError("checkpoint_search_paths must contain at least one path")
+    checkpoint_search_paths = [str(path) for path in checkpoint_search_paths]
 
     # some state might not be initialized, so we need to initialize it
     # JAX will be smart and only do the compute for things we actually need
@@ -921,12 +895,17 @@ def load_checkpoint_or_initialize(
         if do_load is not False:
             # now we can load the checkpoint
             try:
+                if discover_latest:
+                    checkpoint_path = latest_checkpoint_path(checkpoint_search_paths[0], *checkpoint_search_paths[1:])
+                else:
+                    if len(checkpoint_search_paths) != 1:
+                        raise ValueError("discover_latest=False requires exactly one checkpoint search path")
+                    checkpoint_path = checkpoint_search_paths[0]
+
                 loaded_state = load_checkpoint(
                     filtered_state_shape,
                     checkpoint_path,
-                    additional_checkpoint_paths=additional_checkpoint_paths,
                     subpath=subpath,
-                    discover_latest=discover_latest,
                     axis_mapping=axis_mapping,
                     mesh=mesh,
                     allow_partial=allow_partial,
@@ -934,7 +913,7 @@ def load_checkpoint_or_initialize(
             except FileNotFoundError:
                 if do_load is True:
                     raise
-                logger.info(f"Checkpoint not found at {checkpoint_path}. Initializing from scratch.")
+                logger.info(f"Checkpoint not found in {checkpoint_search_paths}. Initializing from scratch.")
 
         state = init_and_merge(loaded_state, *args, **kwargs)
 
@@ -981,6 +960,15 @@ def discover_latest_checkpoint(checkpoint_path: PathLike, *additional_paths: Pat
     else:
         logger.warning(f"No checkpoints found in {all_paths}")
     return best
+
+
+def latest_checkpoint_path(checkpoint_path: PathLike, *additional_paths: PathLike) -> str:
+    """Return the latest concrete checkpoint path across one or more search roots."""
+    latest = discover_latest_checkpoint(checkpoint_path, *additional_paths)
+    if latest is None:
+        search_paths = [str(checkpoint_path)] + [str(path) for path in additional_paths]
+        raise FileNotFoundError(f"Could not discover checkpoint under any of: {search_paths}")
+    return latest
 
 
 def _discover_latest_checkpoint_single(checkpoint_path: str) -> Optional[str]:
