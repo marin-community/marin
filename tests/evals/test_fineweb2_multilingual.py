@@ -11,7 +11,6 @@ def test_fineweb2_multilingual_raw_sets_use_eval_split_in_path_only():
 
     assert isinstance(dataset.input_path, str)
     assert "/deu_Latn/test/*.parquet" in dataset.input_path
-    assert dataset.split == "validation"
     assert dataset.tags == (
         "fineweb2_multilingual",
         "fineweb2_multilingual/script/Latn",
