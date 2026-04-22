@@ -63,13 +63,13 @@ mixture_weights = {DATASET_SHORT_NAME: DATASET_SIZE}
 # Training configuration
 TARGET_EPOCHS = 8
 TRAIN_BATCH_SIZE = 64
-MICROBATCH_SIZE = 32  # 2 gradient accumulation steps on v5p-64
+MICROBATCH_SIZE = 64  # no gradient accumulation on v5p-64
 
 # Fix at 4000 instead of using the number of epochs
 # NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * DATASET_SIZE / TRAIN_BATCH_SIZE)
 NUM_TRAIN_STEPS = 4000
 
-RESOURCES = ResourceConfig.with_tpu("v5p-64")
+RESOURCES = ResourceConfig.with_tpu("v5p-64", ram="256g")
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
