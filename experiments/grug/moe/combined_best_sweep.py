@@ -23,9 +23,9 @@ from experiments.grug.moe.launch import (
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 ALL_CONFIGS: list[tuple[int, float]] = [
-    (512, 2.19e17),
-    (768, 1.70e18),
-    (1024, 9.00e18),
+    # (512, 2.19e17),  # done
+    # (768, 1.70e18),  # done
+    # (1024, 9.00e18),  # running
     (1280, 2.83e19),
 ]
 
