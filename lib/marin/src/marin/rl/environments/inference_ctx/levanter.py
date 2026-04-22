@@ -30,7 +30,6 @@ logger = logging.getLogger(__name__)
 
 UNSUPPORTED_LEVANTER_DECODING_FIELDS = (
     "top_k",
-    "top_p",
     "min_p",
     "repetition_penalty",
     "presence_penalty",
@@ -129,6 +128,7 @@ class LevanterInferenceContext(BaseInferenceContext):
             "logprobs": True,
             "max_tokens": decoding.max_output_tokens,
             "temperature": temperature,
+            "top_p": decoding.top_p,
             "n": n,
             # The Levanter OpenAI surface only accepts string stop sequences.
             "stop": stop_strings_for_decoding(decoding, self.tokenizer),

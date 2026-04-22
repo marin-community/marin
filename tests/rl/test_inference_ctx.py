@@ -331,6 +331,7 @@ def test_levanter_batch_completions_maps_supported_decoding_fields(gpt2_tokenize
         decoding=DecodingConfig(
             strategy=DecodingStrategy.GREEDY,
             temperature=0.7,
+            top_p=0.91,
             max_output_tokens=17,
             stop_strings=["<stop>"],
             seed=123,
@@ -339,6 +340,7 @@ def test_levanter_batch_completions_maps_supported_decoding_fields(gpt2_tokenize
 
     assert len(completions) == 1
     assert mock_client.chat.completions.create.await_args.kwargs["temperature"] == 0.0
+    assert mock_client.chat.completions.create.await_args.kwargs["top_p"] == 0.91
     assert mock_client.chat.completions.create.await_args.kwargs["max_tokens"] == 17
     assert mock_client.chat.completions.create.await_args.kwargs["stop"] == ["<stop>"]
     assert mock_client.chat.completions.create.await_args.kwargs["n"] == 2
@@ -401,13 +403,12 @@ def test_levanter_batch_completions_rejects_unsupported_decoding_fields(gpt2_tok
     mock_client.close = AsyncMock()
     ctx = _test_levanter_context(gpt2_tokenizer, dummy_server, mock_client)
 
-    with pytest.raises(ValueError, match=r"top_p.*ignore_eos"):
+    with pytest.raises(ValueError, match=r"ignore_eos"):
         ctx.batch_completions(
             prompts=["prompt"],
             n=1,
             decoding=DecodingConfig(
                 temperature=1.0,
-                top_p=0.9,
                 ignore_eos=True,
             ),
         )
@@ -417,13 +418,16 @@ def test_levanter_batch_completions_rejects_all_unsupported_decoding_fields(gpt2
     mock_client = AsyncMock()
     mock_client.close = AsyncMock()
     ctx = _test_levanter_context(gpt2_tokenizer, dummy_server, mock_client)
+    expected_match = "".join(
+        [
+            r"top_k, min_p, repetition_penalty, presence_penalty, ",
+            r"frequency_penalty, min_output_tokens, ignore_eos",
+        ]
+    )
 
     with pytest.raises(
         ValueError,
-        match=(
-            r"top_k, top_p, min_p, repetition_penalty, presence_penalty, "
-            r"frequency_penalty, min_output_tokens, ignore_eos"
-        ),
+        match=expected_match,
     ):
         ctx.batch_completions(
             prompts=["prompt"],
@@ -431,7 +435,6 @@ def test_levanter_batch_completions_rejects_all_unsupported_decoding_fields(gpt2
             decoding=DecodingConfig(
                 temperature=1.0,
                 top_k=8,
-                top_p=0.9,
                 min_p=0.1,
                 repetition_penalty=1.1,
                 presence_penalty=0.2,

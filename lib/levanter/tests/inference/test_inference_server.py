@@ -20,8 +20,14 @@ try:
     from openai.types import Completion
     from openai.types.chat import ChatCompletion
 
-    from levanter.inference.engine import InferenceEngineConfig
-    from levanter.inference.openai import InferenceServer, InferenceServerConfig
+    from levanter.inference.engine import GenerationResult, InferenceEngineConfig
+    from levanter.inference.openai import (
+        InferenceBatch,
+        InferenceContext,
+        InferenceRequest,
+        InferenceServer,
+        InferenceServerConfig,
+    )
 
 except ImportError:
     pytest.skip("Serving imports not installed, use --extra=serve", allow_module_level=True)
@@ -171,6 +177,71 @@ def test_endpoints_exist(test_client):
     assert "/health" in routes
     assert "/v1/completions" in routes
     assert "/v1/chat/completions" in routes
+
+
+def test_execute_batch_forwards_top_p_into_engine_requests():
+    class _FakeTokenizer:
+        def decode(self, tokens, skip_special_tokens=True):
+            del skip_special_tokens
+            return "decoded"
+
+    class _FakeLoop:
+        def call_soon_threadsafe(self, callback, *args):
+            callback(*args)
+
+    class _FakeFuture:
+        def __init__(self):
+            self._loop = _FakeLoop()
+            self.result = None
+            self.exception = None
+
+        def get_loop(self):
+            return self._loop
+
+        def set_result(self, value):
+            self.result = value
+
+        def set_exception(self, exc):
+            self.exception = exc
+
+    class _FakeEngine:
+        def __init__(self):
+            self.requests = None
+
+        def generate(self, requests):
+            self.requests = list(requests)
+            return GenerationResult(tokens=[[1, 2]], logprobs=[[-0.1, -0.2]], total_generated=2)
+
+    engine = _FakeEngine()
+    ctx = InferenceContext(
+        model=None,
+        tokenizer=_FakeTokenizer(),
+        engine=engine,
+        config=InferenceServerConfig(),
+    )
+    future = _FakeFuture()
+    batch = InferenceBatch(
+        [
+            InferenceRequest(
+                request_id="req_0",
+                prompt_tokens=[1, 2, 3],
+                max_tokens=2,
+                temperature=0.7,
+                top_p=0.73,
+                stop_tokens=None,
+                seed=123,
+                future=future,
+                n_generations=1,
+            )
+        ]
+    )
+
+    ctx._execute_batch(batch)
+
+    assert engine.requests is not None
+    assert np.asarray(engine.requests[0].decode_params.top_p, dtype=np.float32).item() == pytest.approx(0.73)
+    assert future.exception is None
+    assert future.result is not None
 
 
 @pytest.mark.slow
