@@ -99,6 +99,7 @@ from iris.cluster.controller.transitions import (
     DIRECT_PROVIDER_PROMOTION_RATE,
     HeartbeatApplyRequest,
     ReservationClaim,
+    RunningTaskEntry,
     SchedulingEvent,
     TaskUpdate,
 )
@@ -1024,6 +1025,13 @@ class Controller:
                    the controller will run it in a background thread.
     """
 
+    # Grace window during which a freshly-dispatched task (via StartTasks) is
+    # treated as expected when polling its worker. Bridges the StartTasks →
+    # PollTasks race: a poll's DB snapshot taken before the assignment commit
+    # would otherwise omit the task, and the worker would kill it as
+    # unexpected. 30s comfortably exceeds any normal StartTasks RPC latency.
+    _RECENT_DISPATCH_GRACE_SECONDS = 30.0
+
     def __init__(
         self,
         config: ControllerConfig,
@@ -1129,6 +1137,14 @@ class Controller:
         self._ping_thread: ManagedThread | None = None
         self._poll_thread: ManagedThread | None = None
         self._task_update_queue: queue_mod.Queue[HeartbeatApplyRequest] = queue_mod.Queue()
+
+        # Track tasks dispatched via StartTasks but whose assignment commit
+        # may not yet be visible to a concurrent PollTasks snapshot. Merged
+        # into expected_tasks in _poll_all_workers so the worker does not
+        # treat a freshly-submitted task as "unexpected" and kill it. See
+        # _RECENT_DISPATCH_GRACE_SECONDS and _dispatch_assignments_direct.
+        self._recent_dispatches: dict[WorkerId, dict[tuple[str, int], float]] = {}
+        self._recent_dispatches_lock = threading.Lock()
 
         self._autoscaler: Autoscaler | None = autoscaler
 
@@ -2168,6 +2184,14 @@ class Controller:
         command = [Assignment(task_id=task_id, worker_id=worker_id) for task_id, worker_id in assignments]
         result = self._transitions.queue_assignments(command, direct_dispatch=True)
 
+        # Register dispatches before issuing StartTasks so a concurrent poll
+        # whose DB snapshot predates the assignment commit still sees these
+        # tasks as expected. Any poll that observes the entries won't kill
+        # the task; any poll that misses them can't yet collide with the
+        # StartTasks RPC (not sent until after this point) on the same
+        # gRPC channel.
+        self._record_recent_dispatches(result.start_requests)
+
         # Group StartTasks payloads by (worker_id, address)
         by_worker: dict[tuple[WorkerId, str], list[job_pb2.RunTaskRequest]] = {}
         for worker_id, address, run_request in result.start_requests:
@@ -2318,11 +2342,65 @@ class Controller:
             except Exception:
                 logger.exception("Poll loop iteration failed")
 
+    def _record_recent_dispatches(
+        self,
+        start_requests: list[tuple[WorkerId, str, job_pb2.RunTaskRequest]],
+    ) -> None:
+        """Record (worker, task, attempt) dispatches with a monotonic timestamp."""
+        if not start_requests:
+            return
+        now = time.monotonic()
+        with self._recent_dispatches_lock:
+            for worker_id, _address, run_request in start_requests:
+                self._recent_dispatches.setdefault(worker_id, {})[(run_request.task_id, run_request.attempt_id)] = now
+
+    def _prune_and_snapshot_recent_dispatches(self) -> dict[WorkerId, set[tuple[str, int]]]:
+        """Drop stale entries and return a per-worker snapshot of keys within the grace window."""
+        cutoff = time.monotonic() - self._RECENT_DISPATCH_GRACE_SECONDS
+        snapshot: dict[WorkerId, set[tuple[str, int]]] = {}
+        with self._recent_dispatches_lock:
+            for wid in list(self._recent_dispatches.keys()):
+                entries = self._recent_dispatches[wid]
+                for key in [k for k, ts in entries.items() if ts < cutoff]:
+                    del entries[key]
+                if not entries:
+                    del self._recent_dispatches[wid]
+                else:
+                    snapshot[wid] = set(entries.keys())
+        return snapshot
+
     def _poll_all_workers(self) -> None:
-        """Poll all workers for task state and feed results into the updater queue."""
+        """Poll all workers for task state and feed results into the updater queue.
+
+        Merges recently-dispatched (worker, task, attempt) keys into each
+        worker's expected_tasks so a stale DB snapshot can't cause the worker
+        to kill a just-submitted task. Suppresses "Task not found on worker"
+        updates for entries still within the grace window: the StartTasks RPC
+        may not yet have landed when PollTasks arrived.
+        """
         if self._config.dry_run:
             return
         running, addresses = self._transitions.get_running_tasks_for_poll()
+        recent = self._prune_and_snapshot_recent_dispatches()
+
+        # Merge recent dispatches into the per-worker expected list. Ensures
+        # a worker with only freshly-dispatched tasks (not yet visible in the
+        # DB snapshot) is still polled with the correct expected set.
+        for wid, keys in recent.items():
+            if wid not in addresses:
+                continue
+            entries = running.setdefault(wid, [])
+            existing = {(e.task_id.to_wire(), e.attempt_id) for e in entries}
+            for task_wire, attempt_id in keys:
+                if (task_wire, attempt_id) in existing:
+                    continue
+                entries.append(
+                    RunningTaskEntry(
+                        task_id=JobName.from_wire(task_wire),
+                        attempt_id=attempt_id,
+                    )
+                )
+
         if not running:
             return
         poll_results = self._provider.poll_workers(running, addresses)
@@ -2330,12 +2408,22 @@ class Controller:
             if error is not None:
                 logger.warning("PollTasks failed for worker %s: %s", worker_id, error)
                 continue
-            if updates:
+            if not updates:
+                continue
+            # Drop every update for a task still inside the dispatch grace
+            # window. The worker's view of a freshly-submitted task is
+            # unreliable during this race (either it already has it and would
+            # report running, or it doesn't yet and would report "not found"
+            # as WORKER_FAILED). Let the next poll settle this once the grace
+            # window closes.
+            grace_keys = recent.get(worker_id, set())
+            filtered = [u for u in updates if (u.task_id.to_wire(), u.attempt_id) not in grace_keys]
+            if filtered:
                 self._task_update_queue.put(
                     HeartbeatApplyRequest(
                         worker_id=worker_id,
                         worker_resource_snapshot=None,
-                        updates=updates,
+                        updates=filtered,
                     )
                 )
 

@@ -341,3 +341,105 @@ def test_heartbeat_failure_error_includes_rpc_context():
     assert "expected=1" in error
 
     provider.close()
+
+
+def test_poll_merges_recent_dispatches_into_expected_tasks(tmp_path, worker_metadata):
+    """A poll whose DB snapshot predates the assignment commit still includes
+    freshly-dispatched tasks in expected_tasks, so the worker won't kill them.
+
+    Reproduces the controller side of the StartTasks→PollTasks race: we record
+    a dispatch for worker1 without committing any matching ASSIGNED row in the
+    DB, then run _poll_all_workers and confirm the task appears in the
+    expected_tasks passed to poll_workers.
+    """
+    db = ControllerDB(db_dir=tmp_path)
+    config = ControllerConfig(remote_state_dir="file:///tmp/iris-test-state", local_state_dir=tmp_path)
+
+    captured: dict[str, list[RunningTaskEntry]] = {}
+
+    class RecordingProvider(FakeProvider):
+        def poll_workers(self, running, worker_addresses):
+            for wid, entries in running.items():
+                captured[str(wid)] = list(entries)
+            return []
+
+    controller = Controller(config=config, provider=RecordingProvider(), db=db)
+    state = controller.state
+    _register_worker(state, "worker1", worker_metadata, address="10.0.0.1:10001")
+
+    task_wire = JobName.from_wire("/user/dispatch-race/0").to_wire()
+    run_request = job_pb2.RunTaskRequest(task_id=task_wire, attempt_id=1)
+    controller._record_recent_dispatches([(WorkerId("worker1"), "10.0.0.1:10001", run_request)])
+
+    controller._poll_all_workers()
+
+    assert "worker1" in captured, "worker1 must be polled so expected_tasks covers the dispatch"
+    wire_keys = {(e.task_id.to_wire(), e.attempt_id) for e in captured["worker1"]}
+    assert (task_wire, 1) in wire_keys
+
+    controller.stop()
+    db.close()
+
+
+def test_poll_suppresses_worker_failed_within_grace_window(tmp_path, worker_metadata):
+    """A WORKER_FAILED update for a task still in the dispatch grace window
+    is dropped: this is the reverse race where PollTasks reaches the worker
+    before StartTasks has been applied, producing a spurious 'not found'.
+    """
+    db = ControllerDB(db_dir=tmp_path)
+    config = ControllerConfig(remote_state_dir="file:///tmp/iris-test-state", local_state_dir=tmp_path)
+
+    task_wire = JobName.from_wire("/user/dispatch-race/0").to_wire()
+
+    class FailingProvider(FakeProvider):
+        def poll_workers(self, running, worker_addresses):
+            return [
+                (
+                    WorkerId("worker1"),
+                    [
+                        TaskUpdate(
+                            task_id=JobName.from_wire(task_wire),
+                            attempt_id=1,
+                            new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                            error="Task not found on worker",
+                        )
+                    ],
+                    None,
+                )
+            ]
+
+    controller = Controller(config=config, provider=FailingProvider(), db=db)
+    state = controller.state
+    _register_worker(state, "worker1", worker_metadata, address="10.0.0.1:10001")
+
+    run_request = job_pb2.RunTaskRequest(task_id=task_wire, attempt_id=1)
+    controller._record_recent_dispatches([(WorkerId("worker1"), "10.0.0.1:10001", run_request)])
+
+    controller._poll_all_workers()
+
+    assert controller._task_update_queue.empty(), "WORKER_FAILED should be suppressed within the grace window"
+
+    controller.stop()
+    db.close()
+
+
+def test_prune_recent_dispatches_drops_stale_entries(tmp_path, worker_metadata):
+    """Stale recent-dispatch entries past the grace window are pruned."""
+    db = ControllerDB(db_dir=tmp_path)
+    config = ControllerConfig(remote_state_dir="file:///tmp/iris-test-state", local_state_dir=tmp_path)
+    controller = Controller(config=config, provider=FakeProvider(), db=db)
+
+    grace = controller._RECENT_DISPATCH_GRACE_SECONDS
+    now = time.monotonic()
+    controller._recent_dispatches[WorkerId("worker1")] = {
+        ("/user/fresh/0", 0): now,
+        ("/user/stale/0", 0): now - (grace + 1.0),
+    }
+
+    snapshot = controller._prune_and_snapshot_recent_dispatches()
+
+    assert snapshot == {WorkerId("worker1"): {("/user/fresh/0", 0)}}
+    assert controller._recent_dispatches[WorkerId("worker1")] == {("/user/fresh/0", 0): now}
+
+    controller.stop()
+    db.close()
