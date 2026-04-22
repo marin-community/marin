@@ -15,7 +15,7 @@ from jax.sharding import reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from levanter.analysis.backward_flow import (
-    BACKWARD_FLOW_SITE_IN,
+    BWD_IN,
     is_backward_flow_active,
     log_backward_activation,
     trace_backward_activation,
@@ -82,7 +82,7 @@ class CausalSelfAttention(eqx.Module):
 
     @named_call
     def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
-        x = log_backward_activation(x, site=BACKWARD_FLOW_SITE_IN)
+        x = log_backward_activation(x, site=BWD_IN)
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
 
@@ -111,7 +111,7 @@ class MLP(eqx.Module):
 
     @named_call
     def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
-        x = log_backward_activation(x, site=BACKWARD_FLOW_SITE_IN)
+        x = log_backward_activation(x, site=BWD_IN)
         up = jnp.einsum("bsh,hm->bsm", x, self.mlp_up)
         activated = jax.nn.relu(up)
         out = jnp.einsum("bsm,mh->bsh", activated, self.mlp_down, out_sharding=Pbatch)

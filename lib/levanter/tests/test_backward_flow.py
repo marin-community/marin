@@ -8,12 +8,12 @@ from haliax.nn import ArrayStacked
 
 import levanter.tracker
 from levanter.analysis.backward_flow import (
-    BACKWARD_FLOW_SITE_IN,
-    BACKWARD_FLOW_SITE_OUT,
     BackwardFlowConfig,
     BackwardFlowEdge,
     BackwardFlowGraph,
     BackwardFlowPlate,
+    BWD_IN,
+    BWD_OUT,
     SummaryStats,
     backward_flow_graph_from_jaxpr,
     capture_backward_flow,
@@ -46,8 +46,8 @@ def test_normalize_name_stack_strips_jax_transform_wrappers():
 def test_log_backward_activation_records_activation_and_gradient_metrics():
     @jax.named_call
     def inner(x):
-        x = log_backward_activation(x, site=BACKWARD_FLOW_SITE_IN)
-        return log_backward_activation(x * 2, site=BACKWARD_FLOW_SITE_OUT)
+        x = log_backward_activation(x, site=BWD_IN)
+        return log_backward_activation(x * 2, site=BWD_OUT)
 
     @jax.jit
     def compute_grad(x):
@@ -74,7 +74,7 @@ def test_log_backward_activation_records_activation_and_gradient_metrics():
 def test_log_backward_activation_records_scaled_gradient_rms_when_configured():
     @jax.named_call
     def inner(x):
-        return log_backward_activation(x * 2, site=BACKWARD_FLOW_SITE_OUT)
+        return log_backward_activation(x * 2, site=BWD_OUT)
 
     @jax.jit
     def compute_grad(x):
@@ -119,8 +119,8 @@ def test_trace_backward_activation_adds_named_scope_for_probe():
 def test_log_backward_activation_allows_callers_to_skip_checkpoint_when_active():
     @jax.named_call
     def inner(x):
-        x = log_backward_activation(x, site=BACKWARD_FLOW_SITE_IN)
-        return log_backward_activation(jnp.tanh(x * 2), site=BACKWARD_FLOW_SITE_OUT)
+        x = log_backward_activation(x, site=BWD_IN)
+        return log_backward_activation(jnp.tanh(x * 2), site=BWD_OUT)
 
     def maybe_checkpointed_inner(x):
         if is_backward_flow_active():
@@ -151,8 +151,8 @@ def test_log_backward_activation_works_with_array_stacked_diagnostic_unroll():
 
         def step(self, carry: jax.Array) -> jax.Array:
             with jax.named_scope("ArrayBlock"):
-                carry = log_backward_activation(carry, site=BACKWARD_FLOW_SITE_IN)
-                return log_backward_activation(jnp.tanh(carry * self.weight), site=BACKWARD_FLOW_SITE_OUT)
+                carry = log_backward_activation(carry, site=BWD_IN)
+                return log_backward_activation(jnp.tanh(carry * self.weight), site=BWD_OUT)
 
     def apply_layers(stack: ArrayStacked[Layer], carry: jax.Array) -> jax.Array:
         if is_backward_flow_active():

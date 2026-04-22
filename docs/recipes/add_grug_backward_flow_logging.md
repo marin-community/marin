@@ -41,14 +41,14 @@ explicitly when a variant should opt out. Positive intervals sample that often.
 
 At each named module boundary you want in the graph, wrap the returned activation with
 `log_backward_activation(...)`. For modules where you want to see what backward is
-sending *into* the module, mark the input with `BACKWARD_FLOW_SITE_IN`:
+sending *into* the module, mark the input with `BWD_IN`:
 
 ```python
-from levanter.analysis.backward_flow import BACKWARD_FLOW_SITE_IN, log_backward_activation, trace_backward_activation
+from levanter.analysis.backward_flow import BWD_IN, log_backward_activation, trace_backward_activation
 
 @named_call
 def __call__(self, x):
-    x = log_backward_activation(x, site=BACKWARD_FLOW_SITE_IN)
+    x = log_backward_activation(x, site=BWD_IN)
     out = ...
     return log_backward_activation(out)
 ```
