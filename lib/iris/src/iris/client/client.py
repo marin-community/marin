@@ -51,7 +51,8 @@ from iris.cluster.types import (
     TaskAttempt,
     adjust_tpu_replicas,
 )
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.proto_utils import job_state_friendly
 from iris.time_proto import timestamp_from_proto
 from rigging.timing import Duration, Timestamp
 
@@ -724,28 +725,36 @@ class IrisClient:
     def list_jobs(
         self,
         *,
-        states: list[job_pb2.JobState] | None = None,
+        state: job_pb2.JobState | None = None,
         prefix: JobName | None = None,
     ) -> list[job_pb2.JobStatus]:
         """List jobs with optional filtering.
 
+        Filters are pushed down to the server via ``JobQuery`` so the
+        controller does not page-walk its entire jobs table: ``state`` becomes
+        ``state_filter`` and ``prefix`` becomes a ``name_filter`` substring
+        match. The prefix is re-validated client-side because ``name_filter``
+        is a substring, not an anchored prefix.
+
         Args:
-            states: If provided, only return jobs in these states
+            state: If provided, only return jobs in this state
             prefix: If provided, only return jobs whose JobName starts with this prefix
 
         Returns:
             List of JobStatus matching the filters
         """
-        all_jobs = self._cluster_client.list_jobs()
-        result = []
-        for job in all_jobs:
-            if states is not None and job.state not in states:
-                continue
-            job_name = JobName.from_wire(job.job_id)
-            if prefix is not None and not job_name.to_wire().startswith(prefix.to_wire()):
-                continue
-            result.append(job)
-        return result
+        query = controller_pb2.Controller.JobQuery()
+        if state is not None:
+            query.state_filter = job_state_friendly(state)
+        if prefix is not None:
+            query.name_filter = prefix.to_wire()
+
+        all_jobs = self._cluster_client.list_jobs(query=query)
+        if prefix is None:
+            return list(all_jobs)
+
+        prefix_wire = prefix.to_wire()
+        return [job for job in all_jobs if JobName.from_wire(job.job_id).to_wire().startswith(prefix_wire)]
 
     def terminate_prefix(
         self,
