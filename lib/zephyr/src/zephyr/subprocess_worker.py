@@ -132,16 +132,11 @@ def execute_shard(task_file: str, result_file: str) -> None:
     # a Python traceback on stderr instead of a bare ``returncode < 0``.
     configure_logging(level=logging.INFO)
 
-    ctx = _SubprocessWorkerContext("", "")
     counter_file = f"{result_file}.counters"
     stop_event = threading.Event()
-    flusher = threading.Thread(
-        target=_periodic_counter_writer,
-        args=(stop_event, ctx, counter_file, SUBPROCESS_COUNTER_FLUSH_INTERVAL),
-        daemon=True,
-        name="zephyr-subprocess-counter-flusher",
-    )
+    flusher: threading.Thread | None = None
     result_or_error: Any
+    ctx: _SubprocessWorkerContext | None = None
     try:
         with open(task_file, "rb") as f:
             task, chunk_prefix, execution_id = cloudpickle.load(f)
@@ -149,6 +144,12 @@ def execute_shard(task_file: str, result_file: str) -> None:
         ctx = _SubprocessWorkerContext(chunk_prefix, execution_id)
         _worker_ctx_var.set(ctx)
 
+        flusher = threading.Thread(
+            target=_periodic_counter_writer,
+            args=(stop_event, ctx, counter_file, SUBPROCESS_COUNTER_FLUSH_INTERVAL),
+            daemon=True,
+            name="zephyr-subprocess-counter-flusher",
+        )
         flusher.start()
 
         stage_ctx = StageContext(
@@ -176,18 +177,17 @@ def execute_shard(task_file: str, result_file: str) -> None:
         # at the subprocess origin. Attach the formatted traceback as a note
         # — ``__notes__`` survives pickling and Python prints it inline when
         # the exception eventually propagates.
-        import traceback
-
         logger.exception("Subprocess shard execution failed")
         e.add_note(f"--- subprocess traceback ---\n{traceback.format_exc().rstrip()}")
         result_or_error = e
     finally:
         stop_event.set()
-        if flusher.is_alive():
+        if flusher is not None and flusher.is_alive():
             flusher.join(timeout=2.0)
 
     with open(result_file, "wb") as f:
-        cloudpickle.dump((result_or_error, dict(ctx._counters)), f)
+        counters_out = dict(ctx._counters) if ctx is not None else {}
+        cloudpickle.dump((result_or_error, counters_out), f)
 
 
 def main() -> None:

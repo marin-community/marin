@@ -365,6 +365,28 @@ def test_get_job_status_returns_status(service):
     assert response.job.state == job_pb2.JOB_STATE_PENDING
 
 
+def test_get_job_status_reports_has_children(service, state):
+    """GetJobStatus sets has_children so the dashboard can render the expand toggle."""
+    service.launch_job(make_job_request("parent-job"), None)
+    parent_id = JobName.root("test-user", "parent-job")
+
+    child_id = JobName.from_wire(parent_id.to_wire() + "/child")
+    child_req = controller_pb2.Controller.LaunchJobRequest(
+        name=child_id.to_wire(),
+        entrypoint=job_pb2.RuntimeEntrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+    )
+    child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
+    state.submit_job(child_id, child_req, Timestamp.now())
+
+    parent = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=parent_id.to_wire()), None)
+    assert parent.job.has_children is True
+
+    child = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=child_id.to_wire()), None)
+    assert child.job.has_children is False
+
+
 def test_get_job_status_not_found(service):
     """Verify get_job_status raises ConnectError for unknown job."""
     request = controller_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-user", "nonexistent").to_wire())

@@ -24,6 +24,7 @@ import re
 import sqlite3
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -246,36 +247,50 @@ def choose_log_objects(
     return chosen
 
 
+def _download_one(fs, entry: dict, target_dir: Path, index: int, total: int) -> Path:
+    name = entry["name"]
+    remote_size = entry.get("size")
+    local_path = target_dir / Path(name).name
+    cached_ok = local_path.exists() and remote_size is not None and local_path.stat().st_size == remote_size
+    if cached_ok:
+        logging.info(f"  [{index}/{total}] {Path(name).name} already cached")
+        return local_path
+    if local_path.exists():
+        logging.info(
+            f"  [{index}/{total}] {Path(name).name} cached but size mismatch "
+            f"(local={local_path.stat().st_size}, remote={remote_size}); re-downloading"
+        )
+    else:
+        logging.info(f"  [{index}/{total}] Downloading {Path(name).name}")
+    tmp_path = local_path.with_suffix(local_path.suffix + ".part")
+    with fs.open(name, "rb") as src, tmp_path.open("wb") as dst:
+        while True:
+            chunk = src.read(8 * 1024 * 1024)
+            if not chunk:
+                break
+            dst.write(chunk)
+    tmp_path.replace(local_path)
+    return local_path
+
+
 def download_log_objects(remote_logs_dir: str, entries: list[dict], target_dir: Path) -> list[Path]:
     fs, _ = fsspec.core.url_to_fs(remote_logs_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     logging.info(f"Downloading {len(entries)} parquet files to {target_dir}")
 
-    local_paths: list[Path] = []
-    for i, entry in enumerate(entries, 1):
-        name = entry["name"]
-        remote_size = entry.get("size")
-        local_path = target_dir / Path(name).name
-        cached_ok = local_path.exists() and remote_size is not None and local_path.stat().st_size == remote_size
-        if cached_ok:
-            logging.info(f"  [{i}/{len(entries)}] {Path(name).name} already cached")
-        else:
-            if local_path.exists():
-                logging.info(
-                    f"  [{i}/{len(entries)}] {Path(name).name} cached but size mismatch "
-                    f"(local={local_path.stat().st_size}, remote={remote_size}); re-downloading"
-                )
-            else:
-                logging.info(f"  [{i}/{len(entries)}] Downloading {Path(name).name}")
-            tmp_path = local_path.with_suffix(local_path.suffix + ".part")
-            with fs.open(name, "rb") as src, tmp_path.open("wb") as dst:
-                while True:
-                    chunk = src.read(8 * 1024 * 1024)
-                    if not chunk:
-                        break
-                    dst.write(chunk)
-            tmp_path.replace(local_path)
-        local_paths.append(local_path)
+    index_map = {id(entry): i for i, entry in enumerate(entries, 1)}
+    total = len(entries)
+    results: dict[int, Path] = {}
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        futures = {
+            pool.submit(_download_one, fs, entry, target_dir, index_map[id(entry)], total): entry for entry in entries
+        }
+        for fut in as_completed(futures):
+            entry = futures[fut]
+            results[index_map[id(entry)]] = fut.result()
+
+    local_paths = [results[i] for i in range(1, total + 1)]
     logging.info(f"Finished downloading {len(local_paths)} parquet files")
     return local_paths
 

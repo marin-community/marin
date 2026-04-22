@@ -2167,29 +2167,20 @@ class ControllerTransitions:
                     int(task_row["max_retries_preemption"]),
                     job_pb2.TASK_STATE_WORKER_FAILED,
                 )
-            if is_reservation_holder:
-                cur.execute(
-                    "DELETE FROM task_attempts WHERE task_id = ? AND attempt_id = ?",
-                    (tid, int(task_row["current_attempt_id"])),
-                )
-                cur.execute(
-                    "UPDATE tasks SET state = ?, current_attempt_id = -1, started_at_ms = NULL, "
-                    "finished_at_ms = NULL, error = NULL, preemption_count = 0, "
-                    "current_worker_id = NULL, current_worker_address = NULL WHERE task_id = ?",
-                    (new_task_state, tid),
-                )
-            else:
-                _terminate_task(
-                    cur,
-                    self._db.endpoints,
-                    tid,
-                    int(task_row["current_attempt_id"]),
-                    new_task_state,
-                    f"Worker {worker_id} failed: {error}",
-                    now_ms,
-                    attempt_state=job_pb2.TASK_STATE_WORKER_FAILED,
-                    preemption_count=preemption_count,
-                )
+            # Reservation holders retry to PENDING with preemption_count reset so the
+            # reservation can re-acquire a worker without counting the failure as a preemption.
+            holder_preemption_count = 0 if is_reservation_holder else preemption_count
+            _terminate_task(
+                cur,
+                self._db.endpoints,
+                tid,
+                int(task_row["current_attempt_id"]),
+                new_task_state,
+                f"Worker {worker_id} failed: {error}",
+                now_ms,
+                attempt_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                preemption_count=holder_preemption_count,
+            )
             task_id = JobName.from_wire(tid)
             parent_job_id, _ = task_id.require_task()
             new_job_state = self._recompute_job_state(cur, parent_job_id)

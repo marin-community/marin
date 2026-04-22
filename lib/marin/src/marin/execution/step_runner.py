@@ -218,7 +218,7 @@ class StepRunner:
                     missing = []
                     for s in waiting:
                         unmet = [
-                            _display_name(d)
+                            _display_name(d.output_path)
                             for d in s.deps
                             if d.output_path not in completed and d.output_path not in failed
                         ]

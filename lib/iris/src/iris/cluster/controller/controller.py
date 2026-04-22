@@ -1518,7 +1518,11 @@ class Controller:
                 logger.exception("Profile loop iteration failed")
 
     def _profile_all_running_tasks(self) -> None:
-        """Capture CPU and memory profiles for every running task and store in the DB."""
+        """Capture CPU profiles (py-spy) for every running task and store in the DB.
+
+        Memory profiling via memray is currently disabled because memray attach
+        has been triggering segfaults in target processes.
+        """
         workers = healthy_active_workers_with_attributes(self._db)
         if not workers:
             return
@@ -1539,12 +1543,7 @@ class Controller:
         )
         self._dispatch_profiles(profile_targets, cpu_profile_type, "cpu", self._config.profile_duration)
 
-        memory_profile_type = job_pb2.ProfileType(
-            memory=job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.STATS),
-        )
-        self._dispatch_profiles(profile_targets, memory_profile_type, "memory", self._config.profile_duration)
-
-        logger.info("Profile round (cpu+memory): captured for %d tasks", len(profile_targets))
+        logger.info("Profile round (cpu): captured for %d tasks", len(profile_targets))
 
     def _dispatch_profiles(
         self,

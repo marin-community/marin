@@ -481,9 +481,9 @@ import logging
 
 # Reinitialize logging with the unified Iris format.
 # Uses single-letter level prefix: I=INFO, W=WARNING, E=ERROR, D=DEBUG, C=CRITICAL.
-# NOTE: This duplicates LevelPrefixFormatter and _LEVEL_PREFIX from iris.logging
+# NOTE: This duplicates LevelPrefixFormatter and _LEVEL_PREFIX from rigging.log_setup
 # because CALLABLE_RUNNER executes inside an isolated task container that may not
-# have the iris package installed (e.g. user-provided Docker images).
+# have the rigging package installed (e.g. user-provided Docker images).
 _LEVEL_PREFIX = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
 
 class _LevelPrefixFormatter(logging.Formatter):

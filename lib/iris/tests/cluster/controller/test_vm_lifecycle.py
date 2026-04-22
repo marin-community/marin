@@ -354,12 +354,12 @@ def test_stop_controller_duplicate_vms_raises(config):
         stop_controller(platform, config)
 
 
-def test_gcp_controller_vm_config_defaults_to_100gb_disk():
-    """GCP controller VM defaults to 100GB disk."""
+def test_gcp_controller_vm_config_defaults_to_500gb_disk():
+    """GCP controller VM defaults to 500GB disk (sized for log-store retention)."""
     config = config_pb2.IrisClusterConfig()
     config.platform.label_prefix = "test"
     config.controller.gcp.zone = "us-central1-a"
 
     vm_config = _build_controller_vm_config(config)
 
-    assert vm_config.gcp.boot_disk_size_gb == 100
+    assert vm_config.gcp.boot_disk_size_gb == 500
