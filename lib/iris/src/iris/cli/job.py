@@ -598,6 +598,17 @@ def run_iris_job(
 
     reservation: list[ReservationEntry] | None = None
     if reserve:
+        # --reserve is mutually exclusive with --region/--zone: the controller's
+        # claim loop only evaluates each reservation entry's own constraints, so
+        # job-level routing constraints would not gate worker claims (#4988).
+        # A caller who needs a specific region/zone should name it directly; a
+        # caller who uses a reservation is by definition not picking the region.
+        if regions or zone:
+            raise click.UsageError(
+                "--reserve cannot be combined with --region or --zone. "
+                "Use --region/--zone to target a specific location, or --reserve "
+                "to claim from a reservation (which chooses the location for you)."
+            )
         reservation = []
         for spec in reserve:
             reservation.extend(parse_reservation_spec(spec))
