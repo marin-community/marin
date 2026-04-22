@@ -3,7 +3,10 @@
 
 from types import SimpleNamespace
 
+import fsspec
+
 from marin.rl.rl_losses import RLOOLoss
+from marin.rl.telemetry import TelemetryEvent, TrackerStream
 from marin.rl.train_worker import (
     BatchPrepTiming,
     InitialRolloutState,
@@ -58,6 +61,41 @@ def test_record_train_step_updates_replay_buffer_and_shared_run_state():
     worker._record_train_step(7)
 
     assert recorded_steps == [7, 7]
+
+
+def test_initialize_telemetry_writes_trainer_event_shard_and_registers_artifact(tmp_path):
+    registered_artifacts = []
+
+    class _FakeRemoteMethod:
+        def remote(self, artifact_ref):
+            registered_artifacts.append(artifact_ref)
+            return SimpleNamespace(result=lambda: None)
+
+    worker = TrainWorker.__new__(TrainWorker)
+    worker.config = SimpleNamespace(
+        metadata_path=str(tmp_path / "metadata"),
+        run_id="rl-test",
+        root_run_id="rl-test",
+        instance_id="attempt-abc",
+    )
+    worker._runtime = SimpleNamespace(run_state=SimpleNamespace(register_artifact_ref=_FakeRemoteMethod()))
+    worker._event_writer = None
+
+    worker._initialize_telemetry()
+
+    assert worker._event_writer is not None
+    assert len(registered_artifacts) == 1
+
+    fs = fsspec.filesystem("file")
+    assert fs.exists(worker._event_writer.path)
+    with fs.open(worker._event_writer.path) as handle:
+        events = [TelemetryEvent.from_json(line) for line in handle.read().splitlines() if line]
+
+    assert len(events) == 1
+    assert events[0].stream == TrackerStream.TRAINER
+    assert events[0].event_type == "worker_started"
+    assert events[0].run_id == "rl-test"
+    assert events[0].payload == {"worker_role": "trainer"}
 
 
 def test_initial_rollout_state_uses_bootstrap_weights_for_fresh_run():

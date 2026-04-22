@@ -19,14 +19,34 @@ from marin.rl.rollout_worker import (
     _should_run_micro_eval,
     create_inference_context,
 )
+from marin.rl.telemetry import TelemetryEvent, TrackerRunRef, TrackerStream
 
 
 def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
     captured = {}
+    summary_updates = []
+    artifact_logs = []
 
     class _FakeRun:
         def log(self, _metrics, step=None):
             pass
+
+        def log_artifact(self, artifact_path, name=None, artifact_type=None):
+            artifact_logs.append((artifact_path, name, artifact_type))
+
+        @property
+        def summary(self):
+            class _Summary:
+                def update(self_inner, metrics):
+                    summary_updates.append(metrics)
+
+            return _Summary()
+
+        id = "wandb-rollout-123"
+        name = "iris-rl-e4ms2-500-rollout-0"
+        url = "https://wandb.ai/example/run"
+        entity = "marin"
+        project = "marin_iris_rl_debug"
 
         def finish(self):
             pass
@@ -36,7 +56,7 @@ def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
         lambda **kwargs: captured.update(kwargs) or _FakeRun(),
     )
 
-    RolloutTracker(
+    tracker = RolloutTracker(
         RolloutTrackerConfig(project="marin_iris_rl_debug", name="iris-rl-e4ms2-500-rollout-0"),
         run_id="iris-rl-e4ms2-500-rollout-0",
     )
@@ -44,6 +64,11 @@ def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
     assert captured["name"] == "iris-rl-e4ms2-500-rollout-0"
     assert captured["id"] == "iris-rl-e4ms2-500-rollout-0"
     assert captured["resume"] == "allow"
+    tracker.log_summary({"metric": 1})
+    tracker.log_artifact("/tmp/trace.json", name="trace", artifact_type="trace")
+    assert summary_updates == [{"metric": 1}]
+    assert artifact_logs == [("/tmp/trace.json", "trace", "trace")]
+    assert tracker.as_tracker_ref(stream=TrackerStream.ROLLOUT, worker_index=0).tracker_run_id == "wandb-rollout-123"
 
 
 def test_resume_safe_transfer_metrics_logs_attempt_and_cumulative_values_after_counter_reset():
@@ -189,6 +214,68 @@ def test_log_lesson_eval_uses_wandb_default_step_and_context_metrics():
             None,
         )
     ]
+
+
+def test_initialize_telemetry_writes_rollout_and_eval_shards_and_registers_refs(tmp_path):
+    registered_artifacts = []
+    registered_trackers = []
+
+    class _FakeRemoteMethod:
+        def __init__(self, sink):
+            self._sink = sink
+
+        def remote(self, value):
+            self._sink.append(value)
+            return SimpleNamespace(result=lambda: None)
+
+    worker = object.__new__(RolloutWorker)
+    worker.config = SimpleNamespace(
+        metadata_path=str(tmp_path / "metadata"),
+        run_id="rl-test-rollout-0",
+        root_run_id="rl-test",
+        instance_id="attempt-abc",
+        worker_index=0,
+        eval_owner_worker_index=0,
+    )
+    worker._runtime = SimpleNamespace(
+        run_state=SimpleNamespace(
+            register_artifact_ref=_FakeRemoteMethod(registered_artifacts),
+            register_tracker_ref=_FakeRemoteMethod(registered_trackers),
+        )
+    )
+    worker.tracker = SimpleNamespace(
+        as_tracker_ref=lambda *, stream, worker_index=None: TrackerRunRef(
+            stream=stream,
+            tracker_run_id="wandb-rollout-123",
+            project="marin_post_training",
+            run_name="rl-test-rollout-0",
+            worker_index=worker_index,
+        )
+    )
+    worker._event_writer = None
+    worker._eval_event_writer = None
+
+    worker._initialize_telemetry()
+
+    assert worker._event_writer is not None
+    assert worker._eval_event_writer is not None
+    assert len(registered_artifacts) == 2
+    assert len(registered_trackers) == 1
+
+    fs = fsspec.filesystem("file")
+    with fs.open(worker._event_writer.path) as handle:
+        rollout_events = [TelemetryEvent.from_json(line) for line in handle.read().splitlines() if line]
+    with fs.open(worker._eval_event_writer.path) as handle:
+        eval_events = [TelemetryEvent.from_json(line) for line in handle.read().splitlines() if line]
+
+    assert "/rl-test/events/" in worker._event_writer.path
+    assert "/rl-test/events/" in worker._eval_event_writer.path
+    assert [event.stream for event in rollout_events] == [TrackerStream.ROLLOUT]
+    assert [event.event_type for event in rollout_events] == ["worker_started"]
+    assert [event.run_id for event in rollout_events] == ["rl-test"]
+    assert [event.stream for event in eval_events] == [TrackerStream.EVAL]
+    assert [event.event_type for event in eval_events] == ["stream_initialized"]
+    assert [event.run_id for event in eval_events] == ["rl-test"]
 
 
 def test_stage_vllm_metadata_locally_copies_hf_metadata(tmp_path, monkeypatch):
