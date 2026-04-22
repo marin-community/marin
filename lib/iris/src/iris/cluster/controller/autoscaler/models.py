@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import enum
 from enum import Enum, StrEnum
 
 from iris.cluster.constraints import Constraint, PlacementRequirements
@@ -30,11 +31,11 @@ class SliceLifecycleState(StrEnum):
     Note: These are slice-level aggregate states, not direct VM states.
     """
 
-    REQUESTING = "requesting"
-    BOOTING = "booting"
-    INITIALIZING = "initializing"
-    READY = "ready"
-    FAILED = "failed"
+    REQUESTING = enum.auto()
+    BOOTING = enum.auto()
+    INITIALIZING = enum.auto()
+    READY = enum.auto()
+    FAILED = enum.auto()
 
 
 @dataclass
