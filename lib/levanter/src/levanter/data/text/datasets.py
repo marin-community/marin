@@ -335,6 +335,7 @@ class DatasetComponent(DatasetComponentBase):
     format: LmDatasetFormatBase = field(default_factory=TextLmDatasetFormat)
     pack: bool | int | Literal["pad"] | None = None
     tags: list[str] | None = None
+    split: str = "validation"
 
 
 @DatasetComponentBase.register_subclass("direct")
