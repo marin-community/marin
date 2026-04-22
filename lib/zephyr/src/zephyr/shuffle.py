@@ -435,11 +435,11 @@ _msgpack_decoder = msgspec.msgpack.Decoder()
 
 
 def _has_set_types(obj: Any, depth: int = 0) -> bool:
-    """Return True if obj contains frozenset or set at any nesting level.
+    """Return True if obj contains frozenset or set at any nesting level up to depth 2.
 
     msgspec silently converts frozenset/set to list, which is data loss.
-    Scanning only the first item (O(1) per chunk) is sufficient because all
-    items in a scatter chunk share the same schema.
+    Called for every item in a chunk so that heterogeneous chunks (where
+    only some items contain set types) are correctly routed to pickle.
     """
     if isinstance(obj, (frozenset, set)):
         return True
@@ -448,7 +448,7 @@ def _has_set_types(obj: Any, depth: int = 0) -> bool:
     if isinstance(obj, dict):
         return any(_has_set_types(v, depth + 1) for v in obj.values())
     if isinstance(obj, (list, tuple)):
-        return any(_has_set_types(v, depth + 1) for v in obj[:5])
+        return any(_has_set_types(v, depth + 1) for v in obj)
     return False
 
 
@@ -457,13 +457,14 @@ def _write_chunk_frame(items: list) -> bytes:
 
     Tries msgspec msgpack first (2-5x faster than cloudpickle). Falls back
     to cloudpickle sub-batches for types msgpack cannot encode losslessly
-    (frozenset, set, user-defined classes). The first byte of the returned
-    bytes is the format tag (``_FRAME_FORMAT_MSGPACK`` or
-    ``_FRAME_FORMAT_PICKLE``).
+    (frozenset, set, user-defined classes). Every item in the chunk is
+    scanned — not just the first — because chunks may be heterogeneous.
+    The first byte of the returned bytes is the format tag
+    (``_FRAME_FORMAT_MSGPACK`` or ``_FRAME_FORMAT_PICKLE``).
     """
     try:
-        if items and _has_set_types(items[0]):
-            raise TypeError("item contains frozenset or set")
+        if any(_has_set_types(item) for item in items):
+            raise TypeError("chunk contains frozenset or set")
         payload = _msgpack_encoder.encode(items)
         return _FRAME_FORMAT_MSGPACK + zstd.ZstdCompressor(level=_ZSTD_COMPRESS_LEVEL).compress(payload)
     except Exception:

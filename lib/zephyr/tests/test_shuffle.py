@@ -215,6 +215,19 @@ def test_write_chunk_frame_falls_back_to_pickle_for_frozensets():
     assert frame[0:1] == _FRAME_FORMAT_PICKLE
 
 
+def test_write_chunk_frame_detects_frozenset_in_later_items():
+    """Frozenset in a non-first item must still trigger the pickle fallback.
+
+    Regression test: the earlier implementation only checked items[0], so
+    a heterogeneous chunk whose first item was plain would silently corrupt
+    later items containing frozenset (msgspec coerces them to list).
+    """
+    items = [{"k": i, "v": i} for i in range(10)]
+    items.append({"k": 10, "v": frozenset([1, 2, 3])})
+    frame = _write_chunk_frame(items)
+    assert frame[0:1] == _FRAME_FORMAT_PICKLE
+
+
 # ---------------------------------------------------------------------------
 # external_sort_merge
 # ---------------------------------------------------------------------------
