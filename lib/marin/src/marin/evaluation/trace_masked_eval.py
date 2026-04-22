@@ -6,10 +6,10 @@
 import json
 import logging
 import os
-from collections.abc import Iterator, Sequence
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
-from collections.abc import Mapping
 
 import equinox as eqx
 import fsspec
@@ -52,6 +52,19 @@ DEFAULT_TRACE_MASKED_EVAL_WANDB_PROJECT = "marin-analysis"
 DEFAULT_TRACE_MASKED_EVAL_WANDB_TAGS = ("trace_masked_eval",)
 CORRECT_OUTCOME_LABEL = "CORRECT"
 INCORRECT_OUTCOME_LABEL = "INCORRECT"
+RESULTS_FILENAME = "results.json"
+TRACE_MASKED_EVAL_STATUS_PARTIAL = "partial"
+TRACE_MASKED_EVAL_STATUS_COMPLETED = "completed"
+TRACE_MASKED_EVAL_DATASET_STATUS_COMPLETED = "completed"
+DEFAULT_DATASET_EVAL_MAX_ATTEMPTS = 3
+DEFAULT_DATASET_EVAL_RETRY_INITIAL_DELAY = 30.0
+DEFAULT_DATASET_EVAL_RETRY_MAX_DELAY = 300.0
+DEFAULT_HF_HUB_TIMEOUT = "60"
+HF_HUB_TIMEOUT_ENV_VARS = (
+    "HF_HUB_ETAG_TIMEOUT",
+    "HF_HUB_DOWNLOAD_TIMEOUT",
+    "HF_HUB_REQUEST_TIMEOUT",
+)
 
 
 @dataclass(frozen=True)
@@ -92,6 +105,10 @@ class TraceMaskedEvalConfig:
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(mp=jmp.get_policy("c=bf16")))
     max_eval_length: int = 4096
     output_path: str = ""
+    dataset_eval_max_attempts: int = DEFAULT_DATASET_EVAL_MAX_ATTEMPTS
+    dataset_eval_retry_initial_delay: float = DEFAULT_DATASET_EVAL_RETRY_INITIAL_DELAY
+    dataset_eval_retry_max_delay: float = DEFAULT_DATASET_EVAL_RETRY_MAX_DELAY
+    job_failure_max_retries: int = 1
 
 
 @dataclass(frozen=True)
@@ -298,107 +315,280 @@ def _dataset_metadata(dataset_config: TraceMaskedEvalDatasetConfig) -> dict[str,
     return metadata
 
 
+def _results_path(output_path: str) -> str:
+    return os.path.join(output_path, RESULTS_FILENAME)
+
+
+def _new_results(config: TraceMaskedEvalConfig) -> dict[str, object]:
+    return {
+        "checkpoint_path": config.checkpoint_path,
+        "checkpoint_is_hf": config.checkpoint_is_hf,
+        "tokenizer": config.tokenizer,
+        "max_eval_length": config.max_eval_length,
+        "status": TRACE_MASKED_EVAL_STATUS_PARTIAL,
+        "completed_datasets": 0,
+        "datasets": {},
+    }
+
+
+def _read_results(output_path: str) -> dict[str, object] | None:
+    results_path = _results_path(output_path)
+    fs, _, _ = fsspec.get_fs_token_paths(results_path)
+    if not fs.exists(results_path):
+        return None
+    with fs.open(results_path) as f:
+        results = json.load(f)
+    if not isinstance(results, dict):
+        raise ValueError(f"Expected {results_path} to contain a JSON object")
+    return results
+
+
+def _dataset_results(results: dict[str, object]) -> dict[str, object]:
+    datasets = results.get("datasets")
+    if not isinstance(datasets, dict):
+        raise ValueError("Trace masked eval results must contain a datasets object")
+    return datasets
+
+
+def _validate_loaded_results(config: TraceMaskedEvalConfig, results: dict[str, object]) -> None:
+    expected = _new_results(config)
+    for field_name in ("checkpoint_path", "checkpoint_is_hf", "tokenizer", "max_eval_length"):
+        if field_name in results and results[field_name] != expected[field_name]:
+            raise ValueError(
+                f"Existing trace masked eval results at {config.output_path} have {field_name}="
+                f"{results[field_name]!r}, expected {expected[field_name]!r}"
+            )
+
+
+def _load_or_create_results(config: TraceMaskedEvalConfig) -> dict[str, object]:
+    results = _read_results(config.output_path)
+    if results is None:
+        return _new_results(config)
+
+    _validate_loaded_results(config, results)
+    results.setdefault("checkpoint_path", config.checkpoint_path)
+    results.setdefault("checkpoint_is_hf", config.checkpoint_is_hf)
+    results.setdefault("tokenizer", config.tokenizer)
+    results.setdefault("max_eval_length", config.max_eval_length)
+    results.setdefault("status", TRACE_MASKED_EVAL_STATUS_PARTIAL)
+    results.setdefault("completed_datasets", 0)
+    results.setdefault("datasets", {})
+    _dataset_results(results)
+    return results
+
+
+def _is_completed_dataset_result(dataset_result: object) -> bool:
+    if not isinstance(dataset_result, Mapping):
+        return False
+    return isinstance(dataset_result.get("metrics"), Mapping)
+
+
+def _completed_dataset_count(results: dict[str, object]) -> int:
+    return sum(
+        1 for dataset_result in _dataset_results(results).values() if _is_completed_dataset_result(dataset_result)
+    )
+
+
+def _completed_dataset_metrics(results: dict[str, object]) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    for dataset_result in _dataset_results(results).values():
+        if not _is_completed_dataset_result(dataset_result):
+            continue
+        dataset_metrics = dataset_result["metrics"]
+        assert isinstance(dataset_metrics, Mapping)
+        for metric_name, metric_value in dataset_metrics.items():
+            if not isinstance(metric_name, str):
+                raise ValueError(f"Trace masked eval metric names must be strings, got {metric_name!r}")
+            if not isinstance(metric_value, int | float):
+                raise ValueError(f"Trace masked eval metric {metric_name!r} must be numeric, got {metric_value!r}")
+            metrics[metric_name] = float(metric_value)
+    return metrics
+
+
+def _record_dataset_result(
+    results: dict[str, object],
+    dataset_name: str,
+    dataset_config: TraceMaskedEvalDatasetConfig,
+    metrics: Mapping[str, float],
+) -> None:
+    _dataset_results(results)[dataset_name] = {
+        "status": TRACE_MASKED_EVAL_DATASET_STATUS_COMPLETED,
+        "metadata": _dataset_metadata(dataset_config),
+        "metrics": dict(metrics),
+    }
+    results["status"] = TRACE_MASKED_EVAL_STATUS_PARTIAL
+    results["completed_datasets"] = _completed_dataset_count(results)
+
+
 def _write_results(output_path: str, results: dict[str, object]) -> None:
+    results_path = _results_path(output_path)
+    tmp_path = f"{results_path}.tmp.{os.getpid()}"
     fs, _, _ = fsspec.get_fs_token_paths(output_path)
     fs.makedirs(output_path, exist_ok=True)
-    with fs.open(os.path.join(output_path, "results.json"), "w") as f:
+    with fs.open(tmp_path, "w") as f:
         json.dump(results, f, indent=2, sort_keys=True)
         f.write("\n")
+    fs.mv(tmp_path, results_path)
+
+
+def _run_with_retries(
+    operation_name: str,
+    operation: Callable[[], T],
+    *,
+    max_attempts: int,
+    initial_delay: float,
+    max_delay: float,
+) -> T:
+    attempt = 1
+    delay = initial_delay
+    while True:
+        try:
+            return operation()
+        except Exception:
+            if attempt >= max_attempts:
+                logger.exception("%s failed after %d attempt(s)", operation_name, attempt)
+                raise
+            logger.warning(
+                "%s failed on attempt %d/%d; retrying in %.1f seconds",
+                operation_name,
+                attempt,
+                max_attempts,
+                delay,
+                exc_info=True,
+            )
+            time.sleep(delay)
+            attempt += 1
+            delay = min(delay * 2, max_delay)
+
+
+def _validate_eval_config(config: TraceMaskedEvalConfig) -> None:
+    if not config.datasets:
+        raise ValueError("Trace masked evaluation requires at least one dataset")
+    if config.checkpoint_path is None:
+        raise ValueError("Trace masked evaluation requires checkpoint_path")
+    if config.dataset_eval_max_attempts < 1:
+        raise ValueError("dataset_eval_max_attempts must be at least 1")
+    if config.dataset_eval_retry_initial_delay < 0:
+        raise ValueError("dataset_eval_retry_initial_delay must be non-negative")
+    if config.dataset_eval_retry_max_delay < config.dataset_eval_retry_initial_delay:
+        raise ValueError("dataset_eval_retry_max_delay must be at least dataset_eval_retry_initial_delay")
+    if config.job_failure_max_retries < 0:
+        raise ValueError("job_failure_max_retries must be non-negative")
 
 
 def trace_masked_eval(config: TraceMaskedEvalConfig) -> None:
     """Compute masked losses over configured trace datasets."""
 
-    if not config.datasets:
-        raise ValueError("Trace masked evaluation requires at least one dataset")
-    if config.checkpoint_path is None:
-        raise ValueError("Trace masked evaluation requires checkpoint_path")
+    _validate_eval_config(config)
 
     levanter.initialize(config)
-    tokenizer = load_marin_tokenizer(config.tokenizer)
+    try:
+        tokenizer = load_marin_tokenizer(config.tokenizer)
 
-    hf_checkpoint = RepoRef.from_string(config.checkpoint_path) if config.checkpoint_is_hf else None
-    EvalBatch = config.trainer.EvalBatch
-    Pos = config.model.max_Pos.resize(config.max_eval_length)
+        hf_checkpoint = RepoRef.from_string(config.checkpoint_path) if config.checkpoint_is_hf else None
+        EvalBatch = config.trainer.EvalBatch
+        Pos = config.model.max_Pos.resize(config.max_eval_length)
 
-    compute_axis_mapping = config.trainer.compute_axis_mapping
-    parameter_axis_mapping = config.trainer.parameter_axis_mapping
+        compute_axis_mapping = config.trainer.compute_axis_mapping
+        parameter_axis_mapping = config.trainer.parameter_axis_mapping
 
-    with config.trainer.use_device_mesh():
-        key = jax.random.PRNGKey(0)
+        with config.trainer.use_device_mesh():
+            key = jax.random.PRNGKey(0)
 
-        vocab_size = len(tokenizer)
-        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), compute_axis_mapping)
-        if vocab_size != Vocab.size:
-            logger.info("Rounding vocab size from %d to %d for partitioning", vocab_size, Vocab.size)
+            vocab_size = len(tokenizer)
+            Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), compute_axis_mapping)
+            if vocab_size != Vocab.size:
+                logger.info("Rounding vocab size from %d to %d for partitioning", vocab_size, Vocab.size)
 
-        mp: jmp.Policy = config.trainer.mp
+            mp: jmp.Policy = config.trainer.mp
 
-        if config.checkpoint_path is not None and not config.checkpoint_is_hf:
-            with use_cpu_device():
-                model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-                model = load_checkpoint(model, config.checkpoint_path, subpath="model")
-            model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
-        elif hf_checkpoint is not None:
-            model_config = config.model
-            if not hasattr(model_config, "hf_checkpoint_converter"):
-                raise ValueError("Model config does not have an HF checkpoint converter. Can't load HF checkpoint.")
-            converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
-            converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
-            model = converter.load_pretrained(
-                model_config.model_type,
-                ref=hf_checkpoint,
-                axis_mapping=parameter_axis_mapping,
-                dtype=mp.compute_dtype,
-            )
-        else:
-            raise AssertionError("Should not get here")
+            if config.checkpoint_path is not None and not config.checkpoint_is_hf:
+                with use_cpu_device():
+                    model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
+                    model = load_checkpoint(model, config.checkpoint_path, subpath="model")
+                model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
+            elif hf_checkpoint is not None:
+                model_config = config.model
+                if not hasattr(model_config, "hf_checkpoint_converter"):
+                    raise ValueError("Model config does not have an HF checkpoint converter. Can't load HF checkpoint.")
+                converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
+                converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
+                model = converter.load_pretrained(
+                    model_config.model_type,
+                    ref=hf_checkpoint,
+                    axis_mapping=parameter_axis_mapping,
+                    dtype=mp.compute_dtype,
+                )
+            else:
+                raise AssertionError("Should not get here")
 
-        results: dict[str, object] = {
-            "checkpoint_path": config.checkpoint_path,
-            "checkpoint_is_hf": config.checkpoint_is_hf,
-            "tokenizer": config.tokenizer,
-            "max_eval_length": config.max_eval_length,
-            "datasets": {},
-        }
-        dataset_results: dict[str, object] = {}
+            results = _load_or_create_results(config)
+            dataset_results = _dataset_results(results)
+            tracker_metrics = _completed_dataset_metrics(results)
+            if tracker_metrics:
+                logger.info(
+                    "Loaded %d completed trace dataset(s) from %s",
+                    _completed_dataset_count(results),
+                    config.output_path,
+                )
+                levanter.tracker.log(tracker_metrics, step=_completed_dataset_count(results))
 
-        tracker_metrics: dict[str, float] = {}
-        for dataset_name, dataset_config in config.datasets.items():
-            logger.info("Evaluating trace dataset %s", dataset_name)
-            source = _source_for_dataset(dataset_config)
-            cache_dir = os.path.join(config.output_path, "cache", _safe_name(dataset_name))
-            cache = build_trace_chat_dataset_cache(cache_dir, source, dataset_config.trace_format, tokenizer)
-            dataset = dataset_for_trace_chat_format(
-                dataset_config.trace_format,
-                Pos,
-                cache,
-                block_cross_document_attention=True,
-            )
+            for dataset_name, dataset_config in config.datasets.items():
+                if _is_completed_dataset_result(dataset_results.get(dataset_name)):
+                    logger.info("Skipping completed trace dataset %s", dataset_name)
+                    continue
 
-            evaluator = MaskedEvaluator.for_trace_lm(
-                EvalBatch,
-                dataset,
-                target_names=dataset_config.trace_format.loss_tags,
-                tokenizer=tokenizer,
-                device_mesh=config.trainer.device_mesh,
-                axis_mapping=compute_axis_mapping,
-                mp=mp,
-            )
-            log_dict = eval_masked_model(evaluator, model, prefix=f"trace_masked_eval/{dataset_name}")
-            tracker_metrics.update(log_dict)
-            dataset_results[dataset_name] = {
-                "metadata": _dataset_metadata(dataset_config),
-                "metrics": log_dict,
-            }
+                logger.info("Evaluating trace dataset %s", dataset_name)
 
-        results["datasets"] = dataset_results
-        levanter.tracker.log(tracker_metrics, step=0)
+                def evaluate_dataset(
+                    current_dataset_name: str = dataset_name,
+                    current_dataset_config: TraceMaskedEvalDatasetConfig = dataset_config,
+                ) -> dict[str, float]:
+                    source = _source_for_dataset(current_dataset_config)
+                    cache_dir = os.path.join(config.output_path, "cache", _safe_name(current_dataset_name))
+                    cache = build_trace_chat_dataset_cache(
+                        cache_dir, source, current_dataset_config.trace_format, tokenizer
+                    )
+                    dataset = dataset_for_trace_chat_format(
+                        current_dataset_config.trace_format,
+                        Pos,
+                        cache,
+                        block_cross_document_attention=True,
+                    )
 
-        if jax.process_index() == 0:
-            _write_results(config.output_path, results)
+                    evaluator = MaskedEvaluator.for_trace_lm(
+                        EvalBatch,
+                        dataset,
+                        target_names=current_dataset_config.trace_format.loss_tags,
+                        tokenizer=tokenizer,
+                        device_mesh=config.trainer.device_mesh,
+                        axis_mapping=compute_axis_mapping,
+                        mp=mp,
+                    )
+                    return eval_masked_model(evaluator, model, prefix=f"trace_masked_eval/{current_dataset_name}")
 
-    levanter.tracker.current_tracker().finish()
+                log_dict = _run_with_retries(
+                    f"Trace dataset {dataset_name}",
+                    evaluate_dataset,
+                    max_attempts=config.dataset_eval_max_attempts,
+                    initial_delay=config.dataset_eval_retry_initial_delay,
+                    max_delay=config.dataset_eval_retry_max_delay,
+                )
+                _record_dataset_result(results, dataset_name, dataset_config, log_dict)
+                tracker_metrics.update(log_dict)
+
+                if jax.process_index() == 0:
+                    _write_results(config.output_path, results)
+                levanter.tracker.log(log_dict, step=_completed_dataset_count(results))
+
+            results["status"] = TRACE_MASKED_EVAL_STATUS_COMPLETED
+            results["completed_datasets"] = _completed_dataset_count(results)
+            levanter.tracker.log(tracker_metrics, step=_completed_dataset_count(results))
+
+            if jax.process_index() == 0:
+                _write_results(config.output_path, results)
+    finally:
+        levanter.tracker.current_tracker().finish()
 
 
 def run_trace_masked_eval_on_pod(config: TraceMaskedEvalOnPodConfig) -> None:
@@ -418,7 +608,11 @@ def run_trace_masked_eval_on_pod(config: TraceMaskedEvalOnPodConfig) -> None:
         name=job_name,
         entrypoint=Entrypoint.from_callable(trace_masked_eval, args=[config.trace_masked_eval_config]),
         resources=config.resources,
-        environment=create_environment(extras=extras),
+        environment=create_environment(
+            env_vars={name: os.getenv(name, DEFAULT_HF_HUB_TIMEOUT) for name in HF_HUB_TIMEOUT_ENV_VARS},
+            extras=extras,
+        ),
+        max_retries_failure=config.trace_masked_eval_config.job_failure_max_retries,
     )
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)

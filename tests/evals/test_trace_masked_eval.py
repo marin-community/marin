@@ -12,12 +12,20 @@ from levanter.models.llama import LlamaConfig
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.tokenizers import load_tokenizer
+from marin.evaluation import trace_masked_eval as trace_masked_eval_module
 from marin.evaluation.trace_masked_eval import (
     DEFAULT_TRACE_MASKED_EVAL_WANDB_PROJECT,
+    TraceMaskedEvalConfig,
     TraceRowAdapterConfig,
     TraceMaskedEvalDatasetConfig,
     TraceMaskedEvalOnPodConfig,
+    _completed_dataset_metrics,
+    _is_completed_dataset_result,
+    _load_or_create_results,
+    _record_dataset_result,
+    _run_with_retries,
     _source_for_dataset,
+    _write_results,
     default_trace_masked_eval,
 )
 
@@ -154,3 +162,60 @@ def test_trace_row_adapter_adds_patch_and_outcome_targets(tmp_path):
     assert "Final Patch:" in patch_text
     assert "diff --git" in patch_text
     assert "INCORRECT" in outcome_text
+
+
+def test_run_with_retries_retries_transient_failures(monkeypatch):
+    calls = 0
+    sleeps: list[float] = []
+
+    def flaky_operation() -> str:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise RuntimeError("temporary failure")
+        return "ok"
+
+    monkeypatch.setattr(trace_masked_eval_module.time, "sleep", lambda delay: sleeps.append(delay))
+
+    result = _run_with_retries(
+        "flaky dataset",
+        flaky_operation,
+        max_attempts=3,
+        initial_delay=1.0,
+        max_delay=1.5,
+    )
+
+    assert result == "ok"
+    assert calls == 3
+    assert sleeps == [1.0, 1.5]
+
+
+def test_trace_masked_eval_results_checkpoint_supports_resume(tmp_path):
+    config = TraceMaskedEvalConfig(
+        checkpoint_path="gs://marin-us-central1/checkpoints/example",
+        checkpoint_is_hf=True,
+        tokenizer="gpt2",
+        max_eval_length=32,
+        output_path=str(tmp_path),
+    )
+    dataset_config = TraceMaskedEvalDatasetConfig(
+        source=UrlDatasetSourceConfig(train_urls=[str(tmp_path / "traces.jsonl")]),
+        split="train",
+        max_examples=1,
+    )
+    metrics = {
+        "trace_masked_eval/openhands/outcome/loss": 0.25,
+        "trace_masked_eval/openhands/outcome/count": 4.0,
+    }
+
+    results = _load_or_create_results(config)
+    _record_dataset_result(results, "openhands", dataset_config, metrics)
+    _write_results(config.output_path, results)
+
+    loaded = _load_or_create_results(config)
+    loaded_datasets = loaded["datasets"]
+    assert isinstance(loaded_datasets, dict)
+    assert _is_completed_dataset_result(loaded_datasets["openhands"])
+    assert loaded["status"] == "partial"
+    assert loaded_datasets["openhands"]["metrics"] == metrics
+    assert _completed_dataset_metrics(loaded) == metrics
