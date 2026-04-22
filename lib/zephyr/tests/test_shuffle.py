@@ -235,6 +235,42 @@ def test_scatter_estimate_tracks_skewed_items(tmp_path):
     assert writer._mid_write_flushes > 0, "expected mid-write flushes for large items"
 
 
+def test_scatter_estimate_adapts_to_gradual_drift(tmp_path):
+    """Write-time EMA bounds peak buffered rows even when item sizes grow gradually."""
+    num_shards = 1
+    data_path = str(tmp_path / "shard-0000.shuffle")
+
+    # Items grow linearly from ~100 B to ~100 KB across 200 records.
+    # If all 200 were buffered at once the real RSS would be ~10 MB.
+    n_items = 200
+    items = [{"k": 0, "v": "x" * (100 + i * 500)} for i in range(n_items)]
+
+    # 500 KB budget. With a frozen first-item estimate (~110 B) the budget check
+    # would read 200 * 110 = 22 KB < 500 KB and never flush mid-write, letting
+    # all items accumulate. With EMA adaptation the estimate tracks the growing
+    # sizes and flushes before peak RSS reaches the budget.
+    budget = 500_000
+    writer = ScatterWriter(
+        data_path=data_path,
+        key_fn=_key,
+        num_output_shards=num_shards,
+        buffer_limit_bytes=budget,
+    )
+    for item in items:
+        writer.write(item)
+    writer.close()
+
+    scatter_paths = [data_path]
+    recovered = list(ScatterReader.from_sidecars(scatter_paths, 0))
+    assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
+
+    assert writer._mid_write_flushes > 0, "expected mid-write flushes as item sizes grew"
+    assert writer._peak_buffer_rows < n_items, (
+        f"peak_buffer_rows={writer._peak_buffer_rows} should be < {n_items}; "
+        "a frozen estimate lets all items accumulate before close()"
+    )
+
+
 def test_scatter_byte_budget_preserves_all_items(tmp_path):
     """Items are not lost or duplicated when byte-budget flushes fire mid-write."""
     num_shards = 3
