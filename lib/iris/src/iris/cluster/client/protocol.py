@@ -80,7 +80,12 @@ class ClusterClient(Protocol):
 
     def list_workers(self) -> list[controller_pb2.Controller.WorkerHealthStatus]: ...
 
-    def list_jobs(self) -> list[job_pb2.JobStatus]: ...
+    def list_jobs(
+        self,
+        *,
+        query: controller_pb2.Controller.JobQuery | None = None,
+        page_size: int = 500,
+    ) -> list[job_pb2.JobStatus]: ...
 
     def get_task_status(self, task_name: JobName) -> job_pb2.TaskStatus: ...
 
