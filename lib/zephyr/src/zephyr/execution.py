@@ -463,7 +463,7 @@ class ZephyrCoordinator:
                 self.abort("Coordinator loop crashed unexpectedly")
                 return
 
-            self._shutdown_event.wait(timeout=0.5)
+            self._shutdown_event.wait(timeout=2.0)
 
     def _check_worker_group(self) -> None:
         """Abort the pipeline if the worker job has permanently terminated."""
