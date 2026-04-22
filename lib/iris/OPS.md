@@ -118,9 +118,14 @@ SELECT slice_id, lifecycle, scale_group, worker_ids FROM slices WHERE lifecycle=
 -- Task attempt history (debugging retries)
 SELECT task_id, attempt_id, state, exit_code, error FROM task_attempts
 WHERE task_id LIKE '%<job_fragment>%' ORDER BY attempt_id;
+```
 
--- What the controller has been doing
-SELECT kind, count(*) FROM txn_log GROUP BY kind ORDER BY count(*) DESC LIMIT 10;
+Controller audit events (`event=<kind> action=<action> entity=<id> ...`) are
+emitted as structured `logger.info` lines — query them through
+`iris process logs` with a substring filter, not via SQL. Example:
+
+```bash
+iris process logs --since 24h | grep 'action=worker_heartbeat_failed'
 ```
 
 Full table list: `iris query "SELECT name FROM sqlite_master WHERE type='table'"`.

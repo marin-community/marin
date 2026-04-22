@@ -278,7 +278,7 @@ def test_handle_failed_heartbeats_logs_diagnostics(tmp_path, worker_metadata, ca
         tasks_to_kill=[],
     )
     acc = _SyncFailureAccumulator()
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.INFO, logger="iris.cluster.controller.transitions"):
         primary_failed_workers = controller._handle_failed_heartbeats(
             [(batch, "deadline exceeded after 12000ms")],
             acc,
@@ -286,10 +286,11 @@ def test_handle_failed_heartbeats_logs_diagnostics(tmp_path, worker_metadata, ca
 
     assert primary_failed_workers == []
     assert acc.fail_count == 1
-    assert "worker=worker1" in caplog.text
+    assert "event=worker_heartbeat_failed" in caplog.text
+    assert "entity=worker1" in caplog.text
     assert "address=10.0.0.1:10001" in caplog.text
-    assert "action=transient_failure" in caplog.text
-    assert "last_success_age_s=" in caplog.text
+    assert "rpc_action=transient_failure" in caplog.text
+    assert "last_success_age_ms=" in caplog.text
     assert "deadline exceeded after 12000ms" in caplog.text
 
     controller.stop()
