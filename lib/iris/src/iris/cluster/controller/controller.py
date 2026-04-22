@@ -1039,6 +1039,7 @@ class Controller:
             )
 
         self._config = config
+        self._stopped = False
         self._provider: TaskProvider | K8sTaskProvider = provider
         self._provider_scheduling_events: list[SchedulingEvent] = []
         self._provider_capacity: ClusterCapacity | None = None
@@ -1287,7 +1288,7 @@ class Controller:
         3. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
         4. Stop remaining threads (server) and executors.
         """
-        if getattr(self, "_stopped", False):
+        if self._stopped:
             return
         self._stopped = True
         # Unregister atexit hook before closing DB connections.
