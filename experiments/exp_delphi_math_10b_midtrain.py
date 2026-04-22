@@ -10,10 +10,33 @@ the same optimizer family (AdamH + Complete(d)P); see Will Held's blog at
 https://oa.williamheld.com/blog/delphi/ and ``experiments.scaling_law_sweeps
 .completed_adamh``.
 
-This file produces ``len(BASES) * len(LR_FACTORS) = 6`` :class:`ExecutorStep`
-runs. See ``.agents/logbooks/midtraining_delphi.md`` for the full rationale,
+This file enumerates ``len(BASES) * len(LR_FACTORS) = 6`` :class:`ExecutorStep`
+runs. **Each sweep point must be launched as its own top-level ``iris job
+run`` coordinator** — do NOT put all 6 under a single coordinator, because
+Marin's ``run_levanter_train_lm`` submits its iris child with the hardcoded
+name ``train_lm`` (``lib/marin/src/marin/training/training.py:307``) and
+concurrent same-name submits collapse onto one handle via the iris
+``EXISTING_JOB_POLICY_KEEP`` policy (``lib/iris/src/iris/cluster/controller
+/service.py:1113``). Symptom on v10: 1 of 6 actually trained; the other 5
+marked SUCCESS with empty artifacts.
+
+To launch a single sweep point, set the env vars below so this script
+builds only the matching step:
+
+  iris --cluster=marin job run --cpu 1 --memory 3GB --disk 9GB \\
+    --region us-central1 --job-name delphi-math-10b-1e21-lr0.67 --no-wait \\
+    -e MARIN_I_WILL_PAY_FOR_ALL_FEES 1 -e WANDB_API_KEY "$WANDB_API_KEY" \\
+    -e MIDTRAIN_SELECT_BASE 1e21-v5 -e MIDTRAIN_SELECT_LR 0.67 \\
+    -- python experiments/exp_delphi_math_10b_midtrain.py
+
+With no env vars set, all 6 steps are generated (useful for dry-runs /
+introspection; do NOT actually ``executor_main`` on the full list).
+
+See ``.agents/logbooks/midtraining_delphi.md`` for the full rationale,
 numbers, and verification plan.
 """
+
+import os
 
 from levanter.optim import AdamHConfig
 
@@ -123,9 +146,23 @@ def _build_adamh(base: dict, lr_factor: float) -> AdamHConfig:
     )
 
 
+# Env-var filters: set these to restrict the generated sweep to a single
+# point so each can be launched as its own iris coordinator job. Step hashes
+# are unchanged by filtering — already-succeeded outputs (e.g. the v10
+# `lr0.5-ba7b7f` run) stay cached and will be skipped automatically.
+_SELECT_BASE = os.environ.get("MIDTRAIN_SELECT_BASE")  # e.g. "1e21-v5"
+_SELECT_LR = os.environ.get("MIDTRAIN_SELECT_LR")  # e.g. "0.67"
+
+
+def _lr_str(lr_factor: float) -> str:
+    return f"{lr_factor:.2f}".rstrip("0").rstrip(".")
+
+
 def _build_runs() -> list[ExecutorStep]:
     runs: list[ExecutorStep] = []
     for base_tag, base in BASES.items():
+        if _SELECT_BASE is not None and base_tag != _SELECT_BASE:
+            continue
         # Reconstruct the Qwen3Config exactly as the pretrain run built it,
         # so TensorStore weight restore matches every array shape.
         # Private method is intentional: it's the single source of truth for
@@ -136,6 +173,8 @@ def _build_runs() -> list[ExecutorStep]:
         )
 
         for lr_factor in LR_FACTORS:
+            if _SELECT_LR is not None and _lr_str(lr_factor) != _SELECT_LR:
+                continue
             optimizer = _build_adamh(base, lr_factor)
 
             train_cfg = SimpleTrainConfig(
@@ -158,7 +197,7 @@ def _build_runs() -> list[ExecutorStep]:
                 steps_per_hf_export=STEPS_PER_HF_EXPORT,
             )
 
-            lr_str = f"{lr_factor:.2f}".rstrip("0").rstrip(".")
+            lr_str = _lr_str(lr_factor)
             name = f"delphi-{base_tag}-math-10b-lr{lr_str}"
 
             runs.append(

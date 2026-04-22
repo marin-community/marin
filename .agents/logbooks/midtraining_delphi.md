@@ -394,6 +394,98 @@ Notes captured while writing `experiments/exp_delphi_math_10b_midtrain.py`. Upda
 | 2026-04-21 22:35Z | v8 got past cache-copy (succeeded this time), dispatched the 6 TPU `train_lm` jobs on v5p-64 → all hosts crashed with `ValueError: Unsupported URI scheme for tensorstore: 'mirror' in ...`. | **Lesson:** `mirror://` is an fsspec protocol. Levanter's checkpoint loader uses TensorStore directly (native GCS paths, no fsspec). So `mirror://` works for data loading but NOT for `initialize_from_checkpoint_path`. |
 | 2026-04-21 22:38Z | Reverted ckpt fields in `experiments/exp_delphi_math_10b_midtrain.py` from `mirror://<path>` → `gs://marin-us-central2/<path>`. Cross-region reads are fine: TensorStore doesn't consult the fsspec `CrossRegionGuardedFS`, so `MARIN_I_WILL_PAY_FOR_ALL_FEES=1` isn't even strictly needed for the ckpt read (kept it for the data fsspec paths). Committed `c13560c3f`, pushed. | Normalize/tokenize caches from v7 remain in us-central1; v9 should skip straight to cache-copy then training. |
 | 2026-04-21 22:39Z | Submitted `/ahmed/delphi-math-10b-sweep-v9`. | Job accepted. |
+| 2026-04-21 22:40Z | v9 FAILED in 33s with `ValueError: initialize_from_checkpoint_path is not in the same region (us-central2) as the VM (us-central1)` for all 6 sweep steps. Marin's `rigging.filesystem.check_gcs_paths_same_region` (invoked via `_doublecheck_paths` in `lib/marin/src/marin/training/training.py`) hard-fails any `gs://` path whose bucket region doesn't match the VM's region — no env-var override exists. | Fix: pre-copy the two base ckpts into us-central1 so they're co-located with the pinned `--region us-central1` coordinator. |
+| 2026-04-21 22:42Z | Server-side `gcloud storage cp --recursive` both ckpts us-central2 → us-central1 (23 GB + 41 GB ≈ 64 GB). Updated `BASES[*]["ckpt"]` in the experiment file to `gs://marin-us-central1/...` paths. Committed `56b1b1c86`, pushed. | Copies finished in parallel background (~350-620 MiB/s server-side). |
+| 2026-04-21 22:44Z | Submitted `/ahmed/delphi-math-10b-sweep-v10` with `--region us-central1` (dropping us-east5 because the ckpts are now only in us-central1). | Coordinator up in ~5 s. |
+| 2026-04-21 22:45–22:50Z | v10 walked the dep graph (skipped the already-cached normalize/tokenize from v7), dispatched the train_lm sub-task, scheduler pending-on-coscheduling for a v5p-64 slice (need 8 worker VMs to come up), then `running`. | Expected TPU spin-up delay. |
+| 2026-04-21 22:53Z | All 8 `train_lm/[0-7]` replicas restored the checkpoint successfully (`jax.experimental.array_serialization.serialization Error check finished successfully`). Train-step tracing + HLO lowering completed in a few s. **First training step** 39.3 s (compile-heavy), then 4.4–4.5 s/step steady-state. | MFU ≈ 36 % on v5p-64 (32 chips × 459 TFLOPS bf16 peak; achieved ≈ 5.3 PFLOPS/s). |
+| 2026-04-21 22:53 – 2026-04-22 05:16Z | v10 training ran for ~6 h 22 m. Loss dropped 1.58 → 1.12 over warm-up (500 steps), plateaued 1.12–1.20 through decay, **final train_loss 0.958 (tqdm) / 0.962 (W&B summary at step 4767)**. 3 mid-run evals at steps 200/400/600/800/... ran cleanly. Periodic save at step 1000. | Successful run: `delphi-1e20-iso-d2048-L21-math-10b-lr0.5-ba7b7f` (wandb + 155 GB at `gs://marin-us-central1/checkpoints/delphi-1e20-iso-d2048-L21-math-10b-lr0.5-ba7b7f/`). |
+| 2026-04-22 05:16Z | v10 coordinator `state=succeeded`. But iris shows only ONE `train_lm` child under the coordinator, and wandb has only ONE v10-era run (the `lr0.5-ba7b7f` one). GCS sweep-output audit: `lr0.5-ba7b7f` → 155 GB with `checkpoints/`, `hf/`, `tracker_metrics.jsonl`; `lr0.67-e3be0c` → **65 KB, `.executor_status=SUCCESS`, `.artifact=null`, no training output**; `lr0.83-e3de76` / `1e21-lr0.5-ccce18` / `1e21-lr0.67-e5b5df` / `1e21-lr0.83-ece889` → 65 KB each, `.executor_status=FAILED`. | **Only 1 of 6 sweep points actually trained.** The other 5 marked terminal states (SUCCESS or FAILED) without producing training artifacts. |
+
+## 2026-04-22 post-v10 analysis: the `train_lm` name-collision pitfall
+
+`lib/marin/src/marin/training/training.py:307` pins every dispatched iris sub-job to the **literal name** `"train_lm"`. When an `executor_main` invocation runs 6 training `ExecutorStep`s whose dependencies are all already satisfied (tokenize cache warm, base ckpts local), `step_runner`'s default `max_concurrent=8` `ThreadPoolExecutor` dispatches all 6 `run_levanter_train_lm` calls **in parallel**. All 6 call `_submit_training_job(job_name="train_lm", ...)` under the same coordinator parent → same full iris path `/ahmed/<coord>/train_lm`.
+
+The iris controller's `EXISTING_JOB_POLICY_KEEP` (what fray hands it for `adopt_existing=True`) then, per `lib/iris/src/iris/cluster/controller/service.py:1113-1117`:
+
+```python
+elif policy == job_pb2.EXISTING_JOB_POLICY_KEEP:
+    if not is_job_finished(existing_job.state):
+        return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
+    # Job finished, replace it (KEEP only preserves running jobs)
+    self._transitions.remove_finished_job(job_id)
+```
+
+→ racing submits 2…6 see the still-running first job and **adopt its handle without creating a new job**. All six Python threads then `.wait()` on the same handle, which completes when the first (and only) config's training finishes. The adopted-handle threads see "SUCCEEDED" and return, so `step_runner` marks their steps as `STATUS_SUCCESS` despite the fn never actually running Levanter training.
+
+Why I confused myself with the PR 4591 seed-sweep precedent: the seed-sweep pattern *defines* many ExecutorSteps but in practice each seed ran as a **separate top-level iris job** on a different day (wandb `created_at` for 1e21 seed{0,42,62746} were 2026-03-04, 2026-03-18 01:47Z, 2026-03-18 06:11Z; 1e22 seeds were 03-04, 03-22, 03-26). Different top-level coordinators → different parent paths → no `train_lm` collision. The seed PR itself didn't fix the collision; it just enabled enumerating the variants, and the human operator launched each variant separately.
+
+## Fix applied to `experiments/exp_delphi_math_10b_midtrain.py` (not yet run)
+
+Added env-var-driven filtering so a single invocation of the script can build a single sweep point:
+
+```python
+_SELECT_BASE = os.environ.get("MIDTRAIN_SELECT_BASE")  # e.g. "1e21-v5"
+_SELECT_LR   = os.environ.get("MIDTRAIN_SELECT_LR")    # e.g. "0.67"
+
+def _build_runs():
+    for base_tag, base in BASES.items():
+        if _SELECT_BASE is not None and base_tag != _SELECT_BASE: continue
+        ...
+        for lr_factor in LR_FACTORS:
+            if _SELECT_LR is not None and _lr_str(lr_factor) != _SELECT_LR: continue
+            ...
+```
+
+Verified:
+
+- Unset: builds all 6 steps (as before). Useful for dry-run/introspection.
+- `MIDTRAIN_SELECT_BASE=1e21-v5 MIDTRAIN_SELECT_LR=0.67`: builds just `delphi-1e21-v5-math-10b-lr0.67`.
+
+**Step hashes are unchanged by filtering** (filtering only affects which steps `_build_runs` returns; each step's config is byte-identical to before). So the already-succeeded `delphi-1e20-iso-d2048-L21-math-10b-lr0.5-ba7b7f` entry stays cached — any future invocation that includes it will see `STATUS_SUCCESS` and skip. The 5 remaining steps currently have a `.executor_status` of `SUCCESS` (lr0.67 1e20) or `FAILED` (other 4). Before relaunching:
+
+- **`STATUS_SUCCESS` with no training output** (the `lr0.67-e3be0c` case, and possibly others): the cache check will treat them as succeeded → skip → no retraining. Workaround: delete `.executor_status` at those output paths so the next run re-does the step. (Do NOT delete the `lr0.5-ba7b7f` one — that one really did train.)
+- **`STATUS_FAILED`**: `step_runner` will raise `PreviousTaskFailedError` unless you pass `force_run_failed=True` or delete the status file.
+
+## Launch recipe for the 5 remaining sweep points (copy-paste)
+
+Each variant goes as its own iris coordinator so `/ahmed/<coord-N>/train_lm` is a unique path per sweep point. Run from the repo root:
+
+```bash
+# 1. (one-time) clean up the stale STATUS files so the 5 remaining steps don't
+#    short-circuit on cache hit / fail-as-previous-failure:
+for target in \
+    'delphi-1e20-iso-d2048-L21-math-10b-lr0.67-e3be0c' \
+    'delphi-1e20-iso-d2048-L21-math-10b-lr0.83-e3de76' \
+    'delphi-1e21-v5-math-10b-lr0.5-ccce18' \
+    'delphi-1e21-v5-math-10b-lr0.67-e5b5df' \
+    'delphi-1e21-v5-math-10b-lr0.83-ece889'; do
+  gcloud storage rm "gs://marin-us-central1/checkpoints/${target}/.executor_status" 2>/dev/null || true
+done
+
+# 2. launch each as its own iris job (each gets a unique --job-name)
+launch() {
+  local base="$1" lr="$2" short
+  short=$(echo "$base" | sed 's/-iso-d2048-L21//')
+  uv run iris --cluster=marin job run \
+    --cpu 1 --memory 3GB --disk 9GB \
+    --region us-central1 \
+    --job-name "delphi-math-10b-${short}-lr${lr}" \
+    --no-wait \
+    -e MARIN_I_WILL_PAY_FOR_ALL_FEES 1 \
+    -e WANDB_API_KEY "${WANDB_API_KEY}" \
+    -e MIDTRAIN_SELECT_BASE "$base" \
+    -e MIDTRAIN_SELECT_LR "$lr" \
+    -- python experiments/exp_delphi_math_10b_midtrain.py
+}
+launch 1e20-iso-d2048-L21 0.67
+launch 1e20-iso-d2048-L21 0.83
+launch 1e21-v5            0.5
+launch 1e21-v5            0.67
+launch 1e21-v5            0.83
+```
+
+All 5 can run in parallel (v5p-64 pool has `max_slices: 256`). Expected per-run wall-time: 1.9 B base ≈ 6 h, 3.4 B base ≈ 10 h (larger model, same BS=512). W&B runs appear under `marin-community/marin` with names `delphi-<base>-math-10b-lr<factor>-<hash>`.
 
 ## Expected cross-region transfers (FYI)
 
