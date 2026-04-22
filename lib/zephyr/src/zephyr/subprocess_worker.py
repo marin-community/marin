@@ -16,15 +16,18 @@ via ``execution.ZephyrWorker._execute_shard``.
 
 import logging
 import os
+import re
 import sys
 import threading
 import traceback
 from contextlib import suppress
-from typing import Any
+from typing import Any, TypeVar
+from collections.abc import Iterator
 
 import cloudpickle
 from rigging.filesystem import open_url
 
+from zephyr import counters
 from zephyr.execution import (
     CounterSnapshot,
     _shared_data_path,
@@ -35,13 +38,28 @@ from zephyr.plan import Scatter, StageContext, run_stage
 
 logger = logging.getLogger(__name__)
 
-
 SUBPROCESS_COUNTER_FLUSH_INTERVAL = 5.0
 """How often the subprocess flushes its counter snapshot to the counter file.
 
 Matches the parent worker's heartbeat interval so each heartbeat reads at most
 one stale snapshot before the next flush lands.
 """
+
+
+T = TypeVar("T")
+
+
+class StatisticsGenerator:
+    """Wraps a generator and counts and sizes yielded items."""
+
+    def __init__(self, stage_name: str) -> None:
+        self._stage_name = stage_name
+
+    def wrap(self, gen: Iterator[T]) -> Iterator[T]:
+        for item in gen:
+            counters.increment(f"zephyr/stage/{self._stage_name}/item_count", 1)
+            counters.increment(f"zephyr/stage/{self._stage_name}/bytes_processed", sys.getsizeof(item))
+            yield item
 
 
 class _SubprocessWorkerContext:
@@ -159,12 +177,16 @@ def execute_shard(task_file: str, result_file: str) -> None:
             aux_shards=task.aux_shards,
         )
 
-        stage_dir = f"{chunk_prefix}/{execution_id}/{task.stage_name}"
+        # Sanitize for use as a path component: replace non-alphanumeric runs with '-'
+        output_stage_name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", task.stage_name).strip("-")
+        stage_dir = f"{chunk_prefix}/{execution_id}/{output_stage_name}"
         external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
         scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
 
+        output_counter = StatisticsGenerator(task.stage_name)
+
         result_or_error = _write_stage_output(
-            run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir),
+            output_counter.wrap(run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir)),
             source_shard=task.shard_idx,
             stage_dir=stage_dir,
             shard_idx=task.shard_idx,

@@ -18,7 +18,6 @@ import itertools
 import logging
 import os
 import pickle
-import re
 import signal
 import sys
 from datetime import datetime, timezone
@@ -378,6 +377,9 @@ class ZephyrCoordinator:
         self._initialized: bool = False
         self._pipeline_running: bool = False
 
+        # Set at each _start_stage so _log_status can show average throughput since stage start.
+        self._stage_monotonic_start: float | None = None
+
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
 
@@ -492,8 +494,19 @@ class ZephyrCoordinator:
             retried = {idx: att for idx, att in self._task_attempts.items() if att > 0}
         alive = sum(1 for s in states if s in {WorkerState.READY, WorkerState.BUSY})
         dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
+
+        totals = self.get_counters()
+        items = totals.get(f"zephyr/stage/{self._stage_name}/item_count", 0)
+        bytes_processed = totals.get(f"zephyr/stage/{self._stage_name}/bytes_processed", 0)
+        elapsed = time.monotonic() - (
+            self._stage_monotonic_start if self._stage_monotonic_start is not None else float("inf")
+        )
+        item_rate = items / elapsed
+        byte_rate = bytes_processed / elapsed
+
         logger.info(
-            "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
+            "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead; "
+            "items=%d (%.1f/s), bytes_processed=%.1fMiB (%.1fMiB/s)",
             self._execution_id,
             self._stage_name,
             self._completed_shards,
@@ -503,6 +516,10 @@ class ZephyrCoordinator:
             alive,
             len(self._worker_handles),
             dead,
+            items,
+            item_rate,
+            bytes_processed / (1024 * 1024),
+            byte_rate / (1024 * 1024),
         )
         if retried:
             attempts_histogram = dict(sorted(Counter(retried.values()).items()))
@@ -768,6 +785,7 @@ class ZephyrCoordinator:
             # Only reset in-flight worker snapshots; completed snapshots
             # accumulate across stages for full pipeline visibility.
             self._worker_counters = {}
+            self._stage_monotonic_start = time.monotonic()
 
     def _wait_for_stage(self) -> None:
         """Block until current stage completes or error occurs."""
@@ -865,7 +883,7 @@ class ZephyrCoordinator:
                 aux_per_shard = self._compute_join_aux(stage.operations, shards, stage_idx)
 
                 # Build and submit tasks
-                tasks = _compute_tasks_from_shards(shards, stage, aux_per_shard, stage_name=stage_label)
+                tasks = _compute_tasks_from_shards(shards, stage, stage_name=stage_label, aux_per_shard=aux_per_shard)
                 logger.info("[%s] Starting stage %s with %d tasks", self._execution_id, stage_label, len(tasks))
                 self._start_stage(stage_label, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
 
@@ -1760,15 +1778,12 @@ def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
 def _compute_tasks_from_shards(
     shard_refs: list[Shard],
     stage,
+    stage_name: str,
     aux_per_shard: list[dict[int, Shard]] | None = None,
-    stage_name: str | None = None,
 ) -> list[ShardTask]:
     """Convert shard references into ShardTasks for the coordinator."""
     total = len(shard_refs)
     tasks = []
-    # Sanitize for use as a path component: replace non-alphanumeric runs with '-'
-    raw_name = stage_name or stage.stage_name(max_length=60)
-    output_stage_name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", raw_name).strip("-")
 
     for i, shard in enumerate(shard_refs):
         aux_shards = None
@@ -1781,7 +1796,7 @@ def _compute_tasks_from_shards(
                 total_shards=total,
                 shard=shard,
                 operations=stage.operations,
-                stage_name=output_stage_name,
+                stage_name=stage_name,
                 aux_shards=aux_shards,
             )
         )
