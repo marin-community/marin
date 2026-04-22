@@ -363,7 +363,7 @@ message ControllerVmConfig {
   string image = 10;            // Controller docker image (shared by all controller types)
   iris.time.Duration worker_timeout = 12;  // Default: 60s
   reserved 13;                  // removed: heartbeat_failure_threshold (now hardcoded via PING_FAILURE_THRESHOLD)
-  bool use_split_heartbeat = 14;  // Default: true. Set false to use the legacy monolithic heartbeat path.
+  reserved 14;                  // removed: use_split_heartbeat (legacy monolithic heartbeat path deleted)
   oneof controller {
     GcpControllerConfig gcp = 1;
     ManualControllerConfig manual = 2;

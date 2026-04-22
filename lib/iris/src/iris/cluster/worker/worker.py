@@ -35,7 +35,6 @@ from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
-from rigging.log_setup import slow_log
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 from iris.rpc import job_pb2
@@ -571,17 +570,18 @@ class Worker:
         return f"{address_host}:{self._config.port}"
 
     def _serve(self, stop_event: threading.Event) -> None:
-        """Wait for heartbeats from controller. Returns when heartbeat timeout expires.
+        """Wait for RPCs from controller. Returns when the controller-contact timeout expires.
 
-        This method blocks in a loop, checking the time since last heartbeat.
-        When the timeout expires, it returns, triggering a reset and re-registration.
+        This method blocks in a loop, checking the time since the last
+        controller RPC (Ping / PollTasks / StartTasks / StopTasks). When the
+        timeout expires it returns, triggering a reset and re-registration.
         """
         self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
-        logger.info("Serving (waiting for controller heartbeats)")
+        logger.info("Serving (waiting for controller RPCs)")
 
         while not stop_event.is_set():
             if self._heartbeat_deadline.expired():
-                logger.warning("No heartbeat from controller, resetting")
+                logger.warning("No contact from controller, resetting")
                 return
             # Check every second
             stop_event.wait(1.0)
@@ -865,90 +865,6 @@ class Worker:
         snapshot.running_task_count = running_count
         snapshot.total_process_count = total_processes
         return snapshot
-
-    def handle_heartbeat(self, request: job_pb2.HeartbeatRequest) -> job_pb2.HeartbeatResponse:
-        """Handle controller-initiated heartbeat with reconciliation.
-
-        Processing order (sequential, not concurrent):
-        1. Submit tasks_to_run — registers each task in self._tasks
-        2. Kill tasks_to_kill — synchronously, blocks until old process is stopped
-           so the controller does not assign new work while old tasks hold resources
-        3. Reconcile expected_tasks — for each expected task, report its current
-           state. If not found in self._tasks, report WORKER_FAILED ("Task not
-           found on worker"). This happens when the worker has reset its state
-           (_tasks.clear() in _reset_worker_state) between heartbeats — from
-           the controller's perspective this is equivalent to a worker restart.
-        4. Kill unexpected tasks — any non-terminal task in self._tasks that is
-           NOT in expected_tasks and is not within the recent-submission grace
-           window is killed (controller no longer wants it). The grace window
-           keeps tasks just submitted via StartTasks or this heartbeat's
-           tasks_to_run from being killed when the controller hasn't yet
-           listed them in expected_tasks.
-
-        The ordering guarantee between steps 1 and 3 is critical: a task that
-        appears in both tasks_to_run and expected_tasks (which is always the case
-        for newly-assigned tasks) will be submitted before reconciliation checks
-        for it, so it will be found.
-
-        Reconciliation kills (step 4) remain async to avoid blocking the heartbeat
-        for stale-task cleanup that is not part of a preemption handoff.
-        """
-        # Reset heartbeat deadline
-        self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
-
-        with slow_log(logger, "handle_heartbeat", threshold_ms=2000):
-            # Start new tasks
-            with slow_log(logger, "heartbeat submit_tasks", threshold_ms=200):
-                for run_req in request.tasks_to_run:
-                    try:
-                        with slow_log(logger, f"heartbeat submit_task[{run_req.task_id}]", threshold_ms=500):
-                            self.submit_task(run_req)
-                        logger.info("Heartbeat: submitted task %s", run_req.task_id)
-                    except Exception as e:
-                        logger.warning("Heartbeat: failed to submit task %s: %s", run_req.task_id, e)
-
-            # Kill requested tasks synchronously so the old process is fully stopped
-            # before the heartbeat returns. This prevents the controller from assigning
-            # new work while the old task still holds accelerator resources (TPU/GPU chips).
-            with slow_log(logger, "heartbeat kill_tasks", threshold_ms=5000):
-                for task_id in request.tasks_to_kill:
-                    try:
-                        current = self._get_current_attempt(task_id)
-                        if current:
-                            with slow_log(logger, f"heartbeat kill_task[{task_id}]", threshold_ms=2000):
-                                self._kill_task_attempt(task_id, current.attempt_id, async_kill=False)
-                            logger.info("Heartbeat: killed task %s", task_id)
-                    except Exception as e:
-                        logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
-
-            with slow_log(logger, "heartbeat reconciliation", threshold_ms=200):
-                # tasks_to_run was just submitted above; those keys live in
-                # self._recent_submissions and are protected from the race by
-                # _reconcile_expected_tasks' grace-window logic.
-                with self._lock:
-                    tasks, tasks_to_kill = self._reconcile_expected_tasks(request.expected_tasks)
-
-                # Kill removed tasks asynchronously outside lock to avoid deadlock
-                for task_id, attempt_id in tasks_to_kill:
-                    logger.warning("Killing task %s attempt %d (no longer in expected_tasks)", task_id, attempt_id)
-                    self._kill_task_attempt(task_id, attempt_id, async_kill=True)
-
-            # Collect host metrics and aggregate task stats
-            with slow_log(logger, "heartbeat host_metrics", threshold_ms=100):
-                resource_snapshot = self._collect_resource_metrics()
-
-            # Run health checks to detect local faults (disk full, write failure)
-            with slow_log(logger, "heartbeat health_check", threshold_ms=100):
-                health = check_worker_health(disk_path=str(self._cache_dir))
-                if not health.healthy:
-                    logger.warning("Worker health check failed: %s", health.error)
-
-            return job_pb2.HeartbeatResponse(
-                tasks=tasks,
-                resource_snapshot=resource_snapshot,
-                worker_healthy=health.healthy,
-                health_error=health.error,
-            )
 
     def handle_ping(self, request: worker_pb2.Worker.PingRequest) -> worker_pb2.Worker.PingResponse:
         """Liveness check. Resets heartbeat deadline, returns resource snapshot and health."""

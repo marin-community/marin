@@ -125,7 +125,7 @@ emitted as structured `logger.info` lines — query them through
 `iris process logs` with a substring filter, not via SQL. Example:
 
 ```bash
-iris process logs --since 24h | grep 'action=worker_heartbeat_failed'
+iris process logs --since 24h | grep 'event=worker_failed'
 ```
 
 Full table list: `iris query "SELECT name FROM sqlite_master WHERE type='table'"`.
@@ -170,7 +170,7 @@ iris key list / iris key revoke       # manage API keys
 
 1. **Committed resource leak** (`transitions.py`): `_decommit_worker_resources()` can miss certain task termination paths, leaving stale committed resources on workers. Symptom: workers show high committed CPU/memory/TPU with zero active tasks. Detect by joining `workers` against active tasks in `task_attempts`.
 
-2. **Heartbeat thread stall on gcloud subprocess** (#3678): The heartbeat loop calls `notify_worker_failed` -> `scale_down` -> `terminate` which runs a synchronous `gcloud compute tpus tpu-vm delete`. If the gcloud API hangs, **all task dispatch stops** because dispatches are delivered via heartbeats. Symptoms: `dispatch_queue` growing, tasks stuck in ASSIGNED (9), stale `last_heartbeat_ms`. Diagnose with `py-spy dump` — look for `subprocess.run` -> `terminate` on the heartbeat thread. Kill the stuck gcloud process to unblock.
+2. **Worker-failure thread stall on gcloud subprocess** (#3678): The reaper thread calls `notify_worker_failed` -> `scale_down` -> `terminate` which runs a synchronous `gcloud compute tpus tpu-vm delete`. If the gcloud API hangs, worker removals queue up. Symptoms: tasks stuck in ASSIGNED (9), stale `last_heartbeat_ms`. Diagnose with `py-spy dump` — look for `subprocess.run` -> `terminate` on the reaper thread. Kill the stuck gcloud process to unblock.
 
 ---
 

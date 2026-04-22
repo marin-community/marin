@@ -135,8 +135,6 @@ _RESOURCE_SPEC_DECODER = proto_decoder(job_pb2.ResourceSpecProto)
 # Sentinel for dry-run scheduling with per-worker limits disabled.
 _UNLIMITED = sys.maxsize
 
-_SLOW_HEARTBEAT_MS = 5000
-
 # How often the prune loop trims worker_task_history (independent of the
 # full data-prune interval, which is typically 1 hour).
 _HISTORY_CLEANUP_INTERVAL_S = 60.0
@@ -161,8 +159,6 @@ def _drain_queue(q: queue_mod.Queue, timeout: float = 1.0) -> list:
         pass
     return items
 
-
-_HEALTH_SUMMARY_INTERVAL = RateLimiter(interval_seconds=30)
 
 # Log a detailed per-phase scheduling trace every this many rounds.
 _SCHEDULING_TRACE_INTERVAL = 50
@@ -194,17 +190,6 @@ class PreemptionCandidate:
     job_name: JobName
     requirements: JobRequirements
     band: int  # proto PriorityBand value
-
-
-@dataclass
-class _SyncFailureAccumulator:
-    """Mutable accumulator for tracking failures during provider sync."""
-
-    fail_count: int = 0
-    transient_failed_workers: list[str] = field(default_factory=list)
-    terminal_failed_workers: list[str] = field(default_factory=list)
-    all_tasks_to_kill: set[JobName] = field(default_factory=set)
-    all_task_kill_workers: dict[JobName, WorkerId] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -964,13 +949,6 @@ class ControllerConfig:
     dry_run: bool = False
     """Start in dry-run mode: compute scheduling but suppress all side effects."""
 
-    use_split_heartbeat: bool = True
-    """When True (default), use direct StartTasks/StopTasks RPCs instead of the
-    dispatch_queue. Scheduling sends StartTasks immediately after committing
-    assignments; kills send StopTasks directly. A task-updater thread applies
-    state transitions from a queue fed by poll results and RPC failures.
-    Set False to fall back to the legacy monolithic Heartbeat path."""
-
     user_budget_defaults: UserBudgetDefaults = field(default_factory=UserBudgetDefaults)
     """Default budget settings applied when a new user is first seen."""
 
@@ -1123,10 +1101,9 @@ class Controller:
 
         # Background loop state
         self._wake_event = threading.Event()
-        self._heartbeat_event = threading.Event()
         self._server: uvicorn.Server | None = None
         self._scheduling_thread: ManagedThread | None = None
-        self._heartbeat_thread: ManagedThread | None = None
+        self._direct_provider_thread: ManagedThread | None = None
         self._autoscaler_thread: ManagedThread | None = None
         self._profile_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
@@ -1136,7 +1113,6 @@ class Controller:
 
         self._autoscaler: Autoscaler | None = autoscaler
 
-        self._heartbeat_iteration = 0
         self._last_timeout_check_ms: int = 0
 
         # Cached scheduling diagnostics: populated each scheduling cycle for
@@ -1228,17 +1204,11 @@ class Controller:
             logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
 
         if isinstance(self._provider, K8sTaskProvider):
-            self._heartbeat_thread = self._threads.spawn(self._run_direct_provider_loop, name="provider-loop")
-        elif self._config.use_split_heartbeat:
+            self._direct_provider_thread = self._threads.spawn(self._run_direct_provider_loop, name="provider-loop")
+        else:
             self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
             self._ping_thread = self._threads.spawn(self._run_ping_loop, name="ping-loop")
             self._task_updater_thread = self._threads.spawn(self._run_task_updater_loop, name="task-updater-loop")
-            if not self._config.dry_run:
-                self._profile_thread = self._threads.spawn(self._run_profile_loop, name="profile-loop")
-                self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
-        else:
-            self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
-            self._heartbeat_thread = self._threads.spawn(self._run_provider_loop, name="provider-loop")
             if not self._config.dry_run:
                 self._profile_thread = self._threads.spawn(self._run_profile_loop, name="profile-loop")
                 self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
@@ -1286,7 +1256,7 @@ class Controller:
 
         Shutdown ordering:
         1. Unregister atexit hook so it doesn't fire against a closed DB.
-        2. Stop scheduling/heartbeat/autoscaler loops so no new work is triggered.
+        2. Stop scheduling/provider/autoscaler loops so no new work is triggered.
         3. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
         4. Stop remaining threads (server) and executors.
         """
@@ -1298,14 +1268,13 @@ class Controller:
             atexit.unregister(self._atexit_checkpoint)
             self._atexit_registered = False
         self._wake_event.set()
-        self._heartbeat_event.set()
         join_timeout = Duration.from_seconds(5.0)
         if self._scheduling_thread:
             self._scheduling_thread.stop()
             self._scheduling_thread.join(timeout=join_timeout)
-        if self._heartbeat_thread:
-            self._heartbeat_thread.stop()
-            self._heartbeat_thread.join(timeout=join_timeout)
+        if self._direct_provider_thread:
+            self._direct_provider_thread.stop()
+            self._direct_provider_thread.join(timeout=join_timeout)
         if self._ping_thread:
             self._ping_thread.stop()
             self._ping_thread.join(timeout=join_timeout)
@@ -1382,7 +1351,7 @@ class Controller:
             if outcome == SchedulingOutcome.ASSIGNMENTS_MADE:
                 backoff.reset()
 
-            if self._config.use_split_heartbeat and poll_limiter.should_run():
+            if poll_limiter.should_run():
                 try:
                     self._poll_all_workers()
                 except Exception:
@@ -1465,28 +1434,11 @@ class Controller:
             except Exception:
                 logger.exception("Periodic checkpoint failed")
 
-    def _run_provider_loop(self, stop_event: threading.Event) -> None:
-        """Provider sync loop on its own thread so slow RPCs don't block scheduling."""
-        limiter = RateLimiter(interval_seconds=self._config.heartbeat_interval.to_seconds())
-        while not stop_event.is_set():
-            self._heartbeat_event.wait(timeout=limiter.time_until_next())
-            self._heartbeat_event.clear()
-            limiter.mark_run()
-            if stop_event.is_set():
-                break
-            try:
-                self._sync_all_execution_units()
-            except Exception:
-                logger.exception("Provider sync round failed, will retry next interval")
-
     def _run_direct_provider_loop(self, stop_event: threading.Event) -> None:
         """Provider sync loop for K8sTaskProvider: no scheduling, no workers."""
         limiter = RateLimiter(interval_seconds=self._config.heartbeat_interval.to_seconds())
         while not stop_event.is_set():
-            self._heartbeat_event.wait(timeout=limiter.time_until_next())
-            self._heartbeat_event.clear()
-            limiter.mark_run()
-            if stop_event.is_set():
+            if not limiter.wait(cancel=stop_event):
                 break
             try:
                 self._sync_direct_provider()
@@ -1979,12 +1931,8 @@ class Controller:
                 len(result.assignments),
             )
         if all_assignments:
-            if self._config.use_split_heartbeat:
-                with slow_log(logger, "dispatch_assignments_direct", threshold_ms=200):
-                    self._dispatch_assignments_direct(all_assignments)
-            else:
-                with slow_log(logger, "buffer_assignments", threshold_ms=200):
-                    self._buffer_assignments(all_assignments)
+            with slow_log(logger, "dispatch_assignments_direct", threshold_ms=200):
+                self._dispatch_assignments_direct(all_assignments)
             logger.debug(
                 "Scheduling cycle: %d assignments (%d preferred, %d normal), %dms (state read: %dms)",
                 len(all_assignments),
@@ -2070,20 +2018,6 @@ class Controller:
         """Return cached scheduling diagnostic for a job, or None if unavailable."""
         return self._scheduling_diagnostics.get(job_wire_id)
 
-    def _buffer_assignments(
-        self,
-        assignments: list[tuple[JobName, WorkerId]],
-    ) -> None:
-        """Commit assignments and enqueue worker dispatches in one state command."""
-        if self._config.dry_run:
-            for task_id, worker_id in assignments:
-                logger.info("[DRY-RUN] Would assign task %s to worker %s", task_id, worker_id)
-            return
-        command = [Assignment(task_id=task_id, worker_id=worker_id) for task_id, worker_id in assignments]
-        result = self._transitions.queue_assignments(command)
-        if result.has_real_dispatch:
-            self._heartbeat_event.set()
-
     _TIMEOUT_CHECK_INTERVAL_MS = 60_000  # Check at most once per minute.
 
     def _enforce_execution_timeouts(self) -> None:
@@ -2143,41 +2077,21 @@ class Controller:
     ) -> None:
         """Kill tasks on their assigned workers.
 
-        In split heartbeat mode, sends StopTasks RPCs directly. Otherwise,
-        buffers kill requests for delivery via next heartbeat.
+        Non-K8s providers send StopTasks RPCs directly. K8s buffers direct kills
+        for the provider sync loop to consume.
         """
         if self._config.dry_run:
             logger.info("[DRY-RUN] Would kill %d tasks on workers: %s", len(task_ids), list(task_ids)[:5])
             return
-        if self._config.use_split_heartbeat and not isinstance(self._provider, K8sTaskProvider):
+        if not isinstance(self._provider, K8sTaskProvider):
             self._stop_tasks_direct(task_ids, task_kill_workers)
             return
-        any_buffered = False
-        mapping = dict(task_kill_workers or {})
-        unresolved = task_ids - set(mapping.keys())
-        if unresolved:
-            mapping.update(_task_worker_mapping(self._db, unresolved))
-        workers = _workers_by_id(self._db, set(mapping.values()))
-        for task_id, worker_id in mapping.items():
-            worker = workers.get(worker_id)
-            if worker is None:
-                continue
-            self._transitions.buffer_kill(worker_id, task_id.to_wire())
-            any_buffered = True
-
-        # Route kills for tasks without worker assignment to the direct kill queue.
-        if isinstance(self._provider, K8sTaskProvider):
-            for task_id in task_ids:
-                if task_id not in mapping:
-                    self._transitions.buffer_direct_kill(task_id.to_wire())
-                    any_buffered = True
-
-        # Wake heartbeat thread to deliver buffered kills immediately
-        if any_buffered:
-            self._heartbeat_event.set()
+        # K8s: buffer direct kills for the provider sync loop.
+        for task_id in task_ids:
+            self._transitions.buffer_direct_kill(task_id.to_wire())
 
     # =========================================================================
-    # Split Heartbeat Mode
+    # Worker lifecycle RPC dispatch (StartTasks / StopTasks / Ping / PollTasks)
     # =========================================================================
 
     def _dispatch_assignments_direct(
@@ -2360,7 +2274,7 @@ class Controller:
                 )
 
     def _run_task_updater_loop(self, stop_event: threading.Event) -> None:
-        """Batched task state updater for split heartbeat mode.
+        """Batched task state updater.
 
         Drains the task-update queue every 1s and applies transitions in a
         single batch. Kill requests resulting from transitions are sent directly.
@@ -2412,163 +2326,6 @@ class Controller:
         if failure_result.tasks_to_kill:
             self.kill_tasks_on_workers(failure_result.tasks_to_kill, failure_result.task_kill_workers)
         return removed
-
-    def _sync_all_execution_units(self) -> None:
-        if self._config.dry_run:
-            return
-        round_timer = Timer()
-
-        with slow_log(logger, "provider sync phase 1 (snapshot)", threshold_ms=100):
-            batches = self._transitions.drain_dispatch_all()
-
-        if not batches:
-            return
-
-        # Sync with the execution backend (ThreadPoolExecutor inside provider).
-        with slow_log(logger, "provider sync (RPC dispatch)", threshold_ms=5_000):
-            results = self._provider.sync(batches)
-
-        acc = _SyncFailureAccumulator()
-        with slow_log(logger, "provider sync (apply results)", threshold_ms=500):
-            success_reqs, failure_entries = self._separate_sync_results(results)
-            self._apply_successful_heartbeats(success_reqs, acc)
-            primary_failed_workers = self._handle_failed_heartbeats(failure_entries, acc)
-            self._handle_sibling_worker_failures(primary_failed_workers, acc)
-
-            if acc.all_tasks_to_kill:
-                self.kill_tasks_on_workers(acc.all_tasks_to_kill, acc.all_task_kill_workers)
-
-        self._log_sync_health_summary(
-            batch_count=len(batches),
-            fail_count=acc.fail_count,
-            transient_failed_workers=acc.transient_failed_workers,
-            terminal_failed_workers=acc.terminal_failed_workers,
-            elapsed_ms=round_timer.elapsed_ms(),
-        )
-
-    def _separate_sync_results(
-        self,
-        results: list,
-    ) -> tuple[list, list[tuple]]:
-        """Partition provider sync results into successes and failures."""
-        success_reqs = []
-        failure_entries = []
-        for batch, apply_req, error in results:
-            if apply_req is not None:
-                success_reqs.append(apply_req)
-            else:
-                failure_entries.append((batch, error or "unknown error"))
-        return success_reqs, failure_entries
-
-    def _apply_successful_heartbeats(
-        self,
-        success_reqs: list,
-        acc: _SyncFailureAccumulator,
-    ) -> None:
-        """Batch-apply successful heartbeat results, accumulating kill targets."""
-        if not success_reqs:
-            return
-        batch_results = self._transitions.apply_heartbeats_batch(success_reqs)
-        for result in batch_results:
-            acc.all_tasks_to_kill.update(result.tasks_to_kill)
-            acc.all_task_kill_workers.update(result.task_kill_workers)
-
-    def _handle_failed_heartbeats(
-        self,
-        failure_entries: list[tuple],
-        acc: _SyncFailureAccumulator,
-    ) -> list[str]:
-        """Process failed heartbeats: update health tracker, log, and immediately
-        terminate any workers that just crossed the ping threshold.
-
-        _terminate_workers handles slice siblings, so the return value is always empty
-        (callers need not invoke _handle_sibling_worker_failures separately).
-        """
-        for batch, _error in failure_entries:
-            self._health.ping(batch.worker_id, healthy=False)
-        failure_result = self._transitions.fail_heartbeats_batch(failure_entries)
-        acc.all_tasks_to_kill.update(failure_result.tasks_to_kill)
-        acc.all_task_kill_workers.update(failure_result.task_kill_workers)
-
-        for batch, _error in failure_entries:
-            acc.fail_count += 1
-            acc.transient_failed_workers.append(batch.worker_id)
-
-        unhealthy = self._health.workers_over_threshold()
-        if unhealthy:
-            removed = self._terminate_workers(
-                [str(wid) for wid in unhealthy],
-                reason="worker ping threshold exceeded",
-                sibling_reason="unhealthy worker failed, slice terminated",
-            )
-            self._health.forget_many(removed)
-            acc.fail_count += len(removed)
-            acc.terminal_failed_workers.extend(removed)
-
-        return []
-
-    def _handle_sibling_worker_failures(
-        self,
-        primary_failed_workers: list[str],
-        acc: _SyncFailureAccumulator,
-    ) -> None:
-        """Terminate slices containing failed workers and fail their siblings."""
-        if not self._autoscaler or not primary_failed_workers:
-            return
-        sibling_worker_ids = self._autoscaler.terminate_slices_for_workers(primary_failed_workers)
-        for wid in sibling_worker_ids:
-            log_event("worker_failing", str(wid), trigger="sibling_slice_terminated")
-        # TODO(#3425): This prunes sibling workers before their in-flight
-        # results are processed, causing apply_heartbeat() to
-        # silently drop any logs/states those workers reported this round.
-        sibling_failures = self._transitions.fail_workers_batch(
-            sibling_worker_ids,
-            reason="sibling worker failed, slice terminated",
-        )
-        acc.all_tasks_to_kill.update(sibling_failures.tasks_to_kill)
-        acc.all_task_kill_workers.update(sibling_failures.task_kill_workers)
-        for wid, addr in sibling_failures.removed_workers:
-            self._provider.on_worker_failed(wid, addr)
-        if sibling_failures.removed_workers:
-            acc.fail_count += len(sibling_failures.removed_workers)
-            acc.terminal_failed_workers.extend(wid for wid, _ in sibling_failures.removed_workers)
-
-    def _log_sync_health_summary(
-        self,
-        batch_count: int,
-        fail_count: int,
-        transient_failed_workers: list[str],
-        terminal_failed_workers: list[str],
-        elapsed_ms: int,
-    ) -> None:
-        """Log provider sync timing and periodic cluster health summary."""
-        if elapsed_ms > _SLOW_HEARTBEAT_MS or transient_failed_workers or terminal_failed_workers:
-            log_event(
-                "provider_sync",
-                "controller",
-                workers=batch_count,
-                failed=fail_count,
-                transient=len(transient_failed_workers),
-                terminal=len(terminal_failed_workers),
-                elapsed_ms=elapsed_ms,
-            )
-
-        self._heartbeat_iteration += 1
-        if _HEALTH_SUMMARY_INTERVAL.should_run():
-            workers = healthy_active_workers_with_attributes(self._db)
-            with self._db.read_snapshot() as snap:
-                active = snap.fetchone("SELECT COUNT(*) FROM jobs j WHERE j.state = ?", (job_pb2.JOB_STATE_RUNNING,))[
-                    0
-                ]  # type: ignore[index]
-            pending = len(_schedulable_tasks(self._db))
-            log_event(
-                "controller_status",
-                "controller",
-                workers=len(workers),
-                failed=fail_count,
-                active_jobs=active,
-                pending_tasks=pending,
-            )
 
     def _run_autoscaler_once(self) -> None:
         """Run one autoscaler cycle: refresh (I/O) then update (CPU).
