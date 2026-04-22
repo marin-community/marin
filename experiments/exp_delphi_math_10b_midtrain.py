@@ -15,10 +15,11 @@ runs. See ``.agents/logbooks/midtraining_delphi.md`` for the full rationale,
 numbers, and verification plan.
 """
 
+from levanter.data.text import DatasetComponent, LMMixtureDatasetConfig, TextLmDatasetFormat
 from levanter.optim import AdamHConfig
 
 from experiments.defaults import default_train
-from experiments.midtraining_data_buckets import BUCKET_2
+from experiments.llama import llama3_tokenizer
 from experiments.scaling_law_sweeps.completed_adamh import completed_adamh_heuristic
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
@@ -87,6 +88,26 @@ LR_FACTORS: tuple[float, ...] = (0.5, 0.67, 0.83)
 
 
 # ----------------------------------------------------------------------------
+# Data mix: 100% nemotron_cc_math_v1/4plus. Point at the already-tokenized
+# cache in us-central2 via mirror:// so the training workers can pull from
+# any Marin bucket without re-running the raw + normalize + tokenize chain
+# in their own region (that chain would redownload multi-TB of Nemotron-CC-
+# Math-v1 from HF Hub — observed on the first launch attempt).
+MATH_CACHE_MIRROR_PATH: str = "mirror://tokenized/nemotron_cc_math_v1/4plus-0bd79d"
+
+math_mix: LMMixtureDatasetConfig = LMMixtureDatasetConfig(
+    components={
+        "nemotron_cc_math_v1/4plus": DatasetComponent(
+            cache_dir=MATH_CACHE_MIRROR_PATH,
+            format=TextLmDatasetFormat(),
+        ),
+    },
+    train_weights={"nemotron_cc_math_v1/4plus": 1.0},
+    tokenizer=llama3_tokenizer,
+)
+
+
+# ----------------------------------------------------------------------------
 
 
 def _build_adamh(base: dict, lr_factor: float) -> AdamHConfig:
@@ -147,7 +168,7 @@ def _build_runs() -> list[ExecutorStep]:
             runs.append(
                 default_train(
                     name=name,
-                    tokenized=BUCKET_2["nemotron_cc_math_v1/4plus"],
+                    tokenized=math_mix,
                     model_config=model_config,
                     train_config=train_cfg,
                     tags=(
