@@ -1,3 +1,8 @@
+---
+name: fix-docs
+description: Fix markdown docs in `lib/iris`, `lib/zephyr`, and `lib/fray` to align with Marin's agent-doc principles. Use when asked to repair, modernize, or de-rot docs in those directories.
+---
+
 Your task is to fix the markdown docs within `lib/iris`, `lib/zephyr` and `lib/fray` so that they maximally comply with the principles below. Do NOT fix docs outside of the aforementioned directories.
 
 Your output: You will dispatch sub-agents that will (1) thoroughly parse the code and the docs and (2) make all the documentation changes that are deemed appropriate, locally. You will commit the changes locally into a single commit, inform the user of the commit, and summarize the changes you made. Under no circumstances should you push any commit to the repo without explicit approval from the user.

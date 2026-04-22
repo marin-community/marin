@@ -74,6 +74,52 @@ def test_drain_pending_creates_attempt_rows(state):
     assert attempt.worker_id is None
 
 
+def test_drain_propagates_task_image(state):
+    """task_image set on the LaunchJobRequest is copied into RunTaskRequest."""
+    [task_id] = submit_direct_job(state, "drain-task-image", task_image="custom/swetrace:dev")
+
+    batch = state.drain_for_direct_provider()
+
+    assert len(batch.tasks_to_run) == 1
+    assert batch.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch.tasks_to_run[0].task_image == "custom/swetrace:dev"
+
+
+def test_drain_default_task_image_is_empty(state):
+    """When the LaunchJobRequest omits task_image, the dispatched RunTaskRequest is empty."""
+    submit_direct_job(state, "drain-default-image")
+
+    batch = state.drain_for_direct_provider()
+
+    assert len(batch.tasks_to_run) == 1
+    assert batch.tasks_to_run[0].task_image == ""
+
+
+def test_drain_includes_workdir_files(state):
+    """Workdir files stored in job_workdir_files are included in the RunTaskRequest."""
+    from iris.rpc import controller_pb2
+
+    job_name = JobName.from_wire("/test-user/drain-workdir")
+    entrypoint = job_pb2.RuntimeEntrypoint()
+    entrypoint.run_command.argv[:] = ["python", "_callable_runner.py"]
+    entrypoint.workdir_files["_callable_runner.py"] = b"print('hello')"
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name=job_name.to_wire(),
+        entrypoint=entrypoint,
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    state.submit_job(job_name, req, Timestamp.now())
+
+    batch = state.drain_for_direct_provider()
+
+    assert len(batch.tasks_to_run) == 1
+    run_req = batch.tasks_to_run[0]
+    assert "_callable_runner.py" in run_req.entrypoint.workdir_files
+    assert run_req.entrypoint.workdir_files["_callable_runner.py"] == b"print('hello')"
+
+
 def test_drain_skips_already_assigned(state):
     """Already ASSIGNED tasks appear in running_tasks, not tasks_to_run."""
     [task_id] = submit_direct_job(state, "drain-skip")

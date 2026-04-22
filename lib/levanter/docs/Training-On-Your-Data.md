@@ -201,33 +201,9 @@ in the background, using the mostly-idle CPU-cores of the machine(s) you are tra
 The cache that is built is fully reproducible, and can be used for future training runs.
 Training will start as soon as the system has the data it needs.
 
-### Offline Preprocessing
-
-If you want, you can also preprocess your data offline, and then upload the preprocessed data to cloud storage.
-
-Levanter has a script that basically runs the same online preprocessing code, but doesn't do any training.
-You can run it like this:
-
-```bash
-python -m levanter.main.cache_dataset --config_path my_config.yaml
-```
-
-You can actually connect this to a Ray cluster, and use the cluster to do the preprocessing. This lets you
-use any of Ray's autoscaling features to scale up the preprocessing job.
-
-To do so:
-
-```bash
-python -m levanter.main.cache_dataset \
-    --config_path my_config.yaml \
-    --address <ray-cluster-address> \
-    --start_workers false \
-    --auto_start_cluster false
-```
-
 ### Direct Cache Construction
 
-We also support direct cache construction. This is useful if you want to use a custom cache format.
+For offline preprocessing, use direct cache construction. This is useful if you want to build caches without launching training, or if you need a custom cache format.
 See our guide on [Direct Cache Construction](./guides/Direct-Cache-Construction.md) for more details.
 
 

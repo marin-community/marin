@@ -259,6 +259,43 @@ def test_start_controller_replaces_unhealthy_existing(config):
     assert len(replacement.bootstrap_calls) == 1
 
 
+def test_start_controller_fresh_terminates_existing_and_bootstraps_with_flag(config):
+    """fresh=True -- existing healthy VM is terminated, new VM gets --fresh in bootstrap."""
+    existing = FakeWorkerHandle(vm_id="ctrl-existing", internal_address="10.0.0.2")
+    replacement = FakeWorkerHandle(vm_id="ctrl-new", internal_address="10.0.0.7")
+    platform = FakePlatform(existing_vms=[existing], vm_to_create=replacement)
+
+    address, vm = start_controller(platform, config, fresh=True)
+
+    assert existing.terminated
+    assert vm is replacement
+    assert address == "http://10.0.0.7:10000"
+    assert len(replacement.bootstrap_calls) == 1
+    assert "--fresh" in replacement.bootstrap_calls[0]
+
+
+def test_start_controller_fresh_new_vm_bootstrap_contains_flag(config):
+    """fresh=True with no existing VM still threads --fresh into the bootstrap script."""
+    new_vm = FakeWorkerHandle(vm_id="ctrl-new", internal_address="10.0.0.8")
+    platform = FakePlatform(existing_vms=[], vm_to_create=new_vm)
+
+    start_controller(platform, config, fresh=True)
+
+    assert len(new_vm.bootstrap_calls) == 1
+    assert "--fresh" in new_vm.bootstrap_calls[0]
+
+
+def test_start_controller_without_fresh_omits_flag(config):
+    """fresh=False (default) must not inject --fresh into the bootstrap script."""
+    new_vm = FakeWorkerHandle(vm_id="ctrl-new", internal_address="10.0.0.9")
+    platform = FakePlatform(existing_vms=[], vm_to_create=new_vm)
+
+    start_controller(platform, config)
+
+    assert len(new_vm.bootstrap_calls) == 1
+    assert "--fresh" not in new_vm.bootstrap_calls[0]
+
+
 def test_start_controller_connection_timeout_terminates_vm(config):
     """VM created but wait_for_connection fails -- terminates the VM and raises."""
     unreachable = FakeWorkerHandle(
@@ -317,12 +354,12 @@ def test_stop_controller_duplicate_vms_raises(config):
         stop_controller(platform, config)
 
 
-def test_gcp_controller_vm_config_defaults_to_100gb_disk():
-    """GCP controller VM defaults to 100GB disk."""
+def test_gcp_controller_vm_config_defaults_to_500gb_disk():
+    """GCP controller VM defaults to 500GB disk (sized for log-store retention)."""
     config = config_pb2.IrisClusterConfig()
     config.platform.label_prefix = "test"
     config.controller.gcp.zone = "us-central1-a"
 
     vm_config = _build_controller_vm_config(config)
 
-    assert vm_config.gcp.boot_disk_size_gb == 100
+    assert vm_config.gcp.boot_disk_size_gb == 500

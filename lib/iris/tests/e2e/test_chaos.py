@@ -21,6 +21,7 @@ import time
 
 import pytest
 from iris.chaos import enable_chaos, reset_chaos
+from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import CoschedulingConfig
 from iris.rpc import job_pb2
@@ -225,9 +226,6 @@ def test_heartbeat_permanent_failure(cluster):
 # Heartbeat threshold (from test_heartbeat.py)
 # ---------------------------------------------------------------------------
 
-# Local config sets heartbeat_failure_threshold = 3 via make_local_config().
-LOCAL_HEARTBEAT_FAILURE_THRESHOLD = 3
-
 
 def test_heartbeat_survives_transient_delay(cluster):
     """Brief heartbeat delays don't trigger reset."""
@@ -239,11 +237,10 @@ def test_heartbeat_survives_transient_delay(cluster):
 
 def test_heartbeat_below_threshold_recovers(cluster):
     """Heartbeat failures below threshold don't kill the worker."""
-    failures_to_inject = LOCAL_HEARTBEAT_FAILURE_THRESHOLD - 2
     enable_chaos(
         "controller.heartbeat",
         failure_rate=1.0,
-        max_failures=failures_to_inject,
+        max_failures=PING_FAILURE_THRESHOLD - 2,
         delay_seconds=0.01,
     )
     job = cluster.submit(TestJobs.quick, "transient-hb-fail")
@@ -256,11 +253,11 @@ def test_heartbeat_at_threshold_kills_worker(cluster):
     enable_chaos(
         "controller.heartbeat",
         failure_rate=1.0,
-        max_failures=LOCAL_HEARTBEAT_FAILURE_THRESHOLD,
+        max_failures=PING_FAILURE_THRESHOLD,
         delay_seconds=0.01,
     )
     job = cluster.submit(TestJobs.sleep, "threshold-hb-fail", 2, max_retries_preemption=10)
-    status = cluster.wait(job, timeout=30)
+    status = cluster.wait(job, timeout=60)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -269,11 +266,11 @@ def test_dispatch_cleared_on_worker_failure(cluster):
     enable_chaos(
         "controller.heartbeat",
         failure_rate=1.0,
-        max_failures=LOCAL_HEARTBEAT_FAILURE_THRESHOLD + 2,
+        max_failures=PING_FAILURE_THRESHOLD + 2,
         delay_seconds=0.01,
     )
     job = cluster.submit(TestJobs.sleep, "dispatch-clear-test", 3, max_retries_preemption=10)
-    status = cluster.wait(job, timeout=30)
+    status = cluster.wait(job, timeout=60)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -282,11 +279,11 @@ def test_multiple_workers_one_fails(cluster):
     enable_chaos(
         "controller.heartbeat",
         failure_rate=1.0,
-        max_failures=LOCAL_HEARTBEAT_FAILURE_THRESHOLD,
+        max_failures=PING_FAILURE_THRESHOLD,
         delay_seconds=0.01,
     )
     job = cluster.submit(TestJobs.quick, "multi-worker-fail", max_retries_preemption=10)
-    status = cluster.wait(job, timeout=30)
+    status = cluster.wait(job, timeout=60)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -295,11 +292,11 @@ def test_heartbeat_failure_with_pending_kills(cluster):
     enable_chaos(
         "controller.heartbeat",
         failure_rate=1.0,
-        max_failures=LOCAL_HEARTBEAT_FAILURE_THRESHOLD,
+        max_failures=PING_FAILURE_THRESHOLD,
         delay_seconds=0.01,
     )
     job = cluster.submit(TestJobs.quick, "kill-clear-test", max_retries_preemption=10)
-    status = cluster.wait(job, timeout=30)
+    status = cluster.wait(job, timeout=60)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 

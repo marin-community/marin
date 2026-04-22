@@ -131,8 +131,8 @@ class MyMarkdownConverter(MarkdownConverter):
         kwargs = config.markdownify_kwargs
         super().__init__(**kwargs)
 
-    def convert_hn(self, n, el, text, convert_as_inline):
-        if convert_as_inline:
+    def convert_hn(self, n, el, text, parent_tags):
+        if "_inline" in parent_tags:
             return text
 
         style = self.options["heading_style"].lower()
@@ -146,7 +146,7 @@ class MyMarkdownConverter(MarkdownConverter):
 
         return f"\n\n{hashes} {text}\n\n"
 
-    def convert_a(self, el, text, convert_as_inline):
+    def convert_a(self, el, text, parent_tags):
         prefix, suffix, text = markdownify.chomp(text)
 
         if not self.include_links:
@@ -174,18 +174,18 @@ class MyMarkdownConverter(MarkdownConverter):
         return f"{prefix}[{text}]({href}{title_part}){suffix}" if href else text
 
     # markdownify doesn't allow difference pre- and post- text for converting sub and sup
-    def convert_sub(self, el, text, convert_as_inline):
+    def convert_sub(self, el, text, parent_tags):
         if not text:
             return ""
         return f"<sub>{text}</sub>"
 
-    def convert_sup(self, el, text, convert_as_inline):
+    def convert_sup(self, el, text, parent_tags):
         if not text:
             return ""
         return f"<sup>{text}</sup>"
 
-    def convert_br(self, el, text, convert_as_inline):
-        if convert_as_inline:
+    def convert_br(self, el, text, parent_tags):
+        if "_inline" in parent_tags:
             return "<br>"
 
         if self.options["newline_style"].lower() == markdownify.BACKSLASH:
@@ -193,7 +193,7 @@ class MyMarkdownConverter(MarkdownConverter):
         else:
             return "  \n"
 
-    def convert_img(self, el, text, convert_as_inline):
+    def convert_img(self, el, text, parent_tags):
         # mostly copied from the parent class
         # the gfm spec says that the alt text is markdown, so we need to escape it
 
@@ -202,20 +202,20 @@ class MyMarkdownConverter(MarkdownConverter):
 
         alt = el.attrs.get("alt", None) or ""
         alt = alt.replace("\n", " ")
-        alt = self.escape(alt)
+        alt = self.escape(alt, parent_tags)
         src = el.attrs.get("src", None) or el.attrs.get("data-src", None) or ""
         title = el.attrs.get("title", None) or ""
         title_part = ' "{title}"'.format(title=title.replace('"', r"\"") if title else "")
-        if convert_as_inline and el.parent.name not in self.options["keep_inline_images_in"]:
+        if "_inline" in parent_tags and el.parent.name not in self.options["keep_inline_images_in"]:
             return alt
 
         return f"![{alt}]({src}{title_part})"
 
-    def escape(self, text):
+    def escape(self, text, parent_tags=None):
         return minimal_markdown_escape(text)
 
-    def convert_figure(self, el, text, convert_as_inline):
-        if convert_as_inline:
+    def convert_figure(self, el, text, parent_tags):
+        if "_inline" in parent_tags:
             return text
 
         # the super doesn't handle this specifically. we basically want to be sure there's a newline
@@ -226,7 +226,7 @@ class MyMarkdownConverter(MarkdownConverter):
                 text += "\n"
         return text
 
-    def convert_pre(self, el, text, convert_as_inline):
+    def convert_pre(self, el, text, parent_tags):
         if not text:
             return ""
         code_language = self.options["code_language"]
@@ -304,8 +304,8 @@ class MyMarkdownConverter(MarkdownConverter):
         text = "|".join(text)
         return text
 
-    def convert_tr(self, el, text, convert_as_inline):
-        if convert_as_inline:
+    def convert_tr(self, el, text, parent_tags):
+        if "_inline" in parent_tags:
             return text + "\n"
         # this is also mostly copied from the parent class
         # but the logic for guessing a th isn't quite right
@@ -345,43 +345,41 @@ class MyMarkdownConverter(MarkdownConverter):
         return overline + "|" + text + "\n" + underline
 
     def indent(self, text, level):
-        return markdownify.line_beginning_re.sub("    " * level, text) if text else ""
+        return re.sub(r"^", "    " * level, text, flags=re.MULTILINE) if text else ""
 
-    def process_tag(self, node, convert_as_inline, children_only=False, parent_tags=None):
+    def process_tag(self, node, parent_tags=None):
+        if parent_tags is None:
+            parent_tags = set()
+
         # skip aria-hidden elements
         if node.get("aria-hidden") == "true":
             return ""
-        text = ""
 
         # some sites use tables for layout, and so we need to 'inline' them. Our heuristic is that if the table
         # has block elements in it.
         if self._is_layout_table(node):
-            return self._process_layout_table(node, convert_as_inline)
+            return self._process_layout_table(node, parent_tags)
 
-        # markdown headings or cells can't include
-        # block elements (elements w/newlines)
-        isHeading = markdownify.html_heading_re.match(node.name) is not None
-        isEmphasisLike = node.name in ["em", "strong", "b", "i", "u", "s", "del", "ins"]
-        isCell = node.name in ["td", "th"]
-        convert_children_as_inline = convert_as_inline
+        # Build parent_tags for children, mirroring upstream logic for _inline and _noformat
+        parent_tags_for_children = set(parent_tags)
+        parent_tags_for_children.add(node.name)
 
-        if not children_only and (isHeading or isCell or isEmphasisLike):
-            convert_children_as_inline = True
+        if markdownify.re_html_heading.match(node.name) is not None or node.name in ["td", "th"]:
+            parent_tags_for_children.add("_inline")
+
+        # emphasis-like elements also force inline context for children
+        if node.name in ["em", "strong", "b", "i", "u", "s", "del", "ins"]:
+            parent_tags_for_children.add("_inline")
+
+        if node.name in ["pre", "code", "kbd", "samp"]:
+            parent_tags_for_children.add("_noformat")
 
         # Remove whitespace-only textnodes in purely nested nodes
         def is_nested_node(el):
             return el and el.name in ["ol", "ul", "li", "table", "thead", "tbody", "tfoot", "tr", "td", "th"]
 
-        def is_in_preformatted(el):
-            return el.name == "pre" or el.find_parent("pre")
-
         if is_nested_node(node):
             for el in node.children:
-                # Only extract (remove) whitespace-only text node if any of the
-                # conditions is true:
-                # - el is the first element in its parent
-                # - el is the last element in its parent
-                # - el is adjacent to an nested node
                 can_extract = (
                     not el.previous_sibling
                     or not el.next_sibling
@@ -392,21 +390,21 @@ class MyMarkdownConverter(MarkdownConverter):
                     el.extract()
 
         # Convert the children first
-        is_in_pre = is_in_preformatted(node)
+        is_in_pre = node.name == "pre" or node.find_parent("pre")
+        text = ""
 
         for el in node.children:
-            if isinstance(el, Comment) or isinstance(el, Doctype):
+            if isinstance(el, (Comment, Doctype)):
                 continue
             elif isinstance(el, NavigableString):
-                next_text = self.process_text(el)
+                next_text = self.process_text(el, parent_tags=parent_tags_for_children)
                 text = self.join_text(text, next_text, is_in_pre)
             else:
-                text = self.join_text(text, self.process_tag(el, convert_children_as_inline), is_in_pre)
+                text = self.join_text(text, self.process_tag(el, parent_tags=parent_tags_for_children), is_in_pre)
 
-        if not children_only:
-            convert_fn = getattr(self, f"convert_{node.name}", None)
-            if convert_fn and self.should_convert_tag(node.name):
-                text = convert_fn(node, text, convert_as_inline)
+        convert_fn = self.get_conv_fn_cached(node.name)
+        if convert_fn is not None:
+            text = convert_fn(node, text, parent_tags=parent_tags)
 
         return text
 
@@ -447,21 +445,39 @@ class MyMarkdownConverter(MarkdownConverter):
 
         return False
 
-    def _process_layout_table(self, table, convert_as_inline):
+    def _process_layout_table(self, table, parent_tags):
         # if the table is for layout, we want to inline it
+        # We process cell children directly (skipping the cell's own convert_fn)
+        # to avoid table-cell formatting on what is really a layout element.
         text = ""
-        if table.name == "table" or table.name == "tbody":
+        if table.name in ("table", "tbody"):
             for row in table.find_all("tr", recursive=False):
                 for cell in row.find_all(["td", "th"], recursive=False):
-                    text += self.process_tag(cell, convert_as_inline, children_only=True)
+                    text += self._process_children_only(cell, parent_tags)
                 text += "\n\n"
         elif table.name == "tr":
             for cell in table.find_all(["td", "th"], recursive=False):
-                text += self.process_tag(cell, convert_as_inline, children_only=True)
+                text += self._process_children_only(cell, parent_tags)
 
         return text
 
-    def convert_li(self, el, text, convert_as_inline):
+    def _process_children_only(self, node, parent_tags):
+        """Process a node's children without applying the node's own convert_fn."""
+        parent_tags_for_children = set(parent_tags)
+        parent_tags_for_children.add(node.name)
+        is_in_pre = node.name == "pre" or node.find_parent("pre")
+        text = ""
+        for el in node.children:
+            if isinstance(el, (Comment, Doctype)):
+                continue
+            elif isinstance(el, NavigableString):
+                next_text = self.process_text(el, parent_tags=parent_tags_for_children)
+                text = self.join_text(text, next_text, is_in_pre)
+            else:
+                text = self.join_text(text, self.process_tag(el, parent_tags=parent_tags_for_children), is_in_pre)
+        return text
+
+    def convert_li(self, el, text, parent_tags):
         parent = el.parent
         if parent is not None and parent.name == "ol":
             # TODO: upstream this
@@ -481,8 +497,8 @@ class MyMarkdownConverter(MarkdownConverter):
             bullet = bullets[depth % len(bullets)]
         return f"{bullet} {(text or '').strip()}\n"
 
-    def convert_td(self, el, text, convert_as_inline):
-        if convert_as_inline:
+    def convert_td(self, el, text, parent_tags):
+        if "_inline" in parent_tags:
             return text + " "
         colspan = 1
         if "colspan" in el.attrs:
@@ -490,12 +506,12 @@ class MyMarkdownConverter(MarkdownConverter):
 
         return " " + text.strip().replace("\n", " ") + " |" * colspan
 
-    def convert_svg(self, el, text, convert_as_inline):
+    def convert_svg(self, el, text, parent_tags):
         # ignore svg elements
         return ""
 
-    def convert_th(self, el, text, convert_as_inline):
-        if convert_as_inline:
+    def convert_th(self, el, text, parent_tags):
+        if "_inline" in parent_tags:
             return text + " "
         colspan = 1
         if "colspan" in el.attrs:
@@ -539,7 +555,7 @@ class MyMarkdownConverter(MarkdownConverter):
 
         return text1 + text2
 
-    def convert_math(self, el, text, convert_as_inline):
+    def convert_math(self, el, text, parent_tags):
         try:
             x = mathml_to_markdown(el)
             return x
@@ -547,12 +563,12 @@ class MyMarkdownConverter(MarkdownConverter):
             logger.exception(f"Error converting math: {e}")
             return text
 
-    def convert_p(self, el, text, convert_as_inline):
+    def convert_p(self, el, text, parent_tags):
         # no reason for leading whitespace in a paragraph
         if text:
             text = text.lstrip()
 
-        if convert_as_inline:
+        if "_inline" in parent_tags:
             # if el has a sibling, add a <br> at the end
             if el.next_sibling and text:
                 return text + "<br>"
@@ -562,18 +578,20 @@ class MyMarkdownConverter(MarkdownConverter):
             text = fill(text, width=self.options["wrap_width"], break_long_words=False, break_on_hyphens=False)
         return f"\n\n{text}\n\n" if text else ""
 
-    def process_text(self, el):
+    def process_text(self, el, parent_tags=None):
+        if parent_tags is None:
+            parent_tags = set()
+
         text = six.text_type(el) or ""
 
         # normalize whitespace if we're not inside a preformatted element
-        if not el.find_parent("pre"):
+        if "pre" not in parent_tags:
             text = whitespace_re.sub(" ", text)
 
         # escape special characters if we're not inside a preformatted or code element
-        if not el.find_parent(["pre", "code", "kbd", "samp"]):
-            text = self.escape(text)
+        if "_noformat" not in parent_tags:
+            text = self.escape(text, parent_tags)
 
-            # text = text.replace(' *\n', ' ')
             text = re.sub(r"\s+", " ", text, flags=re.MULTILINE)
 
         # remove trailing whitespaces if any of the following condition is true:

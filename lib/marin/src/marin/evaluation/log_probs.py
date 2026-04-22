@@ -13,7 +13,6 @@ from fray.v2 import current_client
 from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.data.text import LMMixtureDatasetConfig
-from levanter.distributed import RayConfig
 from levanter.main.eval_lm import EvalLmConfig as LevanterEvalLmConfig
 from levanter.main.eval_lm import main as eval_lm_main
 from levanter.models.lm_model import LmConfig
@@ -133,7 +132,6 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
                 WandbConfig(project="marin", tags=wandb_tags, name=name),
                 JsonFileTrackerConfig(output_path=config.output_path),
             ),
-            ray=RayConfig(auto_start_cluster=False),
             per_device_eval_parallelism=config.per_device_batch_size,
             max_eval_batches=max_eval_batches,
         ),

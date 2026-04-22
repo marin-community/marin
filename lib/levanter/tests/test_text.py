@@ -426,7 +426,7 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
     with tempfile.TemporaryDirectory() as tmpdir:
         cache_dir = tmpdir
 
-        tokenizer = load_tokenizer("stanford-crfm/marin-tokenizer")
+        tokenizer = load_tokenizer("marin-community/marin-tokenizer")
 
         component = DatasetComponent(
             source=UrlDatasetSourceConfig(train_urls=[dummy_chat_data]),
@@ -454,11 +454,14 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
         assert sample["assistant_masks"].shape == sample["input_ids"].shape
         assert 8 < sample["assistant_masks"].sum() <= 10
         # assert sample["input_ids"].shape[0] > 20
-        assert (
-            tokenizer.decode(sample["input_ids"], skip_special_tokens=False)
-            == "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\nHello!<|eot_id|>\n<|start_header_id|>assistant"
-            "<|end_header_id|>\nHi there, how can I help?<|eot_id|>\n"
+        expected_rendered = tokenizer.apply_chat_template(
+            [
+                {"role": "user", "content": "Hello!"},
+                {"role": "assistant", "content": "Hi there, how can I help?"},
+            ],
+            tokenize=False,
         )
+        assert tokenizer.decode(sample["input_ids"], skip_special_tokens=False) == expected_rendered
 
         # now test packing
         Pos = hax.Axis("position", 100)

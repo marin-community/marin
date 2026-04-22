@@ -8,6 +8,7 @@ Defines the ``iris`` Click group and registers all subcommands.
 
 import logging as _logging_module
 import sys
+from pathlib import Path
 
 import click
 
@@ -22,12 +23,46 @@ from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, priority_band_name, priori
 
 logger = _logging_module.getLogger(__name__)
 
-# Directories searched (in priority order) to resolve ``--cluster=<name>`` to a
-# YAML config file. Relative paths are resolved against the marin project root
-# by ``rigging.config_discovery``.
-IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = (
-    "lib/iris/examples",
-    "~/.config/marin/clusters",
+
+def _bundled_iris_examples_dir() -> str | None:
+    """Return the iris package's bundled examples/ dir when it ships on disk.
+
+    Probes two layouts because the examples directory can physically live in
+    two places depending on how iris was installed:
+
+    1. Wheel installs (site-packages): hatchling force-include places the
+       yamls at ``iris/examples/`` inside the package. Resolve that via
+       ``Path(__file__).parent.parent / "examples"``.
+    2. Editable workspace installs: the yamls stay at their source location
+       ``lib/iris/examples/`` — reachable via ``parents[3] / "examples"`` from
+       ``lib/iris/src/iris/cli/main.py``.
+
+    Returns the first directory that exists, or ``None`` for wheel installs
+    that don't ship examples at all.
+    """
+    here = Path(__file__).resolve()
+    # Wheel install: examples is a sibling of cli/ inside the iris package.
+    wheel_path = here.parent.parent / "examples"
+    if wheel_path.is_dir():
+        return str(wheel_path)
+    # Editable install: examples lives at lib/iris/examples/ (parents[3]).
+    editable_path = here.parents[3] / "examples"
+    if editable_path.is_dir():
+        return str(editable_path)
+    return None
+
+
+# Directories searched (in priority order) to resolve ``--cluster=<name>`` to
+# a YAML config file. Relative paths are resolved against the marin project
+# root by ``rigging.config_discovery``; absolute paths are used as-is.
+IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
+    p
+    for p in (
+        "~/.config/marin/clusters",  # user override — checked first
+        "lib/iris/examples",  # in-tree marin checkout
+        _bundled_iris_examples_dir(),  # editable install from sibling workspace
+    )
+    if p is not None
 )
 
 
@@ -141,7 +176,9 @@ def require_controller_url(ctx: click.Context) -> str:
             f"Could not connect to controller (config: {config_file}). "
             "Check that the controller is running and reachable."
         )
-    raise click.ClickException("Either --controller-url or --config is required")
+    raise click.ClickException(
+        "No controller specified. Pass --cluster=<name> (see `iris cluster list`), --controller-url, or --config."
+    )
 
 
 @click.group()
@@ -182,7 +219,9 @@ def iris(
             logger.info("Resolved cluster %r to config: %s", cluster_name, resolved)
             config_file = str(resolved)
         except FileNotFoundError:
-            pass  # Fall through to token-only mode; error will surface if a command needs a controller
+            raise click.UsageError(
+                f"Unknown cluster {cluster_name!r}. Run `iris cluster list` to see available clusters."
+            ) from None
 
     # Validate mutually exclusive options
     if controller_url and config_file:

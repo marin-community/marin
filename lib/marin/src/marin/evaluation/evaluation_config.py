@@ -34,7 +34,7 @@ class EvaluationConfig:
 
     resource_config: ResourceConfig
     """
-    Additional keyword arguments to pass to the Ray resources.
+    Resources to allocate for the eval step (passed to @remote).
     """
 
     model_name: str | None
@@ -69,11 +69,6 @@ class EvaluationConfig:
     discover_latest_checkpoint: bool = False
     """
     Whether to discover the latest HF checkpoint in the model path.
-    """
-
-    launch_with_ray: bool = True
-    """
-    Whether to launch the evaluation run with Ray.
     """
 
     max_eval_instances: int | None = None

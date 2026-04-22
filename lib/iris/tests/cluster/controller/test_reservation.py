@@ -12,6 +12,7 @@ Tests cover:
   and non-reservation jobs get NOT_EXISTS constraint.
 """
 
+from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.controller import (
     RESERVATION_TAINT_KEY,
     Controller,
@@ -27,10 +28,9 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
 
-from iris.cluster.controller.db import job_is_finished, task_row_can_be_scheduled
+from iris.cluster.controller.db import task_row_can_be_scheduled
 from iris.cluster.controller.schema import WorkerRow
 from iris.cluster.controller.transitions import (
-    HEARTBEAT_FAILURE_THRESHOLD,
     RESERVATION_HOLDER_JOB_NAME,
     Assignment,
     ControllerTransitions,
@@ -46,7 +46,7 @@ from iris.cluster.constraints import (
     get_device_type,
     get_device_variant,
 )
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import JobName, WorkerId, is_job_finished
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from rigging.timing import Timestamp
@@ -478,7 +478,7 @@ def test_cleanup_removes_finished_job_claims():
     ctrl.state.cancel_job(jid, reason="test")
 
     job = _query_job(ctrl.state, jid)
-    assert job_is_finished(job.state)
+    assert is_job_finished(job.state)
 
     ctrl._cleanup_stale_claims()
 
@@ -648,7 +648,7 @@ def test_taint_constraint_added_to_non_reservation_jobs():
     constraints = result[JobName.root("test-user", "regular")].constraints
     not_exists = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(not_exists) == 1
-    assert not_exists[0].op == job_pb2.CONSTRAINT_OP_NOT_EXISTS
+    assert not_exists[0].op == ConstraintOp.NOT_EXISTS
 
 
 def test_taint_constraint_not_added_to_reservation_jobs():
@@ -665,8 +665,8 @@ def test_taint_constraint_not_added_to_reservation_jobs():
     constraints = result[res_job].constraints
     eq = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(eq) == 1
-    assert eq[0].op == job_pb2.CONSTRAINT_OP_EQ
-    assert eq[0].value.string_value == res_job.to_wire()
+    assert eq[0].op == ConstraintOp.EQ
+    assert eq[0].values[0].value == res_job.to_wire()
 
 
 def test_taint_constraint_mixed_jobs():
@@ -687,8 +687,8 @@ def test_taint_constraint_mixed_jobs():
     # Direct reservation job: EQ constraint
     res_constraints = [c for c in result[res_job].constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(res_constraints) == 1
-    assert res_constraints[0].op == job_pb2.CONSTRAINT_OP_EQ
-    assert res_constraints[0].value.string_value == res_job.to_wire()
+    assert res_constraints[0].op == ConstraintOp.EQ
+    assert res_constraints[0].values[0].value == res_job.to_wire()
 
     # Descendant: no taint constraint
     desc_constraints = [c for c in result[descendant_job].constraints if c.key == RESERVATION_TAINT_KEY]
@@ -697,16 +697,12 @@ def test_taint_constraint_mixed_jobs():
     # Regular job: NOT_EXISTS constraint
     reg_constraints = [c for c in result[reg_job].constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(reg_constraints) == 1
-    assert reg_constraints[0].op == job_pb2.CONSTRAINT_OP_NOT_EXISTS
+    assert reg_constraints[0].op == ConstraintOp.NOT_EXISTS
 
 
 def test_taint_constraint_preserves_existing_constraints():
     """Existing constraints are preserved when the taint constraint is added."""
-    existing = job_pb2.Constraint(
-        key=WellKnownAttribute.REGION,
-        op=job_pb2.CONSTRAINT_OP_EQ,
-        value=job_pb2.AttributeValue(string_value="us-central1"),
-    )
+    existing = Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-central1")
     jobs = {
         JobName.root("test-user", "regular"): JobRequirements(
             resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
@@ -921,8 +917,8 @@ def test_region_constraint_injected_from_claimed_workers():
 
     assert len(result) == 1
     assert result[0].key == WellKnownAttribute.REGION
-    assert result[0].op == job_pb2.CONSTRAINT_OP_EQ
-    assert result[0].value.string_value == "us-central1"
+    assert result[0].op == ConstraintOp.EQ
+    assert result[0].values[0].value == "us-central1"
 
 
 def test_region_constraint_not_injected_when_already_present():
@@ -935,11 +931,7 @@ def test_region_constraint_not_injected_when_already_present():
     jid = _submit_job(ctrl.state, "j1", req)
     ctrl._claim_workers_for_reservations()
 
-    existing = job_pb2.Constraint(
-        key=WellKnownAttribute.REGION,
-        op=job_pb2.CONSTRAINT_OP_EQ,
-        value=job_pb2.AttributeValue(string_value="us-east1"),
-    )
+    existing = Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-east1")
     result = _reservation_region_constraints(
         jid.to_wire(),
         ctrl.reservation_claims,
@@ -993,9 +985,8 @@ def test_region_constraint_multiple_regions():
 
     assert len(result) == 1
     assert result[0].key == WellKnownAttribute.REGION
-    assert result[0].op == job_pb2.CONSTRAINT_OP_IN
-    regions = {v.string_value for v in result[0].values}
-    assert regions == {"us-central1", "us-east1"}
+    assert result[0].op == ConstraintOp.IN
+    assert {v.value for v in result[0].values} == {"us-central1", "us-east1"}
 
 
 def test_no_injection_for_non_reservation_job():
@@ -1164,9 +1155,9 @@ def test_taint_exemption_for_children_of_reservation_job():
     for task in pending:
         job_row = _query_job_row(ctrl.state, task.job_id)
         job_detail = _query_job(ctrl.state, task.job_id)
-        if job_row and not job_is_finished(job_row.state):
+        if job_row and not is_job_finished(job_row.state):
             jobs[task.job_id] = job_requirements_from_job(job_row)
-            if job_detail and job_detail.request.HasField("reservation"):
+            if job_detail and job_detail.reservation_json is not None:
                 has_reservation.add(task.job_id)
             elif _find_reservation_ancestor(ctrl._db, task.job_id) is not None:
                 has_reservation.add(task.job_id)
@@ -1177,7 +1168,7 @@ def test_taint_exemption_for_children_of_reservation_job():
     has_direct_reservation: set[JobName] = set()
     for task in pending:
         job_detail = _query_job(ctrl.state, task.job_id)
-        if job_detail and not job_is_finished(job_detail.state) and job_detail.request.HasField("reservation"):
+        if job_detail and not is_job_finished(job_detail.state) and job_detail.reservation_json is not None:
             has_direct_reservation.add(task.job_id)
 
     # Child does NOT get NOT_EXISTS constraint (descendant, no constraint at all)
@@ -1274,9 +1265,9 @@ def test_grandchildren_inherit_reservation_from_ancestor():
     for task in pending:
         job_row = _query_job_row(ctrl.state, task.job_id)
         job_detail = _query_job(ctrl.state, task.job_id)
-        if job_row and not job_is_finished(job_row.state):
+        if job_row and not is_job_finished(job_row.state):
             jobs[task.job_id] = job_requirements_from_job(job_row)
-            if job_detail and job_detail.request.HasField("reservation"):
+            if job_detail and job_detail.reservation_json is not None:
                 has_reservation.add(task.job_id)
             elif _find_reservation_ancestor(ctrl._db, task.job_id) is not None:
                 has_reservation.add(task.job_id)
@@ -1289,7 +1280,7 @@ def test_grandchildren_inherit_reservation_from_ancestor():
     has_direct_reservation: set[JobName] = set()
     for task in pending:
         job_detail = _query_job(ctrl.state, task.job_id)
-        if job_detail and not job_is_finished(job_detail.state) and job_detail.request.HasField("reservation"):
+        if job_detail and not is_job_finished(job_detail.state) and job_detail.reservation_json is not None:
             has_direct_reservation.add(task.job_id)
 
     # Neither grandchild gets any taint constraint (descendants)
@@ -1392,12 +1383,11 @@ def test_reservation_match_user_variant_override():
 
 
 def test_holder_task_worker_death_no_failure_record(state):
-    """Holder tasks return to PENDING with no WORKER_FAILED record when their worker dies.
-
-    Holder tasks are virtual (never dispatched). When a worker dies, they must
-    be silently requeued — no attempt accumulation, no retry budget burn — so
-    that they can survive an arbitrary number of worker cycles without leaking
-    memory or eventually going terminal.
+    """Holder tasks return to PENDING and do NOT burn their retry budget when a
+    worker dies, so they can survive an arbitrary number of worker cycles
+    without going terminal. Unlike pre-fix behavior, each failed attempt is
+    preserved as a WORKER_FAILED row for observability — it just doesn't count
+    as a preemption against the holder.
     """
     request = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_cpu_device())])
     parent_job_id = _submit_job(state, "res-job", request)
@@ -1425,8 +1415,7 @@ def test_holder_task_worker_death_no_failure_record(state):
         # Kill the worker — holder task must NOT go through WORKER_FAILED.
         batch = state.drain_dispatch(worker_id)
         assert batch is not None
-        for _ in range(HEARTBEAT_FAILURE_THRESHOLD):
-            state.record_heartbeat_failure(worker_id, "simulated crash", batch)
+        state.record_heartbeat_failure(worker_id, "simulated crash", batch, force_remove=True)
 
         holder_task = _query_task_with_attempts(state, holder_task.task_id)
         assert holder_task is not None
@@ -1436,10 +1425,13 @@ def test_holder_task_worker_death_no_failure_record(state):
         ), f"cycle {cycle}: expected PENDING, got {job_pb2.TaskState.Name(current_state)}"
         assert holder_task.preemption_count == 0, f"cycle {cycle}: preemption_count leaked"
         assert holder_task.failure_count == 0, f"cycle {cycle}: failure_count leaked"
-        assert (
-            len(holder_task.attempts) == 0
-        ), f"cycle {cycle}: attempt list leaked ({len(holder_task.attempts)} entries)"
-        # active_worker_id should be None when PENDING
+        # Attempts accumulate: one WORKER_FAILED row per cycle. This is a
+        # deliberate change from the pre-outage DELETE-the-attempt behavior
+        # (which left dangling current_attempt_id=-1 with orphan rows).
+        assert len(holder_task.attempts) == cycle + 1, (
+            f"cycle {cycle}: expected {cycle + 1} attempt rows, " f"got {len(holder_task.attempts)}"
+        )
+        assert holder_task.attempts[-1].state == job_pb2.TASK_STATE_WORKER_FAILED
         assert holder_task.state == job_pb2.TASK_STATE_PENDING, "no active worker after death"
         assert task_row_can_be_scheduled(holder_task), "holder task must be schedulable again"
 
@@ -1577,7 +1569,7 @@ def _tpu_metadata(variant: str = "v5p-64", region: str | None = None) -> job_pb2
 
 def _region_constraint(region: str) -> job_pb2.Constraint:
     """Create a region=<value> constraint proto."""
-    return Constraint(key="region", op=ConstraintOp.EQ, value=region).to_proto()
+    return Constraint.create(key="region", op=ConstraintOp.EQ, value=region).to_proto()
 
 
 def test_holder_task_gets_device_constraints_from_tpu_entry(state):
@@ -1599,7 +1591,7 @@ def test_holder_task_gets_device_constraints_from_tpu_entry(state):
 
     holder_job = _query_job(state, holder_job_id)
     assert holder_job is not None
-    constraint_keys = [c.key for c in holder_job.request.constraints]
+    constraint_keys = [c.key for c in constraints_from_json(holder_job.constraints_json)]
 
     assert (
         WellKnownAttribute.DEVICE_TYPE in constraint_keys

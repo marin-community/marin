@@ -39,7 +39,7 @@ from levanter.utils import fsspec_utils
 
 from experiments.evals.task_configs import CORE_TASKS
 from marin.evaluation.evaluation_config import convert_to_levanter_task_config
-from experiments.paloma import paloma_tokenized
+from experiments.paloma import paloma_raw_validation_sets, paloma_tokenized
 from experiments.simple_dpo_config import SimpleDPOConfig
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
@@ -206,6 +206,9 @@ def default_tokenize(
     *,
     sample_count: int | VersionedValue[int] | None = None,
     is_validation: bool = False,
+    levanter_batch_size: int | None = None,
+    resources: ResourceConfig | None = None,
+    worker_resources: ResourceConfig | None = None,
 ) -> ExecutorStep:
     """
     Tokenizes a dataset using the specified tokenizer and Levanter's tokenization infrastructure.
@@ -228,6 +231,11 @@ def default_tokenize(
         An ExecutorStep that represents the tokenized dataset.
     """
 
+    # Common kwargs for config constructors
+    extra_kwargs: dict = {}
+    if worker_resources is not None:
+        extra_kwargs["worker_resources"] = worker_resources
+
     # sniff out if it's a HuggingFace dataset
     if isinstance(dataset, HfDatasetSpec):
         config = HfTokenizeConfig(
@@ -237,6 +245,8 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            levanter_batch_size=levanter_batch_size,
+            **extra_kwargs,
         )
     elif (
         isinstance(dataset, str)
@@ -250,6 +260,8 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            levanter_batch_size=levanter_batch_size,
+            **extra_kwargs,
         )
     else:
         config = TokenizeConfig(
@@ -259,6 +271,8 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            levanter_batch_size=levanter_batch_size,
+            **extra_kwargs,
         )
 
     return ExecutorStep(
@@ -266,7 +280,7 @@ def default_tokenize(
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=remote(
             tokenize,
-            resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
+            resources=resources or ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
             pip_dependency_groups=["cpu"],
             env_vars={
                 "TRANSFORMERS_NO_TORCH": "1",
@@ -287,6 +301,15 @@ def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> di
 
     validation_sets = dict(paloma_tokenized(base_path=base_path, tokenizer=tokenizer))
     validation_sets.update(uncheatable_eval_tokenized(base_path=base_path, tokenizer=tokenizer))
+    return validation_sets
+
+
+@lru_cache
+def default_raw_validation_sets() -> dict[str, Any]:
+    from experiments.evals.exp1600_uncheatable_evals import uncheatable_eval_raw_validation_sets
+
+    validation_sets = dict(paloma_raw_validation_sets())
+    validation_sets.update(uncheatable_eval_raw_validation_sets())
     return validation_sets
 
 

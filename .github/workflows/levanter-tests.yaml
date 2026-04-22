@@ -19,7 +19,7 @@ jobs:
     outputs:
       should_run: ${{ steps.filter.outputs.relevant }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -39,7 +39,7 @@ jobs:
         working-directory: lib/levanter
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v6
         with:
@@ -54,11 +54,11 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --group test --frozen
+        run: uv sync --package marin-levanter --dev --group test --frozen
       - name: Test with pytest
         run: |
           # Test with specific JAX version, excluding TPU tests
-          PYTHONPATH=tests:src:. uv run --package levanter --frozen --with "jax[cpu]==0.8.0" pytest tests -m "not entry and not slow and not ray and not tpu" --durations=20
+          PYTHONPATH=tests:src:. uv run --package marin-levanter --frozen --with "jax[cpu]==0.8.0" pytest tests -m "not entry and not slow and not ray and not tpu" --durations=20
 
   levanter-ray-tests:
     needs: changes
@@ -69,7 +69,7 @@ jobs:
         working-directory: lib/levanter
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v6
         with:
@@ -84,10 +84,10 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --group test --frozen
+        run: uv sync --package marin-levanter --dev --group test --frozen
       - name: Test with pytest
         run: |
-          PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "ray" --durations=20
+          PYTHONPATH=tests:src:. uv run --package marin-levanter --frozen pytest tests -m "ray" --durations=20
 
   levanter-entry-tests:
     needs: changes
@@ -98,7 +98,7 @@ jobs:
         working-directory: lib/levanter
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v6
         with:
@@ -113,10 +113,10 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --group test --frozen
+        run: uv sync --package marin-levanter --dev --group test --frozen
       - name: Test with pytest
         run: |
-          PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "entry" --durations=20
+          PYTHONPATH=tests:src:. uv run --package marin-levanter --frozen pytest tests -m "entry" --durations=20
 
   levanter-torch-tests:
     needs: changes
@@ -128,7 +128,7 @@ jobs:
         working-directory: lib/levanter
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v6
         with:
@@ -143,7 +143,7 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --group test --frozen --extra torch_test --no-install-package torch
+        run: uv sync --package marin-levanter --dev --group test --frozen --extra torch_test --no-install-package torch
 
       - name: Install locked CPU torch wheel
         run: |
@@ -187,7 +187,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ (github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number)) || '' }}
 
@@ -239,7 +239,7 @@ jobs:
               fi && \
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
               timeout --kill-after=5 --signal=TERM 890 \
-              uv run --package levanter --frozen --group test --with 'jax[tpu]==$JAX_VERSION' \
+              uv run --package marin-levanter --frozen --group test --with 'jax[tpu]==$JAX_VERSION' \
               pytest -n 0 lib/levanter/tests \
               -m 'not entry and not ray and not slow and not torch' \
               --ignore=lib/levanter/tests/test_audio.py \

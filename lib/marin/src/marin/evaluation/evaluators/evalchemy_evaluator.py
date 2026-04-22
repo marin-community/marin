@@ -32,19 +32,18 @@ import sys
 import traceback
 from collections.abc import Sequence
 from typing import ClassVar
-from fray.v1.cluster import ResourceConfig
 from rigging.filesystem import filesystem as marin_filesystem
 
 from marin.evaluation.evaluation_config import WANDB_PROJECT, EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
-from marin.evaluation.utils import is_remote_path, upload_to_gcs
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.inference.vllm_server import resolve_model_name_or_path
+from marin.evaluation.utils import is_remote_path, upload_to_gcs
 
 logger = logging.getLogger(__name__)
 
 # Evalchemy git repo and commit to use
 EVALCHEMY_REPO = "https://github.com/teetone/evalchemy.git"
-EVALCHEMY_COMMIT = "010412c"  # 2026-03-14 commit
+EVALCHEMY_COMMIT = "7f24168"  # 2026-03-31: Added OlympiadBench Physics, coverage for science
 
 
 # Evalchemy benchmarks that have hardcoded n_repeat values and their paths.
@@ -66,7 +65,6 @@ N_REPEAT_BENCHMARK_PATHS = {
     "JEEBench": "eval/chat_benchmarks/JEEBench/eval_instruct.py",
     "HLE": "eval/chat_benchmarks/HLE/eval_instruct.py",
     "AIME26": "eval/chat_benchmarks/AIME26/eval_instruct.py",
-    "OlympiadBench": "eval/chat_benchmarks/OlympiadBench/eval_instruct.py",
 }
 
 
@@ -671,7 +669,7 @@ _patch_autoconfig_for_gcs()
         """Run evalchemy in-process using runpy instead of a subprocess.
 
         Executes the evalchemy CLI entrypoint (eval.eval) directly in the current
-        process. This ensures that when the Ray worker dies (due to error or preemption),
+        process. This ensures that when the worker dies (due to error or preemption),
         all TPU handles die with it — no orphaned subprocesses.
 
         Args:
@@ -974,6 +972,31 @@ _patch_autoconfig_for_gcs()
                     log_file=log_file,
                 )
 
+                # Verify results were actually written — evalchemy can return 0
+                # but silently fail to write results (e.g. sympy hang during scoring).
+                results_files = glob.glob(os.path.join(result_dir, "*", "results_*.json"))
+                if returncode == 0 and not results_files:
+                    # Log what's actually in the result dir for debugging
+                    all_files = []
+                    for root, _, files in os.walk(result_dir):
+                        for f in files:
+                            all_files.append(os.path.join(root, f))
+                    log_tail = ""
+                    if os.path.exists(log_file):
+                        with open(log_file, "r") as lf:
+                            content = lf.read()
+                            log_tail = content[-3000:] if len(content) > 3000 else content
+                    logger.error(
+                        f"Evalchemy returned exit code 0 for {eval_task.name} but no results_*.json "
+                        f"found in {result_dir}. Scoring likely hung or crashed silently.\n"
+                        f"Files in result_dir: {all_files}\n"
+                        f"=== Last 3000 chars of evalchemy log ===\n{log_tail}"
+                    )
+                    raise RuntimeError(
+                        f"Evalchemy returned success for {eval_task.name} but no results_*.json "
+                        f"found in {result_dir}. Scoring likely hung or crashed silently."
+                    )
+
                 if returncode != 0:
                     # Read log file contents to include in the error message
                     log_contents = ""
@@ -1034,34 +1057,3 @@ _patch_autoconfig_for_gcs()
                 shutil.rmtree(self.RESULTS_PATH)
             if local_config_dir and os.path.exists(local_config_dir):
                 shutil.rmtree(local_config_dir, ignore_errors=True)
-
-    def launch_evaluate_with_ray(
-        self,
-        model: ModelConfig,
-        evals: Sequence[EvalTaskConfig],
-        output_path: str,
-        resource_config: ResourceConfig,
-        max_eval_instances: int | None = None,
-        wandb_tags: list[str] | None = None,
-    ) -> None:
-        """Launch evaluation on Ray cluster with TPU resources."""
-        env_vars = {"HF_ALLOW_CODE_EVAL": "1"}
-        wandb_api_key = os.environ.get("WANDB_API_KEY")
-        if wandb_api_key:
-            env_vars["WANDB_API_KEY"] = wandb_api_key
-        wandb_entity = os.environ.get("WANDB_ENTITY")
-        if wandb_entity:
-            env_vars["WANDB_ENTITY"] = wandb_entity
-
-        launch_evaluate_with_ray(
-            evaluator=self,
-            job_name="evalchemy-tpu-evaluation",
-            model=model,
-            evals=evals,
-            output_path=output_path,
-            resource_config=resource_config,
-            max_eval_instances=max_eval_instances,
-            wandb_tags=wandb_tags,
-            extras=("evalchemy", "tpu", "vllm"),
-            env_vars=env_vars,
-        )

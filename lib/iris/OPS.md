@@ -81,7 +81,7 @@ iris rpc controller get-provider-status         # scheduling events, cluster cap
 iris cluster vm status                          # scale groups with slice counts
 ```
 
-Priority bands: `PRIORITY_BAND_INTERACTIVE` (default), `PRIORITY_BAND_PRODUCTION` (can preempt interactive).
+Priority bands: `PRIORITY_BAND_INTERACTIVE` (default), `PRIORITY_BAND_PRODUCTION` (can preempt interactive), `PRIORITY_BAND_BATCH` (preemptible). See [`docs/priority-bands.md`](docs/priority-bands.md) for the user-facing guide on when to pick each band.
 
 ## SQL Queries
 
@@ -127,12 +127,17 @@ Full table list: `iris query "SELECT name FROM sqlite_master WHERE type='table'"
 
 ### Offline checkpoint analysis
 
-For slow queries, trigger a checkpoint and query offline. **Never run expensive queries against the live DB** — they stall the controller.
+For slow queries, query offline. **Never run expensive queries against the live DB** — they stall the controller.
 
 ```bash
-iris cluster controller checkpoint           # trigger fresh checkpoint
 # Download the checkpoint file (path printed by command above)
 sqlite3 /tmp/controller.sqlite3 "SELECT ..."
+```
+
+Prefer to use the last checkpoint from GCS. Only take a new controller checkpoint if this is too old:
+
+```bash
+iris cluster controller checkpoint
 ```
 
 ## Users & Auth
@@ -222,17 +227,36 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 
 ### Connecting
 
-```bash
-# Port-forward (keep terminal open)
-kubectl --kubeconfig ~/.kube/coreweave-iris \
-  port-forward -n iris svc/iris-controller-svc 10000:10000
+Preferred — let the CLI open the tunnel for you:
 
-# Then: iris --controller-url=http://localhost:10000 ...
-# Or config-based: iris --config=lib/iris/examples/coreweave.yaml ...
+```bash
+iris --cluster=coreweave-ci job logs /runner/my-job    # auto-tunnels
+iris cluster list                                      # see available cluster names
 ```
 
-Namespaces: `iris` (main dev), `iris-ci` (persistent CI), `iris-canary` (GPU canary, ephemeral).
-Configs: `coreweave.yaml`, `coreweave-ci.yaml`, `coreweave-canary.yaml`.
+`--cluster=NAME` resolves to a config under `lib/iris/examples/` and establishes
+a `kubectl port-forward` to the controller service before each call, tearing it
+down on exit. The CLI prints `Establishing tunnel to controller... Tunnel
+ready: 127.0.0.1:<port> -> <svc>:10000`.
+
+Requires the `iris[controller]` extras (`duckdb`, `pyarrow`, `kubernetes`) in
+your venv — otherwise the CLI fails with `ImportError: Install
+iris[controller] to use CloudK8sService` before it can tunnel. If you see
+that error, `uv pip install 'marin-iris[controller]'` inside the venv.
+
+Fallback — manual port-forward (use if you don't have the extras or need to
+keep the tunnel up across many calls):
+
+```bash
+kubectl --kubeconfig ~/.kube/coreweave-iris \
+  port-forward -n <namespace> svc/<service_name> 10000:10000 &
+iris --controller-url=http://localhost:10000 ...
+```
+
+| Cluster name      | Namespace | Service                  | Config file          |
+|-------------------|-----------|--------------------------|----------------------|
+| `coreweave`       | `iris`    | `iris-controller-svc`    | `coreweave.yaml`     |
+| `coreweave-ci`    | `iris-ci` | `iris-ci-controller-svc` | `coreweave-ci.yaml`  |
 
 ### KubernetesProvider vs Worker Daemons
 
@@ -290,6 +314,12 @@ kci delete nodepool -l iris-<label_prefix>-managed=true
 - **Konnectivity agent.** `kubectl port-forward` returns 500 until `konnectivity-agent` pods are running (~18-30s after node provisions).
 - **`kubectl scale --replicas` is wrong for NodePools.** Use `kci patch nodepool ... '{"spec":{"targetNodes":N}}'`.
 
+### GPU-canary pod stuck Pending, `NotTriggerScaleUp: 2 max node group size reached`
+
+- Check **account-wide** H100 contention, not just `iris-canary`: `kci get nodepools -A`. If `iris-ci-h100-8x` (or any other pool) is already holding the zone's H100 quota at `maxNodes=1`, the canary's `iris-canary-h100-8x` cannot scale up — CW account caps total H100 in US-WEST-04A.
+- Workaround: reuse the CI nodepool (point `coreweave-canary.yaml` `h100-8x` selector at `iris-iris-ci-managed=true` and coordinate with iris-ci) or scale `iris-ci-h100-8x` to 0 before the canary runs.
+- Root fix: CW support ticket to raise `gd-8xh100ib-i128` account quota ≥2 in US-WEST-04A.
+
 ---
 
 ## CI Workflows
@@ -297,7 +327,7 @@ kci delete nodepool -l iris-<label_prefix>-managed=true
 | Workflow | Trigger | What |
 |----------|---------|------|
 | `marin-canary-ferry.yaml` | Daily 6AM UTC | TPU canary on GCP (`marin-dev.yaml`) |
-| `marin-canary-ferry-cw.yaml` | Daily 10AM UTC | GPU canary on CW (`coreweave-canary.yaml`) |
+| `marin-canary-ferry-cw.yaml` | Daily 10AM UTC | GPU canary on CW — shares `iris-ci` controller + H100 nodepool with `iris-coreweave-ci.yaml` (concurrency group `iris-coreweave-ci-shared`) |
 | `iris-cloud-smoke-gcp.yaml` | PRs touching `lib/iris/` | GCP smoke test (ephemeral cluster) |
 | `iris-coreweave-ci.yaml` | PRs touching `lib/iris/` | CW integration tests (warm cluster) |
 

@@ -17,44 +17,19 @@ Subsets available on HuggingFace:
 """
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 
 def download(
     *,
     revision: str = "87f0914",
+    hf_urls_glob: list[str] | None = None,
 ) -> StepSpec:
     """Download FineWeb-Edu from HuggingFace."""
     return download_hf_step(
         "raw/fineweb-edu",
         hf_dataset_id="HuggingFaceFW/fineweb-edu",
         revision=revision,
+        hf_urls_glob=hf_urls_glob,
         override_output_path=f"raw/fineweb-edu-{revision}",
-    )
-
-
-def normalize(
-    dl: StepSpec,
-    *,
-    subset: str = "data",
-    target_partition_bytes: int = 256 * 1024 * 1024,
-    override_output_path: str | None = None,
-) -> StepSpec:
-    """Normalize FineWeb-Edu to the datakit standard Parquet format.
-
-    Args:
-        dl: Download step (from ``download()``).
-        subset: Which subset to normalize (``"data"``, ``"sample/10BT"``,
-            ``"sample/100BT"``, ``"sample/350BT"``).
-        target_partition_bytes: Target size per output partition.
-        override_output_path: Override the computed output path.
-    """
-
-    return normalize_step(
-        name="normalized/fineweb_edu",
-        download=dl,
-        input_path=f"{dl.output_path}/{subset}",
-        target_partition_bytes=target_partition_bytes,
-        override_output_path=override_output_path,
     )

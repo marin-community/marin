@@ -58,8 +58,7 @@ When using W&B:
   - iteration is quick,
   - you are tuning kernels or benchmarks,
   - full pipeline apparatus is unnecessary.
-- Use `.agents/skills/dev-tpu/SKILL.md` for the standard Iris-backed workflow.
-- Use `.agents/skills/dev-tpu-ray/SKILL.md` only when you specifically need the legacy Ray-backed workflow.
+- Use `.agents/skills/dev-tpu/SKILL.md` for the Iris-backed workflow.
 
 Rule of thumb:
 - Start with dev TPU for fast hillclimbing.
