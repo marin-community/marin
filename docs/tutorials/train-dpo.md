@@ -141,7 +141,7 @@ Submit the job to the shared Iris cluster (CPU-only entrypoint; the script's
 `executor_main` spawns the TPU sub-task via Fray):
 
 ```bash
-uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=4G --extra=cpu \
+uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G --extra=cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -- python -m experiments.my_dpo_experiment
 ```

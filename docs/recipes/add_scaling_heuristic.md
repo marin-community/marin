@@ -42,7 +42,7 @@ Nemotron mix. Then sweep the optimizer hyperparameter space with
 `experiments/references/reference_hyperparameter_sweep.py` or an equivalent setup.
 
 ```sh
-uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=4G --extra=cpu \
+uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G --extra=cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -- python -m experiments.references.reference_hyperparameter_sweep
 ```
@@ -174,7 +174,7 @@ SCALING_SUITES = {
 Submit:
 
 ```sh
-uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=4G --extra=cpu \
+uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G --extra=cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -- python -m experiments.isoflop_sweep
 ```

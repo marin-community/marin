@@ -4,7 +4,7 @@
 """andyrdt/gpt-oss-20b-rollouts rollout dataset (non-benchmark subsets).
 
 Usage:
-    uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
+    uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
       -- python -m experiments.rollout_data.gpt_oss_rollouts
 """
 

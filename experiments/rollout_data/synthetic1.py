@@ -4,7 +4,7 @@
 """PrimeIntellect/SYNTHETIC-1 pretraining dataset.
 
 Usage:
-    uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
+    uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
       -- python -m experiments.rollout_data.synthetic1
 """
 

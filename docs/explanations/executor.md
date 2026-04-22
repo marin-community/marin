@@ -103,7 +103,7 @@ as the entrypoint of a CPU-only Iris job. The script then uses `executor_main`
 to spawn the accelerated sub-jobs via Fray:
 
 ```bash
-uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
   -- python -m experiments.tutorials.hello_world
 ```
 

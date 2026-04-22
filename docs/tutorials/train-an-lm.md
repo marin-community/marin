@@ -151,7 +151,7 @@ Iris entrypoint job. `executor_main` inside the script spawns the TPU/GPU
 sub-tasks via Fray:
 
 ```bash
-uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -- python -m experiments.${YOUR_EXPERIMENT_SCRIPT}
 ```

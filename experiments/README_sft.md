@@ -11,7 +11,7 @@ The default doc reproduces OLMO SFT
 Run Olmo SFT with:
 
 ```bash
-uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
   -e HF_TOKEN "$HF_TOKEN" \
   -- python -m experiments.exp227_sft
 ```
@@ -45,12 +45,12 @@ In `train_step`, essential parameters:
 
 ```bash
 # Basic run
-uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
   -e HF_TOKEN "$HF_TOKEN" \
   -- python -m experiments.my_sft
 
 # Force specific steps
-uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
   -e HF_TOKEN "$HF_TOKEN" \
   -- python -m experiments.my_sft --force_run '["your_step_name"]'
 ```

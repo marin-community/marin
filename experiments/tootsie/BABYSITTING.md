@@ -17,7 +17,7 @@ Iris cluster.
 I use this command to launch it:
 
 ```
-uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -e HF_DATASETS_TRUST_REMOTE_CODE true \
   -- python -m experiments.exp600_tootsie --run_only "[adept]" --force_run_failed true
@@ -53,7 +53,7 @@ I have been using XXX v6e-128s, where XXX ranges from 2-8. The 70b needs at leas
 To cancel a stuck run:
 
 ```
-uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -e HF_DATASETS_TRUST_REMOTE_CODE true \
   -- python -m marin.execution.status_actor kill
@@ -62,7 +62,7 @@ uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
 ## 70b
 
 ```
-uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -e HF_DATASETS_TRUST_REMOTE_CODE true \
   -- python -m experiments.exp750_tootsie70b --force_run_failed true --run_only '[real]'
@@ -71,7 +71,7 @@ uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
 ## 22b
 
 ```
-uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -e HF_DATASETS_TRUST_REMOTE_CODE true \
   -- python -m experiments.exp750_tootsie70b --force_run_failed true --run_only '[22b]'
@@ -80,7 +80,7 @@ uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
 ## 13b
 
 ```
-uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -e HF_DATASETS_TRUST_REMOTE_CODE true \
   -- python -m experiments.exp750_tootsie70b --force_run_failed true --run_only '[13b]'

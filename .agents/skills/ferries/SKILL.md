@@ -124,7 +124,7 @@ Then push the launch commit (no proposal PR by default).
 Before launch, confirm requester approval in-thread unless they already gave explicit "launch without asking" permission.
 
 ```bash
-uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=4G --extra=cpu \
+uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G --extra=cpu \
   -- python -m experiments.ferries.daily
 ```
 
@@ -136,7 +136,7 @@ After launch, capture and post to the issue:
 
 Optional deterministic daily rerun name:
 ```bash
-uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=4G --extra=cpu \
+uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G --extra=cpu \
   -e FERRY_DATE "$(date +%Y%m%d-%H%M%S)-daily-ferry" \
   -- python -m experiments.ferries.daily
 ```

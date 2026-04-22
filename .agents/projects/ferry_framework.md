@@ -274,7 +274,7 @@ gh issue list \
 Launch shape (illustrative, to pin in recipe):
 
 ```bash
-uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=4G --extra=cpu \
+uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G --extra=cpu \
   -- python -m experiments.ferries.daily --run_name "daily-125m-$(date +%F)"
 ```
 

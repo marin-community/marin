@@ -11,7 +11,7 @@ Author: Will Held
 
 Example usage:
   # Run the training job with wandb logging enabled
-  uv run iris --cluster=marin job run --cpu=1 --memory=4G --extra=cpu \
+  uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
     -e WANDB_API_KEY "$WANDB_API_KEY" \
     -- python -m experiments.tutorials.exp1078_reproduce_dclm_7b1x
 """
