@@ -1383,12 +1383,11 @@ def test_reservation_match_user_variant_override():
 
 
 def test_holder_task_worker_death_no_failure_record(state):
-    """Holder tasks return to PENDING with no WORKER_FAILED record when their worker dies.
-
-    Holder tasks are virtual (never dispatched). When a worker dies, they must
-    be silently requeued — no attempt accumulation, no retry budget burn — so
-    that they can survive an arbitrary number of worker cycles without leaking
-    memory or eventually going terminal.
+    """Holder tasks return to PENDING and do NOT burn their retry budget when a
+    worker dies, so they can survive an arbitrary number of worker cycles
+    without going terminal. Unlike pre-fix behavior, each failed attempt is
+    preserved as a WORKER_FAILED row for observability — it just doesn't count
+    as a preemption against the holder.
     """
     request = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_cpu_device())])
     parent_job_id = _submit_job(state, "res-job", request)
@@ -1426,10 +1425,13 @@ def test_holder_task_worker_death_no_failure_record(state):
         ), f"cycle {cycle}: expected PENDING, got {job_pb2.TaskState.Name(current_state)}"
         assert holder_task.preemption_count == 0, f"cycle {cycle}: preemption_count leaked"
         assert holder_task.failure_count == 0, f"cycle {cycle}: failure_count leaked"
-        assert (
-            len(holder_task.attempts) == 0
-        ), f"cycle {cycle}: attempt list leaked ({len(holder_task.attempts)} entries)"
-        # active_worker_id should be None when PENDING
+        # Attempts accumulate: one WORKER_FAILED row per cycle. This is a
+        # deliberate change from the pre-outage DELETE-the-attempt behavior
+        # (which left dangling current_attempt_id=-1 with orphan rows).
+        assert len(holder_task.attempts) == cycle + 1, (
+            f"cycle {cycle}: expected {cycle + 1} attempt rows, " f"got {len(holder_task.attempts)}"
+        )
+        assert holder_task.attempts[-1].state == job_pb2.TASK_STATE_WORKER_FAILED
         assert holder_task.state == job_pb2.TASK_STATE_PENDING, "no active worker after death"
         assert task_row_can_be_scheduled(holder_task), "holder task must be schedulable again"
 

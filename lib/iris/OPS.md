@@ -127,12 +127,17 @@ Full table list: `iris query "SELECT name FROM sqlite_master WHERE type='table'"
 
 ### Offline checkpoint analysis
 
-For slow queries, trigger a checkpoint and query offline. **Never run expensive queries against the live DB** — they stall the controller.
+For slow queries, query offline. **Never run expensive queries against the live DB** — they stall the controller.
 
 ```bash
-iris cluster controller checkpoint           # trigger fresh checkpoint
 # Download the checkpoint file (path printed by command above)
 sqlite3 /tmp/controller.sqlite3 "SELECT ..."
+```
+
+Prefer to use the last checkpoint from GCS. Only take a new controller checkpoint if this is too old:
+
+```bash
+iris cluster controller checkpoint
 ```
 
 ## Users & Auth
