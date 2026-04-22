@@ -191,17 +191,28 @@ def task_updates_from_proto(entries) -> list[TaskUpdate]:
 
     Skips UNSPECIFIED/PENDING — the controller is only interested in
     transitions to BUILDING or beyond.
+
+    TASK_STATE_MISSING is a worker-only signal (the worker lost the task or
+    reconciled it away). It is translated to WORKER_FAILED so the retry
+    machinery rolls the task back to PENDING; see issue #5041 for why we
+    never let a worker-reported KILLED survive onto a task the controller
+    did not itself ask to kill.
     """
     updates: list[TaskUpdate] = []
     for entry in entries:
         if entry.state in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING):
             continue
+        new_state = entry.state
+        error = entry.error or None
+        if new_state == job_pb2.TASK_STATE_MISSING:
+            new_state = job_pb2.TASK_STATE_WORKER_FAILED
+            error = error or "Worker reported task as missing"
         updates.append(
             TaskUpdate(
                 task_id=JobName.from_wire(entry.task_id),
                 attempt_id=entry.attempt_id,
-                new_state=entry.state,
-                error=entry.error or None,
+                new_state=new_state,
+                error=error,
                 exit_code=entry.exit_code if entry.HasField("exit_code") else None,
                 resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
                 container_id=entry.container_id or None,

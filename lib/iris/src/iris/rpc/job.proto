@@ -204,6 +204,12 @@ enum TaskState {
   TASK_STATE_UNSCHEDULABLE = 8;
   TASK_STATE_ASSIGNED = 9;
   TASK_STATE_PREEMPTED = 10;
+  // Worker-only signal (never a controller-persisted state): the worker has no
+  // record of this task, or killed it during reconciliation. The controller
+  // maps MISSING to the appropriate outcome (typically WORKER_FAILED with
+  // preemption-retry semantics) instead of trusting a worker-reported KILLED
+  // it never asked for. See issue #5041.
+  TASK_STATE_MISSING = 11;
 }
 
 // Status of a single task within a job

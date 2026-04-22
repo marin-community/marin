@@ -34,6 +34,7 @@ class TaskState(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     TASK_STATE_UNSCHEDULABLE: _ClassVar[TaskState]
     TASK_STATE_ASSIGNED: _ClassVar[TaskState]
     TASK_STATE_PREEMPTED: _ClassVar[TaskState]
+    TASK_STATE_MISSING: _ClassVar[TaskState]
 
 class ConstraintOp(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -91,6 +92,7 @@ TASK_STATE_WORKER_FAILED: TaskState
 TASK_STATE_UNSCHEDULABLE: TaskState
 TASK_STATE_ASSIGNED: TaskState
 TASK_STATE_PREEMPTED: TaskState
+TASK_STATE_MISSING: TaskState
 CONSTRAINT_OP_EQ: ConstraintOp
 CONSTRAINT_OP_NE: ConstraintOp
 CONSTRAINT_OP_EXISTS: ConstraintOp

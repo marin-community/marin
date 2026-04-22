@@ -1061,8 +1061,13 @@ def test_heartbeat_after_adoption_reports_running(mock_worker, mock_runtime):
     assert task_status.state == job_pb2.TASK_STATE_RUNNING
 
 
-def test_heartbeat_without_adoption_reports_worker_failed(mock_worker, mock_runtime):
-    """Without adoption, expected tasks should report WORKER_FAILED."""
+def test_heartbeat_without_adoption_reports_missing(mock_worker, mock_runtime):
+    """Without adoption, expected tasks should report TASK_STATE_MISSING.
+
+    The controller maps MISSING to WORKER_FAILED with retry semantics; see
+    issue #5041 for why we never let a worker-reported KILLED survive onto a
+    task the controller didn't itself ask to kill.
+    """
     mock_runtime.discover_containers = Mock(return_value=[])
 
     heartbeat_req = job_pb2.HeartbeatRequest(
@@ -1076,7 +1081,7 @@ def test_heartbeat_without_adoption_reports_worker_failed(mock_worker, mock_runt
     response = mock_worker.handle_heartbeat(heartbeat_req)
 
     assert len(response.tasks) == 1
-    assert response.tasks[0].state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert response.tasks[0].state == job_pb2.TASK_STATE_MISSING
 
 
 def test_stop_preserve_containers_does_not_kill_tasks(mock_worker, mock_runtime):
