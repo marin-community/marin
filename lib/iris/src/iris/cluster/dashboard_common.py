@@ -15,12 +15,31 @@ from pathlib import Path
 from typing import Any
 
 from starlette.applications import Starlette
-from starlette.responses import PlainTextResponse
-from starlette.routing import Mount
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse, Response
+from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Route auth policy annotations
+# ---------------------------------------------------------------------------
+
+_AUTH_POLICY_ATTR = "_auth_policy"
+
+
+def public(fn: Callable) -> Callable:
+    """Mark a route handler as publicly accessible (no auth required)."""
+    setattr(fn, _AUTH_POLICY_ATTR, "public")
+    return fn
+
+
+def requires_auth(fn: Callable) -> Callable:
+    """Mark a route handler as requiring authentication via session cookie or Bearer token."""
+    setattr(fn, _AUTH_POLICY_ATTR, "requires_auth")
+    return fn
 
 
 def on_shutdown(
@@ -113,6 +132,26 @@ def static_files_mount() -> Mount:
     the dashboard dist being present.
     """
     return Mount("/static", app=_LazyStaticFiles(), name="static")
+
+
+@public
+def _favicon(_request: Request) -> Response:
+    dist = _vue_dist_dir()
+    if dist is None:
+        return Response(status_code=404)
+    favicon_path = dist / "favicon.ico"
+    if not favicon_path.exists():
+        return Response(status_code=404)
+    return Response(
+        content=favicon_path.read_bytes(),
+        media_type="image/x-icon",
+        headers={"cache-control": f"public, max-age={STATIC_MAX_AGE_SECONDS}"},
+    )
+
+
+def favicon_route() -> Route:
+    """Route for serving favicon.ico from the Vue dashboard dist root."""
+    return Route("/favicon.ico", _favicon)
 
 
 _NOT_BUILT_HTML = """\
