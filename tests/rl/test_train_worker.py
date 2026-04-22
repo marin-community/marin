@@ -4,7 +4,6 @@
 from types import SimpleNamespace
 
 import pytest
-
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.train_worker import (
