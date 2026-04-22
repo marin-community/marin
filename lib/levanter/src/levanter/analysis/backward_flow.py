@@ -15,6 +15,7 @@ import re
 from typing import Any, Iterable, Literal, Mapping
 
 import jax
+from jax._src.core import Literal as JaxprLiteral
 from jax._src import source_info_util
 import jax.numpy as jnp
 
@@ -1158,13 +1159,4 @@ def _unwrap_jaxpr(jaxpr_like: Any) -> Any:
 
 
 def _is_literal(value: Any) -> bool:
-    literal_type = getattr(jax.core, "Literal", None)
-    if literal_type is not None and isinstance(value, literal_type):
-        return True
-    if type(value).__name__ == "Literal":
-        return True
-    try:
-        hash(value)
-    except TypeError:
-        return True
-    return False
+    return isinstance(value, JaxprLiteral)
