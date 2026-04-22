@@ -6,7 +6,12 @@
 import cloudpickle
 
 import zephyr.subprocess_worker as sw
-from zephyr.execution import ListShard, ShardTask
+from zephyr.execution import (
+    ZEPHYR_STAGE_BYTES_PROCESSED_KEY,
+    ZEPHYR_STAGE_ITEM_COUNT_KEY,
+    ListShard,
+    ShardTask,
+)
 from zephyr.shuffle import MemChunk
 
 
@@ -33,5 +38,5 @@ def test_execute_shard_sets_stage_scoped_output_counters(tmp_path):
     with open(result_file, "rb") as f:
         _result_or_error, counters_out = cloudpickle.load(f)
 
-    assert counters_out[f"zephyr/stage/{stage_name}/item_count"] == 10
-    assert counters_out[f"zephyr/stage/{stage_name}/bytes_processed"] > 0
+    assert counters_out[ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)] == 10
+    assert counters_out[ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)] > 0

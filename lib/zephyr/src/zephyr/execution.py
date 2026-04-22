@@ -61,6 +61,9 @@ logger = logging.getLogger(__name__)
 # unbounded. `_check_worker_group` backstops if workers fully exhaust Iris retries.
 MAX_SHARD_FAILURES = 3
 
+ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/stage/{stage_name}/item_count"
+ZEPHYR_STAGE_BYTES_PROCESSED_KEY = "zephyr/stage/{stage_name}/bytes_processed"
+
 
 class ShardFailureKind(enum.StrEnum):
     """TASK failures count toward MAX_SHARD_FAILURES; INFRA failures (preemption) do not."""
@@ -496,8 +499,8 @@ class ZephyrCoordinator:
         dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
 
         totals = self.get_counters()
-        items = totals.get(f"zephyr/stage/{self._stage_name}/item_count", 0)
-        bytes_processed = totals.get(f"zephyr/stage/{self._stage_name}/bytes_processed", 0)
+        items = totals.get(ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=self._stage_name), 0)
+        bytes_processed = totals.get(ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=self._stage_name), 0)
         elapsed = time.monotonic() - (
             self._stage_monotonic_start if self._stage_monotonic_start is not None else float("inf")
         )
