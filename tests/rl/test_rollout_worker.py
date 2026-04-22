@@ -7,7 +7,11 @@ from types import SimpleNamespace
 import fsspec
 import pytest
 from marin.rl.environments.inference_ctx.staging import stage_vllm_metadata_locally
-from marin.rl.environments.inference_ctx.vllm import VLLMSamplingConfig, vLLMInferenceContextConfig
+from marin.rl.environments.inference_ctx.vllm import (
+    VLLMEngineConfig,
+    VLLMFallbackSamplingConfig,
+    vLLMInferenceContextConfig,
+)
 from marin.rl.rollout_worker import (
     RolloutTracker,
     RolloutTrackerConfig,
@@ -226,22 +230,24 @@ def test_create_inference_context_uses_local_metadata_for_remote_inflight_vllm(m
     ctx = create_inference_context(
         "vllm",
         vLLMInferenceContextConfig(
-            model_name="gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f",
-            canonical_model_name="meta-llama/Llama-3.1-8B-Instruct",
-            max_model_len=2048,
-            tensor_parallel_size=4,
-            gpu_memory_utilization=0.9,
-            kv_cache_metrics=True,
-            sampling_params=VLLMSamplingConfig(),
-            load_format="runai_streamer",
+            engine=VLLMEngineConfig(
+                model_name="gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f",
+                canonical_model_name="meta-llama/Llama-3.1-8B-Instruct",
+                max_model_len=2048,
+                tensor_parallel_size=4,
+                gpu_memory_utilization=0.9,
+                kv_cache_metrics=True,
+                load_format="runai_streamer",
+            ),
+            fallback_sampling=VLLMFallbackSamplingConfig(),
         ),
         inflight_weight_updates=True,
     )
 
     assert isinstance(ctx, _FakeAsyncContext)
-    assert captured["config"].model_name == "/tmp/staged-model"
-    assert captured["config"].load_format == "dummy"
-    assert captured["config"].kv_cache_metrics is True
+    assert captured["config"].engine.model_name == "/tmp/staged-model"
+    assert captured["config"].engine.load_format == "dummy"
+    assert captured["config"].engine.kv_cache_metrics is True
 
 
 @pytest.mark.parametrize(

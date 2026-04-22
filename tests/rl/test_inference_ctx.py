@@ -20,7 +20,8 @@ from marin.rl.environments.inference_ctx import (
     MODEL_TRANSPOSE_KEYS,
     LevanterInferenceContext,
     LevanterInferenceContextConfig,
-    VLLMSamplingConfig,
+    VLLMEngineConfig,
+    VLLMFallbackSamplingConfig,
     vLLMInferenceContext,
     vLLMInferenceContextConfig,
 )
@@ -276,6 +277,28 @@ def _test_levanter_context(tokenizer, dummy_server, client) -> LevanterInference
     return _TestLevanterInferenceContext()
 
 
+def _test_vllm_engine_config(**overrides) -> VLLMEngineConfig:
+    kwargs = {
+        "model_name": "test-model",
+        "max_model_len": 1024,
+        "tensor_parallel_size": 4,
+        "gpu_memory_utilization": 0.9,
+    }
+    kwargs.update(overrides)
+    return VLLMEngineConfig(**kwargs)
+
+
+def _test_vllm_inference_config(
+    *,
+    fallback_sampling: VLLMFallbackSamplingConfig | None = None,
+    **engine_overrides,
+) -> vLLMInferenceContextConfig:
+    return vLLMInferenceContextConfig(
+        engine=_test_vllm_engine_config(**engine_overrides),
+        fallback_sampling=fallback_sampling or VLLMFallbackSamplingConfig(),
+    )
+
+
 def test_levanter_batch_completions_forwards_seed(gpt2_tokenizer, dummy_server):
     choice = create_choice_with_logprobs(gpt2_tokenizer, "hello")
     mock_client = AsyncMock()
@@ -459,12 +482,8 @@ def test_vllm_resolve_decoding_includes_sampling_fallbacks(monkeypatch):
     )
 
     ctx = vLLMInferenceContext(
-        vLLMInferenceContextConfig(
-            model_name="test-model",
-            max_model_len=1024,
-            tensor_parallel_size=4,
-            gpu_memory_utilization=0.9,
-            sampling_params=VLLMSamplingConfig(top_k=16, stop=["<stop>"]),
+        _test_vllm_inference_config(
+            fallback_sampling=VLLMFallbackSamplingConfig(top_k=16, stop_strings=["<stop>"]),
         )
     )
 
@@ -556,12 +575,8 @@ def test_vllm_sampling_params_maps_shared_decoding_fields(monkeypatch):
     )
 
     ctx = vLLMInferenceContext(
-        vLLMInferenceContextConfig(
-            model_name="test-model",
-            max_model_len=1024,
-            tensor_parallel_size=4,
-            gpu_memory_utilization=0.9,
-            sampling_params=VLLMSamplingConfig(include_stop_str_in_output=True),
+        _test_vllm_inference_config(
+            fallback_sampling=VLLMFallbackSamplingConfig(include_stop_str_in_output=True),
             mode=InferenceMode.ASYNC,
         )
     )
@@ -633,15 +648,7 @@ def test_vllm_sampling_params_passes_stop_token_ids_when_supported(monkeypatch):
         staticmethod(lambda _model_name, _tokenizer: SimpleNamespace(build_generation_prompt=lambda _messages: [])),
     )
 
-    ctx = vLLMInferenceContext(
-        vLLMInferenceContextConfig(
-            model_name="test-model",
-            max_model_len=1024,
-            tensor_parallel_size=4,
-            gpu_memory_utilization=0.9,
-            sampling_params=VLLMSamplingConfig(),
-        )
-    )
+    ctx = vLLMInferenceContext(_test_vllm_inference_config())
 
     sampling_params = ctx._sampling_params_from_decoding(
         DecodingConfig(temperature=1.0, stop_token_ids=[7, 8]),
@@ -673,15 +680,7 @@ def test_vllm_sampling_params_rejects_stop_token_ids_when_unsupported(monkeypatc
         staticmethod(lambda _model_name, _tokenizer: SimpleNamespace(build_generation_prompt=lambda _messages: [])),
     )
 
-    ctx = vLLMInferenceContext(
-        vLLMInferenceContextConfig(
-            model_name="test-model",
-            max_model_len=1024,
-            tensor_parallel_size=4,
-            gpu_memory_utilization=0.9,
-            sampling_params=VLLMSamplingConfig(),
-        )
-    )
+    ctx = vLLMInferenceContext(_test_vllm_inference_config())
 
     with pytest.raises(ValueError, match="does not support stop_token_ids"):
         ctx._sampling_params_from_decoding(DecodingConfig(temperature=1.0, stop_token_ids=[7]), n=1)
@@ -704,13 +703,9 @@ def test_vllm_inference_context_uses_canonical_model_name(monkeypatch):
     )
 
     ctx = vLLMInferenceContext(
-        vLLMInferenceContextConfig(
+        _test_vllm_inference_config(
             model_name="gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f",
             canonical_model_name="meta-llama/Llama-3.1-8B-Instruct",
-            max_model_len=1024,
-            tensor_parallel_size=4,
-            gpu_memory_utilization=0.9,
-            sampling_params=VLLMSamplingConfig(),
         )
     )
 
@@ -729,14 +724,7 @@ def test_vllm_sync_engine_receives_kv_cache_metrics_flag(monkeypatch):
     monkeypatch.setattr(vLLMInferenceContext, "_patch_tpu_inference_registry", staticmethod(lambda: None))
     monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.LLM", _FakeLLM)
 
-    config = vLLMInferenceContextConfig(
-        model_name="test-model",
-        max_model_len=1024,
-        tensor_parallel_size=2,
-        gpu_memory_utilization=0.9,
-        sampling_params=VLLMSamplingConfig(),
-        kv_cache_metrics=True,
-    )
+    config = _test_vllm_engine_config(tensor_parallel_size=2, kv_cache_metrics=True)
 
     vLLMInferenceContext._get_llm_engine(config)
 
@@ -754,14 +742,7 @@ def test_vllm_sync_engine_receives_engine_seed(monkeypatch):
     monkeypatch.setattr(vLLMInferenceContext, "_patch_tpu_inference_registry", staticmethod(lambda: None))
     monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.LLM", _FakeLLM)
 
-    config = vLLMInferenceContextConfig(
-        model_name="test-model",
-        max_model_len=1024,
-        tensor_parallel_size=2,
-        gpu_memory_utilization=0.9,
-        sampling_params=VLLMSamplingConfig(),
-        seed=1234,
-    )
+    config = _test_vllm_engine_config(tensor_parallel_size=2, seed=1234)
 
     vLLMInferenceContext._get_llm_engine(config)
 
@@ -778,12 +759,8 @@ def test_vllm_async_engine_receives_kv_cache_metrics_flag(monkeypatch):
     monkeypatch.setattr(vLLMInferenceContext, "_patch_tpu_inference_registry", staticmethod(lambda: None))
     monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.SyncVLLMWrapper", _FakeSyncVLLMWrapper)
 
-    config = vLLMInferenceContextConfig(
-        model_name="test-model",
-        max_model_len=1024,
+    config = _test_vllm_engine_config(
         tensor_parallel_size=2,
-        gpu_memory_utilization=0.9,
-        sampling_params=VLLMSamplingConfig(),
         mode=InferenceMode.ASYNC,
         kv_cache_metrics=True,
     )
@@ -804,15 +781,7 @@ def test_vllm_async_engine_receives_engine_seed(monkeypatch):
     monkeypatch.setattr(vLLMInferenceContext, "_patch_tpu_inference_registry", staticmethod(lambda: None))
     monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.SyncVLLMWrapper", _FakeSyncVLLMWrapper)
 
-    config = vLLMInferenceContextConfig(
-        model_name="test-model",
-        max_model_len=1024,
-        tensor_parallel_size=2,
-        gpu_memory_utilization=0.9,
-        sampling_params=VLLMSamplingConfig(),
-        mode=InferenceMode.ASYNC,
-        seed=1234,
-    )
+    config = _test_vllm_engine_config(tensor_parallel_size=2, mode=InferenceMode.ASYNC, seed=1234)
 
     vLLMInferenceContext._get_llm_engine(config)
 
