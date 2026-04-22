@@ -207,6 +207,12 @@ def task_updates_from_proto(entries) -> list[TaskUpdate]:
         if new_state == job_pb2.TASK_STATE_MISSING:
             new_state = job_pb2.TASK_STATE_WORKER_FAILED
             error = error or "Worker reported task as missing"
+            logger.info(
+                "Translating worker-reported MISSING to WORKER_FAILED for task %s attempt %d: %s",
+                entry.task_id,
+                entry.attempt_id,
+                error,
+            )
         updates.append(
             TaskUpdate(
                 task_id=JobName.from_wire(entry.task_id),

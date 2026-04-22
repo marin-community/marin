@@ -853,6 +853,11 @@ class Worker:
             expected_keys.add(key)
             task = self._tasks.get(key)
             if task is None:
+                logger.warning(
+                    "Reporting TASK_STATE_MISSING for expected task %s attempt %d (not found on worker)",
+                    task_id,
+                    expected_attempt_id,
+                )
                 tasks.append(self._missing_task_status(task_id, expected_attempt_id, "Task not found on worker"))
             else:
                 tasks.append(self._encode_task_status(task, task_id))
