@@ -5,6 +5,7 @@ import json
 
 from fray.cluster import ResourceConfig
 from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
+from levanter.data.sharded_datasource import ShardedDataSource
 from levanter.data.text import TraceChatEvaluationFormat
 from levanter.data.text import HfDatasetSourceConfig
 from levanter.data.text import UrlDatasetSourceConfig
@@ -15,6 +16,7 @@ from levanter.tokenizers import load_tokenizer
 from marin.evaluation import trace_masked_eval as trace_masked_eval_module
 from marin.evaluation.trace_masked_eval import (
     DEFAULT_TRACE_MASKED_EVAL_WANDB_PROJECT,
+    FirstRowsShardedDataSource,
     TraceMaskedEvalConfig,
     TraceRowAdapterConfig,
     TraceMaskedEvalDatasetConfig,
@@ -28,6 +30,25 @@ from marin.evaluation.trace_masked_eval import (
     _write_results,
     default_trace_masked_eval,
 )
+
+
+class FailingAfterLimitSource(ShardedDataSource[int]):
+    def __init__(self):
+        self.rows_read = 0
+
+    @property
+    def shard_names(self):
+        return ["data"]
+
+    def open_shard_at_row(self, shard_name: str, row: int):
+        if shard_name != "data":
+            raise ValueError(f"Unknown shard {shard_name!r}")
+
+        for value in range(row, 3):
+            if value >= 2:
+                raise RuntimeError("read past requested rows")
+            self.rows_read += 1
+            yield value
 
 
 def test_default_trace_masked_eval_configures_wandb_and_json_trackers():
@@ -69,6 +90,14 @@ def test_default_trace_masked_eval_configures_wandb_and_json_trackers():
     assert wandb_tracker.name == "trace-smoke"
     assert wandb_tracker.tags == ["trace_masked_eval", "unit-test"]
     assert wandb_tracker.group == "trace-evals"
+
+
+def test_first_rows_source_does_not_pull_one_extra_row():
+    source = FailingAfterLimitSource()
+    limited_source = FirstRowsShardedDataSource(source, max_rows=2)
+
+    assert list(limited_source.open_shard("data")) == [0, 1]
+    assert source.rows_read == 2
 
 
 def test_llama_template_preserves_empty_tool_call_messages_and_tool_call_content():

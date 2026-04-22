@@ -140,11 +140,13 @@ class FirstRowsShardedDataSource(ShardedDataSource[T]):
 
         emitted = 0
         for item in self.source:
-            if emitted >= self.max_rows:
-                break
             if emitted >= row:
+                emitted += 1
                 yield item
-            emitted += 1
+                if emitted >= self.max_rows:
+                    return
+            else:
+                emitted += 1
 
 
 def _lookup_field(row: Mapping[str, Any], field_path: str) -> Any:
