@@ -55,6 +55,7 @@ from experiments.grug.base.model import GrugModelConfig, Transformer
 logger = logging.getLogger(__name__)
 _BACKWARD_FLOW_METRICS_KEY = "_backward_flow"
 _BACKWARD_FLOW_BASELINE_DURATION_EMA_ALPHA = 0.1
+_BACKWARD_FLOW_DEFAULT_INTERVAL = 50
 
 
 @dataclass(frozen=True)
@@ -67,7 +68,9 @@ class GrugTrainerConfig:
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
-    backward_flow: BackwardFlowConfig = field(default_factory=BackwardFlowConfig)
+    backward_flow: BackwardFlowConfig = field(
+        default_factory=lambda: BackwardFlowConfig(interval=_BACKWARD_FLOW_DEFAULT_INTERVAL)
+    )
 
 
 @dataclass(frozen=True)

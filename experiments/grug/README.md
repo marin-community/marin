@@ -100,7 +100,7 @@ Useful flags:
 - Training/eval metrics: tracker backend (default W&B).
 - Checkpoints: `<output_path>/checkpoints`.
 - Profiler traces (if enabled): `<trainer.log_dir>/<run_id>/profiler`.
-- Backward-flow artifacts (if enabled): `<trainer.log_dir>/<run_id>/artifacts/backward_flow`, plus `backward_flow/dag` as native HTML media in W&B.
+- Backward-flow artifacts: `<trainer.log_dir>/<run_id>/artifacts/backward_flow`, plus `backward_flow/dag` as native HTML media in W&B. Base Grug samples every 50 steps by default; set `trainer.backward_flow.interval=0` to disable.
 - Executor step outputs: `this_output_path()` root for the step.
 
 ## Logged metrics

@@ -106,8 +106,11 @@ that stream.
 
 ### 4) Sampled train-step path
 
-`experiments/grug/base/train.py:58-68` adds `BackwardFlowConfig(interval=0)` to the
-trainer config. `interval=0` keeps the feature disabled by default.
+`experiments/grug/base/train.py:58-68` adds a `BackwardFlowConfig` field to the
+trainer config. The reusable `BackwardFlowConfig()` default remains disabled with
+`interval=0`, but base Grug chooses `interval=50` so important runs get sampled
+backward-flow artifacts without extra launch wiring. Set `interval=0` in a run config to
+disable it.
 
 When `compute_backward_flow` is true, the jitted train step in
 `experiments/grug/base/train.py:330-396` runs `jax.value_and_grad(...)` inside both:
@@ -152,12 +155,12 @@ edges, inter-block flow, and block plates. Grug calls that reusable inference in
 `experiments/grug/base/train.py`, so the template only needs stable named scopes and
 unobtrusive activation markers. Nodes are colored by scaled backward-gradient RMS when it
 is available, falling back to raw gradient RMS otherwise. Raw gradient RMS and norms
-remain in the table for shape-aware debugging.
+remain available in scalar metrics and node labels for shape-aware debugging.
 
 ## Implementation Outline
 
 1. Add reusable backward-flow context, marker, graph extraction, collapse, and HTML rendering in `levanter.analysis`
-2. Add a minimal `BackwardFlowConfig` to Grug trainer config, default off
+2. Add a minimal `BackwardFlowConfig` to Grug trainer config, defaulting base Grug to 50-step sampling
 3. Mark Grug module outputs and add per-layer block scopes in the transformer loop
 4. Sample the backward-flow path in `_make_train_step(...)` and emit HTML artifacts from the outer train loop
 5. Test name normalization, activation/gradient metric capture, checkpointed graph extraction, graph collapse, residual-stream hint inference, and HTML rendering

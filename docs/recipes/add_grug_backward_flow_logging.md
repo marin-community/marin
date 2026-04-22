@@ -22,8 +22,8 @@ adding a new shared Grug framework layer.
 
 ## 1) Add the config knob
 
-Expose `BackwardFlowConfig` from the variant's trainer config and keep it disabled by
-default:
+Expose `BackwardFlowConfig` from the variant's trainer config and choose the sampling
+policy there. Base Grug samples every 50 steps by default:
 
 ```python
 from levanter.analysis.backward_flow import BackwardFlowConfig
@@ -31,11 +31,11 @@ from levanter.analysis.backward_flow import BackwardFlowConfig
 @dataclass(frozen=True)
 class GrugTrainerConfig:
     ...
-    backward_flow: BackwardFlowConfig = field(default_factory=BackwardFlowConfig)
+    backward_flow: BackwardFlowConfig = field(default_factory=lambda: BackwardFlowConfig(interval=50))
 ```
 
-`interval=0` disables the feature. Set a positive interval only when you actually want
-to sample it.
+The reusable `BackwardFlowConfig()` default is still disabled with `interval=0`; use that
+explicitly when a variant should opt out. Positive intervals sample that often.
 
 ## 2) Mark module outputs
 
