@@ -30,7 +30,7 @@ from levanter.analysis.perplexity_gap import (
     tokenize_text_with_byte_spans,
     write_report_files,
 )
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.data.text import DatasetComponent
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
@@ -265,7 +265,8 @@ def _load_model_runner(
     else:
         with use_cpu_device():
             model = eqx.filter_eval_shape(spec.model.build, Vocab, key=key)
-            model = load_checkpoint(model, spec.checkpoint_path, subpath="model")
+            checkpoint_path = latest_checkpoint_path(spec.checkpoint_path)
+            model = load_checkpoint(model, checkpoint_path, subpath="model")
         model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
 
     label = _model_label(spec)
