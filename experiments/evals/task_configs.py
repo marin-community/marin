@@ -81,6 +81,89 @@ BASE_GENERATION_TASKS = (
     EvalTaskConfig(name="triviaqa", num_fewshot=0, task_alias="triviaqa"),
 )
 
+
+def finepdf_extractive_qa_task(*, context_len: int, manifest_path: str, max_gen_toks: int = 64) -> EvalTaskConfig:
+    context_len_k = context_len // 1024
+    return EvalTaskConfig(
+        name=f"finepdf_extractive_qa_{context_len_k}k",
+        num_fewshot=0,
+        task_kwargs={
+            "family": "finepdf_qa",
+            "context_len": context_len,
+            "manifest_path": manifest_path,
+            "max_gen_toks": max_gen_toks,
+        },
+    )
+
+
+LONG_CONTEXT_TASKS_BY_LENGTH = {
+    4096: (
+        EvalTaskConfig(
+            name="passkey_4k",
+            num_fewshot=0,
+            task_kwargs={"family": "passkey", "context_len": 4096, "num_examples": 128, "seed": 0, "max_gen_toks": 16},
+        ),
+        EvalTaskConfig(
+            name="kv_retrieval_4k",
+            num_fewshot=0,
+            task_kwargs={"family": "kv", "context_len": 4096, "num_examples": 128, "seed": 0, "max_gen_toks": 16},
+        ),
+    ),
+    16384: (
+        EvalTaskConfig(
+            name="passkey_16k",
+            num_fewshot=0,
+            task_kwargs={"family": "passkey", "context_len": 16384, "num_examples": 128, "seed": 0, "max_gen_toks": 16},
+        ),
+        EvalTaskConfig(
+            name="kv_retrieval_16k",
+            num_fewshot=0,
+            task_kwargs={"family": "kv", "context_len": 16384, "num_examples": 128, "seed": 0, "max_gen_toks": 16},
+        ),
+    ),
+    32768: (
+        EvalTaskConfig(
+            name="passkey_32k",
+            num_fewshot=0,
+            task_kwargs={"family": "passkey", "context_len": 32768, "num_examples": 128, "seed": 0, "max_gen_toks": 16},
+        ),
+        EvalTaskConfig(
+            name="kv_retrieval_32k",
+            num_fewshot=0,
+            task_kwargs={"family": "kv", "context_len": 32768, "num_examples": 128, "seed": 0, "max_gen_toks": 16},
+        ),
+    ),
+    65536: (
+        EvalTaskConfig(
+            name="passkey_64k",
+            num_fewshot=0,
+            task_kwargs={"family": "passkey", "context_len": 65536, "num_examples": 128, "seed": 0, "max_gen_toks": 16},
+        ),
+        EvalTaskConfig(
+            name="kv_retrieval_64k",
+            num_fewshot=0,
+            task_kwargs={"family": "kv", "context_len": 65536, "num_examples": 128, "seed": 0, "max_gen_toks": 16},
+        ),
+    ),
+}
+
+
+def long_context_tasks_for_lengths(
+    lengths: Sequence[int],
+    *,
+    finepdf_manifest_path: str | None = None,
+) -> tuple[EvalTaskConfig, ...]:
+    tasks: list[EvalTaskConfig] = []
+    for length in lengths:
+        if length not in LONG_CONTEXT_TASKS_BY_LENGTH:
+            raise KeyError(f"Unsupported long-context length: {length}")
+        tasks.extend(LONG_CONTEXT_TASKS_BY_LENGTH[length])
+        if finepdf_manifest_path is not None:
+            tasks.append(finepdf_extractive_qa_task(context_len=length, manifest_path=finepdf_manifest_path))
+
+    return tuple(tasks)
+
+
 # Settings are chosen to compare to Olmo2
 KEY_GENERATION_TASKS = (
     EvalTaskConfig(name="ifeval", num_fewshot=0),
