@@ -11,6 +11,10 @@ ferry's normalize step needs to preserve provenance.
 from dataclasses import dataclass
 from functools import cache
 
+from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.normalize import normalize_step as _normalize_step
+from marin.execution.step_spec import StepSpec
+
 
 @dataclass(frozen=True)
 class DatakitSource:
@@ -75,6 +79,58 @@ class DatakitSource:
     Used as the initial per-source mixing weight. ``None`` means unknown —
     replace with a measured value from the tokenize step's stats later.
     """
+
+    def download_step(self) -> StepSpec:
+        """Build the canonical HF download ``StepSpec`` for this source.
+
+        Output lands at ``staged_path`` if set, else the executor's computed
+        path. Raises :class:`ValueError` if ``revision`` is unset or
+        ``hf_dataset_id`` is empty — sources with ``revision=None`` or
+        API-sourced entries (``nsf_awards``) need bespoke wiring. Filter via
+        :func:`pinned_sources` to stay inside the set this method handles.
+        """
+        if not self.hf_dataset_id:
+            raise ValueError(f"{self.name}: cannot build download_step without an hf_dataset_id")
+        if self.revision is None:
+            raise ValueError(f"{self.name}: cannot build download_step for unpinned source (revision=None)")
+        base = self.hf_dataset_id.replace("/", "__")
+        # Some HF repos stage each subset under a distinct override_output_path
+        # (e.g. bigcode/StarCoder2-Extras/{ir_cpp,documentation,...}). Append
+        # the last segment of staged_path when it disambiguates, so same-repo
+        # different-staging sources produce distinct StepSpec names.
+        name = f"raw/{base}"
+        if self.staged_path:
+            tail = self.staged_path.rstrip("/").rsplit("/", 1)[-1]
+            if tail and tail != base:
+                name = f"{name}__{tail}"
+        return download_hf_step(
+            name,
+            hf_dataset_id=self.hf_dataset_id,
+            revision=self.revision,
+            hf_urls_glob=list(self.hf_urls_glob) if self.hf_urls_glob else None,
+            override_output_path=self.staged_path,
+        )
+
+    def normalize_step(self, download: StepSpec | None = None) -> StepSpec:
+        """Build the canonical ``normalize`` ``StepSpec`` for this source.
+
+        Output lands at ``$MARIN_PREFIX/normalized/<name>-<hash>/`` — a
+        run-independent artifact any downstream consumer can reference. If
+        ``download`` is omitted, ``download_step()`` is called to construct a
+        fresh one; callers composing a DAG with a shared family download
+        should pass it in explicitly so normalize depends on the same
+        ``StepSpec`` the rest of the graph uses.
+        """
+        dl = download if download is not None else self.download_step()
+        input_path = f"{dl.output_path}/{self.data_subdir}" if self.data_subdir else dl.output_path
+        return _normalize_step(
+            name=f"normalized/{self.name}",
+            download=dl,
+            text_field=self.text_field,
+            id_field=self.id_field,
+            input_path=input_path,
+            file_extensions=self.file_extensions,
+        )
 
 
 @cache
