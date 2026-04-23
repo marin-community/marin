@@ -12,19 +12,11 @@ We have several clusters for Marin, each with a different TPU type:
 
 
 
-## Ray
+## Cluster Infrastructure
 
-[Ray](https://docs.ray.io/en/latest/cluster/running-applications/job-submission/index.html) provides the underlying
-cluster infrastructure for Marin. We use Ray for:
-- **Cluster management**: Autoscaling, node provisioning, job scheduling
-- **Training**: Distributed model training via Levanter
-- **Inference**: GPU/TPU actor pools for model serving
-
-For **data processing** (downloads, transforms, deduplication), we use Zephyr instead of raw Ray.
-
-**Useful Documentation**:
-- [Ray Cluster](https://docs.ray.io/en/latest/cluster/key-concepts.html): Cluster architecture and key concepts
-- [Ray on GCP](https://docs.ray.io/en/latest/cluster/vms/user-guides/launching-clusters/gcp.html): GCP-specific deployment
+Marin clusters run on [Iris](../lib/iris/README.md) for orchestration (job/task
+scheduling, node provisioning), fray for distributed execution (Iris-backed),
+and [zephyr](../lib/zephyr/README.md) for data pipelines.
 
 ## Preemptibility
 

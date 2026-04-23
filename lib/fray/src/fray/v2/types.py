@@ -409,8 +409,8 @@ class ActorConfig:
     """Actor lifecycle and scheduling policy (not physical resources).
 
     `max_concurrency` controls how many method calls can run in parallel on
-    the actor (Ray's max_concurrency). Use >1 for actors that need to handle
-    concurrent calls, e.g. coordinators that block while workers call back.
+    the actor. Use >1 for actors that need to handle concurrent calls, e.g.
+    coordinators that block while workers call back.
 
     `max_restarts` overrides the backend default for automatic actor restarts.
     Set to 0 for actors that must NOT auto-restart on preemption because they
@@ -418,12 +418,10 @@ class ActorConfig:
 
     `max_task_retries` controls how many times a failed task (or actor
     initialisation) is retried before being marked as permanently failed.
-    Maps to Ray's ``max_task_retries`` and Iris's ``max_retries_failure``.
+    Maps to Iris's ``max_retries_failure``.
     """
 
     max_concurrency: int = 1
-    # TODO: max_restarts is conceptually a job-level property, revisit when we
-    # drop Ray support.
     max_restarts: int | None = None
     max_task_retries: int | None = None
 
