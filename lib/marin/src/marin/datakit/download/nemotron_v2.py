@@ -153,3 +153,19 @@ def normalize_nemotron_v2_step(download: StepSpec, *, family: str, subset: str) 
         file_extensions=(".parquet",),
         input_path=f"{download.output_path}/{subset_dir}",
     )
+
+
+def nemotron_v2_normalize_steps(family: str) -> dict[str, tuple[StepSpec, ...]]:
+    """Full ``(download, normalize)`` chain per subset of a Nemotron v2 family.
+
+    One download step is shared across every subset; each subset gets its own
+    normalize step parameterized by the subset glob's directory prefix.
+    Returns ``{marin_name: (download, normalize)}`` where marin_name is
+    ``f"{family}/{subset}"`` — matching the ``DatakitSource.name`` convention.
+    """
+    info = NEMOTRON_V2_DATASETS[family]
+    download = download_nemotron_v2_step(family)
+    return {
+        f"{family}/{subset}": (download, normalize_nemotron_v2_step(download, family=family, subset=subset))
+        for subset in info.subsets
+    }
