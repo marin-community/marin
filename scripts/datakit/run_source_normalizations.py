@@ -30,14 +30,25 @@ STAGING_PREFIX = "gs://marin-us-central1"
 def main() -> None:
     os.environ["MARIN_PREFIX"] = STAGING_PREFIX
 
+    # Walk each source's chain AND its transitive deps — e.g. coderforge's
+    # ``processed`` step depends on a hidden ``raw_download`` that isn't in
+    # ``normalize_steps``. Without it in the iterable, StepRunner's dep-
+    # satisfaction loop leaves ``processed`` in ``waiting`` forever and the
+    # run dies with "Iterable exhausted with unsatisfied dependencies".
     seen: set[str] = set()
     steps: list = []
+
+    def visit(step):
+        if step.output_path in seen:
+            return
+        for dep in step.deps:
+            visit(dep)
+        seen.add(step.output_path)
+        steps.append(step)
+
     for src in all_sources().values():
         for step in src.normalize_steps:
-            if step.output_path in seen:
-                continue
-            seen.add(step.output_path)
-            steps.append(step)
+            visit(step)
 
     logger.info("Running %d unique StepSpecs across %d sources", len(steps), len(all_sources()))
     StepRunner().run(steps)
