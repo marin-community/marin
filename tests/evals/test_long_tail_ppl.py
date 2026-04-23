@@ -11,7 +11,9 @@ from experiments.evals.long_tail_ppl import (
     long_tail_raw_validation_sets,
     render_long_tail_ppl_registry_markdown,
 )
+from experiments.defaults import default_raw_validation_sets
 from levanter.data.text import HfDatasetSourceConfig
+from levanter.data.text import UrlDatasetSourceConfig
 from marin.evaluation.perplexity_gap import _to_dataset_component, raw_text_dataset
 from marin.processing.tokenize import HfDatasetSpec
 
@@ -93,6 +95,27 @@ def test_diagnostic_logs_slices_excluded_from_unfiltered_default_root():
     assert "long_tail_ppl/diagnostic_logs/ghalogs" in all_datasets
     assert all(key.startswith("long_tail_ppl/diagnostic_logs/") for key in diagnostic_only)
     assert len(diagnostic_only) >= 3
+
+
+def test_diagnostic_logs_are_opt_in_and_not_added_to_default_validation_bundles():
+    default_validation_sets = default_raw_validation_sets()
+    assert all(not key.startswith("long_tail_ppl/diagnostic_logs/") for key in default_validation_sets)
+
+
+def test_diagnostic_logs_convert_to_gap_finder_dataset_components():
+    datasets = long_tail_raw_validation_sets(
+        raw_root="gs://example-bucket/raw/long_tail",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+    )
+
+    apache_component = _to_dataset_component(datasets["long_tail_ppl/diagnostic_logs/loghub_apache"])
+
+    assert isinstance(apache_component.source, UrlDatasetSourceConfig)
+    assert apache_component.source.validation_urls == [
+        "gs://example-bucket/raw/long_tail/diagnostic_logs/loghub/apache.jsonl.gz"
+    ]
+    assert apache_component.split == "validation"
+    assert apache_component.tags == ["long_tail_ppl", "epic:5005", f"issue:{DIAGNOSTIC_LOGS_ISSUE}", "diagnostic_logs"]
 
 
 def test_diagnostic_logs_registry_markdown_includes_issue_link():
