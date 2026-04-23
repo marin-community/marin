@@ -45,8 +45,11 @@ from experiments.evals.gh_archive_structured_output import (
     gh_archive_structured_output_raw_validation_sets,
 )
 from experiments.evals.paired_robustness_ppl import (
+    ALL_PAIRED_TEXT_VIEWS,
     PAIRED_ROBUSTNESS_SLICES,
-    paired_robustness_raw_steps,
+    PairedRobustnessMaterializeConfig,
+    PairedRobustnessSlice,
+    linearized_text_views_for_example,
     paired_robustness_raw_validation_sets,
 )
 from experiments.exp5095_diff_patch_ppl import (
@@ -130,6 +133,39 @@ class DiffPatchRawConfig:
     output_path: str = field(default_factory=this_output_path)  # type: ignore[arg-type]
     swe_bench_max_rows: int = MAX_DOCS_PER_DATASET
     commitpack_max_rows: int = MAX_DOCS_PER_DATASET
+
+
+def materialize_paired_robustness_slice_for_gap_run(config: PairedRobustnessMaterializeConfig) -> None:
+    slice_ = _paired_slice_from_config(config)
+    dataset = load_dataset(
+        path=config.hf_dataset_id,
+        name=config.hf_dataset_name,
+        split=config.split,
+        streaming=config.hf_dataset_id != "Muennighoff/flores200",
+        trust_remote_code=config.trust_remote_code,
+    )
+
+    buffers = {view: [] for view in ALL_PAIRED_TEXT_VIEWS}
+    kept_pairs = 0
+
+    for example in dataset:
+        views = linearized_text_views_for_example(slice_, example)
+        if views is None:
+            continue
+        kept_pairs += 1
+        for view, text in views.items():
+            buffers[view].append({"text": text})
+        if kept_pairs >= config.max_pairs:
+            break
+
+    if kept_pairs == 0:
+        raise ValueError(f"Slice {config.name}/{config.split} produced zero paired examples.")
+
+    for view, records in buffers.items():
+        _write_jsonl_records(
+            posixpath.join(config.output_path, view.value, "shard-00000.jsonl.gz"),
+            records,
+        )
 
 
 def materialize_diagnostic_log_url_samples(config: DiagnosticLogUrlSampleConfig) -> None:
@@ -303,6 +339,81 @@ def _commitpack_diff_row(row: Mapping[str, object]) -> dict[str, object]:
     }
 
 
+def _paired_slice_for_gap_run(slice_: PairedRobustnessSlice) -> PairedRobustnessSlice:
+    capped_slice = replace(slice_, max_pairs=min(slice_.max_pairs, MAX_DOCS_PER_DATASET))
+    if slice_.hf_dataset_id != "facebook/flores":
+        return capped_slice
+    return replace(
+        capped_slice,
+        source_url="https://huggingface.co/datasets/Muennighoff/flores200",
+        hf_dataset_id="Muennighoff/flores200",
+        trust_remote_code=True,
+    )
+
+
+def _paired_materialize_config(slice_: PairedRobustnessSlice) -> PairedRobustnessMaterializeConfig:
+    return PairedRobustnessMaterializeConfig(
+        name=slice_.name,
+        family=slice_.family,
+        source_url=slice_.source_url,
+        hf_dataset_id=slice_.hf_dataset_id,
+        hf_dataset_name=slice_.hf_dataset_name,
+        split=slice_.split,
+        source_field=slice_.source_field,
+        target_field=slice_.target_field,
+        source_label=slice_.source_label,
+        target_label=slice_.target_label,
+        max_pairs=slice_.max_pairs,
+        trust_remote_code=slice_.trust_remote_code,
+        label_field=slice_.label_field,
+        required_label=slice_.required_label,
+        notes=slice_.notes,
+    )
+
+
+def _paired_slice_from_config(config: PairedRobustnessMaterializeConfig) -> PairedRobustnessSlice:
+    return PairedRobustnessSlice(
+        name=config.name,
+        family=config.family,
+        source_url=config.source_url,
+        hf_dataset_id=config.hf_dataset_id,
+        hf_dataset_name=config.hf_dataset_name,
+        split=config.split,
+        source_field=config.source_field,
+        target_field=config.target_field,
+        source_label=config.source_label,
+        target_label=config.target_label,
+        max_pairs=config.max_pairs,
+        trust_remote_code=config.trust_remote_code,
+        label_field=config.label_field,
+        required_label=config.required_label,
+        notes=config.notes,
+    )
+
+
+def _paired_robustness_raw_steps_for_gap_run(
+    slices: Sequence[PairedRobustnessSlice],
+) -> dict[str, ExecutorStep]:
+    steps: dict[str, ExecutorStep] = {}
+    for slice_ in slices:
+        steps[slice_.raw_step_key] = ExecutorStep(
+            name=posixpath.join(
+                "raw/evals/issue5005/paired_robustness_marin32_qwen3_sample",
+                slice_.family.value,
+                slice_.name,
+                slice_.split,
+            ),
+            description=f"Materialize capped paired robustness eval records for {slice_.name}/{slice_.split}.",
+            fn=remote(
+                materialize_paired_robustness_slice_for_gap_run,
+                resources=CPU_MATERIALIZE_RESOURCES,
+                pip_dependency_groups=["cpu"],
+            ),
+            config=_paired_materialize_config(slice_),
+        )
+    return steps
+
+
 def _report_step(
     *,
     bundle_name: str,
@@ -357,14 +468,8 @@ ASR_OCR_RAW = ExecutorStep(
     config=NoisyAsrOcrRawConfig(max_rows_per_slice_override=MAX_DOCS_PER_DATASET),
 )
 
-PAIRED_ROBUSTNESS_CAPPED_SLICES = tuple(
-    replace(slice_, max_pairs=min(slice_.max_pairs, MAX_DOCS_PER_DATASET)) for slice_ in PAIRED_ROBUSTNESS_SLICES
-)
-PAIRED_ROBUSTNESS_RAW_STEPS = paired_robustness_raw_steps(
-    slices=PAIRED_ROBUSTNESS_CAPPED_SLICES,
-    name_prefix="raw/evals/issue5005/paired_robustness_marin32_qwen3_sample",
-    resources=CPU_MATERIALIZE_RESOURCES,
-)
+PAIRED_ROBUSTNESS_CAPPED_SLICES = tuple(_paired_slice_for_gap_run(slice_) for slice_ in PAIRED_ROBUSTNESS_SLICES)
+PAIRED_ROBUSTNESS_RAW_STEPS = _paired_robustness_raw_steps_for_gap_run(PAIRED_ROBUSTNESS_CAPPED_SLICES)
 
 GH_ARCHIVE_RAW = make_gh_archive_step(
     name="raw/evals/issue5005/gh_archive_structured_output_marin32_qwen3_sample",
