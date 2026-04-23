@@ -163,7 +163,10 @@ def _bucket_hash(value: str) -> str:
 
 
 def _bucket_url(value: str) -> str:
-    parsed = urlsplit(value)
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return "<URL>"
     if not parsed.scheme or not parsed.netloc:
         return value
 

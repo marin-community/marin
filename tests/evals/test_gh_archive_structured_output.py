@@ -33,6 +33,7 @@ def _event(
             "comment": {
                 "id": 112233445566,
                 "html_url": "https://api.github.com/repos/marin-community/marin/issues/comments/112233445566",
+                "malformed_url": "https://[hsjobeki] /not-a-valid-url",
             },
         },
     }
@@ -95,6 +96,7 @@ def test_download_gh_archive_events_filters_masks_and_serializes(tmp_path: Path)
     assert push_payload["payload"]["after"] == "<SHA_40>"
     assert push_payload["payload"]["before"] == "<SHA_40>"
     assert push_payload["payload"]["comment"]["html_url"].endswith("/issues/comments/<INT_12>")
+    assert push_payload["payload"]["comment"]["malformed_url"] == "<URL>"
     assert push_payload["repo"]["id"] == "<INT_10>"
     assert push_payload["created_at"] == "<DATE:2024-02-01>"
     assert push_text == json.dumps(push_payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
