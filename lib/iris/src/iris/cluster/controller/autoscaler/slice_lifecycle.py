@@ -1,19 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Slice lifecycle state machine: pure transition table and event mapping.
+"""Slice lifecycle state machine: typed events, table of transitions, variant outcomes.
 
-This module owns only the data — the discrete state transitions and the
-helper that maps a CloudSliceState observation to a SliceEvent. Dispatch
-logic and cross-machine cascades (e.g., short-lived failure → group backoff)
-live on ScalingGroup, which can mutate slice and group state atomically
-under a single lock.
+Events are discriminated-union dataclasses carrying the exact payload each
+transition needs; there is no untyped context dict at the API boundary.
+Cross-machine cascades (short-lived failure → group backoff) live on
+ScalingGroup, which holds _slices_lock across both the slice mutation and
+the group failure accounting so the two stay consistent.
 """
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from enum import StrEnum
-from typing import NamedTuple
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import ClassVar
 
 from iris.cluster.controller.autoscaler.models import SliceLifecycleState
 from iris.cluster.providers.types import CloudSliceState, RemoteWorkerHandle, SliceHandle
@@ -24,110 +24,164 @@ logger = logging.getLogger(__name__)
 SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
 
 
-class SliceEvent(StrEnum):
-    CLOUD_STATE_INITIALIZING = "cloud_state_initializing"
-    CLOUD_STATE_READY = "cloud_state_ready"
-    CLOUD_STATE_FAILED = "cloud_state_failed"
-    CLOUD_STATE_UNKNOWN_TIMEOUT = "cloud_state_unknown_timeout"
-    WORKER_FAILURE_REPORTED = "worker_failure_reported"
-    IDLE_TIMEOUT = "idle_timeout"
-
-
-# Events whose FAILED transitions count toward group-level backoff (when the
-# slice was short-lived). IDLE_TIMEOUT is a healthy scaledown and never counts.
-BACKOFF_TRIGGERS: frozenset[SliceEvent] = frozenset(
-    {
-        SliceEvent.CLOUD_STATE_FAILED,
-        SliceEvent.CLOUD_STATE_UNKNOWN_TIMEOUT,
-        SliceEvent.WORKER_FAILURE_REPORTED,
-    }
-)
-
-
-class Transition(NamedTuple):
-    to_state: SliceLifecycleState
-
-
-_B, _I, _RDY, _F = (
-    SliceLifecycleState.BOOTING,
-    SliceLifecycleState.INITIALIZING,
-    SliceLifecycleState.READY,
-    SliceLifecycleState.FAILED,
-)
-_C_INIT = SliceEvent.CLOUD_STATE_INITIALIZING
-_C_READY = SliceEvent.CLOUD_STATE_READY
-_C_FAILED = SliceEvent.CLOUD_STATE_FAILED
-_C_TIMEOUT = SliceEvent.CLOUD_STATE_UNKNOWN_TIMEOUT
-_W_FAILED = SliceEvent.WORKER_FAILURE_REPORTED
-_IDLE = SliceEvent.IDLE_TIMEOUT
-
-TRANSITIONS: dict[tuple[SliceLifecycleState, SliceEvent], Transition] = {
-    (_B, _C_INIT):      Transition(_I),
-    (_B, _C_READY):     Transition(_RDY),
-    (_B, _C_FAILED):    Transition(_F),
-    (_B, _C_TIMEOUT):   Transition(_F),
-    (_B, _W_FAILED):    Transition(_F),
-    (_I, _C_READY):     Transition(_RDY),
-    (_I, _C_FAILED):    Transition(_F),
-    (_I, _C_TIMEOUT):   Transition(_F),
-    (_I, _W_FAILED):    Transition(_F),
-    (_RDY, _W_FAILED):  Transition(_F),
-    (_RDY, _IDLE):      Transition(_F),
-}  # fmt: skip
+# ---------------------------------------------------------------------------
+# Events
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class TransitionResult:
-    """Result of dispatching a slice event.
+class SliceEvent:
+    """Base class for slice lifecycle events.
 
-    `applied` is False when the (state, event) pair is not in TRANSITIONS or
-    the slice is unknown — callers can blindly call _handle_transition without
-    a None check.
+    Subclasses carry exactly the payload the transition needs. Class-level
+    attributes (counts_toward_backoff, label) are read from the concrete type
+    so dispatch logic never branches on event kind.
+    """
 
-    `detached_handle` is set when the transition removed the slice from
-    tracking; the caller spawns the async termination thread on it.
+    counts_toward_backoff: ClassVar[bool] = False
+    label: ClassVar[str] = "slice_event"
 
-    `registered_workers` is set on transitions to READY; the caller adds
-    these to its worker registry.
+
+@dataclass(frozen=True)
+class CloudInitializing(SliceEvent):
+    label: ClassVar[str] = "cloud_initializing"
+
+
+@dataclass(frozen=True)
+class CloudReady(SliceEvent):
+    workers: tuple[RemoteWorkerHandle, ...]
+    label: ClassVar[str] = "cloud_ready"
+
+
+@dataclass(frozen=True)
+class CloudFailed(SliceEvent):
+    error_message: str = ""
+    counts_toward_backoff: ClassVar[bool] = True
+    label: ClassVar[str] = "cloud_failed"
+
+
+@dataclass(frozen=True)
+class UnknownTimeout(SliceEvent):
+    counts_toward_backoff: ClassVar[bool] = True
+    label: ClassVar[str] = "cloud_unknown_timeout"
+
+
+@dataclass(frozen=True)
+class WorkerFailure(SliceEvent):
+    failed_worker_ids: tuple[str, ...]
+    counts_toward_backoff: ClassVar[bool] = True
+    label: ClassVar[str] = "worker_failure"
+
+
+@dataclass(frozen=True)
+class IdleTimeout(SliceEvent):
+    target_capacity: int
+    ready_before: int
+    label: ClassVar[str] = "idle_timeout"
+
+
+# ---------------------------------------------------------------------------
+# Transition table
+# ---------------------------------------------------------------------------
+
+_B = SliceLifecycleState.BOOTING
+_I = SliceLifecycleState.INITIALIZING
+_R = SliceLifecycleState.READY
+_F = SliceLifecycleState.FAILED
+
+TRANSITIONS: dict[tuple[SliceLifecycleState, type[SliceEvent]], SliceLifecycleState] = {
+    (_B, CloudInitializing): _I,
+    (_B, CloudReady):        _R,
+    (_B, CloudFailed):       _F,
+    (_B, UnknownTimeout):    _F,
+    (_B, WorkerFailure):     _F,
+    (_I, CloudReady):        _R,
+    (_I, CloudFailed):       _F,
+    (_I, UnknownTimeout):    _F,
+    (_I, WorkerFailure):     _F,
+    (_R, WorkerFailure):     _F,
+    (_R, IdleTimeout):       _F,
+}  # fmt: skip
+
+
+# ---------------------------------------------------------------------------
+# Outcomes: variant type the caller match-dispatches on.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class NoOp:
+    """Unknown slice or invalid (state, event) pair; caller has no work to do."""
+
+    slice_id: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class InternalTransition:
+    """State changed but the transition has no externally visible side effect
+    (e.g. BOOTING → INITIALIZING). Persistence is handled inside dispatch."""
+
+    slice_id: str
+    prior: SliceLifecycleState
+    new_state: SliceLifecycleState
+
+
+@dataclass(frozen=True)
+class BecameReady:
+    """Slice reached READY. Caller registers workers and logs a slice_ready action."""
+
+    slice_id: str
+    workers: tuple[RemoteWorkerHandle, ...]
+
+
+@dataclass(frozen=True)
+class BecameFailed:
+    """Slice reached FAILED and has been detached from the group's _slices map.
+
+    Caller unregisters workers, async-terminates the handle, and logs. If
+    triggered_backoff is True, the group's consecutive_failures/backoff_until
+    were also updated atomically under the same lock as the slice detach.
     """
 
     slice_id: str
-    prior_state: SliceLifecycleState
-    new_state: SliceLifecycleState
+    handle: SliceHandle
     event: SliceEvent
-    applied: bool = True
-    timestamp: Timestamp = field(default_factory=Timestamp.now)
-    detached_handle: SliceHandle | None = None
-    registered_workers: list[RemoteWorkerHandle] = field(default_factory=list)
-    triggered_backoff: bool = False
+    triggered_backoff: bool
 
 
-NOOP = TransitionResult(
-    slice_id="",
-    prior_state=SliceLifecycleState.FAILED,
-    new_state=SliceLifecycleState.FAILED,
-    event=SliceEvent.CLOUD_STATE_FAILED,
-    applied=False,
-)
+TransitionOutcome = NoOp | InternalTransition | BecameReady | BecameFailed
 
 
-def cloud_state_to_event(
+# ---------------------------------------------------------------------------
+# Event derivation from cloud observations.
+# ---------------------------------------------------------------------------
+
+
+def cloud_event(
     cloud_state: CloudSliceState,
     handle_created_at: Timestamp,
     now: Timestamp,
     unresolvable_timeout: Duration,
+    *,
+    workers: Sequence[RemoteWorkerHandle] = (),
+    error_message: str = "",
 ) -> SliceEvent | None:
-    """Map a cloud slice state to a lifecycle event, or None to skip (e.g., UNKNOWN within timeout)."""
+    """Map a cloud-side observation to a typed lifecycle event.
+
+    Returns None for UNKNOWN within the timeout (retryable) and for any
+    cloud_state the state machine does not model.
+    """
     if cloud_state == CloudSliceState.READY:
-        return SliceEvent.CLOUD_STATE_READY
+        return CloudReady(workers=tuple(workers))
     if cloud_state == CloudSliceState.FAILED:
-        return SliceEvent.CLOUD_STATE_FAILED
+        return CloudFailed(error_message=error_message)
     if cloud_state in (CloudSliceState.BOOTSTRAPPING, CloudSliceState.CREATING):
-        return SliceEvent.CLOUD_STATE_INITIALIZING
+        return CloudInitializing()
     if cloud_state == CloudSliceState.UNKNOWN:
         age = Duration.from_ms(now.epoch_ms() - handle_created_at.epoch_ms())
         if age >= unresolvable_timeout:
-            return SliceEvent.CLOUD_STATE_UNKNOWN_TIMEOUT
+            return UnknownTimeout()
         logger.debug("Slice UNKNOWN (age %s < timeout %s); will retry", age, unresolvable_timeout)
         return None
     return None
