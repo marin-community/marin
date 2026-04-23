@@ -113,9 +113,9 @@ _COMMON_PILE_ENTRIES: tuple[tuple[str, str, str, str], ...] = (
 def common_pile_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
     """Return ``(download, normalize)`` chains for every common-pile entry.
 
-    common-pile is published in the Dolma ``.json.gz`` format (JSON-lines,
-    gzipped) rather than parquet, so we override the normalize input
-    extension. The default ``text``/``id`` fields match Dolma's schema.
+    common-pile is published in the Dolma gzipped-JSON format rather than
+    parquet. Most repos use ``.json.gz``; ``stackv2`` uses ``.jsonl.gz``, so
+    we allow both. The default ``text``/``id`` fields match Dolma's schema.
     """
     return {
         marin_name: hf_normalize_steps(
@@ -123,7 +123,7 @@ def common_pile_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
             hf_dataset_id=hf_id,
             revision=revision,
             staged_path=staged,
-            file_extensions=(".json.gz",),
+            file_extensions=(".json.gz", ".jsonl.gz"),
         )
         for marin_name, hf_id, revision, staged in _COMMON_PILE_ENTRIES
     }
