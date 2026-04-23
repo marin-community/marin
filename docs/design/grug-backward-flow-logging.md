@@ -49,7 +49,10 @@ canonical Grug base template.
 - `trace_backward_activation(x, name, site=...)`: a convenience wrapper for
   identity-only stream anchors that adds a `jax.named_scope(name)` around
   `log_backward_activation(...)`
-- `BWD_IN` / `BWD_OUT`: named constants for the metric-key site labels
+- `BWD_IN` / `BWD_OUT`: named constants for forward input/output boundary labels.
+  The backward value at `BWD_OUT` is the cotangent with respect to the returned
+  activation, and the backward value at `BWD_IN` is the cotangent with respect to
+  the input activation.
 - `normalize_name_stack(...)`: removes transform wrappers such as `jvp(...)` and
   `transpose(...)` so metric keys stay stable
 

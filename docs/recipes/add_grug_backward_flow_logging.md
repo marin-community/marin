@@ -37,11 +37,17 @@ class GrugTrainerConfig:
 The reusable `BackwardFlowConfig()` default is still disabled with `interval=0`; use that
 explicitly when a variant should opt out. Positive intervals sample that often.
 
-## 2) Mark module outputs
+## 2) Mark module boundaries
 
 At each named module boundary you want in the graph, wrap the returned activation with
-`log_backward_activation(...)`. For modules where you want to see what backward is
-sending *into* the module, mark the input with `BWD_IN`:
+`log_backward_activation(...)`. Omitting `site` means `BWD_OUT`, the forward output
+boundary. The backward metric there is the cotangent with respect to the returned
+activation, such as `dL/dout`.
+
+For modules where you also want the gradient at the forward input boundary, mark the
+input with `BWD_IN`. The backward metric there is the cotangent with respect to that
+input, such as `dL/dx`; in reverse-mode terms it is what the module's backward pass sends
+upstream, not what downstream sends into the module.
 
 ```python
 from levanter.analysis.backward_flow import BWD_IN, log_backward_activation, trace_backward_activation
