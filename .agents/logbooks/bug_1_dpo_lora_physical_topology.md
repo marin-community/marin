@@ -9337,6 +9337,12 @@ Immediate next step:
 
 ## CLAUDESKSTART — Next-Agent Handoff
 
+> **SUPERSEDED by CLAUDESKSTART-2 at the very end of this file
+> (2026-04-23).** This section was the original P1+P2 design intent
+> asked at commit ``31ad93bc6``. Both priorities are now shipped and
+> the tensor evidence has reshaped the mechanism story. Start from
+> CLAUDESKSTART-2; return here only for the original P1/P2 intent.
+
 Last committed state on branch ``dpo-lora``:
 ``31ad93bc6 [dpo] D1 LR=0 warmup probe + Tune-LoRA a_init_mode=zero rerun``.
 Working tree is clean.
@@ -10321,3 +10327,406 @@ Operational caveats for future agents:
   [scratch/p2_analyze_tdump_ctrl.py](../../scratch/p2_analyze_tdump_ctrl.py)
 - local tensor artifacts (gitignored):
   `.agents/artifacts/bug_1_tdump_ctrl/20260422/`
+
+
+## CLAUDESKSTART-2 — Next-Agent Handoff (2026-04-23)
+
+This section supersedes the original CLAUDESKSTART. It is self-contained
+— a new agent picking up Bug-1 after this point can read *only this
+section* and understand where the investigation stands, what's shipped,
+what's open, and exactly what the next probes look like.
+
+### Short version
+
+Bug-1 has a shipped adapter-level mitigation (``a_init_mode="zero"``)
+that kills the canonical/reverse split on ``v5p-8`` by ~500× on the
+original recipe. The recent work is pure mechanism investigation, not
+user-facing. Here's what that investigation produced:
+
+- **P1 is done**: fixed the ``lora_debug.effective_update`` emission
+  gap. Adam ``mu/nu`` now pair up correctly; ``adam/effective_update``
+  aggregate and sentinel keys emit to W&B.
+- **P2 is done**: added full-tensor GCS dump infrastructure to
+  ``LoraDebugConfig`` behind a hard ``verbose_grads=False`` safety
+  gate, with env-var plumbing for use on existing experiments.
+- **D1-tdump cohort ran**: captured the first full-tensor
+  canonical/reverse snapshots at the post-zero-LR bifurcation window
+  (steps 11/12/13) on ``o_proj`` and ``down_proj`` (output-sharded).
+- **Control cohort ran**: captured the same snapshots on ``q_proj``
+  and ``up_proj`` (input-sharded) for comparison.
+- **Mechanism story tightened**: the handoff's "direction / sign-pattern
+  defect" framing was wrong. The actual first detectable difference is
+  ~5% elementwise bit-level noise on *every* module's lora_B gradient at
+  step 11 (the first live update after the zero-LR warmup). This noise
+  is **system-wide**, not localized to the output-axis collective. The
+  shard-class discrimination — why L3b / L4b output-sharded-only runs
+  bifurcate while L3a / L3c / L4a input-sharded-only runs don't — lives
+  at the **forward-pass amplification** layer, not at the gradient-
+  generation layer. Output-sharded ``B`` updates put bit-level
+  perturbations directly on the replicated output axis, where the DPO
+  softmax amplifies them to a ~50% loss gap in 1-2 steps. Input-sharded
+  ``B`` updates don't have that amplification path.
+
+### Branch state at writing
+
+- branch: ``dpo-lora``
+- remote is at ``4d7d810fc``, local is 6 commits ahead:
+
+```
+939dc7616 [dpo] Logbook: control cohort result — noise is ambient, amplification is shard-class-specific
+5375c0b02 [dpo] Logbook: handoff after P1+P2, control probe defined
+bbad9faac [dpo] Logbook: D1-tdump cohort result — direction hypothesis refuted
+e9d23d87c [dpo] Logbook: P1 fix, P2 tensor-dump infra, D1-tdump rerun launched
+d51bdfe0d [dpo] P2 env-var plumbing + D1 launcher pass-through
+9795627c9 [dpo] P2: Full-tensor GCS dump for offline cosine/sign-agreement analysis
+cfc3fea03 [dpo] P1: Fix lora_debug effective_update emission gap
+```
+
+Working tree is clean. Nothing pushed. No open PR. ``a_init_mode="zero"``
+shipped on ``e66f9540f`` and is unchanged — do not regress.
+
+### What's shipped and how to use it
+
+#### P1: effective_update emission fix
+
+File: [lib/levanter/src/levanter/callbacks/lora_debug.py](../../lib/levanter/src/levanter/callbacks/lora_debug.py).
+Commit: ``cfc3fea03``.
+
+Root cause: opt-state paths like
+``inner_state/1/mu/transformer/.../q_proj`` carry a ``mu`` or ``nu``
+segment in the middle of the path. The old ``_emit_opt_state_stats``
+used the full path as the pairing key, so ``mu_by_key`` and
+``nu_by_key`` differed by exactly that one segment and never found
+each other. Fix was a ``_strip_adam_slot_segments`` helper that drops
+``mu`` / ``nu`` path components before building the pairing key. Slot
+detection still runs on the original path, so the ``adam/m/`` vs
+``adam/v/`` labels on the emitted keys are unchanged.
+
+Side benefit: emitted keys no longer carry the slot marker. New shape:
+``lora_debug/adam/{m|v|effective_update}/{A|B}/inner_state/1/transformer/.../q_proj/l2``
+and analogous for the sentinels. Keys from D1c/D1d and earlier that
+had ``/mu/`` inside the module path are schema-incompatible and
+shouldn't be cross-diffed with post-fix runs.
+
+Scratch repro: [scratch/p1_repro_effective_update.py](../../scratch/p1_repro_effective_update.py).
+Runs a realistic ``optax.inject_hyperparams + chain(clip, scale_by_adam,
+add_decayed_weights(masked), scale)`` on a Llama-shaped tree; verifies
+both the aggregate and sentinel effective_update keys emit; checks the
+aggregate value against a direct NumPy recompute to fp32 sum-order
+tolerance.
+
+#### P2: full-tensor GCS dump
+
+File: [lib/levanter/src/levanter/callbacks/lora_debug.py](../../lib/levanter/src/levanter/callbacks/lora_debug.py).
+Commits: ``9795627c9`` (infra) + ``d51bdfe0d`` (env-var plumbing).
+
+``LoraDebugConfig`` gains four knobs, all defaulted off:
+
+```python
+verbose_grads:         bool = False           # top-level hard gate
+dump_tensors_at_steps: tuple[int, ...] = ()
+dump_tensor_modules:   tuple[str, ...] = ()   # suffix match, e.g. ("o_proj","down_proj")
+dump_tensor_path:      Optional[str] = None   # fsspec prefix: gs:// or local
+```
+
+Inside JIT, when all four are non-default the callback collects
+``grad_B``, Adam ``mu_B``, ``nu_B``, and ``effective_update_B = mu /
+(sqrt(nu) + eps)`` for each matching module. A ``jax.lax.cond`` on
+``state.step ∈ dump_tensors_at_steps`` zero-masks the tensors on
+non-dump steps — XLA can elide real device→host transfer on those
+branches, and the JIT trace shape stays fixed.
+
+Tensors flow out of JIT under ``__lora_tensor_dump__/{metric}/{module}``
+keys in ``cb_info``. The ``on_step`` hook splits the dict on that
+prefix before calling ``levanter.tracker.log``, so W&B never sees the
+tensor blobs. When the Python-level step matches a configured dump
+step, the host writes each tensor to
+``{dump_tensor_path}/step_{N:04d}/{module}/{metric}.npy`` via
+``fsspec.open`` (supports ``gs://``, local, anything fsspec does).
+
+Env-var plumbing for SimpleDPOConfig-style experiments (which don't
+thread a ``lora_debug`` field through ``default_dpo``):
+
+```
+MARIN_DEBUG_LORA_VERBOSE_GRADS=1          # required explicit opt-in
+MARIN_DEBUG_LORA_DUMP_STEPS="11,12,13"
+MARIN_DEBUG_LORA_DUMP_MODULES="o_proj,down_proj"
+MARIN_DEBUG_LORA_DUMP_PATH="gs://..."
+```
+
+All four are consumed by ``LoraDebugConfig.with_env_overrides()`` which
+``build()`` now calls. ``MARIN_DEBUG_LORA_VERBOSE_GRADS=1`` is a
+**separate** gate from ``MARIN_DEBUG_LORA_DEBUG=1``. Setting only a
+``DUMP_PATH`` cannot enable dumps — both gates must be on. The D1
+launcher mirrors these vars into the TPU worker env when present.
+
+Scratch smoke tests:
+
+- [scratch/p2_smoke_tensor_dump.py](../../scratch/p2_smoke_tensor_dump.py)
+  — full roundtrip on Llama-shaped pytree with lax.cond gating.
+- [scratch/p2_smoke_default_off.py](../../scratch/p2_smoke_default_off.py)
+  — confirms ``verbose_grads=False`` produces zero tensor-dump keys.
+
+### D1-tdump cohort (the main result)
+
+Launched ``20260423-0021`` UTC, 4 jobs (canonical/reverse ×
+us-central1/us-east5), all terminal-SUCCEEDED. GCS:
+``gs://marin-{us-central1,us-east5}/debug/bug_1_tensor_dump/20260422/``,
+48 objects per region, 24 per variant (3 steps × 2 modules × 4
+metrics).
+
+Local pull: ``.agents/artifacts/bug_1_tdump/20260422/``, ~1.5 GB
+(gitignored).
+
+Offline analysis: [scratch/p2_analyze_tdump.py](../../scratch/p2_analyze_tdump.py).
+
+Key numbers (canonical vs reverse, uc1 pair):
+
+| step | module | flat cos | mean rel err | p99 rel err | \|c\|/\|r\| |
+|---|---|---|---|---|---|
+| 11 | o_proj grad_B | 0.9999 | 3.8% | 55% | 1.000 |
+| 11 | down_proj grad_B | 1.0000 | 4.0% | 56% | 0.998 |
+| 12 | o_proj grad_B | 0.9757 | 55% | 171% | **2.04×** |
+| 12 | down_proj grad_B | 0.9769 | 55% | 171% | **2.08×** |
+| 13 | o_proj grad_B | 0.9781 | 55% | 169% | 2.06× |
+
+What refutes the original direction-defect hypothesis:
+
+- Cosines are ≥ 0.975 everywhere, ≥ 0.999 on mu/nu/effective_update.
+- Sign agreement ≥ 0.93 in the worst case. Nowhere near a sign flip.
+- Directions agree; what differs is **grad_B norm at step 12+**
+  (canonical 2× reverse).
+- Adam mu and nu track each other to 4 nines on cosine and ~0.3% on
+  norm right through step 13 — Adam smoothing absorbs the grad spike.
+
+What agrees with the existing chaotic-amplification story:
+
+- Step 11 grad_B norms match to 0.03% (``|c|=0.7285, |r|=0.7287`` on
+  o_proj), but individual elements scatter by ~4% mean / 55% p99.
+- That's bit-level noise, same direction, tiny magnitude.
+- The 3.8% elementwise B perturbation at step 11 flows into
+  ``post_step11_B`` and amplifies through the DPO softmax in the
+  step-12 forward. Canonical lands stuck at loss ~0.689 (near
+  ``log 2 = 0.693``); reverse drops to 0.325.
+- Step-12 grad_B is 2× on canonical because its stuck-high loss
+  produces larger gradients — symptom of the bad basin, not cause.
+
+### Control cohort (what it did and didn't resolve)
+
+Launched ``20260423-0623`` UTC, 4 jobs same shape but
+``MARIN_DEBUG_LORA_DUMP_MODULES="q_proj,up_proj"`` (input-sharded).
+All terminal-SUCCEEDED. GCS under
+``.../bug_1_tensor_dump_ctrl/20260422/``, 48 objects per region.
+
+Local pull: ``.agents/artifacts/bug_1_tdump_ctrl/20260422/``, ~3.4 GB
+(q_proj B is 33 MB per file but up_proj B is 117 MB since its output
+axis is ``ffn_dim=14336`` not ``embed=4096``).
+
+Offline analysis: [scratch/p2_analyze_tdump_ctrl.py](../../scratch/p2_analyze_tdump_ctrl.py).
+
+Key numbers:
+
+| step | module | flat cos | mean rel err | p99 rel err | \|c\|/\|r\| |
+|---|---|---|---|---|---|
+| 11 | q_proj grad_B | 0.9999 | 5.6% | 76% | 1.000 |
+| 11 | up_proj grad_B | 1.0000 | 4.6% | 64% | 1.000 |
+| 12 | q_proj grad_B | 0.9674 | 55% | 174% | **2.02×** |
+| 12 | up_proj grad_B | 0.9785 | 55% | 172% | **1.99×** |
+
+**Same pattern as the main cohort.** Input-sharded modules in a
+full-recipe run exhibit the same step-11 bit-noise and the same step-12
+2× norm bifurcation as output-sharded.
+
+Why: both cohorts set ``target_modules=None`` (all linears are
+LoRA-trained), so the shard class of the *dumped* module only
+determines which tensor you serialize; it doesn't isolate which
+modules drive the mechanism. o_proj and down_proj are LoRA-updated
+in *every* run, so the forward bifurcation (which they cause)
+shows up in every module's grad at step 12.
+
+### What this reshapes about the mechanism story
+
+Picture at the end of the previous CLAUDESKSTART:
+
+> Bug-1 originates in bit-level ring-order noise on the **output-axis
+> collective** used to reduce ``lora_B`` gradients for output-sharded
+> projections.
+
+Refined picture after this session:
+
+> Bug-1 originates in ring-order bit-noise in FSDP all-reduces during
+> the backward pass. This noise lands on **every** lora_B gradient at
+> step 11 at the ~5% elementwise level, not just output-sharded ones.
+> What's shard-class-specific is **forward-pass amplification**: the
+> tiny step-11 B perturbation only flows into a loss bifurcation when
+> the updated B matrix is **output-sharded on the FSDP-sharded axis**
+> (i.e., its output axis is ``embed`` and ``embed`` maps to the ``data``
+> axis). In that case the perturbation lands directly on the replicated
+> residual-stream output and the DPO softmax amplifies it in 1-2 steps.
+> On input-sharded modules the equivalent-magnitude B perturbation
+> gets contracted down by the embed reduction and never builds into a
+> loss gap.
+
+This is consistent with:
+
+- L3b / L4b: output-sharded-only LoRA (``o_proj``, ``down_proj``) still
+  bifurcates, gap 0.228 / 0.373.
+- L3a / L3c / L4a: input-sharded-only LoRA (``q,v``, ``k``, ``gate,up``)
+  does **not** bifurcate (|gap| ≤ 0.006 across four independent probes).
+- ``a_init_mode="zero"``: routes the first live update through an
+  input-axis collective (``lora_A``), completely sidesteps the output-
+  axis amplification, kills Bug-1.
+
+### Operational gotchas learned (important for future agents)
+
+1. **``.agents/artifacts/`` must be in the main repo's
+   ``.git/info/exclude``, not the per-worktree one.** Git worktrees
+   share the main ``.git/info/exclude``. The per-worktree
+   ``.git/worktrees/<name>/info/`` directory exists but git does *not*
+   consult it for exclude patterns — that directory is for HEAD / index
+   state only. I wasted 4 launch attempts discovering this. The fix was
+   literally one line:
+   ```
+   echo ".agents/artifacts/" >> /lfs/skampere3/0/ahmedah/code/marin/.git/info/exclude
+   ```
+   Bundle went from 1.3 GB (over the 25 MB cap) to 22 MB.
+
+2. **Iris bundle size cap is 25 MB enforced client-side** before
+   submission. ``git ls-files --cached --others --exclude-standard``
+   drives the file list, so anything untracked AND not in an exclude
+   file gets included. Any agent pulling multi-GB GCS dumps into the
+   worktree must add a matching exclude first.
+
+3. **skampere3 shell sometimes can't fork ``bash``** (ENOMEM from the
+   pyenv shim even though plenty of memory is free). Bypass by invoking
+   the underlying Python binary directly:
+   ``/lfs/skampere3/0/ahmedah/.pyenv/versions/3.12.0/bin/uv run iris ...``
+
+4. **Iris CLI via IAP tunnel works for everything**: ``iris job run``,
+   ``iris job list``, ``iris query``. Pattern:
+   ``uv run iris --controller-url=http://localhost:10000 --cluster=marin <cmd>``.
+   Tunnel setup is in the ``iris_cluster_remote_access`` memory and
+   stays up across sessions.
+
+5. **TPU ``Couldn't open iommu group`` bad-node errors** are transient
+   infrastructure failures. Iris auto-recovers (bounces onto a new
+   worker) and ``failure_count`` stays 0 (only ``preemption_count``
+   increments). Don't interpret these as experiment failures in the
+   logs.
+
+6. **When dumping tensors on a full-recipe (``target_modules=None``)
+   run, the shard class of the dumped module doesn't isolate the
+   mechanism.** If you want to test "does the noise source depend on
+   shard class", restrict ``target_modules`` to only the shard class
+   of interest. The dump path selects which tensor to serialize, not
+   which module drives the forward/backward.
+
+### What's left open
+
+1. **Tensor-level confirmation of the forward-amplification story.**
+   An input-only run (``target_modules=["q_proj","up_proj"]``) with
+   tensor dumps would predict step-12 ``|c|/|r| ≈ 1.0`` on those
+   modules (no chaotic amplification). Training-loss from L3a / L4a
+   already implies this, but no one has checked at the tensor level.
+   Low priority — L3a / L4a carry the key discrimination already.
+
+2. **Exact upstream source of the step-11 bit-noise.** The tensor data
+   localizes it to "some all-reduce somewhere in the backward pass
+   under the bad physical device ordering". The earlier BL-PASS HLO
+   analysis localized the XLA compiler fork to
+   ``spmd-cleanup.after_pipeline-start.before_dce``. Merging these
+   views into a single definitive "collective X rewrites to Y under
+   order Z" statement would be closure-grade. Requires coordinated
+   HLO + tensor analysis at the specific pass boundary.
+
+3. **A clean writeup for the blog / external communication.** The
+   chaotic-amplification story is now well-supported. The core assets
+   (mechanism diagram, decision matrix, fix recipe) could be lifted
+   from this logbook into a 2-3 page internal note. Low priority but
+   blocks nothing.
+
+4. **PiSSA / alternative LoRA-init integration.** ``a_init_mode="zero"``
+   is the shipped mitigation, but PiSSA would give both the permutation
+   invariance *and* the reported accuracy gains. Orthogonal to Bug-1
+   investigation but would be the natural follow-up.
+
+### What NOT to do (caveats carried forward + new ones)
+
+From the original CLAUDESKSTART (all still valid):
+
+- Don't regress ``a_init_mode="zero"``. Ship-quality mitigation.
+- Don't add more sentinels hoping they'll resolve direction questions;
+  they can't distinguish direction from marginal distribution.
+- Don't treat W&B as the sink for direction questions. Sink is GCS +
+  offline numpy, summary is a per-layer-cosine scalar.
+- Don't retrofit ``a_init_mode="zero"`` onto historical experiment
+  scripts. Their logged numbers are tied to their original init.
+
+New to this session:
+
+- Don't interpret "grad_B shows step-11 noise on input-sharded module X"
+  as "the collective on X is broken". In a full-recipe run the noise is
+  ambient from upstream all-reduces; module-local claims need a
+  target-modules-restricted run.
+- Don't launch from a worktree with un-excluded ``.agents/artifacts/``.
+  Check ``git check-ignore -v <big-file>`` first.
+- Don't amend commits; create new ones (AGENTS.md convention).
+- Don't add Co-Authored-By: trailers (AGENTS.md convention).
+
+### Artifact inventory
+
+**Commits on this branch** (newest first, top of list is tip):
+
+```
+939dc7616  Logbook: control result
+5375c0b02  Logbook: handoff after P1+P2, control probe defined
+bbad9faac  Logbook: D1-tdump result — direction hypothesis refuted
+e9d23d87c  Logbook: P1 fix + P2 infra + D1-tdump launch
+d51bdfe0d  P2 env-var plumbing + D1 launcher pass-through
+9795627c9  P2: Full-tensor GCS dump infrastructure
+cfc3fea03  P1: Fix lora_debug effective_update emission gap
+```
+
+**Iris jobs submitted this session** (all terminal-SUCCEEDED):
+
+```
+/ahmedah/experiment-d1-{canonical,reverse}-{central1,east5}-tdump-20260423-0021
+/ahmedah/experiment-d1-{canonical,reverse}-{central1,east5}-tdump-ctrl-20260423-0623
+```
+
+**GCS paths**:
+
+```
+gs://marin-us-central1/debug/bug_1_tensor_dump/20260422/d1-{canonical,reverse}-tdump/
+gs://marin-us-east5/debug/bug_1_tensor_dump/20260422/d1-{canonical,reverse}-tdump/
+gs://marin-us-central1/debug/bug_1_tensor_dump_ctrl/20260422/d1-{canonical,reverse}-tdump-ctrl/
+gs://marin-us-east5/debug/bug_1_tensor_dump_ctrl/20260422/d1-{canonical,reverse}-tdump-ctrl/
+```
+
+**Local gitignored artifacts**:
+
+```
+.agents/artifacts/bug_1_tdump/20260422/        # ~1.5 GB (main cohort)
+.agents/artifacts/bug_1_tdump_ctrl/20260422/   # ~3.4 GB (control cohort)
+```
+
+**Scratch scripts** (kept for regression / re-analysis; in
+``scratch/`` which is gitignored):
+
+```
+scratch/p1_repro_effective_update.py   # P1 smoke test
+scratch/p2_smoke_tensor_dump.py        # P2 roundtrip
+scratch/p2_smoke_default_off.py        # P2 default-off verification
+scratch/p2_analyze_tdump.py            # main cohort offline analysis
+scratch/p2_analyze_tdump_ctrl.py       # control cohort offline analysis
+```
+
+### One-sentence summary
+
+Bug-1 is a two-stage phenomenon: **ambient** step-11 ring-order bit-noise
+on every lora_B gradient produces a tiny post-update B perturbation,
+which then **selectively amplifies** through the forward pass into a
+loss fork only on modules whose ``B`` has the FSDP-sharded axis as its
+output (``o_proj``, ``down_proj``); ``a_init_mode="zero"`` ships as
+the one-line mitigation because it routes the first live update through
+``A`` (input-sharded) instead and sidesteps the amplification path.
