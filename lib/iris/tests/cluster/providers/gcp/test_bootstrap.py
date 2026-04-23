@@ -43,8 +43,9 @@ def test_build_worker_bootstrap_script_configures_ar_auth() -> None:
 
     script = build_worker_bootstrap_script(cfg)
 
+    # AR images must trigger the auth path before the docker pull.
     assert f'if echo "{ar_image}" | grep -q -- "-docker.pkg.dev/"' in script
-    assert 'sudo gcloud auth configure-docker "$AR_HOST" -q || true' in script
+    assert 'configure_docker_auth_with_retries "$AR_HOST"' in script
 
 
 def test_build_worker_bootstrap_script_requires_controller_address() -> None:
@@ -154,7 +155,6 @@ def test_build_controller_bootstrap_script_from_config_rewrites_ghcr_to_ar() -> 
         "Pulling image: europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-controller:latest"
         in script
     )
-    assert 'sudo gcloud auth configure-docker "$AR_HOST" -q || true' in script
 
 
 # --- GcpWorkerProvider.resolve_image() tests ---
