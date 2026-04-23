@@ -411,11 +411,10 @@ def _block_attn_res(
     blocks: list[Float[Array, "B S D"]],
     partial_block: Float[Array, "B S D"],
     proj: jax.Array,
-    norm: RMSNorm,
 ) -> Float[Array, "B S D"]:
     """Inter-block attention: softmax-weighted sum over block reps + partial sum."""
     all_reps = jnp.stack([*blocks, partial_block], axis=0)  # [N+1, B, S, D]
-    normed = jax.vmap(norm)(all_reps)  # [N+1, B, S, D]
+    normed = jax.vmap(rms_norm)(all_reps)  # [N+1, B, S, D]
     logits = jnp.einsum("d,nbsd->nbs", proj, normed)  # [N+1, B, S]
     weights = jax.nn.softmax(logits, axis=0)  # [N+1, B, S]
     return jnp.einsum("nbs,nbsd->bsd", weights, all_reps)  # [B, S, D]
@@ -431,9 +430,7 @@ class Block(eqx.Module):
     shared: DenseMLP | None
     # Block attention residual params (None if disabled).
     attn_res_proj: jax.Array | None
-    attn_res_norm: RMSNorm | None
     mlp_res_proj: jax.Array | None
-    mlp_res_norm: RMSNorm | None
     layer_number: int = eqx.field(static=True)
 
     @staticmethod
@@ -445,14 +442,10 @@ class Block(eqx.Module):
                 cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
             )
         attn_res_proj = None
-        attn_res_norm = None
         mlp_res_proj = None
-        mlp_res_norm = None
         if cfg.use_block_attn_res:
             attn_res_proj = jnp.zeros((cfg.hidden_dim,))
-            attn_res_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
             mlp_res_proj = jnp.zeros((cfg.hidden_dim,))
-            mlp_res_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
@@ -462,9 +455,7 @@ class Block(eqx.Module):
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
             attn_res_proj=attn_res_proj,
-            attn_res_norm=attn_res_norm,
             mlp_res_proj=mlp_res_proj,
-            mlp_res_norm=mlp_res_norm,
             layer_number=layer_number,
         )
 
@@ -476,16 +467,16 @@ class Block(eqx.Module):
         blocks: list[Float[Array, "B S D"]] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], list[Float[Array, "B S D"]] | None]:
         if blocks is not None and self.attn_res_proj is not None:
-            # Block boundary: append current partial block to blocks list.
+            # Block attn res before attention (partial not in blocks yet).
+            h = _block_attn_res(blocks, x, self.attn_res_proj)
+            # Block boundary: save partial to blocks, reset.
             # With block_size=2, every layer is a boundary.
             blocks = [*blocks, x]
-            # Block attn res before attention.
-            h = _block_attn_res(blocks, x, self.attn_res_proj, self.attn_res_norm)
             attn_in = self.attn_gated_norm(self.rms_attn(h))
             attn_out = self.attn(attn_in, mask)
             partial_block = attn_out
             # Block attn res before MLP.
-            h = _block_attn_res(blocks, partial_block, self.mlp_res_proj, self.mlp_res_norm)
+            h = _block_attn_res(blocks, partial_block, self.mlp_res_proj)
             mlp_in = self.mlp_gated_norm(self.rms_mlp(h))
             mlp_out, router_stats = self.mlp(mlp_in)
             if self.shared is not None:
@@ -513,7 +504,6 @@ class Transformer(eqx.Module):
     final_gated_norm: GatedNorm
     # Final block attn res to combine all blocks before LM head.
     final_bar_proj: jax.Array | None
-    final_bar_norm: RMSNorm | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -525,10 +515,8 @@ class Transformer(eqx.Module):
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
         blocks = tuple(Block.init(cfg, layer_number=i, key=block_keys[i]) for i in range(cfg.num_layers))
         final_bar_proj = None
-        final_bar_norm = None
         if cfg.use_block_attn_res:
             final_bar_proj = jnp.zeros((cfg.hidden_dim,))
-            final_bar_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -538,7 +526,6 @@ class Transformer(eqx.Module):
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             final_bar_proj=final_bar_proj,
-            final_bar_norm=final_bar_norm,
             config=cfg,
         )
 
@@ -575,7 +562,7 @@ class Transformer(eqx.Module):
             "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
         }
         if bar_blocks is not None and self.final_bar_proj is not None:
-            hidden = _block_attn_res(bar_blocks, hidden, self.final_bar_proj, self.final_bar_norm)
+            hidden = _block_attn_res(bar_blocks, hidden, self.final_bar_proj)
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
 
