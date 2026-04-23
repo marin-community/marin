@@ -1092,7 +1092,7 @@ name = "colorful"
 version = "0.5.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/82/31/109ef4bedeb32b4202e02ddb133162457adc4eb890a9ed9c05c9dd126ed0/colorful-0.5.8.tar.gz", hash = "sha256:bb16502b198be2f1c42ba3c52c703d5f651d826076817185f0294c1a549a7445", size = 209361, upload-time = "2025-10-29T11:53:21.663Z" }
 wheels = [
@@ -4616,7 +4616,6 @@ dependencies = [
     { name = "pandas" },
     { name = "plotly" },
     { name = "pyarrow" },
-    { name = "ray" },
     { name = "regex" },
     { name = "requests" },
     { name = "resiliparse" },
@@ -4802,7 +4801,6 @@ requires-dist = [
     { name = "prime", marker = "extra == 'rl'" },
     { name = "pyarrow", specifier = ">=22" },
     { name = "pylatexenc", marker = "extra == 'math'" },
-    { name = "ray", specifier = "==2.54.0" },
     { name = "regex" },
     { name = "requests", specifier = ">=2.33.0" },
     { name = "resiliparse", specifier = ">=0.17.2", index = "https://marin-community.github.io/chatnoir-resiliparse/simple" },
@@ -5183,7 +5181,6 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pytimeparse" },
-    { name = "ray", extra = ["default"] },
     { name = "safetensors", extra = ["numpy"] },
     { name = "tblib" },
     { name = "tensorstore" },
@@ -5311,7 +5308,6 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=11.0.0" },
     { name = "pydantic", specifier = "<3" },
     { name = "pytimeparse", specifier = ">=1.1.8" },
-    { name = "ray", extras = ["default"], specifier = "==2.54.0" },
     { name = "safetensors", extras = ["numpy"], specifier = ">=0.4.2,<0.7.0" },
     { name = "tblib", specifier = ">=1.7.0,<4.0.0" },
     { name = "tensorboard", marker = "extra == 'profiling'", specifier = ">=2.16" },
