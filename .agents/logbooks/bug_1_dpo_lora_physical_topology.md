@@ -9991,3 +9991,171 @@ pass propagates B-induced perturbations through the DPO loss geometry.
   [scratch/p2_analyze_tdump.py](../../scratch/p2_analyze_tdump.py)
 - local tensor artifacts (gitignored):
   `.agents/artifacts/bug_1_tdump/20260422/`
+
+
+## 2026-04-22T Handoff after P1 + P2: chaotic-amplification story pinned; input-sharded control pending
+
+### State summary
+
+Infrastructure shipped:
+
+- `cfc3fea03 [dpo] P1: Fix lora_debug effective_update emission gap` —
+  Adam mu/nu pairing now works; `adam/effective_update/*` and
+  `sentinel/adam_effective_update/*` keys emit correctly. Past runs
+  with the old key schema (mu/nu in path) are obsolete for comparison;
+  use post-fix runs only.
+- `9795627c9 [dpo] P2: Full-tensor GCS dump for offline
+  cosine/sign-agreement analysis` — `LoraDebugConfig` gains
+  `verbose_grads` (hard-off default), `dump_tensors_at_steps`,
+  `dump_tensor_modules`, `dump_tensor_path`. Inside-JIT `lax.cond`
+  gating keeps zero-overhead on non-dump steps; host-side writer
+  strips tensor keys before `tracker.log` so W&B never sees blobs.
+- `d51bdfe0d [dpo] P2 env-var plumbing + D1 launcher pass-through` —
+  four env vars (`MARIN_DEBUG_LORA_VERBOSE_GRADS`,
+  `MARIN_DEBUG_LORA_DUMP_STEPS`, `..._MODULES`, `..._PATH`) consumed
+  by `LoraDebugConfig.with_env_overrides()` which `build()` calls.
+  `verbose_grads` is a separate env gate from
+  `MARIN_DEBUG_LORA_DEBUG=1`; setting only DUMP_PATH cannot enable
+  dumps.
+
+Experimental outcome:
+
+- D1-tdump cohort (canonical/reverse × us-central1/us-east5) launched
+  `20260423-0021` UTC, all four terminal-SUCCEEDED. Two children hit
+  the known transient `Couldn't open iommu group` bad-node signature,
+  Iris auto-recovered. `eval/full_val/dpo_loss = 0.68458` on canonical
+  uc1 — canonical bad-basin, as expected.
+- 48 objects per region bucket
+  (`gs://marin-{us-central1,us-east5}/debug/bug_1_tensor_dump/20260422/`),
+  covering steps 11/12/13 × {o_proj, down_proj} × {grad_B, mu_B, nu_B,
+  effective_update_B}.
+- Pulled locally to `.agents/artifacts/bug_1_tdump/20260422/` (~1.5 GB,
+  gitignored). Analysis script:
+  [scratch/p2_analyze_tdump.py](../../scratch/p2_analyze_tdump.py).
+
+### Headline finding (refutes the earlier direction-defect framing)
+
+Full-tensor analysis of the canonical vs reverse uc1 pair on o_proj +
+down_proj:
+
+- **Directions agree, everywhere, every metric.** Flat cosine ≥ 0.975
+  on grad_B, ≥ 0.9994 on every other metric; sign agreement ≥ 0.93
+  in the worst case.
+- **Adam moments agree to 4 nines** on cosine, norm ratio ≈ 1, through
+  step 13.
+- **What bifurcates is grad_B norm at step 12+**: canonical is 2×
+  reverse on both o_proj and down_proj.
+- **Step 11 grad_B is near-identical in norm and direction** (|c| =
+  0.7285, |r| = 0.7287 on o_proj; cos ≈ 1.0) but has mean 3.8%
+  elementwise relative error — tiny bit-level noise, same direction.
+
+### Revised mechanistic picture
+
+Chaotic amplification of a tiny step-11 bit-level noise, confirmed
+at the tensor level:
+
+1. Through step 11 inclusive, canonical and reverse are numerically
+   near-identical (zero-LR prefix + B=0 → identical forward, plus
+   bit-level noise from the output-axis SPMD collective in step-11's
+   backward).
+2. Step-11 Adam update lands with ~3.8% elementwise relative error
+   on mu (and hence on the post-step-11 B matrix).
+3. Step-12 forward uses post-step-11 B. DPO loss near init is highly
+   non-linear through the softmax — tiny B differences produce the
+   full 50% loss gap (canonical stuck at 0.689, reverse at 0.325).
+4. Step-12 grad_B reflects that gap: canonical's stuck-high loss
+   produces 2× larger gradients. This is the *downstream symptom*,
+   not the trigger.
+5. Adam smoothing absorbs the grad_B norm divergence for many steps
+   (mu cosine stays at 0.9994+ through step 13).
+
+### Open probe: input-sharded control
+
+Everything above is on output-sharded modules (o_proj, down_proj),
+where the L3b/L4b results already established Bug-1. The shard-class
+rule predicts input-sharded modules should show no step-11 bit-noise
+because their grad_B doesn't traverse the pathological output-axis
+collective.
+
+Control modules: q_proj (attention, input-sharded, per L3a clean) +
+up_proj (MLP, input-sharded, per L4a clean). One per family so the
+result generalises.
+
+Predicted if shard-class rule holds:
+
+| metric (step 11) | expected on q_proj / up_proj |
+|---|---|
+| cosine | ≈ 1.0 (not ≈ 0.9999 with 3.8% elementwise noise — actually bit-close) |
+| mean elementwise rel err | ≪ 3.8% (closer to fp32 sum-order noise, ~1e-4) |
+| grad_B norm ratio | ≈ 1.0 |
+
+Predicted at step 12:
+
+| | expected |
+|---|---|
+| grad_B norm ratio | ≈ 1.0 (no chaotic amplification because there's no seed noise to amplify) |
+
+Falsification paths:
+
+- **q_proj/up_proj grad_B shows 3%+ elementwise noise at step 11**:
+  shard-class rule is incomplete; noise enters somewhere else too.
+  Next probe would look at the activation side or at a different
+  collective family.
+- **q_proj/up_proj grad_B matches at step 11 but shows 2× norm at
+  step 12**: mechanism story would need a new term — maybe the
+  chaotic amplification doesn't need a seed in the controlled
+  module, forward-pass coupling from the output-sharded modules
+  suffices to perturb everything. (Consistent with the earlier L2
+  observation that MLP gap > attention gap, since MLP has both
+  input- and output-sharded components.)
+- **Control matches at step 11 and at step 12**: chaotic-amplification
+  story is closed at the tensor level. Write up and move on.
+
+### Exact launch shape for the control
+
+Same launcher and shape as the D1-tdump pair that just finished. Only
+difference: `MARIN_DEBUG_LORA_DUMP_MODULES="q_proj,up_proj"`. Use a
+distinct GCS prefix so the analysis script doesn't mix up control and
+main dumps. Regions per the standing multi-region rule
+(us-central1 + us-east5 for v5p).
+
+```
+for order in canonical reverse; do
+  for region in us-central1 us-east5; do
+    short=${region##us-}
+    job="experiment-d1-${order}-${short}-tdump-ctrl-<ts>"
+    gcs="gs://marin-${region}/debug/bug_1_tensor_dump_ctrl/20260422/d1-${order}-tdump-ctrl/"
+    uv run iris --controller-url=http://localhost:10000 --cluster=marin job run --no-wait \
+      --job-name "$job" \
+      -e WANDB_API_KEY "$WANDB_API_KEY" \
+      -- \
+      bash -lc "EXPERIMENT_D1_ORDER=${order} \
+        REGIONS_OVERRIDE=${region} \
+        MARIN_DEBUG_LORA_DEBUG=1 \
+        MARIN_DEBUG_LORA_VERBOSE_GRADS=1 \
+        MARIN_DEBUG_LORA_DUMP_STEPS=11,12,13 \
+        MARIN_DEBUG_LORA_DUMP_MODULES=q_proj,up_proj \
+        MARIN_DEBUG_LORA_DUMP_PATH='${gcs}' \
+        MARIN_DEBUG_RUN_TAG=d1-${order}-${short}-tdump-ctrl \
+        uv run python experiments/posttrain/per_stmt_dpo/experiment_d1_v5p8_pd4_lr0warmup_s20.py"
+  done
+done
+```
+
+Expected artifact size: ~3.6 GB per region bucket (q_proj B is
+`(L=32, H=32, Hd=128, R=64)` ≈ 33 MB per file; up_proj B is
+`(L=32, ffn=14336, R=64)` ≈ 117 MB per file; 4 metrics × 2 modules ×
+3 steps × 2 variants per region = 48 objects).
+
+### What not to do
+
+- Don't regress `a_init_mode="zero"`. That's the production Bug-1
+  mitigation; it shipped in an earlier commit and stays.
+- Don't dump beyond ~3 steps per run without re-estimating bandwidth:
+  every extra step is 150+ MB per variant, and GCS writes serialize
+  at step boundaries.
+- Don't interpret the control failure paths (above) from loss alone —
+  the input-sharded single-module LoRA runs on prior probes (L3a,
+  L3c, L4a) showed all variants get stuck near the DPO baseline
+  because the adapter is too small to learn. The *tensor-level*
+  step-11 comparison is the discriminating signal, not the loss.
