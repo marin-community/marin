@@ -24,16 +24,11 @@ dependencies = [
     "zstandard>=0.22.0",
 ]
 
-[project.optional-dependencies]
-ray = ["ray==2.54.0"]
-
 [dependency-groups]
 fray_test = [
     "numpy",
-    "pip", # ray requires pip to be installed
     "pytest-timeout",
     "pytest>=8.3.2",
-    "ray[default]"
 ]
 fray_tpu_test = ["jax[tpu]", { include-group = "fray_test" }]
 

@@ -4924,33 +4924,22 @@ dependencies = [
     { name = "zstandard" },
 ]
 
-[package.optional-dependencies]
-ray = [
-    { name = "ray" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "numpy" },
-    { name = "pip" },
     { name = "pytest" },
     { name = "pytest-timeout" },
-    { name = "ray", extra = ["default"] },
 ]
 fray-test = [
     { name = "numpy" },
-    { name = "pip" },
     { name = "pytest" },
     { name = "pytest-timeout" },
-    { name = "ray", extra = ["default"] },
 ]
 fray-tpu-test = [
     { name = "jax", extra = ["tpu"] },
     { name = "numpy" },
-    { name = "pip" },
     { name = "pytest" },
     { name = "pytest-timeout" },
-    { name = "ray", extra = ["default"] },
 ]
 
 [package.metadata]
@@ -4966,36 +4955,28 @@ requires-dist = [
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "mergedeep" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ray", marker = "extra == 'ray'", specifier = "==2.54.0" },
     { name = "tabulate", specifier = ">=0.9.0" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
     { name = "zstandard", specifier = ">=0.22.0" },
 ]
-provides-extras = ["ray"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "numpy" },
-    { name = "pip" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
-    { name = "ray", extras = ["default"] },
 ]
 fray-test = [
     { name = "numpy" },
-    { name = "pip" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
-    { name = "ray", extras = ["default"] },
 ]
 fray-tpu-test = [
     { name = "jax", extras = ["tpu"] },
     { name = "numpy" },
-    { name = "pip" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
-    { name = "ray", extras = ["default"] },
 ]
 
 [[package]]
@@ -5449,7 +5430,7 @@ dependencies = [
     { name = "cloudpickle" },
     { name = "fsspec" },
     { name = "humanfriendly" },
-    { name = "marin-fray", extra = ["ray"] },
+    { name = "marin-fray" },
     { name = "marin-iris" },
     { name = "marin-rigging" },
     { name = "msgspec" },
@@ -5482,7 +5463,7 @@ requires-dist = [
     { name = "cloudpickle", specifier = ">=3.0" },
     { name = "fsspec", specifier = ">=2023.1.0" },
     { name = "humanfriendly", specifier = ">=10.0" },
-    { name = "marin-fray", extras = ["ray"], editable = "lib/fray" },
+    { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "msgspec", specifier = ">=0.18.0" },
@@ -10886,8 +10867,8 @@ dependencies = [
     { name = "typing-extensions", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cpu') or (platform_machine == 'arm64' and sys_platform == 'darwin' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cuda12' and extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'darwin' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'darwin' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'darwin' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'darwin' and extra != 'extra-14-marin-levanter-tpu' and extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'darwin' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12' and extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm')" },
 ]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0-cp311-none-macosx_11_0_arm64.whl", hash = "sha256:aa4483602586cc9a35d1cf33771a9977f05f642b9161518a289e36548a0b77c2" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0-cp312-none-macosx_11_0_arm64.whl", hash = "sha256:4de0ed8cbc457a506dbca40376e206a29efee10756a00f1f3404bf67ad737d04" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0-cp311-none-macosx_11_0_arm64.whl", hash = "sha256:aa4483602586cc9a35d1cf33771a9977f05f642b9161518a289e36548a0b77c2", upload-time = "2025-10-14T17:26:16Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0-cp312-none-macosx_11_0_arm64.whl", hash = "sha256:4de0ed8cbc457a506dbca40376e206a29efee10756a00f1f3404bf67ad737d04", upload-time = "2025-10-14T17:26:17Z" },
 ]
 
 [[package]]
@@ -11090,14 +11071,14 @@ dependencies = [
     { name = "typing-extensions", marker = "(platform_machine != 'arm64' and extra == 'extra-5-marin-cpu') or (sys_platform != 'darwin' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cpu') or (sys_platform != 'darwin' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'darwin' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (sys_platform != 'darwin' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu')" },
 ]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0%2Bcpu-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:da77341ccaba31762d9238b0942c165c4582a26818f3045b052b39cebdd7ad9d" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0%2Bcpu-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:add3e93ecc1eeaa6853f6a973ce60ffb3cb14ed2e80f5055e139b09385dce0a7" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0%2Bcpu-cp311-cp311-win_amd64.whl", hash = "sha256:389e1e0b8083fd355f7caf5ba82356b5e01c318998bd575dbf2285a0d8137089" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0%2Bcpu-cp311-cp311-win_arm64.whl", hash = "sha256:5ce3d01aef91dc078fbb121814e556d55bc886d303efaf42c4fe67e411f5f9ad" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:3a651434ae1248b0568c12b5f9e3acc8942eb28378d9d04a79302938b68c6f24" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:28f6eb31b08180a5c5e98d5bc14eef6909c9f5a1dbff9632c3e02a8773449349" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0%2Bcpu-cp312-cp312-win_amd64.whl", hash = "sha256:e438061b87ec7dd6018fca9f975219889aa0a3f6cdc3ea10dd0ae2bc7f1c47ce" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0%2Bcpu-cp312-cp312-win_arm64.whl", hash = "sha256:eb13ff1c34e338d722e76a4fd83b8d282782505bd1b99af4b3c32da66eba6eb4" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0%2Bcpu-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:da77341ccaba31762d9238b0942c165c4582a26818f3045b052b39cebdd7ad9d", upload-time = "2025-10-14T17:26:04Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0%2Bcpu-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:add3e93ecc1eeaa6853f6a973ce60ffb3cb14ed2e80f5055e139b09385dce0a7", upload-time = "2025-10-14T17:26:06Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0%2Bcpu-cp311-cp311-win_amd64.whl", hash = "sha256:389e1e0b8083fd355f7caf5ba82356b5e01c318998bd575dbf2285a0d8137089", upload-time = "2025-10-14T17:26:00Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0%2Bcpu-cp311-cp311-win_arm64.whl", hash = "sha256:5ce3d01aef91dc078fbb121814e556d55bc886d303efaf42c4fe67e411f5f9ad", upload-time = "2025-10-14T17:26:01Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:3a651434ae1248b0568c12b5f9e3acc8942eb28378d9d04a79302938b68c6f24", upload-time = "2025-10-14T17:26:02Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:28f6eb31b08180a5c5e98d5bc14eef6909c9f5a1dbff9632c3e02a8773449349", upload-time = "2025-10-14T17:26:03Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0%2Bcpu-cp312-cp312-win_amd64.whl", hash = "sha256:e438061b87ec7dd6018fca9f975219889aa0a3f6cdc3ea10dd0ae2bc7f1c47ce", upload-time = "2025-10-14T17:26:05Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.9.0%2Bcpu-cp312-cp312-win_arm64.whl", hash = "sha256:eb13ff1c34e338d722e76a4fd83b8d282782505bd1b99af4b3c32da66eba6eb4", upload-time = "2025-10-14T17:26:06Z" },
 ]
 
 [[package]]
@@ -11163,12 +11144,12 @@ dependencies = [
     { name = "typing-extensions", marker = "(sys_platform == 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm')" },
 ]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.9.0%2Bcu128-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:6848715fc906574eb2c0975f56771663344eef7b9a717816b50dede616a3d4fb" },
-    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.9.0%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:e97c264478c9fc48f91832749d960f1e349aeb214224ebe65fb09435dd64c59a" },
-    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.9.0%2Bcu128-cp311-cp311-win_amd64.whl", hash = "sha256:dc6f6c6e7d7eed20c687fc189754a6ea6bf2da9c64eff59fd6753b80ed4bca05" },
-    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.9.0%2Bcu128-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:e1765625084e320f1eb2f4eb5fd9d14d39d08d7a1880c10a307ce5de20831d27" },
-    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.9.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:87c62d3b95f1a2270bd116dbd47dc515c0b2035076fbb4a03b4365ea289e89c4" },
-    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.9.0%2Bcu128-cp312-cp312-win_amd64.whl", hash = "sha256:c97dc47a1f64745d439dd9471a96d216b728d528011029b4f9ae780e985529e0" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.9.0%2Bcu128-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:6848715fc906574eb2c0975f56771663344eef7b9a717816b50dede616a3d4fb", upload-time = "2025-10-14T17:28:16Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.9.0%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:e97c264478c9fc48f91832749d960f1e349aeb214224ebe65fb09435dd64c59a", upload-time = "2025-10-14T17:28:26Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.9.0%2Bcu128-cp311-cp311-win_amd64.whl", hash = "sha256:dc6f6c6e7d7eed20c687fc189754a6ea6bf2da9c64eff59fd6753b80ed4bca05", upload-time = "2025-10-14T17:28:28Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.9.0%2Bcu128-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:e1765625084e320f1eb2f4eb5fd9d14d39d08d7a1880c10a307ce5de20831d27", upload-time = "2025-10-14T17:28:29Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.9.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:87c62d3b95f1a2270bd116dbd47dc515c0b2035076fbb4a03b4365ea289e89c4", upload-time = "2025-10-14T17:28:41Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.9.0%2Bcu128-cp312-cp312-win_amd64.whl", hash = "sha256:c97dc47a1f64745d439dd9471a96d216b728d528011029b4f9ae780e985529e0", upload-time = "2025-10-14T17:28:47Z" },
 ]
 
 [[package]]
@@ -11240,10 +11221,10 @@ dependencies = [
     { name = "torch", version = "2.9.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-tpu') or (platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-tpu') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cpu') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (platform_machine != 'aarch64' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (platform_machine != 'aarch64' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (platform_machine != 'aarch64' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (platform_machine != 'aarch64' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (platform_python_implementation != 'CPython' and extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (platform_python_implementation != 'CPython' and extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12' and extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm')" },
 ]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.24.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:f771cf918351ad509a28488be475f3e9cc71a750d6b1467842bfb64863a5e986" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.24.0-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:bbd63bf4ebff84c48c50123eba90526cc9f794fe45bc9f5dd07cec19e8c62bce" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.24.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:c61d40bcd2e2451e932902a702ad495ba1ec6f279e90b1e15cef2bb55dc911e2" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.24.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:b0531d1483fc322d7da0d83be52f0df860a75114ab87dbeeb9de765feaeda843" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.24.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:f771cf918351ad509a28488be475f3e9cc71a750d6b1467842bfb64863a5e986", upload-time = "2025-10-15T14:05:20Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.24.0-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:bbd63bf4ebff84c48c50123eba90526cc9f794fe45bc9f5dd07cec19e8c62bce", upload-time = "2025-10-15T14:05:20Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.24.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:c61d40bcd2e2451e932902a702ad495ba1ec6f279e90b1e15cef2bb55dc911e2", upload-time = "2025-10-15T14:05:20Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.24.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:b0531d1483fc322d7da0d83be52f0df860a75114ab87dbeeb9de765feaeda843", upload-time = "2025-10-15T14:05:20Z" },
 ]
 
 [[package]]
@@ -11260,8 +11241,8 @@ dependencies = [
     { name = "torch", version = "2.9.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu') or (platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (platform_machine != 'aarch64' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (platform_machine != 'aarch64' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (platform_python_implementation != 'CPython' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (platform_python_implementation != 'CPython' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm')" },
 ]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cu128/torchvision-0.24.0-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:d1090dcf436124521eb765fafff44300dcda090d2d4047d515632627a78d6709" },
-    { url = "https://download-r2.pytorch.org/whl/cu128/torchvision-0.24.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:5d6bcd7393774c82531f7ec411f352129fe8c302bba7765c372398a71d5df4a8" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torchvision-0.24.0-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:d1090dcf436124521eb765fafff44300dcda090d2d4047d515632627a78d6709", upload-time = "2025-10-15T14:15:54Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torchvision-0.24.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:5d6bcd7393774c82531f7ec411f352129fe8c302bba7765c372398a71d5df4a8", upload-time = "2025-10-15T14:15:54Z" },
 ]
 
 [[package]]
@@ -11372,10 +11353,10 @@ dependencies = [
     { name = "torch", version = "2.9.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-5-marin-tpu') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-tpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-tpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (platform_machine != 'arm64' and sys_platform == 'darwin' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu') or (platform_machine == 'arm64' and sys_platform == 'darwin' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (platform_machine == 'arm64' and sys_platform == 'darwin' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (platform_machine != 'arm64' and sys_platform == 'darwin' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cpu' and extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu') or (platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-5-marin-cuda12' and extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform == 'win32' and extra == 'extra-5-marin-tpu') or (sys_platform == 'darwin' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform == 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'darwin' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'linux' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'linux' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'linux' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform == 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'win32' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform == 'win32' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform == 'darwin' and extra == 'extra-5-marin-cpu' and extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'darwin' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'darwin' and extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform == 'linux' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm')" },
 ]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.24.0%2Bcpu-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:51fe8d72ddcc88a50ff27c50dd4987d82fba8b0dfd591898ee1f60e2902d18d1" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.24.0%2Bcpu-cp311-cp311-win_amd64.whl", hash = "sha256:bb035ec26121238dbaa888e5efbf04c7d45f113a7c34d1cf849c4031e7cac4b8" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.24.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:baa37f80155a3b055911d5c2418be1e16b95bb69f671dbb0d07d67504093e23d" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.24.0%2Bcpu-cp312-cp312-win_amd64.whl", hash = "sha256:6ec2ebf962e7dca034e06a6eb07dafe388b16e7b01168f1c10b0c299e95946d5" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.24.0%2Bcpu-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:51fe8d72ddcc88a50ff27c50dd4987d82fba8b0dfd591898ee1f60e2902d18d1", upload-time = "2025-10-15T14:05:19Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.24.0%2Bcpu-cp311-cp311-win_amd64.whl", hash = "sha256:bb035ec26121238dbaa888e5efbf04c7d45f113a7c34d1cf849c4031e7cac4b8", upload-time = "2025-10-15T14:05:19Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.24.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:baa37f80155a3b055911d5c2418be1e16b95bb69f671dbb0d07d67504093e23d", upload-time = "2025-10-15T14:05:20Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.24.0%2Bcpu-cp312-cp312-win_amd64.whl", hash = "sha256:6ec2ebf962e7dca034e06a6eb07dafe388b16e7b01168f1c10b0c299e95946d5", upload-time = "2025-10-15T14:05:19Z" },
 ]
 
 [[package]]
@@ -11427,10 +11408,10 @@ dependencies = [
     { name = "torch", version = "2.9.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-5-marin-gpu') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm')" },
 ]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cu128/torchvision-0.24.0%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:8af994ac56868f939fb1314eb99f5282951c9a12aae34b9dde00a78e42e59d21" },
-    { url = "https://download-r2.pytorch.org/whl/cu128/torchvision-0.24.0%2Bcu128-cp311-cp311-win_amd64.whl", hash = "sha256:0783b511e3e5a7821480254768fc3a1193726f9cc0373aac41c28cf934ef63f0" },
-    { url = "https://download-r2.pytorch.org/whl/cu128/torchvision-0.24.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:e505bd83ee10edb94523d0b805a08f50b8862b58d2cc6f02d14cd4e7ef9302bc" },
-    { url = "https://download-r2.pytorch.org/whl/cu128/torchvision-0.24.0%2Bcu128-cp312-cp312-win_amd64.whl", hash = "sha256:1aa36ac00106e1381c38348611a1ec0eebe942570ebaf0490f026b061dfc212c" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torchvision-0.24.0%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:8af994ac56868f939fb1314eb99f5282951c9a12aae34b9dde00a78e42e59d21", upload-time = "2025-10-15T14:05:29Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torchvision-0.24.0%2Bcu128-cp311-cp311-win_amd64.whl", hash = "sha256:0783b511e3e5a7821480254768fc3a1193726f9cc0373aac41c28cf934ef63f0", upload-time = "2025-10-15T14:36:40Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torchvision-0.24.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:e505bd83ee10edb94523d0b805a08f50b8862b58d2cc6f02d14cd4e7ef9302bc", upload-time = "2025-10-15T14:05:29Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torchvision-0.24.0%2Bcu128-cp312-cp312-win_amd64.whl", hash = "sha256:1aa36ac00106e1381c38348611a1ec0eebe942570ebaf0490f026b061dfc212c", upload-time = "2025-10-15T14:36:42Z" },
 ]
 
 [[package]]

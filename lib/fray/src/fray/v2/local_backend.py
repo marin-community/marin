@@ -225,8 +225,8 @@ class LocalActorHandle:
     This allows the handle to be created before the actor instance exists,
     enabling actors to access their own handle during __init__.
 
-    Actors are responsible for their own thread safety. This matches Iris/Ray
-    behavior where actor methods can be called concurrently and the actor
+    Actors are responsible for their own thread safety. This matches the Iris
+    backend where actor methods can be called concurrently and the actor
     implementation must handle synchronization internally.
     """
 
