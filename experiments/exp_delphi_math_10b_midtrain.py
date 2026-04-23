@@ -218,7 +218,12 @@ def _build_runs() -> list[ExecutorStep]:
             )
 
             lr_str = _lr_str(lr_factor)
-            name = f"delphi-{base_tag}-math-10b-lr{lr_str}"
+            # `-v2` suffix forces a new executor output hash so we get a fresh
+            # W&B run_id, escaping the step-monotonic rejection bug from the
+            # broken-run hash collision. Plain SimpleTrainConfig fields like
+            # `checkpoint_init_mode` do NOT bump the hash (the Marin executor
+            # only versions `versioned(...)` values + step.name + upstream deps).
+            name = f"delphi-{base_tag}-math-10b-lr{lr_str}-v2"
 
             runs.append(
                 default_train(
