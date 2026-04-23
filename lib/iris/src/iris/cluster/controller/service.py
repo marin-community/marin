@@ -1054,17 +1054,21 @@ class ControllerServiceImpl:
         if self._auth.provider and verified_user is not None and not job_id.is_root:
             self._authorize_job_owner(job_id)
 
-        # Priority band validation: PRODUCTION requires MANAGE_BUDGETS permission,
-        # and non-PRODUCTION submissions are capped by the user's max_band (or
-        # UserBudgetDefaults when the user has no explicit row).
+        # Priority band validation.
+        #
+        # - PRODUCTION additionally requires MANAGE_BUDGETS when auth is on;
+        #   admins pass here and skip the max_band cap below.
+        # - The max_band cap fires regardless of auth mode, keyed on the
+        #   claimed job_id.user. In anonymous mode this doesn't guarantee the
+        #   user is who they claim to be, but it ensures the cluster's
+        #   configured tiers and UserBudgetDefaults still bite — an unlisted
+        #   submitter hits the INTERACTIVE default cap and can't punch up to
+        #   PRODUCTION just by skipping auth.
         # UNSPECIFIED (0) defaults to INTERACTIVE.
         band = request.priority_band or job_pb2.PRIORITY_BAND_INTERACTIVE
         if band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
-            # MANAGE_BUDGETS is the primary gate for PRODUCTION; admins pass
-            # here and skip the max_band cap below (the cap is meant to prevent
-            # unlisted users from punching up, not to re-check admins).
             authorize(AuthzAction.MANAGE_BUDGETS)
-        elif self._auth.provider:
+        else:
             user_budget = self._db.get_user_budget(job_id.user)
             max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
             if band < max_band:
