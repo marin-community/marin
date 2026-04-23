@@ -6,13 +6,13 @@
 import pytest
 
 from experiments.datakit_testbed.dag import build_testbed_steps
-from marin.datakit.sources import DatakitSource, pinned_sources
+from marin.datakit.sources import DatakitSource, all_sources
 
-_PINNED = pinned_sources()
+_ALL = all_sources()
 
 
 def _source(name: str) -> DatakitSource:
-    return _PINNED[name]
+    return _ALL[name]
 
 
 def test_dag_empty_source_list_raises():
@@ -26,7 +26,7 @@ def test_dag_single_source_shape():
 
     names = [s.name for s in dag.all_steps]
     assert names == [
-        "raw/nvidia__Nemotron-CC-Code-v1__nemotron_cc_code_v1-c55cd9",
+        "raw/nemotron_cc_code_v1",
         "normalized/nemotron_cc_code_v1/all",
         "datakit-testbed/sample/nemotron_cc_code_v1/all",
         "datakit-testbed/noop_dedup",
@@ -38,19 +38,26 @@ def test_dag_single_source_shape():
 def test_dag_has_one_sample_step_per_source():
     dag = build_testbed_steps("run0")
     sample_names = {s.name for s in dag.all_steps if "/sample/" in s.name}
-    assert sample_names == {f"datakit-testbed/sample/{s.name}" for s in _PINNED.values()}
+    assert sample_names == {f"datakit-testbed/sample/{s.name}" for s in _ALL.values()}
 
 
-def test_dag_groups_downloads_by_hf_id_revision():
-    """Every Nemotron-CC v2.1 subset shares one family download."""
-    v21_sources = tuple(s for s in _PINNED.values() if s.name.startswith("nemotron_cc_v2_1/"))
+def test_dag_nemotron_family_subsets_share_one_download_stepspec():
+    """Every Nemotron-CC v2.1 subset's chain starts with the SAME StepSpec object.
+
+    Subsets share one family download because
+    :func:`nemotron_v2_normalize_steps` builds the download once and passes it
+    to each subset's normalize step. The ferry appends each source's
+    ``normalize_steps`` as-is; duplicate downloads in ``all_steps`` are the
+    same Python object, which the executor trivially dedupes.
+    """
+    v21_sources = tuple(s for s in _ALL.values() if s.name.startswith("nemotron_cc_v2_1/"))
     assert len(v21_sources) > 1, "registry must have multiple v2.1 subsets"
 
+    first_download = v21_sources[0].normalize_steps[0]
+    for src in v21_sources[1:]:
+        assert src.normalize_steps[0] is first_download, "v2.1 subsets must share one download StepSpec"
+
     dag = build_testbed_steps("run0", sources=v21_sources)
-
-    download_steps = [s for s in dag.all_steps if s.name.startswith("raw/")]
-    assert len(download_steps) == 1, "expected exactly one download for a single family"
-
     normalize_steps = [s for s in dag.all_steps if s.name.startswith("normalized/")]
     assert len(normalize_steps) == len(v21_sources)
 
@@ -64,7 +71,7 @@ def test_dag_single_shared_dedup_step():
 def test_dag_per_source_consolidate():
     dag = build_testbed_steps("run0")
     consolidate_names = {s.name for s in dag.all_steps if "/consolidate/" in s.name}
-    expected_names = {f"datakit-testbed/consolidate/{s.name}" for s in _PINNED.values()}
+    expected_names = {f"datakit-testbed/consolidate/{s.name}" for s in _ALL.values()}
     assert consolidate_names == expected_names
     # The ferry stops at consolidate; tokenize lives in the training harness.
     tokenize_names = {s.name for s in dag.all_steps if "/tokenize/" in s.name}
@@ -81,19 +88,17 @@ def test_dag_output_paths_namespaced_by_run_id():
         assert "/abc123/" in step.output_path, f"{step.name} not namespaced: {step.output_path}"
 
 
-def test_dag_same_repo_different_staged_paths_get_separate_downloads():
-    """StarCoder2-Extras-shaped case: same (hf_repo, revision), different staged_path per subset."""
-    a = DatakitSource(name="A", hf_dataset_id="foo/bar", revision="abc1234", staged_path="raw/foo/sub_a")
-    b = DatakitSource(name="B", hf_dataset_id="foo/bar", revision="abc1234", staged_path="raw/foo/sub_b")
-    dag = build_testbed_steps("run0", sources=[a, b])
-    download_names = sorted(s.name for s in dag.all_steps if s.name.startswith("raw/"))
-    assert download_names == [
-        "raw/foo__bar__sub_a",
-        "raw/foo__bar__sub_b",
-    ]
+def test_dag_starcoder2_subsets_get_distinct_download_names():
+    """StarCoder2-Extras stages each subset under its own path; the download
+    names must reflect that disambiguation so per-subset StepSpecs don't collide."""
+    subsets = tuple(s for s in _ALL.values() if s.name.startswith("starcoder2/"))
+    assert len(subsets) > 1
+
+    download_names = {s.normalize_steps[0].name for s in subsets}
+    assert len(download_names) == len(subsets), f"expected distinct downloads, got {download_names}"
 
 
 def test_dag_full_testbed_builds():
     """Smoke test: building the default (pinned) testbed does not raise."""
     dag = build_testbed_steps("run0")
-    assert len(dag.consolidated_by_source) == len(_PINNED)
+    assert len(dag.consolidated_by_source) == len(_ALL)

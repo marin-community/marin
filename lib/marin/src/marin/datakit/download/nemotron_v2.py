@@ -120,6 +120,18 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
         },
         override_output_path="raw/nemotron_pretraining_sft_v1-10f77e",
     ),
+    "nemotron_pretraining_specialized_v1_1": NemotronV2Dataset(
+        hf_dataset_id="nvidia/Nemotron-Pretraining-Specialized-v1.1",
+        revision="13fa979",
+        subsets={
+            "code_concepts": "Nemotron-Pretraining-Code-Concepts/**/*.parquet",
+            "economics": "Nemotron-Pretraining-Economics/**/*.parquet",
+            "formal_logic": "Nemotron-Pretraining-Formal-Logic/**/*.parquet",
+            "multiple_choice": "Nemotron-Pretraining-Multiple-Choice/**/*.parquet",
+            "unconditional_algorithmic": "Nemotron-Pretraining-Unconditional-Algorithmic/**/*.parquet",
+        },
+        override_output_path="raw/nemotron_pretraining_specialized_v1_1-b12f71",
+    ),
 }
 
 

@@ -12,14 +12,14 @@ validated by a live smoke run, not unit tests.
 import pytest
 
 from experiments.datakit_testbed.dag import build_testbed_steps
-from marin.datakit.sources import pinned_sources
+from marin.datakit.sources import all_sources
 from experiments.datakit_testbed.train import (
     DEFAULT_TARGET_BUDGET_TOKENS,
     build_testbed_tokenize_steps,
     simulated_experiment_budget,
 )
 
-_SMOKE_SOURCE = pinned_sources()["nemotron_cc_code_v1/all"]
+_SMOKE_SOURCE = all_sources()["nemotron_cc_code_v1/all"]
 
 
 def test_default_target_budget_is_1t():

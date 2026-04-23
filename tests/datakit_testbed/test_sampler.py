@@ -120,7 +120,7 @@ def test_sample_no_shards_raises(tmp_path: Path):
 
 
 def _src(name: str, rough: float | None) -> DatakitSource:
-    return DatakitSource(name=name, hf_dataset_id="fake/dataset", revision="abcdef0", rough_token_count_b=rough)
+    return DatakitSource(name=name, normalize_steps=(), rough_token_count_b=rough)
 
 
 def test_proportional_fractions_sum_to_target_across_known_sources():

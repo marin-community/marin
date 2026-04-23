@@ -19,12 +19,7 @@ from marin.datakit.sources import DatakitSource, all_sources
 
 
 def _src(name: str, rough: float | None) -> DatakitSource:
-    return DatakitSource(
-        name=name,
-        hf_dataset_id="fake/dataset",
-        revision="abcdef0",
-        rough_token_count_b=rough,
-    )
+    return DatakitSource(name=name, normalize_steps=(), rough_token_count_b=rough)
 
 
 def test_weights_use_rough_token_counts():
