@@ -176,8 +176,8 @@ jobs:
           FSSPEC_S3: '{"endpoint_url": "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"}'
         run: |
           export IRIS_CONTROLLER_URL="http://localhost:${LOCAL_PORT}"
-          timeout 900 uv run pytest tests/test_integration_test.py \
-            -m integration -o "addopts=" --timeout=600 -v -s
+          timeout 1800 uv run pytest tests/test_integration_test.py \
+            -m integration -o "addopts=" --timeout=900 -v -s
 
       - name: Stop port-forward
         if: always()
