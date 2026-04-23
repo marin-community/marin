@@ -35,11 +35,13 @@ from experiments.rerank_decode.serve import launch_vllm_server, shutdown_servers
 from experiments.rerank_decode.utils import rerank
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.rl.environments.tinker_environments.math_grading import extract_boxed, grade_answer
+from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 
 PROPOSAL_MODEL = "meta-llama/Llama-3.2-1B"
 SCORING_MODEL = "Qwen/Qwen3-4B"
+CHECKPOINT_BATCH_SIZE = 10
 
 QUESTION_SUFFIX = " Write your answer in \\boxed{} format."
 
@@ -115,47 +117,75 @@ def run_single_eval(config: RerankDecodeMath500Config):
 
         result_path = os.path.join(config.output_path, "results.json.gz")
 
-        generations = []
-        for i, prompt in enumerate(prompts):
-            scorer.reset()
-            if (i + 1) % 50 == 0:
-                logger.info("  %d/%d", i + 1, len(prompts))
-            generations.append(
-                rerank(
+        def process_batch(batch_rows: list[dict]) -> list[dict]:
+            batch_results = []
+            for row in batch_rows:
+                i = row["problem_id"]
+                scorer.reset()
+                if (i + 1) % 50 == 0:
+                    logger.info("  %d/%d", i + 1, len(prompts))
+
+                generated = rerank(
                     proposal_client=proposal_client,
                     proposal_model=config.proposal_model,
                     scorer=scorer,
-                    prompt=prompt,
+                    prompt=row["prompt"],
                     num_samples=config.num_samples,
                     max_tokens=config.max_tokens,
                     chunk_size=config.chunk_size,
                     temperature=config.temperature,
                     eos_token=eos_token,
                 )
-            )
+
+                try:
+                    extracted = extract_boxed(generated)
+                except ValueError:
+                    extracted = None
+
+                is_correct = False
+                if extracted is not None:
+                    is_correct = grade_answer(extracted, row["ground_truth"])
+
+                batch_results.append({
+                    "problem": row["problem"],
+                    "ground_truth": row["ground_truth"],
+                    "samples": [{"generated": generated, "extracted_answer": extracted, "correct": is_correct}],
+                })
+
+            return batch_results
+
+        for batch_start in range(0, len(prompts), CHECKPOINT_BATCH_SIZE):
+            batch_result_path = os.path.join(config.output_path, f"results-batch-{batch_start}.json.gz")
+            if fsspec_exists(batch_result_path):
+                continue
+
+            batch_end = min(batch_start + CHECKPOINT_BATCH_SIZE, len(prompts))
+            logger.info("Processing problems %d-%d/%d", batch_start, batch_end, len(prompts))
+            batch_rows = [
+                {
+                    "problem_id": i,
+                    "problem": problems[i],
+                    "ground_truth": answers[i],
+                    "prompt": prompts[i],
+                }
+                for i in range(batch_start, batch_end)
+            ]
+            batch_results = process_batch(batch_rows)
+            with fsspec.open(batch_result_path, "wt", compression="gzip") as f:
+                json.dump(batch_results, f, indent=2)
 
         results = []
         pass_at_1 = 0
-        for i, generated in enumerate(generations):
-            ground_truth = answers[i]
+        for batch_start in range(0, len(prompts), CHECKPOINT_BATCH_SIZE):
+            batch_result_path = os.path.join(config.output_path, f"results-batch-{batch_start}.json.gz")
+            with fsspec.open(batch_result_path, "rt", compression="gzip") as f:
+                batch_results = json.load(f)
+                results.extend(batch_results)
 
-            try:
-                extracted = extract_boxed(generated)
-            except ValueError:
-                extracted = None
-
-            is_correct = False
-            if extracted is not None:
-                is_correct = grade_answer(extracted, ground_truth)
-
+        for result in results:
+            is_correct = result["samples"][0]["correct"]
             if is_correct:
                 pass_at_1 += 1
-
-            results.append({
-                "problem": problems[i],
-                "ground_truth": ground_truth,
-                "samples": [{"generated": generated, "extracted_answer": extracted, "correct": is_correct}],
-            })
 
         accuracy = pass_at_1 / len(results)
         print(f"chunk_size={config.chunk_size} num_samples={config.num_samples}: {accuracy:.4f} ({pass_at_1}/{len(results)})")
