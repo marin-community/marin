@@ -7,7 +7,10 @@ Long-context datasets for post-training experiments.
 Dataset families are organized in separate modules:
 - finepdfs: FinePDFs and FinePDFs-edu (English, path-based dicts for mixtures)
 - longmino: Dolma3 Longmino pool with length-bucket breakdowns
-- institutional_books: Institutional Books 1.0
+
+Institutional Books 1.0 lives in ``marin.datakit.download.institutional_books``
+as the canonical single-source declaration; it's registered in
+``marin.datakit.sources`` and consumed from there.
 """
 
 from experiments.long_context_datasets.finepdfs import (
@@ -17,7 +20,6 @@ from experiments.long_context_datasets.finepdfs import (
     finepdfs_token_counts,
     finepdfs_validation_by_language,
 )
-from experiments.long_context_datasets.institutional_books import institutional_books_raw
 from experiments.long_context_datasets.longmino import (
     longmino_bucket_token_counts,
     longmino_by_bucket,
@@ -29,7 +31,6 @@ __all__ = [
     "finepdfs_edu_token_counts",
     "finepdfs_token_counts",
     "finepdfs_validation_by_language",
-    "institutional_books_raw",
     "longmino_bucket_token_counts",
     "longmino_by_bucket",
 ]
