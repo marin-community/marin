@@ -73,6 +73,7 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    use_full_attn_res: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -406,6 +407,19 @@ class MoEMLP(eqx.Module):
         return routed, router_stats
 
 
+def _full_attn_res(
+    entries: list[Float[Array, "B S D"]],
+    current: Float[Array, "B S D"],
+    proj: jax.Array,
+) -> Float[Array, "B S D"]:
+    """Full attention residual: softmax-weighted sum over all previous entries + current."""
+    all_reps = jnp.stack([*entries, current], axis=0)  # [N+1, B, S, D]
+    normed = jax.vmap(rms_norm)(all_reps)  # [N+1, B, S, D]
+    logits = jnp.einsum("d,nbsd->nbs", proj, normed)  # [N+1, B, S]
+    weights = jax.nn.softmax(logits, axis=0)  # [N+1, B, S]
+    return jnp.einsum("nbs,nbsd->bsd", weights, all_reps)  # [B, S, D]
+
+
 class Block(eqx.Module):
     rms_attn: RMSNorm
     attn_gated_norm: GatedNorm
@@ -414,6 +428,9 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    # Full attention residual projections (None if disabled).
+    attn_res_proj: jax.Array | None
+    mlp_res_proj: jax.Array | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
@@ -423,6 +440,8 @@ class Block(eqx.Module):
             shared = DenseMLP.init(
                 cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
             )
+        attn_res_proj = jnp.zeros((cfg.hidden_dim,)) if cfg.use_full_attn_res else None
+        mlp_res_proj = jnp.zeros((cfg.hidden_dim,)) if cfg.use_full_attn_res else None
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
@@ -431,6 +450,8 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            attn_res_proj=attn_res_proj,
+            mlp_res_proj=mlp_res_proj,
         )
 
     @named_call
@@ -438,15 +459,34 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask)
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
-        if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
-        x = x + mlp_out
-        return x, router_stats
+        entries: list[Float[Array, "B S D"]] | None = None,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], list[Float[Array, "B S D"]] | None]:
+        if entries is not None and self.attn_res_proj is not None:
+            # Full attn res before attention: weight over all entries + x.
+            entries = [*entries, x]
+            h = _full_attn_res(entries, x, self.attn_res_proj)
+            attn_in = self.attn_gated_norm(self.rms_attn(h))
+            attn_out = self.attn(attn_in, mask)
+            # Save attn output as new entry.
+            entries = [*entries, attn_out]
+            # Full attn res before MLP: weight over all entries + attn_out.
+            h = _full_attn_res(entries, attn_out, self.mlp_res_proj)
+            mlp_in = self.mlp_gated_norm(self.rms_mlp(h))
+            mlp_out, router_stats = self.mlp(mlp_in)
+            if self.shared is not None:
+                mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            # Save mlp output as new entry. Output = mlp_out (no residual add).
+            entries = [*entries, mlp_out]
+            return mlp_out, router_stats, entries
+        else:
+            attn_in = self.attn_gated_norm(self.rms_attn(x))
+            x = x + self.attn(attn_in, mask)
+            mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+            mlp_out, router_stats = self.mlp(mlp_in)
+            if self.shared is not None:
+                mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            x = x + mlp_out
+            return x, router_stats, None
 
 
 class Transformer(eqx.Module):
@@ -457,6 +497,7 @@ class Transformer(eqx.Module):
     blocks: tuple[Block, ...]
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
+    final_res_proj: jax.Array | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -467,6 +508,7 @@ class Transformer(eqx.Module):
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
         blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+        final_res_proj = jnp.zeros((cfg.hidden_dim,)) if cfg.use_full_attn_res else None
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -475,6 +517,7 @@ class Transformer(eqx.Module):
             blocks=blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
+            final_res_proj=final_res_proj,
             config=cfg,
         )
 
@@ -497,9 +540,10 @@ class Transformer(eqx.Module):
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
 
         moe_router_stats: list[dict[str, jax.Array]] = []
+        entries: list[Float[Array, "B S D"]] | None = [hidden] if cfg.use_full_attn_res else None
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            hidden, router_stats, entries = eqx.filter_checkpoint(block)(hidden, layer_mask, entries)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
@@ -509,6 +553,8 @@ class Transformer(eqx.Module):
             "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
             "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
         }
+        if entries is not None and self.final_res_proj is not None:
+            hidden = _full_attn_res(entries, hidden, self.final_res_proj)
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
 
