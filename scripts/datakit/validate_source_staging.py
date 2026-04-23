@@ -1,16 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Verify every Datakit source's staged dump terminated SUCCESS.
+"""Verify every Datakit source's pre-normalize step terminated SUCCESS.
 
-Each :class:`marin.datakit.sources.DatakitSource` with a non-empty ``staged_path``
-must resolve to a GCS prefix under ``gs://marin-us-central1`` whose
-``.executor_status`` file (plain text or legacy JSON-lines) reports ``SUCCESS`` —
-otherwise the ferry's verify-only download step is pointing at a partial or
-missing dump. Enforced daily as a parallel lane of the datakit-smoke workflow.
+For each :class:`marin.datakit.sources.DatakitSource`, the first pre-normalize
+step (``normalize_steps[:-1][0]``) is the staged raw dump the ferry expects
+to exist on GCS. The staging region is pinned via ``MARIN_PREFIX`` so
+``step.output_path`` resolves to ``gs://marin-us-central1/...`` regardless of
+the caller's environment. Enforced daily as a parallel lane of the
+datakit-smoke workflow.
 """
 
 import logging
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
@@ -20,23 +22,27 @@ from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
-BUCKET = "gs://marin-us-central1"
+STAGING_PREFIX = "gs://marin-us-central1"
 MAX_WORKERS = 16
 WORKER_ID = "datakit-smoke-sources-check"
 
 
-def _check(staged_path: str) -> tuple[str, str]:
+def _check(output_path: str) -> tuple[str, str]:
     """Return (output_path, status) where status is ``SUCCESS`` or a failure token."""
-    output_path = f"{BUCKET}/{staged_path}"
     status = StatusFile(output_path, worker_id=WORKER_ID).status
     return output_path, status or "MISSING"
 
 
 def main() -> None:
     configure_logging()
+    # Pin the staging region before building the registry — StepSpec caches
+    # output_path on first access, so MARIN_PREFIX must be set before
+    # all_sources() materializes any chain.
+    os.environ["MARIN_PREFIX"] = STAGING_PREFIX
+
     sources = all_sources()
-    unique_paths = sorted({s.staged_path for s in sources.values() if s.staged_path})
-    logger.info("Verifying %d unique staged paths under %s", len(unique_paths), BUCKET)
+    unique_paths = sorted({s.normalize_steps[:-1][0].output_path for s in sources.values()})
+    logger.info("Verifying %d unique pre-normalize paths under %s", len(unique_paths), STAGING_PREFIX)
 
     bad: list[tuple[str, str]] = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
@@ -48,8 +54,8 @@ def main() -> None:
                 bad.append((output_path, status))
 
     if bad:
-        raise SystemExit(f"{len(bad)}/{len(unique_paths)} staged paths not SUCCESS under {BUCKET}")
-    logger.info("All %d staged paths report SUCCESS under %s", len(unique_paths), BUCKET)
+        raise SystemExit(f"{len(bad)}/{len(unique_paths)} pre-normalize paths not SUCCESS under {STAGING_PREFIX}")
+    logger.info("All %d pre-normalize paths report SUCCESS under %s", len(unique_paths), STAGING_PREFIX)
 
 
 if __name__ == "__main__":
