@@ -111,7 +111,7 @@ class KVCacheScorer(Scorer):
     The accept() method extends the KV cache with the selected completion.
     """
 
-    def __init__(self, model_name: str, device: str = "cuda"):
+    def __init__(self, model_name: str, device: str = "cuda", score_batch_size: int | None = None):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -121,6 +121,7 @@ class KVCacheScorer(Scorer):
         ).to(device)
         self.model.eval()
         self.device = device
+        self.score_batch_size = score_batch_size
         self._past_key_values: DynamicCache | None = None
         self._prefix_tokens: list[int] = []
 
@@ -158,25 +159,15 @@ class KVCacheScorer(Scorer):
             cache.layers.append(new_layer)
         return cache
 
-    @torch.inference_mode()
-    def score(self, prompt: str, completions: list[str]) -> list[float]:
-        if self._past_key_values is None:
-            self._prefill(prompt)
-
-        assert prompt == self.tokenizer.decode(self._prefix_tokens, skip_special_tokens=False), (
-            f"Prompt does not match cached prefix. "
-            f"Expected: {self.tokenizer.decode(self._prefix_tokens, skip_special_tokens=False)!r}, "
-            f"Got: {prompt!r}"
-        )
-
+    def _score_batch(self, completions: list[str]) -> list[float]:
         bsz = len(completions)
 
         enc = self.tokenizer(completions, add_special_tokens=False, padding=True, return_tensors="pt").to(self.device)
-        suffix_ids = enc["input_ids"]       # [bsz, max_len]
+        suffix_ids = enc["input_ids"]  # [bsz, max_len]
         suffix_mask = enc["attention_mask"]  # [bsz, max_len]
         max_len = suffix_ids.shape[1]
 
-        # Prepend last prefix token so position 0 logits score the first suffix token
+        # Prepend last prefix token so position 0 logits score the first suffix token.
         last_prefix_tok = torch.full((bsz, 1), self._prefix_tokens[-1], dtype=torch.long, device=self.device)
         input_ids = torch.cat([last_prefix_tok, suffix_ids], dim=1)  # [bsz, max_len + 1]
         attention_mask = torch.cat(
@@ -199,11 +190,31 @@ class KVCacheScorer(Scorer):
         neg_logprobs = F.cross_entropy(
             scoring_logits.reshape(-1, scoring_logits.size(-1)),
             suffix_ids.reshape(-1),
-            reduction='none',
+            reduction="none",
         ).view(bsz, max_len)
         scores = -(neg_logprobs * suffix_mask).sum(dim=1)
 
         return scores.tolist()
+
+    @torch.inference_mode()
+    def score(self, prompt: str, completions: list[str]) -> list[float]:
+        if self._past_key_values is None:
+            self._prefill(prompt)
+
+        assert prompt == self.tokenizer.decode(self._prefix_tokens, skip_special_tokens=False), (
+            f"Prompt does not match cached prefix. "
+            f"Expected: {self.tokenizer.decode(self._prefix_tokens, skip_special_tokens=False)!r}, "
+            f"Got: {prompt!r}"
+        )
+
+        if not completions:
+            return []
+
+        batch_size = self.score_batch_size or len(completions)
+        scores: list[float] = []
+        for start in range(0, len(completions), batch_size):
+            scores.extend(self._score_batch(completions[start : start + batch_size]))
+        return scores
 
     def accept(self, prompt: str, completion: str) -> None:
         if self._past_key_values is None:

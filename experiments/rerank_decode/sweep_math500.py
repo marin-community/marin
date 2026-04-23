@@ -109,7 +109,7 @@ def run_single_eval(config: RerankDecodeMath500Config):
             )
             scorer = VLLMLogprobScorer(client=scoring_client, model=config.scoring_model)
         elif config.scorer_type == "kv_cache":
-            scorer = KVCacheScorer(model_name=config.scoring_model)
+            scorer = KVCacheScorer(model_name=config.scoring_model, score_batch_size=4)
         else:
             raise ValueError(f"Unknown scorer_type: {config.scorer_type}")
 
