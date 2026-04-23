@@ -117,6 +117,17 @@ def _sidecar_decoder() -> msgspec.msgpack.Decoder:
     return msgspec.msgpack.Decoder()
 
 
+@functools.cache
+def _read_sidecar_bytes(meta_path: str) -> bytes:
+    """Read sidecar bytes from storage, caching at the module level.
+
+    Sidecars are immutable once written, so an unbounded cache is safe.
+    A typical sidecar is a few KB; even 10 000 mappers is < 50 MB.
+    """
+    fs, fs_path = url_to_fs(meta_path)
+    return fs.cat_file(fs_path)
+
+
 def _scatter_meta_path(data_path: str) -> str:
     """``shard-0000.shuffle`` -> ``shard-0000.scatter_meta``."""
     stem, _ = os.path.splitext(data_path)
@@ -160,13 +171,11 @@ def _read_sidecar_slice(path: str, shard_key: str) -> _SidecarSlice | None:
     sidecar is corrupt or was written by an incompatible version, and we
     fail rather than silently substituting zero.
 
-    Uses ``fs.cat_file`` rather than ``open_url`` — one direct GET returning
-    bytes is ~25% faster than going through ``TextIOWrapper(BufferedFile)``
-    for small sidecars, and msgpack decodes bytes directly.
+    Sidecar bytes are read through a module-level cache so colocated reducers
+    that hit the same sidecar avoid redundant GCS GETs.
     """
     meta_path = _scatter_meta_path(path)
-    fs, fs_path = url_to_fs(meta_path)
-    meta = _sidecar_decoder().decode(fs.cat_file(fs_path))
+    meta = _sidecar_decoder().decode(_read_sidecar_bytes(meta_path))
     ranges_raw = meta.get("shards", {}).get(shard_key)
     if not ranges_raw:
         return None
@@ -191,10 +200,8 @@ def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -
     accumulate in the reducer process. Sidecars with no ranges for
     ``target_shard`` are dropped.
 
-    TODO(rav): each reducer subprocess re-reads every sidecar even though only
-    one shard's byte ranges are used. A worker-level sidecar cache (or a shared
-    read across colocated reducers) would avoid the redundant GCS GETs when
-    many reducers run on the same host.
+    Sidecar bytes are cached at the module level by ``_read_sidecar_bytes``,
+    so colocated reducers that hit the same sidecar avoid redundant GCS GETs.
     """
     shard_key = str(target_shard)
     ordered: list[_SidecarSlice | None] = [None] * len(scatter_paths)
