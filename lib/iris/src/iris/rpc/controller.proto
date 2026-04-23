@@ -108,11 +108,11 @@ message Controller {
     repeated string submit_argv = 35;
 
     // ISO date (YYYY-MM-DD) of the client's marin-iris build. For wheels this
-    // is stamped at build time by hatch_build.py; for editable installs it's
-    // derived from `git log` on the iris source tree. Root submissions older
-    // than the server's floor are rejected. Nested submissions
-    // (is_root == false) are exempt. Empty string is interpreted as the
-    // feature's introduction date — see service.py.
+    // is stamped at build time by scripts/python_libs_package.py; for editable
+    // installs it's derived from `git log` on the iris source tree. Root
+    // submissions older than the server's floor are rejected. Nested
+    // submissions (is_root == false) are exempt. Empty string is interpreted
+    // as the feature's introduction date — see service.py.
     string client_revision_date = 36;
   }
 
