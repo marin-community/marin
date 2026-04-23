@@ -23,8 +23,6 @@ Design choices:
 * **Copy, not manifest.** GCS has no symlinks; a manifest would force a
   downstream API change. Intra-region GCS copy has no network egress — only
   the storage of the sampled subset.
-* **Never reads row data.** Only lists shards (fsspec glob) and invokes the
-  filesystem's own copy (server-side on GCS).
 * **Fraction per source** is computed upstream from ``rough_token_count_b``
   against ``RAW_TARGET_TOTAL_TOKENS_B`` via :func:`proportional_sample_fractions`.
 """
@@ -97,23 +95,18 @@ def proportional_sample_fractions(
 
 
 def _copy_shard(src: str, dst: str) -> int:
-    """Copy a single file. Server-side within a backend, streamed otherwise."""
+    """Copy a single file server-side. Both paths must share a backend."""
     src_fs, src_path = url_to_fs(src)
     dst_fs, dst_path = url_to_fs(dst)
+    assert src_fs.protocol == dst_fs.protocol, (
+        f"sampler: src/dst filesystem mismatch: {src_fs.protocol!r} vs {dst_fs.protocol!r}. "
+    )
     parent = os.path.dirname(dst_path)
     if parent:
         fsspec_mkdirs(parent, exist_ok=True)
-    if src_fs.protocol == dst_fs.protocol:
-        src_fs.copy(src_path, dst_path)
-        return int(src_fs.size(src_path) or 0)
-    size = 0
-    with src_fs.open(src_path, "rb") as sf, dst_fs.open(dst_path, "wb") as df:
-        while True:
-            chunk = sf.read(8 * 1024 * 1024)
-            if not chunk:
-                break
-            df.write(chunk)
-            size += len(chunk)
+    src_fs.copy(src_path, dst_path)
+    size = int(src_fs.size(src_path) or 0)
+    assert size > 0, f"sampler: source shard has zero size: {src}"
     return size
 
 
@@ -148,7 +141,7 @@ def sample_normalized_shards(
     output_path: str,
     sample_fraction: float,
 ) -> NormalizedData:
-    """Copy the first ``K = ceil(N * sample_fraction)`` normalized shards.
+    """Copy the first ``K = ceil(N * sample_fraction)`` normalized shards or rows if single-shard.
 
     Shards are enumerated under ``source.main_output_dir``, sorted
     lexicographically, and the first ``K`` copied to ``{output_path}/outputs/main/``
