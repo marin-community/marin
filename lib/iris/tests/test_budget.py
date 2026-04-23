@@ -268,7 +268,7 @@ def service(state, tmp_path) -> ControllerServiceImpl:
     priority-band authorization triggers (see launch_job band check)."""
     return ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=MockController(),
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=LogServiceImpl(),

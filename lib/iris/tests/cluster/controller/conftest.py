@@ -51,6 +51,7 @@ from iris.cluster.controller.schema import (
     tasks_with_attempts,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.stores import ControllerStore
 from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -171,7 +172,7 @@ def controller_service(state, log_service, mock_controller, tmp_path) -> Control
     """ControllerServiceImpl with fresh DB, log service, and mock controller."""
     return ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
@@ -189,7 +190,8 @@ def make_controller_state(**kwargs):
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
     try:
         db = ControllerDB(db_dir=tmp)
-        yield ControllerTransitions(db=db, **kwargs)
+        store = ControllerStore(db)
+        yield ControllerTransitions(store=store, **kwargs)
         db.close()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

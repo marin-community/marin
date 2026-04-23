@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for EndpointRegistry — the in-memory cache over the ``endpoints`` table."""
+"""Tests for EndpointStore — the in-memory cache over the ``endpoints`` table."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import threading
 import pytest
 
 from iris.cluster.controller.db import EndpointQuery
-from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.controller.schema import ENDPOINT_PROJECTION, EndpointRow
+from iris.cluster.controller.stores import EndpointStore
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp
@@ -73,9 +73,9 @@ def test_registry_loads_existing_rows_on_startup(state):
     """On construction, the registry should contain every row in the ``endpoints`` table."""
     tasks = submit_job(state, "j", make_job_request("j"))
     with state._db.transaction() as cur:
-        assert state._db.endpoints.add(cur, _make_row("e1", "svc", tasks[0].task_id))
+        assert state._store.endpoints.add(cur, _make_row("e1", "svc", tasks[0].task_id))
 
-    fresh = EndpointRegistry(state._db)
+    fresh = EndpointStore(state._db)
     rows = fresh.query()
     assert [r.endpoint_id for r in rows] == ["e1"]
 
@@ -85,12 +85,12 @@ def test_add_updates_memory_after_commit(state):
     t = tasks[0].task_id
 
     with state._db.transaction() as cur:
-        assert state._db.endpoints.add(cur, _make_row("e1", "alpha", t))
+        assert state._store.endpoints.add(cur, _make_row("e1", "alpha", t))
         # Not yet committed; memory should not reflect the insert.
-        assert state._db.endpoints.get("e1") is None
+        assert state._store.endpoints.get("e1") is None
 
-    assert state._db.endpoints.get("e1") is not None
-    assert [r.endpoint_id for r in state._db.endpoints.query()] == ["e1"]
+    assert state._store.endpoints.get("e1") is not None
+    assert [r.endpoint_id for r in state._store.endpoints.query()] == ["e1"]
 
 
 def test_rollback_leaves_memory_untouched(state):
@@ -102,12 +102,12 @@ def test_rollback_leaves_memory_untouched(state):
 
     with pytest.raises(BoomError):
         with state._db.transaction() as cur:
-            state._db.endpoints.add(cur, _make_row("e1", "alpha", t))
+            state._store.endpoints.add(cur, _make_row("e1", "alpha", t))
             raise BoomError
 
     # DB rolled back → memory must NOT see the insert.
-    assert state._db.endpoints.get("e1") is None
-    assert state._db.endpoints.query() == []
+    assert state._store.endpoints.get("e1") is None
+    assert state._store.endpoints.query() == []
 
 
 def test_add_rejects_terminal_task(state):
@@ -121,22 +121,22 @@ def test_add_rejects_terminal_task(state):
     )
 
     with state._db.transaction() as cur:
-        assert state._db.endpoints.add(cur, _make_row("e1", "alpha", task_id)) is False
+        assert state._store.endpoints.add(cur, _make_row("e1", "alpha", task_id)) is False
 
-    assert state._db.endpoints.get("e1") is None
+    assert state._store.endpoints.get("e1") is None
 
 
 def test_remove_drops_endpoint_by_id(state):
     tasks = submit_job(state, "j", make_job_request("j"))
     t = tasks[0].task_id
     with state._db.transaction() as cur:
-        state._db.endpoints.add(cur, _make_row("e1", "alpha", t))
-        state._db.endpoints.add(cur, _make_row("e2", "beta", t))
+        state._store.endpoints.add(cur, _make_row("e1", "alpha", t))
+        state._store.endpoints.add(cur, _make_row("e2", "beta", t))
 
     with state._db.transaction() as cur:
-        removed = state._db.endpoints.remove(cur, "e1")
+        removed = state._store.endpoints.remove(cur, "e1")
     assert removed is not None and removed.endpoint_id == "e1"
-    assert {r.endpoint_id for r in state._db.endpoints.query()} == {"e2"}
+    assert {r.endpoint_id for r in state._store.endpoints.query()} == {"e2"}
 
 
 def test_remove_by_task_drops_all_task_endpoints(state):
@@ -144,15 +144,15 @@ def test_remove_by_task_drops_all_task_endpoints(state):
     t1, t2 = tasks[0].task_id, tasks[1].task_id
 
     with state._db.transaction() as cur:
-        state._db.endpoints.add(cur, _make_row("e1", "alpha", t1))
-        state._db.endpoints.add(cur, _make_row("e2", "beta", t1))
-        state._db.endpoints.add(cur, _make_row("e3", "gamma", t2))
+        state._store.endpoints.add(cur, _make_row("e1", "alpha", t1))
+        state._store.endpoints.add(cur, _make_row("e2", "beta", t1))
+        state._store.endpoints.add(cur, _make_row("e3", "gamma", t2))
 
     with state._db.transaction() as cur:
-        removed = state._db.endpoints.remove_by_task(cur, t1)
+        removed = state._store.endpoints.remove_by_task(cur, t1)
 
     assert set(removed) == {"e1", "e2"}
-    assert {r.endpoint_id for r in state._db.endpoints.query()} == {"e3"}
+    assert {r.endpoint_id for r in state._store.endpoints.query()} == {"e3"}
 
 
 def test_remove_by_job_ids_drops_subtree(state):
@@ -163,14 +163,14 @@ def test_remove_by_job_ids_drops_subtree(state):
     t2 = tasks_b[0].task_id
 
     with state._db.transaction() as cur:
-        state._db.endpoints.add(cur, _make_row("e1", "alpha", t1))
-        state._db.endpoints.add(cur, _make_row("e2", "beta", t2))
+        state._store.endpoints.add(cur, _make_row("e1", "alpha", t1))
+        state._store.endpoints.add(cur, _make_row("e2", "beta", t2))
 
     with state._db.transaction() as cur:
-        removed = state._db.endpoints.remove_by_job_ids(cur, [ja])
+        removed = state._store.endpoints.remove_by_job_ids(cur, [ja])
 
     assert removed == ["e1"]
-    assert [r.endpoint_id for r in state._db.endpoints.query()] == ["e2"]
+    assert [r.endpoint_id for r in state._store.endpoints.query()] == ["e2"]
 
 
 # --- Query semantics --------------------------------------------------------
@@ -193,51 +193,51 @@ def populated(state):
     ]
     with state._db.transaction() as cur:
         for r in rows:
-            state._db.endpoints.add(cur, r)
+            state._store.endpoints.add(cur, r)
     return state, rows, (t0, t1, t2)
 
 
 def test_query_by_exact_name(populated):
     state, _, _ = populated
-    ids = {r.endpoint_id for r in state._db.endpoints.query(EndpointQuery(exact_name="alpha/svc"))}
+    ids = {r.endpoint_id for r in state._store.endpoints.query(EndpointQuery(exact_name="alpha/svc"))}
     assert ids == {"e1"}
 
 
 def test_query_by_prefix(populated):
     state, _, _ = populated
-    ids = {r.endpoint_id for r in state._db.endpoints.query(EndpointQuery(name_prefix="alpha/"))}
+    ids = {r.endpoint_id for r in state._store.endpoints.query(EndpointQuery(name_prefix="alpha/"))}
     assert ids == {"e1", "e2"}
 
 
 def test_query_by_task_ids(populated):
     state, _, (t0, _, t2) = populated
-    ids = {r.endpoint_id for r in state._db.endpoints.query(EndpointQuery(task_ids=(t0, t2)))}
+    ids = {r.endpoint_id for r in state._store.endpoints.query(EndpointQuery(task_ids=(t0, t2)))}
     assert ids == {"e1", "e2", "e4"}
 
 
 def test_query_by_endpoint_ids(populated):
     state, _, _ = populated
-    ids = {r.endpoint_id for r in state._db.endpoints.query(EndpointQuery(endpoint_ids=("e2", "e3")))}
+    ids = {r.endpoint_id for r in state._store.endpoints.query(EndpointQuery(endpoint_ids=("e2", "e3")))}
     assert ids == {"e2", "e3"}
 
 
 def test_query_limit(populated):
     state, _, _ = populated
-    rows = state._db.endpoints.query(EndpointQuery(limit=2))
+    rows = state._store.endpoints.query(EndpointQuery(limit=2))
     assert len(rows) == 2
 
 
 def test_query_empty_matches_all(populated):
     state, rows, _ = populated
-    assert {r.endpoint_id for r in state._db.endpoints.query()} == {r.endpoint_id for r in rows}
+    assert {r.endpoint_id for r in state._store.endpoints.query()} == {r.endpoint_id for r in rows}
 
 
 def test_resolve_returns_address_for_exact_name(populated):
     state, _, _ = populated
-    row = state._db.endpoints.resolve("alpha/svc")
+    row = state._store.endpoints.resolve("alpha/svc")
     assert row is not None
     assert row.endpoint_id == "e1"
-    assert state._db.endpoints.resolve("nope") is None
+    assert state._store.endpoints.resolve("nope") is None
 
 
 # --- Parity with the legacy SQL builder -------------------------------------
@@ -262,7 +262,7 @@ def test_registry_parity_with_legacy_sql(populated, build_query):
     sql, params = _endpoint_query_sql_legacy(query)
     with state._db.read_snapshot() as q:
         expected_ids = sorted(r.endpoint_id for r in ENDPOINT_PROJECTION.decode(q.fetchall(sql, tuple(params))))
-    actual_ids = sorted(r.endpoint_id for r in state._db.endpoints.query(query))
+    actual_ids = sorted(r.endpoint_id for r in state._store.endpoints.query(query))
 
     # For LIMIT queries, both sides just need to be a valid subset of matching rows.
     if query.limit is not None:
@@ -290,9 +290,9 @@ def test_concurrent_readers_never_see_torn_snapshot(state):
                 eid = f"e{i % len(task_ids)}"
                 name = f"svc-{i % len(task_ids)}"
                 with state._db.transaction() as cur:
-                    state._db.endpoints.add(cur, _make_row(eid, name, t))
+                    state._store.endpoints.add(cur, _make_row(eid, name, t))
                 with state._db.transaction() as cur:
-                    state._db.endpoints.remove(cur, eid)
+                    state._store.endpoints.remove(cur, eid)
                 i += 1
         except Exception as exc:
             errors.append(f"writer: {exc!r}")
@@ -300,7 +300,7 @@ def test_concurrent_readers_never_see_torn_snapshot(state):
     def reader():
         try:
             while not stop.is_set():
-                snapshot = state._db.endpoints.query()
+                snapshot = state._store.endpoints.query()
                 # Verify the snapshot itself is internally consistent: every
                 # endpoint_id in the result set is unique (no duplicates from
                 # a torn index).
@@ -311,11 +311,11 @@ def test_concurrent_readers_never_see_torn_snapshot(state):
                 # present in a subsequent get() — the writer may remove it
                 # between the two calls (TOCTOU).
                 for row in snapshot:
-                    state._db.endpoints.get(row.endpoint_id)
+                    state._store.endpoints.get(row.endpoint_id)
                 for i in range(len(task_ids)):
-                    state._db.endpoints.query(EndpointQuery(name_prefix=f"svc-{i}"))
-                    state._db.endpoints.query(EndpointQuery(exact_name=f"svc-{i}"))
-                    state._db.endpoints.query(EndpointQuery(task_ids=(task_ids[i],)))
+                    state._store.endpoints.query(EndpointQuery(name_prefix=f"svc-{i}"))
+                    state._store.endpoints.query(EndpointQuery(exact_name=f"svc-{i}"))
+                    state._store.endpoints.query(EndpointQuery(task_ids=(task_ids[i],)))
         except Exception as exc:
             errors.append(f"reader: {exc!r}")
 

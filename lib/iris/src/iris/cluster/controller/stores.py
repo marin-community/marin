@@ -1,29 +1,30 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Process-local in-memory cache for the ``endpoints`` table.
+"""Typed store layer over :mod:`iris.cluster.controller.db`.
 
-Profiling showed that ``ListEndpoints`` dominated controller CPU — not because
-the SQL was slow per se, but because every call serialized through the
-read-connection pool and walked a large WAL to build a snapshot. The endpoints
-table is tiny (hundreds of rows) and only changes on explicit register /
-unregister, so it is a natural fit for a write-through in-memory cache.
+Stores group related SQL against a single entity (jobs, tasks, workers,
+endpoints, ...) and expose a typed API that callers invoke inside an open
+transaction (read or write). :class:`ControllerStore` bundles every per-entity
+store and forwards ``transaction()`` / ``read_snapshot()`` to the underlying
+:class:`ControllerDB`.
 
-Design invariants:
+Dependency chain::
 
-* Reads never touch the DB. All lookups are served from in-memory maps
-  guarded by an ``RLock`` — readers observe a consistent snapshot of the
-  indexes, never a torn state mid-update.
-* Writes execute the SQL inside the caller's transaction. The in-memory
-  update is scheduled as a post-commit hook on the cursor so memory only
-  changes after the DB has committed. If the transaction rolls back, the
-  hook never fires.
-* N is small enough (≈ hundreds) that linear scans for prefix / task / id
-  lookups are simpler and plenty fast. Extra indexes (by name, by task_id)
-  speed the two common cases.
+    db.py        — connections, migrations, transaction context managers
+    schema.py    — table DDL, row dataclasses, projections
+    stores.py    — depends on { db, schema }; per-entity stores
+    transitions.py — depends on stores; never calls db.py directly
 
-The registry is the sole source of truth for endpoint reads; nothing else in
-the controller tree should SELECT from ``endpoints``.
+Stores are the only place outside of ``db.py`` / ``schema.py`` that build
+SQL strings for the controller tables. ``transitions.py`` uses the store
+API; other callers (``service.py``, ``controller.py``) are migrated
+later as the pattern proves out.
+
+The layer is introduced incrementally. Phase 1 (this module as it stands)
+adds the scaffolding and folds the previous ``EndpointRegistry`` in as
+:class:`EndpointStore`. Subsequent phases move per-entity SQL out of
+``transitions.py`` into the relevant store class.
 """
 
 from __future__ import annotations
@@ -33,24 +34,52 @@ import logging
 from collections.abc import Iterable, Sequence
 from threading import RLock
 
-from iris.cluster.controller.db import EndpointQuery, TransactionCursor
+from iris.cluster.controller.db import ControllerDB, EndpointQuery, QuerySnapshot, TransactionCursor
 from iris.cluster.controller.schema import ENDPOINT_PROJECTION, EndpointRow
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName
 
 logger = logging.getLogger(__name__)
 
 
-class EndpointRegistry:
-    """In-memory index of endpoint rows, kept in sync with the DB.
+# Store read methods accept either a write cursor or a read snapshot. Writes
+# require ``TransactionCursor`` explicitly so static typing prevents issuing
+# mutations through a read-only snapshot.
+Tx = TransactionCursor | QuerySnapshot
 
-    Construct with a ``ControllerDB``; the registry loads all existing rows at
-    init time. Callers mutate through ``add`` / ``remove*`` methods that take
-    the open ``TransactionCursor`` so the SQL lands inside the caller's
-    transaction. Memory is only updated after a successful commit via a
-    cursor post-commit hook.
+
+# =============================================================================
+# EndpointStore
+# =============================================================================
+
+
+class EndpointStore:
+    """Process-local write-through cache over the ``endpoints`` table.
+
+    Profiling showed ``ListEndpoints`` dominated controller CPU — not because
+    the SQL was slow per se, but because every call serialized through the
+    read-connection pool and walked a large WAL to build a snapshot. The
+    endpoints table is tiny (hundreds of rows) and only changes on explicit
+    register / unregister, so it is a natural fit for a write-through
+    in-memory cache.
+
+    Design invariants:
+
+    * Reads never touch the DB. All lookups are served from in-memory maps
+      guarded by an ``RLock`` — readers observe a consistent snapshot of the
+      indexes, never a torn state mid-update.
+    * Writes execute the SQL inside the caller's transaction. The in-memory
+      update is scheduled as a post-commit hook on the cursor so memory only
+      changes after the DB has committed. If the transaction rolls back, the
+      hook never fires.
+    * N is small enough (≈ hundreds) that linear scans for prefix / task / id
+      lookups are simpler and plenty fast. Extra indexes (by name, by task_id)
+      speed the two common cases.
+
+    The store is the sole source of truth for endpoint reads; nothing else in
+    the controller tree should SELECT from ``endpoints``.
     """
 
-    def __init__(self, db):
+    def __init__(self, db: ControllerDB) -> None:
         self._db = db
         self._lock = RLock()
         self._by_id: dict[str, EndpointRow] = {}
@@ -73,7 +102,7 @@ class EndpointRegistry:
             self._by_task.clear()
             for row in rows:
                 self._index(row)
-        logger.info("EndpointRegistry loaded %d endpoint(s) from DB", len(rows))
+        logger.info("EndpointStore loaded %d endpoint(s) from DB", len(rows))
 
     def _index(self, row: EndpointRow) -> None:
         self._by_id[row.endpoint_id] = row
@@ -99,11 +128,7 @@ class EndpointRegistry:
     # -- Reads ----------------------------------------------------------------
 
     def query(self, query: EndpointQuery = EndpointQuery()) -> list[EndpointRow]:
-        """Return endpoint rows matching ``query``.
-
-        All filters AND together, matching the semantics of the original SQL
-        in :func:`iris.cluster.controller.db.endpoint_query_sql`.
-        """
+        """Return endpoint rows matching ``query``; all filters AND together."""
         with self._lock:
             # Narrow the candidate set using the most selective index available.
             if query.endpoint_ids:
@@ -210,7 +235,7 @@ class EndpointRegistry:
             ids = list(self._by_task.get(task_id, ()))
         if not ids:
             # Still issue the DELETE to stay consistent with any rows the
-            # registry might not have observed yet (belt-and-suspenders for
+            # store might not have observed yet (belt-and-suspenders for
             # the unlikely race of an in-flight concurrent writer). This
             # costs nothing on the common path.
             cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id.to_wire(),))
@@ -251,3 +276,84 @@ class EndpointRegistry:
 
         cur.on_commit(apply)
         return to_remove
+
+
+# =============================================================================
+# Phase-1 skeletons for the remaining per-entity stores.
+#
+# These exist so callers can already reference ``store.jobs`` etc. and so that
+# subsequent phases (moving SQL out of transitions.py) land as additive
+# changes to these classes rather than needing new plumbing each time.
+# Methods are added as the corresponding SQL migrates out of transitions.py.
+# =============================================================================
+
+
+class JobStore:
+    """Jobs, job_config, users, user_budgets, job_workdir_files."""
+
+    def __init__(self, db: ControllerDB) -> None:
+        self._db = db
+
+
+class TaskStore:
+    """Tasks and task_resource_history."""
+
+    def __init__(self, db: ControllerDB) -> None:
+        self._db = db
+
+
+class TaskAttemptStore:
+    """Task attempts."""
+
+    def __init__(self, db: ControllerDB) -> None:
+        self._db = db
+
+
+class WorkerStore:
+    """Workers, worker_attributes, worker_task_history, worker_resource_history."""
+
+    def __init__(self, db: ControllerDB) -> None:
+        self._db = db
+
+
+class DispatchQueueStore:
+    """The dispatch_queue table."""
+
+    def __init__(self, db: ControllerDB) -> None:
+        self._db = db
+
+
+class ReservationStore:
+    """Reservation claims and the meta(last_submission_ms) counter."""
+
+    def __init__(self, db: ControllerDB) -> None:
+        self._db = db
+
+
+# =============================================================================
+# ControllerStore
+# =============================================================================
+
+
+class ControllerStore:
+    """Bundle of per-entity stores with direct access to transactions/snapshots."""
+
+    def __init__(self, db: ControllerDB) -> None:
+        self._db = db
+        self.jobs = JobStore(db)
+        self.tasks = TaskStore(db)
+        self.attempts = TaskAttemptStore(db)
+        self.workers = WorkerStore(db)
+        self.endpoints = EndpointStore(db)
+        self.dispatch = DispatchQueueStore(db)
+        self.reservations = ReservationStore(db)
+        # Caches reload after a checkpoint restore via db.replace_from(). The
+        # hook fires only in that flow; normal startup loads caches in the
+        # store constructors above.
+        db.register_reopen_hook(self.endpoints._load_all)
+
+    def transaction(self):
+        return self._db.transaction()
+
+    def read_snapshot(self):
+        return self._db.read_snapshot()
