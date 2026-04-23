@@ -24,6 +24,7 @@ TIME_SERIES_ISSUE = 5059
 FORMAL_HARDWARE_ISSUE = 5060
 PACKAGE_METADATA_ISSUE = 5061
 GAME_MUSIC_ISSUE = 5062
+DIAGNOSTIC_LOGS_ISSUE = 5093
 
 
 class LongTailPplFamily(StrEnum):
@@ -36,6 +37,7 @@ class LongTailPplFamily(StrEnum):
     FORMAL_HARDWARE = "formal_hardware"
     PACKAGE_METADATA = "package_metadata"
     GAME_MUSIC = "game_music"
+    DIAGNOSTIC_LOGS = "diagnostic_logs"
 
 
 @dataclass(frozen=True)
@@ -443,6 +445,125 @@ LONG_TAIL_PPL_SLICES: tuple[LongTailPplSlice, ...] = (
         surface_form="abc_notation",
         raw_relative_path="music/abc/notation.jsonl.gz",
         notes="Keep ABC headers, barlines, and note-length annotations.",
+    ),
+    # Diagnostic logs — surfaces from issue #5093 DoD: held-out PPL/gap eval
+    # registers that agents read during debugging (CI logs, compiler/linker
+    # output, pytest failures, stack traces, package install errors, system
+    # and application logs). Entries are metadata-only; they stay outside
+    # default_raw_validation_sets so worst-doc artifacts only show up when an
+    # experiment opts in via long_tail_raw_validation_sets(family=...).
+    _slice(
+        name="ghalogs",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://zenodo.org/records/14796970",
+        surface_form="github_actions_log",
+        raw_relative_path="diagnostic_logs/ghalogs/runs.jsonl.gz",
+        notes="Preserve GHA timestamps, ANSI control codes, step boundaries, and exit-status lines.",
+    ),
+    _slice(
+        name="logchunks",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://papertalk.org/papertalks/24713",
+        surface_form="failure_log_chunk",
+        raw_relative_path="diagnostic_logs/logchunks/chunks.jsonl.gz",
+        notes="Keep chunked failure-context windows and surrounding log boundaries intact.",
+    ),
+    _slice(
+        name="loghub_apache",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/logpai/loghub",
+        surface_form="application_log",
+        raw_relative_path="diagnostic_logs/loghub/apache.jsonl.gz",
+        notes="Preserve Apache access/error log line layout, IPs, and status codes.",
+    ),
+    _slice(
+        name="loghub_linux",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/logpai/loghub",
+        surface_form="system_log",
+        raw_relative_path="diagnostic_logs/loghub/linux.jsonl.gz",
+        notes="Preserve syslog timestamps, hostnames, daemon names, and PIDs literal.",
+    ),
+    _slice(
+        name="loghub_hdfs",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/logpai/loghub",
+        surface_form="distributed_system_log",
+        raw_relative_path="diagnostic_logs/loghub/hdfs.jsonl.gz",
+        notes="Preserve block IDs, datanode hosts, and Hadoop log severity prefixes.",
+    ),
+    _slice(
+        name="loghub_openssh",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/logpai/loghub",
+        surface_form="auth_log",
+        raw_relative_path="diagnostic_logs/loghub/openssh.jsonl.gz",
+        notes="Keep sshd auth-failure templates, user/IP fields, and reason strings literal.",
+    ),
+    _slice(
+        name="loghub_thunderbird",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/logpai/loghub",
+        surface_form="hpc_supercomputer_log",
+        raw_relative_path="diagnostic_logs/loghub/thunderbird.jsonl.gz",
+        notes="Preserve Thunderbird HPC node IDs, kernel events, and alert prefixes.",
+    ),
+    _slice(
+        name="pytest_failures",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/marin-community/marin/issues/5093",
+        surface_form="pytest_failure_output",
+        raw_relative_path="diagnostic_logs/pytest_failures/failures.jsonl.gz",
+        notes="Keep traceback layout, FAILED/ERROR markers, and assertion-diff blocks intact.",
+    ),
+    _slice(
+        name="compiler_linker_output",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/marin-community/marin/issues/5093",
+        surface_form="compiler_diagnostic_text",
+        raw_relative_path="diagnostic_logs/compiler_linker/output.jsonl.gz",
+        notes="Preserve file:line:col diagnostic format, error codes, and template-instantiation traces.",
+    ),
+    _slice(
+        name="stack_traces",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/marin-community/marin/issues/5093",
+        surface_form="exception_stack_trace",
+        raw_relative_path="diagnostic_logs/stack_traces/traces.jsonl.gz",
+        notes="Keep frame-by-frame layout, exception class names, and 'Caused by'/'During handling' markers.",
+    ),
+    _slice(
+        name="package_install_errors",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/marin-community/marin/issues/5093",
+        surface_form="package_install_failure",
+        raw_relative_path="diagnostic_logs/package_install_errors/errors.jsonl.gz",
+        notes="Preserve pip/uv/apt/conda resolver output, dependency conflict tables, and exit codes.",
+    ),
+    _slice(
+        name="marin_internal_logs_sanitized",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/marin-community/marin/issues/5093",
+        surface_form="marin_gha_iris_zephyr_log",
+        raw_relative_path="diagnostic_logs/marin_internal/sanitized.jsonl.gz",
+        notes=(
+            "Held-out eval-only slice from Marin GHA / Iris / Zephyr logs. "
+            "Mirror only after PII + secret + GCS-path scrub; never include in any training mixture. "
+            "Leakage policy: contributors' GitHub handles, internal hostnames, bucket names, "
+            "and access tokens must be redacted before this path is populated."
+        ),
     ),
 )
 
