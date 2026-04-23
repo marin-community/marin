@@ -28,12 +28,10 @@ from experiments.evals.long_tail_ppl_runnable import runnable_long_tail_ppl_slic
 from experiments.evals.synthetic_reasoning_ppl import synthetic_reasoning_raw_validation_sets
 from experiments.exp5052_synthetic_reasoning_ppl import RAW_SYNTHETIC_REASONING_PPL
 from experiments.exp5056_raw_web_markup_ppl import raw_web_markup_raw_validation_sets
-from experiments.structured_evals import STRUCTURED_EVAL_STAGED
 from marin.evaluation.perplexity_gap import (
     GapFinderModelConfig,
     RawTextEvaluationDataset,
     default_model_perplexity_gap,
-    raw_text_dataset,
 )
 from marin.execution.executor import executor_main
 
@@ -42,12 +40,13 @@ MAX_DOCS_PER_DATASET = 128
 MAX_DOC_BYTES = 32_768
 MAX_EVAL_LENGTH = 4096
 PER_DEVICE_BATCH_SIZE = 1
-SKIPPED_FORMAL_HARDWARE_DATASETS = frozenset(
+SKIPPED_DATASETS = frozenset(
     {
         "formal_methods/tptp",
         "formal_methods/dimacs_cnf",
         "hardware_rtl/rtl_repo",
         "hardware_rtl/rtl_coder",
+        "bio_chem/rcsb/rcsb_mmcif",
     }
 )
 
@@ -59,30 +58,17 @@ def _game_music_raw_validation_sets() -> dict[str, RawTextEvaluationDataset]:
     }
 
 
-def _structured_text_raw_validation_sets() -> dict[str, RawTextEvaluationDataset]:
-    return {
-        f"structured_text/{dataset_name}": raw_text_dataset(
-            staged_step.cd("staged.jsonl.gz"),
-            tags=("structured_text", "issue:5059", dataset_name),
-        )
-        for dataset_name, staged_step in STRUCTURED_EVAL_STAGED.items()
-    }
-
-
 def issue5005_wave2_raw_validation_sets() -> dict[str, RawTextEvaluationDataset]:
     datasets: dict[str, RawTextEvaluationDataset] = {}
     datasets.update(synthetic_reasoning_raw_validation_sets(synthetic_reasoning_raw=RAW_SYNTHETIC_REASONING_PPL))
     datasets.update(raw_web_markup_raw_validation_sets())
     datasets.update(_game_music_raw_validation_sets())
     datasets.update(
-        {
-            name: dataset
-            for name, dataset in exp5060_raw_validation_sets().items()
-            if name not in SKIPPED_FORMAL_HARDWARE_DATASETS
-        }
+        {name: dataset for name, dataset in exp5060_raw_validation_sets().items() if name not in SKIPPED_DATASETS}
     )
-    datasets.update(_structured_text_raw_validation_sets())
-    datasets.update(bio_chem_raw_validation_sets())
+    datasets.update(
+        {name: dataset for name, dataset in bio_chem_raw_validation_sets().items() if name not in SKIPPED_DATASETS}
+    )
     return datasets
 
 
@@ -102,7 +88,7 @@ COMMON_TAGS = [
     "model_b=Qwen/Qwen3-32B",
     "region=us-central1",
     "dataset_bundle=issue5005_wave2_materialized",
-    "families=synthetic_reasoning,raw_web_markup,game_music,formal_hardware,structured_text,bio_chem",
+    "families=synthetic_reasoning,raw_web_markup,game_music,formal_hardware,bio_chem",
     f"max_docs_per_dataset={MAX_DOCS_PER_DATASET}",
 ]
 
