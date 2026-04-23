@@ -24,7 +24,7 @@ from fray.v2 import (
 )
 from mergedeep import mergedeep
 
-from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket, marin_temp_bucket_for_prefix
+from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
 from marin.training.run_environment import add_run_env_variables
 
 logger = logging.getLogger(__name__)
@@ -106,10 +106,10 @@ def temporary_checkpoint_base_path(output_path: str) -> str:
     """Return the region-local temporary checkpoint base for an executor output path."""
     output_component = _output_path_temp_component(output_path)
     temp_prefix = os.path.join(TEMPORARY_CHECKPOINTS_PATH, output_component, DEFAULT_CHECKPOINTS_PATH)
-    return marin_temp_bucket_for_prefix(
+    return marin_temp_bucket(
         ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
-        source_prefix=output_path,
         prefix=temp_prefix,
+        source_prefix=output_path,
     )
 
 
