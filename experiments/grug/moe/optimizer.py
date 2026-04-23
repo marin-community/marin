@@ -16,6 +16,7 @@ from levanter.optim.grugmuon import (
     VMAP_REPLICATED,
     _batch_sharded_stack_target_pspec,
     _match_update_sharding,
+    _target_sharding,
     _zeropower_via_newtonschulz_batched_stack_sharded,
     _zeropower_via_newtonschulz_replicated,
 )
@@ -263,6 +264,10 @@ def _scale_with_grug_muonh(
                         coefficient_type=coefficient_type,
                         target_pspec=target_pspec,
                     )
+
+            target_sharding = _target_sharding(param)
+            if target_sharding is not None:
+                direction = jax.sharding.reshard(direction, target_sharding)
 
             return _scale_invariant_muonh_update(param, direction, learning_rate)
 
