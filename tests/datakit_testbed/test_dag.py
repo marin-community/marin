@@ -26,7 +26,7 @@ def test_dag_single_source_shape():
 
     names = [s.name for s in dag.all_steps]
     assert names == [
-        "datakit-testbed/download/nvidia__Nemotron-CC-Code-v1__nemotron_cc_code_v1-c55cd9",
+        "raw/nvidia__Nemotron-CC-Code-v1__nemotron_cc_code_v1-c55cd9",
         "normalized/nemotron_cc_code_v1/all",
         "datakit-testbed/sample/nemotron_cc_code_v1/all",
         "datakit-testbed/noop_dedup",
@@ -48,7 +48,7 @@ def test_dag_groups_downloads_by_hf_id_revision():
 
     dag = build_testbed_steps("run0", sources=v21_sources)
 
-    download_steps = [s for s in dag.all_steps if "/download/" in s.name]
+    download_steps = [s for s in dag.all_steps if s.name.startswith("raw/")]
     assert len(download_steps) == 1, "expected exactly one download for a single family"
 
     normalize_steps = [s for s in dag.all_steps if s.name.startswith("normalized/")]
@@ -76,7 +76,7 @@ def test_dag_output_paths_namespaced_by_run_id():
     # Downloads and normalize outputs are shared canonical artifacts — not run-id scoped.
     # Every other step (sample, dedup, consolidate) must land under datakit-testbed/abc123/...
     for step in dag.all_steps:
-        if "/download/" in step.name or step.name.startswith("normalized/"):
+        if step.name.startswith(("raw/", "normalized/")):
             continue
         assert "/abc123/" in step.output_path, f"{step.name} not namespaced: {step.output_path}"
 
@@ -86,10 +86,10 @@ def test_dag_same_repo_different_staged_paths_get_separate_downloads():
     a = DatakitSource(name="A", hf_dataset_id="foo/bar", revision="abc1234", staged_path="raw/foo/sub_a")
     b = DatakitSource(name="B", hf_dataset_id="foo/bar", revision="abc1234", staged_path="raw/foo/sub_b")
     dag = build_testbed_steps("run0", sources=[a, b])
-    download_names = sorted(s.name for s in dag.all_steps if "/download/" in s.name)
+    download_names = sorted(s.name for s in dag.all_steps if s.name.startswith("raw/"))
     assert download_names == [
-        "datakit-testbed/download/foo__bar__sub_a",
-        "datakit-testbed/download/foo__bar__sub_b",
+        "raw/foo__bar__sub_a",
+        "raw/foo__bar__sub_b",
     ]
 
 

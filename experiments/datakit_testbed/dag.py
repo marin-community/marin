@@ -40,8 +40,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from fray import ResourceConfig
-from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.normalize import NormalizedData, normalize_step
+from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import Artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import (
@@ -81,77 +80,24 @@ DownloadKey = tuple[str, str, str | None, tuple[str, ...] | None]
 
 
 def _download_key(src: DatakitSource) -> DownloadKey:
-    """Key that uniquely identifies a download step.
+    """Group sources that map to the same physical download.
 
-    Includes ``staged_path`` and ``hf_urls_glob`` because some HF repos (e.g.
-    ``bigcode/StarCoder2-Extras``) are downloaded per-subset with distinct
-    ``override_output_path`` values — so the same ``(hf_repo, revision)`` can
-    correspond to multiple physical download steps.
+    Some HF repos (e.g. ``bigcode/StarCoder2-Extras``) are downloaded per-subset
+    with distinct ``override_output_path`` values, so the same
+    ``(hf_repo, revision)`` can correspond to multiple physical download steps —
+    hence ``staged_path`` and ``hf_urls_glob`` are part of the key.
     """
     return (src.hf_dataset_id, src.revision or "", src.staged_path, src.hf_urls_glob)
 
 
-def _download_step_name(src: DatakitSource) -> str:
-    """Stable download step name. Includes the last staged_path segment when
-    multiple sources share a repo but stage separately (StarCoder2-Extras)."""
-    base = src.hf_dataset_id.replace("/", "__")
-    if src.staged_path:
-        tail = src.staged_path.rstrip("/").rsplit("/", 1)[-1]
-        if tail and tail != base:
-            return f"datakit-testbed/download/{base}__{tail}"
-    return f"datakit-testbed/download/{base}"
-
-
 def _build_downloads(sources: Sequence[DatakitSource]) -> dict[DownloadKey, StepSpec]:
-    """One download step per unique ``(hf_repo, revision, staged_path, urls_glob)``."""
-    by_key: dict[DownloadKey, DatakitSource] = {}
+    """One download StepSpec per unique ``(hf_repo, revision, staged_path, urls_glob)``."""
+    by_key: dict[DownloadKey, StepSpec] = {}
     for src in sources:
         key = _download_key(src)
-        if key in by_key:
-            continue
-        by_key[key] = src
-
-    downloads: dict[DownloadKey, StepSpec] = {}
-    seen_names: set[str] = set()
-    for key, src in by_key.items():
-        step_name = _download_step_name(src)
-        if step_name in seen_names:
-            raise ValueError(
-                f"Duplicate download step name {step_name!r} — extend " "_download_step_name to disambiguate"
-            )
-        seen_names.add(step_name)
-        assert src.revision is not None, f"{src.name}: cannot build download for unpinned revision"
-        downloads[key] = download_hf_step(
-            step_name,
-            hf_dataset_id=src.hf_dataset_id,
-            revision=src.revision,
-            hf_urls_glob=list(src.hf_urls_glob) if src.hf_urls_glob else None,
-            override_output_path=src.staged_path,
-        )
-    return downloads
-
-
-def _normalize_step_for(
-    src: DatakitSource,
-    download: StepSpec,
-) -> StepSpec:
-    """Per-source normalize. ``input_path`` points at ``data_subdir`` inside the download.
-
-    Output lands at ``$MARIN_PREFIX/normalized/<src.name>-<hash>/`` — a
-    canonical, run-independent artifact that any downstream consumer (testbed
-    or otherwise) can point at. Matches the convention used by
-    ``marin.datakit.download.nemotron_v2.normalize_nemotron_v2_step``.
-    """
-    input_path = f"{download.output_path}/{src.data_subdir}" if src.data_subdir else download.output_path
-    return normalize_step(
-        name=f"normalized/{src.name}",
-        download=download,
-        text_field=src.text_field,
-        id_field=src.id_field,
-        input_path=input_path,
-        file_extensions=src.file_extensions,
-        worker_resources=ResourceConfig(cpu=2, ram="16g", disk="20g"),
-    )
+        if key not in by_key:
+            by_key[key] = src.download_step()
+    return by_key
 
 
 def _sample_step_for(
@@ -237,7 +183,7 @@ def build_testbed_steps(
     normalized: dict[str, StepSpec] = {}
     sampled: dict[str, StepSpec] = {}
     for src in sources:
-        normalized[src.name] = _normalize_step_for(src, downloads[_download_key(src)])
+        normalized[src.name] = src.normalize_step(downloads[_download_key(src)])
         sampled[src.name] = _sample_step_for(src, normalized[src.name], fractions[src.name], base)
 
     deduped = compute_noop_dedup_attrs_step(
