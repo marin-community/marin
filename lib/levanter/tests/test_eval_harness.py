@@ -183,3 +183,16 @@ def test_task_config():
     q = config.to_task_dict()
 
     assert len(q) == 3
+
+
+def test_eval_harness_config_loads_marin_tokenizer():
+    """Verify EvalHarnessMainConfig.the_tokenizer returns a MarinTokenizer."""
+    from levanter.eval_harness import EvalHarnessMainConfig, LmEvalHarnessConfig
+    from levanter.tokenizers import MarinTokenizer
+
+    config = EvalHarnessMainConfig(
+        eval_harness=LmEvalHarnessConfig(task_spec=["hellaswag"]),
+        tokenizer="stanford-crfm/marin-tokenizer",
+        checkpoint_path="/nonexistent",
+    )
+    assert isinstance(config.the_tokenizer, MarinTokenizer)
