@@ -4,6 +4,7 @@
 - Goal: Test whether a Muon-based optimizer recipe using AOL Newton-Schulz coefficients can beat the current AdamH-based Grug MoE recipe at the gate-1 compute-optimal scales.
 - Primary metric(s): `eval/paloma/macro_loss`, `throughput/tokens_per_second`, effective speedup versus the compute-optimal AdamH baseline.
 - Constraints: Keep the model architecture, data mix, and compute-optimal budgets fixed at `d512 / 2.19e17` and `d768 / 1.70e18`. Only swap the optimizer path.
+- Issue: https://github.com/marin-community/marin/issues/5115
 
 ## Baseline
 - Date: 2026-04-22
