@@ -41,6 +41,9 @@ from fray.v2.types import Entrypoint, JobRequest
 from rigging.filesystem import marin_temp_bucket
 from rigging.timing import ExponentialBackoff, log_time
 
+from iris.cluster.client.job_info import get_job_info
+from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc import job_pb2
 from zephyr.dataset import Dataset
 from zephyr.plan import (
     Join,
@@ -352,6 +355,9 @@ class ZephyrCoordinator:
         self._worker_states: dict[str, WorkerState] = {}
         self._last_seen: dict[str, float] = {}
         self._stage_name: str = ""
+        self._stage_index: int = 0
+        self._total_stages: int = 0
+        self._plan_stages: list = []  # PhysicalStage list, set in run_pipeline
         self._total_shards: int = 0
         self._completed_shards: int = 0
         self._retries: int = 0
@@ -370,6 +376,9 @@ class ZephyrCoordinator:
         # can discard stale or out-of-order heartbeats.
         self._worker_counters: dict[str, CounterSnapshot] = {}
         self._completed_counters: list[CounterSnapshot] = []
+
+        # Iris controller client for reporting task stats. None if not connected to an Iris job.
+        self._iris_client: ControllerServiceClientSync | None = None
 
         # Worker management state (workers self-register via register_worker)
         self._worker_handles: dict[str, ActorHandle] = {}
@@ -408,6 +417,13 @@ class ZephyrCoordinator:
         self._chunk_prefix = chunk_prefix
         self._self_handle = coordinator_handle
         self._no_workers_timeout = no_workers_timeout
+
+        job_info = get_job_info()
+        if job_info and job_info.controller_address:
+            self._iris_client = ControllerServiceClientSync(
+                address=job_info.controller_address,
+                timeout_ms=5000,
+            )
 
         logger.info("Coordinator initialized")
 
@@ -460,6 +476,7 @@ class ZephyrCoordinator:
                 now = time.monotonic()
                 if self._has_active_execution() and now - last_log_time > 5.0:
                     self._log_status()
+                    self._report_task_stats()
                     last_log_time = now
             except Exception:
                 if sys.is_finalizing():
@@ -490,6 +507,52 @@ class ZephyrCoordinator:
 
     def _has_active_execution(self) -> bool:
         return self._execution_id != "" and self._total_shards > 0 and self._completed_shards < self._total_shards
+
+    def _report_task_stats(self) -> None:
+        """Push cumulative stage stats to the Iris coordinator if available."""
+        if self._iris_client is None:
+            return
+        job_info = get_job_info()
+        if job_info is None:
+            return
+        totals = self.get_counters()
+        with self._lock:
+            stage_index = self._stage_index
+            stage_name = self._stage_name
+            plan_stages = self._plan_stages
+            completed = self._completed_shards
+            total_shards = self._total_shards
+            in_flight = len(self._in_flight)
+            queued = len(self._task_queue)
+
+        lines = ["Physical stages:"]
+        worker_idx = 0
+        for stage in plan_stages:
+            hint_parts = []
+            if stage.stage_type == StageType.RESHARD:
+                hint_parts.append(f"reshard→{stage.output_shards}")
+            if any(isinstance(op, Join) for op in stage.operations):
+                hint_parts.append("join")
+            hint_str = f" [{', '.join(hint_parts)}]" if hint_parts else ""
+            if stage.stage_type != StageType.RESHARD:
+                worker_idx += 1
+                arrow = "→ " if worker_idx == stage_index else "  "
+                lines.append(f"{arrow}{worker_idx}. {stage.stage_name()}{hint_str}")
+            else:
+                lines.append(f"   {stage.stage_name()}{hint_str}")
+        lines.append(f"\nShards: {completed}/{total_shards} complete, {in_flight} in-flight, {queued} queued")
+        status = "\n".join(lines)
+        try:
+            self._iris_client.set_task_stats(
+                job_pb2.SetTaskStatsRequest(
+                    task_id=job_info.task_id.to_wire(),
+                    items_processed=totals.get(ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name), 0),
+                    bytes_processed=totals.get(ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name), 0),
+                    status=status,
+                )
+            )
+        except Exception:
+            logger.warning("Failed to report task stats to Iris controller", exc_info=True)
 
     def _log_status(self) -> None:
         with self._lock:
@@ -776,6 +839,7 @@ class ZephyrCoordinator:
             self._task_queue = deque(tasks)
             self._results = {}
             self._stage_name = stage_name
+            self._stage_index += 1
             self._total_shards = len(tasks)
             self._completed_shards = 0
             self._retries = 0
@@ -874,6 +938,11 @@ class ZephyrCoordinator:
                 (i for i, s in enumerate(plan.stages) if s.stage_type != StageType.RESHARD),
                 default=-1,
             )
+
+            with self._lock:
+                self._total_stages = sum(1 for s in plan.stages if s.stage_type != StageType.RESHARD)
+                self._stage_index = 0
+                self._plan_stages = list(plan.stages)
 
             for stage_idx, stage in enumerate(plan.stages):
                 stage_label = f"stage{stage_idx}-{stage.stage_name(max_length=40)}"

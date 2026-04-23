@@ -601,3 +601,13 @@ message WorkerTaskStatus {
   reserved 9;  // was log_entries (pushed via LogService now)
   string container_id = 10;         // Platform container identifier (Docker container ID, K8s pod name)
 }
+
+// Stats reported by a running task to the coordinator.
+message SetTaskStatsRequest {
+  string task_id = 1;           // Full task ID: "/job/full/path/with/task/0"
+  int64 items_processed = 2;    // Number of items processed so far
+  int64 bytes_processed = 3;    // Number of bytes processed so far
+  string status = 4;            // Human-readable status string for UI display (not stored in history)
+}
+
+message SetTaskStatsResponse {}

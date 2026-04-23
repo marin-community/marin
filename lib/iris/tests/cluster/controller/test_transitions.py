@@ -3516,3 +3516,17 @@ def test_job_cancel_marks_job_killed(harness) -> None:
     jid = JobName.root("test-user", "killed")
     harness.state.cancel_job(jid, reason="manual")
     assert harness.query_job(jid).state == job_pb2.JOB_STATE_KILLED
+
+
+# =============================================================================
+# Task Stats
+# =============================================================================
+
+
+def test_record_task_stats_does_not_raise(state) -> None:
+    """record_task_stats completes without raising for a valid task."""
+    tasks = submit_job(state, "stats-job", make_job_request("stats-job"))
+    task_id = tasks[0].task_id
+
+    # Should log and return without raising
+    state.record_task_stats(task_id, items_processed=500, bytes_processed=1024 * 1024, status="in progress")
