@@ -456,11 +456,18 @@ class Checkpointer:
         if latest_checkpoint is not None and delete_old_temp_checkpoints:
             metadata = _load_metadata(latest_checkpoint)
             if metadata.get("is_temporary", False):
+                # Only mark for deletion if this process will resume from this
+                # checkpoint and write a replacement.  If a prior child reached a
+                # higher step and was preempted, blindly deleting its checkpoint
+                # destroys irreplaceable training progress.
+                prior_step = metadata.get("step", 0)
                 logger.info(
-                    f"Found prior temporary checkpoint {latest_checkpoint}. We will delete it after"
-                    " saving a new checkpoint."
+                    f"Found prior temporary checkpoint {latest_checkpoint} (step {prior_step}). "
+                    "Deferring cleanup decision until the first save — will only delete if the new "
+                    "checkpoint is at an equal or higher step."
                 )
                 self._last_temporary_checkpoint = latest_checkpoint
+                self._inherited_temp_checkpoint_step = prior_step
 
     def load_checkpoint(
         self,
@@ -558,6 +565,26 @@ class Checkpointer:
                             last_checkpoint,
                         )
                         return
+                    # Guard: never delete an inherited checkpoint (from a prior child) at
+                    # a higher step than what we just saved.  This prevents a restarted
+                    # child from destroying a checkpoint left by a previous child that
+                    # trained further before being preempted.
+                    inherited_step = getattr(self, "_inherited_temp_checkpoint_step", None)
+                    if inherited_step is not None and inherited_step > step:
+                        logger.warning(
+                            "NOT deleting prior temporary checkpoint %s (step %d) because it is ahead of "
+                            "the checkpoint we just saved (step %d).  This likely means a prior child "
+                            "trained further before being preempted.",
+                            last_checkpoint,
+                            inherited_step,
+                            step,
+                        )
+                        # Clear so this guard only applies to the inherited checkpoint
+                        self._inherited_temp_checkpoint_step = None
+                        return
+                    # Clear after first use
+                    if inherited_step is not None:
+                        self._inherited_temp_checkpoint_step = None
                     # check if we still want to delete it. Sometimes we like to replace the metadata of the last
                     # checkpoint. It'd be nice if the process weren't manual, but this is a good compromise
                     try:

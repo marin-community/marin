@@ -465,6 +465,24 @@ def _read_optional_jsonl_last_record(path: str) -> dict[str, Any] | None:
     return json.loads(lines[-1])
 
 
+def _read_optional_jsonl_record_at_step(path: str, *, step: int | None) -> dict[str, Any] | None:
+    if step is None:
+        return None
+    try:
+        with fsspec.open(path, "r") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                record = json.loads(line)
+                record_step = pd.to_numeric(pd.Series([record.get("step")]), errors="coerce").iloc[0]
+                if pd.notna(record_step) and int(record_step) == step:
+                    return record
+    except FileNotFoundError:
+        return None
+    return None
+
+
 def _read_optional_tracker_summary(path: str) -> dict[str, Any] | None:
     record = _read_optional_jsonl_last_record(path)
     if record is None:
@@ -596,6 +614,32 @@ def _attempt_has_checkpoint_backed_objective(attempt: dict[str, Any]) -> bool:
     return bool(checkpoint_root) and pd.notna(objective_metric_value)
 
 
+def _attempt_with_target_eval(
+    attempt: dict[str, Any],
+    *,
+    target_final_step: int | None,
+    objective_metric: str,
+) -> dict[str, Any]:
+    enriched = dict(attempt)
+    checkpoint_root = str(enriched.get("checkpoint_root") or "").strip()
+    target_record = (
+        None
+        if not checkpoint_root
+        else _read_optional_jsonl_record_at_step(
+            f"{checkpoint_root}/checkpoints/eval_metrics.jsonl",
+            step=target_final_step,
+        )
+    )
+    target_value = None
+    if target_record is not None and isinstance(target_record.get(objective_metric), int | float):
+        target_value = float(target_record[objective_metric])
+        enriched["objective_metric_value"] = target_value
+    enriched["target_eval_step"] = target_final_step if target_value is not None else pd.NA
+    enriched["target_eval_objective_metric_value"] = target_value if target_value is not None else pd.NA
+    enriched["has_target_eval"] = bool(target_value is not None)
+    return enriched
+
+
 def _attempt_reached_target_step(attempt: dict[str, Any], *, num_train_steps: object) -> bool:
     target_final_step = _target_final_checkpoint_step(num_train_steps)
     if target_final_step is None:
@@ -605,15 +649,24 @@ def _attempt_reached_target_step(attempt: dict[str, Any], *, num_train_steps: ob
 
 
 def _attempt_is_perplexity_ready(attempt: dict[str, Any], *, num_train_steps: object) -> bool:
-    return _attempt_has_checkpoint_backed_objective(attempt) and _attempt_reached_target_step(
-        attempt,
-        num_train_steps=num_train_steps,
-    )
+    target_eval_present = bool(attempt.get("has_target_eval", False))
+    if target_eval_present:
+        return True
+    return False
 
 
 def _analysis_attempt(attempts: list[dict[str, Any]], *, num_train_steps: object) -> dict[str, Any] | None:
     if not attempts:
         return None
+    target_final_step = _target_final_checkpoint_step(num_train_steps)
+    attempts = [
+        _attempt_with_target_eval(
+            attempt,
+            target_final_step=target_final_step,
+            objective_metric=str(attempt.get("objective_metric", OBJECTIVE_METRIC)),
+        )
+        for attempt in attempts
+    ]
 
     def _analysis_sort_key(row: dict[str, Any]) -> tuple[int, int, int, int, str, str]:
         max_checkpoint_step = pd.to_numeric(pd.Series([row.get("max_checkpoint_step")]), errors="coerce").iloc[0]
@@ -1489,6 +1542,16 @@ def build_registry(
         logical_runs["max_checkpoint_step"] = [
             pd.NA if attempt is None else attempt.get("max_checkpoint_step", pd.NA) for attempt in analysis_attempts
         ]
+        logical_runs["target_eval_step"] = [
+            pd.NA if attempt is None else attempt.get("target_eval_step", pd.NA) for attempt in analysis_attempts
+        ]
+        logical_runs["target_eval_objective_metric_value"] = [
+            pd.NA if attempt is None else attempt.get("target_eval_objective_metric_value", pd.NA)
+            for attempt in analysis_attempts
+        ]
+        logical_runs["has_target_eval"] = [
+            False if attempt is None else bool(attempt.get("has_target_eval", False)) for attempt in analysis_attempts
+        ]
         logical_runs["wandb_run_id"] = [
             original if attempt is None else attempt.get("wandb_run_id", original)
             for original, attempt in zip(logical_runs["wandb_run_id"], analysis_attempts, strict=False)
@@ -1522,9 +1585,9 @@ def build_registry(
     logical_runs["reached_target_step"] = (
         max_steps.notna() & target_final_steps.notna() & (max_steps >= target_final_steps)
     ).fillna(False)
-    logical_runs["is_perplexity_ready"] = (
-        logical_runs["has_checkpoint_backed_objective"] & logical_runs["reached_target_step"]
-    ).fillna(False)
+    if "has_target_eval" not in logical_runs.columns:
+        logical_runs["has_target_eval"] = False
+    logical_runs["is_perplexity_ready"] = logical_runs["has_target_eval"].fillna(False)
     if not run_attempts.empty:
         num_train_steps_by_registry = logical_runs.set_index("registry_id")["num_train_steps"].to_dict()
         target_steps_by_registry = logical_runs.set_index("registry_id")["target_final_checkpoint_step"].to_dict()
@@ -1541,9 +1604,26 @@ def build_registry(
                 >= pd.to_numeric(run_attempts["target_final_checkpoint_step"], errors="coerce")
             )
         ).fillna(False)
-        run_attempts["is_perplexity_ready"] = (
-            run_attempts["has_checkpoint_backed_objective"] & run_attempts["reached_target_step"]
-        ).fillna(False)
+        target_eval_rows = [
+            _attempt_with_target_eval(
+                row._asdict(),
+                target_final_step=(
+                    None if pd.isna(row.target_final_checkpoint_step) else int(row.target_final_checkpoint_step)
+                ),
+                objective_metric=str(row.objective_metric),
+            )
+            for row in run_attempts.itertuples(index=False)
+        ]
+        run_attempts["target_eval_step"] = [row.get("target_eval_step", pd.NA) for row in target_eval_rows]
+        run_attempts["target_eval_objective_metric_value"] = [
+            row.get("target_eval_objective_metric_value", pd.NA) for row in target_eval_rows
+        ]
+        run_attempts["has_target_eval"] = [bool(row.get("has_target_eval", False)) for row in target_eval_rows]
+        run_attempts["objective_metric_value"] = [
+            row.get("objective_metric_value", original)
+            for row, original in zip(target_eval_rows, run_attempts["objective_metric_value"], strict=False)
+        ]
+        run_attempts["is_perplexity_ready"] = run_attempts["has_target_eval"].fillna(False)
     live_watchlist = _live_watchlist_frame(
         include_live_status=include_live_status,
         live_status_timeout=live_status_timeout,

@@ -14,7 +14,9 @@ Design:
 - `logical_runs.csv` is the table analysis code should join against first
 - `run_attempts.csv` preserves retries, failures, and superseded attempts
 - `canonical_attempt_root` is the operational snapshot used for current job state
-- `checkpoint_root` is the best analysis attempt, which may differ if an older attempt finished training and wrote evals while a newer retry is still running
+- `checkpoint_root` is the best analysis attempt
+  and may differ if an older attempt finished training and wrote evals
+  while a newer retry is still running
 - W&B is treated as a convenient mirror, not the sole source of truth
 - checkpoint-backed artifacts and executor status remain authoritative
 

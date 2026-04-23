@@ -1,0 +1,135 @@
+# Domain Phase Mix Direct Decompositions: Research Logbook
+
+## Scope
+- Goal: benchmark additive N/D decompositions built on a scale-neutral GRP anchor basis.
+- Primary metric(s): fold-mean regret@1, lower-tail optimism, low-tail RMSE, RMSE, Spearman; fixed-520M robustness; candidate geometry.
+- Constraints: preserve corrected simulated-epoching target-budget semantics; avoid privileging 60M as the anchor scale.
+
+## Baseline
+- Date: 2026-04-21
+- Code refs:
+  - experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_swarm_transfer_packet/code/direct_backbone_candidates.py
+  - experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_swarm_transfer_packet/code/run_direct_backbone_merge_benchmark.py
+- Baseline numbers:
+  - direct winner before this sweep: two_stage_quality_split_signed
+  - clean direct reference: direct_shared_score_tilt_poly4
+
+## Experiment Log
+### 2026-04-21 18:00 - additive anchor decompositions
+- Hypothesis: a scale-neutral GRP anchor body plus explicit additive N/D power-law channels may recover cleaner structure than the current jointly warped GRP direct laws.
+- Command:
+  - uv run --with numpy --with pandas --with matplotlib --with scikit-learn --with scipy experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_swarm_transfer_packet/code/run_direct_anchor_decomposition_benchmark.py
+- Config:
+  - Variants: anchor_constant_split, anchor_data_mixture, anchor_model_mixture, anchor_free_twohead
+  - Baselines: direct_drop_uNuD, direct_shared_score_tilt_poly4, two_stage_quality_split_signed
+  - Seeds: 1, 3, 7, 13
+  - Anchor basis: non-scale columns of joint_ND_baseline (scale-neutral GRP body)
+  - Selection objective: fold-mean regret@1, lower-tail optimism, low-tail RMSE, RMSE, Spearman
+  - Search method: first pass used coarse grids; final reported pass uses bounded Powell optimization over `alpha_power`, `beta_power`, `lambda_split` (if used), and log-ridge.
+- Result:
+  - Optimizer-corrected result is strongly negative for the additive anchor family.
+  - Best additive variant by overall RMSE is `anchor_data_mixture`, but it is still far worse than the direct incumbents:
+    - `direct_shared_score_tilt_poly4`: overall RMSE `0.02261`, Spearman `0.7786`
+    - `two_stage_quality_split_signed`: overall RMSE `0.02305`, Spearman `0.8029`
+    - `direct_drop_uNuD`: overall RMSE `0.02767`, Spearman `0.7759`
+    - `anchor_data_mixture`: overall RMSE `0.09224`, Spearman `0.6284`
+    - `anchor_model_mixture`: overall RMSE `0.09875`, Spearman `0.6297`
+    - `anchor_free_twohead`: overall RMSE `0.09847`, Spearman `0.6224`
+    - `anchor_constant_split`: overall RMSE `0.10382`, Spearman `0.5848`
+  - The apparently strong fixed-520M RMSE for additive variants is misleading. Those models collapse dispersion and lose ranking:
+    - `anchor_data_mixture`: fixed-520M RMSE `0.00855`, Spearman `0.35`
+    - `anchor_constant_split`: fixed-520M RMSE `0.01855`, Spearman `-0.2`
+    - incumbents remain much better on fixed-520M ranking (`0.95-1.0` Spearman).
+  - Geometry is mixed rather than clean:
+    - `anchor_constant_split` and `anchor_model_mixture` stay relatively diffuse.
+    - `anchor_data_mixture` collapses to one-hot phase-0 and phase-1 supports (`1.0 / 1.0`).
+    - `anchor_free_twohead` has the healthiest support of the additive family, but still poor predictive metrics.
+- Interpretation:
+  - The clean additive decomposition itself is too rigid. Breaking a scale-neutral GRP anchor into separate additive `N` and `D` power channels loses too much predictive structure.
+  - The failure is not just search quality; switching from grid search to a proper optimizer improved the additive models materially but did not make them competitive.
+  - The low fixed-520M RMSE is largely a calibration artifact from under-dispersed predictions, not evidence of good model selection.
+  - The core missing ingredient appears to be multiplicative / interaction structure between mixture quality and scale, not just an additive split of a scale-free anchor.
+- Next action:
+  - Keep the additive-anchor family as a useful negative result.
+  - If revisiting this direction, test only a constrained hybrid that restores a multiplicative mixture-by-scale interaction on top of the scale-neutral anchor rather than further expanding the pure additive `A_mu/B_mu` family.
+
+### 2026-04-21 19:45 - exact-anchor Chinchilla-style variants
+- Hypothesis: if the direct law is forced to reduce exactly to a scale-neutral GRP base form at `(N0, D0)`, then the missing piece may just be the choice of anchored scale correction, not the anchor itself.
+- Command:
+  - uv run --with numpy --with pandas --with matplotlib --with scikit-learn --with scipy experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_swarm_transfer_packet/code/run_direct_anchor_exact_benchmark.py
+- Config:
+  - Variants:
+    - `anchor_base_only`
+    - `anchor_centered_additive_global`
+    - `anchor_centered_additive_twohead`
+    - `anchor_centered_linear_factor`
+    - `anchor_centered_lowrank_score`
+  - Baselines: `direct_drop_uNuD`, `direct_shared_score_tilt_poly4`, `two_stage_quality_split_signed`
+  - Seeds: 1, 3, 7, 13
+  - Anchor reference: `N0 = exp(muN) ≈ 207M`, `D0 = exp(muD) ≈ 4.04B`
+  - Search method: bounded Powell over structural params plus continuous log-ridge, same selection stack as above
+- Result:
+  - All exact-anchor variants are still substantially worse than the current direct backbones.
+  - Overall 4-seed means:
+    - `direct_shared_score_tilt_poly4`: RMSE `0.02261`, Spearman `0.7786`
+    - `two_stage_quality_split_signed`: `0.02305`, `0.8029`
+    - `direct_drop_uNuD`: `0.02767`, `0.7759`
+    - `anchor_centered_linear_factor`: `0.06090`, `0.6251`
+    - `anchor_centered_additive_twohead`: `0.10114`, `0.6388`
+    - `anchor_centered_lowrank_score`: `0.14045`, `0.6740`
+    - `anchor_centered_additive_global`: `0.15675`, `0.6871`
+    - `anchor_base_only`: `0.23274`, `0.1321`
+  - The least-bad exact-anchor family is `anchor_centered_linear_factor`, but it is still far behind the incumbents on overall fit and tail-aware selection.
+  - Candidate geometry is not the issue here:
+    - `anchor_centered_additive_global` stays very diffuse and plausible
+    - `anchor_centered_linear_factor` is middling
+    - the family still loses badly on predictive metrics
+- Interpretation:
+  - Exact anchor recovery is a good modeling principle, but it does not rescue the Chinchilla-style decomposition on this problem.
+  - The failure is now sharper: even when the law is forced to reduce to a plausible base form at `(N0, D0)`, centered additive residuals and simple centered tilts still miss too much structure.
+  - This pushes against the hypothesis that the main issue was "lack of exact anchor consistency." The harder missing piece remains richer mixture-specific scale behavior.
+  - Of the tested exact-anchor variants, the linear-factor form is the only one worth remembering, but only as a weak negative result rather than a live contender.
+- Next action:
+  - If staying close to Approach 3, the next version should likely keep exact anchor recovery but allow a more expressive mixture-dependent scale interaction than these centered linear forms.
+  - Otherwise, treat the current direct winners as evidence that pure Chinchilla-style separability is not enough in this setting.
+
+### 2026-04-21 21:10 - exact-anchor exponential variants
+- Hypothesis: exact-anchor recovery may still be viable if the scale correction acts in floor-log space, i.e. if the base law is multiplied by an exponential tilt rather than perturbed by raw additive residuals.
+- Command:
+  - uv run --with numpy --with pandas --with matplotlib --with scikit-learn --with scipy experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_swarm_transfer_packet/code/run_direct_anchor_exp_benchmark.py
+- Config:
+  - Variants:
+    - `anchor_exp_base_only`
+    - `anchor_exp_global`
+    - `anchor_exp_twohead`
+    - `anchor_exp_shared_score_2d`
+    - `anchor_exp_shared_score_1d`
+  - Baselines: `direct_drop_uNuD`, `direct_shared_score_tilt_poly4`, `two_stage_quality_split_signed`
+  - Anchor reference: `N0 ≈ 207M`, `D0 ≈ 4.04B`
+  - Search method: bounded Powell over structural params plus continuous log-ridge / log-regularization
+- Result:
+  - The exponential anchor family is much better than the non-`exp` exact-anchor family, but it still does not beat the current direct backbones.
+  - Overall 4-seed means:
+    - `direct_shared_score_tilt_poly4`: RMSE `0.02261`, Spearman `0.7786`
+    - `two_stage_quality_split_signed`: `0.02305`, `0.8029`
+    - `direct_drop_uNuD`: `0.02767`, `0.7759`
+    - `anchor_exp_shared_score_2d`: `0.04143`, `0.7178`
+    - `anchor_exp_shared_score_1d`: `0.04454`, `0.7217`
+    - `anchor_exp_twohead`: `0.05359`, `0.6690`
+    - `anchor_exp_global`: `0.12157`, `0.6682`
+    - `anchor_exp_base_only`: `0.16641`, `0.0540`
+  - The best `exp` variants are the shared-score tilts with centered power-law scale basis. Those are clear improvements over the non-`exp` exact-anchor variants and preserve healthier geometry than the incumbent direct laws.
+  - Seed-7 geometry:
+    - `anchor_exp_shared_score_2d`: nearest-TV `0.503`, phase supports `21.4 / 11.0`, max weights `0.070 / 0.124`
+    - `anchor_exp_shared_score_1d`: nearest-TV `0.511`, phase supports `20.4 / 11.2`, max weights `0.074 / 0.123`
+    - these are substantially healthier than the current direct winners' near one-hot phase-1 collapse
+- Interpretation:
+  - This is the first anchored Approach 3 family that looks structurally credible rather than just clean-on-paper.
+  - The key improvement is not "exact anchor" alone; it is exact anchor plus multiplicative interaction in floor-log space.
+  - Even so, the best `exp` variants still underperform the current direct winners by a meaningful margin on overall holdout fit and selection metrics.
+  - So the live conclusion is:
+    - pure additive exact-anchor: no
+    - exact-anchor with exponential shared-score tilt: maybe, but still not yet better than the incumbent direct laws
+- Next action:
+  - Treat `anchor_exp_shared_score_2d` and `anchor_exp_shared_score_1d` as the only promising Chinchilla-lineage variants.
+  - If continuing this thread, refine only those, not the additive or base-only families.

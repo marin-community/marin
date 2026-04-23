@@ -143,6 +143,8 @@ def build_launch_artifacts(
         name=name_prefix,
         experiment_budget=experiment_budget,
         target_budget=target_budget,
+        batch_size=spec.batch_size,
+        seq_len=spec.seq_len,
         model_config=spec.model_config,
         optimizer_config=spec.optimizer_config,
         resources=ResourceConfig.with_tpu(tpu_type, regions=list(tpu_regions), zone=tpu_zone),
@@ -153,6 +155,12 @@ def build_launch_artifacts(
         ),
         runtime_cache_region=tpu_regions if len(tpu_regions) > 1 else tpu_regions[0],
     )
+    if experiment.num_train_steps != run_spec.num_train_steps:
+        raise ValueError(
+            "Stratified launch step mismatch: "
+            f"run_spec.num_train_steps={run_spec.num_train_steps}, "
+            f"experiment.num_train_steps={experiment.num_train_steps}"
+        )
     run_manifest_step = create_run_manifest_step(
         step_name_prefix=name_prefix,
         experiment_name=name_prefix,

@@ -301,7 +301,7 @@ def main(config: TrainLmConfig):
                 every=config.hf_save_steps,
             )
 
-        if config.eval_harness is not None:
+        if config.eval_harness is not None and not os.environ.get("LEVANTER_SKIP_EVAL_HARNESS"):
             eval_harness = config.eval_harness
             trainer.add_hook(
                 levanter.eval_harness.lm_eval_harness(
@@ -309,6 +309,8 @@ def main(config: TrainLmConfig):
                 ),
                 every=config.eval_harness_steps,
             )
+        elif os.environ.get("LEVANTER_SKIP_EVAL_HARNESS"):
+            logger.info("Skipping lm-eval harness (LEVANTER_SKIP_EVAL_HARNESS is set)")
 
         @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
@@ -344,8 +346,7 @@ def main(config: TrainLmConfig):
 
         if trainer.config.checkpointer is not None:
             trainer.run_hooks(last_info, force=True)
-            checkpointer = trainer.config.checkpointer.create(trainer.run_id)
-            checkpointer.wait_until_finished()
+            trainer._checkpointer.wait_until_finished()
 
     # This isn't necessary except when Levanter is run in a subprocess (as happens w/ ray)
     trainer.tracker.finish()

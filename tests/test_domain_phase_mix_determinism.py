@@ -1148,6 +1148,87 @@ def test_stratified_launch_artifacts_record_explicit_scaled_budgets():
     assert artifacts.training_step.name.endswith("unit-test/stratified_130m_0p5x/baseline_stratified")
 
 
+def test_stratified_build_launch_artifacts_uses_scale_specific_batch_size_and_seq_len(monkeypatch):
+    scale = stratified_baseline_launch.StratifiedScale.REGMIX_520M_10P4B
+    spec = stratified_baseline_launch.resolve_scale_spec(scale)
+    captured: dict[str, object] = {}
+
+    class FakeExperiment:
+        def __init__(self, *, batch_size: int = 128, seq_len: int = 2048, experiment_budget: int, **_: object) -> None:
+            captured["batch_size"] = batch_size
+            captured["seq_len"] = seq_len
+            self.num_train_steps = experiment_budget // (batch_size * seq_len)
+
+        def create_training_step(self, **_: object) -> SimpleNamespace:
+            return SimpleNamespace(name="fake_train_step")
+
+    monkeypatch.setattr(
+        stratified_baseline_launch,
+        "create_two_phase_dolma3_dolmino_top_level_experiment",
+        lambda **kwargs: FakeExperiment(**kwargs),
+    )
+    monkeypatch.setattr(
+        stratified_baseline_launch,
+        "create_run_manifest_step",
+        lambda **kwargs: SimpleNamespace(name="fake_manifest_step", kwargs=kwargs),
+    )
+
+    artifacts = stratified_baseline_launch.build_launch_artifacts(
+        scale=scale,
+        name_prefix="unit-test/stratified_520m",
+        experiment_budget=spec.experiment_budget,
+        target_budget=scaling_study_recipes.BASE_TARGET_BUDGET,
+        target_budget_multiplier=1.0,
+        tpu_type=spec.tpu_type,
+        tpu_regions=spec.tpu_regions,
+        tpu_zone=spec.tpu_zone,
+        eval_datasets_cache_path=stratified_baseline_launch.EVAL_DATASETS_CACHE_PATH,
+        resume_latest_checkpoints=False,
+        cohort="unit_test_stratified_520m",
+    )
+
+    assert captured["batch_size"] == spec.batch_size
+    assert captured["seq_len"] == spec.seq_len
+    assert artifacts.run_spec.num_train_steps == spec.experiment_budget // (spec.batch_size * spec.seq_len)
+
+
+def test_stratified_build_launch_artifacts_raises_on_num_train_steps_mismatch(monkeypatch):
+    scale = stratified_baseline_launch.StratifiedScale.REGMIX_520M_10P4B
+    spec = stratified_baseline_launch.resolve_scale_spec(scale)
+
+    class FakeExperiment:
+        num_train_steps = 123
+
+        def create_training_step(self, **_: object) -> SimpleNamespace:
+            return SimpleNamespace(name="fake_train_step")
+
+    monkeypatch.setattr(
+        stratified_baseline_launch,
+        "create_two_phase_dolma3_dolmino_top_level_experiment",
+        lambda **kwargs: FakeExperiment(),
+    )
+    monkeypatch.setattr(
+        stratified_baseline_launch,
+        "create_run_manifest_step",
+        lambda **kwargs: SimpleNamespace(name="fake_manifest_step", kwargs=kwargs),
+    )
+
+    with pytest.raises(ValueError, match="num_train_steps"):
+        stratified_baseline_launch.build_launch_artifacts(
+            scale=scale,
+            name_prefix="unit-test/stratified_520m_mismatch",
+            experiment_budget=spec.experiment_budget,
+            target_budget=scaling_study_recipes.BASE_TARGET_BUDGET,
+            target_budget_multiplier=1.0,
+            tpu_type=spec.tpu_type,
+            tpu_regions=spec.tpu_regions,
+            tpu_zone=spec.tpu_zone,
+            eval_datasets_cache_path=stratified_baseline_launch.EVAL_DATASETS_CACHE_PATH,
+            resume_latest_checkpoints=False,
+            cohort="unit_test_stratified_520m_mismatch",
+        )
+
+
 def test_stratified_baseline_main_builds_selected_scale_in_ci_without_launching(monkeypatch):
     captured: dict[str, object] = {}
 
