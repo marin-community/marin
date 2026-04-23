@@ -511,6 +511,9 @@ class Transformer(eqx.Module):
     blocks: tuple[Block, ...]
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
+    # Final block attn res to combine all blocks before LM head.
+    final_bar_proj: jax.Array | None
+    final_bar_norm: RMSNorm | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -521,6 +524,11 @@ class Transformer(eqx.Module):
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
         blocks = tuple(Block.init(cfg, layer_number=i, key=block_keys[i]) for i in range(cfg.num_layers))
+        final_bar_proj = None
+        final_bar_norm = None
+        if cfg.use_block_attn_res:
+            final_bar_proj = jnp.zeros((cfg.hidden_dim,))
+            final_bar_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -529,6 +537,8 @@ class Transformer(eqx.Module):
             blocks=blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
+            final_bar_proj=final_bar_proj,
+            final_bar_norm=final_bar_norm,
             config=cfg,
         )
 
@@ -564,6 +574,8 @@ class Transformer(eqx.Module):
             "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
             "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
         }
+        if bar_blocks is not None and self.final_bar_proj is not None:
+            hidden = _block_attn_res(bar_blocks, hidden, self.final_bar_proj, self.final_bar_norm)
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
 
