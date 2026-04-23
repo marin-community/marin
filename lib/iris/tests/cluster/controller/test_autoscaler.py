@@ -18,7 +18,7 @@ from iris.cluster.controller.autoscaler import Autoscaler, DEFAULT_UNRESOLVABLE_
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.routing import route_demand
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
-from iris.cluster.controller.autoscaler.slice_lifecycle import SliceEvent
+from iris.cluster.controller.autoscaler.slice_lifecycle import CloudReady
 from iris.cluster.providers.types import (
     CloudSliceState,
     QuotaExhaustedError,
@@ -686,7 +686,7 @@ class TestAutoscalerBootstrapLogs:
         autoscaler = make_autoscaler({"test-group": group})
 
         workers = mock_handle.describe().workers
-        autoscaler._register_slice_workers(workers, mock_handle.slice_id, "test-group")
+        autoscaler._worker_registry.register_slice_workers(list(workers), mock_handle.slice_id, "test-group")
 
         vm_id = mock_handle.describe().workers[0].worker_id
         assert autoscaler.get_init_log(vm_id) == bootstrap_log
@@ -700,7 +700,7 @@ class TestAutoscalerBootstrapLogs:
         autoscaler = make_autoscaler({"test-group": group})
 
         workers = mock_handle.describe().workers
-        autoscaler._register_slice_workers(workers, mock_handle.slice_id, "test-group")
+        autoscaler._worker_registry.register_slice_workers(list(workers), mock_handle.slice_id, "test-group")
 
         worker = workers[0]
         # Lookup by platform worker_id
@@ -1260,8 +1260,7 @@ class TestGpuScaleGroupBugs:
         group.complete_scale_up(handle, ts)
 
         # Mark the slice as READY (simulates bootstrap completion)
-        worker_ids = [w.worker_id for w in handle.describe().workers]
-        group.dispatch(handle.slice_id, SliceEvent.CLOUD_STATE_READY, {"worker_ids": worker_ids})
+        group.dispatch(handle.slice_id, CloudReady(workers=tuple(handle.describe().workers)))
 
         # last_active should be initialized to at least the ready time
         with group._slices_lock:

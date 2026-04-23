@@ -16,7 +16,6 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
 
 from collections.abc import Sequence
 
@@ -35,11 +34,16 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.controller.autoscaler.models import SliceLifecycleState, SliceState
 from iris.cluster.controller.autoscaler.slice_lifecycle import (
-    BACKOFF_TRIGGERS,
-    NOOP,
+    BecameFailed,
+    BecameReady,
+    CloudFailed,
+    CloudReady,
+    IdleTimeout,
+    InternalTransition,
+    NoOp,
     SHORT_LIVED_SLICE_THRESHOLD,
     SliceEvent,
-    TransitionResult,
+    TransitionOutcome,
     TRANSITIONS,
 )
 from iris.cluster.controller.db import ControllerDB
@@ -482,101 +486,84 @@ class ScalingGroup:
         with self._slices_lock:
             self._pending_scale_ups = max(0, self._pending_scale_ups - 1)
 
-    def dispatch(
-        self,
-        slice_id: str,
-        event: SliceEvent,
-        context: dict[str, Any] | None = None,
-        *,
-        now: Timestamp | None = None,
-    ) -> TransitionResult:
-        """Apply a lifecycle event to a slice atomically with cross-machine cascades.
+    def dispatch(self, slice_id: str, event: SliceEvent, *, now: Timestamp | None = None) -> TransitionOutcome:
+        """Apply a typed lifecycle event, atomically with any cross-machine cascade.
 
-        Mutates both slice state AND group failure state under one lock so that:
-          - short-lived slice failures bump consecutive_failures and extend
-            backoff_until atomically with the FAILED transition
-          - terminal failures detach the slice and return its handle for the
-            caller to async-terminate
+        Behavior note: a FAILED transition removes the slice from _slices and
+        hands the SliceHandle to the caller via BecameFailed.handle. The caller
+        is responsible for unregistering workers and async-terminating the
+        cloud handle. As a consequence, slice_state_counts() and to_status()
+        will never observe a slice in the FAILED state for this group — failure
+        is surfaced via the action log and the returned outcome, not via
+        lingering FAILED entries in the tracked slice map.
 
-        Returns NOOP (applied=False) for unknown slice or invalid transition.
+        Holds _slices_lock across both the slice mutation and the group
+        failure accounting (_apply_failure_locked) so that short-lived
+        failures bump consecutive_failures/backoff_until consistently with
+        the slice detach. See test_concurrent_failures_account_atomically.
         """
-        ctx = context or {}
         now = now or Timestamp.now()
 
         with self._slices_lock:
             state = self._slices.get(slice_id)
             if state is None:
-                logger.warning("slice event for unknown slice %s (event=%s)", slice_id, event)
-                return NOOP
+                logger.warning("slice event for unknown slice %s (event=%s)", slice_id, event.label)
+                return NoOp(slice_id, reason="unknown_slice")
 
-            transition = TRANSITIONS.get((state.lifecycle, event))
-            if transition is None:
+            to_state = TRANSITIONS.get((state.lifecycle, type(event)))
+            if to_state is None:
                 logger.warning(
                     "no transition for slice %s in state %s on event %s",
                     slice_id,
                     state.lifecycle,
-                    event,
+                    event.label,
                 )
-                return NOOP
+                return NoOp(slice_id, reason=f"no_transition/{state.lifecycle.value}+{event.label}")
 
             prior = state.lifecycle
-            state.lifecycle = transition.to_state
+            state.lifecycle = to_state
 
-            detached_handle: SliceHandle | None = None
-            registered_workers: list = []
-            triggered_backoff = False
-
-            if transition.to_state == SliceLifecycleState.READY:
-                workers = ctx.get("workers", [])
+            outcome: TransitionOutcome
+            if to_state == SliceLifecycleState.READY:
+                assert isinstance(event, CloudReady)
                 state.last_active = now
-                state.worker_ids = ctx.get("worker_ids") or [w.worker_id for w in workers]
-                registered_workers = list(workers)
+                state.worker_ids = [w.worker_id for w in event.workers]
+                outcome = BecameReady(slice_id=slice_id, workers=event.workers)
 
-            elif transition.to_state == SliceLifecycleState.FAILED:
-                error_message = ctx.get("error_message", "")
-                if error_message:
-                    state.error_message = error_message
-                detached_handle = state.handle
-                age = Duration.from_ms(now.epoch_ms() - state.handle.created_at.epoch_ms())
+            elif to_state == SliceLifecycleState.FAILED:
+                handle = state.handle
+                age = Duration.from_ms(now.epoch_ms() - handle.created_at.epoch_ms())
                 short_lived = age < SHORT_LIVED_SLICE_THRESHOLD
-                if event in BACKOFF_TRIGGERS and short_lived:
+                triggered = event.counts_toward_backoff and short_lived
+                if triggered:
                     self._apply_failure_locked(now)
-                    triggered_backoff = True
-                # Remove the slice from tracking; caller is responsible for
-                # terminating the cloud handle and unregistering workers.
+                if isinstance(event, CloudFailed) and event.error_message:
+                    state.error_message = event.error_message
                 self._slices.pop(slice_id, None)
                 self._last_scale_down = now
+                outcome = BecameFailed(slice_id=slice_id, handle=handle, event=event, triggered_backoff=triggered)
 
-        # Outside the lock: persist and log.
-        if transition.to_state == SliceLifecycleState.FAILED:
+            else:  # BOOTING -> INITIALIZING
+                outcome = InternalTransition(slice_id=slice_id, prior=prior, new_state=to_state)
+
+        # Persistence outside the lock.
+        if isinstance(outcome, BecameFailed):
             self._db_remove_slice(slice_id)
+            if outcome.triggered_backoff:
+                self._db_update_group()
         elif slice_id in self._slices:
             self._db_upsert_slice(slice_id, self._slices[slice_id])
-        if triggered_backoff:
-            self._db_update_group()
 
         logger.info(
-            "slice transition group=%s slice=%s %s → %s event=%s backoff=%s error=%s",
+            "slice_transition group=%s slice=%s %s→%s event=%s backoff=%s",
             self.name,
             slice_id,
             prior.value,
-            transition.to_state.value,
-            event.value,
-            triggered_backoff,
-            ctx.get("error_message", ""),
+            to_state.value,
+            event.label,
+            isinstance(outcome, BecameFailed) and outcome.triggered_backoff,
         )
-
-        return TransitionResult(
-            slice_id=slice_id,
-            prior_state=prior,
-            new_state=transition.to_state,
-            event=event,
-            applied=True,
-            timestamp=now,
-            detached_handle=detached_handle,
-            registered_workers=registered_workers,
-            triggered_backoff=triggered_backoff,
-        )
+        return outcome
 
     def _apply_failure_locked(self, now: Timestamp) -> None:
         """Mutate group failure state. Caller must hold _slices_lock."""
@@ -867,45 +854,28 @@ class ScalingGroup:
         worker_status_map: WorkerStatusMap,
         target_capacity: int,
         timestamp: Timestamp,
-    ) -> list[TransitionResult]:
+    ) -> list[BecameFailed]:
         """Scale down idle slices that exceed target capacity.
 
-        Dispatches IDLE_TIMEOUT through the state machine for each eligible
+        Dispatches IdleTimeout through the state machine for each eligible
         slice so that all slice teardowns go through the same path. Returns
-        the list of applied TransitionResults so the caller can execute
+        the list of BecameFailed outcomes so the caller can execute
         side-effect work (unregister workers, async terminate the handle).
 
         Terminates multiple idle slices in a single call, rate-limited by a
         token bucket.
-
-        Steps:
-        1. Update slice activity based on worker idle status
-        2. Check if we're over target capacity (using ready + pending)
-        3. Find eligible idle slices and dispatch IDLE_TIMEOUT (up to the token budget)
-
-        Args:
-            worker_status_map: Map of worker_id to worker status
-            target_capacity: Target number of slices (typically min(demand + buffer_slices, max_slices))
-            timestamp: Current timestamp for idle calculation
-
-        Returns:
-            List of applied TransitionResults for terminated slices.
         """
         self.update_slice_activity(worker_status_map, timestamp)
 
-        # Use ready + pending for capacity check to prevent churn during boot
         counts = self.slice_state_counts()
         ready = counts[SliceLifecycleState.READY]
         pending = counts[SliceLifecycleState.BOOTING] + counts[SliceLifecycleState.INITIALIZING]
 
-        if ready + pending <= target_capacity:
-            return []
-        if ready <= target_capacity:
+        if ready + pending <= target_capacity or ready <= target_capacity:
             return []
 
-        results: list[TransitionResult] = []
-        idle_slices = self.get_idle_slices(timestamp)
-        for slice_state in idle_slices:
+        results: list[BecameFailed] = []
+        for slice_state in self.get_idle_slices(timestamp):
             if ready - len(results) <= target_capacity:
                 break
 
@@ -937,9 +907,10 @@ class ScalingGroup:
                 pending,
                 target_capacity,
             )
-            result = self.dispatch(slice_state.handle.slice_id, SliceEvent.IDLE_TIMEOUT, now=timestamp)
-            if result.applied:
-                results.append(result)
+            event = IdleTimeout(target_capacity=target_capacity, ready_before=ready)
+            outcome = self.dispatch(slice_state.handle.slice_id, event, now=timestamp)
+            if isinstance(outcome, BecameFailed):
+                results.append(outcome)
 
         return results
 
