@@ -35,9 +35,9 @@ Current datasets:
 20. nvidia/Nemotron-Post-Training-Dataset-v2
 21. HuggingFaceH4/no_robots
 22. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
+23. lambda/hermes-agent-reasoning-traces
 """
 
-import dataclasses
 import hashlib
 import json
 from collections.abc import Sequence
@@ -57,10 +57,20 @@ from marin.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
     convert_conversation_to_dolma,
 )
-from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
+from marin.transform.conversation.adapters import (
+    InputDatasetFormat,
+    MessagePostprocessFn,
+    RowIdFn,
+    TransformAdapter,
+    transform_adapter_signature,
+)
 from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
     transform_hf_dataset,
+)
+from marin.transform.conversation.trace_normalization import (
+    hermes_trace_row_id,
+    normalize_hermes_trace_messages,
 )
 
 SMOLTALK2_SPLITS = [
@@ -104,6 +114,7 @@ NEMOTRON_V2_SPLITS = [
 ]
 
 NEMOTRON_V1_SPLITS = ["chat", "code", "math", "stem", "tool_calling"]
+HERMES_TRACE_REVISION = "aa7c93605c71578869938359075b1765cf1b26e1"
 
 
 @dataclass(frozen=True)
@@ -142,6 +153,8 @@ def multi_turn_adapter(
     metadata_remap: dict[str, str] | None = None,
     replacements: dict[str, str] | None = None,
     extra_metadata_fn=None,
+    message_postprocess_fn: MessagePostprocessFn | None = None,
+    row_id_fn: RowIdFn | None = None,
 ) -> TransformAdapter:
     return TransformAdapter(
         dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
@@ -154,6 +167,8 @@ def multi_turn_adapter(
         metadata_remap=metadata_remap or {},
         replacements=replacements,
         extra_metadata_fn=extra_metadata_fn,
+        message_postprocess_fn=message_postprocess_fn,
+        row_id_fn=row_id_fn,
     )
 
 
@@ -166,6 +181,8 @@ def instruction_response_adapter(
     metadata_remap: dict[str, str] | None = None,
     replacements: dict[str, str] | None = None,
     extra_metadata_fn=None,
+    message_postprocess_fn: MessagePostprocessFn | None = None,
+    row_id_fn: RowIdFn | None = None,
 ) -> TransformAdapter:
     return TransformAdapter(
         dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
@@ -176,6 +193,8 @@ def instruction_response_adapter(
         metadata_remap=metadata_remap or {},
         replacements=replacements,
         extra_metadata_fn=extra_metadata_fn,
+        message_postprocess_fn=message_postprocess_fn,
+        row_id_fn=row_id_fn,
     )
 
 
@@ -186,6 +205,8 @@ def instruct_column_response_adapter(
     metadata_remap: dict[str, str] | None = None,
     replacements: dict[str, str] | None = None,
     extra_metadata_fn=None,
+    message_postprocess_fn: MessagePostprocessFn | None = None,
+    row_id_fn: RowIdFn | None = None,
 ) -> TransformAdapter:
     return TransformAdapter(
         dataset_format=InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE,
@@ -195,6 +216,8 @@ def instruct_column_response_adapter(
         metadata_remap=metadata_remap or {},
         replacements=replacements,
         extra_metadata_fn=extra_metadata_fn,
+        message_postprocess_fn=message_postprocess_fn,
+        row_id_fn=row_id_fn,
     )
 
 
@@ -210,6 +233,8 @@ def instruct_msg_response_adapter(
     metadata_remap: dict[str, str] | None = None,
     replacements: dict[str, str] | None = None,
     extra_metadata_fn=None,
+    message_postprocess_fn: MessagePostprocessFn | None = None,
+    row_id_fn: RowIdFn | None = None,
 ) -> TransformAdapter:
     return TransformAdapter(
         dataset_format=InputDatasetFormat.INSTRUCT_MSG_RESPONSE,
@@ -223,6 +248,8 @@ def instruct_msg_response_adapter(
         metadata_remap=metadata_remap or {},
         replacements=replacements,
         extra_metadata_fn=extra_metadata_fn,
+        message_postprocess_fn=message_postprocess_fn,
+        row_id_fn=row_id_fn,
     )
 
 
@@ -287,6 +314,42 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         ),
         metadata_columns=["id", "category", "source"],
         name="teknium/OpenHermes-2.5",
+    ),
+    "lambda/hermes-agent-reasoning-traces/glm-5.1": InstructionDatasetConfig(
+        hf_dataset_id="lambda/hermes-agent-reasoning-traces",
+        revision=HERMES_TRACE_REVISION,
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            system_value="system",
+            content_key="value",
+            message_postprocess_fn=normalize_hermes_trace_messages,
+            row_id_fn=hermes_trace_row_id,
+        ),
+        metadata_columns=["category", "subcategory", "task"],
+        name="lambda/hermes-agent-reasoning-traces/glm-5.1",
+        subsets=["glm-5.1"],
+        splits=["train"],
+    ),
+    "lambda/hermes-agent-reasoning-traces/kimi": InstructionDatasetConfig(
+        hf_dataset_id="lambda/hermes-agent-reasoning-traces",
+        revision=HERMES_TRACE_REVISION,
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            system_value="system",
+            content_key="value",
+            message_postprocess_fn=normalize_hermes_trace_messages,
+            row_id_fn=hermes_trace_row_id,
+        ),
+        metadata_columns=["category", "subcategory", "task"],
+        name="lambda/hermes-agent-reasoning-traces/kimi",
+        subsets=["kimi"],
+        splits=["train"],
     ),
     "allenai/tulu-v2-sft-mixture-olmo-4096": InstructionDatasetConfig(
         hf_dataset_id="allenai/tulu-v2-sft-mixture-olmo-4096",
@@ -561,26 +624,18 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     return dataset_name
 
 
+def get_adapter_signature_string(adapter: TransformAdapter) -> str:
+    """Return the stable JSON signature used to version transformed instruction datasets."""
+    return json.dumps(transform_adapter_signature(adapter), sort_keys=True)
+
+
 def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorStep:
     """ExecutorStep that preprocesses the input dataset into a canonicalized format for SFT training."""
     adapter = dataset_cfg.adapter
     output_name = dataset_cfg.name if dataset_cfg.name is not None else dataset_cfg.hf_dataset_id
     dataset_name = get_directory_friendly_dataset_name(output_name)
 
-    adapter_dict = dataclasses.asdict(adapter)
-    adapter_dict["dataset_format"] = adapter_dict["dataset_format"].value
-
-    def canonicalize(value):
-        if isinstance(value, dict):
-            return {k: canonicalize(v) for k, v in sorted(value.items())}
-        if isinstance(value, list):
-            return [canonicalize(x) for x in value]
-        if callable(value):
-            return f"{value.__module__}.{value.__qualname__}"
-        return value
-
-    adapter_signature = canonicalize(adapter_dict)
-    adapter_signature_str = json.dumps(adapter_signature, sort_keys=True)
+    adapter_signature_str = get_adapter_signature_string(adapter)
 
     config_str = f"{dataset_name}-\
         {dataset_cfg.revision}\
