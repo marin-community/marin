@@ -7,7 +7,7 @@ These tests verify the RPC contract (input -> output) of the ControllerServiceIm
 State changes are verified via RPC calls rather than internal state inspection.
 """
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 from connectrpc.code import Code
@@ -16,8 +16,9 @@ from connectrpc.errors import ConnectError
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
 from iris.cluster.controller.service import (
     FEATURE_INTRODUCTION_DATE,
-    MIN_CLIENT_REVISION_DATE,
+    FRESHNESS_WINDOW,
     ControllerServiceImpl,
+    _check_client_freshness,
 )
 from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.codec import constraints_from_json
@@ -1279,44 +1280,65 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
 # =============================================================================
 
 
+# Fixed reference point for helper unit tests so freshness behavior is
+# reproducible regardless of wall-clock date. Pick something far enough in the
+# future that FEATURE_INTRODUCTION_DATE has aged out for the past-grace test.
+_REF_NOW = date(2026, 6, 1)
+
+
+def test_check_client_freshness_accepts_today():
+    """A client built today is inside the window (upper edge)."""
+    _check_client_freshness(_REF_NOW.isoformat(), _REF_NOW)
+
+
+def test_check_client_freshness_accepts_at_window_edge():
+    """A client exactly FRESHNESS_WINDOW old is still accepted (lower edge)."""
+    edge = _REF_NOW - FRESHNESS_WINDOW
+    _check_client_freshness(edge.isoformat(), _REF_NOW)
+
+
+def test_check_client_freshness_rejects_over_window():
+    """A client one day past the window is rejected."""
+    stale = _REF_NOW - FRESHNESS_WINDOW - timedelta(days=1)
+    with pytest.raises(ConnectError) as exc_info:
+        _check_client_freshness(stale.isoformat(), _REF_NOW)
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+    assert stale.isoformat() in exc_info.value.message
+
+
+def test_check_client_freshness_empty_is_introduction_date():
+    """Empty string is substituted with FEATURE_INTRODUCTION_DATE."""
+    # Right at ship time: empty clients still inside window, succeed.
+    _check_client_freshness("", FEATURE_INTRODUCTION_DATE)
+    # Well past the grace period: empty clients fail.
+    well_past = FEATURE_INTRODUCTION_DATE + FRESHNESS_WINDOW + timedelta(days=1)
+    with pytest.raises(ConnectError) as exc_info:
+        _check_client_freshness("", well_past)
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+
+
+def test_check_client_freshness_rejects_malformed():
+    """Non-ISO strings are rejected as INVALID_ARGUMENT."""
+    with pytest.raises(ConnectError) as exc_info:
+        _check_client_freshness("not-a-date", _REF_NOW)
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
 def test_launch_job_root_with_fresh_client_date(service):
-    """Root submission with a date >= the floor succeeds."""
+    """Root submission with today's date succeeds end-to-end through launch_job."""
     request = make_job_request("fresh-client")
-    request.client_revision_date = MIN_CLIENT_REVISION_DATE.isoformat()
+    request.client_revision_date = date.today().isoformat()
     response = service.launch_job(request, None)
     assert response.job_id == JobName.root("test-user", "fresh-client").to_wire()
 
 
 def test_launch_job_root_with_stale_client_date(service):
-    """Root submission with a date below the floor is rejected."""
+    """Root submission with an ancient date is rejected end-to-end."""
     request = make_job_request("stale-client")
-    stale = MIN_CLIENT_REVISION_DATE - timedelta(days=1)
-    request.client_revision_date = stale.isoformat()
+    request.client_revision_date = "2000-01-01"
     with pytest.raises(ConnectError) as exc_info:
         service.launch_job(request, None)
     assert exc_info.value.code == Code.FAILED_PRECONDITION
-    assert MIN_CLIENT_REVISION_DATE.isoformat() in exc_info.value.message
-
-
-def test_launch_job_root_with_empty_client_date(service):
-    """Empty client_revision_date is treated as the feature introduction date."""
-    # Sanity check: this only works while the introduction date is >= the floor.
-    # Once the floor crosses past the introduction date, that grace window is
-    # over and this test should be deleted along with FEATURE_INTRODUCTION_DATE.
-    assert FEATURE_INTRODUCTION_DATE >= MIN_CLIENT_REVISION_DATE
-    request = make_job_request("empty-client")
-    assert request.client_revision_date == ""
-    response = service.launch_job(request, None)
-    assert response.job_id == JobName.root("test-user", "empty-client").to_wire()
-
-
-def test_launch_job_root_with_malformed_client_date(service):
-    """A non-ISO client_revision_date is rejected as INVALID_ARGUMENT."""
-    request = make_job_request("malformed-client")
-    request.client_revision_date = "not-a-date"
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request, None)
-    assert exc_info.value.code == Code.INVALID_ARGUMENT
 
 
 def test_launch_job_nested_with_stale_client_date_is_exempt(service):
@@ -1332,8 +1354,7 @@ def test_launch_job_nested_with_stale_client_date_is_exempt(service):
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
     )
-    stale = MIN_CLIENT_REVISION_DATE - timedelta(days=365)
-    child_req.client_revision_date = stale.isoformat()
+    child_req.client_revision_date = "2000-01-01"
 
     response = service.launch_job(child_req, None)
     assert response.job_id == child_id.to_wire()
