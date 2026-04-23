@@ -883,3 +883,27 @@ Neither blocks the sweep. Both should be filed as issues once the sweep lands.
 - `/ahmed/delphi-math-10b-1e20-lr0.5-20260423-v2`: still in zephyr-normalize phase (landed us-east5; normalize/tokenize caches live in us-central1 under a different hash, so it's re-running data prep locally). Expected ~30–60 min before training starts; total wall-time thus slightly longer than the other two.
 
 Next check: verify loss ≪ 1.12 at step 500 (v10's warmup-end number under the broken schedule). If yes, LR fix confirmed. If no, dig deeper.
+
+### LR fix confirmed — both runs finished (2026-04-23 14:28 UTC)
+
+`lr=0.67` and `lr=0.83` reached `4.77kit/4.77kit` (i.e., step 4768) simultaneously at 14:28 UTC, ~6 h 23 min after training-start. Final train-loss (single-step tqdm):
+
+| Run | Final loss | vs v10 broken (0.962) |
+|---|---:|---|
+| `lr=0.5` | (still running, ETA 15:00 UTC) | — |
+| **`lr=0.67`** | **0.781** | 18.8% lower |
+| **`lr=0.83`** | **0.772** | 19.7% lower |
+
+Preliminary 1e20 ranking (awaiting `lr=0.5` final + smoothed curves for confirmation):
+`lr=0.83 (0.772) < lr=0.67 (0.781)`
+
+The **final-loss test is unambiguous**: both runs' single-step final losses are ~0.18-0.19 below v10's final of 0.962. Under the flat-min-lr bug, effective LR was ~10x too low across the whole run; new runs trained at the intended warmup→peak→decay schedule, and that's the measurable difference in the final loss. Combined with:
+
+- the earlier loss trajectory during warmup being faster than v10's, and
+- the crossover/ordering between factors (lr=0.83 leading early, lr=0.67 overtaking in decay tail, then lr=0.83 finishing slightly lower again)
+
+we have three independent lines of evidence that the LR schedule is alive. The `CheckpointInitMode.MODEL_ONLY` branch in `train_lm.py` correctly keeps the freshly-initialized opt_state, so the schedule evaluates at count=0 at step 0 and ramps normally.
+
+**Runs ended with the expected tqdm rate pattern** — `rate:4.4-4.5s/it` for ~4768 steps = ~5:50 elapsed, plus eval+checkpoint pauses absorbed into the rolling average. No crashes, no preemptions, no mid-training bug.
+
+Coordinators are still showing `running` because Levanter is in the final HF-export phase (~7.7 GB × 2 shards per run). Iris will flip them to `succeeded` in 5-10 min once export commits.
