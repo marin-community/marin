@@ -134,7 +134,7 @@ class VmConfig(_message.Message):
     def __init__(self, name: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., gcp: _Optional[_Union[GcpVmConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualVmConfig, _Mapping]] = ...) -> None: ...
 
 class GcpSliceConfig(_message.Message):
-    __slots__ = ("mode", "zone", "runtime_version", "topology", "machine_type", "service_account")
+    __slots__ = ("mode", "zone", "runtime_version", "topology", "machine_type", "service_account", "enable_external_ip")
     class GcpSliceMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
         __slots__ = ()
         GCP_SLICE_MODE_TPU: _ClassVar[GcpSliceConfig.GcpSliceMode]
@@ -147,13 +147,15 @@ class GcpSliceConfig(_message.Message):
     TOPOLOGY_FIELD_NUMBER: _ClassVar[int]
     MACHINE_TYPE_FIELD_NUMBER: _ClassVar[int]
     SERVICE_ACCOUNT_FIELD_NUMBER: _ClassVar[int]
+    ENABLE_EXTERNAL_IP_FIELD_NUMBER: _ClassVar[int]
     mode: GcpSliceConfig.GcpSliceMode
     zone: str
     runtime_version: str
     topology: str
     machine_type: str
     service_account: str
-    def __init__(self, mode: _Optional[_Union[GcpSliceConfig.GcpSliceMode, str]] = ..., zone: _Optional[str] = ..., runtime_version: _Optional[str] = ..., topology: _Optional[str] = ..., machine_type: _Optional[str] = ..., service_account: _Optional[str] = ...) -> None: ...
+    enable_external_ip: bool
+    def __init__(self, mode: _Optional[_Union[GcpSliceConfig.GcpSliceMode, str]] = ..., zone: _Optional[str] = ..., runtime_version: _Optional[str] = ..., topology: _Optional[str] = ..., machine_type: _Optional[str] = ..., service_account: _Optional[str] = ..., enable_external_ip: _Optional[bool] = ...) -> None: ...
 
 class CoreweaveSliceConfig(_message.Message):
     __slots__ = ("region", "instance_type", "gpu_class", "infiniband")

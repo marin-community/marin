@@ -406,3 +406,13 @@ def test_tpu_list_extracts_zone_from_wildcard() -> None:
     assert len(results) == 1
     assert results[0].name == "my-tpu"
     assert results[0].zone == "us-central2-b"
+
+
+def test_gcloud_tpu_ssh_uses_alpha_track_when_tunneling_through_iap() -> None:
+    """`gcloud compute tpus tpu-vm ssh` lacks --tunnel-through-iap on stable; must use alpha."""
+    from iris.cluster.providers.remote_exec import GcloudRemoteExec
+
+    direct = GcloudRemoteExec(project_id="p", _zone="z", vm_id="v", tunnel_through_iap=False)._build_cmd("x")
+    iap = GcloudRemoteExec(project_id="p", _zone="z", vm_id="v", tunnel_through_iap=True)._build_cmd("x")
+    assert direct[:2] == ["gcloud", "compute"] and "--tunnel-through-iap" not in direct
+    assert iap[:3] == ["gcloud", "alpha", "compute"] and "--tunnel-through-iap" in iap
