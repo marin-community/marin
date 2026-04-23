@@ -17,6 +17,7 @@ import time
 import uuid
 import dataclasses
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Protocol
 
 from connectrpc.code import Code
@@ -123,6 +124,42 @@ DEFAULT_MAX_TOTAL_LINES = 100000
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+
+# Floor for accepted client_revision_date on root LaunchJob submissions. Bumped
+# manually in the same PR as breaking client/server changes; the convention is
+# floor = today - 14d at the time of the bump.
+MIN_CLIENT_REVISION_DATE = date(2026, 4, 8)
+
+# Date this freshness check shipped. An empty client_revision_date is
+# interpreted as this date so already-deployed clients (which don't set the
+# field at all) get a grace window before the floor catches up to them.
+FEATURE_INTRODUCTION_DATE = date(2026, 4, 22)
+
+
+def _check_client_freshness(client_date_str: str) -> None:
+    """Reject root LaunchJob submissions from stale clients.
+
+    Empty string is treated as FEATURE_INTRODUCTION_DATE so old clients (which
+    don't set the field at all) get a grace window after rollout.
+    """
+    if not client_date_str:
+        client_date = FEATURE_INTRODUCTION_DATE
+    else:
+        try:
+            client_date = date.fromisoformat(client_date_str)
+        except ValueError as err:
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                f"client_revision_date must be ISO YYYY-MM-DD, got {client_date_str!r}",
+            ) from err
+    if client_date < MIN_CLIENT_REVISION_DATE:
+        raise ConnectError(
+            Code.FAILED_PRECONDITION,
+            f"marin-iris client is too old (build {client_date.isoformat()}; "
+            f"minimum {MIN_CLIENT_REVISION_DATE.isoformat()}). "
+            f"Run `uv sync` or upgrade marin-iris and retry.",
+        )
+
 
 USER_TASK_STATES = (
     job_pb2.TASK_STATE_PENDING,
@@ -1039,6 +1076,12 @@ class ControllerServiceImpl:
             raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
 
         job_id = JobName.from_wire(request.name)
+
+        # Reject root submissions from stale clients. Nested submissions (from
+        # a job already running in the cluster) are exempt — the workload would
+        # otherwise crash mid-flight when we bump the floor.
+        if job_id.is_root:
+            _check_client_freshness(request.client_revision_date)
 
         # When an auth provider is configured, override the user segment with
         # the verified identity to prevent impersonation. Only override for

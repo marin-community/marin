@@ -25,6 +25,7 @@ from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.logging_connect import LogServiceClientSync
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
 from iris.time_proto import duration_to_proto
+from iris.version import client_revision_date
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,7 @@ class RemoteClusterClient:
             task_image=task_image or "",
             priority_band=priority_band,
             submit_argv=submit_argv or [],
+            client_revision_date=client_revision_date(),
         )
         if self._bundle_id:
             request.bundle_id = self._bundle_id

@@ -7,12 +7,18 @@ These tests verify the RPC contract (input -> output) of the ControllerServiceIm
 State changes are verified via RPC calls rather than internal state inspection.
 """
 
+from datetime import timedelta
+
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
-from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.service import (
+    FEATURE_INTRODUCTION_DATE,
+    MIN_CLIENT_REVISION_DATE,
+    ControllerServiceImpl,
+)
 from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.transitions import (
@@ -1266,3 +1272,68 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         assert resp.running_tasks[0].user_id == "alice"
     finally:
         _verified_identity.reset(token)
+
+
+# =============================================================================
+# Client freshness tests
+# =============================================================================
+
+
+def test_launch_job_root_with_fresh_client_date(service):
+    """Root submission with a date >= the floor succeeds."""
+    request = make_job_request("fresh-client")
+    request.client_revision_date = MIN_CLIENT_REVISION_DATE.isoformat()
+    response = service.launch_job(request, None)
+    assert response.job_id == JobName.root("test-user", "fresh-client").to_wire()
+
+
+def test_launch_job_root_with_stale_client_date(service):
+    """Root submission with a date below the floor is rejected."""
+    request = make_job_request("stale-client")
+    stale = MIN_CLIENT_REVISION_DATE - timedelta(days=1)
+    request.client_revision_date = stale.isoformat()
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+    assert MIN_CLIENT_REVISION_DATE.isoformat() in exc_info.value.message
+
+
+def test_launch_job_root_with_empty_client_date(service):
+    """Empty client_revision_date is treated as the feature introduction date."""
+    # Sanity check: this only works while the introduction date is >= the floor.
+    # Once the floor crosses past the introduction date, that grace window is
+    # over and this test should be deleted along with FEATURE_INTRODUCTION_DATE.
+    assert FEATURE_INTRODUCTION_DATE >= MIN_CLIENT_REVISION_DATE
+    request = make_job_request("empty-client")
+    assert request.client_revision_date == ""
+    response = service.launch_job(request, None)
+    assert response.job_id == JobName.root("test-user", "empty-client").to_wire()
+
+
+def test_launch_job_root_with_malformed_client_date(service):
+    """A non-ISO client_revision_date is rejected as INVALID_ARGUMENT."""
+    request = make_job_request("malformed-client")
+    request.client_revision_date = "not-a-date"
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
+def test_launch_job_nested_with_stale_client_date_is_exempt(service):
+    """Nested submissions bypass the freshness check (parent already running)."""
+    service.launch_job(make_job_request("parent-job"), None)
+    parent_id = JobName.root("test-user", "parent-job")
+
+    child_id = JobName.from_wire(parent_id.to_wire() + "/child")
+    assert not child_id.is_root
+    child_req = controller_pb2.Controller.LaunchJobRequest(
+        name=child_id.to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+    )
+    stale = MIN_CLIENT_REVISION_DATE - timedelta(days=365)
+    child_req.client_revision_date = stale.isoformat()
+
+    response = service.launch_job(child_req, None)
+    assert response.job_id == child_id.to_wire()
