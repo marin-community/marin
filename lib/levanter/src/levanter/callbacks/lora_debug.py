@@ -62,9 +62,21 @@ MLP_MODULES: frozenset[str] = frozenset({"gate_proj", "up_proj", "down_proj"})
 
 _ENV_FLAG = "MARIN_DEBUG_LORA_DEBUG"
 
+# Separate env gate for P2 verbose_grads — intentionally distinct from the
+# general enable flag so "someone accidentally set a GCS path" can never
+# trigger full-tensor dumps. Both gates must be on.
+_ENV_VERBOSE_GRADS = "MARIN_DEBUG_LORA_VERBOSE_GRADS"
+_ENV_DUMP_STEPS = "MARIN_DEBUG_LORA_DUMP_STEPS"
+_ENV_DUMP_MODULES = "MARIN_DEBUG_LORA_DUMP_MODULES"
+_ENV_DUMP_PATH = "MARIN_DEBUG_LORA_DUMP_PATH"
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "0").strip() not in ("", "0", "false", "False")
+
 
 def _env_enabled() -> bool:
-    return os.environ.get(_ENV_FLAG, "0").strip() not in ("", "0", "false", "False")
+    return _env_truthy(_ENV_FLAG)
 
 
 @dataclass(frozen=True)
@@ -176,8 +188,37 @@ class LoraDebugConfig:
         """True if config, WandbConfig convenience flag, or env var say on."""
         return self.enabled or _env_enabled()
 
+    def with_env_overrides(self) -> "LoraDebugConfig":
+        """Return a copy of this config with P2 knobs populated from env vars
+        when present. The `verbose_grads` safety gate requires an explicit
+        `MARIN_DEBUG_LORA_VERBOSE_GRADS=1` — setting only `DUMP_STEPS` or
+        `DUMP_PATH` in isolation does nothing.
+        """
+        import dataclasses
+
+        updates: dict[str, Any] = {}
+        if _env_truthy(_ENV_VERBOSE_GRADS):
+            updates["verbose_grads"] = True
+        steps_raw = os.environ.get(_ENV_DUMP_STEPS, "").strip()
+        if steps_raw:
+            updates["dump_tensors_at_steps"] = tuple(
+                int(s) for s in steps_raw.split(",") if s.strip()
+            )
+        mods_raw = os.environ.get(_ENV_DUMP_MODULES, "").strip()
+        if mods_raw:
+            updates["dump_tensor_modules"] = tuple(
+                s.strip() for s in mods_raw.split(",") if s.strip()
+            )
+        path_raw = os.environ.get(_ENV_DUMP_PATH, "").strip()
+        if path_raw:
+            updates["dump_tensor_path"] = path_raw
+
+        if not updates:
+            return self
+        return dataclasses.replace(self, **updates)
+
     def build(self) -> "LoraDebugCallback":
-        return LoraDebugCallback(self)
+        return LoraDebugCallback(self.with_env_overrides())
 
 
 # --- Helpers -----------------------------------------------------------------

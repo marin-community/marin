@@ -89,6 +89,19 @@ _worker_env = {
 if os.environ.get("MARIN_DEBUG_LORA_DEBUG", "0").strip() not in ("", "0", "false", "False"):
     _worker_env["MARIN_DEBUG_LORA_DEBUG"] = "1"
 
+# P2 full-tensor dump passthrough. All four must be present on the worker for
+# the dump to actually happen; the launcher just mirrors whatever the parent
+# Iris command set so we don't silently lose them across the env boundary.
+for _k in (
+    "MARIN_DEBUG_LORA_VERBOSE_GRADS",
+    "MARIN_DEBUG_LORA_DUMP_STEPS",
+    "MARIN_DEBUG_LORA_DUMP_MODULES",
+    "MARIN_DEBUG_LORA_DUMP_PATH",
+):
+    _v = os.environ.get(_k, "").strip()
+    if _v:
+        _worker_env[_k] = _v
+
 config = SimpleDPOConfig(
     resources=ResourceConfig.with_tpu(TPU_TYPE, ram="250g", regions=REGIONS_FOR_TPU),
     per_device_parallelism=PER_DEVICE,
