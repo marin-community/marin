@@ -138,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         "--mode",
         choices=["docker", "native"],
         default=None,
-        help="Override MARIN_VLLM_MODE (default: use env; docker if unset).",
+        help="Override MARIN_VLLM_MODE (default: use env; native if unset).",
     )
     parser.add_argument(
         "--docker-image",
