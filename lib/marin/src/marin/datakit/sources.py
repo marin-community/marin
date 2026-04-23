@@ -90,13 +90,16 @@ def all_sources() -> dict[str, DatakitSource]:
             staged_path="raw/coderforge-preview_ad26b119",
         ),
         # ---- Common Corpus (English filter) ----
-        DatakitSource(
-            name="common_corpus/english",
-            hf_dataset_id="PleIAs/common_corpus",
-            revision="b78a5c1",
-            rough_token_count_b=1015.39,
-            staged_path="raw/common_corpus_english-b78a5c1",
-        ),
+        # TODO: staged dir `raw/common_corpus_english-b78a5c1` is missing its
+        # .executor_status marker — we can't confirm the staging run completed
+        # cleanly. Re-enable once the staging is re-verified.
+        # DatakitSource(
+        #     name="common_corpus/english",
+        #     hf_dataset_id="PleIAs/common_corpus",
+        #     revision="b78a5c1",
+        #     rough_token_count_b=1015.39,
+        #     staged_path="raw/common_corpus_english-b78a5c1",
+        # ),
         # ---- common-pile: 28 filtered subsets ----
         DatakitSource(
             name="cp/arxiv_abstracts",
@@ -332,23 +335,24 @@ def all_sources() -> dict[str, DatakitSource]:
             )
         ),
         # ---- FineTranslations ----
-        # TODO: add a download module for HuggingFaceFW/finetranslations and
-        # pin the revision so pinned_sources() can include these entries. No
-        # provenance.json on the staged dir to recover from.
-        DatakitSource(
-            name="finetranslations/multilingual",
-            hf_dataset_id="HuggingFaceFW/finetranslations",
-            revision=None,
-            rough_token_count_b=1520.07,
-            staged_path="raw/finetranslations_d17a789b",
-        ),
-        DatakitSource(
-            name="finetranslations/web",
-            hf_dataset_id="HuggingFaceFW/finetranslations",
-            revision=None,
-            rough_token_count_b=1520.07,
-            staged_path="raw/finetranslations_d17a789b",
-        ),
+        # TODO: staging at `raw/finetranslations_d17a789b` is still in progress;
+        # no provenance.json and no .executor_status=SUCCESS yet. Re-enable once
+        # staging lands and add a download module for HuggingFaceFW/finetranslations
+        # so pinned_sources() can include these entries.
+        # DatakitSource(
+        #     name="finetranslations/multilingual",
+        #     hf_dataset_id="HuggingFaceFW/finetranslations",
+        #     revision=None,
+        #     rough_token_count_b=1520.07,
+        #     staged_path="raw/finetranslations_d17a789b",
+        # ),
+        # DatakitSource(
+        #     name="finetranslations/web",
+        #     hf_dataset_id="HuggingFaceFW/finetranslations",
+        #     revision=None,
+        #     rough_token_count_b=1520.07,
+        #     staged_path="raw/finetranslations_d17a789b",
+        # ),
         # ---- gpt-oss rollouts ----
         DatakitSource(
             name="gpt-oss-rollouts",
