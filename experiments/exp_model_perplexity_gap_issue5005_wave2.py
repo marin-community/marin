@@ -47,6 +47,8 @@ SKIPPED_DATASETS = frozenset(
         "hardware_rtl/rtl_repo",
         "hardware_rtl/rtl_coder",
         "bio_chem/rcsb/rcsb_mmcif",
+        "bio_chem/refseq/refseq_viral_fasta",
+        "bio_chem/refseq/refseq_viral_gff",
     }
 )
 
