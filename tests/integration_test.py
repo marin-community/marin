@@ -25,8 +25,8 @@ from pathlib import Path
 
 import fsspec
 from fray import ResourceConfig, set_current_client
-from fray.v2.iris_backend import FrayIrisClient
-from fray.v2.types import Entrypoint, JobRequest, create_environment
+from fray.iris_backend import FrayIrisClient
+from fray.types import Entrypoint, JobRequest, create_environment
 from rigging.log_setup import configure_logging
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config

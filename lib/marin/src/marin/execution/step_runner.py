@@ -31,8 +31,8 @@ from concurrent.futures import ThreadPoolExecutor
 import levanter.utils.fsspec_utils as fsspec_utils
 from rigging.filesystem import open_url, url_to_fs
 
-from fray.v2.client import JobHandle, JobStatus
-from fray.v2.local_backend import LocalJobHandle
+from fray.client import JobHandle, JobStatus
+from fray.local_backend import LocalJobHandle
 from marin.execution.artifact import Artifact
 from marin.execution.executor_step_status import (
     STATUS_DEP_FAILED,
@@ -118,7 +118,7 @@ class StepRunner:
         # Capture the fray client on the calling thread so worker threads can
         # inherit it explicitly.  This is more robust than contextvars.copy_context()
         # alone because it survives process/thread-pool boundary edge cases.
-        from fray.v2.client import _current_client_var
+        from fray.client import _current_client_var
 
         caller_fray_client = _current_client_var.get()
         if caller_fray_client is not None:
@@ -274,7 +274,7 @@ class StepRunner:
 
         def worker_fn():
             if captured_client is not None:
-                from fray.v2.client import set_current_client
+                from fray.client import set_current_client
 
                 with set_current_client(captured_client):
                     run_step(step)

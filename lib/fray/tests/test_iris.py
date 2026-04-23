@@ -12,12 +12,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from fray.v2.iris_backend import (
+from fray.iris_backend import (
     FrayIrisClient,
     IrisActorHandle,
     convert_constraints,
 )
-from fray.v2.types import (
+from fray.types import (
     Entrypoint,
     JobRequest,
     ResourceConfig,

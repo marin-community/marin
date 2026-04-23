@@ -35,9 +35,9 @@ from typing import Any, Protocol
 
 import cloudpickle
 from rigging.filesystem import open_url, url_to_fs
-from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
-from fray.v2.client import JobHandle
-from fray.v2.types import Entrypoint, JobRequest
+from fray import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
+from fray.client import JobHandle
+from fray.types import Entrypoint, JobRequest
 from rigging.filesystem import marin_temp_bucket
 from rigging.timing import ExponentialBackoff, log_time
 
@@ -344,7 +344,7 @@ class ZephyrCoordinator:
     """
 
     def __init__(self):
-        from fray.v2 import current_actor
+        from fray import current_actor
 
         # Task management state
         self._task_queue: deque[ShardTask] = deque()
@@ -1019,7 +1019,7 @@ class ZephyrWorker:
     """
 
     def __init__(self, coordinator_handle: ActorHandle):
-        from fray.v2 import current_actor
+        from fray import current_actor
 
         self._coordinator = coordinator_handle
         self._shutdown_event = threading.Event()
@@ -1403,7 +1403,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
     to disk. The coordinator monitors worker job health directly in its
     maintenance loop (no separate watchdog thread).
     """
-    from fray.v2.client import current_client
+    from fray.client import current_client
     from iris.cluster.client.job_info import get_job_info
 
     logger.info("Loading coordinator config from %s", config_path)
@@ -1557,12 +1557,12 @@ class ZephyrContext:
 
     def __post_init__(self):
         if self.client is None:
-            from fray.v2.client import current_client
+            from fray.client import current_client
 
             self.client = current_client()
 
         if self.max_workers is None:
-            from fray.v2.local_backend import LocalClient
+            from fray.local_backend import LocalClient
 
             if isinstance(self.client, LocalClient):
                 self.max_workers = os.cpu_count() or 1
@@ -1675,7 +1675,7 @@ class ZephyrContext:
                 # resources are requested by the coordinator/worker children.
                 # Set the context var so the coordinator job inherits self.client
                 # instead of auto-detecting (which may pick a different backend).
-                from fray.v2.client import set_current_client
+                from fray.client import set_current_client
 
                 with set_current_client(self.client):
                     self._coordinator_job = self.client.submit(

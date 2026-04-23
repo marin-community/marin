@@ -23,9 +23,9 @@ from unittest.mock import Mock
 
 import pytest
 
-from fray.v2.iris_backend import FrayIrisClient
-from fray.v2.types import Entrypoint as FrayEntrypoint
-from fray.v2.types import GpuConfig, JobRequest, ResourceConfig
+from fray.iris_backend import FrayIrisClient
+from fray.types import Entrypoint as FrayEntrypoint
+from fray.types import GpuConfig, JobRequest, ResourceConfig
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.controller import Controller, ControllerConfig

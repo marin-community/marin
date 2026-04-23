@@ -38,7 +38,7 @@ from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import job_pb2
 from rigging.timing import ExponentialBackoff
 
-from fray.v2.actor import (
+from fray.actor import (
     ActorContext,
     ActorFuture,
     ActorHandle,
@@ -46,8 +46,8 @@ from fray.v2.actor import (
     _reset_current_actor,
     _set_current_actor,
 )
-from fray.v2.client import JobAlreadyExists as FrayJobAlreadyExists
-from fray.v2.types import (
+from fray.client import JobAlreadyExists as FrayJobAlreadyExists
+from fray.types import (
     ActorConfig,
     CpuConfig,
     DeviceConfig,
@@ -58,7 +58,7 @@ from fray.v2.types import (
     ResourceConfig,
     TpuConfig,
 )
-from fray.v2.types import (
+from fray.types import (
     Entrypoint as Entrypoint_v2,
 )
 

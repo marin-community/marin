@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Client protocol and helpers for fray v2."""
+"""Client protocol and helpers for fray."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ import time
 from collections.abc import Generator, Sequence
 from typing import Any, Protocol
 
-from fray.v2.actor import ActorGroup, ActorHandle, HostedActor
-from fray.v2.types import ActorConfig, JobRequest, JobStatus, ResourceConfig
+from fray.actor import ActorGroup, ActorHandle, HostedActor
+from fray.types import ActorConfig, JobRequest, JobStatus, ResourceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -176,14 +176,14 @@ def current_client() -> Client:
 
         ctx = get_iris_ctx()
         if ctx is not None:
-            from fray.v2.iris_backend import FrayIrisClient
+            from fray.iris_backend import FrayIrisClient
 
             logger.info("current_client: using Iris backend (auto-detected)")
             return FrayIrisClient.from_iris_client(ctx.client)
     except ImportError:
         logger.warning("current_client: iris not installed")
 
-    from fray.v2.local_backend import LocalClient
+    from fray.local_backend import LocalClient
 
     logger.info("current_client: using LocalClient (fallback)")
     return LocalClient()

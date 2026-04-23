@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from fray.v2 import (
+from fray import (
     Entrypoint,
     JobFailed,
     JobRequest,
@@ -16,7 +16,7 @@ from fray.v2 import (
     LocalClient,
     wait_all,
 )
-from fray.v2.client import JobAlreadyExists
+from fray.client import JobAlreadyExists
 
 
 @pytest.fixture

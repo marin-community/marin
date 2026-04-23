@@ -7,7 +7,7 @@ import threading
 
 import pytest
 
-from fray.v2 import LocalClient
+from fray import LocalClient
 
 
 class Counter:

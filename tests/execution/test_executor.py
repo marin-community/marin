@@ -12,7 +12,7 @@ from threading import Thread
 
 import pytest
 from draccus.utils import Dataclass
-from fray.v2.types import ResourceConfig
+from fray.types import ResourceConfig
 from marin.execution import THIS_OUTPUT_PATH
 from marin.evaluation.perplexity_gap import GapFinderModelConfig, default_model_perplexity_gap, raw_text_dataset
 from marin.execution.executor import (

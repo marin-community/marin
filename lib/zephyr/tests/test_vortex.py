@@ -5,8 +5,8 @@
 
 import pytest
 
-from fray.v2 import ResourceConfig
-from fray.v2.local_backend import LocalClient
+from fray import ResourceConfig
+from fray.local_backend import LocalClient
 from zephyr import Dataset
 from zephyr.execution import ZephyrContext
 from zephyr.expr import col

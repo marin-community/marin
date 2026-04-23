@@ -21,7 +21,7 @@ import draccus
 import fsspec
 from rigging.filesystem import open_url, url_to_fs
 from datasets import load_dataset_builder
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,

@@ -1,15 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fray: Execution contexts for distributed and parallel computing."""
+"""Fray: minimal job and actor scheduling interface."""
 
-from fray.v2 import (
+from fray.actor import (
     ActorContext,
     ActorFuture,
     ActorGroup,
     ActorHandle,
     ActorMethod,
-    Client,
+    current_actor,
+)
+from fray.client import Client, JobAlreadyExists, JobFailed, JobHandle, current_client, set_current_client, wait_all
+from fray.local_backend import LocalActorHandle, LocalActorMethod, LocalClient, LocalJobHandle
+from fray.types import (
+    ActorConfig,
+    BinaryEntrypoint,
+    CallableEntrypoint,
     CpuConfig,
     DeviceConfig,
     DeviceKind,
@@ -17,32 +24,25 @@ from fray.v2 import (
     EnvironmentConfig,
     GpuConfig,
     GpuType,
-    JobFailed,
-    JobHandle,
     JobRequest,
     JobStatus,
-    LocalActorHandle,
-    LocalActorMethod,
-    LocalClient,
-    LocalJobHandle,
     ResourceConfig,
     TpuConfig,
     TpuTopologyInfo,
     TpuType,
     create_environment,
-    current_actor,
-    current_client,
     get_tpu_topology,
-    set_current_client,
-    wait_all,
 )
 
 __all__ = [
+    "ActorConfig",
     "ActorContext",
     "ActorFuture",
     "ActorGroup",
     "ActorHandle",
     "ActorMethod",
+    "BinaryEntrypoint",
+    "CallableEntrypoint",
     "Client",
     "CpuConfig",
     "DeviceConfig",
@@ -51,6 +51,7 @@ __all__ = [
     "EnvironmentConfig",
     "GpuConfig",
     "GpuType",
+    "JobAlreadyExists",
     "JobFailed",
     "JobHandle",
     "JobRequest",

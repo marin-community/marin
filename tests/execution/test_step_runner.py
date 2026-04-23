@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from fray.v2.types import ResourceConfig
+from fray.types import ResourceConfig
 from rigging.filesystem import MARIN_CROSS_REGION_OVERRIDE_ENV
 
 from marin.execution.artifact import Artifact, PathMetadata
@@ -1068,7 +1068,7 @@ def test_runner_propagates_fray_client(tmp_path):
     This tests the explicit client capture path (not just generic contextvars)
     to ensure current_client() returns the correct client inside step functions.
     """
-    from fray.v2.client import current_client, set_current_client
+    from fray.client import current_client, set_current_client
 
     class FakeClient:
         """Marker client to verify propagation."""

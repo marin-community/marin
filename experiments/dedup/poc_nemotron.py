@@ -8,7 +8,7 @@ from rigging.log_setup import configure_logging
 import os
 from typing import TypeVar
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from rigging.filesystem import marin_temp_bucket, region_from_metadata, check_path_in_region
 
 from marin.datakit.normalize import NormalizedData, normalize_step

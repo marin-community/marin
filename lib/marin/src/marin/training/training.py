@@ -11,7 +11,7 @@ from collections.abc import Callable
 from typing import TypeVar
 
 import draccus
-from fray.v2 import (
+from fray import (
     CpuConfig,
     Entrypoint,
     GpuConfig,
