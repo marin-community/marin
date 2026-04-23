@@ -59,7 +59,7 @@ TEST_ROOT = Path(__file__).resolve().parent.parent.parent
 class TpuJobSpec:
     """ResourceSpec + replica count for a TPU job.
 
-    Mirrors fray v2's ResourceConfig.with_tpu() without depending on fray.
+    Mirrors fray's ResourceConfig.with_tpu() without depending on fray.
     Iris's ResourceSpec doesn't carry replicas (they're a submit-time concern),
     so we bundle them here.
     """

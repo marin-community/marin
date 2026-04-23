@@ -1063,7 +1063,7 @@ def test_runner_propagates_context_vars(tmp_path):
 
 
 def test_runner_propagates_fray_client(tmp_path):
-    """StepRunner explicitly propagates the fray v2 client to worker threads.
+    """StepRunner explicitly propagates the fray client to worker threads.
 
     This tests the explicit client capture path (not just generic contextvars)
     to ensure current_client() returns the correct client inside step functions.

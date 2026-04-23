@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for the fray v2 Iris backend.
+"""Unit tests for the fray Iris backend.
 
 Tests type conversions and handle serialization without requiring an Iris cluster.
 Integration tests that need a running cluster are marked with @pytest.mark.iris.

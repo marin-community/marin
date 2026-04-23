@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Type definitions for fray v2.
+"""Type definitions for fray.
 
 Standalone dataclasses with no v1 backend dependencies. Copied from
 fray.cluster.base with one structural change: `replicas` moves from

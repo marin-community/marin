@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for fray v2 Client protocol, LocalClient, and wait_all."""
+"""Tests for fray Client protocol, LocalClient, and wait_all."""
 
 import threading
 import time

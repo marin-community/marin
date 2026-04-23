@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""LocalClient: in-process fray v2 backend for development and testing."""
+"""LocalClient: in-process fray backend for development and testing."""
 
 from __future__ import annotations
 
