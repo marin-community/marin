@@ -151,21 +151,52 @@ def test_write_parquet_file_basic():
         assert len(table) == 2
 
 
-def test_write_parquet_file_schema_mismatch_surfaces_both_schemas():
-    """On schema divergence, the raised error includes expected + actual schemas and inference origin."""
-    # First micro-batch (_MICRO_BATCH_SIZE=8) has `x` all None → inferred as pa.null().
-    # A later record with a real value for `x` then fails to fit that schema.
+def test_write_parquet_file_widens_null_to_concrete_type():
+    """First batch pins a field as null; a later batch with a concrete type widens cleanly.
+
+    This is the stackv2 failure mode: the first ``_MICRO_BATCH_SIZE`` (=8)
+    records all had ``None`` for a field, pinning it to ``pa.null()`` —
+    later records with real values would fail without schema widening.
+    Behavior must: (a) succeed, (b) land the widened schema on disk, (c)
+    preserve all values from both batches.
+    """
     records = [{"x": None}] * 8 + [{"x": "hello"}]
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = str(Path(tmpdir) / "test.parquet")
-        with pytest.raises(pa.ArrowInvalid) as excinfo:
+        result = write_parquet_file(records, output_path)
+        assert result["count"] == 9
+
+        table = pq.read_table(output_path)
+        assert len(table) == 9
+        assert pa.types.is_string(table.schema.field("x").type)
+        xs = table.column("x").to_pylist()
+        assert xs[:8] == [None] * 8
+        assert xs[8] == "hello"
+
+
+def test_write_parquet_file_captures_fields_appearing_in_later_batches():
+    """A field absent from the first batch but present later must not be silently dropped."""
+    records = [{"x": "a"}] * 8 + [{"x": "b", "z": 42}]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = str(Path(tmpdir) / "test.parquet")
+        result = write_parquet_file(records, output_path)
+        assert result["count"] == 9
+
+        table = pq.read_table(output_path)
+        assert "z" in table.schema.names, "field `z` must survive to disk, not be dropped"
+        assert table.column("z").to_pylist() == [None] * 8 + [42]
+
+
+def test_write_parquet_file_raises_on_incompatible_type_conflict():
+    """Genuine type conflicts (e.g. int vs string) must still raise a clear error."""
+    records = [{"x": i} for i in range(8)] + [{"x": "stringy"}]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = str(Path(tmpdir) / "test.parquet")
+        with pytest.raises((pa.ArrowInvalid, pa.ArrowTypeError)) as excinfo:
             write_parquet_file(records, output_path)
     msg = str(excinfo.value)
-    assert "Expected schema" in msg
-    assert "Got schema" in msg
-    assert "inferred from first" in msg
-    assert "x: null" in msg
-    assert "x: string" in msg
+    assert "int" in msg.lower() or "int64" in msg.lower()
+    assert "string" in msg.lower()
 
 
 def test_write_parquet_file_empty():

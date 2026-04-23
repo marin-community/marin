@@ -171,42 +171,94 @@ def _accumulate_tables(
     Converts records to PyArrow in micro-batches of ``_MICRO_BATCH_SIZE``,
     tracks byte size incrementally, and yields a single ``concat_tables``
     result each time the threshold is reached.
+
+    When the caller did not pass an explicit schema, the schema is inferred
+    from the first micro-batch. If a later micro-batch doesn't fit that
+    schema — e.g. early rows pinned a column as ``null`` and a later row
+    supplies a concrete value, or a new top-level column appears — the
+    schemas are unified via :func:`pa.unify_schemas` and the batch is
+    rebuilt against the widened schema. On yield, prior chunks whose
+    schemas differ are reconciled via ``concat_tables(promote_options=
+    "permissive")``. Genuinely incompatible schemas (e.g. ``int`` vs
+    ``string`` for the same field) still raise, with both schemas shown.
+
+    An explicit caller-provided schema is treated as a contract: mismatches
+    raise without silent widening.
     """
     chunks: list[pa.Table] = []
     bytesize = 0
     convert: Callable | None = None
     schema_inferred = schema is None
 
+    def _raise_schema_mismatch(e: Exception, dicts: list[dict[str, Any]]) -> None:
+        actual_schema = pa.Table.from_pylist(dicts).schema
+        origin = (
+            f"inferred from first {_MICRO_BATCH_SIZE} records (no explicit schema passed)"
+            if schema_inferred
+            else "explicitly provided by caller"
+        )
+        raise pa.ArrowInvalid(
+            f"Schema mismatch converting batch to Arrow: {e}\n"
+            f"Expected schema ({origin}):\n{schema}\n"
+            f"Got schema:\n{actual_schema}"
+        ) from e
+
+    def _build_table(dicts: list[dict[str, Any]], schema: pa.Schema) -> tuple[pa.Table, pa.Schema]:
+        """Convert *dicts* to a table under *schema*, widening via ``pa.unify_schemas`` when needed.
+
+        Returns ``(table, schema)`` where ``schema`` may be wider than the
+        input. Handles two kinds of divergence: (1) ``from_pylist`` raises
+        because a field's type doesn't fit, (2) ``from_pylist`` would
+        silently drop extra top-level keys (new fields appearing only in
+        later batches). Raises (via :func:`_raise_schema_mismatch`) when
+        *schema* was explicitly provided by the caller, or when the
+        divergence isn't representable as a widening (e.g. ``int`` vs
+        ``string``).
+        """
+        mismatch_error: Exception | None = None
+        try:
+            table = pa.Table.from_pylist(dicts, schema=schema)
+        except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError) as e:
+            mismatch_error = e
+
+        if mismatch_error is None:
+            extra_keys = {k for d in dicts for k in d.keys()} - set(schema.names)
+            if not extra_keys:
+                return table, schema
+            mismatch_error = pa.ArrowInvalid(f"extra top-level keys not in schema: {sorted(extra_keys)}")
+
+        if not schema_inferred:
+            _raise_schema_mismatch(mismatch_error, dicts)
+        new_schema = pa.Table.from_pylist(dicts).schema
+        try:
+            widened = pa.unify_schemas([schema, new_schema])
+        except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError):
+            _raise_schema_mismatch(mismatch_error, dicts)
+        return pa.Table.from_pylist(dicts, schema=widened), widened
+
     for micro_batch in batchify(records, n=_MICRO_BATCH_SIZE):
         if convert is None:
             convert = asdict if is_dataclass(micro_batch[0]) else (lambda x: x)
         dicts = [convert(r) for r in micro_batch]
         if schema is None:
-            # NOTE: the _MICRO_BATCH_SIZE is fairly small, here we hope it's enough to infer "real" schema
+            # NOTE: _MICRO_BATCH_SIZE is small; if the initial schema turns
+            # out to be narrower than the stream's true schema, we widen
+            # below on the first mismatching batch.
             schema = infer_arrow_schema(dicts)
-        try:
-            table = pa.Table.from_pylist(dicts, schema=schema)
-        except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError) as e:
-            actual_schema = pa.Table.from_pylist(dicts).schema
-            origin = (
-                f"inferred from first {_MICRO_BATCH_SIZE} records (no explicit schema passed)"
-                if schema_inferred
-                else "explicitly provided by caller"
-            )
-            raise pa.ArrowInvalid(
-                f"Schema mismatch converting batch to Arrow: {e}\n"
-                f"Expected schema ({origin}):\n{schema}\n"
-                f"Got schema:\n{actual_schema}"
-            ) from e
+
+        table, schema = _build_table(dicts, schema)
         chunks.append(table)
         bytesize += table.nbytes
         if bytesize >= target_bytes:
-            yield pa.concat_tables(chunks)
+            # ``promote_options="permissive"`` reconciles chunks whose schemas
+            # widened mid-stream (e.g. a later chunk introduced a new column
+            # or widened ``null`` → concrete type).
+            yield pa.concat_tables(chunks, promote_options="permissive")
             chunks = []
             bytesize = 0
 
     if chunks:
-        yield pa.concat_tables(chunks)
+        yield pa.concat_tables(chunks, promote_options="permissive")
 
 
 def write_parquet_file(
