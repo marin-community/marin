@@ -7,7 +7,10 @@ Covers the scatter write/read roundtrip, per-shard stats, and external sort —
 without spinning up a full coordinator.
 """
 
+import pytest
+
 from zephyr.plan import deterministic_hash
+from zephyr.scatter_codec import ArrowIpcCodec, PickleCodec, get_codec
 from zephyr.shuffle import (
     ScatterFileIterator,
     ScatterReader,
@@ -221,3 +224,63 @@ def test_external_sort_merge_cleans_up(tmp_path):
     iters = [iter([i]) for i in range(EXTERNAL_SORT_FAN_IN + 1)]
     list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
     assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"
+
+
+# ---------------------------------------------------------------------------
+# ArrowIpcCodec
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("codec", [PickleCodec(), ArrowIpcCodec()])
+def test_codec_roundtrip(codec):
+    """Both codecs encode and decode a list of dicts identically."""
+    items = [{"k": i, "v": f"item-{i}", "score": 0.5} for i in range(50)]
+    recovered = list(codec.decode_chunk(codec.encode_chunk(items)))
+    assert recovered == items
+
+
+@pytest.mark.parametrize("codec", [PickleCodec(), ArrowIpcCodec()])
+def test_codec_nested_dict(codec):
+    """Nested dicts (e.g. paragraph_span) round-trip correctly."""
+    items = [{"id": "doc-1", "span": {"start": 0, "end": 42}, "is_dup": False}]
+    recovered = list(codec.decode_chunk(codec.encode_chunk(items)))
+    assert recovered == items
+
+
+@pytest.mark.parametrize("codec", [PickleCodec(), ArrowIpcCodec()])
+def test_scatter_roundtrip_arrow_codec(tmp_path, codec):
+    """Scatter write+read roundtrip works with both codecs."""
+    num_shards = 4
+    items = [{"k": i % 4, "v": i, "label": f"x{i}"} for i in range(40)]
+    data_path = str(tmp_path / "shard-0000.shuffle")
+    list_shard = _write_scatter(
+        iter(items),
+        source_shard=0,
+        data_path=data_path,
+        key_fn=lambda r: r["k"],
+        num_output_shards=num_shards,
+        codec=codec,
+    )
+    scatter_paths = list(list_shard)
+
+    recovered = []
+    for shard_idx in range(num_shards):
+        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
+        recovered.extend(list(shard))
+
+    assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
+
+
+def test_arrow_codec_rejects_non_json_items():
+    """ArrowIpcCodec raises on items that pyarrow cannot serialize (e.g. frozensets)."""
+    import pyarrow as pa
+
+    codec = ArrowIpcCodec()
+    items = [{"k": 0, "v": frozenset([1, 2, 3])}]
+    with pytest.raises(pa.ArrowInvalid):
+        codec.encode_chunk(items)
+
+
+def test_get_codec_unknown_tag():
+    with pytest.raises(ValueError, match="Unknown scatter codec"):
+        get_codec("nonexistent")

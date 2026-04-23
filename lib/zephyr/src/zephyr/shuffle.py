@@ -4,47 +4,46 @@
 """Scatter/shuffle support for Zephyr pipelines.
 
 Each source-shard's scatter output is a single binary file containing a
-sequence of zstd-compressed frames. Within one chunk's zstd frame, items
-are written in sub-batches of ``_SUB_BATCH_SIZE`` — each sub-batch is a
-single ``pickle.dump(list_of_items)`` into the zstd stream. This amortises
-per-item pickle/zstd dispatch over a sub-batch while still letting the
-reader stream sub-batches lazily without materialising the full chunk.
+sequence of codec-encoded chunks. The codec is recorded in the msgpack sidecar
+so readers automatically dispatch to the matching decoder.
+
+Two codecs are available (see :mod:`zephyr.scatter_codec`):
+
+- ``PickleCodec`` (default): zstd-compressed cloudpickle sub-batches.
+  Handles arbitrary Python objects.
+- ``ArrowIpcCodec``: Arrow IPC stream with built-in zstd body compression.
+  2-5x faster for JSON-shaped items (dicts of scalars/strings/lists).
+  Select via ``ZEPHYR_SCATTER_CODEC=arrow_ipc`` env var or ``codec=`` kwarg.
 
 A msgpack sidecar (``.scatter_meta``) maps ``target_shard -> [(offset, length)]``
-byte ranges into the data file, plus per-shard ``max_chunk_rows`` and a global
-``avg_item_bytes`` estimate. Sidecars from all source shards are aggregated
-into a single ``scatter_metadata`` manifest at the end of the scatter stage,
-which reducers consume to build :class:`ScatterReader` instances.
+byte ranges into the data file, plus per-shard ``max_chunk_rows``, a global
+``avg_item_bytes`` estimate, and the codec tag. Sidecars are aggregated into a
+single ``scatter_metadata`` manifest at the end of scatter; reducers consume it
+to build :class:`ScatterReader` instances.
 
-On read, each chunk is fetched with a single ``cat_file`` range GET (one
-HTTP request, no per-chunk file handle), then streamed via
-``pickle.load`` on a length-bounded zstd reader. Per-iterator memory stays
-near-constant: one buffered item plus the zstd decoder state plus the
-chunk's compressed bytes (typically a few MB). This bound is essential for
-skewed shuffles where one reducer pulls disproportionate data and the
-external-sort fan-in opens hundreds of chunk iterators at once.
+On read, each chunk is fetched with a single ``cat_file`` range GET and decoded
+by the matching codec. Per-iterator memory stays near-constant regardless of
+codec: bounded by the chunk's compressed bytes plus decoder state.
 """
 
 from __future__ import annotations
 
 import concurrent.futures
 import functools
-import io
 import logging
 import os
 import pickle
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-import cloudpickle
 import msgspec
-import zstandard as zstd
 from rigging.filesystem import open_url, url_to_fs
 from rigging.timing import log_time
 
 from zephyr.plan import deterministic_hash
+from zephyr.scatter_codec import ArrowIpcCodec, PickleCodec, default_codec, get_codec
 from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -96,9 +95,9 @@ _SCATTER_SAMPLE_SIZE = 100
 # Fraction of total memory budgeted for read-side decompression buffers.
 _SCATTER_READ_BUFFER_FRACTION = 0.25
 
+# These constants are kept here for _write_chunk_frame backward-compat; the
+# codec implementations own their own copies in scatter_codec.py.
 _ZSTD_COMPRESS_LEVEL = 3
-# Items per pickle.dump call within a chunk. Larger = faster (less per-call
-# dispatch overhead), smaller = lower per-iterator read memory.
 _SUB_BATCH_SIZE = 1024
 
 
@@ -147,6 +146,7 @@ class _SidecarSlice:
     ranges: tuple[tuple[int, int], ...]
     max_chunk_rows: int
     avg_item_bytes: float
+    codec: str = "pickle"
 
 
 def _read_sidecar_slice(path: str, shard_key: str) -> _SidecarSlice | None:
@@ -181,6 +181,7 @@ def _read_sidecar_slice(path: str, shard_key: str) -> _SidecarSlice | None:
         ranges=ranges,
         max_chunk_rows=int(max_rows_map[shard_key]),
         avg_item_bytes=float(meta["avg_item_bytes"]),
+        codec=str(meta.get("codec", "pickle")),
     )
 
 
@@ -218,13 +219,14 @@ class ScatterFileIterator:
     ``chunks`` is a tuple of ``(offset, length)`` byte ranges. Each chunk is
     fetched on demand via a single ``cat_file`` and streamed item-by-item.
     Per-iterator memory is bounded by the chunk's compressed size (typically
-    a few MB) plus tiny zstd/pickle state.
+    a few MB) plus tiny codec decoder state.
     """
 
     path: str
     chunks: tuple[tuple[int, int], ...]
-    _fs: Any = None
-    _fs_path: str = ""
+    codec: str = "pickle"
+    _fs: Any = field(default=None, compare=False, repr=False)
+    _fs_path: str = field(default="", compare=False, repr=False)
 
     def __post_init__(self) -> None:
         if self._fs is None:
@@ -243,25 +245,13 @@ class ScatterFileIterator:
     def get_chunk_iterators(self) -> Iterator[Iterator]:
         """Yield one lazy iterator per chunk, in write order."""
         for offset, length in self.chunks:
-            yield _iter_chunk(self._fs, self._fs_path, offset, length)
+            yield _iter_chunk(self._fs, self._fs_path, offset, length, self.codec)
 
 
-def _iter_chunk(fs: Any, fs_path: str, offset: int, length: int) -> Iterator:
-    """Fetch one chunk's compressed bytes via cat_file and stream items.
-
-    Each chunk is a zstd frame containing a sequence of pickled sub-batches
-    (lists of up to ``_SUB_BATCH_SIZE`` items). The reader streams one
-    sub-batch at a time, so per-iterator memory is bounded by the
-    sub-batch size plus the chunk's compressed bytes.
-    """
+def _iter_chunk(fs: Any, fs_path: str, offset: int, length: int, codec_tag: str = "pickle") -> Iterator:
+    """Fetch one chunk's compressed bytes via cat_file and stream items."""
     blob = fs.cat_file(fs_path, start=offset, end=offset + length)
-    with zstd.ZstdDecompressor().stream_reader(io.BytesIO(blob)) as reader:
-        while True:
-            try:
-                sub_batch = pickle.load(reader)
-            except EOFError:
-                return
-            yield from sub_batch
+    yield from get_codec(codec_tag).decode_chunk(blob)
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +295,7 @@ class ScatterReader:
             f"from {len(scatter_paths)} sidecars (concurrency={_SIDECAR_READ_CONCURRENCY})"
         ):
             for slice_ in _read_sidecar_slices_parallel(scatter_paths, target_shard):
-                iterators.append(ScatterFileIterator(path=slice_.path, chunks=slice_.ranges))
+                iterators.append(ScatterFileIterator(path=slice_.path, chunks=slice_.ranges, codec=slice_.codec))
                 max_rows = max(max_rows, slice_.max_chunk_rows)
                 if slice_.avg_item_bytes > 0:
                     count = len(slice_.ranges)
@@ -426,27 +416,20 @@ def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> li
 
 
 def _write_chunk_frame(items: list) -> bytes:
-    """Encode a list of items as one zstd frame of pickled sub-batches.
+    """Encode items as a pickle+zstd chunk (PickleCodec).
 
-    Items are split into sub-batches of ``_SUB_BATCH_SIZE`` and each
-    sub-batch is written as a single ``cloudpickle.dump(sublist)`` into the
-    same zstd stream. This batches per-call dispatch overhead while
-    keeping per-iterator read memory bounded by the sub-batch size.
+    Kept as a module-level function for backward-compatibility with test code
+    that imports it directly. New code should use a codec instance.
     """
-    raw = io.BytesIO()
-    cctx = zstd.ZstdCompressor(level=_ZSTD_COMPRESS_LEVEL)
-    with cctx.stream_writer(raw, closefd=False) as zf:
-        for i in range(0, len(items), _SUB_BATCH_SIZE):
-            cloudpickle.dump(items[i : i + _SUB_BATCH_SIZE], zf, protocol=pickle.HIGHEST_PROTOCOL)
-    return raw.getvalue()
+    return PickleCodec().encode_chunk(items)
 
 
 class ScatterWriter:
-    """Writes items to a scatter data file with zstd-compressed chunks.
+    """Writes items to a scatter data file with codec-compressed chunks.
 
     Items are routed to target shards by ``key_fn``, buffered, optionally
-    combined and sorted, then flushed as zstd frames. A JSON sidecar is
-    written on close.
+    combined and sorted, then flushed via the chosen codec. A msgpack sidecar
+    is written on close including the codec tag for reader dispatch.
     """
 
     def __init__(
@@ -457,6 +440,7 @@ class ScatterWriter:
         source_shard: int = 0,
         sort_fn: Callable | None = None,
         combiner_fn: Callable | None = None,
+        codec: PickleCodec | ArrowIpcCodec | None = None,
     ) -> None:
         self._data_path = data_path
         self._key_fn = key_fn
@@ -464,6 +448,7 @@ class ScatterWriter:
         self._source_shard = source_shard
         self._combiner_fn = combiner_fn
         self._chunk_size = INTERMEDIATE_CHUNK_SIZE
+        self._codec = codec if codec is not None else default_codec()
 
         if sort_fn is not None:
             captured_sort_fn = sort_fn
@@ -497,7 +482,7 @@ class ScatterWriter:
             self._avg_item_bytes = total_bytes / len(sample)
             self._sampled_avg = True
 
-        frame = _write_chunk_frame(buf)
+        frame = self._codec.encode_chunk(buf)
         offset = self._out.tell()
         self._out.write(frame)
         self._shard_ranges[target].append((offset, len(frame)))
@@ -531,6 +516,7 @@ class ScatterWriter:
         self._out.close()
 
         sidecar: dict = {
+            "codec": self._codec.tag,
             "shards": {str(k): v for k, v in self._shard_ranges.items()},
             "max_chunk_rows": {str(k): v for k, v in self._per_shard_max_rows.items() if v > 0},
         }
@@ -557,8 +543,9 @@ def _write_scatter(
     num_output_shards: int,
     sort_fn: Callable | None = None,
     combiner_fn: Callable | None = None,
+    codec: PickleCodec | ArrowIpcCodec | None = None,
 ) -> ListShard:
-    """Route items to target shards, buffer, sort, and append zstd chunks.
+    """Route items to target shards, buffer, sort, and append codec chunks.
 
     Writes one binary data file plus one ``.scatter_meta`` sidecar.
 
@@ -573,6 +560,7 @@ def _write_scatter(
         source_shard=source_shard,
         sort_fn=sort_fn,
         combiner_fn=combiner_fn,
+        codec=codec,
     )
     for item in items:
         writer.write(item)
