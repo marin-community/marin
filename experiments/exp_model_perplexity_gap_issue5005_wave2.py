@@ -28,6 +28,7 @@ from experiments.evals.long_tail_ppl_runnable import runnable_long_tail_ppl_slic
 from experiments.evals.synthetic_reasoning_ppl import synthetic_reasoning_raw_validation_sets
 from experiments.exp5052_synthetic_reasoning_ppl import RAW_SYNTHETIC_REASONING_PPL
 from experiments.exp5056_raw_web_markup_ppl import raw_web_markup_raw_validation_sets
+from experiments.marin_models import marin_tokenizer
 from marin.evaluation.perplexity_gap import (
     GapFinderModelConfig,
     RawTextEvaluationDataset,
@@ -79,7 +80,7 @@ DATASETS = issue5005_wave2_raw_validation_sets()
 MARIN_MODEL = GapFinderModelConfig(
     checkpoint_path="marin-community/marin-32b-base",
     checkpoint_is_hf=True,
-    tokenizer="Qwen/Qwen3-32B",
+    tokenizer=marin_tokenizer,
 )
 
 COMMON_TAGS = [
