@@ -9,6 +9,7 @@ without spinning up a full coordinator.
 
 from pathlib import Path
 
+import zephyr.shuffle as shuffle_mod
 from zephyr.plan import deterministic_hash
 from zephyr.shuffle import (
     ScatterFileIterator,
@@ -241,6 +242,22 @@ def test_sidecar_bytes_reads_file(tmp_path):
     meta_path = _scatter_meta_path(data_path)
 
     assert _read_sidecar_bytes(meta_path) == Path(meta_path).read_bytes()
+
+
+def test_sidecar_bytes_shm_cache(tmp_path, monkeypatch):
+    """Second read of the same sidecar is served from the shm cache, not re-fetched from storage."""
+    monkeypatch.setattr(shuffle_mod, "_SIDECAR_SHM_DIR", str(tmp_path / "shm"))
+
+    data_path = str(tmp_path / "shard-0000.shuffle")
+    _write_scatter_meta(data_path, {"shards": {"0": [(0, 100)]}, "max_chunk_rows": {"0": 10}, "avg_item_bytes": 50.0})
+    meta_path = _scatter_meta_path(data_path)
+
+    first = _read_sidecar_bytes(meta_path)
+    assert first == Path(meta_path).read_bytes()
+
+    # Corrupt the original to prove a second read comes from shm, not storage.
+    Path(meta_path).write_bytes(b"corrupted")
+    assert _read_sidecar_bytes(meta_path) == first
 
 
 def test_sidecar_slice_uses_cache(tmp_path):

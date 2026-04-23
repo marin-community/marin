@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import functools
+import hashlib
 import io
 import logging
 import os
@@ -91,6 +92,9 @@ _SCATTER_DATA_SUFFIX = ".shuffle"
 # ScatterReader. Sidecars are small msgpack files (a few KB) and reads are
 # GCS GET-bound, so a modest pool keeps latency low without thrashing.
 _SIDECAR_READ_CONCURRENCY = 32
+# /dev/shm cache for sidecar bytes shared across co-located reducer subprocesses.
+# Sidecar paths embed the execution_id, so keys are unique per pipeline run.
+_SIDECAR_SHM_DIR = "/dev/shm/zephyr-sidecars"
 # Number of items sampled from the first flush to estimate avg_item_bytes.
 _SCATTER_SAMPLE_SIZE = 100
 # Fraction of total memory budgeted for read-side decompression buffers.
@@ -118,14 +122,37 @@ def _sidecar_decoder() -> msgspec.msgpack.Decoder:
 
 
 def _read_sidecar_bytes(meta_path: str) -> bytes:
-    """Read sidecar bytes from storage.
+    """Read sidecar bytes, using ``_SIDECAR_SHM_DIR`` as a local cache.
 
-    Uses ``fs.cat_file`` — one direct GET returning bytes is ~25% faster
-    than going through ``TextIOWrapper(BufferedFile)`` for small sidecars,
-    and msgpack decodes bytes directly.
+    Multiple reducer subprocesses on the same host each need all N mapper
+    sidecars. Without a local cache they each issue N GCS GETs. The
+    ``/dev/shm`` cache (a shared tmpfs visible to all processes on the host)
+    reduces this to N GETs total per host per execution. Sidecar paths embed
+    the execution_id so cached bytes from a previous run are never returned
+    for a new one. Atomic rename (``os.rename``) makes concurrent writes safe:
+    last writer wins, but content is identical so it doesn't matter.
+
+    Falls back to a direct GCS GET if ``_SIDECAR_SHM_DIR`` is unavailable.
     """
+    key = hashlib.sha256(meta_path.encode()).hexdigest()
+    shm_path = os.path.join(_SIDECAR_SHM_DIR, key)
+    if os.path.exists(shm_path):
+        with open(shm_path, "rb") as f:
+            return f.read()
+
     fs, fs_path = url_to_fs(meta_path)
-    return fs.cat_file(fs_path)
+    data = fs.cat_file(fs_path)
+
+    try:
+        os.makedirs(_SIDECAR_SHM_DIR, exist_ok=True)
+        tmp = f"{shm_path}.tmp.{os.getpid()}"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.rename(tmp, shm_path)
+    except OSError as e:
+        logger.debug("Sidecar shm cache write skipped for %s: %s", meta_path, e)
+
+    return data
 
 
 def _scatter_meta_path(data_path: str) -> str:
@@ -198,10 +225,9 @@ def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -
     accumulate in the reducer process. Sidecars with no ranges for
     ``target_shard`` are dropped.
 
-    TODO(rav): each reducer subprocess re-reads every sidecar even though only
-    one shard's byte ranges are used. A worker-level sidecar cache (or a shared
-    read across colocated reducers) would avoid the redundant GCS GETs when
-    many reducers run on the same host.
+    Sidecar bytes are cached in ``_SIDECAR_SHM_DIR`` (``/dev/shm``) so
+    co-located reducer subprocesses on the same host share reads rather than
+    each issuing a full set of GCS GETs.
     """
     shard_key = str(target_shard)
     ordered: list[_SidecarSlice | None] = [None] * len(scatter_paths)
