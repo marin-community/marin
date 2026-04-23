@@ -10,28 +10,32 @@ terminal normalize step is already cached on GCS, then builds a
 a fixed ``SAMPLE_FRACTION`` keeps output small and predictable so this
 script can run against whatever subset of normalized data exists right now.
 
-Outputs land under ``gs://marin-us-central1/datakit-testbed/<RUN_ID>/sample/<src.name>``
-so the test artifacts are easy to identify and drop later.
+Outputs land in the region-local marin temp bucket
+(``gs://marin-tmp-us-central1/ttl=Nd/datakit-testbed/<RUN_ID>/sample/<src.name>``)
+so they're auto-deleted after the configured TTL — no manual cleanup.
 """
 
 import logging
 import os
 
+from rigging.filesystem import marin_temp_bucket
+from rigging.log_setup import configure_logging
+
 from experiments.datakit_testbed.sampler import sample_normalized_shards_step
 from marin.datakit.sources import all_sources
 from marin.execution.step_runner import StepRunner, check_cache
-from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
 STAGING_PREFIX = "gs://marin-us-central1"
 RUN_ID = "sample-test"
 SAMPLE_FRACTION = 0.05
+TTL_DAYS = 1
 
 
 def main() -> None:
     os.environ["MARIN_PREFIX"] = STAGING_PREFIX
-    base = f"datakit-testbed/{RUN_ID}"
+    base = marin_temp_bucket(ttl_days=TTL_DAYS, prefix=f"datakit-testbed/{RUN_ID}")
 
     steps = []
     skipped: list[str] = []
@@ -49,12 +53,12 @@ def main() -> None:
         )
 
     logger.info(
-        "Sampling %d / %d sources at fraction=%.2f under %s/%s/ (skipped %d not-yet-normalized)",
+        "Sampling %d / %d sources at fraction=%.2f under %s/ (TTL=%dd, skipped %d not-yet-normalized)",
         len(steps),
         len(all_sources()),
         SAMPLE_FRACTION,
-        STAGING_PREFIX,
         base,
+        TTL_DAYS,
         len(skipped),
     )
     StepRunner().run(steps)
