@@ -18,7 +18,6 @@ from marin.transform.security_artifacts.zeek_to_dolma import (
     render_records_to_dolma_blocks,
 )
 
-
 FIELDS = ("ts", "uid", "id.orig_h", "id.orig_p", "proto", "service")
 SAMPLE_RECORDS = [
     {
