@@ -128,9 +128,7 @@ class _SourceFile:
     content: bytes
 
 
-_ARCHIVE_FORMATS: frozenset[str] = frozenset(
-    {"tar", "tar.gz", "tgz", "tar.bz2", "tar.xz", "tar.zst", "zip"}
-)
+_ARCHIVE_FORMATS: frozenset[str] = frozenset({"tar", "tar.gz", "tgz", "tar.bz2", "tar.xz", "tar.zst", "zip"})
 
 
 def _tar_mode(archive_format: str) -> str:
@@ -204,9 +202,7 @@ def _iter_jsonl_bytes(raw: bytes) -> Iterator[dict[str, Any]]:
             continue
 
 
-def _emit_records(
-    source: ArchiveSourceConfig, filtered: Iterable[_SourceFile]
-) -> Iterator[tuple[str, str]]:
+def _emit_records(source: ArchiveSourceConfig, filtered: Iterable[_SourceFile]) -> Iterator[tuple[str, str]]:
     """Yield (filename, text) for each downstream record."""
     if source.content_mode == RAW_FILE_CONTENT_MODE:
         for sf in filtered:
@@ -225,9 +221,7 @@ def _emit_records(
 
 def _http_session(timeout_seconds: int) -> requests.Session:
     session = requests.Session()
-    retries = Retry(
-        total=5, backoff_factor=1.5, status_forcelist=[500, 502, 503, 504], allowed_methods=["GET"]
-    )
+    retries = Retry(total=5, backoff_factor=1.5, status_forcelist=[500, 502, 503, 504], allowed_methods=["GET"])
     adapter = HTTPAdapter(max_retries=retries)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
