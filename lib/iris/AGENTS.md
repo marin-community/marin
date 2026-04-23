@@ -12,7 +12,7 @@ Distributed job orchestration replacing Ray with simpler primitives. Start with 
 - `docs/image-push.md` — multi-region image push/pull architecture
 - `docs/constraints.md` — constraint system design
 
-Archived design docs (implemented, read code instead): `.agents/project/2026*_iris_*.md`
+Archived design docs (implemented, read code instead): `.agents/projects/2026*_iris_*.md`
 
 ## Source Layout
 

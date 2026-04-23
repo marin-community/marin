@@ -2225,6 +2225,40 @@ def test_worker_failed_from_building_counts_as_preemption(state):
     assert _query_task(state, task.task_id).failure_count == 0
 
 
+def test_worker_failed_from_assigned_bumps_health_tracker(state):
+    """ASSIGNED -> WORKER_FAILED attributes the failure to the worker.
+
+    Regression for the TPU-iommu co-schedule loop: the task retries to PENDING
+    (no preemption-budget cost) but the health tracker must still bump so that
+    a host that repeatedly fails launches eventually crosses the threshold and
+    gets reaped.
+    """
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    req = make_job_request("job1")
+    req.max_retries_preemption = 5
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_id)])
+    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
+    assert state._health.snapshot().get(worker_id) is None
+
+    transition_task(
+        state,
+        task.task_id,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        error='TPU init failure ("Couldn\'t open iommu group")',
+    )
+
+    # Task retries without consuming preemption budget...
+    t = _query_task(state, task.task_id)
+    assert t.state == job_pb2.TASK_STATE_PENDING
+    assert t.preemption_count == 0
+    # ...but the worker is charged a build failure.
+    _, build_failures = state._health.snapshot()[worker_id]
+    assert build_failures == 1
+
+
 def test_failed_from_building_bumps_health_tracker(state):
     """FAILED originating from BUILDING increments the build failure counter.
 
@@ -3147,7 +3181,6 @@ def test_prune_old_terminal_jobs(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
 
@@ -3179,7 +3212,6 @@ def test_prune_old_inactive_workers(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
 
@@ -3188,35 +3220,18 @@ def test_prune_old_inactive_workers(state):
     assert _query_worker(state, stale_wid) is None  # pruned
 
 
-def test_prune_old_txn_actions(state):
-    """Old txn_actions are pruned by the txn_action retention."""
-    register_worker(state, "w1", "host:8080", make_worker_metadata())
+def test_submit_job_emits_structured_audit_log(state, caplog):
+    """submit_job logs a structured event=job_submitted line for the log-store audit trail."""
+    import logging
 
-    # Submit a job to generate txn_actions, then backdate some
-    req = make_job_request("txn-test")
-    submit_job(state, "txn-test", req)
+    req = make_job_request("audit-me")
+    with caplog.at_level(logging.INFO, logger="iris.cluster.controller.transitions"):
+        submit_job(state, "audit-me", req)
 
-    # Backdate all existing txn_actions to epoch
-    state._db.execute("UPDATE txn_actions SET created_at_ms = 1000")
-
-    old_txn_count = state._db.fetchone("SELECT COUNT(*) as c FROM txn_actions")["c"]
-
-    assert old_txn_count > 0
-
-    result = state.prune_old_data(
-        job_retention=Duration.from_seconds(86400),
-        worker_retention=Duration.from_seconds(86400),
-        txn_action_retention=Duration.from_seconds(86400),
-        profile_retention=Duration.from_seconds(86400),
-    )
-
-    assert result.txn_actions_deleted == old_txn_count
-
-    remaining_txn_actions = state._db.fetchone("SELECT COUNT(*) as c FROM txn_actions")["c"]
-
-    # Incremental prune deletes old txn_actions in batches; no new aggregate
-    # action rows are recorded for txn_action cleanup.
-    assert remaining_txn_actions == 0
+    job_wire = JobName.root("test-user", "audit-me").to_wire()
+    expected = f"event=job_submitted entity={job_wire}"
+    messages = [r.getMessage() for r in caplog.records]
+    assert any(expected in msg for msg in messages), messages
 
 
 def test_prune_noop_when_nothing_old(state):
@@ -3225,7 +3240,6 @@ def test_prune_noop_when_nothing_old(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
 
@@ -3307,7 +3321,6 @@ def test_prune_old_data_short_circuits_when_nothing_prunable(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
 

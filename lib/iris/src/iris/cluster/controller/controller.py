@@ -101,6 +101,7 @@ from iris.cluster.controller.transitions import (
     ReservationClaim,
     SchedulingEvent,
     TaskUpdate,
+    log_event,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.log_store import CONTROLLER_LOG_KEY
@@ -905,6 +906,12 @@ class ControllerConfig:
     heartbeat_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     """How often to send heartbeats to workers."""
 
+    poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
+    """How often to reconcile worker task state via PollTasks. Reconciliation runs
+    inline at the end of each scheduling iteration so it observes a post-commit DB
+    view, eliminating the StartTasks/PollTasks race that arose when poll ran in a
+    separate thread (issue #5041)."""
+
     max_dispatch_parallelism: int = 32
     """Maximum number of concurrent RPC dispatch operations."""
 
@@ -935,9 +942,6 @@ class ControllerConfig:
 
     worker_retention: Duration = field(default_factory=lambda: Duration.from_seconds(86400))
     """Delete inactive/unhealthy workers whose last heartbeat exceeds this (default: 24 hours)."""
-
-    txn_action_retention: Duration = field(default_factory=lambda: Duration.from_seconds(3 * 86400))
-    """Delete txn_actions older than this (default: 3 days)."""
 
     profile_retention: Duration = field(default_factory=lambda: Duration.from_seconds(86400))
     """Delete task_profiles older than this (default: 24 hours)."""
@@ -1039,6 +1043,7 @@ class Controller:
             )
 
         self._config = config
+        self._stopped = False
         self._provider: TaskProvider | K8sTaskProvider = provider
         self._provider_scheduling_events: list[SchedulingEvent] = []
         self._provider_capacity: ClusterCapacity | None = None
@@ -1127,7 +1132,6 @@ class Controller:
         self._prune_thread: ManagedThread | None = None
         self._task_updater_thread: ManagedThread | None = None
         self._ping_thread: ManagedThread | None = None
-        self._poll_thread: ManagedThread | None = None
         self._task_update_queue: queue_mod.Queue[HeartbeatApplyRequest] = queue_mod.Queue()
 
         self._autoscaler: Autoscaler | None = autoscaler
@@ -1229,7 +1233,6 @@ class Controller:
             self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
             self._ping_thread = self._threads.spawn(self._run_ping_loop, name="ping-loop")
             self._task_updater_thread = self._threads.spawn(self._run_task_updater_loop, name="task-updater-loop")
-            self._poll_thread = self._threads.spawn(self._run_poll_loop, name="poll-loop")
             if not self._config.dry_run:
                 self._profile_thread = self._threads.spawn(self._run_profile_loop, name="profile-loop")
                 self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
@@ -1279,7 +1282,7 @@ class Controller:
         logger.info("Registered system endpoint /system/log-server -> %s", self._log_service_address)
 
     def stop(self) -> None:
-        """Stop all background components gracefully.
+        """Stop all background components gracefully. Idempotent.
 
         Shutdown ordering:
         1. Unregister atexit hook so it doesn't fire against a closed DB.
@@ -1287,6 +1290,9 @@ class Controller:
         3. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
         4. Stop remaining threads (server) and executors.
         """
+        if self._stopped:
+            return
+        self._stopped = True
         # Unregister atexit hook before closing DB connections.
         if self._atexit_registered:
             atexit.unregister(self._atexit_checkpoint)
@@ -1306,9 +1312,6 @@ class Controller:
         if self._task_updater_thread:
             self._task_updater_thread.stop()
             self._task_updater_thread.join(timeout=join_timeout)
-        if self._poll_thread:
-            self._poll_thread.stop()
-            self._poll_thread.join(timeout=join_timeout)
         if self._prune_thread:
             self._prune_thread.stop()
             self._prune_thread.join(timeout=join_timeout)
@@ -1349,6 +1352,11 @@ class Controller:
         Backs off from min to max interval when idle (no pending tasks or no
         assignments possible). Resets to min interval when woken by a new job
         submission or when assignments are made.
+
+        Reconciliation (PollTasks) runs inline at the end of each iteration,
+        gated by a rate limiter. Sharing this thread with scheduling guarantees
+        the poll's expected_tasks snapshot is taken after the same iteration's
+        StartTasks commits — see issue #5041 for the race that motivated this.
         """
         backoff = ExponentialBackoff(
             initial=self._config.scheduler_min_interval.to_seconds(),
@@ -1356,6 +1364,7 @@ class Controller:
             factor=2.0,
             jitter=0.1,
         )
+        poll_limiter = RateLimiter(interval_seconds=self._config.poll_interval.to_seconds())
         while not stop_event.is_set():
             interval = backoff.next_interval()
             woken = self._wake_event.wait(timeout=interval)
@@ -1372,6 +1381,12 @@ class Controller:
             outcome = self._run_scheduling()
             if outcome == SchedulingOutcome.ASSIGNMENTS_MADE:
                 backoff.reset()
+
+            if self._config.use_split_heartbeat and poll_limiter.should_run():
+                try:
+                    self._poll_all_workers()
+                except Exception:
+                    logger.exception("Inline poll reconciliation failed")
 
     def _run_prune_loop(self, stop_event: threading.Event) -> None:
         """Background pruning loop: history cleanup every 60s, full data prune on the configured interval."""
@@ -1419,7 +1434,6 @@ class Controller:
                     self._transitions.prune_old_data(
                         job_retention=self._config.job_retention,
                         worker_retention=self._config.worker_retention,
-                        txn_action_retention=self._config.txn_action_retention,
                         profile_retention=self._config.profile_retention,
                         stop_event=stop_event,
                     )
@@ -1655,6 +1669,7 @@ class Controller:
             del claims[wid]
         if stale and persisted:
             self._transitions.replace_reservation_claims(claims)
+            log_event("reservation_claims_cleaned", "controller", count=len(stale))
         return bool(stale)
 
     def _claim_workers_for_reservations(self, claims: dict[WorkerId, ReservationClaim] | None = None) -> bool:
@@ -1702,6 +1717,7 @@ class Controller:
                     break
         if changed and persisted:
             self._transitions.replace_reservation_claims(claims)
+            log_event("reservation_claims_updated", "controller", total_claims=len(claims))
         return changed
 
     def _run_scheduling(self) -> SchedulingOutcome:
@@ -1772,6 +1788,14 @@ class Controller:
         self._cache_scheduling_diagnostics(context, tainted_jobs, all_assignments, order.ordered_task_ids)
 
         if all_assignments or preemptions:
+            log_event(
+                "scheduling_pass_completed",
+                "scheduler",
+                assignments=len(all_assignments),
+                preempted=len(preemptions),
+                pending=len(state.pending_tasks),
+                workers=len(state.workers),
+            )
             return SchedulingOutcome.ASSIGNMENTS_MADE
         return SchedulingOutcome.NO_ASSIGNMENTS
 
@@ -2188,8 +2212,13 @@ class Controller:
                 # the task state machine bounces it back to PENDING — see
                 # transitions._apply_task_transition: WORKER_FAILED from ASSIGNED
                 # rolls the task to PENDING without consuming a preemption retry.
-                logger.warning("StartTasks RPC failed for worker %s: %s", worker_id, error)
-                summary = f"StartTasks RPC failed: {error}"
+                log_event(
+                    "dispatch_failed",
+                    str(worker_id),
+                    trigger="start_tasks_rpc",
+                    task_count=len(tasks_by_worker.get(worker_id, [])),
+                    error=error,
+                )
                 self._task_update_queue.put(
                     HeartbeatApplyRequest(
                         worker_id=worker_id,
@@ -2199,7 +2228,7 @@ class Controller:
                                 task_id=JobName.from_wire(t.task_id),
                                 attempt_id=attempt_by_worker_task.get((worker_id, t.task_id), -1),
                                 new_state=job_pb2.TASK_STATE_WORKER_FAILED,
-                                error=summary,
+                                error=f"StartTasks RPC failed: {error}",
                             )
                             for t in tasks_by_worker.get(worker_id, [])
                         ],
@@ -2209,7 +2238,13 @@ class Controller:
             assert response is not None
             for ack in response.acks:
                 if not ack.accepted:
-                    logger.warning("Worker %s rejected task %s: %s", worker_id, ack.task_id, ack.error)
+                    log_event(
+                        "task_rejected",
+                        ack.task_id,
+                        trigger="start_tasks_ack",
+                        worker=str(worker_id),
+                        error=ack.error,
+                    )
                     self._task_update_queue.put(
                         HeartbeatApplyRequest(
                             worker_id=worker_id,
@@ -2303,21 +2338,6 @@ class Controller:
             except Exception:
                 logger.exception("Ping loop iteration failed")
 
-    def _run_poll_loop(self, stop_event: threading.Event) -> None:
-        """Periodic full-state reconciliation for split heartbeat mode.
-
-        Polls all workers via PollTasks every 60s and feeds results into the
-        task-updater queue for batched application.
-        """
-        limiter = RateLimiter(interval_seconds=60.0)
-        while not stop_event.is_set():
-            if not limiter.wait(cancel=stop_event):
-                break
-            try:
-                self._poll_all_workers()
-            except Exception:
-                logger.exception("Poll loop iteration failed")
-
     def _poll_all_workers(self) -> None:
         """Poll all workers for task state and feed results into the updater queue."""
         if self._config.dry_run:
@@ -2367,6 +2387,8 @@ class Controller:
         Returns the set of worker_ids that were actually removed (primary + siblings),
         so callers can drop them from in-memory state like the health tracker.
         """
+        for wid in worker_ids:
+            log_event("worker_failing", wid, trigger=reason)
         failure_result = self._transitions.fail_workers_batch(worker_ids, reason=reason)
         removed: list[WorkerId] = []
         for wid, addr in failure_result.removed_workers:
@@ -2376,6 +2398,8 @@ class Controller:
             sibling_worker_ids = self._autoscaler.terminate_slices_for_workers(
                 [str(wid) for wid, _ in failure_result.removed_workers]
             )
+            for wid in sibling_worker_ids:
+                log_event("worker_failing", str(wid), trigger=sibling_reason)
             sibling_failures = self._transitions.fail_workers_batch(
                 sibling_worker_ids,
                 reason=sibling_reason,
@@ -2466,32 +2490,12 @@ class Controller:
         acc.all_tasks_to_kill.update(failure_result.tasks_to_kill)
         acc.all_task_kill_workers.update(failure_result.task_kill_workers)
 
-        for (batch, error), result in zip(failure_entries, failure_result.results, strict=False):
-            last_success_age_s = (
-                "unknown" if result.last_heartbeat_age_ms is None else f"{result.last_heartbeat_age_ms / 1000.0:.1f}"
-            )
-            logger.warning(
-                "Heartbeat RPC failure: worker=%s address=%s action=%s last_success_age_s=%s "
-                "expected=%d run=%d kill=%d error=%s",
-                batch.worker_id,
-                batch.worker_address or "<missing>",
-                result.action.value,
-                last_success_age_s,
-                len(batch.running_tasks),
-                len(batch.tasks_to_run),
-                len(batch.tasks_to_kill),
-                error,
-            )
+        for batch, _error in failure_entries:
             acc.fail_count += 1
             acc.transient_failed_workers.append(batch.worker_id)
 
         unhealthy = self._health.workers_over_threshold()
         if unhealthy:
-            logger.warning(
-                "Failing %d workers over ping threshold: %s",
-                len(unhealthy),
-                [str(wid) for wid in unhealthy[:10]],
-            )
             removed = self._terminate_workers(
                 [str(wid) for wid in unhealthy],
                 reason="worker ping threshold exceeded",
@@ -2512,6 +2516,8 @@ class Controller:
         if not self._autoscaler or not primary_failed_workers:
             return
         sibling_worker_ids = self._autoscaler.terminate_slices_for_workers(primary_failed_workers)
+        for wid in sibling_worker_ids:
+            log_event("worker_failing", str(wid), trigger="sibling_slice_terminated")
         # TODO(#3425): This prunes sibling workers before their in-flight
         # results are processed, causing apply_heartbeat() to
         # silently drop any logs/states those workers reported this round.
@@ -2526,11 +2532,6 @@ class Controller:
         if sibling_failures.removed_workers:
             acc.fail_count += len(sibling_failures.removed_workers)
             acc.terminal_failed_workers.extend(wid for wid, _ in sibling_failures.removed_workers)
-            logger.info(
-                "Failed %d sibling workers from slices: %s",
-                len(sibling_failures.removed_workers),
-                [wid for wid, _ in sibling_failures.removed_workers],
-            )
 
     def _log_sync_health_summary(
         self,
@@ -2541,28 +2542,15 @@ class Controller:
         elapsed_ms: int,
     ) -> None:
         """Log provider sync timing and periodic cluster health summary."""
-        level = logging.WARNING if elapsed_ms > _SLOW_HEARTBEAT_MS else logging.DEBUG
-        logger.log(
-            level,
-            "Provider sync: %d workers, %d failed (%d transient, %d terminal), %dms",
-            batch_count,
-            fail_count,
-            len(transient_failed_workers),
-            len(terminal_failed_workers),
-            elapsed_ms,
-        )
-        if transient_failed_workers:
-            logger.log(
-                level,
-                "Provider sync transient failures (%d): [%s]",
-                len(transient_failed_workers),
-                ", ".join(transient_failed_workers),
-            )
-        if terminal_failed_workers:
-            logger.warning(
-                "Provider sync terminal failures (%d): [%s]",
-                len(terminal_failed_workers),
-                ", ".join(terminal_failed_workers),
+        if elapsed_ms > _SLOW_HEARTBEAT_MS or transient_failed_workers or terminal_failed_workers:
+            log_event(
+                "provider_sync",
+                "controller",
+                workers=batch_count,
+                failed=fail_count,
+                transient=len(transient_failed_workers),
+                terminal=len(terminal_failed_workers),
+                elapsed_ms=elapsed_ms,
             )
 
         self._heartbeat_iteration += 1
@@ -2573,12 +2561,13 @@ class Controller:
                     0
                 ]  # type: ignore[index]
             pending = len(_schedulable_tasks(self._db))
-            logger.info(
-                "Controller status: %d workers (%d failed), %d active jobs, %d pending tasks",
-                len(workers),
-                fail_count,
-                active,
-                pending,
+            log_event(
+                "controller_status",
+                "controller",
+                workers=len(workers),
+                failed=fail_count,
+                active_jobs=active,
+                pending_tasks=pending,
             )
 
     def _run_autoscaler_once(self) -> None:
@@ -2638,12 +2627,13 @@ class Controller:
             path, result = upload_checkpoint(self._db, backup, self._config.remote_state_dir)
         finally:
             backup.cleanup()
-        logger.info(
-            "Checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
-            path,
-            result.job_count,
-            result.task_count,
-            result.worker_count,
+        log_event(
+            "checkpoint_written",
+            "controller",
+            path=path,
+            jobs=result.job_count,
+            tasks=result.task_count,
+            workers=result.worker_count,
         )
         return path, result
 

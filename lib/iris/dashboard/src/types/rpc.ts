@@ -458,19 +458,6 @@ export interface GetProcessStatusResponse {
   logEntries?: LogEntry[]
 }
 
-// -- Transactions --
-
-export interface TransactionAction {
-  timestamp?: ProtoTimestamp
-  action?: string
-  entityId?: string
-  details?: string
-}
-
-export interface GetTransactionsResponse {
-  actions: TransactionAction[]
-}
-
 // -- Task State Counts (used in job summaries and user summaries) --
 
 /** Mapping from lowercase state name to count, e.g. { running: 2, pending: 5 } */

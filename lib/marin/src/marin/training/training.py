@@ -109,6 +109,7 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
         checkpointer=replace(
             pod_config.train_config.trainer.checkpointer,
             base_path=os.path.join(pod_config.output_path, DEFAULT_CHECKPOINTS_PATH),
+            temporary_base_path=marin_temp_bucket(ttl_days=14, prefix="checkpoints-temp"),
         ),
     )
 

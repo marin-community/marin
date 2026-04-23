@@ -13,6 +13,7 @@ import pytest
 
 import haliax
 
+import levanter.analysis.perplexity_gap as gap_analysis
 from levanter.analysis.perplexity_gap import (
     GapReportBuilder,
     RawTextDocument,
@@ -125,6 +126,69 @@ def test_gap_report_builder_records_per_model_literal_boundaries():
     assert literal_row["model_a_token_boundaries"] == "|abc|"
     assert literal_row["model_b_token_boundaries"] == "|a|bc|"
     assert literal_row["example_dataset"] == "paloma/example"
+
+
+def test_gap_report_builder_renders_literal_boundaries_only_for_reported_literals(monkeypatch):
+    report = GapReportBuilder(model_a_name="a", model_b_name="b", output_path="/tmp/report", top_k_literals=1)
+    calls: list[str] = []
+
+    def fake_render_token_boundaries(**kwargs):
+        calls.append(kwargs["segment_text"])
+        return f"|{kwargs['segment_text']}|"
+
+    monkeypatch.setattr(gap_analysis, "render_token_boundaries", fake_render_token_boundaries)
+
+    weaker_document = RawTextDocument(
+        dataset_name="paloma/example",
+        tags=("paloma/example",),
+        shard_name="docs",
+        row_index=0,
+        text="aaa",
+    )
+    stronger_document = RawTextDocument(
+        dataset_name="paloma/example",
+        tags=("paloma/example",),
+        shard_name="docs",
+        row_index=1,
+        text="bbb",
+    )
+    tokenized_weaker = TokenizedDocument(
+        token_ids=np.asarray([1], dtype=np.int32),
+        byte_starts=np.asarray([0], dtype=np.int32),
+        byte_ends=np.asarray([3], dtype=np.int32),
+        num_bytes=3,
+    )
+    tokenized_stronger = TokenizedDocument(
+        token_ids=np.asarray([2], dtype=np.int32),
+        byte_starts=np.asarray([0], dtype=np.int32),
+        byte_ends=np.asarray([3], dtype=np.int32),
+        num_bytes=3,
+    )
+
+    report.add_document(
+        document=weaker_document,
+        per_byte_loss_a=np.asarray([1.0, 1.0, 1.0], dtype=np.float64),
+        per_byte_loss_b=np.asarray([0.0, 0.0, 0.0], dtype=np.float64),
+        tokenized_a=tokenized_weaker,
+        tokenized_b=tokenized_weaker,
+    )
+    report.add_document(
+        document=stronger_document,
+        per_byte_loss_a=np.asarray([2.0, 2.0, 2.0], dtype=np.float64),
+        per_byte_loss_b=np.asarray([0.0, 0.0, 0.0], dtype=np.float64),
+        tokenized_a=tokenized_stronger,
+        tokenized_b=tokenized_stronger,
+    )
+
+    assert calls == []
+
+    summary = report.build_summary()
+    literal_rows = summary["top_literals"]["model_a_worse"]
+
+    assert [row["name"] for row in literal_rows] == ["bbb"]
+    assert literal_rows[0]["model_a_token_boundaries"] == "|bbb|"
+    assert literal_rows[0]["model_b_token_boundaries"] == "|bbb|"
+    assert calls == ["bbb", "bbb"]
 
 
 def test_gap_report_builder_previews_worst_region():
