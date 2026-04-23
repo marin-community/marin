@@ -6,7 +6,8 @@ from dataclasses import dataclass
 import jax
 import optax
 
-from levanter.optim import OptimizerConfig
+from levanter.optim import GrugMuonConfig, OptimizerConfig
+from levanter.optim.util import CoefficientType
 from experiments.grug.moe.adamh import scale_by_adamh
 from levanter.utils.jax_utils import leaf_key_paths
 
@@ -91,4 +92,111 @@ class GrugMoeAdamHConfig(OptimizerConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
-__all__ = ["GrugMoeAdamHConfig"]
+@OptimizerConfig.register_subclass("grug_moe_muon")
+@dataclass(frozen=True)
+class GrugMoeMuonConfig(GrugMuonConfig):
+    """Muon for Grug MoE.
+
+    - muon: attention, gated-norm, shared expert, and expert MLP weight matrices
+    - adamw: embeddings, output projection, router path, attention gates, norms, biases
+    """
+
+    def create_mask(self, params, use_kimi_scaling=True):
+        del use_kimi_scaling
+        paths = leaf_key_paths(params)
+
+        def mask_fn(param, path):
+            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+            path_lower = path_str.lower()
+            if (
+                "token_embed" in path_lower
+                or "output_proj" in path_lower
+                or "router_bias" in path_lower
+                or "attn_gate" in path_lower
+                or ".router" in path_lower
+            ):
+                return "adamw"
+            if hasattr(param, "ndim") and param.ndim >= 2:
+                return "muon"
+            return "adamw"
+
+        return jax.tree.map(mask_fn, params, paths)
+
+
+@dataclass(frozen=True)
+class MuonPreset:
+    learning_rate: float
+    adam_lr: float
+    momentum: float
+    decay: float
+    max_grad_norm: float
+
+
+_MUON_PRESETS: tuple[tuple[int, MuonPreset], ...] = (
+    (
+        512,
+        MuonPreset(
+            learning_rate=0.016,
+            adam_lr=0.0032,
+            momentum=0.95,
+            decay=0.8,
+            max_grad_norm=1.0,
+        ),
+    ),
+    (
+        1024,
+        MuonPreset(
+            learning_rate=0.008,
+            adam_lr=0.0024,
+            momentum=0.98,
+            decay=1.0,
+            max_grad_norm=1.0,
+        ),
+    ),
+    (
+        1 << 30,
+        MuonPreset(
+            learning_rate=0.004,
+            adam_lr=0.0012,
+            momentum=0.98,
+            decay=1.0,
+            max_grad_norm=2.0,
+        ),
+    ),
+)
+
+_COEFFICIENT_STEPS: dict[CoefficientType, int] = {
+    "simple": 1,
+    "quintic": 5,
+    "polar_express": 8,
+    "aol": 4,
+}
+
+
+def build_grug_moe_muon_config(
+    *,
+    hidden_dim: int,
+    coefficient_type: CoefficientType = "aol",
+) -> GrugMoeMuonConfig:
+    """Return the size-matched Muon preset for the current MoE recipe."""
+    preset = next(config for max_hidden_dim, config in _MUON_PRESETS if hidden_dim <= max_hidden_dim)
+    return GrugMoeMuonConfig(
+        learning_rate=preset.learning_rate,
+        adam_lr=preset.adam_lr,
+        weight_decay=0.0,
+        min_lr_ratio=0.0,
+        warmup=0.0,
+        momentum=preset.momentum,
+        beta1=0.8,
+        beta2=0.98,
+        epsilon=1e-15,
+        muon_epsilon=1e-5,
+        max_grad_norm=preset.max_grad_norm,
+        lr_schedule="linear",
+        decay=preset.decay,
+        coefficient_type=coefficient_type,
+        backend_steps=_COEFFICIENT_STEPS[coefficient_type],
+    )
+
+
+__all__ = ["GrugMoeAdamHConfig", "GrugMoeMuonConfig", "build_grug_moe_muon_config"]
