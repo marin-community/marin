@@ -7,12 +7,19 @@ These tests verify the RPC contract (input -> output) of the ControllerServiceIm
 State changes are verified via RPC calls rather than internal state inspection.
 """
 
+from datetime import date, timedelta
+
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
-from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.service import (
+    FEATURE_INTRODUCTION_DATE,
+    FRESHNESS_WINDOW,
+    ControllerServiceImpl,
+    _check_client_freshness,
+)
 from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.transitions import (
@@ -1266,3 +1273,88 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         assert resp.running_tasks[0].user_id == "alice"
     finally:
         _verified_identity.reset(token)
+
+
+# =============================================================================
+# Client freshness tests
+# =============================================================================
+
+
+# Fixed reference point for helper unit tests so freshness behavior is
+# reproducible regardless of wall-clock date. Pick something far enough in the
+# future that FEATURE_INTRODUCTION_DATE has aged out for the past-grace test.
+_REF_NOW = date(2026, 6, 1)
+
+
+def test_check_client_freshness_accepts_today():
+    """A client built today is inside the window (upper edge)."""
+    _check_client_freshness(_REF_NOW.isoformat(), _REF_NOW)
+
+
+def test_check_client_freshness_accepts_at_window_edge():
+    """A client exactly FRESHNESS_WINDOW old is still accepted (lower edge)."""
+    edge = _REF_NOW - FRESHNESS_WINDOW
+    _check_client_freshness(edge.isoformat(), _REF_NOW)
+
+
+def test_check_client_freshness_rejects_over_window():
+    """A client one day past the window is rejected."""
+    stale = _REF_NOW - FRESHNESS_WINDOW - timedelta(days=1)
+    with pytest.raises(ConnectError) as exc_info:
+        _check_client_freshness(stale.isoformat(), _REF_NOW)
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+    assert stale.isoformat() in exc_info.value.message
+
+
+def test_check_client_freshness_empty_is_introduction_date():
+    """Empty string is substituted with FEATURE_INTRODUCTION_DATE."""
+    # Right at ship time: empty clients still inside window, succeed.
+    _check_client_freshness("", FEATURE_INTRODUCTION_DATE)
+    # Well past the grace period: empty clients fail.
+    well_past = FEATURE_INTRODUCTION_DATE + FRESHNESS_WINDOW + timedelta(days=1)
+    with pytest.raises(ConnectError) as exc_info:
+        _check_client_freshness("", well_past)
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+
+
+def test_check_client_freshness_rejects_malformed():
+    """Non-ISO strings are rejected as INVALID_ARGUMENT."""
+    with pytest.raises(ConnectError) as exc_info:
+        _check_client_freshness("not-a-date", _REF_NOW)
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
+def test_launch_job_root_with_fresh_client_date(service):
+    """Root submission with today's date succeeds end-to-end through launch_job."""
+    request = make_job_request("fresh-client")
+    request.client_revision_date = date.today().isoformat()
+    response = service.launch_job(request, None)
+    assert response.job_id == JobName.root("test-user", "fresh-client").to_wire()
+
+
+def test_launch_job_root_with_stale_client_date(service):
+    """Root submission with an ancient date is rejected end-to-end."""
+    request = make_job_request("stale-client")
+    request.client_revision_date = "2000-01-01"
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+
+
+def test_launch_job_nested_with_stale_client_date_is_exempt(service):
+    """Nested submissions bypass the freshness check (parent already running)."""
+    service.launch_job(make_job_request("parent-job"), None)
+    parent_id = JobName.root("test-user", "parent-job")
+
+    child_id = JobName.from_wire(parent_id.to_wire() + "/child")
+    assert not child_id.is_root
+    child_req = controller_pb2.Controller.LaunchJobRequest(
+        name=child_id.to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+    )
+    child_req.client_revision_date = "2000-01-01"
+
+    response = service.launch_job(child_req, None)
+    assert response.job_id == child_id.to_wire()
