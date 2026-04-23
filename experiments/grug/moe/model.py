@@ -73,7 +73,9 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
-    use_block_attn_res: bool = False
+    # Block attention residual block_size: 0 = disabled, 2/4/8 = ops per block.
+    # Each layer has 2 ops (attn + MLP). block_size=2 → every layer is a block.
+    block_attn_res_size: int = 0
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -432,6 +434,7 @@ class Block(eqx.Module):
     attn_res_proj: jax.Array | None
     mlp_res_proj: jax.Array | None
     layer_number: int = eqx.field(static=True)
+    block_size: int = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, layer_number: int = 0, key: PRNGKeyArray) -> "Block":
@@ -443,7 +446,7 @@ class Block(eqx.Module):
             )
         attn_res_proj = None
         mlp_res_proj = None
-        if cfg.use_block_attn_res:
+        if cfg.block_attn_res_size > 0:
             attn_res_proj = jnp.zeros((cfg.hidden_dim,))
             mlp_res_proj = jnp.zeros((cfg.hidden_dim,))
         return Block(
@@ -457,6 +460,7 @@ class Block(eqx.Module):
             attn_res_proj=attn_res_proj,
             mlp_res_proj=mlp_res_proj,
             layer_number=layer_number,
+            block_size=cfg.block_attn_res_size,
         )
 
     @named_call
@@ -467,14 +471,17 @@ class Block(eqx.Module):
         blocks: list[Float[Array, "B S D"]] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], list[Float[Array, "B S D"]] | None]:
         if blocks is not None and self.attn_res_proj is not None:
+            partial_block = x
             # Block attn res before attention (partial not in blocks yet).
-            h = _block_attn_res(blocks, x, self.attn_res_proj)
+            h = _block_attn_res(blocks, partial_block, self.attn_res_proj)
             # Block boundary: save partial to blocks, reset.
-            # With block_size=2, every layer is a boundary.
-            blocks = [*blocks, x]
+            is_boundary = self.layer_number % (self.block_size // 2) == 0
+            if is_boundary:
+                blocks = [*blocks, partial_block]
+                partial_block = None
             attn_in = self.attn_gated_norm(self.rms_attn(h))
             attn_out = self.attn(attn_in, mask)
-            partial_block = attn_out
+            partial_block = partial_block + attn_out if partial_block is not None else attn_out
             # Block attn res before MLP.
             h = _block_attn_res(blocks, partial_block, self.mlp_res_proj)
             mlp_in = self.mlp_gated_norm(self.rms_mlp(h))
@@ -515,7 +522,7 @@ class Transformer(eqx.Module):
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
         blocks = tuple(Block.init(cfg, layer_number=i, key=block_keys[i]) for i in range(cfg.num_layers))
         final_bar_proj = None
-        if cfg.use_block_attn_res:
+        if cfg.block_attn_res_size > 0:
             final_bar_proj = jnp.zeros((cfg.hidden_dim,))
         return Transformer(
             token_embed=token_embed,
@@ -548,7 +555,7 @@ class Transformer(eqx.Module):
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
 
         moe_router_stats: list[dict[str, jax.Array]] = []
-        bar_blocks: list[Float[Array, "B S D"]] | None = [hidden] if cfg.use_block_attn_res else None
+        bar_blocks: list[Float[Array, "B S D"]] | None = [hidden] if cfg.block_attn_res_size > 0 else None
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
             hidden, router_stats, bar_blocks = eqx.filter_checkpoint(block)(hidden, layer_mask, bar_blocks)
