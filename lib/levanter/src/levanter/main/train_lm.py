@@ -6,6 +6,7 @@ import gc
 import logging
 import os
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Optional
 
 import haliax as hax
@@ -32,6 +33,25 @@ from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 
 logger = logging.getLogger(__name__)
+
+
+class CheckpointInitMode(StrEnum):
+    """How to consume ``initialize_from_checkpoint_path`` at the start of training.
+
+    MODEL_ONLY: load only the model subtree (via ``subpath="model"``); keep the
+    freshly-initialized optimizer state (count=0, fresh momentum). Use this for
+    midtraining from a pretrain checkpoint when you want a fresh warmup/decay
+    schedule.
+
+    FULL_STATE: load the full trainer state (model + opt_state), then reset
+    only the outer ``state.step`` to 0. The restored opt_state includes
+    ``inject_hyperparams`` counts from the pretrain run. This is the legacy
+    behavior of the ``initialize_from_checkpoint_path`` branch and is correct
+    for WSD-S rewarmup workflows that rely on the carried-over schedule count.
+    """
+
+    MODEL_ONLY = "model_only"
+    FULL_STATE = "full_state"
 
 
 @dataclass
@@ -67,6 +87,13 @@ class TrainLmConfig:
     """
     If provided, will initialize from this checkpoint, used for llama style ablation. This resets the data loader.
     Note that this differs from --trainer.initialize_from, which does not reset the data loader.
+    """
+    checkpoint_init_mode: CheckpointInitMode = CheckpointInitMode.FULL_STATE
+    """
+    How ``initialize_from_checkpoint_path`` is consumed. Default ``FULL_STATE`` preserves the
+    long-standing behavior (restore model + opt_state, reset only outer step). Use ``MODEL_ONLY``
+    for fresh-schedule midtraining: restores only model weights so warmup/decay starts from
+    count=0. See ``CheckpointInitMode`` docstring.
     """
     eval_harness: Optional[LmEvalHarnessConfig] = None
     eval_harness_steps: int = 10000
@@ -175,9 +202,17 @@ def main(config: TrainLmConfig):
 
         if int(state.step) == 0 and config.initialize_from_checkpoint_path is not None:
             checkpoint_path = latest_checkpoint_path(config.initialize_from_checkpoint_path)
-            state = load_checkpoint(state, checkpoint_path)
-            # reset to step 0, we're just initializing weights here
-            state = dataclasses.replace(state, step=jnp.array(0))
+            match config.checkpoint_init_mode:
+                case CheckpointInitMode.MODEL_ONLY:
+                    # Load only the model subtree; keep the freshly-initialized opt_state
+                    # (count=0, fresh momentum). state.step is already 0 from initial_state.
+                    loaded_model = load_checkpoint(state.model, checkpoint_path, subpath="model")
+                    state = dataclasses.replace(state, model=loaded_model)
+                case CheckpointInitMode.FULL_STATE:
+                    # Legacy behavior: restore model + opt_state (incl. inject_hyperparams
+                    # count); reset only outer step. For weights-only init, use MODEL_ONLY.
+                    state = load_checkpoint(state, checkpoint_path)
+                    state = dataclasses.replace(state, step=jnp.array(0))
 
         if int(state.step) == 0:
             # TODO: I don't love that we init the model twice, but it's not a big deal i think?

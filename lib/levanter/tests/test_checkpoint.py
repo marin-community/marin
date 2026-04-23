@@ -865,3 +865,124 @@ def test_backward_compatibility_with_ocdbt():
         )
         assert all(np.isclose(restored_state.training_key, initial_state.training_key))
         assert restored_state.step == initial_state.step
+
+
+# ---------------------------------------------------------------------------
+# CheckpointInitMode: MODEL_ONLY vs FULL_STATE semantics
+# ---------------------------------------------------------------------------
+#
+# These tests cover the train_lm.py load branch that consumes
+# initialize_from_checkpoint_path. They exercise the underlying load mechanics
+# (load_checkpoint with / without subpath="model") directly rather than
+# spinning up a full Trainer — the purpose is to prove that MODEL_ONLY leaves
+# opt_state unchanged (so a freshly-built schedule starts from count=0) while
+# FULL_STATE restores the pretrain's opt_state (including inject_hyperparams
+# counts).
+
+
+def _make_state_with_scheduled_optim(step, key, depth=3):
+    """Build a TrainerState whose optimizer uses optax.inject_hyperparams,
+    matching the AdamH/Adam structure that real pretrain checkpoints carry."""
+    model = MLP(in_size=2, out_size=1, width_size=2, depth=depth, key=key)
+    schedule = optax.linear_schedule(1e-3, 1e-5, 1000)
+    optim = optax.inject_hyperparams(optax.adam)(learning_rate=schedule)
+    opt_state = optim.init(arrays_only(model))
+    return TrainerState(step, model, optim, opt_state, key, is_trainable=True, mp=None, model_averaging=None)
+
+
+def _advance_schedule_count(opt_state, count_value: int):
+    """Bump the schedule count inside optax.inject_hyperparams opt_state so it
+    simulates a checkpoint from well into a pretrain run."""
+
+    def _is_wrapped_schedule_state(x):
+        return hasattr(x, "_fields") and x._fields == ("count",)
+
+    def _set_count(x):
+        if _is_wrapped_schedule_state(x):
+            return type(x)(count=jnp.asarray(count_value, dtype=jnp.int32))
+        return x
+
+    return jax.tree.map(_set_count, opt_state, is_leaf=_is_wrapped_schedule_state)
+
+
+def _schedule_count(opt_state) -> int:
+    """Extract the WrappedScheduleState.count value from an inject_hyperparams state."""
+
+    def _is_wrapped_schedule_state(x):
+        return hasattr(x, "_fields") and x._fields == ("count",)
+
+    for leaf in jax.tree.leaves(opt_state, is_leaf=_is_wrapped_schedule_state):
+        if _is_wrapped_schedule_state(leaf):
+            return int(leaf.count)
+    raise AssertionError("No WrappedScheduleState leaf found in opt_state")
+
+
+def test_model_only_init_does_not_restore_opt_state_count():
+    """CheckpointInitMode.MODEL_ONLY: loaded state has fresh opt_state count
+    (the schedule starts from 0), while model weights match the saved checkpoint.
+    This is the fix for the Delphi flat-LR bug."""
+    key0 = jax.random.PRNGKey(0)
+    key1 = jax.random.PRNGKey(1)
+
+    # Saved "pretrain" state with count bumped to 46916 — the real count we
+    # read out of the isoflop-3e20 pretrain checkpoint.
+    pretrain_state = _make_state_with_scheduled_optim(46916, key0)
+    pretrain_state = dataclasses.replace(
+        pretrain_state,
+        opt_state=_advance_schedule_count(pretrain_state.opt_state, 46916),
+    )
+    assert _schedule_count(pretrain_state.opt_state) == 46916
+
+    # Fresh "midtrain" state as trainer.initial_state would build it: count=0.
+    fresh_state = _make_state_with_scheduled_optim(0, key1)
+    assert_trees_not_close(fresh_state.model, pretrain_state.model)
+    assert _schedule_count(fresh_state.opt_state) == 0
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        save_checkpoint(pretrain_state, step=pretrain_state.step, checkpoint_path=tmpdir)
+
+        # MODEL_ONLY: load only the model subtree, exactly as train_lm.py does.
+        loaded_model = load_checkpoint(fresh_state.model, tmpdir, subpath="model")
+        state_after = dataclasses.replace(fresh_state, model=loaded_model)
+
+    # Model weights now match pretrain.
+    assert_trees_all_equal(
+        jax.tree_util.tree_leaves(arrays_only(state_after.model)),
+        jax.tree_util.tree_leaves(arrays_only(pretrain_state.model)),
+    )
+    # Opt state count stays at 0 — schedule will warm up from count=0.
+    assert _schedule_count(state_after.opt_state) == 0
+    # Outer step stays at 0.
+    assert int(state_after.step) == 0
+
+
+def test_full_state_init_restores_opt_state_count():
+    """CheckpointInitMode.FULL_STATE (legacy): loaded state has the pretrain's
+    opt_state count; only outer state.step is reset to 0. This preserves the
+    WSD-S rewarmup trick used by exp2062."""
+    key0 = jax.random.PRNGKey(0)
+    key1 = jax.random.PRNGKey(1)
+
+    pretrain_state = _make_state_with_scheduled_optim(46916, key0)
+    pretrain_state = dataclasses.replace(
+        pretrain_state,
+        opt_state=_advance_schedule_count(pretrain_state.opt_state, 46916),
+    )
+    fresh_state = _make_state_with_scheduled_optim(0, key1)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        save_checkpoint(pretrain_state, step=pretrain_state.step, checkpoint_path=tmpdir)
+
+        # FULL_STATE: load whole state, then reset outer step.
+        state_after = load_checkpoint(fresh_state, tmpdir)
+        state_after = dataclasses.replace(state_after, step=jnp.array(0))
+
+    # Model weights match pretrain.
+    assert_trees_all_equal(
+        jax.tree_util.tree_leaves(arrays_only(state_after.model)),
+        jax.tree_util.tree_leaves(arrays_only(pretrain_state.model)),
+    )
+    # Opt state count was restored from the pretrain.
+    assert _schedule_count(state_after.opt_state) == 46916
+    # Outer step reset.
+    assert int(state_after.step) == 0

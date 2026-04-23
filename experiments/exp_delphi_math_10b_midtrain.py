@@ -42,6 +42,7 @@ numbers, and verification plan.
 
 import os
 
+from levanter.main.train_lm import CheckpointInitMode
 from levanter.optim import AdamHConfig
 
 from experiments.defaults import default_train
@@ -205,6 +206,12 @@ def _build_runs() -> list[ExecutorStep]:
                 # from the pretrain mix, so pretrain step counter + data
                 # cursor should be discarded.
                 reset_data_loader_on_init=True,
+                # MODEL_ONLY: drop pretrain opt_state so the fresh warmup/decay
+                # schedule starts from count=0. The default FULL_STATE would
+                # restore inject_hyperparams counts from the pretrain, clamping
+                # the schedule to min_lr for the entire midtrain run.
+                # See .agents/logbooks/midtraining_delphi.md.
+                checkpoint_init_mode=CheckpointInitMode.MODEL_ONLY,
                 steps_per_eval=STEPS_PER_EVAL,
                 steps_per_export=STEPS_PER_EXPORT,
                 steps_per_hf_export=STEPS_PER_HF_EXPORT,

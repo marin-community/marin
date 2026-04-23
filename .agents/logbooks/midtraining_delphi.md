@@ -736,3 +736,95 @@ Very narrow spread (~0.035 across factors 0.5–0.83). Need to look at smoothed 
 1. Inspect final W&B panels for smoothed train-loss + Paloma validation trajectories across lr=0.5 / 0.67 / 0.83. Confirm the crossover + pick the 1e20 winner.
 2. Launch 3 × 1e21 sweep points (lr=0.5 / 0.67 / 0.83) on v5p-64. With the Levanter mirror-staging patch now verified end-to-end (see "Cross-region verification" section above), the new launches can go `--region us-central1 --region us-east5` and land wherever the autoscaler has capacity. Expected wall-time per 1e21 run: ~10 h (3.4 B params at BS=512).
 3. Commit the Levanter patch + experiment change + these logbook updates to `origin/midtrain_data` before relaunching, so the iris worker bundle picks up the new code.
+
+---
+
+## 2026-04-23 flat-LR incident — root cause + fix
+
+**TL;DR: every 1e20 run completed before today was trained at `min_lr = 0.1 × peak`, not the scheduled warmup → peak → decay curve. All three completed/in-flight runs are DISCARDED. The Levanter warmstart path had a latent bug; fix landed locally today. Relaunch will produce new output hashes (config changed).**
+
+### Symptom
+
+W&B `optim/learning_rate` for the three completed 1e20 runs (`lr=0.5-ba7b7f` v10, and in-flight `lr=0.67-e3be0c` / `lr=0.83-db9de7`) is flat from step 0, no warmup, no decay. Values match `0.1 × peak × lr_factor` to 2 sig figs:
+
+| Factor | Expected peak `learning_rate` | `0.1 × peak × factor` | Chart value |
+|---:|---:|---:|---:|
+| 0.50 | 2.2415e-3 | 2.2415e-4 | ~2.2e-4 |
+| 0.67 | 3.0036e-3 | 3.0036e-4 | ~3.0e-4 |
+| 0.83 | 3.7209e-3 | 3.7209e-4 | ~3.7e-4 |
+
+Same story on `optim/adam_lr` — flat at `0.1 × peak_adam_lr × factor` (3.7e-6 / 4.9e-6 / 6.1e-6).
+
+### Root cause
+
+Direct TensorStore read of `gs://marin-us-central1/checkpoints/isoflop/.../step-46915/`:
+
+```
+opt_state/count                                  = 46916
+opt_state/hyperparams_states/learning_rate/count = 46916
+opt_state/hyperparams_states/adam_lr/count       = 46916
+step                                              = 46916
+```
+
+Levanter's `train_lm.py:176-180` (`initialize_from_checkpoint_path` branch):
+
+```python
+if int(state.step) == 0 and config.initialize_from_checkpoint_path is not None:
+    checkpoint_path = latest_checkpoint_path(config.initialize_from_checkpoint_path)
+    state = load_checkpoint(state, checkpoint_path)     # restores FULL state incl opt_state
+    state = dataclasses.replace(state, step=jnp.array(0))   # resets only outer step
+```
+
+`load_checkpoint(state, path)` deserializes every array leaf in the exemplar tree — including `opt_state.hyperparams_states.learning_rate.count`, which comes back as 46916 from the pretrain. Our fresh schedule is built with `num_train_steps=4768, warmup=500, decay=4268`. `optax.linear_schedule(peak, min_lr, 4268)` evaluated at count=46916 clamps to `min_lr = 0.1 × peak`. Every subsequent step increments count but stays past decay → flat forever at `min_lr`.
+
+The inline comment `# we're just initializing weights here` has been a lie since PR #1957 (David Hall, `b5659c59c4`, 2025-12-02). Before #1957 the branch restored everything AND kept the outer step — a coherent full resume. PR #1957 added the step-reset without also resetting opt_state, creating today's inconsistency. The actual `load_checkpoint(state, ...)` call pre-existed #1957 (from `5c53a19fdc`, Aug 2024) but wasn't pathological on its own. `534544b0bd` (Apr 2026) refactored the call to use `latest_checkpoint_path` — a semantics-preserving change.
+
+Pathology only manifests when `num_train_steps < restored count`. Existing callers (Mantis, 8B cooldowns, exp2062 giraffe) all use larger `num_train_steps` or `reset_data_loader_on_init=False` (which routes through a different `trainer.initialize_from` path), so none of them tripped it. Our midtraining with `num_train_steps=4768 << 46916` is the first case to hit it.
+
+### Fix
+
+Added `CheckpointInitMode` enum to `lib/levanter/src/levanter/main/train_lm.py` with two values:
+
+- `MODEL_ONLY`: `load_checkpoint(state.model, path, subpath="model")` — load only the model subtree, keep freshly-initialized opt_state (count=0). The pattern `train_dpo.py:383` already uses.
+- `FULL_STATE`: current (legacy) behavior — restore everything, reset only outer step. Preserves WSD-S rewarmup tricks like exp2062's.
+
+**Default: `FULL_STATE`.** Preserves behavior byte-for-byte for every caller currently on this path; a full audit of every `initialize_from_checkpoint_path=` caller was explicitly *not* done. Delphi opts into `MODEL_ONLY` explicitly in `experiments/exp_delphi_math_10b_midtrain.py`. exp2062 is untouched.
+
+Files changed (uncommitted as of 2026-04-23):
+
+- `lib/levanter/src/levanter/main/train_lm.py` — enum, field on `TrainLmConfig`, branch the load block.
+- `experiments/simple_train_config.py` — `checkpoint_init_mode: CheckpointInitMode = FULL_STATE` field.
+- `experiments/defaults.py` — forward field from `SimpleTrainConfig` → `TrainLmConfig` in `default_train`.
+- `experiments/exp_delphi_math_10b_midtrain.py` — explicit `checkpoint_init_mode=MODEL_ONLY` + comment.
+- `lib/levanter/tests/test_checkpoint.py` — 2 raw-load tests (MODEL_ONLY vs FULL_STATE semantics on a schedule-count fixture).
+- `experiments/test_default_train_init_mode.py` — 3 plumbing tests asserting defaults + Delphi-experiment MODEL_ONLY propagation through `default_train` to the inner `TrainLmConfig`.
+
+Tests: `uv run python -m pytest lib/levanter/tests/test_checkpoint.py` → 29/29 pass; `uv run python -m pytest experiments/test_default_train_init_mode.py` → 3/3 pass. `./infra/pre-commit.py --fix` on all 6 files: ok.
+
+### Hash impact — new output paths on relaunch
+
+Adding `checkpoint_init_mode=MODEL_ONLY` to the Delphi `SimpleTrainConfig` changes its serialized form, which feeds `executor.py:1407-1408`'s `json.dumps(version, sort_keys=True, cls=CustomJsonEncoder)` → `hashlib.md5(...)[:6]`. The new runs will have different `-<hash>` suffixes than `ba7b7f` / `e3be0c` / `db9de7`. **No `.executor_status` surgery is needed at the old paths** — they're orphans of a different config and the executor simply won't see them.
+
+### Runs marked DISCARDED (do not use for analysis)
+
+- `delphi-1e20-iso-d2048-L21-math-10b-lr0.5-ba7b7f` (v10, 155 GB at `gs://marin-us-central1/checkpoints/`) — trained at lr=2.24e-4 constant, not the 2.24e-3 → 2.24e-4 warmup/decay curve.
+- `delphi-1e20-iso-d2048-L21-math-10b-lr0.67-e3be0c` (in-flight coord `/ahmedah/delphi-math-10b-1e20-lr0.67-20260422`) — trained at lr=3.00e-4 constant.
+- `delphi-1e20-iso-d2048-L21-math-10b-lr0.83-db9de7` (in-flight coord `/ahmedah/delphi-math-10b-1e20-lr0.83-20260422`) — trained at lr=3.72e-4 constant.
+
+Keep the GCS artifacts around until relaunched runs land healthy on W&B, then `gcloud storage rm --recursive` them as a cleanup pass.
+
+### Follow-up (not in this change)
+
+Audit every `initialize_from_checkpoint_path=` caller in the repo. If all verified tolerant of fresh opt_state, flip the default on `SimpleTrainConfig.checkpoint_init_mode` + `TrainLmConfig.checkpoint_init_mode` to `MODEL_ONLY` so the comment-and-intent mismatch fully heals. Precondition: explicit `FULL_STATE` on any caller that wants the opt-state carry (e.g. exp2062). This is a separate, scope-limited change — not part of this fix.
+
+### Pointer
+
+Full plan at `/Users/ahmed/.claude/plans/feedback-from-codex-make-humble-kernighan.md`.
+
+### Next steps (replacing the pre-incident list above)
+
+1. Kill in-flight `/ahmedah/delphi-math-10b-1e20-lr{0.67,0.83}-20260422`.
+2. Commit the 6-file fix + this logbook entry; push to `origin/midtrain_data`.
+3. Submit one pilot (`1e20 × lr=0.67` under the new hash). Wait ~30 min, verify on W&B that `optim/learning_rate` rises 0 → 3.00e-3 over first 500 steps, then decays linearly toward 3.00e-4 by step 4768. That's the anti-pathology.
+4. If pilot healthy, submit remaining 5 sweep points (1e20 × lr=0.5, 0.83; 1e21 × lr=0.5, 0.67, 0.83) in parallel on v5p-64.
+5. After all 6 land, compare smoothed train-loss + Paloma panels across (base × lr_factor), pick winners, write up.
