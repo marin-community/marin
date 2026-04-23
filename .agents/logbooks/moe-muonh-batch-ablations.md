@@ -16,13 +16,13 @@
 ## Experiment Log
 ### 2026-04-23 00:00 - kickoff
 - Hypothesis: MuonH can reuse the AdamH heuristic learning rates on the matrix/expert parameters, and the larger-step geometry may show a clearer gain when batch size is doubled.
-- Command: pending issue creation and Iris submission.
+- Command: `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --reserve v5p-8 -e WANDB_API_KEY \"$WANDB_API_KEY\" -- python -m experiments.grug.moe.muonh_batch_gate1`
 - Config:
   - Branch: `research/moe-muonh-batch-ablations`
   - Optimizer variant: `GrugMoeMuonHConfig`
   - Newton-Schulz coefficient type: `quintic`
   - Batch variants: baseline heuristic batch and `2x` batch
   - MoE budgets: `d512 / 2.19e17`, `d768 / 1.70e18`
-- Result: pending
-- Interpretation: pending
-- Next action: validate the MuonH launcher locally, create the experiment issue, then submit the four gate-1 runs on Iris.
+- Result: issue #5134 created, branch pushed, and Iris parent job `/pc0618/iris-run-job-20260423-170113` submitted.
+- Interpretation: the four-run gate-1 matrix is queued on the standard v5p-8 Iris path with the AdamH-derived LR schedule preserved across the base-batch and `2x` batch variants.
+- Next action: monitor the Iris parent job until the child runs are scheduled, then track W&B for step-wise throughput and loss.
