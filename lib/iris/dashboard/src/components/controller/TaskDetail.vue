@@ -6,9 +6,10 @@ import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
 import type {
   TaskStatus,
+  TaskStatsSnapshot,
   GetTaskStatusResponse,
 } from '@/types/rpc'
-import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime } from '@/utils/formatting'
+import { timestampMs, formatBytes, formatRate, formatCpuMillicores, formatDuration, formatRelativeTime } from '@/utils/formatting'
 
 import { controllerRpcCall } from '@/composables/useRpc'
 import { useProfileAction } from '@/composables/useProfileAction'
@@ -76,6 +77,45 @@ const cpuHistory = computed(() =>
 const memHistory = computed(() =>
   (task.value?.resourceHistory ?? []).map(r => r.memoryMb ? parseFloat(r.memoryMb) : 0)
 )
+
+const statsHistory = computed(() => task.value?.taskStatsHistory ?? [])
+
+const latestStats = computed(() => statsHistory.value[statsHistory.value.length - 1] ?? null)
+
+// Compute per-second throughput from cumulative deltas, then smooth with a
+// 5-point centred moving average to reduce reporting-interval spikes.
+function throughputSeries(field: 'itemsProcessed' | 'bytesProcessed'): number[] {
+  const snaps = statsHistory.value
+  if (snaps.length < 2) return []
+  const raw: number[] = []
+  for (let i = 1; i < snaps.length; i++) {
+    const prev = snaps[i - 1]
+    const curr = snaps[i]
+    const dtMs = parseFloat(curr.timestampMs ?? '0') - parseFloat(prev.timestampMs ?? '0')
+    if (dtMs <= 0) continue
+    const dv = parseFloat(curr[field] ?? '0') - parseFloat(prev[field] ?? '0')
+    raw.push(Math.max(0, dv / (dtMs / 1000)))
+  }
+  const window = 5
+  return raw.map((_, i) => {
+    const lo = Math.max(0, i - Math.floor(window / 2))
+    const hi = Math.min(raw.length, lo + window)
+    const slice = raw.slice(lo, hi)
+    return slice.reduce((a, b) => a + b, 0) / slice.length
+  })
+}
+
+const itemsThroughput = computed(() => throughputSeries('itemsProcessed'))
+const bytesThroughput = computed(() => throughputSeries('bytesProcessed'))
+
+const itemsThroughputMax = computed(() => {
+  const m = Math.max(...itemsThroughput.value, 0)
+  return m > 0 ? m.toFixed(1) + '/s' : '0/s'
+})
+const bytesThroughputMax = computed(() => {
+  const m = Math.max(...bytesThroughput.value, 0)
+  return m > 0 ? formatRate(m) : '0 B/s'
+})
 
 // Use job-level resource limits for gauge totals when available.
 const cpuTotal = computed(() => {
@@ -276,13 +316,61 @@ watch(() => props.taskId, async () => {
       <div v-if="cpuHistory.length > 1" class="grid grid-cols-2 gap-4 mb-6">
         <div class="rounded-lg border border-surface-border bg-surface p-3">
           <div class="text-xs text-text-secondary mb-2">CPU %</div>
-          <Sparkline :data="cpuHistory" :width="200" :height="40" color="var(--color-accent, #2563eb)" />
+          <Sparkline :data="cpuHistory" :width="200" :height="40" fill color="var(--color-accent, #2563eb)" />
           <div class="text-xs font-mono text-text-muted mt-1">{{ cpuUsed.toFixed(0) }}%</div>
         </div>
         <div class="rounded-lg border border-surface-border bg-surface p-3">
           <div class="text-xs text-text-secondary mb-2">Memory (MB)</div>
-          <Sparkline :data="memHistory" :width="200" :height="40" color="var(--color-status-purple, #8b5cf6)" />
+          <Sparkline :data="memHistory" :width="200" :height="40" fill color="var(--color-status-purple, #8b5cf6)" />
           <div class="text-xs font-mono text-text-muted mt-1">{{ memUsedMb.toFixed(0) }} MB</div>
+        </div>
+      </div>
+
+      <!-- Task stats -->
+      <div v-if="statsHistory.length > 0" class="grid grid-cols-2 gap-4 mb-6">
+        <!-- Left: status text + latest values -->
+        <div class="rounded-lg border border-surface-border bg-surface p-3 space-y-2">
+          <div v-if="task.statusMessage" class="text-xs text-text font-mono whitespace-pre-wrap break-all">{{ task.statusMessage }}</div>
+          <div class="text-xs text-text-muted space-y-1 mt-2">
+            <div>Items processed: <span class="font-mono text-text">{{ latestStats ? parseInt(latestStats.itemsProcessed ?? '0').toLocaleString() : '—' }}</span></div>
+            <div>Bytes processed: <span class="font-mono text-text">{{ latestStats ? formatBytes(parseFloat(latestStats.bytesProcessed ?? '0')) : '—' }}</span></div>
+          </div>
+        </div>
+
+        <!-- Right: throughput charts -->
+        <div class="space-y-3">
+          <div class="rounded-lg border border-surface-border bg-surface p-3">
+            <div class="text-xs text-text-secondary mb-2">Items / sec</div>
+            <Sparkline
+              v-if="itemsThroughput.length > 1"
+              :data="itemsThroughput"
+              :width="200"
+              :height="40"
+              fill
+              color="var(--color-accent, #2563eb)"
+              show-y-axis
+              :y-axis-top-label="itemsThroughputMax"
+            />
+            <div class="text-xs font-mono text-text-muted mt-1">
+              {{ itemsThroughput.length ? itemsThroughput[itemsThroughput.length - 1].toFixed(1) + ' items/s' : '—' }}
+            </div>
+          </div>
+          <div class="rounded-lg border border-surface-border bg-surface p-3">
+            <div class="text-xs text-text-secondary mb-2">Bytes / sec</div>
+            <Sparkline
+              v-if="bytesThroughput.length > 1"
+              :data="bytesThroughput"
+              :width="200"
+              :height="40"
+              fill
+              color="var(--color-status-purple, #8b5cf6)"
+              show-y-axis
+              :y-axis-top-label="bytesThroughputMax"
+            />
+            <div class="text-xs font-mono text-text-muted mt-1">
+              {{ bytesThroughput.length ? formatRate(bytesThroughput[bytesThroughput.length - 1]) : '—' }}
+            </div>
+          </div>
         </div>
       </div>
 

@@ -1395,3 +1395,102 @@ def test_set_task_stats_unknown_task_raises_not_found(service):
         service.set_task_stats(request, None)
 
     assert exc_info.value.code == Code.NOT_FOUND
+
+
+def test_get_task_status_includes_status_message(service):
+    """get_task_status returns the status_message set via set_task_stats."""
+    service.launch_job(make_job_request("msg-job"), None)
+    task_id = JobName.root("test-user", "msg-job").task(0)
+
+    status_text = "Shards: 3/10 complete, 2 in-flight, 5 queued"
+    service.set_task_stats(
+        job_pb2.SetTaskStatsRequest(
+            task_id=task_id.to_wire(),
+            items_processed=30,
+            bytes_processed=1024,
+            status=status_text,
+        ),
+        None,
+    )
+
+    resp = service.get_task_status(controller_pb2.Controller.GetTaskStatusRequest(task_id=task_id.to_wire()), None)
+    assert resp.task.status_message == status_text
+
+
+def test_get_task_status_status_message_empty_when_not_set(service):
+    """get_task_status returns an empty status_message when set_task_stats has not been called."""
+    service.launch_job(make_job_request("no-msg-job"), None)
+    task_id = JobName.root("test-user", "no-msg-job").task(0)
+
+    resp = service.get_task_status(controller_pb2.Controller.GetTaskStatusRequest(task_id=task_id.to_wire()), None)
+    assert resp.task.status_message == ""
+
+
+def test_get_task_status_includes_task_stats_history(service):
+    """get_task_status returns task_stats_history snapshots in oldest-first order."""
+    service.launch_job(make_job_request("hist-job"), None)
+    task_id = JobName.root("test-user", "hist-job").task(0)
+
+    snapshots = [
+        (10, 512, "stage 1 done"),
+        (20, 1024, "stage 2 done"),
+        (30, 2048, "stage 3 done"),
+    ]
+    for items, bytes_, status in snapshots:
+        service.set_task_stats(
+            job_pb2.SetTaskStatsRequest(
+                task_id=task_id.to_wire(),
+                items_processed=items,
+                bytes_processed=bytes_,
+                status=status,
+            ),
+            None,
+        )
+
+    resp = service.get_task_status(controller_pb2.Controller.GetTaskStatusRequest(task_id=task_id.to_wire()), None)
+    history = resp.task.task_stats_history
+    assert len(history) == 3
+    # Oldest first.
+    assert history[0].items_processed == 10
+    assert history[0].bytes_processed == 512
+    assert history[1].items_processed == 20
+    assert history[1].bytes_processed == 1024
+    assert history[2].items_processed == 30
+    assert history[2].bytes_processed == 2048
+
+
+def test_get_task_status_task_stats_history_empty_when_no_stats(service):
+    """get_task_status returns an empty task_stats_history when no stats have been pushed."""
+    service.launch_job(make_job_request("no-hist-job"), None)
+    task_id = JobName.root("test-user", "no-hist-job").task(0)
+
+    resp = service.get_task_status(controller_pb2.Controller.GetTaskStatusRequest(task_id=task_id.to_wire()), None)
+    assert len(resp.task.task_stats_history) == 0
+
+
+def test_get_task_status_status_message_updated_by_latest_set_task_stats(service):
+    """status_message reflects the most recent set_task_stats call."""
+    service.launch_job(make_job_request("update-msg-job"), None)
+    task_id = JobName.root("test-user", "update-msg-job").task(0)
+
+    service.set_task_stats(
+        job_pb2.SetTaskStatsRequest(
+            task_id=task_id.to_wire(),
+            items_processed=5,
+            bytes_processed=100,
+            status="first status",
+        ),
+        None,
+    )
+    service.set_task_stats(
+        job_pb2.SetTaskStatsRequest(
+            task_id=task_id.to_wire(),
+            items_processed=10,
+            bytes_processed=200,
+            status="second status",
+        ),
+        None,
+    )
+
+    resp = service.get_task_status(controller_pb2.Controller.GetTaskStatusRequest(task_id=task_id.to_wire()), None)
+    assert resp.task.status_message == "second status"

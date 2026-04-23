@@ -251,6 +251,8 @@ def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> job_pb2.Task
         proto.finished_at.CopyFrom(timestamp_to_proto(current_attempt.finished_at))
     if task.container_id:
         proto.container_id = task.container_id
+    if task.status_message:
+        proto.status_message = task.status_message
     # For pending tasks with prior terminal attempts, surface retry context.
     if task.state == job_pb2.TASK_STATE_PENDING and task.attempts and task.attempts[-1].state in TERMINAL_TASK_STATES:
         last = task.attempts[-1]
@@ -1494,6 +1496,12 @@ class ControllerServiceImpl:
                 "WHERE trh.task_id = ? AND trh.attempt_id = ? ORDER BY trh.id DESC LIMIT ?",
                 (task_id.to_wire(), task.current_attempt_id, TASK_RESOURCE_HISTORY_RETENTION),
             )
+            stats_rows = q.raw(
+                "SELECT tsh.items_processed, tsh.bytes_processed, tsh.timestamp_ms "
+                "FROM task_stats_history tsh "
+                "WHERE tsh.task_id = ? ORDER BY tsh.id DESC LIMIT ?",
+                (task_id.to_wire(), TASK_RESOURCE_HISTORY_RETENTION),
+            )
             jc_row = q.raw(
                 "SELECT jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json "
                 "FROM job_config jc WHERE jc.job_id = ?",
@@ -1509,6 +1517,15 @@ class ControllerServiceImpl:
                     memory_peak_mb=r.memory_peak_mb,
                 )
             )
+        for r in reversed(stats_rows):
+            proto.task_stats_history.append(
+                job_pb2.TaskStatsSnapshot(
+                    items_processed=r.items_processed,
+                    bytes_processed=r.bytes_processed,
+                    timestamp_ms=r.timestamp_ms,
+                )
+            )
+
         # Populate resource_usage from the latest history entry (newest is first before reversal).
         if history_rows:
             latest = history_rows[0]
