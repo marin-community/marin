@@ -86,30 +86,6 @@ DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
 
 
-def _runtime_extras_for_training(
-    train_config: object,
-    device: CpuConfig | TpuConfig | GpuConfig,
-) -> list[str]:
-    """Resolve runtime dependency groups for the submitted job environment.
-
-    Set MARIN_SKIP_RUNTIME_EXTRAS=1 to bypass dynamic extras installation when
-    cluster images already contain the needed dependencies.
-    """
-    if os.getenv("MARIN_SKIP_RUNTIME_EXTRAS", "").lower() in {"1", "true", "yes"}:
-        logger.info("Skipping runtime dependency extras due to MARIN_SKIP_RUNTIME_EXTRAS.")
-        return []
-
-    extras: list[str] = []
-    if isinstance(device, TpuConfig):
-        extras.append("tpu")
-    elif isinstance(device, GpuConfig):
-        extras.append("gpu")
-    eval_harness = getattr(train_config, "eval_harness", None)
-    if eval_harness is not None:
-        extras.append("eval")
-    return extras
-
-
 def _cli_helpers_module():
     return importlib.import_module("levanter.infra.cli_helpers")
 
@@ -133,6 +109,7 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
         checkpointer=replace(
             pod_config.train_config.trainer.checkpointer,
             base_path=os.path.join(pod_config.output_path, DEFAULT_CHECKPOINTS_PATH),
+            temporary_base_path=marin_temp_bucket(ttl_days=14, prefix="checkpoints-temp"),
         ),
     )
 
@@ -142,31 +119,6 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
         hf_save_path=os.path.join(pod_config.output_path, DEFAULT_HF_CHECKPOINTS_PATH),
     )
     return replace(pod_config, train_config=config)
-
-
-def _suppress_ray_config(config: TrainConfigT) -> TrainConfigT:
-    """
-    Disable Levanter's internal Ray bootstrap knobs.
-
-    Marin manages execution via Fray, so Levanter should never try to create or
-    scale its own Ray cluster from inside a submitted job.
-    """
-    if config.trainer.ray.auto_start_cluster:
-        logger.info("Disabling Levanter ray.auto_start_cluster for Marin-managed execution.")
-        return replace(
-            config,
-            trainer=replace(
-                config.trainer,
-                ray=replace(config.trainer.ray, auto_start_cluster=False, start_workers=False),
-            ),
-        )
-    elif config.trainer.ray.start_workers:
-        logger.info("Disabling Levanter ray.start_workers for Marin-managed execution.")
-        return replace(
-            config,
-            trainer=replace(config.trainer, ray=replace(config.trainer.ray, start_workers=False)),
-        )
-    return config
 
 
 def _maybe_override_auto_build_caches(config: TrainConfigT, auto_build: bool) -> TrainConfigT:
@@ -281,7 +233,6 @@ def _prepare_training_run(
     logger.info(f"Using run ID: {config.train_config.trainer.id}")
 
     train_config = config.train_config
-    train_config = _suppress_ray_config(train_config)
     train_config = _maybe_override_auto_build_caches(train_config, config.auto_build_caches)
 
     # disable accelerator requirement when running without GPU/TPU resources
@@ -292,7 +243,11 @@ def _prepare_training_run(
     if not isinstance(config.resources.device, CpuConfig):
         _doublecheck_paths(config)
 
-    extras = _runtime_extras_for_training(train_config, config.resources.device)
+    extras: list[str] = []
+    if isinstance(config.resources.device, TpuConfig):
+        extras.append("tpu")
+    elif isinstance(config.resources.device, GpuConfig):
+        extras.append("gpu")
 
     return config, train_config, env, extras
 
@@ -322,10 +277,10 @@ def _submit_training_job(
 
 
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
-    """Run the Levanter LM training main function through Fray.
+    """Run the Levanter LM training main function on a Ray cluster.
 
-    This function is designed to run inside Marin/Fray-managed jobs or from a
-    context that can submit Fray jobs.
+    This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
+    It should also be run with a Ray cluster already running.
 
     - WANDB_API_KEY: The API key for Weights and Biases.
     - RUN_ID: (Optional) The run ID for this training run. Will default to a random UID if not set.
@@ -334,7 +289,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     This function makes a number of changes to the config and ensures a few things are set:
     - The run ID is set, or sets a default if not.
     - WANDB_API_KEY is set.
-    - It disables Levanter's internal Ray bootstrap options.
+    - It disables the auto-ray-start and auto-worker-start options since we're already in a Ray cluster.
     - It checks that configured GCS paths are in the same region as the VM (except train/validation source URLs).
     """
     config, train_config, env, extras = _prepare_training_run(config)
@@ -348,8 +303,9 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         train_config.trainer.train_batch_size,
         config.resources.device,
     )
+
     _submit_training_job(
-        job_name=f"train_lm_{config.train_config.trainer.id}",
+        job_name="train_lm",
         main_fn=importlib.import_module("levanter.main.train_lm").main,
         train_config=train_config,
         resources=config.resources,
@@ -359,15 +315,15 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
 
 def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
-    """Run the Levanter DPO training main function through Fray.
+    """Run the Levanter DPO training main function on a Ray cluster.
 
-    This function is designed to run inside Marin/Fray-managed jobs or from a
-    context that can submit Fray jobs.
+    This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
+    It should also be run with a Ray cluster already running.
     """
     config, train_config, env, extras = _prepare_training_run(config)
 
     _submit_training_job(
-        job_name=f"train_dpo_{config.train_config.trainer.id}",
+        job_name="train_dpo",
         main_fn=importlib.import_module("levanter.main.train_dpo").main,
         train_config=train_config,
         resources=config.resources,

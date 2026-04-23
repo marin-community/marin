@@ -92,36 +92,18 @@ def _add_coscheduling_group_4vm(config: config_pb2.IrisClusterConfig) -> None:
     sg.slice_template.local.SetInParent()
 
 
-def _add_multi_region_groups(config: config_pb2.IrisClusterConfig) -> None:
-    """Two CPU scale groups in different regions for constraint routing tests."""
-    for name, region in [("cpu-region-a", "us-central1"), ("cpu-region-b", "europe-west4")]:
-        sg = config.scale_groups[name]
-        sg.name = name
-        sg.num_vms = 1
-        sg.buffer_slices = 1
-        sg.max_slices = 2
-        sg.resources.cpu_millicores = 8000
-        sg.resources.memory_bytes = 16 * 1024**3
-        sg.resources.disk_bytes = 50 * 1024**3
-        sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
-        sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
-        sg.slice_template.local.SetInParent()
-        sg.worker.attributes[WellKnownAttribute.REGION] = region
-
-
 # Total local-mode workers:
-# 2 (local-cpu) + 2 (cosched_2) + 4 (cosched_4) + 2 (region-a + region-b) = 10
-SMOKE_WORKER_COUNT = 10
+# 2 (local-cpu) + 2 (cosched_2) + 4 (cosched_4) = 8
+SMOKE_WORKER_COUNT = 8
 
 
 def _make_smoke_config() -> config_pb2.IrisClusterConfig:
-    """Build a local config with CPU, TPU (coscheduling), and multi-region workers."""
+    """Build a local config with CPU and TPU (coscheduling) workers."""
     config = load_config(DEFAULT_CONFIG)
     config.scale_groups.clear()
     _add_cpu_group(config, num_workers=2)
     _add_coscheduling_group(config)
     _add_coscheduling_group_4vm(config)
-    _add_multi_region_groups(config)
     return make_local_config(config)
 
 
@@ -360,10 +342,17 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
 
 def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
     """Constraint chips rendered on job detail."""
+    # Use soft constraints to avoid submit-time routing feasibility rejection;
+    # the test only checks that constraint chips render on the dashboard.
     constraints = [
-        Constraint.create(key="region", op=ConstraintOp.EQ, value="local"),
+        Constraint.create(key="region", op=ConstraintOp.EQ, value="local", mode=job_pb2.CONSTRAINT_MODE_PREFERRED),
         Constraint.create(key="env-tag", op=ConstraintOp.EXISTS),
-        Constraint.create(key="device-variant", op=ConstraintOp.IN, values=["v5p-8", "v6e-4"]),
+        Constraint.create(
+            key="device-variant",
+            op=ConstraintOp.IN,
+            values=["v5p-8", "v6e-4"],
+            mode=job_pb2.CONSTRAINT_MODE_PREFERRED,
+        ),
     ]
     with smoke_cluster.launched_job(TestJobs.quick, "smoke-constraints", constraints=constraints) as job:
         time.sleep(3)
@@ -446,10 +435,13 @@ def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Autoscaler tab shows scale groups."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/autoscaler")
     wait_for_dashboard_ready(smoke_page)
+    # Wait for actual scale group content, not just the tab heading ("Autoscaler")
+    # which appears before the API response loads.
     smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('Autoscaler') || "
-        "document.body.textContent.includes('Scale Group') || "
-        "document.body.textContent.includes('scale group')",
+        "() => !document.body.textContent.includes('Loading') && "
+        "(document.body.textContent.includes('Scale Group') || "
+        "document.body.textContent.includes('scale group') || "
+        "document.body.textContent.includes('local-cpu'))",
         timeout=10000,
     )
     smoke_screenshot("autoscaler-tab", "Autoscaler tab showing scale group configuration")
@@ -735,75 +727,12 @@ def test_exec_in_container(smoke_cluster):
     smoke_cluster.kill(job)
 
 
-@pytest.mark.timeout(180)
-def test_worker_restart_preserves_task(smoke_cluster):
-    """Restarting a worker preserves its running task via container adoption.
-
-    Submits a task that logs every second, restarts the worker running it,
-    then verifies the task is still RUNNING and eventually succeeds. Fetches
-    logs to confirm continuity across the restart.
-    """
-    # Use shorter duration in local mode (restart is a no-op there)
-    is_local = not smoke_cluster.is_cloud
-    task_duration = 30 if is_local else 90
-
-    job = smoke_cluster.submit(TestJobs.log_periodic, "smoke-restart", task_duration, 1.0)
-    smoke_cluster.wait_for_state(job, job_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
-
-    # Wait for task itself to be RUNNING (not just BUILDING)
-    deadline = time.monotonic() + smoke_cluster.job_timeout
-    while time.monotonic() < deadline:
-        task = smoke_cluster.task_status(job, task_index=0)
-        if task.state == job_pb2.TASK_STATE_RUNNING:
-            break
-        time.sleep(0.5)
-    assert task.state == job_pb2.TASK_STATE_RUNNING, f"Task stuck in {job_pb2.TaskState.Name(task.state)}"
-
-    # Let a few ticks log before we restart
-    time.sleep(3)
-
-    # Find the worker running this task
-    worker_id = task.worker_id
-    assert worker_id, "Task has no worker_id"
-
-    # Restart the worker via the controller RPC
-    restart_resp = smoke_cluster.controller_client.restart_worker(
-        controller_pb2.Controller.RestartWorkerRequest(worker_id=worker_id),
-        timeout_ms=60_000,
-    )
-    assert restart_resp.accepted, f"Restart rejected: {restart_resp.error}"
-
-    # In cloud mode, wait for the worker to come back as healthy after real restart.
-    # In local mode, restart_worker is a no-op so the worker stays healthy.
-    if not is_local:
-        worker_back = False
-        deadline = time.monotonic() + 120
-        while time.monotonic() < deadline:
-            time.sleep(5)
-            workers_resp = smoke_cluster.controller_client.list_workers(controller_pb2.Controller.ListWorkersRequest())
-            for w in workers_resp.workers:
-                if w.worker_id == worker_id and w.healthy:
-                    worker_back = True
-                    break
-            if worker_back:
-                break
-        assert worker_back, f"Worker {worker_id} did not re-register within 120s"
-
-    # Wait for the job to complete — the task should either be adopted by
-    # the new worker (RUNNING → SUCCEEDED) or retried by the controller
-    # (WORKER_FAILED → re-scheduled → SUCCEEDED). Either path validates
-    # that the restart didn't permanently break the task.
-    final = smoke_cluster.wait(job, timeout=120)
-    assert (
-        final.state == job_pb2.JOB_STATE_SUCCEEDED
-    ), f"Job should succeed after restart, got {job_pb2.JobState.Name(final.state)}"
-
-
 # ============================================================================
 # Checkpoint / restore
 # ============================================================================
 
 
+@pytest.mark.timeout(120)
 def test_checkpoint_restore():
     """Controller restart resumes from checkpoint: completed jobs visible, cluster functional.
 

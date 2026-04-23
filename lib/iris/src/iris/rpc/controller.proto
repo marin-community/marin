@@ -99,6 +99,21 @@ message Controller {
     // need a custom runtime (e.g. an image with runsc/skopeo for sandboxing
     // untrusted child workloads).
     string task_image = 34;
+
+    // Full argv of the CLI invocation that submitted this job (e.g. the
+    // user's `iris ... job run -- python train.py ...`). Captured from
+    // sys.argv at the client with secret-looking env var values redacted.
+    // Empty when submitted programmatically. Bookkeeping only; not
+    // interpreted by the controller.
+    repeated string submit_argv = 35;
+
+    // ISO date (YYYY-MM-DD) of the client's marin-iris build. For wheels this
+    // is stamped at build time by scripts/python_libs_package.py; for editable
+    // installs it's derived from `git log` on the iris source tree. Root
+    // submissions older than FRESHNESS_WINDOW (today - 14d) are rejected.
+    // Nested submissions (is_root == false) are exempt. Empty string is
+    // interpreted as FEATURE_INTRODUCTION_DATE — see service.py.
+    string client_revision_date = 36;
   }
 
   message LaunchJobResponse {
@@ -172,22 +187,9 @@ message Controller {
   }
 
   message ListJobsRequest {
-    // Preferred typed query shape. When set, legacy fields are ignored.
+    reserved 1, 2, 3, 4, 5, 6, 7;
+    reserved offset, limit, sort_field, sort_direction, name_filter, state_filter, parent_job_id;
     JobQuery query = 9;
-
-    // DEPRECATED: legacy flat query fields kept for rolling compatibility
-    // with older clients (e.g. iris.cluster.client.remote_client, CLI).
-    // The server normalizes these into `query` once at ingestion; do not
-    // read them elsewhere. Remove together with the normalization shim
-    // tracked in https://github.com/marin-community/marin/issues/4573
-    // (~2 weeks after the JobQuery rollout).
-    int32 offset = 1;
-    int32 limit = 2;
-    JobSortField sort_field = 3;
-    SortDirection sort_direction = 4;
-    string name_filter = 5;
-    string state_filter = 6;
-    string parent_job_id = 7;
   }
 
   message ListJobsResponse {
@@ -247,7 +249,7 @@ message Controller {
     repeated string running_job_ids = 5;
     string address = 6;                    // Worker RPC address (host:port)
     iris.job.WorkerMetadata metadata = 7;           // Full worker metadata
-    string status_message = 8;             // Error or status message (e.g., "Heartbeat timeout", "Worker crashed")
+    string status_message = 8;             // Error or status message (e.g., "Ping timeout", "Worker crashed")
   }
 
   message ListWorkersRequest {}
@@ -315,22 +317,6 @@ message Controller {
 
   message GetAutoscalerStatusResponse {
     iris.vm.AutoscalerStatus status = 1;
-  }
-
-  // --- Transactions / Actions Log ---
-  message TransactionAction {
-    iris.time.Timestamp timestamp = 1;
-    string action = 2;
-    string entity_id = 3;
-    string details = 4;
-  }
-
-  message GetTransactionsRequest {
-    int32 limit = 1;  // 0 = default (50)
-  }
-
-  message GetTransactionsResponse {
-    repeated TransactionAction actions = 1;
   }
 
   // --- Checkpoint ---
@@ -411,10 +397,10 @@ message Controller {
     // Recent tasks that ran or are running on this worker (newest first)
     repeated iris.job.TaskStatus recent_tasks = 6;
 
-    // Current host-level resource snapshot (from latest heartbeat)
+    // Current host-level resource snapshot (from latest Ping)
     iris.job.WorkerResourceSnapshot current_resources = 7;
 
-    // Recent resource history (ring buffer of snapshots from heartbeats)
+    // Recent resource history (ring buffer of Ping snapshots)
     repeated iris.job.WorkerResourceSnapshot resource_history = 8;
   }
 
@@ -516,6 +502,14 @@ message Controller {
     repeated GetUserBudgetResponse users = 1;
   }
 
+  // --- Heartbeat Refactor: Worker pushes task state transitions ---
+  message UpdateTaskStatusRequest {
+    string worker_id = 1;
+    repeated iris.job.WorkerTaskStatus updates = 2;
+  }
+  message UpdateTaskStatusResponse {
+  }
+
   // --- Scheduler State ---
   message GetSchedulerStateRequest {}
 
@@ -592,9 +586,6 @@ service ControllerService {
   // Autoscaler
   rpc GetAutoscalerStatus(Controller.GetAutoscalerStatusRequest) returns (Controller.GetAutoscalerStatusResponse);
 
-  // Transactions / Actions Log
-  rpc GetTransactions(Controller.GetTransactionsRequest) returns (Controller.GetTransactionsResponse);
-
   rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
 
   // DEPRECATED: use LogService.FetchLogs with regex patterns instead.
@@ -643,4 +634,7 @@ service ControllerService {
 
   // Scheduler state (dashboard)
   rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
+
+  // Worker-to-controller task status push
+  rpc UpdateTaskStatus(Controller.UpdateTaskStatusRequest) returns (Controller.UpdateTaskStatusResponse);
 }

@@ -34,7 +34,7 @@ def test_iterate_tokenized_requests_with_chat_template():
     from lm_eval.api.instance import Instance
 
     # Load a tokenizer with chat template - Llama 3 has one
-    hf_tokenizer = AutoTokenizer.from_pretrained("stanford-crfm/marin-tokenizer")
+    hf_tokenizer = AutoTokenizer.from_pretrained("marin-community/marin-tokenizer")
     if hf_tokenizer.pad_token is None:
         hf_tokenizer.pad_token = hf_tokenizer.eos_token
 
@@ -118,7 +118,7 @@ def test_iterate_tokenized_requests_with_chat_template():
 def test_iterate_tokenized_requests():
     from lm_eval.api.instance import Instance
 
-    hf_tokenizer = AutoTokenizer.from_pretrained("stanford-crfm/marin-tokenizer")
+    hf_tokenizer = AutoTokenizer.from_pretrained("marin-community/marin-tokenizer")
     if hf_tokenizer.pad_token is None:
         hf_tokenizer.pad_token = hf_tokenizer.eos_token
 

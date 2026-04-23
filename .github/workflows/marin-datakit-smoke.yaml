@@ -22,15 +22,15 @@ jobs:
       FERRY_STATUS_PATH: gs://marin-tmp-us-central1/ttl=1d/ci/datakit-smoke-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
-      IRIS_CONFIG: lib/iris/examples/marin-dev.yaml
+      IRIS_CONFIG: lib/iris/examples/marin.yaml
       IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -52,15 +52,16 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Set up OS Login SSH key
+      - name: Install SSH key
+        env:
+          SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
+          SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
         run: |
           mkdir -p ~/.ssh
-          ssh-keygen -t rsa -b 4096 -f ~/.ssh/google_compute_engine -N "" -q -C "gha-${{ github.run_id }}-${{ github.run_attempt }}"
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
+          printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
           chmod 600 ~/.ssh/google_compute_engine
-          gcloud compute os-login ssh-keys add \
-            --key-file ~/.ssh/google_compute_engine.pub \
-            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
-            --ttl=6h
+          chmod 644 ~/.ssh/google_compute_engine.pub
 
       - name: Submit datakit smoke ferry
         id: submit
@@ -69,6 +70,7 @@ jobs:
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
+            --priority production \
             -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
             -e FERRY_STATUS_PATH "$FERRY_STATUS_PATH" \
             -e WANDB_ENTITY "$WANDB_ENTITY" \
@@ -135,7 +137,7 @@ jobs:
         run: .venv/bin/python scripts/datakit/validate_ferry_outputs.py
 
       - name: Capture failure diagnostics
-        if: failure()
+        if: failure() || cancelled()
         run: |
           echo "=== Controller logs ==="
           .venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
@@ -147,7 +149,7 @@ jobs:
       # The canary-triage skill handles both lanes; CANARY_LANE selects datakit-smoke vs tpu.
       - name: Claude triage
         id: claude_triage
-        if: failure() && github.event_name == 'schedule'
+        if: (failure() || cancelled()) && github.event_name == 'schedule'
         uses: anthropics/claude-code-action@v1
         timeout-minutes: 30
         with:
@@ -168,8 +170,75 @@ jobs:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-      - name: Notify Slack on failure
-        if: failure() && github.event_name == 'schedule'
+      # Upload Claude's Slack message (if it was written) so the separate
+      # notify-slack job can pick it up. We run Slack notify in a separate
+      # job because a job-level timeout can force-kill this runner before
+      # in-job steps after Claude triage ever execute — see
+      # https://github.com/marin-community/marin/actions/runs/24498461666.
+      - name: Upload Slack message
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slack-message
+          path: slack_message.md
+          retention-days: 1
+          if-no-files-found: ignore
+
+  # Parallel lane: verify every DatakitSource.staged_path resolves to a
+  # non-empty prefix under gs://marin-us-central1. Cheap (metadata only) and
+  # independent of the ferry, so runs alongside datakit-smoke.
+  datakit-sources-staged:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: datakit-sources-staged
+      cancel-in-progress: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=cpu --no-default-groups
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Verify datakit source staging paths
+        shell: bash -l {0}
+        run: .venv/bin/python scripts/datakit/validate_source_staging.py
+
+  # Separate job so Slack always fires, even if the main job is force-killed
+  # after its grace window. `needs.*.result` reflects the upstream job
+  # outcomes; failure()/cancelled() context functions only see this job's
+  # steps.
+  notify-slack:
+    needs: [datakit-smoke, datakit-sources-staged]
+    if: |
+      always() && github.event_name == 'schedule' && (
+        needs.datakit-smoke.result == 'failure' || needs.datakit-smoke.result == 'cancelled'
+        || needs.datakit-sources-staged.result == 'failure' || needs.datakit-sources-staged.result == 'cancelled'
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Slack message
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: slack-message
+
+      - name: Notify Slack
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           FALLBACK_TEXT: ":red_circle: *Datakit Smoke failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -181,10 +250,3 @@ jobs:
           fi
           PAYLOAD=$(python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))" <<< "$TEXT")
           curl -sf -X POST -H 'Content-Type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL"
-
-      - name: Remove OS Login SSH key
-        if: always()
-        run: |
-          gcloud compute os-login ssh-keys remove \
-            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
-            --key-file ~/.ssh/google_compute_engine.pub || true

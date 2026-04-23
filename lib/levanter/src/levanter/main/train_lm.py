@@ -19,15 +19,9 @@ import levanter.callbacks
 import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
-from levanter.data import AsyncDataset
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
-from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import (
-    HFCompatConfig,
-    build_generation_config,
-    converter_from_hf_compat_config,
-    save_hf_checkpoint_callback,
-)
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
+from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config, save_hf_checkpoint_callback
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
@@ -38,24 +32,6 @@ from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 
 logger = logging.getLogger(__name__)
-
-
-def _find_nested_mixture_dataset(dataset: AsyncDataset | object) -> MixtureDataset | None:
-    """Return the first MixtureDataset reachable through common dataset wrappers."""
-    current = dataset
-    seen: set[int] = set()
-    while current is not None:
-        if isinstance(current, MixtureDataset):
-            return current
-        marker = id(current)
-        if marker in seen:
-            return None
-        seen.add(marker)
-        next_dataset = getattr(current, "dataset", None)
-        if next_dataset is None:
-            next_dataset = getattr(current, "_dataset", None)
-        current = next_dataset
-    return None
 
 
 @dataclass
@@ -109,13 +85,14 @@ def main(config: TrainLmConfig):
             raise ValueError("Cannot specify both initialize_from_hf and initialize_from")
 
         assert isinstance(config.model, HFCompatConfig)
-        converter = converter_from_hf_compat_config(
-            config.model,
-            tokenizer=tokenizer,
-            reference_checkpoint=config.initialize_from_hf if isinstance(config.initialize_from_hf, str) else None,
-        )
+        converter = config.model.hf_checkpoint_converter()
         if hasattr(tokenizer, "vocab") and tokenizer.vocab != converter.tokenizer.vocab:
             logger.warning("The tokenizers appear to be different. You may want to check this.")
+
+        if isinstance(config.initialize_from_hf, str):
+            converter = converter.replaced(reference_checkpoint=config.initialize_from_hf, tokenizer=tokenizer)
+        else:
+            converter = converter.replaced(tokenizer=tokenizer)
 
         if config.pad_tokenizer_to_match_model:
             converter = converter.with_tokenizer_padded_to_match_model()
@@ -125,7 +102,8 @@ def main(config: TrainLmConfig):
             # NB: gross mutability
             config.model = converter.config_from_hf_config(converter.default_hf_config)
     elif isinstance(config.model, HFCompatConfig):
-        converter = converter_from_hf_compat_config(config.model, tokenizer=tokenizer)
+        converter = config.model.hf_checkpoint_converter()
+        converter = converter.replaced(tokenizer=tokenizer)
         if config.pad_tokenizer_to_match_model:
             converter = converter.with_tokenizer_padded_to_match_model()
     else:
@@ -196,7 +174,8 @@ def main(config: TrainLmConfig):
         state = trainer.initial_state(training_key, model_init=lambda: config.model.build(Vocab, key=model_key))
 
         if int(state.step) == 0 and config.initialize_from_checkpoint_path is not None:
-            state = load_checkpoint(state, config.initialize_from_checkpoint_path)
+            checkpoint_path = latest_checkpoint_path(config.initialize_from_checkpoint_path)
+            state = load_checkpoint(state, checkpoint_path)
             # reset to step 0, we're just initializing weights here
             state = dataclasses.replace(state, step=jnp.array(0))
 
@@ -255,16 +234,15 @@ def main(config: TrainLmConfig):
             callbacks.log_performance_stats(Pos.size, trainer.config.batch_schedule, flops_per_example), every=1
         )
 
-        mixture_dataset = _find_nested_mixture_dataset(train_dataset)
-        if mixture_dataset is not None:
+        if isinstance(train_dataset, MixtureDataset):
             last_stage = -1
 
             def log_mixture_weights(step_info):
                 nonlocal last_stage
                 seq_index = trainer.config.batch_schedule.global_data_offset_by_step(step_info.step)
-                block_id = seq_index // mixture_dataset.block_size
-                stage = mixture_dataset._get_stage_for_block(block_id)
-                weights = mixture_dataset.weight_stages[stage][1]
+                block_id = seq_index // train_dataset.block_size
+                stage = train_dataset._get_stage_for_block(block_id)
+                weights = train_dataset.weight_stages[stage][1]
                 if stage != last_stage:
                     metrics = {f"mixture/weight/{name}": weight for name, weight in weights.items()}
                     metrics["mixture/stage"] = stage
@@ -301,16 +279,17 @@ def main(config: TrainLmConfig):
                 every=config.hf_save_steps,
             )
 
-        if config.eval_harness is not None and not os.environ.get("LEVANTER_SKIP_EVAL_HARNESS"):
-            eval_harness = config.eval_harness
-            trainer.add_hook(
-                levanter.eval_harness.lm_eval_harness(
-                    eval_harness, tokenizer, EvalBatch, compute_axis_mapping, trainer.mp
-                ),
-                every=config.eval_harness_steps,
-            )
-        elif os.environ.get("LEVANTER_SKIP_EVAL_HARNESS"):
-            logger.info("Skipping lm-eval harness (LEVANTER_SKIP_EVAL_HARNESS is set)")
+        if config.eval_harness is not None:
+            if os.environ.get("LEVANTER_SKIP_EVAL_HARNESS"):
+                logger.info("Skipping lm-eval harness (LEVANTER_SKIP_EVAL_HARNESS is set)")
+            else:
+                eval_harness = config.eval_harness
+                trainer.add_hook(
+                    levanter.eval_harness.lm_eval_harness(
+                        eval_harness, tokenizer, EvalBatch, compute_axis_mapping, trainer.mp
+                    ),
+                    every=config.eval_harness_steps,
+                )
 
         @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
@@ -342,11 +321,7 @@ def main(config: TrainLmConfig):
             train_loader = train_loader.iter_from_step(0)
 
         ## OK, actually run training!
-        last_info = trainer.train(state, train_loader)
-
-        if trainer.config.checkpointer is not None:
-            trainer.run_hooks(last_info, force=True)
-            trainer._checkpointer.wait_until_finished()
+        trainer.train(state, train_loader)
 
     # This isn't necessary except when Levanter is run in a subprocess (as happens w/ ray)
     trainer.tracker.finish()

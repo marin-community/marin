@@ -73,22 +73,6 @@ def is_inside_jit():
     return isinstance(jnp.zeros(()), jax.core.Tracer)
 
 
-def shape_dtype_struct_tree(tree: T) -> T:
-    """Convert array-like leaves in a pytree to ShapeDtypeStruct leaves."""
-
-    def _to_shape_dtype_struct(x):
-        if isinstance(x, jax.ShapeDtypeStruct):
-            return x
-        if is_jax_array_like(x):
-            sharding = getattr(x, "sharding", None)
-            if sharding is not None:
-                return jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=sharding)
-            return jax.ShapeDtypeStruct(x.shape, x.dtype)
-        return x
-
-    return jax.tree.map(_to_shape_dtype_struct, tree)
-
-
 def _flatten_axis_resource(axis_resource: Any) -> tuple[str, ...]:
     if axis_resource is None:
         return ()
@@ -333,24 +317,6 @@ def is_inexact_arrayish(x):
         return jnp.issubdtype(x.dtype, jnp.inexact)
     else:
         return False
-
-
-def tree_filter_like(template: X, tree: X) -> X:
-    """
-    Filters a tree to only include the leaves that are not None in the template.
-
-    This is useful for filtering out nontrainable parameters from a tree.
-    """
-
-    def match_like(templ_leaf, tree_leaf):
-        if templ_leaf is None:
-            return None
-        else:
-            if tree_leaf is None:
-                warnings.warn(f"Template has a non-None value where tree is None. Template value: {templ_leaf}")
-            return tree_leaf
-
-    return jax.tree_util.tree_map(match_like, template, tree, is_leaf=lambda x: x is None)
 
 
 def best_effort_sharding(shape, *, devices=None, mesh=None):

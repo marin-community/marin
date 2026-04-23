@@ -30,11 +30,10 @@ from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
-from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, converter_from_hf_compat_config
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data import DataLoader
 from levanter.data.text import DatasetComponent, LmDataConfig, LMMixtureDatasetConfig
-from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.models.loss import next_token_loss
@@ -138,17 +137,15 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
         if config.checkpoint_path is not None and not config.checkpoint_is_hf:
             with use_cpu_device():
                 model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-                model = load_checkpoint(model, config.checkpoint_path, subpath="model")
+                checkpoint_path = latest_checkpoint_path(config.checkpoint_path)
+                model = load_checkpoint(model, checkpoint_path, subpath="model")
             model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
         elif hf_checkpoint is not None:
             model_config = config.model
             if not hasattr(model_config, "hf_checkpoint_converter"):
                 raise ValueError("Model config does not have an HF checkpoint converter. Can't load HF checkpoint.")
-            converter: HFCheckpointConverter = converter_from_hf_compat_config(
-                model_config,
-                tokenizer=tokenizer,
-                reference_checkpoint=hf_checkpoint,
-            )
+            converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
+            converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
             model = converter.load_pretrained(model_config.model_type, ref=hf_checkpoint, dtype=mp.compute_dtype)
         else:
             raise AssertionError("Should not get here")
@@ -258,7 +255,6 @@ def default_save_logprobs(
                 data=data,
                 trainer=TrainerConfig(
                     tracker=NoopConfig(),
-                    ray=RayConfig(auto_start_cluster=False),
                     per_device_eval_parallelism=per_device_batch_size,
                     mp=jmp.get_policy("c=bf16"),
                 ),

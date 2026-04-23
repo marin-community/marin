@@ -138,7 +138,6 @@ def test_lm_eval_harness_levanter(current_date_time, model_config):
         evaluation_path=f"gs://marin-us-east5/evaluation/lm_eval/{model_config.name}-{current_date_time}",
         evals=[mmlu_config],
         max_eval_instances=5,
-        launch_with_ray=True,
         resource_config=ResourceConfig.with_cpu(cpu=1),
         engine_kwargs=model_config.engine_kwargs,
     )
@@ -155,31 +154,7 @@ def test_lm_eval_harness(current_date_time, model_config):
         evaluation_path=f"gs://marin-us-east5/evaluation/lm_eval/{model_config.name}-{current_date_time}",
         evals=[gsm8k_config],
         max_eval_instances=1,
-        launch_with_ray=True,
         resource_config=ResourceConfig.with_cpu(cpu=1),
         engine_kwargs=model_config.engine_kwargs,
-    )
-    evaluate(config=config)
-
-
-@pytest.mark.tpu_ci
-def test_alpaca_eval(current_date_time, model_config):
-    config = EvaluationConfig(
-        evaluator="alpaca",
-        model_name=model_config.name,
-        model_path=model_config.path,
-        evaluation_path=f"gs://marin-us-east5/evaluation/alpaca_eval/{model_config.name}-{current_date_time}",
-        max_eval_instances=1,
-        launch_with_ray=True,
-        resource_config=ResourceConfig.with_cpu(cpu=1),
-        engine_kwargs={
-            "temperature": 0.7,
-            "presence_penalty": 0.0,
-            "frequency_penalty": 0.0,
-            "repetition_penalty": 1.0,
-            "top_p": 1.0,
-            "top_k": -1,
-            **model_config.engine_kwargs,
-        },
     )
     evaluate(config=config)

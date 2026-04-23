@@ -654,6 +654,7 @@ JOB_CONFIG = Table(
         Column("existing_job_policy", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
         Column("priority_band", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
         Column("task_image", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("submit_argv_json", "TEXT", "NOT NULL DEFAULT '[]'", python_type=str, decoder=str, default="[]"),
         Column("reservation_json", "TEXT", "", python_type=str | None, decoder=_nullable(str), default=None),
         Column(
             "fail_if_exists",
@@ -766,6 +767,9 @@ TASKS = Table(
         # Migration 0020
         "CREATE INDEX IF NOT EXISTS idx_tasks_current_worker"
         " ON tasks(current_worker_id) WHERE current_worker_id IS NOT NULL",
+        # Migration 0034: covers _task_summaries_for_jobs GROUP BY + SUM.
+        "CREATE INDEX IF NOT EXISTS idx_tasks_job_state_counts"
+        " ON tasks(job_id, state, failure_count, preemption_count)",
     ),
 )
 
@@ -959,7 +963,13 @@ WORKER_TASK_HISTORY = Table(
             python_type=WorkerId,
             decoder=decode_worker_id,
         ),
-        Column("task_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column(
+            "task_id",
+            "TEXT",
+            "NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE",
+            python_type=str,
+            decoder=str,
+        ),
         Column(
             "assigned_at_ms",
             "INTEGER",
@@ -972,6 +982,9 @@ WORKER_TASK_HISTORY = Table(
     indexes=(
         "CREATE INDEX IF NOT EXISTS idx_worker_task_history_worker"
         " ON worker_task_history(worker_id, assigned_at_ms DESC)",
+        # Probed on task delete by the new FK cascade; without it each delete
+        # scans the full history table.
+        "CREATE INDEX IF NOT EXISTS idx_worker_task_history_task" " ON worker_task_history(task_id)",
     ),
 )
 
@@ -1099,62 +1112,6 @@ DISPATCH_QUEUE = Table(
     indexes=("CREATE INDEX IF NOT EXISTS idx_dispatch_worker ON dispatch_queue(worker_id, id)",),
 )
 
-TXN_LOG = Table(
-    "txn_log",
-    "tl",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column("kind", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("payload_json", "TEXT", "NOT NULL", python_name="payload", python_type=dict, decoder=_decode_json_dict),
-        Column(
-            "created_at_ms",
-            "INTEGER",
-            "NOT NULL",
-            python_name="created_at",
-            python_type=Timestamp,
-            decoder=decode_timestamp_ms,
-        ),
-    ),
-    triggers=(
-        # Migration 0004_worker_indexes rewrote the trigger from 0001
-        """CREATE TRIGGER IF NOT EXISTS trg_txn_log_retention
-AFTER INSERT ON txn_log
-WHEN (SELECT COUNT(*) FROM txn_log) > 1100
-BEGIN
-  DELETE FROM txn_log WHERE id <= (
-    SELECT id FROM txn_log ORDER BY id DESC LIMIT 1 OFFSET 1000
-  );
-END;""",
-    ),
-)
-
-TXN_ACTIONS = Table(
-    "txn_actions",
-    "ta2",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column(
-            "txn_id",
-            "INTEGER",
-            "NOT NULL REFERENCES txn_log(id) ON DELETE CASCADE",
-            python_type=int,
-            decoder=int,
-        ),
-        Column("action", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("entity_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("details_json", "TEXT", "NOT NULL", python_name="details", python_type=dict, decoder=_decode_json_dict),
-        Column(
-            "created_at_ms",
-            "INTEGER",
-            "NOT NULL",
-            python_name="timestamp",
-            python_type=Timestamp,
-            decoder=decode_timestamp_ms,
-        ),
-    ),
-    indexes=("CREATE INDEX IF NOT EXISTS idx_txn_actions_txn ON txn_actions(txn_id, id)",),
-)
-
 # Migration 0003: restructured scaling_groups
 SCALING_GROUPS = Table(
     "scaling_groups",
@@ -1202,20 +1159,6 @@ RESERVATION_CLAIMS = Table(
         Column("job_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
         Column("entry_idx", "INTEGER", "NOT NULL", python_type=int, decoder=int),
     ),
-)
-
-LOGS = Table(
-    "logs",
-    "l",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column("key", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("source", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("data", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("epoch_ms", "INTEGER", "NOT NULL", python_type=int, decoder=int),
-        Column("level", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
-    ),
-    indexes=("CREATE INDEX IF NOT EXISTS idx_logs_key ON logs(key, id)",),
 )
 
 # Migration 0005 + 0014 + 0023 (moved to profiles DB)
@@ -1371,12 +1314,9 @@ MAIN_TABLES: tuple[Table, ...] = (
     TASK_RESOURCE_HISTORY,
     ENDPOINTS,
     DISPATCH_QUEUE,
-    TXN_LOG,
-    TXN_ACTIONS,
     SCALING_GROUPS,
     SLICES,
     RESERVATION_CLAIMS,
-    LOGS,
     USER_BUDGETS,
 )
 
@@ -1492,6 +1432,7 @@ class JobDetailRow:
     existing_job_policy: int
     priority_band: int
     task_image: str
+    submit_argv_json: str
     reservation_json: str | None
     fail_if_exists: bool
 
@@ -1631,16 +1572,6 @@ class EndpointRow:
     task_id: JobName
     metadata: dict
     registered_at: Timestamp
-
-
-@dataclass(frozen=True, slots=True)
-class TransactionActionRow:
-    """Transaction action log entry."""
-
-    timestamp: Timestamp
-    action: str
-    entity_id: str
-    details: dict
 
 
 @dataclass(frozen=True, slots=True)
@@ -1845,6 +1776,7 @@ _job_detail_cols, _job_detail_aliases = _job_columns(
     "existing_job_policy",
     "priority_band",
     "task_image",
+    "submit_argv_json",
     "reservation_json",
     "fail_if_exists",
 )
@@ -1945,15 +1877,6 @@ ENDPOINT_PROJECTION = ENDPOINTS.projection(
     "metadata_json",
     "registered_at_ms",
     row_cls=EndpointRow,
-)
-
-# Transaction action row.
-TXN_ACTION_PROJECTION = TXN_ACTIONS.projection(
-    "created_at_ms",
-    "action",
-    "entity_id",
-    "details_json",
-    row_cls=TransactionActionRow,
 )
 
 # API key row.

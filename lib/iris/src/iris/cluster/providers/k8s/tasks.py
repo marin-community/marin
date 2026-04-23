@@ -525,7 +525,7 @@ def _build_pod_manifest(
 
 def _kubectl_log_line_to_log_entry(kll: KubectlLogLine, attempt_id: int) -> logging_pb2.LogEntry:
     level_name = parse_log_level(kll.data)
-    level = str_to_log_level(level_name) if level_name else 0
+    level = str_to_log_level(level_name)
     entry = logging_pb2.LogEntry(source=kll.stream, data=kll.data, attempt_id=attempt_id, level=level)
     entry.timestamp.CopyFrom(timestamp_to_proto(Timestamp.from_seconds(kll.timestamp.timestamp())))
     return entry
@@ -1044,10 +1044,9 @@ class K8sTaskProvider:
     Implements the "direct provider" interface used by the controller when no
     separate worker daemon is involved. The controller calls sync() with a
     DirectProviderBatch and receives back a DirectProviderSyncResult — not the
-    standard TaskProvider/DispatchBatch/HeartbeatApplyRequest protocol used by
-    worker-based providers (e.g. GCP). This is intentional: K8s pods are
-    launched and monitored directly via kubectl rather than through a worker
-    gRPC daemon.
+    per-worker RPC-based TaskProvider protocol used by GCP. This is intentional:
+    K8s pods are launched and monitored directly via kubectl rather than
+    through a worker gRPC daemon.
 
     Capacity is derived from node allocatable resources minus running pod
     resource requests, queried via kubectl each sync cycle.

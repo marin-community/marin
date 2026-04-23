@@ -77,10 +77,7 @@ dependencies = [
  "arrow-array",
  "arrow-buffer",
  "arrow-cast",
- "arrow-csv",
  "arrow-data",
- "arrow-ipc",
- "arrow-json",
  "arrow-ord",
  "arrow-pyarrow",
  "arrow-row",
@@ -155,21 +152,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arrow-csv"
-version = "57.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2275877a0e5e7e7c76954669366c2aa1a829e340ab1f612e647507860906fb6b"
-dependencies = [
- "arrow-array",
- "arrow-cast",
- "arrow-schema",
- "chrono",
- "csv",
- "csv-core",
- "regex",
-]
-
-[[package]]
 name = "arrow-data"
 version = "57.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -194,30 +176,6 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "flatbuffers",
-]
-
-[[package]]
-name = "arrow-json"
-version = "57.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "371ffd66fa77f71d7628c63f209c9ca5341081051aa32f9c8020feb0def787c0"
-dependencies = [
- "arrow-array",
- "arrow-buffer",
- "arrow-cast",
- "arrow-data",
- "arrow-schema",
- "chrono",
- "half",
- "indexmap",
- "itoa",
- "lexical-core",
- "memchr",
- "num-traits",
- "ryu",
- "serde_core",
- "serde_json",
- "simdutf8",
 ]
 
 [[package]]
@@ -492,27 +450,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "csv"
-version = "1.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52cd9d68cf7efc6ddfaaee42e7288d3a99d613d4b50f76ce9827ae0c6e14f938"
-dependencies = [
- "csv-core",
- "itoa",
- "ryu",
- "serde_core",
-]
-
-[[package]]
-name = "csv-core"
-version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "704a3c26996a80471189265814dbc2c257598b96b8a7feae2d31ace646bb9782"
-dependencies = [
- "memchr",
-]
-
-[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -538,12 +475,6 @@ dependencies = [
  "regex",
  "xxhash-rust",
 ]
-
-[[package]]
-name = "equivalent"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "find-msvc-tools"
@@ -660,16 +591,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "indexmap"
-version = "2.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7714e70437a7dc3ac8eb7e6f8df75fd8eb422675fc7678aff7364301092b1017"
-dependencies = [
- "equivalent",
- "hashbrown",
-]
-
-[[package]]
 name = "indoc"
 version = "2.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -683,12 +604,6 @@ name = "integer-encoding"
 version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8bb03732005da905c88227371639bf1ad885cc712789c011c31c5fb3ab3ccf02"
-
-[[package]]
-name = "itoa"
-version = "1.0.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
 
 [[package]]
 name = "jobserver"
@@ -796,9 +711,9 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "lz4_flex"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab6473172471198271ff72e9379150e9dfd70d8e533e0752a27e515b48dd375e"
+checksum = "98c23545df7ecf1b16c303910a69b079e8e251d60f7dd2cc9b4177f2afaf1746"
 dependencies = [
  "twox-hash",
 ]
@@ -908,7 +823,6 @@ dependencies = [
  "num-traits",
  "paste",
  "seq-macro",
- "simdutf8",
  "snap",
  "thrift",
  "twox-hash",
@@ -1129,48 +1043,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bc711410fbe7399f390ca1c3b60ad0f53f80e95c5eb935e52268a0e2cd49acc"
 
 [[package]]
-name = "serde"
-version = "1.0.228"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
-dependencies = [
- "serde_core",
-]
-
-[[package]]
-name = "serde_core"
-version = "1.0.228"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41d385c7d4ca58e59fc732af25c3983b67ac852c1a25000afe1175de458b67ad"
-dependencies = [
- "serde_derive",
-]
-
-[[package]]
-name = "serde_derive"
-version = "1.0.228"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "serde_json"
-version = "1.0.149"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
-dependencies = [
- "itoa",
- "memchr",
- "serde",
- "serde_core",
- "zmij",
-]
-
-[[package]]
 name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1181,12 +1053,6 @@ name = "simd-adler32"
 version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e320a6c5ad31d271ad523dcf3ad13e2767ad8b1cb8f047f75a8aeaf8da139da2"
-
-[[package]]
-name = "simdutf8"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "snap"
@@ -1423,12 +1289,6 @@ name = "zlib-rs"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40990edd51aae2c2b6907af74ffb635029d5788228222c4bb811e9351c0caad3"
-
-[[package]]
-name = "zmij"
-version = "1.0.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fc5a66a20078bf1251bde995aa2fdcc4b800c70b5d92dd2c62abc5c60f679f8"
 
 [[package]]
 name = "zstd"

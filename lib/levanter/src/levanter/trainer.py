@@ -59,7 +59,7 @@ from levanter.checkpoint import CheckpointerConfig, is_checkpoint_path, load_che
 from levanter.config import JsonAtom
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.loader import _round_to_nearest_multiple
-from levanter.distributed import DistributedConfig, RayConfig
+from levanter.distributed import DistributedConfig
 from levanter.grad_accum import microbatched
 from levanter.metrics import Metric, auto_metric_from_name, unwrap_metrics
 from levanter.optim.model_averaging import ModelAveragingConfig
@@ -419,20 +419,21 @@ class Trainer:
         assert model_init is not None
 
         # first try to load a full trainer state checkpoint
-        checkpoint_path = self.checkpoint_path
+        checkpoint_search_paths = self.checkpoint_search_paths
 
         load_checkpoint = self.config.load_checkpoint
         # we don't save the full trainer state, so we need to filter out the non-trainable parameters
-        if load_checkpoint is True and not fsspec_utils.exists(checkpoint_path):
-            raise FileNotFoundError(f"Checkpoint {checkpoint_path} does not exist")
+        if load_checkpoint is True and not any(fsspec_utils.exists(path) for path in checkpoint_search_paths):
+            raise FileNotFoundError(f"Checkpoint search paths do not exist: {checkpoint_search_paths}")
         elif load_checkpoint is None:
-            load_checkpoint = levanter.checkpoint.is_checkpoint_path(checkpoint_path)
+            load_checkpoint = any(levanter.checkpoint.is_checkpoint_path(path) for path in checkpoint_search_paths)
 
         if load_checkpoint is False and self.config.initialize_from is not None:
             # we're not going to load a checkpoint from this run, so instead we can initialize from a different run
             logger.info(f"Initializing from {self.config.initialize_from}")
             load_checkpoint = True
             checkpoint_path = self.config.initialize_from
+            checkpoint_search_paths = [checkpoint_path]
             if not is_checkpoint_path(checkpoint_path):
                 raise ValueError(f"initialize_from must be a checkpoint path, got {checkpoint_path}")
 
@@ -455,7 +456,7 @@ class Trainer:
 
         state = load_checkpoint_or_initialize(
             init_state_and_model,
-            checkpoint_path,
+            checkpoint_search_paths,
             axis_mapping=self.parameter_axis_mapping,
             mesh=self.device_mesh,
             is_checkpointed=saveable_train_state,
@@ -466,11 +467,12 @@ class Trainer:
         return state
 
     @property
+    def checkpoint_search_paths(self) -> list[str]:
+        return self.config.checkpoint_search_paths(self.run_id)
+
+    @property
     def checkpoint_path(self) -> str:
-        checkpoint_path = self.config.load_checkpoint_path
-        if checkpoint_path is None:
-            checkpoint_path = self.config.checkpointer.expanded_path(self.run_id)
-        return checkpoint_path
+        return self.checkpoint_search_paths[0]
 
     def train_step(self, state: S, *batch: X, **batch_kwargs) -> StepInfo[S]:
         """
@@ -859,6 +861,17 @@ class TrainerConfig:
     """if None (default), we'll load a checkpoint if it exists. If true, we must load a checkpoint"""
     load_checkpoint_path: Optional[str] = None
     """can be a parent (to find latest) or a specific checkpoint. if None, will set to checkpointer.base_path."""
+
+    def checkpoint_search_paths(self, run_id: str) -> list[str]:
+        if self.load_checkpoint_path is not None:
+            return [self.load_checkpoint_path]
+
+        paths = [self.checkpointer.expanded_path(run_id)]
+        temp_path = self.checkpointer.expanded_temporary_path(run_id)
+        if temp_path is not None:
+            paths.append(temp_path)
+        return paths
+
     initialize_from: Optional[str] = None  # Levanter trainer checkpoint to initialize from
     """Load and continue training from a checkpoint. If None, will initialize from model_init."""
     allow_partial_checkpoint: bool = False
@@ -871,7 +884,6 @@ class TrainerConfig:
     jax_compilation_cache_dir: Optional[str] = None
 
     distributed: DistributedConfig = DistributedConfig()
-    ray: RayConfig = field(default_factory=RayConfig)
 
     # whether or not to require an accelerator (e.g. TPU or GPU).
     # default depends on the platform: on macos False, else True
@@ -923,8 +935,6 @@ class TrainerConfig:
         id = self._maybe_set_id()
         levanter.utils.logging.init_logging(self.log_dir, f"{id}.log")
         _initialize_global_tracker(self.tracker, id)
-
-        self.ray.initialize()
 
         if self.require_accelerator is None:
             self.require_accelerator = not sys.platform.startswith("darwin")

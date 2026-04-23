@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
@@ -126,7 +126,16 @@ onMounted(async () => {
   if (isActive.value) startRefresh()
 })
 
+const router = useRouter()
 const { profiling, profile } = useProfileAction(controllerRpcCall, () => props.taskId)
+
+function handleProfile(type: 'cpu' | 'memory' | 'threads') {
+  if (type === 'threads') {
+    router.push(`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(props.taskId)}/threads`)
+  } else {
+    profile(type)
+  }
+}
 
 const logViewerRef = ref<{ selectedAttemptId: number } | null>(null)
 
@@ -207,7 +216,7 @@ watch(() => props.taskId, async () => {
             <span class="text-status-warning">{{ task.pendingReason }}</span>
           </InfoRow>
           <div v-if="isActive" class="mt-3 pt-3 border-t border-surface-border">
-            <ProfileButtons :profiling="profiling" @profile="profile" />
+            <ProfileButtons :profiling="profiling" @profile="handleProfile" />
           </div>
         </InfoCard>
 

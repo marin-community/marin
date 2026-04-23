@@ -13,7 +13,7 @@ from fray.v2 import ResourceConfig
 from fray.v2.local_backend import LocalClient
 from zephyr import Dataset, load_file, load_parquet
 from zephyr._test_helpers import SampleDataclass
-from zephyr.dataset import FilterOp, MapOp, WindowOp
+from zephyr.dataset import FilterOp, GlobSource, MapOp, WindowOp, resolve_glob
 from zephyr.execution import ZephyrContext
 from zephyr.writers import write_parquet_file
 
@@ -280,28 +280,24 @@ def test_operations_are_dataclasses():
 
 def test_from_files_basic(tmp_path):
     """Test basic file globbing."""
-    # Create test input files
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     (input_dir / "file1.txt").write_text("data1")
     (input_dir / "file2.txt").write_text("data2")
     (input_dir / "file3.txt").write_text("data3")
 
-    # Create dataset
     ds = Dataset.from_files(f"{input_dir}/*.txt")
-    files = list(ds.source)  # Access source directly without backend execution
+    assert isinstance(ds.source, GlobSource)
 
-    assert len(files) == 3
-    assert all(isinstance(f, str) for f in files)
-
-    # Check that all input files are from input_dir
-    assert all(str(input_dir) in f for f in files)
-    assert all(f.endswith(".txt") for f in files)
+    entries = resolve_glob(ds.source)
+    assert len(entries) == 3
+    assert all(str(input_dir) in e.path for e in entries)
+    assert all(e.path.endswith(".txt") for e in entries)
+    assert all(e.size > 0 for e in entries)
 
 
 def test_from_files_nested(tmp_path):
     """Test from_files with nested directories."""
-    # Create nested structure
     input_dir = tmp_path / "input"
     (input_dir / "subdir1").mkdir(parents=True)
     (input_dir / "subdir2").mkdir(parents=True)
@@ -310,15 +306,12 @@ def test_from_files_nested(tmp_path):
     (input_dir / "subdir1" / "file2.txt").write_text("data2")
     (input_dir / "subdir2" / "file3.txt").write_text("data3")
 
-    # Use ** pattern to match nested files
     ds = Dataset.from_files(f"{input_dir}/**/*.txt")
-    files = list(ds.source)
+    entries = resolve_glob(ds.source)
 
-    assert len(files) == 3
-
-    # Check that nested structure is in file paths
-    assert any("subdir1" in path for path in files)
-    assert any("subdir2" in path for path in files)
+    assert len(entries) == 3
+    assert any("subdir1" in e.path for e in entries)
+    assert any("subdir2" in e.path for e in entries)
 
 
 def test_from_files_empty_glob_ok(tmp_path):
@@ -326,10 +319,9 @@ def test_from_files_empty_glob_ok(tmp_path):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
-    # No error when empty_glob_ok=True
     ds = Dataset.from_files(f"{input_dir}/*.txt", empty_glob_ok=True)
-    files = list(ds.source)
-    assert len(files) == 0
+    entries = resolve_glob(ds.source)
+    assert len(entries) == 0
 
 
 def test_from_files_empty_glob_error(tmp_path):
@@ -337,9 +329,9 @@ def test_from_files_empty_glob_error(tmp_path):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
-    # Should raise FileNotFoundError
+    ds = Dataset.from_files(f"{input_dir}/*.txt", empty_glob_ok=False)
     with pytest.raises(FileNotFoundError, match="No files found"):
-        Dataset.from_files(f"{input_dir}/*.txt", empty_glob_ok=False)
+        resolve_glob(ds.source)
 
 
 def test_from_files_with_map(tmp_path, zephyr_ctx):

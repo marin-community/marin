@@ -12,8 +12,9 @@ from threading import Thread
 
 import pytest
 from draccus.utils import Dataclass
-from fray.v2.client import _current_client_var
+from fray.v2.types import ResourceConfig
 from marin.execution import THIS_OUTPUT_PATH
+from marin.evaluation.perplexity_gap import GapFinderModelConfig, default_model_perplexity_gap, raw_text_dataset
 from marin.execution.executor import (
     Executor,
     ExecutorStep,
@@ -26,7 +27,6 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-from marin.execution.remote import remote
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
@@ -153,30 +153,40 @@ def test_status_file_reads_legacy_format(tmp_path):
     assert status_file.status == "SUCCESS"
 
 
-def test_executor_seeds_auto_detected_fray_client_for_remote_steps(monkeypatch, tmp_path):
-    class FakeClient:
-        pass
+def test_perplexity_gap_step_hash_changes_when_tokenizer_changes():
+    base_kwargs = dict(
+        name="marin-vs-qwen",
+        model_a=GapFinderModelConfig(
+            checkpoint_path="marin-community/marin-8b-base",
+            checkpoint_is_hf=True,
+            tokenizer="meta-llama/Llama-3.1-8B",
+        ),
+        datasets={"eval": raw_text_dataset("gs://example-bucket/eval.jsonl")},
+        resource_config=ResourceConfig.with_tpu("v5p-8", regions=["us-central1"]),
+    )
+    step_a = default_model_perplexity_gap(
+        **base_kwargs,
+        model_b=GapFinderModelConfig(
+            checkpoint_path="Qwen/Qwen3-8B-Base",
+            checkpoint_is_hf=True,
+            tokenizer="Qwen/Qwen3-8B",
+        ),
+    )
+    step_b = default_model_perplexity_gap(
+        **base_kwargs,
+        model_b=GapFinderModelConfig(
+            checkpoint_path="Qwen/Qwen3-8B-Base",
+            checkpoint_is_hf=True,
+            tokenizer="meta-llama/Llama-3.1-8B",
+        ),
+    )
 
-    fake_client = FakeClient()
-    observed_clients: list[object | None] = []
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        executor = create_executor(temp_dir)
+        executor.compute_version(step_a, is_pseudo_dep=False)
+        executor.compute_version(step_b, is_pseudo_dep=False)
 
-    @remote
-    def remote_step(_config):
-        return None
-
-    def fake_current_client():
-        return fake_client
-
-    def fake_run(self, steps, **kwargs):
-        observed_clients.append(_current_client_var.get())
-
-    monkeypatch.setattr("marin.execution.executor.current_client", fake_current_client)
-    monkeypatch.setattr("marin.execution.executor.StepRunner.run", fake_run)
-
-    executor = Executor(prefix=str(tmp_path), executor_info_base_path=str(tmp_path))
-    executor.run([ExecutorStep(name="remote_step", fn=remote_step, config=None)])
-
-    assert observed_clients == [fake_client]
+        assert executor.output_paths[step_a] != executor.output_paths[step_b]
 
 
 def test_force_run_failed():
@@ -501,12 +511,6 @@ class DummyCfg:
     output_path: str = THIS_OUTPUT_PATH
 
 
-@dataclass(frozen=True)
-class TupleDependencyCfg:
-    dep_paths: tuple[str, ...]
-    output_path: str = THIS_OUTPUT_PATH
-
-
 def dummy_fn(cfg: DummyCfg):
     # write one tiny file so the step "does something"
     out_path = os.path.join(cfg.output_path, "dummy")
@@ -514,19 +518,6 @@ def dummy_fn(cfg: DummyCfg):
     with open(os.path.join(out_path, "done.txt"), "w") as f:
         f.write(str(cfg.x))
     return cfg.x
-
-
-def tuple_dependency_fn(cfg: TupleDependencyCfg):
-    dep_path = cfg.dep_paths[0]
-    with open(os.path.join(dep_path, "done.txt")) as f:
-        value = int(f.read())
-
-    out_path = os.path.join(cfg.output_path, "tuple")
-    os.makedirs(out_path, exist_ok=True)
-    with open(os.path.join(out_path, "done.txt"), "w") as f:
-        f.write(str(value + 1))
-
-    return value + 1
 
 
 def shouldnt_run_fn(cfg: DummyCfg):
@@ -561,38 +552,6 @@ def test_collect_deps_skip_vs_block():
 
     assert parent in deps and parent not in pseudo
     assert ver == {"": "DEP[0]/ckpt.pt"}  # same placeholder, but in deps
-
-
-def test_collect_deps_from_tuple_field():
-    parent = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=1))
-    cfg = TupleDependencyCfg(dep_paths=(parent.cd("dummy"),))
-
-    computed_deps = collect_dependencies_and_version(cfg)
-
-    assert computed_deps.dependencies == [parent]
-    assert computed_deps.version["dep_paths.[0]"] == "DEP[0]/dummy"
-
-
-def test_executor_instantiates_tuple_input_names_and_blocks_on_parent():
-    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
-        parent = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=7))
-        child = ExecutorStep(
-            name="child",
-            fn=tuple_dependency_fn,
-            config=TupleDependencyCfg(dep_paths=(parent.cd("dummy"),)),
-        )
-
-        executor = create_executor(temp_dir)
-        executor.run(steps=[child])
-
-        assert executor.dependencies[child] == [parent]
-
-        parent_done = os.path.join(executor.output_paths[parent], "dummy", "done.txt")
-        child_done = os.path.join(executor.output_paths[child], "tuple", "done.txt")
-        with open(parent_done) as f:
-            assert f.read() == "7"
-        with open(child_done) as f:
-            assert f.read() == "8"
 
 
 # ----------------------------------------------------------------------

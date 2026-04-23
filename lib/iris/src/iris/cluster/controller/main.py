@@ -9,27 +9,78 @@ the standalone ``python -m iris.cluster.controller.main serve`` entrypoint
 serve`` subcommand in the main CLI.
 """
 
+import datetime
 import logging
 import os
 import shutil
 import signal
-import tempfile
+import subprocess
+import sys
 import threading
 from pathlib import Path
+
 
 import click
 
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
+from iris.cluster.providers.types import port_is_open, resolve_external_host
+from iris.log_server.main import (
+    AUTH_STRICT_ENV_VAR as LOG_SERVER_AUTH_STRICT_ENV_VAR,
+    JWT_KEY_ENV_VAR as LOG_SERVER_JWT_KEY_ENV_VAR,
+)
 from iris.rpc import config_pb2
-from rigging.timing import Duration
+from rigging.timing import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
 
 LOCAL_STATE_DIR_DEFAULT = Path("/var/cache/iris/controller")
+DRY_RUN_STATE_DIR_ROOT = Path("/tmp/dry-run")
 HOURLY_CHECKPOINT_SECONDS = 3600.0
+
+# Default offset from the controller port for the log server.
+LOG_SERVER_PORT_OFFSET = 1
+
+
+def _start_log_server(
+    *,
+    port: int,
+    log_dir: Path,
+    remote_log_dir: str,
+    signing_key: str | None = None,
+    strict_auth: bool = False,
+) -> subprocess.Popen:
+    """Start the log server as a subprocess and wait for it to be ready."""
+    env = os.environ.copy()
+    if signing_key:
+        env[LOG_SERVER_JWT_KEY_ENV_VAR] = signing_key
+    if strict_auth:
+        env[LOG_SERVER_AUTH_STRICT_ENV_VAR] = "1"
+    argv = [
+        sys.executable,
+        "-m",
+        "iris.log_server.main",
+        "--port",
+        str(port),
+        "--log-dir",
+        str(log_dir),
+        "--remote-log-dir",
+        remote_log_dir,
+    ]
+    # Run log server at idle I/O priority so Parquet writes and GCS uploads
+    # don't starve the controller's interactive disk I/O. ionice is Linux-only
+    # and absent on macOS / minimal containers — skip silently if unavailable.
+    ionice = shutil.which("ionice") if sys.platform == "linux" else None
+    if ionice is not None:
+        argv = [ionice, "-c", "3", *argv]
+    proc = subprocess.Popen(argv, env=env)
+    ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
+        lambda: port_is_open(port),
+        timeout=Duration.from_seconds(10.0),
+    )
+    logger.info("Log server started (pid=%d, port=%d)", proc.pid, port)
+    return proc
 
 
 def run_controller_serve(
@@ -41,6 +92,7 @@ def run_controller_serve(
     checkpoint_interval: float | None = None,
     dry_run: bool = False,
     fresh: bool = False,
+    state_dir: Path | None = None,
 ) -> None:
     """Start the Iris controller, block until SIGTERM/SIGINT.
 
@@ -64,16 +116,15 @@ def run_controller_serve(
         )
     logger.info("Using remote_state_dir from config: %s", remote_state_dir)
 
-    if dry_run:
-        _dry_run_tmpdir = tempfile.mkdtemp(prefix="iris-dry-run-")
-        local_state_dir = Path(_dry_run_tmpdir)
-        logger.info("Dry-run mode: using temporary local state dir %s", local_state_dir)
+    if state_dir is not None:
+        local_state_dir = state_dir
+    elif dry_run:
+        local_state_dir = DRY_RUN_STATE_DIR_ROOT / datetime.date.today().isoformat()
     elif cluster_config.storage.local_state_dir:
         local_state_dir = Path(cluster_config.storage.local_state_dir)
     else:
         local_state_dir = LOCAL_STATE_DIR_DEFAULT
-
-    heartbeat_failure_threshold = cluster_config.controller.heartbeat_failure_threshold or HEARTBEAT_FAILURE_THRESHOLD
+    logger.info("Controller local state dir: %s (dry_run=%s)", local_state_dir, dry_run)
 
     # --- Restore or reuse local DB ---
     local_state_dir.mkdir(parents=True, exist_ok=True)
@@ -157,68 +208,98 @@ def run_controller_serve(
 
     logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
 
+    # Resolve auth first so we can hand the log server subprocess a
+    # signing key for verifying worker JWTs on PushLogs/FetchLogs.
     auth = create_controller_auth(cluster_config.auth, db=db) if cluster_config else ControllerAuth()
     if auth.worker_token and base_worker_config is not None:
         base_worker_config.auth_token = auth.worker_token
 
-    config = ControllerConfig(
-        host=host,
-        port=port,
-        remote_state_dir=remote_state_dir,
-        heartbeat_failure_threshold=heartbeat_failure_threshold,
-        checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
-        local_state_dir=local_state_dir,
-        auth_verifier=auth.verifier,
-        auth_provider=auth.provider,
-        auth=auth,
-        dry_run=dry_run,
+    # --- Start log server subprocess ---
+    log_port = port + LOG_SERVER_PORT_OFFSET
+    log_dir = local_state_dir / "logs"
+    remote_log_dir = f"{remote_state_dir.rstrip('/')}/logs"
+
+    log_server_proc = _start_log_server(
+        port=log_port,
+        log_dir=log_dir,
+        remote_log_dir=remote_log_dir,
+        signing_key=auth.jwt_manager.signing_key if auth.jwt_manager else None,
+        strict_auth=auth.provider is not None,
     )
+    try:
+        # Advertise the externally-reachable host so workers on other nodes can
+        # route to the log server. Binding to 0.0.0.0 is fine; advertising it is
+        # not — remote workers cannot connect to an unspecified address.
+        log_service_address = f"http://{resolve_external_host(host)}:{log_port}"
 
-    controller = Controller(
-        config=config,
-        provider=provider,
-        autoscaler=autoscaler,
-        db=db,
-    )
-    logger.info("Controller instance created")
+        config = ControllerConfig(
+            host=host,
+            port=port,
+            remote_state_dir=remote_state_dir,
+            checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
+            local_state_dir=local_state_dir,
+            auth_verifier=auth.verifier,
+            auth_provider=auth.provider,
+            auth=auth,
+            dry_run=dry_run,
+            log_service_address=log_service_address,
+        )
 
-    controller.start()
-    logger.info("Controller started successfully on %s:%d", host, port)
-    logger.info("Controller is ready to accept connections")
+        controller = Controller(
+            config=config,
+            provider=provider,
+            autoscaler=autoscaler,
+            db=db,
+        )
+        logger.info("Controller instance created")
 
-    stop_event = threading.Event()
+        controller.start()
+        logger.info("Controller started successfully on %s:%d", host, port)
+        logger.info("Controller is ready to accept connections")
 
-    def handle_shutdown(_signum, _frame):
-        # Second signal force-exits immediately.
-        signal.signal(signal.SIGTERM, signal.SIG_DFL)
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        stop_event = threading.Event()
 
-        # Write a final checkpoint then exit. Do NOT call controller.stop()
-        # here — its shutdown path runs autoscaler.shutdown() which terminates
-        # every worker VM in the cluster. On a controller restart, workers must
-        # survive; the new controller picks them up from the checkpoint. Even on
-        # a full cluster teardown, `iris cluster stop` handles VM cleanup via
-        # stop_all(), so the SIGTERM handler never needs to delete VMs itself.
-        logger.info("Shutdown signal received")
-        if not config.dry_run:
-            try:
-                path, result = controller.begin_checkpoint()
-                logger.info(
-                    "Final checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
-                    path,
-                    result.job_count,
-                    result.task_count,
-                    result.worker_count,
-                )
-            except Exception:
-                logger.exception("Final checkpoint on shutdown failed")
-        logger.info("Controller exiting")
-        stop_event.set()
+        def handle_shutdown(_signum, _frame):
+            # Second signal force-exits immediately.
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-    signal.signal(signal.SIGTERM, handle_shutdown)
-    signal.signal(signal.SIGINT, handle_shutdown)
+            # Write a final checkpoint then exit. Do NOT call controller.stop()
+            # here — its shutdown path runs autoscaler.shutdown() which terminates
+            # every worker VM in the cluster. On a controller restart, workers must
+            # survive; the new controller picks them up from the checkpoint. Even on
+            # a full cluster teardown, `iris cluster stop` handles VM cleanup via
+            # stop_all(), so the SIGTERM handler never needs to delete VMs itself.
+            logger.info("Shutdown signal received")
+            if not config.dry_run:
+                try:
+                    path, result = controller.begin_checkpoint()
+                    logger.info(
+                        "Final checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
+                        path,
+                        result.job_count,
+                        result.task_count,
+                        result.worker_count,
+                    )
+                except Exception:
+                    logger.exception("Final checkpoint on shutdown failed")
+            log_server_proc.kill()
+            log_server_proc.wait(timeout=5)
+            logger.info("Controller exiting")
+            stop_event.set()
 
-    stop_event.wait()
+        signal.signal(signal.SIGTERM, handle_shutdown)
+        signal.signal(signal.SIGINT, handle_shutdown)
+
+        stop_event.wait()
+    except BaseException:
+        # Startup (or the wait loop) failed before the signal handler ran its
+        # own cleanup: hard-kill the log server so port+1 is freed for the
+        # next restart.
+        logger.exception("Controller startup failed; killing log server subprocess")
+        log_server_proc.kill()
+        log_server_proc.wait(timeout=5)
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +342,12 @@ def cli():
     default=False,
     help="Start with an empty database, ignoring any remote checkpoint",
 )
+@click.option(
+    "--state-dir",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Override the local state dir (default: /var/cache/iris/controller, or /tmp/dry-run/{today} in dry-run)",
+)
 def serve(
     host: str,
     port: int,
@@ -270,6 +357,7 @@ def serve(
     checkpoint_interval: float | None,
     dry_run: bool,
     fresh: bool,
+    state_dir: Path | None,
 ):
     """Start the Iris controller service."""
     from iris.cluster.config import load_config
@@ -288,6 +376,7 @@ def serve(
         checkpoint_interval=checkpoint_interval,
         dry_run=dry_run,
         fresh=fresh,
+        state_dir=state_dir,
     )
 
 

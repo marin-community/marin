@@ -481,9 +481,9 @@ import logging
 
 # Reinitialize logging with the unified Iris format.
 # Uses single-letter level prefix: I=INFO, W=WARNING, E=ERROR, D=DEBUG, C=CRITICAL.
-# NOTE: This duplicates LevelPrefixFormatter and _LEVEL_PREFIX from iris.logging
+# NOTE: This duplicates LevelPrefixFormatter and _LEVEL_PREFIX from rigging.log_setup
 # because CALLABLE_RUNNER executes inside an isolated task container that may not
-# have the iris package installed (e.g. user-provided Docker images).
+# have the rigging package installed (e.g. user-provided Docker images).
 _LEVEL_PREFIX = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
 
 class _LevelPrefixFormatter(logging.Formatter):
@@ -587,14 +587,30 @@ class Namespace(str):
         return cls(job_id.namespace)
 
 
-def is_job_finished(state: int) -> bool:
-    return state in (
+TERMINAL_JOB_STATES: frozenset[int] = frozenset(
+    {
         job_pb2.JOB_STATE_SUCCEEDED,
         job_pb2.JOB_STATE_FAILED,
         job_pb2.JOB_STATE_KILLED,
         job_pb2.JOB_STATE_WORKER_FAILED,
         job_pb2.JOB_STATE_UNSCHEDULABLE,
-    )
+    }
+)
+
+TERMINAL_TASK_STATES: frozenset[int] = frozenset(
+    {
+        job_pb2.TASK_STATE_SUCCEEDED,
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_KILLED,
+        job_pb2.TASK_STATE_UNSCHEDULABLE,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_PREEMPTED,
+    }
+)
+
+
+def is_job_finished(state: int) -> bool:
+    return state in TERMINAL_JOB_STATES
 
 
 def is_task_finished(state: int) -> bool:
@@ -603,18 +619,7 @@ def is_task_finished(state: int) -> bool:
     This is a simple check for whether the state is a terminal state.
     For ControllerTask, use task.is_finished() which also considers retry budgets.
     """
-    # Avoid circular import - define inline since this is a stable set
-    terminal_states = frozenset(
-        {
-            job_pb2.TASK_STATE_SUCCEEDED,
-            job_pb2.TASK_STATE_FAILED,
-            job_pb2.TASK_STATE_KILLED,
-            job_pb2.TASK_STATE_WORKER_FAILED,
-            job_pb2.TASK_STATE_PREEMPTED,
-            job_pb2.TASK_STATE_UNSCHEDULABLE,
-        }
-    )
-    return state in terminal_states
+    return state in TERMINAL_TASK_STATES
 
 
 JobState = job_pb2.JobState

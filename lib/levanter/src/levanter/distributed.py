@@ -1,20 +1,15 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import atexit
 import itertools
 import logging
 import os
 import re
-import socket
 from dataclasses import dataclass
 from typing import List, Optional, Union
 
 import jax
-import ray
-from jax._src import clusters, distributed
-
-from levanter.utils.py_utils import logical_cpu_core_count
+from jax._src import clusters
 
 
 logger = logging.getLogger(__name__)
@@ -108,7 +103,6 @@ class LevanterSlurmCluster(clusters.SlurmCluster):
                 f"Number of visible devices ({len(all_visible_devices)}) is not divisible by the number "
                 f"of local tasks ({local_process_count})"
             )
-            return None
 
         num_devices_per_local_process = len(all_visible_devices) // local_process_count
 
@@ -194,133 +188,6 @@ def _choose_port(id):
     return port
 
 
-_already_initialized = False
-
-
-def _setup_logger():
-    logging.basicConfig(level=logging.INFO)
-
-
-def auto_ray_cluster(
-    address: Optional[str] = None,
-    namespace: Optional[str] = "levanter",
-    start_workers: bool = True,
-    fail_if_cluster_already_initialized: bool = False,
-    **kwargs,
-):
-    """Initializes ray, automatically discovering the address if it is not provided.
-    Currently supports slurm and TPU.
-
-    NB that Ray has Slurm support: https://docs.ray.io/en/latest/cluster/vms/user-guides/community/slurm.html
-
-    We don't use that because it's more geared towards submitting jobs to a ray cluster that is backed by slurm.
-    Instead, we have our machines already.
-    """
-    global _already_initialized
-
-    if _already_initialized:
-        logger.warning("auto_ray_cluster has already been called. Ignoring subsequent calls.")
-        return
-
-    def _munge_address_port(address: str):
-        # the coordinator address typically includes a port that jax wants to use. we want to use our own port
-        # we add a deterministic number to the chosen port and then cycle through the ephemeral range
-        # this is a hack, but it works
-        host, port_str = address.split(":")
-        port = int(port_str)
-        return host, port
-
-    if address is None:
-        # Ray automatically looks at RAY_ADDRESS. We don't want to use our defaulting logic if that is set
-        if os.getenv("RAY_ADDRESS") is not None:
-            address = os.getenv("RAY_ADDRESS")
-            logger.info("Auto-discovered ray address using RAY_ADDRESS: %s", address)
-        else:
-            coord_address = getattr(distributed.global_state, "coordinator_address", None)
-
-            if coord_address is None:
-                logger.info("No auto-discovered ray address found. Using ray.init('local').")
-                address = "local"
-            else:
-                logger.info(f"Auto-discovered ray address using JAX coordinator address: {coord_address}")
-                host, port = _munge_address_port(coord_address)
-
-                ray_port = _choose_port(port + 240)
-                address = f"{host}:{ray_port}"
-
-                # Explicitly setting the number of CPUs on ray init stops init errors
-                num_cpus = logical_cpu_core_count()
-
-                if _is_local_leader():
-                    # it used to be that if we were coordinator, we were also process 0
-                    # this is no longer the case, so instead we need to check if we are the coordinator
-                    # and if so, start the head
-                    if _is_this_machine(host):
-                        logger.info(f"Starting ray head on port {ray_port}. We are process the coordinator {host}.")
-                        logger.info(f"Starting ray head with num_cpus set to {num_cpus}.")
-                        ret = os.system(
-                            f"ray start --head --port {ray_port} --num-cpus {num_cpus} --dashboard-host=0.0.0.0"
-                        )
-                        if ret != 0:
-                            if not fail_if_cluster_already_initialized:
-                                # see if we can connect to the head
-                                logger.warning(
-                                    f"Failed to start ray head with exit code {ret}. Checking if we can connect to"
-                                    " the head..."
-                                )
-                                ret = os.system("ray status")
-                                if ret != 0:
-                                    raise RuntimeError(f"Failed to start ray head with exit code {ret}")
-                                else:
-                                    logger.info(f"Ray head already running on port {ray_port}. Connecting to it.")
-                            else:
-                                raise RuntimeError(f"Failed to start ray head with exit code {ret}")
-                        else:
-                            logger.info(f"Successfully started ray head on port {ray_port}.")
-
-                        # install an atexit handler to kill the head when we exit
-                        def kill_ray():
-                            # silence spam from ray stop
-                            os.system("bash -c 'ray stop -g 10 --force &> /dev/null'")
-
-                        atexit.register(kill_ray)
-                    elif start_workers:
-                        logger.info(
-                            f"Starting ray worker and connecting to {address}. We are process {jax.process_index()}."
-                        )
-                        logger.info(f"Starting ray worker with num_cpus set to {num_cpus}.")
-                        ret = os.system(f"ray start --address {address} --num-cpus {num_cpus}")
-                        if ret != 0:
-                            raise RuntimeError(f"Failed to start ray head with exit code {ret}")
-                        else:
-                            logger.info(f"Successfully started ray worker and connected to {address}.")
-
-    logger.info(f"ray.init(address={repr(address)}, namespace={repr(namespace)}, **{repr(kwargs)})")
-    # Ray has retry logic, but it doesn't seem to work super well, so we retry manually
-    for i in range(0, 5):
-        try:
-            ray.init(
-                address=address,
-                namespace=namespace,
-                runtime_env={"worker_process_setup_hook": _setup_logger},
-                **kwargs,
-            )
-            break
-        except Exception as e:
-            if i == 4:
-                raise e
-            else:
-                logger.warning(f"Failed to initialize ray with address {address}. Retrying...")
-                continue
-
-    def do_shutdown():
-        logger.info("Shutting down ray...")
-        ray.shutdown()
-
-    atexit.register(do_shutdown)
-    _already_initialized = True
-
-
 @dataclass(frozen=True)
 class DistributedConfig:
     coordinator_address: Optional[str] = None  # if None, we'll use the default coordinator address (for TPU or GPU)
@@ -398,77 +265,3 @@ class DistributedConfig:
                 "Not initializing jax.distributed because no distributed config "
                 "was provided, and no cluster was detected."
             )
-
-
-@dataclass(frozen=True)
-class RayConfig:
-    address: Optional[str] = None
-    start_workers: bool = True
-    auto_start_cluster: bool = False
-
-    def initialize(self):
-        if self.auto_start_cluster:
-            auto_ray_cluster(address=self.address, start_workers=self.start_workers)
-
-
-def _is_this_machine(host):
-    """
-    Checks if the given host identifies this machine.
-    """
-    if host == "localhost" or host == "0.0.0.0":
-        return True
-
-    try:
-        # Get IP addresses of all interfaces
-        machine_ips = [addr[4][0] for addr in socket.getaddrinfo(socket.gethostname(), None)]
-
-        # Get the IP address of the host
-        host_ip = socket.gethostbyname(host)
-    except socket.gaierror:
-        # Host or interface could not be resolved
-        return False
-
-    # Check if the host IP matches any of the machine IPs
-    return any(host_ip == machine_ip for machine_ip in machine_ips)
-
-
-def _remove_if_possible(path):
-    try:
-        os.remove(path)
-    except OSError:
-        pass
-
-
-def _touch(file_path):
-    with open(file_path, "a"):
-        os.utime(file_path, None)
-
-
-def _is_local_leader():
-    import atexit
-
-    import filelock
-    from jax.experimental.multihost_utils import broadcast_one_to_all
-
-    if jax.process_count() == 1:
-        return True
-
-    import random
-
-    random_id = random.randint(0, 1000000)
-    random_id = broadcast_one_to_all(random_id)
-
-    lock = filelock.FileLock(f"/tmp/levanter_local_process_zero_lock.{random_id}")
-    action_performed_file = f"/tmp/levanter_local_process_zero_action_performed.{random_id}"
-
-    try:
-        with lock.acquire(timeout=0.1):
-            if not os.path.exists(action_performed_file):
-                _touch(action_performed_file)
-                return True  # Action needs to be performed
-            else:
-                return False  # Action already performed
-            atexit.register(_remove_if_possible, lock.lock_file)
-            atexit.register(_remove_if_possible, action_performed_file)
-    except filelock.Timeout:
-        return False

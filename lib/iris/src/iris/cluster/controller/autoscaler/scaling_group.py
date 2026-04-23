@@ -20,7 +20,7 @@ from enum import Enum, StrEnum
 from collections.abc import Sequence
 
 from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import Labels, SliceHandle
+from iris.cluster.providers.types import Labels, QuotaExhaustedError, SliceHandle
 from iris.cluster.constraints import (
     AttributeValue,
     CONSTRAINT_REGISTRY,
@@ -150,6 +150,66 @@ def prepare_slice_config(
         config.num_vms = parent_config.num_vms
 
     return config
+
+
+def _region_from_template(template: config_pb2.SliceConfig) -> str | None:
+    """Region derived from a scale group's slice template."""
+    if template.HasField("gcp") and template.gcp.zone:
+        return template.gcp.zone.rsplit("-", 1)[0]
+    if template.HasField("coreweave") and template.coreweave.region:
+        return template.coreweave.region
+    return None
+
+
+def _zone_from_template(template: config_pb2.SliceConfig) -> str | None:
+    """Zone derived from a scale group's slice template."""
+    if template.HasField("gcp") and template.gcp.zone:
+        return template.gcp.zone
+    if template.HasField("coreweave") and template.coreweave.region:
+        return template.coreweave.region
+    return None
+
+
+def build_worker_config_for_group(
+    base_worker_config: config_pb2.WorkerConfig | None,
+    group_config: config_pb2.ScaleGroupConfig,
+) -> config_pb2.WorkerConfig | None:
+    """Merge base worker config with per-scale-group overrides.
+
+    Returns None when base_worker_config is None (test/local mode).
+    """
+    if not base_worker_config:
+        return None
+
+    wc = config_pb2.WorkerConfig()
+    wc.CopyFrom(base_worker_config)
+
+    resources = group_config.resources if group_config.HasField("resources") else None
+    if resources is not None:
+        wc.accelerator_type = resources.device_type
+        if resources.device_variant:
+            wc.accelerator_variant = resources.device_variant
+        if resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and resources.device_count > 0:
+            wc.gpu_count = resources.device_count
+        wc.capacity_type = resources.capacity_type
+
+    if group_config.HasField("worker"):
+        for k, v in group_config.worker.attributes.items():
+            wc.worker_attributes[k] = v
+
+    template = group_config.slice_template
+    region = _region_from_template(template)
+    if region and not wc.worker_attributes.get(WellKnownAttribute.REGION):
+        wc.worker_attributes[WellKnownAttribute.REGION] = region
+
+    zone = _zone_from_template(template)
+    if zone and not wc.worker_attributes.get(WellKnownAttribute.ZONE):
+        wc.worker_attributes[WellKnownAttribute.ZONE] = zone
+
+    if group_config.name:
+        wc.worker_attributes["scale-group"] = group_config.name
+
+    return wc
 
 
 def _zones_from_config(config: config_pb2.ScaleGroupConfig) -> list[str]:
@@ -385,11 +445,7 @@ class ScalingGroup:
 
     @property
     def region(self) -> str | None:
-        """Region derived from worker attributes or slice template."""
-        if self._config.HasField("worker"):
-            region = self._config.worker.attributes.get(WellKnownAttribute.REGION, "").strip()
-            if region:
-                return region
+        """Region derived from the slice template."""
         template = self._config.slice_template
         if template.HasField("gcp") and template.gcp.zone:
             return template.gcp.zone.rsplit("-", 1)[0]
@@ -399,11 +455,7 @@ class ScalingGroup:
 
     @property
     def zone(self) -> str | None:
-        """Zone derived from worker attributes or slice template."""
-        if self._config.HasField("worker"):
-            zone = self._config.worker.attributes.get(WellKnownAttribute.ZONE, "").strip()
-            if zone:
-                return zone
+        """Zone derived from the slice template."""
         template = self._config.slice_template
         if template.HasField("gcp") and template.gcp.zone:
             return template.gcp.zone
@@ -474,6 +526,13 @@ class ScalingGroup:
                 state.last_active = timestamp
         if state is not None:
             self._db_upsert_slice(slice_id, state)
+            logger.info(
+                "slice ready group=%s slice=%s n_workers=%d worker_ids=%s",
+                self._config.name,
+                slice_id,
+                len(worker_ids),
+                worker_ids,
+            )
 
     def mark_slice_failed(self, slice_id: str, error_message: str = "") -> None:
         """Mark a slice as FAILED. Called when bootstrap fails."""
@@ -482,20 +541,35 @@ class ScalingGroup:
             if state is not None:
                 state.lifecycle = SliceLifecycleState.FAILED
                 state.error_message = error_message
+                registered = list(state.worker_ids)
+            else:
+                registered = []
         if state is not None:
             self._db_upsert_slice(slice_id, state)
+            logger.warning(
+                "slice failed group=%s slice=%s n_registered=%d registered=%s error=%s",
+                self._config.name,
+                slice_id,
+                len(registered),
+                registered,
+                error_message,
+            )
 
     def reconcile(self) -> None:
         """Discover and adopt existing slices from the cloud.
 
         Used in tests to populate a scaling group with pre-injected slices.
         Production restore uses prepare_for_restore() + restore_scaling_group().
+        Skips operator-created manual slices (iris_manual=true), which the
+        autoscaler must not track or scale down.
         """
         zones = _zones_from_config(self._config)
         labels = {self._labels.iris_scale_group: self._config.name}
         slice_handles = self._platform.list_slices(zones, labels)
         with self._slices_lock:
             for handle in slice_handles:
+                if handle.labels.get(self._labels.iris_manual) == "true":
+                    continue
                 state = SliceState(handle=handle)
                 self._slices[handle.slice_id] = state
                 self._db_upsert_slice(handle.slice_id, state)
@@ -573,6 +647,17 @@ class ScalingGroup:
     def _terminate_slice_handle(self, handle: SliceHandle, *, context: str) -> None:
         try:
             handle.terminate()
+        except QuotaExhaustedError as e:
+            # Delete quota retries are exhausted inside the provider; log a
+            # terse warning without a stack trace since this is a known-benign
+            # rate limit, not a crash.
+            logger.warning(
+                "Scale group %s: terminate() rate-limited for slice %s (%s), %s",
+                self.name,
+                handle.slice_id,
+                e,
+                context,
+            )
         except Exception:
             logger.warning(
                 "Scale group %s: terminate() failed for slice %s, %s",
@@ -1084,6 +1169,13 @@ class ScalingGroup:
         for handle in snapshot:
             try:
                 handle.terminate()
+            except QuotaExhaustedError as e:
+                logger.warning(
+                    "Scale group %s: terminate() rate-limited for slice %s (%s) during terminate_all, continuing",
+                    self.name,
+                    handle.slice_id,
+                    e,
+                )
             except Exception:
                 logger.warning(
                     "Scale group %s: terminate() failed for slice %s during terminate_all, continuing",

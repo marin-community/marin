@@ -11,7 +11,9 @@ Author: Will Held
 
 Example usage:
   # Run the training job with wandb logging enabled
-  python marin/run/ray_run.py --env_vars WANDB_API_KEY YOUR_WANDB_API_KEY -- python experiments/howto/dclm_1b1x.py
+  uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
+    -e WANDB_API_KEY "$WANDB_API_KEY" \
+    -- python -m experiments.tutorials.exp1077_reproduce_dclm_1b1x
 """
 
 from fray.cluster import ResourceConfig

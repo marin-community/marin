@@ -2,7 +2,7 @@
 import { computed, onMounted, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
-import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
 import type {
   GetWorkerStatusResponse,
@@ -71,7 +71,7 @@ const taskColumns: Column[] = [
   { key: 'duration', label: 'Duration', align: 'right' },
 ]
 
-useAutoRefresh(fetchWorker, 5_000)
+useAutoRefresh(fetchWorker, DEFAULT_REFRESH_MS)
 onMounted(fetchWorker)
 
 // Re-fetch when navigating between workers (Vue Router reuses the component).

@@ -20,7 +20,6 @@ const WORKER_TABS: Tab[] = [
   { key: 'fleet', label: 'Workers', to: '/fleet' },
   { key: 'endpoints', label: 'Endpoints', to: '/endpoints' },
   { key: 'autoscaler', label: 'Autoscaler', to: '/autoscaler' },
-  { key: 'transactions', label: 'Transactions', to: '/transactions' },
   { key: 'account', label: 'Account', to: '/account' },
   { key: 'status', label: 'Status', to: '/status' },
 ]
@@ -30,7 +29,6 @@ const KUBERNETES_TABS: Tab[] = [
   { key: 'scheduler', label: 'Scheduler', to: '/scheduler' },
   { key: 'cluster', label: 'Cluster', to: '/cluster' },
   { key: 'endpoints', label: 'Endpoints', to: '/endpoints' },
-  { key: 'transactions', label: 'Transactions', to: '/transactions' },
   { key: 'account', label: 'Account', to: '/account' },
   { key: 'status', label: 'Status', to: '/status' },
 ]
@@ -46,7 +44,6 @@ const PATH_TO_TAB: Record<string, string> = {
   '/cluster': 'cluster',
   '/endpoints': 'endpoints',
   '/autoscaler': 'autoscaler',
-  '/transactions': 'transactions',
   '/account': 'account',
   '/status': 'status',
 }

@@ -20,11 +20,9 @@ References:
 
 """
 
-import copy
 import dataclasses
 import json
 import logging
-import os
 import random
 import tempfile
 import time
@@ -44,7 +42,7 @@ from haliax import NamedArray
 from jax.sharding import PartitionSpec
 
 import levanter.tracker
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, converter_from_hf_compat_config, load_tokenizer
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
 from levanter.data.packing import (
     PromptCompletion,
     greedy_pack_prompt_completions,
@@ -79,7 +77,7 @@ from tqdm_loggable.auto import tqdm
 
 import levanter.config
 from levanter.callbacks import StepInfo
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.data import batched
 from levanter.data.loader import stack_batches
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
@@ -91,48 +89,6 @@ from levanter.utils.tree_utils import inference_mode
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
-
-
-def _enable_hf_offline_mode_for_eval_cache() -> None:
-    """Force both HF datasets and Hub into cache-only mode after syncing a full cache root."""
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["HF_DATASETS_OFFLINE"] = "1"
-
-    try:
-        import datasets.config as datasets_config
-
-        datasets_config.HF_HUB_OFFLINE = True
-        datasets_config.HF_DATASETS_OFFLINE = True
-    except Exception:
-        logger.debug("datasets.config unavailable while enabling offline mode", exc_info=True)
-
-    try:
-        import huggingface_hub.constants as hub_constants
-
-        hub_constants.HF_HUB_OFFLINE = True
-    except Exception:
-        logger.debug("huggingface_hub.constants unavailable while enabling offline mode", exc_info=True)
-
-
-def _enable_hf_dataset_cache_only_mode() -> None:
-    """Use the local datasets cache after sync while still allowing Hub metadata lookups."""
-    os.environ.pop("HF_HUB_OFFLINE", None)
-    os.environ["HF_DATASETS_OFFLINE"] = "1"
-
-    try:
-        import datasets.config as datasets_config
-
-        datasets_config.HF_HUB_OFFLINE = False
-        datasets_config.HF_DATASETS_OFFLINE = True
-    except Exception:
-        logger.debug("datasets.config unavailable while configuring eval cache mode", exc_info=True)
-
-    try:
-        import huggingface_hub.constants as hub_constants
-
-        hub_constants.HF_HUB_OFFLINE = False
-    except Exception:
-        logger.debug("huggingface_hub.constants unavailable while configuring eval cache mode", exc_info=True)
 
 
 def _call_with_retry(
@@ -275,9 +231,6 @@ class _LmEvalHarnessWorker:
         generation_kwargs=None,
         sample_logging_config: SampleLoggingConfig | None = None,
         profiler_config: ProfilerConfig | None = None,
-        inference_max_seqs: int = 64,
-        inference_max_seqs_in_prefill: int = 16,
-        inference_hbm_utilization: float = 0.5,
     ):
         self.tokenizer = tokenizer
         self.max_packed_segments = max_packed_segments
@@ -290,10 +243,6 @@ class _LmEvalHarnessWorker:
         self._generation_kwargs = generation_kwargs or {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
         self.sample_logging_config = sample_logging_config or SampleLoggingConfig()
         self.profiler_config = profiler_config or ProfilerConfig()
-        # Inference engine configuration
-        self.inference_max_seqs = inference_max_seqs
-        self.inference_max_seqs_in_prefill = inference_max_seqs_in_prefill
-        self.inference_hbm_utilization = inference_hbm_utilization
 
         self._dummy_batch = _make_dummy_batch(EvalBatch, EvalPos)
 
@@ -332,6 +281,7 @@ class _LmEvalHarnessWorker:
                 weight=loss_weight,
                 logsumexp_weight=0.0,
                 return_argmax=True,
+                implementation="xla",
             )
 
             # We need to compute losses and also whether or not the completion is correct
@@ -397,7 +347,10 @@ class _LmEvalHarnessWorker:
     def _receive_payload(self):
         payload = broadcast_shard(
             self._dummy_batch,
-            hax.partitioning.infer_resource_partitions(self._dummy_batch, self.axis_resources),
+            hax.partitioning.infer_resource_partitions(
+                self._dummy_batch,
+                resource_mapping=self.axis_resources,
+            ),
         )
         return payload
 
@@ -408,7 +361,13 @@ class _LmEvalHarnessWorker:
 
     def _send_payload(self, payload):
         assert jax.process_index() == 0
-        out = broadcast_shard(payload, hax.partitioning.infer_resource_partitions(payload, self.axis_resources))
+        out = broadcast_shard(
+            payload,
+            hax.partitioning.infer_resource_partitions(
+                payload,
+                resource_mapping=self.axis_resources,
+            ),
+        )
         return out
 
     def process_loglikelihood(self, packed_request):
@@ -459,16 +418,6 @@ def get_padding_count_from_batch(batch: LmExample, pad_token_id: int) -> tuple[i
     padding_count = int(np.sum(tokens == pad_token_id))
     total_tokens = batch.tokens.size
     return padding_count, total_tokens
-
-
-def _effective_pad_token_id(tokenizer: MarinTokenizer) -> int:
-    """Return a padding token ID without mutating the tokenizer."""
-    if tokenizer.pad_token_id is not None:
-        return tokenizer.pad_token_id
-    if tokenizer.eos_token_id is not None:
-        logger.warning("No pad token set. Using eos token as the effective pad token.")
-        return tokenizer.eos_token_id
-    raise ValueError("Tokenizer must define either pad_token_id or eos_token_id for lm-eval harness padding.")
 
 
 class LevanterHarnessLM(TemplateLM):
@@ -642,7 +591,9 @@ class LevanterHarnessLM(TemplateLM):
         Downstream tasks should attempt to use loglikelihood instead of other
         LM calls whenever possible.
         """
-        pad_token_id = _effective_pad_token_id(self.tokenizer)
+        if self.tokenizer.pad_token_id is None:
+            logger.warning("No pad token set. Setting to eos token.")
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
         current_task = getattr(self, "_current_task", "loglikelihood_task")
         for request in requests:
@@ -658,13 +609,7 @@ class LevanterHarnessLM(TemplateLM):
                 }
             )
 
-        packed = _pack_requests(
-            requests,
-            self.tokenizer,
-            self.EvalPos,
-            self.leader.max_packed_segments,
-            pad_token_id=pad_token_id,
-        )
+        packed = _pack_requests(requests, self.tokenizer, self.EvalPos, self.leader.max_packed_segments)
         packed_iterator = stack_batches(iter(packed), self.EvalPos, self.EvalBatch)
         packed_iterator = BackgroundIterator(packed_iterator, max_capacity=1024)
 
@@ -687,7 +632,7 @@ class LevanterHarnessLM(TemplateLM):
                 batch, self.leader.max_packed_segments * self.EvalBatch.size
             )
 
-            padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token_id)
+            padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
             batch = jax.device_put(batch)
 
             batch = jax.device_put(batch)
@@ -830,7 +775,9 @@ class LevanterHarnessLM(TemplateLM):
         # Implement simple generation using InferenceEngine.
         # requests: list[Instance] where args[0] = prompt, args[1] may be stop strings (list[str])
         # kwargs may include max_gen_toks, temperature, n (n_generations), seed
-        _effective_pad_token_id(self.tokenizer)
+        if self.tokenizer.pad_token_id is None:
+            logger.warning("No pad token set. Setting to eos token.")
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
         # Require a model with paged decode support
         if not hasattr(self.leader.model, "initial_cache") or not hasattr(self.leader.model, "decode"):
@@ -897,16 +844,16 @@ class LevanterHarnessLM(TemplateLM):
                 max_stop_seqs = max(max_stop_seqs, num_stop_seqs)
                 max_stop_tokens = max(max_stop_tokens, num_stop_tokens)
 
-        # Use configurable inference parameters to avoid OOM on large models
+        # [ChiHeem,2025-10-06] TODO: Pass this from marin to allow users to
+        # optimize the inference based on hardware and model.
         engine_cfg = InferenceEngineConfig(
             max_stop_seqs=max_stop_seqs,
             max_stop_tokens=max_stop_tokens,
             max_seq_len=max_length,
-            max_seqs=self.leader.inference_max_seqs,
-            max_seqs_in_prefill=self.leader.inference_max_seqs_in_prefill,
+            max_seqs=256,
             page_size=8,
             compute_dtype=jnp.bfloat16,
-            hbm_utilization=self.leader.inference_hbm_utilization,
+            hbm_utilization=0.5,
         )
         engine = InferenceEngine.from_model_with_config(
             model=self.leader.model,
@@ -1130,37 +1077,6 @@ class LmEvalHarnessConfig:
     These can be overridden on a per-request basis by the evaluation harness.
     """
 
-    eval_datasets_cache_path: str | None = None
-    """
-    Optional GCS path to pre-cached evaluation datasets.
-
-    When set, datasets will be synced from this GCS path to the local HuggingFace
-    datasets cache before loading tasks. This avoids HuggingFace API rate limiting
-    when multiple concurrent jobs all try to download the same evaluation datasets.
-
-    Use marin.evaluation.eval_dataset_cache.create_cache_eval_datasets_step() to
-    pre-cache datasets before training.
-    """
-
-    # Inference engine configuration for generation tasks
-    inference_max_seqs: int = 16
-    """
-    Maximum concurrent sequences for generation. Lower values use less memory but
-    may be slower. Default reduced from 256 to 16 to avoid OOM on large models.
-    """
-
-    inference_max_seqs_in_prefill: int = 4
-    """
-    Maximum number of sequences to batch together during prefill. Controls memory
-    usage during the initial prompt processing phase.
-    """
-
-    inference_hbm_utilization: float = 0.3
-    """
-    Fraction of HBM to use for KV cache. Lower values leave more room for the model
-    and batch data. Range: 0.0 to 1.0.
-    """
-
     @property
     def max_gen_toks(self) -> int:
         """Backward compatibility property for max_gen_toks."""
@@ -1175,39 +1091,6 @@ class LmEvalHarnessConfig:
         """
         return [task.to_dict() if isinstance(task, TaskConfig) else task for task in self.task_spec]
 
-    def _sync_datasets_from_gcs(self) -> bool:
-        """
-        Sync evaluation datasets from GCS to local HuggingFace cache.
-
-        This method is called before loading tasks to ensure datasets are available
-        locally, avoiding HuggingFace API rate limiting.
-
-        Returns:
-            True if sync was successful or not configured, False if sync failed.
-        """
-        if not self.eval_datasets_cache_path:
-            return True
-
-        try:
-            from marin.evaluation.eval_dataset_cache import load_eval_datasets_from_gcs
-
-            manifest = load_eval_datasets_from_gcs(
-                gcs_path=self.eval_datasets_cache_path,
-                log=logger,
-            )
-            if manifest is None:
-                return False
-            if manifest.supports_full_offline_task_loading():
-                _enable_hf_offline_mode_for_eval_cache()
-            else:
-                _enable_hf_dataset_cache_only_mode()
-            return True
-        except ImportError:
-            logger.warning(
-                "marin.evaluation.eval_dataset_cache not available. " "Skipping eval datasets sync from GCS."
-            )
-            return False
-
     def to_task_dict(self) -> dict:
         """
         Convert the task spec to a dictionary that the LM Eval Harness expects.
@@ -1219,9 +1102,6 @@ class LmEvalHarnessConfig:
         Uses retry logic with exponential backoff to handle HuggingFace rate limits when
         downloading evaluation datasets.
         """
-        # Sync datasets from GCS cache if configured
-        self._sync_datasets_from_gcs()
-
         logger.info("Loading tasks...")
         import lm_eval.tasks as tasks
 
@@ -1234,7 +1114,7 @@ class LmEvalHarnessConfig:
                     task_dict = _call_with_retry(lambda t=task: tasks.get_task_dict(t, manager))
                     this_tasks.update(task_dict)
                 else:
-                    our_name = (task.get("task_alias") or task["task"]) if isinstance(task, dict) else task
+                    our_name = task.get("task_alias", task["task"]) if isinstance(task, dict) else task
                     assert isinstance(our_name, str)
                     our_name = our_name.replace(" ", "_")
                     tasks_for_this_task_spec = self._get_task_and_rename(manager, our_name, task)
@@ -1261,9 +1141,7 @@ class LmEvalHarnessConfig:
 
         task_name = task if isinstance(task, str) else task["task"]
 
-        task_dict = _call_with_retry(
-            lambda: tasks.get_task_dict([copy.deepcopy(task)] if isinstance(task, dict) else [task], manager)
-        )
+        task_dict = _call_with_retry(lambda: tasks.get_task_dict([task], manager))
         assert len(task_dict) == 1, f"Expected 1 task, got {len(task_dict)}"
         try:
             this_task = self._rename_tasks_for_eval_harness(task_dict, task_name, our_name)
@@ -1455,9 +1333,6 @@ def _actually_run_eval_harness(
         generation_kwargs=config.generation_kwargs,
         sample_logging_config=config.sample_logging,
         profiler_config=profiler_config,
-        inference_max_seqs=config.inference_max_seqs,
-        inference_max_seqs_in_prefill=config.inference_max_seqs_in_prefill,
-        inference_hbm_utilization=config.inference_hbm_utilization,
     )
 
     if jax.process_index() == 0:
@@ -1589,11 +1464,8 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
         # initialize the model
         if config.checkpoint_is_hf:
             model_config = config.model
-            converter: HFCheckpointConverter = converter_from_hf_compat_config(
-                model_config,
-                tokenizer=tokenizer,
-                reference_checkpoint=config.checkpoint_path,
-            )
+            converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
+            converter = converter.replaced(reference_checkpoint=config.checkpoint_path, tokenizer=tokenizer)
             model = converter.load_pretrained(
                 model_config.model_type,
                 ref=config.checkpoint_path,
@@ -1603,9 +1475,10 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
         else:
             with use_cpu_device():
                 model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
+                checkpoint_path = latest_checkpoint_path(config.checkpoint_path)
                 model = load_checkpoint(
                     model,
-                    config.checkpoint_path,
+                    checkpoint_path,
                     subpath="model",
                     axis_mapping=parameter_axis_mapping,
                 )
@@ -1783,21 +1656,8 @@ def _adjust_config(task_dict, fewshot_random_seed=0):
     return adjusted_task_dict
 
 
-def _encode_batch_texts(tokenizer, texts: list[str]) -> list[list[int]]:
-    """Tokenize a batch of plain strings without adding special tokens.
-
-    Levanter's tokenizer wrapper exposes ``encode_batch`` directly, but some evaluation paths pass a plain
-    ``transformers.PreTrainedTokenizerFast`` instead. The HF tokenizer API supports batched calls via ``__call__``.
-    """
-    if hasattr(tokenizer, "encode_batch"):
-        return tokenizer.encode_batch(texts, add_special_tokens=False)
-
-    encodings = tokenizer(texts, add_special_tokens=False, truncation=False, padding=False)
-    return list(encodings["input_ids"])
-
-
 def _iterate_tokenized_requests(
-    requests: list[Instance], tokenizer, max_length: int, batch_size: int
+    requests: list[Instance], tokenizer: MarinTokenizer, max_length: int, batch_size: int
 ) -> Iterator[PromptCompletion]:
     """
     Tokenize the requests and yield them as PromptCompletions, for packing into LmExamples.
@@ -1815,8 +1675,8 @@ def _iterate_tokenized_requests(
         combined_batch = [combined_texts[i] for i in batch_indices]
         context_batch = [contexts[i] for i in batch_indices]
         # Tokenize batched inputs
-        combined_encodings = {"input_ids": _encode_batch_texts(tokenizer, combined_batch)}
-        context_encodings = {"input_ids": _encode_batch_texts(tokenizer, context_batch)}
+        combined_encodings = {"input_ids": tokenizer.encode_batch(combined_batch)}
+        context_encodings = {"input_ids": tokenizer.encode_batch(context_batch)}
 
         for off in range(len(batch_indices)):
             i = batch_indices[off]
@@ -1841,8 +1701,6 @@ def _pack_requests(
     tokenizer: MarinTokenizer,
     Pos: hax.Axis,
     max_pack_size: int,
-    *,
-    pad_token_id: int | None = None,
 ) -> list[LmExample]:
     packed_iterator = _iterate_tokenized_requests(requests, tokenizer, Pos.size, batch_size=128)
     # TODO: use a better packing algorithm?
@@ -1850,7 +1708,7 @@ def _pack_requests(
         Pos,
         packed_iterator,
         max_segments_per_example=max_pack_size,
-        pad_token=_effective_pad_token_id(tokenizer) if pad_token_id is None else pad_token_id,
+        pad_token=tokenizer.pad_token_id,
     )
 
 

@@ -23,27 +23,5 @@ uv run python -m marin.processing.classification.decon \
 
 [`consolidate.py`](./consolidate.py) consumes attribute files and filters or rewrites documents. Supported filter types:
 
-- `classify`: keep or reject documents based on attribute scores
 - `remove_spans`: remove text spans such as duplicate paragraphs
 - `remove_docs`: drop whole documents when an attribute marks them as duplicates
-
-Example:
-
-```bash
-uv run python -m marin.processing.classification.consolidate \
-  --config_path lib/marin/src/marin/processing/classification/config/quickstart_consolidate_fasttext.yaml
-```
-
-Example `classify` filter:
-
-```yaml
-input_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/"
-output_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_fasttext_only/"
-
-filters:
-  - type: "classify"
-    attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_olmo_fasttext/"
-    name: "olmo-fasttext-quality"
-    label: "__label__hq"
-    lower_threshold: 0.1
-```

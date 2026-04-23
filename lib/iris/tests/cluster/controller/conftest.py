@@ -28,15 +28,16 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
+from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
-    TERMINAL_TASK_STATES,
     ControllerDB,
     _decode_attribute_rows,
-    job_is_finished,
     task_row_can_be_scheduled,
     task_row_is_finished,
 )
+from iris.cluster.controller.provider import ProviderUnsupportedError
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
     JOB_CONFIG_JOIN,
@@ -49,15 +50,11 @@ from iris.cluster.controller.schema import (
     WorkerRow,
     tasks_with_attempts,
 )
-from iris.cluster.controller.provider import ProviderUnsupportedError
-from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
-    DispatchBatch,
-    HEARTBEAT_FAILURE_THRESHOLD,
     HeartbeatApplyRequest,
     TaskUpdate,
 )
@@ -65,7 +62,7 @@ from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId, is_job_finished
 from iris.rpc import config_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
@@ -77,19 +74,13 @@ check_task_can_be_scheduled = task_row_can_be_scheduled
 check_task_is_finished = task_row_is_finished
 
 
-def check_job_is_finished(j: JobDetailRow) -> bool:
+def check_is_job_finished(j: JobDetailRow) -> bool:
     """Whether a job row is in a terminal state."""
-    return job_is_finished(j.state)
+    return is_job_finished(j.state)
 
 
 class FakeProvider:
     """Minimal TaskProvider for tests that only exercise transitions, not RPCs."""
-
-    def sync(
-        self,
-        batches: list[DispatchBatch],
-    ) -> list[tuple[DispatchBatch, HeartbeatApplyRequest | None, str | None]]:
-        return [(b, None, "no stub") for b in batches]
 
     def get_process_status(
         self,
@@ -109,6 +100,22 @@ class FakeProvider:
         timeout_ms: int,
     ) -> job_pb2.ProfileTaskResponse:
         raise ProviderUnsupportedError("fake")
+
+    # --- Split heartbeat surface (no-op stubs so split-mode tests can run) ---
+
+    def ping_workers(self, workers):
+        return []
+
+    def start_tasks(self, jobs):
+        from iris.rpc import worker_pb2
+
+        return [(wid, worker_pb2.Worker.StartTasksResponse(), None) for wid, _, _ in jobs]
+
+    def stop_tasks(self, jobs):
+        return [(wid, None) for wid, _, _ in jobs]
+
+    def poll_workers(self, running, worker_addresses):
+        return []
 
     def close(self) -> None:
         pass
@@ -141,8 +148,20 @@ def mock_controller() -> MockController:
 
 @pytest.fixture
 def log_service(state, tmp_path) -> LogServiceImpl:
-    """LogServiceImpl with its own internal log store."""
+    """LogServiceImpl with its own internal log store.
+
+    Wraps ``fetch_logs`` to run the bg compact step first so push→fetch in
+    the same test is synchronously visible. The production path relies on the
+    1s bg tick; tests can't afford that wait.
+    """
     svc = LogServiceImpl(log_dir=tmp_path / "log_service_logs")
+    original_fetch = svc.fetch_logs
+
+    def fetch_logs(request, ctx):
+        svc._log_store._compact_step()
+        return original_fetch(request, ctx)
+
+    svc.fetch_logs = fetch_logs  # type: ignore[method-assign]
     yield svc
     svc.close()
 
@@ -174,6 +193,66 @@ def make_controller_state(**kwargs):
         db.close()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+@pytest.fixture
+def make_controller(tmp_path):
+    """Factory for building ``Controller`` instances with automatic teardown.
+
+    ``Controller.__init__`` attaches a ``RemoteLogHandler`` to the ``iris``
+    logger and spawns a ``LogPusher`` drain thread. Without ``stop()``, those
+    leak across the test session and pull every ``iris.*`` log record into
+    their internal queue — which can then be flushed into another test's
+    monkeypatched ``LogServiceClientSync``. The factory tracks every
+    constructed controller and ``stop()``s them at fixture teardown.
+
+    Pass ``db=`` to inject a pre-built ``ControllerDB`` (otherwise the
+    ``Controller`` opens one under ``config.local_state_dir``). Pass
+    ``provider=`` to override the default ``FakeProvider``. Any remaining
+    keyword arguments are forwarded to ``ControllerConfig``.
+
+    Usage::
+
+        def test_foo(make_controller, tmp_path):
+            ctrl = make_controller(remote_state_dir="file:///tmp/iris-state")
+            # Or inject an existing DB / provider:
+            ctrl = make_controller(
+                remote_state_dir="file:///tmp/iris-state",
+                local_state_dir=tmp_path,
+                db=my_db,
+            )
+    """
+    created: list[Controller] = []
+
+    def _factory(
+        config: ControllerConfig | None = None,
+        *,
+        provider=None,
+        db: ControllerDB | None = None,
+        **config_kwargs,
+    ) -> Controller:
+        if config is None:
+            config_kwargs.setdefault("remote_state_dir", f"file://{tmp_path}/remote")
+            config = ControllerConfig(**config_kwargs)
+        elif config_kwargs:
+            raise TypeError("make_controller: pass either a config or config kwargs, not both")
+        controller = Controller(
+            config=config,
+            provider=provider if provider is not None else FakeProvider(),
+            db=db,
+        )
+        created.append(controller)
+        return controller
+
+    yield _factory
+    errors: list[BaseException] = []
+    for controller in created:
+        try:
+            controller.stop()
+        except BaseException as exc:
+            errors.append(exc)
+    if errors:
+        raise errors[0]
 
 
 def make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:
@@ -572,11 +651,8 @@ def transition_task(
 
 
 def fail_worker(state: ControllerTransitions, worker_id: WorkerId, error: str) -> None:
-    batch = state.drain_dispatch(worker_id)
-    if batch is None:
-        return
-    for _ in range(HEARTBEAT_FAILURE_THRESHOLD):
-        state.record_heartbeat_failure(worker_id, error, batch)
+    """Force-remove a worker via the explicit kill path used by the reaper thread."""
+    state.fail_workers([(worker_id, None, error)])
 
 
 # =============================================================================

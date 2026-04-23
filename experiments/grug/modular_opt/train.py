@@ -372,12 +372,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state = _init_state(model_key)
 
         checkpointer = trainer.checkpointer.create(run_id)
-        checkpoint_path = trainer.load_checkpoint_path
-        if checkpoint_path is None and checkpointer is not None:
-            checkpoint_path = trainer.checkpointer.expanded_path(run_id)
         state = restore_grug_state_from_checkpoint(
             state,
-            checkpoint_path=checkpoint_path,
+            checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
             load_checkpoint_setting=trainer.load_checkpoint,
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
