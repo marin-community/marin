@@ -828,3 +828,58 @@ Full plan at `/Users/ahmed/.claude/plans/feedback-from-codex-make-humble-kernigh
 3. Submit one pilot (`1e20 × lr=0.67` under the new hash). Wait ~30 min, verify on W&B that `optim/learning_rate` rises 0 → 3.00e-3 over first 500 steps, then decays linearly toward 3.00e-4 by step 4768. That's the anti-pathology.
 4. If pilot healthy, submit remaining 5 sweep points (1e20 × lr=0.5, 0.83; 1e21 × lr=0.5, 0.67, 0.83) in parallel on v5p-64.
 5. After all 6 land, compare smoothed train-loss + Paloma panels across (base × lr_factor), pick winners, write up.
+
+---
+
+## 2026-04-23 relaunch + hash-collision surprise (08:00–08:15 UTC)
+
+### What happened
+
+Relaunched the three 1e20 sweep points after the Levanter fix was committed (`37fba5983`, pushed). Job names: `/ahmed/delphi-math-10b-1e20-lr{0.5,0.67,0.83}-20260423-v2`.
+
+**Surprise 1: The executor output hash did NOT change after adding `checkpoint_init_mode=MODEL_ONLY` to Delphi's `SimpleTrainConfig`.** Plan had assumed it would. Root cause: `lib/marin/src/marin/execution/executor.py:1028-1094`'s `collect_dependencies_and_version` only records values wrapped in `versioned(...)` — plain dataclass fields are recursed into but not added to the hash input. Since I didn't wrap `checkpoint_init_mode` in `versioned()`, the field has no effect on the step hash. The new runs landed at the SAME output paths as the broken v10/in-flight runs: `-ba7b7f`, `-e3be0c`, `-db9de7`.
+
+First "fix" (`-20260423-fix` coordinators) therefore found `already succeeded` markers and skipped training entirely for lr=0.5, and the other two were headed toward the same outcome.
+
+**Resolution:** killed the `-fix` coordinators, deleted all three junk directories (`gcloud storage rm --recursive` ~465 GB), then resubmitted as `-v2`. Now the `.executor_status` cache misses and the executor runs training. Old artifacts are gone (not merely moved) so there's no Levanter auto-resume-from-broken-ckpt risk.
+
+**Surprise 2: W&B monotonic-step rejection.** Because the output hash is unchanged, the W&B run ID is the same as the broken runs'. W&B's run.step is at 4768 from the old training. Levanter's `wandb.py:69` refuses to log metrics whose step is less than `run.step`:
+
+```
+W20260423 08:06:50 levanter.tracker.wandb Step 1 is less than the current step 4768. Cowardly refusing to log metrics.
+```
+
+**Training is actually fine** — the JAX training loop is running and loss is dropping — but W&B panels won't show LR/loss curves from the new run until the fresh training advances past step 4768. Since `num_train_steps=4768`, that means basically nothing gets logged to W&B this time. For LR-fix verification, rely on:
+
+- `tracker_metrics.jsonl` at the run's GCS output (written by Levanter's local tracker, independent of W&B).
+- The tqdm `Progress on:train … postfix:loss=…` lines in iris logs.
+- Compare trajectory shape against v10's broken curve (recorded in this logbook).
+
+### Early signal (loss trajectory, tqdm-reported)
+
+| Step | lr=0.67 loss | lr=0.83 loss | Notes |
+|---:|---:|---:|---|
+|   2 | 1.58 | 1.58 | Identical to v10 initial — pretrain weights loaded correctly. |
+|  16 | 1.58 | (not yet seen) | LR still ramping up through early warmup. |
+|  30 | 1.51 | (not yet seen) | Rate-of-drop increasing, as warmup approaches peak. |
+|  44 | 1.45 | (not yet seen) | |
+|  58 | (not yet seen) | 1.43 | Higher-LR factor drops faster — expected ordering. |
+
+Rate of descent is materially faster than the broken v10 curves at equivalent steps. This is the loss-side proof the MODEL_ONLY fix is doing its job: the schedule count is at 0 (not 46916), so actual LR is warming up toward the peak, not clamped to the 0.1×peak floor.
+
+Initial Paloma / uncheatable_eval losses at step 0 look sane (`wikipedia_english=2.535, github_python=1.775, ao3_english=3.158, arxiv_physics=2.767`) — consistent with freshly-loaded pretrain weights.
+
+### Known bugs to tackle later (not blocking the sweep)
+
+1. **Executor hash ignores non-`versioned()` fields.** When flipping `checkpoint_init_mode` selectively, the step's output path does not change. This is a foot-gun: a naive relaunch after a field change silently reuses the old artifact. Options: (a) wrap the field in `versioned()` at call sites that care; (b) add opt-in "always-versioned" dataclass fields at the marin-executor layer; (c) document + rely on manual deletion for now.
+2. **W&B run step collision on relaunch.** Same root cause — unchanged hash → same W&B run_id → monotonic-step rejection. Fix would be to include a unique component (timestamp, attempt counter) in the W&B run config so relaunches get fresh run_ids.
+
+Neither blocks the sweep. Both should be filed as issues once the sweep lands.
+
+### Current job states (08:11 UTC)
+
+- `/ahmed/delphi-math-10b-1e20-lr0.67-20260423-v2/train_lm`: running on v5p-64, us-central1. Step 44+, loss dropping.
+- `/ahmed/delphi-math-10b-1e20-lr0.83-20260423-v2/train_lm`: running on v5p-64, us-central1. Step 58+, loss dropping.
+- `/ahmed/delphi-math-10b-1e20-lr0.5-20260423-v2`: still in zephyr-normalize phase (landed us-east5; normalize/tokenize caches live in us-central1 under a different hash, so it's re-running data prep locally). Expected ~30–60 min before training starts; total wall-time thus slightly longer than the other two.
+
+Next check: verify loss ≪ 1.12 at step 500 (v10's warmup-end number under the broken schedule). If yes, LR fix confirmed. If no, dig deeper.
