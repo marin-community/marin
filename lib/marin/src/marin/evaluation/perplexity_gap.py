@@ -40,6 +40,7 @@ class RawTextEvaluationDataset:
     hf_dataset_id: str | None = None
     hf_dataset_name: str | None = None
     text_key: str = "text"
+    split: str = "validation"
     tags: tuple[str, ...] = ()
 
 
@@ -63,6 +64,7 @@ def raw_text_dataset(
     source: str | InputName | ExecutorStep | HfDatasetSpec,
     *,
     text_key: str = "text",
+    split: str = "validation",
     tags: tuple[str, ...] = (),
 ) -> RawTextEvaluationDataset:
     if isinstance(source, HfDatasetSpec):
@@ -70,9 +72,12 @@ def raw_text_dataset(
             hf_dataset_id=source.id,
             hf_dataset_name=source.name,
             text_key=text_key,
+            split=split,
             tags=tags,
         )
-    return RawTextEvaluationDataset(input_path=source, text_key=text_key, tags=tags)
+    if split != "validation":
+        raise ValueError("split is only supported for Hugging Face dataset sources; file paths use validation.")
+    return RawTextEvaluationDataset(input_path=source, text_key=text_key, split=split, tags=tags)
 
 
 def default_model_perplexity_gap(
@@ -184,10 +189,13 @@ def _to_dataset_component(config: RawTextEvaluationDataset) -> DatasetComponent:
             id=config.hf_dataset_id,
             name=config.hf_dataset_name,
             format=dataset_format,
+            splits=[config.split],
         )
     else:
         if config.input_path is None:
             raise ValueError("RawTextEvaluationDataset requires either input_path or hf_dataset_id.")
+        if config.split != "validation":
+            raise ValueError("RawTextEvaluationDataset split is only supported for Hugging Face dataset sources.")
         input_path = config.input_path
         if isinstance(input_path, ExecutorStep):
             input_path = input_path.as_input_name()
@@ -234,5 +242,6 @@ def _cache_key_for_dataset(dataset: RawTextEvaluationDataset) -> dict[str, Any]:
         "hf_dataset_id": dataset.hf_dataset_id,
         "hf_dataset_name": dataset.hf_dataset_name,
         "text_key": dataset.text_key,
+        "split": dataset.split,
         "tags": dataset.tags,
     }
