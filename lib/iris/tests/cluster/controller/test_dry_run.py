@@ -3,7 +3,7 @@
 
 """Tests for Controller --dry-run mode."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -48,15 +48,6 @@ def test_dry_run_scheduling_does_not_dispatch(dry_run_controller):
         )
     assert len(tasks) == 1
     assert tasks[0].state == job_pb2.TASK_STATE_PENDING
-
-
-def test_dry_run_provider_sync_skipped(dry_run_controller):
-    controller = dry_run_controller
-    provider = controller._provider
-
-    with patch.object(provider, "sync", wraps=provider.sync) as spy:
-        controller._sync_all_execution_units()
-        spy.assert_not_called()
 
 
 def test_dry_run_autoscaler_skipped_entirely(dry_run_controller):

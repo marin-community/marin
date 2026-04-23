@@ -2592,25 +2592,21 @@ class ControllerServiceImpl:
         """Worker pushes task state transitions to controller.
 
         Converts the proto updates into TaskUpdate dataclasses and applies
-        them through the same ControllerTransitions.apply_heartbeat() path
-        used by the poll-based heartbeat. Stop decisions are delivered via
-        the StopTasks RPC, not piggy-backed on the response.
+        them via ``ControllerTransitions.apply_task_updates``. Stop decisions
+        are delivered via the StopTasks RPC, not piggy-backed on the response.
 
-        Vestigial: the kill decisions produced by apply_heartbeat are ignored
-        here. The poll loop reruns the same transition logic every 60s and
-        routes kills through _stop_tasks_direct, so push-path kills are
-        recovered with ≤60s latency. This RPC will be removed once the poll
-        loop is the sole path.
+        The kill decisions produced here are ignored: the poll loop reruns the
+        same transition logic and routes kills through ``_stop_tasks_direct``,
+        so push-path kills are recovered with ≤60s latency.
         """
         updates = task_updates_from_proto(request.updates)
         if updates:
-            self._transitions.apply_heartbeat(
+            self._transitions.apply_task_updates(
                 HeartbeatApplyRequest(
                     worker_id=WorkerId(request.worker_id),
                     worker_resource_snapshot=None,
                     updates=updates,
                 )
             )
-            # Wake the controller so it can act on any state changes promptly.
             self._controller.wake()
         return controller_pb2.Controller.UpdateTaskStatusResponse()
