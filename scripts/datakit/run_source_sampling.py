@@ -37,12 +37,31 @@ def main() -> None:
     os.environ["MARIN_PREFIX"] = STAGING_PREFIX
     base = marin_temp_bucket(ttl_days=TTL_DAYS, prefix=f"datakit-testbed/{RUN_ID}")
 
+    # For each source whose normalize is already cached, feed the sample step
+    # AND its full ``normalize_steps`` chain (with transitive deps) into the
+    # iterable. StepRunner's dep-satisfaction loop only marks a step as
+    # ``completed`` when it sees the step go through its own cache check, so
+    # the normalize must be in the iterable even though it'll no-op — without
+    # it, the sample step's dep check fails and the run dies with "Iterable
+    # exhausted with unsatisfied dependencies".
+    seen: set[str] = set()
     steps = []
     skipped: list[str] = []
+
+    def visit(step):
+        if step.output_path in seen:
+            return
+        for dep in step.deps:
+            visit(dep)
+        seen.add(step.output_path)
+        steps.append(step)
+
     for src in all_sources().values():
         if not check_cache(src.normalized.output_path):
             skipped.append(src.name)
             continue
+        for step in src.normalize_steps:
+            visit(step)
         steps.append(
             sample_normalized_shards_step(
                 name=f"datakit-testbed/sample/{src.name}",
