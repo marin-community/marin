@@ -330,6 +330,123 @@ def test_vllm_async_engine_receives_kv_cache_metrics_flag(monkeypatch):
     assert calls["kv_cache_metrics"] is True
 
 
+def test_levanter_reload_model_reloads_plain_model(monkeypatch):
+    reloaded_models: list[object] = []
+    model = object()
+
+    ctx = LevanterInferenceContext(
+        LevanterInferenceContextConfig(
+            inference_server_config=None,
+            tokenizer=SimpleNamespace(),
+            stop_tokens=None,
+            max_tokens=16,
+            mesh=None,
+            axis_mapping={},
+        )
+    )
+    ctx._inference_server = SimpleNamespace(reload=lambda loader: reloaded_models.append(loader(None)))
+
+    returned_model = ctx.reload_model(model, state_dict=None)
+
+    assert returned_model is model
+    assert reloaded_models == [model]
+
+
+def test_vllm_reload_model_resets_prefix_cache_and_syncs_weights(monkeypatch):
+    reset_calls: list[str] = []
+    sync_calls: list[dict[str, object]] = []
+
+    class _FakeDriverWorker:
+        def sync_weights(self, nnx_state, *, mappings, transpose_keys, reshard_fn):
+            sync_calls.append(
+                {
+                    "nnx_state": nnx_state,
+                    "mappings": mappings,
+                    "transpose_keys": transpose_keys,
+                    "reshard_fn": reshard_fn,
+                }
+            )
+
+    class _FakeLLMEngine:
+        def reset_prefix_cache(self):
+            reset_calls.append("reset")
+
+        model_executor = SimpleNamespace(driver_worker=_FakeDriverWorker())
+
+    fake_llm = SimpleNamespace(llm_engine=_FakeLLMEngine())
+
+    monkeypatch.setattr(vLLMInferenceContext, "_get_llm_engine", staticmethod(lambda _config: fake_llm))
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
+        lambda _path: SimpleNamespace(get_vocab=lambda: {}),
+    )
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_renderer",
+        staticmethod(lambda model_name, _tokenizer: model_name),
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.levanter_state_dict_to_nnx_state_on_cpu",
+        lambda state_dict: {"converted": state_dict},
+    )
+
+    ctx = vLLMInferenceContext(
+        vLLMInferenceContextConfig(
+            model_name="Qwen/Qwen3-0.6B",
+            canonical_model_name="Qwen/Qwen3-0.6B",
+            max_model_len=1024,
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.9,
+            sampling_params=VLLMSamplingConfig(),
+        )
+    )
+
+    returned_model = ctx.reload_model(model=None, state_dict={"weight": np.array([1.0], dtype=np.float32)})
+
+    assert returned_model is None
+    assert reset_calls == ["reset", "reset"]
+    assert len(sync_calls) == 1
+    call = sync_calls[0]
+    np.testing.assert_array_equal(call["nnx_state"]["converted"]["weight"], np.array([1.0], dtype=np.float32))
+    assert call["mappings"] == MODEL_MAPPINGS["Qwen/Qwen3-0.6B"]
+    assert call["transpose_keys"] == MODEL_TRANSPOSE_KEYS["Qwen/Qwen3-0.6B"]
+    assert call["reshard_fn"] is None
+
+
+def test_vllm_reload_model_requires_state_dict(monkeypatch):
+    fake_llm = SimpleNamespace(
+        llm_engine=SimpleNamespace(
+            reset_prefix_cache=lambda: None,
+            model_executor=SimpleNamespace(driver_worker=SimpleNamespace(sync_weights=lambda **kwargs: None)),
+        )
+    )
+
+    monkeypatch.setattr(vLLMInferenceContext, "_get_llm_engine", staticmethod(lambda _config: fake_llm))
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
+        lambda _path: SimpleNamespace(get_vocab=lambda: {}),
+    )
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_renderer",
+        staticmethod(lambda model_name, _tokenizer: model_name),
+    )
+
+    ctx = vLLMInferenceContext(
+        vLLMInferenceContextConfig(
+            model_name="Qwen/Qwen3-0.6B",
+            canonical_model_name="Qwen/Qwen3-0.6B",
+            max_model_len=1024,
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.9,
+            sampling_params=VLLMSamplingConfig(),
+        )
+    )
+
+    with pytest.raises(ValueError, match="requires a full state_dict payload"):
+        ctx.reload_model(model=None, state_dict=None)
+
+
 def test_worker_extension_uses_public_sync_weights():
     calls = {}
 

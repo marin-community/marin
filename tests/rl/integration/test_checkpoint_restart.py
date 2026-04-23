@@ -9,6 +9,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from levanter.lora import LoraConfig
 
 from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
@@ -139,3 +140,82 @@ def test_train_worker_checkpoint_restart(tmp_path):
     assert (
         max_step_second_run > max_step_first_run
     ), f"Second run should progress beyond first run: first max={max_step_first_run}, second max={max_step_second_run}"
+
+
+@pytest.mark.slow("Integration test with checkpoint restart")
+def test_lora_resume_manifest_mismatch_fails_fast(tmp_path):
+    """Test that LoRA resume fails before training starts when manifest fields change."""
+    rollout_storage_config = create_test_rollout_storage_config()
+    queue_writer = rollout_storage_config.create_writer()
+
+    trainer_config = create_nano_trainer_config(tmp_path)
+    trainer_config.num_train_steps = 3
+    trainer_config.checkpointer.save_interval = timedelta(milliseconds=100)
+    run_id = "test-lora"
+
+    initial_job_config = RLJobConfig(
+        model=create_nano_llama_config(),
+        trainer=trainer_config,
+        train_params=TrainParams(
+            optimizer=create_nano_optimizer_config(),
+            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
+            lora=LoraConfig(r=4, alpha=8.0),
+        ),
+        curriculum=create_test_curriculum_config(),
+        tokenizer=DummyTokenizer(),
+        rollout_storage=rollout_storage_config,
+        run_id=run_id,
+        inference_type="levanter",
+    )
+
+    initial_job = RLJob(initial_job_config)
+
+    with TrainWorkerRunner.from_job(initial_job) as runner:
+        tokenizer = DummyTokenizer()
+        batch_size = runner.training_worker_config.trainer.train_batch_size
+
+        while not runner.worker:
+            time.sleep(0.1)
+
+        for _ in range(5):
+            batch = create_cats_rollout_batch(
+                policy_model=runner.reference_model,
+                batch_size=batch_size,
+                tokenizer=tokenizer,
+            )
+            queue_writer.write_batch(batch)
+
+        result = runner.wait_for_result(timeout=30)
+        assert result == WaitResult.SUCCESS, "Initial LoRA training timed out after 30s"
+
+        manifest_path = Path(runner.training_worker_config.run_manifest_path)
+        assert manifest_path.exists(), f"Expected run manifest at {manifest_path}"
+
+    mismatched_job_config = RLJobConfig(
+        model=create_nano_llama_config(),
+        trainer=trainer_config,
+        train_params=TrainParams(
+            optimizer=create_nano_optimizer_config(),
+            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
+            lora=LoraConfig(r=2, alpha=8.0),
+        ),
+        curriculum=create_test_curriculum_config(),
+        tokenizer=DummyTokenizer(),
+        rollout_storage=rollout_storage_config,
+        run_id=run_id,
+        inference_type="levanter",
+    )
+
+    mismatched_job = RLJob(mismatched_job_config)
+    runner = TrainWorkerRunner.from_job(mismatched_job)
+    runner.start()
+
+    try:
+        with pytest.raises(RuntimeError, match="TrainWorkerRunner failed") as exc_info:
+            runner.wait_for_result(timeout=30)
+
+        assert exc_info.value.__cause__ is not None
+        assert "lora_config_fingerprint" in str(exc_info.value.__cause__)
+    finally:
+        runner.stop()
+        runner.join(timeout=5)

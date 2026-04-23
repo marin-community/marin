@@ -16,6 +16,7 @@ import signal
 import sys
 import time
 from dataclasses import dataclass
+from typing import Literal
 
 import haliax as hax
 import jax
@@ -24,10 +25,21 @@ import levanter
 import wandb
 from levanter import callbacks
 from levanter.checkpoint import (
+    discover_latest_checkpoint,
+    is_checkpoint_path,
     register_debug_checkpointer_state_provider,
     unregister_debug_checkpointer_state_provider,
 )
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook
+from levanter.lora import (
+    LoraConfig,
+    lora_trainable_params_filter,
+    loraize,
+    merge_lora_modules,
+    save_merged_hf_model,
+    save_peft_pretrained,
+)
 from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend
 from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
 from levanter.models.lm_model import LmConfig
@@ -35,10 +47,13 @@ from levanter.models.lm_model import LmHeadModel
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.tokenizers import MarinTokenizer
+from levanter.utils.fsspec_utils import join_path
+from levanter.utils.jax_utils import parameter_count
 
 from marin.rl import weight_transfer
 from marin.rl.curriculum import CurriculumConfig
-from marin.rl.model_utils import load_model_from_checkpoint
+from marin.rl.lora_manifest import RLRunManifest, build_rl_run_manifest, read_rl_run_manifest, write_rl_run_manifest
+from marin.rl.model_utils import is_hf_checkpoint, load_model_from_checkpoint
 from marin.rl.runtime import RLRuntimeHandles
 from marin.rl.weight_transfer import WeightTransferConfig
 
@@ -48,6 +63,7 @@ from .rollout_storage import RolloutStorageConfig
 from .train_batch import create_training_batch_from_rollouts
 
 logger = logging.getLogger(__name__)
+FINAL_EXPORT_DIR = "final"
 
 
 @dataclass(frozen=True)
@@ -145,8 +161,14 @@ class TrainWorkerConfig:
     weight_transfer: WeightTransferConfig
     curriculum_config: CurriculumConfig
     loss: RLLossModule
+    lora: LoraConfig | None
     tokenizer: MarinTokenizer
     run_id: str
+    run_manifest_path: str
+    inference_type: Literal["levanter", "vllm"]
+    rollout_policy_format: Literal["merged", "adapter"] = "merged"
+    adapter_artifacts_path: str | None = None
+    merged_hf_export_path: str | None = None
 
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
@@ -260,6 +282,17 @@ class StopTrainerException(Exception):
     pass
 
 
+def _resume_checkpoint_path_for_validation(trainer: Trainer) -> str | None:
+    """Return the checkpoint path that a LoRA resume would load, if any."""
+    if trainer.config.load_checkpoint is False:
+        initialize_from = trainer.config.initialize_from
+        if initialize_from is None or not is_checkpoint_path(initialize_from):
+            return None
+        return initialize_from
+
+    return discover_latest_checkpoint(trainer.checkpoint_path)
+
+
 class TrainWorker:
     """Training worker that reads rollout data from a queue and trains the model using Levanter."""
 
@@ -271,6 +304,7 @@ class TrainWorker:
     loss_module: RLLossModule
     initial_model: LmHeadModel | None
     reference_model: LmHeadModel | None
+    trainable_model_filter: object
 
     def __init__(
         self,
@@ -338,7 +372,7 @@ class TrainWorker:
     def _build_models(self):
         """Build the initial policy model and optional retained reference model."""
         config = self.config
-        model_key = jrandom.PRNGKey(config.seed)
+        model_key, lora_key = jrandom.split(jrandom.PRNGKey(config.seed))
         vocab_size = config.vocab_size if config.vocab_size is not None else self.tokenizer.vocab_size
         Vocab = hax.Axis("vocab", vocab_size)
 
@@ -359,10 +393,186 @@ class TrainWorker:
                 key=model_key,
             )
 
-        self.initial_model = _load_model()
+        base_model = _load_model()
+        self.trainable_model_filter = True
+
+        if config.lora is None:
+            self.initial_model = base_model
+        else:
+
+            @hax.named_jit(axis_resources=config.trainer.parameter_axis_mapping)
+            def _loraize_model(model: LmHeadModel) -> LmHeadModel:
+                return loraize(model, config.lora, key=lora_key)
+
+            self.initial_model = _loraize_model(base_model)
+            self.trainable_model_filter = lora_trainable_params_filter(self.initial_model)
+
         # Keep compatibility for callers that inspect the worker immediately after construction.
         # The zero-KL path clears this alias once trainer state has been materialized.
-        self.reference_model = self.initial_model
+        self.reference_model = base_model
+
+    def _write_run_manifest(self) -> None:
+        """Persist LoRA run metadata needed for checkpoint validation and future exports."""
+        manifest = self._expected_run_manifest()
+        write_rl_run_manifest(self.config.run_manifest_path, manifest)
+
+    def _expected_run_manifest(self) -> RLRunManifest:
+        """Build the manifest expected for the current RL training configuration."""
+        return build_rl_run_manifest(
+            initial_checkpoint=self.config.initial_checkpoint,
+            model_config=self.config.model,
+            lora_config=self.config.lora,
+            rollout_policy_format=self._rollout_policy_format(),
+            inference_type=self.config.inference_type,
+        )
+
+    def _validate_run_manifest_for_resume(self, trainer: Trainer) -> None:
+        """Fail fast when a LoRA resume request does not match the saved run manifest."""
+        resume_checkpoint = _resume_checkpoint_path_for_validation(trainer)
+        if resume_checkpoint is None:
+            return
+
+        try:
+            manifest = read_rl_run_manifest(self.config.run_manifest_path)
+        except FileNotFoundError as exc:
+            raise ValueError(
+                f"LoRA resume from {resume_checkpoint!r} requires run manifest {self.config.run_manifest_path!r}"
+            ) from exc
+
+        expected = self._expected_run_manifest()
+        mismatches = {
+            "manifest_version": (expected.manifest_version, manifest.manifest_version),
+            "initial_checkpoint": (expected.initial_checkpoint, manifest.initial_checkpoint),
+            "model_config_type": (expected.model_config_type, manifest.model_config_type),
+            "model_config_fingerprint": (expected.model_config_fingerprint, manifest.model_config_fingerprint),
+            "lora_config_fingerprint": (expected.lora_config_fingerprint, manifest.lora_config_fingerprint),
+            "inference_type": (expected.inference_type, manifest.inference_type),
+            "rollout_policy_format": (expected.rollout_policy_format, manifest.rollout_policy_format),
+            "reference_mode": (expected.reference_mode, manifest.reference_mode),
+        }
+
+        for field_name, (expected_value, actual_value) in mismatches.items():
+            if expected_value != actual_value:
+                raise ValueError(
+                    f"LoRA resume manifest mismatch for {field_name}: "
+                    f"expected {expected_value!r}, found {actual_value!r}"
+                )
+
+    def _rollout_transfer_model(self, model: LmHeadModel) -> LmHeadModel:
+        """Return the plain rollout-serving model for the current trainer state."""
+        if self._rollout_policy_format() != "merged":
+            raise ValueError(
+                "rollout_policy_format='adapter' is not implemented yet; "
+                "rollout workers still require merged full-model transfers"
+            )
+
+        if getattr(self.config, "lora", None) is None:
+            return model
+
+        return merge_lora_modules(model)
+
+    def _rollout_policy_format(self) -> Literal["merged", "adapter"]:
+        """Return the rollout-serving format, defaulting to the v1 merged contract."""
+        return getattr(self.config, "rollout_policy_format", "merged")
+
+    def _log_lora_parameter_metrics(self, state) -> None:
+        """Log total and trainable parameter counts for LoRA runs."""
+        all_param_count = parameter_count(state.model)
+        trainable_param_count = parameter_count(state.trainable_model)
+        fraction_trainable = trainable_param_count / all_param_count
+
+        levanter.tracker.log_summary(
+            {
+                "parameter_count": all_param_count,
+                "trainable_parameter_count": trainable_param_count,
+                "fraction_trainable": fraction_trainable,
+            }
+        )
+
+        logger.info("Total parameter count: %d", all_param_count)
+        logger.info("Trainable parameter count: %d", trainable_param_count)
+        logger.info("Fraction of parameters that are trainable: %.3e", fraction_trainable)
+
+    def _log_rollout_policy_metadata(self) -> None:
+        """Record rollout-serving semantics for the current RL run."""
+        levanter.tracker.log_summary(
+            {
+                "rollout_policy_format": self._rollout_policy_format(),
+                "reference_mode": "base",
+            }
+        )
+        logger.info(
+            "Rollout serving configured with rollout_policy_format=%s reference_mode=%s",
+            self._rollout_policy_format(),
+            "base",
+        )
+
+    def _adapter_artifacts_path(self) -> str | None:
+        """Return the adapter export root, if configured."""
+        return getattr(self.config, "adapter_artifacts_path", None)
+
+    def _merged_hf_export_path(self) -> str | None:
+        """Return the merged-HF export root, if configured."""
+        return getattr(self.config, "merged_hf_export_path", None)
+
+    def _final_export_path(self, base_path: str) -> str:
+        """Return the final export directory under an artifact root."""
+        return join_path(base_path, FINAL_EXPORT_DIR)
+
+    def _adapter_base_model_name_or_path(self) -> str | None:
+        """Return the base checkpoint identifier used by PEFT adapter exports."""
+        if self.config.initial_checkpoint is not None:
+            return self.config.initial_checkpoint
+
+        reference_checkpoint = getattr(self.config.model, "reference_checkpoint", None)
+        if reference_checkpoint is None:
+            return None
+
+        return str(reference_checkpoint)
+
+    def _hf_export_converter(self) -> HFCheckpointConverter:
+        """Build an HF converter for merged full-model exports."""
+        if not hasattr(self.config.model, "hf_checkpoint_converter"):
+            raise ValueError("Merged HF export requires an HF-compatible model config")
+
+        converter = self.config.model.hf_checkpoint_converter(self.config.initial_checkpoint)
+        return converter.replaced(tokenizer=self.tokenizer)
+
+    def _export_lora_artifacts(self, model: LmHeadModel) -> None:
+        """Export adapter and merged artifacts for LoRA runs."""
+        if self.config.lora is None:
+            return
+
+        exported_paths: dict[str, str] = {}
+
+        adapter_artifacts_path = self._adapter_artifacts_path()
+        if adapter_artifacts_path is not None:
+            base_model_name_or_path = self._adapter_base_model_name_or_path()
+            if base_model_name_or_path is None or not is_hf_checkpoint(base_model_name_or_path):
+                raise ValueError(
+                    "PEFT adapter export requires an HF-compatible base checkpoint, " f"got {base_model_name_or_path!r}"
+                )
+
+            adapter_export_path = self._final_export_path(adapter_artifacts_path)
+            logger.info("Exporting LoRA adapter artifacts to %s", adapter_export_path)
+            save_peft_pretrained(
+                model,
+                self.config.lora,
+                base_model_name_or_path,
+                adapter_export_path,
+                tokenizer=self.tokenizer,
+            )
+            exported_paths["adapter_artifacts_path"] = adapter_export_path
+
+        merged_hf_export_path = self._merged_hf_export_path()
+        if merged_hf_export_path is not None:
+            merged_export_path = self._final_export_path(merged_hf_export_path)
+            logger.info("Exporting merged HF model to %s", merged_export_path)
+            save_merged_hf_model(model, self._hf_export_converter(), merged_export_path)
+            exported_paths["merged_hf_export_path"] = merged_export_path
+
+        if exported_paths:
+            levanter.tracker.log_summary(exported_paths)
 
     def _drop_bootstrap_model_references(self) -> None:
         """Release one-shot bootstrap model references once trainer state exists."""
@@ -465,8 +675,20 @@ class TrainWorker:
             with Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer:
                 if debug_checkpointer:
                     install_tensorstore_metrics_hook(trainer, every=1)
+                self._log_rollout_policy_metadata()
                 _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
-                state = trainer.initial_state(training_key, model=self.initial_model)
+                if config.lora is None:
+                    state = trainer.initial_state(training_key, model=self.initial_model)
+                else:
+                    self._validate_run_manifest_for_resume(trainer)
+                    if jax.process_index() == 0:
+                        self._write_run_manifest()
+                    state = trainer.initial_state(
+                        training_key,
+                        model=self.initial_model,
+                        is_trainable=self.trainable_model_filter,
+                    )
+                    self._log_lora_parameter_metrics(state)
                 self._drop_bootstrap_model_references()
                 startup_rollout_state = _initial_rollout_state(int(state.step))
                 logger.info(
@@ -487,7 +709,8 @@ class TrainWorker:
 
                 with self.replay_loader:
                     # Always transfer startup weights to rollout workers before we attempt to train.
-                    self.transfer_server.serve_weights(startup_rollout_state.weight_step, state.model)
+                    startup_rollout_model = self._rollout_transfer_model(state.model)
+                    self.transfer_server.serve_weights(startup_rollout_state.weight_step, startup_rollout_model)
 
                     # Wait for startup rollouts so both fresh runs and resumed runs begin with
                     # rollouts that match the currently served weights.
@@ -496,7 +719,8 @@ class TrainWorker:
 
                     self._configure_training_hooks(trainer)
                     try:
-                        trainer.train(state, self.data_loader)
+                        final_info = trainer.train(state, self.data_loader)
+                        self._export_lora_artifacts(final_info.eval_model)
                     except StopTrainerException:
                         pass
         except StopTrainerException:
@@ -593,12 +817,13 @@ class TrainWorker:
         state = info.state
 
         logger.info(
-            "Transferring weights at step %d, loss=%s",
+            "Transferring weights at step %d, loss=%s, rollout_policy_format=%s",
             step,
             info.loss,
+            self._rollout_policy_format(),
         )
 
-        model_params = state.model
+        model_params = self._rollout_transfer_model(state.model)
 
         # Measure weight transfer time
         transfer_start = time.time()
