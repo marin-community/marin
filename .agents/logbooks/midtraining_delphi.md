@@ -936,3 +936,34 @@ For follow-up ranking with smoothed curves, read `tracker_metrics.jsonl` at each
 1. Pull smoothed train-loss + Paloma trajectories from each run's `tracker_metrics.jsonl`; confirm the preliminary 1e20 ranking.
 2. Launch 3 × 1e21 sweep points (`lr=0.5 / 0.67 / 0.83`) on `v5p-64`. Same launch recipe as the 1e20 relaunch above. Expected wall-time ~10 h per run (3.4 B params, same BS=512, slightly larger). The pretrain ckpt lives at `gs://marin-us-central1/adamh-scaling-ladder-nemotron-optimal-1e+21-v5-019021/checkpoints/step-21979/` with schedule count ~21979 (smaller than `num_train_steps=4768` — no wait, it's *larger*, so the same flat-min-lr pathology would apply to the 1e21 runs without the fix, and does not with MODEL_ONLY). With MODEL_ONLY plumbed, the 1e21 sweep will train at the scheduled warmup→peak→decay.
 3. When all 6 land, cross-ranking + winner selection + writeup. Store the winning (base, lr_factor) combination as input to any downstream sweep.
+
+### 2026-04-23 lr=0.67 / lr=0.83 `-v2` reruns (22:53-22:56 UTC) — clean W&B curves
+
+Context: the original lr=0.67 and lr=0.83 runs succeeded with correct training (final losses 0.781 and 0.772) but their W&B panels still showed the OLD broken flat-min-lr curves. Root cause: the Marin executor hash only tracks `versioned(...)` values + `step.name` + upstream dep paths — plain `SimpleTrainConfig` fields (including our `checkpoint_init_mode`) are invisible. With the same us-central1 tokenize dep as before, both runs landed at the same output hashes as the broken v10-era runs (`e3be0c`, `db9de7`) → same W&B run_ids → W&B's step-monotonic guard rejected the fresh metrics.
+
+Fix (commit `0a5b1fde3`): append `-v2` to the `step.name` template in `experiments/exp_delphi_math_10b_midtrain.py:221`, so the name-contribution to the hash changes. Relaunched both with coordinators `/ahmed/delphi-math-10b-1e20-lr{0.67,0.83}-v2-20260423`.
+
+Results:
+
+| Run | Output hash | W&B run name | Final single-step loss |
+|---|---|---|---:|
+| `lr=0.67-v2` | `a176ff` | `delphi-1e20-iso-d2048-L21-math-10b-lr0.67-v2-a176ff` | **0.781** (matches original 0.781 exactly) |
+| `lr=0.83-v2` | `4487d2` | `delphi-1e20-iso-d2048-L21-math-10b-lr0.83-v2-4487d2` | **0.782** (original 0.772; +0.010 single-step noise, statistically indistinguishable) |
+
+Both coordinators in terminal `succeeded` state. No `Cowardly refusing to log metrics` warnings this time — W&B accepted the fresh metrics, so these two runs now have clean warmup→peak→decay curves on the W&B panel.
+
+The 1e20 sweep now has **one set of canonical, clean-W&B results** for the cross-ranking:
+
+| lr factor | Canonical run name | Final loss |
+|---:|---|---:|
+| 0.50 | `delphi-1e20-iso-d2048-L21-math-10b-lr0.5-4d19a2` (us-east5, fresh hash by-accident) | 0.840 |
+| 0.67 | `delphi-1e20-iso-d2048-L21-math-10b-lr0.67-v2-a176ff` | 0.781 |
+| 0.83 | `delphi-1e20-iso-d2048-L21-math-10b-lr0.83-v2-4487d2` | 0.782 |
+
+Preliminary 1e20 ranking (unsmoothed): `lr=0.67 (0.781) ≈ lr=0.83 (0.782) < lr=0.5 (0.840)`. The 0.67/0.83 gap is within noise; smoothed curves + Paloma eval should disambiguate. Either factor is a reasonable default for the 1e21 sweep.
+
+**Stale artifacts to eventually garbage-collect** (no longer canonical; W&B + GCS data is superseded by the `-v2` runs):
+
+- `gs://marin-us-central1/checkpoints/delphi-1e20-iso-d2048-L21-math-10b-lr0.67-e3be0c/` (GCS is the healthy fresh training, but W&B run is polluted with broken data)
+- `gs://marin-us-central1/checkpoints/delphi-1e20-iso-d2048-L21-math-10b-lr0.83-db9de7/` (ditto)
+- Also the corresponding W&B runs at those names — they display misleading flat-min-lr curves; safe to delete once the `-v2` runs are locked in.
