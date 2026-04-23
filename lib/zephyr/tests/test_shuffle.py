@@ -234,15 +234,13 @@ def test_external_sort_merge_cleans_up(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_sidecar_bytes_cache(tmp_path):
-    """Cached sidecar bytes match the file content and are not re-read on subsequent calls."""
+def test_sidecar_bytes_reads_file(tmp_path):
+    """_read_sidecar_bytes returns the raw bytes written to the sidecar file."""
     data_path = str(tmp_path / "shard-0000.shuffle")
     _write_scatter_meta(data_path, {"shards": {"0": [(0, 100)]}, "max_chunk_rows": {"0": 10}, "avg_item_bytes": 50.0})
     meta_path = _scatter_meta_path(data_path)
 
-    raw = _read_sidecar_bytes(meta_path)
-    assert raw == Path(meta_path).read_bytes()  # content matches the file on disk
-    assert _read_sidecar_bytes(meta_path) is raw  # same object — no re-read from disk
+    assert _read_sidecar_bytes(meta_path) == Path(meta_path).read_bytes()
 
 
 def test_sidecar_slice_uses_cache(tmp_path):
