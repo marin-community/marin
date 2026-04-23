@@ -2526,24 +2526,33 @@ class ControllerServiceImpl:
             )
 
         # --- User budgets for response ---
+        # Users without an explicit user_budgets row inherit UserBudgetDefaults;
+        # synthesize entries for any user with active spend so the dashboard
+        # renders their Spent/Limit/Utilization instead of '-'.
         budget_protos: list[controller_pb2.Controller.SchedulerUserBudget] = []
-        for b in budgets:
-            spent = user_spend.get(b.user_id, 0)
-            utilization = (spent / b.budget_limit * 100.0) if b.budget_limit > 0 else 0.0
+        defaults = self._user_budget_defaults
+        seen_users = {b.user_id for b in budgets}
+        budget_rows: list[tuple[str, int, int]] = [(b.user_id, b.budget_limit, b.max_band) for b in budgets]
+        for uid in user_spend:
+            if uid not in seen_users:
+                budget_rows.append((uid, defaults.budget_limit, defaults.max_band))
+        for user_id, budget_limit, max_band in budget_rows:
+            spent = user_spend.get(user_id, 0)
+            utilization = (spent / budget_limit * 100.0) if budget_limit > 0 else 0.0
             # Show effective band: use INTERACTIVE as the test band to see if user is downgraded
             eff = compute_effective_band(
                 job_pb2.PRIORITY_BAND_INTERACTIVE,
-                b.user_id,
+                user_id,
                 user_spend,
                 budget_limits,
                 self._user_budget_defaults,
             )
             budget_protos.append(
                 controller_pb2.Controller.SchedulerUserBudget(
-                    user_id=b.user_id,
-                    budget_limit=b.budget_limit,
+                    user_id=user_id,
+                    budget_limit=budget_limit,
                     budget_spent=spent,
-                    max_band=b.max_band,
+                    max_band=max_band,
                     effective_band=eff,
                     utilization_percent=utilization,
                 )

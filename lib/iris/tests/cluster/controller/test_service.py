@@ -1264,5 +1264,12 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         assert resp.total_running == 1
         assert resp.running_tasks[0].job_id == job_id.to_wire()
         assert resp.running_tasks[0].user_id == "alice"
+        # alice has no explicit user_budgets row but has an active task — the
+        # scheduler state must report her spend using UserBudgetDefaults so the
+        # dashboard renders Spent/Limit/Utilization instead of '-'.
+        alice_budget = next((b for b in resp.user_budgets if b.user_id == "alice"), None)
+        assert alice_budget is not None
+        assert alice_budget.budget_spent > 0
+        assert alice_budget.budget_limit == controller_service._user_budget_defaults.budget_limit
     finally:
         _verified_identity.reset(token)
