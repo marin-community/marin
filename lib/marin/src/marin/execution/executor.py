@@ -778,6 +778,16 @@ class ExecutorStep(Generic[ConfigT]):
     def as_input_name(self) -> "InputName":
         return InputName(step=self, name=None)
 
+    def as_mirrored_value(self, budget_gb: float = 10) -> "MirroredValue[InputName]":
+        """Return a ``MirroredValue`` wrapping this step's output as an ``InputName``.
+
+        This is the step-reference analogue of the free ``mirrored()`` helper
+        used for raw paths.  Usage::
+
+            default_eval(step=training_run.as_mirrored_value())
+        """
+        return MirroredValue(value=self.as_input_name(), budget_gb=budget_gb)
+
 
 @dataclass(frozen=True)
 class InputName:
@@ -797,7 +807,11 @@ class InputName:
     """
 
     def cd(self, name: str) -> "InputName":
-        return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
+        return InputName(
+            self.step,
+            name=os.path.join(self.name, name) if self.name else name,
+            block_on_step=self.block_on_step,
+        )
 
     def __truediv__(self, other: str) -> "InputName":
         """Alias for `cd` that looks more Pythonic."""
@@ -818,6 +832,10 @@ class InputName:
          (Note that if another step depends on the parent step, it will still block on it.)
         """
         return dataclasses.replace(self, block_on_step=False)
+
+    def as_mirrored_value(self, budget_gb: float = 10) -> "MirroredValue[InputName]":
+        """Wrap this input in a ``MirroredValue`` for cross-region mirroring."""
+        return MirroredValue(value=self, budget_gb=budget_gb)
 
 
 def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
@@ -935,11 +953,27 @@ class MirroredValue(Generic[T_co]):
     value: T_co
     budget_gb: float = 10
 
+    def cd(self, name: str) -> "MirroredValue":
+        """Navigate into a subdirectory, keeping the mirror wrapper."""
+        inner = self.value
+        if isinstance(inner, (ExecutorStep, InputName)):
+            return MirroredValue(value=inner.cd(name), budget_gb=self.budget_gb)
+        if isinstance(inner, str):
+            return MirroredValue(value=os.path.join(inner, name), budget_gb=self.budget_gb)
+        raise TypeError(f"cd() not supported on MirroredValue wrapping {type(inner)}")
 
-def mirrored(value: str | VersionedValue[str], budget_gb: float = 10) -> MirroredValue:
+    def __truediv__(self, other: str) -> "MirroredValue":
+        """Alias for ``cd`` that looks more Pythonic."""
+        return self.cd(other)
+
+
+def mirrored(value: str | VersionedValue[str] | InputName, budget_gb: float = 10) -> MirroredValue:
     """Mark a path for cross-region mirroring with a transfer budget.
 
-    Usage: input_path=mirrored(versioned("documents/stackexchange/..."), budget_gb=50)
+    Usage::
+
+        input_path=mirrored(versioned("documents/stackexchange/..."), budget_gb=50)
+        model_path=mirrored(training_step.as_input_name() / "hf", budget_gb=25)
     """
     if isinstance(value, MirroredValue):
         raise ValueError("Can't nest MirroredValue")
@@ -1109,7 +1143,9 @@ def _max_mirror_budget(config: Any) -> float | None:
         if isinstance(obj, VersionedValue):
             recurse(obj.value)
             return
-        if isinstance(obj, InputName | ExecutorStep):
+        if isinstance(obj, InputName):
+            return
+        if isinstance(obj, ExecutorStep):
             return
         if is_dataclass(obj):
             for field in fields(obj):
@@ -1155,9 +1191,10 @@ def instantiate_config(
 
         if isinstance(obj, InputName):
             if obj.step is None:
-                return _make_prefix_absolute_path(prefix, obj.name)
+                resolved = _make_prefix_absolute_path(prefix, obj.name)
             else:
-                return join_path(output_paths[obj.step], obj.name)
+                resolved = join_path(output_paths[obj.step], obj.name)
+            return resolved
         elif isinstance(obj, OutputName):
             return join_path(output_path, obj.name)
         elif isinstance(obj, VersionedValue):

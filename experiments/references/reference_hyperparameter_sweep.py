@@ -611,7 +611,7 @@ def _build_update_step(
             study_resource_name=study_resource_name,
             input_db_path=input_db_path,
             suggestions_path=suggestions_path,
-            run_paths=[step.as_input_name() for step in training_steps],
+            run_paths=[step.as_mirrored_value() for step in training_steps],
             metric_file=SWEEP.metric_file,
             metric_key=SWEEP.metric_key,
             mode=SWEEP.metric_mode,
@@ -648,7 +648,7 @@ if __name__ == "__main__":
     base_launch_config = _build_base_launch_config()
 
     for loop_index in range(num_loops):
-        input_db_path = previous_update_step / VIZIER_DB_FILENAME if previous_update_step else None
+        input_db_path = previous_update_step.as_mirrored_value() / VIZIER_DB_FILENAME if previous_update_step else None
         suggest_step = _build_suggest_step(loop_index=loop_index, input_db_path=input_db_path)
 
         suggestions_path = suggest_step / SUGGESTIONS_FILENAME
@@ -665,14 +665,14 @@ if __name__ == "__main__":
         update_step = _build_update_step(
             loop_index=loop_index,
             study_resource_name=SWEEP.study_resource_name,
-            input_db_path=suggest_step / VIZIER_DB_FILENAME,
+            input_db_path=suggest_step.as_mirrored_value() / VIZIER_DB_FILENAME,
             suggestions_path=suggestions_path,
             training_steps=training_steps,
         )
         previous_update_step = update_step
 
     optimal_step = _build_optimal_step(
-        input_db_path=previous_update_step / VIZIER_DB_FILENAME,
+        input_db_path=previous_update_step.as_mirrored_value() / VIZIER_DB_FILENAME,
         study_resource_name=SWEEP.study_resource_name,
     )
     executor_main(steps=[optimal_step])
