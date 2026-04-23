@@ -11,6 +11,7 @@ All use parquet format with a "text" field.
 """
 
 from dataclasses import dataclass, field
+from functools import cache
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
@@ -135,8 +136,14 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
 }
 
 
+@cache
 def download_nemotron_v2_step(family: str) -> StepSpec:
-    """Create a download StepSpec for a Nemotron v2 dataset family."""
+    """Create a download StepSpec for a Nemotron v2 dataset family.
+
+    Cached because the registry flattens each family to per-subset rows; all
+    subsets of a family must see the SAME download StepSpec object so the
+    ferry dedupes it once across the DAG.
+    """
     info = NEMOTRON_V2_DATASETS[family]
     return download_hf_step(
         f"raw/{family}",
