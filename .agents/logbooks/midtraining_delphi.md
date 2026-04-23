@@ -907,3 +907,32 @@ we have three independent lines of evidence that the LR schedule is alive. The `
 **Runs ended with the expected tqdm rate pattern** — `rate:4.4-4.5s/it` for ~4768 steps = ~5:50 elapsed, plus eval+checkpoint pauses absorbed into the rolling average. No crashes, no preemptions, no mid-training bug.
 
 Coordinators are still showing `running` because Levanter is in the final HF-export phase (~7.7 GB × 2 shards per run). Iris will flip them to `succeeded` in 5-10 min once export commits.
+
+### 1e20 sweep complete (2026-04-23 15:05 UTC) — all three succeeded
+
+All three coordinators in terminal `succeeded` state.
+
+| Run | Coordinator | Final single-step loss | vs v10 broken (0.962) |
+|---|---|---:|---|
+| `lr=0.5` | `/ahmed/delphi-math-10b-1e20-lr0.5-20260423-v2` | **0.840** | −12.7% |
+| `lr=0.67` | `/ahmed/delphi-math-10b-1e20-lr0.67-20260423-v2` | **0.781** | −18.8% |
+| `lr=0.83` | `/ahmed/delphi-math-10b-1e20-lr0.83-20260423-v2` | **0.772** | −19.7% |
+
+Preliminary 1e20 ranking (unsmoothed tqdm tail reading — these have ~0.02 single-step jitter so the ordering is tentative): `lr=0.83 (0.772) < lr=0.67 (0.781) < lr=0.5 (0.840)`.
+
+Wall-times:
+- `lr=0.67`: ~6 h 38 min coordinator-to-succeeded
+- `lr=0.83`: ~6 h 38 min
+- `lr=0.5`: ~7 h 02 min (included zephyr-normalize + zephyr-tokenize in us-east5 before training could start)
+
+GCS outputs at `gs://marin-us-central1/checkpoints/delphi-1e20-iso-d2048-L21-math-10b-lr{0.5,0.67,0.83}-{ba7b7f,e3be0c,db9de7}/` (same hash slots as the DISCARDED v10/broken runs — the Marin-executor-hash-ignores-unversioned-fields caveat remains).
+
+Final HF export (`hf/step-4768/`) is present on all three. Periodic waypoint at `hf/step-1000/`.
+
+For follow-up ranking with smoothed curves, read `tracker_metrics.jsonl` at each output path — W&B is not usable for these runs due to the step-monotonic rejection bug (same-hash-as-broken-run) noted above.
+
+### Next steps
+
+1. Pull smoothed train-loss + Paloma trajectories from each run's `tracker_metrics.jsonl`; confirm the preliminary 1e20 ranking.
+2. Launch 3 × 1e21 sweep points (`lr=0.5 / 0.67 / 0.83`) on `v5p-64`. Same launch recipe as the 1e20 relaunch above. Expected wall-time ~10 h per run (3.4 B params, same BS=512, slightly larger). The pretrain ckpt lives at `gs://marin-us-central1/adamh-scaling-ladder-nemotron-optimal-1e+21-v5-019021/checkpoints/step-21979/` with schedule count ~21979 (smaller than `num_train_steps=4768` — no wait, it's *larger*, so the same flat-min-lr pathology would apply to the 1e21 runs without the fix, and does not with MODEL_ONLY). With MODEL_ONLY plumbed, the 1e21 sweep will train at the scheduled warmup→peak→decay.
+3. When all 6 land, cross-ranking + winner selection + writeup. Store the winning (base, lr_factor) combination as input to any downstream sweep.
