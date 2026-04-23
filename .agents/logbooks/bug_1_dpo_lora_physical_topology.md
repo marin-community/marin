@@ -9797,3 +9797,197 @@ Low-risk operational notes:
   be cancelled to free capacity.
 - `.agents/artifacts/` is locally gitignored per the earlier BL lesson
   so pulled dumps won't bloat the next Iris workspace bundle.
+
+
+## 2026-04-22T D1-tdump result — cohort complete, direction hypothesis refuted, step-11 picture
+
+### Cohort outcome
+
+All four D1-tdump jobs reached terminal success (3 at the 10-min check-in,
+the reverse×ue5 copy finished ~2 min later during eval/HF save):
+
+| variant             | state      | preempts | notes                           |
+|---------------------|-----------|:-------:|---------------------------------|
+| canonical × uc1     | SUCCEEDED | 0       | clean                           |
+| canonical × ue5     | SUCCEEDED | 2       | 2 iommu bounces, auto-recovered |
+| reverse   × uc1     | SUCCEEDED | 2       | 2 iommu bounces, auto-recovered |
+| reverse   × ue5     | SUCCEEDED | 0       | clean                           |
+
+Eval metric on canonical×uc1: ``eval/full_val/dpo_loss = 0.68458`` —
+squarely in the canonical bad-basin established by all prior D1 reruns
+(step-19 loss ~0.66 for canonical). So the rerun landed in the expected
+regime and the P2 artifacts represent a true Bug-1 canonical-vs-reverse
+pair.
+
+GCS: 48 objects per region bucket
+(``gs://marin-{us-central1,us-east5}/debug/bug_1_tensor_dump/20260422/``);
+24 per variant, one per (step ∈ {11,12,13}) × (module ∈ {o_proj,down_proj})
+× (metric ∈ {grad_B, mu_B, nu_B, effective_update_B}). Both regions'
+tensors are bit-deterministic against their matching-region counterpart
+(standard for this recipe), so a single-region pair (uc1) is sufficient
+for analysis.
+
+### Pulled locally for offline work
+
+```
+.agents/artifacts/bug_1_tdump/20260422/
+  d1-canonical-tdump/step_{0011,0012,0013}/{o_proj,down_proj}/{grad_B,mu_B,nu_B,effective_update_B}.npy
+  d1-reverse-tdump/step_{...}/...
+```
+
+Each tensor: ``(layers=32, out=4096, r=64)`` fp32, ~33 MB per file,
+1.5 GB total for the pair. ``.agents/artifacts/`` stays gitignored per
+the earlier BL lesson (25 MB Iris workspace bundle cap).
+
+### Offline analysis
+
+Script: [scratch/p2_analyze_tdump.py](../../scratch/p2_analyze_tdump.py)
+
+Per (module × metric × step) computes: flat cosine, per-layer min/median
+cosine over the 32-layer stack, sign-match fraction, relative L2,
+canonical/reverse norm ratio. Raw tabular output:
+
+```
+step  module               metric   flat_cos  min_layer_cos  med_layer_cos  sign_agr  rel_l2   |c|/|r|
+  11  o_proj               grad_B    0.9999         0.9999         1.0000     0.996    0.009    1.000
+  11  o_proj               mu_B      0.9999         0.9987         1.0000     0.995    0.014    1.003
+  11  o_proj               nu_B      1.0000         0.9966         1.0000     1.000    0.011    1.005
+  11  o_proj   effective_update_B    0.9994         0.9945         1.0000     0.995    0.035    1.003
+  11  down_proj            grad_B    1.0000         0.9998         1.0000     0.996    0.008    0.998
+  11  down_proj            mu_B      0.9999         0.9986         1.0000     0.996    0.011    1.001
+  11  down_proj            nu_B      0.9998         0.9956         1.0000     1.000    0.018    0.998
+  11  down_proj effective_update_B   0.9996         0.9964         1.0000     0.996    0.030    1.002
+
+  12  o_proj               grad_B    0.9757         0.9652         0.9827     0.933    0.532    2.037  *
+  12  o_proj               mu_B      0.9999         0.9990         1.0000     0.996    0.012    1.002
+  12  o_proj               nu_B      1.0000         0.9973         1.0000     1.000    0.010    1.004
+  12  o_proj   effective_update_B    0.9995         0.9956         1.0000     0.996    0.031    1.003
+  12  down_proj            grad_B    0.9769         0.9614         0.9834     0.934    0.540    2.080  *
+  12  down_proj            mu_B      1.0000         0.9989         1.0000     0.996    0.010    1.000
+  12  down_proj            nu_B      0.9999         0.9965         1.0000     1.000    0.016    0.998
+  12  down_proj effective_update_B   0.9997         0.9972         1.0000     0.996    0.027    1.002
+
+  13  o_proj               grad_B    0.9781         0.9659         0.9851     0.938    0.535    2.060  *
+  13  o_proj               mu_B      0.9994         0.9985         0.9996     0.988    0.034    1.006
+  13  o_proj               nu_B      0.9996         0.9974         0.9997     1.000    0.030    1.013
+  13  o_proj   effective_update_B    0.9985         0.9949         0.9990     0.988    0.056    1.007
+  13  down_proj            grad_B    0.9780         0.9645         0.9860     0.940    0.542    2.091  *
+  13  down_proj            mu_B      0.9995         0.9982         0.9996     0.989    0.031    1.006
+  13  down_proj            nu_B      0.9996         0.9963         0.9997     1.000    0.030    1.005
+  13  down_proj effective_update_B   0.9986         0.9962         0.9991     0.989    0.053    1.005
+```
+
+Starred rows = grad_B at steps 12 and 13, where canonical/reverse norm
+ratio is ~2×.
+
+Cross-check on element-wise magnitudes at step 11 (norm ratio is
+deceiving — norms match while individual elements scatter):
+
+```
+step 11 o_proj    grad_B:  |c|=0.7285 |r|=0.7287  mean_rel=3.8%   p99_rel=55%
+step 11 o_proj    mu_B:    |c|=0.1787 |r|=0.1782  mean_rel=4.0%   p99_rel=63%
+step 11 down_proj grad_B:  |c|=1.361  |r|=1.364   mean_rel=4.0%   p99_rel=56%
+step 12 o_proj    grad_B:  |c|=0.677  |r|=0.333   mean_rel=55%    p99_rel=171%
+step 12 down_proj grad_B:  |c|=1.273  |r|=0.612   mean_rel=55%    p99_rel=171%
+```
+
+### Refutation of the handoff's direction hypothesis
+
+The CLAUDESKSTART handoff framed Bug-1 as a "directional / sign-pattern /
+coordinate structure" defect based on D1c/D1d sentinels showing norms
+agree to ~1% while loss bifurcates ~50%. The full-tensor evidence
+disagrees:
+
+- **Directions agree, at every step, on every metric.** Flat cosine is
+  ≥ 0.975 for grad_B and ≥ 0.999 for everything else. Sign agreement on
+  grad_B is 0.93 even in the worst case (step 13) — not a sign flip.
+  The direction-defect hypothesis does not survive contact with the
+  tensors.
+- **What actually bifurcates is grad_B *norm* at step 12+.** Canonical
+  grad_B is ~2× the magnitude of reverse's starting at step 12 on both
+  o_proj and down_proj.
+- **Adam moments track each other to 4 nines** on cosine and to within
+  0.3% on norm, right through step 13. The 2× grad_B divergence barely
+  perturbs mu/nu because each step only contributes 10% weight to mu
+  and the prior mu was nearly identical.
+
+### Updated mechanistic picture (consistent with chaotic amplification)
+
+1. **Through step 11 inclusive**, canonical and reverse are numerically
+   near-identical. Zero-LR prefix (steps 0-10) produces identical
+   forward/backward because B = 0 and A is untouched. Step 11 is the
+   first live update; grad_B at that step is near-identical between
+   variants (`|c|=0.7285`, `|r|=0.7287`, mean elementwise 3.8% rel
+   error — that's bit-level noise on the output-axis collective, not
+   a direction flip).
+2. **Step 11's tiny bit-level noise** in grad_B flows through Adam's
+   first real update and lands as a tiny elementwise perturbation on
+   the post-step-11 B matrix. The canonical B ≠ reverse B by ~3.8%
+   per element while norms match.
+3. **Step 12's forward pass** uses post-step-11 B. DPO loss near init
+   is highly non-linear in B through the softmax — tiny B differences
+   produce large loss differences. Canonical lands at `loss=0.689`
+   (stuck near DPO log-2 baseline); reverse drops to `0.325`.
+4. **Step 12's grad_B reflects the loss gap.** Canonical's stuck-high
+   loss produces larger gradients than reverse's progressing loss →
+   2× norm ratio on grad_B. This is a *consequence* of the basin
+   split, not the trigger.
+5. **Adam's history dominates mu** for the next few steps, so mu keeps
+   tracking between variants even as grad_B norms diverge. By step 13,
+   mu/nu cosine drop from 0.9999 to 0.9994 — the divergence is starting
+   to register but still tiny.
+
+### What this does and doesn't resolve
+
+What the P2 artifacts establish:
+
+- The first detectable canonical/reverse numerical difference is
+  **elementwise bit-level noise in grad_B at step 11** (the first live
+  update) — mean 3.8% relative error, same direction, same norm.
+- Chaotic amplification through the non-linear DPO loss in 1–2 steps
+  produces the ~50% loss gap.
+- Adam smooths the grad_B norm divergence for many steps; by step 19
+  it may have caught up or may still lag. Step-19 tensors are not in
+  this dump (dumps only covered 11–13).
+
+What it does **not** resolve:
+
+- **Where the step-11 bit-level noise originates specifically.** The
+  earlier BL HLO analysis localized it to the SPMD output-axis
+  reduction pass on output-sharded weights; the tensor analysis here
+  is consistent with that, but doesn't add new evidence on the HLO side.
+- **Whether the same fingerprint appears on input-sharded modules.**
+  We dumped only o_proj and down_proj (both output-sharded). A later
+  tdump pair on q_proj/v_proj/gate_proj/up_proj (input-sharded) is
+  needed to confirm the expected clean behavior (cosine ≈ 1 at step 11
+  with no 2× grad_B growth at step 12). That would be the true
+  control.
+
+### Immediate next step
+
+Rerun one more D1-tdump pair with `dump_tensor_modules="q_proj,up_proj"`
+(two input-sharded controls). Predicted pattern if the shard-class rule
+holds:
+
+- Step 11 grad_B/mu_B/nu_B: cosine ≈ 1.0, norm ratio ≈ 1.0, mean_rel
+  elementwise ≈ 0 (input-sharded path doesn't use the output-axis
+  collective).
+- Step 12 grad_B: norm ratio still ≈ 1.0 (no chaotic amplification of
+  a step-11 bit difference because there was no step-11 bit difference
+  to amplify).
+- Loss curves on the q_proj / up_proj LoRA-only runs remain in the
+  canonical/reverse-tight regime documented in L3a and L4a.
+
+If the control shows what it's predicted to show, the chaotic-
+amplification story is closed at the tensor level and the investigation
+can move to documenting rather than exploring. If the input-sharded
+modules also show a step-11 bit difference but don't amplify, then
+something more nuanced is going on — likely specific to how the forward
+pass propagates B-induced perturbations through the DPO loss geometry.
+
+### Files
+
+- offline analysis script:
+  [scratch/p2_analyze_tdump.py](../../scratch/p2_analyze_tdump.py)
+- local tensor artifacts (gitignored):
+  `.agents/artifacts/bug_1_tdump/20260422/`
