@@ -39,7 +39,7 @@ iris job bug-report /user/job-name      # structured diagnostic dump
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
 - **`--extra gpu`** installs CUDA jaxlib but does NOT request GPU hardware. Need both `--gpu H100x8 --extra gpu`.
 - **`--reserve`** holds capacity for scheduling only — does not attach accelerator devices. Use `--tpu`/`--gpu` on the task that needs hardware.
-- **`executor_main` parent jobs** (e.g., canary ferries) submit GPU sub-tasks via Fray. The parent must be CPU-only (`--cpu 1 --memory 16g`), otherwise it hogs the GPU node and deadlocks.
+- **`executor_main` parent jobs** (e.g., canary ferries) submit GPU sub-tasks via Fray. The parent must be CPU-only (`--cpu 1 --memory 2g`), otherwise it hogs the GPU node and deadlocks. Memory at or above 4 GB requires `--enable-extra-resources` (see "Validator opt-in" below).
 
 ## Task Operations
 

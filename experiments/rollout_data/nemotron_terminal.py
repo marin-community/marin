@@ -4,7 +4,8 @@
 """nvidia/Nemotron-Terminal-Corpus rollout dataset.
 
 Usage:
-    uv run lib/marin/src/marin/run/ray_run.py -- python experiments/rollout_data/nemotron_terminal.py
+    uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
+      -- python -m experiments.rollout_data.nemotron_terminal
 """
 
 from fray.v2 import ResourceConfig
