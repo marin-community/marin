@@ -3,12 +3,11 @@
 
 """institutional/institutional-books-1.0 download + transform + normalize helpers.
 
-The upstream parquet schema has no scalar ``text`` or ``id`` columns: pages
-are stored in ``text_by_page_src`` / ``text_by_page_gen`` (list of strings,
-one per page), and the stable identifier is ``barcode_src`` (HathiTrust
-barcode). This module inserts a transform step between download and
-normalize that joins pages into a single ``text`` string and emits the
-Dolma-shaped ``{id, text, source}`` rows the normalize step expects.
+The upstream parquet schema has no scalar ``text`` column: pages are stored
+in ``text_by_page_src`` / ``text_by_page_gen`` (list of strings, one per
+page). This module inserts a transform step between download and normalize
+that joins pages into a single ``text`` string; normalize then synthesizes
+its canonical ``id`` from the text content via xxh3_128.
 
 OCR-corrected pages (``text_by_page_gen``) are preferred over raw source
 pages (``text_by_page_src``); we fall back when the corrected list is
@@ -16,8 +15,6 @@ missing or empty. Pages are joined with a blank line.
 """
 
 from __future__ import annotations
-
-import hashlib
 
 from fray.v2 import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_parquet
@@ -37,23 +34,19 @@ def row_to_doc(row: dict) -> list[dict]:
 
     Prefers OCR-corrected pages (``text_by_page_gen``) over raw source pages
     (``text_by_page_src``). Rows whose page lists are both missing/empty are
-    dropped with an ``institutional_books/dropped`` counter.
+    dropped with an ``institutional_books/dropped`` counter. ``id`` is
+    synthesized downstream by normalize from the joined text.
     """
     pages = row.get("text_by_page_gen") or row.get("text_by_page_src") or []
-    # Arrow may surface list<string> as tuples; normalize to str iterator.
     pages = [p for p in pages if p]
     if not pages:
         counters.increment("institutional_books/dropped")
         return []
 
-    text = PAGE_SEPARATOR.join(pages)
-    doc_id = row.get("barcode_src") or hashlib.sha256(text.encode("utf-8")).hexdigest()
-
     counters.increment("institutional_books/kept")
     return [
         {
-            "id": str(doc_id),
-            "text": text,
+            "text": PAGE_SEPARATOR.join(pages),
             "source": HF_DATASET_ID,
         }
     ]
