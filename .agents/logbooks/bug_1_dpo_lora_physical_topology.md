@@ -9582,3 +9582,218 @@ Fix the ``effective_update`` emission gap in ``lora_debug.py`` first
 offline cosine / sign-agreement analysis — that is the probe that
 actually answers the direction question that L1, zlrmom, and D1c/d all
 pointed at without resolving.
+
+
+## 2026-04-22T P1 + P2: Emission fix shipped, tensor-dump infrastructure added, D1-tdump pair launched
+
+Executes the CLAUDESKSTART handoff end-to-end. P1 (effective_update
+emission bug) is fixed and verified. P2 (full-tensor GCS dump for offline
+direction analysis) is implemented behind an explicit safety gate. Four D1
+Iris jobs are now live that will produce the first full-tensor canonical
+vs reverse snapshot at the post-zero-LR bifurcation window.
+
+### P1 — root cause and fix
+
+`_emit_opt_state_stats` computed `mod_key` from the full flattened opt-state
+path, which for optax Adam includes a `.mu`/`.nu` segment
+(e.g. `inner_state/1/mu/transformer/.../q_proj`). The mu version and the
+nu version of the same parameter therefore built different pairing keys
+(`B/inner_state/1/mu/...` vs `B/inner_state/1/nu/...`), so
+`nu_by_key.get(mu_key)` returned `None` for every entry. The
+`m/(sqrt(v)+eps)` block `continue`d for every parameter → zero
+`adam/effective_update/*` and zero `sentinel/adam_effective_update/*` keys
+ever emitted to W&B in D1c/D1d. Sentinel `adam_m` survived because its
+list was built independently of mu/nu pairing.
+
+Fix: add `_strip_adam_slot_segments(path)` that drops `mu`/`nu`
+components before computing the module key. Slot detection still runs on
+the original path so `adam/m/` vs `adam/v/` labeling is unchanged. Side
+benefit: keys no longer carry the slot marker — new shape is
+`lora_debug/adam/{m|v|effective_update}/{A|B}/inner_state/1/transformer/.../q_proj/l2`
+instead of the prior
+`.../adam/m/B/inner_state/1/mu/transformer/.../q_proj/l2`. Historical
+D1c/D1d keys with embedded `/mu/` are obsolete; any future cross-run diff
+should use post-fix runs only.
+
+Commit: `cfc3fea03 [dpo] P1: Fix lora_debug effective_update emission gap`.
+
+Verified offline on a Llama-8B-shaped params tree under the real
+`optax.inject_hyperparams + chain(clip, scale_by_adam,
+add_decayed_weights(masked), scale)` layout. Both `adam/effective_update`
+aggregates and `sentinel/adam_effective_update` keys now emit. The
+aggregate value for `q_proj.B` matched a direct NumPy recompute to
+fp32 sum-order noise (~2e-4 relative). Repro script at
+[scratch/p1_repro_effective_update.py](../../scratch/p1_repro_effective_update.py).
+
+### P2 — full-tensor GCS dump
+
+Norms and fixed-index sentinels both summarise each tensor to a few
+scalars. Two tensors with identical marginal statistics can still differ
+by an arbitrary rotation, coordinate permutation, or per-index sign
+flip — which is exactly the regime D1c/D1d implied (norms agree ~1%,
+loss bifurcates ~50%). Closing that question needs both tensors in the
+same analysis, not more scalar summaries.
+
+Added four knobs to `LoraDebugConfig`, all gated behind a single
+top-level safety flag:
+
+```
+verbose_grads:        bool = False   # hard guard; must be True to do anything
+dump_tensors_at_steps: tuple[int, ...] = ()
+dump_tensor_modules:   tuple[str, ...] = ()
+dump_tensor_path:      Optional[str] = None   # fsspec prefix (gs://, local, ...)
+```
+
+Inside `inside_step`, when all four are non-default the callback collects
+`grad_B` (pre-optimizer), Adam `mu_B`, `nu_B`, and `effective_update_B
+= mu / (sqrt(nu) + eps)` for each module whose path substring-matches
+`dump_tensor_modules`. Tensors are `lax.cond`-gated on
+`state.step ∈ dump_tensors_at_steps`: the non-dump branch returns
+`jnp.zeros_like` of the same shape, so the JIT payload shape stays
+fixed and XLA can elide real device→host transfer on non-dump steps.
+
+Tensors flow out under `__lora_tensor_dump__/{metric}/{module}` keys in
+the normal `cb_info` dict. `on_step` splits the dict on that prefix
+before calling `levanter.tracker.log` so W&B never sees the 256 MB
+blobs even if the gate was flipped accidentally. When the Python-level
+step matches a configured dump step, the host writes each tensor to
+`{dump_tensor_path}/step_{N:04d}/{module}/{metric}.npy` via
+`fsspec.open` (supports `gs://` and local).
+
+Commit: `9795627c9 [dpo] P2: Full-tensor GCS dump for offline
+cosine/sign-agreement analysis`.
+
+Env-var plumbing added so SimpleDPOConfig-based experiments can enable
+P2 without modifying `default_dpo` to thread a new field. Four env
+vars, all consumed by `LoraDebugConfig.with_env_overrides()` which
+`build()` now calls:
+
+```
+MARIN_DEBUG_LORA_VERBOSE_GRADS=1          # required explicit opt-in
+MARIN_DEBUG_LORA_DUMP_STEPS="11,12,13"
+MARIN_DEBUG_LORA_DUMP_MODULES="o_proj,down_proj"
+MARIN_DEBUG_LORA_DUMP_PATH="gs://..."
+```
+
+The `verbose_grads` gate is intentionally a **separate env var** from
+`MARIN_DEBUG_LORA_DEBUG=1`: setting only a `DUMP_PATH` cannot enable
+dumps. Both gates must be on. The D1 launcher mirrors these into the
+TPU worker env when present in the parent process.
+
+Commit: `d51bdfe0d [dpo] P2 env-var plumbing + D1 launcher pass-through`.
+
+### Verification before launch
+
+All exercised on a Levanter-shaped optax chain + 8B-Llama-shaped params
+tree (q/k/v/o + gate/up/down LoRA with scan-stacked layers):
+
+- **Default-off path** (`verbose_grads=False`): 270 scalar keys emit
+  normally; zero `__lora_tensor_dump__/` keys; zero P2 overhead.
+- **Verbose-on 5-step walk** with `dump_steps=(2,3)`,
+  `modules=(o_proj,down_proj)`:
+  - 8 tensor keys per step in `cb_info` (4 metrics × 2 modules).
+  - Zeros on steps 0, 1, 4 — `lax.cond` gating correct.
+  - Real non-zero values on steps 2, 3.
+  - On-disk: only `step_0002/` and `step_0003/` dirs exist, each with
+    exactly 8 `.npy` files. No stray writes.
+- **Split logic**: tracker.log receives only scalar keys even when
+  tensor keys are present in cb_info.
+- **P1 regression**: passes — `effective_update` emission still works.
+
+Scratch scripts preserved at
+[scratch/p2_smoke_tensor_dump.py](../../scratch/p2_smoke_tensor_dump.py)
+and
+[scratch/p2_smoke_default_off.py](../../scratch/p2_smoke_default_off.py).
+
+### D1-tdump rerun launched (`20260423-0021` Z stamp)
+
+Rerun shape per the handoff: same D1 recipe (20 steps, 10-step zero-LR
+prefix, canonical vs reverse, `MARIN_DEBUG_LORA_DEBUG=1`), with P2 env
+vars set to dump at steps `(11, 12, 13)` (the first three live training
+steps after zero-LR warmup) for `o_proj` and `down_proj` — the two
+output-sharded projections already established as the Bug-1 epicenter.
+
+Per the standing multi-region rule, 4 jobs submitted
+(canonical/reverse × us-central1/us-east5):
+
+| variant | region     | Iris job                                                         | GCS dump prefix                                                              |
+|---------|------------|-----------------------------------------------------------------|------------------------------------------------------------------------------|
+| canonical | us-central1 | `/ahmedah/experiment-d1-canonical-central1-tdump-20260423-0021` | `gs://marin-us-central1/debug/bug_1_tensor_dump/20260422/d1-canonical-tdump/` |
+| canonical | us-east5    | `/ahmedah/experiment-d1-canonical-east5-tdump-20260423-0021`    | `gs://marin-us-east5/debug/bug_1_tensor_dump/20260422/d1-canonical-tdump/`    |
+| reverse   | us-central1 | `/ahmedah/experiment-d1-reverse-central1-tdump-20260423-0021`   | `gs://marin-us-central1/debug/bug_1_tensor_dump/20260422/d1-reverse-tdump/`   |
+| reverse   | us-east5    | `/ahmedah/experiment-d1-reverse-east5-tdump-20260423-0021`      | `gs://marin-us-east5/debug/bug_1_tensor_dump/20260422/d1-reverse-tdump/`      |
+
+Each run tagged `d1-<order>-<region>-tdump` in `MARIN_DEBUG_RUN_TAG`.
+At submit time all four parent tasks reached state `JOB_STATE_RUNNING`
+with no errors. TPU children had not yet been spawned (CPU parent in
+executor-prep phase).
+
+### Expected artifacts per successful variant
+
+```
+{gcs_prefix}/step_0011/o_proj/{grad_B,mu_B,nu_B,effective_update_B}.npy
+{gcs_prefix}/step_0011/down_proj/{grad_B,mu_B,nu_B,effective_update_B}.npy
+{gcs_prefix}/step_0012/o_proj/{grad_B,mu_B,nu_B,effective_update_B}.npy
+{gcs_prefix}/step_0012/down_proj/{grad_B,mu_B,nu_B,effective_update_B}.npy
+{gcs_prefix}/step_0013/o_proj/{grad_B,mu_B,nu_B,effective_update_B}.npy
+{gcs_prefix}/step_0013/down_proj/{grad_B,mu_B,nu_B,effective_update_B}.npy
+```
+
+24 tensors × 2 variants × 2 regions = 96 objects total. Volume is
+dominated by `grad_B`, `mu_B`, `nu_B`, `effective_update_B` on
+`down_proj` (fp32 × layers × ffn_dim × r) ≈ 120 MB each on 8B Llama.
+Total across the cohort: single-digit GB.
+
+Within each region×variant, the four metrics for each module should
+satisfy `effective_update_B ≈ mu_B / (sqrt(nu_B) + 1e-8)` — this is a
+cheap post-hoc sanity check.
+
+### What the offline analysis will compute
+
+Per-layer, per-module, per-metric, per-step comparisons between the
+canonical and reverse runs (using the same region to avoid cross-region
+noise — prefer the us-central1 pair):
+
+- **Flat cosine**: `(c·r) / (||c|| ||r||)` over the full flattened
+  tensor.
+- **Per-layer cosine**: reshape to `(layer, -1)`, compute per-layer
+  cosine. Bug-1 hypothesis predicts `cosine < 0.5` on `o_proj` /
+  `down_proj` at step 11 with `q_proj` control staying `> 0.95`.
+- **Sign agreement**: `(sign(c) == sign(r)).mean()`. Expected fork on
+  output-sharded modules; expected ~1 on input-sharded control.
+- **Relative L2**: `||c - r||_2 / ||c||_2`. Pairs with cosine to split
+  norm vs direction defects.
+
+Deferred decision rules (carried over from the handoff):
+
+- `cosine < 0.5` on `o_proj` / `down_proj` at step 11 while > 0.95 on
+  `q_proj` → direction fork confirmed at the coordinate level. Topology
+  hypothesis stands; look at what per-layer pattern separates them.
+- `cosine ≈ 1` everywhere but loss still diverges → defect is
+  downstream of these tensors; look at `lora_A` interaction or
+  forward-pass activations, not more optimizer state.
+- `sign_agree < 0.6` on a specific layer range → effect is
+  layer-localised; next probe should be per-layer rather than
+  per-module.
+
+### Next checkpoint
+
+When any of the four jobs reaches terminal state, run:
+
+1. `gsutil ls -r gs://marin-us-central1/debug/bug_1_tensor_dump/20260422/` to
+   inventory the dumps.
+2. Verify each run produced 24 .npy files at 3 steps × 2 modules × 4
+   metrics.
+3. Pull matching canonical/reverse pair (prefer us-central1) locally
+   into `.agents/artifacts/bug_1_tdump/20260422/`.
+4. Run the offline cosine / sign-agreement notebook (not yet written;
+   template at the bottom of the CLAUDESKSTART section).
+
+Low-risk operational notes:
+- us-east5 runs write to a us-east5 bucket (region-local), so no
+  cross-region transfer overhead.
+- If the us-central1 pair finishes first with bit-identical recipe
+  determinism (standard for these experiments), the us-east5 pair can
+  be cancelled to free capacity.
+- `.agents/artifacts/` is locally gitignored per the earlier BL lesson
+  so pulled dumps won't bloat the next Iris workspace bundle.
