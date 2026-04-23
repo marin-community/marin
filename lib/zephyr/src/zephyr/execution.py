@@ -993,10 +993,6 @@ class ZephyrCoordinator:
             self._chunk_prefix = prefix
             self._execution_id = execution_id
 
-    def start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
-        """Load a new stage's tasks into the queue (legacy compat)."""
-        self._start_stage(stage_name, tasks, is_last_stage=is_last_stage)
-
     def check_heartbeats(self, timeout: float = 120.0) -> None:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""
         with self._lock:
