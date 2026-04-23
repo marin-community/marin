@@ -1383,6 +1383,10 @@ class Controller:
                     self._transitions.prune_task_resource_history()
                 except Exception:
                     logger.exception("Task resource history cleanup failed")
+                try:
+                    self._transitions.prune_task_stats_history()
+                except Exception:
+                    logger.exception("Task stats history cleanup failed")
 
             if wal_checkpoint_limiter.should_run():
                 try:
