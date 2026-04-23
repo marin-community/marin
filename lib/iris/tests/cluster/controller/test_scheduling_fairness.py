@@ -5,7 +5,7 @@
 
 from collections import defaultdict
 
-from iris.cluster.controller.budget import UserTask, compute_effective_band, interleave_by_user
+from iris.cluster.controller.budget import UserBudgetDefaults, UserTask, compute_effective_band, interleave_by_user
 from iris.cluster.controller.controller import SchedulingOutcome, _schedulable_tasks
 from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
 from iris.cluster.types import JobName, WorkerId
@@ -183,8 +183,8 @@ def test_child_inherits_parent_band():
             )
 
 
-def test_user_budget_row_created_on_submit():
-    """Submitting a job creates a user_budgets row with defaults."""
+def test_submit_does_not_create_user_budgets_row():
+    """Submitting a job does NOT create a user_budgets row; absence = defaults."""
     with make_controller_state() as state:
         _submit_user_job(state, "newuser", "first-job")
 
@@ -192,9 +192,10 @@ def test_user_budget_row_created_on_submit():
             "SELECT budget_limit, max_band FROM user_budgets WHERE user_id = ?",
             ("newuser",),
         )
-        assert row is not None, "user_budgets row should be created on first job submission"
-        assert row["budget_limit"] == 0  # default unlimited
-        assert row["max_band"] == job_pb2.PRIORITY_BAND_BATCH  # default
+        assert row is None, (
+            "user_budgets row should NOT be created on first job submission; "
+            "unlisted users fall through to UserBudgetDefaults at read time"
+        )
 
 
 def test_default_band_is_interactive():
@@ -222,7 +223,9 @@ def test_user_over_budget_tasks_become_batch():
         # Compute effective bands — alice's tasks should become BATCH
         tasks_by_band: dict[int, list[JobName]] = defaultdict(list)
         for task in schedulable:
-            band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
+            band = compute_effective_band(
+                task.priority_band, task.task_id.user, user_spend, user_budget_limits, UserBudgetDefaults()
+            )
             tasks_by_band[band].append(task.task_id)
 
         alice_ids = {t.task_id for t in alice_tasks}
@@ -245,7 +248,9 @@ def test_user_within_budget_keeps_interactive():
         user_budget_limits = {"alice": 50000}
 
         for task in schedulable:
-            band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
+            band = compute_effective_band(
+                task.priority_band, task.task_id.user, user_spend, user_budget_limits, UserBudgetDefaults()
+            )
             assert band == job_pb2.PRIORITY_BAND_INTERACTIVE
 
 
@@ -259,7 +264,9 @@ def test_production_never_downgraded_by_budget():
         user_budget_limits = {"alice": 100}
 
         for task in schedulable:
-            band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
+            band = compute_effective_band(
+                task.priority_band, task.task_id.user, user_spend, user_budget_limits, UserBudgetDefaults()
+            )
             assert band == job_pb2.PRIORITY_BAND_PRODUCTION
 
 
@@ -273,7 +280,9 @@ def test_zero_budget_means_unlimited():
         user_budget_limits = {"alice": 0}
 
         for task in schedulable:
-            band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
+            band = compute_effective_band(
+                task.priority_band, task.task_id.user, user_spend, user_budget_limits, UserBudgetDefaults()
+            )
             assert band == job_pb2.PRIORITY_BAND_INTERACTIVE
 
 

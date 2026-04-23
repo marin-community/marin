@@ -129,8 +129,8 @@ def _tier(user_ids: list[str], budget_limit: int, max_band: int) -> config_pb2.U
 def test_reconcile_creates_rows_for_fresh_users(db: ControllerDB) -> None:
     """On a fresh DB, reconcile_user_budget_tiers upserts the intended rows.
 
-    This is the gap migration 0037 misses: listed users with no pre-existing
-    user_budgets row would otherwise land on UserBudgetDefaults at first-submit.
+    Without this, listed users would have no row and fall back to
+    UserBudgetDefaults when the scheduler or launch-job guard looks them up.
     """
     tiers = [
         _tier(["alice", "bob"], 75000, job_pb2.PRIORITY_BAND_PRODUCTION),

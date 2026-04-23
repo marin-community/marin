@@ -179,14 +179,14 @@ scale_groups:
 # ---------------------------------------------------------------------------
 # User budget tiers
 #
-# Reconciled into user_budgets on every controller start. Mirrors the one-shot
-# fixup in migrations/0037_user_budget_default.py so fresh DBs (and listed
-# users who haven't yet submitted a job) land on the intended tier instead of
-# UserBudgetDefaults (budget_limit=0, max_band=BATCH).
+# This section is the source of truth for per-user budgets. It is reconciled
+# into user_budgets on every controller start (migration 0037 truncates the
+# table first so the config fully owns row contents).
 #
-# Unlisted submitters stay on the default BATCH cap; see
-# docs/priority-bands.md → "Max-band caps" for the recovery path when an
-# unlisted user hits PERMISSION_DENIED on an INTERACTIVE submission.
+# Unlisted submitters have no row and fall through to UserBudgetDefaults at
+# read time — a small INTERACTIVE budget that silently degrades to BATCH once
+# exceeded. See docs/priority-bands.md → "Max-band caps and unlisted users"
+# for the recovery path on PERMISSION_DENIED.
 # ---------------------------------------------------------------------------
 user_budgets:
   # Admins: standard budget, may submit PRIORITY_BAND_PRODUCTION for work that

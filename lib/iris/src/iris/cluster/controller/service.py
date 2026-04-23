@@ -32,6 +32,7 @@ from iris.cluster.controller.codec import (
     resource_spec_from_scalars,
 )
 from iris.cluster.controller.budget import (
+    UserBudgetDefaults,
     UserTask,
     compute_effective_band,
     compute_user_spend,
@@ -964,6 +965,7 @@ class ControllerServiceImpl:
         log_service: LogServiceImpl | LogServiceProxy,
         auth: ControllerAuth | None = None,
         system_endpoints: dict[str, str] | None = None,
+        user_budget_defaults: UserBudgetDefaults | None = None,
     ):
         self._transitions = transitions
         self._db = db
@@ -973,6 +975,7 @@ class ControllerServiceImpl:
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
         self._system_endpoints: dict[str, str] = system_endpoints or {}
+        self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
         # Short-TTL cache of the worker roster. Dashboards call ListWorkers
         # and GetAutoscalerStatus back-to-back; both enumerate every worker.
         # 1s is short enough that stale rows don't matter (workers have
@@ -1052,19 +1055,24 @@ class ControllerServiceImpl:
             self._authorize_job_owner(job_id)
 
         # Priority band validation: PRODUCTION requires MANAGE_BUDGETS permission,
-        # and user's max_band from budget table must allow the requested band.
+        # and non-PRODUCTION submissions are capped by the user's max_band (or
+        # UserBudgetDefaults when the user has no explicit row).
         # UNSPECIFIED (0) defaults to INTERACTIVE.
         band = request.priority_band or job_pb2.PRIORITY_BAND_INTERACTIVE
         if band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
+            # MANAGE_BUDGETS is the primary gate for PRODUCTION; admins pass
+            # here and skip the max_band cap below (the cap is meant to prevent
+            # unlisted users from punching up, not to re-check admins).
             authorize(AuthzAction.MANAGE_BUDGETS)
-        if self._auth.provider and verified_user is not None:
+        elif self._auth.provider and verified_user is not None:
             user_budget = self._db.get_user_budget(job_id.user)
-            if user_budget is not None and band < user_budget.max_band:
+            max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
+            if band < max_band:
                 raise ConnectError(
                     Code.PERMISSION_DENIED,
                     f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
-                    f"(max band: {priority_band_name(user_budget.max_band)}). "
-                    f"Resubmit with `--priority {priority_band_name(user_budget.max_band).lower()}` "
+                    f"(max band: {priority_band_name(max_band)}). "
+                    f"Resubmit with `--priority {priority_band_name(max_band).lower()}` "
                     f"(e.g. `--priority batch`) to launch opportunistically, or ping @Helw150 "
                     f"if you believe your username ({job_id.user}) should have a higher band — "
                     f"either to be added to the researcher list or to confirm your username is "
@@ -2469,7 +2477,9 @@ class ControllerServiceImpl:
         # Partition tasks by effective band
         tasks_by_band: dict[int, list[UserTask]] = {b: [] for b in BAND_ORDER}
         for task in pending_tasks:
-            eff_band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, budget_limits)
+            eff_band = compute_effective_band(
+                task.priority_band, task.task_id.user, user_spend, budget_limits, self._user_budget_defaults
+            )
             ut: UserTask = UserTask(user_id=task.task_id.user, task=(task, eff_band))
             target_band = eff_band if eff_band in tasks_by_band else job_pb2.PRIORITY_BAND_BATCH
             tasks_by_band[target_band].append(ut)
@@ -2517,7 +2527,13 @@ class ControllerServiceImpl:
             spent = user_spend.get(b.user_id, 0)
             utilization = (spent / b.budget_limit * 100.0) if b.budget_limit > 0 else 0.0
             # Show effective band: use INTERACTIVE as the test band to see if user is downgraded
-            eff = compute_effective_band(job_pb2.PRIORITY_BAND_INTERACTIVE, b.user_id, user_spend, budget_limits)
+            eff = compute_effective_band(
+                job_pb2.PRIORITY_BAND_INTERACTIVE,
+                b.user_id,
+                user_spend,
+                budget_limits,
+                self._user_budget_defaults,
+            )
             budget_protos.append(
                 controller_pb2.Controller.SchedulerUserBudget(
                     user_id=b.user_id,
@@ -2549,7 +2565,9 @@ class ControllerServiceImpl:
         running_protos: list[controller_pb2.Controller.SchedulerRunningTask] = []
         for row in running_rows:
             res = _resource_spec_from_job_row(row)
-            eff_band = compute_effective_band(row.priority_band, row.task_id.user, user_spend, budget_limits)
+            eff_band = compute_effective_band(
+                row.priority_band, row.task_id.user, user_spend, budget_limits, self._user_budget_defaults
+            )
             accel = get_gpu_count(res.device) + get_tpu_count(res.device)
             rv = resource_value(res.cpu_millicores, res.memory_bytes, accel)
             is_cosched = bool(row.has_coscheduling)

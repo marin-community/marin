@@ -15,7 +15,6 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, NamedTuple
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
-from iris.cluster.controller.budget import UserBudgetDefaults
 from iris.cluster.controller.codec import (
     constraints_from_json,
     constraints_to_json,
@@ -971,11 +970,9 @@ class ControllerTransitions:
     def __init__(
         self,
         db: ControllerDB,
-        user_budget_defaults: UserBudgetDefaults | None = None,
         health: WorkerHealthTracker | None = None,
     ):
         self._db = db
-        self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
         self._health = health or WorkerHealthTracker()
 
     def _recompute_job_state(self, cur: Any, job_id: JobName) -> int | None:
@@ -1114,18 +1111,10 @@ class ControllerTransitions:
                 "INSERT OR IGNORE INTO users(user_id, created_at_ms) VALUES (?, ?)",
                 (job_id.user, effective_submission_ms),
             )
-            # Create default user budget row alongside user creation.
-            budget_defaults = self._user_budget_defaults
-            cur.execute(
-                "INSERT OR IGNORE INTO user_budgets(user_id, budget_limit, max_band, updated_at_ms) "
-                "VALUES (?, ?, ?, ?)",
-                (
-                    job_id.user,
-                    budget_defaults.budget_limit,
-                    budget_defaults.max_band,
-                    effective_submission_ms,
-                ),
-            )
+            # No user_budgets row is created here: absence means "apply
+            # UserBudgetDefaults". Rows exist only for tier seeds from cluster
+            # config (see reconcile_user_budget_tiers) and admin overrides via
+            # set_user_budget.
 
             # Resolve priority band: use explicit request value, inherit from parent, or default to INTERACTIVE.
             requested_band = int(request.priority_band)

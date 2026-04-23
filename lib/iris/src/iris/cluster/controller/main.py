@@ -216,10 +216,9 @@ def run_controller_serve(
         base_worker_config.auth_token = auth.worker_token
 
     # Reconcile per-user budget tiers from the cluster config into the DB.
-    # Runs after auth so users listed in admin_users already have rows; the
-    # upsert here adds/updates budget_limit and max_band for everyone in
-    # cluster_config.user_budgets. Unlisted users still fall through to
-    # UserBudgetDefaults at first-submit time.
+    # Runs after migrations have cleared user_budgets (see migration 0037).
+    # Unlisted users are left without a row and fall through to
+    # UserBudgetDefaults when the scheduler and launch-job guard look them up.
     if cluster_config and cluster_config.user_budgets:
         reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
 
