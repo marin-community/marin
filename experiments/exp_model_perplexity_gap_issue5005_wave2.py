@@ -50,6 +50,7 @@ SKIPPED_DATASETS = frozenset(
         "bio_chem/rcsb/rcsb_mmcif",
         "bio_chem/refseq/refseq_viral_fasta",
         "bio_chem/refseq/refseq_viral_gff",
+        "long_tail_ppl_runnable/game_music/lichess_pgn_2013_06",
     }
 )
 
@@ -58,6 +59,7 @@ def _game_music_raw_validation_sets() -> dict[str, RawTextEvaluationDataset]:
     return {
         slice_.registry_key: slice_.to_raw_text_dataset()
         for slice_ in runnable_long_tail_ppl_slices(family=LongTailPplFamily.GAME_MUSIC)
+        if slice_.registry_key not in SKIPPED_DATASETS
     }
 
 
