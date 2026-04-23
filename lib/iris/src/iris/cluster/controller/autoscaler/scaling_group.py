@@ -310,6 +310,10 @@ class ScalingGroup:
         # Demand tracking (simple current/peak, no history)
         self._current_demand: int = 0
         self._peak_demand: int = 0
+        # Raw pending demand (pre-absorption): prevents premature scaledown when
+        # the dry-run absorbs all pending tasks onto idle workers that haven't
+        # actually been assigned work by the real scheduler yet.
+        self._pending_demand: int = 0
 
         self._idle_threshold = idle_threshold
 
@@ -700,9 +704,23 @@ class ScalingGroup:
             return state.handle
 
     def update_demand(self, demand: int) -> None:
-        """Update current demand."""
+        """Update current demand (post dry-run absorption)."""
         self._current_demand = demand
         self._peak_demand = max(self._peak_demand, demand)
+
+    def update_pending_demand(self, demand: int) -> None:
+        """Update raw pending demand (pre dry-run absorption).
+
+        This tracks how many slices are needed based on pending tasks alone,
+        without the dry-run scheduler absorbing tasks onto idle workers.
+        Used as a floor for scaledown target_capacity to prevent terminating
+        slices when workers are idle but pending tasks exist.
+        """
+        self._pending_demand = demand
+
+    @property
+    def pending_demand(self) -> int:
+        return self._pending_demand
 
     def can_fit_resources(self, resources: job_pb2.ResourceSpecProto) -> bool:
         """Check whether a demand entry's resources fit within one VM."""

@@ -455,7 +455,11 @@ class Autoscaler:
                         )
 
         for group in self._groups.values():
-            target_capacity = min(group.current_demand + group.buffer_slices, group.max_slices)
+            # Use max(absorbed_demand, raw_pending_demand) to prevent scaledown
+            # when the dry-run absorbs all pending tasks onto idle workers that
+            # haven't actually been assigned work by the real scheduler yet.
+            effective_demand = max(group.current_demand, group.pending_demand)
+            target_capacity = min(effective_demand + group.buffer_slices, group.max_slices)
             ready_before = group.ready_slice_count()
             scaled_down_handles = group.scale_down_if_idle(worker_status_map, target_capacity, timestamp)
             for handle in scaled_down_handles:
@@ -466,6 +470,18 @@ class Autoscaler:
                     slice_id=handle.slice_id,
                     reason=f"idle slice (target={target_capacity}, ready={ready_before})",
                 )
+
+    def update_pending_demand(self, raw_demand_entries: list[DemandEntry], timestamp: Timestamp | None = None) -> None:
+        """Update pending_demand per group from raw demand entries (no dry-run absorption).
+
+        Must be called BEFORE refresh() so that scaledown decisions see the
+        raw demand floor. This prevents terminating idle slices when the dry-run
+        absorbs all pending tasks but the real scheduler hasn't assigned them.
+        """
+        ts = timestamp or Timestamp.now()
+        raw_routing = route_demand(list(self._groups.values()), raw_demand_entries, ts)
+        for name, group in self._groups.items():
+            group.update_pending_demand(raw_routing.group_required_slices.get(name, 0))
 
     def update(
         self,
@@ -487,10 +503,13 @@ class Autoscaler:
         demand_entries: list[DemandEntry],
         worker_status_map: WorkerStatusMap,
         timestamp: Timestamp | None = None,
+        raw_demand_entries: list[DemandEntry] | None = None,
     ) -> list[ScalingDecision]:
-        """Full cycle: refresh + update. Preserved for tests."""
+        """Full cycle: update_pending_demand + refresh + update. Preserved for tests."""
         timestamp = timestamp or Timestamp.now()
         logger.debug("Autoscaler run_once: demand_entries=%s", demand_entries)
+        if raw_demand_entries is not None:
+            self.update_pending_demand(raw_demand_entries, timestamp)
         self.refresh(worker_status_map, timestamp)
         return self.update(demand_entries, timestamp)
 
