@@ -88,6 +88,34 @@ def _write_executor_info(step: StepSpec) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _flatten_transitive_deps(steps: Iterable[StepSpec]) -> list[StepSpec]:
+    """Walk transitive deps in post-order, deduping by ``output_path``.
+
+    Callers can pass only terminal steps; the runner resolves the full graph.
+    A cycle in the graph is a construction-time invariant violation and raises.
+    """
+    seen: set[str] = set()
+    in_stack: set[str] = set()
+    ordered: list[StepSpec] = []
+
+    def visit(step: StepSpec) -> None:
+        path = step.output_path
+        if path in seen:
+            return
+        if path in in_stack:
+            raise ValueError(f"Cycle detected in step graph involving {step.name_with_hash}")
+        in_stack.add(path)
+        for dep in step.deps:
+            visit(dep)
+        in_stack.remove(path)
+        seen.add(path)
+        ordered.append(step)
+
+    for step in steps:
+        visit(step)
+    return ordered
+
+
 class StepRunner:
     """Runs ``StepSpec`` objects respecting their dependencies.
 
@@ -106,10 +134,11 @@ class StepRunner:
     ) -> None:
         """Eagerly run steps, launching each as soon as its deps are satisfied.
 
-        Concurrency is bounded by the thread pool (``max_concurrent`` workers,
-        default 8). If a step's dependencies haven't been seen yet, it is
-        buffered until they complete. Raises if the iterable is exhausted and
-        buffered steps still have unsatisfied dependencies.
+        The input iterable may contain only the terminal steps you want to
+        reach; the runner walks transitive deps (deduped by ``output_path``)
+        before scheduling. Concurrency is bounded by the thread pool
+        (``max_concurrent`` workers, default 8). Already-succeeded deps
+        (``STATUS_SUCCESS`` on disk) resolve via the cache check.
         """
         max_workers = max_concurrent or 8
         if max_workers < 1:
@@ -196,7 +225,8 @@ class StepRunner:
             else:
                 completed.add(path)
 
-        for step in steps:
+        flattened = _flatten_transitive_deps(steps)
+        for step in flattened:
             path_to_name[step.output_path] = step.name_with_hash
 
             _harvest()
@@ -212,22 +242,6 @@ class StepRunner:
 
         # Drain remaining running and waiting steps
         while running or waiting:
-            if not running and waiting:
-                _flush_waiting()
-                if not running and waiting:
-                    missing = []
-                    for s in waiting:
-                        unmet = [
-                            _display_name(d.output_path)
-                            for d in s.deps
-                            if d.output_path not in completed and d.output_path not in failed
-                        ]
-                        missing.append(f"  {s.name_with_hash}: needs {unmet}")
-                    raise RuntimeError(
-                        f"Iterable exhausted with {len(waiting)} step(s) with unsatisfied dependencies:\n"
-                        + "\n".join(missing)
-                    )
-
             _harvest(block=True)
             _flush_waiting()
 

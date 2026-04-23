@@ -372,29 +372,98 @@ def test_runner_max_concurrent(tmp_path: Path):
     assert train_artifact.tokens_seen > 0
 
 
-def test_runner_raises_clear_error_for_unmet_deps(tmp_path: Path):
-    """When the iterable omits a dependency, the runner must name the offending step and
-    its unmet dep paths — not crash with ``TypeError: unhashable type: 'list'``."""
+def test_runner_walks_transitive_deps(tmp_path: Path):
+    """Passing only terminal steps should cause the runner to walk and run transitive deps."""
+    executed: list[str] = []
+
+    def record(name: str):
+        def _fn(output_path: str) -> PathMetadata:
+            executed.append(name)
+            return PathMetadata(path=output_path)
+
+        return _fn
 
     dep = StepSpec(
-        name="missing_upstream",
-        override_output_path=(tmp_path / "missing_upstream").as_posix(),
+        name="dep",
+        override_output_path=(tmp_path / "dep").as_posix(),
+        fn=record("dep"),
+    )
+    mid = StepSpec(
+        name="mid",
+        override_output_path=(tmp_path / "mid").as_posix(),
+        deps=[dep],
+        fn=record("mid"),
+    )
+    terminal = StepSpec(
+        name="terminal",
+        override_output_path=(tmp_path / "terminal").as_posix(),
+        deps=[mid],
+        fn=record("terminal"),
+    )
+
+    StepRunner().run([terminal])
+
+    assert executed == ["dep", "mid", "terminal"]
+
+
+def test_runner_walks_transitive_deps_with_cache_hit(tmp_path: Path):
+    """Deps already succeeded on disk must be recognized via cache-hit during the walk."""
+    dep = StepSpec(
+        name="dep",
+        override_output_path=(tmp_path / "dep").as_posix(),
         fn=lambda output_path: PathMetadata(path=output_path),
     )
+    downstream_ran: list[str] = []
+
+    def run_downstream(output_path: str) -> PathMetadata:
+        downstream_ran.append(output_path)
+        return PathMetadata(path=output_path)
+
     downstream = StepSpec(
         name="downstream",
         override_output_path=(tmp_path / "downstream").as_posix(),
         deps=[dep],
+        fn=run_downstream,
+    )
+
+    # Prime the cache for ``dep`` only.
+    StepRunner().run([dep])
+    assert downstream_ran == []
+
+    # Pass only ``downstream``; the runner walks deps and cache-hits ``dep``.
+    StepRunner().run([downstream])
+    assert downstream_ran == [(tmp_path / "downstream").as_posix()]
+
+
+def test_runner_dedups_shared_deps(tmp_path: Path):
+    """A dep shared by multiple terminals must be executed exactly once."""
+    dep_runs: list[str] = []
+
+    def run_dep(output_path: str) -> PathMetadata:
+        dep_runs.append(output_path)
+        return PathMetadata(path=output_path)
+
+    dep = StepSpec(
+        name="shared_dep",
+        override_output_path=(tmp_path / "shared_dep").as_posix(),
+        fn=run_dep,
+    )
+    a = StepSpec(
+        name="a",
+        override_output_path=(tmp_path / "a").as_posix(),
+        deps=[dep],
+        fn=lambda output_path: PathMetadata(path=output_path),
+    )
+    b = StepSpec(
+        name="b",
+        override_output_path=(tmp_path / "b").as_posix(),
+        deps=[dep],
         fn=lambda output_path: PathMetadata(path=output_path),
     )
 
-    runner = StepRunner()
-    with pytest.raises(RuntimeError, match=r"Iterable exhausted .* unsatisfied dependencies") as exc_info:
-        runner.run([downstream])
+    StepRunner().run([a, b])
 
-    message = str(exc_info.value)
-    assert downstream.name_with_hash in message
-    assert dep.output_path in message
+    assert dep_runs == [(tmp_path / "shared_dep").as_posix()]
 
 
 def test_runner_preserves_underlying_step_exception(tmp_path: Path):
