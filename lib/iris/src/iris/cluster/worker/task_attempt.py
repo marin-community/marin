@@ -135,6 +135,7 @@ def build_iris_env(
     task: "TaskAttempt",
     worker_id: str | None,
     controller_address: str | None,
+    auth_token: str = "",
 ) -> dict[str, str]:
     """Build Iris system environment variables for the task container.
 
@@ -164,6 +165,9 @@ def build_iris_env(
     # Compute the host's routable IP so container code can read it via
     # get_job_info().advertise_host without needing its own socket tricks.
     env["IRIS_ADVERTISE_HOST"] = _get_host_ip()
+
+    if auth_token:
+        env["IRIS_AUTH_TOKEN"] = auth_token
 
     # Override port placeholders with real allocated values
     for name, port in task.ports.items():
@@ -204,6 +208,7 @@ class TaskAttempt:
         port_allocator: PortAllocator,
         log_pusher: LogPusher | None,
         poll_interval_seconds: float = 5.0,
+        auth_token: str = "",
         *,
         container_handle: ContainerHandle | None = None,
         initial_status: TaskState | None = None,
@@ -240,6 +245,7 @@ class TaskAttempt:
         self._worker_metadata = worker_metadata or job_pb2.WorkerMetadata()
         self._worker_id = worker_id
         self._controller_address = controller_address
+        self._auth_token = auth_token
         self._task_env = task_env or {}
         self._default_task_image = default_task_image
         self._resolve_image_fn = resolve_image or (lambda x: x)
@@ -684,6 +690,7 @@ class TaskAttempt:
             self,
             self._worker_id,
             self._controller_address,
+            self._auth_token,
         )
         env = dict(iris_env)
 

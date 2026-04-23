@@ -42,6 +42,7 @@ from rigging.filesystem import marin_temp_bucket
 from rigging.timing import ExponentialBackoff, log_time
 
 from iris.cluster.client.job_info import get_job_info
+from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc import job_pb2
 from zephyr.dataset import Dataset
@@ -420,9 +421,13 @@ class ZephyrCoordinator:
 
         job_info = get_job_info()
         if job_info and job_info.controller_address:
+            interceptors = ()
+            if job_info.auth_token:
+                interceptors = (AuthTokenInjector(StaticTokenProvider(job_info.auth_token)),)
             self._iris_client = ControllerServiceClientSync(
                 address=job_info.controller_address,
                 timeout_ms=5000,
+                interceptors=interceptors,
             )
 
         logger.info("Coordinator initialized")
