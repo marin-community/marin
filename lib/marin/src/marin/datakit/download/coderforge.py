@@ -16,6 +16,7 @@ from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "togethercomputer/CoderForge-Preview"
@@ -114,4 +115,13 @@ def download_coderforge_step() -> StepSpec:
             output_path=output_path,
         ),
         hash_attrs={"version": "v1"},
+    )
+
+
+def coderforge_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the full ``(download+transform, normalize)`` chain for coderforge."""
+    processed = download_coderforge_step()
+    return (
+        processed,
+        normalize_step(name="normalized/coderforge", download=processed),
     )

@@ -13,14 +13,21 @@ The chains themselves live in the family-specific modules under
 ties them to a ``name`` and a token count.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
 
+from marin.datakit.download.coderforge import coderforge_normalize_steps
 from marin.datakit.download.common_pile import common_pile_normalize_steps
 from marin.datakit.download.finepdfs import finepdfs_normalize_steps
-from marin.datakit.download.hf_simple_util import hf_normalize_steps
+from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_normalize_steps
+from marin.datakit.download.institutional_books import institutional_books_normalize_steps
+from marin.datakit.download.nemotron_terminal import nemotron_terminal_normalize_steps
 from marin.datakit.download.nemotron_v2 import NEMOTRON_V2_DATASETS, nemotron_v2_normalize_steps
 from marin.datakit.download.starcoder2_extras import starcoder2_extras_normalize_steps
+from marin.datakit.download.superior_reasoning import superior_reasoning_normalize_steps
+from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_normalize_steps
+from marin.datakit.download.synthetic1 import synthetic1_normalize_steps
 from marin.execution.step_spec import StepSpec
 
 
@@ -48,37 +55,20 @@ class DatakitSource:
         return self.normalize_steps[-1]
 
 
-# ---- Plain-HF single-source entries -----------------------------------------
-# Sources that are just download + normalize, no custom preprocessing, no
-# shared family download. One :func:`hf_normalize_steps` call per entry.
+# ---- Single-source families ------------------------------------------------
+# Each family has a dedicated download module that exposes a
+# ``<family>_normalize_steps()`` returning ``tuple[StepSpec, ...]``; the
+# registry just pairs the chain with a rough token count.
 #
-# (marin_name, hf_dataset_id, revision, staged_path, rough_token_count_b)
-_SIMPLE_HF_SOURCES: tuple[tuple[str, str, str, str, float], ...] = (
-    ("coderforge", "togethercomputer/CoderForge-Preview", "060fca9", "raw/coderforge-preview_ad26b119", 10.29),
-    ("gpt-oss-rollouts", "andyrdt/gpt-oss-20b-rollouts", "f47b4a2", "raw/gpt-oss-20b-rollouts_58b022a7", 3.20),
-    (
-        "institutional_books",
-        "institutional/institutional-books-1.0",
-        "d2f504a",
-        "raw/institutional-books-d2f504a",
-        203.63,
-    ),
-    ("nemotron-terminal", "nvidia/Nemotron-Terminal-Corpus", "a1667c4", "raw/nemotron-terminal-corpus_c68d0061", 6.08),
-    (
-        "superior-reasoning",
-        "Alibaba-Apsara/Superior-Reasoning-SFT-gpt-oss-120b",
-        "21b55a6",
-        "raw/superior-reasoning-sft_b42ea7b3",
-        7.08,
-    ),
-    (
-        "swe-rebench-openhands",
-        "nebius/SWE-rebench-openhands-trajectories",
-        "3545538",
-        "raw/swe-rebench-openhands-trajectories_e1e457c7",
-        2.47,
-    ),
-    ("synthetic-1", "PrimeIntellect/SYNTHETIC-1", "f08fe8c", "raw/synthetic-1_1b24a14b", 7.32),
+# (marin_name, normalize_steps factory, rough_token_count_b)
+_SINGLE_SOURCE_FAMILIES: tuple[tuple[str, Callable[[], tuple[StepSpec, ...]], float], ...] = (
+    ("coderforge", coderforge_normalize_steps, 10.29),
+    ("gpt-oss-rollouts", gpt_oss_rollouts_normalize_steps, 3.20),
+    ("institutional_books", institutional_books_normalize_steps, 203.63),
+    ("nemotron-terminal", nemotron_terminal_normalize_steps, 6.08),
+    ("superior-reasoning", superior_reasoning_normalize_steps, 7.08),
+    ("swe-rebench-openhands", swe_rebench_openhands_normalize_steps, 2.47),
+    ("synthetic-1", synthetic1_normalize_steps, 7.32),
 )
 
 
@@ -268,9 +258,9 @@ def all_sources() -> dict[str, DatakitSource]:
     def _add(name: str, steps: tuple[StepSpec, ...], rough: float | None) -> None:
         entries[name] = DatakitSource(name=name, normalize_steps=steps, rough_token_count_b=rough)
 
-    # Plain-HF single-source entries
-    for name, hf_id, rev, staged, rough in _SIMPLE_HF_SOURCES:
-        _add(name, hf_normalize_steps(marin_name=name, hf_dataset_id=hf_id, revision=rev, staged_path=staged), rough)
+    # Single-source families — each imports its own normalize_steps factory
+    for name, make_chain, rough in _SINGLE_SOURCE_FAMILIES:
+        _add(name, make_chain(), rough)
 
     # common-pile: 27 flat HF entries
     for marin_name, chain in common_pile_normalize_steps().items():

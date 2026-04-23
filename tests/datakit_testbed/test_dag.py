@@ -80,10 +80,11 @@ def test_dag_per_source_consolidate():
 
 def test_dag_output_paths_namespaced_by_run_id():
     dag = build_testbed_steps("abc123")
-    # Downloads and normalize outputs are shared canonical artifacts — not run-id scoped.
-    # Every other step (sample, dedup, consolidate) must land under datakit-testbed/abc123/...
+    # Canonical source-pipeline artifacts (download, any transform/preprocess,
+    # normalize) are run-independent. Only the testbed-specific stages (sample,
+    # dedup, consolidate) must land under datakit-testbed/abc123/...
     for step in dag.all_steps:
-        if step.name.startswith(("raw/", "normalized/")):
+        if step.name.startswith(("raw/", "processed/", "normalized/")):
             continue
         assert "/abc123/" in step.output_path, f"{step.name} not namespaced: {step.output_path}"
 
