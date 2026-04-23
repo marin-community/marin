@@ -37,6 +37,7 @@ import os
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
+import pyarrow.parquet as pq
 from rigging.filesystem import url_to_fs
 
 from marin.datakit.normalize import NormalizedData
@@ -116,6 +117,31 @@ def _copy_shard(src: str, dst: str) -> int:
     return size
 
 
+def _sample_rows_within_shard(src: str, dst: str, sample_fraction: float) -> tuple[int, int]:
+    """Read *src* parquet, take the first ``ceil(rows * sample_fraction)`` rows, write to *dst*.
+
+    Returns ``(rows_in, rows_out)``. First-K is deterministic (no RNG) and
+    matches the cross-shard "first K by filename" selection rule.
+    """
+    src_fs, src_path = url_to_fs(src)
+    dst_fs, dst_path = url_to_fs(dst)
+    parent = os.path.dirname(dst_path)
+    if parent:
+        fsspec_mkdirs(parent, exist_ok=True)
+
+    with src_fs.open(src_path, "rb") as sf:
+        pf = pq.ParquetFile(sf)
+        rows_in = pf.metadata.num_rows
+        rows_out = max(1, math.ceil(rows_in * sample_fraction))
+        rows_out = min(rows_out, rows_in)
+        table = pf.read().slice(0, rows_out)
+
+    with dst_fs.open(dst_path, "wb") as df:
+        pq.write_table(table, df)
+
+    return rows_in, rows_out
+
+
 def sample_normalized_shards(
     *,
     source: NormalizedData,
@@ -154,6 +180,33 @@ def sample_normalized_shards(
         raise ValueError(f"No parquet shards under {input_base}")
 
     total = len(shards)
+    main_out = f"{output_path.rstrip('/')}/outputs/main"
+
+    # Single-shard sources: "first K shards by filename" degenerates to copying
+    # the whole shard regardless of sample_fraction. Fall back to row-level
+    # sampling within the shard so small sources still honour the fraction.
+    if total == 1 and sample_fraction < 1.0:
+        src = shards[0]
+        rel = os.path.relpath(src, input_base)
+        dst = f"{main_out}/{rel}"
+        rows_in, rows_out = _sample_rows_within_shard(src, dst, sample_fraction)
+        logger.info(
+            "sampler: single-shard source — sampled %d / %d rows (fraction=%.4f) from %s",
+            rows_out,
+            rows_in,
+            sample_fraction,
+            input_base,
+        )
+        return NormalizedData(
+            main_output_dir=main_out,
+            dup_output_dir=source.dup_output_dir,
+            counters={
+                "sampler/single_shard_rows_in": rows_in,
+                "sampler/single_shard_rows_out": rows_out,
+                "sampler/total_shards": 1,
+            },
+        )
+
     k = max(1, math.ceil(total * sample_fraction))
     k = min(k, total)
     selected = shards[:k]
@@ -165,7 +218,6 @@ def sample_normalized_shards(
         input_base,
     )
 
-    main_out = f"{output_path.rstrip('/')}/outputs/main"
     tasks: list[tuple[str, str]] = []
     for shard in selected:
         rel = os.path.relpath(shard, input_base)
