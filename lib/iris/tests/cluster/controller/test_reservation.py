@@ -12,11 +12,12 @@ Tests cover:
   and non-reservation jobs get NOT_EXISTS constraint.
 """
 
+import pytest
+
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.controller import (
     RESERVATION_TAINT_KEY,
     Controller,
-    ControllerConfig,
     ReservationClaim,
     _find_reservation_ancestor,
     _inject_reservation_taints,
@@ -51,8 +52,8 @@ from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from rigging.timing import Timestamp
 from tests.cluster.controller.conftest import (
-    FakeProvider,
     hydrate_worker_attributes as _with_attrs,
+    make_job_request,
     query_job as _query_job,
     query_job_row as _query_job_row,
     query_task as _query_task,
@@ -60,6 +61,7 @@ from tests.cluster.controller.conftest import (
     query_tasks_for_job as _query_tasks_for_job,
     query_worker as _query_worker,
     schedulable_tasks as _schedulable_tasks,
+    submit_job as _submit_job_tasks,
     worker_running_tasks as _worker_running_tasks,
 )
 
@@ -191,12 +193,15 @@ def _make_job_request_with_reservation(
     return req
 
 
-def _make_controller() -> Controller:
-    """Create a Controller with minimal config for unit testing."""
-    config = ControllerConfig(
-        remote_state_dir="file:///tmp/iris-test-bundles",
-    )
-    return Controller(config=config, provider=FakeProvider())
+@pytest.fixture
+def ctrl(make_controller) -> Controller:
+    """Minimal Controller for reservation unit tests.
+
+    Uses the shared ``make_controller`` factory so the Controller's
+    RemoteLogHandler is detached and its LogPusher drain thread stopped
+    at teardown.
+    """
+    return make_controller(remote_state_dir="file:///tmp/iris-test-bundles")
 
 
 def _register_worker(
@@ -291,9 +296,8 @@ def test_worker_rejects_unmet_constraint():
 # =============================================================================
 
 
-def test_claim_eligible_worker():
+def test_claim_eligible_worker(ctrl):
     """An eligible worker is claimed for a reservation entry."""
-    ctrl = _make_controller()
     _register_worker(ctrl.state, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
@@ -308,9 +312,8 @@ def test_claim_eligible_worker():
     assert claim.entry_idx == 0
 
 
-def test_claim_rejects_wrong_device():
+def test_claim_rejects_wrong_device(ctrl):
     """A worker with the wrong device type is not claimed."""
-    ctrl = _make_controller()
     _register_worker(ctrl.state, "w1", _cpu_metadata())
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry(_gpu_device("H100"))],
@@ -322,9 +325,8 @@ def test_claim_rejects_wrong_device():
     assert len(ctrl.reservation_claims) == 0
 
 
-def test_claim_one_per_worker():
+def test_claim_one_per_worker(ctrl):
     """A single worker cannot be claimed by two different reservation entries."""
-    ctrl = _make_controller()
     _register_worker(ctrl.state, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry(), _make_reservation_entry()],
@@ -337,9 +339,8 @@ def test_claim_one_per_worker():
     assert WorkerId("w1") in ctrl.reservation_claims
 
 
-def test_claim_respects_entry_count():
+def test_claim_respects_entry_count(ctrl):
     """Two workers can satisfy a 2-entry reservation."""
-    ctrl = _make_controller()
     _register_worker(ctrl.state, "w1")
     _register_worker(ctrl.state, "w2")
     req = _make_job_request_with_reservation(
@@ -355,9 +356,8 @@ def test_claim_respects_entry_count():
     assert claimed_entries == {0, 1}
 
 
-def test_claim_does_not_exceed_entry_count():
+def test_claim_does_not_exceed_entry_count(ctrl):
     """Extra workers beyond entry count are not claimed."""
-    ctrl = _make_controller()
     _register_worker(ctrl.state, "w1")
     _register_worker(ctrl.state, "w2")
     _register_worker(ctrl.state, "w3")
@@ -371,9 +371,8 @@ def test_claim_does_not_exceed_entry_count():
     assert len(ctrl.reservation_claims) == 1
 
 
-def test_claim_independent_per_job():
+def test_claim_independent_per_job(ctrl):
     """Claims for different jobs don't interfere with each other."""
-    ctrl = _make_controller()
     _register_worker(ctrl.state, "w1")
     _register_worker(ctrl.state, "w2")
 
@@ -399,9 +398,8 @@ def test_claim_independent_per_job():
     }
 
 
-def test_claim_skips_unhealthy_worker():
+def test_claim_skips_unhealthy_worker(ctrl):
     """Unhealthy workers are not claimed."""
-    ctrl = _make_controller()
     _register_worker(ctrl.state, "w1")
     # Mark worker unhealthy
     ctrl.state.set_worker_health_for_test(WorkerId("w1"), False)
@@ -416,9 +414,8 @@ def test_claim_skips_unhealthy_worker():
     assert len(ctrl.reservation_claims) == 0
 
 
-def test_claim_idempotent():
+def test_claim_idempotent(ctrl):
     """Running claiming twice doesn't duplicate claims."""
-    ctrl = _make_controller()
     _register_worker(ctrl.state, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
@@ -436,9 +433,8 @@ def test_claim_idempotent():
 # =============================================================================
 
 
-def test_cleanup_removes_dead_worker_claims():
+def test_cleanup_removes_dead_worker_claims(ctrl):
     """Claims for workers no longer in state are removed."""
-    ctrl = _make_controller()
     w1 = _register_worker(ctrl.state, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
@@ -463,9 +459,8 @@ def test_cleanup_removes_dead_worker_claims():
     assert w1 in ctrl.reservation_claims
 
 
-def test_cleanup_removes_finished_job_claims():
+def test_cleanup_removes_finished_job_claims(ctrl):
     """Claims for finished jobs are removed."""
-    ctrl = _make_controller()
     _register_worker(ctrl.state, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
@@ -485,9 +480,8 @@ def test_cleanup_removes_finished_job_claims():
     assert len(ctrl.reservation_claims) == 0
 
 
-def test_cleanup_preserves_valid_claims():
+def test_cleanup_preserves_valid_claims(ctrl):
     """Valid claims (healthy worker, active job) are preserved."""
-    ctrl = _make_controller()
     _register_worker(ctrl.state, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
@@ -505,9 +499,8 @@ def test_cleanup_preserves_valid_claims():
 # =============================================================================
 
 
-def test_gate_satisfied_when_claims_meet_entries():
+def test_gate_satisfied_when_claims_meet_entries(ctrl):
     """Gate opens when claimed workers >= reservation entries."""
-    ctrl = _make_controller()
     _register_worker(ctrl.state, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
@@ -519,9 +512,8 @@ def test_gate_satisfied_when_claims_meet_entries():
     assert ctrl._is_reservation_satisfied(job)
 
 
-def test_gate_unsatisfied_when_claims_below_entries():
+def test_gate_unsatisfied_when_claims_below_entries(ctrl):
     """Gate stays closed when fewer workers are claimed than entries required."""
-    ctrl = _make_controller()
     _register_worker(ctrl.state, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry(), _make_reservation_entry()],
@@ -534,9 +526,8 @@ def test_gate_unsatisfied_when_claims_below_entries():
     assert not ctrl._is_reservation_satisfied(job)
 
 
-def test_gate_satisfied_for_jobs_without_reservation():
+def test_gate_satisfied_for_jobs_without_reservation(ctrl):
     """Jobs without a reservation always pass the gate."""
-    ctrl = _make_controller()
     req = controller_pb2.Controller.LaunchJobRequest(
         name="no-res",
         entrypoint=_entrypoint(),
@@ -897,9 +888,8 @@ def test_preference_pass_deducts_capacity():
 # =============================================================================
 
 
-def test_region_constraint_injected_from_claimed_workers():
+def test_region_constraint_injected_from_claimed_workers(ctrl):
     """Region constraint is injected when claimed workers have a region attribute."""
-    ctrl = _make_controller()
     w1 = _register_worker(ctrl.state, "w1")
     # Set region attribute on worker
     ctrl.state.set_worker_attribute_for_test(w1, WellKnownAttribute.REGION, AttributeValue("us-central1"))
@@ -921,9 +911,8 @@ def test_region_constraint_injected_from_claimed_workers():
     assert result[0].values[0].value == "us-central1"
 
 
-def test_region_constraint_not_injected_when_already_present():
+def test_region_constraint_not_injected_when_already_present(ctrl):
     """Existing region constraint prevents injection."""
-    ctrl = _make_controller()
     w1 = _register_worker(ctrl.state, "w1")
     ctrl.state.set_worker_attribute_for_test(w1, WellKnownAttribute.REGION, AttributeValue("us-central1"))
 
@@ -943,9 +932,8 @@ def test_region_constraint_not_injected_when_already_present():
     assert result[0] is existing
 
 
-def test_region_constraint_not_injected_when_no_region_attr():
+def test_region_constraint_not_injected_when_no_region_attr(ctrl):
     """No injection when claimed workers lack region attributes."""
-    ctrl = _make_controller()
     _register_worker(ctrl.state, "w1")
 
     req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
@@ -962,9 +950,8 @@ def test_region_constraint_not_injected_when_no_region_attr():
     assert result == []
 
 
-def test_region_constraint_multiple_regions():
+def test_region_constraint_multiple_regions(ctrl):
     """IN constraint injected when claimed workers span multiple regions."""
-    ctrl = _make_controller()
     w1 = _register_worker(ctrl.state, "w1")
     w2 = _register_worker(ctrl.state, "w2")
     ctrl.state.set_worker_attribute_for_test(w1, WellKnownAttribute.REGION, AttributeValue("us-central1"))
@@ -989,9 +976,8 @@ def test_region_constraint_multiple_regions():
     assert {v.value for v in result[0].values} == {"us-central1", "us-east1"}
 
 
-def test_no_injection_for_non_reservation_job():
+def test_no_injection_for_non_reservation_job(ctrl):
     """No claims for this job → constraints returned unchanged."""
-    ctrl = _make_controller()
     w1 = _register_worker(ctrl.state, "w1")
     ctrl.state.set_worker_attribute_for_test(w1, WellKnownAttribute.REGION, AttributeValue("us-central1"))
 
@@ -1015,9 +1001,8 @@ def test_no_injection_for_non_reservation_job():
 # =============================================================================
 
 
-def test_find_reservation_ancestor_returns_parent_with_reservation():
+def test_find_reservation_ancestor_returns_parent_with_reservation(ctrl):
     """Direct parent with reservation is found."""
-    ctrl = _make_controller()
     parent_req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
     )
@@ -1037,9 +1022,8 @@ def test_find_reservation_ancestor_returns_parent_with_reservation():
     assert result == parent_jid
 
 
-def test_find_reservation_ancestor_returns_grandparent():
+def test_find_reservation_ancestor_returns_grandparent(ctrl):
     """Grandparent with reservation is found when parent has none."""
-    ctrl = _make_controller()
     # Grandparent with reservation
     gp_req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
@@ -1072,9 +1056,8 @@ def test_find_reservation_ancestor_returns_grandparent():
     assert result == gp_jid
 
 
-def test_find_reservation_ancestor_returns_none_for_root_job():
+def test_find_reservation_ancestor_returns_none_for_root_job(ctrl):
     """Root job with no reservation returns None."""
-    ctrl = _make_controller()
     req = controller_pb2.Controller.LaunchJobRequest(
         name="no-res",
         entrypoint=_entrypoint(),
@@ -1086,9 +1069,8 @@ def test_find_reservation_ancestor_returns_none_for_root_job():
     assert _find_reservation_ancestor(ctrl._db, jid) is None
 
 
-def test_find_reservation_ancestor_returns_none_when_no_ancestor_has_reservation():
+def test_find_reservation_ancestor_returns_none_when_no_ancestor_has_reservation(ctrl):
     """Child of a non-reservation parent returns None."""
-    ctrl = _make_controller()
     parent_req = controller_pb2.Controller.LaunchJobRequest(
         name="plain-parent",
         entrypoint=_entrypoint(),
@@ -1116,9 +1098,8 @@ def test_find_reservation_ancestor_returns_none_when_no_ancestor_has_reservation
 # =============================================================================
 
 
-def test_taint_exemption_for_children_of_reservation_job():
+def test_taint_exemption_for_children_of_reservation_job(ctrl):
     """Children of a reservation job are not blocked from claimed workers."""
-    ctrl = _make_controller()
     _register_worker(ctrl.state, "w1", _gpu_metadata("H100"))
     _register_worker(ctrl.state, "w2", _gpu_metadata("H100"))
 
@@ -1185,9 +1166,8 @@ def test_taint_exemption_for_children_of_reservation_job():
         assert parent_constraints[0].op == job_pb2.CONSTRAINT_OP_EQ
 
 
-def test_grandchildren_inherit_reservation_from_ancestor():
+def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
     """Grandchildren of a reservation job inherit taint exemption."""
-    ctrl = _make_controller()
     _register_worker(ctrl.state, "h1", _gpu_metadata("H100"))
     _register_worker(ctrl.state, "h2", _gpu_metadata("H100"))
     _register_worker(ctrl.state, "a1", _gpu_metadata("A100"))
@@ -1317,9 +1297,8 @@ def test_grandchildren_inherit_reservation_from_ancestor():
     assert not_exists[0].op == job_pb2.CONSTRAINT_OP_NOT_EXISTS
 
 
-def test_unrelated_job_blocked_when_all_workers_claimed():
+def test_unrelated_job_blocked_when_all_workers_claimed(ctrl):
     """A job with no reservation ancestor gets NOT_EXISTS and is blocked from claimed workers."""
-    ctrl = _make_controller()
     _register_worker(ctrl.state, "w1", _gpu_metadata("H100"))
     _register_worker(ctrl.state, "w2", _gpu_metadata("H100"))
 
@@ -1413,9 +1392,7 @@ def test_holder_task_worker_death_no_failure_record(state):
         assert active_wid == worker_id
 
         # Kill the worker — holder task must NOT go through WORKER_FAILED.
-        batch = state.drain_dispatch(worker_id)
-        assert batch is not None
-        state.record_heartbeat_failure(worker_id, "simulated crash", batch, force_remove=True)
+        state.fail_workers([(worker_id, None, "simulated crash")])
 
         holder_task = _query_task_with_attempts(state, holder_task.task_id)
         assert holder_task is not None
@@ -1434,6 +1411,49 @@ def test_holder_task_worker_death_no_failure_record(state):
         assert holder_task.attempts[-1].state == job_pb2.TASK_STATE_WORKER_FAILED
         assert holder_task.state == job_pb2.TASK_STATE_PENDING, "no active worker after death"
         assert task_row_can_be_scheduled(holder_task), "holder task must be schedulable again"
+
+
+def test_get_running_tasks_for_poll_excludes_reservation_holders(state):
+    """get_running_tasks_for_poll must filter reservation-holder tasks.
+
+    Regression: the ping/poll loop feeds its output directly into
+    PollTasksRequest.expected_tasks. Holders are virtual — they never reach
+    the worker's _tasks dict — so including them makes the worker reconcile,
+    miss, and return WORKER_FAILED("Task not found on worker") every cycle.
+    That drains the holder's preemption budget and (with the ASSIGNED→
+    WORKER_FAILED health hook) reaps the claimed worker every few minutes.
+
+    Produced observed ~51 attempts/hour per holder in production.
+    """
+    request = _make_job_request_with_reservation(
+        reservation_entries=[_make_reservation_entry(_cpu_device())],
+    )
+    parent_job_id = _submit_job(state, "res-job", request)
+    holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
+
+    holder_tasks = _query_tasks_for_job(state, holder_job_id)
+    assert len(holder_tasks) == 1
+    holder_task = holder_tasks[0]
+
+    real_request = make_job_request("real-job")
+    (real_task,) = _submit_job_tasks(state, "real-job", real_request)
+
+    worker_id = _register_worker(state, "w1")
+    state.queue_assignments(
+        [
+            Assignment(task_id=holder_task.task_id, worker_id=worker_id),
+            Assignment(task_id=real_task.task_id, worker_id=worker_id),
+        ]
+    )
+
+    running, _addresses = state.get_running_tasks_for_poll()
+
+    task_ids = {entry.task_id for entry in running.get(worker_id, [])}
+    assert real_task.task_id in task_ids, "real task must still appear for polling"
+    assert holder_task.task_id not in task_ids, (
+        "reservation holder must be excluded — worker has no in-memory state "
+        "for virtual holders, so polling them produces bogus WORKER_FAILEDs"
+    )
 
 
 def test_holder_task_removed_from_worker_when_parent_succeeds(state):

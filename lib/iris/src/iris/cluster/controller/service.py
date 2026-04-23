@@ -74,14 +74,12 @@ from iris.cluster.controller.schema import (
     JOB_ROW_PROJECTION,
     TASK_DETAIL_PROJECTION,
     TASK_ROW_PROJECTION,
-    TXN_ACTION_PROJECTION,
     WORKER_DETAIL_PROJECTION,
     AttemptRow,
     EndpointRow,
     JobDetailRow,
     JobRow,
     TaskDetailRow,
-    TransactionActionRow,
     WorkerDetailRow,
     WorkerRow,
     tasks_with_attempts,
@@ -120,9 +118,6 @@ from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp, Timer
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_TRANSACTION_LIMIT = 50
-
 
 DEFAULT_MAX_TOTAL_LINES = 100000
 
@@ -796,17 +791,6 @@ def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[JobDetailRow]:
                 (prefix, upper),
             ),
         )
-
-
-def _transaction_actions(db: ControllerDB, limit: int = 100) -> list[TransactionActionRow]:
-    with db.read_snapshot() as q:
-        actions = TXN_ACTION_PROJECTION.decode(
-            q.fetchall(
-                f"SELECT {TXN_ACTION_PROJECTION.select_clause()} " "FROM txn_actions ta2 ORDER BY ta2.id DESC LIMIT ?",
-                (limit,),
-            ),
-        )
-    return list(reversed(actions))
 
 
 def _live_user_stats(db: ControllerDB) -> list[UserStats]:
@@ -1963,27 +1947,6 @@ class ControllerServiceImpl:
             error=resp.error,
         )
 
-    # --- Transactions ---
-
-    def get_transactions(
-        self,
-        request: controller_pb2.Controller.GetTransactionsRequest,
-        ctx: Any,
-    ) -> controller_pb2.Controller.GetTransactionsResponse:
-        """Get recent controller actions for the dashboard action log."""
-        limit = request.limit if request.limit > 0 else DEFAULT_TRANSACTION_LIMIT
-        actions = []
-        for action in _transaction_actions(self._db, limit=limit):
-            details_str = json.dumps(action.details) if action.details else ""
-            proto_action = controller_pb2.Controller.TransactionAction(
-                action=action.action,
-                entity_id=action.entity_id,
-                details=details_str,
-            )
-            proto_action.timestamp.CopyFrom(timestamp_to_proto(action.timestamp))
-            actions.append(proto_action)
-        return controller_pb2.Controller.GetTransactionsResponse(actions=actions)
-
     def list_users(
         self,
         request: controller_pb2.Controller.ListUsersRequest,
@@ -2629,25 +2592,21 @@ class ControllerServiceImpl:
         """Worker pushes task state transitions to controller.
 
         Converts the proto updates into TaskUpdate dataclasses and applies
-        them through the same ControllerTransitions.apply_heartbeat() path
-        used by the poll-based heartbeat. Stop decisions are delivered via
-        the StopTasks RPC, not piggy-backed on the response.
+        them via ``ControllerTransitions.apply_task_updates``. Stop decisions
+        are delivered via the StopTasks RPC, not piggy-backed on the response.
 
-        Vestigial: the kill decisions produced by apply_heartbeat are ignored
-        here. The poll loop reruns the same transition logic every 60s and
-        routes kills through _stop_tasks_direct, so push-path kills are
-        recovered with ≤60s latency. This RPC will be removed once the poll
-        loop is the sole path.
+        The kill decisions produced here are ignored: the poll loop reruns the
+        same transition logic and routes kills through ``_stop_tasks_direct``,
+        so push-path kills are recovered with ≤60s latency.
         """
         updates = task_updates_from_proto(request.updates)
         if updates:
-            self._transitions.apply_heartbeat(
+            self._transitions.apply_task_updates(
                 HeartbeatApplyRequest(
                     worker_id=WorkerId(request.worker_id),
                     worker_resource_snapshot=None,
                     updates=updates,
                 )
             )
-            # Wake the controller so it can act on any state changes promptly.
             self._controller.wake()
         return controller_pb2.Controller.UpdateTaskStatusResponse()

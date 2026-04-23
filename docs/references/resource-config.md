@@ -1,7 +1,6 @@
 # Hardware Resource Configuration
 
-Marin uses Ray for scheduling and resource management. Ray provides a flexible resource model that allows you to specify
-the resources that a task requires. The `fray` library provides unified resource configuration types.
+Marin uses Fray for scheduling and resource management (dispatching to Iris on shared clusters, or to a local backend for laptop runs). The `fray` library provides unified resource configuration types that translate to concrete cluster resource requests.
 
 ## ResourceConfig
 

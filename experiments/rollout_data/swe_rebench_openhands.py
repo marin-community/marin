@@ -4,7 +4,8 @@
 """nebius/SWE-rebench-openhands-trajectories rollout dataset.
 
 Usage:
-    uv run lib/marin/src/marin/run/ray_run.py -- python experiments/rollout_data/swe_rebench_openhands.py
+    uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
+      -- python -m experiments.rollout_data.swe_rebench_openhands
 """
 
 from fray.v2 import ResourceConfig

@@ -241,7 +241,7 @@ message Controller {
     repeated string running_job_ids = 5;
     string address = 6;                    // Worker RPC address (host:port)
     iris.job.WorkerMetadata metadata = 7;           // Full worker metadata
-    string status_message = 8;             // Error or status message (e.g., "Heartbeat timeout", "Worker crashed")
+    string status_message = 8;             // Error or status message (e.g., "Ping timeout", "Worker crashed")
   }
 
   message ListWorkersRequest {}
@@ -309,22 +309,6 @@ message Controller {
 
   message GetAutoscalerStatusResponse {
     iris.vm.AutoscalerStatus status = 1;
-  }
-
-  // --- Transactions / Actions Log ---
-  message TransactionAction {
-    iris.time.Timestamp timestamp = 1;
-    string action = 2;
-    string entity_id = 3;
-    string details = 4;
-  }
-
-  message GetTransactionsRequest {
-    int32 limit = 1;  // 0 = default (50)
-  }
-
-  message GetTransactionsResponse {
-    repeated TransactionAction actions = 1;
   }
 
   // --- Checkpoint ---
@@ -405,10 +389,10 @@ message Controller {
     // Recent tasks that ran or are running on this worker (newest first)
     repeated iris.job.TaskStatus recent_tasks = 6;
 
-    // Current host-level resource snapshot (from latest heartbeat)
+    // Current host-level resource snapshot (from latest Ping)
     iris.job.WorkerResourceSnapshot current_resources = 7;
 
-    // Recent resource history (ring buffer of snapshots from heartbeats)
+    // Recent resource history (ring buffer of Ping snapshots)
     repeated iris.job.WorkerResourceSnapshot resource_history = 8;
   }
 
@@ -593,9 +577,6 @@ service ControllerService {
 
   // Autoscaler
   rpc GetAutoscalerStatus(Controller.GetAutoscalerStatusRequest) returns (Controller.GetAutoscalerStatusResponse);
-
-  // Transactions / Actions Log
-  rpc GetTransactions(Controller.GetTransactionsRequest) returns (Controller.GetTransactionsResponse);
 
   rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
 

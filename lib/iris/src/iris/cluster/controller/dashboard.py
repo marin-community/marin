@@ -25,7 +25,6 @@ Auth model:
 
 import logging
 import os
-from collections.abc import Callable
 from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
@@ -39,7 +38,15 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from iris.cluster.controller.actor_proxy import PROXY_ROUTE, ActorProxy
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.dashboard_common import html_shell, on_shutdown, static_files_mount
+from iris.cluster.dashboard_common import (
+    _AUTH_POLICY_ATTR,
+    favicon_route,
+    html_shell,
+    on_shutdown,
+    public,
+    requires_auth,
+    static_files_mount,
+)
 from iris.log_server.client import LogServiceProxy
 from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
@@ -51,24 +58,6 @@ from iris.rpc.stats_connect import StatsServiceWSGIApplication
 from iris.rpc.stats_service import RpcStatsService
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Route auth policy annotations
-# ---------------------------------------------------------------------------
-
-_AUTH_POLICY_ATTR = "_auth_policy"
-
-
-def public(fn: Callable) -> Callable:
-    """Mark a route handler as publicly accessible (no auth required)."""
-    setattr(fn, _AUTH_POLICY_ATTR, "public")
-    return fn
-
-
-def requires_auth(fn: Callable) -> Callable:
-    """Mark a route handler as requiring authentication via session cookie or Bearer token."""
-    setattr(fn, _AUTH_POLICY_ATTR, "requires_auth")
-    return fn
 
 
 def _extract_token_from_scope(scope: Scope) -> str | None:
@@ -318,6 +307,7 @@ class ControllerDashboard:
 
         routes = [
             Route("/", self._dashboard),
+            favicon_route(),
             Route("/auth/session_bootstrap", self._session_bootstrap),
             Route("/auth/config", self._auth_config),
             Route("/auth/session", self._auth_session, methods=["POST"]),
@@ -484,6 +474,7 @@ class ProxyControllerDashboard:
     def _create_app(self) -> Starlette:
         routes = [
             Route("/", self._dashboard),
+            favicon_route(),
             Route("/job/{job_id:path}", self._job_detail_page),
             Route("/worker/{worker_id:path}", self._worker_detail_page),
             Route("/bundles/{bundle_id:str}.zip", self._proxy_bundle),

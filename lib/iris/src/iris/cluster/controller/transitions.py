@@ -6,10 +6,8 @@
 Read-only queries do NOT belong here — callers use db.read_snapshot() directly.
 """
 
-import enum
 import threading
 import time
-from collections import defaultdict
 import json
 import logging
 from dataclasses import dataclass, field
@@ -62,6 +60,37 @@ from rigging.timing import Duration, Timestamp
 logger = logging.getLogger(__name__)
 
 
+def log_event(
+    action: str,
+    entity_id: str,
+    *,
+    trigger: str | None = None,
+    **details: object,
+) -> None:
+    """Emit a semi-structured audit line for a controller state transition.
+
+    Each call produces one ``logger.info`` line of the shape::
+
+        event=<action> entity=<entity_id> trigger=<trigger> k=v ...
+
+    ``trigger`` names the upstream event when this is derived (e.g.
+    ``trigger=heartbeat_applied`` on cascaded job terminations); callers omit
+    it for externally-caused events and the line renders ``trigger=-``.
+
+    These lines are captured by the Iris log server and queried via the normal
+    ``iris process logs`` / log-store DuckDB interface — there is no SQLite
+    audit table.
+    """
+    extras = " ".join(f"{k}={v}" for k, v in details.items() if v is not None)
+    logger.info(
+        "event=%s entity=%s trigger=%s %s",
+        action,
+        entity_id,
+        trigger or "-",
+        extras,
+    )
+
+
 @dataclass(frozen=True)
 class ReservationClaim:
     """A claim binding a worker to a specific reservation entry.
@@ -88,12 +117,12 @@ Uses colons to clearly distinguish from user-created jobs and avoid
 accidental collision with normal job names."""
 
 
-FAIL_HEARTBEATS_CHUNK_SIZE = 10
-"""Number of worker failures processed per transaction in
-``fail_heartbeats_batch``. Commits between chunks so the SQLite writer is
-released and other RPCs (RegisterEndpoint, Register, LaunchJob,
-apply_heartbeats_batch) can interleave. Keeps worst-case writer-hold
-below ~1s even when a zone-wide failure removes hundreds of workers."""
+FAIL_WORKERS_CHUNK_SIZE = 10
+"""Number of worker failures processed per transaction in ``fail_workers``.
+Commits between chunks so the SQLite writer is released and other RPCs
+(RegisterEndpoint, Register, LaunchJob, apply_heartbeats_batch) can
+interleave. Keeps worst-case writer-hold below ~1s even when a zone-wide
+failure removes hundreds of workers."""
 
 HEARTBEAT_STALENESS_THRESHOLD = Duration.from_seconds(900)
 """If a worker's last successful heartbeat is older than this, it is failed
@@ -142,20 +171,11 @@ class PruneResult:
 
     jobs_deleted: int = 0
     workers_deleted: int = 0
-    txn_actions_deleted: int = 0
     profiles_deleted: int = 0
 
     @property
     def total(self) -> int:
-        return self.jobs_deleted + self.workers_deleted + self.txn_actions_deleted + self.profiles_deleted
-
-
-class HeartbeatAction(enum.Enum):
-    """Result of processing a single heartbeat response."""
-
-    OK = "ok"
-    TRANSIENT_FAILURE = "transient_failure"
-    WORKER_FAILED = "worker_failed"
+        return self.jobs_deleted + self.workers_deleted + self.profiles_deleted
 
 
 @dataclass
@@ -257,15 +277,9 @@ class WorkerRegistrationResult:
 
 
 @dataclass(frozen=True)
-class HeartbeatApplyResult(TxResult):
-    action: HeartbeatAction = HeartbeatAction.OK
-
-
-@dataclass(frozen=True)
-class HeartbeatFailureResult(TxResult):
+class WorkerFailureResult(TxResult):
     worker_removed: bool = False
-    action: HeartbeatAction = HeartbeatAction.TRANSIENT_FAILURE
-    last_heartbeat_age_ms: int | None = None
+    last_contact_age_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -273,7 +287,7 @@ class WorkerFailureBatchResult(TxResult):
     """Result of applying a batch of worker failures."""
 
     removed_workers: list[tuple[WorkerId, str | None]] = field(default_factory=list)
-    results: list[HeartbeatFailureResult] = field(default_factory=list)
+    results: list[WorkerFailureResult] = field(default_factory=list)
 
 
 class RunningTaskEntry(NamedTuple):
@@ -281,17 +295,6 @@ class RunningTaskEntry(NamedTuple):
 
     task_id: JobName
     attempt_id: int
-
-
-@dataclass(frozen=True)
-class DispatchBatch:
-    """Drained worker dispatch plus running-task snapshot."""
-
-    worker_id: WorkerId
-    worker_address: str | None
-    running_tasks: list[RunningTaskEntry]
-    tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
-    tasks_to_kill: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -321,8 +324,8 @@ class ClusterCapacity:
 class DirectProviderBatch:
     """Work batch for a KubernetesProvider sync cycle.
 
-    Unlike DispatchBatch, there is no worker_id — tasks run without a registered
-    worker daemon. task_attempts rows use NULL worker_id.
+    No worker_id — tasks run without a registered worker daemon.
+    task_attempts rows use NULL worker_id.
     """
 
     tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
@@ -975,26 +978,6 @@ class ControllerTransitions:
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
         self._health = health or WorkerHealthTracker()
 
-    def _record_transaction(
-        self,
-        cur: Any,
-        kind: str,
-        actions: list[tuple[str, str, dict[str, object]]],
-        *,
-        payload: dict[str, object] | None = None,
-    ) -> None:
-        created_ms = Timestamp.now().epoch_ms()
-        cur.execute(
-            "INSERT INTO txn_log(kind, payload_json, created_at_ms) VALUES (?, ?, ?)",
-            (kind, json.dumps(payload or {}), created_ms),
-        )
-        txn_id = int(cur.lastrowid)
-        for action, entity_id, details in actions:
-            cur.execute(
-                "INSERT INTO txn_actions(txn_id, action, entity_id, details_json, created_at_ms) VALUES (?, ?, ?, ?, ?)",
-                (txn_id, action, entity_id, json.dumps(details), created_ms),
-            )
-
     def _recompute_job_state(self, cur: Any, job_id: JobName) -> int | None:
         row = cur.execute(
             f"SELECT j.state, j.started_at_ms, jc.max_task_failures "
@@ -1095,7 +1078,6 @@ class ControllerTransitions:
     ) -> SubmitJobResult:
         """Submit a job and expand its tasks in one DB transaction."""
         submitted_ms = ts.epoch_ms()
-        actions: list[tuple[str, str, dict[str, object]]] = []
         created_task_ids: list[JobName] = []
 
         with self._db.transaction() as cur:
@@ -1395,8 +1377,7 @@ class ControllerTransitions:
                             ),
                         )
 
-            actions.append(("job_submitted", job_id.to_wire(), {"num_tasks": replicas, "error": validation_error}))
-            self._record_transaction(cur, "submit_job", actions)
+        log_event("job_submitted", job_id.to_wire(), num_tasks=replicas, error=validation_error)
         return SubmitJobResult(job_id=job_id, task_ids=created_task_ids)
 
     def cancel_job(self, job_id: JobName, reason: str) -> TxResult:
@@ -1480,8 +1461,8 @@ class ControllerTransitions:
                 ),
             )
             self._db.endpoints.remove_by_job_ids(cur, [JobName.from_wire(jid) for jid in subtree_ids])
-            self._record_transaction(cur, "cancel_job", [("job_cancelled", job_id.to_wire(), {"reason": reason})])
-            return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
+        log_event("job_cancelled", job_id.to_wire(), reason=reason)
+        return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
     def register_or_refresh_worker(
         self,
@@ -1582,9 +1563,7 @@ class ControllerTransitions:
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (str(worker_id), key, value_type, str_value, int_value, float_value),
                 )
-            self._record_transaction(
-                cur, "register_worker", [("worker_registered", str(worker_id), {"address": address})]
-            )
+        log_event("worker_registered", str(worker_id), address=address)
         # Update in-memory attribute cache so scheduling sees the new worker immediately.
         attr_dict: dict[str, AttributeValue] = {}
         for key, value_type, str_value, int_value, float_value in attrs:
@@ -1729,9 +1708,8 @@ class ControllerTransitions:
                     "started_at_ms = COALESCE(started_at_ms, ?) WHERE job_id = ?",
                     (job_pb2.JOB_STATE_PENDING, job_pb2.JOB_STATE_RUNNING, now_ms, job_id_wire),
                 )
-            if accepted or rejected:
-                actions = [("assignment_queued", a.task_id.to_wire(), {"worker_id": str(a.worker_id)}) for a in accepted]
-                self._record_transaction(cur, "queue_assignments", actions)
+        for a in accepted:
+            log_event("assignment_queued", a.task_id.to_wire(), worker=str(a.worker_id))
         return AssignmentResult(
             tasks_to_kill=set(),
             has_real_dispatch=has_real_dispatch,
@@ -1878,6 +1856,13 @@ class ControllerTransitions:
                 if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state == job_pb2.TASK_STATE_ASSIGNED:
                     task_state = job_pb2.TASK_STATE_PENDING
                     terminal_ms = None
+                    # ASSIGNED -> WORKER_FAILED means the worker accepted the task but
+                    # couldn't bring it up (e.g. TPU iommu/vfio already held by another
+                    # process on the VM). Attribute the failure to the worker so a host
+                    # that keeps failing launches gets reaped; otherwise the task loops
+                    # forever without draining preemption budget.
+                    if worker_id is not None:
+                        self._health.build_failed(WorkerId(str(worker_id)))
                 if update.new_state == job_pb2.TASK_STATE_FAILED and failure_count <= int(
                     task_row["max_retries_failure"]
                 ):
@@ -2000,10 +1985,9 @@ class ControllerTransitions:
                 task_kill_workers.update(final_task_kill_workers)
                 cascaded_jobs.add(job_id)
         if tasks_to_kill or cascaded_jobs:
-            actions: list[tuple[str, str, dict[str, object]]] = [("heartbeat_applied", str(req.worker_id), {})]
+            log_event("heartbeat_applied", str(req.worker_id))
             for job_id in cascaded_jobs:
-                actions.append(("job_terminated", job_id.to_wire(), {}))
-            self._record_transaction(cur, "apply_task_updates", actions)
+                log_event("job_terminated", job_id.to_wire(), trigger="heartbeat_applied")
 
         return TxResult(
             tasks_to_kill=tasks_to_kill,
@@ -2020,7 +2004,7 @@ class ControllerTransitions:
 
         return result
 
-    def apply_heartbeats_batch(self, requests: list[HeartbeatApplyRequest]) -> list[HeartbeatApplyResult]:
+    def apply_heartbeats_batch(self, requests: list[HeartbeatApplyRequest]) -> list[TxResult]:
         """Apply multiple heartbeats in a single transaction.
 
         Two-pass architecture to minimise SQL round-trips:
@@ -2033,8 +2017,8 @@ class ControllerTransitions:
 
         Worker health updates are also batched via ``executemany``.
         """
-        _empty = HeartbeatApplyResult(tasks_to_kill=set(), action=HeartbeatAction.OK)
-        results: list[HeartbeatApplyResult] = [_empty] * len(requests)
+        _empty = TxResult(tasks_to_kill=set())
+        results: list[TxResult] = [_empty] * len(requests)
 
         with self._db.transaction() as cur:
             now_ms = Timestamp.now().epoch_ms()
@@ -2123,16 +2107,9 @@ class ControllerTransitions:
             # ── Pass 2b: transitions via existing state machine ───────────
             for req_idx, treq in transition_entries:
                 tx_result = self._apply_task_transitions(cur, treq, now_ms)
-                results[req_idx] = HeartbeatApplyResult(
-                    tasks_to_kill=tx_result.tasks_to_kill,
-                    action=HeartbeatAction.OK,
-                )
+                results[req_idx] = TxResult(tasks_to_kill=tx_result.tasks_to_kill)
 
         return results
-
-    def apply_heartbeat(self, req: HeartbeatApplyRequest) -> HeartbeatApplyResult:
-        result = self.apply_task_updates(req)
-        return HeartbeatApplyResult(tasks_to_kill=result.tasks_to_kill, action=HeartbeatAction.OK)
 
     def _remove_failed_worker(
         self,
@@ -2208,164 +2185,81 @@ class ControllerTransitions:
         _remove_worker(cur, str(worker_id))
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
-    def _record_heartbeat_failure(
+    def _record_worker_failure(
         self,
         cur: TransactionCursor,
         worker_id: WorkerId,
         error: str,
-        drained_dispatch: DispatchBatch,
         *,
-        force_remove: bool = False,
         now_ms: int | None = None,
-    ) -> HeartbeatFailureResult:
-        """Apply a heartbeat failure inside an existing transaction."""
-        tasks_to_kill: set[JobName] = set()
-        task_kill_workers: dict[JobName, WorkerId] = {}
+    ) -> WorkerFailureResult:
+        """Remove a failed worker inside an existing transaction."""
         row = cur.execute(
             "SELECT last_heartbeat_ms FROM workers WHERE worker_id = ? AND active = 1",
             (str(worker_id),),
         ).fetchone()
         if row is None:
-            return HeartbeatFailureResult(
-                worker_removed=True,
-                action=HeartbeatAction.WORKER_FAILED,
-            )
+            return WorkerFailureResult(worker_removed=True)
 
         now_ms = now_ms or Timestamp.now().epoch_ms()
         last_heartbeat_ms = row["last_heartbeat_ms"]
-        last_heartbeat_age_ms = None if last_heartbeat_ms is None else max(0, now_ms - int(last_heartbeat_ms))
-        if force_remove:
-            cur.execute(
-                "UPDATE workers SET healthy = 0 WHERE worker_id = ?",
-                (str(worker_id),),
-            )
-            removal = self._remove_failed_worker(cur, worker_id, error, now_ms=now_ms)
-            tasks_to_kill.update(removal.tasks_to_kill)
-            task_kill_workers.update(removal.task_kill_workers)
-        else:
-            cur.execute(
-                "UPDATE workers SET consecutive_failures = consecutive_failures + 1 WHERE worker_id = ?",
-                (str(worker_id),),
-            )
-            for req in drained_dispatch.tasks_to_run:
-                enqueue_run_dispatch(cur, str(worker_id), req.SerializeToString(), now_ms)
-            for task_id in drained_dispatch.tasks_to_kill:
-                enqueue_kill_dispatch(cur, str(worker_id), task_id, now_ms)
-        action = HeartbeatAction.WORKER_FAILED if force_remove else HeartbeatAction.TRANSIENT_FAILURE
-        return HeartbeatFailureResult(
-            tasks_to_kill=tasks_to_kill,
-            task_kill_workers=task_kill_workers,
-            worker_removed=force_remove,
-            action=action,
-            last_heartbeat_age_ms=last_heartbeat_age_ms,
+        last_contact_age_ms = None if last_heartbeat_ms is None else max(0, now_ms - int(last_heartbeat_ms))
+        cur.execute(
+            "UPDATE workers SET healthy = 0 WHERE worker_id = ?",
+            (str(worker_id),),
+        )
+        removal = self._remove_failed_worker(cur, worker_id, error, now_ms=now_ms)
+        return WorkerFailureResult(
+            tasks_to_kill=removal.tasks_to_kill,
+            task_kill_workers=removal.task_kill_workers,
+            worker_removed=True,
+            last_contact_age_ms=last_contact_age_ms,
         )
 
-    def record_heartbeat_failure(
+    def fail_workers(
         self,
-        worker_id: WorkerId,
-        error: str,
-        drained_dispatch: DispatchBatch,
+        failures: list[tuple[WorkerId, str | None, str]],
         *,
-        force_remove: bool = False,
-    ) -> TxResult:
-        """Record heartbeat failure and requeue/flush drained dispatches."""
-        with self._db.transaction() as cur:
-            result = self._record_heartbeat_failure(
-                cur,
-                worker_id,
-                error,
-                drained_dispatch,
-                force_remove=force_remove,
-            )
-            self._record_transaction(
-                cur,
-                "heartbeat_failure",
-                [("worker_heartbeat_failed", str(worker_id), {"error": error})],
-            )
-        if result.worker_removed:
-            self._db.remove_worker_from_attr_cache(worker_id)
-        return TxResult(tasks_to_kill=result.tasks_to_kill, task_kill_workers=result.task_kill_workers)
-
-    def fail_heartbeat_for_worker(
-        self,
-        worker_id: WorkerId,
-        error: str,
-        snapshot: DispatchBatch,
-        *,
-        force_remove: bool = False,
-    ) -> HeartbeatFailureResult:
-        with self._db.transaction() as cur:
-            result = self._record_heartbeat_failure(
-                cur,
-                worker_id,
-                error,
-                snapshot,
-                force_remove=force_remove,
-            )
-            self._record_transaction(
-                cur,
-                "heartbeat_failure",
-                [("worker_heartbeat_failed", str(worker_id), {"error": error})],
-            )
-        if result.worker_removed:
-            self._db.remove_worker_from_attr_cache(worker_id)
-        return result
-
-    def fail_heartbeats_batch(
-        self,
-        failures: list[tuple[DispatchBatch, str]],
-        *,
-        force_remove: bool = False,
-        chunk_size: int = FAIL_HEARTBEATS_CHUNK_SIZE,
+        chunk_size: int = FAIL_WORKERS_CHUNK_SIZE,
     ) -> WorkerFailureBatchResult:
-        """Apply heartbeat RPC failures in chunked transactions.
+        """Remove the given active workers and cascade task state in chunks.
 
-        Each chunk is its own write transaction so we release the SQLite
-        writer between chunks and other RPCs (RegisterEndpoint, Register,
-        LaunchJob, apply_heartbeats_batch) can interleave instead of
-        stalling for the full batch. A single big transaction would starve
-        them for seconds when a zone-wide failure knocks out hundreds of
-        workers at once.
-
-        Heartbeat failures are idempotent at the semantic level
-        (``_record_heartbeat_failure`` guards on ``active = 1``), so
-        partial progress on crash is safe. Downstream consumers do not
-        rely on cross-worker atomicity.
+        Each ``(worker_id, worker_address, reason)`` tuple triggers a
+        worker-removal transaction. Chunks commit between themselves so the
+        SQLite writer is released and other RPCs (register, apply_heartbeats_batch,
+        ...) can interleave instead of stalling behind a zone-wide failure.
         """
         if not failures:
             return WorkerFailureBatchResult()
 
-        results: list[HeartbeatFailureResult] = []
+        results: list[WorkerFailureResult] = []
         removed_workers: list[tuple[WorkerId, str | None]] = []
         all_tasks_to_kill: set[JobName] = set()
         all_task_kill_workers: dict[JobName, WorkerId] = {}
 
         for chunk_start in range(0, len(failures), chunk_size):
             chunk = failures[chunk_start : chunk_start + chunk_size]
-            chunk_actions: list[tuple[str, str, dict[str, object]]] = []
             with self._db.transaction() as cur:
                 now_ms = Timestamp.now().epoch_ms()
-                for snapshot, error in chunk:
-                    result = self._record_heartbeat_failure(
+                for worker_id, worker_address, error in chunk:
+                    result = self._record_worker_failure(
                         cur,
-                        snapshot.worker_id,
+                        worker_id,
                         error,
-                        snapshot,
-                        force_remove=force_remove,
                         now_ms=now_ms,
                     )
                     results.append(result)
-                    chunk_actions.append(("worker_heartbeat_failed", str(snapshot.worker_id), {"error": error}))
+                    log_event(
+                        "worker_failed",
+                        str(worker_id),
+                        address=worker_address or "-",
+                        last_contact_age_ms=result.last_contact_age_ms or "-",
+                        error=error,
+                    )
                     all_tasks_to_kill.update(result.tasks_to_kill)
                     all_task_kill_workers.update(result.task_kill_workers)
                     if result.worker_removed:
-                        removed_workers.append((snapshot.worker_id, snapshot.worker_address))
-                self._record_transaction(
-                    cur,
-                    "heartbeat_failures_batch",
-                    chunk_actions,
-                    payload={"count": len(chunk_actions)},
-                )
+                        removed_workers.append((worker_id, worker_address))
 
         for worker_id, _ in removed_workers:
             self._db.remove_worker_from_attr_cache(worker_id)
@@ -2393,9 +2287,7 @@ class ControllerTransitions:
                 now_ms,
             )
             self._recompute_job_state(cur, JobName.from_wire(str(row["job_id"])))
-            self._record_transaction(
-                cur, "mark_task_unschedulable", [("task_unschedulable", task_id.to_wire(), {"reason": reason})]
-            )
+        log_event("task_unschedulable", task_id.to_wire(), reason=reason)
         return TxResult()
 
     def preempt_task(self, task_id: JobName, reason: str) -> TxResult:
@@ -2484,7 +2376,7 @@ class ControllerTransitions:
             if new_state == job_pb2.TASK_STATE_PREEMPTED:
                 tasks_to_kill.add(task_id)
 
-            self._record_transaction(cur, "preempt_task", [("task_preempted", task_id.to_wire(), {"reason": reason})])
+        log_event("task_preempted", task_id.to_wire(), reason=reason)
 
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
@@ -2613,170 +2505,9 @@ class ControllerTransitions:
                     )
                     tasks_to_kill.update(final_kill)
                     task_kill_workers.update(final_workers)
-            self._record_transaction(
-                cur,
-                "cancel_tasks_for_timeout",
-                [("task_timeout", tid.to_wire(), {"reason": reason}) for tid in tasks_to_kill],
-            )
+        for tid in tasks_to_kill:
+            log_event("task_timeout", tid.to_wire(), reason=reason)
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
-
-    def drain_dispatch(self, worker_id: WorkerId) -> DispatchBatch | None:
-        """Drain buffered dispatches and snapshot worker running tasks."""
-        with self._db.transaction() as cur:
-            worker_row = cur.execute(
-                "SELECT worker_id, address FROM workers " "WHERE worker_id = ? AND active = 1 AND healthy = 1",
-                (str(worker_id),),
-            ).fetchone()
-            if worker_row is None:
-                return None
-            dispatch_rows = cur.execute(
-                "SELECT id, kind, payload_proto, task_id FROM dispatch_queue WHERE worker_id = ? ORDER BY id ASC",
-                (str(worker_id),),
-            ).fetchall()
-            if dispatch_rows:
-                cur.execute("DELETE FROM dispatch_queue WHERE worker_id = ?", (str(worker_id),))
-            running_rows_raw = cur.execute(
-                "SELECT t.task_id, t.current_attempt_id, t.job_id "
-                "FROM tasks t "
-                "WHERE t.current_worker_id = ? AND t.state IN (?, ?, ?) "
-                "ORDER BY t.task_id ASC",
-                (str(worker_id), *ACTIVE_TASK_STATES),
-            ).fetchall()
-            running_job_ids = {str(row["job_id"]) for row in running_rows_raw}
-            if running_job_ids:
-                holder_placeholders = ",".join("?" for _ in running_job_ids)
-                holder_rows = cur.execute(
-                    f"SELECT job_id FROM jobs WHERE job_id IN ({holder_placeholders}) AND is_reservation_holder = 1",
-                    tuple(running_job_ids),
-                ).fetchall()
-                holder_ids = {str(r["job_id"]) for r in holder_rows}
-            else:
-                holder_ids = set()
-            running_rows = [r for r in running_rows_raw if str(r["job_id"]) not in holder_ids]
-            tasks_to_run: list[job_pb2.RunTaskRequest] = []
-            tasks_to_kill: list[str] = []
-            for row in dispatch_rows:
-                if str(row["kind"]) == "run" and row["payload_proto"] is not None:
-                    req = job_pb2.RunTaskRequest()
-                    req.ParseFromString(bytes(row["payload_proto"]))
-                    tasks_to_run.append(req)
-                elif row["task_id"] is not None:
-                    tasks_to_kill.append(str(row["task_id"]))
-            return DispatchBatch(
-                worker_id=WorkerId(str(worker_row["worker_id"])),
-                worker_address=str(worker_row["address"]),
-                running_tasks=[
-                    RunningTaskEntry(
-                        task_id=JobName.from_wire(str(row["task_id"])),
-                        attempt_id=int(row["current_attempt_id"]),
-                    )
-                    for row in running_rows
-                ],
-                tasks_to_run=tasks_to_run,
-                tasks_to_kill=tasks_to_kill,
-            )
-
-    def drain_dispatch_all(self) -> list[DispatchBatch]:
-        """Drain buffered dispatches and snapshot running tasks for all healthy active workers.
-
-        Reads (workers, running tasks, reservation filter) use a read snapshot
-        to avoid holding the write lock. The write lock is only held for the
-        dispatch_queue SELECT + DELETE.
-        """
-        # -- Phase 1: read-only queries (no write lock) --
-        with self._db.read_snapshot() as snap:
-            worker_rows = snap.fetchall("SELECT worker_id, address FROM workers WHERE active = 1 AND healthy = 1")
-            if not worker_rows:
-                return []
-
-            worker_id_set = {str(row["worker_id"]) for row in worker_rows}
-
-            running_rows = snap.fetchall(
-                "SELECT t.current_worker_id AS worker_id, t.task_id, t.current_attempt_id, t.job_id "
-                "FROM tasks t "
-                "WHERE t.state IN (?, ?, ?) AND t.current_worker_id IS NOT NULL "
-                "ORDER BY t.task_id ASC",
-                tuple(ACTIVE_TASK_STATES),
-            )
-
-            # Batch-check reservation holders instead of joining the jobs table
-            running_job_ids = {str(row["job_id"]) for row in running_rows}
-            reservation_holder_ids: set[str] = set()
-            if running_job_ids:
-                job_placeholders = ",".join("?" for _ in running_job_ids)
-                res_rows = snap.fetchall(
-                    f"SELECT job_id FROM jobs WHERE job_id IN ({job_placeholders}) AND is_reservation_holder = 1",
-                    tuple(running_job_ids),
-                )
-                reservation_holder_ids = {str(row["job_id"]) for row in res_rows}
-
-        running_rows = [row for row in running_rows if str(row["job_id"]) not in reservation_holder_ids]
-
-        # -- Phase 2: write lock only for dispatch_queue drain --
-        placeholders = ",".join("?" for _ in worker_id_set)
-        with self._db.transaction() as cur:
-            dispatch_rows = cur.execute(
-                f"SELECT worker_id, id, kind, payload_proto, task_id FROM dispatch_queue "
-                f"WHERE worker_id IN ({placeholders}) ORDER BY id ASC",
-                tuple(worker_id_set),
-            ).fetchall()
-            if dispatch_rows:
-                cur.execute(
-                    f"DELETE FROM dispatch_queue WHERE worker_id IN ({placeholders})",
-                    tuple(worker_id_set),
-                )
-
-        # -- Phase 3: build results (pure Python, no lock) --
-        dispatch_by_worker: dict[str, list[Any]] = defaultdict(list)
-        for row in dispatch_rows:
-            dispatch_by_worker[str(row["worker_id"])].append(row)
-
-        running_by_worker: dict[str, list[Any]] = defaultdict(list)
-        for row in running_rows:
-            running_by_worker[str(row["worker_id"])].append(row)
-
-        batches: list[DispatchBatch] = []
-        for worker_row in worker_rows:
-            wid = str(worker_row["worker_id"])
-            w_dispatch = dispatch_by_worker.get(wid, [])
-            w_running = running_by_worker.get(wid, [])
-
-            tasks_to_run: list[job_pb2.RunTaskRequest] = []
-            tasks_to_kill: list[str] = []
-            for row in w_dispatch:
-                if str(row["kind"]) == "run" and row["payload_proto"] is not None:
-                    req = job_pb2.RunTaskRequest()
-                    req.ParseFromString(bytes(row["payload_proto"]))
-                    tasks_to_run.append(req)
-                elif row["task_id"] is not None:
-                    tasks_to_kill.append(str(row["task_id"]))
-
-            batches.append(
-                DispatchBatch(
-                    worker_id=WorkerId(wid),
-                    worker_address=str(worker_row["address"]),
-                    running_tasks=[
-                        RunningTaskEntry(
-                            task_id=JobName.from_wire(str(row["task_id"])),
-                            attempt_id=int(row["current_attempt_id"]),
-                        )
-                        for row in w_running
-                    ],
-                    tasks_to_run=tasks_to_run,
-                    tasks_to_kill=tasks_to_kill,
-                )
-            )
-
-        return batches
-
-    def requeue_dispatch(self, batch: DispatchBatch) -> None:
-        """Re-queue drained dispatch payloads for later delivery."""
-        with self._db.transaction() as cur:
-            now_ms = Timestamp.now().epoch_ms()
-            for req in batch.tasks_to_run:
-                enqueue_run_dispatch(cur, str(batch.worker_id), req.SerializeToString(), now_ms)
-            for task_id in batch.tasks_to_kill:
-                enqueue_kill_dispatch(cur, str(batch.worker_id), task_id, now_ms)
 
     def remove_finished_job(self, job_id: JobName) -> bool:
         """Remove a finished job and its tasks from state.
@@ -2803,8 +2534,8 @@ class ControllerTransitions:
             ):
                 return False
             cur.execute("DELETE FROM jobs WHERE job_id = ?", (job_id.to_wire(),))
-            self._record_transaction(cur, "remove_finished_job", [("job_removed", job_id.to_wire(), {"state": state})])
-            return True
+        log_event("job_removed", job_id.to_wire(), state=state)
+        return True
 
     def remove_worker(self, worker_id: WorkerId) -> WorkerDetailRow | None:
         with self._db.transaction() as cur:
@@ -2812,7 +2543,7 @@ class ControllerTransitions:
             if row is None:
                 return None
             _remove_worker(cur, str(worker_id))
-            self._record_transaction(cur, "remove_worker", [("worker_removed", str(worker_id), {})])
+        log_event("worker_removed", str(worker_id))
         self._db.remove_worker_from_attr_cache(worker_id)
         return WORKER_DETAIL_PROJECTION.decode_one([row])
 
@@ -2965,7 +2696,6 @@ class ControllerTransitions:
         *,
         job_retention: Duration,
         worker_retention: Duration,
-        txn_action_retention: Duration,
         profile_retention: Duration,
         stop_event: threading.Event | None = None,
         pause_between_s: float = 1.0,
@@ -2979,7 +2709,6 @@ class ControllerTransitions:
         Args:
             job_retention: Delete terminal jobs whose finished_at is older than this.
             worker_retention: Delete inactive/unhealthy workers whose last heartbeat is older than this.
-            txn_action_retention: Delete txn_actions older than this.
             profile_retention: Delete task_profiles older than this.
             stop_event: If set, abort early (e.g. during shutdown).
             pause_between_s: Sleep between individual deletes to reduce lock contention.
@@ -2987,7 +2716,6 @@ class ControllerTransitions:
         now_ms = Timestamp.now().epoch_ms()
         job_cutoff_ms = now_ms - job_retention.to_ms()
         worker_cutoff_ms = now_ms - worker_retention.to_ms()
-        txn_cutoff_ms = now_ms - txn_action_retention.to_ms()
 
         terminal_states = tuple(TERMINAL_JOB_STATES)
         placeholders = ",".join("?" * len(terminal_states))
@@ -3012,7 +2740,7 @@ class ControllerTransitions:
                 # drops rows SQLite is about to delete for us.
                 self._db.endpoints.remove_by_job_ids(cur, [JobName.from_wire(str(job_id))])
                 cur.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
-                self._record_transaction(cur, "prune_old_data", [("job_pruned", str(job_id), {})])
+            log_event("job_pruned", str(job_id))
             jobs_deleted += 1
             time.sleep(pause_between_s)
 
@@ -3029,20 +2757,11 @@ class ControllerTransitions:
             worker_id = row["worker_id"]
             with self._db.transaction() as cur:
                 _remove_worker(cur, str(worker_id))
-                self._record_transaction(cur, "prune_old_data", [("worker_pruned", str(worker_id), {})])
+            log_event("worker_pruned", str(worker_id))
             workers_deleted += 1
             time.sleep(pause_between_s)
 
-        # 3. txn_actions: batch of 1000 per transaction (no CASCADE)
-        txn_actions_deleted = self._batch_delete(
-            "DELETE FROM txn_actions WHERE rowid IN "
-            "(SELECT rowid FROM txn_actions WHERE created_at_ms < ? LIMIT 1000)",
-            (txn_cutoff_ms,),
-            _stopped,
-            pause_between_s,
-        )
-
-        # 4. Task profiles: batch of 1000 per transaction
+        # 3. Task profiles: batch of 1000 per transaction
         profile_cutoff_ms = now_ms - profile_retention.to_ms()
         # 4a. Delete stale profiles by age.
         profiles_deleted = self._batch_delete(
@@ -3066,15 +2785,13 @@ class ControllerTransitions:
         result = PruneResult(
             jobs_deleted=jobs_deleted,
             workers_deleted=workers_deleted,
-            txn_actions_deleted=txn_actions_deleted,
             profiles_deleted=profiles_deleted,
         )
         if result.total > 0:
             logger.info(
-                "Pruned old data: %d jobs, %d workers, %d txn_actions, %d profiles",
+                "Pruned old data: %d jobs, %d workers, %d profiles",
                 result.jobs_deleted,
                 result.workers_deleted,
-                result.txn_actions_deleted,
                 result.profiles_deleted,
             )
             self._db.optimize()
@@ -3128,10 +2845,17 @@ class ControllerTransitions:
                 return {}, {}
 
             placeholders = ",".join("?" for _ in worker_ids)
+            # Reservation holders are virtual — they live on ``current_worker_id``
+            # only as a scheduling anchor and never get a RunTaskRequest. Sending
+            # them in PollTasksRequest.expected_tasks makes the worker reconcile
+            # against its _tasks dict, miss, and return WORKER_FAILED every cycle,
+            # which drains the holder's preemption budget and (post the build-
+            # failure health hook) reaps the claimed worker for a harmless miss.
             task_rows = snap.fetchall(
                 f"SELECT t.task_id, t.current_attempt_id, t.current_worker_id "
-                f"FROM tasks t "
+                f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id "
                 f"WHERE t.current_worker_id IN ({placeholders}) AND t.state IN (?, ?, ?) "
+                f"AND j.is_reservation_holder = 0 "
                 f"ORDER BY t.task_id ASC",
                 (*worker_ids, *ACTIVE_TASK_STATES),
             )
@@ -3146,136 +2870,16 @@ class ControllerTransitions:
             running.setdefault(wid, []).append(entry)
         return running, worker_addresses
 
-    # =========================================================================
-    # Heartbeat Dispatch API
-    # =========================================================================
-
-    def buffer_dispatch(self, worker_id: WorkerId, task_request: job_pb2.RunTaskRequest) -> None:
-        """Buffer a task dispatch for the next heartbeat.
-
-        Called by the scheduling thread after committing resources via TaskAssignedEvent.
-        The dispatch will be delivered when begin_heartbeat() drains the buffer.
-        """
-        with self._db.transaction() as cur:
-            enqueue_run_dispatch(cur, str(worker_id), task_request.SerializeToString(), Timestamp.now().epoch_ms())
-
-    def buffer_kill(self, worker_id: WorkerId, task_id: str) -> None:
-        """Buffer a task kill for the next heartbeat.
-
-        Called when a task needs to be terminated on a worker. The kill will be
-        delivered when begin_heartbeat() drains the buffer.
-        """
-        with self._db.transaction() as cur:
-            enqueue_kill_dispatch(cur, str(worker_id), task_id, Timestamp.now().epoch_ms())
-
-    def begin_heartbeat(self, worker_id: WorkerId) -> DispatchBatch | None:
-        """Drain dispatch for a worker and snapshot expected running attempts."""
-        return self.drain_dispatch(worker_id)
-
-    def complete_heartbeat(
-        self,
-        snapshot: DispatchBatch,
-        response: job_pb2.HeartbeatResponse,
-    ) -> HeartbeatApplyResult:
-        """Process successful heartbeat response (phase 3, success path).
-
-        Preconditions:
-            - snapshot was returned by begin_heartbeat for this worker
-            - response is the worker's HeartbeatResponse
-        Postconditions:
-            - worker.healthy = True, consecutive_failures = 0
-            - Task states updated from worker reports (BUILDING, RUNNING, terminal)
-            - Terminal tasks trigger retry/cleanup via the normal state machine
-            - Worker resource metrics updated
-
-        Updates worker health state and processes task state changes from the response.
-        Log entries are collected under the state lock but flushed to SQLite after
-        the lock is released, so disk I/O does not block scheduling or RPCs.
-
-        If the worker reports itself as unhealthy (worker_healthy=False), the worker
-        is immediately failed and WORKER_FAILED is returned.
-        """
-        updates: list[TaskUpdate] = []
-        for entry in response.tasks:
-            if entry.state in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING):
-                continue
-            updates.append(
-                TaskUpdate(
-                    task_id=JobName.from_wire(entry.task_id),
-                    attempt_id=entry.attempt_id,
-                    new_state=entry.state,
-                    error=entry.error or None,
-                    exit_code=entry.exit_code if entry.HasField("exit_code") else None,
-                    resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
-                    container_id=entry.container_id or None,
-                )
-            )
-        result = self.apply_heartbeat(
-            HeartbeatApplyRequest(
-                worker_id=snapshot.worker_id,
-                worker_resource_snapshot=(
-                    response.resource_snapshot if response.resource_snapshot.ByteSize() > 0 else None
-                ),
-                updates=updates,
-            )
-        )
-        if result.action != HeartbeatAction.OK:
-            return result
-        # Check if the worker explicitly reported itself as unhealthy.
-        # We intentionally use force_remove=False here: a self-reported unhealthy
-        # worker still goes through the consecutive-failure threshold so that
-        # transient health-check flaps don't cause immediate eviction.
-        if not response.worker_healthy:
-            health_error = response.health_error or "worker reported unhealthy"
-            logger.warning("Worker %s reported unhealthy: %s", snapshot.worker_id, health_error)
-            failure = self.fail_heartbeat_for_worker(
-                worker_id=snapshot.worker_id,
-                error=health_error,
-                snapshot=DispatchBatch(
-                    worker_id=snapshot.worker_id,
-                    worker_address=snapshot.worker_address,
-                    running_tasks=snapshot.running_tasks,
-                ),
-                force_remove=False,
-            )
-            return HeartbeatApplyResult(tasks_to_kill=failure.tasks_to_kill, action=failure.action)
-        return result
-
-    def fail_heartbeat(self, snapshot: DispatchBatch, error: str) -> HeartbeatAction:
-        """Handle heartbeat RPC failure (phase 3, failure path).
-
-        Preconditions:
-            - snapshot was returned by begin_heartbeat for this worker
-            - The heartbeat RPC failed (timeout, connection refused, etc.)
-        Postconditions:
-            - Buffered dispatches (tasks_to_run, tasks_to_kill) are re-queued for the
-              next heartbeat. We cannot tell whether the worker received the previous
-              heartbeat (RPC timeout ≠ delivery failure), so we re-send the same
-              RunTaskRequests with the same attempt_ids. If the worker did receive
-              them, it will reject re-sends as benign duplicates. If it did not, it
-              will start them fresh.
-            - Worker termination decisions are made by the reaper thread based on the
-              aggregate health score (bumped by the caller on RPC failure), not here.
-
-        Note: we intentionally do NOT fire WORKER_FAILED for tasks_to_run here.
-        The heartbeat may have timed out on the controller side but the worker may
-        still be processing it. Firing WORKER_FAILED would bump the attempt_id; the
-        next heartbeat would then carry a higher attempt_id, causing the worker to
-        kill the running task and restart it unnecessarily.
-        """
-        result = self.fail_heartbeat_for_worker(snapshot.worker_id, error, snapshot)
-        return result.action
-
     def fail_workers_batch(
         self,
         worker_ids: list[str],
         reason: str,
     ) -> WorkerFailureBatchResult:
-        """Fail all active workers matching the given worker IDs in one transaction.
+        """Fail all active workers matching the given worker IDs.
 
         Used for slice reaping: when one worker on a multi-VM slice fails, all
         sibling workers on that slice must be failed immediately rather than
-        waiting for individual heartbeat timeouts.
+        waiting for individual ping timeouts.
         """
         if not worker_ids:
             return WorkerFailureBatchResult()
@@ -3288,20 +2892,10 @@ class ControllerTransitions:
                     tuple(target_set),
                 )
             )
-        failures = [
-            (
-                DispatchBatch(
-                    worker_id=row.worker_id,
-                    worker_address=row.address,
-                    running_tasks=[],
-                ),
-                reason,
-            )
-            for row in rows
-        ]
+        failures = [(row.worker_id, row.address, reason) for row in rows]
         if not failures:
             return WorkerFailureBatchResult()
-        results = self.fail_heartbeats_batch(failures, force_remove=True)
+        results = self.fail_workers(failures)
         return WorkerFailureBatchResult(
             tasks_to_kill=results.tasks_to_kill,
             task_kill_workers=results.task_kill_workers,
@@ -3696,10 +3290,9 @@ class ControllerTransitions:
                         cascaded_jobs.add(task.job_id)
 
             if tasks_to_kill or cascaded_jobs:
-                actions: list[tuple[str, str, dict[str, object]]] = [("direct_provider_updates_applied", "direct", {})]
+                log_event("direct_provider_updates_applied", "direct")
                 for job_id in cascaded_jobs:
-                    actions.append(("job_terminated", job_id.to_wire(), {}))
-                self._record_transaction(cur, "apply_direct_provider_updates", actions)
+                    log_event("job_terminated", job_id.to_wire(), trigger="direct_provider_updates_applied")
 
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 

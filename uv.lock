@@ -5154,7 +5154,7 @@ dev = [
     { name = "pillow", specifier = ">=10.0.0" },
     { name = "playwright", specifier = ">=1.49.0" },
     { name = "pyarrow", specifier = ">=19.0.0" },
-    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest", specifier = ">=8.4" },
     { name = "pytest-asyncio" },
     { name = "pytest-flakefinder", specifier = ">=1.1.0" },
     { name = "pytest-playwright", specifier = ">=0.6.2" },
