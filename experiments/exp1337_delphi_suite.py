@@ -1,9 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Scaling Ladder Analysis for Completed AdamH v6 heuristic on Nemotron.
 
 This experiment runs scaling ladder analysis on the isoflop training sweeps

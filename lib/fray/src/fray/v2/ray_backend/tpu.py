@@ -47,6 +47,11 @@ START_ACTOR_TIMEOUT = 7 * 24 * 60 * 60  # 1 week
 # Intervals (in seconds)
 SCALE_UP_MULTISLICE_CHECK_INTERVAL = 3 * 60 * 60  # 3 hours
 SCALE_UP_MULTISLICE_INTERVAL = 12 * 60 * 60  # 12 hours
+RETRYABLE_TPU_STARTUP_ERROR_MESSAGES = (
+    "No accelerator found",
+    "No JAX TPU devices found",
+    "JAX TPU initialization failed",
+)
 
 
 def _get_current_tpu_pod_type() -> str:
@@ -180,6 +185,32 @@ def get_current_tpu_is_preempted() -> bool:
         return False
 
 
+def _iter_exception_chain(error: BaseException):
+    seen: set[int] = set()
+    stack: list[BaseException] = [error]
+    while stack:
+        current = stack.pop()
+        current_id = id(current)
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+        yield current
+        if isinstance(current, RayTaskError) and current.cause is not None:
+            stack.append(current.cause)
+        if current.__cause__ is not None:
+            stack.append(current.__cause__)
+        if current.__context__ is not None:
+            stack.append(current.__context__)
+
+
+def _is_retryable_tpu_startup_error(error: BaseException) -> bool:
+    for current in _iter_exception_chain(error):
+        message = str(current)
+        if any(token in message for token in RETRYABLE_TPU_STARTUP_ERROR_MESSAGES):
+            return True
+    return False
+
+
 def _handle_ray_error(e: RayError):
     """Handle a Ray error from a TPU pod, classifying it as preemption, failure, or run error."""
     if isinstance(e, NodeDiedError):
@@ -195,11 +226,17 @@ def _handle_ray_error(e: RayError):
         logger.exception("Worker crashed", exc_info=e)
         return TpuPreempted(e)
     elif isinstance(e, RaySystemError):
+        if _is_retryable_tpu_startup_error(e):
+            logger.exception("TPU startup failed; treating as infrastructure retry", exc_info=e)
+            return TpuPreempted(e)
         logger.exception("System error", exc_info=e)
         return TpuRunError(e)
     elif isinstance(e, RayTaskError):
         if get_current_tpu_is_preempted():
             logger.exception("Preempted", exc_info=e)
+            return TpuPreempted(e)
+        if _is_retryable_tpu_startup_error(e):
+            logger.exception("TPU startup failed; treating as infrastructure retry", exc_info=e)
             return TpuPreempted(e)
 
         logger.exception(f"Task error {e}", exc_info=e)
@@ -573,6 +610,7 @@ class SliceActor(ResourcePoolManager):
         return TPUHostActor.options(resources={slice_name: 1}, num_cpus=0.0).remote(self._slice_info)  # type: ignore
 
     def get_info(self) -> SliceInfo:
+        self._failed = False
         pod_name = ray.util.accelerators.tpu.get_current_pod_name()
         tpe = _get_current_tpu_pod_type()
 
@@ -590,6 +628,9 @@ class SliceActor(ResourcePoolManager):
         )
         self._scale_actor_pool(config.vm_count)
         return self._slice_info
+
+    def mark_failed(self) -> None:
+        self._failed = True
 
     def run_remote_fn(self, remote_fn: RemoteFunction, runtime_env: dict) -> list[ray.ObjectRef]:
         """Run the remote function on this slice."""
@@ -722,6 +763,14 @@ def run_on_pod_ray(
 
     slice_pool_manager = SlicePoolManager(tpu_type)
 
+    def mark_slice_failed(slice_resource: SliceResource, error: BaseException) -> None:
+        slice_name = slice_resource.actor_info.slice_name
+        logger.warning("Marking slice %s failed so the next retry rebuilds it.", slice_name, exc_info=error)
+        try:
+            ray.get(slice_resource.actor.mark_failed.remote(), timeout=HEALTH_CHECK_TIMEOUT)
+        except RayError as exc:
+            logger.warning("Failed to mark slice %s as failed", slice_name, exc_info=exc)
+
     try:
         while num_failures <= max_retries_failure and num_preemptions <= max_retries_preemption:
             logger.info(
@@ -743,6 +792,7 @@ def run_on_pod_ray(
 
             futures: list[ray.ObjectRef] = []
             future_to_index: dict[ray.ObjectRef, int] = {}
+            future_to_slice: dict[ray.ObjectRef, SliceResource] = {}
             global_index = 0
 
             try:
@@ -759,6 +809,7 @@ def run_on_pod_ray(
                     futures.extend(futures_for_slice)
                     for future in futures_for_slice:
                         future_to_index[future] = global_index
+                        future_to_slice[future] = tpu_slice
                         global_index += 1
             except RayError as e:
                 logger.exception("Failed to start remote function on slice", exc_info=e)
@@ -790,11 +841,19 @@ def run_on_pod_ray(
                     except RayError as e:
                         had_a_failure = True
                         problems.append(e)
-                        tpu_results[future_to_index[f]] = _handle_ray_error(e)
+                        result = _handle_ray_error(e)
+                        tpu_results[future_to_index[f]] = result
+                        if isinstance(result, TpuPreempted):
+                            mark_slice_failed(future_to_slice[f], e)
                     except Exception as e:
                         logger.warning(f"Task {f} failed with unexpected error {e}. Will retry.")
                         had_a_failure = True
-                        tpu_results[future_to_index[f]] = TpuRunError(e)
+                        if _is_retryable_tpu_startup_error(e):
+                            problems.append(e)
+                            tpu_results[future_to_index[f]] = TpuPreempted(e)
+                            mark_slice_failed(future_to_slice[f], e)
+                        else:
+                            tpu_results[future_to_index[f]] = TpuRunError(e)
 
                 if had_a_failure:
                     break

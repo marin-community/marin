@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 import jax
 import haliax as hax
 import jax.numpy as jnp
@@ -10,7 +12,9 @@ import pytest
 from haliax.partitioning import ResourceAxis
 from levanter.utils.jax_utils import (
     axis_resource_is_explicit,
+    barrier_sync,
     best_effort_sharding,
+    multihost_broadcast_sync,
     move_tree_to_memory_kind,
     sharded_tree_size,
 )
@@ -278,3 +282,48 @@ def test_move_tree_to_memory_kind_is_noop_inside_jit():
     y = move_inside_jit(x)
     np.testing.assert_array_equal(np.asarray(y), np.asarray(x))
     assert y.sharding.memory_kind == x.sharding.memory_kind
+
+
+def test_multihost_broadcast_sync_falls_back_to_jax_utils_when_client_missing(monkeypatch):
+    import jax._src.distributed as distributed
+    from levanter.utils import jax_utils
+
+    source_obj = {"project": "proj", "name": "run", "id": "abc123", "tags": ["x"]}
+    serialized = json.dumps(source_obj).encode("utf-8")
+    payload = np.frombuffer(serialized, dtype=np.uint8)
+    calls: list[tuple[np.ndarray, bool | None]] = []
+
+    def fake_broadcast(arr, is_source=None):
+        array = np.asarray(arr)
+        calls.append((array.copy(), is_source))
+        if array.dtype == np.int32:
+            return np.asarray([len(serialized)], dtype=np.int32)
+        return payload
+
+    monkeypatch.setattr(jax, "process_count", lambda: 2)
+    monkeypatch.setattr(jax, "process_index", lambda: 1)
+    monkeypatch.setattr(distributed.global_state, "client", None, raising=False)
+    monkeypatch.setattr(jax_utils.multihost_utils, "broadcast_one_to_all", fake_broadcast)
+
+    result = multihost_broadcast_sync({"project": "", "name": "", "id": "", "tags": []}, is_source=False)
+
+    assert result == source_obj
+    assert len(calls) == 2
+    np.testing.assert_array_equal(calls[0][0], np.asarray([0], dtype=np.int32))
+    np.testing.assert_array_equal(calls[1][0], np.zeros(len(serialized), dtype=np.uint8))
+
+
+def test_barrier_sync_falls_back_to_jax_utils_when_client_missing(monkeypatch):
+    import jax._src.distributed as distributed
+    from levanter.utils import jax_utils
+
+    synced_names: list[str] = []
+
+    monkeypatch.setattr(jax, "process_count", lambda: 2)
+    monkeypatch.setattr(distributed.global_state, "client", None, raising=False)
+    monkeypatch.setattr(jax_utils, "_sync_counter", 0)
+    monkeypatch.setattr(jax_utils.multihost_utils, "sync_global_devices", synced_names.append)
+
+    barrier_sync()
+
+    assert synced_names == ["levanter_barrier_sync_1"]

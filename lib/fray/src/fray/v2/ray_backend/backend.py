@@ -348,9 +348,26 @@ class RayClient:
         topo = get_tpu_topology(device.variant)
         replicas = request.replicas or 1
         num_slices = max(1, replicas // topo.vm_count)
-        # Only propagate env_vars to TPU workers. Other runtime_env keys (pip, py_modules,
-        # etc.) reference local temp files that don't exist on the run_on_pod_ray worker node.
-        tpu_runtime_env = {"env_vars": runtime_env["env_vars"]} if "env_vars" in runtime_env else {}
+        # Propagate env_vars and pip packages to TPU workers so that packages
+        # like libtpu are installed in the worker's virtualenv.  The pip spec
+        # may reference a local requirements file (e.g. /tmp/ray_reqs_XXX.txt)
+        # that won't exist on worker nodes, so resolve it to an inline list.
+        tpu_runtime_env: dict[str, Any] = {}
+        if "env_vars" in runtime_env:
+            tpu_runtime_env["env_vars"] = runtime_env["env_vars"]
+        if "pip" in runtime_env:
+            pip_spec = dict(runtime_env["pip"])
+            packages = pip_spec.get("packages")
+            if isinstance(packages, str) and os.path.isfile(packages):
+                with open(packages) as f:
+                    pip_spec["packages"] = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+            tpu_runtime_env["pip"] = pip_spec
+        if "pip_check" in runtime_env:
+            tpu_runtime_env["pip_check"] = runtime_env["pip_check"]
+        if "working_dir" in runtime_env:
+            tpu_runtime_env["working_dir"] = runtime_env["working_dir"]
+        if "excludes" in runtime_env:
+            tpu_runtime_env["excludes"] = runtime_env["excludes"]
         object_ref = run_on_pod_ray.remote(
             remote_fn,
             tpu_type=device.variant,

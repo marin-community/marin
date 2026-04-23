@@ -1,0 +1,39 @@
+{
+  "backfilled_metric_count": 18,
+  "backfilled_metrics": [
+    "lm_eval/arc_challenge_5shot/bpb",
+    "lm_eval/arc_easy_5shot/bpb",
+    "lm_eval/csqa_5shot/bpb",
+    "lm_eval/hellaswag_5shot/bpb",
+    "lm_eval/lambada_0shot/perplexity",
+    "lm_eval/medmcqa_5shot/acc_norm",
+    "lm_eval/mmlu_5shot/bpb",
+    "lm_eval/mmlu_humanities_5shot/bpb",
+    "lm_eval/mmlu_other_5shot/bpb",
+    "lm_eval/mmlu_sl_verb_5shot/bpb",
+    "lm_eval/mmlu_social_sciences_5shot/bpb",
+    "lm_eval/mmlu_stem_5shot/bpb",
+    "lm_eval/olmo_base_easy_overlap/macro_bpb",
+    "lm_eval/piqa_5shot/bpb",
+    "lm_eval/sciq_5shot/acc_norm",
+    "lm_eval/socialiqa_5shot/acc",
+    "lm_eval/socialiqa_5shot/choice_logprob",
+    "lm_eval/winogrande_5shot/bpb"
+  ],
+  "backfilled_run_names": [
+    "baseline_genericfamily_power_family_penalty_raw_optimum",
+    "baseline_olmix_loglinear_uncheatable_bpb",
+    "baseline_proportional",
+    "baseline_stratified",
+    "baseline_unimax"
+  ],
+  "common_metric_count": 47,
+  "common_wide_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/power_family_penalty_vs_baselines_ranked_metrics_common_wide.csv",
+  "long_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/power_family_penalty_vs_baselines_ranked_metrics_long.csv",
+  "missing_columns": [],
+  "missing_values": {},
+  "primary_metric": "eval/uncheatable_eval/bpb",
+  "requested_metric_count": 47,
+  "run_count": 5,
+  "wide_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/power_family_penalty_vs_baselines_ranked_metrics_wide.csv"
+}

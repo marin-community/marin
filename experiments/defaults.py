@@ -6,6 +6,7 @@ This file represents the best practices for each stage of the pipeline.
 """
 
 import dataclasses
+import hashlib
 import logging
 import os
 from collections.abc import Sequence
@@ -97,21 +98,36 @@ DEFAULT_NEW_RUN_DATA_SHUFFLE = BlockShuffleConfig(
 
 
 def _truncate_wandb_name(name: str) -> str:
-    """Truncate a run name to fit WANDB's 64-character limit, preserving the trailing suffix."""
+    """Truncate a run name to fit WANDB's 64-character limit while preserving uniqueness."""
     if len(name) <= 64:
         return name
-    old_name = name
-    if "-" not in name:
-        name = name[:64]
+
+    suffix = name.rsplit("/", 1)[-1]
+    digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
+    reserved = len(digest) + 2
+
+    if len(suffix) + reserved >= 64:
+        suffix_budget = 64 - reserved
+        truncated = f"{digest}/{suffix[-suffix_budget:]}"
     else:
-        prefix, suffix = name.rsplit("-", 1)
-        if len(suffix) >= 64:
-            suffix = suffix[:64]
-            name = suffix
-        else:
-            name = prefix[: 63 - len(suffix)] + "-" + suffix
-    logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
-    return name
+        prefix_budget = 64 - len(suffix) - reserved
+        truncated = f"{name[:prefix_budget]}~{digest}/{suffix}"
+
+    logger.warning(f"Truncated name from {name} to {truncated} to fit within WANDB limits.")
+    return truncated
+
+
+def _truncate_wandb_tags(tags: Sequence[str]) -> list[str]:
+    """Truncate W&B tags to fit the 64-character limit while preserving order."""
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        truncated = _truncate_wandb_name(tag)
+        if truncated in seen:
+            continue
+        seen.add(truncated)
+        deduped.append(truncated)
+    return deduped
 
 
 def _resolve_hf_export_steps(steps_per_hf_export: int | None, steps_per_export: int | None) -> int | None:
@@ -324,9 +340,13 @@ def simulated_epoching_train(
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
     target_budget: int,
+    simulated_epoch_subset_seed: int | None = None,
+    experiment_budget_override: int | None = None,
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+    wandb_name: str | None = None,
+    eval_datasets_cache_path: str | None = None,
 ) -> ExecutorStep:
     """
     Simulates the number of epochs seen in a full training run by sub-sampling individual datasets.
@@ -338,28 +358,50 @@ def simulated_epoching_train(
         model_config: Levanter LmConfig for the model to train.
         train_config: SimpleTrainConfig for the training run.
         target_budget: Target token budget to simulate.
+        simulated_epoch_subset_seed: Optional seed used to freeze simulated-epoch
+            subset membership before applying any run-specific shuffle.
+        experiment_budget_override: Optional explicit experiment token budget for
+            simulated epoching. Use this when the trainer should stop at an
+            intermediate step count but the dataset slicing must match a larger
+            native experiment.
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
+        wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
+        eval_datasets_cache_path: Optional GCS path to pre-cached evaluation datasets. If provided, datasets will be
+            synced from GCS to local cache before evaluation to avoid HuggingFace API rate limiting.
     """
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
     train_length = _validate_train_length(train_config.train_seq_len, model_config)
 
     # Calculate the experiment token budget
-    experiment_budget = train_config.train_batch_size * train_config.num_train_steps * train_length
+    experiment_budget = experiment_budget_override
+    if experiment_budget is None:
+        experiment_budget = train_config.train_batch_size * train_config.num_train_steps * train_length
 
     simulated_pretraining_data = dataclasses.replace(
-        pretraining_data, target_budget=target_budget, experiment_budget=experiment_budget
+        pretraining_data,
+        target_budget=target_budget,
+        experiment_budget=experiment_budget,
+        simulated_epoch_subset_seed=simulated_epoch_subset_seed,
     )
 
     logger.info(
         f"Simulating Epoching Behavior, Experiment Tokens {experiment_budget}, "
-        + "Simulated Target Tokens {target_budget}"
+        f"Simulated Target Tokens {target_budget}"
     )
 
     return default_train(
-        name, simulated_pretraining_data, model_config, train_config, tags, use_default_validation, eval_harness_tasks
+        name,
+        simulated_pretraining_data,
+        model_config,
+        train_config,
+        tags,
+        use_default_validation,
+        eval_harness_tasks,
+        wandb_name=wandb_name,
+        eval_datasets_cache_path=eval_datasets_cache_path,
     )
 
 
@@ -374,6 +416,7 @@ def default_train(
     wandb_name: str | None = None,
     wandb_group: str | None = None,
     override_output_path: str | None = None,
+    eval_datasets_cache_path: str | None = None,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -388,6 +431,8 @@ def default_train(
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
         wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
         wandb_group: Optional W&B group to organize related runs (e.g., a sweep). If unset, defaults to $WANDB_GROUP.
+        eval_datasets_cache_path: Optional GCS path to pre-cached evaluation datasets. If provided, datasets will be
+            synced from GCS to local cache before evaluation to avoid HuggingFace API rate limiting.
     """
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
@@ -398,10 +443,15 @@ def default_train(
     if wandb_group is None:
         wandb_group = os.environ.get("WANDB_GROUP")
 
-    name = _truncate_wandb_name(name)
+    wandb_display_name = _truncate_wandb_name(wandb_name or name)
+
+    wandb_tags = _truncate_wandb_tags(tags)
 
     if eval_harness_tasks:
-        harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
+        harness_config = LmEvalHarnessConfig(
+            task_spec=convert_to_levanter_task_config(eval_harness_tasks),
+            eval_datasets_cache_path=eval_datasets_cache_path,
+        )
     else:
         harness_config = None
 
@@ -434,11 +484,12 @@ def default_train(
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project="marin",
-                name=wandb_name,
-                tags=[*tags],
+                name=wandb_display_name,
+                tags=wandb_tags,
                 group=wandb_group,
                 replicate_path=this_output_path(),
             ),
+            seed=train_config.trainer_seed if train_config.trainer_seed is not None else 0,
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=train_config.train_batch_size,
             per_device_parallelism=train_config.per_device_parallelism,
@@ -651,7 +702,9 @@ def default_dpo(
     preference_data = dataclasses.replace(preference_data, permutation_type="feistel")
     dpo_tokenizer_name = unwrap_versioned_value(preference_data.tokenizer)
 
-    name = _truncate_wandb_name(name)
+    wandb_display_name = _truncate_wandb_name(name)
+
+    wandb_tags = _truncate_wandb_tags(tags)
 
     steps_per_export = dpo_config.steps_per_checkpoint
     steps_per_export_hf = _resolve_hf_export_steps(dpo_config.steps_per_hf_export, steps_per_export)
@@ -670,7 +723,8 @@ def default_dpo(
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project=dpo_config.wandb_project or "marin",
-                tags=[*tags],
+                name=wandb_display_name,
+                tags=wandb_tags,
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=dpo_config.train_batch_size,

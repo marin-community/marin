@@ -7,9 +7,18 @@ from dataclasses import dataclass, field
 
 from fray.cluster import ResourceConfig
 from levanter.eval_harness import TaskConfig
+from marin.execution.executor import InputName
 
 # Wandb project name for evaluations. Controlled via WANDB_PROJECT env var.
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
+_LEVANTER_TASK_KWARG_ALIASES = {
+    "doc_to_target": "doct_to_target",
+}
+_SUPPORTED_LEVANTER_TASK_KWARGS = frozenset(TaskConfig.__dataclass_fields__) - {
+    "task",
+    "task_alias",
+    "num_fewshot",
+}
 
 
 @dataclass(frozen=True)
@@ -100,14 +109,49 @@ class EvaluationConfig:
     """Custom base name for wandb runs. If set, wandb runs will be named
     evalchemy-{base_eval_run_name}[-step{N}]-{task}-seed{S}."""
 
+    eval_datasets_cache_path: str | None = None
+    """
+    Optional GCS path to pre-cached evaluation datasets for Levanter lm-eval.
+    """
+
+    eval_datasets_cache_dependency: InputName | str | None = None
+    """
+    Optional executor-only dependency marker for the eval dataset cache step.
+
+    This field is not read at runtime. It exists so Executor can see an
+    `InputName` and block the evaluation step on a cache-population step.
+    """
+
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
-    """Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects."""
+    """Convert Marin eval task configs into Levanter task configs."""
     return [
         TaskConfig(
             task=task.name,
             num_fewshot=task.num_fewshot,
             task_alias=task.task_alias,
+            **_convert_task_kwargs_for_levanter(task),
         )
         for task in tasks
     ]
+
+
+def _convert_task_kwargs_for_levanter(task: EvalTaskConfig) -> dict[str, object]:
+    if not task.task_kwargs:
+        return {}
+
+    converted_kwargs: dict[str, object] = {}
+    unsupported_keys: list[str] = []
+    for key, value in task.task_kwargs.items():
+        mapped_key = _LEVANTER_TASK_KWARG_ALIASES.get(key, key)
+        if mapped_key not in _SUPPORTED_LEVANTER_TASK_KWARGS:
+            unsupported_keys.append(key)
+            continue
+        converted_kwargs[mapped_key] = value
+
+    if unsupported_keys:
+        raise ValueError(
+            f"Unsupported Levanter task kwargs for {task.task_alias or task.name}: {sorted(unsupported_keys)}"
+        )
+
+    return converted_kwargs

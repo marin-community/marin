@@ -5,6 +5,8 @@ from collections.abc import Sequence
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
+MMLU_SL_VERB_DOC_TO_CHOICE = "{{['A. ' + choices[0], 'B. ' + choices[1], " "'C. ' + choices[2], 'D. ' + choices[3]]}}"
+
 # tasks to run (corresponding to lm_eval_harness tasks)
 # subset from from page 43 of the DCLM paper: https://arxiv.org/pdf/2406.11794
 # TODO: add more once supported in lm-eval-harness and/or tested on our end
@@ -28,7 +30,13 @@ CORE_TASKS = (
 
 MMLU_0_SHOT = EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot")
 MMLU_5_SHOT = EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot")
-MMLU_PRO_5_SHOT = EvalTaskConfig("leaderboard_mmlu_pro", 5, task_alias="mmlu_5shot")
+MMLU_SL_VERB_5_SHOT = EvalTaskConfig(
+    "mmlu",
+    5,
+    task_alias="mmlu_sl_verb_5shot",
+    task_kwargs={"doc_to_choice": MMLU_SL_VERB_DOC_TO_CHOICE},
+)
+MMLU_PRO_5_SHOT = EvalTaskConfig("leaderboard_mmlu_pro", 5, task_alias="mmlu_pro_5shot")
 
 OPEN_LM_LEADERBOARD_MCQ = (
     EvalTaskConfig("leaderboard_bbh", 3, task_alias="lb_bbh_3shot"),

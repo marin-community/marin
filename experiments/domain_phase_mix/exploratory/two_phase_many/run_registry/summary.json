@@ -1,0 +1,94 @@
+{
+  "attempt_count": 265,
+  "live_jobs_by_state": {
+    "skipped": 13
+  },
+  "live_watch_count": 13,
+  "logical_run_count": 701,
+  "logical_runs_by_family": {
+    "grp_no_l2_metric_objective_raw_optima": 2,
+    "grp_penalty_raw_optima_1_2b_24b": 1,
+    "grp_penalty_raw_optima_300m_6b": 3,
+    "grp_penalty_raw_optima_520m_10p4b": 1,
+    "grp_power_family_penalty_no_l2_subset_optima": 9,
+    "olmix_loglinear_subset_optima": 9,
+    "qsplit240_300m_6b": 241,
+    "regmix_raw_subset_optima": 9,
+    "run00097_300m_6b_fixed_subset": 10,
+    "stratified_300m_6b": 1,
+    "strong_tier_qsplit_baselines3_holdout": 3,
+    "strong_tier_qsplit_representative12": 108,
+    "strong_tier_stratified": 9,
+    "strong_tier_stratified_holdout": 1,
+    "two_phase_many_60m_export": 294
+  },
+  "logical_runs_by_status": {
+    "completed": 659,
+    "failed": 19,
+    "planned": 2,
+    "running": 21
+  },
+  "qsplit240_300m_active_recovery_runs": [],
+  "qsplit240_300m_incomplete_runs": [
+    "baseline_olmix_loglinear_uncheatable_bpb"
+  ],
+  "qsplit240_300m_unrecovered_missing_runs": [
+    "baseline_olmix_loglinear_uncheatable_bpb"
+  ],
+  "strong_tier_checkpoint_backed_objective_by_scale_path_status": {
+    "130m_2p6b|qsplit_representative12|completed": 36,
+    "130m_2p6b|stratified|completed": 3,
+    "1_2b_24b|qsplit_baselines3_holdout|running": 3,
+    "1_2b_24b|stratified_holdout|failed": 1,
+    "300m_6b|qsplit_representative12|completed": 36,
+    "300m_6b|stratified|completed": 3,
+    "520m_10p4b|qsplit_representative12|completed": 14,
+    "520m_10p4b|qsplit_representative12|failed": 10,
+    "520m_10p4b|qsplit_representative12|running": 12,
+    "520m_10p4b|stratified|completed": 2,
+    "520m_10p4b|stratified|failed": 1
+  },
+  "strong_tier_checkpoint_backed_objective_rows": 121,
+  "strong_tier_child_job_count": 0,
+  "strong_tier_child_jobs_by_state": {},
+  "strong_tier_logical_runs_by_scale": {
+    "130m_2p6b": 39,
+    "1_2b_24b": 4,
+    "300m_6b": 39,
+    "520m_10p4b": 39
+  },
+  "strong_tier_logical_runs_by_scale_path_status": {
+    "130m_2p6b|qsplit_representative12|completed": 36,
+    "130m_2p6b|stratified|completed": 3,
+    "1_2b_24b|qsplit_baselines3_holdout|running": 3,
+    "1_2b_24b|stratified_holdout|failed": 1,
+    "300m_6b|qsplit_representative12|completed": 36,
+    "300m_6b|stratified|completed": 3,
+    "520m_10p4b|qsplit_representative12|completed": 14,
+    "520m_10p4b|qsplit_representative12|failed": 10,
+    "520m_10p4b|qsplit_representative12|running": 12,
+    "520m_10p4b|stratified|completed": 2,
+    "520m_10p4b|stratified|failed": 1
+  },
+  "strong_tier_logical_runs_by_study_path": {
+    "qsplit_baselines3_holdout": 3,
+    "qsplit_representative12": 108,
+    "stratified": 9,
+    "stratified_holdout": 1
+  },
+  "strong_tier_new_runs": 91,
+  "strong_tier_perplexity_ready_by_scale_path_status": {
+    "130m_2p6b|qsplit_representative12|completed": 36,
+    "130m_2p6b|stratified|completed": 3,
+    "300m_6b|qsplit_representative12|completed": 36,
+    "300m_6b|stratified|completed": 3,
+    "520m_10p4b|qsplit_representative12|completed": 14,
+    "520m_10p4b|qsplit_representative12|failed": 4,
+    "520m_10p4b|qsplit_representative12|running": 8
+  },
+  "strong_tier_perplexity_ready_rows": 104,
+  "strong_tier_tracked_parent_job_ids": [
+    "/calvinxu/dm-strong-tier-scaling-study-20260415-235849",
+    "/calvinxu/dm-strong-tier-scaling-study-20260416-1115"
+  ]
+}

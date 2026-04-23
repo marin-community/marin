@@ -21,10 +21,13 @@ from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compati
 from levanter.compat.hf_checkpoints import (
     SAFE_TENSORS_INDEX_NAME,
     SAFE_TENSORS_MODEL,
+    HFCheckpointConverter,
     ModelWithHfSerializationMixin,
     _convert_to_jnp,
+    converter_from_hf_compat_config,
 )
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
+from levanter.models.llama import LlamaConfig
 from test_utils import skip_if_no_torch
 from tests.test_utils import use_test_mesh
 
@@ -73,6 +76,30 @@ def test_save_sharded_checkpoints():
             nano_model,
             loaded_model,
         )
+
+
+def test_converter_from_hf_compat_config_uses_explicit_tokenizer(monkeypatch):
+    config = LlamaConfig()
+    tokenizer = object()
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        HFCheckpointConverter,
+        "_infer_config_class",
+        staticmethod(lambda hf_config_class, ref, trust_remote_code: object),
+    )
+
+    def fake_infer_tokenizer(tokenizer_arg, ref, trust_remote_code=False):
+        observed["tokenizer_arg"] = tokenizer_arg
+        observed["ref"] = ref
+        return tokenizer_arg
+
+    monkeypatch.setattr(HFCheckpointConverter, "_infer_tokenizer", staticmethod(fake_infer_tokenizer))
+
+    converter = converter_from_hf_compat_config(config, tokenizer=tokenizer)
+
+    assert converter.tokenizer is tokenizer
+    assert observed["tokenizer_arg"] is tokenizer
 
 
 # A simple wrapper to include diverse dtypes in a model

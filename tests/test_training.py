@@ -9,11 +9,13 @@ import pytest
 from fray.v2 import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.main import train_lm
+from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.trainer import TrainerConfig
 
 from marin.training.training import (
     TrainLmOnPodConfig,
     _doublecheck_paths,
+    _prepare_training_run,
 )
 
 
@@ -31,6 +33,7 @@ class MockDataConfig:
     """Mock data config for testing."""
 
     cache_dir: str
+    auto_build_caches: bool = False
 
 
 @dataclasses.dataclass
@@ -116,3 +119,27 @@ def test_pathlib_path_handling(trainer_config):
         )
         with pytest.raises(ValueError, match="not in the same region"):
             _doublecheck_paths(config)
+
+
+def test_prepare_training_run_adds_eval_extra_for_lm_eval_harness(trainer_config, monkeypatch):
+    """LM jobs with eval harness enabled include the eval dependency group."""
+    monkeypatch.setenv("WANDB_MODE", "disabled")
+    monkeypatch.setenv("HF_TOKEN", "test-token")
+    monkeypatch.setenv("WANDB_API_KEY", "test-key")
+
+    with (
+        patch("levanter.infra.cli_helpers.load_config") as load_config,
+        patch("marin.training.training._doublecheck_paths"),
+    ):
+        load_config.return_value.env_for_accel.return_value = {}
+        config = TrainLmOnPodConfig(
+            train_config=train_lm.TrainLmConfig(
+                data=MockDataConfig(cache_dir="gs://bucket/path"),
+                trainer=trainer_config,
+                eval_harness=LmEvalHarnessConfig(task_spec=["mmlu"]),
+            ),
+            resources=ResourceConfig.with_tpu("v4-8"),
+        )
+        _, _, _, extras = _prepare_training_run(config)
+
+    assert extras == ["tpu", "eval"]

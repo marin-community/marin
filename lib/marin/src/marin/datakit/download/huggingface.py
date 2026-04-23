@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, field
 
 import huggingface_hub
+from fray.v2 import ResourceConfig
 from rigging.filesystem import open_url, url_to_fs
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version
@@ -62,6 +63,9 @@ class DownloadConfig:
 
     zephyr_max_parallelism: int = 8
     """Maximum parallelism of the Zephyr download job"""
+
+    worker_resources: ResourceConfig | None = None
+    """Optional Zephyr worker resource pinning for the download workers."""
 
     read_timeout_seconds: float = 120.0
     """Socket read timeout while streaming each HF file. Timeout failures trigger retries."""
@@ -342,7 +346,11 @@ def download_hf(cfg: DownloadConfig) -> None:
             f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
-    ctx = ZephyrContext(name="download-hf", max_workers=cfg.zephyr_max_parallelism)
+    ctx = ZephyrContext(
+        name="download-hf",
+        max_workers=cfg.zephyr_max_parallelism,
+        resources=cfg.worker_resources,
+    )
     ctx.execute(pipeline)
 
     # Write Provenance JSON

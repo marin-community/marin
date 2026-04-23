@@ -1643,7 +1643,13 @@ class ControllerTransitions:
                         continue
                     job_cache[job_id_wire] = decoded_job
                 job = job_cache[job_id_wire]
-                attempt_id = int(task_row["current_attempt_id"]) + 1
+                current_attempt_id = int(task_row["current_attempt_id"])
+                attempt_id = current_attempt_id + 1
+                if current_attempt_id >= 0:
+                    # Clear endpoints from the previous attempt before
+                    # launching a retry so new peers cannot resolve a stale
+                    # coordinator.
+                    cur.execute("DELETE FROM endpoints WHERE task_id = ?", (assignment.task_id.to_wire(),))
                 _assign_task(
                     cur,
                     assignment.task_id.to_wire(),
@@ -3002,7 +3008,11 @@ class ControllerTransitions:
 
             for row in pending_rows:
                 task_id = str(row["task_id"])
-                attempt_id = int(row["current_attempt_id"]) + 1
+                current_attempt_id = int(row["current_attempt_id"])
+                attempt_id = current_attempt_id + 1
+
+                if current_attempt_id >= 0:
+                    cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id,))
                 resources = resource_spec_from_scalars(
                     int(row["res_cpu_millicores"]),
                     int(row["res_memory_bytes"]),

@@ -581,10 +581,15 @@ class Trainer:
         self.add_hook(levanter.callbacks.pbar_logger(total=self.config.num_train_steps), every=1)
         self.add_hook(levanter.callbacks.log_step_info(self.config.num_train_steps), every=1)
         # engine.add_hook(callbacks.log_memory_usage(), every=1)
-        checkpointer = self.config.checkpointer.create(self.run_id)
+        self._checkpointer = self.config.checkpointer.create(self.run_id)
 
         def checkpoint_hook(info, force=False):
-            checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
+            self._checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
+            if force:
+                # Block until the checkpoint save completes before other force hooks
+                # (like eval) run.  This ensures the permanent final checkpoint is
+                # committed to GCS even if the process is killed during eval.
+                self._checkpointer.wait_until_finished()
 
         self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 

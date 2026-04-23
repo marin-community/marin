@@ -1,0 +1,2054 @@
+{
+  "full_swarm_coarse_top_k": 3,
+  "method": "Powell",
+  "objective_metric": "eval/uncheatable_eval/bpb",
+  "rows": [
+    {
+      "family_shares": {
+        "phase0_broad_text": 0.8076810384443985,
+        "phase0_reasoning": 0.004948320428912706,
+        "phase0_tech_code": 0.18737064112668866,
+        "phase1_broad_text": 0.7178192966046483,
+        "phase1_reasoning": 0.0038132204723537915,
+        "phase1_tech_code": 0.2783674829229975
+      },
+      "fullswarm_chosen_run_name": "baseline_unimax",
+      "fullswarm_chosen_value": 1.0834295749664309,
+      "fullswarm_regret_at_1": 0.02623081207275413,
+      "nearest_observed_run_name": "run_00152",
+      "nearest_observed_tv_distance": 0.5206752500711278,
+      "nearest_observed_value": 1.0874489545822144,
+      "objective_metric": "eval/uncheatable_eval/bpb",
+      "optimum_move_mean_phase_tv_vs_prev": NaN,
+      "phase0_max_weight": 0.23197311890251004,
+      "phase0_support_below_1e4": 21,
+      "phase0_top_domains": [
+        {
+          "domain": "dolma3_cc/health_high",
+          "epochs": 2.695529761770173,
+          "weight": 0.23197311890251004
+        },
+        {
+          "domain": "dolma3_cc/food_and_dining_high",
+          "epochs": 2.8066947108324105,
+          "weight": 0.09475891769434941
+        },
+        {
+          "domain": "dolma3_cc/industrial_high",
+          "epochs": 4.511957781928396,
+          "weight": 0.07282454568257923
+        },
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 2.7351659897161746,
+          "weight": 0.07246955350827584
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "epochs": 2.2058748978988416,
+          "weight": 0.06699156063089055
+        },
+        {
+          "domain": "dolmino_common_crawl_hq",
+          "epochs": 0.22843024973499337,
+          "weight": 0.05947980635196006
+        },
+        {
+          "domain": "dolma3_cc/games_high",
+          "epochs": 1.301192919234691,
+          "weight": 0.05810005070000928
+        },
+        {
+          "domain": "dolma3_finemath_3plus",
+          "epochs": 8.401312685917064,
+          "weight": 0.056452949394385867
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 1.3736069335985222,
+          "weight": 0.05589342530785552
+        },
+        {
+          "domain": "dolma3_cc/literature_high",
+          "epochs": 0.9076959523372046,
+          "weight": 0.046341499934496086
+        }
+      ],
+      "phase1_max_weight": 0.15389168147530258,
+      "phase1_support_below_1e4": 21,
+      "phase1_top_domains": [
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 1.4520556319676174,
+          "weight": 0.15389168147530258
+        },
+        {
+          "domain": "dolma3_cc/health_high",
+          "epochs": 0.3279775182893983,
+          "weight": 0.11290095019768319
+        },
+        {
+          "domain": "dolma3_cc/food_and_dining_high",
+          "epochs": 0.8222814987057436,
+          "weight": 0.1110466408145042
+        },
+        {
+          "domain": "dolma3_cc/industrial_high",
+          "epochs": 1.5645085021969243,
+          "weight": 0.10100681468728484
+        },
+        {
+          "domain": "dolmino_common_crawl_hq",
+          "epochs": 0.08417226330381128,
+          "weight": 0.08766877289369672
+        },
+        {
+          "domain": "dolma3_finemath_3plus",
+          "epochs": 2.7444265445628924,
+          "weight": 0.07376512629819178
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 0.43680977816559674,
+          "weight": 0.07109688838182782
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "epochs": 0.4815878293201147,
+          "weight": 0.058502538467123805
+        },
+        {
+          "domain": "dolma3_cc/games_high",
+          "epochs": 0.29772118804553316,
+          "weight": 0.05317463956101525
+        },
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 0.39127494400006246,
+          "weight": 0.04140993570617094
+        }
+      ],
+      "phase_weights": {
+        "phase_0": {
+          "dolma3_arxiv": 7.873930601746282e-16,
+          "dolma3_cc/art_and_design_high": 8.137343085691663e-16,
+          "dolma3_cc/art_and_design_low": 8.54356195221507e-16,
+          "dolma3_cc/crime_and_law_high": 0.06699156063089055,
+          "dolma3_cc/crime_and_law_low": 1.0198053941006845e-13,
+          "dolma3_cc/education_and_jobs_high": 0.01651671312004463,
+          "dolma3_cc/education_and_jobs_low": 1.5000968260783731e-12,
+          "dolma3_cc/electronics_and_hardware_high": 8.053948093058303e-16,
+          "dolma3_cc/electronics_and_hardware_low": 8.263585244134834e-16,
+          "dolma3_cc/entertainment_high": 7.888994916022324e-16,
+          "dolma3_cc/entertainment_low": 7.915536847506546e-16,
+          "dolma3_cc/finance_and_business_high": 0.021397190644013804,
+          "dolma3_cc/finance_and_business_low": 1.4623216263643188e-12,
+          "dolma3_cc/food_and_dining_high": 0.09475891769434941,
+          "dolma3_cc/food_and_dining_low": 1.7264906133198253e-15,
+          "dolma3_cc/games_high": 0.05810005070000928,
+          "dolma3_cc/games_low": 3.2219319696815143e-12,
+          "dolma3_cc/health_high": 0.23197311890251004,
+          "dolma3_cc/health_low": 1.0373902180113868e-15,
+          "dolma3_cc/history_and_geography_high": 8.119423878833367e-16,
+          "dolma3_cc/history_and_geography_low": 8.813643427851713e-16,
+          "dolma3_cc/industrial_high": 0.07282454568257923,
+          "dolma3_cc/industrial_low": 2.0885533299966093e-15,
+          "dolma3_cc/literature_high": 0.046341499934496086,
+          "dolma3_cc/literature_low": 8.587131486849802e-06,
+          "dolma3_cc/science_math_and_technology_high": 0.03793125382884838,
+          "dolma3_cc/science_math_and_technology_low": 7.000458362384937e-13,
+          "dolma3_finemath_3plus": 0.056452949394385867,
+          "dolma3_stack_edu": 0.07246955350827584,
+          "dolma3_wikipedia": 8.289989788875225e-15,
+          "dolmino_common_crawl_hq": 0.05947980635196006,
+          "dolmino_olmocr_pdfs_hq": 0.05589342530785552,
+          "dolmino_stack_edu_fim": 0.04589161160720746,
+          "dolmino_stem_heavy_crawl": 0.01699932076542823,
+          "dolmino_synth_code": 0.012556526616817944,
+          "dolmino_synth_instruction": 0.004948320428911918,
+          "dolmino_synth_math": 7.873930601746282e-16,
+          "dolmino_synth_qa": 0.02846504774292049,
+          "dolmino_synth_thinking": 7.873930601746282e-16
+        },
+        "phase_1": {
+          "dolma3_arxiv": 9.015216202323272e-16,
+          "dolma3_cc/art_and_design_high": 9.326337587749762e-16,
+          "dolma3_cc/art_and_design_low": 9.806771280727678e-16,
+          "dolma3_cc/crime_and_law_high": 0.058502538467123805,
+          "dolma3_cc/crime_and_law_low": 1.1272171162263968e-13,
+          "dolma3_cc/education_and_jobs_high": 0.013706724123368609,
+          "dolma3_cc/education_and_jobs_low": 1.574606952062968e-12,
+          "dolma3_cc/electronics_and_hardware_high": 9.228371806120458e-16,
+          "dolma3_cc/electronics_and_hardware_low": 9.476801887891149e-16,
+          "dolma3_cc/entertainment_high": 9.033699813339077e-16,
+          "dolma3_cc/entertainment_low": 9.066264102039112e-16,
+          "dolma3_cc/finance_and_business_high": 0.017213705786898126,
+          "dolma3_cc/finance_and_business_low": 1.549113216370068e-12,
+          "dolma3_cc/food_and_dining_high": 0.1110466408145042,
+          "dolma3_cc/food_and_dining_low": 1.9238704631260216e-15,
+          "dolma3_cc/games_high": 0.05317463956101525,
+          "dolma3_cc/games_low": 3.52936835115695e-12,
+          "dolma3_cc/health_high": 0.11290095019768319,
+          "dolma3_cc/health_low": 1.054665160977377e-15,
+          "dolma3_cc/history_and_geography_high": 9.304879302244874e-16,
+          "dolma3_cc/history_and_geography_low": 1.0125502279934714e-15,
+          "dolma3_cc/industrial_high": 0.10100681468728484,
+          "dolma3_cc/industrial_low": 2.333325524099888e-15,
+          "dolma3_cc/literature_high": 0.03340385826083444,
+          "dolma3_cc/literature_low": 9.109008325704543e-06,
+          "dolma3_cc/science_math_and_technology_high": 0.027627453276024456,
+          "dolma3_cc/science_math_and_technology_low": 7.607454558071017e-13,
+          "dolma3_finemath_3plus": 0.07376512629819178,
+          "dolma3_stack_edu": 0.15389168147530258,
+          "dolma3_wikipedia": 1.0256003199809386e-14,
+          "dolmino_common_crawl_hq": 0.08766877289369672,
+          "dolmino_olmocr_pdfs_hq": 0.07109688838182782,
+          "dolmino_stack_edu_fim": 0.04140993570617094,
+          "dolmino_stem_heavy_crawl": 0.010940727147446231,
+          "dolmino_synth_code": 0.009300739443330402,
+          "dolmino_synth_instruction": 0.00381322047235289,
+          "dolmino_synth_math": 9.015216202323272e-16,
+          "dolmino_synth_qa": 0.01952047399106537,
+          "dolmino_synth_thinking": 9.015216202323272e-16
+        }
+      },
+      "policy": "feature_bayes_linear_power_family_penalty_no_l2_raw_optimum",
+      "predicted_optimum_value": 0.6029892645592558,
+      "run_id": 470,
+      "run_name": "baseline_genericfamily_power_family_penalty_no_l2_raw_optimum_k020_uncheatable_bpb",
+      "subset_best_observed_bpb": 1.0687605142593384,
+      "subset_best_observed_run_name": "run_00200",
+      "subset_size": 20,
+      "tuning_cv_depopt_best8": 0.14827449687705282,
+      "tuning_cv_foldmean_regret_at_1": 0.007509851455688476,
+      "tuning_cv_rawopt_nearest_tv": 0.7503752214608955,
+      "tuning_cv_regret_at_1": 0.02161848545074463,
+      "tuning_cv_rmse": 0.022794459996537942,
+      "tuning_lower_tail_optimism": 0.0036891322781123837,
+      "tuning_method": "Powell",
+      "tuning_objective": 0.047345720610692796,
+      "variant_name": "power_family_penalty_no_l2"
+    },
+    {
+      "family_shares": {
+        "phase0_broad_text": 0.7082942915684457,
+        "phase0_reasoning": 0.15582318865196132,
+        "phase0_tech_code": 0.13588251977959287,
+        "phase1_broad_text": 0.5905384987764067,
+        "phase1_reasoning": 7.879423447222784e-05,
+        "phase1_tech_code": 0.40938270698912094
+      },
+      "fullswarm_chosen_run_name": "run_00078",
+      "fullswarm_chosen_value": 1.0926015377044678,
+      "fullswarm_regret_at_1": 0.035402774810791016,
+      "nearest_observed_run_name": "run_00158",
+      "nearest_observed_tv_distance": 0.5988416049253658,
+      "nearest_observed_value": 1.0859878063201904,
+      "objective_metric": "eval/uncheatable_eval/bpb",
+      "optimum_move_mean_phase_tv_vs_prev": 0.617690715868531,
+      "phase0_max_weight": 0.15423793817897846,
+      "phase0_support_below_1e4": 18,
+      "phase0_top_domains": [
+        {
+          "domain": "dolmino_common_crawl_hq",
+          "epochs": 0.5923457539244912,
+          "weight": 0.15423793817897846
+        },
+        {
+          "domain": "dolma3_cc/industrial_high",
+          "epochs": 7.760829679118594,
+          "weight": 0.12526245209238931
+        },
+        {
+          "domain": "dolma3_cc/history_and_geography_low",
+          "epochs": 13.36012022548532,
+          "weight": 0.09817071598021343
+        },
+        {
+          "domain": "dolmino_synth_thinking",
+          "epochs": 12.101446458356373,
+          "weight": 0.09541668458510118
+        },
+        {
+          "domain": "dolma3_arxiv",
+          "epochs": 13.642056086950852,
+          "weight": 0.07612792521919876
+        },
+        {
+          "domain": "dolmino_synth_instruction",
+          "epochs": 16.999909043766092,
+          "weight": 0.060406504066860135
+        },
+        {
+          "domain": "dolmino_synth_math",
+          "epochs": 13.852358529029042,
+          "weight": 0.059735588157757404
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "epochs": 0.5384703819406206,
+          "weight": 0.05609648633693547
+        },
+        {
+          "domain": "dolma3_cc/games_high",
+          "epochs": 1.1243213752089514,
+          "weight": 0.05020249337136314
+        },
+        {
+          "domain": "dolma3_cc/education_and_jobs_high",
+          "epochs": 0.811923599621629,
+          "weight": 0.04031595091770755
+        }
+      ],
+      "phase1_max_weight": 0.21147456732248449,
+      "phase1_support_below_1e4": 23,
+      "phase1_top_domains": [
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 1.9981846886618535,
+          "weight": 0.21147456732248449
+        },
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 1.8598440307819848,
+          "weight": 0.19710988950954117
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 1.1096739493887195,
+          "weight": 0.18061492407801047
+        },
+        {
+          "domain": "dolma3_cc/entertainment_high",
+          "epochs": 0.5088694252652284,
+          "weight": 0.17032054096333432
+        },
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "epochs": 0.2857472030238193,
+          "weight": 0.05489741020101892
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "epochs": 0.10772144115556186,
+          "weight": 0.04488859223937289
+        },
+        {
+          "domain": "dolmino_common_crawl_hq",
+          "epochs": 0.03799182029004699,
+          "weight": 0.03956999769394886
+        },
+        {
+          "domain": "dolma3_cc/finance_and_business_high",
+          "epochs": 0.0894686952082839,
+          "weight": 0.038471404075944064
+        },
+        {
+          "domain": "dolma3_cc/food_and_dining_high",
+          "epochs": 0.20191301250433852,
+          "weight": 0.027267744453250167
+        },
+        {
+          "domain": "dolma3_cc/education_and_jobs_high",
+          "epochs": 0.12435988688985199,
+          "weight": 0.02470029001900871
+        }
+      ],
+      "phase_weights": {
+        "phase_0": {
+          "dolma3_arxiv": 0.07612792521919876,
+          "dolma3_cc/art_and_design_high": 8.67945812698474e-07,
+          "dolma3_cc/art_and_design_low": 0.007777595764365604,
+          "dolma3_cc/crime_and_law_high": 0.00693551482445598,
+          "dolma3_cc/crime_and_law_low": 9.096734639564506e-05,
+          "dolma3_cc/education_and_jobs_high": 0.04031595091770755,
+          "dolma3_cc/education_and_jobs_low": 4.1904166189381475e-08,
+          "dolma3_cc/electronics_and_hardware_high": 8.443913012573268e-09,
+          "dolma3_cc/electronics_and_hardware_low": 4.1312593141278326e-08,
+          "dolma3_cc/entertainment_high": 0.0007907735099993455,
+          "dolma3_cc/entertainment_low": 7.45929925410105e-08,
+          "dolma3_cc/finance_and_business_high": 0.01586171672229046,
+          "dolma3_cc/finance_and_business_low": 5.347773481134602e-08,
+          "dolma3_cc/food_and_dining_high": 0.03930757777539229,
+          "dolma3_cc/food_and_dining_low": 7.747610008897557e-08,
+          "dolma3_cc/games_high": 0.05020249337136314,
+          "dolma3_cc/games_low": 5.849078574564297e-06,
+          "dolma3_cc/health_high": 0.003004763520164517,
+          "dolma3_cc/health_low": 3.1413893556926785e-07,
+          "dolma3_cc/history_and_geography_high": 5.676486952994157e-06,
+          "dolma3_cc/history_and_geography_low": 0.09817071598021343,
+          "dolma3_cc/industrial_high": 0.12526245209238931,
+          "dolma3_cc/industrial_low": 4.255091508772663e-08,
+          "dolma3_cc/literature_high": 2.1906292225252166e-07,
+          "dolma3_cc/literature_low": 0.02901537356526782,
+          "dolma3_cc/science_math_and_technology_high": 0.025219258802785135,
+          "dolma3_cc/science_math_and_technology_low": 4.960818793974527e-08,
+          "dolma3_finemath_3plus": 6.374774051732846e-09,
+          "dolma3_stack_edu": 1.687696334758091e-05,
+          "dolma3_wikipedia": 0.025297709357493585,
+          "dolmino_common_crawl_hq": 0.15423793817897846,
+          "dolmino_olmocr_pdfs_hq": 0.0045105788581043275,
+          "dolmino_stack_edu_fim": 2.1177189148135534e-06,
+          "dolmino_stem_heavy_crawl": 0.02618310856434275,
+          "dolmino_synth_code": 5.345600257089795e-09,
+          "dolmino_synth_instruction": 0.060406504066860135,
+          "dolmino_synth_math": 0.059735588157757404,
+          "dolmino_synth_qa": 0.05609648633693547,
+          "dolmino_synth_thinking": 0.09541668458510118
+        },
+        "phase_1": {
+          "dolma3_arxiv": 0.0005974739858812587,
+          "dolma3_cc/art_and_design_high": 1.233109668192682e-07,
+          "dolma3_cc/art_and_design_low": 5.237087304659828e-07,
+          "dolma3_cc/crime_and_law_high": 8.636844685818351e-06,
+          "dolma3_cc/crime_and_law_low": 8.161712798725071e-07,
+          "dolma3_cc/education_and_jobs_high": 0.02470029001900871,
+          "dolma3_cc/education_and_jobs_low": 1.6357033094572323e-08,
+          "dolma3_cc/electronics_and_hardware_high": 1.7351201878209088e-09,
+          "dolma3_cc/electronics_and_hardware_low": 5.53440509713361e-09,
+          "dolma3_cc/entertainment_high": 0.17032054096333432,
+          "dolma3_cc/entertainment_low": 7.267839768541094e-09,
+          "dolma3_cc/finance_and_business_high": 0.038471404075944064,
+          "dolma3_cc/finance_and_business_low": 1.1133390598145004e-08,
+          "dolma3_cc/food_and_dining_high": 0.027267744453250167,
+          "dolma3_cc/food_and_dining_low": 1.8612517381543146e-08,
+          "dolma3_cc/games_high": 0.008023785916001164,
+          "dolma3_cc/games_low": 1.8759238110466666e-06,
+          "dolma3_cc/health_high": 8.466804949483998e-07,
+          "dolma3_cc/health_low": 3.000396350615463e-08,
+          "dolma3_cc/history_and_geography_high": 4.22982963178809e-06,
+          "dolma3_cc/history_and_geography_low": 0.0005568082894278238,
+          "dolma3_cc/industrial_high": 0.0009680236640389096,
+          "dolma3_cc/industrial_low": 2.1235980287084876e-08,
+          "dolma3_cc/literature_high": 3.1238456316046976e-08,
+          "dolma3_cc/literature_low": 0.000241737253643238,
+          "dolma3_cc/science_math_and_technology_high": 0.05489741020101892,
+          "dolma3_cc/science_math_and_technology_low": 1.3530144919632454e-08,
+          "dolma3_finemath_3plus": 8.456781858598289e-10,
+          "dolma3_stack_edu": 0.19710988950954117,
+          "dolma3_wikipedia": 2.4392712807158937e-08,
+          "dolmino_common_crawl_hq": 0.03956999769394886,
+          "dolmino_olmocr_pdfs_hq": 0.18061492407801047,
+          "dolmino_stack_edu_fim": 0.21147456732248449,
+          "dolmino_stem_heavy_crawl": 6.418242539604998e-09,
+          "dolmino_synth_code": 1.5396297686918356e-09,
+          "dolmino_synth_instruction": 5.0641520518459666e-08,
+          "dolmino_synth_math": 0.00020077378590612543,
+          "dolmino_synth_qa": 0.04488859223937289,
+          "dolmino_synth_thinking": 7.874359295170938e-05
+        }
+      },
+      "policy": "feature_bayes_linear_power_family_penalty_no_l2_raw_optimum",
+      "predicted_optimum_value": 0.9888210660549577,
+      "run_id": 471,
+      "run_name": "baseline_genericfamily_power_family_penalty_no_l2_raw_optimum_k040_uncheatable_bpb",
+      "subset_best_observed_bpb": 1.0687605142593384,
+      "subset_best_observed_run_name": "run_00200",
+      "subset_size": 40,
+      "tuning_cv_depopt_best8": 0.1194280346522432,
+      "tuning_cv_foldmean_regret_at_1": 0.0015633344650268556,
+      "tuning_cv_rawopt_nearest_tv": 0.6050477612548404,
+      "tuning_cv_regret_at_1": 0.023428916931152344,
+      "tuning_cv_rmse": 0.012608590408202952,
+      "tuning_lower_tail_optimism": 0.0081679425606076,
+      "tuning_method": "Powell",
+      "tuning_objective": 0.034764009489530824,
+      "variant_name": "power_family_penalty_no_l2"
+    },
+    {
+      "family_shares": {
+        "phase0_broad_text": 0.7508626302916502,
+        "phase0_reasoning": 0.0858341673346037,
+        "phase0_tech_code": 0.16330320237374607,
+        "phase1_broad_text": 0.5673324284175401,
+        "phase1_reasoning": 0.01711786037108623,
+        "phase1_tech_code": 0.4155497112113737
+      },
+      "fullswarm_chosen_run_name": "run_00125",
+      "fullswarm_chosen_value": 1.0571987628936768,
+      "fullswarm_regret_at_1": 0.0,
+      "nearest_observed_run_name": "run_00200",
+      "nearest_observed_tv_distance": 0.5278278174662937,
+      "nearest_observed_value": 1.0687605142593384,
+      "objective_metric": "eval/uncheatable_eval/bpb",
+      "optimum_move_mean_phase_tv_vs_prev": 0.46767042077518906,
+      "phase0_max_weight": 0.07844030789604652,
+      "phase0_support_below_1e4": 17,
+      "phase0_top_domains": [
+        {
+          "domain": "dolma3_cc/entertainment_high",
+          "epochs": 0.9374294884439482,
+          "weight": 0.07844030789604652
+        },
+        {
+          "domain": "dolma3_cc/literature_high",
+          "epochs": 1.5095784169407962,
+          "weight": 0.07707000117126253
+        },
+        {
+          "domain": "dolma3_cc/history_and_geography_high",
+          "epochs": 2.7911079340098293,
+          "weight": 0.07452577910794869
+        },
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "epochs": 1.5253657114229213,
+          "weight": 0.0732628581141115
+        },
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 2.6447543348057323,
+          "weight": 0.07007405272772396
+        },
+        {
+          "domain": "dolma3_cc/games_high",
+          "epochs": 1.4352662033929158,
+          "weight": 0.06408660695309062
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "epochs": 1.9767350388163607,
+          "weight": 0.060032672446751256
+        },
+        {
+          "domain": "dolmino_common_crawl_hq",
+          "epochs": 0.22841388972474014,
+          "weight": 0.059475546450992886
+        },
+        {
+          "domain": "dolma3_cc/industrial_high",
+          "epochs": 3.260723168328043,
+          "weight": 0.052629189989596974
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 1.1744577642304128,
+          "weight": 0.047789848548791716
+        }
+      ],
+      "phase1_max_weight": 0.22820418758201305,
+      "phase1_support_below_1e4": 20,
+      "phase1_top_domains": [
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 2.1562598249440352,
+          "weight": 0.22820418758201305
+        },
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 1.5533032649383045,
+          "weight": 0.16462210263839533
+        },
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "epochs": 0.8042842565088222,
+          "weight": 0.15451812749364277
+        },
+        {
+          "domain": "dolmino_common_crawl_hq",
+          "epochs": 0.12582261536144312,
+          "weight": 0.1310492774941677
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 0.5882213050644547,
+          "weight": 0.09574122778480061
+        },
+        {
+          "domain": "dolma3_cc/history_and_geography_high",
+          "epochs": 0.6911908283816475,
+          "weight": 0.07382234756275725
+        },
+        {
+          "domain": "dolma3_cc/industrial_high",
+          "epochs": 0.5899534504485059,
+          "weight": 0.038088203905507455
+        },
+        {
+          "domain": "dolma3_cc/entertainment_high",
+          "epochs": 0.10882643076270213,
+          "weight": 0.03642462218859274
+        },
+        {
+          "domain": "dolmino_synth_code",
+          "epochs": 1.1049587970837396,
+          "weight": 0.016474159320814995
+        },
+        {
+          "domain": "dolma3_cc/games_high",
+          "epochs": 0.08402730983750889,
+          "weight": 0.0150077390971849
+        }
+      ],
+      "phase_weights": {
+        "phase_0": {
+          "dolma3_arxiv": 0.043169982461341884,
+          "dolma3_cc/art_and_design_high": 0.017205310031532865,
+          "dolma3_cc/art_and_design_low": 5.744693445315682e-06,
+          "dolma3_cc/crime_and_law_high": 0.060032672446751256,
+          "dolma3_cc/crime_and_law_low": 6.358956282895778e-06,
+          "dolma3_cc/education_and_jobs_high": 0.00012076341827784394,
+          "dolma3_cc/education_and_jobs_low": 5.172868004363434e-06,
+          "dolma3_cc/electronics_and_hardware_high": 1.5579110679953947e-06,
+          "dolma3_cc/electronics_and_hardware_low": 1.3324796915670988e-06,
+          "dolma3_cc/entertainment_high": 0.07844030789604652,
+          "dolma3_cc/entertainment_low": 1.7483595277130318e-05,
+          "dolma3_cc/finance_and_business_high": 0.042898618755609616,
+          "dolma3_cc/finance_and_business_low": 1.147828430163097e-05,
+          "dolma3_cc/food_and_dining_high": 0.02768480239782239,
+          "dolma3_cc/food_and_dining_low": 7.140823851586322e-06,
+          "dolma3_cc/games_high": 0.06408660695309062,
+          "dolma3_cc/games_low": 1.2185567556953684e-05,
+          "dolma3_cc/health_high": 1.6874214557618305e-06,
+          "dolma3_cc/health_low": 1.6459986801823593e-06,
+          "dolma3_cc/history_and_geography_high": 0.07452577910794869,
+          "dolma3_cc/history_and_geography_low": 1.3191821008783131e-06,
+          "dolma3_cc/industrial_high": 0.052629189989596974,
+          "dolma3_cc/industrial_low": 9.554244146272167e-07,
+          "dolma3_cc/literature_high": 0.07707000117126253,
+          "dolma3_cc/literature_low": 5.1619343932026584e-05,
+          "dolma3_cc/science_math_and_technology_high": 0.0732628581141115,
+          "dolma3_cc/science_math_and_technology_low": 1.8642867794758969e-06,
+          "dolma3_finemath_3plus": 1.6219502928548544e-06,
+          "dolma3_stack_edu": 0.07007405272772396,
+          "dolma3_wikipedia": 0.018825387828742785,
+          "dolmino_common_crawl_hq": 0.059475546450992886,
+          "dolmino_olmocr_pdfs_hq": 0.047789848548791716,
+          "dolmino_stack_edu_fim": 0.01566107177424485,
+          "dolmino_stem_heavy_crawl": 0.027786254518263657,
+          "dolmino_synth_code": 0.034394912869881146,
+          "dolmino_synth_instruction": 0.04415715799172748,
+          "dolmino_synth_math": 1.5605902613747304e-06,
+          "dolmino_synth_qa": 0.028901135825965995,
+          "dolmino_synth_thinking": 0.04167700934287622
+        },
+        "phase_1": {
+          "dolma3_arxiv": 0.006248070531377063,
+          "dolma3_cc/art_and_design_high": 6.813645924178784e-05,
+          "dolma3_cc/art_and_design_low": 1.3297405263322624e-06,
+          "dolma3_cc/crime_and_law_high": 0.004922769091663615,
+          "dolma3_cc/crime_and_law_low": 1.9096886563435354e-06,
+          "dolma3_cc/education_and_jobs_high": 8.993732838454923e-06,
+          "dolma3_cc/education_and_jobs_low": 1.3774335862676296e-06,
+          "dolma3_cc/electronics_and_hardware_high": 5.670551458390798e-07,
+          "dolma3_cc/electronics_and_hardware_low": 4.972439291074175e-07,
+          "dolma3_cc/entertainment_high": 0.03642462218859274,
+          "dolma3_cc/entertainment_low": 8.089136762226227e-06,
+          "dolma3_cc/finance_and_business_high": 0.0034956789716848314,
+          "dolma3_cc/finance_and_business_low": 3.90384466173687e-06,
+          "dolma3_cc/food_and_dining_high": 0.00034431124379318283,
+          "dolma3_cc/food_and_dining_low": 1.804742377412592e-06,
+          "dolma3_cc/games_high": 0.0150077390971849,
+          "dolma3_cc/games_low": 4.082673442416445e-06,
+          "dolma3_cc/health_high": 6.524689055202766e-07,
+          "dolma3_cc/health_low": 6.237032318531731e-07,
+          "dolma3_cc/history_and_geography_high": 0.07382234756275725,
+          "dolma3_cc/history_and_geography_low": 8.445900075213565e-07,
+          "dolma3_cc/industrial_high": 0.038088203905507455,
+          "dolma3_cc/industrial_low": 4.767107914469803e-07,
+          "dolma3_cc/literature_high": 0.011401054507480716,
+          "dolma3_cc/literature_low": 1.433407400588073e-05,
+          "dolma3_cc/science_math_and_technology_high": 0.15451812749364277,
+          "dolma3_cc/science_math_and_technology_low": 1.0418611027560062e-06,
+          "dolma3_finemath_3plus": 6.082079334896294e-07,
+          "dolma3_stack_edu": 0.16462210263839533,
+          "dolma3_wikipedia": 7.445899354108172e-05,
+          "dolmino_common_crawl_hq": 0.1310492774941677,
+          "dolmino_olmocr_pdfs_hq": 0.09574122778480061,
+          "dolmino_stack_edu_fim": 0.22820418758201305,
+          "dolmino_stem_heavy_crawl": 0.0003896187804198566,
+          "dolmino_synth_code": 0.016474159320814995,
+          "dolmino_synth_instruction": 0.005112317560827794,
+          "dolmino_synth_math": 5.829308397582426e-07,
+          "dolmino_synth_qa": 0.001934326143090468,
+          "dolmino_synth_thinking": 0.012005542810258434
+        }
+      },
+      "policy": "feature_bayes_linear_power_family_penalty_no_l2_raw_optimum",
+      "predicted_optimum_value": 1.0041381608081494,
+      "run_id": 472,
+      "run_name": "baseline_genericfamily_power_family_penalty_no_l2_raw_optimum_k060_uncheatable_bpb",
+      "subset_best_observed_bpb": 1.0687605142593384,
+      "subset_best_observed_run_name": "run_00200",
+      "subset_size": 60,
+      "tuning_cv_depopt_best8": 0.08659153269805338,
+      "tuning_cv_foldmean_regret_at_1": 0.0008509397506713867,
+      "tuning_cv_rawopt_nearest_tv": 0.5996275216705025,
+      "tuning_cv_regret_at_1": 0.0,
+      "tuning_cv_rmse": 0.009574714120762247,
+      "tuning_lower_tail_optimism": 0.005839596422177845,
+      "tuning_method": "Powell",
+      "tuning_objective": 0.027192487805895102,
+      "variant_name": "power_family_penalty_no_l2"
+    },
+    {
+      "family_shares": {
+        "phase0_broad_text": 0.8346195161461717,
+        "phase0_reasoning": 0.05747381532165951,
+        "phase0_tech_code": 0.1079066685321684,
+        "phase1_broad_text": 0.6131556049711108,
+        "phase1_reasoning": 0.00019283635533816001,
+        "phase1_tech_code": 0.38665155867355105
+      },
+      "fullswarm_chosen_run_name": "run_00125",
+      "fullswarm_chosen_value": 1.0571987628936768,
+      "fullswarm_regret_at_1": 0.0,
+      "nearest_observed_run_name": "run_00105",
+      "nearest_observed_tv_distance": 0.5612870456687177,
+      "nearest_observed_value": 1.094372272491455,
+      "objective_metric": "eval/uncheatable_eval/bpb",
+      "optimum_move_mean_phase_tv_vs_prev": 0.3210843320010258,
+      "phase0_max_weight": 0.16395167827945728,
+      "phase0_support_below_1e4": 16,
+      "phase0_top_domains": [
+        {
+          "domain": "dolma3_cc/history_and_geography_high",
+          "epochs": 6.140248857743417,
+          "weight": 0.16395167827945728
+        },
+        {
+          "domain": "dolma3_cc/industrial_high",
+          "epochs": 6.132751878486597,
+          "weight": 0.09898471814687262
+        },
+        {
+          "domain": "dolmino_common_crawl_hq",
+          "epochs": 0.3510706605354745,
+          "weight": 0.09141352744975728
+        },
+        {
+          "domain": "dolma3_cc/art_and_design_high",
+          "epochs": 3.471746443695452,
+          "weight": 0.07833169401208759
+        },
+        {
+          "domain": "dolma3_cc/games_high",
+          "epochs": 1.538569946264972,
+          "weight": 0.06869926093363742
+        },
+        {
+          "domain": "dolmino_synth_instruction",
+          "epochs": 16.166659440584557,
+          "weight": 0.057445682605185754
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "epochs": 0.4809696711328309,
+          "weight": 0.05010620730511872
+        },
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 1.6532085129768936,
+          "weight": 0.04380256380854912
+        },
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "epochs": 0.8996632301580303,
+          "weight": 0.0432105554018687
+        },
+        {
+          "domain": "dolmino_synth_code",
+          "epochs": 10.769675002044155,
+          "weight": 0.04014207187755165
+        }
+      ],
+      "phase1_max_weight": 0.1880724473798988,
+      "phase1_support_below_1e4": 20,
+      "phase1_top_domains": [
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "epochs": 0.9789382706372741,
+          "weight": 0.1880724473798988
+        },
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 1.618936390857037,
+          "weight": 0.1713374517990082
+        },
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 1.6079957878333546,
+          "weight": 0.17041852264266238
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 0.9104506639066476,
+          "weight": 0.14818855360969602
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "epochs": 0.1778053570390273,
+          "weight": 0.07409325464347365
+        },
+        {
+          "domain": "dolma3_cc/literature_high",
+          "epochs": 0.2588705894889819,
+          "weight": 0.05286550578949811
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "epochs": 0.36024923445566503,
+          "weight": 0.043762515191149945
+        },
+        {
+          "domain": "dolma3_arxiv",
+          "epochs": 1.3215852372103114,
+          "weight": 0.029499817759987227
+        },
+        {
+          "domain": "dolma3_cc/finance_and_business_high",
+          "epochs": 0.06299072423391813,
+          "weight": 0.02708591646941834
+        },
+        {
+          "domain": "dolmino_common_crawl_hq",
+          "epochs": 0.019147973026503527,
+          "weight": 0.019943378409300282
+        }
+      ],
+      "phase_weights": {
+        "phase_0": {
+          "dolma3_arxiv": 0.008189333973839122,
+          "dolma3_cc/art_and_design_high": 0.07833169401208759,
+          "dolma3_cc/art_and_design_low": 1.6667245927800101e-06,
+          "dolma3_cc/crime_and_law_high": 0.015106731044562359,
+          "dolma3_cc/crime_and_law_low": 1.5347313379665977e-06,
+          "dolma3_cc/education_and_jobs_high": 4.217655531798915e-07,
+          "dolma3_cc/education_and_jobs_low": 3.2982153621092866e-07,
+          "dolma3_cc/electronics_and_hardware_high": 3.633897325143168e-07,
+          "dolma3_cc/electronics_and_hardware_low": 5.791746301435087e-07,
+          "dolma3_cc/entertainment_high": 0.014847420209958785,
+          "dolma3_cc/entertainment_low": 2.6458202394851275e-05,
+          "dolma3_cc/finance_and_business_high": 0.02521720884126708,
+          "dolma3_cc/finance_and_business_low": 6.174699219655114e-06,
+          "dolma3_cc/food_and_dining_high": 0.02889060236614946,
+          "dolma3_cc/food_and_dining_low": 6.0222839472007945e-06,
+          "dolma3_cc/games_high": 0.06869926093363742,
+          "dolma3_cc/games_low": 8.359094698287192e-06,
+          "dolma3_cc/health_high": 0.03158770862071387,
+          "dolma3_cc/health_low": 9.022370276834806e-06,
+          "dolma3_cc/history_and_geography_high": 0.16395167827945728,
+          "dolma3_cc/history_and_geography_low": 8.853330430736781e-07,
+          "dolma3_cc/industrial_high": 0.09898471814687262,
+          "dolma3_cc/industrial_low": 5.260222984602861e-07,
+          "dolma3_cc/literature_high": 0.018357530442924944,
+          "dolma3_cc/literature_low": 2.4547581107675797e-05,
+          "dolma3_cc/science_math_and_technology_high": 0.0432105554018687,
+          "dolma3_cc/science_math_and_technology_low": 7.157970920844633e-07,
+          "dolma3_finemath_3plus": 0.00396023925023236,
+          "dolma3_stack_edu": 0.04380256380854912,
+          "dolma3_wikipedia": 0.03041773147535168,
+          "dolmino_common_crawl_hq": 0.09141352744975728,
+          "dolmino_olmocr_pdfs_hq": 0.035451890173299895,
+          "dolmino_stack_edu_fim": 0.007692822956898274,
+          "dolmino_stem_heavy_crawl": 0.03995744445168329,
+          "dolmino_synth_code": 0.04014207187755165,
+          "dolmino_synth_instruction": 0.057445682605185754,
+          "dolmino_synth_math": 0.004119636665097879,
+          "dolmino_synth_qa": 0.05010620730511872,
+          "dolmino_synth_thinking": 2.8132716473755512e-05
+        },
+        "phase_1": {
+          "dolma3_arxiv": 0.029499817759987227,
+          "dolma3_cc/art_and_design_high": 0.005093252715177351,
+          "dolma3_cc/art_and_design_low": 2.88895407172092e-07,
+          "dolma3_cc/crime_and_law_high": 0.043762515191149945,
+          "dolma3_cc/crime_and_law_low": 3.007920996141913e-07,
+          "dolma3_cc/education_and_jobs_high": 1.0093848550236144e-07,
+          "dolma3_cc/education_and_jobs_low": 1.1922294485953813e-07,
+          "dolma3_cc/electronics_and_hardware_high": 7.202774418630094e-08,
+          "dolma3_cc/electronics_and_hardware_low": 5.169650081539748e-08,
+          "dolma3_cc/entertainment_high": 0.016377630673187878,
+          "dolma3_cc/entertainment_low": 3.809832499209367e-06,
+          "dolma3_cc/finance_and_business_high": 0.02708591646941834,
+          "dolma3_cc/finance_and_business_low": 1.1575958449157442e-06,
+          "dolma3_cc/food_and_dining_high": 0.0011592591580177683,
+          "dolma3_cc/food_and_dining_low": 6.153345314550502e-07,
+          "dolma3_cc/games_high": 0.011576517448206885,
+          "dolma3_cc/games_low": 1.7605218775063476e-06,
+          "dolma3_cc/health_high": 0.006854048687684848,
+          "dolma3_cc/health_low": 1.6678345448573838e-06,
+          "dolma3_cc/history_and_geography_high": 0.013094875796994788,
+          "dolma3_cc/history_and_geography_low": 3.1861259177542737e-07,
+          "dolma3_cc/industrial_high": 0.004909562096904451,
+          "dolma3_cc/industrial_low": 1.479105520280429e-07,
+          "dolma3_cc/literature_high": 0.05286550578949811,
+          "dolma3_cc/literature_low": 6.809268474765347e-06,
+          "dolma3_cc/science_math_and_technology_high": 0.1880724473798988,
+          "dolma3_cc/science_math_and_technology_low": 1.1526869757390564e-07,
+          "dolma3_finemath_3plus": 2.616307134816924e-06,
+          "dolma3_stack_edu": 0.17041852264266238,
+          "dolma3_wikipedia": 1.572850116812222e-05,
+          "dolmino_common_crawl_hq": 0.019943378409300282,
+          "dolmino_olmocr_pdfs_hq": 0.14818855360969602,
+          "dolmino_stack_edu_fim": 0.1713374517990082,
+          "dolmino_stem_heavy_crawl": 4.5822648537336616e-05,
+          "dolmino_synth_code": 0.015371192665005758,
+          "dolmino_synth_instruction": 0.00018972600648763406,
+          "dolmino_synth_math": 2.1957499752642816e-05,
+          "dolmino_synth_qa": 0.07409325464347365,
+          "dolmino_synth_thinking": 3.1103488505259453e-06
+        }
+      },
+      "policy": "feature_bayes_linear_power_family_penalty_no_l2_raw_optimum",
+      "predicted_optimum_value": 1.010626870606056,
+      "run_id": 473,
+      "run_name": "baseline_genericfamily_power_family_penalty_no_l2_raw_optimum_k080_uncheatable_bpb",
+      "subset_best_observed_bpb": 1.0687605142593384,
+      "subset_best_observed_run_name": "run_00200",
+      "subset_size": 80,
+      "tuning_cv_depopt_best8": 0.07549241191827376,
+      "tuning_cv_foldmean_regret_at_1": 0.002564620971679732,
+      "tuning_cv_rawopt_nearest_tv": 0.576977067210026,
+      "tuning_cv_regret_at_1": 0.023841023445129395,
+      "tuning_cv_rmse": 0.010393283987336424,
+      "tuning_lower_tail_optimism": 0.0048242601005283325,
+      "tuning_method": "Powell",
+      "tuning_objective": 0.02625265695011221,
+      "variant_name": "power_family_penalty_no_l2"
+    },
+    {
+      "family_shares": {
+        "phase0_broad_text": 0.8103010679698532,
+        "phase0_reasoning": 0.048982269283270694,
+        "phase0_tech_code": 0.14071666274687605,
+        "phase1_broad_text": 0.5449089598823446,
+        "phase1_reasoning": 0.00024126180536236913,
+        "phase1_tech_code": 0.45484977831229306
+      },
+      "fullswarm_chosen_run_name": "run_00125",
+      "fullswarm_chosen_value": 1.0571987628936768,
+      "fullswarm_regret_at_1": 0.0,
+      "nearest_observed_run_name": "run_00105",
+      "nearest_observed_tv_distance": 0.5811207102373994,
+      "nearest_observed_value": 1.094372272491455,
+      "objective_metric": "eval/uncheatable_eval/bpb",
+      "optimum_move_mean_phase_tv_vs_prev": 0.19946334591565354,
+      "phase0_max_weight": 0.1698832644869103,
+      "phase0_support_below_1e4": 14,
+      "phase0_top_domains": [
+        {
+          "domain": "dolma3_cc/history_and_geography_high",
+          "epochs": 6.362396113673542,
+          "weight": 0.1698832644869103
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "epochs": 0.9158725100628141,
+          "weight": 0.09541328821457634
+        },
+        {
+          "domain": "dolma3_cc/industrial_high",
+          "epochs": 5.044902350127729,
+          "weight": 0.08142645375196879
+        },
+        {
+          "domain": "dolmino_common_crawl_hq",
+          "epochs": 0.24241231654584935,
+          "weight": 0.06312052655987778
+        },
+        {
+          "domain": "dolma3_cc/finance_and_business_high",
+          "epochs": 0.5269472301126286,
+          "weight": 0.05664662865924244
+        },
+        {
+          "domain": "dolmino_synth_code",
+          "epochs": 14.250313165748848,
+          "weight": 0.053115539258940914
+        },
+        {
+          "domain": "dolma3_cc/art_and_design_high",
+          "epochs": 2.3062030691800293,
+          "weight": 0.0520339823413078
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "epochs": 1.6671191344895344,
+          "weight": 0.05062975814424226
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 1.2065835125131639,
+          "weight": 0.04909707703474353
+        },
+        {
+          "domain": "dolmino_synth_instruction",
+          "epochs": 13.537539965591916,
+          "weight": 0.04810351990010691
+        }
+      ],
+      "phase1_max_weight": 0.21029863062317847,
+      "phase1_support_below_1e4": 16,
+      "phase1_top_domains": [
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 1.9842873121148574,
+          "weight": 0.21029863062317847
+        },
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 1.9101393196077157,
+          "weight": 0.20215643150094473
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 1.204738632218232,
+          "weight": 0.1960880281201581
+        },
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "epochs": 0.6457421867022911,
+          "weight": 0.12405921504170811
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "epochs": 0.2530229181612628,
+          "weight": 0.10543715790206652
+        },
+        {
+          "domain": "dolma3_cc/literature_high",
+          "epochs": 0.3559878544478372,
+          "weight": 0.07269840122608501
+        },
+        {
+          "domain": "dolma3_arxiv",
+          "epochs": 1.405358448373264,
+          "weight": 0.03136976484542275
+        },
+        {
+          "domain": "dolma3_cc/finance_and_business_high",
+          "epochs": 0.025668944917141955,
+          "weight": 0.01103760762143186
+        },
+        {
+          "domain": "dolmino_synth_code",
+          "epochs": 0.6578812435945551,
+          "weight": 0.00980854711483983
+        },
+        {
+          "domain": "dolma3_cc/history_and_geography_high",
+          "epochs": 0.08439553538973946,
+          "weight": 0.009013829886709986
+        }
+      ],
+      "phase_weights": {
+        "phase_0": {
+          "dolma3_arxiv": 0.012044442651429576,
+          "dolma3_cc/art_and_design_high": 0.0520339823413078,
+          "dolma3_cc/art_and_design_low": 2.73869523882923e-06,
+          "dolma3_cc/crime_and_law_high": 0.05062975814424226,
+          "dolma3_cc/crime_and_law_low": 1.966527013896623e-06,
+          "dolma3_cc/education_and_jobs_high": 0.006689191149251753,
+          "dolma3_cc/education_and_jobs_low": 2.004736477010587e-06,
+          "dolma3_cc/electronics_and_hardware_high": 3.26286421962746e-07,
+          "dolma3_cc/electronics_and_hardware_low": 5.757772844409782e-07,
+          "dolma3_cc/entertainment_high": 0.02487173870996968,
+          "dolma3_cc/entertainment_low": 7.282308837251065e-06,
+          "dolma3_cc/finance_and_business_high": 0.05664662865924244,
+          "dolma3_cc/finance_and_business_low": 1.74918366944905e-06,
+          "dolma3_cc/food_and_dining_high": 0.012799470107807128,
+          "dolma3_cc/food_and_dining_low": 3.5825281678152673e-06,
+          "dolma3_cc/games_high": 0.016713008842999557,
+          "dolma3_cc/games_low": 1.1891110996526227e-05,
+          "dolma3_cc/health_high": 0.015341405462998245,
+          "dolma3_cc/health_low": 3.484594772757207e-06,
+          "dolma3_cc/history_and_geography_high": 0.1698832644869103,
+          "dolma3_cc/history_and_geography_low": 8.416812422334034e-07,
+          "dolma3_cc/industrial_high": 0.08142645375196879,
+          "dolma3_cc/industrial_low": 6.769930031359443e-07,
+          "dolma3_cc/literature_high": 0.02261173352895488,
+          "dolma3_cc/literature_low": 9.828087747114489e-06,
+          "dolma3_cc/science_math_and_technology_high": 0.037839580423828796,
+          "dolma3_cc/science_math_and_technology_low": 5.691450286043781e-07,
+          "dolma3_finemath_3plus": 0.01480051252899368,
+          "dolma3_stack_edu": 0.00466776093292461,
+          "dolma3_wikipedia": 0.024386956849577306,
+          "dolmino_common_crawl_hq": 0.06312052655987778,
+          "dolmino_olmocr_pdfs_hq": 0.04909707703474353,
+          "dolmino_stack_edu_fim": 0.02265981556795272,
+          "dolmino_stem_heavy_crawl": 0.030749486045695624,
+          "dolmino_synth_code": 0.053115539258940914,
+          "dolmino_synth_instruction": 0.04810351990010691,
+          "dolmino_synth_math": 0.03342859180663453,
+          "dolmino_synth_qa": 0.09541328821457634,
+          "dolmino_synth_thinking": 0.0008787493831637801
+        },
+        "phase_1": {
+          "dolma3_arxiv": 0.03136976484542275,
+          "dolma3_cc/art_and_design_high": 0.0014181643337418928,
+          "dolma3_cc/art_and_design_low": 1.242890562210452e-06,
+          "dolma3_cc/crime_and_law_high": 0.007196552631465132,
+          "dolma3_cc/crime_and_law_low": 8.853748241442229e-07,
+          "dolma3_cc/education_and_jobs_high": 0.00022514958818280076,
+          "dolma3_cc/education_and_jobs_low": 1.1504407274118211e-06,
+          "dolma3_cc/electronics_and_hardware_high": 1.7657507495037037e-07,
+          "dolma3_cc/electronics_and_hardware_low": 2.405319630440984e-07,
+          "dolma3_cc/entertainment_high": 0.007591314685142892,
+          "dolma3_cc/entertainment_low": 2.6918838043540917e-06,
+          "dolma3_cc/finance_and_business_high": 0.01103760762143186,
+          "dolma3_cc/finance_and_business_low": 7.375917634780038e-07,
+          "dolma3_cc/food_and_dining_high": 0.00036080862666463805,
+          "dolma3_cc/food_and_dining_low": 1.1094381182791182e-06,
+          "dolma3_cc/games_high": 0.0007104503801251775,
+          "dolma3_cc/games_low": 3.5604697743682373e-06,
+          "dolma3_cc/health_high": 0.0006779046720729649,
+          "dolma3_cc/health_low": 1.3754314350495076e-06,
+          "dolma3_cc/history_and_geography_high": 0.009013829886709986,
+          "dolma3_cc/history_and_geography_low": 5.807997697866304e-07,
+          "dolma3_cc/industrial_high": 0.0019062225175393022,
+          "dolma3_cc/industrial_low": 3.988337250026062e-07,
+          "dolma3_cc/literature_high": 0.07269840122608501,
+          "dolma3_cc/literature_low": 6.504036597767878e-06,
+          "dolma3_cc/science_math_and_technology_high": 0.12405921504170811,
+          "dolma3_cc/science_math_and_technology_low": 2.3996978837613676e-07,
+          "dolma3_finemath_3plus": 0.00017101784216173228,
+          "dolma3_stack_edu": 0.21029863062317847,
+          "dolma3_wikipedia": 8.677825474187331e-05,
+          "dolmino_common_crawl_hq": 0.006241746536871645,
+          "dolmino_olmocr_pdfs_hq": 0.1960880281201581,
+          "dolmino_stack_edu_fim": 0.20215643150094473,
+          "dolmino_stem_heavy_crawl": 0.00013873358970845065,
+          "dolmino_synth_code": 0.00980854711483983,
+          "dolmino_synth_instruction": 0.00014926969661406596,
+          "dolmino_synth_math": 0.0010453863857455784,
+          "dolmino_synth_qa": 0.10543715790206652,
+          "dolmino_synth_thinking": 9.199210874830316e-05
+        }
+      },
+      "policy": "feature_bayes_linear_power_family_penalty_no_l2_raw_optimum",
+      "predicted_optimum_value": 1.0054740600333936,
+      "run_id": 474,
+      "run_name": "baseline_genericfamily_power_family_penalty_no_l2_raw_optimum_k100_uncheatable_bpb",
+      "subset_best_observed_bpb": 1.0687605142593384,
+      "subset_best_observed_run_name": "run_00200",
+      "subset_size": 100,
+      "tuning_cv_depopt_best8": 0.08636893314360419,
+      "tuning_cv_foldmean_regret_at_1": 0.0005489349365234375,
+      "tuning_cv_rawopt_nearest_tv": 0.6085897334405358,
+      "tuning_cv_regret_at_1": 0.023841023445129395,
+      "tuning_cv_rmse": 0.011180216592250991,
+      "tuning_lower_tail_optimism": 0.005276979846549571,
+      "tuning_method": "Powell",
+      "tuning_objective": 0.028568943911117726,
+      "variant_name": "power_family_penalty_no_l2"
+    },
+    {
+      "family_shares": {
+        "phase0_broad_text": 0.6550833317357486,
+        "phase0_reasoning": 0.019046993511683735,
+        "phase0_tech_code": 0.32586967475256756,
+        "phase1_broad_text": 0.700586140138734,
+        "phase1_reasoning": 0.01753493829558807,
+        "phase1_tech_code": 0.2818789215656781
+      },
+      "fullswarm_chosen_run_name": "run_00125",
+      "fullswarm_chosen_value": 1.0571987628936768,
+      "fullswarm_regret_at_1": 0.0,
+      "nearest_observed_run_name": "run_00178",
+      "nearest_observed_tv_distance": 0.4947782761441533,
+      "nearest_observed_value": 1.0749270915985107,
+      "objective_metric": "eval/uncheatable_eval/bpb",
+      "optimum_move_mean_phase_tv_vs_prev": 0.4140454784867619,
+      "phase0_max_weight": 0.13640659271076472,
+      "phase0_support_below_1e4": 13,
+      "phase0_top_domains": [
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 5.155524249335185,
+          "weight": 0.13640659271076472
+        },
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 4.043386656291731,
+          "weight": 0.1071314964958265
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "epochs": 0.8714280903337203,
+          "weight": 0.09078318065861225
+        },
+        {
+          "domain": "dolma3_cc/industrial_high",
+          "epochs": 5.529218882852696,
+          "weight": 0.08924348865498231
+        },
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "epochs": 1.5245039200453312,
+          "weight": 0.07322146653244191
+        },
+        {
+          "domain": "dolma3_cc/finance_and_business_high",
+          "epochs": 0.5753483500586486,
+          "weight": 0.06184973081367949
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 1.4310874329631365,
+          "weight": 0.058232363703774645
+        },
+        {
+          "domain": "dolma3_cc/history_and_geography_high",
+          "epochs": 1.9401170180051823,
+          "weight": 0.05180334682353317
+        },
+        {
+          "domain": "dolma3_cc/health_high",
+          "epochs": 0.4332825230550979,
+          "weight": 0.037287623258529426
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "epochs": 1.0770355944001673,
+          "weight": 0.032709151091303124
+        }
+      ],
+      "phase1_max_weight": 0.1877860121275254,
+      "phase1_support_below_1e4": 14,
+      "phase1_top_domains": [
+        {
+          "domain": "dolma3_cc/literature_high",
+          "epochs": 0.9195462131924703,
+          "weight": 0.1877860121275254
+        },
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 1.1533831845886775,
+          "weight": 0.12206639921821368
+        },
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 1.1421084314772798,
+          "weight": 0.12104287403161883
+        },
+        {
+          "domain": "dolma3_cc/finance_and_business_high",
+          "epochs": 0.26406143022348005,
+          "weight": 0.11354601695430341
+        },
+        {
+          "domain": "dolma3_cc/entertainment_high",
+          "epochs": 0.2352705917103543,
+          "weight": 0.07874596598525375
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "epochs": 0.6296635823368857,
+          "weight": 0.07649055001870673
+        },
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "epochs": 0.27325946135173385,
+          "weight": 0.0524982802364828
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 0.29993448235216186,
+          "weight": 0.048818523484537864
+        },
+        {
+          "domain": "dolma3_cc/health_high",
+          "epochs": 0.1351673749367084,
+          "weight": 0.046529180248920055
+        },
+        {
+          "domain": "dolma3_arxiv",
+          "epochs": 1.1248302220153665,
+          "weight": 0.02510794281451163
+        }
+      ],
+      "phase_weights": {
+        "phase_0": {
+          "dolma3_arxiv": 0.017464489518514544,
+          "dolma3_cc/art_and_design_high": 0.029980375337242075,
+          "dolma3_cc/art_and_design_low": 1.1048038987915662e-06,
+          "dolma3_cc/crime_and_law_high": 0.032709151091303124,
+          "dolma3_cc/crime_and_law_low": 5.529334950846569e-07,
+          "dolma3_cc/education_and_jobs_high": 0.010506559031251425,
+          "dolma3_cc/education_and_jobs_low": 7.370539086449047e-07,
+          "dolma3_cc/electronics_and_hardware_high": 0.022129104339227258,
+          "dolma3_cc/electronics_and_hardware_low": 9.154828949495872e-07,
+          "dolma3_cc/entertainment_high": 0.00811938877130818,
+          "dolma3_cc/entertainment_low": 1.2778156783369495e-06,
+          "dolma3_cc/finance_and_business_high": 0.06184973081367949,
+          "dolma3_cc/finance_and_business_low": 6.351943992588765e-07,
+          "dolma3_cc/food_and_dining_high": 0.0011967632518309615,
+          "dolma3_cc/food_and_dining_low": 1.1465767976976063e-06,
+          "dolma3_cc/games_high": 0.019170261645661147,
+          "dolma3_cc/games_low": 1.8790496912817709e-06,
+          "dolma3_cc/health_high": 0.037287623258529426,
+          "dolma3_cc/health_low": 7.206326044186829e-07,
+          "dolma3_cc/history_and_geography_high": 0.05180334682353317,
+          "dolma3_cc/history_and_geography_low": 4.4572800163159425e-06,
+          "dolma3_cc/industrial_high": 0.08924348865498231,
+          "dolma3_cc/industrial_low": 3.5216240974281724e-07,
+          "dolma3_cc/literature_high": 0.021434283950876248,
+          "dolma3_cc/literature_low": 4.357780647105982e-07,
+          "dolma3_cc/science_math_and_technology_high": 0.07322146653244191,
+          "dolma3_cc/science_math_and_technology_low": 5.254666399981727e-07,
+          "dolma3_finemath_3plus": 0.0010297096938258591,
+          "dolma3_stack_edu": 0.1071314964958265,
+          "dolma3_wikipedia": 0.008408951081121968,
+          "dolmino_common_crawl_hq": 0.032654316186234565,
+          "dolmino_olmocr_pdfs_hq": 0.058232363703774645,
+          "dolmino_stack_edu_fim": 0.13640659271076472,
+          "dolmino_stem_heavy_crawl": 0.006338236373639297,
+          "dolmino_synth_code": 0.031430631485718986,
+          "dolmino_synth_instruction": 0.010284046685833605,
+          "dolmino_synth_math": 0.03240675484791694,
+          "dolmino_synth_qa": 0.09078318065861225,
+          "dolmino_synth_thinking": 0.008762946825850128
+        },
+        "phase_1": {
+          "dolma3_arxiv": 0.02510794281451163,
+          "dolma3_cc/art_and_design_high": 0.007676489887759848,
+          "dolma3_cc/art_and_design_low": 1.0666183439512214e-06,
+          "dolma3_cc/crime_and_law_high": 0.07649055001870673,
+          "dolma3_cc/crime_and_law_low": 5.094635398096658e-07,
+          "dolma3_cc/education_and_jobs_high": 0.009038005354987836,
+          "dolma3_cc/education_and_jobs_low": 9.942582051829793e-07,
+          "dolma3_cc/electronics_and_hardware_high": 0.01940793913627401,
+          "dolma3_cc/electronics_and_hardware_low": 6.871717178089232e-07,
+          "dolma3_cc/entertainment_high": 0.07874596598525375,
+          "dolma3_cc/entertainment_low": 1.066038943087161e-06,
+          "dolma3_cc/finance_and_business_high": 0.11354601695430341,
+          "dolma3_cc/finance_and_business_low": 6.10841269975164e-07,
+          "dolma3_cc/food_and_dining_high": 0.0023249607130049733,
+          "dolma3_cc/food_and_dining_low": 8.563923458523851e-07,
+          "dolma3_cc/games_high": 0.008451623171659194,
+          "dolma3_cc/games_low": 1.8365317998686945e-06,
+          "dolma3_cc/health_high": 0.046529180248920055,
+          "dolma3_cc/health_low": 7.993460322278413e-07,
+          "dolma3_cc/history_and_geography_high": 0.004872345169486358,
+          "dolma3_cc/history_and_geography_low": 5.104459818834869e-06,
+          "dolma3_cc/industrial_high": 0.005650947173694178,
+          "dolma3_cc/industrial_low": 4.389050269551691e-07,
+          "dolma3_cc/literature_high": 0.1877860121275254,
+          "dolma3_cc/literature_low": 2.465356592439537e-06,
+          "dolma3_cc/science_math_and_technology_high": 0.0524982802364828,
+          "dolma3_cc/science_math_and_technology_low": 5.85454037943402e-07,
+          "dolma3_finemath_3plus": 8.01275846023356e-05,
+          "dolma3_stack_edu": 0.12104287403161883,
+          "dolma3_wikipedia": 0.007479882347131725,
+          "dolmino_common_crawl_hq": 0.0041649747327681605,
+          "dolmino_olmocr_pdfs_hq": 0.048818523484537864,
+          "dolmino_stack_edu_fim": 0.12206639921821368,
+          "dolmino_stem_heavy_crawl": 0.008764826234951216,
+          "dolmino_synth_code": 0.006994040243200912,
+          "dolmino_synth_instruction": 0.008921117672387366,
+          "dolmino_synth_math": 0.006587537673530707,
+          "dolmino_synth_qa": 0.0183225963236125,
+          "dolmino_synth_thinking": 0.008613820623200706
+        }
+      },
+      "policy": "feature_bayes_linear_power_family_penalty_no_l2_raw_optimum",
+      "predicted_optimum_value": 1.0177995155148551,
+      "run_id": 475,
+      "run_name": "baseline_genericfamily_power_family_penalty_no_l2_raw_optimum_k140_uncheatable_bpb",
+      "subset_best_observed_bpb": 1.0687605142593384,
+      "subset_best_observed_run_name": "run_00200",
+      "subset_size": 140,
+      "tuning_cv_depopt_best8": 0.07356229636893157,
+      "tuning_cv_foldmean_regret_at_1": 0.004614806175231934,
+      "tuning_cv_rawopt_nearest_tv": 0.5437381102705294,
+      "tuning_cv_regret_at_1": 0.011017918586730735,
+      "tuning_cv_rmse": 0.010636025469091133,
+      "tuning_lower_tail_optimism": 0.00526741839372822,
+      "tuning_method": "Powell",
+      "tuning_objective": 0.02629408571431529,
+      "variant_name": "power_family_penalty_no_l2"
+    },
+    {
+      "family_shares": {
+        "phase0_broad_text": 0.816608451487863,
+        "phase0_reasoning": 0.0005715316162217469,
+        "phase0_tech_code": 0.18282001689591526,
+        "phase1_broad_text": 0.40404914204307424,
+        "phase1_reasoning": 0.00078128011835077,
+        "phase1_tech_code": 0.595169577838575
+      },
+      "fullswarm_chosen_run_name": "run_00125",
+      "fullswarm_chosen_value": 1.0571987628936768,
+      "fullswarm_regret_at_1": 0.0,
+      "nearest_observed_run_name": "baseline_unimax",
+      "nearest_observed_tv_distance": 0.5767889104423287,
+      "nearest_observed_value": 1.0834295749664309,
+      "objective_metric": "eval/uncheatable_eval/bpb",
+      "optimum_move_mean_phase_tv_vs_prev": 0.3296295010504684,
+      "phase0_max_weight": 0.1915242046954087,
+      "phase0_support_below_1e4": 18,
+      "phase0_top_domains": [
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "epochs": 3.9876202249015185,
+          "weight": 0.1915242046954087
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 2.952913128326633,
+          "weight": 0.12015695708984461
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "epochs": 0.9209265217120371,
+          "weight": 0.09593980240168092
+        },
+        {
+          "domain": "dolma3_cc/finance_and_business_high",
+          "epochs": 0.6804337524362122,
+          "weight": 0.07314637196827213
+        },
+        {
+          "domain": "dolma3_cc/industrial_high",
+          "epochs": 4.287336029369566,
+          "weight": 0.06919907357686948
+        },
+        {
+          "domain": "dolma3_cc/health_high",
+          "epochs": 0.691073981325228,
+          "weight": 0.05947275712330146
+        },
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 2.137236276901673,
+          "weight": 0.05654771546998182
+        },
+        {
+          "domain": "dolma3_cc/literature_high",
+          "epochs": 1.0521343866083679,
+          "weight": 0.0537156582912464
+        },
+        {
+          "domain": "dolmino_synth_code",
+          "epochs": 14.030314440869423,
+          "weight": 0.052295532654711596
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "epochs": 1.7169286326851803,
+          "weight": 0.0521424531849022
+        }
+      ],
+      "phase1_max_weight": 0.29244985881564806,
+      "phase1_support_below_1e4": 18,
+      "phase1_top_domains": [
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 2.7594309223890514,
+          "weight": 0.29244985881564806
+        },
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 2.4595713266194767,
+          "weight": 0.2603046580463835
+        },
+        {
+          "domain": "dolma3_cc/literature_high",
+          "epochs": 0.6957926837560827,
+          "weight": 0.14209197044750888
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "epochs": 0.37987197564194564,
+          "weight": 0.04614625518869404
+        },
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "epochs": 0.2388033150182202,
+          "weight": 0.04587860669567282
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 0.24684629060691024,
+          "weight": 0.04017767927368704
+        },
+        {
+          "domain": "dolma3_cc/finance_and_business_high",
+          "epochs": 0.09123372611191403,
+          "weight": 0.03923036470392689
+        },
+        {
+          "domain": "dolma3_arxiv",
+          "epochs": 1.3544332563508674,
+          "weight": 0.030233036133755106
+        },
+        {
+          "domain": "dolma3_cc/entertainment_high",
+          "epochs": 0.09020302872047181,
+          "weight": 0.030191298367345125
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "epochs": 0.05720301180481479,
+          "weight": 0.023837062002004108
+        }
+      ],
+      "phase_weights": {
+        "phase_0": {
+          "dolma3_arxiv": 0.02419817190819644,
+          "dolma3_cc/art_and_design_high": 1.9047048619756645e-06,
+          "dolma3_cc/art_and_design_low": 1.5576412536010795e-06,
+          "dolma3_cc/crime_and_law_high": 0.0521424531849022,
+          "dolma3_cc/crime_and_law_low": 7.714899359043092e-06,
+          "dolma3_cc/education_and_jobs_high": 0.008917745633113833,
+          "dolma3_cc/education_and_jobs_low": 1.299059775864697e-05,
+          "dolma3_cc/electronics_and_hardware_high": 0.012261378151409263,
+          "dolma3_cc/electronics_and_hardware_low": 2.5680223238631087e-05,
+          "dolma3_cc/entertainment_high": 0.022624721807993558,
+          "dolma3_cc/entertainment_low": 3.313549712628457e-05,
+          "dolma3_cc/finance_and_business_high": 0.07314637196827213,
+          "dolma3_cc/finance_and_business_low": 1.1352783786237492e-05,
+          "dolma3_cc/food_and_dining_high": 3.777843695657838e-06,
+          "dolma3_cc/food_and_dining_low": 3.2355522330215687e-06,
+          "dolma3_cc/games_high": 2.1638318448194847e-06,
+          "dolma3_cc/games_low": 2.0363680823933004e-06,
+          "dolma3_cc/health_high": 0.05947275712330146,
+          "dolma3_cc/health_low": 1.1521960072381645e-05,
+          "dolma3_cc/history_and_geography_high": 0.007219387626898943,
+          "dolma3_cc/history_and_geography_low": 0.0003420878949989862,
+          "dolma3_cc/industrial_high": 0.06919907357686948,
+          "dolma3_cc/industrial_low": 5.838849851550969e-06,
+          "dolma3_cc/literature_high": 0.0537156582912464,
+          "dolma3_cc/literature_low": 2.9410464386633238e-05,
+          "dolma3_cc/science_math_and_technology_high": 0.1915242046954087,
+          "dolma3_cc/science_math_and_technology_low": 5.845548274495045e-06,
+          "dolma3_finemath_3plus": 5.861434466608446e-06,
+          "dolma3_stack_edu": 0.0040869343528075665,
+          "dolma3_wikipedia": 0.005494833052748984,
+          "dolmino_common_crawl_hq": 0.04429230714396296,
+          "dolmino_olmocr_pdfs_hq": 0.12015695708984461,
+          "dolmino_stack_edu_fim": 0.05654771546998182,
+          "dolmino_stem_heavy_crawl": 5.450793852132216e-07,
+          "dolmino_synth_code": 0.052295532654711596,
+          "dolmino_synth_instruction": 0.0005630260549355235,
+          "dolmino_synth_math": 0.04568580107575124,
+          "dolmino_synth_qa": 0.09593980240168092,
+          "dolmino_synth_thinking": 8.505561286223431e-06
+        },
+        "phase_1": {
+          "dolma3_arxiv": 0.030233036133755106,
+          "dolma3_cc/art_and_design_high": 2.0724374650384092e-06,
+          "dolma3_cc/art_and_design_low": 1.3504957315415756e-06,
+          "dolma3_cc/crime_and_law_high": 0.04614625518869404,
+          "dolma3_cc/crime_and_law_low": 5.664145419050938e-06,
+          "dolma3_cc/education_and_jobs_high": 0.002407130303119309,
+          "dolma3_cc/education_and_jobs_low": 1.419134712420192e-05,
+          "dolma3_cc/electronics_and_hardware_high": 0.004446289019724835,
+          "dolma3_cc/electronics_and_hardware_low": 1.1425147482227746e-05,
+          "dolma3_cc/entertainment_high": 0.030191298367345125,
+          "dolma3_cc/entertainment_low": 2.1517960535993108e-05,
+          "dolma3_cc/finance_and_business_high": 0.03923036470392689,
+          "dolma3_cc/finance_and_business_low": 7.915066276393575e-06,
+          "dolma3_cc/food_and_dining_high": 3.3783655081239395e-06,
+          "dolma3_cc/food_and_dining_low": 2.1050675253757373e-06,
+          "dolma3_cc/games_high": 2.1118999085991095e-06,
+          "dolma3_cc/games_low": 1.613760042991589e-06,
+          "dolma3_cc/health_high": 0.01820915628974931,
+          "dolma3_cc/health_low": 9.94247367584284e-06,
+          "dolma3_cc/history_and_geography_high": 0.00321798433837824,
+          "dolma3_cc/history_and_geography_low": 0.00019608992739647107,
+          "dolma3_cc/industrial_high": 0.0025952408052513152,
+          "dolma3_cc/industrial_low": 5.2414521861625114e-06,
+          "dolma3_cc/literature_high": 0.14209197044750888,
+          "dolma3_cc/literature_low": 5.1432247342360425e-05,
+          "dolma3_cc/science_math_and_technology_high": 0.04587860669567282,
+          "dolma3_cc/science_math_and_technology_low": 4.50831872216164e-06,
+          "dolma3_finemath_3plus": 3.52641738838674e-06,
+          "dolma3_stack_edu": 0.29244985881564806,
+          "dolma3_wikipedia": 0.003136162177664354,
+          "dolmino_common_crawl_hq": 0.0021418688337032,
+          "dolmino_olmocr_pdfs_hq": 0.04017767927368704,
+          "dolmino_stack_edu_fim": 0.2603046580463835,
+          "dolmino_stem_heavy_crawl": 1.5134843021922284e-06,
+          "dolmino_synth_code": 0.0075730138144752745,
+          "dolmino_synth_instruction": 0.0007742339456283992,
+          "dolmino_synth_math": 0.00460548461092479,
+          "dolmino_synth_qa": 0.023837062002004108,
+          "dolmino_synth_thinking": 7.046172722370818e-06
+        }
+      },
+      "policy": "feature_bayes_linear_power_family_penalty_no_l2_raw_optimum",
+      "predicted_optimum_value": 1.0077772414263693,
+      "run_id": 476,
+      "run_name": "baseline_genericfamily_power_family_penalty_no_l2_raw_optimum_k180_uncheatable_bpb",
+      "subset_best_observed_bpb": 1.0687605142593384,
+      "subset_best_observed_run_name": "run_00200",
+      "subset_size": 180,
+      "tuning_cv_depopt_best8": 0.0723950923189709,
+      "tuning_cv_foldmean_regret_at_1": 0.0005043268203735352,
+      "tuning_cv_rawopt_nearest_tv": 0.5793102729119213,
+      "tuning_cv_regret_at_1": 0.011017918586730735,
+      "tuning_cv_rmse": 0.009419497859730017,
+      "tuning_lower_tail_optimism": 0.004191137436279245,
+      "tuning_method": "Powell",
+      "tuning_objective": 0.02457289487990462,
+      "variant_name": "power_family_penalty_no_l2"
+    },
+    {
+      "family_shares": {
+        "phase0_broad_text": 0.7387101114718245,
+        "phase0_reasoning": 0.023010175732117267,
+        "phase0_tech_code": 0.23827971279605817,
+        "phase1_broad_text": 0.5244681461001932,
+        "phase1_reasoning": 0.004967171196826483,
+        "phase1_tech_code": 0.47056468270298046
+      },
+      "fullswarm_chosen_run_name": "run_00125",
+      "fullswarm_chosen_value": 1.0571987628936768,
+      "fullswarm_regret_at_1": 0.0,
+      "nearest_observed_run_name": "run_00176",
+      "nearest_observed_tv_distance": 0.5750822528315763,
+      "nearest_observed_value": 1.098947048187256,
+      "objective_metric": "eval/uncheatable_eval/bpb",
+      "optimum_move_mean_phase_tv_vs_prev": 0.15217100851318635,
+      "phase0_max_weight": 0.18708306004418512,
+      "phase0_support_below_1e4": 14,
+      "phase0_top_domains": [
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "epochs": 3.895153592492853,
+          "weight": 0.18708306004418512
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 3.0868674840739363,
+          "weight": 0.1256076923726152
+        },
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 3.7586870344514467,
+          "weight": 0.099448604378452
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "epochs": 0.884320612672673,
+          "weight": 0.09212629112019276
+        },
+        {
+          "domain": "dolma3_cc/finance_and_business_high",
+          "epochs": 0.6816985370102966,
+          "weight": 0.07328233583335741
+        },
+        {
+          "domain": "dolma3_cc/literature_high",
+          "epochs": 1.4070045220649363,
+          "weight": 0.07183319458373597
+        },
+        {
+          "domain": "dolmino_synth_code",
+          "epochs": 12.153832242719586,
+          "weight": 0.04530127486505875
+        },
+        {
+          "domain": "dolmino_common_crawl_hq",
+          "epochs": 0.15892415128095638,
+          "weight": 0.04138146219166355
+        },
+        {
+          "domain": "dolmino_synth_math",
+          "epochs": 9.34858326395057,
+          "weight": 0.04031393777049444
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "epochs": 1.258731079560337,
+          "weight": 0.0382271721368578
+        }
+      ],
+      "phase1_max_weight": 0.24598800901298132,
+      "phase1_support_below_1e4": 14,
+      "phase1_top_domains": [
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 2.3210369167427944,
+          "weight": 0.24598800901298132
+        },
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 1.7951524447928913,
+          "weight": 0.1899869860351634
+        },
+        {
+          "domain": "dolma3_cc/literature_high",
+          "epochs": 0.8799191035728416,
+          "weight": 0.17969352391883023
+        },
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "epochs": 0.5356255472388171,
+          "weight": 0.10290373823348845
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 0.5576807051877328,
+          "weight": 0.09077031886955607
+        },
+        {
+          "domain": "dolma3_cc/finance_and_business_high",
+          "epochs": 0.1070345810063978,
+          "weight": 0.046024708490609946
+        },
+        {
+          "domain": "dolma3_cc/entertainment_high",
+          "epochs": 0.10785045549467376,
+          "weight": 0.036097959537303
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "epochs": 0.06060969005117048,
+          "weight": 0.025256658593462322
+        },
+        {
+          "domain": "dolma3_arxiv",
+          "epochs": 0.971196921491574,
+          "weight": 0.021678610948725963
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "epochs": 0.17405358082966374,
+          "weight": 0.021143757561737753
+        }
+      ],
+      "phase_weights": {
+        "phase_0": {
+          "dolma3_arxiv": 0.030484608304655943,
+          "dolma3_cc/art_and_design_high": 0.0001480969417173241,
+          "dolma3_cc/art_and_design_low": 4.408280292722759e-05,
+          "dolma3_cc/crime_and_law_high": 0.0382271721368578,
+          "dolma3_cc/crime_and_law_low": 3.7700373241879625e-05,
+          "dolma3_cc/education_and_jobs_high": 0.0044463314768265205,
+          "dolma3_cc/education_and_jobs_low": 2.935636604446422e-05,
+          "dolma3_cc/electronics_and_hardware_high": 0.004506751847508469,
+          "dolma3_cc/electronics_and_hardware_low": 4.943017051718621e-05,
+          "dolma3_cc/entertainment_high": 0.016417508527761963,
+          "dolma3_cc/entertainment_low": 4.8242026008264854e-05,
+          "dolma3_cc/finance_and_business_high": 0.07328233583335741,
+          "dolma3_cc/finance_and_business_low": 2.997214964880858e-05,
+          "dolma3_cc/food_and_dining_high": 0.002295163904804142,
+          "dolma3_cc/food_and_dining_low": 3.90093488695315e-05,
+          "dolma3_cc/games_high": 3.4267047056726844e-05,
+          "dolma3_cc/games_low": 2.4808920889790446e-05,
+          "dolma3_cc/health_high": 0.015298948588837399,
+          "dolma3_cc/health_low": 3.696386116160931e-05,
+          "dolma3_cc/history_and_geography_high": 0.012632669588373257,
+          "dolma3_cc/history_and_geography_low": 0.0019088088131861047,
+          "dolma3_cc/industrial_high": 0.03584482229824364,
+          "dolma3_cc/industrial_low": 3.652573297828374e-05,
+          "dolma3_cc/literature_high": 0.07183319458373597,
+          "dolma3_cc/literature_low": 5.4005893767866095e-05,
+          "dolma3_cc/science_math_and_technology_high": 0.18708306004418512,
+          "dolma3_cc/science_math_and_technology_low": 2.2705644536155252e-05,
+          "dolma3_finemath_3plus": 2.8673529124397822e-05,
+          "dolma3_stack_edu": 0.02270261394827265,
+          "dolma3_wikipedia": 0.00865303113573367,
+          "dolmino_common_crawl_hq": 0.04138146219166355,
+          "dolmino_olmocr_pdfs_hq": 0.1256076923726152,
+          "dolmino_stack_edu_fim": 0.099448604378452,
+          "dolmino_stem_heavy_crawl": 0.006529699728576545,
+          "dolmino_synth_code": 0.04530127486505875,
+          "dolmino_synth_instruction": 0.01443349509498224,
+          "dolmino_synth_math": 0.04031393777049444,
+          "dolmino_synth_qa": 0.09212629112019276,
+          "dolmino_synth_thinking": 0.008576680637135027
+        },
+        "phase_1": {
+          "dolma3_arxiv": 0.021678610948725963,
+          "dolma3_cc/art_and_design_high": 0.00011451940814939488,
+          "dolma3_cc/art_and_design_low": 2.8676531656909792e-05,
+          "dolma3_cc/crime_and_law_high": 0.021143757561737753,
+          "dolma3_cc/crime_and_law_low": 2.656039714989646e-05,
+          "dolma3_cc/education_and_jobs_high": 0.0013215608301479788,
+          "dolma3_cc/education_and_jobs_low": 2.4853354802188732e-05,
+          "dolma3_cc/electronics_and_hardware_high": 0.0008441638371589198,
+          "dolma3_cc/electronics_and_hardware_low": 2.6970578171239364e-05,
+          "dolma3_cc/entertainment_high": 0.036097959537303,
+          "dolma3_cc/entertainment_low": 3.332502202648118e-05,
+          "dolma3_cc/finance_and_business_high": 0.046024708490609946,
+          "dolma3_cc/finance_and_business_low": 2.152614090461241e-05,
+          "dolma3_cc/food_and_dining_high": 0.0005496230013886323,
+          "dolma3_cc/food_and_dining_low": 2.3354986889644425e-05,
+          "dolma3_cc/games_high": 2.6941317723967306e-05,
+          "dolma3_cc/games_low": 1.703174596498181e-05,
+          "dolma3_cc/health_high": 0.0051550150199820705,
+          "dolma3_cc/health_low": 2.651302997138308e-05,
+          "dolma3_cc/history_and_geography_high": 0.0018446727238948656,
+          "dolma3_cc/history_and_geography_low": 0.0005585349838925648,
+          "dolma3_cc/industrial_high": 0.0026220738187157106,
+          "dolma3_cc/industrial_low": 2.730787503946569e-05,
+          "dolma3_cc/literature_high": 0.17969352391883023,
+          "dolma3_cc/literature_low": 6.031787822405468e-05,
+          "dolma3_cc/science_math_and_technology_high": 0.10290373823348845,
+          "dolma3_cc/science_math_and_technology_low": 1.7491551483448808e-05,
+          "dolma3_finemath_3plus": 1.7417901761097197e-05,
+          "dolma3_stack_edu": 0.24598800901298132,
+          "dolma3_wikipedia": 0.0037484653118757196,
+          "dolmino_common_crawl_hq": 0.0037655596772529264,
+          "dolmino_olmocr_pdfs_hq": 0.09077031886955607,
+          "dolmino_stack_edu_fim": 0.1899869860351634,
+          "dolmino_stem_heavy_crawl": 0.0016924218727382833,
+          "dolmino_synth_code": 0.006090805535237525,
+          "dolmino_synth_instruction": 0.0027980146026788783,
+          "dolmino_synth_math": 0.0068028532691111745,
+          "dolmino_synth_qa": 0.025256658593462322,
+          "dolmino_synth_thinking": 0.002169156594147605
+        }
+      },
+      "policy": "feature_bayes_linear_power_family_penalty_no_l2_raw_optimum",
+      "predicted_optimum_value": 1.0100242131130013,
+      "run_id": 477,
+      "run_name": "baseline_genericfamily_power_family_penalty_no_l2_raw_optimum_k220_uncheatable_bpb",
+      "subset_best_observed_bpb": 1.0571987628936768,
+      "subset_best_observed_run_name": "run_00125",
+      "subset_size": 220,
+      "tuning_cv_depopt_best8": 0.06421164344017956,
+      "tuning_cv_foldmean_regret_at_1": 0.0007091283798217329,
+      "tuning_cv_rawopt_nearest_tv": 0.5786176367075555,
+      "tuning_cv_regret_at_1": 0.0,
+      "tuning_cv_rmse": 0.008726748842634689,
+      "tuning_lower_tail_optimism": 0.0033043949188260252,
+      "tuning_method": "Powell",
+      "tuning_objective": 0.0226217434321323,
+      "variant_name": "power_family_penalty_no_l2"
+    },
+    {
+      "family_shares": {
+        "phase0_broad_text": 0.64376455307393,
+        "phase0_reasoning": 0.014629957886900117,
+        "phase0_tech_code": 0.34160548903916976,
+        "phase1_broad_text": 0.5927707117281369,
+        "phase1_reasoning": 0.004462409330079057,
+        "phase1_tech_code": 0.40276687894178426
+      },
+      "fullswarm_chosen_run_name": "run_00125",
+      "fullswarm_chosen_value": 1.0571987628936768,
+      "fullswarm_regret_at_1": 0.0,
+      "nearest_observed_run_name": "baseline_unimax",
+      "nearest_observed_tv_distance": 0.5440299596557423,
+      "nearest_observed_value": 1.0834295749664309,
+      "objective_metric": "eval/uncheatable_eval/bpb",
+      "optimum_move_mean_phase_tv_vs_prev": 0.21049637375955332,
+      "phase0_max_weight": 0.15465203070194183,
+      "phase0_support_below_1e4": 14,
+      "phase0_top_domains": [
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 5.836919839283783,
+          "weight": 0.15465203070194183
+        },
+        {
+          "domain": "dolma3_cc/literature_high",
+          "epochs": 2.604816877639467,
+          "weight": 0.1329862944234658
+        },
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 3.419609736008301,
+          "weight": 0.09047718329510342
+        },
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "epochs": 1.749809156060081,
+          "weight": 0.08404280951590068
+        },
+        {
+          "domain": "dolma3_cc/finance_and_business_high",
+          "epochs": 0.7117527077159665,
+          "weight": 0.0765131478584281
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 1.4377360035157736,
+          "weight": 0.05850290061830105
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "epochs": 0.5492478219364706,
+          "weight": 0.05721925285437227
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "epochs": 1.3420740170523084,
+          "weight": 0.04075826465505462
+        },
+        {
+          "domain": "dolma3_cc/entertainment_high",
+          "epochs": 0.47639002032962163,
+          "weight": 0.03986239000790057
+        },
+        {
+          "domain": "dolma3_arxiv",
+          "epochs": 6.235923611247845,
+          "weight": 0.03479885460988591
+        }
+      ],
+      "phase1_max_weight": 0.19775965054665606,
+      "phase1_support_below_1e4": 14,
+      "phase1_top_domains": [
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 1.8685949367843087,
+          "weight": 0.19775965054665606
+        },
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "epochs": 0.8222413367419937,
+          "weight": 0.1579680202279939
+        },
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 1.4437634683697425,
+          "weight": 0.15301286184122556
+        },
+        {
+          "domain": "dolma3_cc/literature_high",
+          "epochs": 0.6881398127461114,
+          "weight": 0.14052913205214476
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 0.6263614850850322,
+          "weight": 0.10194907444330152
+        },
+        {
+          "domain": "dolma3_cc/finance_and_business_high",
+          "epochs": 0.10932063803961421,
+          "weight": 0.04700770956892878
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "epochs": 0.10490758057904374,
+          "weight": 0.043716028646806744
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "epochs": 0.2107730426924711,
+          "weight": 0.02560438052464295
+        },
+        {
+          "domain": "dolma3_arxiv",
+          "epochs": 0.9171275818538455,
+          "weight": 0.02047170002023924
+        },
+        {
+          "domain": "dolma3_cc/entertainment_high",
+          "epochs": 0.05438668386309418,
+          "weight": 0.018203430893762144
+        }
+      ],
+      "phase_weights": {
+        "phase_0": {
+          "dolma3_arxiv": 0.03479885460988591,
+          "dolma3_cc/art_and_design_high": 0.005496064535025996,
+          "dolma3_cc/art_and_design_low": 3.317437597469202e-05,
+          "dolma3_cc/crime_and_law_high": 0.04075826465505462,
+          "dolma3_cc/crime_and_law_low": 1.1098639168462414e-05,
+          "dolma3_cc/education_and_jobs_high": 0.009088440036541584,
+          "dolma3_cc/education_and_jobs_low": 1.2412099939230263e-05,
+          "dolma3_cc/electronics_and_hardware_high": 0.02004425214315213,
+          "dolma3_cc/electronics_and_hardware_low": 1.466899274516125e-05,
+          "dolma3_cc/entertainment_high": 0.03986239000790057,
+          "dolma3_cc/entertainment_low": 1.3843143511456658e-05,
+          "dolma3_cc/finance_and_business_high": 0.0765131478584281,
+          "dolma3_cc/finance_and_business_low": 7.228596265882142e-06,
+          "dolma3_cc/food_and_dining_high": 0.0018270968158553061,
+          "dolma3_cc/food_and_dining_low": 1.5146751337776038e-05,
+          "dolma3_cc/games_high": 0.0015152026296466662,
+          "dolma3_cc/games_low": 2.5438837335255728e-05,
+          "dolma3_cc/health_high": 0.020059771604610074,
+          "dolma3_cc/health_low": 1.2281474188949955e-05,
+          "dolma3_cc/history_and_geography_high": 0.020129476653815495,
+          "dolma3_cc/history_and_geography_low": 0.00027686987237056214,
+          "dolma3_cc/industrial_high": 0.032415284985292385,
+          "dolma3_cc/industrial_low": 1.1548586884824498e-05,
+          "dolma3_cc/literature_high": 0.1329862944234658,
+          "dolma3_cc/literature_low": 1.3184818726392342e-05,
+          "dolma3_cc/science_math_and_technology_high": 0.08404280951590068,
+          "dolma3_cc/science_math_and_technology_low": 5.536958457410016e-06,
+          "dolma3_finemath_3plus": 8.496767256234491e-06,
+          "dolma3_stack_edu": 0.15465203070194183,
+          "dolma3_wikipedia": 0.0076253084334975164,
+          "dolmino_common_crawl_hq": 0.03207089561367585,
+          "dolmino_olmocr_pdfs_hq": 0.05850290061830105,
+          "dolmino_stack_edu_fim": 0.09047718329510342,
+          "dolmino_stem_heavy_crawl": 0.0031552665424878453,
+          "dolmino_synth_code": 0.03139965091743267,
+          "dolmino_synth_instruction": 0.014605547679304581,
+          "dolmino_synth_math": 0.03026927274754972,
+          "dolmino_synth_qa": 0.05721925285437227,
+          "dolmino_synth_thinking": 2.4410207595535527e-05
+        },
+        "phase_1": {
+          "dolma3_arxiv": 0.02047170002023924,
+          "dolma3_cc/art_and_design_high": 0.0013238563676838946,
+          "dolma3_cc/art_and_design_low": 2.6368418916501903e-05,
+          "dolma3_cc/crime_and_law_high": 0.02560438052464295,
+          "dolma3_cc/crime_and_law_low": 1.0893977631003702e-05,
+          "dolma3_cc/education_and_jobs_high": 0.0028149572252641687,
+          "dolma3_cc/education_and_jobs_low": 1.1221728908869769e-05,
+          "dolma3_cc/electronics_and_hardware_high": 0.006364135115771886,
+          "dolma3_cc/electronics_and_hardware_low": 1.361561922480542e-05,
+          "dolma3_cc/entertainment_high": 0.018203430893762144,
+          "dolma3_cc/entertainment_low": 1.3590111646702578e-05,
+          "dolma3_cc/finance_and_business_high": 0.04700770956892878,
+          "dolma3_cc/finance_and_business_low": 7.169697907294107e-06,
+          "dolma3_cc/food_and_dining_high": 0.000596849053939914,
+          "dolma3_cc/food_and_dining_low": 1.3286234785108101e-05,
+          "dolma3_cc/games_high": 0.0004160584501893374,
+          "dolma3_cc/games_low": 2.1098109825739537e-05,
+          "dolma3_cc/health_high": 0.007307857169171138,
+          "dolma3_cc/health_low": 1.1555416246591742e-05,
+          "dolma3_cc/history_and_geography_high": 0.006374799417982771,
+          "dolma3_cc/history_and_geography_low": 0.00019427077299299545,
+          "dolma3_cc/industrial_high": 0.013561294996753754,
+          "dolma3_cc/industrial_low": 1.1071773894988035e-05,
+          "dolma3_cc/literature_high": 0.14052913205214476,
+          "dolma3_cc/literature_low": 1.1829540999397834e-05,
+          "dolma3_cc/science_math_and_technology_high": 0.1579680202279939,
+          "dolma3_cc/science_math_and_technology_low": 5.474643098147689e-06,
+          "dolma3_finemath_3plus": 7.92772425821213e-06,
+          "dolma3_stack_edu": 0.15301286184122556,
+          "dolma3_wikipedia": 0.004234513924920084,
+          "dolmino_common_crawl_hq": 0.01374187683816628,
+          "dolmino_olmocr_pdfs_hq": 0.10194907444330152,
+          "dolmino_stack_edu_fim": 0.19775965054665606,
+          "dolmino_stem_heavy_crawl": 0.0007052907646346187,
+          "dolmino_synth_code": 0.016914791277527316,
+          "dolmino_synth_instruction": 0.004440942429727921,
+          "dolmino_synth_math": 0.014599947531877886,
+          "dolmino_synth_qa": 0.043716028646806744,
+          "dolmino_synth_thinking": 2.1466900351135837e-05
+        }
+      },
+      "policy": "feature_bayes_linear_power_family_penalty_no_l2_raw_optimum",
+      "predicted_optimum_value": 1.013866135880064,
+      "run_id": 478,
+      "run_name": "baseline_genericfamily_power_family_penalty_no_l2_raw_optimum_k242_uncheatable_bpb",
+      "subset_best_observed_bpb": 1.0571987628936768,
+      "subset_best_observed_run_name": "run_00125",
+      "subset_size": 242,
+      "tuning_cv_depopt_best8": 0.05627328049308757,
+      "tuning_cv_foldmean_regret_at_1": 0.0020820379257202593,
+      "tuning_cv_rawopt_nearest_tv": 0.5528221602935263,
+      "tuning_cv_regret_at_1": 0.0,
+      "tuning_cv_rmse": 0.00872034786579222,
+      "tuning_lower_tail_optimism": 0.002776860539141558,
+      "tuning_method": "Powell",
+      "tuning_objective": 0.021368429683893034,
+      "variant_name": "power_family_penalty_no_l2"
+    }
+  ],
+  "subset_coarse_top_k": 1,
+  "subset_sizes": [
+    20,
+    40,
+    60,
+    80,
+    100,
+    140,
+    180,
+    220,
+    242
+  ],
+  "variant_name": "power_family_penalty_no_l2"
+}

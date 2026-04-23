@@ -77,6 +77,7 @@ might be:
 """
 
 import copy
+import contextlib
 import dataclasses
 import hashlib
 import inspect
@@ -97,6 +98,8 @@ from urllib.parse import urlparse
 
 import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
+from fray.v2.client import current_client, set_current_client
+from fray.v2.iris_backend import FrayIrisClient
 from fray.v2.types import TpuConfig
 from iris.cluster.constraints import WellKnownAttribute
 from rigging.filesystem import collect_gcs_paths
@@ -305,7 +308,6 @@ def _allowed_regions_for_step(
 
 def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
     from fray.v2.client import current_client
-    from fray.v2.iris_backend import FrayIrisClient
     from iris.rpc import config_pb2
 
     try:
@@ -540,7 +542,6 @@ def _component_tpu_pins(
 
 def _iris_backend_is_active() -> bool:
     from fray.v2.client import current_client
-    from fray.v2.iris_backend import FrayIrisClient
 
     try:
         client = current_client()
@@ -1082,6 +1083,12 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
             # Recurse through lists
             for i, x in enumerate(obj):
                 recurse(x, new_prefix + f"[{i}]")
+        elif isinstance(obj, tuple) and hasattr(obj, "_fields"):
+            for i, x in enumerate(obj):
+                recurse(x, new_prefix + f"[{i}]")
+        elif isinstance(obj, tuple):
+            for i, x in enumerate(obj):
+                recurse(x, new_prefix + f"[{i}]")
         elif isinstance(obj, dict):
             # Recurse through dicts
             for i, x in obj.items():
@@ -1172,6 +1179,10 @@ def instantiate_config(
         elif isinstance(obj, list):
             # Recurse through lists
             return [recurse(x) for x in obj]
+        elif isinstance(obj, tuple) and hasattr(obj, "_fields"):
+            return type(obj)(*(recurse(x) for x in obj))
+        elif isinstance(obj, tuple):
+            return tuple(recurse(x) for x in obj)
         elif isinstance(obj, dict):
             # Recurse through dicts
             return dict((i, recurse(x)) for i, x in obj.items())
@@ -1262,12 +1273,24 @@ class Executor:
             logger.info(f"### Max concurrent steps: {max_concurrent} ###")
 
         resolved_steps = self._resolve_steps(steps_to_run)
-        StepRunner().run(
-            resolved_steps,
-            dry_run=dry_run,
-            force_run_failed=force_run_failed,
-            max_concurrent=max_concurrent,
+        shared_fray_client = None
+        if any(isinstance(step.fn, RemoteCallable) for step in resolved_steps):
+            shared_fray_client = current_client()
+            logger.info(
+                "Executor captured fray client %s for remote step submissions",
+                type(shared_fray_client).__name__,
+            )
+
+        client_scope = (
+            set_current_client(shared_fray_client) if shared_fray_client is not None else contextlib.nullcontext()
         )
+        with client_scope:
+            StepRunner().run(
+                resolved_steps,
+                dry_run=dry_run,
+                force_run_failed=force_run_failed,
+                max_concurrent=max_concurrent,
+            )
 
     def _resolve_steps(self, steps: list[ExecutorStep]) -> list[StepSpec]:
         """Convert computed ExecutorStep state into a flat list of StepSpec."""

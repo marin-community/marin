@@ -236,12 +236,36 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
     spec = _as_spec(source)
     decoder = msgspec.json.Decoder()
 
-    with open_file(spec.path, "rt") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                counters.increment("zephyr/records_in")
-                yield decoder.decode(line)
+    try:
+        with open_file(spec.path, "rt") as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if line:
+                    try:
+                        record = decoder.decode(line)
+                    except Exception as e:
+                        error_msg = str(e).lower()
+                        if "truncated" in error_msg or "corrupt" in error_msg:
+                            logger.warning(
+                                "Skipping rest of %s: truncated/corrupt data at line %d (%s)",
+                                spec.path,
+                                line_num,
+                                e,
+                            )
+                            return
+                        logger.error(f"Error decoding line {line_num} in {spec.path}: {e}")
+                        raise RuntimeError(f"Error decoding line {line_num} in {spec.path}: {e}") from e
+                    counters.increment("zephyr/records_in")
+                    yield record
+    except RuntimeError:
+        raise  # Re-raise wrapped error
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "truncated" in error_msg or "corrupt" in error_msg:
+            logger.warning("Skipping corrupted file %s: %s", spec.path, e)
+            return
+        logger.error(f"Error reading JSONL file {spec.path}: {e}")
+        raise RuntimeError(f"Error reading JSONL file {spec.path}: {e}") from e
 
 
 def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:

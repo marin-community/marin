@@ -24,6 +24,7 @@ from haliax.partitioning import ResourceMapping
 from haliax.util import is_named_array
 from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
+from rigging.filesystem import resolve_mirror_url
 
 from levanter._debug_logging import flush_debug_output
 from levanter.utils import fsspec_utils, jax_utils
@@ -51,6 +52,9 @@ def build_kvstore_spec(path: str) -> dict:
     environment, so we pass them explicitly when set. This is required for S3-compatible
     endpoints like CoreWeave object storage.
     """
+    if path.startswith("mirror://"):
+        path = resolve_mirror_url(path)
+
     parsed = urllib.parse.urlparse(path)
     if parsed.scheme == "s3":
         spec: dict = {"driver": "s3", "bucket": parsed.netloc, "path": parsed.path.lstrip("/")}
