@@ -49,9 +49,9 @@ canonical Grug base template.
 - `trace_backward_activation(x, name, site=...)`: a convenience wrapper for
   identity-only stream anchors that adds a `jax.named_scope(name)` around
   `log_backward_activation(...)`
-- `BWD_IN` / `BWD_OUT`: named constants for forward input/output boundary labels.
-  The backward value at `BWD_OUT` is the cotangent with respect to the returned
-  activation, and the backward value at `BWD_IN` is the cotangent with respect to
+- `ACT_IN` / `ACT_OUT`: named constants for forward input/output boundary labels.
+  The backward value at `ACT_OUT` is the cotangent with respect to the returned
+  activation, and the backward value at `ACT_IN` is the cotangent with respect to
   the input activation.
 - `normalize_name_stack(...)`: removes transform wrappers such as `jvp(...)` and
   `transpose(...)` so metric keys stay stable
@@ -67,20 +67,20 @@ def _tagged_identity(metric_prefix: str, site: BackwardFlowSite, x: jax.Array) -
 
 def _tagged_identity_fwd(metric_prefix: str, site: BackwardFlowSite, x: jax.Array):
     levanter.tracker.jit_log(
-        _tensor_metrics(metric_prefix, x, site=site, kind=_BWD_KIND_ACTIVATION),
+        _tensor_metrics(metric_prefix, x, site=site, kind=_TENSOR_KIND_ACTIVATION),
         step=None,
     )
     return x, None
 
 def _tagged_identity_bwd(metric_prefix: str, site: BackwardFlowSite, _residual: None, cotangent: jax.Array):
     levanter.tracker.jit_log(
-        _tensor_metrics(metric_prefix, cotangent, site=site, kind=_BWD_KIND_GRADIENT),
+        _tensor_metrics(metric_prefix, cotangent, site=site, kind=_TENSOR_KIND_GRADIENT),
         step=None,
     )
     return (cotangent,)
 
 def log_backward_activation(
-    x: jax.Array, *, site: BackwardFlowSite = BWD_OUT
+    x: jax.Array, *, site: BackwardFlowSite = ACT_OUT
 ) -> jax.Array:
     context = _ACTIVE_CONTEXT.get()
     if context is None:
@@ -89,7 +89,7 @@ def log_backward_activation(
     return _tagged_identity(f"{context.prefix}/{name_stack}", site, x)
 
 def trace_backward_activation(
-    x: jax.Array, name: str, *, site: BackwardFlowSite = BWD_OUT
+    x: jax.Array, name: str, *, site: BackwardFlowSite = ACT_OUT
 ) -> jax.Array:
     with jax.named_scope(name):
         return log_backward_activation(x, site=site)

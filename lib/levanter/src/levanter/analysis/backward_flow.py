@@ -43,12 +43,12 @@ _NAME_STACK_PART_RE = re.compile(r"^(?P<wrapper>[A-Za-z_][A-Za-z0-9_]*)\((?P<inn
 _STAT_NAMES = ("norm", "rms", "rms_scaled", "mean_abs", "max_abs", "max_abs_scaled", "finite_fraction")
 BackwardFlowSite: TypeAlias = Literal["in", "out"]
 _BackwardFlowTensorKind: TypeAlias = Literal["activation", "gradient"]
-BWD_IN: BackwardFlowSite = "in"
-BWD_OUT: BackwardFlowSite = "out"
-_BWD_KIND_ACTIVATION: _BackwardFlowTensorKind = "activation"
-_BWD_KIND_GRADIENT: _BackwardFlowTensorKind = "gradient"
-_FLOW_SITES = (BWD_IN, BWD_OUT)
-_TENSOR_KINDS = (_BWD_KIND_ACTIVATION, _BWD_KIND_GRADIENT)
+ACT_IN: BackwardFlowSite = "in"
+ACT_OUT: BackwardFlowSite = "out"
+_TENSOR_KIND_ACTIVATION: _BackwardFlowTensorKind = "activation"
+_TENSOR_KIND_GRADIENT: _BackwardFlowTensorKind = "gradient"
+_FLOW_SITES = (ACT_IN, ACT_OUT)
+_TENSOR_KINDS = (_TENSOR_KIND_ACTIVATION, _TENSOR_KIND_GRADIENT)
 _FLOW_DIRECTIONS = ("tb", "lr")
 _DEFAULT_PREFIX = "backward_flow"
 _DEFAULT_RESIDUAL_GAIN_HORIZON = 50
@@ -202,7 +202,7 @@ def normalize_name_stack(name_stack: str) -> str:
     return "/".join(parts)
 
 
-def log_backward_activation(x: jax.Array, *, site: BackwardFlowSite = BWD_OUT) -> jax.Array:
+def log_backward_activation(x: jax.Array, *, site: BackwardFlowSite = ACT_OUT) -> jax.Array:
     """Return ``x`` unchanged while logging activation and backward-gradient scale when enabled."""
     context = _ACTIVE_CONTEXT.get()
     if context is None:
@@ -219,7 +219,7 @@ def log_backward_activation(x: jax.Array, *, site: BackwardFlowSite = BWD_OUT) -
     return _tagged_identity_with_scale(f"{context.prefix}/{name_stack}", site, context.gradient_scale, x)
 
 
-def trace_backward_activation(x: jax.Array, name: str, *, site: BackwardFlowSite = BWD_OUT) -> jax.Array:
+def trace_backward_activation(x: jax.Array, name: str, *, site: BackwardFlowSite = ACT_OUT) -> jax.Array:
     """Return ``x`` unchanged while logging under an extra JAX named scope."""
     if not name:
         raise ValueError("name must be non-empty")
@@ -234,14 +234,16 @@ def _tagged_identity(metric_prefix: str, site: BackwardFlowSite, x: jax.Array) -
 
 
 def _tagged_identity_fwd(metric_prefix: str, site: BackwardFlowSite, x: jax.Array) -> tuple[jax.Array, None]:
-    levanter.tracker.jit_log(_tensor_metrics(metric_prefix, x, site=site, kind=_BWD_KIND_ACTIVATION), step=None)
+    levanter.tracker.jit_log(_tensor_metrics(metric_prefix, x, site=site, kind=_TENSOR_KIND_ACTIVATION), step=None)
     return x, None
 
 
 def _tagged_identity_bwd(
     metric_prefix: str, site: BackwardFlowSite, _residual: None, cotangent: jax.Array
 ) -> tuple[jax.Array]:
-    levanter.tracker.jit_log(_tensor_metrics(metric_prefix, cotangent, site=site, kind=_BWD_KIND_GRADIENT), step=None)
+    levanter.tracker.jit_log(
+        _tensor_metrics(metric_prefix, cotangent, site=site, kind=_TENSOR_KIND_GRADIENT), step=None
+    )
     return (cotangent,)
 
 
@@ -258,7 +260,7 @@ def _tagged_identity_with_scale(
 def _tagged_identity_with_scale_fwd(
     metric_prefix: str, site: BackwardFlowSite, gradient_scale: jax.Array, x: jax.Array
 ) -> tuple[jax.Array, jax.Array]:
-    levanter.tracker.jit_log(_tensor_metrics(metric_prefix, x, site=site, kind=_BWD_KIND_ACTIVATION), step=None)
+    levanter.tracker.jit_log(_tensor_metrics(metric_prefix, x, site=site, kind=_TENSOR_KIND_ACTIVATION), step=None)
     return x, gradient_scale
 
 
@@ -273,7 +275,7 @@ def _tagged_identity_with_scale_bwd(
             metric_prefix,
             cotangent,
             site=site,
-            kind=_BWD_KIND_GRADIENT,
+            kind=_TENSOR_KIND_GRADIENT,
             gradient_scale=gradient_scale,
         ),
         step=None,
@@ -516,7 +518,7 @@ def _tensor_metrics(
 ) -> dict[str, jax.Array]:
     summary = SummaryStats.from_tensor(tensor)
     metrics = summary.to_metrics(f"{metric_prefix}/{site}_{kind}")
-    if kind == _BWD_KIND_GRADIENT and gradient_scale is not None:
+    if kind == _TENSOR_KIND_GRADIENT and gradient_scale is not None:
         gradient_scale = jnp.asarray(gradient_scale, dtype=jnp.float32)
         metrics[f"{metric_prefix}/{site}_{kind}_rms_scaled"] = summary.rms * gradient_scale
         metrics[f"{metric_prefix}/{site}_{kind}_max_abs_scaled"] = summary.max_abs * gradient_scale
@@ -1114,36 +1116,36 @@ def _metric_value(
 
 
 def _preferred_gradient_rms(stats: Mapping[str, float]) -> float | None:
-    scaled = _preferred_metric(stats, _BWD_KIND_GRADIENT, "rms_scaled", preferred_site=BWD_IN)
+    scaled = _preferred_metric(stats, _TENSOR_KIND_GRADIENT, "rms_scaled", preferred_site=ACT_IN)
     if scaled is not None:
         return scaled
-    return _preferred_metric(stats, _BWD_KIND_GRADIENT, "rms", preferred_site=BWD_IN)
+    return _preferred_metric(stats, _TENSOR_KIND_GRADIENT, "rms", preferred_site=ACT_IN)
 
 
 def _has_scaled_gradient_rms(stats: Mapping[str, float]) -> bool:
-    return any(_metric_value(stats, site, _BWD_KIND_GRADIENT, "rms_scaled") is not None for site in _FLOW_SITES)
+    return any(_metric_value(stats, site, _TENSOR_KIND_GRADIENT, "rms_scaled") is not None for site in _FLOW_SITES)
 
 
 def _preferred_gradient_max_abs(stats: Mapping[str, float]) -> float | None:
-    scaled = _preferred_metric(stats, _BWD_KIND_GRADIENT, "max_abs_scaled", preferred_site=BWD_IN)
+    scaled = _preferred_metric(stats, _TENSOR_KIND_GRADIENT, "max_abs_scaled", preferred_site=ACT_IN)
     if scaled is not None:
         return scaled
-    return _preferred_metric(stats, _BWD_KIND_GRADIENT, "max_abs", preferred_site=BWD_IN)
+    return _preferred_metric(stats, _TENSOR_KIND_GRADIENT, "max_abs", preferred_site=ACT_IN)
 
 
 def _has_scaled_gradient_max_abs(stats: Mapping[str, float]) -> bool:
-    return any(_metric_value(stats, site, _BWD_KIND_GRADIENT, "max_abs_scaled") is not None for site in _FLOW_SITES)
+    return any(_metric_value(stats, site, _TENSOR_KIND_GRADIENT, "max_abs_scaled") is not None for site in _FLOW_SITES)
 
 
 def _preferred_activation_rms(stats: Mapping[str, float]) -> float | None:
-    return _preferred_metric(stats, _BWD_KIND_ACTIVATION, "rms", preferred_site=BWD_OUT)
+    return _preferred_metric(stats, _TENSOR_KIND_ACTIVATION, "rms", preferred_site=ACT_OUT)
 
 
 def _preferred_finite_fraction(stats: Mapping[str, float]) -> float | None:
-    gradient_fraction = _preferred_metric(stats, _BWD_KIND_GRADIENT, "finite_fraction", preferred_site=BWD_IN)
+    gradient_fraction = _preferred_metric(stats, _TENSOR_KIND_GRADIENT, "finite_fraction", preferred_site=ACT_IN)
     if gradient_fraction is not None:
         return gradient_fraction
-    return _preferred_metric(stats, _BWD_KIND_ACTIVATION, "finite_fraction", preferred_site=BWD_OUT)
+    return _preferred_metric(stats, _TENSOR_KIND_ACTIVATION, "finite_fraction", preferred_site=ACT_OUT)
 
 
 def _preferred_metric(
