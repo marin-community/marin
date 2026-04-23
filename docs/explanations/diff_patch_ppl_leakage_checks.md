@@ -19,3 +19,7 @@ Fail the run if any eval row shares a hash with training rows after normalizatio
 4. Keep eval source snapshots immutable.
 Pin source revisions (dataset snapshot or commit hash) in the build logs.
 Do not regenerate eval rows from moving HEAD references.
+
+5. Cap held-out samples per source.
+Use small held-out caps to avoid full-corpus downloads during eval wiring.
+Current caps: SWE-bench issue-to-patch 256, SWE-bench raw git diff 256, CommitPack commit-message-plus-diff 512.

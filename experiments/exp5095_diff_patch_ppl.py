@@ -43,6 +43,7 @@ class DiffPatchSlice:
     name: str
     relative_path: str
     metrics: tuple[DiffPatchMetric, ...]
+    held_out_sample_cap: int
 
     @property
     def tags(self) -> tuple[str, ...]:
@@ -65,18 +66,21 @@ DIFF_PATCH_SLICES: tuple[DiffPatchSlice, ...] = (
         name="issue_to_patch",
         relative_path="swe_bench/issue_to_patch.jsonl.gz",
         metrics=(DiffPatchMetric.PATCH_TEXT, DiffPatchMetric.CONTEXT_PLUS_PATCH),
+        held_out_sample_cap=256,
     ),
     DiffPatchSlice(
         source="swe_bench",
         name="raw_git_diff",
         relative_path="swe_bench/raw_git_diff.jsonl.gz",
         metrics=(DiffPatchMetric.PATCH_TEXT,),
+        held_out_sample_cap=256,
     ),
     DiffPatchSlice(
         source="commitpack",
         name="commit_message_plus_diff",
         relative_path="commitpack/commit_message_plus_diff.jsonl.gz",
         metrics=(DiffPatchMetric.PATCH_TEXT, DiffPatchMetric.CONTEXT_PLUS_PATCH),
+        held_out_sample_cap=512,
     ),
 )
 
@@ -152,6 +156,26 @@ def build_diff_patch_raw_validation_sets(
         for metric in slice_spec.metrics:
             datasets[slice_spec.dataset_key(metric)] = slice_spec.to_raw_dataset(raw_root, metric)
     return datasets
+
+
+def diff_patch_source_sampling_plan(
+    *,
+    slices: tuple[DiffPatchSlice, ...] = DIFF_PATCH_SLICES,
+) -> dict[str, dict[str, object]]:
+    """Small held-out sampling plan for source builders.
+
+    The plan is intentionally metadata-only so source integration can cap
+    downloads before data ingestion.
+    """
+
+    return {
+        f"{slice_spec.source}/{slice_spec.name}": {
+            "held_out_sample_cap": slice_spec.held_out_sample_cap,
+            "split": "validation",
+            "source": slice_spec.source,
+        }
+        for slice_spec in slices
+    }
 
 
 ACTIVE_DIFF_PATCH_DATASETS: dict[str, RawTextEvaluationDataset] = build_diff_patch_raw_validation_sets()

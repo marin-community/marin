@@ -71,3 +71,12 @@ def test_diff_patch_raw_validation_sets_prefixes_namespace() -> None:
     prefixed = diff_patch.diff_patch_raw_validation_sets()
     assert "diff_patch/swe_bench/issue_to_patch_patch_text" in prefixed
     assert "diff_patch/commitpack/commit_message_plus_diff_context_plus_patch" in prefixed
+
+
+def test_diff_patch_sampling_plan_uses_small_held_out_caps() -> None:
+    plan = diff_patch.diff_patch_source_sampling_plan()
+
+    assert plan["swe_bench/issue_to_patch"]["held_out_sample_cap"] == 256
+    assert plan["swe_bench/raw_git_diff"]["held_out_sample_cap"] == 256
+    assert plan["commitpack/commit_message_plus_diff"]["held_out_sample_cap"] == 512
+    assert all(entry["split"] == "validation" for entry in plan.values())
