@@ -391,10 +391,10 @@ def all_sources() -> dict[str, DatakitSource]:
             )
         ),
         # ---- FineTranslations ----
-        # TODO: staging at `raw/finetranslations_d17a789b` is still in progress;
-        # no provenance.json and no .executor_status=SUCCESS yet. Re-enable once
-        # staging lands and add a download module for HuggingFaceFW/finetranslations
-        # so pinned_sources() can include these entries.
+        # TODO: confirm there's a download module for HuggingFaceFW/finetranslations.
+        # Staging at `raw/finetranslations_d17a789b` is still in progress — no
+        # provenance.json, no .executor_status=SUCCESS yet — and we need a
+        # dedicated download helper before pinning a revision and uncommenting.
         # TODO: both entries point at the same physical dump — the upstream is a
         # parallel corpus of original multilingual text + machine-translated
         # English. Splitting into /multilingual and /web needs different
@@ -423,16 +423,17 @@ def all_sources() -> dict[str, DatakitSource]:
             staged_path="raw/gpt-oss-20b-rollouts_58b022a7",
         ),
         # ---- HPLT v3 ----
-        # TODO: add a download module for HPLT/HPLT3.0 and pin the revision.
-        # The staged dir has no provenance.json and the download_hplt_v3_step
-        # function that produced it has been removed from the tree.
-        DatakitSource(
-            name="hplt_v3",
-            hf_dataset_id="HPLT/HPLT3.0",
-            revision=None,
-            rough_token_count_b=612.70,
-            staged_path="raw/hplt_v3_2a08d6f3",
-        ),
+        # TODO: confirm there's a download module for HPLT/HPLT3.0 (the
+        # previous download_hplt_v3_step was removed from the tree and the
+        # staged dir has no provenance.json to recover the revision). Once
+        # a download module lands, uncomment and pin the revision.
+        # DatakitSource(
+        #     name="hplt_v3",
+        #     hf_dataset_id="HPLT/HPLT3.0",
+        #     revision=None,
+        #     rough_token_count_b=612.70,
+        #     staged_path="raw/hplt_v3_2a08d6f3",
+        # ),
         # ---- Institutional Books ----
         DatakitSource(
             name="institutional_books",
@@ -608,13 +609,17 @@ def all_sources() -> dict[str, DatakitSource]:
             staged_path="raw/nsf-awards_6d7f6004",
         ),
         # ---- NuminaMath ----
-        DatakitSource(
-            name="numinamath",
-            hf_dataset_id="AI-MO/NuminaMath-1.5",
-            revision="1b05109",
-            rough_token_count_b=0.38,
-            staged_path="raw/numinamath_1_5_4911a6eb",
-        ),
+        # TODO: confirm there's a download module for AI-MO/NuminaMath-1.5
+        # (today the dataset is only referenced through gpt-oss-rollouts'
+        # NuminaMath-CoT subset; there's no standalone download helper).
+        # Uncomment once a dedicated module lands.
+        # DatakitSource(
+        #     name="numinamath",
+        #     hf_dataset_id="AI-MO/NuminaMath-1.5",
+        #     revision="1b05109",
+        #     rough_token_count_b=0.38,
+        #     staged_path="raw/numinamath_1_5_4911a6eb",
+        # ),
         # ---- StarCoder2-Extras (5 subsets) ----
         *(
             DatakitSource(

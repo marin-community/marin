@@ -57,8 +57,7 @@ def test_normalize_step_preserves_schema_fields_in_hash():
 
 
 def test_download_step_raises_for_unpinned_source():
-    src = all_sources()["hplt_v3"]
-    assert src.revision is None
+    src = DatakitSource(name="synthetic_unpinned", hf_dataset_id="fake/repo", revision=None)
     with pytest.raises(ValueError, match="unpinned"):
         src.download_step()
 
@@ -81,7 +80,7 @@ def test_normalize_step_falls_back_to_self_download():
 
 
 def test_normalize_step_inherits_download_raise_for_unpinned():
-    src = all_sources()["hplt_v3"]
+    src = DatakitSource(name="synthetic_unpinned", hf_dataset_id="fake/repo", revision=None)
     with pytest.raises(ValueError, match="unpinned"):
         src.normalize_step()
 
