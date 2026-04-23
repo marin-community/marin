@@ -151,6 +151,23 @@ def test_write_parquet_file_basic():
         assert len(table) == 2
 
 
+def test_write_parquet_file_schema_mismatch_surfaces_both_schemas():
+    """On schema divergence, the raised error includes expected + actual schemas and inference origin."""
+    # First micro-batch (_MICRO_BATCH_SIZE=8) has `x` all None → inferred as pa.null().
+    # A later record with a real value for `x` then fails to fit that schema.
+    records = [{"x": None}] * 8 + [{"x": "hello"}]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = str(Path(tmpdir) / "test.parquet")
+        with pytest.raises(pa.ArrowInvalid) as excinfo:
+            write_parquet_file(records, output_path)
+    msg = str(excinfo.value)
+    assert "Expected schema" in msg
+    assert "Got schema" in msg
+    assert "inferred from first" in msg
+    assert "x: null" in msg
+    assert "x: string" in msg
+
+
 def test_write_parquet_file_empty():
     """Test writing an empty parquet file."""
     with tempfile.TemporaryDirectory() as tmpdir:
