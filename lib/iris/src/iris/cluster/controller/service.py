@@ -1064,7 +1064,7 @@ class ControllerServiceImpl:
             # here and skip the max_band cap below (the cap is meant to prevent
             # unlisted users from punching up, not to re-check admins).
             authorize(AuthzAction.MANAGE_BUDGETS)
-        elif self._auth.provider and verified_user is not None:
+        elif self._auth.provider:
             user_budget = self._db.get_user_budget(job_id.user)
             max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
             if band < max_band:
