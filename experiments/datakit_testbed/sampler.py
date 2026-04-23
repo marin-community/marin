@@ -3,11 +3,7 @@
 
 """Post-normalize by-provenance sampler for the Datakit Testbed.
 
-For each source, copy a subset of its *normalized* parquet shards into a new
-directory that noop_dedup and consolidate then read. The point is to drop the
-per-experiment cost of the dedup + consolidate + tokenize chain: once the
-full upstream is normalized (once — cached by ``override_output_path``),
-every dedup-variant experiment pays O(sampled) instead of O(raw).
+For each source, copy a subset of its *normalized* parquet shards.
 
 Why post-normalize rather than pre:
 
