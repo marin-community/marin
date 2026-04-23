@@ -20,6 +20,7 @@ from marin.datakit.download.common_pile import common_pile_normalize_steps
 from marin.datakit.download.finepdfs import finepdfs_normalize_steps
 from marin.datakit.download.hf_simple_util import hf_normalize_steps
 from marin.datakit.download.nemotron_v2 import NEMOTRON_V2_DATASETS, nemotron_v2_normalize_steps
+from marin.datakit.download.starcoder2_extras import starcoder2_extras_normalize_steps
 from marin.execution.step_spec import StepSpec
 
 
@@ -81,19 +82,17 @@ _SIMPLE_HF_SOURCES: tuple[tuple[str, str, str, str, float], ...] = (
 )
 
 
-# ---- StarCoder2-Extras -----------------------------------------------------
-# 5 subsets share ``(hf_id, revision)`` but stage separately under
-# ``raw/starcoder2_extras-1ba0d4f/<subset>``. Each subset is independent as
-# far as the download is concerned (HF repo-level, not subdir).
-_STARCODER2_EXTRAS_REVISION = "1ba0d4f"
-# (subset, rough_token_count_b)
-_STARCODER2_EXTRAS_SUBSETS: tuple[tuple[str, float], ...] = (
-    ("documentation", 1.40),
-    ("ir_cpp", 39.01),
-    ("ir_python", 4.64),
-    ("ir_rust", 1.84),
-    ("kaggle", 1.38),
-)
+# ---- StarCoder2-Extras token counts ----------------------------------------
+# Chains live in starcoder2_extras.starcoder2_extras_normalize_steps(); this
+# registry advertises 5 of the 6 subsets (ir_low_resource isn't in the
+# token-count-viewer set, so it's filtered out here).
+_STARCODER2_EXTRAS_TOKEN_COUNTS: dict[str, float] = {
+    "starcoder2/documentation": 1.40,
+    "starcoder2/ir_cpp": 39.01,
+    "starcoder2/ir_python": 4.64,
+    "starcoder2/ir_rust": 1.84,
+    "starcoder2/kaggle": 1.38,
+}
 
 
 # ---- Nemotron v2 families --------------------------------------------------
@@ -281,19 +280,11 @@ def all_sources() -> dict[str, DatakitSource]:
     for marin_name, chain in finepdfs_normalize_steps().items():
         _add(marin_name, chain, _FINEPDFS_TOKEN_COUNTS[marin_name])
 
-    # StarCoder2-Extras: 5 per-subset chains
-    for subset, rough in _STARCODER2_EXTRAS_SUBSETS:
-        marin_name = f"starcoder2/{subset}"
-        _add(
-            marin_name,
-            hf_normalize_steps(
-                marin_name=marin_name,
-                hf_dataset_id="bigcode/StarCoder2-Extras",
-                revision=_STARCODER2_EXTRAS_REVISION,
-                staged_path=f"raw/starcoder2_extras-1ba0d4f/{subset}",
-            ),
-            rough,
-        )
+    # StarCoder2-Extras: 5 per-subset chains (out of 6 in the download module;
+    # ir_low_resource isn't in the token-count-viewer set)
+    for marin_name, chain in starcoder2_extras_normalize_steps().items():
+        if marin_name in _STARCODER2_EXTRAS_TOKEN_COUNTS:
+            _add(marin_name, chain, _STARCODER2_EXTRAS_TOKEN_COUNTS[marin_name])
 
     # Nemotron v2 family dumps — one shared download per family
     for library_family, counts in _NEMOTRON_V2_TOKEN_COUNTS.items():
