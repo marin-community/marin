@@ -868,6 +868,13 @@ class Worker:
 
     def handle_ping(self, request: worker_pb2.Worker.PingRequest) -> worker_pb2.Worker.PingResponse:
         """Liveness check. Resets heartbeat deadline, returns resource snapshot and health."""
+        if rule := chaos("worker.ping"):
+            if rule.delay_seconds > 0:
+                time.sleep(rule.delay_seconds)
+            if rule.error:
+                raise rule.error
+            if not rule.delay_seconds:
+                raise RuntimeError("chaos: worker.ping")
         self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
         resource_snapshot = self._collect_resource_metrics()
         health = check_worker_health(disk_path=str(self._cache_dir))

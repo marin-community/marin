@@ -9,6 +9,7 @@ import threading
 from dataclasses import dataclass
 from typing import Protocol
 
+from iris.chaos import chaos
 from iris.cluster.controller.provider import ProviderError
 from iris.cluster.controller.transitions import (
     RunningTaskEntry,
@@ -146,6 +147,9 @@ class WorkerProvider:
                 if not addr:
                     return PingResult(worker_id=wid, worker_address=addr, error=f"Worker {wid} has no address")
                 try:
+                    if rule := chaos("controller.ping"):
+                        await asyncio.sleep(rule.delay_seconds)
+                        raise ProviderError("chaos: controller.ping")
                     stub = self.stub_factory.get_stub(addr)
                     response = await stub.ping(worker_pb2.Worker.PingRequest())
                     if not response.healthy:
@@ -185,6 +189,9 @@ class WorkerProvider:
         ) -> tuple[WorkerId, worker_pb2.Worker.StartTasksResponse | None, str | None]:
             async with sem:
                 try:
+                    if rule := chaos("controller.start_tasks"):
+                        await asyncio.sleep(rule.delay_seconds)
+                        raise ProviderError("chaos: controller.start_tasks")
                     stub = self.stub_factory.get_stub(addr)
                     response = await stub.start_tasks(worker_pb2.Worker.StartTasksRequest(tasks=tasks))
                     return (wid, response, None)
@@ -208,6 +215,9 @@ class WorkerProvider:
         async def _one(sem: asyncio.Semaphore, wid: WorkerId, addr: str, ids: list[str]) -> tuple[WorkerId, str | None]:
             async with sem:
                 try:
+                    if rule := chaos("controller.stop_tasks"):
+                        await asyncio.sleep(rule.delay_seconds)
+                        raise ProviderError("chaos: controller.stop_tasks")
                     stub = self.stub_factory.get_stub(addr)
                     await stub.stop_tasks(worker_pb2.Worker.StopTasksRequest(task_ids=ids))
                     return (wid, None)
@@ -239,9 +249,16 @@ class WorkerProvider:
                 if not addr:
                     return (wid, None, f"Worker {wid} has no address")
                 try:
-                    expected = [
-                        job_pb2.WorkerTaskStatus(task_id=e.task_id.to_wire(), attempt_id=e.attempt_id) for e in entries
-                    ]
+                    if rule := chaos("controller.poll_tasks"):
+                        await asyncio.sleep(rule.delay_seconds)
+                        raise ProviderError("chaos: controller.poll_tasks")
+                    expected = []
+                    for entry in entries:
+                        if iter_rule := chaos("controller.poll_iteration"):
+                            await asyncio.sleep(iter_rule.delay_seconds)
+                        expected.append(
+                            job_pb2.WorkerTaskStatus(task_id=entry.task_id.to_wire(), attempt_id=entry.attempt_id)
+                        )
                     stub = self.stub_factory.get_stub(addr)
                     response = await stub.poll_tasks(worker_pb2.Worker.PollTasksRequest(expected_tasks=expected))
                     return (wid, task_updates_from_proto(response.tasks), None)
