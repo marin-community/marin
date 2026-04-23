@@ -12,8 +12,9 @@ PPL slices without expanding default validation sets:
 - #5097 ASR/OCR noisy text: https://github.com/marin-community/marin/issues/5097
 - #5098 GH Archive structured events: https://github.com/marin-community/marin/issues/5098
 
-Run with ``--run_only <bundle-name> --max_concurrent 1`` to submit one bundle
-at a time from the same script.
+The report step combines all bundles so the 32B checkpoints are loaded once.
+Keep ``--max_concurrent 1`` on the executor run so raw materializers and the
+single TPU report do not overlap.
 """
 
 from __future__ import annotations
@@ -481,50 +482,34 @@ GH_ARCHIVE_RAW = make_gh_archive_step(
     max_events_per_event_type=MAX_DOCS_PER_DATASET,
 )
 
-DIAGNOSTIC_LOG_REPORT = _report_step(
-    bundle_name="diagnostic-logs",
-    datasets=diagnostic_log_sample_validation_sets(DIAGNOSTIC_LOG_RAW),
-    issue_ids=(5093,),
+DIAGNOSTIC_LOG_DATASETS = diagnostic_log_sample_validation_sets(DIAGNOSTIC_LOG_RAW)
+DIFF_PATCH_DATASETS = diff_patch_sample_validation_sets(DIFF_PATCH_RAW)
+PAIRED_ROBUSTNESS_DATASETS = paired_robustness_raw_validation_sets(
+    slices=PAIRED_ROBUSTNESS_CAPPED_SLICES,
+    raw_steps=PAIRED_ROBUSTNESS_RAW_STEPS,
 )
+ASR_OCR_DATASETS = noisy_asr_ocr_raw_validation_sets(noisy_asr_ocr_raw=ASR_OCR_RAW)
+GH_ARCHIVE_DATASETS = gh_archive_structured_output_raw_validation_sets(gh_archive_raw=GH_ARCHIVE_RAW)
 
-DIFF_PATCH_REPORT = _report_step(
-    bundle_name="diff-patch",
-    datasets=diff_patch_sample_validation_sets(DIFF_PATCH_RAW),
-    issue_ids=(5095,),
-)
-
-PAIRED_ROBUSTNESS_REPORT = _report_step(
-    bundle_name="paired-robustness",
-    datasets=paired_robustness_raw_validation_sets(
-        slices=PAIRED_ROBUSTNESS_CAPPED_SLICES,
-        raw_steps=PAIRED_ROBUSTNESS_RAW_STEPS,
-    ),
-    issue_ids=(5096,),
-)
-
-ASR_OCR_REPORT = _report_step(
-    bundle_name="asr-ocr-noisy",
-    datasets=noisy_asr_ocr_raw_validation_sets(noisy_asr_ocr_raw=ASR_OCR_RAW),
-    issue_ids=(5097,),
-)
-
-GH_ARCHIVE_REPORT = _report_step(
-    bundle_name="gh-archive-structured-output",
-    datasets=gh_archive_structured_output_raw_validation_sets(gh_archive_raw=GH_ARCHIVE_RAW),
-    issue_ids=(5098,),
+COMBINED_REPORT = _report_step(
+    bundle_name="5093-5098-combined",
+    datasets={
+        **DIAGNOSTIC_LOG_DATASETS,
+        **DIFF_PATCH_DATASETS,
+        **PAIRED_ROBUSTNESS_DATASETS,
+        **ASR_OCR_DATASETS,
+        **GH_ARCHIVE_DATASETS,
+    },
+    issue_ids=(5093, 5095, 5096, 5097, 5098),
 )
 
 ALL_STEPS = [
     DIAGNOSTIC_LOG_RAW,
-    DIAGNOSTIC_LOG_REPORT,
     DIFF_PATCH_RAW,
-    DIFF_PATCH_REPORT,
     *PAIRED_ROBUSTNESS_RAW_STEPS.values(),
-    PAIRED_ROBUSTNESS_REPORT,
     ASR_OCR_RAW,
-    ASR_OCR_REPORT,
     GH_ARCHIVE_RAW,
-    GH_ARCHIVE_REPORT,
+    COMBINED_REPORT,
 ]
 
 
