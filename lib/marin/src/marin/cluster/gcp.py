@@ -33,37 +33,6 @@ def get_project_id() -> str | None:
         return None
 
 
-def get_default_zone() -> str | None:
-    """Get the default GCP zone."""
-    try:
-        result = run_gcloud_command(["gcloud", "config", "get-value", "compute/zone"])
-        return result.stdout.strip() or None
-    except RuntimeError:
-        return None
-
-
-# Compute instance utilities
-
-
-def list_instances(project: str, zone: str, filter_expr: str | None = None) -> list[dict[str, Any]]:
-    """List GCP compute instances."""
-    cmd = [
-        "gcloud",
-        "compute",
-        "instances",
-        "list",
-        f"--project={project}",
-        f"--zones={zone}",
-        "--format=json",
-    ]
-
-    if filter_expr:
-        cmd.append(f"--filter={filter_expr}")
-
-    result = run_gcloud_command(cmd)
-    return json.loads(result.stdout)
-
-
 def list_tpu_nodes(project: str, zone: str, filter_expr: str = "") -> list[dict[str, Any]]:
     """List TPU nodes in a zone."""
     cmd = [
