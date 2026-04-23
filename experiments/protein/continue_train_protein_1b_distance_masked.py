@@ -14,11 +14,14 @@ experiment living at its own output path. This file is deliberately kept
 separate so we don't disturb the surviving 3.5e-4 run while continuing its
 training.
 
+The inner TPU task is pinned to `us-east5-a` (same region as the checkpoint
+bucket) via the ``RESOURCES`` config below.
+
 Usage::
 
     uv run iris --config=lib/iris/examples/marin.yaml job run \\
-        --memory=16G --disk=16G --cpu=1 --extra=tpu --reserve=v5p-8 -- \\
-        python -m experiments.protein.continue_train_protein_1b_3.5e-4_distance_masked
+        --memory=16GB --disk=16GB --cpu=1 --extra=tpu --zone=us-east5-a -- \\
+        python -m experiments.protein.continue_train_protein_1b_distance_masked
 """
 
 import dataclasses
@@ -49,7 +52,19 @@ def _distance_bin_only_loss_weight(tokens: jax.Array) -> jax.Array:
     return jnp.where(mask_zero, 0.0, 1.0).astype(jnp.float32)
 
 
-RESOURCES = ResourceConfig.with_tpu("v5p-8", slice_count=1, cpu=32, ram="128g", disk="50g")
+# Pin to us-east5-a so the TPU is co-located with the `marin-us-east5`
+# checkpoint bucket. The v5p-preemptible pool spans {us-central1-a, us-east5-a};
+# without this pin a worker can land in us-central1 and pay cross-region I/O
+# latency on every checkpoint write (which contributed to the stall / failure
+# of this run's previous attempt).
+RESOURCES = ResourceConfig.with_tpu(
+    "v5p-8",
+    slice_count=1,
+    cpu=32,
+    ram="128g",
+    disk="50g",
+    zone="us-east5-a",
+)
 
 protein_llama_1b = LlamaConfig(
     max_seq_len=8192,
