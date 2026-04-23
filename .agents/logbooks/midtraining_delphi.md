@@ -498,3 +498,241 @@ Launch region isn't pinned (Iris picks any v5p zone) — either `us-central1` or
 | `nemotron_cc_math_v1/4plus` tokenize cache | `gs://marin-us-central2/tokenized/nemotron_cc_math_v1/4plus-0bd79d/` | might mirror, or executor re-tokenizes on the local CPU pool | ~100 GB (or retokenize) | us-east5 has only `3-ef5cb9` + `4plus_mind-d60b4a`, NOT `4plus`. Versioning hashes differ between regions so the executor may re-run the tokenize step locally instead of mirroring. If it mirrors, ~100 GB; if it re-tokenizes, hours of CPU but no cross-region. |
 
 Total worst-case cross-region read: **~160 GB** (once, cached thereafter). User has accepted this.
+
+---
+
+## 2026-04-22 region-pin diagnosis and the real fix: wiring `mirror://` through Levanter's checkpoint loader
+
+### Re-verification of current state
+
+Two coordinators `/ahmedah/delphi-math-10b-1e20-lr{0.67,0.83}-20260422` are queued (pinned to `us-central1`) but have not yet dispatched TPU. GCS audit shows **only** `delphi-1e20-iso-d2048-L21-math-10b-lr0.5-ba7b7f` (155 GB) is a real training output; all other 11 sweep-point directories (two hash variants per remaining combination) are 65–70 KB stubs. That means the logbook's "Step hashes are unchanged by filtering" claim above is wrong — something after v10 did change hashes, so there are now TWO hash series of stubs per variant. Relaunch plan will be: compute the hash the current code produces, then clear `.executor_status` files at all known variants of the target step before launching.
+
+### Why I was pinning `--region us-central1`
+
+Two reasons from the earlier v-series attempts:
+
+1. `lib/rigging/src/rigging/filesystem.py:254` — `check_path_in_region` hard-fails any `gs://` path whose bucket region ≠ VM region. `lib/marin/src/marin/training/training.py:344` runs this check on the whole `TrainLmConfig` via `_doublecheck_paths`. v9 died in 33 s because the 1e20 ckpt was a `gs://marin-us-central2/...` path while the VM was in us-central1. No env-var override exists.
+2. The base ckpts and the `tokenized/nemotron_cc_math_v1/4plus-212a2d` cache currently live only in `gs://marin-us-central1/...`. A TPU in us-east5-a would either re-run the entire tokenize step (hours) or fail the region check.
+
+### Why `mirror://` was supposed to handle this (and why it broke last time)
+
+`mirror://` IS designed to solve exactly this problem. The mechanism:
+
+- `mirrored("relative/path", budget_gb=N)` in the executor config (`lib/marin/src/marin/execution/executor.py:939-946`) marks a path as cross-region-mirrorable.
+- At config instantiation time, `MirroredValue` is rewritten to `mirror://relative/path` (`executor.py:1149-1153`).
+- `MirrorFileSystem` (`lib/rigging/src/rigging/filesystem.py:715-935`) registers `mirror` as an fsspec protocol. On read, it: checks `${MARIN_PREFIX}/<path>` first; otherwise scans the other marin regional buckets (`marin-us-central1`, `marin-us-east5`, `marin-us-central2`, `marin-eu-west4`, …) via `_find_in_remote_prefixes`; copies from whichever bucket has the file to the local prefix under a distributed lock; charges against the shared `TransferBudget` (disabled by `MARIN_I_WILL_PAY_FOR_ALL_FEES=1`).
+- **The region check already skips `mirror://` paths** — `_collect_gcs_paths_recursively` at `filesystem.py:338-344` only gathers strings starting with `gs://`, so a mirror URL sails through `check_gcs_paths_same_region`.
+
+v8's failure (`ValueError: Unsupported URI scheme for tensorstore: 'mirror'`) happened because `mirror://` was passed straight into `initialize_from_checkpoint_path`. Levanter's `load_checkpoint` at `lib/levanter/src/levanter/checkpoint.py:794-810` hands the path verbatim to `tree_deserialize_leaves_tensorstore`, whose `build_kvstore_spec` (`lib/levanter/src/levanter/tensorstore_serialization.py:54-78`) only speaks `gs`/`s3`/`file`/``''``. TensorStore bypasses fsspec entirely — the mirror protocol has no hook.
+
+For **data loaders** (LMMixture, tokenizers) this is already solved: Levanter goes through fsspec for data paths, and the tokenizer loader has an explicit `_stage_from_mirror` staging helper (`lib/levanter/src/levanter/tokenizers.py:702-729`) that uses `mirror_fs.ls()` + per-file `_fetch_file_atomic` to materialize files to a local staging dir before the HF loader opens them.
+
+For **checkpoints** there is no equivalent staging path — that's the gap.
+
+### Planned fix (small, local to Levanter)
+
+Add a `_stage_mirror_to_local(path)` helper to `lib/levanter/src/levanter/checkpoint.py`:
+
+1. If path does not start with `mirror://`, return it unchanged.
+2. Strip the prefix to get a relative path (e.g. `checkpoints/isoflop/.../step-46915`).
+3. Construct `fsspec.filesystem("mirror")` and call `mfs.find(rel)` → recursive list of file paths.
+4. For each file, call `mfs._resolve_path(file_rel)` — triggers `_copy_to_local` on cache miss (GCS-to-GCS server-side `rewrite`, fast). Files already present locally are skipped.
+5. Return `f"{marin_prefix()}/{rel}"` — a concrete `gs://marin-${region}/...` or `/tmp/marin/...` URL that TensorStore can open.
+
+Wire the helper at exactly two call sites:
+
+- Top of `latest_checkpoint_path` (line 965): discovery still runs against `mirror://` (via fsspec, which MirrorFileSystem handles), but the returned concrete step dir goes through the staging helper before being returned.
+- Top of `load_checkpoint` (line 794): covers direct-path callers that skip discovery (`eval_lm.main`, `export_lm_to_hf`, `perplexity_gap`, `inference_repl`, `eval_harness`).
+
+This is the same import pattern `lib/levanter/src/levanter/config.py` and `lib/levanter/src/levanter/trainer.py` already use (`from rigging.filesystem import url_to_fs / open_url`) — Levanter already depends on `marin-rigging` via `pyproject.toml`.
+
+Test: add a `test_stage_mirror_to_local` in `lib/levanter/tests/test_checkpoint.py` using the same fixture pattern as `lib/rigging/tests/test_mirror_fs.py` (manually constructed MirrorFileSystem backed by two tempdirs, one standing in for local and one for remote).
+
+### Experiment change
+
+Replace the hardcoded `gs://marin-us-central1/...` ckpt paths in `experiments/exp_delphi_math_10b_midtrain.py` with `mirrored(...)` calls:
+
+```python
+"ckpt": mirrored(
+    "checkpoints/isoflop/isoflop-3e+20-d2048-L21-B128-adamh_scaling_v5/checkpoints/step-46915",
+    budget_gb=30,
+),
+...
+"ckpt": mirrored(
+    "adamh-scaling-ladder-nemotron-optimal-1e+21-v5-019021/checkpoints/step-21979",
+    budget_gb=50,
+),
+```
+
+Budgets cover the actual ckpt sizes (1e20 ≈ 22 GB, 1e21 ≈ 40 GB) with a small safety margin. `MARIN_I_WILL_PAY_FOR_ALL_FEES=1` in the iris job env disables `TransferBudget` enforcement globally, so budgets are informational on worker runs — they still matter for dry-runs and local dev.
+
+### Relaunch plan (after fix lands)
+
+Drop `--region us-central1` from the launch recipe; replace with `--region us-central1 --region us-east5`. The coordinator lands wherever CPU is free; Fray propagates the region constraint to the v5p-64 sub-task; MirrorFileSystem copies the ckpt from us-central1 → `marin-${landing_region}` on first open, cached thereafter. The `4plus-212a2d` tokenize cache is NOT wrapped with `mirrored()` in this pass (it's already materialized in us-central1; if the TPU lands in us-east5 the executor will re-run normalize+tokenize locally, which takes longer but is acceptable — can revisit).
+
+### Checkpoint before launch
+
+Plan this logbook entry → implement Levanter patch + test → implement experiment update → run lint → report back before relaunching any jobs.
+
+### Implementation status (2026-04-22)
+
+**Levanter patch** — `lib/levanter/src/levanter/checkpoint.py`
+- Added `_stage_mirror_to_local(checkpoint_path: str) -> str` (~25 lines). No-op on non-`mirror://` inputs. On `mirror://` input, walks `mfs.find(rel)` and calls `mfs._resolve_path(file_rel)` on each file; returns `${marin_prefix()}/<rel>`.
+- `latest_checkpoint_path` now routes the discovered path through `_stage_mirror_to_local` before returning.
+- `load_checkpoint` now stages at the top so direct-path callers (`eval_lm.main`, `export_lm_to_hf`, `perplexity_gap`, `inference_repl`, `eval_harness`) benefit without further changes.
+- Imports `marin_prefix` from `rigging.filesystem`; same pattern used in `levanter/config.py` and `levanter/trainer.py` — no new dependency (marin-rigging is already declared in `lib/levanter/pyproject.toml`).
+
+**Tests** — `lib/levanter/tests/test_checkpoint.py`
+- `test_stage_mirror_to_local_passes_through_non_mirror_paths`: the no-op branch for `file://` / `gs://` / raw paths.
+- `test_stage_mirror_to_local_copies_all_files`: remote dir with 4 files (metadata.json, manifest.ocdbt, d/shard_0, d/shard_1) → all copied to local, returned URL points at local prefix.
+- `test_stage_mirror_to_local_raises_when_empty`: FileNotFoundError when the mirror tree has no files.
+- `test_latest_checkpoint_path_stages_direct_mirror_step`: end-to-end through `latest_checkpoint_path` with a direct `mirror://.../step-N` input — the shape our experiment uses.
+- Helper `_configure_mirror_fs(local_dir, remote_dirs, monkeypatch)` patches `marin_prefix` + `_mirror_remote_prefixes` on `rigging.filesystem` AND clears `MirrorFileSystem._cache` (fsspec's instance cache lives on the leaf class, not on `AbstractFileSystem`, so clearing the base class cache alone is not enough — that was a real bug I hit).
+- All 4 pass in isolation and together; all 20 existing tests in `lib/rigging/tests/test_mirror_fs.py` still pass (no upstream regression).
+
+**Experiment** — `experiments/exp_delphi_math_10b_midtrain.py`
+- Both `BASES[*]["ckpt"]` values replaced with `mirrored("<relative-path>", budget_gb=N)` (N=30 for 1e20 at ~22 GB, N=50 for 1e21 at ~40 GB).
+- Header docstring's launch-recipe updated from `--region us-central1` to `--region us-central1 --region us-east5` — the whole point of this fix.
+- Verified: `MIDTRAIN_SELECT_BASE=1e20-iso-d2048-L21 MIDTRAIN_SELECT_LR=0.67` import builds 1 ExecutorStep; both `BASES[*]["ckpt"]` are `MirroredValue` instances pre-instantiation.
+
+**Lint** — `./infra/pre-commit.py` on the 3 changed files: Ruff + Black + pyrefly + license + AST + merge + whitespace + EOF all pass.
+
+### Things NOT done (deliberate)
+
+- `tokenized=BUCKET_2["nemotron_cc_math_v1/4plus"]` is still an ExecutorStep dependency, not `mirrored(...)`. The `4plus-212a2d` tokenize cache exists in us-central1 only; if the TPU lands in us-east5, the executor walks the dep chain → normalize + tokenize run fresh in us-east5 (raw is already present in both regions). Extra wall-clock but no cross-region data transfer. Can revisit if we want to cut the tokenize turnaround later.
+- The two queued `--region us-central1` pinned jobs (`/ahmedah/delphi-math-10b-1e20-lr{0.67,0.83}-20260422`) are still alive. Need user sign-off before killing and relaunching with the new region-flex recipe.
+
+### Ready for launch, pending user sign-off
+
+1. Kill `/ahmedah/delphi-math-10b-1e20-lr{0.67,0.83}-20260422`.
+2. Commit the Levanter patch + experiment change + logbook entry, push to `origin/midtrain_data` so the coordinator picks up the new code.
+3. Resubmit the 5 remaining sweep points with `--region us-central1 --region us-east5` and a fresh `--job-name` per sweep point.
+
+### Cross-region verification — actually exercised on a us-east5 worker (2026-04-22)
+
+Added `scripts/_verify_mirror_stage.py` — a small iris-submittable script that imports `_stage_mirror_to_local`, pulls the 1e20 ckpt via `mirror://…`, then opens the staged OCDBT kvstore through TensorStore to prove the full end-to-end path (mirror:// → fsspec copy → TensorStore read) works across regions.
+
+**Attempt 1 (`verify-mirror-stage-1e20-20260422`): FAILED after copying ~10 GB**
+
+```
+rigging.filesystem.TransferBudgetExceeded: ... would bring total to 10.53GB,
+exceeding the 10GB limit (already transferred 9.77GB).
+Consider running in the source region instead.
+```
+
+Worker was us-east5 (✓ marin_prefix = `gs://marin-us-east5`); 15 OCDBT shards successfully copied gs→gs from us-central1→us-east5 before the cap fired. The copy mechanism itself worked — the problem was the budget.
+
+**Key discovery — the two safety envs are NOT symmetric.** `MARIN_I_WILL_PAY_FOR_ALL_FEES=1` ONLY short-circuits `CrossRegionGuardedFS._guard_read` (`lib/rigging/src/rigging/filesystem.py:623-625`); it does NOT disable `MirrorFileSystem._copy_to_local`'s budget charge at line 819. Those are separate code paths that happen to share `_global_transfer_budget` by default. The mirror side is governed by `MARIN_MIRROR_BUDGET_GB` (process-wide default ceiling) OR a `mirror_budget(gb)` contextvar (per-call stack, scoped). `MARIN_I_WILL_PAY_FOR_ALL_FEES` is invisible to the mirror code. That was the gap that bit us.
+
+In the production training run, the executor already opens a per-step `mirror_budget(_max_mirror_budget(config))` context around the step fn (`lib/marin/src/marin/execution/executor.py:703-708`, `1301`) — so `mirrored("1e20-ckpt", budget_gb=30)` in our experiment yields a 30 GB budget at call time, which is why the real training launch will not hit this failure. The verify script, calling the helper outside an executor context, inherited the 10 GB default.
+
+**Attempt 2 (`verify-mirror-stage-1e20-v2-20260422`): SUCCESS**
+
+Wrapped the staging call in `with mirror_budget(30.0):` — same budget the executor sets from `mirrored(..., budget_gb=30)`. Duration 3m 50s on a us-east5 worker.
+
+```
+[verify] marin_prefix = gs://marin-us-east5
+[verify] mirror URL   = mirror://checkpoints/isoflop/.../step-46915
+[verify] staged in 218.2s
+[verify] resolved    = gs://marin-us-east5/checkpoints/isoflop/.../step-46915
+[verify]   metadata.json: OK
+[verify]   manifest.ocdbt: OK
+[verify]   OCDBT keys   = 1218
+[verify] SUCCESS
+Staged mirror://checkpoints/isoflop/.../step-46915 (44 files) to gs://marin-us-east5/...
+```
+
+**What this proves end-to-end:**
+
+- `_stage_mirror_to_local("mirror://…")` on a fresh us-east5 worker correctly detects local prefix = `gs://marin-us-east5`.
+- MirrorFileSystem finds the files in the remote (`gs://marin-us-central1/…`) bucket, copies all 44 files (OCDBT shards + manifest + metadata) via gs→gs rewrite, caches them under `gs://marin-us-east5/checkpoints/…/step-46915/`, and returns that concrete URL.
+- The returned URL opens cleanly as an OCDBT kvstore through TensorStore (1218 keys enumerated), which is the exact call path Levanter's `load_checkpoint` uses for weight restore.
+- Budget enforcement works as intended — the 30 GB ceiling from our `mirrored(..., budget_gb=30)` declaration is respected by a scoped context (1e20 ckpt actual size ~22 GB; used ~20 GB of the 30 GB budget since ~2 GB was already cached from v1).
+- Side-effect: the 1e20 ckpt is now physically present at `gs://marin-us-east5/checkpoints/isoflop/.../step-46915/`, so future us-east5 launches for this base are cache-hits (MirrorFS `_fs_exists` returns True → skip copy).
+
+**Budget semantics (for next agent):**
+
+- `MARIN_I_WILL_PAY_FOR_ALL_FEES=1` disables the *direct-read* guard only, not mirror copies.
+- `MARIN_MIRROR_BUDGET_GB=<n>` sets the default global mirror ceiling at module import (one-shot).
+- `with rigging.filesystem.mirror_budget(<gb>):` opens a fresh scoped budget — preferred for ad-hoc scripts because it can't leak to other call sites.
+- `mirrored(path, budget_gb=<n>)` in the executor config does (3) automatically on the step's behalf — nothing to set on the iris command line for real runs.
+- The two overrides (`I_WILL_PAY` vs `mirror_budget`) are orthogonal; the default global `TransferBudget` instance is shared by both paths but the overrides do not cascade between them.
+
+---
+
+## 2026-04-23 live training — 1e20 lr=0.67 and lr=0.83 (still running; pre-mirror patch)
+
+These two coordinators were launched 2026-04-22 23:54Z with `--region us-central1` pinning, BEFORE the mirror:// fix. They succeeded at the ckpt region check because the ckpts were pre-copied to us-central1 earlier in the v-series. They do NOT exercise the Levanter mirror-staging patch — that's still pending proper-run validation via the 3 × 1e21 launch.
+
+### Run identifiers (wandb + GCS)
+
+| Sweep point | Coordinator | train_lm output path | wandb run |
+|---|---|---|---|
+| `1e20 × lr=0.67` | `/ahmedah/delphi-math-10b-1e20-lr0.67-20260422` | `gs://marin-us-central1/checkpoints/delphi-1e20-iso-d2048-L21-math-10b-lr0.67-e3be0c/` | `https://wandb.ai/marin-community/marin/runs/delphi-1e20-iso-d2048-L21-math-10b-lr0.67-e3be0c` |
+| `1e20 × lr=0.83` | `/ahmedah/delphi-math-10b-1e20-lr0.83-20260422` | `gs://marin-us-central1/checkpoints/delphi-1e20-iso-d2048-L21-math-10b-lr0.83-db9de7/` | `https://wandb.ai/marin-community/marin/runs/delphi-1e20-iso-d2048-L21-math-10b-lr0.83-db9de7` |
+
+Both `e3be0c` and `db9de7` are the OLD stubs' hashes — same hash as the v10 empty-SUCCESS stubs. Clearing the `.executor_status` files (logbook entry for 2026-04-22) did let the executor re-run the step under the same hash, so the filtering patch did NOT change hashes after all (the "two hash variants per point" observed earlier must have come from a separate code change between v10 and now). Future relaunches under these hashes will hit the cache and be skipped, which is what we want.
+
+### Training configuration recap (both runs)
+
+- v5p-64 (32 chips), us-central1-a, mesh `{data:-1, replica:1, model:1}` (tp=1 since H=2048 divides 32).
+- Batch 512 × seq_len 4096 = 2,097,152 tokens/step. 4768 steps → ~10.0 B tokens.
+- Fresh AdamH optimizer, β₂=0.99980, ε=4.11e-8, β₁=0.9, max_grad_norm=0.1.
+- 500 linear warmup steps → 4268 linear decay steps, `min_lr_ratio=0.1`.
+- `reset_data_loader_on_init=True`, `z_loss_weight=0`, `jmp.get_policy("p=f32,c=bfloat16")`.
+- `steps_per_eval=200`, `steps_per_export=1000`, `steps_per_hf_export=1000`.
+
+Per-run LR:
+
+| lr_factor | `learning_rate` | `adam_lr` |
+|---:|---:|---:|
+| 0.67 | 3.0036e-3 | 4.9460e-5 |
+| 0.83 | 3.7209e-3 | 6.1271e-5 |
+
+### Throughput
+
+Measured from `Progress on:train` ticks, averaged over the elapsed/step ratio (to neutralize tqdm's instant-rate spikes near eval/export):
+
+- **Rate: ~4.4 s/step** (both runs, identical — same arch, same batch, same mesh).
+- Achieved compute: ~5.3 PFLOPS (6 × 1.9e9 params × 2.1e6 tokens / 4.5 s).
+- v5p-64 peak: 32 × 459 TFLOPS bf16 = 14.69 PFLOPS.
+- **MFU ≈ 36 %** on both runs. Matches v10's measurement exactly.
+
+Per-host memory: ~31 GB / 95 GB HBM (1.9 B model + full opt state + activations; v5p has plenty of headroom). We could run this on v5p-32 and stay under 62 GB/chip, at ~11 h wall-clock instead of ~6 h.
+
+### Evaluation + HF-export overhead
+
+At every multiple-of-1000 step, Levanter: (a) runs the full Paloma + uncheatable eval suite (17+ loss computations) and (b) writes a **7.74 GB × 2-shard** HF-compatible checkpoint to GCS. This takes ~2.5 min total. Tqdm's rolling-average `rate` field rolls the entire pause into "the last step," so after step 2000 the reported rate spiked to 47.0 s/it (lr=0.83) / 19.5 s/it (lr=0.67). **Actual per-step rate is unchanged at ~4.4 s/step** — always compute rate from `elapsed/N_steps`, not tqdm's instant rate, when eval/export is in the window. For future agents: this is a Levanter+tqdm display artifact, NOT a slowdown, and does NOT require action.
+
+### Loss trajectory + lr=0.67/0.83 crossover (unsmoothed; check W&B for the clean version)
+
+Single-step tqdm loss readouts (noisy but directionally correct):
+
+| Step | lr=0.67 | lr=0.83 | Notes |
+|---:|---:|---:|---|
+| 444–513 (~11%) | 1.17 | 1.15 | End of warmup; lr=0.83 ahead (higher LR → faster initial progress) |
+| 2000 (42%) | 1.03 | **0.987** | Mid-run; lr=0.83 still ahead by ~0.04 |
+| 4370–4400 (92%) | **0.927** | 0.959 | Decay tail; **lr=0.67 has overtaken** |
+
+**Crossover observation:** the higher peak LR (lr=0.83) converges faster initially but loses ~0.03 of its advantage by the decay tail — lr=0.67 with the gentler peak ends up lower in single-step loss. Both end below the v10 lr=0.5 final of 0.962, which is the direction we expected. Preliminary ranking for the 1e20 base:
+
+```
+lr=0.67 (0.927)  <  lr=0.83 (0.959)  <  lr=0.5 (0.962, v10)
+```
+
+Very narrow spread (~0.035 across factors 0.5–0.83). Need to look at smoothed Paloma/c4 curves and math-eval downstream scores before calling a winner, but if the signal holds, **lr=0.67 is the sweet spot for the 1e20 base** and is a reasonable default for the 1e21 LR sweep too.
+
+**Caveat — single-step unsmoothed loss is noisy.** A ~0.03 gap at one step can be dominated by within-batch variance. The W&B panels at the run URLs above show EMA-smoothed curves; use those for the actual ranking.
+
+### Current status (as of 2026-04-23 05:53Z)
+
+- lr=0.67: step 4400/4770 (92 %), elapsed 5:54:38, real ETA ≈ 30 min.
+- lr=0.83: step 4370/4770 (91.5 %), elapsed 5:50:55, real ETA ≈ 30 min.
+- No preemptions, no failures across all 16 hosts.
+- Both expected to finish around 06:25Z.
+
+### Next steps once these land
+
+1. Inspect final W&B panels for smoothed train-loss + Paloma validation trajectories across lr=0.5 / 0.67 / 0.83. Confirm the crossover + pick the 1e20 winner.
+2. Launch 3 × 1e21 sweep points (lr=0.5 / 0.67 / 0.83) on v5p-64. With the Levanter mirror-staging patch now verified end-to-end (see "Cross-region verification" section above), the new launches can go `--region us-central1 --region us-east5` and land wherever the autoscaler has capacity. Expected wall-time per 1e21 run: ~10 h (3.4 B params at BS=512).
+3. Commit the Levanter patch + experiment change + these logbook updates to `origin/midtrain_data` before relaunching, so the iris worker bundle picks up the new code.

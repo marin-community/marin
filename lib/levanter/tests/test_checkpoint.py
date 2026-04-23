@@ -32,7 +32,9 @@ from levanter.checkpoint import (
     CheckpointInterval,
     _collect_debug_checkpointer_state,
     _load_metadata,
+    _stage_mirror_to_local,
     discover_latest_checkpoint,
+    latest_checkpoint_path,
     load_checkpoint,
     load_checkpoint_or_initialize,
     register_debug_checkpointer_state_provider,
@@ -277,6 +279,91 @@ def test_checkpoint_discovery_across_multiple_paths():
         # With additional paths, the newer checkpoint in temp_dir wins
         latest_both = discover_latest_checkpoint(permanent_dir, temp_dir)
         assert latest_both == f"{temp_dir}/step-15"
+
+
+def _configure_mirror_fs(local_dir: str, remote_dirs: list[str], monkeypatch):
+    """Configure MirrorFileSystem to mirror between local_dir and remote_dirs.
+
+    Patches ``marin_prefix()`` and ``_mirror_remote_prefixes()`` so a fresh
+    ``fsspec.filesystem("mirror")`` call yields an instance whose local prefix
+    is *local_dir* and whose remote-scan list is *remote_dirs*. Also busts
+    fsspec's per-class instance cache (which lives on ``MirrorFileSystem``
+    itself, not ``AbstractFileSystem``) so the patches take effect for the
+    next lookup.
+    """
+    from rigging import filesystem as rfs
+
+    monkeypatch.setattr(rfs, "marin_prefix", lambda: local_dir)
+    monkeypatch.setattr(rfs, "_mirror_remote_prefixes", lambda _local: list(remote_dirs))
+    rfs.MirrorFileSystem._cache.clear()
+
+
+def _write_file(base_dir: str, rel_path: str, data: bytes):
+    full = os.path.join(base_dir, rel_path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "wb") as f:
+        f.write(data)
+
+
+def test_stage_mirror_to_local_passes_through_non_mirror_paths(tmp_path):
+    """Non-mirror paths must be returned as-is — the helper is a no-op on them."""
+    assert _stage_mirror_to_local(f"{tmp_path}/checkpoints/step-10") == f"{tmp_path}/checkpoints/step-10"
+    assert _stage_mirror_to_local("gs://bucket/path") == "gs://bucket/path"
+    assert _stage_mirror_to_local("file:///tmp/foo") == "file:///tmp/foo"
+
+
+def test_stage_mirror_to_local_copies_all_files(tmp_path, monkeypatch):
+    """A mirror:// dir with files in a remote bucket is copied to the local prefix
+    and the returned URL points at the local prefix (TensorStore-compatible)."""
+    local_dir = str(tmp_path / "marin-local")
+    remote_dir = str(tmp_path / "marin-us-central2")
+    os.makedirs(local_dir)
+    os.makedirs(remote_dir)
+
+    ckpt_rel = "checkpoints/my-run/step-42"
+    _write_file(remote_dir, f"{ckpt_rel}/metadata.json", b'{"step": 42}')
+    _write_file(remote_dir, f"{ckpt_rel}/manifest.ocdbt", b"ocdbt-manifest")
+    _write_file(remote_dir, f"{ckpt_rel}/d/shard_0", b"shard0-bytes")
+    _write_file(remote_dir, f"{ckpt_rel}/d/shard_1", b"shard1-bytes")
+
+    _configure_mirror_fs(local_dir, [remote_dir], monkeypatch)
+
+    returned = _stage_mirror_to_local(f"mirror://{ckpt_rel}")
+
+    assert returned == f"{local_dir}/{ckpt_rel}"
+    for rel in ("metadata.json", "manifest.ocdbt", "d/shard_0", "d/shard_1"):
+        assert (tmp_path / "marin-local" / ckpt_rel / rel).exists(), rel
+
+
+def test_stage_mirror_to_local_raises_when_empty(tmp_path, monkeypatch):
+    local_dir = str(tmp_path / "marin-local")
+    remote_dir = str(tmp_path / "marin-us-central2")
+    os.makedirs(local_dir)
+    os.makedirs(remote_dir)
+
+    _configure_mirror_fs(local_dir, [remote_dir], monkeypatch)
+
+    with pytest.raises(FileNotFoundError):
+        _stage_mirror_to_local("mirror://nonexistent/dir")
+
+
+def test_latest_checkpoint_path_stages_direct_mirror_step(tmp_path, monkeypatch):
+    """`latest_checkpoint_path` given a mirror:// pointing directly at a
+    step-N directory stages to a concrete local path — the primary usage for
+    `initialize_from_checkpoint_path`."""
+    local_dir = str(tmp_path / "marin-local")
+    remote_dir = str(tmp_path / "marin-us-central2")
+    os.makedirs(local_dir)
+    os.makedirs(remote_dir)
+
+    save_checkpoint(dict(model=1), step=20, checkpoint_path=f"{remote_dir}/run/step-20")
+
+    _configure_mirror_fs(local_dir, [remote_dir], monkeypatch)
+
+    resolved = latest_checkpoint_path("mirror://run/step-20")
+
+    assert resolved == f"{local_dir}/run/step-20"
+    assert (tmp_path / "marin-local" / "run" / "step-20" / "metadata.json").exists()
 
 
 def test_checkpointer_temporary_base_path_routes_temp_checkpoints():

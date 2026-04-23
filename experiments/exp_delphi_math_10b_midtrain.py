@@ -21,10 +21,14 @@ concurrent same-name submits collapse onto one handle via the iris
 marked SUCCESS with empty artifacts.
 
 To launch a single sweep point, set the env vars below so this script
-builds only the matching step:
+builds only the matching step. Base ckpts are wrapped in ``mirrored(...)``
+so the job can land in either us-central1-a or us-east5-a (the two v5p
+zones) — MirrorFileSystem copies the ckpt from whichever marin-<region>
+bucket has it on first open.
 
   iris --cluster=marin job run --cpu 1 --memory 3GB --disk 9GB \\
-    --region us-central1 --job-name delphi-math-10b-1e21-lr0.67 --no-wait \\
+    --region us-central1 --region us-east5 \\
+    --job-name delphi-math-10b-1e21-lr0.67 --no-wait \\
     -e MARIN_I_WILL_PAY_FOR_ALL_FEES 1 -e WANDB_API_KEY "$WANDB_API_KEY" \\
     -e MIDTRAIN_SELECT_BASE 1e21-v5 -e MIDTRAIN_SELECT_LR 0.67 \\
     -- python experiments/exp_delphi_math_10b_midtrain.py
@@ -45,7 +49,7 @@ from experiments.midtraining_data_buckets import BUCKET_2
 from experiments.scaling_law_sweeps.completed_adamh import completed_adamh_heuristic
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.executor import ExecutorStep, executor_main, mirrored
 
 # ----------------------------------------------------------------------------
 # Fixed knobs (both bases)
@@ -80,16 +84,22 @@ MAX_GRAD_NORM: float = 0.1
 # wandb config (not recomputed via the heuristic formula — the config is the
 # source of truth for what the weights were optimized against).
 
+# Checkpoint paths are wrapped in `mirrored(...)` so the executor rewrites
+# them to `mirror://<rel>`. MirrorFileSystem locates the file in whichever
+# marin-<region> bucket currently has it and copies to the local prefix on
+# first open; Levanter's `latest_checkpoint_path` / `load_checkpoint` stage
+# the mirror:// dir down to a concrete gs:// URL before TensorStore opens it
+# (see `_stage_mirror_to_local` in lib/levanter/src/levanter/checkpoint.py).
+# This lets the coordinator land in either us-central1-a or us-east5-a based
+# on capacity — no pre-copy required, no region-pin required.
 BASES: dict[str, dict] = {
     # ~1.9 B AdamH isoflop scan point at 3e20 FLOPs (compute-optimal).
     # Stands in for "1e20" — no optimal-training run exists at 1e20 FLOPs
     # in the AdamH scaling ladder, only the sweep points up to 3e20.
-    # Pre-copied from us-central2 into us-central1 so Marin's same-region
-    # training-config guard (rigging.filesystem.check_gcs_paths_same_region)
-    # passes. Job is pinned to --region us-central1 accordingly.
     "1e20-iso-d2048-L21": dict(
-        ckpt=(
-            "gs://marin-us-central1/checkpoints/isoflop/isoflop-3e+20-d2048-L21-B128-adamh_scaling_v5/checkpoints/step-46915/"
+        ckpt=mirrored(
+            "checkpoints/isoflop/isoflop-3e+20-d2048-L21-B128-adamh_scaling_v5/checkpoints/step-46915",
+            budget_gb=30,
         ),
         hidden_dim=2048,
         peak_lr=4.483e-3,
@@ -100,7 +110,10 @@ BASES: dict[str, dict] = {
     # Canonical Delphi 1e21 v5 (~3.4 B). Seed replicates v5-seed42,
     # v5-seed62746, and v6 converge within 0.001 c4-en-loss of this run.
     "1e21-v5": dict(
-        ckpt=("gs://marin-us-central1/adamh-scaling-ladder-nemotron-optimal-1e+21-v5-019021/checkpoints/step-21979/"),
+        ckpt=mirrored(
+            "adamh-scaling-ladder-nemotron-optimal-1e+21-v5-019021/checkpoints/step-21979",
+            budget_gb=50,
+        ),
         hidden_dim=2560,
         peak_lr=7.425e-3,
         peak_adam_lr=4.314e-4,
