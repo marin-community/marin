@@ -211,5 +211,6 @@ user_budgets:
       - moojink
       - michaelryan
       - kaiyue
+      - ryan
     budget_limit: 75000
     max_band: PRIORITY_BAND_INTERACTIVE

@@ -24,6 +24,7 @@ STANDARD_BUDGET_USERS = (
     "moojink",
     "michaelryan",
     "kaiyue",
+    "ryan",
 )
 
 BUDGETED_USERS = PRODUCTION_USERS + STANDARD_BUDGET_USERS
