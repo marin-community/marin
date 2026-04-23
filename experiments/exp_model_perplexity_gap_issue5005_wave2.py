@@ -90,7 +90,7 @@ COMMON_TAGS = [
     "model_b=Qwen/Qwen3-32B",
     "region=us-central1",
     "dataset_bundle=issue5005_wave2_materialized",
-    "families=synthetic_reasoning,raw_web_markup,game_music,formal_hardware,bio_chem",
+    "families=wave2_core",
     f"max_docs_per_dataset={MAX_DOCS_PER_DATASET}",
 ]
 
