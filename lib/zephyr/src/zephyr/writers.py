@@ -175,6 +175,7 @@ def _accumulate_tables(
     chunks: list[pa.Table] = []
     bytesize = 0
     convert: Callable | None = None
+    schema_inferred = schema is None
 
     for micro_batch in batchify(records, n=_MICRO_BATCH_SIZE):
         if convert is None:
@@ -183,7 +184,20 @@ def _accumulate_tables(
         if schema is None:
             # NOTE: the _MICRO_BATCH_SIZE is fairly small, here we hope it's enough to infer "real" schema
             schema = infer_arrow_schema(dicts)
-        table = pa.Table.from_pylist(dicts, schema=schema)
+        try:
+            table = pa.Table.from_pylist(dicts, schema=schema)
+        except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError) as e:
+            actual_schema = pa.Table.from_pylist(dicts).schema
+            origin = (
+                f"inferred from first {_MICRO_BATCH_SIZE} records (no explicit schema passed)"
+                if schema_inferred
+                else "explicitly provided by caller"
+            )
+            raise pa.ArrowInvalid(
+                f"Schema mismatch converting batch to Arrow: {e}\n"
+                f"Expected schema ({origin}):\n{schema}\n"
+                f"Got schema:\n{actual_schema}"
+            ) from e
         chunks.append(table)
         bytesize += table.nbytes
         if bytesize >= target_bytes:
