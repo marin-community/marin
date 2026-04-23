@@ -16,13 +16,11 @@ Distributed execution abstraction layer. Start with the shared instructions in `
 - `src/fray/v2/iris_backend.py` — Iris backend
 - `src/fray/v2/local_backend.py` — Local/thread backend (testing)
 - `src/fray/v2/device_flops.py` — TPU/GPU flops calculation
-- `src/fray/v1/` — Legacy API (Cluster, JobContext, Queue) — do not extend
-- `src/fray/cluster/` — Shared TPU orchestration (`run_on_pod`, gang scheduling)
+- `src/fray/cluster/` — v2 type re-exports (back-compat shim for `from fray.cluster import ResourceConfig`)
 
 ## Conventions
 
-- **v2 is the production API.** All new code should use `fray.v2`. Do not add features to v1.
+- **v2 is the production API.** All new code should use `fray.v2`.
 - Always use the `Client` protocol, not concrete backend implementations.
 - Actor resources: set `num_cpus=0` on actors to avoid head-node resource contention.
 - Testing: use `LocalClient` for unit tests. Only use Ray/Iris backends for integration tests.
-- No backward compatibility shims between v1 and v2 — migrate callers directly.

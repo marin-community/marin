@@ -24,9 +24,6 @@ dependencies = [
     "zstandard>=0.22.0",
 ]
 
-[project.scripts]
-fray = "fray.v1.cli:main"
-
 [project.optional-dependencies]
 ray = ["ray==2.54.0"]
 

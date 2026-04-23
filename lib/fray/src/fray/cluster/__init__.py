@@ -1,11 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""fray.cluster now re-exports v2 types.
-
-For v1 cluster APIs (Cluster, current_cluster, create_cluster, etc.),
-use ``fray.v1.cluster`` instead.
-"""
+"""fray.cluster re-exports v2 types."""
 
 from fray.v2.types import (
     CpuConfig,
