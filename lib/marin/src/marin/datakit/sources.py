@@ -339,6 +339,11 @@ def all_sources() -> dict[str, DatakitSource]:
         # no provenance.json and no .executor_status=SUCCESS yet. Re-enable once
         # staging lands and add a download module for HuggingFaceFW/finetranslations
         # so pinned_sources() can include these entries.
+        # TODO: both entries point at the same physical dump — the upstream is a
+        # parallel corpus of original multilingual text + machine-translated
+        # English. Splitting into /multilingual and /web needs different
+        # text_field, hf_urls_glob, or data_subdir so the two accounting slices
+        # don't normalize to identical rows and double-count the mixture.
         # DatakitSource(
         #     name="finetranslations/multilingual",
         #     hf_dataset_id="HuggingFaceFW/finetranslations",
