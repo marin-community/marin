@@ -10159,3 +10159,165 @@ Expected artifact size: ~3.6 GB per region bucket (q_proj B is
   L3c, L4a) showed all variants get stuck near the DPO baseline
   because the adapter is too small to learn. The *tensor-level*
   step-11 comparison is the discriminating signal, not the loss.
+
+
+## 2026-04-23T Control cohort result — NOT a shard-class discriminator, but informative
+
+Control tdump (q_proj, up_proj) launched `20260423-0623` UTC. All four
+jobs terminal-SUCCEEDED, 1 preemption each on 3 of 4 (iommu bounces,
+auto-recovered), `failure_count=0`. 48 objects per region bucket under
+`gs://marin-{us-central1,us-east5}/debug/bug_1_tensor_dump_ctrl/20260422/`.
+
+Operational wrinkle: first launch attempt failed 4/4 at client-side
+bundle creation because the 1.5 GB of main-cohort dumps in
+`.agents/artifacts/bug_1_tdump/20260422/` blew past the 25 MB Iris
+bundle cap (same failure mode as the earlier BL-PASS launch). Added
+`.agents/artifacts/` to the main repo's `.git/info/exclude` (worktrees
+share that file — the per-worktree `info/exclude` is ignored by git);
+bundle dropped from 1.3 GB to 22 MB. Relaunch was clean. Scratch file
+mark: do not pull large debug artifacts into a worktree that's going
+to submit Iris jobs without first ensuring a matching exclude.
+
+### Result (offline analysis script: scratch/p2_analyze_tdump_ctrl.py)
+
+Control step-11:
+
+| module | cos | mean elementwise rel err | p99 rel err | \|c\|/\|r\| |
+|---|---|---|---|---|
+| q_proj | 0.9999 | 5.6% | 76% | 1.000 |
+| up_proj | 0.9999 | 4.6% | 64% | 1.000 |
+
+Main step-11 (for comparison):
+
+| module | cos | mean rel err | p99 rel err | \|c\|/\|r\| |
+|---|---|---|---|---|
+| o_proj | 0.9999 | 3.8% | 55% | 1.000 |
+| down_proj | 0.9999 | 4.0% | 56% | 0.998 |
+
+Step 12 grad_B norm ratio (canonical/reverse):
+
+| module | norm ratio |
+|---|---|
+| o_proj | 2.04 |
+| down_proj | 2.08 |
+| q_proj | 2.02 |
+| up_proj | 1.99 |
+
+### Interpretation — what the control does and doesn't say
+
+What it **does** say: in a full-recipe LoRA DPO run
+(target_modules=None, everything gets adapted), every module's grad_B
+at step 11 picks up the canonical/reverse bit-level noise to a similar
+degree, and every module's grad_B at step 12 gets the 2× scale gap.
+This is consistent with FSDP all-reduces anywhere in the backward
+contributing to the step-11 perturbation, and with the step-12 gap
+being a run-wide loss-gap symptom.
+
+What it **does not** say: the step-11 bit-noise originates specifically
+in the output-axis collective. That claim needed a run where only
+input-sharded modules are LoRA-trained (so no output-axis lora_B
+collective fires at all), which is **not** what was launched.
+
+### Why the tensor-level shard-class discrimination isn't clean here
+
+Both cohorts use `target_modules=None`, so o_proj and down_proj are
+being LoRA-trained in every run. The shard class of the *dumped*
+module controls which tensors get serialized, not which modules
+participate in the forward/backward pass. Therefore:
+
+- step-11 forward outputs are identical canonical vs reverse
+  (B=0 everywhere)
+- step-11 backward generates noise from every all-reduce it traverses
+  — regardless of which module's lora_B we sample
+- step-12 forward uses post-step-11 B, which has noise on *every*
+  module's B (not just o_proj/down_proj), so the loss gap arises
+  from the cumulative perturbation, not from o_proj/down_proj alone
+- all modules' step-12 grad_B is ~2× bigger in canonical because the
+  whole loss landscape has bifurcated, not because output-sharded
+  gradients specifically are bigger
+
+### Reconciling with L3a / L4a (still valid)
+
+L3a (q,v LoRA-only) showed step-9 canonical/reverse gap of ~0.004.
+L4a (gate,up LoRA-only) showed gap of ~-0.001. These are real
+shard-class discriminators, but at the **training-loss** level, not at
+the step-11 gradient level. The mechanism that makes input-sharded-
+only runs safe is most plausibly that input-sharded B updates don't
+amplify into the forward-pass when the output (embed) axis is
+replicated across data-rank — so even if step-11 noise exists on
+q_proj.lora_B, the updated B doesn't produce a diverging forward.
+
+By contrast, output-sharded B's (o_proj, down_proj) put the noise
+directly on the replicated output axis, and the forward pass
+amplifies it through the DPO softmax non-linearity in 1-2 steps.
+
+### So the shard-class story at the tensor level
+
+- **Grad-level noise is system-wide** at step 11 in a full-recipe
+  run (~4-5% mean elementwise rel err on any module's lora_B grad).
+- **Forward-pass amplification is shard-class-specific**: only when
+  the post-update B's perturbed axis is replicated across the FSDP
+  data axis (i.e., output-sharded B on the sharded embed axis) does
+  the tiny B perturbation flow into a significant loss divergence.
+
+That is a more precise statement than "output-sharded modules have
+noisy gradients". The noise is ambient; the **amplification geometry
+is output-sharded-specific**.
+
+### What would close this the rest of the way
+
+A true input-only control: rerun with
+`target_modules=["q_proj","up_proj"]` (no output-sharded LoRA) and
+dump at steps 11-13. Expected pattern if the forward-amplification
+interpretation is right:
+
+- step-11 grad_B on q_proj, up_proj: similar ~4-5% elementwise rel
+  err to what we see here (noise still propagates through residual-
+  stream backward)
+- step-12 grad_B: **norm ratio ≈ 1.0** (no chaotic amplification
+  because no output-sharded lora_B to flow the perturbation through)
+- training loss at step 19: canonical and reverse within ~0.01
+  (matches the L3a / L4a training-level behavior)
+
+That would cleanly decouple "gradient noise source" from "forward
+amplification" and leave the Bug-1 mechanism described at the right
+layer of abstraction.
+
+### Next-agent guidance
+
+The mechanism story is now:
+
+1. Ring-order differences in FSDP all-reduces produce ~5% elementwise
+   bit-noise on every LoRA-B gradient at step 11.
+2. Adam updates that noise into B at step 11.
+3. Whether this B perturbation amplifies into a loss fork depends on
+   whether the perturbed B sits on the FSDP-sharded axis as its
+   output (output-sharded case, amplifies) or as its input
+   (input-sharded case, doesn't amplify).
+4. L3b / L4b already established (3) at the training-loss level. The
+   main-cohort tdump confirmed the grad-level noise exists on
+   output-sharded modules. The control cohort added: the grad-level
+   noise also exists on input-sharded modules in a mixed run — it's
+   ambient, not localized to the output-axis collective.
+5. The remaining open probe is the input-only control (above), which
+   would empirically test the forward-amplification story at the
+   tensor level. Low-priority — the L3a / L4a training-loss results
+   already carry the key discrimination; the tensor control would
+   just make the picture cleaner for writeup.
+
+Operational caveats for future agents:
+- When dumping tensors on a full-recipe run, the shard class of the
+  *dumped* module doesn't tell you where the noise came from. Plan
+  the training recipe (target_modules) to isolate what you want to
+  measure.
+- `.agents/artifacts/` will kill Iris submissions on any worktree
+  where the main `.git/info/exclude` doesn't cover it. The per-
+  worktree `info/exclude` is NOT read by git — add to
+  `<repo>/.git/info/exclude` (the main dir).
+
+### Files
+
+- control analysis script:
+  [scratch/p2_analyze_tdump_ctrl.py](../../scratch/p2_analyze_tdump_ctrl.py)
+- local tensor artifacts (gitignored):
+  `.agents/artifacts/bug_1_tdump_ctrl/20260422/`
