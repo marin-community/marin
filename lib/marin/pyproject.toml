@@ -123,6 +123,13 @@ conflicts = [
         { extra = "vllm" },
         { extra = "cuda12" },
     ],
+    [
+        # vllm ships vllm-tpu only — no marin vllm-cuda variant — so the
+        # vllm extra requires CPU/torch_xla torch which conflicts with the
+        # cu128-pinned torch from the gpu extra.
+        { extra = "vllm" },
+        { extra = "gpu" },
+    ],
 ]
 
 
@@ -172,9 +179,22 @@ vizier = [
     "google-vizier[jax]",
 ]
 
-vllm =[
+vllm = [
     "vllm-tpu==0.13.2.post6",
     "triton==3.5.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
+    # Pin torch + torchvision explicitly so the per-extra source map below
+    # routes them to the pytorch-cpu index instead of the default PyPI index.
+    # vllm-tpu transitively depends on torch, but without an explicit pin
+    # here uv resolves the transitive dep without consulting the per-extra
+    # sources and ends up installing the CUDA-build torch wheel — which
+    # crashes at module init on TPU workers with
+    # "libcublas.so.*[0-9] not found in the system path". This becomes
+    # visible when Iris workers drop uv.lock from the workspace bundle (>1MB
+    # ConfigMap limit) and have to do a fresh `uv sync --extra vllm` resolve.
+    "torch==2.9.0",
+    "torchvision==0.24.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torchvision==0.24.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
+    "torchvision==0.24.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
 harbor = [
@@ -193,18 +213,22 @@ url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
 
 [tool.uv.sources]
 torchvision = [
-    # Default to the CPU index for TPU/CPU builds
+    # Default to the CPU index for TPU/CPU/vLLM builds
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
+    { index = "pytorch-cpu", extra = "vllm" },
     # GPU index only when --extra gpu
     { index = "pytorch-cu128", extra = "gpu" },
 ]
 resiliparse = { index = "marin-resiliparse" }
-# Use CUDA PyTorch for --extra=gpu on Linux, CPU PyTorch for TPU/CPU builds
+# Use CUDA PyTorch for --extra=gpu on Linux, CPU PyTorch for TPU/CPU/vLLM builds.
+# The vllm extra ships vllm-tpu (TPU only — there is no marin vllm-cuda variant),
+# so it must use the same CPU/torch_xla flavor of torch as the tpu extra.
 torch = [
     { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
+    { index = "pytorch-cpu", extra = "vllm" },
 ]
 
 [[tool.uv.index]]
