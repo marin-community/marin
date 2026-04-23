@@ -135,6 +135,43 @@ class LoraDebugConfig:
     adam_eps: float = 1e-8
     """Epsilon for the effective-Adam-update metric (``|m / (sqrt(v) + eps)|``)."""
 
+    # --- Full-tensor GCS dump (P2) ------------------------------------------
+    #
+    # Scalars (norms / sentinels) collapse each tensor to a few numbers and
+    # cannot distinguish a direction defect from a distribution match. The
+    # Bug-1 investigation (D1c / D1d) now has evidence pointing at a
+    # directional, not scalar, discrepancy between canonical and reverse, so
+    # we need the full signed tensor side by side across variants. The knobs
+    # below dump raw ``grad_B`` / Adam ``mu`` / ``nu`` / effective-update
+    # tensors to a filesystem path (local or gs://) at a small handful of
+    # configured steps, for offline cosine / sign-agreement analysis.
+
+    verbose_grads: bool = False
+    """Top-level guard. When ``False`` (default) the full-tensor dump
+    machinery below is entirely skipped, regardless of the other knobs —
+    the callback behaves exactly as if P2 did not exist. Turn on only for
+    targeted debug runs. Typical production / long-horizon training should
+    never have this set."""
+
+    dump_tensors_at_steps: tuple[int, ...] = ()
+    """Steps at which to write full tensors. Empty tuple = never. Usage
+    example for the D1 post-warmup window: ``(11, 12, 13)``. Each step
+    produces ``len(dump_tensor_modules) * 4`` ``.npy`` files. Ignored when
+    ``verbose_grads=False``."""
+
+    dump_tensor_modules: tuple[str, ...] = ()
+    """Module name suffixes to dump (matched against the LoRA module
+    path, same matching rule as ``sentinel_modules``). Empty = nothing
+    is dumped even if ``dump_tensors_at_steps`` is set. Bug-1 default
+    of interest: ``("o_proj", "down_proj")``."""
+
+    dump_tensor_path: Optional[str] = None
+    """Output directory prefix for the full-tensor dump. Supports fsspec
+    schemes (``gs://...``, local absolute path, etc.). Per-tensor layout is
+    ``{dump_tensor_path}/step_{N:04d}/{module_key}/{metric}.npy`` where
+    ``metric`` is one of ``grad_B``, ``mu_B``, ``nu_B``,
+    ``effective_update_B``. Must be set when ``verbose_grads=True``."""
+
     def resolve_enabled(self) -> bool:
         """True if config, WandbConfig convenience flag, or env var say on."""
         return self.enabled or _env_enabled()
@@ -144,6 +181,11 @@ class LoraDebugConfig:
 
 
 # --- Helpers -----------------------------------------------------------------
+
+
+# Internal key prefix used to pass full tensors from inside_step to on_step
+# without mixing them into the scalar tracker payload. Never emitted to W&B.
+_TENSOR_DUMP_PREFIX = "__lora_tensor_dump__/"
 
 
 def _fmt_path(path: Sequence[Any]) -> str:
@@ -353,12 +395,44 @@ class LoraDebugCallback(JitCallback[S, M, dict[str, jax.Array]]):
         if cfg.include_opt_state:
             _emit_opt_state_stats(out, state.opt_state, cfg)
 
+        # --- Full-tensor dump (P2) — gated end-to-end on verbose_grads ------
+        if (
+            cfg.verbose_grads
+            and cfg.dump_tensors_at_steps
+            and cfg.dump_tensor_modules
+            and cfg.dump_tensor_path
+        ):
+            _emit_full_tensor_dump(out, state, grads, cfg)
+
         return out
 
     def on_step(self, step_info, cb_info: dict[str, jax.Array]):
         if not cb_info:
             return
-        levanter.tracker.log(cb_info, step=int(step_info.step))
+
+        # Split off any full-tensor dump payload so it never hits the scalar
+        # tracker (otherwise we'd be streaming hundreds of MB to W&B per step).
+        scalar_items: dict[str, jax.Array] = {}
+        tensor_items: dict[str, jax.Array] = {}
+        for k, v in cb_info.items():
+            if k.startswith(_TENSOR_DUMP_PREFIX):
+                tensor_items[k[len(_TENSOR_DUMP_PREFIX):]] = v
+            else:
+                scalar_items[k] = v
+
+        if scalar_items:
+            levanter.tracker.log(scalar_items, step=int(step_info.step))
+
+        cfg = self.config
+        if not (cfg.verbose_grads and tensor_items):
+            return
+
+        step = int(step_info.step)
+        if step not in cfg.dump_tensors_at_steps:
+            # Not a configured dump step — drop the zero-filled placeholders.
+            return
+
+        _write_tensor_dump(tensor_items, step, cfg.dump_tensor_path)
 
 
 # --- Metric emission helpers -------------------------------------------------
@@ -538,6 +612,145 @@ def _emit_opt_state_stats(
                 effective_update_sentinels.append((mod_key, eff))
         if cfg.include_sentinels and effective_update_sentinels:
             _emit_module_sentinels(out, "adam_effective_update", effective_update_sentinels, cfg)
+
+
+# --- Full-tensor GCS dump (P2) ----------------------------------------------
+
+
+def _first_matching_suffix(path: str, suffixes: Sequence[str]) -> Optional[str]:
+    """Return the first suffix name in ``suffixes`` that is a substring of
+    ``path``, or None if no match."""
+    for s in suffixes:
+        if s in path:
+            return s
+    return None
+
+
+def _collect_dump_tensors(
+    state: TrainerState,
+    grads: PyTree,
+    cfg: LoraDebugConfig,
+) -> dict[str, jax.Array]:
+    """Gather the four per-module tensors (grad_B, mu_B, nu_B,
+    effective_update_B) for modules whose path suffix matches
+    ``cfg.dump_tensor_modules``. Returns a dict keyed by
+    ``{metric}/{module_name}`` where ``module_name`` is the matched suffix
+    (e.g. ``o_proj``), not the full scan-stacked path — grads and opt_state
+    use different outer paths (opt_state has chain-index prefixes) and the
+    suffix is unique enough in a Llama block to serve as the join key.
+
+    Assumes the caller has already verified ``cfg.verbose_grads`` is on.
+    Does NOT gate on the current step — the caller is responsible for
+    zero-masking on non-dump steps via ``lax.cond``.
+    """
+    module_suffixes = cfg.dump_tensor_modules
+    eps = cfg.adam_eps
+
+    # grad_B: walk the grads tree, bucket by matched suffix
+    grad_by_name: dict[str, jax.Array] = {}
+    for path, arr in _collect_lora_arrays(grads, "B"):
+        name = _first_matching_suffix(path, module_suffixes)
+        if name is None:
+            continue
+        grad_by_name.setdefault(name, arr.astype(jnp.float32))
+
+    # Adam mu / nu for LoRA-B params: walk opt_state with the slot-aware logic
+    mu_by_name: dict[str, jax.Array] = {}
+    nu_by_name: dict[str, jax.Array] = {}
+    flat, _ = jax.tree_util.tree_flatten_with_path(state.opt_state)
+    for path, leaf in flat:
+        arr = leaf.array if isinstance(leaf, hax.NamedArray) else leaf
+        if not hasattr(arr, "shape"):
+            continue
+        path_str = _fmt_path(path)
+        if "lora_B" not in path_str:
+            continue
+        name = _first_matching_suffix(path_str, module_suffixes)
+        if name is None:
+            continue
+        if "/mu/" in f"/{path_str}/" or path_str.endswith("/mu"):
+            mu_by_name.setdefault(name, arr.astype(jnp.float32))
+        elif "/nu/" in f"/{path_str}/" or path_str.endswith("/nu"):
+            nu_by_name.setdefault(name, arr.astype(jnp.float32))
+        # else: other opt-state leaves (count, schedule state, etc.) — skip
+
+    out: dict[str, jax.Array] = {}
+    # Keep only modules where we have grad, mu, and nu — otherwise the
+    # effective_update computation can't pair up and the dump is incomplete.
+    for name in sorted(set(grad_by_name) & set(mu_by_name) & set(nu_by_name)):
+        g = grad_by_name[name]
+        mu = mu_by_name[name]
+        nu = nu_by_name[name]
+        if mu.shape != nu.shape:
+            continue
+        eff = mu / (jnp.sqrt(nu) + eps)
+        out[f"grad_B/{name}"] = g
+        out[f"mu_B/{name}"] = mu
+        out[f"nu_B/{name}"] = nu
+        out[f"effective_update_B/{name}"] = eff
+    return out
+
+
+def _emit_full_tensor_dump(
+    out: dict[str, jax.Array],
+    state: TrainerState,
+    grads: PyTree,
+    cfg: LoraDebugConfig,
+) -> None:
+    """Stash full tensors under ``__lora_tensor_dump__/`` keys in cb_info.
+
+    Inside JIT we cannot vary the output *shape* by step, but we can zero
+    out the values on non-dump steps via ``lax.cond`` so XLA can elide the
+    real compute / transfer on those steps. The host-side ``on_step``
+    writer checks the Python-level step before actually materializing to
+    disk, so stray zero tensors never leak to the filesystem.
+    """
+    payload = _collect_dump_tensors(state, grads, cfg)
+    if not payload:
+        return
+
+    # should_dump is a scalar bool: True iff state.step matches any
+    # configured dump step.
+    targets = jnp.asarray(cfg.dump_tensors_at_steps, dtype=state.step.dtype)
+    should_dump = jnp.any(targets == state.step)
+
+    payload = jax.lax.cond(
+        should_dump,
+        lambda p: p,
+        lambda p: jax.tree_util.tree_map(jnp.zeros_like, p),
+        payload,
+    )
+    for sub_key, arr in payload.items():
+        out[f"{_TENSOR_DUMP_PREFIX}{sub_key}"] = arr
+
+
+def _write_tensor_dump(
+    tensor_items: dict[str, jax.Array],
+    step: int,
+    root: str,
+) -> None:
+    """Host-side writer. Called once, only at configured dump steps.
+
+    Each ``tensor_items`` key is ``{metric}/{module_key}``; the on-disk
+    layout is ``{root}/step_{step:04d}/{module_key}/{metric}.npy``.
+    Supports fsspec paths (``gs://...``, local filesystem, etc.).
+    """
+    # Lazy imports so the main code path stays import-cheap.
+    import fsspec
+    import numpy as np
+
+    for key, arr in tensor_items.items():
+        metric, _, module_key = key.partition("/")
+        if not module_key:
+            continue
+        np_arr = np.asarray(arr)
+        # Haliax NamedArrays should be unwrapped by inside_step already, but
+        # be defensive in case a future caller passes one directly.
+        if hasattr(np_arr, "array"):
+            np_arr = np.asarray(np_arr.array)
+        out_path = f"{root.rstrip('/')}/step_{step:04d}/{module_key}/{metric}.npy"
+        with fsspec.open(out_path, "wb") as f:
+            np.save(f, np_arr)
 
 
 # --- One-time topology summary ----------------------------------------------
