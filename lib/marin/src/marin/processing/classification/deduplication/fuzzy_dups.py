@@ -233,6 +233,7 @@ def compute_fuzzy_dups_attrs(
     inputs: list[MinHashAttrData],
     output_path: str,
     cc_max_iterations: int = 10,
+    cc_resume: bool = False,
     max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
@@ -299,7 +300,11 @@ def compute_fuzzy_dups_attrs(
 
     bucket_ds = Dataset.from_list(entry_groups).flat_map(_emit_bucket_records)
     converged, cc_files = connected_components(
-        bucket_ds, ctx, output_dir=f"{output_path}/metadata/cc", max_iterations=cc_max_iterations
+        bucket_ds,
+        ctx,
+        output_dir=f"{output_path}/metadata/cc",
+        max_iterations=cc_max_iterations,
+        resume=cc_resume,
     )
     if not converged:
         # TODO (rav): log the number of changed nodes?
