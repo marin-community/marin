@@ -62,7 +62,7 @@ def _internal_orderable_id(record_id: Any) -> str:
     """
     We need an id that has a total ordering for connected components. If the id is an int,
     we can use it as is. If it's a string, we hash it and convert it to string. We convert
-    to string to make internal zephyr/ray/pyarrow serde happy.
+    to string to make internal zephyr/pyarrow serde happy.
     """
     if isinstance(record_id, int):
         id_norm = str(record_id)

@@ -277,10 +277,9 @@ def _submit_training_job(
 
 
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
-    """Run the Levanter LM training main function on a Ray cluster.
+    """Run the Levanter LM training main function by submitting a job to Fray.
 
-    This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
-    It should also be run with a Ray cluster already running.
+    Expects the following env vars (in the process env or ``config.env_vars``):
 
     - WANDB_API_KEY: The API key for Weights and Biases.
     - RUN_ID: (Optional) The run ID for this training run. Will default to a random UID if not set.
@@ -289,7 +288,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     This function makes a number of changes to the config and ensures a few things are set:
     - The run ID is set, or sets a default if not.
     - WANDB_API_KEY is set.
-    - It disables the auto-ray-start and auto-worker-start options since we're already in a Ray cluster.
+    - Accelerator-appropriate extras (``tpu``/``gpu``) are selected for the Fray environment.
     - It checks that configured GCS paths are in the same region as the VM (except train/validation source URLs).
     """
     config, train_config, env, extras = _prepare_training_run(config)
