@@ -44,10 +44,10 @@ class DatakitSource:
     ``normalize``; may contain preprocessing steps in between for sources
     that need filtering or transforms."""
 
-    rough_token_count_b: float | None = None
+    rough_token_count_b: float
     """Approximate token count in billions (Llama-3 tokenizer). Used as the
-    initial per-source mixing weight; ``None`` means unknown and callers
-    should supply their own fallback."""
+    initial per-source mixing weight — required so callers never have to
+    fall back to a made-up default."""
 
     @property
     def normalized(self) -> StepSpec:

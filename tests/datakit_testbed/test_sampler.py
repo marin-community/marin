@@ -137,19 +137,3 @@ def test_proportional_fractions_clamp_to_one_when_target_exceeds_source():
     sources = [_src("big", 3800.0), _src("tiny", 10.0)]
     fractions = proportional_sample_fractions(sources, target_total_tokens_b=10_000.0)
     assert fractions["tiny"] == 1.0
-
-
-def test_proportional_fractions_unknown_sources_take_all(caplog):
-    sources = [_src("known", 100.0), _src("mystery", None)]
-    with caplog.at_level("WARNING"):
-        fractions = proportional_sample_fractions(sources, target_total_tokens_b=50.0)
-    assert fractions["mystery"] == 1.0
-    assert any("rough_token_count_b" in r.message for r in caplog.records)
-
-
-def test_proportional_fractions_all_unknown_defaults_to_take_all(caplog):
-    sources = [_src("a", None), _src("b", None)]
-    with caplog.at_level("WARNING"):
-        fractions = proportional_sample_fractions(sources, target_total_tokens_b=1.0)
-    assert fractions == {"a": 1.0, "b": 1.0}
-    assert any("no source has rough_token_count_b" in r.message for r in caplog.records)

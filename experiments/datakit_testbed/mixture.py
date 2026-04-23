@@ -29,35 +29,14 @@ from marin.datakit.sources import DatakitSource, all_sources
 
 logger = logging.getLogger(__name__)
 
-# Applied to any source whose ``rough_token_count_b`` is ``None``. Picking 1.0
-# — roughly a billion tokens — avoids biasing the mixture toward tiny sources
-# when the known-count sources are in the hundreds or thousands of billions.
-_UNKNOWN_WEIGHT_FALLBACK_B: float = 1.0
-
 
 def weights_from_rough_counts(sources: list[DatakitSource]) -> dict[str, float]:
     """Use each source's ``rough_token_count_b`` as its mixture weight.
 
-    Sources with ``rough_token_count_b is None`` get ``_UNKNOWN_WEIGHT_FALLBACK_B``
-    and are logged. Measured counts from the tokenize step's ``stats.json``
-    can replace this later.
+    Measured counts from the tokenize step's ``stats.json`` can replace
+    this later.
     """
-    weights: dict[str, float] = {}
-    unknown: list[str] = []
-    for src in sources:
-        if src.rough_token_count_b is None:
-            weights[src.name] = _UNKNOWN_WEIGHT_FALLBACK_B
-            unknown.append(src.name)
-        else:
-            weights[src.name] = src.rough_token_count_b
-    if unknown:
-        logger.warning(
-            "testbed mixture: %d source(s) have rough_token_count_b=None; using fallback %s: %s",
-            len(unknown),
-            _UNKNOWN_WEIGHT_FALLBACK_B,
-            sorted(unknown),
-        )
-    return weights
+    return {src.name: src.rough_token_count_b for src in sources}
 
 
 def build_testbed_mixture(

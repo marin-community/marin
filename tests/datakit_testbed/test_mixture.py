@@ -27,15 +27,6 @@ def test_weights_use_rough_token_counts():
     assert weights_from_rough_counts(sources) == {"a": 100.0, "b": 50.0}
 
 
-def test_weights_fallback_for_unknown_token_count(caplog):
-    sources = [_src("known", 10.0), _src("unknown", None)]
-    with caplog.at_level("WARNING"):
-        weights = weights_from_rough_counts(sources)
-    assert weights["known"] == 10.0
-    assert weights["unknown"] == 1.0
-    assert any("rough_token_count_b=None" in r.message for r in caplog.records)
-
-
 def test_weights_for_full_testbed_source_set():
     """Every canonical testbed source resolves to a positive weight."""
     sources = list(all_sources().values())

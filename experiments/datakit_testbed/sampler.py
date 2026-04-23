@@ -54,53 +54,27 @@ def proportional_sample_fractions(
     sources: Sequence[DatakitSource],
     target_total_tokens_b: float,
 ) -> dict[str, float]:
-    """Per-source ``sample_fraction`` to hit a target total across known sources.
+    """Per-source ``sample_fraction`` to hit ``target_total_tokens_b``.
 
-    For each source with ``rough_token_count_b`` set, compute a fraction that
-    makes its contribution proportional to its share of the known total. Sources
-    with unknown counts get ``1.0`` (take everything) and a warning — we can't
-    size them and refusing to run the ferry on them would be more surprising.
-
-    Fractions are clamped to ``[0.0, 1.0]`` — if a source's target exceeds its
-    known count it simply contributes all of itself.
+    Each source's ``rough_token_count_b`` determines its share of the
+    target; the fraction is ``target_share / its own count``, clamped to
+    ``[0.0, 1.0]`` so a source whose target exceeds its known count
+    simply contributes all of itself.
     """
-    known = [s for s in sources if s.rough_token_count_b is not None]
-    unknown = [s for s in sources if s.rough_token_count_b is None]
-
-    fractions: dict[str, float] = {}
-    if not known:
-        logger.warning(
-            "sampler: no source has rough_token_count_b set; falling back to "
-            "sample_fraction=1.0 for all %d source(s)",
-            len(sources),
-        )
-        for src in sources:
-            fractions[src.name] = 1.0
-        return fractions
-
-    known_sum = sum(s.rough_token_count_b for s in known)  # type: ignore[misc]
-    for src in known:
-        target = target_total_tokens_b * (src.rough_token_count_b / known_sum)  # type: ignore[operator]
-        fractions[src.name] = min(1.0, target / src.rough_token_count_b)  # type: ignore[operator]
-    for src in unknown:
-        fractions[src.name] = 1.0
-
-    if unknown:
-        logger.warning(
-            "sampler: %d source(s) missing rough_token_count_b, sampling 1.0 (take all): %s",
-            len(unknown),
-            sorted(s.name for s in unknown),
-        )
-    return fractions
+    total_count = sum(s.rough_token_count_b for s in sources)
+    return {
+        src.name: min(1.0, target_total_tokens_b * (src.rough_token_count_b / total_count) / src.rough_token_count_b)
+        for src in sources
+    }
 
 
 def _copy_shard(src: str, dst: str) -> int:
     """Copy a single file server-side. Both paths must share a backend."""
     src_fs, src_path = url_to_fs(src)
     dst_fs, dst_path = url_to_fs(dst)
-    assert src_fs.protocol == dst_fs.protocol, (
-        f"sampler: src/dst filesystem mismatch: {src_fs.protocol!r} vs {dst_fs.protocol!r}. "
-    )
+    assert (
+        src_fs.protocol == dst_fs.protocol
+    ), f"sampler: src/dst filesystem mismatch: {src_fs.protocol!r} vs {dst_fs.protocol!r}. "
     parent = os.path.dirname(dst_path)
     if parent:
         fsspec_mkdirs(parent, exist_ok=True)
