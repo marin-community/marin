@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Verify every Datakit source's staged_path exists under gs://marin-us-central1.
+"""Verify every Datakit source's staged dump terminated SUCCESS.
 
 Each :class:`marin.datakit.sources.DatakitSource` with a non-empty ``staged_path``
-must resolve to a GCS prefix with at least one object — otherwise the ferry's
-verify-only download step will 404 at runtime. Enforced daily as a parallel
-lane of the datakit-smoke workflow.
+must resolve to a GCS prefix under ``gs://marin-us-central1`` whose
+``.executor_status`` file (plain text or legacy JSON-lines) reports ``SUCCESS`` —
+otherwise the ferry's verify-only download step is pointing at a partial or
+missing dump. Enforced daily as a parallel lane of the datakit-smoke workflow.
 """
 
 import logging
@@ -14,22 +15,21 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 from marin.datakit.sources import all_sources
-from rigging.filesystem import url_to_fs
+from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
 BUCKET = "gs://marin-us-central1"
 MAX_WORKERS = 16
+WORKER_ID = "datakit-smoke-sources-check"
 
 
-def _check(full_path: str) -> tuple[str, bool]:
-    fs, _ = url_to_fs(full_path)
-    try:
-        children = fs.ls(full_path, detail=False)
-    except FileNotFoundError:
-        return full_path, False
-    return full_path, bool(children)
+def _check(staged_path: str) -> tuple[str, str]:
+    """Return (output_path, status) where status is ``SUCCESS`` or a failure token."""
+    output_path = f"{BUCKET}/{staged_path}"
+    status = StatusFile(output_path, worker_id=WORKER_ID).status
+    return output_path, status or "MISSING"
 
 
 def main() -> None:
@@ -37,20 +37,19 @@ def main() -> None:
     sources = all_sources()
     unique_paths = sorted({s.staged_path for s in sources.values() if s.staged_path})
     logger.info("Verifying %d unique staged paths under %s", len(unique_paths), BUCKET)
-    urls = [f"{BUCKET}/{p}" for p in unique_paths]
 
-    missing: list[str] = []
+    bad: list[tuple[str, str]] = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        for full, exists in pool.map(_check, urls):
-            if exists:
-                logger.debug("OK: %s", full)
+        for output_path, status in pool.map(_check, unique_paths):
+            if status == STATUS_SUCCESS:
+                logger.debug("OK: %s", output_path)
             else:
-                logger.error("MISSING: %s", full)
-                missing.append(full)
+                logger.error("%s: %s", status, output_path)
+                bad.append((output_path, status))
 
-    if missing:
-        raise SystemExit(f"{len(missing)}/{len(unique_paths)} staged paths missing under {BUCKET}")
-    logger.info("All %d staged paths present under %s", len(unique_paths), BUCKET)
+    if bad:
+        raise SystemExit(f"{len(bad)}/{len(unique_paths)} staged paths not SUCCESS under {BUCKET}")
+    logger.info("All %d staged paths report SUCCESS under %s", len(unique_paths), BUCKET)
 
 
 if __name__ == "__main__":
