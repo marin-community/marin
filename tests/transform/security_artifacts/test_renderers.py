@@ -89,6 +89,8 @@ def test_render_zeek_tsv_value_joins_sets_with_separator():
     # tuples/lists preserve order.
     assert render_zeek_tsv_value(["dns", "http"]) == "dns,http"
     assert render_zeek_tsv_value(("a", "b", "c"), set_separator=";") == "a;b;c"
+    # sets are sorted by rendered value so their output is stable across hash seeds.
+    assert render_zeek_tsv_value({"ssh", "dns", "http"}) == "dns,http,ssh"
 
 
 def test_render_zeek_tsv_record_writes_missing_fields_as_unset():

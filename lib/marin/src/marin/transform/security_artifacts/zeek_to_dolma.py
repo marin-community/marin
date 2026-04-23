@@ -85,21 +85,15 @@ class ZeekToDolmaConfig:
 
     def __post_init__(self) -> None:
         if self.input_format not in SUPPORTED_INPUT_FORMATS:
-            raise ValueError(
-                f"input_format must be one of {SUPPORTED_INPUT_FORMATS}, got {self.input_format!r}"
-            )
+            raise ValueError(f"input_format must be one of {SUPPORTED_INPUT_FORMATS}, got {self.input_format!r}")
         if not self.fields:
             raise ValueError("fields must be a non-empty sequence of Zeek field names")
         if self.types is not None and len(self.types) != len(self.fields):
-            raise ValueError(
-                f"types length ({len(self.types)}) must match fields length ({len(self.fields)})"
-            )
+            raise ValueError(f"types length ({len(self.types)}) must match fields length ({len(self.fields)})")
         if self.records_per_block <= 0:
             raise ValueError(f"records_per_block must be positive, got {self.records_per_block}")
         if self.max_blocks_per_file is not None and self.max_blocks_per_file <= 0:
-            raise ValueError(
-                f"max_blocks_per_file must be positive when set, got {self.max_blocks_per_file}"
-            )
+            raise ValueError(f"max_blocks_per_file must be positive when set, got {self.max_blocks_per_file}")
 
 
 def _default_input_glob(cfg: ZeekToDolmaConfig) -> str:
@@ -176,8 +170,7 @@ def render_file_to_dolma_blocks(file_path: str, cfg: ZeekToDolmaConfig) -> list[
     Used as the per-shard unit of work for the Zephyr pipeline.
     """
     loader = load_parquet if cfg.input_format == "parquet" else load_jsonl
-    records = list(loader(file_path))
-    return list(_render_records_into_blocks(records, cfg))
+    return list(_render_records_into_blocks(loader(file_path), cfg))
 
 
 def render_records_to_dolma_blocks(

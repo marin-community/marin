@@ -142,8 +142,20 @@ def render_zeek_tsv_value(
     if isinstance(value, bool):
         return "T" if value else "F"
 
-    if isinstance(value, (list, tuple, set, frozenset)):
-        items = [render_zeek_tsv_value(v, set_separator=set_separator, empty_field=empty_field, unset_field=unset_field) for v in value]
+    if isinstance(value, (list, tuple)):
+        items = [
+            render_zeek_tsv_value(v, set_separator=set_separator, empty_field=empty_field, unset_field=unset_field)
+            for v in value
+        ]
+        if not items:
+            return empty_field
+        return set_separator.join(items)
+
+    if isinstance(value, (set, frozenset)):
+        items = sorted(
+            render_zeek_tsv_value(v, set_separator=set_separator, empty_field=empty_field, unset_field=unset_field)
+            for v in value
+        )
         if not items:
             return empty_field
         return set_separator.join(items)
