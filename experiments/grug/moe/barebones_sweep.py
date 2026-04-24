@@ -28,7 +28,7 @@ from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 GATE1_CONFIGS: list[tuple[int, float]] = [
-    (512, 2.19e17),
+    # (512, 2.19e17),  # already running
     (768, 1.70e18),
 ]
 
@@ -71,10 +71,10 @@ def _build_muon_optimizer(warmup: float = 0.1) -> GrugMuonConfig:
 CONFIGS: list[tuple[str, bool]] = [
     ("adamh", False),
     ("adamh", True),
-    ("muon", False),
-    ("muon", True),
-    ("muon-nowarmup", False),
-    ("muon-nowarmup", True),
+    # ("muon", False),  # already running
+    # ("muon", True),  # already running
+    # ("muon-nowarmup", False),  # already running
+    # ("muon-nowarmup", True),  # already running
 ]
 
 
