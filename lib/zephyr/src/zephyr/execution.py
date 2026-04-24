@@ -52,6 +52,7 @@ from zephyr.plan import (
     StageType,
     compute_plan,
 )
+from zephyr.shuffle import ListShard, MemChunk, _write_scatter
 from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -112,18 +113,6 @@ class PickleDiskChunk:
         with open_url(self.path, "rb") as f:
             return pickle.load(f)
 
-
-# ---------------------------------------------------------------------------
-# Scatter Parquet support (imported from shuffle.py)
-# ---------------------------------------------------------------------------
-
-from zephyr.shuffle import (  # noqa: E402
-    ListShard,
-    MemChunk,
-    ScatterReader,  # noqa: F401 — re-exported for plan.py and external callers
-    ScatterWriter,  # noqa: F401 — re-exported for external callers
-    _write_scatter,
-)
 
 # ---------------------------------------------------------------------------
 # Task result
