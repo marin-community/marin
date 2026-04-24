@@ -32,17 +32,16 @@ import logging
 from collections.abc import Sequence
 
 from marin.datakit.sources import DatakitSource, all_sources
+from marin.execution.executor import ExecutorStep
 from marin.execution.step_runner import check_cache
 from marin.execution.step_spec import StepSpec
-
-from marin.processing.tokenize.data_configs import TokenizerStep
 
 from experiments.datakit_testbed.sampler import (
     proportional_sample_fractions,
     sample_normalized_shards_step,
 )
 from experiments.datakit_testbed.settings import RAW_TARGET_TOTAL_TOKENS_B, TESTBED_TOKENIZER
-from experiments.datakit_testbed.train import build_testbed_tokenize_steps
+from experiments.datakit_testbed.train import run_testbed_config
 
 logger = logging.getLogger(__name__)
 
@@ -117,8 +116,14 @@ def build_testbed_steps(
 _SAMPLE_STEP_PREFIX = "datakit-testbed/sample/"
 
 
-def baseline(steps: list[StepSpec], tokenizer: str = TESTBED_TOKENIZER) -> dict[str, TokenizerStep]:
-    """Assemble the baseline (control-arm) tokenize components off *steps*.
+def baseline(
+    steps: list[StepSpec],
+    *,
+    name: str = "baseline",
+    tokenizer: str = TESTBED_TOKENIZER,
+    **run_config_kwargs,
+) -> ExecutorStep:
+    """Assemble the baseline (control-arm) training step off *steps*.
 
     The testbed's ranking protocol runs every experiment alongside a
     baseline where the pipeline's middle stages are deliberate no-ops:
@@ -129,22 +134,32 @@ def baseline(steps: list[StepSpec], tokenizer: str = TESTBED_TOKENIZER) -> dict[
       (one shard set per source), so bucketing is an identity op
 
     With all three as no-ops, the sampled parquet that ``build_testbed_steps``
-    produces is also the bucket, so this function just wires one tokenize
-    ``ExecutorStep`` per sample output — keyed by source name so the
-    mixture builder can weight them.
+    produces is also the bucket, so this function wires one tokenize
+    ExecutorStep per sample output, builds the proportional mixture over
+    them, and hands the result to :func:`run_testbed_config` to assemble
+    the full Grug-MoE training ExecutorStep.
 
     Args:
         steps: Return value of :func:`build_testbed_steps`.
-        tokenizer: Tokenizer to use across every component; must match the
-            training model's tokenizer.
+        name: Config name — forms the executor step name and wandb run id.
+        tokenizer: Tokenizer to use across every component; must match
+            the training model's tokenizer.
+        **run_config_kwargs: Forwarded to :func:`run_testbed_config`
+            (compute_budget_flops, hidden_dim, target_steps, weights,
+            tpu, wandb_group, etc.).
 
     Returns:
-        ``{source_name: TokenizerStep}`` ready to hand to
-        :func:`experiments.datakit_testbed.mixture.build_testbed_mixture`.
+        An ``ExecutorStep`` whose ``fn`` is ``run_grug_moe_trial``. Pass
+        to ``executor_main`` to actually train.
     """
     sampled_by_source = {
         s.name.removeprefix(_SAMPLE_STEP_PREFIX): s for s in steps if s.name.startswith(_SAMPLE_STEP_PREFIX)
     }
     if not sampled_by_source:
         raise ValueError("no sample steps found in the DAG (expected names under 'datakit-testbed/sample/...')")
-    return build_testbed_tokenize_steps(sampled_by_source, tokenizer=tokenizer)
+    return run_testbed_config(
+        name=name,
+        sampled_by_source=sampled_by_source,
+        tokenizer=tokenizer,
+        **run_config_kwargs,
+    )
