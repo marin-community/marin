@@ -967,3 +967,54 @@ Preliminary 1e20 ranking (unsmoothed): `lr=0.67 (0.781) ≈ lr=0.83 (0.782) < lr
 - `gs://marin-us-central1/checkpoints/delphi-1e20-iso-d2048-L21-math-10b-lr0.67-e3be0c/` (GCS is the healthy fresh training, but W&B run is polluted with broken data)
 - `gs://marin-us-central1/checkpoints/delphi-1e20-iso-d2048-L21-math-10b-lr0.83-db9de7/` (ditto)
 - Also the corresponding W&B runs at those names — they display misleading flat-min-lr curves; safe to delete once the `-v2` runs are locked in.
+
+---
+
+## Analysis + plotting utilities in this repo (found 2026-04-23)
+
+Will Held owns most of the scaling-law / analysis infra. If you need to produce plots, fits, or sweep-wide comparisons, these are the code paths to study first rather than rolling your own.
+
+### Core library — `lib/marin/src/marin/scaling_laws/` (≈1001 lines, plotly-based)
+
+| File | Key exports | What it does |
+|---|---|---|
+| `scaling_plots.py` | `create_isoflop_plot`, `create_scaling_plot`, `save_plots`, `upload_plots_to_wandb` | Plotly figure builders for isoflop curves + scaling fits; GCS save + W&B artifact upload |
+| `isoflop_analysis.py` | `fit_scaling_laws`, `predict_optimal_config`, `robust_quad_logx` (Huber-loss quadratic fit), `ScalingFit`, `QuadraticFitCoeffs`, `IsoFlopRecord`, `MinimaRecord`, `CandidateConfig` | Scaling-law math and data structures |
+| `eval_metrics_reader.py` | `read_eval_records` (+ W&B backfill via `_backfill_metrics_from_wandb`) | Pulls per-step eval metrics from GCS runs and W&B API, unifying the two sources |
+| `tpu_utils.py` | `pick_v5p_type`, `pick_v4_type`, `V5P_SPEC`, `V4_SPEC` | Choose the smallest TPU slice that fits a given model |
+| `__init__.py` | Re-exports above | Public API entry |
+
+### Callers / end-to-end wiring
+
+| File | Purpose |
+|---|---|
+| `experiments/isoflop_sweep.py` | **The canonical ExecutorStep wiring** — reads eval metrics, fits scaling laws, emits plots, uploads to W&B. Pattern-match against this when building a new analysis step. |
+| `experiments/exp1337_delphi_suite.py` | Delphi-specific sweep runner using `predict_optimal_config`. Source of the `(H, L, B)`-heuristic pipeline. |
+| `experiments/exp2166_scaling_ladder_analysis.py` | Most recent ladder analysis (~2026-02). |
+| `experiments/scaling_law_sweeps/completed_adamh.py` | The AdamH heuristic that drove our 1e20 base-model choice — `completed_adamh_heuristic._build_model_config(hidden_size, seq_len)` is the source of truth for Delphi architecture. |
+| `experiments/scaling_law_sweeps/c_adamc.py` | AdamC-variant counterpart. |
+
+### Per-run training-loss (no dedicated Marin tool)
+
+For single-run or small-sweep train-loss plots (what this midtraining sweep wants), the options are:
+
+- `lib/levanter/scripts/loss_history.py` — ~30-line example that hits `wandb.Api().runs().scan_history()` for `train/loss` by git-sha. Good template.
+- Read `tracker_metrics.jsonl` at each run's GCS output path directly (Levanter writes it independently of W&B; **this is our only source of truth for the `e3be0c` / `db9de7` runs whose W&B is polluted**). One JSON per step, columns include `train/loss`, `optim/learning_rate`, `optim/adam_lr`, and all `eval/paloma/*/loss` + `eval/uncheatable_eval/*/loss` series. Just `pd.read_json(..., lines=True)`.
+
+### For this midtraining sweep specifically
+
+The scaling-laws infra is overkill for a 3-point × 2-base LR sweep (no scaling fit is meaningful with one token budget + one parameter count per base). Appropriate plots:
+
+- Train-loss vs step, EMA-smoothed, one line per `(base, lr_factor)`.
+- Paloma validation loss vs step (`eval/paloma/c4_en/loss`, `eval/paloma/dolma-v1_5/loss`, etc.), same overlay.
+- Final-loss bar chart per sweep point to pick the winner.
+
+A ~50-line script that loads the 6 `tracker_metrics.jsonl` files (3 × 1e20 + 3 × 1e21 once they land) and renders these with matplotlib or plotly is enough. **Do not** build it on top of `isoflop_analysis.py` — wrong abstraction. **Do** reuse `eval_metrics_reader.read_eval_records` for the GCS + W&B unification logic if the runs have the right shape (check its filters first).
+
+### Authorship / blame-walk
+
+- `scaling_plots.py` / `isoflop_analysis.py` / `eval_metrics_reader.py` / `isoflop_sweep.py` — William Held, PR #2243 "Scaling Plots & Analysis as an Executor Step".
+- Delphi pipeline (`exp1337_delphi_suite.py`) — William Held, PR #3292 "Delphi Scaling Setup", plus PR #4591 "exp1337: add seed sweep".
+- AdamH heuristic — William Held, PR #2447 "Beta2 gets a bit wacky with very large batch sizes...".
+
+When in doubt on scaling/analysis decisions, `git log --format='%an %s' -- <file>` → look for Will.
