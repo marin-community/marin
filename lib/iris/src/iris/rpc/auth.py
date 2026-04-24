@@ -16,7 +16,6 @@ import hashlib
 import logging
 import time
 from contextvars import ContextVar
-from dataclasses import dataclass
 from enum import StrEnum
 from http.cookies import SimpleCookie
 from typing import Protocol
@@ -24,17 +23,17 @@ from typing import Protocol
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
+from rigging.auth import VerifiedIdentity
+
 logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "iris_session"
 
 
-@dataclass(frozen=True, slots=True)
-class VerifiedIdentity:
-    """Identity of an authenticated caller, extracted from JWT claims."""
-
-    user_id: str
-    role: str
+# `VerifiedIdentity` is defined in `rigging.auth` so the stateless
+# `JwtVerifier` (also in rigging) and the iris-side issuer share the same
+# type. Re-exported here for the many iris call sites that import
+# `from iris.rpc.auth import VerifiedIdentity`.
 
 
 def _extract_cookie(cookie_header: str, name: str) -> str | None:

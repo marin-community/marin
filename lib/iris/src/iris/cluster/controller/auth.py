@@ -27,6 +27,7 @@ from iris.rpc.auth import (
     VerifiedIdentity,
     hash_token,
 )
+from rigging.auth import JWT_ALGORITHM, JwtVerifier
 from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
@@ -169,17 +170,18 @@ _TOUCH_INTERVAL_SECONDS = 300  # 5 minutes
 
 
 class JwtTokenManager:
-    """Creates and verifies HMAC-SHA256 JWT tokens.
+    """Issues HMAC-SHA256 JWTs and verifies them against a DB-backed
+    revocation set.
 
-    Verification is a pure crypto operation followed by an in-memory
-    revocation check — no DB hit on the hot path. An optional DB reference
-    enables sampled last_used_at write-back (at most once per key per
+    Composes a `rigging.auth.JwtVerifier` for signature/expiry/revocation
+    checks; adds the issuer half (`create_token`), DB-backed revocation
+    hydration (`load_revocations`), and sampled `last_used_at` write-back
+    on the verify hot path (at most once per key per
     ``_TOUCH_INTERVAL_SECONDS``).
     """
 
     def __init__(self, signing_key: str, db: ControllerDB | None = None):
-        self._signing_key = signing_key
-        self._revoked_jtis: set[str] = set()
+        self._verifier = JwtVerifier(signing_key)
         self._db = db
         # Tracks the last wall-clock time we wrote last_used_at per jti.
         self._last_touched: dict[str, float] = {}
@@ -187,7 +189,13 @@ class JwtTokenManager:
     @property
     def signing_key(self) -> str:
         """HMAC secret used to sign and verify JWTs. Do not log or serialize."""
-        return self._signing_key
+        return self._verifier.signing_key
+
+    @property
+    def verifier(self) -> JwtVerifier:
+        """Underlying stateless verifier, suitable for handing to a log server
+        or other process that should validate but not issue tokens."""
+        return self._verifier
 
     def create_token(
         self,
@@ -204,7 +212,7 @@ class JwtTokenManager:
             "iat": int(now),
             "exp": int(now + ttl_seconds),
         }
-        return jwt.encode(payload, self._signing_key, algorithm="HS256")
+        return jwt.encode(payload, self._verifier.signing_key, algorithm=JWT_ALGORITHM)
 
     def verify(self, token: str) -> VerifiedIdentity:
         """Verify JWT signature and claims, check revocation.
@@ -212,23 +220,9 @@ class JwtTokenManager:
         On success, updates ``last_used_at`` in the DB at most once per key
         per ``_TOUCH_INTERVAL_SECONDS`` to avoid hot-path DB writes.
         """
-        try:
-            payload = jwt.decode(token, self._signing_key, algorithms=["HS256"])
-        except jwt.ExpiredSignatureError as exc:
-            raise ValueError("Token has expired") from exc
-        except jwt.InvalidTokenError as exc:
-            raise ValueError(f"Invalid token: {exc}") from exc
-
-        jti = payload.get("jti", "")
-        if jti in self._revoked_jtis:
-            raise ValueError("Token has been revoked")
-
-        self._maybe_touch(jti)
-
-        return VerifiedIdentity(
-            user_id=payload["sub"],
-            role=payload.get("role", "user"),
-        )
+        identity, payload = self._verifier.verify_full(token)
+        self._maybe_touch(payload.get("jti", ""))
+        return identity
 
     def _maybe_touch(self, jti: str) -> None:
         """Write last_used_at to DB if enough time has elapsed since the last write."""
@@ -246,7 +240,7 @@ class JwtTokenManager:
 
     def revoke(self, jti: str) -> None:
         """Add a JTI to the in-memory revocation set."""
-        self._revoked_jtis.add(jti)
+        self._verifier.revoke(jti)
 
     def load_revocations(self, db: ControllerDB) -> None:
         """Load revoked key_ids from api_keys into the revocation set.
@@ -264,7 +258,7 @@ class JwtTokenManager:
                 (now_ms,),
                 decoders={"key_id": str},
             )
-            self._revoked_jtis = {row.key_id for row in rows}
+            self._verifier.set_revocations({row.key_id for row in rows})
 
 
 # ---------------------------------------------------------------------------
