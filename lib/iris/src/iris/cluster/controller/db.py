@@ -291,6 +291,14 @@ class ControllerDB:
     AUTH_DB_FILENAME = "auth.sqlite3"
     PROFILES_DB_FILENAME = "profiles.sqlite3"
 
+    # Class-level SQL trace hook: when set, every connection (writer + read pool)
+    # opened via _configure() registers this callback via
+    # ``conn.set_trace_callback``. Exposed for the replay-system tests
+    # (``iris.cluster.controller.replay``); production never sets this. Must be
+    # set BEFORE ``ControllerDB(...)`` is constructed so the writer connection
+    # picks it up — connections opened earlier will not retroactively trace.
+    _trace_callback: Callable[[str], None] | None = None
+
     def __init__(self, db_dir: Path):
         import time
 
@@ -412,6 +420,8 @@ class ControllerDB:
         conn.execute("PRAGMA synchronous = NORMAL")
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA foreign_keys = ON")
+        if (cb := ControllerDB._trace_callback) is not None:
+            conn.set_trace_callback(cb)
 
     def optimize(self) -> None:
         """Run PRAGMA optimize to refresh statistics for tables with stale data.

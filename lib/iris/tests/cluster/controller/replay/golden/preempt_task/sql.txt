@@ -1,0 +1,622 @@
+ATTACH DATABASE '<tmp>' AS auth
+ATTACH DATABASE '<tmp>' AS profiles
+BEGIN IMMEDIATE
+CREATE TABLE IF NOT EXISTS schema_migrations ( name TEXT PRIMARY KEY, applied_at_ms INTEGER NOT NULL )
+SELECT name FROM schema_migrations ORDER BY name
+COMMIT
+PRAGMA synchronous=OFF
+PRAGMA journal_mode=MEMORY
+PRAGMA temp_store=MEMORY
+CREATE TABLE IF NOT EXISTS schema_migrations ( name TEXT PRIMARY KEY, applied_at_ms INTEGER NOT NULL );
+CREATE TABLE IF NOT EXISTS meta ( key TEXT PRIMARY KEY, value INTEGER NOT NULL );
+CREATE TABLE IF NOT EXISTS users ( user_id TEXT PRIMARY KEY, created_at_ms INTEGER NOT NULL, display_name TEXT, role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user', 'worker')) );
+CREATE TABLE IF NOT EXISTS jobs ( job_id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(user_id), parent_job_id TEXT REFERENCES jobs(job_id) ON DELETE CASCADE, root_job_id TEXT NOT NULL, depth INTEGER NOT NULL, state INTEGER NOT NULL, submitted_at_ms INTEGER NOT NULL, root_submitted_at_ms INTEGER NOT NULL, started_at_ms INTEGER, finished_at_ms INTEGER, scheduling_deadline_epoch_ms INTEGER, error TEXT, exit_code INTEGER, num_tasks INTEGER NOT NULL, is_reservation_holder INTEGER NOT NULL CHECK (is_reservation_holder IN (0, 1)), name TEXT NOT NULL DEFAULT '', has_reservation INTEGER NOT NULL DEFAULT 0 );
+CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_job_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state, submitted_at_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_depth_state ON jobs(depth, state, submitted_at_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_user_state ON jobs(user_id, state);
+CREATE INDEX IF NOT EXISTS idx_jobs_root_depth ON jobs(root_job_id, depth);
+CREATE INDEX IF NOT EXISTS idx_jobs_depth_submitted ON jobs(depth, submitted_at_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_name ON jobs(name);
+CREATE INDEX IF NOT EXISTS idx_jobs_has_reservation ON jobs(has_reservation, state) WHERE has_reservation = 1;
+CREATE TABLE IF NOT EXISTS job_config ( job_id TEXT PRIMARY KEY REFERENCES jobs(job_id) ON DELETE CASCADE, name TEXT NOT NULL DEFAULT '', has_reservation INTEGER NOT NULL DEFAULT 0, res_cpu_millicores INTEGER NOT NULL DEFAULT 0, res_memory_bytes INTEGER NOT NULL DEFAULT 0, res_disk_bytes INTEGER NOT NULL DEFAULT 0, res_device_json TEXT, constraints_json TEXT, has_coscheduling INTEGER NOT NULL DEFAULT 0, coscheduling_group_by TEXT NOT NULL DEFAULT '', scheduling_timeout_ms INTEGER, max_task_failures INTEGER NOT NULL DEFAULT 0, entrypoint_json TEXT NOT NULL DEFAULT '{}', environment_json TEXT NOT NULL DEFAULT '{}', bundle_id TEXT NOT NULL DEFAULT '', ports_json TEXT NOT NULL DEFAULT '[]', max_retries_failure INTEGER NOT NULL DEFAULT 0, max_retries_preemption INTEGER NOT NULL DEFAULT 100, timeout_ms INTEGER, preemption_policy INTEGER NOT NULL DEFAULT 0, existing_job_policy INTEGER NOT NULL DEFAULT 0, priority_band INTEGER NOT NULL DEFAULT 0, task_image TEXT NOT NULL DEFAULT '', submit_argv_json TEXT NOT NULL DEFAULT '[]', reservation_json TEXT, fail_if_exists INTEGER NOT NULL DEFAULT 0 );
+CREATE INDEX IF NOT EXISTS idx_job_config_name ON job_config(name);
+CREATE INDEX IF NOT EXISTS idx_job_config_has_reservation ON job_config(has_reservation, job_id) WHERE has_reservation = 1;
+CREATE TABLE IF NOT EXISTS job_workdir_files ( job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE, filename TEXT NOT NULL, data BLOB NOT NULL, PRIMARY KEY (job_id, filename) );
+CREATE TABLE IF NOT EXISTS tasks ( task_id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE, task_index INTEGER NOT NULL, state INTEGER NOT NULL, error TEXT, exit_code INTEGER, submitted_at_ms INTEGER NOT NULL, started_at_ms INTEGER, finished_at_ms INTEGER, max_retries_failure INTEGER NOT NULL, max_retries_preemption INTEGER NOT NULL, failure_count INTEGER NOT NULL, preemption_count INTEGER NOT NULL, current_attempt_id INTEGER NOT NULL DEFAULT -1, priority_neg_depth INTEGER NOT NULL, priority_root_submitted_ms INTEGER NOT NULL, priority_insertion INTEGER NOT NULL, priority_band INTEGER NOT NULL DEFAULT 2, container_id TEXT, current_worker_id TEXT REFERENCES workers(worker_id) ON DELETE SET NULL, current_worker_address TEXT, UNIQUE(job_id, task_index) );
+CREATE INDEX IF NOT EXISTS idx_tasks_job_state ON tasks(job_id, state);
+CREATE INDEX IF NOT EXISTS idx_tasks_pending ON tasks(state, priority_band ASC, priority_neg_depth ASC, priority_root_submitted_ms ASC, submitted_at_ms ASC, priority_insertion ASC);
+CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state);
+CREATE INDEX IF NOT EXISTS idx_tasks_state_attempt ON tasks(state, task_id, current_attempt_id, job_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_job_failures ON tasks(job_id, failure_count, preemption_count);
+CREATE INDEX IF NOT EXISTS idx_tasks_current_worker ON tasks(current_worker_id) WHERE current_worker_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tasks_job_state_counts ON tasks(job_id, state, failure_count, preemption_count);
+CREATE TABLE IF NOT EXISTS task_attempts ( task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE, attempt_id INTEGER NOT NULL, worker_id TEXT REFERENCES workers(worker_id) ON DELETE SET NULL, state INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, started_at_ms INTEGER, finished_at_ms INTEGER, exit_code INTEGER, error TEXT, PRIMARY KEY (task_id, attempt_id) );
+CREATE INDEX IF NOT EXISTS idx_task_attempts_worker_task ON task_attempts(worker_id, task_id, attempt_id);
+CREATE TRIGGER IF NOT EXISTS trg_task_attempt_active_worker BEFORE INSERT ON task_attempts FOR EACH ROW WHEN NEW.worker_id IS NOT NULL BEGIN SELECT CASE WHEN NOT EXISTS( SELECT 1 FROM workers w WHERE w.worker_id = NEW.worker_id AND w.active = 1 AND w.healthy = 1 ) THEN RAISE(ABORT, 'task attempt worker must be active and healthy') END; END;
+CREATE TABLE IF NOT EXISTS workers ( worker_id TEXT PRIMARY KEY, address TEXT NOT NULL, md_hostname TEXT NOT NULL DEFAULT '', md_ip_address TEXT NOT NULL DEFAULT '', md_cpu_count INTEGER NOT NULL DEFAULT 0, md_memory_bytes INTEGER NOT NULL DEFAULT 0, md_disk_bytes INTEGER NOT NULL DEFAULT 0, md_tpu_name TEXT NOT NULL DEFAULT '', md_tpu_worker_hostnames TEXT NOT NULL DEFAULT '', md_tpu_worker_id TEXT NOT NULL DEFAULT '', md_tpu_chips_per_host_bounds TEXT NOT NULL DEFAULT '', md_gpu_count INTEGER NOT NULL DEFAULT 0, md_gpu_name TEXT NOT NULL DEFAULT '', md_gpu_memory_mb INTEGER NOT NULL DEFAULT 0, md_gce_instance_name TEXT NOT NULL DEFAULT '', md_gce_zone TEXT NOT NULL DEFAULT '', md_git_hash TEXT NOT NULL DEFAULT '', md_device_json TEXT NOT NULL DEFAULT '{}', healthy INTEGER NOT NULL CHECK (healthy IN (0, 1)), active INTEGER NOT NULL CHECK (active IN (0, 1)), consecutive_failures INTEGER NOT NULL, last_heartbeat_ms INTEGER NOT NULL, committed_cpu_millicores INTEGER NOT NULL, committed_mem_bytes INTEGER NOT NULL, committed_gpu INTEGER NOT NULL, committed_tpu INTEGER NOT NULL, snapshot_host_cpu_percent INTEGER, snapshot_memory_used_bytes INTEGER, snapshot_memory_total_bytes INTEGER, snapshot_disk_used_bytes INTEGER, snapshot_disk_total_bytes INTEGER, snapshot_running_task_count INTEGER, snapshot_total_process_count INTEGER, snapshot_net_recv_bps INTEGER, snapshot_net_sent_bps INTEGER, total_cpu_millicores INTEGER NOT NULL DEFAULT 0, total_memory_bytes INTEGER NOT NULL DEFAULT 0, total_gpu_count INTEGER NOT NULL DEFAULT 0, total_tpu_count INTEGER NOT NULL DEFAULT 0, device_type TEXT NOT NULL DEFAULT '', device_variant TEXT NOT NULL DEFAULT '', slice_id TEXT NOT NULL DEFAULT '', scale_group TEXT NOT NULL DEFAULT '' );
+CREATE INDEX IF NOT EXISTS idx_workers_healthy_active ON workers(healthy, active);
+CREATE TABLE IF NOT EXISTS worker_attributes ( worker_id TEXT NOT NULL REFERENCES workers(worker_id) ON DELETE CASCADE, key TEXT NOT NULL, value_type TEXT NOT NULL CHECK (value_type IN ('str', 'int', 'float')), str_value TEXT, int_value INTEGER, float_value REAL, PRIMARY KEY (worker_id, key) );
+CREATE TABLE IF NOT EXISTS worker_task_history ( id INTEGER PRIMARY KEY AUTOINCREMENT, worker_id TEXT NOT NULL REFERENCES workers(worker_id) ON DELETE CASCADE, task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE, assigned_at_ms INTEGER NOT NULL );
+CREATE INDEX IF NOT EXISTS idx_worker_task_history_worker ON worker_task_history(worker_id, assigned_at_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_worker_task_history_task ON worker_task_history(task_id);
+CREATE TABLE IF NOT EXISTS worker_resource_history ( id INTEGER PRIMARY KEY AUTOINCREMENT, worker_id TEXT NOT NULL REFERENCES workers(worker_id) ON DELETE CASCADE, snapshot_host_cpu_percent INTEGER, snapshot_memory_used_bytes INTEGER, snapshot_memory_total_bytes INTEGER, snapshot_disk_used_bytes INTEGER, snapshot_disk_total_bytes INTEGER, snapshot_running_task_count INTEGER, snapshot_total_process_count INTEGER, snapshot_net_recv_bps INTEGER, snapshot_net_sent_bps INTEGER, timestamp_ms INTEGER NOT NULL );
+CREATE INDEX IF NOT EXISTS idx_worker_resource_history_worker ON worker_resource_history(worker_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_worker_resource_history_ts ON worker_resource_history(worker_id, timestamp_ms DESC);
+CREATE TABLE IF NOT EXISTS task_resource_history ( id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE, attempt_id INTEGER NOT NULL, cpu_millicores INTEGER NOT NULL DEFAULT 0, memory_mb INTEGER NOT NULL DEFAULT 0, disk_mb INTEGER NOT NULL DEFAULT 0, memory_peak_mb INTEGER NOT NULL DEFAULT 0, timestamp_ms INTEGER NOT NULL );
+CREATE INDEX IF NOT EXISTS idx_task_resource_history_task_attempt ON task_resource_history(task_id, attempt_id, id DESC);
+CREATE TABLE IF NOT EXISTS endpoints ( endpoint_id TEXT PRIMARY KEY, name TEXT NOT NULL, address TEXT NOT NULL, job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE, task_id TEXT REFERENCES tasks(task_id) ON DELETE CASCADE, metadata_json TEXT NOT NULL, registered_at_ms INTEGER NOT NULL );
+CREATE INDEX IF NOT EXISTS idx_endpoints_name ON endpoints(name);
+CREATE INDEX IF NOT EXISTS idx_endpoints_task ON endpoints(task_id);
+CREATE INDEX IF NOT EXISTS idx_endpoints_job_id ON endpoints(job_id);
+CREATE TABLE IF NOT EXISTS dispatch_queue ( id INTEGER PRIMARY KEY AUTOINCREMENT, worker_id TEXT REFERENCES workers(worker_id) ON DELETE CASCADE, kind TEXT NOT NULL CHECK (kind IN ('run', 'kill')), payload_proto BLOB, task_id TEXT, created_at_ms INTEGER NOT NULL );
+CREATE INDEX IF NOT EXISTS idx_dispatch_worker ON dispatch_queue(worker_id, id);
+CREATE TABLE IF NOT EXISTS scaling_groups ( name TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0, backoff_until_ms INTEGER NOT NULL DEFAULT 0, last_scale_up_ms INTEGER NOT NULL DEFAULT 0, last_scale_down_ms INTEGER NOT NULL DEFAULT 0, quota_exceeded_until_ms INTEGER NOT NULL DEFAULT 0, quota_reason TEXT NOT NULL DEFAULT '', updated_at_ms INTEGER NOT NULL DEFAULT 0 );
+CREATE TABLE IF NOT EXISTS slices ( slice_id TEXT PRIMARY KEY, scale_group TEXT NOT NULL, lifecycle TEXT NOT NULL, worker_ids TEXT NOT NULL DEFAULT '[]', created_at_ms INTEGER NOT NULL DEFAULT 0, last_active_ms INTEGER NOT NULL DEFAULT 0, error_message TEXT NOT NULL DEFAULT '' );
+CREATE INDEX IF NOT EXISTS idx_slices_scale_group ON slices(scale_group);
+CREATE TABLE IF NOT EXISTS reservation_claims ( worker_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, entry_idx INTEGER NOT NULL );
+CREATE TABLE IF NOT EXISTS user_budgets ( user_id TEXT PRIMARY KEY REFERENCES users(user_id), budget_limit INTEGER NOT NULL DEFAULT 0, max_band INTEGER NOT NULL DEFAULT 2, updated_at_ms INTEGER NOT NULL );
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0001_init.py', <ms>)
+COMMIT
+CREATE INDEX IF NOT EXISTS idx_tasks_job_state ON tasks(job_id, state)
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0002_read_indexes.py', <ms>)
+COMMIT
+DROP TABLE IF EXISTS scaling_groups_new;
+CREATE TABLE scaling_groups_new ( name TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0, backoff_until_ms INTEGER NOT NULL DEFAULT 0, last_scale_up_ms INTEGER NOT NULL DEFAULT 0, last_scale_down_ms INTEGER NOT NULL DEFAULT 0, quota_exceeded_until_ms INTEGER NOT NULL DEFAULT 0, quota_reason TEXT NOT NULL DEFAULT '', updated_at_ms INTEGER NOT NULL DEFAULT 0 );
+INSERT INTO scaling_groups_new (name, updated_at_ms) SELECT name, updated_at_ms FROM scaling_groups;
+DROP TABLE scaling_groups;
+ALTER TABLE scaling_groups_new RENAME TO scaling_groups;
+CREATE TABLE IF NOT EXISTS slices ( slice_id TEXT PRIMARY KEY, scale_group TEXT NOT NULL, lifecycle TEXT NOT NULL, worker_ids TEXT NOT NULL DEFAULT '[]', created_at_ms INTEGER NOT NULL DEFAULT 0, last_active_ms INTEGER NOT NULL DEFAULT 0, error_message TEXT NOT NULL DEFAULT '' );
+CREATE INDEX IF NOT EXISTS idx_slices_scale_group ON slices(scale_group);
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0003_normalize_scaling_groups.py', <ms>)
+COMMIT
+CREATE TABLE IF NOT EXISTS api_keys ( key_id TEXT PRIMARY KEY, key_hash TEXT NOT NULL UNIQUE, key_prefix TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(user_id), name TEXT NOT NULL, created_at_ms INTEGER NOT NULL, last_used_at_ms INTEGER, expires_at_ms INTEGER, revoked_at_ms INTEGER );
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+PRAGMA table_info(users)
+PRAGMA table_info(users)
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0004_api_keys.py', <ms>)
+COMMIT
+CREATE INDEX IF NOT EXISTS idx_workers_healthy_active ON workers(healthy, active)
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0004_worker_indexes.py', <ms>)
+COMMIT
+CREATE TABLE IF NOT EXISTS task_profiles ( id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, profile_data BLOB NOT NULL, captured_at_ms INTEGER NOT NULL );
+CREATE INDEX IF NOT EXISTS idx_task_profiles_task ON task_profiles(task_id, id DESC);
+CREATE TRIGGER IF NOT EXISTS trg_task_profiles_cap AFTER INSERT ON task_profiles BEGIN DELETE FROM task_profiles WHERE task_id = NEW.task_id AND id NOT IN ( SELECT id FROM task_profiles WHERE task_id = NEW.task_id ORDER BY id DESC LIMIT 10 ); END;
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0005_task_profiles.py', <ms>)
+COMMIT
+CREATE TABLE IF NOT EXISTS controller_secrets ( key TEXT PRIMARY KEY, value TEXT NOT NULL, created_at_ms INTEGER NOT NULL );
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0006_jwt_signing_key.py', <ms>)
+COMMIT
+CREATE INDEX IF NOT EXISTS idx_task_attempts_worker_task ON task_attempts(worker_id, task_id, attempt_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state, submitted_at_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_depth_state ON jobs(depth, state, submitted_at_ms DESC);
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0007_perf_indexes.py', <ms>)
+COMMIT
+SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_config'
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0008_jobs_name.py', <ms>)
+COMMIT
+CREATE INDEX IF NOT EXISTS idx_jobs_user_state ON jobs(user_id, state)
+CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state)
+CREATE INDEX IF NOT EXISTS idx_endpoints_job_id ON endpoints(job_id)
+BEGIN
+DELETE FROM endpoints WHERE job_id IN ( SELECT job_id FROM jobs WHERE state IN (4, 5, 6, 7, 8))
+COMMIT
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0009_query_indexes.py', <ms>)
+COMMIT
+CREATE INDEX IF NOT EXISTS idx_jobs_root_depth ON jobs(root_job_id, depth)
+CREATE INDEX IF NOT EXISTS idx_tasks_state_attempt ON tasks(state, task_id, current_attempt_id, job_id)
+CREATE INDEX IF NOT EXISTS idx_jobs_depth_submitted ON jobs(depth, submitted_at_ms DESC)
+CREATE INDEX IF NOT EXISTS idx_tasks_job_failures ON tasks(job_id, failure_count, preemption_count)
+CREATE INDEX IF NOT EXISTS idx_worker_resource_history_ts ON worker_resource_history(worker_id, timestamp_ms DESC)
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0010_dashboard_indexes.py', <ms>)
+COMMIT
+BEGIN
+DELETE FROM endpoints WHERE task_id IN ( SELECT task_id FROM tasks WHERE state IN (4, 5, 6, 7, 8))
+COMMIT
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0010_purge_orphaned_endpoints.py', <ms>)
+COMMIT
+PRAGMA table_info(dispatch_queue)
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0011_direct_provider.py', <ms>)
+COMMIT
+PRAGMA table_info(tasks)
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0012_container_name.py', <ms>)
+COMMIT
+CREATE TABLE IF NOT EXISTS auth.api_keys ( key_id TEXT PRIMARY KEY, key_hash TEXT NOT NULL UNIQUE, key_prefix TEXT NOT NULL, user_id TEXT NOT NULL, name TEXT NOT NULL, created_at_ms INTEGER NOT NULL, last_used_at_ms INTEGER, expires_at_ms INTEGER, revoked_at_ms INTEGER );
+CREATE INDEX IF NOT EXISTS auth.idx_api_keys_hash ON api_keys(key_hash);
+CREATE INDEX IF NOT EXISTS auth.idx_api_keys_user ON api_keys(user_id);
+CREATE TABLE IF NOT EXISTS auth.controller_secrets ( key TEXT PRIMARY KEY, value TEXT NOT NULL, created_at_ms INTEGER NOT NULL );
+SELECT 1 FROM main.sqlite_master WHERE type='table' AND name='api_keys'
+BEGIN
+INSERT OR IGNORE INTO auth.api_keys SELECT * FROM main.api_keys
+DROP TABLE main.api_keys
+SELECT 1 FROM main.sqlite_master WHERE type='table' AND name='controller_secrets'
+INSERT OR IGNORE INTO auth.controller_secrets SELECT * FROM main.controller_secrets
+DROP TABLE main.controller_secrets
+COMMIT
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0012_separate_auth_db.py', <ms>)
+COMMIT
+SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_config'
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0013_has_reservation.py', <ms>)
+COMMIT
+PRAGMA table_info(task_profiles)
+ALTER TABLE task_profiles ADD COLUMN profile_kind TEXT NOT NULL DEFAULT 'cpu'
+-- Recreate the index to include profile_kind for efficient per-kind queries. DROP INDEX IF EXISTS idx_task_profiles_task;
+CREATE INDEX IF NOT EXISTS idx_task_profiles_task_kind ON task_profiles(task_id, profile_kind, id DESC);
+-- Replace the cap trigger: keep 10 per (task_id, profile_kind) instead of per task_id. DROP TRIGGER IF EXISTS trg_task_profiles_cap;
+CREATE TRIGGER IF NOT EXISTS trg_task_profiles_cap AFTER INSERT ON task_profiles BEGIN DELETE FROM task_profiles WHERE task_id = NEW.task_id AND profile_kind = NEW.profile_kind AND id NOT IN ( SELECT id FROM task_profiles WHERE task_id = NEW.task_id AND profile_kind = NEW.profile_kind ORDER BY id DESC LIMIT 10 ); END;
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0014_profile_kind.py', <ms>)
+COMMIT
+DROP INDEX IF EXISTS idx_task_attempts_worker
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0015_drop_redundant_index.py', <ms>)
+COMMIT
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0016_worker_scheduling_fields.py', <ms>)
+COMMIT
+SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_config'
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0017_job_scheduling_fields.py', <ms>)
+COMMIT
+PRAGMA table_info(tasks)
+PRAGMA table_info(tasks)
+BEGIN
+UPDATE tasks SET current_worker_id = ( SELECT a.worker_id FROM task_attempts a WHERE a.task_id = tasks.task_id AND a.attempt_id = tasks.current_attempt_id ) WHERE current_attempt_id >= 0 AND current_worker_id IS NULL
+COMMIT
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0018_task_assignment_fields.py', <ms>)
+COMMIT
+CREATE TABLE task_attempts_new ( task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE, attempt_id INTEGER NOT NULL, worker_id TEXT REFERENCES workers(worker_id) ON DELETE SET NULL, state INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, started_at_ms INTEGER, finished_at_ms INTEGER, exit_code INTEGER, error TEXT, PRIMARY KEY (task_id, attempt_id) )
+BEGIN
+INSERT INTO task_attempts_new SELECT task_id, attempt_id, worker_id, state, created_at_ms, started_at_ms, finished_at_ms, exit_code, error FROM task_attempts
+DROP TABLE task_attempts
+ALTER TABLE task_attempts_new RENAME TO task_attempts
+CREATE INDEX IF NOT EXISTS idx_task_attempts_worker_task ON task_attempts(worker_id, task_id, attempt_id)
+CREATE TRIGGER IF NOT EXISTS trg_task_attempt_active_worker BEFORE INSERT ON task_attempts FOR EACH ROW WHEN NEW.worker_id IS NOT NULL BEGIN SELECT CASE WHEN NOT EXISTS( SELECT 1 FROM workers w WHERE w.worker_id = NEW.worker_id AND w.active = 1 AND w.healthy = 1 ) THEN RAISE(ABORT, 'task attempt worker must be active and healthy') END; END;
+COMMIT
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0019_worker_fk_cascade.py', <ms>)
+COMMIT
+CREATE INDEX IF NOT EXISTS idx_tasks_current_worker ON tasks(current_worker_id) WHERE current_worker_id IS NOT NULL
+CREATE INDEX IF NOT EXISTS idx_task_profiles_task_kind ON task_profiles(task_id, profile_kind, id DESC)
+CREATE TRIGGER IF NOT EXISTS trg_task_profiles_cap AFTER INSERT ON task_profiles BEGIN DELETE FROM task_profiles WHERE task_id = NEW.task_id AND profile_kind = NEW.profile_kind AND id NOT IN ( SELECT id FROM task_profiles WHERE task_id = NEW.task_id AND profile_kind = NEW.profile_kind ORDER BY id DESC LIMIT 10 ); END
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0020_perf_indices_and_profiles_fk.py', <ms>)
+COMMIT
+PRAGMA table_info(tasks)
+-- User budgets table CREATE TABLE IF NOT EXISTS user_budgets ( user_id TEXT PRIMARY KEY REFERENCES users(user_id), budget_limit INTEGER NOT NULL DEFAULT 0, max_band INTEGER NOT NULL DEFAULT 2, updated_at_ms INTEGER NOT NULL );
+-- Seed budget rows for existing users INSERT OR IGNORE INTO user_budgets(user_id, budget_limit, max_band, updated_at_ms) SELECT user_id, 0, 2, created_at_ms FROM users;
+-- Rebuild pending-tasks index to include priority_band DROP INDEX IF EXISTS idx_tasks_pending;
+CREATE INDEX idx_tasks_pending ON tasks(state, priority_band ASC, priority_neg_depth ASC, priority_root_submitted_ms ASC, submitted_at_ms ASC, priority_insertion ASC );
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0021_budgets.py', <ms>)
+COMMIT
+PRAGMA table_info(workers)
+SELECT name FROM sqlite_master WHERE type='table'
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0022_workers_slice_and_group.py', <ms>)
+COMMIT
+CREATE TABLE IF NOT EXISTS profiles.task_profiles ( id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, profile_data BLOB NOT NULL, captured_at_ms INTEGER NOT NULL, profile_kind TEXT NOT NULL DEFAULT 'cpu' );
+CREATE INDEX IF NOT EXISTS profiles.idx_task_profiles_task_kind ON task_profiles(task_id, profile_kind, id DESC);
+CREATE TRIGGER IF NOT EXISTS profiles.trg_task_profiles_cap AFTER INSERT ON task_profiles BEGIN DELETE FROM task_profiles WHERE task_id = NEW.task_id AND profile_kind = NEW.profile_kind AND id NOT IN ( SELECT id FROM task_profiles WHERE task_id = NEW.task_id AND profile_kind = NEW.profile_kind ORDER BY id DESC LIMIT 10 ); END
+SELECT 1 FROM main.sqlite_master WHERE type='table' AND name='task_profiles'
+BEGIN
+INSERT OR IGNORE INTO profiles.task_profiles SELECT * FROM main.task_profiles
+DROP TRIGGER IF EXISTS trg_task_profiles_cap
+DROP INDEX IF EXISTS idx_task_profiles_task_kind
+DROP TABLE main.task_profiles
+COMMIT
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0023_separate_profiles_db.py', <ms>)
+COMMIT
+PRAGMA table_info(tasks)
+ALTER TABLE tasks ADD COLUMN resource_usage_memory_mb INTEGER
+PRAGMA table_info(tasks)
+ALTER TABLE tasks ADD COLUMN resource_usage_disk_mb INTEGER
+PRAGMA table_info(tasks)
+ALTER TABLE tasks ADD COLUMN resource_usage_cpu_millicores INTEGER
+PRAGMA table_info(tasks)
+ALTER TABLE tasks ADD COLUMN resource_usage_memory_peak_mb INTEGER
+PRAGMA table_info(tasks)
+ALTER TABLE tasks ADD COLUMN resource_usage_process_count INTEGER
+PRAGMA table_info(tasks)
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0024_normalize_resource_usage.py', <ms>)
+COMMIT
+CREATE TABLE IF NOT EXISTS task_resource_history ( id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE, attempt_id INTEGER NOT NULL, cpu_millicores INTEGER NOT NULL DEFAULT 0, memory_mb INTEGER NOT NULL DEFAULT 0, disk_mb INTEGER NOT NULL DEFAULT 0, memory_peak_mb INTEGER NOT NULL DEFAULT 0, timestamp_ms INTEGER NOT NULL )
+CREATE INDEX IF NOT EXISTS idx_task_resource_history_task_attempt ON task_resource_history(task_id, attempt_id, id DESC)
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0024_task_resource_history.py', <ms>)
+COMMIT
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(worker_resource_history)
+PRAGMA table_info(worker_resource_history)
+PRAGMA table_info(worker_resource_history)
+PRAGMA table_info(worker_resource_history)
+PRAGMA table_info(worker_resource_history)
+PRAGMA table_info(worker_resource_history)
+PRAGMA table_info(worker_resource_history)
+PRAGMA table_info(worker_resource_history)
+PRAGMA table_info(worker_resource_history)
+PRAGMA table_info(workers)
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0025_normalize_resource_snapshots.py', <ms>)
+COMMIT
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+PRAGMA table_info(workers)
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0026_normalize_worker_metadata.py', <ms>)
+COMMIT
+SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_config'
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0027_normalize_job_resources.py', <ms>)
+COMMIT
+SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_config'
+SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_workdir_files'
+PRAGMA table_info(jobs)
+PRAGMA table_info(jobs)
+PRAGMA table_info(jobs)
+BEGIN
+UPDATE jobs SET name = LOWER(name) WHERE name != LOWER(name)
+UPDATE job_config SET name = LOWER(name) WHERE name != LOWER(name)
+PRAGMA table_info(jobs)
+PRAGMA table_info(jobs)
+PRAGMA table_info(jobs)
+PRAGMA table_info(jobs)
+PRAGMA table_info(jobs)
+PRAGMA table_info(jobs)
+PRAGMA table_info(jobs)
+PRAGMA table_info(jobs)
+PRAGMA table_info(jobs)
+PRAGMA table_info(jobs)
+COMMIT
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0028_job_config_table.py', <ms>)
+COMMIT
+PRAGMA table_info(tasks)
+ALTER TABLE tasks DROP COLUMN resource_usage_memory_mb
+PRAGMA table_info(tasks)
+ALTER TABLE tasks DROP COLUMN resource_usage_disk_mb
+PRAGMA table_info(tasks)
+ALTER TABLE tasks DROP COLUMN resource_usage_cpu_millicores
+PRAGMA table_info(tasks)
+ALTER TABLE tasks DROP COLUMN resource_usage_memory_peak_mb
+PRAGMA table_info(tasks)
+ALTER TABLE tasks DROP COLUMN resource_usage_process_count
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0029_drop_task_resource_usage_columns.py', <ms>)
+COMMIT
+SELECT w.worker_id, w.scale_group FROM workers w WHERE w.active=1 AND w.scale_group != '' AND NOT EXISTS ( SELECT 1 FROM worker_attributes wa WHERE wa.worker_id = w.worker_id AND wa.key = 'region')
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0030_backfill_worker_region.py', <ms>)
+COMMIT
+PRAGMA table_info(job_config)
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0030_job_submit_argv.py', <ms>)
+COMMIT
+PRAGMA main.auto_vacuum
+PRAGMA main.auto_vacuum = INCREMENTAL
+VACUUM main
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0031_auto_vacuum_incremental.py', <ms>)
+COMMIT
+WITH next_attempt AS ( SELECT task_id, attempt_id, LEAD(created_at_ms) OVER ( PARTITION BY task_id ORDER BY attempt_id ) AS next_created_at_ms FROM task_attempts ) UPDATE task_attempts SET finished_at_ms = COALESCE( (SELECT n.next_created_at_ms FROM next_attempt n WHERE n.task_id = task_attempts.task_id AND n.attempt_id = task_attempts.attempt_id), task_attempts.started_at_ms, task_attempts.created_at_ms ) WHERE finished_at_ms IS NULL AND state IN (4,5,6,7,8,10)
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0032_backfill_attempt_finished_at.py', <ms>)
+COMMIT
+CREATE TABLE worker_task_history_new ( id INTEGER PRIMARY KEY AUTOINCREMENT, worker_id TEXT NOT NULL REFERENCES workers(worker_id) ON DELETE CASCADE, task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE, assigned_at_ms INTEGER NOT NULL )
+BEGIN
+INSERT INTO worker_task_history_new (id, worker_id, task_id, assigned_at_ms) SELECT id, worker_id, task_id, assigned_at_ms FROM worker_task_history WHERE task_id IN (SELECT task_id FROM tasks)
+DROP TABLE worker_task_history
+ALTER TABLE worker_task_history_new RENAME TO worker_task_history
+CREATE INDEX IF NOT EXISTS idx_worker_task_history_worker ON worker_task_history(worker_id, assigned_at_ms DESC)
+CREATE INDEX IF NOT EXISTS idx_worker_task_history_task ON worker_task_history(task_id)
+COMMIT
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0033_worker_task_history_fk_cascade.py', <ms>)
+COMMIT
+CREATE INDEX IF NOT EXISTS idx_tasks_job_state_counts ON tasks(job_id, state, failure_count, preemption_count)
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0034_task_summaries_covering_index.py', <ms>)
+COMMIT
+DROP INDEX IF EXISTS idx_logs_key
+DROP TABLE IF EXISTS logs
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0035_drop_dead_logs_table.py', <ms>)
+COMMIT
+BEGIN
+UPDATE tasks SET current_attempt_id = ( SELECT MAX(attempt_id) FROM task_attempts WHERE task_attempts.task_id = tasks.task_id ) WHERE EXISTS ( SELECT 1 FROM task_attempts WHERE task_attempts.task_id = tasks.task_id AND task_attempts.attempt_id > tasks.current_attempt_id )
+COMMIT
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0036_reconcile_reservation_holder_attempt_ids.py', <ms>)
+COMMIT
+DROP TRIGGER IF EXISTS trg_txn_log_retention
+DROP INDEX IF EXISTS idx_txn_actions_txn
+DROP TABLE IF EXISTS txn_actions
+DROP TABLE IF EXISTS txn_log
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0037_drop_txn_log_and_txn_actions.py', <ms>)
+COMMIT
+BEGIN
+DELETE FROM user_budgets
+COMMIT
+BEGIN IMMEDIATE
+INSERT INTO schema_migrations(name, applied_at_ms) VALUES ('0037_user_budget_default.py', <ms>)
+COMMIT
+PRAGMA synchronous=NORMAL
+PRAGMA journal_mode=WAL
+PRAGMA main.incremental_vacuum
+PRAGMA main.wal_checkpoint(TRUNCATE)
+ANALYZE
+-- SELECT tbl,idx,stat FROM 'main'.sqlite_stat1
+-- SELECT tbl,idx,stat FROM 'auth'.sqlite_stat1
+-- SELECT tbl,idx,stat FROM 'profiles'.sqlite_stat1
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+ATTACH DATABASE '<tmp>' AS profiles
+PRAGMA query_only = ON
+BEGIN
+SELECT e.endpoint_id, e.name, e.address, e.task_id, e.metadata_json, e.registered_at_ms FROM endpoints e
+ROLLBACK
+BEGIN IMMEDIATE
+INSERT INTO workers(worker_id, address, healthy, active, consecutive_failures, last_heartbeat_ms, committed_cpu_millicores, committed_mem_bytes, committed_gpu, committed_tpu, total_cpu_millicores, total_memory_bytes, total_gpu_count, total_tpu_count, device_type, device_variant, slice_id, scale_group, md_hostname, md_ip_address, md_cpu_count, md_memory_bytes, md_disk_bytes, md_tpu_name, md_tpu_worker_hostnames, md_tpu_worker_id, md_tpu_chips_per_host_bounds, md_gpu_count, md_gpu_name, md_gpu_memory_mb, md_gce_instance_name, md_gce_zone, md_git_hash, md_device_json) VALUES ('w-preempt', 'w-preempt:8080', 1, 1, 0, 1704067200000, 0, 0, 0, 0, 8000, 17179869184, 0, 0, '', '', '', '', 'replay-worker', '127.0.0.1', 8, 17179869184, 17179869184, '', '', '', '', 0, '', 0, '', '', '', '{"cpu": {"variant": "cpu"}}') ON CONFLICT(worker_id) DO UPDATE SET address=excluded.address, healthy=1, active=1, consecutive_failures=0, last_heartbeat_ms=excluded.last_heartbeat_ms, total_cpu_millicores=excluded.total_cpu_millicores, total_memory_bytes=excluded.total_memory_bytes, total_gpu_count=excluded.total_gpu_count, total_tpu_count=excluded.total_tpu_count, device_type=excluded.device_type, device_variant=excluded.device_variant, slice_id=excluded.slice_id, scale_group=excluded.scale_group, md_hostname=excluded.md_hostname, md_ip_address=excluded.md_ip_address, md_cpu_count=excluded.md_cpu_count, md_memory_bytes=excluded.md_memory_bytes, md_disk_bytes=excluded.md_disk_bytes, md_tpu_name=excluded.md_tpu_name, md_tpu_worker_hostnames=excluded.md_tpu_worker_hostnames, md_tpu_worker_id=excluded.md_tpu_worker_id, md_tpu_chips_per_host_bounds=excluded.md_tpu_chips_per_host_bounds, md_gpu_count=excluded.md_gpu_count, md_gpu_name=excluded.md_gpu_name, md_gpu_memory_mb=excluded.md_gpu_memory_mb, md_gce_instance_name=excluded.md_gce_instance_name, md_gce_zone=excluded.md_gce_zone, md_git_hash=excluded.md_git_hash, md_device_json=excluded.md_device_json
+DELETE FROM worker_attributes WHERE worker_id = 'w-preempt'
+INSERT INTO worker_attributes(worker_id, key, value_type, str_value, int_value, float_value) VALUES ('w-preempt', 'device-type', 'str', 'cpu', NULL, NULL)
+COMMIT
+BEGIN IMMEDIATE
+SELECT value FROM meta WHERE key = 'last_submission_ms'
+INSERT INTO meta(key, value) VALUES ('last_submission_ms', 1704067200000)
+INSERT OR IGNORE INTO users(user_id, created_at_ms) VALUES ('test-user', 1704067200000)
+INSERT INTO jobs(job_id, user_id, parent_job_id, root_job_id, depth, state, submitted_at_ms, root_submitted_at_ms, started_at_ms, finished_at_ms, scheduling_deadline_epoch_ms, error, exit_code, num_tasks, is_reservation_holder, name, has_reservation) VALUES ('/test-user/preempt-job', 'test-user', NULL, '/test-user/preempt-job', 1, 1, 1704067200000, 1704067200000, NULL, NULL, NULL, NULL, NULL, 1, 0, '/test-user/preempt-job', 0)
+INSERT INTO job_config(job_id, name, has_reservation, res_cpu_millicores, res_memory_bytes, res_disk_bytes, res_device_json, constraints_json, has_coscheduling, coscheduling_group_by, scheduling_timeout_ms, max_task_failures, entrypoint_json, environment_json, bundle_id, ports_json, max_retries_failure, max_retries_preemption, timeout_ms, preemption_policy, existing_job_policy, priority_band, task_image, submit_argv_json, reservation_json, fail_if_exists) VALUES ('/test-user/preempt-job', '/test-user/preempt-job', 0, 1000, 1073741824, 0, '{}', NULL, 0, '', NULL, 0, '{"run_command": {"argv": ["python", "-c", "pass"]}}', '{}', '', '[]', 0, 0, NULL, 0, 0, 0, '', '[]', NULL, 0)
+SELECT value FROM meta WHERE key = 'task_priority_insertion'
+INSERT INTO meta(key, value) VALUES ('task_priority_insertion', 1)
+INSERT INTO tasks(task_id, job_id, task_index, state, error, exit_code, submitted_at_ms, started_at_ms, finished_at_ms, max_retries_failure, max_retries_preemption, failure_count, preemption_count, current_attempt_id, priority_neg_depth, priority_root_submitted_ms, priority_insertion, priority_band) VALUES ('/test-user/preempt-job/0', '/test-user/preempt-job', 0, 1, NULL, NULL, 1704067200000, NULL, NULL, 0, 0, 0, 0, -1, -1, 1704067200000, 1, 2)
+COMMIT
+BEGIN
+SELECT task_id FROM tasks WHERE job_id = '/test-user/preempt-job' ORDER BY task_index ASC
+ROLLBACK
+BEGIN IMMEDIATE
+SELECT t.task_id, t.job_id, t.state, t.current_attempt_id, t.failure_count, t.preemption_count, t.max_retries_failure, t.max_retries_preemption, t.submitted_at_ms, t.priority_band, t.error, t.exit_code, t.started_at_ms, t.finished_at_ms, t.current_worker_id, t.current_worker_address, t.container_id FROM tasks t WHERE t.task_id = '/test-user/preempt-job/0'
+SELECT worker_id, address, active, healthy FROM workers WHERE worker_id = 'w-preempt' AND active = 1 AND healthy = 1
+SELECT j.job_id, j.state, j.submitted_at_ms, j.root_submitted_at_ms, j.started_at_ms, j.finished_at_ms, j.scheduling_deadline_epoch_ms, j.error, j.exit_code, j.num_tasks, j.is_reservation_holder, j.has_reservation, j.name, j.depth, jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, jc.constraints_json, jc.has_coscheduling, jc.coscheduling_group_by, jc.scheduling_timeout_ms, jc.max_task_failures, jc.entrypoint_json, jc.environment_json, jc.bundle_id, jc.ports_json, jc.max_retries_failure, jc.max_retries_preemption, jc.timeout_ms, jc.preemption_policy, jc.existing_job_policy, jc.priority_band, jc.task_image, jc.submit_argv_json, jc.reservation_json, jc.fail_if_exists FROM jobs j JOIN job_config jc ON jc.job_id = j.job_id WHERE j.job_id = '/test-user/preempt-job'
+INSERT INTO task_attempts(task_id, attempt_id, worker_id, state, created_at_ms) VALUES ('/test-user/preempt-job/0', 0, 'w-preempt', 9, 1704067200000)
+INSERT INTO task_attempts(task_id, attempt_id, worker_id, state, created_at_ms) VALUES ('/test-user/preempt-job/0', 0, 'w-preempt', 9, 1704067200000)
+INSERT INTO task_attempts(task_id, attempt_id, worker_id, state, created_at_ms) VALUES ('/test-user/preempt-job/0', 0, 'w-preempt', 9, 1704067200000)
+UPDATE tasks SET state = 9, current_attempt_id = 0, current_worker_id = 'w-preempt', current_worker_address = 'w-preempt:8080', started_at_ms = COALESCE(started_at_ms, 1704067200000) WHERE task_id = '/test-user/preempt-job/0'
+UPDATE workers SET committed_cpu_millicores = committed_cpu_millicores + 1000, committed_mem_bytes = committed_mem_bytes + 1073741824, committed_gpu = committed_gpu + 0, committed_tpu = committed_tpu + 0 WHERE worker_id = 'w-preempt'
+SELECT filename, data FROM job_workdir_files WHERE job_id = '/test-user/preempt-job'
+INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) VALUES ('w-preempt', 'run', x'0a182f746573742d757365722f707265656d70742d6a6f622f3010011a1412120a06707974686f6e0a022d630a047061737322002a00320d08e8072080808080042a00480048005a00', NULL, 1704067200000)
+INSERT INTO worker_task_history(worker_id, task_id, assigned_at_ms) VALUES ('w-preempt', '/test-user/preempt-job/0', 1704067200000)
+UPDATE jobs SET state = CASE WHEN state = 1 THEN 3 ELSE state END, started_at_ms = COALESCE(started_at_ms, 1704067200000) WHERE job_id = '/test-user/preempt-job'
+COMMIT
+BEGIN IMMEDIATE
+SELECT t.task_id, t.job_id, t.state, t.current_attempt_id, t.preemption_count, t.max_retries_preemption, jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json FROM tasks t JOIN jobs j ON j.job_id = t.job_id JOIN job_config jc ON jc.job_id = j.job_id WHERE t.task_id = '/test-user/preempt-job/0'
+SELECT worker_id FROM task_attempts WHERE task_id = '/test-user/preempt-job/0' AND attempt_id = 0
+UPDATE task_attempts SET state = 10, finished_at_ms = COALESCE(finished_at_ms, 1704067200001), error = 'reclaim' WHERE task_id = '/test-user/preempt-job/0' AND attempt_id = 0
+UPDATE tasks SET state = 1, error = 'reclaim', finished_at_ms = NULL, preemption_count = 0, current_worker_id = NULL, current_worker_address = NULL WHERE task_id = '/test-user/preempt-job/0'
+DELETE FROM endpoints WHERE task_id = '/test-user/preempt-job/0'
+UPDATE workers SET committed_cpu_millicores = MAX(0, committed_cpu_millicores - 1000), committed_mem_bytes = MAX(0, committed_mem_bytes - 1073741824), committed_gpu = MAX(0, committed_gpu - 0), committed_tpu = MAX(0, committed_tpu - 0) WHERE worker_id = 'w-preempt'
+SELECT j.state, j.started_at_ms, jc.max_task_failures FROM jobs j JOIN job_config jc ON jc.job_id = j.job_id WHERE j.job_id = '/test-user/preempt-job'
+SELECT state, COUNT(*) AS c FROM tasks WHERE job_id = '/test-user/preempt-job' GROUP BY state
+SELECT jc.preemption_policy, j.num_tasks FROM jobs j JOIN job_config jc ON jc.job_id = j.job_id WHERE j.job_id = '/test-user/preempt-job'
+WITH RECURSIVE subtree(job_id) AS ( SELECT job_id FROM jobs WHERE parent_job_id = '/test-user/preempt-job' AND is_reservation_holder = 0 UNION ALL SELECT j.job_id FROM jobs j JOIN subtree s ON j.parent_job_id = s.job_id WHERE j.is_reservation_holder = 0) SELECT job_id FROM subtree
+COMMIT
+BEGIN
+SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name
+ROLLBACK
+BEGIN
+PRAGMA table_info(dispatch_queue)
+ROLLBACK
+BEGIN
+SELECT * FROM dispatch_queue ORDER BY id
+ROLLBACK
+BEGIN
+PRAGMA table_info(endpoints)
+ROLLBACK
+BEGIN
+SELECT * FROM endpoints ORDER BY endpoint_id
+ROLLBACK
+BEGIN
+PRAGMA table_info(job_config)
+ROLLBACK
+BEGIN
+SELECT * FROM job_config ORDER BY job_id
+ROLLBACK
+BEGIN
+PRAGMA table_info(job_workdir_files)
+ROLLBACK
+BEGIN
+SELECT * FROM job_workdir_files ORDER BY job_id, filename
+ROLLBACK
+BEGIN
+PRAGMA table_info(jobs)
+ROLLBACK
+BEGIN
+SELECT * FROM jobs ORDER BY job_id
+ROLLBACK
+BEGIN
+PRAGMA table_info(meta)
+ROLLBACK
+BEGIN
+SELECT * FROM meta ORDER BY key
+ROLLBACK
+BEGIN
+PRAGMA table_info(reservation_claims)
+ROLLBACK
+BEGIN
+SELECT * FROM reservation_claims ORDER BY worker_id
+ROLLBACK
+BEGIN
+PRAGMA table_info(scaling_groups)
+ROLLBACK
+BEGIN
+SELECT * FROM scaling_groups ORDER BY name
+ROLLBACK
+BEGIN
+PRAGMA table_info(slices)
+ROLLBACK
+BEGIN
+SELECT * FROM slices ORDER BY slice_id
+ROLLBACK
+BEGIN
+PRAGMA table_info(task_attempts)
+ROLLBACK
+BEGIN
+SELECT * FROM task_attempts ORDER BY task_id, attempt_id
+ROLLBACK
+BEGIN
+PRAGMA table_info(task_resource_history)
+ROLLBACK
+BEGIN
+SELECT * FROM task_resource_history ORDER BY id
+ROLLBACK
+BEGIN
+PRAGMA table_info(tasks)
+ROLLBACK
+BEGIN
+SELECT * FROM tasks ORDER BY task_id
+ROLLBACK
+BEGIN
+PRAGMA table_info(user_budgets)
+ROLLBACK
+BEGIN
+SELECT * FROM user_budgets ORDER BY user_id
+ROLLBACK
+BEGIN
+PRAGMA table_info(users)
+ROLLBACK
+BEGIN
+SELECT * FROM users ORDER BY user_id
+ROLLBACK
+BEGIN
+PRAGMA table_info(worker_attributes)
+ROLLBACK
+BEGIN
+SELECT * FROM worker_attributes ORDER BY worker_id, key
+ROLLBACK
+BEGIN
+PRAGMA table_info(worker_resource_history)
+ROLLBACK
+BEGIN
+SELECT * FROM worker_resource_history ORDER BY id
+ROLLBACK
+BEGIN
+PRAGMA table_info(worker_task_history)
+ROLLBACK
+BEGIN
+SELECT * FROM worker_task_history ORDER BY id
+ROLLBACK
+BEGIN
+PRAGMA table_info(workers)
+ROLLBACK
+BEGIN
+SELECT * FROM workers ORDER BY worker_id
+ROLLBACK
