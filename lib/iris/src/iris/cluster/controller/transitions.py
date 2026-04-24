@@ -53,7 +53,6 @@ from iris.cluster.controller.stores import (
     WorkerUpsertParams,
 )
 from iris.cluster.controller.schema import (
-    JOB_CONFIG_JOIN,
     EndpointRow,
     JobDetailRow,
     WorkerDetailRow,
@@ -2322,64 +2321,43 @@ class ControllerTransitions:
             newly_promoted: set[str] = set()
             tasks_to_run: list[job_pb2.RunTaskRequest] = []
 
-            if max_promotions <= 0:
-                pending_rows = []
-            else:
-                pending_rows = cur.execute(
-                    "SELECT t.task_id, t.job_id, t.current_attempt_id, j.num_tasks, j.is_reservation_holder, "
-                    "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, "
-                    "jc.entrypoint_json, jc.environment_json, jc.bundle_id, jc.ports_json, "
-                    "jc.constraints_json, jc.task_image, jc.timeout_ms "
-                    f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id {JOB_CONFIG_JOIN} "
-                    "WHERE t.state = ? AND j.is_reservation_holder = 0 "
-                    "LIMIT ?",
-                    (job_pb2.TASK_STATE_PENDING, max_promotions),
-                ).fetchall()
+            pending_rows = self._store.tasks.list_pending_for_direct_provider(cur, max_promotions)
 
             for row in pending_rows:
-                task_id = str(row["task_id"])
-                attempt_id = int(row["current_attempt_id"]) + 1
-                resources = resource_spec_from_scalars(
-                    int(row["res_cpu_millicores"]),
-                    int(row["res_memory_bytes"]),
-                    int(row["res_disk_bytes"]),
-                    row["res_device_json"],
-                )
+                attempt_id = row.current_attempt_id + 1
 
                 self._store.tasks.assign(
                     cur,
                     self._store.attempts,
-                    JobName.from_wire(task_id),
+                    row.task_id,
                     None,
                     None,
                     attempt_id,
                     now_ms,
                 )
 
-                entrypoint = proto_from_json(str(row["entrypoint_json"]), job_pb2.RuntimeEntrypoint)
+                entrypoint = proto_from_json(row.entrypoint_json, job_pb2.RuntimeEntrypoint)
                 # Load inline workdir files from the job_workdir_files table.
-                job_id = JobName.from_wire(str(row["job_id"]))
-                for filename, data in self._store.jobs.get_workdir_files(cur, job_id).items():
+                for filename, data in self._store.jobs.get_workdir_files(cur, row.job_id).items():
                     entrypoint.workdir_files[filename] = data
 
                 run_req = job_pb2.RunTaskRequest(
-                    task_id=task_id,
-                    num_tasks=int(row["num_tasks"]),
+                    task_id=row.task_id.to_wire(),
+                    num_tasks=row.num_tasks,
                     entrypoint=entrypoint,
-                    environment=proto_from_json(str(row["environment_json"]), job_pb2.EnvironmentConfig),
-                    bundle_id=str(row["bundle_id"]),
-                    resources=resources,
-                    ports=json.loads(str(row["ports_json"])),
+                    environment=proto_from_json(row.environment_json, job_pb2.EnvironmentConfig),
+                    bundle_id=row.bundle_id,
+                    resources=row.resources,
+                    ports=json.loads(row.ports_json),
                     attempt_id=attempt_id,
-                    constraints=[c.to_proto() for c in constraints_from_json(row["constraints_json"])],
-                    task_image=str(row["task_image"]),
+                    constraints=[c.to_proto() for c in constraints_from_json(row.constraints_json)],
+                    task_image=row.task_image,
                 )
                 # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
-                timeout_ms = row["timeout_ms"]
-                if timeout_ms is not None and int(timeout_ms) > 0:
-                    run_req.timeout.milliseconds = int(timeout_ms)
+                if row.timeout_ms is not None and row.timeout_ms > 0:
+                    run_req.timeout.milliseconds = row.timeout_ms
                 tasks_to_run.append(run_req)
-                newly_promoted.add(task_id)
+                newly_promoted.add(row.task_id.to_wire())
 
             # Snapshot already-running tasks with NULL worker_id (excluding newly promoted).
             running_rows = self._store.tasks.list_active(

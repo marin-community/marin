@@ -592,6 +592,31 @@ def _decode_active_task_row(row) -> ActiveTaskRow:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class PendingDispatchRow:
+    """Scheduling payload for a pending task awaiting direct-provider promotion.
+
+    Unlike :class:`ActiveTaskRow`, this row carries the full serialized
+    runtime configuration (entrypoint / environment / ports / constraints
+    / task_image / timeout) so the caller can assemble a
+    ``RunTaskRequest``. Kept separate so other active-task queries don't
+    pay for loading these JSON blobs.
+    """
+
+    task_id: JobName
+    job_id: JobName
+    current_attempt_id: int
+    num_tasks: int
+    resources: job_pb2.ResourceSpecProto
+    entrypoint_json: str
+    environment_json: str
+    bundle_id: str
+    ports_json: str
+    constraints_json: str | None
+    task_image: str
+    timeout_ms: int | None
+
+
 class JobStore:
     """Jobs, job_config, users, user_budgets.
 
@@ -1086,6 +1111,55 @@ class TaskStore:
             (task_id.to_wire(),),
         )
         return _decode_active_task_row(row) if row is not None else None
+
+    def list_pending_for_direct_provider(
+        self,
+        tx: Tx,
+        limit: int,
+    ) -> list[PendingDispatchRow]:
+        """Return pending non-holder tasks eligible for direct-provider dispatch.
+
+        Joins ``job_config`` to return the full runtime payload (entrypoint,
+        environment, ports, constraints, task_image, timeout) that the caller
+        needs to assemble a ``RunTaskRequest``. Returns at most ``limit`` rows.
+        """
+        if limit <= 0:
+            return []
+        rows = tx.fetchall(
+            "SELECT t.task_id, t.job_id, t.current_attempt_id, j.num_tasks, "
+            "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, "
+            "jc.entrypoint_json, jc.environment_json, jc.bundle_id, jc.ports_json, "
+            "jc.constraints_json, jc.task_image, jc.timeout_ms "
+            f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id {JOB_CONFIG_JOIN} "
+            "WHERE t.state = ? AND j.is_reservation_holder = 0 "
+            "LIMIT ?",
+            (job_pb2.TASK_STATE_PENDING, limit),
+        )
+        result: list[PendingDispatchRow] = []
+        for row in rows:
+            timeout_ms = row["timeout_ms"]
+            result.append(
+                PendingDispatchRow(
+                    task_id=JobName.from_wire(str(row["task_id"])),
+                    job_id=JobName.from_wire(str(row["job_id"])),
+                    current_attempt_id=int(row["current_attempt_id"]),
+                    num_tasks=int(row["num_tasks"]),
+                    resources=resource_spec_from_scalars(
+                        int(row["res_cpu_millicores"]),
+                        int(row["res_memory_bytes"]),
+                        int(row["res_disk_bytes"]),
+                        row["res_device_json"],
+                    ),
+                    entrypoint_json=str(row["entrypoint_json"]),
+                    environment_json=str(row["environment_json"]),
+                    bundle_id=str(row["bundle_id"]),
+                    ports_json=str(row["ports_json"]),
+                    constraints_json=row["constraints_json"],
+                    task_image=str(row["task_image"]),
+                    timeout_ms=int(timeout_ms) if timeout_ms is not None else None,
+                )
+            )
+        return result
 
     # -- Writes --------------------------------------------------------------
 
