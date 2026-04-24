@@ -1248,3 +1248,145 @@ CSVs for downstream plotting in `scripts/analysis/`:
 Given phase 1 results, **launching the 1e21 sweep now is justified**. The cross-LR LOO on train/loss at ≥ 50% prefix is within reach of noise floor (0.028 → 0.002), which is exactly the regime the cross-base test needs. Don't over-interpret phase-1 results for Paloma — that needs more data, which 1e21 will provide.
 
 If cross-base train/loss MAE < 0.05 at prefix 50% when 1e21 lands, project goal #1 has a validated baseline. Everything beyond that (cross-scale to 1e22/1e23, uncertainty bounds, better Paloma models) is iteration.
+
+---
+
+## 2026-04-23 session summary — end-to-end record
+
+This section captures everything done in the 2026-04-23 session so far, in one place, so a future agent or the same user tomorrow can pick up cold.
+
+### Commit chain on `origin/midtrain_data` this session
+
+(newest first; `b860d5b60 wip` is the first pre-session commit, for reference)
+
+| Commit | What |
+|---|---|
+| `64c030b70` | `[analysis] Plots for 1e20 midtrain runs (matplotlib)` — `scripts/analysis/plot_midtrain_curves.py` generates four PNGs and `open`s them on macOS. |
+| `8aefa1689` | `[analysis] Phase-1 midtrain loss predictor: script + results` — `scripts/analysis/midtrain_loss_predictor.py` with 5 baselines and self-prefix + cross-LR LOO tests against the 3 canonical 1e20 runs. |
+| `f8a85aef0` | `[logbook] Delphi midtrain: detailed phase-1 plan for loss predictor` — fully-specified plan before implementation. |
+| `d04dea5d6` | `[logbook] Delphi midtrain: clarify project goal hierarchy` — two tracks (predict trajectory, pick dataset); this sweep is a subgoal of track 1. |
+| `6deb3dc8c` | `[logbook] Delphi midtrain: add analysis-utils reference section` — pointers to Will Held's `scaling_laws/` module and related files. |
+| `5fed3965d` | `[logbook] Delphi 1e20 lr=0.67/0.83 v2 reruns done — clean W&B curves` — both `-v2` reruns succeeded with losses matching originals; noise floor ≈ 0.01 confirmed. |
+| `0a5b1fde3` | `[delphi-midtrain] Append -v2 to step names so hash changes` — workaround for the Marin executor's cache-hash behaviour (only versioned values + step name + upstream deps contribute to the hash). |
+| `fc14f21ba` | `[logbook] Delphi 1e20 sweep complete — all 3 succeeded, fix fully confirmed` — final losses 0.840 / 0.781 / 0.772 for LR factors 0.5 / 0.67 / 0.83, all well below v10's broken 0.962. |
+| `cbdd748b0` | `[logbook] Delphi midtrain: LR fix confirmed by final-loss at step 4768` — incremental. |
+| `e77ea7e47` | `[logbook] Delphi midtrain: relaunch at -v2 + hash-collision + W&B step-monotonic notes` — diagnosed the hash-stays-same + wandb-step-monotonic-refusal bugs during relaunch. |
+| `37fba5983` | `[levanter] Add CheckpointInitMode for initialize_from_checkpoint_path` — the core Levanter fix: `MODEL_ONLY` mode loads only the model subtree (using `subpath="model"`), keeping the freshly-initialized opt_state so the schedule starts from count=0. Default is `FULL_STATE` (legacy behaviour preserved). |
+
+Between `97ed6c6f2` and `37fba5983` the user walked up to the flat-LR bug in the 1e20 sweep, caught it visually on W&B (`optim/learning_rate` flat for 3/3 broken v10-series runs), and worked through the `train_lm.py:176-180` root cause with a plan doc and back-and-forth review with Codex.
+
+### What the completed 1e20 sweep produced
+
+Three GCS output paths that are now **canonical for phase-2 analysis** (clean W&B runs):
+
+| LR factor | GCS output | W&B run | Final single-step loss | Target-window mean |
+|---:|---|---|---:|---:|
+| 0.50 | `gs://marin-us-east5/checkpoints/delphi-1e20-iso-d2048-L21-math-10b-lr0.5-4d19a2/` | `delphi-1e20-iso-d2048-L21-math-10b-lr0.5-4d19a2` | 0.840 | ~0.813 |
+| 0.67 | `gs://marin-us-central1/checkpoints/delphi-1e20-iso-d2048-L21-math-10b-lr0.67-v2-a176ff/` | `delphi-1e20-iso-d2048-L21-math-10b-lr0.67-v2-a176ff` | 0.781 | ~0.798 |
+| 0.83 | `gs://marin-us-central1/checkpoints/delphi-1e20-iso-d2048-L21-math-10b-lr0.83-v2-4487d2/` | `delphi-1e20-iso-d2048-L21-math-10b-lr0.83-v2-4487d2` | 0.782 | ~0.797 |
+
+Plus the original (non-v2) `-e3be0c` / `-db9de7` outputs — GCS is healthy training (the MODEL_ONLY fix did its job), but the W&B panels for those IDs show OLD flat-min-lr curves from the broken training because W&B's step-monotonic guard rejected the fresh step-0..4767 logs. They're kept as noise-floor evidence (final losses match the `-v2` reruns within 0.01).
+
+### Phase-1 loss-predictor infrastructure (landed this session)
+
+**Script 1: `scripts/analysis/midtrain_loss_predictor.py`** (~370 lines).
+
+- Pulls per-step data from `wandb.Api().run().scan_history()` (the GCS `tracker_metrics.jsonl` file only carries final summary, not a time series).
+- **Bugfix that mattered:** initial version fetched `train_keys + eval_keys` in a single `scan_history` call, which returns only rows where *every* key is set — intersecting train (every step) with eval (every 200) collapsed the result to ~27 rows and broke every short-prefix fit. Two-phase fetch fixes it.
+- Five baselines: **B0 last-value**, **B1 `a + b/√t`** (raw step), **B2 `L_∞ + A(U-u)^c`** with `c` bounded to `[0.2, 3.0]`, **B3 `L_∞ + A(U-u)^c`** with `c` fixed at `0.5` or `1.0`.
+- Self-prefix + cross-LR LOO tests at prefixes `{30%, 50%, 80%}`.
+- Target quantity: EMA-mean over steps `[4600, 4767]` (above the ~0.01 noise floor of single-step finals).
+- CSVs: `midtrain_loss_predictor_{self_prefix,cross_lr,c_stability}.csv` (gitignored; rerun to regenerate).
+
+**Script 2: `scripts/analysis/plot_midtrain_curves.py`** (~230 lines).
+
+Four matplotlib PNGs, auto-opened via `open` on macOS.
+
+### Phase-1 results (numbers)
+
+**Self-prefix MAE on train/loss_smooth** (noise floor ≈ 0.01):
+
+| method | 30% | 50% | 80% |
+|---|---:|---:|---:|
+| B0 last-value | 0.146 | 0.084 | 0.021 |
+| **B1 a+b/√t** | **0.024** | 0.020 | **0.003** |
+| B2 free c (bounded) | 0.085 | 0.056 | 0.007 |
+| B3 c=0.5 | 0.428 | 0.124 | 0.041 |
+| **B3 c=1** | 0.120 | **0.004** | 0.007 |
+
+**Cross-LR LOO MAE on train/loss_smooth**:
+
+| prefix | MAE |
+|---:|---:|
+| 30% | 0.182 (18× noise floor — not yet usable) |
+| 50% | 0.028 (~3× noise floor — borderline) |
+| 80% | 0.002 (at noise floor — clean) |
+
+**Paloma c4_en** — at most 12-24 eval points per prefix; power-law fits are noisy. Best self-prefix MAE (B2 at 50%) is 0.037, roughly 10% of the metric's midtrain-induced change (0.29 to 0.43 depending on LR). Not yet a usable forecast; will improve with more runs (1e21 adds 3 more eval trajectories).
+
+**c stability (B2 free-c)**: `c_std` is 0.8-0.9 for train/loss across prefixes and worse for Paloma. `c` hits the upper bound (3.0) at short prefixes. Parameter is under-identified on this data — don't report free-c B2 as the primary method.
+
+### Visual findings (from `scripts/analysis/*.png`)
+
+1. **`train_loss_vs_step.png`** — Three LR-factor curves have near-identical shape. Warmup-to-peak visible around step 500; decay tail smooth; the three curves fan out by only ~0.02 loss at the endpoint.
+
+2. **`train_loss_vs_cumlr.png`** — The headline plot. Left panel (raw cumulative LR `u(t)`) shows the expected horizontal fan-out; `U` at endpoint is proportional to LR factor (~6.0, ~7.8, ~9.7 for 0.5 / 0.67 / 0.83). **Right panel (`u/U` normalized) shows the three curves nearly overlaying** with residual spread comparable to noise floor. This is the strongest single piece of evidence that cumulative-LR is the right time axis for cross-LR prediction — the "schedule-shape dominates" hypothesis is empirically supported on this data. With three runs this is modest evidence, but it's exactly the direction we want.
+
+3. **`paloma_c4_en_vs_step.png`** — Retention tradeoff in full view. Pretrain c4_en = 2.8586 (dotted). All three runs rise during warmup + early decay:
+   - lr=0.5 peaks at ~3.15 (Δ +0.29) around step 3000 and plateaus there.
+   - lr=0.67 peaks at ~3.30 (Δ +0.44) around step 2500 and plateaus.
+   - lr=0.83 peaks at ~3.40 (Δ +0.54) around step 3200, then **drops sharply in the last ~500 steps** to ~3.29 at endpoint.
+   Higher LR factor → faster rise + higher peak damage. The lr=0.83 late-decay recovery is novel: the low-LR cooldown tail appears to partially undo retention damage. Worth re-testing as 1e21 data lands — if it reproduces, it's a hint that the end-of-cooldown behaviour is important for trade-off management.
+
+4. **`predictor_fit_overlay.png`** — Side-by-side view of why B3 `c=1` wins at prefix 50%:
+   - Left (raw step, B1): `a + b/√t` fit (orange dashed) traces the `lr=0.67` curve beautifully, extrapolates to 0.819 at step 4768; actual target 0.798 → error 0.021.
+   - Right (cumulative LR, B2 + B3): B2's free-`c` fit lands `c = 2.34` (green dashed) and over-predicts at 0.865 — visibly too convex. B3 with fixed `c=1` (purple dash-dot) is nearly a straight line through the decay data and lands at 0.795, within 0.003 of the actual 0.798. This is the visual reason B3 `c=1` beats B2 in the MAE table at prefix 50%.
+
+### Revised success criteria (update to the pre-committed ones)
+
+Pre-committed:
+- B2 MAE < 2× noise floor at prefix=30% for train/loss — **FAIL** (0.085, 8.5× floor). Swap: use B1 or B3 c=1 as primary predictor.
+- B2 beats B1 by >20% on train/loss — **FAIL** (B2 is WORSE); but B3 c=1 beats B1 at 50% (0.004 vs 0.020). Schedule-awareness helps iff `c` is pinned.
+- c_std < 0.1 per run/metric — **FAIL** (0.8-0.9). c is under-identified; don't free-float it.
+- Cross-LR LOO MAE < 3× noise floor on train/loss at prefix=30% — **FAIL** at 30%, **PASS** at 50% (0.028 ≈ 3×), **PASS** at 80% (0.002).
+
+Operational takeaway:
+- **Default predictor for train/loss:** B3 with c=1 OR B1 raw sqrt-t. They're within 2× of each other at any prefix ≥ 50% and both at noise floor at 80%.
+- **Default predictor for rising/sparse evals (Paloma):** B0 last-value. Power fits are noisier than the signal at this point-count.
+- **Prefix horizon for cross-base test (phase 2):** 50%+. 30% was aspirational and is empirically too short for this functional family.
+
+### What's NOT done (phase 2 blockers)
+
+- **1e21 sweep NOT launched.** Three runs (`lr=0.5 / 0.67 / 0.83` on the 3.4B base) are the test set for the cross-base extrapolation. Each is ~10h on v5p-64. Launch recipe is the same as the 1e20 `-v2` recipe (including explicit `checkpoint_init_mode=CheckpointInitMode.MODEL_ONLY` and the `-v2` name suffix since the experiment file carries that now).
+- **Math-domain evals NOT computed** on the 1e20 checkpoints. Needed to measure the "math target" side of the trade-off (currently only train/loss on math-data + Paloma c4_en retention). Would go through `experiments/evals/`.
+- **Noise floor calibration is coarse.** Two pairs (0.67 orig vs v2: 0.000 gap, 0.83 orig vs v2: 0.010 gap) → "~0.005-0.010." A handful more seed replicates per LR factor would tighten this, but it's not blocking.
+- **Phase 2 cross-base fit** needs the 1e21 trajectories. Blocked on point 1.
+- **Phase 3 cross-scale** needs actual 1e22 runs. Out of scope until cross-base validates.
+
+### Known non-blocking bugs filed in this logbook but not addressed
+
+1. **Marin executor cache hash ignores plain `SimpleTrainConfig` fields.** Only `versioned(...)` values, `step.name`, and upstream `ExecutorStep` deps feed the hash. Changing `checkpoint_init_mode`, `learning_rate`, `beta2`, etc. without wrapping them in `versioned()` silently reuses cached outputs. Workaround: bump step.name (e.g., `-v2`). Proper fix: either wrap fields in `versioned()` at use sites or make `SimpleTrainConfig` auto-version critical fields. Not filed as a GH issue yet.
+2. **W&B step-monotonic rejection on same-hash relaunch.** Levanter's `wandb.py:69` refuses `step < run.step` logs; a relaunch that inherits the same W&B run ID (because the executor hash didn't change) gets its fresh metrics silently dropped. Workaround: bump the hash. Proper fix: include a unique component (timestamp, attempt counter) in the W&B run config so relaunches always get fresh run_ids. Not filed as GH issue yet.
+3. **`tracker_metrics.jsonl` name is misleading.** It contains only `{config, summary}` — one line per run. The per-step time series lives only in W&B. The file could reasonably be renamed (e.g., `run_summary.jsonl`) or the `tracker_metrics` name made accurate by also writing per-step JSONL alongside it. Not filed.
+
+### How to resume from a cold start tomorrow morning
+
+1. Open `.agents/logbooks/midtraining_delphi.md` and read this session-summary section + the phase-1 plan + phase-1 results.
+2. If phase-1 numbers need to be regenerated: `uv run python scripts/analysis/midtrain_loss_predictor.py` (reads W&B, writes CSVs). `uv run python scripts/analysis/plot_midtrain_curves.py` (makes PNGs and opens them).
+3. To launch the 1e21 sweep (the natural next step):
+   ```bash
+   for lr in 0.5 0.67 0.83; do
+     uv run iris --cluster=marin job run \
+       --cpu 1 --memory 3GB --disk 9GB \
+       --region us-central1 --region us-east5 \
+       --job-name "delphi-math-10b-1e21-lr${lr}-$(date -u +%Y%m%d-%H%M)" \
+       --no-wait \
+       -e MARIN_I_WILL_PAY_FOR_ALL_FEES 1 \
+       -e WANDB_API_KEY "${WANDB_API_KEY}" \
+       -e MIDTRAIN_SELECT_BASE 1e21-v5 \
+       -e MIDTRAIN_SELECT_LR "$lr" \
+       -- python experiments/exp_delphi_math_10b_midtrain.py
+     sleep 5  # stagger to avoid any residual auto-naming collisions
+   done
+   ```
+4. When the 3 × 1e21 runs land: add them to `RUNS_1E21` in the predictor module and rerun the script with a cross-base LOO test added (fit on 1e20 → predict 1e21 finals from features alone, or from first 50% of 1e21). If cross-base MAE on train/loss ≤ 0.05 at prefix 50%, project goal #1 has a validated baseline.
