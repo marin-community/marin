@@ -471,6 +471,7 @@ def default_train(
         initialize_from_checkpoint_path=(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
         ),
+        checkpoint_init_mode=train_config.checkpoint_init_mode,
         initialize_from_hf=hf_checkpoint_path_to_load_from or False,
         pad_tokenizer_to_match_model=train_config.pad_tokenizer_to_match_model,
         z_loss_weight=train_config.z_loss_weight,
