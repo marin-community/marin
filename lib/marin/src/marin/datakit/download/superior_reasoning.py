@@ -88,5 +88,5 @@ def superior_reasoning_normalize_steps() -> tuple[StepSpec, ...]:
     processed = download_superior_reasoning_step()
     return (
         processed,
-        normalize_step(name="normalized/superior-reasoning", download=processed),
+        normalize_step(name="data/normalized/superior-reasoning", download=processed),
     )

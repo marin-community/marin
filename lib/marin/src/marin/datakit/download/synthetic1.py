@@ -99,5 +99,5 @@ def synthetic1_normalize_steps() -> tuple[StepSpec, ...]:
     processed = download_synthetic1_step()
     return (
         processed,
-        normalize_step(name="normalized/synthetic-1", download=processed),
+        normalize_step(name="data/normalized/synthetic-1", download=processed),
     )

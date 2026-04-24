@@ -3,10 +3,10 @@
 
 """Tests for the Datakit Testbed Grug-MoE training harness.
 
-Covers the pure arithmetic helpers and the consolidate-to-TokenizerStep
-bridge. ``run_testbed_config`` itself loads the Llama-3 tokenizer (gated
-repo) via ``default_validation_sets``, so its end-to-end integration is
-validated by a live smoke run, not unit tests.
+Covers the pure arithmetic helpers and the sample-to-TokenizerStep bridge.
+``run_testbed_config`` itself loads the Llama-3 tokenizer (gated repo) via
+``default_validation_sets``, so its end-to-end integration is validated by
+a live smoke run, not unit tests.
 """
 
 import pytest
@@ -47,7 +47,7 @@ def test_simulated_experiment_budget_returns_positive_int(batch: int, steps: int
 
 
 def test_tokenize_step_bridge_produces_training_ready_steps():
-    """consolidate StepSpec -> ExecutorStep[TokenizeConfig] via the bridge helper.
+    """sample StepSpec -> ExecutorStep[TokenizeConfig] via the bridge helper.
 
     This catches the StepSpec/ExecutorStep type gap that blocked training
     end-to-end before the dag.py refactor: the bridge must produce real
@@ -58,7 +58,7 @@ def test_tokenize_step_bridge_produces_training_ready_steps():
     from marin.processing.tokenize import TokenizeConfig
 
     dag = build_testbed_steps("run0", sources=[_SMOKE_SOURCE])
-    tokenize_steps = build_testbed_tokenize_steps(dag.consolidated_by_source)
+    tokenize_steps = build_testbed_tokenize_steps(dag.sampled_by_source)
 
     assert set(tokenize_steps) == {_SMOKE_SOURCE.name}
     step = tokenize_steps[_SMOKE_SOURCE.name]
@@ -75,7 +75,7 @@ def test_bridge_steps_compose_into_lm_mixture():
     from experiments.datakit_testbed.mixture import build_testbed_mixture
 
     dag = build_testbed_steps("run0", sources=[_SMOKE_SOURCE])
-    tokenize_steps = build_testbed_tokenize_steps(dag.consolidated_by_source)
+    tokenize_steps = build_testbed_tokenize_steps(dag.sampled_by_source)
 
     mixture = build_testbed_mixture(tokenize_steps, weights={_SMOKE_SOURCE.name: 1.0})
     assert _SMOKE_SOURCE.name in mixture.train_weights

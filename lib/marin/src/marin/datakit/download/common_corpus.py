@@ -80,7 +80,7 @@ def filter_common_corpus_step(raw_step: StepSpec) -> StepSpec:
 def normalize_common_corpus_step(filtered_step: StepSpec) -> StepSpec:
     """Normalize filtered common_corpus: generate content-hash IDs, dedup, sort."""
     return normalize_step(
-        name="normalized/common_corpus_english_filtered",
+        name="data/normalized/common_corpus_english_filtered",
         download=filtered_step,
         id_field="identifier",
     )

@@ -91,5 +91,5 @@ def swe_rebench_openhands_normalize_steps() -> tuple[StepSpec, ...]:
     processed = download_swe_rebench_openhands_step()
     return (
         processed,
-        normalize_step(name="normalized/swe-rebench-openhands", download=processed),
+        normalize_step(name="data/normalized/swe-rebench-openhands", download=processed),
     )

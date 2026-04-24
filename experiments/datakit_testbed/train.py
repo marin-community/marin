@@ -63,21 +63,21 @@ def simulated_experiment_budget(*, train_batch_size: int, num_train_steps: int, 
 
 def _tokenize_step_for_source(
     source_name: str,
-    consolidated: StepSpec,
+    sampled: StepSpec,
     tokenizer: str,
 ) -> TokenizerStep:
-    """Convert a consolidate ``StepSpec`` into a training-ready ``TokenizerStep``.
+    """Convert a sample ``StepSpec`` into a training-ready ``TokenizerStep``.
 
     Mirrors ``experiments/pretraining_datasets/nemotron_v2.py:65-76``: build a
-    real ``ExecutorStep[TokenizeConfig]`` that references the consolidate
-    output via ``InputName`` so the executor preserves dep tracking.
+    real ``ExecutorStep[TokenizeConfig]`` that references the sample output
+    via ``InputName`` so the executor preserves dep tracking.
     """
-    consolidated_exec = consolidated.as_executor_step()
+    sampled_exec = sampled.as_executor_step()
     return ExecutorStep(
         name=os.path.join("tokenized", "datakit-testbed", source_name),
         fn=tokenize,
         config=TokenizeConfig(
-            train_paths=[consolidated_exec / "**/*.parquet"],
+            train_paths=[sampled_exec / "outputs/main/**/*.parquet"],
             validation_paths=versioned([]),
             cache_path=this_output_path(),
             tokenizer=versioned(tokenizer),
@@ -86,20 +86,17 @@ def _tokenize_step_for_source(
 
 
 def build_testbed_tokenize_steps(
-    consolidated_by_source: dict[str, StepSpec],
+    sampled_by_source: dict[str, StepSpec],
     tokenizer: str = TESTBED_TOKENIZER,
 ) -> dict[str, TokenizerStep]:
-    """Build one training-ready ``TokenizerStep`` per consolidate output."""
-    return {
-        name: _tokenize_step_for_source(name, consolidated, tokenizer)
-        for name, consolidated in consolidated_by_source.items()
-    }
+    """Build one training-ready ``TokenizerStep`` per sampled source."""
+    return {name: _tokenize_step_for_source(name, sampled, tokenizer) for name, sampled in sampled_by_source.items()}
 
 
 def run_testbed_config(
     *,
     name: str,
-    consolidated_by_source: dict[str, StepSpec],
+    sampled_by_source: dict[str, StepSpec],
     compute_budget_flops: float = DEFAULT_COMPUTE_BUDGET_FLOPS,
     hidden_dim: int = DEFAULT_HIDDEN_DIM,
     target_steps: int = DEFAULT_TARGET_STEPS,
@@ -116,8 +113,8 @@ def run_testbed_config(
     Args:
         name: Config name — forms the executor step name and wandb run id.
             Use e.g. ``"baseline"`` for the trivial no-dedup run.
-        consolidated_by_source: Per-source consolidate steps, typically
-            ``TestbedDAG.consolidated_by_source``. Tokenize ExecutorSteps are
+        sampled_by_source: Per-source sample steps, typically
+            ``TestbedDAG.sampled_by_source``. Tokenize ExecutorSteps are
             built internally on top of these (see
             :func:`build_testbed_tokenize_steps`).
         compute_budget_flops: FLOP budget fed to ``build_from_heuristic``.
@@ -138,8 +135,8 @@ def run_testbed_config(
         An ``ExecutorStep`` whose ``fn`` is ``run_grug_moe_trial``. Pass to
         ``executor_main`` to actually train.
     """
-    if not consolidated_by_source:
-        raise ValueError("consolidated_by_source must be non-empty")
+    if not sampled_by_source:
+        raise ValueError("sampled_by_source must be non-empty")
 
     model_cfg, opt_cfg, batch_size, steps = build_from_heuristic(
         budget=compute_budget_flops,
@@ -147,7 +144,7 @@ def run_testbed_config(
         target_steps=target_steps,
     )
 
-    tokenized_by_source = build_testbed_tokenize_steps(consolidated_by_source, tokenizer=tokenizer)
+    tokenized_by_source = build_testbed_tokenize_steps(sampled_by_source, tokenizer=tokenizer)
     data = build_testbed_mixture(tokenized_by_source, weights=weights)
     data = add_validation_sets_to_mixture(
         data,

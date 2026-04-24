@@ -27,12 +27,10 @@ def test_dag_single_source_shape():
     names = [s.name for s in dag.all_steps]
     assert names == [
         "raw/nemotron_cc_code_v1",
-        "normalized/nemotron_cc_code_v1/all",
+        "data/normalized/nemotron_cc_code_v1/all",
         "datakit-testbed/sample/nemotron_cc_code_v1/all",
-        "datakit-testbed/noop_dedup",
-        "datakit-testbed/consolidate/nemotron_cc_code_v1/all",
     ]
-    assert set(dag.consolidated_by_source.keys()) == {"nemotron_cc_code_v1/all"}
+    assert set(dag.sampled_by_source.keys()) == {"nemotron_cc_code_v1/all"}
 
 
 def test_dag_has_one_sample_step_per_source():
@@ -58,33 +56,24 @@ def test_dag_nemotron_family_subsets_share_one_download_stepspec():
         assert src.normalize_steps[0] is first_download, "v2.1 subsets must share one download StepSpec"
 
     dag = build_testbed_steps("run0", sources=v21_sources)
-    normalize_steps = [s for s in dag.all_steps if s.name.startswith("normalized/")]
+    normalize_steps = [s for s in dag.all_steps if s.name.startswith("data/normalized/")]
     assert len(normalize_steps) == len(v21_sources)
 
 
-def test_dag_single_shared_dedup_step():
+def test_dag_stops_at_sample():
     dag = build_testbed_steps("run0")
-    dedup_steps = [s for s in dag.all_steps if s.name == "datakit-testbed/noop_dedup"]
-    assert len(dedup_steps) == 1
-
-
-def test_dag_per_source_consolidate():
-    dag = build_testbed_steps("run0")
-    consolidate_names = {s.name for s in dag.all_steps if "/consolidate/" in s.name}
-    expected_names = {f"datakit-testbed/consolidate/{s.name}" for s in _ALL.values()}
-    assert consolidate_names == expected_names
-    # The ferry stops at consolidate; tokenize lives in the training harness.
-    tokenize_names = {s.name for s in dag.all_steps if "/tokenize/" in s.name}
-    assert tokenize_names == set()
+    # The ferry stops at sample; tokenize lives in the training harness.
+    non_source_stages = {s.name.split("/", 2)[1] for s in dag.all_steps if s.name.startswith("datakit-testbed/")}
+    assert non_source_stages == {"sample"}
 
 
 def test_dag_output_paths_namespaced_by_run_id():
     dag = build_testbed_steps("abc123")
     # Canonical source-pipeline artifacts (download, any transform/preprocess,
-    # normalize) are run-independent. Only the testbed-specific stages (sample,
-    # dedup, consolidate) must land under datakit-testbed/abc123/...
+    # normalize) are run-independent. Only the testbed-specific sample stage
+    # must land under datakit-testbed/abc123/...
     for step in dag.all_steps:
-        if step.name.startswith(("raw/", "processed/", "normalized/")):
+        if step.name.startswith(("raw/", "processed/", "data/normalized/")):
             continue
         assert "/abc123/" in step.output_path, f"{step.name} not namespaced: {step.output_path}"
 
@@ -102,4 +91,4 @@ def test_dag_starcoder2_subsets_get_distinct_download_names():
 def test_dag_full_testbed_builds():
     """Smoke test: building the default (pinned) testbed does not raise."""
     dag = build_testbed_steps("run0")
-    assert len(dag.consolidated_by_source) == len(_ALL)
+    assert len(dag.sampled_by_source) == len(_ALL)

@@ -96,5 +96,5 @@ def gpt_oss_rollouts_normalize_steps() -> tuple[StepSpec, ...]:
     processed = download_gpt_oss_rollouts_step()
     return (
         processed,
-        normalize_step(name="normalized/gpt-oss-rollouts", download=processed),
+        normalize_step(name="data/normalized/gpt-oss-rollouts", download=processed),
     )
