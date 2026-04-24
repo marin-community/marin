@@ -165,7 +165,7 @@ def normalize_nemotron_v2_step(download: StepSpec, *, family: str, subset: str) 
     # Extract the directory prefix from the glob (e.g. "Diverse-QA/**/*.parquet" → "Diverse-QA")
     subset_dir = glob_pattern.split("/**")[0]
     return normalize_step(
-        name=f"data/normalized/{family}/{subset}",
+        name=f"normalized/{family}/{subset}",
         download=download,
         text_field="text",
         id_field="id",

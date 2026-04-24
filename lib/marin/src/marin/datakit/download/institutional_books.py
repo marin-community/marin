@@ -85,5 +85,5 @@ def institutional_books_normalize_steps() -> tuple[StepSpec, ...]:
     processed = download_institutional_books_step()
     return (
         processed,
-        normalize_step(name="data/normalized/institutional_books", download=processed),
+        normalize_step(name="normalized/institutional_books", download=processed),
     )

@@ -153,7 +153,7 @@ def normalize_nemotron_v1_step(download: StepSpec, *, split: str) -> StepSpec:
         raise ValueError(f"Unknown split {split!r}. Choose from: {sorted(NEMOTRON_V1_SPLITS)}")
     rel_path = NEMOTRON_V1_SPLITS[split]
     return normalize_step(
-        name=f"data/normalized/nemotron_v1/{split}",
+        name=f"normalized/nemotron_v1/{split}",
         download=download,
         text_field="text",
         id_field="id",

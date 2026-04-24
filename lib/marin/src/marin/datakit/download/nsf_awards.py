@@ -157,7 +157,7 @@ def download_nsf_awards_step(
 def normalize_nsf_awards_step(download: StepSpec) -> StepSpec:
     """Normalize NSF awards: generate content-hash IDs, preserve awd_id as source_id."""
     return normalize_step(
-        name="data/normalized/nsf-awards",
+        name="normalized/nsf-awards",
         download=download,
         text_field="text",
         id_field="awd_id",

@@ -82,5 +82,5 @@ def nemotron_terminal_normalize_steps() -> tuple[StepSpec, ...]:
     processed = download_nemotron_terminal_step()
     return (
         processed,
-        normalize_step(name="data/normalized/nemotron-terminal", download=processed),
+        normalize_step(name="normalized/nemotron-terminal", download=processed),
     )

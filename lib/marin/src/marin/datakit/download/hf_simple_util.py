@@ -78,7 +78,7 @@ def hf_normalize_steps(
 
     input_path = f"{download.output_path}/{data_subdir}" if data_subdir else download.output_path
     normalize = _normalize_step(
-        name=f"data/normalized/{marin_name}",
+        name=f"normalized/{marin_name}",
         download=download,
         text_field=text_field,
         id_field=id_field,

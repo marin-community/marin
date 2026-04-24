@@ -49,7 +49,7 @@ def starcoder2_extras_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
         marin_name = f"starcoder2/{subset}"
         download = download_starcoder2_extras_step(subset)
         normalize = normalize_step(
-            name=f"data/normalized/{marin_name}",
+            name=f"normalized/{marin_name}",
             download=download,
             text_field="content",
             id_field="id",

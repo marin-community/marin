@@ -27,7 +27,7 @@ def test_dag_single_source_shape():
     names = [s.name for s in dag.all_steps]
     assert names == [
         "raw/nemotron_cc_code_v1",
-        "data/normalized/nemotron_cc_code_v1/all",
+        "normalized/nemotron_cc_code_v1/all",
         "datakit-testbed/sample/nemotron_cc_code_v1/all",
     ]
     assert set(dag.sampled_by_source.keys()) == {"nemotron_cc_code_v1/all"}
@@ -56,7 +56,7 @@ def test_dag_nemotron_family_subsets_share_one_download_stepspec():
         assert src.normalize_steps[0] is first_download, "v2.1 subsets must share one download StepSpec"
 
     dag = build_testbed_steps("run0", sources=v21_sources)
-    normalize_steps = [s for s in dag.all_steps if s.name.startswith("data/normalized/")]
+    normalize_steps = [s for s in dag.all_steps if s.name.startswith("normalized/")]
     assert len(normalize_steps) == len(v21_sources)
 
 
@@ -73,7 +73,7 @@ def test_dag_output_paths_namespaced_by_run_id():
     # normalize) are run-independent. Only the testbed-specific sample stage
     # must land under datakit-testbed/abc123/...
     for step in dag.all_steps:
-        if step.name.startswith(("raw/", "processed/", "data/normalized/")):
+        if step.name.startswith(("raw/", "processed/", "normalized/")):
             continue
         assert "/abc123/" in step.output_path, f"{step.name} not namespaced: {step.output_path}"
 

@@ -123,5 +123,5 @@ def coderforge_normalize_steps() -> tuple[StepSpec, ...]:
     processed = download_coderforge_step()
     return (
         processed,
-        normalize_step(name="data/normalized/coderforge", download=processed),
+        normalize_step(name="normalized/coderforge", download=processed),
     )
