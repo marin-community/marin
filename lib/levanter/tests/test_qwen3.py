@@ -46,7 +46,7 @@ def test_qwen3_roundtrip():
     # Levanter config from HF
     config = Qwen3Config.from_hf_config(hf_config)  # type: ignore
 
-    converter = Qwen3Config().hf_checkpoint_converter()  # type: ignore
+    converter = config.hf_checkpoint_converter()  # type: ignore
 
     # Inputs
     input_ids = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
