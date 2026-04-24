@@ -240,7 +240,7 @@ class Transformer(eqx.Module):
         num_blocks = len(self.blocks)
         for i, block in enumerate(self.blocks):
             is_last = i == num_blocks - 1
-            is_long = i % 4 == 3 or (cfg.last_layer_pko and is_last)
+            is_long = i % 4 == 3 or is_last
             layer_mask = long_mask if is_long else short_mask
             use_pko = pko_mode == "every_4th" and is_long
             hidden = eqx.filter_checkpoint(block)(hidden, layer_mask, use_pko)
