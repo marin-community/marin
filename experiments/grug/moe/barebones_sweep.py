@@ -17,7 +17,7 @@ from levanter.optim.grugmuon import GrugMuonConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 
-from experiments.grug.moe.heuristic import MoeAdamHHeuristic, compute_flops_per_token, compute_tokens_and_batch
+from experiments.grug.moe.heuristic import MoeAdamHHeuristic, build_from_heuristic, compute_flops_per_token, compute_tokens_and_batch
 from experiments.grug.moe.launch import (
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
     GrugMoeLaunchConfig,
