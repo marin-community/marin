@@ -35,11 +35,14 @@ from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.step_runner import check_cache
 from marin.execution.step_spec import StepSpec
 
+from marin.processing.tokenize.data_configs import TokenizerStep
+
 from experiments.datakit_testbed.sampler import (
     proportional_sample_fractions,
     sample_normalized_shards_step,
 )
-from experiments.datakit_testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
+from experiments.datakit_testbed.settings import RAW_TARGET_TOTAL_TOKENS_B, TESTBED_TOKENIZER
+from experiments.datakit_testbed.train import build_testbed_tokenize_steps
 
 logger = logging.getLogger(__name__)
 
@@ -109,3 +112,39 @@ def build_testbed_steps(
     )
 
     return all_steps
+
+
+_SAMPLE_STEP_PREFIX = "datakit-testbed/sample/"
+
+
+def baseline(steps: list[StepSpec], tokenizer: str = TESTBED_TOKENIZER) -> dict[str, TokenizerStep]:
+    """Assemble the baseline (control-arm) tokenize components off *steps*.
+
+    The testbed's ranking protocol runs every experiment alongside a
+    baseline where the pipeline's middle stages are deliberate no-ops:
+
+    * **no-op dedup** — every sampled doc survives (no fuzzy/exact cut)
+    * **constant-quality filter** — all docs tagged equal quality
+    * **bucket by provenance** — the sample output IS already the bucket
+      (one shard set per source), so bucketing is an identity op
+
+    With all three as no-ops, the sampled parquet that ``build_testbed_steps``
+    produces is also the bucket, so this function just wires one tokenize
+    ``ExecutorStep`` per sample output — keyed by source name so the
+    mixture builder can weight them.
+
+    Args:
+        steps: Return value of :func:`build_testbed_steps`.
+        tokenizer: Tokenizer to use across every component; must match the
+            training model's tokenizer.
+
+    Returns:
+        ``{source_name: TokenizerStep}`` ready to hand to
+        :func:`experiments.datakit_testbed.mixture.build_testbed_mixture`.
+    """
+    sampled_by_source = {
+        s.name.removeprefix(_SAMPLE_STEP_PREFIX): s for s in steps if s.name.startswith(_SAMPLE_STEP_PREFIX)
+    }
+    if not sampled_by_source:
+        raise ValueError("no sample steps found in the DAG (expected names under 'datakit-testbed/sample/...')")
+    return build_testbed_tokenize_steps(sampled_by_source, tokenizer=tokenizer)
