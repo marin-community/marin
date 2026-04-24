@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Actor protocols for fray v2.
+"""Actor protocols for fray.
 
 Defines the calling convention for remote actors: handle.method.remote()
 returns an ActorFuture, handle.method() calls synchronously. ActorGroup

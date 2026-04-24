@@ -1,14 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for fray v2 Client protocol, LocalClient, and wait_all."""
+"""Tests for fray Client protocol, LocalClient, and wait_all."""
 
 import threading
 import time
 
 import pytest
 
-from fray.v2 import (
+from fray import (
     Entrypoint,
     JobFailed,
     JobRequest,
@@ -16,7 +16,7 @@ from fray.v2 import (
     LocalClient,
     wait_all,
 )
-from fray.v2.client import JobAlreadyExists
+from fray.client import JobAlreadyExists
 
 
 @pytest.fixture

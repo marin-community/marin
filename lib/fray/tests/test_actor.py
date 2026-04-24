@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for fray v2 actor support via LocalClient."""
+"""Tests for fray actor support via LocalClient."""
 
 import threading
 
 import pytest
 
-from fray.v2 import LocalClient
+from fray import LocalClient
 
 
 class Counter:

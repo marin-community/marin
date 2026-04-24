@@ -8,7 +8,7 @@ Usage:
       -- python -m experiments.rollout_data.swe_rebench_openhands
 """
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from marin.datakit.download.swe_rebench_openhands import download_swe_rebench_openhands_step
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec

@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Iris backend for fray v2.
+"""Iris backend for fray.
 
-Wraps iris.client.IrisClient to implement the fray v2 Client protocol.
-Handles type conversion between fray v2 types and Iris types, actor hosting
+Wraps iris.client.IrisClient to implement the fray Client protocol.
+Handles type conversion between fray types and Iris types, actor hosting
 via submitted jobs, and deferred actor handle resolution.
 """
 
@@ -38,7 +38,7 @@ from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import job_pb2
 from rigging.timing import ExponentialBackoff
 
-from fray.v2.actor import (
+from fray.actor import (
     ActorContext,
     ActorFuture,
     ActorHandle,
@@ -46,8 +46,8 @@ from fray.v2.actor import (
     _reset_current_actor,
     _set_current_actor,
 )
-from fray.v2.client import JobAlreadyExists as FrayJobAlreadyExists
-from fray.v2.types import (
+from fray.client import JobAlreadyExists as FrayJobAlreadyExists
+from fray.types import (
     ActorConfig,
     CpuConfig,
     DeviceConfig,
@@ -58,8 +58,8 @@ from fray.v2.types import (
     ResourceConfig,
     TpuConfig,
 )
-from fray.v2.types import (
-    Entrypoint as Entrypoint_v2,
+from fray.types import (
+    Entrypoint as FrayEntrypoint,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ def resolve_coscheduling(device: DeviceConfig, replicas: int) -> CoschedulingCon
 
 
 def _convert_device(device: DeviceConfig) -> job_pb2.DeviceConfig | None:
-    """Convert fray v2 DeviceConfig to Iris protobuf DeviceConfig."""
+    """Convert fray DeviceConfig to Iris protobuf DeviceConfig."""
     from iris.cluster.types import tpu_device
 
     if isinstance(device, CpuConfig):
@@ -96,9 +96,9 @@ def _convert_device(device: DeviceConfig) -> job_pb2.DeviceConfig | None:
 
 
 def convert_resources(resources: ResourceConfig) -> ResourceSpec:
-    """Convert fray v2 ResourceConfig to Iris ResourceSpec.
+    """Convert fray ResourceConfig to Iris ResourceSpec.
 
-    This is the primary type bridge between fray v2 and Iris. The mapping is:
+    This is the primary type bridge between fray and Iris. The mapping is:
       fray cpu       → Iris cpu
       fray ram       → Iris memory
       fray disk      → Iris disk
@@ -116,7 +116,7 @@ def convert_resources(resources: ResourceConfig) -> ResourceSpec:
 
 
 def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
-    """Build Iris scheduling constraints from fray v2 ResourceConfig."""
+    """Build Iris scheduling constraints from fray ResourceConfig."""
     constraints: list[Constraint] = []
     if not resources.preemptible:
         constraints.append(preemptible_constraint(False))
@@ -131,8 +131,8 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
     return constraints
 
 
-def convert_entrypoint(entrypoint: Entrypoint_v2) -> IrisEntrypoint:
-    """Convert fray v2 Entrypoint to Iris Entrypoint."""
+def convert_entrypoint(entrypoint: FrayEntrypoint) -> IrisEntrypoint:
+    """Convert fray Entrypoint to Iris Entrypoint."""
     from iris.cluster.types import Entrypoint as IrisEntrypoint
 
     if entrypoint.callable_entrypoint is not None:
@@ -145,7 +145,7 @@ def convert_entrypoint(entrypoint: Entrypoint_v2) -> IrisEntrypoint:
 
 
 def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | None = None) -> EnvironmentSpec | None:
-    """Convert fray v2 EnvironmentConfig to Iris EnvironmentSpec."""
+    """Convert fray EnvironmentConfig to Iris EnvironmentSpec."""
     env_vars = dict(env.env_vars) if env is not None else {}
     if device is not None:
         for key, value in device.default_env_vars().items():
@@ -162,7 +162,7 @@ def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | No
 
 
 def map_iris_job_state(iris_state: int) -> JobStatus:
-    """Map Iris protobuf JobState enum to fray v2 JobStatus."""
+    """Map Iris protobuf JobState enum to fray JobStatus."""
 
     _STATE_MAP = {
         job_pb2.JOB_STATE_PENDING: JobStatus.PENDING,
@@ -519,9 +519,9 @@ class IrisActorGroup:
 
 
 class FrayIrisClient:
-    """Iris cluster backend for fray v2.
+    """Iris cluster backend for fray.
 
-    Wraps iris.client.IrisClient to implement the fray v2 Client protocol.
+    Wraps iris.client.IrisClient to implement the fray Client protocol.
     Jobs are submitted via Iris, actors are hosted as Iris jobs with endpoint
     registration for discovery.
     """

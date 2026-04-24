@@ -10,7 +10,7 @@ CLI tasks, with thinking traces.
 
 import hashlib
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.download.huggingface import download_hf_step

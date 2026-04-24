@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""LocalClient: in-process fray v2 backend for development and testing."""
+"""LocalClient: in-process fray backend for development and testing."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, cast
 
-from fray.v2.actor import (
+from fray.actor import (
     ActorContext,
     ActorFuture,
     ActorGroup,
@@ -22,7 +22,7 @@ from fray.v2.actor import (
     _reset_current_actor,
     _set_current_actor,
 )
-from fray.v2.types import (
+from fray.types import (
     ActorConfig,
     BinaryEntrypoint,
     CallableEntrypoint,

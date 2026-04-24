@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fray.v2.client import current_client, set_current_client
-from fray.v2.local_backend import LocalClient
+from fray.client import current_client, set_current_client
+from fray.local_backend import LocalClient
 
 
 def test_default_returns_local_client():
@@ -44,7 +44,7 @@ def test_iris_auto_detection_with_context():
     mock_ctx.client = mock_iris_client_lib
 
     with patch("iris.client.client.get_iris_ctx", return_value=mock_ctx):
-        with patch("fray.v2.iris_backend.FrayIrisClient") as mock_client_cls:
+        with patch("fray.iris_backend.FrayIrisClient") as mock_client_cls:
             mock_fray_client = MagicMock()
             mock_client_cls.from_iris_client.return_value = mock_fray_client
 
@@ -60,7 +60,7 @@ def test_iris_auto_detection_reuses_client():
     mock_ctx.client = mock_iris_client_lib
 
     with patch("iris.client.client.get_iris_ctx", return_value=mock_ctx):
-        with patch("fray.v2.iris_backend.FrayIrisClient") as mock_client_cls:
+        with patch("fray.iris_backend.FrayIrisClient") as mock_client_cls:
             mock_fray_client = MagicMock()
             mock_client_cls.from_iris_client.return_value = mock_fray_client
 
