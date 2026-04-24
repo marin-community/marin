@@ -3442,7 +3442,7 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
             harness.state._store.tasks,
             harness.state._store.workers,
             harness.state._store.endpoints,
-            holder_job_id.to_wire(),
+            holder_job_id,
             "Job finalized",
             0,
         )

@@ -28,12 +28,14 @@ from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
     FAILURE_TASK_STATES,
+    NON_TERMINAL_TASK_STATES,
     ControllerDB,
     TransactionCursor,
     task_row_can_be_scheduled,
     task_row_is_finished,
 )
 from iris.cluster.controller.stores import (
+    ActiveTaskRow,
     ControllerStore,
     EndpointStore,
     JobConfigInsertParams,
@@ -42,6 +44,7 @@ from iris.cluster.controller.stores import (
     JobStore,
     TaskAttemptStore,
     TaskAttemptUpdateParams,
+    TaskScope,
     TaskStateUpdateParams,
     TaskInsertParams,
     TaskStore,
@@ -412,39 +415,32 @@ def _terminate_task(
 
 
 def _kill_non_terminal_tasks(
-    cur: Any,
+    cur: TransactionCursor,
     attempts: TaskAttemptStore,
     tasks: TaskStore,
     workers: WorkerStore,
     registry,
-    job_id_wire: str,
+    job_id: JobName,
     reason: str,
     now_ms: int,
 ) -> tuple[set[JobName], dict[JobName, WorkerId]]:
     """Kill all non-terminal tasks for a single job, decommit resources, and delete endpoints."""
-    terminal_states = tuple(sorted(TERMINAL_TASK_STATES))
-    placeholders = ",".join("?" * len(terminal_states))
-    rows = cur.execute(
-        "SELECT t.task_id, t.current_attempt_id, t.current_worker_id, "
-        "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, "
-        "j.is_reservation_holder "
-        "FROM tasks t "
-        "JOIN jobs j ON j.job_id = t.job_id "
-        f"{JOB_CONFIG_JOIN} "
-        f"WHERE t.job_id = ? AND t.state NOT IN ({placeholders})",
-        (job_id_wire, *terminal_states),
-    ).fetchall()
+    rows = tasks.list_active(
+        cur,
+        TaskScope(job_id=job_id),
+        states=NON_TERMINAL_TASK_STATES,
+    )
     tasks_to_kill: set[JobName] = set()
     task_kill_workers: dict[JobName, WorkerId] = {}
     for row in rows:
-        task_id = str(row["task_id"])
-        worker_id = row["current_worker_id"]
-        task_name = JobName.from_wire(task_id)
-        is_reservation_holder = bool(int(row["is_reservation_holder"]))
+        task_name = row.task_id
+        task_id = task_name.to_wire()
+        worker_id = row.current_worker_id
+        is_reservation_holder = row.is_reservation_holder
         decommit_worker: str | None = None
         decommit_resources = None
         if worker_id is not None:
-            task_kill_workers[task_name] = WorkerId(str(worker_id))
+            task_kill_workers[task_name] = worker_id
             # Reservation holders never commit resources on assignment,
             # so they must not decommit on termination —
             # otherwise we subtract chips that were never added, which floors
@@ -452,12 +448,7 @@ def _kill_non_terminal_tasks(
             # the scheduler double-book the worker.
             if not is_reservation_holder:
                 decommit_worker = str(worker_id)
-                decommit_resources = resource_spec_from_scalars(
-                    int(row["res_cpu_millicores"]),
-                    int(row["res_memory_bytes"]),
-                    int(row["res_disk_bytes"]),
-                    row["res_device_json"],
-                )
+                decommit_resources = row.resources
         _terminate_task(
             cur,
             attempts,
@@ -465,7 +456,7 @@ def _kill_non_terminal_tasks(
             workers,
             registry,
             task_id,
-            int(row["current_attempt_id"]),
+            row.current_attempt_id,
             job_pb2.TASK_STATE_KILLED,
             reason,
             now_ms,
@@ -506,7 +497,7 @@ def _cascade_children(
             store.tasks,
             store.workers,
             store.endpoints,
-            child_job_id.to_wire(),
+            child_job_id,
             reason,
             now_ms,
         )
@@ -530,7 +521,7 @@ def _cascade_terminal_job(
         store.tasks,
         store.workers,
         store.endpoints,
-        job_id.to_wire(),
+        job_id,
         reason,
         now_ms,
     )
@@ -540,54 +531,31 @@ def _cascade_terminal_job(
     return tasks_to_kill, task_kill_workers
 
 
-@dataclass(frozen=True, slots=True)
-class _CoscheduledSibling:
-    task_id: str  # wire format
-    attempt_id: int
-    max_retries_preemption: int
-    worker_id: str | None
-
-
 def _find_coscheduled_siblings(
-    cur: Any,
+    tx: "TransactionCursor",
+    tasks: TaskStore,
     job_id: JobName,
     exclude_task_id: JobName,
     has_coscheduling: bool,
-) -> list[_CoscheduledSibling]:
+) -> list[ActiveTaskRow]:
     """Find active siblings in a coscheduled job (read-only)."""
     if not has_coscheduling:
         return []
-    rows = cur.execute(
-        "SELECT t.task_id, t.current_attempt_id, t.max_retries_preemption, "
-        "t.current_worker_id AS worker_id "
-        "FROM tasks t "
-        "WHERE t.job_id = ? AND t.task_id != ? AND t.state IN (?, ?, ?)",
-        (
-            job_id.to_wire(),
-            exclude_task_id.to_wire(),
-            job_pb2.TASK_STATE_ASSIGNED,
-            job_pb2.TASK_STATE_BUILDING,
-            job_pb2.TASK_STATE_RUNNING,
-        ),
-    ).fetchall()
-    return [
-        _CoscheduledSibling(
-            task_id=str(r["task_id"]),
-            attempt_id=int(r["current_attempt_id"]),
-            max_retries_preemption=int(r["max_retries_preemption"]),
-            worker_id=str(r["worker_id"]) if r["worker_id"] is not None else None,
-        )
-        for r in rows
-    ]
+    return tasks.list_active(
+        tx,
+        TaskScope(job_id=job_id),
+        states=ACTIVE_TASK_STATES,
+        exclude_task_id=exclude_task_id,
+    )
 
 
 def _terminate_coscheduled_siblings(
-    cur: Any,
+    cur: TransactionCursor,
     attempts: TaskAttemptStore,
     tasks: TaskStore,
     workers: WorkerStore,
     registry,
-    siblings: Iterable[_CoscheduledSibling],
+    siblings: Iterable[ActiveTaskRow],
     failed_task_id: JobName,
     resources: "job_pb2.ResourceSpecProto",
     now_ms: int,
@@ -602,24 +570,25 @@ def _terminate_coscheduled_siblings(
     error = f"Coscheduled sibling {failed_task_id.to_wire()} failed"
 
     for sib in siblings:
+        worker_id_str = str(sib.current_worker_id) if sib.current_worker_id is not None else None
         _terminate_task(
             cur,
             attempts,
             tasks,
             workers,
             registry,
-            sib.task_id,
-            sib.attempt_id,
+            sib.task_id.to_wire(),
+            sib.current_attempt_id,
             job_pb2.TASK_STATE_WORKER_FAILED,
             error,
             now_ms,
-            worker_id=sib.worker_id,
-            resources=resources if sib.worker_id is not None else None,
+            worker_id=worker_id_str,
+            resources=resources if sib.current_worker_id is not None else None,
             preemption_count=sib.max_retries_preemption + 1,
         )
-        if sib.worker_id is not None:
-            task_kill_workers[JobName.from_wire(sib.task_id)] = WorkerId(sib.worker_id)
-        tasks_to_kill.add(JobName.from_wire(sib.task_id))
+        if sib.current_worker_id is not None:
+            task_kill_workers[sib.task_id] = sib.current_worker_id
+        tasks_to_kill.add(sib.task_id)
 
     return tasks_to_kill, task_kill_workers
 
@@ -671,7 +640,7 @@ def _finalize_terminal_job(
         store.tasks,
         store.workers,
         store.endpoints,
-        job_id.to_wire(),
+        job_id,
         reason,
         now_ms,
     )
@@ -1196,29 +1165,14 @@ class ControllerTransitions:
             subtree = self._store.jobs.list_subtree(cur, job_id)
             if not subtree:
                 return TxResult()
-            subtree_ids = [jid.to_wire() for jid in subtree]
-            placeholders = ",".join("?" for _ in subtree_ids)
-            running_rows = cur.execute(
-                f"SELECT t.task_id, t.current_worker_id AS worker_id, "
-                f"j.is_reservation_holder, "
-                f"jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json "
-                f"FROM tasks t "
-                f"JOIN jobs j ON j.job_id = t.job_id "
-                f"{JOB_CONFIG_JOIN} "
-                f"WHERE t.job_id IN ({placeholders}) "
-                "AND t.state IN (?, ?, ?)",
-                (
-                    *subtree_ids,
-                    job_pb2.TASK_STATE_ASSIGNED,
-                    job_pb2.TASK_STATE_BUILDING,
-                    job_pb2.TASK_STATE_RUNNING,
-                ),
-            ).fetchall()
-            tasks_to_kill = {JobName.from_wire(str(row["task_id"])) for row in running_rows}
+            running_rows = self._store.tasks.list_active(
+                cur,
+                TaskScope(job_subtree=subtree),
+                states=ACTIVE_TASK_STATES,
+            )
+            tasks_to_kill = {row.task_id for row in running_rows}
             task_kill_workers = {
-                JobName.from_wire(str(row["task_id"])): WorkerId(str(row["worker_id"]))
-                for row in running_rows
-                if row["worker_id"] is not None
+                row.task_id: row.current_worker_id for row in running_rows if row.current_worker_id is not None
             }
             # Decommit resources for each active task on its assigned worker.
             # cancel_job marks tasks as KILLED, but apply_heartbeat skips
@@ -1226,14 +1180,8 @@ class ControllerTransitions:
             # heartbeat decommit path never fires for cancelled tasks.
             # Direct-provider tasks have NULL worker_id — skip decommit for them.
             for row in running_rows:
-                if row["worker_id"] is not None and not int(row["is_reservation_holder"]):
-                    resources = resource_spec_from_scalars(
-                        int(row["res_cpu_millicores"]),
-                        int(row["res_memory_bytes"]),
-                        int(row["res_disk_bytes"]),
-                        row["res_device_json"],
-                    )
-                    self._store.workers.decommit_resources(cur, WorkerId(str(row["worker_id"])), resources)
+                if row.current_worker_id is not None and not row.is_reservation_holder:
+                    self._store.workers.decommit_resources(cur, row.current_worker_id, row.resources)
             now_ms = Timestamp.now().epoch_ms()
             self._store.tasks.bulk_kill_non_terminal(cur, subtree, reason, now_ms, TERMINAL_TASK_STATES)
             # Deliberately excludes JOB_STATE_WORKER_FAILED from the guard set:
@@ -1675,7 +1623,7 @@ class ControllerTransitions:
             # Coscheduled jobs: a terminal host failure should cascade to siblings.
             if jc is not None and task_state in FAILURE_TASK_STATES:
                 has_cosched = bool(int(jc["has_coscheduling"]))
-                siblings = _find_coscheduled_siblings(cur, task.job_id, update.task_id, has_cosched)
+                siblings = _find_coscheduled_siblings(cur, self._store.tasks, task.job_id, update.task_id, has_cosched)
                 resources = resource_spec_from_scalars(
                     int(jc["res_cpu_millicores"]),
                     int(jc["res_memory_bytes"]),
@@ -1844,46 +1792,42 @@ class ControllerTransitions:
         """Remove a definitively failed worker and cascade its task state."""
         tasks_to_kill: set[JobName] = set()
         task_kill_workers: dict[JobName, WorkerId] = {}
-        task_rows = cur.execute(
-            "SELECT t.task_id, t.current_attempt_id, t.state, t.preemption_count, t.max_retries_preemption, "
-            "j.is_reservation_holder "
-            "FROM tasks t "
-            "JOIN jobs j ON j.job_id = t.job_id "
-            "WHERE t.current_worker_id = ? AND t.state IN (?, ?, ?)",
-            (str(worker_id), *ACTIVE_TASK_STATES),
-        ).fetchall()
+        task_rows = self._store.tasks.list_active(
+            cur,
+            TaskScope(worker_id=worker_id),
+            states=ACTIVE_TASK_STATES,
+        )
         for task_row in task_rows:
-            tid = str(task_row["task_id"])
-            prior_state = int(task_row["state"])
-            is_reservation_holder = bool(int(task_row["is_reservation_holder"]))
+            prior_state = task_row.state
+            is_reservation_holder = task_row.is_reservation_holder
             if is_reservation_holder:
                 new_task_state = job_pb2.TASK_STATE_PENDING
-                preemption_count = int(task_row["preemption_count"])
+                preemption_count = task_row.preemption_count
             else:
                 new_task_state, preemption_count = _resolve_task_failure_state(
                     prior_state,
-                    int(task_row["preemption_count"]),
-                    int(task_row["max_retries_preemption"]),
+                    task_row.preemption_count,
+                    task_row.max_retries_preemption,
                     job_pb2.TASK_STATE_WORKER_FAILED,
                 )
             # Reservation holders retry to PENDING with preemption_count reset so the
             # reservation can re-acquire a worker without counting the failure as a preemption.
             holder_preemption_count = 0 if is_reservation_holder else preemption_count
+            task_id = task_row.task_id
             _terminate_task(
                 cur,
                 self._store.attempts,
                 self._store.tasks,
                 self._store.workers,
                 self._store.endpoints,
-                tid,
-                int(task_row["current_attempt_id"]),
+                task_id.to_wire(),
+                task_row.current_attempt_id,
                 new_task_state,
                 f"Worker {worker_id} failed: {error}",
                 now_ms,
                 attempt_state=job_pb2.TASK_STATE_WORKER_FAILED,
                 preemption_count=holder_preemption_count,
             )
-            task_id = JobName.from_wire(tid)
             parent_job_id, _ = task_id.require_task()
             new_job_state = self._recompute_job_state(cur, parent_job_id)
             if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
@@ -2027,39 +1971,25 @@ class ControllerTransitions:
         tasks_to_kill: set[JobName] = set()
         task_kill_workers: dict[JobName, WorkerId] = {}
         with self._db.transaction() as cur:
-            row = cur.execute(
-                "SELECT t.task_id, t.job_id, t.state, t.current_attempt_id, "
-                "t.preemption_count, t.max_retries_preemption, "
-                "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json "
-                f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id {JOB_CONFIG_JOIN} "
-                "WHERE t.task_id = ?",
-                (task_id.to_wire(),),
-            ).fetchone()
+            row = self._store.tasks.get_with_resources(cur, task_id)
             if row is None:
                 return TxResult()
 
-            prior_state = int(row["state"])
+            prior_state = row.state
             if prior_state not in ACTIVE_TASK_STATES:
                 return TxResult()
 
             now_ms = Timestamp.now().epoch_ms()
             new_state, preemption_count = _resolve_task_failure_state(
                 prior_state,
-                int(row["preemption_count"]),
-                int(row["max_retries_preemption"]),
+                row.preemption_count,
+                row.max_retries_preemption,
                 job_pb2.TASK_STATE_PREEMPTED,
             )
             # Fetch worker_id from the attempt for resource decommit.
-            attempt_worker = self._store.attempts.get_worker_id(cur, task_id, int(row["current_attempt_id"]))
+            attempt_worker = self._store.attempts.get_worker_id(cur, task_id, row.current_attempt_id)
             attempt_worker_id = str(attempt_worker) if attempt_worker is not None else None
-            attempt_resources = None
-            if attempt_worker_id is not None:
-                attempt_resources = resource_spec_from_scalars(
-                    int(row["res_cpu_millicores"]),
-                    int(row["res_memory_bytes"]),
-                    int(row["res_disk_bytes"]),
-                    row["res_device_json"],
-                )
+            attempt_resources = row.resources if attempt_worker_id is not None else None
 
             _terminate_task(
                 cur,
@@ -2068,7 +1998,7 @@ class ControllerTransitions:
                 self._store.workers,
                 self._store.endpoints,
                 task_id.to_wire(),
-                int(row["current_attempt_id"]),
+                row.current_attempt_id,
                 new_state,
                 reason,
                 now_ms,
@@ -2079,7 +2009,7 @@ class ControllerTransitions:
             )
 
             # Recompute job state and cascade if terminal
-            job_id = JobName.from_wire(str(row["job_id"]))
+            job_id = row.job_id
             new_job_state = self._recompute_job_state(cur, job_id)
             if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
                 cascade_kills, cascade_workers = _finalize_terminal_job(cur, self._store, job_id, new_job_state, now_ms)
@@ -2119,35 +2049,30 @@ class ControllerTransitions:
         if not task_ids:
             return TxResult()
         with self._db.transaction() as cur:
-            wires = [tid.to_wire() for tid in task_ids]
-            placeholders = ",".join("?" for _ in wires)
-            rows = cur.execute(
-                f"SELECT t.task_id, t.job_id, t.current_worker_id AS worker_id, t.current_attempt_id, "
-                f"t.failure_count, j.is_reservation_holder, "
-                f"jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, "
-                f"jc.has_coscheduling "
-                f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id {JOB_CONFIG_JOIN} "
-                f"WHERE t.task_id IN ({placeholders}) AND t.state IN (?, ?)",
-                (*wires, *EXECUTING_TASK_STATES),
-            ).fetchall()
+            rows = self._store.tasks.list_active(
+                cur,
+                TaskScope(task_ids=sorted(task_ids, key=lambda tid: tid.to_wire())),
+                states=EXECUTING_TASK_STATES,
+            )
 
             # -- Phase 1: read all state before any mutations. --
             now_ms = Timestamp.now().epoch_ms()
-            job_row_cache: dict[str, dict] = {}
+            # Resources per job (all direct-timeout tasks in a job share job_config).
+            job_resources_cache: dict[str, job_pb2.ResourceSpecProto] = {}
             # Collect directly-timed-out task wires for dedup against siblings.
             direct_task_wires: set[str] = set()
             # Per-job list of siblings to cascade (collected across all timed-out tasks).
-            siblings_by_job: dict[str, list[_CoscheduledSibling]] = {}
+            siblings_by_job: dict[str, list[ActiveTaskRow]] = {}
 
             for row in rows:
-                task_id_wire = str(row["task_id"])
+                task_id_wire = row.task_id.to_wire()
                 direct_task_wires.add(task_id_wire)
-                job_id_wire = str(row["job_id"])
-                if job_id_wire not in job_row_cache:
-                    job_row_cache[job_id_wire] = dict(row)
-                has_cosched = bool(int(row["has_coscheduling"]))
-                tid = JobName.from_wire(task_id_wire)
-                siblings = _find_coscheduled_siblings(cur, JobName.from_wire(job_id_wire), tid, has_cosched)
+                job_id_wire = row.job_id.to_wire()
+                if job_id_wire not in job_resources_cache:
+                    job_resources_cache[job_id_wire] = row.resources
+                siblings = _find_coscheduled_siblings(
+                    cur, self._store.tasks, row.job_id, row.task_id, row.has_coscheduling
+                )
                 if siblings:
                     existing = siblings_by_job.get(job_id_wire, [])
                     existing.extend(siblings)
@@ -2158,10 +2083,11 @@ class ControllerTransitions:
             # trigger tasks within the same job.
             for job_id_wire, siblings in siblings_by_job.items():
                 seen: set[str] = set()
-                deduped: list[_CoscheduledSibling] = []
+                deduped: list[ActiveTaskRow] = []
                 for sib in siblings:
-                    if sib.task_id not in direct_task_wires and sib.task_id not in seen:
-                        seen.add(sib.task_id)
+                    sib_wire = sib.task_id.to_wire()
+                    if sib_wire not in direct_task_wires and sib_wire not in seen:
+                        seen.add(sib_wire)
                         deduped.append(sib)
                 siblings_by_job[job_id_wire] = deduped
 
@@ -2171,54 +2097,39 @@ class ControllerTransitions:
             jobs_to_update: set[str] = set()
 
             for row in rows:
-                task_id_wire = str(row["task_id"])
-                tid = JobName.from_wire(task_id_wire)
-                job_id_wire = str(row["job_id"])
-                worker_id_str = row["worker_id"]
+                tid = row.task_id
                 tasks_to_kill.add(tid)
                 decommit_worker = None
                 decommit_resources = None
-                if worker_id_str is not None:
-                    task_kill_workers[tid] = WorkerId(str(worker_id_str))
-                    if not int(row["is_reservation_holder"]):
-                        decommit_worker = str(worker_id_str)
-                        decommit_resources = resource_spec_from_scalars(
-                            int(row["res_cpu_millicores"]),
-                            int(row["res_memory_bytes"]),
-                            int(row["res_disk_bytes"]),
-                            row["res_device_json"],
-                        )
-                attempt_id = row["current_attempt_id"]
+                if row.current_worker_id is not None:
+                    task_kill_workers[tid] = row.current_worker_id
+                    if not row.is_reservation_holder:
+                        decommit_worker = str(row.current_worker_id)
+                        decommit_resources = row.resources
                 _terminate_task(
                     cur,
                     self._store.attempts,
                     self._store.tasks,
                     self._store.workers,
                     self._store.endpoints,
-                    task_id_wire,
-                    int(attempt_id) if attempt_id is not None else None,
+                    tid.to_wire(),
+                    row.current_attempt_id,
                     job_pb2.TASK_STATE_FAILED,
                     reason,
                     now_ms,
                     worker_id=decommit_worker,
                     resources=decommit_resources,
-                    failure_count=int(row["failure_count"]) + 1,
+                    failure_count=row.failure_count + 1,
                 )
-                jobs_to_update.add(job_id_wire)
+                jobs_to_update.add(row.job_id.to_wire())
 
             # Terminate coscheduled siblings (deduplicated, all reads already done).
             for job_id_wire, siblings in siblings_by_job.items():
                 if not siblings:
                     continue
-                jc_row = job_row_cache[job_id_wire]
-                job_resources = resource_spec_from_scalars(
-                    int(jc_row["res_cpu_millicores"]),
-                    int(jc_row["res_memory_bytes"]),
-                    int(jc_row["res_disk_bytes"]),
-                    jc_row["res_device_json"],
-                )
+                job_resources = job_resources_cache[job_id_wire]
                 # Pick the first direct-timeout task in this job as the "cause" for the error message.
-                cause_tid = next(JobName.from_wire(str(r["task_id"])) for r in rows if str(r["job_id"]) == job_id_wire)
+                cause_tid = next(r.task_id for r in rows if r.job_id.to_wire() == job_id_wire)
                 cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
                     cur,
                     self._store.attempts,
@@ -2440,39 +2351,39 @@ class ControllerTransitions:
         with self._db.read_snapshot() as snap:
             worker_rows = snap.fetchall("SELECT worker_id, address FROM workers WHERE active = 1 AND healthy = 1")
             worker_addresses: dict[WorkerId, str] = {}
-            worker_ids: list[str] = []
+            worker_ids: list[WorkerId] = []
             for row in worker_rows:
                 wid = WorkerId(str(row["worker_id"]))
                 worker_addresses[wid] = str(row["address"])
-                worker_ids.append(str(row["worker_id"]))
+                worker_ids.append(wid)
 
             if not worker_ids:
                 return {}, {}
 
-            placeholders = ",".join("?" for _ in worker_ids)
             # Reservation holders are virtual — they live on ``current_worker_id``
             # only as a scheduling anchor and never get a RunTaskRequest. Sending
             # them in PollTasksRequest.expected_tasks makes the worker reconcile
             # against its _tasks dict, miss, and return WORKER_FAILED every cycle,
             # which drains the holder's preemption budget and (post the build-
             # failure health hook) reaps the claimed worker for a harmless miss.
-            task_rows = snap.fetchall(
-                f"SELECT t.task_id, t.current_attempt_id, t.current_worker_id "
-                f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id "
-                f"WHERE t.current_worker_id IN ({placeholders}) AND t.state IN (?, ?, ?) "
-                f"AND j.is_reservation_holder = 0 "
-                f"ORDER BY t.task_id ASC",
-                (*worker_ids, *ACTIVE_TASK_STATES),
+            task_rows = self._store.tasks.list_active(
+                snap,
+                TaskScope(worker_ids=worker_ids),
+                states=ACTIVE_TASK_STATES,
+                exclude_reservation_holders=True,
+                order_by_task_id=True,
             )
 
         running: dict[WorkerId, list[RunningTaskEntry]] = {}
         for row in task_rows:
-            wid = WorkerId(str(row["current_worker_id"]))
+            # list_active only returns rows where current_worker_id matched the IN filter,
+            # so current_worker_id cannot be None here.
+            assert row.current_worker_id is not None
             entry = RunningTaskEntry(
-                task_id=JobName.from_wire(str(row["task_id"])),
-                attempt_id=int(row["current_attempt_id"]),
+                task_id=row.task_id,
+                attempt_id=row.current_attempt_id,
             )
-            running.setdefault(wid, []).append(entry)
+            running.setdefault(row.current_worker_id, []).append(entry)
         return running, worker_addresses
 
     def fail_workers_batch(
@@ -2651,22 +2562,19 @@ class ControllerTransitions:
                 newly_promoted.add(task_id)
 
             # Snapshot already-running tasks with NULL worker_id (excluding newly promoted).
-            active_states = tuple(sorted(ACTIVE_TASK_STATES))
-            placeholders = ",".join("?" * len(active_states))
-            running_rows = cur.execute(
-                "SELECT t.task_id, t.current_attempt_id "
-                "FROM tasks t "
-                f"WHERE t.current_worker_id IS NULL AND t.state IN ({placeholders}) "
-                "ORDER BY t.task_id ASC",
-                active_states,
-            ).fetchall()
+            running_rows = self._store.tasks.list_active(
+                cur,
+                TaskScope(null_worker=True),
+                states=ACTIVE_TASK_STATES,
+                order_by_task_id=True,
+            )
             running_tasks = [
                 RunningTaskEntry(
-                    task_id=JobName.from_wire(str(row["task_id"])),
-                    attempt_id=int(row["current_attempt_id"]),
+                    task_id=row.task_id,
+                    attempt_id=row.current_attempt_id,
                 )
                 for row in running_rows
-                if str(row["task_id"]) not in newly_promoted
+                if row.task_id.to_wire() not in newly_promoted
             ]
 
             tasks_to_kill = self._store.dispatch.drain_direct_kills(cur)
@@ -2835,7 +2743,9 @@ class ControllerTransitions:
                 # Coscheduled sibling cascade.
                 if jc_row is not None and task_state in FAILURE_TASK_STATES:
                     has_cosched = bool(int(jc_row["has_coscheduling"]))
-                    siblings = _find_coscheduled_siblings(cur, task.job_id, update.task_id, has_cosched)
+                    siblings = _find_coscheduled_siblings(
+                        cur, self._store.tasks, task.job_id, update.task_id, has_cosched
+                    )
                     job_resources = resource_spec_from_scalars(
                         int(jc_row["res_cpu_millicores"]),
                         int(jc_row["res_memory_bytes"]),

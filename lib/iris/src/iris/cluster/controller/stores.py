@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from threading import RLock
 
 from iris.cluster.constraints import AttributeValue
+from iris.cluster.controller.codec import resource_spec_from_scalars
 from iris.cluster.controller.db import ControllerDB, EndpointQuery, QuerySnapshot, TransactionCursor
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
@@ -465,6 +466,82 @@ class WorkerAttributeParams:
     float_value: float | None
 
 
+@dataclass(frozen=True, slots=True)
+class TaskScope:
+    """Scope predicate for :meth:`TaskStore.list_active`.
+
+    Exactly one field must be set. The store validates at the call boundary.
+    ``null_worker=True`` matches rows where ``current_worker_id IS NULL``
+    (direct-provider-promoted tasks).
+    """
+
+    job_id: JobName | None = None
+    job_subtree: Sequence[JobName] | None = None
+    worker_id: WorkerId | None = None
+    worker_ids: Sequence[WorkerId] | None = None
+    task_ids: Sequence[JobName] | None = None
+    null_worker: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveTaskRow:
+    """Task projection joined with ``jobs`` + ``job_config``.
+
+    Shared by every cascade/scheduling query (``_kill_non_terminal_tasks``,
+    ``_find_coscheduled_siblings``, ``cancel_job``, ``preempt_task``,
+    ``cancel_tasks_for_timeout``, ``_remove_failed_worker``, poll paths). The
+    resource columns are decoded into a single ``ResourceSpecProto`` so
+    callers stop re-running ``resource_spec_from_scalars(...)`` at every
+    site. Reservation-holder rows carry a populated ``resources`` that
+    callers are expected to ignore (they never commit resources).
+    """
+
+    task_id: JobName
+    job_id: JobName
+    state: int
+    current_attempt_id: int
+    current_worker_id: WorkerId | None
+    failure_count: int
+    preemption_count: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    is_reservation_holder: bool
+    has_coscheduling: bool
+    resources: job_pb2.ResourceSpecProto
+
+
+_ACTIVE_TASK_PROJECTION = (
+    "t.task_id, t.job_id, t.state, t.current_attempt_id, t.current_worker_id, "
+    "t.failure_count, t.preemption_count, t.max_retries_failure, t.max_retries_preemption, "
+    "j.is_reservation_holder, "
+    "jc.has_coscheduling, "
+    "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json"
+)
+
+
+def _decode_active_task_row(row) -> ActiveTaskRow:
+    worker_id = row["current_worker_id"]
+    return ActiveTaskRow(
+        task_id=JobName.from_wire(str(row["task_id"])),
+        job_id=JobName.from_wire(str(row["job_id"])),
+        state=int(row["state"]),
+        current_attempt_id=int(row["current_attempt_id"]),
+        current_worker_id=WorkerId(str(worker_id)) if worker_id is not None else None,
+        failure_count=int(row["failure_count"]),
+        preemption_count=int(row["preemption_count"]),
+        max_retries_failure=int(row["max_retries_failure"]),
+        max_retries_preemption=int(row["max_retries_preemption"]),
+        is_reservation_holder=bool(int(row["is_reservation_holder"])),
+        has_coscheduling=bool(int(row["has_coscheduling"])),
+        resources=resource_spec_from_scalars(
+            int(row["res_cpu_millicores"]),
+            int(row["res_memory_bytes"]),
+            int(row["res_disk_bytes"]),
+            row["res_device_json"],
+        ),
+    )
+
+
 class JobStore:
     """Jobs, job_config, users, user_budgets.
 
@@ -803,6 +880,112 @@ class TaskStore:
             (job_id.to_wire(),),
         )
         return str(row["error"]) if row is not None else None
+
+    def list_active(
+        self,
+        tx: Tx,
+        scope: TaskScope,
+        *,
+        states: Iterable[int],
+        exclude_task_id: JobName | None = None,
+        exclude_reservation_holders: bool = False,
+        order_by_task_id: bool = False,
+        limit: int | None = None,
+    ) -> list[ActiveTaskRow]:
+        """Return :class:`ActiveTaskRow` rows matching ``scope`` and ``states``.
+
+        ``scope`` picks which side of the query the filter binds to
+        (single job, job subtree, worker, explicit task list, or NULL
+        worker). ``states`` is the required ``tasks.state`` filter —
+        typical values are ``ACTIVE_TASK_STATES``,
+        ``EXECUTING_TASK_STATES``, or ``NON_TERMINAL_TASK_STATES``. Pass
+        an empty ``states`` (or an empty ``task_ids``/``job_subtree``
+        scope) to short-circuit to an empty list.
+        """
+        scope_set = sum(
+            1
+            for x in (scope.job_id, scope.job_subtree, scope.worker_id, scope.worker_ids, scope.task_ids)
+            if x is not None
+        ) + (1 if scope.null_worker else 0)
+        if scope_set != 1:
+            raise ValueError(
+                "TaskScope must set exactly one of: " "job_id, job_subtree, worker_id, worker_ids, task_ids, null_worker"
+            )
+
+        where_parts: list[str] = []
+        params: list[object] = []
+
+        if scope.job_id is not None:
+            where_parts.append("t.job_id = ?")
+            params.append(scope.job_id.to_wire())
+        elif scope.job_subtree is not None:
+            if not scope.job_subtree:
+                return []
+            wires = [jid.to_wire() for jid in scope.job_subtree]
+            ph = ",".join("?" for _ in wires)
+            where_parts.append(f"t.job_id IN ({ph})")
+            params.extend(wires)
+        elif scope.worker_id is not None:
+            where_parts.append("t.current_worker_id = ?")
+            params.append(str(scope.worker_id))
+        elif scope.worker_ids is not None:
+            if not scope.worker_ids:
+                return []
+            wids = [str(wid) for wid in scope.worker_ids]
+            ph = ",".join("?" for _ in wids)
+            where_parts.append(f"t.current_worker_id IN ({ph})")
+            params.extend(wids)
+        elif scope.task_ids is not None:
+            if not scope.task_ids:
+                return []
+            wires = [tid.to_wire() for tid in scope.task_ids]
+            ph = ",".join("?" for _ in wires)
+            where_parts.append(f"t.task_id IN ({ph})")
+            params.extend(wires)
+        else:  # null_worker
+            where_parts.append("t.current_worker_id IS NULL")
+
+        if exclude_task_id is not None:
+            where_parts.append("t.task_id != ?")
+            params.append(exclude_task_id.to_wire())
+
+        if exclude_reservation_holders:
+            where_parts.append("j.is_reservation_holder = 0")
+
+        states_tuple = tuple(states)
+        if not states_tuple:
+            return []
+        state_ph = ",".join("?" for _ in states_tuple)
+        where_parts.append(f"t.state IN ({state_ph})")
+        params.extend(states_tuple)
+
+        sql = (
+            f"SELECT {_ACTIVE_TASK_PROJECTION} "
+            f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id {JOB_CONFIG_JOIN} "
+            f"WHERE {' AND '.join(where_parts)}"
+        )
+        if order_by_task_id:
+            sql += " ORDER BY t.task_id ASC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+
+        rows = tx.fetchall(sql, tuple(params))
+        return [_decode_active_task_row(row) for row in rows]
+
+    def get_with_resources(self, tx: Tx, task_id: JobName) -> ActiveTaskRow | None:
+        """Fetch a single task with its job_config resource projection.
+
+        Unlike :meth:`list_active`, no state filter is applied; callers
+        (``preempt_task``) check the returned ``state`` themselves.
+        """
+        row = tx.fetchone(
+            f"SELECT {_ACTIVE_TASK_PROJECTION} "
+            f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id {JOB_CONFIG_JOIN} "
+            f"WHERE t.task_id = ?",
+            (task_id.to_wire(),),
+        )
+        return _decode_active_task_row(row) if row is not None else None
 
     # -- Writes --------------------------------------------------------------
 
