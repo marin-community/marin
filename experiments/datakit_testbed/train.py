@@ -68,13 +68,15 @@ def _tokenize_step_for_source(
 ) -> TokenizerStep:
     """Convert a sample ``StepSpec`` into a training-ready ``TokenizerStep``.
 
-    Mirrors ``experiments/pretraining_datasets/nemotron_v2.py:65-76``: build a
-    real ``ExecutorStep[TokenizeConfig]`` that references the sample output
-    via ``InputName`` so the executor preserves dep tracking.
+    Mirrors ``experiments/pretraining_datasets/nemotron_v2.py:65-76``: build
+    a real ``ExecutorStep[TokenizeConfig]`` that references the sample
+    output via ``InputName`` so the path is resolved lazily (the sample
+    doesn't need to be materialized at tokenize-step-construction time)
+    and the executor preserves dep tracking.
     """
     sampled_exec = sampled.as_executor_step()
     return ExecutorStep(
-        name=os.path.join("tokenized", "datakit-testbed", source_name),
+        name=os.path.join("datakit-testbed", "tokenized", source_name),
         fn=tokenize,
         config=TokenizeConfig(
             train_paths=[sampled_exec / "outputs/main/**/*.parquet"],
