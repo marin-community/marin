@@ -36,16 +36,20 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
 import pyarrow.parquet as pq
+from fray.v2 import ResourceConfig
 from rigging.filesystem import url_to_fs
 
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.artifact import Artifact
+from marin.execution.remote import remote
 from marin.execution.step_runner import check_cache
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_glob, fsspec_mkdirs
 
 from experiments.datakit_testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
+
+_SAMPLE_REMOTE_RESOURCES = ResourceConfig(cpu=1, ram="1g")
 
 logger = logging.getLogger(__name__)
 
@@ -216,16 +220,25 @@ def sample_normalized_shards_step(
 
     The step loads the upstream ``NormalizedData`` artifact at execution time,
     so the sampled shard set reflects whatever normalize actually emitted.
+    Runs remotely via Fray with :data:`_SAMPLE_REMOTE_RESOURCES` so the
+    entrypoint doesn't OOM when orchestrating many sources concurrently.
     """
+    # Resolve the normalize output path once at factory time so the remote
+    # fn's closure only captures strings + a float (cleanly picklable).
+    normalized_path = normalized.output_path
+
+    def sample(output_path: str) -> NormalizedData:
+        return sample_normalized_shards(
+            source=Artifact.load(normalized_path, NormalizedData),
+            output_path=output_path,
+            sample_fraction=sample_fraction,
+        )
+
     return StepSpec(
         name=name,
         deps=[normalized],
         hash_attrs={"sample_fraction": sample_fraction},
-        fn=lambda output_path: sample_normalized_shards(
-            source=Artifact.load(normalized, NormalizedData),
-            output_path=output_path,
-            sample_fraction=sample_fraction,
-        ),
+        fn=remote(sample, resources=_SAMPLE_REMOTE_RESOURCES),
         override_output_path=override_output_path,
     )
 
