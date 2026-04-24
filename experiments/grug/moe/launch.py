@@ -50,6 +50,7 @@ class GrugMoeLaunchConfig:
     mp: str  # jmp policy string, e.g. "params=float32,compute=bfloat16,output=bfloat16".
     tracker: TrackerConfig
     optimizer: OptimizerConfig
+    mesh: MeshConfig = field(default_factory=lambda: MeshConfig(axes={"expert": 1}))
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -87,7 +88,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
-        mesh=MeshConfig(axes={"expert": 1}),
+        mesh=config.mesh,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         checkpointer=CheckpointerConfig(
@@ -174,8 +175,135 @@ baseline_moe = ExecutorStep(
 )
 
 
+# ---------------------------------------------------------------------------
+# ~120B-A12B bring-up on v4-1024 (issue #4301)
+# Two shared-expert widths: 1x (sx3072) and 2x (sx6144).
+# ---------------------------------------------------------------------------
+
+GRUG_MOE_120B_SX3072 = GrugModelConfig(
+    vocab_size=128_256,
+    hidden_dim=4096,
+    intermediate_dim=3072,
+    shared_expert_intermediate_dim=3072,
+    dense_intermediate_dim=12288,
+    num_experts=64,
+    num_experts_per_token=4,
+    num_layers=48,
+    num_heads=64,
+    num_kv_heads=4,
+    head_dim=128,
+    max_seq_len=4096,
+    initializer_std=0.5 / 4096**0.5,
+    qk_mult=1.3,
+)
+
+GRUG_MOE_120B_SX6144 = dataclasses.replace(
+    GRUG_MOE_120B_SX3072,
+    shared_expert_intermediate_dim=6144,
+)
+
+_V4_1024_MESH = MeshConfig(
+    axes={"expert": 8, "data": -1},
+    dcn_axes={"data": -1},
+)
+
+_120B_STEPS = 200
+_120B_BATCH_SIZE = 512
+_120B_MP = "params=float32,compute=bfloat16,output=bfloat16"
+
+_120B_OPTIMIZER = GrugMoeAdamHConfig(
+    learning_rate=0.003,
+    adam_lr=0.003,
+    beta1=0.96,
+    beta2=0.995,
+    epsilon=1e-15,
+    lr_schedule="linear",
+    decay=0.2,
+    min_lr_ratio=0.0,
+    warmup=0.1,
+    max_grad_norm=1,
+)
+
+_120B_TRAINER = GrugTrainerConfig(
+    z_loss_weight=1e-4,
+    ema_beta=None,
+    log_every=1,
+)
+
+_120B_EVAL = GrugEvalConfig(
+    eval_batch_size=512,
+    steps_per_eval=100,
+    max_eval_batches=4,
+    eval_current=True,
+    eval_ema=False,
+)
+
+_120B_PROFILER = ProfilerConfig(
+    enabled=True,
+    start_step=10,
+    num_steps=5,
+)
+
+RESOLVED_120B_SX3072_RUN_ID = _resolve_run_id("03_31_120b_sx3072")
+RESOLVED_120B_SX6144_RUN_ID = _resolve_run_id("03_31_120b_sx6144")
+
+moe_120b_sx3072 = ExecutorStep(
+    name="grug/03_31_120b_sx3072",
+    fn=run_grug_moe_trial,
+    config=GrugMoeLaunchConfig(
+        model=versioned(GRUG_MOE_120B_SX3072),
+        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+        output_path=this_output_path(),
+        run_id=RESOLVED_120B_SX3072_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu("v4-1024")),
+        steps=versioned(_120B_STEPS),
+        batch_size=versioned(_120B_BATCH_SIZE),
+        seed=versioned(0),
+        mp=versioned(_120B_MP),
+        mesh=versioned(_V4_1024_MESH),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=["adamh", "qb", "sharded-qb", "gatednorm", "xsa", "zloss", "120b", "v4-1024"],
+            group="moe-120b-bringup",
+            name=None,
+        ),
+        optimizer=versioned(_120B_OPTIMIZER),
+        profiler=versioned(_120B_PROFILER),
+        grug_trainer=versioned(_120B_TRAINER),
+        eval=versioned(_120B_EVAL),
+    ),
+)
+
+moe_120b_sx6144 = ExecutorStep(
+    name="grug/03_31_120b_sx6144",
+    fn=run_grug_moe_trial,
+    config=GrugMoeLaunchConfig(
+        model=versioned(GRUG_MOE_120B_SX6144),
+        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+        output_path=this_output_path(),
+        run_id=RESOLVED_120B_SX6144_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu("v4-1024")),
+        steps=versioned(_120B_STEPS),
+        batch_size=versioned(_120B_BATCH_SIZE),
+        seed=versioned(0),
+        mp=versioned(_120B_MP),
+        mesh=versioned(_V4_1024_MESH),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=["adamh", "qb", "sharded-qb", "gatednorm", "xsa", "zloss", "120b", "v4-1024"],
+            group="moe-120b-bringup",
+            name=None,
+        ),
+        optimizer=versioned(_120B_OPTIMIZER),
+        profiler=versioned(_120B_PROFILER),
+        grug_trainer=versioned(_120B_TRAINER),
+        eval=versioned(_120B_EVAL),
+    ),
+)
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=[baseline_moe],
-        description="Baseline grug MoE (QB+GN+XSA+zloss) on Nemotron mix.",
+        steps=[baseline_moe, moe_120b_sx3072, moe_120b_sx6144],
+        description="Grug MoE runs: baseline trial + 120B-A12B bring-up on v4-1024.",
     )
