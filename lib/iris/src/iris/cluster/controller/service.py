@@ -17,6 +17,7 @@ import time
 import uuid
 import dataclasses
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any, Protocol
 
 from connectrpc.code import Code
@@ -32,6 +33,7 @@ from iris.cluster.controller.codec import (
     resource_spec_from_scalars,
 )
 from iris.cluster.controller.budget import (
+    UserBudgetDefaults,
     UserTask,
     compute_effective_band,
     compute_user_spend,
@@ -88,6 +90,7 @@ from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.query import execute_raw_query
 from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     TASK_RESOURCE_HISTORY_RETENTION,
     ControllerTransitions,
@@ -123,6 +126,44 @@ DEFAULT_MAX_TOTAL_LINES = 100000
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+
+# A root LaunchJob submission is rejected if its client_revision_date is more
+# than FRESHNESS_WINDOW older than today. Clients get exactly this long to
+# upgrade after a new marin-iris release is cut.
+FRESHNESS_WINDOW = timedelta(days=14)
+
+# Date this freshness check shipped. An empty client_revision_date is
+# interpreted as this date — already-deployed clients that don't set the field
+# start being rejected FRESHNESS_WINDOW after rollout.
+FEATURE_INTRODUCTION_DATE = date(2026, 4, 22)
+
+
+def _check_client_freshness(client_date_str: str, now: date) -> None:
+    """Reject root LaunchJob submissions whose client is older than FRESHNESS_WINDOW.
+
+    Empty string is treated as FEATURE_INTRODUCTION_DATE so old clients (which
+    don't set the field at all) behave as if they shipped the day this check
+    rolled out.
+    """
+    if not client_date_str:
+        client_date = FEATURE_INTRODUCTION_DATE
+    else:
+        try:
+            client_date = date.fromisoformat(client_date_str)
+        except ValueError as err:
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                f"client_revision_date must be ISO YYYY-MM-DD, got {client_date_str!r}",
+            ) from err
+    floor = now - FRESHNESS_WINDOW
+    if client_date < floor:
+        raise ConnectError(
+            Code.FAILED_PRECONDITION,
+            f"marin-iris client is too old (build {client_date.isoformat()}; "
+            f"minimum {floor.isoformat()}). Run `uv sync` or upgrade "
+            f"marin-iris and retry.",
+        )
+
 
 USER_TASK_STATES = (
     job_pb2.TASK_STATE_PENDING,
@@ -949,7 +990,7 @@ class ControllerServiceImpl:
 
     Args:
         transitions: State machine for DB mutations (submit, cancel, register, etc.)
-        db: Query interface for direct DB reads
+        store: Controller store bundle (per-entity stores + transaction / read_snapshot).
         controller: Controller runtime for scheduling and worker management
         bundle_store: Bundle store for zip storage.
         log_service: LogService for fetching logs (in-process or remote proxy).
@@ -958,21 +999,24 @@ class ControllerServiceImpl:
     def __init__(
         self,
         transitions: ControllerTransitions,
-        db: ControllerDB,
+        store: ControllerStore,
         controller: ControllerProtocol,
         bundle_store: BundleStore,
         log_service: LogServiceImpl | LogServiceProxy,
         auth: ControllerAuth | None = None,
         system_endpoints: dict[str, str] | None = None,
+        user_budget_defaults: UserBudgetDefaults | None = None,
     ):
         self._transitions = transitions
-        self._db = db
+        self._store = store
+        self._db = store._db
         self._controller = controller
         self._bundle_store = bundle_store
         self._log_service = log_service
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
         self._system_endpoints: dict[str, str] = system_endpoints or {}
+        self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
         # Short-TTL cache of the worker roster. Dashboards call ListWorkers
         # and GetAutoscalerStatus back-to-back; both enumerate every worker.
         # 1s is short enough that stale rows don't matter (workers have
@@ -1040,6 +1084,12 @@ class ControllerServiceImpl:
 
         job_id = JobName.from_wire(request.name)
 
+        # Reject root submissions from stale clients. Nested submissions (from
+        # a job already running in the cluster) are exempt — the workload would
+        # otherwise crash mid-flight as the freshness window slides forward.
+        if job_id.is_root:
+            _check_client_freshness(request.client_revision_date, date.today())
+
         # When an auth provider is configured, override the user segment with
         # the verified identity to prevent impersonation. Only override for
         # root-level submissions; child jobs inherit the parent's user.
@@ -1051,19 +1101,33 @@ class ControllerServiceImpl:
         if self._auth.provider and verified_user is not None and not job_id.is_root:
             self._authorize_job_owner(job_id)
 
-        # Priority band validation: PRODUCTION requires MANAGE_BUDGETS permission,
-        # and user's max_band from budget table must allow the requested band.
+        # Priority band validation.
+        #
+        # - PRODUCTION additionally requires MANAGE_BUDGETS when auth is on;
+        #   admins pass here and skip the max_band cap below.
+        # - The max_band cap fires regardless of auth mode, keyed on the
+        #   claimed job_id.user. In anonymous mode this doesn't guarantee the
+        #   user is who they claim to be, but it ensures the cluster's
+        #   configured tiers and UserBudgetDefaults still bite — an unlisted
+        #   submitter hits the INTERACTIVE default cap and can't punch up to
+        #   PRODUCTION just by skipping auth.
         # UNSPECIFIED (0) defaults to INTERACTIVE.
         band = request.priority_band or job_pb2.PRIORITY_BAND_INTERACTIVE
         if band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
             authorize(AuthzAction.MANAGE_BUDGETS)
-        if self._auth.provider and verified_user is not None:
+        else:
             user_budget = self._db.get_user_budget(job_id.user)
-            if user_budget is not None and band < user_budget.max_band:
+            max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
+            if band < max_band:
                 raise ConnectError(
                     Code.PERMISSION_DENIED,
-                    f"User {job_id.user} cannot submit {priority_band_name(band)} jobs (max band: "
-                    f"{priority_band_name(user_budget.max_band)})",
+                    f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
+                    f"(max band: {priority_band_name(max_band)}). "
+                    f"Resubmit with `--priority {priority_band_name(max_band).lower()}` "
+                    f"(e.g. `--priority batch`) to launch opportunistically, or ping @Helw150 "
+                    f"if you believe your username ({job_id.user}) should have a higher band — "
+                    f"either to be added to the researcher list or to confirm your username is "
+                    f"registered correctly.",
                 )
 
         # Reject submissions whose parent is absent or already terminated.
@@ -1680,7 +1744,7 @@ class ControllerServiceImpl:
         if prefix.startswith("/system/"):
             return self._list_system_endpoints(prefix, exact=request.exact)
 
-        endpoints = self._db.endpoints.query(
+        endpoints = self._store.endpoints.query(
             EndpointQuery(
                 exact_name=prefix if request.exact else None,
                 name_prefix=None if request.exact else prefix,
@@ -2464,7 +2528,9 @@ class ControllerServiceImpl:
         # Partition tasks by effective band
         tasks_by_band: dict[int, list[UserTask]] = {b: [] for b in BAND_ORDER}
         for task in pending_tasks:
-            eff_band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, budget_limits)
+            eff_band = compute_effective_band(
+                task.priority_band, task.task_id.user, user_spend, budget_limits, self._user_budget_defaults
+            )
             ut: UserTask = UserTask(user_id=task.task_id.user, task=(task, eff_band))
             target_band = eff_band if eff_band in tasks_by_band else job_pb2.PRIORITY_BAND_BATCH
             tasks_by_band[target_band].append(ut)
@@ -2507,18 +2573,33 @@ class ControllerServiceImpl:
             )
 
         # --- User budgets for response ---
+        # Users without an explicit user_budgets row inherit UserBudgetDefaults;
+        # synthesize entries for any user with active spend so the dashboard
+        # renders their Spent/Limit/Utilization instead of '-'.
         budget_protos: list[controller_pb2.Controller.SchedulerUserBudget] = []
-        for b in budgets:
-            spent = user_spend.get(b.user_id, 0)
-            utilization = (spent / b.budget_limit * 100.0) if b.budget_limit > 0 else 0.0
+        defaults = self._user_budget_defaults
+        seen_users = {b.user_id for b in budgets}
+        budget_rows: list[tuple[str, int, int]] = [(b.user_id, b.budget_limit, b.max_band) for b in budgets]
+        for uid in user_spend:
+            if uid not in seen_users:
+                budget_rows.append((uid, defaults.budget_limit, defaults.max_band))
+        for user_id, budget_limit, max_band in budget_rows:
+            spent = user_spend.get(user_id, 0)
+            utilization = (spent / budget_limit * 100.0) if budget_limit > 0 else 0.0
             # Show effective band: use INTERACTIVE as the test band to see if user is downgraded
-            eff = compute_effective_band(job_pb2.PRIORITY_BAND_INTERACTIVE, b.user_id, user_spend, budget_limits)
+            eff = compute_effective_band(
+                job_pb2.PRIORITY_BAND_INTERACTIVE,
+                user_id,
+                user_spend,
+                budget_limits,
+                self._user_budget_defaults,
+            )
             budget_protos.append(
                 controller_pb2.Controller.SchedulerUserBudget(
-                    user_id=b.user_id,
-                    budget_limit=b.budget_limit,
+                    user_id=user_id,
+                    budget_limit=budget_limit,
                     budget_spent=spent,
-                    max_band=b.max_band,
+                    max_band=max_band,
                     effective_band=eff,
                     utilization_percent=utilization,
                 )
@@ -2544,7 +2625,9 @@ class ControllerServiceImpl:
         running_protos: list[controller_pb2.Controller.SchedulerRunningTask] = []
         for row in running_rows:
             res = _resource_spec_from_job_row(row)
-            eff_band = compute_effective_band(row.priority_band, row.task_id.user, user_spend, budget_limits)
+            eff_band = compute_effective_band(
+                row.priority_band, row.task_id.user, user_spend, budget_limits, self._user_budget_defaults
+            )
             accel = get_gpu_count(res.device) + get_tpu_count(res.device)
             rv = resource_value(res.cpu_millicores, res.memory_bytes, accel)
             is_cosched = bool(row.has_coscheduling)
@@ -2592,25 +2675,21 @@ class ControllerServiceImpl:
         """Worker pushes task state transitions to controller.
 
         Converts the proto updates into TaskUpdate dataclasses and applies
-        them through the same ControllerTransitions.apply_heartbeat() path
-        used by the poll-based heartbeat. Stop decisions are delivered via
-        the StopTasks RPC, not piggy-backed on the response.
+        them via ``ControllerTransitions.apply_task_updates``. Stop decisions
+        are delivered via the StopTasks RPC, not piggy-backed on the response.
 
-        Vestigial: the kill decisions produced by apply_heartbeat are ignored
-        here. The poll loop reruns the same transition logic every 60s and
-        routes kills through _stop_tasks_direct, so push-path kills are
-        recovered with ≤60s latency. This RPC will be removed once the poll
-        loop is the sole path.
+        The kill decisions produced here are ignored: the poll loop reruns the
+        same transition logic and routes kills through ``_stop_tasks_direct``,
+        so push-path kills are recovered with ≤60s latency.
         """
         updates = task_updates_from_proto(request.updates)
         if updates:
-            self._transitions.apply_heartbeat(
+            self._transitions.apply_task_updates(
                 HeartbeatApplyRequest(
                     worker_id=WorkerId(request.worker_id),
                     worker_resource_snapshot=None,
                     updates=updates,
                 )
             )
-            # Wake the controller so it can act on any state changes promptly.
             self._controller.wake()
         return controller_pb2.Controller.UpdateTaskStatusResponse()

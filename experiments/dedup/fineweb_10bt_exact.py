@@ -36,7 +36,7 @@ def build_steps() -> list[StepSpec]:
         fn=lambda op: dedup_exact_paragraph(
             input_paths=os.path.join(download.output_path, "sample/10BT"),
             output_path=op,
-            max_parallelism=4,
+            max_parallelism=128,
         ),
     )
     return [download, dedup_step]

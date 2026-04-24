@@ -1392,9 +1392,7 @@ def test_holder_task_worker_death_no_failure_record(state):
         assert active_wid == worker_id
 
         # Kill the worker — holder task must NOT go through WORKER_FAILED.
-        batch = state.drain_dispatch(worker_id)
-        assert batch is not None
-        state.record_heartbeat_failure(worker_id, "simulated crash", batch, force_remove=True)
+        state.fail_workers([(worker_id, None, "simulated crash")])
 
         holder_task = _query_task_with_attempts(state, holder_task.task_id)
         assert holder_task is not None

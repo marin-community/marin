@@ -51,11 +51,11 @@ from iris.cluster.controller.schema import (
     tasks_with_attempts,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.stores import ControllerStore
 from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
-    DispatchBatch,
     HeartbeatApplyRequest,
     TaskUpdate,
 )
@@ -82,12 +82,6 @@ def check_is_job_finished(j: JobDetailRow) -> bool:
 
 class FakeProvider:
     """Minimal TaskProvider for tests that only exercise transitions, not RPCs."""
-
-    def sync(
-        self,
-        batches: list[DispatchBatch],
-    ) -> list[tuple[DispatchBatch, HeartbeatApplyRequest | None, str | None]]:
-        return [(b, None, "no stub") for b in batches]
 
     def get_process_status(
         self,
@@ -178,7 +172,7 @@ def controller_service(state, log_service, mock_controller, tmp_path) -> Control
     """ControllerServiceImpl with fresh DB, log service, and mock controller."""
     return ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
@@ -196,7 +190,8 @@ def make_controller_state(**kwargs):
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
     try:
         db = ControllerDB(db_dir=tmp)
-        yield ControllerTransitions(db=db, **kwargs)
+        store = ControllerStore(db)
+        yield ControllerTransitions(store=store, **kwargs)
         db.close()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -659,10 +654,7 @@ def transition_task(
 
 def fail_worker(state: ControllerTransitions, worker_id: WorkerId, error: str) -> None:
     """Force-remove a worker via the explicit kill path used by the reaper thread."""
-    batch = state.drain_dispatch(worker_id)
-    if batch is None:
-        return
-    state.record_heartbeat_failure(worker_id, error, batch, force_remove=True)
+    state.fail_workers([(worker_id, None, error)])
 
 
 # =============================================================================

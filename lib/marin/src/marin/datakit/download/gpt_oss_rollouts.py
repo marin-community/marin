@@ -12,7 +12,7 @@ assistant response. We render these into a single document.
 
 import hashlib
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 from zephyr.readers import load_jsonl
 

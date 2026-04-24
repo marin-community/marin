@@ -10,8 +10,8 @@ from typing import Literal
 from urllib.parse import urlparse
 
 import requests
-from fray.v2 import current_client
-from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+from fray import current_client
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode

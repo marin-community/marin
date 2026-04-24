@@ -838,7 +838,7 @@ def run_stage(
         elif isinstance(op, Reduce):
             # Build ScatterReader directly from per-mapper sidecars, then
             # merge sorted chunks and reduce per key.
-            from zephyr.execution import ScatterReader
+            from zephyr.shuffle import ScatterReader
 
             shard = ctx.shard
             if not isinstance(shard, ScatterReader):

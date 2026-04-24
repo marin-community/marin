@@ -170,7 +170,7 @@ def service(state, scheduler, tmp_path):
     log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
@@ -190,7 +190,7 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
     log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
@@ -1042,7 +1042,7 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
     log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
@@ -1074,7 +1074,7 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path):
     log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,

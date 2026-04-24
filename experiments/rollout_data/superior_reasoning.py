@@ -4,10 +4,11 @@
 """Alibaba-Apsara/Superior-Reasoning-SFT-gpt-oss-120b rollout dataset.
 
 Usage:
-    uv run lib/marin/src/marin/run/ray_run.py -- python experiments/rollout_data/superior_reasoning.py
+    uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
+      -- python -m experiments.rollout_data.superior_reasoning
 """
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from marin.datakit.download.superior_reasoning import download_superior_reasoning_step
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec

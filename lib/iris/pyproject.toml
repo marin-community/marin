@@ -66,8 +66,6 @@ dev = [
     "pytest>=8.4",
 ]
 
-[tool.hatch.build.hooks.custom]
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/iris"]
 
