@@ -69,10 +69,10 @@ def _build_muon_optimizer(warmup: float = 0.1) -> GrugMuonConfig:
 
 
 CONFIGS: list[tuple[str, bool]] = [
-    # ("adamh", False),  # already submitted
-    # ("adamh", True),  # already submitted
-    # ("muon", False),  # already submitted
-    # ("muon", True),  # already submitted
+    ("adamh", False),
+    ("adamh", True),
+    ("muon", False),
+    ("muon", True),
     ("muon-nowarmup", False),
     ("muon-nowarmup", True),
 ]

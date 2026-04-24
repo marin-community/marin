@@ -36,6 +36,12 @@ class GrugModelConfig:
     vocab_size: int
     hidden_dim: int = 2048
     intermediate_dim: int = 5632  # dense MLP intermediate dim (3x hidden_dim)
+    # Legacy MoE fields (unused in barebones, kept for heuristic/train.py compat).
+    shared_expert_intermediate_dim: int = 0
+    num_experts: int = 1
+    num_experts_per_token: int = 1
+    num_kv_heads: int = 16
+    router_z_loss_coef: float = 0.0
     num_layers: int = 24
     num_heads: int = 16
     head_dim: int | None = None
