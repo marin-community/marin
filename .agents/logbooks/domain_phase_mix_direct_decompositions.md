@@ -133,3 +133,490 @@
 - Next action:
   - Treat `anchor_exp_shared_score_2d` and `anchor_exp_shared_score_1d` as the only promising Chinchilla-lineage variants.
   - If continuing this thread, refine only those, not the additive or base-only families.
+
+### 2026-04-24 00:10 - session-9 candidates on corrected v29 packet
+- Hypothesis: even though session 9 used the stale v28 packet, its strongest ideas may survive on the corrected v29 canonical dataset if evaluated only as model families, not as stale leaderboard claims.
+- Command:
+  - `uv run --with matplotlib python experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29/reference_outputs/session9_corrected_candidate_revalidation_20260424/scripts/run_scalc_joint_law.py --packet-root experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29 --out experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29/reference_outputs/session9_corrected_candidate_revalidation_20260424/scalc_s6`
+  - `uv run --with matplotlib python experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29/reference_outputs/session9_corrected_candidate_revalidation_20260424/scripts/run_gdc_joint_law.py --packet-root experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29 --out experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29/reference_outputs/session9_corrected_candidate_revalidation_20260424/gdc_s7`
+  - `uv run --with matplotlib python experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29/reference_outputs/session9_corrected_candidate_revalidation_20260424/scripts/run_grp_domain_residual_continuation.py --root experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29 --out-dir experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29/reference_outputs/session9_corrected_candidate_revalidation_20260424/grp_domain_s5`
+  - `uv run python experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29/reference_outputs/session9_corrected_candidate_revalidation_20260424/scripts/run_grpsc_direct_law_20260424.py --packet-root experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29 --out experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29/reference_outputs/session9_corrected_candidate_revalidation_20260424/grpsc_s2`
+  - `uv run --with matplotlib python experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29/reference_outputs/session9_corrected_candidate_revalidation_20260424/scripts/evaluate_corrected_holdouts.py`
+- Config:
+  - Corrected v29 packet with non-embedding `model_size`.
+  - Shared seed-7 corrected split from corrected q/support: `570` train, `61` holdout, including `27` fixed historical-520M rows.
+  - All-1.2B holdout: `4` validation rows, `627` train rows.
+  - Revalidated session-6 SCalC, session-7 GDC, session-5 GRP-domain residual, and session-2 GRPSC candidate families.
+- Result:
+  - Session 7 GDC dual heads are the strongest corrected predictive candidates.
+  - `s7_gdc_frontier_dual_rmse`:
+    - seed-7 corrected holdout RMSE `0.006232`, Spearman `0.985616`, slope `0.967763`, std ratio `0.971371`
+    - fixed historical-520M RMSE `0.004013`, Spearman `0.982906`, slope `0.966213`, std ratio `0.977576`
+    - all-1.2B holdout RMSE `0.007869`
+  - `s7_gdc_frontier_dual_drop` has the best all-1.2B RMSE (`0.006795`) and near-exact fixed-520M drop ratios, but weaker seed-7/fixed RMSE than `dual_rmse`.
+  - Best compact-ish candidates:
+    - `s6_scalc_p1_scalegamma` (`83` params): fixed historical-520M RMSE `0.005546`, slope `0.898567`, std ratio `0.944438`; all-1.2B RMSE `0.011887`
+    - `s7_compact_drop` (`119` params): fixed historical-520M RMSE `0.007773`, all-1.2B RMSE `0.007972`
+  - Corrected q/support baseline:
+    - seed-7 corrected holdout RMSE `0.010554`
+    - fixed historical-520M RMSE `0.007188`, slope `0.780274`, std ratio `0.815564`
+    - all-1.2B RMSE `0.011630`
+  - Session 5 and session 2 compact forms no longer cleanly beat q/support after correction. Session 2 frontier fixes fixed-520M drop ratios but fails all-1.2B RMSE (`0.033983`).
+- Interpretation:
+  - The session-9 result survives as a structural lesson: use a separate continuation/drop head instead of forcing target-budget multiplier effects through the same floor-log head.
+  - The previous session-7 monotonicity objection on `60M -> 130M` is invalid under corrected non-embedding `N`, since the historical "130M" point has fewer non-embedding parameters than the 60M swarm.
+  - The live target should be distilling the session-7 dual-head law into a smaller model, with `s6_scalc_p1_scalegamma` as the compact baseline to beat.
+- Next action:
+  - Build a local distilled dual-head family: q/support or GRP base body plus explicit continuation head trained on same-mixture multiplier pairs.
+  - Replace label-order monotonicity checks with corrected non-embedding-`N` and `D` monotonicity checks.
+  - Treat raw optimum diagnostics as downstream; prediction shape is now the primary validated improvement.
+
+### 2026-04-24 01:05 - historical 20M row ablation
+- Hypothesis: the nominal-130M / corrected-20M rows may be off-family enough that removing them from training improves larger-scale prediction.
+- Command:
+  - `uv run --with matplotlib --with scipy --with scikit-learn --with jax --with jaxlib python experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29/reference_outputs/session9_corrected_candidate_revalidation_20260424/scripts/evaluate_drop20m_ablation.py`
+- Config:
+  - Same corrected v29 packet and same held-out rows as the session-9 revalidation.
+  - Compared `all_train` against `drop_20m_train`.
+  - Seed-7 split: `570 -> 536` train rows after removing `34` 20M rows; `5` 20M rows remain in the random supplement holdout.
+  - All-1.2B split: `627 -> 588` train rows after removing all `39` 20M rows.
+  - Refit q/support, S6 SCalC compact/frontier, and S7 compact/dual candidates under both train sets.
+- Result:
+  - Removing 20M does not generally improve larger-scale holdout prediction.
+  - Fixed historical-520M RMSE:
+    - `s7_gdc_frontier_dual_rmse`: `0.004013 -> 0.011012`
+    - `s6_scalc_frontier_scalegamma`: `0.004563 -> 0.008349`
+    - `s6_scalc_p1_scalegamma`: `0.005546 -> 0.008880`
+    - q/support: `0.007188 -> 0.012950`
+    - `s7_compact_drop`: `0.007773 -> 0.006830` (only clear fixed-520M improvement)
+  - All-1.2B RMSE:
+    - `s7_gdc_frontier_dual_drop`: `0.006795 -> 0.016693`
+    - `s7_gdc_frontier_dual_rmse`: `0.007869 -> 0.010610`
+    - `s7_compact_drop`: `0.007972 -> 0.016291`
+    - q/support: `0.011630 -> 0.028605`
+    - S6 variants improve slightly: frontier `0.010194 -> 0.009767`, compact `0.011887 -> 0.011534`
+  - On seed-7 holdout excluding the 20M random supplement rows, dropping 20M still hurts the leading models:
+    - `s7_gdc_frontier_dual_rmse`: `0.006357 -> 0.009593`
+    - q/support: `0.010554 -> 0.012590`
+    - S6 frontier: `0.007302 -> 0.008834`
+    - S7 dual-drop and compact improve slightly, but remain worse than the all-train dual-rmse lead.
+  - Fixed-520M multiplier-drop calibration gets worse for the current corrected leader when 20M is removed:
+    - `s7_gdc_frontier_dual_rmse` drop ratios change from roughly `1.03 / 1.00 / 1.12` to `0.43 / 0.41 / 0.50`.
+- Interpretation:
+  - The 20M rows are visually suspicious in scale plots, but they are not merely noise for the current predictive laws. They provide useful low-N curvature / continuation signal.
+  - Dropping them can help isolated variants, especially S7 compact on fixed-520M and S6 on the tiny 1.2B holdout, but it damages the strongest overall models.
+  - The right response is not to discard 20M. Keep them, but add diagnostics/regularization that prevent the model from treating them as an ordinary in-family middle-scale point.
+- Next action:
+  - Keep 20M rows in the canonical modeling dataset.
+  - Add explicit scale-family / architecture-offset diagnostics if the scaling-law-respecting forms show systematic 20M residuals.
+  - Do not use nominal scale order for any monotonicity or scale-trajectory check.
+
+### 2026-04-24 01:45 - scaling-respecting law sprint
+- Hypothesis: the original fixed-mixture scaling-law constraint may be necessary; if enforced directly, a model should reduce to a monotone power law in corrected non-embedding `N` and realized `D` whenever mixture `w` is fixed.
+- Command:
+  - `uv run --with matplotlib --with scipy --with tabulate python experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29/reference_outputs/session9_corrected_candidate_revalidation_20260424/scripts/run_scaling_respecting_law_20260424.py`
+- Config:
+  - Corrected v29 packet.
+  - Candidate form:
+    - `L(w,N,D) = E(w) + A(w) N^-alpha(w) + B(w) D^-beta(w) [+ C(w) N^-alpha2(w) D^-beta2(w)]`
+    - plus an equivalent anchored parameterization `M(w) + A(w)(N^-alpha(w)-1) + B(w)(D^-beta(w)-1) [+ ...]`
+  - `A`, `B`, optional `C` positive by construction.
+  - exponents constrained to `[0.01, 0.80]`.
+  - mixture features restricted to phase/family/domain composition; no `N,D` inside the mixture body.
+  - pointwise loss plus optional same-mixture multiplier-drop loss.
+- Result:
+  - Monotonicity guarantee worked: all `12` variants had `0 / 13440` numerical monotonicity violations.
+  - Predictive fit was poor relative to current baselines.
+  - Best constrained candidate on seed-7 holdout was `slaw_family_global`:
+    - seed-7 holdout RMSE `0.040878`, slope `0.644`, std ratio `0.730`
+    - fixed historical-520M RMSE `0.056046`, bias `+0.052416`
+    - all-1.2B RMSE `0.048884`
+  - Anchor parameterization did not fix the problem:
+    - `slaw_anchor_family_global`: seed-7 holdout RMSE `0.052947`, fixed-520M RMSE `0.054894`
+  - Drop-loss variants got good fixed-520M drop ratios in some cases:
+    - `slaw_family_mixexp_drop1`: drop ratios `1.015 / 0.996 / 1.044`
+    - but level calibration remained badly biased, especially on fixed-520M and 1.2B.
+- Interpretation:
+  - The strict end-to-end scaling-respecting class, with only simple composition features for the mixture body, is much too weak.
+  - This does not rule out the structural constraint. It says the mixture body/anchor component cannot be this simple.
+  - The failure mode is mostly level/asymptote calibration, not monotonicity or target-budget drop shape.
+- Next action:
+  - Treat this as a negative baseline: "simple mixture-conditioned power law" is insufficient.
+  - Try scaling-respecting continuation on top of a stronger anchor/body, rather than asking one constrained law to learn both mixture quality and scale transfer from scratch.
+
+### 2026-04-24 02:00 - known-60M anchor scaling probe
+- Hypothesis: if same-mixture 60M BPB is known exactly, a monotone power-law continuation may be enough; this isolates the scaling component from the mixture-anchor problem.
+- Command:
+  - `uv run --with matplotlib --with scipy --with tabulate python experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29/reference_outputs/session9_corrected_candidate_revalidation_20260424/scripts/run_known60_anchor_scaling_probe_20260424.py`
+- Config:
+  - Diagnostic only, not deployable.
+  - For each target row with a matching 60M mixture, predict:
+    - `L(w,N,D) = L_60M(w) + A(w)(N^-alpha - N_60^-alpha) + B(w)(D^-beta - D_60^-beta)`
+  - Tested global and family-conditioned positive `A/B`, with and without same-mixture drop loss.
+- Result:
+  - Fixed historical-520M:
+    - `known60_global_drop1`: RMSE `0.015619`, bias `+0.000291`, slope `0.938`, std ratio `1.292`
+    - `known60_family_drop1`: RMSE `0.017905`
+    - best no-drop family/global variants were worse (`0.021-0.023`)
+  - All-1.2B holdout, only `3` rows with known 60M anchors:
+    - `known60_family`: RMSE `0.008572`, competitive with S7 but too small a subset for a strong claim
+    - `known60_global`: RMSE `0.016997`
+  - Fixed-520M drop ratios:
+    - `known60_global`: `0.993 / 0.804 / 0.761`
+    - `known60_global_drop1`: `0.743 / 0.584 / 0.530`
+    - `known60_family`: `1.052 / 0.772 / 0.743`
+- Interpretation:
+  - Accurate same-mixture anchoring helps substantially versus the naive end-to-end constrained law.
+  - It still does not beat q/support/S6/S7 on fixed-520M, so "known 60M anchor + simple global/family continuation" is not enough.
+  - The positive result is that monotone continuation is not obviously impossible; the negative result is that it needs richer continuation or more anchors than a single 60M point.
+- Next action:
+  - If pursuing the structural hypothesis, use the current S7/S6 continuation diagnostics as donor features but enforce monotonicity in a stronger anchored model.
+  - Consider multi-anchor/isoflop-sweep versions: with reliable same-mixture points at two or more scales, the continuation component should be much easier to identify.
+
+### 2026-04-24 02:20 - anchored strict-law and beta/drop diagnostics
+- Hypothesis: the Gemini/Opus responses converged on a better-conditioned strict form:
+  - `L(w,N,D) = anchor(w) + A(w)(N^-alpha - N_ref^-alpha) + B(w)(D^-beta - D_ref^-beta)`
+  - with `N_ref=60M` corrected non-embedding params, `D_ref=1.2B`, `A/B > 0`, and bounded positive exponents.
+- Command:
+  - `uv run --with matplotlib --with scipy --with pandas --with numpy python experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29/reference_outputs/session9_corrected_candidate_revalidation_20260424/scripts/run_anchored_scaling_sprint_20260424.py`
+- Config:
+  - Corrected v29 packet.
+  - Added direct `beta_hat` audit from same-mixture `0.5x/1.0x/2.0x` triples using `beta = log2((L_0.5 - L_1.0) / (L_1.0 - L_2.0))`.
+  - Trained difference-only drop heads on seed-7 training pairs:
+    - `drop_global_beta_global` (2 params)
+    - `drop_family_beta_global` (31 params)
+    - `drop_domain_beta_global` (107 params)
+    - `drop_family_beta_mixture` (60 params)
+  - Trained anchored strict-law candidates with family/domain features and either joint anchor training or frozen 60M ridge anchor.
+- Result:
+  - Complete triple beta estimates:
+    - `100M/6B`: `n=13`, mean `0.586`, std `0.337`, range `0.118..1.487`
+    - `20M/2.6B`: `n=13`, mean `0.719`, std `0.495`, range `-0.046..1.902`
+    - `340M/10.4B`: `n=3`, mean `0.365`, std `0.066`, range `0.315..0.440`
+  - Difference-only drop heads generalize in shape but still underpredict fixed-340M drops:
+    - best fixed-340M head `drop_domain_beta_global`: RMSE `0.00689`, bias `-0.00650`, mean drop ratio `0.749`
+    - lower-capacity heads are worse: family global ratio `0.729`, global ratio `0.710`
+  - Anchored strict-law candidates are not competitive:
+    - best seed-7 holdout anchored model `anchored_family_freeze_drop1`: RMSE `0.03197`
+    - best fixed-340M anchored model `anchored_family_freeze_drop1`: RMSE `0.03825`, bias `+0.03214`, slope `0.241`
+    - best all-900M anchored model `anchored_family_freeze_drop1`: RMSE `0.01412`, still behind S7/S6/q-support but closer due tiny 4-row holdout.
+  - Baselines remain far ahead on fixed-340M:
+    - S7 dual-rmse `0.00401`
+    - S6 frontier `0.00456`
+    - S6 compact `0.00555`
+    - q/support `0.00719`
+- Interpretation:
+  - The triple-derived beta audit is valuable: fixed-340M data continuation has a fairly coherent beta around `0.36`, while 20M/100M triples have much higher and noisier implied beta. That scale dependence is a real warning against one global `beta` over the full corrected range.
+  - Difference-only training confirms the key failure mode: current mixture features trained on lower-scale pairs underpredict fixed-340M target-budget drops by about `25%`. This is almost exactly the q/support-style drop compression problem, isolated away from absolute-level errors.
+  - The anchored strict-law form is mathematically right but empirically not enough with a learned linear/family/domain anchor. The level error on fixed-340M is too large, so anchor/body quality remains the blocker.
+- Next action:
+  - Do not promote the simple anchored strict-law candidate.
+  - Use the beta/drop audit in the next packet as evidence that continuation should be fit using difference targets and probably scale-dependent or scale-pooled beta.
+  - If continuing locally, test strict continuation on top of an S6/S7-style anchor or distill S7 predictions into the anchored form to separate capacity limits from estimation limits.
+
+### 2026-04-24 02:35 - S7-to-anchored-law distillation
+- Hypothesis: if the anchored strict-law form can closely distill S7 predictions, then the structural form has enough capacity and the problem is mainly estimation from sparse labels; if not, the form/body is still missing S7's representational structure.
+- Command:
+  - `uv run --with matplotlib --with scipy --with pandas --with numpy python experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29/reference_outputs/session9_corrected_candidate_revalidation_20260424/scripts/run_s7_distill_anchored_scaling_20260424.py`
+- Config:
+  - Teacher: `s7_gdc_frontier_dual_rmse` fit on the same seed-7 training rows.
+  - Student: same anchored strict-law family/domain variants from the prior sprint.
+  - Eval: fit student to teacher predictions on seed-7 train rows, then evaluate against teacher and actual labels on seed-7 holdout.
+- Result:
+  - Best in-sample teacher distillation was `distill_domain_freeze_drop1`: train RMSE to teacher `0.01218`, Spearman `0.961`, slope `0.954`.
+  - But holdout distillation was poor:
+    - `distill_family_freeze_drop1`: teacher-holdout RMSE `0.02982`
+    - `distill_domain_freeze_drop1`: teacher-holdout RMSE `0.04933`
+  - Teacher's own holdout RMSE to actual was `0.00623`.
+- Interpretation:
+  - The simple anchored strict-law variants can partially fit the S7 teacher in-sample, especially with domain features, but they do not generalize to held-out mixtures.
+  - This points to missing mixture-body structure / regularization, not just sparse-label estimation. A strict law probably needs an S6/S7-like feature map, not only raw family/domain composition.
+- Next action:
+  - For the next packet, frame "anchored strict continuation" as a promising constraint but not as a solved architecture.
+  - Ask for independent forms that preserve fixed-mixture monotonic scaling while using a stronger mixture body or scale-dependent coefficient pooling.
+
+### 2026-04-24 03:05 - ChatGPT Pro packet v30
+- Goal: prepare the next fresh-session packet around corrected non-embedding `N`, independent model search, and explicit structural priors.
+- Packet:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30/`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30.zip`
+- Added / updated:
+  - full background and request docs for joint mixture-scale modeling
+  - `STRUCTURAL_PRIORS.md` covering fixed-mixture scaling-law behavior and fixed-scale mixture-regression behavior
+  - first-pass sealed-baseline rule that delays S7/S6/q-support implementation inspection
+  - corrected empirical baseline table using the `analysis_dataset` contract
+  - GRP no-`L2` donor framing and 60M/300M fit/optimum failure summary
+  - anchored scaling, beta/drop, known-60 anchor, and S7-distillation local negative results
+- Validation:
+  - manifest has `71` named artifacts and no missing artifact paths
+  - packet zip contains `696` files and excludes `.DS_Store`, `__pycache__`, and paper tarballs
+  - `data/nd_scale_runs.csv` and `data/nd_scale_packet.npz` both have `631` rows
+  - `model_sizes` match CSV `non_embedding_params` exactly
+  - NPZ `weights` match normalized CSV phase weights to numerical precision
+  - corrected row counts remain `39 / 293 / 268 / 27 / 4` for `20M / 60M / 100M / 340M / 900M`
+- Packet framing:
+  - ask for freedom to explore broad forms, but require a serious independent candidate before inspecting baseline internals
+  - make Chinchilla Approach 3 / anchored scale decomposition the preferred theoretical direction, while clearly documenting that naive local versions failed
+  - require prediction-shape diagnostics first, then raw optima, then constrained deployment optima
+- CC review polish:
+  - standardized fixed corrected `340M/10.4B` naming in top-level docs
+  - promoted the beta-from-triples diagnostic into the fresh-session prompt
+  - demoted `DML_NOTES.md` to optional historical context rather than an active recommended starting point
+  - added a provenance note for old `fixed520` / session-named artifact paths
+- Packet slimming:
+  - moved large local-only reference outputs to `chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/`
+  - reduced packet directory from `196M` to `39M` and `reference_outputs/` from `172M` to `15M`
+  - rebuilt zip at `22M` compressed / `39M` uncompressed with `551` files
+  - updated `build_packet.py` so `PROMPT_FOR_FRESH_CHATGPT_PRO.md` stays local and is always excluded from the zip and manifest
+  - kept `MANIFEST.json` in the zip while excluding it from its own file list
+
+### 2026-04-24 03:55 - Session 10 candidate revalidation on corrected v30 data
+- Goal: validate the strongest ChatGPT Pro 5.5 Session 10 candidates on the corrected non-embedding-`N` v30 packet, including fixed corrected `340M/10.4B` and all corrected `900M/24B` holdouts.
+- Inputs:
+  - Session 1 empirical archive from `/Users/calvinxu/Downloads/chatgpt_pro_session_10`
+  - Session 2 structural archive from `/Users/calvinxu/Downloads/chatgpt_pro_session_10`
+  - Session 6 CGC archive from `/Users/calvinxu/Downloads/chatgpt_pro_session_10`
+  - Corrected packet `chatgpt_pro_hybrid_data_mixing_packet_v30`
+- Outputs:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/session10_candidate_revalidation_20260424/summary/selected_holdout_metrics.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/session10_candidate_revalidation_20260424/summary/selected_fixed340_pred_vs_actual.png`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/session10_candidate_revalidation_20260424/summary/selected_all900_pred_vs_actual.png`
+- Fixed corrected `340M/10.4B` results:
+  - `S7 GDC frontier`: RMSE `0.004013`, bias `+0.002993`, slope `0.966`, std ratio `0.978`
+  - `S6 CGC compact`: RMSE `0.004376`, bias `+0.001390`, slope `0.899`, std ratio `0.924`
+  - `S1 frontier mu10`: RMSE `0.004663`, bias `+0.001974`, slope `0.925`, std ratio `0.953`
+  - `S6 SCalC compact`: RMSE `0.005546`, slope `0.899`
+  - `S1 compact logfloor`: RMSE `0.005666`, slope `0.832`
+  - `S2 compact structural`: RMSE `0.007176`, bias `+0.001851`, slope `0.969`, std ratio `1.046`
+  - `S2 frontier envelope`: RMSE `0.007126`, slope `0.977`
+- Corrected `900M/24B` leave-scale-out results:
+  - Recomputed Session 1 using a non-leaky protocol: fit all non-900M rows and evaluate the four 900M rows.
+  - `S1 frontier mu10`: RMSE `0.003647`, bias `+0.002993`, slope `0.913`, std ratio `0.916`
+  - `S7 GDC frontier`: RMSE `0.007869`, slope `0.573`
+  - `S1 compact logfloor`: RMSE `0.008054`, slope `0.646`
+  - `S2 frontier envelope`: RMSE `0.008426`, slope `0.805`
+  - `S6 CGC compact`: RMSE `0.011659`, slope `0.469`
+  - `S2 compact structural`: RMSE `0.012217`, slope `0.484`
+- Fixed corrected `340M/10.4B` same-mixture drop ratios:
+  - `S7`: `0.5->1 = 1.027`, `0.5->2 = 1.003`, `1->2 = 1.121`
+  - `S6 CGC compact`: `0.985 / 0.822 / 0.812`
+  - `S2 compact structural`: `0.989 / 0.895 / 0.935`
+  - `S1 frontier mu10`: `0.981 / 0.921 / 1.044`
+- Optimum diagnostics:
+  - `S6 CGC compact` seed-7 raw unrestricted pool optimum is observed/non-collapsed: phase-0 broad/tech/reasoning around `0.497/0.330/0.173`, phase-1 around `0.508/0.405/0.088`, nearest observed TV `0`.
+  - `S6 CGC frontier` raw optimum collapses to phase-0 reasoning and phase-1 tech.
+  - `S2 compact structural` raw optima collapse at `100M`, `340M`, and `900M`; only the `60M` raw optimum is observed/sane.
+  - `S1 frontier mu10` is predictive but raw optimum collapses, so it should be treated as a donor mechanism, not a deployable law.
+- Interpretation:
+  - Session 1's `mu^-beta - 1` empirical continuation is the strongest prediction-shape donor, and its corrected 900M performance survives a non-leaky refit.
+  - Session 6's CGC compact candidate is the best compact candidate that also has a sane raw seed-7 fixed-340M optimum.
+  - Session 2 remains the cleanest structural law with fixed-mixture scaling behavior, but its predictive performance and raw optima are not yet good enough for deployment.
+
+### 2026-04-24 04:15 - Session 1 continuation graft onto Session 2 structural law
+- Goal: test whether the strongest Session 1 continuation mechanism can improve the clean Session 2 structural law without giving up the structural fixed-mixture scaling constraint.
+- Script:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/run_session10_hybrid_continuation_20260424.py`
+- Command:
+  - `uv run --with matplotlib --with numpy --with pandas --with scipy python experiments/domain_phase_mix/exploratory/two_phase_many/run_session10_hybrid_continuation_20260424.py`
+- Outputs:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/session10_candidate_revalidation_20260424/hybrid_continuation/hybrid_metrics_seed7_fit.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/session10_candidate_revalidation_20260424/hybrid_continuation/hybrid_fixed340_pred_vs_actual.png`
+- Tested residual heads:
+  - base `S2 compact structural`
+  - nonnegative constant `c(w)(mu^-0.8 - 1)` residual
+  - nonnegative family-share residuals with beta `0.4`, `0.8`, and `1.2`
+- Result:
+  - All nonnegative continuation coefficients fit to zero.
+  - Metrics are identical to the S2 compact base: fixed-340M RMSE `0.007176`, slope `0.969`; all-900M RMSE `0.012217` under the proper all-non-900 refit protocol.
+- Diagnosis:
+  - On seed-train same-mixture multiplier pairs, the S2 compact residual targets are negative on average, so a helpful correction would need negative coefficients.
+  - Negative coefficients would undermine the monotone continuation semantics this graft was trying to preserve.
+- Interpretation:
+  - Do not force the Session 1 continuation head into Session 2 compact as a nonnegative structural correction.
+  - If reusing Session 1's mechanism, it probably needs to be integrated into the full model fit with a different anchor/body, not added as a post-hoc monotone residual to S2 compact.
+
+### 2026-04-24 04:35 - compact structural grid around Session 2
+- Goal: see whether the clean structural law can be improved locally by changing anchor features, target-budget coefficient features, beta, and same-mixture pair weighting.
+- Output:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/session10_candidate_revalidation_20260424/session2_structural_grid/structural_grid_metrics.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/session10_candidate_revalidation_20260424/session2_structural_grid/top_structural_grid_fixed340.png`
+- Grid:
+  - anchors: `grp_famsqrt`, `grp_selectedsqrt`
+  - target-budget heads: `family`, `family_quality`, `domain_sqrt`
+  - beta: `0.25`, `0.35`, `0.45`, `0.60`
+  - pair weight: `0`, `2`, `6`, `12`
+- Result:
+  - Best compact balance remains essentially original Session 2:
+    - `grp_famsqrt__Bfamily__b0.25__pw6`, `61` params, holdout RMSE `0.011284`, fixed-340M RMSE `0.007176`, fixed-340M slope `0.969`, all-900M RMSE `0.012217`.
+  - `family_quality` does not materially improve the structural compact candidate.
+  - High-capacity `domain_sqrt` heads can improve fixed-340M shape, but fail 900M extrapolation badly:
+    - `grp_selectedsqrt__Bdomain_sqrt__b0.25__pw6`, `179` params, fixed-340M RMSE `0.004907`, slope `0.970`, but all-900M RMSE `0.048972`.
+- Interpretation:
+  - The structural form can be made to fit fixed-340M with more body capacity, but that capacity overfits and destroys leave-scale extrapolation.
+  - No local grid variant currently beats the original 61-param Session 2 compact as a clean structural baseline.
+  - The next serious structural attempt needs better regularized mixture-body structure, not just more domain coefficients.
+
+### 2026-04-24 04:55 - S2 structural upgrade sprint
+- Hypothesis: keep the Session 2 fixed-mixture power-law skeleton, but improve it by moving capacity only into mixture-dependent terms:
+  - stronger GRP/safety anchors for `E(w)`
+  - richer nonnegative `A(w), B(w), C(w)` heads
+  - small family-dependent beta variants
+  - explicit mixture-only safety penalties for raw optima
+  - higher same-mixture pair/drop weighting
+- Script:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/run_s2_structural_upgrade_sprint_20260424.py`
+- Command:
+  - `uv run --with matplotlib --with scipy --with pandas --with numpy python experiments/domain_phase_mix/exploratory/two_phase_many/run_s2_structural_upgrade_sprint_20260424.py`
+- Outputs:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/s2_structural_upgrade_sprint_20260424/REPORT.md`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/s2_structural_upgrade_sprint_20260424/metrics_seed7_fit.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/s2_structural_upgrade_sprint_20260424/all900_protocol_metrics.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/s2_structural_upgrade_sprint_20260424/optimum_diagnostics.csv`
+- Result:
+  - Original `s2_base` remains the best fixed-340M structural candidate:
+    - `61` params, fixed-340M RMSE `0.007176`, Spearman `0.919`, slope `0.969`, std ratio `1.046`.
+  - Best seed-7 holdout / all-900M variant is `s2_anchor_safety`:
+    - `71` params, seed-7 holdout RMSE `0.010951`, slope `1.013`, std ratio `1.025`
+    - fixed-340M RMSE `0.007407`, slope `1.035`, std ratio `1.095`
+    - all-900M leave-scale-out RMSE `0.010319`, Spearman `1.0`, slope `0.529`
+    - fixed-340M drop ratios `1.022 / 0.998 / 1.043`, better than base `0.989 / 0.895 / 0.935`.
+  - Beta `0.36` did not help after refitting coefficients:
+    - `s2_beta036` fixed-340M RMSE worsened to `0.008127`, and drop ratios worsened to `0.893 / 0.782 / 0.784`.
+  - Higher pair weighting also did not help:
+    - `s2_pair20` fixed-340M RMSE `0.015255` on seed-7 holdout and worse fixed-340M drop ratios.
+  - Richer family/domain heads mostly overfit:
+    - `s2_domain_b_head`: fixed-340M RMSE `0.010612`, all-900M RMSE `0.044510`
+    - `s2_strong_rich_heads`: fixed-340M RMSE `0.007600`, all-900M RMSE `0.087308`.
+  - Explicit safety penalties up to `0.2` do not fix the main raw optimum pathology without damaging 900M:
+    - base raw 340M optimum is not one domain, but it is still a family collapse: phase-0 broad `0.974`, phase-1 broad `1.000`.
+    - `s2_base_safety200` shifts phase-0 away from broad collapse but phase-1 remains broad `1.000`, and all-900M RMSE degrades to `0.140322`.
+- Interpretation:
+  - The most useful positive direction is `grp_famsqrt_safety` as an anchor: it improves holdout RMSE, drop ratios, and 900M RMSE while preserving the power-law skeleton.
+  - The core optimum failure is sharper now: S2 is not only vulnerable to domain corners; it can also prefer all-mass family-level collapse. Existing entropy/support/safety terms are too weak or too blunt.
+  - Simply increasing beta, pair weighting, or head width does not solve this. More capacity quickly overfits leave-scale-out.
+- Next action:
+  - Keep original S2 as the clean 61-param structural reference.
+  - Treat `s2_anchor_safety` as the only promising local upgrade, but not a replacement because raw optima are still bad.
+  - If continuing, focus on a better mixture anchor/objective for raw-simplex extrapolation, likely by fitting an observed-support-aware or convex-hull-aware mixture prior as part of `E(w)` rather than adding large post-hoc safety penalties.
+
+### 2026-04-24 05:30 - S2 plus explicit power-beta continuation
+- Hypothesis: the ChatGPT Pro power-beta continuation result could be grafted onto the clean Session 2 Chinchilla-style law by separating realized tokens into `D_base = D / mu` and modeling target-budget continuation explicitly:
+  - `L(w,N,D,mu) = E(w) + A(w)u_N + B(w)u_Dbase + C(w)u_NDbase + G(w,N,D_base)(mu^-beta(w,N,D_base) - 1)`.
+  - This preserves the fixed-mixture scaling-law property at `mu=1` and gives an explicit power law in `mu` for same-mixture continuation.
+- Script:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/run_s2_powerbeta_extension_20260424.py`
+- Command:
+  - `uv run --with matplotlib --with scipy --with pandas --with numpy python experiments/domain_phase_mix/exploratory/two_phase_many/run_s2_powerbeta_extension_20260424.py`
+- Outputs:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/s2_powerbeta_extension_20260424/REPORT.md`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/s2_powerbeta_extension_20260424/metrics_seed7_fit.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/s2_powerbeta_extension_20260424/all900_protocol_metrics.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/s2_powerbeta_extension_20260424/continuation_diagnostics.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/s2_powerbeta_extension_20260424/plots/fixed340_pred_vs_actual_top_variants.png`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v30_local_artifacts/reference_outputs/s2_powerbeta_extension_20260424/plots/all900_pred_vs_actual_protocol_top_variants.png`
+- Variants:
+  - constant-beta, scale-beta, p1-family-beta, richer amplitude, safety-anchor, family-quality heads, beta-0.36 base.
+  - Also tested `base_row_mode=mu1`, fitting the base law only on `mu=1` rows so continuation errors do not directly pollute the base level.
+- Result:
+  - Plain S2 still wins fixed-340M:
+    - `s2_base`: `61` params, fixed-340M RMSE `0.007176`, slope `0.969`, std ratio `1.046`.
+    - `s2_anchor_safety`: `71` params, fixed-340M RMSE `0.007407`, slope `1.035`, std ratio `1.095`.
+  - Best S2+power-beta fixed-340M variant is much worse:
+    - `s2pb_family_quality`: `98` params, fixed-340M RMSE `0.019342`, slope `0.820`, std ratio `1.009`.
+    - Most compact power-beta variants have fixed-340M RMSE around `0.020-0.023` with positive bias around `0.018-0.022`.
+  - All-900M leave-scale-out also worsens:
+    - best `s2pb_anchor_safety`: RMSE `0.020054`, slope `0.564`, std ratio `0.676`.
+    - compared with prior `s2_anchor_safety`: RMSE `0.010319`, and S2 base `0.012217`.
+  - The explicit continuation term fits same-mixture drops moderately well:
+    - pair RMSE around `0.0037-0.0047`, fixed-340M 0.5->1 drop ratios mostly `0.85-1.02`.
+    - beta triple fit remains noisy because only `16` seed-train triples are available.
+  - Structural sanity is preserved:
+    - no N, D_base, or mu monotonicity violations over the sampled grid for all variants.
+  - Raw optima remain pathological:
+    - power-beta variants inherit S2's family-collapse behavior or safety-anchor corner/collapse behavior.
+- Diagnosis:
+  - The power-beta continuation is not plug-compatible with the S2 anchor/head. It fixes part of the same-mixture drop geometry, but it shifts the absolute base level upward and destroys fixed-340M / 900M prediction quality.
+  - Fitting the base only on `mu=1` rows did not rescue the result, so this is not just base-label pollution from imperfect continuation residuals.
+  - The positive result from ChatGPT Pro's power-beta compact likely depends on the SCalC/continuous-ND GRP body and floor head, not just on the continuation term.
+- Interpretation:
+  - Keep S2 as the clean structural reference, not as the immediate promotion target.
+  - Do not graft power-beta continuation into S2 in the next packet as a claimed positive result.
+  - If pursuing this direction, ask for a unified body that learns `E(w)` and continuation jointly; the S2 anchor is currently too weak/misaligned once `D_base` and `mu` are separated.
+
+### 2026-04-24 12:10 - Session 12 local validation and combination probes
+- Goal: validate the strongest ChatGPT Pro Session 12 candidates locally on the corrected v31 packet and test whether the good ideas combine.
+- Commands:
+  - `uv run --with matplotlib --with scipy python /tmp/chatgpt_pro_session_12_review/5_joint_mixture_scale_structural_v31_mct/joint_mixture_scale_structural_v31_mct/code/run_mct_lrq_law.py --packet-root experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v31 --outdir experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/session12_local_validation_20260424/session5_mct_lrq`
+  - `uv run --with matplotlib --with scipy python /tmp/chatgpt_pro_session_12_review/4_joint_model_archive_v31_pareto/joint_model_archive_v31_pareto/code/run_rsp_pareto_law.py --packet-root experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v31 --out-dir experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/session12_local_validation_20260424/session4_rsp`
+  - `uv run --with matplotlib --with scipy python /tmp/chatgpt_pro_session_12_review/3_joint_mixture_scale_structural_law_v33_ordinal_isotonic_archive/joint_mixture_scale_v33_ordinal_isotonic/code/run_v33_ordinal_isotonic.py --packet-root experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v31 --powerbeta-root experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v31/DO_NOT_READ_FIRST_REFERENCE_FORMS/powerbeta_compact --out experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/session12_local_validation_20260424/session3_ordinal`
+  - Also reran Session 2 geometry guard and Session 10 phase-coupled guard scripts.
+- Outputs:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/session12_local_validation_20260424/REPORT.md`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/session12_local_validation_20260424/validated_candidate_summary.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/session12_local_validation_20260424/combination_probe/oracle_blend_probe.csv`
+- Result:
+  - Best strict-under-100 predictive wrapper is `oit99_token_barycenter`: holdout RMSE `0.009079`, fixed-340M RMSE `0.004398`, all-900M RMSE `0.010909`. Caveat: it is `PB98 + scale-only ordinal correction + support barrier`, and the raw argmin is unchanged before the barrier.
+  - Best compact structural candidate is `mct_lrq74_drop`: `74` params, holdout RMSE `0.010084`, fixed-340M RMSE `0.006080`, all-900M RMSE `0.010495`, sane raw optima.
+  - Best all-900M structural-ish candidate is `a3s_srg99_alt_C_finemath_stackfim`: `99` params, holdout RMSE `0.010285`, fixed-340M RMSE `0.005791`, all-900M RMSE `0.006733`, sane raw optima.
+  - Best RSP transfer candidate is `rsp95_rho070_d030_l2p2_transfer`: `100` scalars, holdout RMSE `0.011922`, fixed-340M RMSE `0.005910`, all-900M RMSE `0.007107`, sane raw optima.
+- Combination probes:
+  - Direct `MCT-LRQ + ordinal token tail` is negative. `mct_lrq74_drop_plus_refit_ordinal_tail` worsens to holdout RMSE `0.010970`, fixed-340M RMSE `0.007299`, all-900M RMSE `0.014257`.
+  - Oracle blends are very strong but leaky: best fixed-340M pair `a3s_srg99_alt_C_finemath_stackfim | oit99_midpivot` gets RMSE `0.003264`; best all-900M pair `mct_lrq74_drop_all900fit | rsp95_rho060_d040_l2p25_holdout_all900fit` gets RMSE `0.003946`.
+- Interpretation:
+  - Session 12 yielded components, not a clean replacement.
+  - The next real modeling direction should combine MCT-LRQ's structural body with train-only-learned SRG/RSP-style regularized residual capacity and a support/geometry prior. The Session 3 token-tail correction does not transfer directly to MCT-LRQ.
+  - Any ensemble/blend result must be treated as a diagnostic until weights are learned without evaluation-row leakage.
+
+### 2026-04-24 13:25 - MCT-LRQ quality/support residual probe
+- Goal: test whether the compact MCT-LRQ structural law improves with a small train-only quality/support residual, and check whether quality split awareness is already present.
+- Script:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/run_session12_quality_residual_sprint_20260424.py`
+- Command:
+  - `uv run --with matplotlib --with pandas --with scipy python experiments/domain_phase_mix/exploratory/two_phase_many/run_session12_quality_residual_sprint_20260424.py`
+- Outputs:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/session12_quality_residual_sprint_20260424/REPORT.md`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/session12_quality_residual_sprint_20260424/csv/quality_residual_metrics.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/session12_quality_residual_sprint_20260424/csv/quality_residual_predictions.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/session12_quality_residual_sprint_20260424/plots/pred_actual_fixed340_holdout.png`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/session12_quality_residual_sprint_20260424/plots/pred_actual_seed7_holdout.png`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/session12_quality_residual_sprint_20260424/plots/pred_actual_all900_leave_scale_out.png`
+- Quality-split audit:
+  - MCT-LRQ is already quality-split aware through its LRQ anchor:
+    - phase-0/phase-1 high-or-HQ sqrt mass
+    - phase-0/phase-1 low-quality sqrt mass
+    - synthetic and curated-technical sqrt masses
+    - family-share sqrt masses
+  - Plain S2 is less explicitly quality-split aware. It uses frozen GRP donor/family features and selected `_high`/curated domains, but its compact `grp_famsqrt` law does not have the same direct high-vs-low aggregate anchor.
+- Result:
+  - Clean mixture-only quality/support residuals preserve fixed-mixture scaling-law shape, but are negative:
+    - best fixed-340M structural residual: `mct_lrq74_balanced_qsplit_core_ridge10`, `89` params, RMSE `0.007990`, worse than MCT balanced base `0.006073`.
+    - best seed-7 structural residual: `mct_lrq74_balanced_qsplit_support_ridge10`, `95` params, RMSE `0.013784`, worse than MCT balanced base `0.010074`.
+    - best all-900M structural residual: `mct_lrq74_balanced_qsplit_support_ridge10`, `95` params, RMSE `0.028899`, much worse than MCT balanced base `0.010434`.
+  - The residuals lower training RMSE substantially (`~0.0266` to `~0.02165` on seed-7 train), so the failure is overfit/transfer, not lack of feature signal.
+  - Scale-interaction residual probes can improve all-900M RMSE (`~0.00565` best), but they do not preserve the clean structural property as written and are over 100 params for the best variant.
+- Interpretation:
+  - Do not promote a post-hoc quality/support residual on top of MCT-LRQ.
+  - The quality split is already being used efficiently in MCT-LRQ; adding more anchor width after fitting is harmful.
+  - If quality-dependent scale elasticity is pursued, it should be integrated as a jointly fitted nonnegative scale head, not as an unconstrained residual patch.
+
+### 2026-04-24 13:55 - Current best structural vs empirical report
+- Wrote consolidated report:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/current_best_models_report_20260424/REPORT.md`
+- Included generated artifacts:
+  - `csv/current_best_split_metrics.csv`
+  - `csv/candidate_summary_selected.csv`
+  - `csv/fixed340_drop_ratios_selected.csv`
+  - `csv/raw_optimum_family_debug_selected.csv`
+  - `plots/pred_actual_seed7.png`
+  - `plots/pred_actual_fixed340.png`
+  - `plots/pred_actual_all900.png`
+  - `plots/fixed340_drop_ratio_debug.png`
+  - `plots/raw_optimum_family_debug.png`
+- Current selection:
+  - Best structural: `mct_lrq74_balanced`, `74` constants.
+  - Best strict-under-100 empirical: `oit99_token_barycenter`, `99` parameters.
+  - Best near-budget empirical reference: `pcf_compact_p1fam10_powbeta_a4p64_gap025`, `102` parameters.
+- Interpretation:
+  - `mct_lrq74_balanced` is the clean law to keep developing.
+  - `oit99_token_barycenter` is useful as an empirical compact wrapper but is barrier-dependent.
+  - `pcf_compact_p1fam10_powbeta_a4p64_gap025` is the empirical performance bar if a small parameter-budget overrun is allowed.

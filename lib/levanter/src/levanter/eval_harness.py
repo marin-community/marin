@@ -1077,6 +1077,15 @@ class LmEvalHarnessConfig:
     These can be overridden on a per-request basis by the evaluation harness.
     """
 
+    eval_datasets_cache_path: str | None = None
+    """
+    Optional GCS path to pre-cached evaluation datasets.
+
+    When set, datasets will be synced from this GCS path to the local HuggingFace
+    datasets cache before loading tasks. This avoids HuggingFace API rate limiting
+    when multiple concurrent jobs all try to download the same evaluation datasets.
+    """
+
     @property
     def max_gen_toks(self) -> int:
         """Backward compatibility property for max_gen_toks."""

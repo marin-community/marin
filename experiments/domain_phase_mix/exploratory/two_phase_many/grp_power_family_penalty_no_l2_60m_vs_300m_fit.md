@@ -50,3 +50,12 @@ So the right conclusion is:
 See:
 
 - [/Users/calvinxu/Projects/Work/Marin/marin/docs/debug-log-grp-no-l2-300m-uniform-phase0.md](/Users/calvinxu/Projects/Work/Marin/marin/docs/debug-log-grp-no-l2-300m-uniform-phase0.md)
+
+## 2026-04-24 expanded debug sprint
+
+Artifacts: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/grp_no_l2_300m_debug_20260424_054825`
+
+Current conclusion: the 300M GRP no-L2 failure is both an optimizer issue and a model-family issue.
+The shallow optimizer can report the uniform phase-0 basin, but expanded searches expose lower-objective collapsed basins. More importantly, the original retained-exposure body often reaches boundary-saturated parameters and can become nearly insensitive to phase-0 composition.
+
+Best non-degenerate/lowest-RMSE diagnostic row by the current screen: `fast_moderate_clip_powell120` with full CV RMSE `0.007430`, full CV Spearman `0.919069`, raw phase-0 max `0.537608`, raw phase-1 max `0.315268`, and phase-0 sensitivity `5.966e-03`.

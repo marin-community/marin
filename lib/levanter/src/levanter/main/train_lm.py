@@ -323,6 +323,10 @@ def main(config: TrainLmConfig):
         ## OK, actually run training!
         trainer.train(state, train_loader)
 
+    # Ensure the last async checkpoint write is committed before the process exits.
+    if trainer.config.checkpointer is not None:
+        trainer._checkpointer.wait_until_finished()
+
     # This isn't necessary except when Levanter is run in a subprocess (as happens w/ ray)
     trainer.tracker.finish()
 
