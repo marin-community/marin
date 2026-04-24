@@ -9,22 +9,21 @@ transaction (read or write). :class:`ControllerStore` bundles every per-entity
 store and forwards ``transaction()`` / ``read_snapshot()`` to the underlying
 :class:`ControllerDB`.
 
-Dependency chain::
+Dependency chain (target state)::
 
     db.py        — connections, migrations, transaction context managers
     schema.py    — table DDL, row dataclasses, projections
     stores.py    — depends on { db, schema }; per-entity stores
-    transitions.py — depends on stores; never calls db.py directly
+    transitions.py — depends on stores; stores own the SQL
 
-Stores are the only place outside of ``db.py`` / ``schema.py`` that build
-SQL strings for the controller tables. ``transitions.py`` uses the store
-API; other callers (``service.py``, ``controller.py``) are migrated
-later as the pattern proves out.
-
-The layer is introduced incrementally. Phase 1 (this module as it stands)
-adds the scaffolding and folds the previous ``EndpointRegistry`` in as
-:class:`EndpointStore`. Subsequent phases move per-entity SQL out of
-``transitions.py`` into the relevant store class.
+The layer is introduced incrementally. The current state is mid-migration:
+``EndpointStore`` and ``JobStore`` are populated, while ``TaskStore``,
+``TaskAttemptStore``, ``WorkerStore``, ``DispatchQueueStore`` and
+``ReservationStore`` are still empty skeletons. ``ControllerTransitions``
+keeps a temporary ``self._db`` backdoor for SQL that has not yet been
+moved (tasks, workers, dispatch queue, reservations, the ``meta`` table,
+worker-attribute cache). That backdoor is removed in a later phase once
+every entity has a store.
 """
 
 from __future__ import annotations
@@ -50,8 +49,11 @@ logger = logging.getLogger(__name__)
 
 
 # Store read methods accept either a write cursor or a read snapshot. Writes
-# require ``TransactionCursor`` explicitly so static typing prevents issuing
-# mutations through a read-only snapshot.
+# require ``TransactionCursor`` explicitly so a ``QuerySnapshot`` can't be
+# accidentally passed to a mutating API. (This alias does *not* prevent a store
+# read method from issuing writes internally — it just polices the caller-side
+# direction. A read-only ``Protocol`` would be stricter; not yet worth the
+# plumbing.)
 Tx = TransactionCursor | QuerySnapshot
 
 
