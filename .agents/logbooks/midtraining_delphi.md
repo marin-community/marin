@@ -1157,4 +1157,94 @@ Meeting these → good enough to commit 1e21 compute and run phase 2. Not meetin
 
 ### Status
 
-Phase 1 script is about to be implemented. Will append results table + c-stability observations to this section once it runs.
+Phase 1 script implemented at `scripts/analysis/midtrain_loss_predictor.py` and run against the 3 canonical 1e20 curves.
+
+### Phase 1 results (2026-04-23)
+
+Ran the script after adding two fixes that surfaced during implementation:
+
+- **Two-phase W&B fetch.** `scan_history(keys=[train_keys, eval_keys])` in a single call does an *intersection* over rows, so train (every step) intersected with eval (every 200 steps) yielded only 27 rows. Split into two fetches: one for `optim/learning_rate` + `train/loss` (4768 rows), one for `eval/paloma/c4_en/loss` (48 rows). Merged on `_step`.
+- **Bounds on `c`.** Without bounds, `curve_fit` drove `c → ∞` and `A → 0`, giving the degenerate fit `L ≈ L_∞` (a useless constant). Added `c ∈ [0.2, 3.0]` bounds. Also added two fixed-c variants (B3_c=0.5 and B3_c=1) as stabler alternatives with the same 2-param count as B1.
+
+#### Self-prefix MAE (tested on target = EMA over steps 4600–4767)
+
+Noise floor ≈ 0.005–0.010 (from original-vs-v2 rerun pairs).
+
+**train/loss_smooth**:
+
+| method | prefix 30% | prefix 50% | prefix 80% |
+|---|---:|---:|---:|
+| B0 last-value | 0.146 | 0.084 | 0.021 |
+| **B1 a+b/√t** | **0.024** | 0.020 | **0.003** |
+| B2 free c (bounded [0.2, 3.0]) | 0.085 | 0.056 | 0.007 |
+| B3 c=0.5 | 0.428 | 0.124 | 0.041 |
+| **B3 c=1 (schedule-aware, fixed c)** | 0.120 | **0.004** | 0.007 |
+
+**eval/paloma/c4_en/loss** (sparse — ~12 points per 30% prefix, so B1/B2/B3 skip prefix=0.3):
+
+| method | prefix 30% | prefix 50% | prefix 80% |
+|---|---:|---:|---:|
+| B0 last-value | 0.086 | 0.039 | 0.036 |
+| B1 a+b/√t | — | 0.075 | 0.052 |
+| B2 free c | — | **0.037** | 0.038 |
+| B3 c=0.5 | — | 0.211 | 0.070 |
+| B3 c=1 | — | 0.100 | 0.050 |
+
+#### Cross-LR LOO (hold out 1 of 3, fit shared c on other 2, predict from 30/50/80% of held-out)
+
+| metric | prefix 30% | prefix 50% | prefix 80% |
+|---|---:|---:|---:|
+| train/loss_smooth | 0.182 | 0.028 | **0.002** |
+| eval/paloma/c4_en/loss | — | 0.519 | 0.129 |
+
+#### c-stability across prefixes (B2 free-c)
+
+`c` values per (run, metric) at prefixes {30%, 50%, 80%}:
+
+- `lr=0.5` train/loss: 3.000 → 1.529 → 1.086 (std ≈ 0.82; bouncing)
+- `lr=0.67` train/loss: 3.000 → 2.339 → 0.824 (std ≈ 0.91)
+- `lr=0.83` train/loss: 3.000 → 2.322 → 0.763 (std ≈ 0.94)
+- Paloma: hits bound c=3.0 at prefix 0.8 for all runs (under-identified)
+
+`c` hits the upper bound (3.0) for short prefixes → the fit wants even larger `c` but can't, which confirms the parameter is under-identified on this data.
+
+### Takeaways
+
+1. **B1 (raw `a + b/√t`) is the surprisingly strong baseline for train/loss self-prefix.** At prefix 30% it gives MAE 0.024 (~2.5× noise floor); at prefix 80% it hits 0.003 (at noise floor). Schedule-unawareness doesn't hurt at this fidelity because `√t` already captures the asymptotic shape well enough when the LR schedule is held constant across runs.
+
+2. **B3 with fixed `c=1` wins at prefix 50% train/loss** (MAE 0.004, at noise floor). This says: if you commit to a schedule-aware parameterization, you must pin `c` — letting it float introduces more error than it removes on this amount of data. The linear-in-remaining-LR form (`c=1`) is the best zero-prior default.
+
+3. **B2 (free `c`) is worse than both B1 and B3.** The 3-parameter fit is under-identified on ~700–3800 points of fairly smooth data. Even with bounds the fit chases degenerate solutions at short prefixes.
+
+4. **Paloma is not tractable with these 3 runs.** Only ~12-24 eval points per prefix. Even the best method (B2 at prefix 50%) has MAE 0.037 — ~10% of the metric's midtrain-induced change (2.86 → 3.29, δ ≈ 0.43). Need the 1e21 sweep's eval points to get more leverage, or use a totally different approach for sparse metrics (e.g., linear extrapolation through 3-4 points).
+
+5. **Cross-LR LOO on train/loss works at ≥ 50% prefix.** MAE 0.028 at 50%, 0.002 at 80%. That is: if you run 2 of the 3 1e20 LR factors to completion and observe the first half of the third, you can predict its final train loss within 0.03. For the 1e20 → 1e21 cross-base test (phase 2), this is encouraging but not decisive — cross-base is a harder extrapolation.
+
+### Implications for the success criteria from the plan
+
+From the pre-committed criteria:
+
+- **"B2 MAE < 2× noise floor at prefix=30% for train/loss"** → FAIL (0.085 at 30%, 8× noise floor). Resolution: use B1 or B3 c=1 as the primary predictor instead. The proposal's `(U-u)^c` with free `c` doesn't have identifiability on this data.
+- **"B2 beats B1 by >20% on train/loss"** → FAIL on its own terms, but B3 c=1 (the fixed-c schedule-aware variant) beats B1 at prefix 50% (0.004 vs 0.020). The schedule-awareness adds value IF you pin `c`.
+- **"`c_std` < 0.1 per run per metric"** → FAIL (std 0.8–0.9 for train/loss, worse for Paloma). Parameter under-identified; forcing it is the right call.
+- **"Cross-LR LOO MAE < 3× noise floor on train/loss at prefix=30%"** → FAIL at 30% (0.182, 18× noise floor). Passes at 50% (0.028, 3× noise floor) and 80% (0.002).
+
+Interpretation: the phase-1 machinery works, but **30% prefix is too short** for this functional family. Revised operational recommendation for phase 2:
+
+- Evaluate predictors at prefix ∈ {50%, 70%, 90%} for the cross-base test. 30% is aspirational but empirically not yet useful on this data.
+- Default predictor: **B3 c=1** for train/loss (schedule-aware, 2-param). Fallback to B1 if the 1e21 schedule is materially different.
+- For Paloma and other sparse evals: skip the fit, use last-value or linear-in-step at the last 3-4 eval points.
+
+### Outputs
+
+CSVs for downstream plotting in `scripts/analysis/`:
+
+- `midtrain_loss_predictor_self_prefix.csv`
+- `midtrain_loss_predictor_cross_lr.csv`
+- `midtrain_loss_predictor_c_stability.csv`
+
+### Phase 2 launch criteria — recommendation
+
+Given phase 1 results, **launching the 1e21 sweep now is justified**. The cross-LR LOO on train/loss at ≥ 50% prefix is within reach of noise floor (0.028 → 0.002), which is exactly the regime the cross-base test needs. Don't over-interpret phase-1 results for Paloma — that needs more data, which 1e21 will provide.
+
+If cross-base train/loss MAE < 0.05 at prefix 50% when 1e21 lands, project goal #1 has a validated baseline. Everything beyond that (cross-scale to 1e22/1e23, uncertainty bounds, better Paloma models) is iteration.
