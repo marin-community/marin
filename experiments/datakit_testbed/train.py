@@ -113,10 +113,11 @@ def run_testbed_config(
     Args:
         name: Config name — forms the executor step name and wandb run id.
             Use e.g. ``"baseline"`` for the trivial no-dedup run.
-        sampled_by_source: Per-source sample steps, typically
-            ``TestbedDAG.sampled_by_source``. Tokenize ExecutorSteps are
-            built internally on top of these (see
-            :func:`build_testbed_tokenize_steps`).
+        sampled_by_source: Per-source sample steps — usually built by
+            filtering :func:`build_testbed_steps`' return list for
+            entries whose name starts with ``datakit-testbed/sample/``.
+            Tokenize ExecutorSteps are built internally on top of these
+            (see :func:`build_testbed_tokenize_steps`).
         compute_budget_flops: FLOP budget fed to ``build_from_heuristic``.
         hidden_dim: Model hidden dimension for the heuristic.
         target_steps: Heuristic target steps; default ``2**14`` matches Grug.

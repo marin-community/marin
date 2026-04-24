@@ -30,9 +30,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
 
 from marin.datakit.sources import DatakitSource, all_sources
+from marin.execution.step_runner import check_cache
 from marin.execution.step_spec import StepSpec
 
 from experiments.datakit_testbed.sampler import (
@@ -42,20 +42,6 @@ from experiments.datakit_testbed.sampler import (
 from experiments.datakit_testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class TestbedDAG:
-    """Handle to the built ferry DAG.
-
-    All steps must be passed to ``StepRunner().run(...)`` for execution.
-    ``sampled_by_source`` is exposed separately so the training harness can
-    reference each source's sample step when building the tokenize
-    ExecutorSteps that feed the mixture.
-    """
-
-    all_steps: list[StepSpec]
-    sampled_by_source: dict[str, StepSpec]
 
 
 def _sample_step_for(
@@ -69,7 +55,7 @@ def _sample_step_for(
         name=f"datakit-testbed/sample/{src.name}",
         normalized=normalized,
         sample_fraction=sample_fraction,
-        override_output_path=f"{base}/sample/{src.name}",
+        override_output_path=f"{base}/{src.name}",
     )
 
 
@@ -77,27 +63,30 @@ def build_testbed_steps(
     run_id: str,
     sources: Sequence[DatakitSource] | None = None,
     target_total_tokens_b: float = RAW_TARGET_TOTAL_TOKENS_B,
-) -> TestbedDAG:
+) -> list[StepSpec]:
     """Build the full Datakit Testbed ferry DAG.
 
     Args:
         run_id: Per-run identifier; sample output paths land under
-            ``datakit-testbed/{run_id}/sample/...``. Normalize outputs land at
-            canonical run-independent paths (``normalized/<name>-<hash>``) so
-            they're reused across runs.
-        sources: DatakitSource list to ferry. ``None`` means every entry in
-            :func:`all_sources` (the canonical active registry).
+            ``datakit_testbed/{run_id}/sample/...``. Normalize outputs land
+            at canonical run-independent paths (``normalized/<name>-<hash>``)
+            so they're reused across runs.
+        sources: DatakitSource list to ferry. ``None`` auto-selects every
+            entry from :func:`all_sources` whose normalize output is
+            already cached on GCS, matching the run_source_sampling script.
+            Pass an explicit list to bypass this check.
         target_total_tokens_b: Target total token count (in billions) across
             the sampled set. Drives per-source sample fractions via
             :func:`proportional_sample_fractions`. Default is
-            :data:`RAW_TARGET_TOTAL_TOKENS_B` (1000B = 1T per RFC).
+            :data:`RAW_TARGET_TOTAL_TOKENS_B`.
 
     Returns:
-        A ``TestbedDAG`` whose ``all_steps`` list is safe to pass directly to
-        ``StepRunner().run(...)``.
+        Flat list of :class:`StepSpec` covering every normalize chain plus
+        one sample step per source. Ready to hand to ``StepRunner().run()``.
     """
     if sources is None:
-        sources = tuple(all_sources().values())
+        # TODO (rav): remove the check_cache when ready?
+        sources = tuple(s for s in all_sources().values() if check_cache(s.normalized.output_path))
     if not sources:
         raise ValueError("build_testbed_steps requires at least one source")
 
@@ -106,14 +95,11 @@ def build_testbed_steps(
     fractions = proportional_sample_fractions(sources, target_total_tokens_b=target_total_tokens_b)
 
     all_steps: list[StepSpec] = []
-    sampled: dict[str, StepSpec] = {}
     for src in sources:
         # Each source contributes its own download → [preprocess] → normalize
         # chain. Duplicates across sources are dedup'd by the executor at run time.
         all_steps.extend(src.normalize_steps)
-        sample = _sample_step_for(src, src.normalized, fractions[src.name], base)
-        sampled[src.name] = sample
-        all_steps.append(sample)
+        all_steps.append(_sample_step_for(src, src.normalized, fractions[src.name], base))
 
     logger.info(
         "Built testbed DAG: %d sources, %d steps (normalize chains + sample), target %.0fB tokens",
@@ -122,4 +108,4 @@ def build_testbed_steps(
         target_total_tokens_b,
     )
 
-    return TestbedDAG(all_steps=all_steps, sampled_by_source=sampled)
+    return all_steps

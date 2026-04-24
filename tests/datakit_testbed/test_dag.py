@@ -9,6 +9,7 @@ from experiments.datakit_testbed.dag import build_testbed_steps
 from marin.datakit.sources import DatakitSource, all_sources
 
 _ALL = all_sources()
+_ALL_LIST = list(_ALL.values())
 
 
 def _source(name: str) -> DatakitSource:
@@ -22,21 +23,20 @@ def test_dag_empty_source_list_raises():
 
 def test_dag_single_source_shape():
     src = _source("nemotron_cc_code_v1/all")
-    dag = build_testbed_steps("run0", sources=[src])
+    steps = build_testbed_steps("run0", sources=[src])
 
-    names = [s.name for s in dag.all_steps]
+    names = [s.name for s in steps]
     assert names == [
         "raw/nemotron_cc_code_v1",
         "normalized/nemotron_cc_code_v1/all",
         "datakit-testbed/sample/nemotron_cc_code_v1/all",
     ]
-    assert set(dag.sampled_by_source.keys()) == {"nemotron_cc_code_v1/all"}
 
 
 def test_dag_has_one_sample_step_per_source():
-    dag = build_testbed_steps("run0")
-    sample_names = {s.name for s in dag.all_steps if "/sample/" in s.name}
-    assert sample_names == {f"datakit-testbed/sample/{s.name}" for s in _ALL.values()}
+    steps = build_testbed_steps("run0", sources=_ALL_LIST)
+    sample_names = {s.name for s in steps if "/sample/" in s.name}
+    assert sample_names == {f"datakit-testbed/sample/{s.name}" for s in _ALL_LIST}
 
 
 def test_dag_nemotron_family_subsets_share_one_download_stepspec():
@@ -45,7 +45,7 @@ def test_dag_nemotron_family_subsets_share_one_download_stepspec():
     Subsets share one family download because
     :func:`nemotron_v2_normalize_steps` builds the download once and passes it
     to each subset's normalize step. The ferry appends each source's
-    ``normalize_steps`` as-is; duplicate downloads in ``all_steps`` are the
+    ``normalize_steps`` as-is; duplicate downloads in the returned list are the
     same Python object, which the executor trivially dedupes.
     """
     v21_sources = tuple(s for s in _ALL.values() if s.name.startswith("nemotron_cc_v2_1/"))
@@ -55,24 +55,24 @@ def test_dag_nemotron_family_subsets_share_one_download_stepspec():
     for src in v21_sources[1:]:
         assert src.normalize_steps[0] is first_download, "v2.1 subsets must share one download StepSpec"
 
-    dag = build_testbed_steps("run0", sources=v21_sources)
-    normalize_steps = [s for s in dag.all_steps if s.name.startswith("normalized/")]
+    steps = build_testbed_steps("run0", sources=v21_sources)
+    normalize_steps = [s for s in steps if s.name.startswith("normalized/")]
     assert len(normalize_steps) == len(v21_sources)
 
 
 def test_dag_stops_at_sample():
-    dag = build_testbed_steps("run0")
+    steps = build_testbed_steps("run0", sources=_ALL_LIST)
     # The ferry stops at sample; tokenize lives in the training harness.
-    non_source_stages = {s.name.split("/", 2)[1] for s in dag.all_steps if s.name.startswith("datakit-testbed/")}
+    non_source_stages = {s.name.split("/", 2)[1] for s in steps if s.name.startswith("datakit-testbed/")}
     assert non_source_stages == {"sample"}
 
 
 def test_dag_output_paths_namespaced_by_run_id():
-    dag = build_testbed_steps("abc123")
+    steps = build_testbed_steps("abc123", sources=_ALL_LIST)
     # Canonical source-pipeline artifacts (download, any transform/preprocess,
     # normalize) are run-independent. Only the testbed-specific sample stage
-    # must land under datakit-testbed/abc123/...
-    for step in dag.all_steps:
+    # must land under datakit_testbed/abc123/...
+    for step in steps:
         if step.name.startswith(("raw/", "processed/", "normalized/")):
             continue
         assert "/abc123/" in step.output_path, f"{step.name} not namespaced: {step.output_path}"
@@ -89,6 +89,7 @@ def test_dag_starcoder2_subsets_get_distinct_download_names():
 
 
 def test_dag_full_testbed_builds():
-    """Smoke test: building the default (pinned) testbed does not raise."""
-    dag = build_testbed_steps("run0")
-    assert len(dag.sampled_by_source) == len(_ALL)
+    """Smoke test: building with the full registry does not raise."""
+    steps = build_testbed_steps("run0", sources=_ALL_LIST)
+    sample_steps = [s for s in steps if s.name.startswith("datakit-testbed/sample/")]
+    assert len(sample_steps) == len(_ALL)
