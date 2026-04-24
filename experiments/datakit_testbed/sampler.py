@@ -364,13 +364,27 @@ def build_testbed_steps(
     base = f"datakit_testbed/{run_id}"
     fractions = proportional_sample_fractions(sources, target_total_tokens_b=target_total_tokens_b)
 
+    # Walk each chain's transitive deps into the iterable — some sources
+    # have a ``processed`` step whose own ``raw_download`` dep lives outside
+    # ``normalize_steps``. Without that dep in the iterable, StepRunner's
+    # dep-satisfaction loop stalls and the run dies with "Iterable
+    # exhausted with unsatisfied dependencies". Dedup by ``output_path``
+    # so shared family downloads (e.g. Nemotron) land once.
+    seen: set[str] = set()
     all_steps: list[StepSpec] = []
+
+    def _visit(step: StepSpec) -> None:
+        if step.output_path in seen:
+            return
+        for dep in step.deps:
+            _visit(dep)
+        seen.add(step.output_path)
+        all_steps.append(step)
+
     for src in sources:
-        # Each source contributes its own download → [preprocess] → normalize
-        # chain. Duplicates across sources dedupe by override_output_path at
-        # run time.
-        all_steps.extend(src.normalize_steps)
-        all_steps.append(_sample_step_for(src, src.normalized, fractions[src.name], base))
+        for step in src.normalize_steps:
+            _visit(step)
+        _visit(_sample_step_for(src, src.normalized, fractions[src.name], base))
 
     logger.info(
         "Built testbed DAG: %d sources, %d steps (normalize chains + sample), target %.0fB tokens",
