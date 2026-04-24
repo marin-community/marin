@@ -239,10 +239,12 @@ class GrugTrainState:
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     """Set router biases from QB betas (computed on previous step)."""
+    if qb_betas.shape[0] == 0:
+        return model
     new_blocks = list(model.blocks)
     moe_idx = 0
     for i, block in enumerate(model.blocks):
-        if block.mlp is None:
+        if not hasattr(block.mlp, "router_bias"):
             continue
         new_bias = -qb_betas[moe_idx]
         new_bias = new_bias - jnp.mean(new_bias)
@@ -261,13 +263,14 @@ def initial_state(
     ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
-    num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
+    num_moe_layers = sum(1 for b in params.blocks if hasattr(b.mlp, "router_bias"))
+    num_experts = getattr(model_config, "num_experts", 0)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
         opt_state=optimizer.init(params),
         ema_params=params if ema_beta is not None else None,
-        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
+        pending_qb_betas=jnp.zeros((num_moe_layers, num_experts)),
     )
 
 
@@ -347,7 +350,7 @@ def _make_train_step(
             params=params,
             opt_state=opt_state,
             ema_params=ema_params,
-            pending_qb_betas=metrics["qb_beta_per_layer"],
+            pending_qb_betas=metrics.get("qb_beta_per_layer", state.pending_qb_betas),
         )
 
         return next_state, metrics, watch_stats
