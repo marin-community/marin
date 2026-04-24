@@ -49,7 +49,7 @@ from marin.utils import fsspec_glob, fsspec_mkdirs
 
 from experiments.datakit_testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
 
-_SAMPLE_REMOTE_RESOURCES = ResourceConfig(cpu=1, ram="1g")
+_SAMPLE_REMOTE_RESOURCES = ResourceConfig(cpu=1, ram="5g")
 
 logger = logging.getLogger(__name__)
 
@@ -130,31 +130,42 @@ def _sample_rows_within_shard(src: str, dst: str, sample_fraction: float) -> tup
     return rows_in, rows_out
 
 
+def _parquet_num_rows(path: str) -> int:
+    """Read the parquet footer at *path* and return its row count."""
+    fs, resolved = url_to_fs(path)
+    with fs.open(resolved, "rb") as f:
+        return pq.ParquetFile(f).metadata.num_rows
+
+
 def sample_normalized_shards(
     *,
     source: NormalizedData,
     output_path: str,
     sample_fraction: float,
 ) -> NormalizedData:
-    """Copy the first ``K = ceil(N * sample_fraction)`` normalized shards or rows if single-shard.
+    """Sample ``source``'s normalized shards to a target row count.
+
+    Probes a single shard for rows-per-file, then computes a total row
+    budget ``target_rows = N * rows_per_file * sample_fraction``. Takes
+    as many whole shards as fit in that budget (cheap server-side copy)
+    and, if there's a row-level remainder, row-samples the next shard
+    for the tail. When the budget fits inside one shard, skips the copy
+    path entirely and row-samples a single file.
 
     Shards are enumerated under ``source.main_output_dir``, sorted
-    lexicographically, and the first ``K`` copied to ``{output_path}/outputs/main/``
-    preserving the relative path so the co-partition invariant downstream is
-    satisfied. Normalize writes ``{parent}/outputs/main/part-*.parquet`` — we
-    mirror that layout.
+    lexicographically, and written to ``{output_path}/outputs/main/``
+    preserving the relative path so the co-partition invariant
+    downstream is satisfied.
 
     Args:
-        source: Upstream normalize output (an ``Artifact.load(step, NormalizedData)``).
-        output_path: Step output root; the new ``main_output_dir`` becomes
-            ``{output_path}/outputs/main``.
-        sample_fraction: Fraction of shards to keep, in ``(0.0, 1.0]``. Rounded
-            up to at least 1 shard.
+        source: Upstream normalize output.
+        output_path: Step output root; the new ``main_output_dir``
+            becomes ``{output_path}/outputs/main``.
+        sample_fraction: Fraction of rows to keep, in ``(0.0, 1.0]``.
 
     Returns:
-        A fresh ``NormalizedData`` pointing at the sampled directory. The
-        ``dup_output_dir`` is passed through unchanged (it's normalize's
-        exact-dedup side output — sampling doesn't touch it).
+        A fresh ``NormalizedData`` pointing at the sampled directory.
+        ``dup_output_dir`` is passed through unchanged.
 
     Raises:
         ValueError: If ``sample_fraction`` is out of range or no shards found.
@@ -167,62 +178,97 @@ def sample_normalized_shards(
     shards = sorted(fsspec_glob(f"{input_base}/**/*.parquet"))
     if not shards:
         raise ValueError(f"No parquet shards under {input_base}")
-    logger.info("sampler: discovered %d parquet shards under %s", len(shards), input_base)
-
     total = len(shards)
     main_out = f"{output_path.rstrip('/')}/outputs/main"
+    logger.info("sampler: discovered %d parquet shards under %s", total, input_base)
 
-    # Single-shard sources: "first K shards by filename" degenerates to copying
-    # the whole shard regardless of sample_fraction. Fall back to row-level
-    # sampling within the shard so small sources still honour the fraction.
-    if total == 1 and sample_fraction < 1.0:
+    # Fraction==1.0 short-circuit: take everything as-is.
+    if sample_fraction >= 1.0:
+        logger.info("sampler: fraction=1.0, copying all %d shards", total)
+        tasks = [(s, f"{main_out}/{os.path.relpath(s, input_base)}") for s in shards]
+        total_bytes = 0
+        with ThreadPoolExecutor(max_workers=_COPY_PARALLELISM) as pool:
+            for nbytes in pool.map(lambda args: _copy_shard(*args), tasks):
+                total_bytes += nbytes
+        logger.info("sampler: copied %d shards, %.1f GiB total", total, total_bytes / (1024**3))
+        return NormalizedData(
+            main_output_dir=main_out,
+            dup_output_dir=source.dup_output_dir,
+            counters={"sampler/selected_shards": total, "sampler/total_shards": total},
+        )
+
+    # Probe one shard for rows-per-file; normalize's target_partition_bytes
+    # keeps shards roughly uniform so this is a good estimate.
+    rows_per_file = _parquet_num_rows(shards[0])
+    est_total_rows = rows_per_file * total
+    target_rows = max(1, math.ceil(est_total_rows * sample_fraction))
+    logger.info(
+        "sampler: probed rows/shard=%d from %s; est total=%d rows, target=%d rows",
+        rows_per_file,
+        shards[0],
+        est_total_rows,
+        target_rows,
+    )
+
+    # Case 1: target fits in one file — row-sample from the first shard only.
+    if target_rows <= rows_per_file:
         src = shards[0]
-        rel = os.path.relpath(src, input_base)
-        dst = f"{main_out}/{rel}"
-        rows_in, rows_out = _sample_rows_within_shard(src, dst, sample_fraction)
+        dst = f"{main_out}/{os.path.relpath(src, input_base)}"
+        row_fraction = target_rows / rows_per_file
+        rows_in, rows_out = _sample_rows_within_shard(src, dst, row_fraction)
         logger.info(
-            "sampler: single-shard source — sampled %d / %d rows (fraction=%.4f) from %s",
+            "sampler: target fits in one shard — sampled %d / %d rows from %s",
             rows_out,
             rows_in,
-            sample_fraction,
-            input_base,
+            src,
         )
         return NormalizedData(
             main_output_dir=main_out,
             dup_output_dir=source.dup_output_dir,
             counters={
-                "sampler/single_shard_rows_in": rows_in,
-                "sampler/single_shard_rows_out": rows_out,
-                "sampler/total_shards": 1,
+                "sampler/selected_shards": 1,
+                "sampler/total_shards": total,
+                "sampler/rows_out": rows_out,
+                "sampler/target_rows": target_rows,
             },
         )
 
-    k = max(1, math.ceil(total * sample_fraction))
-    k = min(k, total)
-    selected = shards[:k]
+    # Case 2: target spans multiple shards — take whole shards for as much
+    # as fits, row-sample the next shard for the remainder.
+    n_whole = min(target_rows // rows_per_file, total)
+    remainder = target_rows - n_whole * rows_per_file
+    whole_shards = shards[:n_whole]
     logger.info(
-        "sampler: selecting %d / %d normalized shards (fraction=%.4f) from %s",
-        k,
-        total,
-        sample_fraction,
-        input_base,
+        "sampler: %d whole shards + %d remainder rows (from shard #%d if any)",
+        n_whole,
+        remainder,
+        n_whole,
     )
 
-    tasks: list[tuple[str, str]] = []
-    for shard in selected:
-        rel = os.path.relpath(shard, input_base)
-        tasks.append((shard, f"{main_out}/{rel}"))
-
+    tasks = [(s, f"{main_out}/{os.path.relpath(s, input_base)}") for s in whole_shards]
     total_bytes = 0
     with ThreadPoolExecutor(max_workers=_COPY_PARALLELISM) as pool:
         for nbytes in pool.map(lambda args: _copy_shard(*args), tasks):
             total_bytes += nbytes
-    logger.info("sampler: copied %d shards, %.1f GiB total", k, total_bytes / (1024**3))
+    logger.info("sampler: copied %d whole shards, %.1f GiB", n_whole, total_bytes / (1024**3))
+
+    rows_out_total = n_whole * rows_per_file
+    if remainder > 0 and n_whole < total:
+        src = shards[n_whole]
+        dst = f"{main_out}/{os.path.relpath(src, input_base)}"
+        row_fraction = remainder / rows_per_file
+        _, rows_out = _sample_rows_within_shard(src, dst, row_fraction)
+        rows_out_total += rows_out
 
     return NormalizedData(
         main_output_dir=main_out,
         dup_output_dir=source.dup_output_dir,
-        counters={"sampler/selected_shards": k, "sampler/total_shards": total},
+        counters={
+            "sampler/selected_shards": n_whole + (1 if remainder > 0 else 0),
+            "sampler/total_shards": total,
+            "sampler/rows_out": rows_out_total,
+            "sampler/target_rows": target_rows,
+        },
     )
 
 
