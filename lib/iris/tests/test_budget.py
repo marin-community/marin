@@ -11,6 +11,7 @@ from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.budget import (
+    UserBudgetDefaults,
     UserTask,
     compute_effective_band,
     compute_user_spend,
@@ -119,6 +120,9 @@ def test_interleave_by_user_three_users_unequal_counts():
 # ---------------------------------------------------------------------------
 
 
+_UNLIMITED_DEFAULTS = UserBudgetDefaults(budget_limit=0, max_band=INTERACTIVE)
+
+
 @pytest.mark.parametrize(
     "task_band,spend,limit,expected",
     [
@@ -130,11 +134,18 @@ def test_interleave_by_user_three_users_unequal_counts():
     ],
 )
 def test_effective_band(task_band, spend, limit, expected):
-    assert compute_effective_band(task_band, "alice", {"alice": spend}, {"alice": limit}) == expected
+    assert (
+        compute_effective_band(task_band, "alice", {"alice": spend}, {"alice": limit}, _UNLIMITED_DEFAULTS) == expected
+    )
 
 
-def test_effective_band_no_limit_row_is_unlimited():
-    assert compute_effective_band(INTERACTIVE, "alice", {"alice": 999999}, {}) == INTERACTIVE
+def test_effective_band_no_limit_row_uses_defaults():
+    """Users without a budget row fall back to defaults.budget_limit."""
+    # Tight default → over-budget spend demotes.
+    tight = UserBudgetDefaults(budget_limit=1000, max_band=INTERACTIVE)
+    assert compute_effective_band(INTERACTIVE, "alice", {"alice": 5000}, {}, tight) == BATCH
+    # Unlimited default (0) → no demotion regardless of spend.
+    assert compute_effective_band(INTERACTIVE, "alice", {"alice": 999999}, {}, _UNLIMITED_DEFAULTS) == INTERACTIVE
 
 
 # ---------------------------------------------------------------------------

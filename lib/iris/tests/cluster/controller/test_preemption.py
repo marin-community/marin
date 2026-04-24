@@ -3,7 +3,7 @@
 
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
-from iris.cluster.controller.budget import compute_effective_band
+from iris.cluster.controller.budget import UserBudgetDefaults, compute_effective_band
 from iris.cluster.controller.transitions import RESERVATION_HOLDER_JOB_NAME, _resolve_task_failure_state
 from iris.cluster.controller.controller import (
     PreemptionCandidate,
@@ -416,7 +416,10 @@ def test_over_budget_user_tasks_preemptible():
     # Alice is over budget — her INTERACTIVE task should have effective band BATCH
     user_spend = {"alice": 10000}
     user_budget_limits = {"alice": 5000}
-    effective = compute_effective_band(job_pb2.PRIORITY_BAND_INTERACTIVE, "alice", user_spend, user_budget_limits)
+    defaults = UserBudgetDefaults()
+    effective = compute_effective_band(
+        job_pb2.PRIORITY_BAND_INTERACTIVE, "alice", user_spend, user_budget_limits, defaults
+    )
     assert effective == job_pb2.PRIORITY_BAND_BATCH
 
     victim = RunningTaskInfo(
@@ -443,7 +446,10 @@ def test_over_budget_production_not_preemptible():
     """Over-budget user's PRODUCTION tasks are NOT downgraded and stay non-preemptible by INTERACTIVE."""
     user_spend = {"alice": 10000}
     user_budget_limits = {"alice": 5000}
-    effective = compute_effective_band(job_pb2.PRIORITY_BAND_PRODUCTION, "alice", user_spend, user_budget_limits)
+    defaults = UserBudgetDefaults()
+    effective = compute_effective_band(
+        job_pb2.PRIORITY_BAND_PRODUCTION, "alice", user_spend, user_budget_limits, defaults
+    )
     assert effective == job_pb2.PRIORITY_BAND_PRODUCTION
 
 
@@ -462,7 +468,11 @@ def test_running_tasks_use_effective_band():
         user_budget_limits = {"alice": 5000}
 
         running = _get_running_tasks_with_band_and_value(
-            state._db, set(), user_spend=user_spend, user_budget_limits=user_budget_limits
+            state._db,
+            set(),
+            user_spend=user_spend,
+            user_budget_limits=user_budget_limits,
+            user_budget_defaults=UserBudgetDefaults(),
         )
 
         assert len(running) == 1

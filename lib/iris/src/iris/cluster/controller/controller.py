@@ -441,12 +441,14 @@ def _get_running_tasks_with_band_and_value(
     claimed_workers: set[WorkerId],
     user_spend: dict[str, int] | None = None,
     user_budget_limits: dict[str, int] | None = None,
+    user_budget_defaults: UserBudgetDefaults | None = None,
 ) -> list[RunningTaskInfo]:
     """Query running tasks with band, worker, resource spec, and coscheduling status.
 
     Skips tasks on reservation-claimed workers since those workers are spoken for.
     When ``user_spend`` and ``user_budget_limits`` are provided, the effective band
     is computed so over-budget users' tasks are treated as BATCH for preemption.
+    Users without a budget row fall back to ``user_budget_defaults``.
     """
     with db.read_snapshot() as q:
         rows = q.raw(
@@ -465,6 +467,7 @@ def _get_running_tasks_with_band_and_value(
         )
     _spend = user_spend or {}
     _limits = user_budget_limits or {}
+    _defaults = user_budget_defaults or UserBudgetDefaults()
     result: list[RunningTaskInfo] = []
     for row in rows:
         wid = row.worker_id
@@ -476,7 +479,7 @@ def _get_running_tasks_with_band_and_value(
             row.res_disk_bytes,
             row.res_device_json,
         )
-        band = compute_effective_band(row.priority_band, row.task_id.user, _spend, _limits)
+        band = compute_effective_band(row.priority_band, row.task_id.user, _spend, _limits, _defaults)
         result.append(
             RunningTaskInfo(
                 task_id=row.task_id,
@@ -1073,7 +1076,6 @@ class Controller:
         self._health = WorkerHealthTracker()
         self._transitions = ControllerTransitions(
             db=self._db,
-            user_budget_defaults=config.user_budget_defaults,
             health=self._health,
         )
         self._scheduler = Scheduler()
@@ -1088,6 +1090,7 @@ class Controller:
             log_service=self._remote_log_service,
             auth=config.auth,
             system_endpoints={},
+            user_budget_defaults=config.user_budget_defaults,
         )
         self._dashboard = ControllerDashboard(
             self._service,
@@ -1854,8 +1857,11 @@ class Controller:
         with self._db.read_snapshot() as budget_snapshot:
             user_spend = compute_user_spend(budget_snapshot)
         user_budget_limits = self._db.get_all_user_budget_limits()
+        defaults = self._config.user_budget_defaults
         task_band_map: dict[JobName, int] = {
-            task.task_id: compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
+            task.task_id: compute_effective_band(
+                task.priority_band, task.task_id.user, user_spend, user_budget_limits, defaults
+            )
             for task in pending_tasks
         }
         tasks_by_band: dict[int, list[JobName]] = defaultdict(list)
@@ -1966,7 +1972,11 @@ class Controller:
         if unscheduled:
             claimed_workers = set(claims.keys())
             running_info = _get_running_tasks_with_band_and_value(
-                self._db, claimed_workers, user_spend=order.user_spend, user_budget_limits=order.user_budget_limits
+                self._db,
+                claimed_workers,
+                user_spend=order.user_spend,
+                user_budget_limits=order.user_budget_limits,
+                user_budget_defaults=self._config.user_budget_defaults,
             )
             preemptions = _run_preemption_pass(unscheduled, running_info, context)
             for preemptor_name, victim_id in preemptions:
