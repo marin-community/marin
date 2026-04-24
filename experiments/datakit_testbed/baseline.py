@@ -23,9 +23,10 @@ from __future__ import annotations
 import logging
 import os
 
+from rigging.filesystem import marin_prefix
 from rigging.log_setup import configure_logging
 
-from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main
+from marin.execution.executor import Executor, ExecutorMainConfig, ExecutorStep, executor_main
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 
@@ -57,11 +58,21 @@ def baseline(
         raise ValueError("no sample steps found in the DAG (expected names under 'data/datakit/...')")
 
     tokenized_buckets = {name: testbed_tokenize(name, sampled, tokenizer) for name, sampled in sampled_by_source.items()}
-    # NOTE: we need to execute tokenize to get the stats - in theory we don't need to get the stats from the disk,
-    # but we might as well, it's not a big deal.
-    executor_main(ExecutorMainConfig(), list(tokenized_buckets.values()))
+    # Run tokenize steps through an Executor we keep a handle on so we can read
+    # each step's *resolved* output_path afterwards. ``executor_main`` discards
+    # its Executor, and ``output_path_of`` outside an executor context returns
+    # a lazy ``InputName`` — not a concrete GCS path.
+    prefix = marin_prefix()
+    tokenize_executor = Executor(
+        prefix=prefix,
+        executor_info_base_path=os.path.join(prefix, "experiments"),
+    )
+    tokenize_executor.run(list(tokenized_buckets.values()))
 
-    weights = weights_from_tokenized_bucket_stats(tokenized_buckets)
+    resolved_output_paths = {
+        bucket_name: tokenize_executor.output_paths[step] for bucket_name, step in tokenized_buckets.items()
+    }
+    weights = weights_from_tokenized_bucket_stats(resolved_output_paths)
     return run_testbed_config(
         name=name,
         tokenized_buckets=tokenized_buckets,
