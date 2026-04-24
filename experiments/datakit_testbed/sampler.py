@@ -321,7 +321,7 @@ def _sample_step_for(
 ) -> StepSpec:
     """Per-source post-normalize sampler. Copies first ceil(N * fraction) shards."""
     return sample_normalized_shards_step(
-        name=f"datakit-testbed/{src.name}",
+        name=f"data/datakit/mini/{src.name}",
         normalized=normalized,
         sample_fraction=sample_fraction,
         override_output_path=f"{base}/{src.name}",
@@ -346,7 +346,7 @@ def build_testbed_steps(
 
     Args:
         run_id: Per-run identifier; sample output paths land under
-            ``datakit_testbed/{run_id}/...``. Normalize outputs land at
+            ``data/datakit/mini/{run_id}/...``. Normalize outputs land at
             canonical run-independent paths (``normalized/<name>-<hash>``)
             so they're reused across runs.
         sources: DatakitSource list to ferry. ``None`` auto-selects every
@@ -368,7 +368,7 @@ def build_testbed_steps(
     if not sources:
         raise ValueError("build_testbed_steps requires at least one source")
 
-    base = f"datakit-testbed/{run_id}"
+    base = f"data/datakit/mini/{run_id}"
     fractions = proportional_sample_fractions(sources, target_total_tokens_b=target_total_tokens_b)
 
     # Walk each chain's transitive deps into the iterable — some sources

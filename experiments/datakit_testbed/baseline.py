@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 STAGING_PREFIX = "gs://marin-us-central1"
 TARGET_TOTAL_TOKENS_B = 10.0
 
-_SAMPLE_STEP_PREFIX = "datakit-testbed/"
+_SAMPLE_STEP_PREFIX = "data/datakit/mini/"
 
 
 def baseline(
@@ -54,7 +54,7 @@ def baseline(
         s.name.removeprefix(_SAMPLE_STEP_PREFIX): s for s in steps if s.name.startswith(_SAMPLE_STEP_PREFIX)
     }
     if not sampled_by_source:
-        raise ValueError("no sample steps found in the DAG (expected names under 'datakit-testbed/...')")
+        raise ValueError("no sample steps found in the DAG (expected names under 'data/datakit/mini/...')")
 
     tokenized_buckets = {name: testbed_tokenize(name, sampled, tokenizer) for name, sampled in sampled_by_source.items()}
     # NOTE: we need to execute tokenize to get the stats - in theory we don't need to get the stats from the disk,
@@ -75,7 +75,7 @@ def main() -> None:
     os.environ["MARIN_PREFIX"] = STAGING_PREFIX
 
     tokenizer = TESTBED_TOKENIZER
-    run_id = "baseline_test"
+    run_id = "baseline_init"
 
     testbed_steps = build_testbed_steps(run_id, target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
     logger.info("Materializing %d ferry StepSpecs under %s", len(testbed_steps), STAGING_PREFIX)

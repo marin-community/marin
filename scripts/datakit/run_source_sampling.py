@@ -12,7 +12,7 @@ math that the full ferry uses — so the subset actually reflects the
 requested target size rather than a blanket fraction.
 
 Outputs land in the region-local marin temp bucket
-(``gs://marin-tmp-us-central1/ttl=Nd/datakit-testbed/<RUN_ID>/sample/<src.name>``)
+(``gs://marin-tmp-us-central1/ttl=Nd/data/datakit/mini/<RUN_ID>/sample/<src.name>``)
 so they're auto-deleted after the configured TTL — no manual cleanup.
 """
 
@@ -42,7 +42,7 @@ TTL_DAYS = 1
 
 def main() -> None:
     os.environ["MARIN_PREFIX"] = STAGING_PREFIX
-    base = marin_temp_bucket(ttl_days=TTL_DAYS, prefix=f"datakit-testbed/{RUN_ID}")
+    base = marin_temp_bucket(ttl_days=TTL_DAYS, prefix=f"data/datakit/mini/{RUN_ID}")
 
     available = [s for s in all_sources().values() if check_cache(s.normalized.output_path)]
     skipped = [s.name for s in all_sources().values() if not check_cache(s.normalized.output_path)]
@@ -71,7 +71,7 @@ def main() -> None:
             visit(step)
         steps.append(
             sample_normalized_shards_step(
-                name=f"datakit-testbed/{src.name}",
+                name=f"data/datakit/mini/{src.name}",
                 normalized=src.normalized,
                 sample_fraction=fractions[src.name],
                 override_output_path=f"{base}/sample/{src.name}",
