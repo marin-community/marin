@@ -1067,7 +1067,7 @@ def run_transfer_validation_sweep():
 # =============================================================================
 
 SCALING_VERSION = "v0.5"
-SCALING_TPU_TYPES: tuple[str, ...] = ("v6e-8",)
+SCALING_TPU_TYPES: tuple[str, ...] = ("v6e-4",)
 SCALING_BATCH_SIZE = 1536
 SCALING_WARMUP_STEPS = 100
 # Per-device microbatch that fit on v6e-8 for all SCALING_HIDDEN_SIZES at SCALING_BATCH_SIZE=1536

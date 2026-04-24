@@ -286,7 +286,7 @@ def plot_lr(df: pd.DataFrame) -> None:
         value_formatter=_fmt_lr,
         plot_path=PLOT_LR_PATH,
         equal_except_annotation="All configurations equal\nexcept for LR",
-        negative_annotation=r"Reference-optimal differs in $\eta_0, \epsilon, \beta_2$",
+        negative_annotation=r"Reference-optimal differs in $\eta, \eta_0, \epsilon$",
     )
 
 
@@ -300,7 +300,7 @@ def plot_beta2(df: pd.DataFrame) -> None:
         value_formatter=_fmt_beta2,
         plot_path=PLOT_BETA2_PATH,
         equal_except_annotation=r"All configurations equal" "\n" r"except for $\beta_2$",
-        negative_annotation=r"Reference-optimal differs in $\eta_0, \epsilon, \beta_2$",
+        negative_annotation=r"Reference-optimal differs in $\eta, \eta_0, \epsilon$",
     )
 
 

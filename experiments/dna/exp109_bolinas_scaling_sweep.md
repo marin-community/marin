@@ -161,17 +161,20 @@ Subcommand dispatch uses `SWEEP_COMMAND` env var.  Ask the subcommand to use is 
 
 ### TODOs
 
-- [ ] Review `.gitignore` workaround: iris `_pb2.py` proto files are temporarily tracked because Ray's `working_dir` upload respects `.gitignore`, causing `ImportError` on cluster. Proper fix: pip-install iris in Ray runtime env or fix hatch build hook to run on cluster.
-- [ ] Empirically verify checkpoint behavior (force=True at end of training)
-- [ ] Bump `VERSION` to `v1.0` before full run
-- [ ] Document error on `vizier._src.service.grpc_util.LocalRpcError: Trial owners/marin/studies/dna-bolinas-ref-v0.6-IR0.0025-E1/trials/1 has state SUCCEEDED. Only trials in state ACTIVE or STOPPING can be completed.` and corresponding fix in `reference_hyperparameter_sweep.py`
-- [ ] Document needing to set crash_on_nan=False, crash_on_inf=False
-- [X] Rename FIXED_BATCH_SIZE to REFERENCE_BATCH_SIZE (and all dataclass fields related to it)
-- [X] Log `TypeError: fused_cross_entropy_loss_and_logsumexp_penalty() got an unexpected keyword argument 'implementation'`
-  - https://github.com/marin-community/marin/issues/4852
-- [X] Log `PreTrainedTokenizerFast has no attribute encode_batch`
-  - https://github.com/marin-community/marin/issues/4678
-  - This was fixed locally in `eval_harness.py` per https://github.com/marin-community/marin/pull/4677/changes
+- [ ] Compare scaling sweep results to [past results](https://gist.github.com/eric-czech/787e7ab1a0e0be87bfecc7bce1fa8e83)
+- [X] Fix vizier sweep bugs
+  - [X] Need to set crash_on_nan=False, crash_on_inf=False
+  - [X] Need to skip completed trials on resumption: `vizier._src.service.grpc_util.LocalRpcError: Trial owners/marin/studies/dna-bolinas-ref-v0.6-IR0.0025-E1/trials/1 has state SUCCEEDED. Only trials in state ACTIVE or STOPPING can be completed.`
+  - See https://github.com/marin-community/marin/pull/4563
+- [ ] Fix lm-eval bugs
+  - [ ] Fix `PreTrainedTokenizerFast has no attribute encode_batch`
+    - See https://github.com/marin-community/marin/pull/4677 and See https://github.com/marin-community/marin/issues/4678
+  - [X] Fix `alueError: No resource mapping found`
+    - See https://github.com/marin-community/marin/pull/4911
+  - [X] Fix `TypeError: fused_cross_entropy_loss_and_logsumexp_penalty() got an unexpected keyword argument 'implementation'`
+    - See https://github.com/marin-community/marin/issues/4852
+  - [ ] Fix `ModuleNotFoundError: No module named 'lm_eval'`
+    - See https://github.com/marin-community/marin/commit/71939d3f47cbbbb1c4c5d59d444ca7a6c18650dc
 
 
 ### Misc
