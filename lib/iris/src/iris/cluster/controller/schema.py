@@ -751,6 +751,8 @@ TASKS = Table(
             default=None,
         ),
         Column("current_worker_address", "TEXT", "", python_type=str | None, decoder=_nullable(str), default=None),
+        # Migration 0039
+        Column("status_message", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
     ),
     table_constraints=("UNIQUE(job_id, task_index)",),
     indexes=(
@@ -1045,6 +1047,25 @@ TASK_RESOURCE_HISTORY = Table(
     ),
 )
 
+TASK_STATS_HISTORY = Table(
+    "task_stats_history",
+    "tsh",
+    columns=(
+        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
+        Column(
+            "task_id",
+            "TEXT",
+            "NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE",
+            python_type=JobName,
+            decoder=JobName.from_wire,
+        ),
+        Column("items_processed", "INTEGER", "NOT NULL DEFAULT 0"),
+        Column("bytes_processed", "INTEGER", "NOT NULL DEFAULT 0"),
+        Column("timestamp_ms", "INTEGER", "NOT NULL", python_type=Timestamp, decoder=decode_timestamp_ms),
+    ),
+    indexes=("CREATE INDEX IF NOT EXISTS idx_task_stats_history_task" " ON task_stats_history(task_id, id DESC)",),
+)
+
 ENDPOINTS = Table(
     "endpoints",
     "e",
@@ -1312,6 +1333,7 @@ MAIN_TABLES: tuple[Table, ...] = (
     WORKER_TASK_HISTORY,
     WORKER_RESOURCE_HISTORY,
     TASK_RESOURCE_HISTORY,
+    TASK_STATS_HISTORY,
     ENDPOINTS,
     DISPATCH_QUEUE,
     SCALING_GROUPS,
@@ -1474,6 +1496,7 @@ class TaskDetailRow:
     current_worker_id: WorkerId | None
     current_worker_address: str | None
     container_id: str | None = None
+    status_message: str = ""
     attempts: tuple = dataclasses.field(default_factory=tuple)
 
 
@@ -1806,6 +1829,7 @@ TASK_DETAIL_PROJECTION = TASKS.projection(
     "current_worker_id",
     "current_worker_address",
     "container_id",
+    "status_message",
     extra_fields=(ExtraField("attempts", tuple, default_factory=tuple),),
     row_cls=TaskDetailRow,
 )

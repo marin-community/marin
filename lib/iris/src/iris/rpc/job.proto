@@ -234,6 +234,18 @@ message TaskStatus {
   string container_id = 19;           // Platform container identifier (Docker container ID, K8s pod name)
   // Historical resource snapshots (oldest first). Populated only in GetTaskStatus detail view.
   repeated ResourceUsage resource_history = 20;
+
+  // Human-readable status string reported by the task (e.g. Zephyr stage progress).
+  string status_message = 21;
+
+  // Historical stats snapshots (oldest first). Populated only in GetTaskStatus detail view.
+  repeated TaskStatsSnapshot task_stats_history = 22;
+}
+
+message TaskStatsSnapshot {
+  int64 items_processed = 1;
+  int64 bytes_processed = 2;
+  int64 timestamp_ms = 3;
 }
 
 // Record of a single task execution attempt
@@ -601,3 +613,13 @@ message WorkerTaskStatus {
   reserved 9;  // was log_entries (pushed via LogService now)
   string container_id = 10;         // Platform container identifier (Docker container ID, K8s pod name)
 }
+
+// Stats reported by a running task to the coordinator.
+message SetTaskStatsRequest {
+  string task_id = 1;           // Full task ID: "/job/full/path/with/task/0"
+  int64 items_processed = 2;    // Number of items processed so far
+  int64 bytes_processed = 3;    // Number of bytes processed so far
+  string status = 4;            // Human-readable status string for UI display (not stored in history)
+}
+
+message SetTaskStatsResponse {}

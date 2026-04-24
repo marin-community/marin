@@ -77,6 +77,12 @@ export interface TaskAttempt {
   isWorkerFailure?: boolean
 }
 
+export interface TaskStatsSnapshot {
+  itemsProcessed?: string
+  bytesProcessed?: string
+  timestampMs?: string
+}
+
 export interface TaskStatus {
   taskId: string
   state: string
@@ -95,6 +101,8 @@ export interface TaskStatus {
   canBeScheduled?: boolean
   containerId?: string
   resourceHistory?: ResourceUsage[]
+  statusMessage?: string
+  taskStatsHistory?: TaskStatsSnapshot[]
 }
 
 // -- Jobs --

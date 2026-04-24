@@ -161,6 +161,17 @@ writer hold; chunk=5000 gives p95 1.6s / max 1.7s. The background loop
 runs every 10 min so total wall-time is irrelevant — bounding worst-case
 writer hold is what matters for concurrent RPCs."""
 
+TASK_STATS_HISTORY_RETENTION = 50
+"""Maximum task_stats_history rows retained per task_id.
+Logarithmic downsampling triggers at 2x this value."""
+
+TASK_STATS_HISTORY_TERMINAL_TTL = Duration.from_hours(1)
+"""After a task reaches a terminal state, its stats history is fully evicted
+this long after the finish timestamp."""
+
+TASK_STATS_HISTORY_DELETE_CHUNK = 1000
+"""Maximum task_ids per DELETE in prune_task_stats_history."""
+
 DIRECT_PROVIDER_PROMOTION_RATE = 128
 """Token bucket capacity for task promotion (pods per minute).
 
@@ -2571,6 +2582,69 @@ class ControllerTransitions:
             logger.info("Pruned %d task_resource_history rows (log downsampling)", total_deleted)
         return evicted_terminal + total_deleted
 
+    def prune_task_stats_history(self) -> int:
+        """Two-pass prune for task_stats_history, mirroring prune_task_resource_history.
+
+        1. Evict all history for tasks that have been in a terminal state
+           longer than TASK_STATS_HISTORY_TERMINAL_TTL.
+        2. Logarithmic downsampling for anything that remains: when a task_id
+           exceeds 2*N rows, thin the older half by deleting every other row.
+        """
+        now_ms = Timestamp.now().epoch_ms()
+        ttl_cutoff_ms = now_ms - TASK_STATS_HISTORY_TERMINAL_TTL.to_ms()
+        terminal_placeholders = ",".join("?" for _ in TERMINAL_TASK_STATES)
+
+        with self._db.read_snapshot() as snap:
+            terminal_ids = [
+                str(r["task_id"])
+                for r in snap.fetchall(
+                    f"SELECT task_id FROM tasks "
+                    f"WHERE state IN ({terminal_placeholders}) "
+                    f"AND finished_at_ms IS NOT NULL AND finished_at_ms < ?",
+                    (*TERMINAL_TASK_STATES, ttl_cutoff_ms),
+                )
+            ]
+
+        evicted_terminal = 0
+        for chunk_start in range(0, len(terminal_ids), TASK_STATS_HISTORY_DELETE_CHUNK):
+            chunk = terminal_ids[chunk_start : chunk_start + TASK_STATS_HISTORY_DELETE_CHUNK]
+            ph = ",".join("?" * len(chunk))
+            with self._db.transaction() as cur:
+                cur.execute(f"DELETE FROM task_stats_history WHERE task_id IN ({ph})", tuple(chunk))
+                evicted_terminal += cur.rowcount
+
+        threshold = TASK_STATS_HISTORY_RETENTION * 2
+        with self._db.transaction() as cur:
+            overflows = cur.execute(
+                "SELECT task_id, COUNT(*) as cnt FROM task_stats_history GROUP BY task_id HAVING cnt > ?",
+                (threshold,),
+            ).fetchall()
+            ids_to_delete: list[int] = []
+            for row in overflows:
+                tid = row["task_id"]
+                all_ids = [
+                    r["id"]
+                    for r in cur.execute(
+                        "SELECT id FROM task_stats_history WHERE task_id = ? ORDER BY id ASC",
+                        (tid,),
+                    ).fetchall()
+                ]
+                older = all_ids[: len(all_ids) - TASK_STATS_HISTORY_RETENTION]
+                ids_to_delete.extend(older[1::2])
+
+            total_deleted = 0
+            for chunk_start in range(0, len(ids_to_delete), 900):
+                chunk = ids_to_delete[chunk_start : chunk_start + 900]
+                ph = ",".join("?" * len(chunk))
+                cur.execute(f"DELETE FROM task_stats_history WHERE id IN ({ph})", tuple(chunk))
+                total_deleted += cur.rowcount
+
+        if evicted_terminal > 0:
+            logger.info("Evicted %d task_stats_history rows (terminal TTL)", evicted_terminal)
+        if total_deleted > 0:
+            logger.info("Pruned %d task_stats_history rows (log downsampling)", total_deleted)
+        return evicted_terminal + total_deleted
+
     def _batch_delete(
         self,
         sql: str,
@@ -2805,6 +2879,30 @@ class ControllerTransitions:
                 address=cfg.address,
                 metadata=cfg.metadata,
                 ts=now,
+            )
+
+    # --- Task Stats ---
+
+    def record_task_stats(self, task_id: JobName, items_processed: int, bytes_processed: int, status: str) -> None:
+        """Record a task stats snapshot into task_stats_history and update the task's status_message."""
+        logger.info(
+            "Recording task stats for %s: items=%d, bytes=%d, status=%r",
+            task_id,
+            items_processed,
+            bytes_processed,
+            status,
+        )
+        now_ms = int(time.time() * 1000)
+        with self._db.transaction() as cur:
+            cur.execute(
+                "INSERT INTO task_stats_history"
+                " (task_id, items_processed, bytes_processed, timestamp_ms)"
+                " VALUES (?, ?, ?, ?)",
+                (task_id.to_wire(), items_processed, bytes_processed, now_ms),
+            )
+            cur.execute(
+                "UPDATE tasks SET status_message = ? WHERE task_id = ?",
+                (status, task_id.to_wire()),
             )
 
     # --- Endpoint Management ---
