@@ -35,8 +35,6 @@ trainer:
   num_train_steps: 20
   steps_per_eval: 1
   model_averaging: null
-  ray:
-    auto_start_cluster: false
   require_accelerator: false
   checkpointer:
     save_interval: 1m

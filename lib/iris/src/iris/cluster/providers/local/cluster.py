@@ -210,7 +210,6 @@ class LocalCluster:
                 port=port,
                 remote_state_dir=self._config.storage.remote_state_dir or f"file://{state_dir}",
                 heartbeat_interval=Duration.from_seconds(0.5),
-                heartbeat_failure_threshold=self._config.controller.heartbeat_failure_threshold,
                 local_state_dir=Path(self._db_dir.name),
                 auth_verifier=auth.verifier,
                 auth_provider=auth.provider,

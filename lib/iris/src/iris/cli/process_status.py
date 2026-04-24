@@ -13,6 +13,7 @@ import click
 import humanfriendly
 
 from iris.cli.main import require_controller_url, rpc_client
+from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
 from iris.rpc import logging_pb2
 from iris.rpc import job_pb2
 from iris.rpc.logging_connect import LogServiceClientSync
@@ -146,7 +147,7 @@ def profile(
     /system/worker/<id> for a worker, /alice/job/0 for a task container.
     """
     url = require_controller_url(ctx)
-    rpc_target = target or ""
+    rpc_target = target or SYSTEM_PROCESS_TARGET
     label = target or "Controller"
 
     if profiler == "threads":

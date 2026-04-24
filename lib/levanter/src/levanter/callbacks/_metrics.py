@@ -9,7 +9,7 @@ from datetime import timedelta
 from typing import Optional
 
 import jax
-from fray.v1.cluster.device_flops import device_flops_for_jax_device
+from fray.v2.device_flops import device_flops_for_jax_device
 from tqdm_loggable.auto import tqdm
 from tqdm_loggable.tqdm_logging import tqdm_logging
 

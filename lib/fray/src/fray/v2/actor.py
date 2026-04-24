@@ -26,9 +26,8 @@ class ActorHandle(Protocol):
 class ActorContext:
     """Context available to actors during execution.
 
-    ``shutdown_event`` is set by the actor when it is ready to exit.
-    Backends create the event and block on it (Iris) or use it to trigger
-    ``exit_actor()`` (Ray).
+    ``shutdown_event`` is set by the actor when it is ready to exit; the
+    backend creates the event and blocks on it to tear the actor down.
     """
 
     handle: ActorHandle
@@ -108,7 +107,7 @@ class ActorMethod(Protocol):
         mechanism (e.g. StartOperation + GetOperation RPCs) so that
         transient connection drops don't kill the call.
 
-        For local and Ray backends this is identical to remote().
+        For the local backend this is identical to remote().
         """
         ...
 

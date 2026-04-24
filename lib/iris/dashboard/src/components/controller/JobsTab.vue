@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { controllerRpcCall, useControllerRpc } from '@/composables/useRpc'
-import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { stateToName, stateDisplayName } from '@/types/status'
+import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
+import { SEGMENT_COLORS, stateToName, stateDisplayName } from '@/types/status'
 import type { JobState } from '@/types/status'
-import type { JobStatus, JobQuery, ListJobsResponse } from '@/types/rpc'
+import type { JobStatus, JobQuery, ListJobsResponse, GetJobStatusResponse } from '@/types/rpc'
 import { timestampMs, formatDuration, formatRelativeTime } from '@/utils/formatting'
 import { flattenLoadedJobTree, getLeafJobName } from '@/utils/jobTree'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -24,6 +24,9 @@ const SORT_FIELD_MAP: Record<string, string> = {
 type SortField = 'date' | 'name' | 'state' | 'failures' | 'preemptions'
 type SortDir = 'asc' | 'desc'
 
+const SORT_FIELDS: SortField[] = ['date', 'name', 'state', 'failures', 'preemptions']
+const SORT_DIRS: SortDir[] = ['asc', 'desc']
+
 const copiedJob = ref<string | null>(null)
 
 async function copyJobName(name: string) {
@@ -32,19 +35,47 @@ async function copyJobName(name: string) {
   setTimeout(() => { copiedJob.value = null }, 1500)
 }
 
+const route = useRoute()
+const router = useRouter()
+
 const EXPANDED_JOBS_KEY = 'iris.controller.expandedJobs'
+const STARRED_JOBS_KEY = 'iris.controller.starredJobs'
+const MAX_STARRED_JOBS = 10
 
-// -- State --
+// -- State (hydrated from URL query params) --
 
-const page = ref(0)
-const sortField = ref<SortField>('date')
-const sortDir = ref<SortDir>('desc')
-const nameFilter = ref('')
-const localFilter = ref('')
-const stateFilter = ref('')
+/** Safely extract a single string from a Vue Router query value (string | string[] | null). */
+function queryStr(v: string | string[] | null | undefined): string {
+  if (Array.isArray(v)) return v[0] ?? ''
+  return v ?? ''
+}
+
+function parseSort(v: string): SortField {
+  return SORT_FIELDS.includes(v as SortField) ? (v as SortField) : 'date'
+}
+function parseDir(v: string): SortDir {
+  return SORT_DIRS.includes(v as SortDir) ? (v as SortDir) : 'desc'
+}
+function parsePage(v: string): number {
+  const n = Number(v)
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0
+}
+
+const page = ref(parsePage(queryStr(route.query.page)))
+const sortField = ref<SortField>(parseSort(queryStr(route.query.sort)))
+const sortDir = ref<SortDir>(parseDir(queryStr(route.query.dir)))
+const nameFilter = ref(queryStr(route.query.name))
+const localFilter = ref(queryStr(route.query.name))
+const stateFilter = ref(queryStr(route.query.state))
 const expandedJobs = ref<Set<string>>(loadExpandedJobs())
 const childJobsByParent = ref<Map<string, JobStatus[]>>(new Map())
 const loadingChildJobs = ref<Set<string>>(new Set())
+const starredJobIds = ref<Set<string>>(loadStarredJobs())
+const showStarredOnly = ref(queryStr(route.query.starred) === '1')
+const starredJobsData = ref<JobStatus[]>([])
+const starredLoading = ref(false)
+const starredError = ref<string | null>(null)
+const starLimitNotice = ref<string | null>(null)
 
 const JOB_STATES: JobState[] = [
   'pending', 'building', 'running', 'succeeded', 'failed', 'killed', 'worker_failed', 'unschedulable',
@@ -90,6 +121,72 @@ function saveExpandedJobs() {
   }
 }
 
+// -- Local storage for starred jobs (persists across sessions) --
+
+function loadStarredJobs(): Set<string> {
+  try {
+    const stored = localStorage.getItem(STARRED_JOBS_KEY)
+    return stored ? new Set(JSON.parse(stored) as string[]) : new Set()
+  } catch {
+    return new Set()
+  }
+}
+
+function saveStarredJobs() {
+  try {
+    localStorage.setItem(STARRED_JOBS_KEY, JSON.stringify([...starredJobIds.value]))
+  } catch {
+    // ignore
+  }
+}
+
+function toggleStar(job: JobStatus) {
+  const next = new Set(starredJobIds.value)
+  if (next.has(job.jobId)) {
+    next.delete(job.jobId)
+  } else {
+    if (next.size >= MAX_STARRED_JOBS) {
+      starLimitNotice.value = `You can star at most ${MAX_STARRED_JOBS} jobs — unstar one first.`
+      setTimeout(() => { starLimitNotice.value = null }, 4000)
+      return
+    }
+    next.add(job.jobId)
+  }
+  starredJobIds.value = next
+  saveStarredJobs()
+  if (showStarredOnly.value) {
+    void fetchStarredJobs()
+  }
+}
+
+// Fetch each starred job individually — the ListJobs RPC does not support
+// filtering by a set of job IDs, so this is the simplest correct way to
+// show only starred jobs without losing any due to pagination.
+async function fetchStarredJobs() {
+  const ids = [...starredJobIds.value]
+  if (ids.length === 0) {
+    starredJobsData.value = []
+    starredError.value = null
+    return
+  }
+  starredLoading.value = true
+  starredError.value = null
+  try {
+    const results = await Promise.allSettled(
+      ids.map(id => controllerRpcCall<GetJobStatusResponse>('GetJobStatus', { jobId: id })),
+    )
+    starredJobsData.value = results
+      .filter((r): r is PromiseFulfilledResult<GetJobStatusResponse> => r.status === 'fulfilled' && !!r.value?.job)
+      .map(r => r.value.job)
+    const failures = results.filter(r => r.status === 'rejected').length
+    if (failures > 0 && starredJobsData.value.length === 0) {
+      starredError.value = `Failed to load ${failures} starred job${failures !== 1 ? 's' : ''}`
+    }
+  } finally {
+    starredLoading.value = false
+  }
+}
+
 async function loadChildJobs(parentJobId: string) {
   if (loadingChildJobs.value.has(parentJobId)) return
   const nextLoading = new Set(loadingChildJobs.value)
@@ -102,7 +199,6 @@ async function loadChildJobs(parentJobId: string) {
         parentJobId,
         sortField: SORT_FIELD_MAP[sortField.value],
         sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
-        stateFilter: stateFilter.value || undefined,
       } satisfies JobQuery,
     })
     const nextChildren = new Map(childJobsByParent.value)
@@ -115,42 +211,133 @@ async function loadChildJobs(parentJobId: string) {
   }
 }
 
-async function fetchAll() {
-  await fetchJobs()
+async function refreshExpandedChildren() {
   await Promise.all([...expandedJobs.value].map(loadChildJobs))
 }
 
+async function fetchAll() {
+  if (showStarredOnly.value) {
+    await fetchStarredJobs()
+    await refreshExpandedChildren()
+    return
+  }
+  await fetchJobs()
+  await refreshExpandedChildren()
+}
+
 onMounted(fetchAll)
-useAutoRefresh(fetchAll, 30_000)
+useAutoRefresh(fetchAll, DEFAULT_REFRESH_MS)
 
 watch([page, sortField, sortDir, nameFilter, stateFilter], () => {
   childJobsByParent.value = new Map()
   expandedJobs.value = new Set()
   saveExpandedJobs()
-  fetchJobs()
+  if (!showStarredOnly.value) fetchJobs()
+})
+
+watch(showStarredOnly, (on) => {
+  childJobsByParent.value = new Map()
+  expandedJobs.value = new Set()
+  saveExpandedJobs()
+  if (on) void fetchStarredJobs()
+  else void fetchJobs()
 })
 
 watch(stateFilter, () => {
   page.value = 0
 })
 
+// Sync filter/sort/page state into the URL so back-button and link sharing work.
+watch([page, sortField, sortDir, nameFilter, stateFilter, showStarredOnly], () => {
+  router.replace({
+    query: {
+      ...route.query,
+      sort: sortField.value !== 'date' ? sortField.value : undefined,
+      dir: sortDir.value !== 'desc' ? sortDir.value : undefined,
+      page: page.value !== 0 ? String(page.value) : undefined,
+      name: nameFilter.value || undefined,
+      state: stateFilter.value || undefined,
+      starred: showStarredOnly.value ? '1' : undefined,
+    },
+  })
+})
+
+// -- Starred-only client-side filter + sort --
+
+function jobSortKey(job: JobStatus, field: SortField): number | string {
+  switch (field) {
+    case 'date': return timestampMs(job.submittedAt) || 0
+    case 'name': return job.name ?? ''
+    case 'state': return stateToName(job.state)
+    case 'failures': return job.failureCount ?? 0
+    case 'preemptions': return job.preemptionCount ?? 0
+  }
+}
+
+function compareJobs(a: JobStatus, b: JobStatus): number {
+  const av = jobSortKey(a, sortField.value)
+  const bv = jobSortKey(b, sortField.value)
+  const sign = sortDir.value === 'asc' ? 1 : -1
+  if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * sign
+  return String(av).localeCompare(String(bv)) * sign
+}
+
+const filteredStarredJobs = computed(() => {
+  const ids = starredJobIds.value
+  const nameF = nameFilter.value.toLowerCase()
+  const stateF = stateFilter.value
+  return starredJobsData.value
+    .filter(j => ids.has(j.jobId))
+    .filter(j => !nameF || (j.name ?? '').toLowerCase().includes(nameF))
+    .filter(j => !stateF || stateToName(j.state) === stateF)
+    .slice()
+    .sort(compareJobs)
+})
+
+const effectiveJobs = computed(() => showStarredOnly.value ? filteredStarredJobs.value : jobs.value)
+const effectiveLoading = computed(() => showStarredOnly.value ? starredLoading.value : loading.value)
+const effectiveError = computed(() => showStarredOnly.value ? starredError.value : error.value)
+const effectiveTotalCount = computed(() => showStarredOnly.value ? filteredStarredJobs.value.length : totalCount.value)
+
 // -- Job tree (lazy-loaded children) --
 
-const flattenedJobs = computed(() => flattenLoadedJobTree(jobs.value, childJobsByParent.value, expandedJobs.value))
+const flattenedJobs = computed(() => flattenLoadedJobTree(effectiveJobs.value, childJobsByParent.value, expandedJobs.value))
+
+// Whether a row should render the expand toggle. In starred-only mode we
+// may have fetched the job via GetJobStatus against an older controller
+// that doesn't populate `has_children`; show the toggle defensively for
+// top-level rows and let `loadChildJobs` reveal whether it actually has
+// children.
+function showExpandToggle(job: JobStatus, depth: number): boolean {
+  if (job.hasChildren) return true
+  if (showStarredOnly.value && depth === 0) return true
+  return false
+}
 
 // -- Interactions --
-function toggleExpanded(job: JobStatus) {
+async function toggleExpanded(job: JobStatus) {
   const next = new Set(expandedJobs.value)
   if (next.has(job.jobId)) {
     next.delete(job.jobId)
-  } else {
-    next.add(job.jobId)
-    if (!childJobsByParent.value.has(job.jobId)) {
-      void loadChildJobs(job.jobId)
-    }
+    expandedJobs.value = next
+    saveExpandedJobs()
+    return
   }
+  next.add(job.jobId)
   expandedJobs.value = next
   saveExpandedJobs()
+  if (!childJobsByParent.value.has(job.jobId)) {
+    await loadChildJobs(job.jobId)
+    // Defensive: auto-collapse if the load returned no children, so the
+    // expanded arrow doesn't dangle over an empty list (matters when the
+    // server doesn't populate hasChildren on GetJobStatus responses).
+    if ((childJobsByParent.value.get(job.jobId) ?? []).length === 0) {
+      const reset = new Set(expandedJobs.value)
+      reset.delete(job.jobId)
+      expandedJobs.value = reset
+      saveExpandedJobs()
+    }
+  }
 }
 
 function handleSort(field: SortField) {
@@ -172,10 +359,11 @@ function handleFilterClear() {
   localFilter.value = ''
   nameFilter.value = ''
   stateFilter.value = ''
+  showStarredOnly.value = false
   page.value = 0
 }
 
-const hasActiveFilter = computed(() => !!nameFilter.value || !!stateFilter.value)
+const hasActiveFilter = computed(() => !!nameFilter.value || !!stateFilter.value || showStarredOnly.value)
 
 // -- Formatting --
 
@@ -200,17 +388,8 @@ interface ProgressSegment {
   label: string
 }
 
-const SEGMENT_COLORS: Record<string, string> = {
-  succeeded: 'bg-status-success',
-  running: 'bg-accent',
-  building: 'bg-status-purple',
-  assigned: 'bg-status-orange',
-  failed: 'bg-status-danger',
-  worker_failed: 'bg-status-danger',
-  preempted: 'bg-status-warning',
-  killed: 'bg-text-muted',
-  pending: 'bg-surface-border',
-}
+// SEGMENT_COLORS lives in @/types/status so the dashboard legend can stay in
+// sync with a single canonical definition.
 
 function progressSegments(job: JobStatus): ProgressSegment[] {
   const counts = job.taskStateCounts ?? {}
@@ -310,21 +489,51 @@ function sortIndicator(field: SortField): string {
         Reset
       </button>
     </form>
+    <button
+      type="button"
+      :class="[
+        'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded',
+        showStarredOnly
+          ? 'border-status-warning-border bg-status-warning-bg text-status-warning'
+          : 'border-surface-border hover:bg-surface-raised',
+      ]"
+      :title="showStarredOnly ? 'Show all jobs' : 'Show only starred jobs'"
+      @click="showStarredOnly = !showStarredOnly"
+    >
+      <svg v-if="showStarredOnly" class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.286 3.966a1 1 0 00.95.69h4.17c.969 0 1.371 1.24.588 1.81l-3.37 2.45a1 1 0 00-.364 1.118l1.287 3.966c.3.922-.755 1.688-1.54 1.118l-3.37-2.45a1 1 0 00-1.176 0l-3.37 2.45c-.784.57-1.838-.196-1.539-1.118l1.287-3.966a1 1 0 00-.364-1.118L2.06 9.393c-.783-.57-.38-1.81.588-1.81h4.17a1 1 0 00.95-.69l1.286-3.966z" />
+      </svg>
+      <svg v-else class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+      </svg>
+      Starred
+      <span v-if="starredJobIds.size > 0" class="text-xs tabular-nums opacity-70">
+        ({{ starredJobIds.size }})
+      </span>
+    </button>
     <span class="text-[13px] text-text-secondary">
-      {{ totalCount }} job{{ totalCount !== 1 ? 's' : '' }}
+      {{ effectiveTotalCount }} job{{ effectiveTotalCount !== 1 ? 's' : '' }}
     </span>
   </div>
 
   <!-- Error -->
   <div
-    v-if="error"
+    v-if="effectiveError"
     class="mb-4 px-4 py-3 text-sm text-status-danger bg-status-danger-bg rounded-lg border border-status-danger-border"
   >
-    {{ error }}
+    {{ effectiveError }}
+  </div>
+
+  <!-- Star-limit notice -->
+  <div
+    v-if="starLimitNotice"
+    class="mb-4 px-4 py-2 text-sm text-status-warning bg-status-warning-bg rounded-lg border border-status-warning-border"
+  >
+    {{ starLimitNotice }}
   </div>
 
   <!-- Loading -->
-  <div v-if="loading && jobs.length === 0" class="flex items-center justify-center py-12 text-text-muted text-sm">
+  <div v-if="effectiveLoading && effectiveJobs.length === 0" class="flex items-center justify-center py-12 text-text-muted text-sm">
     <svg class="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
       <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
       <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -334,8 +543,10 @@ function sortIndicator(field: SortField): string {
 
   <!-- Empty state -->
   <EmptyState
-    v-else-if="!loading && jobs.length === 0"
-    :message="hasActiveFilter ? 'No jobs matching filter' : 'No jobs'"
+    v-else-if="!effectiveLoading && effectiveJobs.length === 0"
+    :message="showStarredOnly && starredJobIds.size === 0
+      ? 'No starred jobs — click the star next to a top-level job to pin it here'
+      : (hasActiveFilter ? 'No jobs matching filter' : 'No jobs')"
   />
 
   <!-- Jobs table -->
@@ -378,7 +589,7 @@ function sortIndicator(field: SortField): string {
           >
             <span class="inline-flex items-center gap-1">
               <button
-                v-if="node.job.hasChildren"
+                v-if="showExpandToggle(node.job, node.depth)"
                 class="text-text-muted hover:text-text select-none w-4 text-center text-xs"
                 @click.stop="toggleExpanded(node.job)"
               >
@@ -403,6 +614,24 @@ function sortIndicator(field: SortField): string {
                 <svg v-else class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
                   <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                </svg>
+              </button>
+              <button
+                v-if="node.depth === 0"
+                :class="[
+                  'ml-1 transition-opacity',
+                  starredJobIds.has(node.job.jobId)
+                    ? 'text-status-warning opacity-100'
+                    : 'text-text-muted hover:text-text opacity-0 group-hover/row:opacity-100',
+                ]"
+                :title="starredJobIds.has(node.job.jobId) ? 'Unstar job' : 'Star job'"
+                @click.stop="toggleStar(node.job)"
+              >
+                <svg v-if="starredJobIds.has(node.job.jobId)" class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.286 3.966a1 1 0 00.95.69h4.17c.969 0 1.371 1.24.588 1.81l-3.37 2.45a1 1 0 00-.364 1.118l1.287 3.966c.3.922-.755 1.688-1.54 1.118l-3.37-2.45a1 1 0 00-1.176 0l-3.37 2.45c-.784.57-1.838-.196-1.539-1.118l1.287-3.966a1 1 0 00-.364-1.118L2.06 9.393c-.783-.57-.38-1.81.588-1.81h4.17a1 1 0 00.95-.69l1.286-3.966z" />
+                </svg>
+                <svg v-else class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
                 </svg>
               </button>
             </span>
@@ -470,7 +699,7 @@ function sortIndicator(field: SortField): string {
 
     <!-- Pagination -->
     <div
-      v-if="totalPages > 1"
+      v-if="!showStarredOnly && totalPages > 1"
       class="flex items-center justify-between px-3 py-2 text-xs text-text-secondary border-t border-surface-border"
     >
       <span>

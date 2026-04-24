@@ -1,10 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fray: Execution contexts for distributed and parallel computing.
-
-Top-level fray exports are v2 APIs. For legacy v1 APIs, use ``fray.v1``.
-"""
+"""Fray: Execution contexts for distributed and parallel computing."""
 
 from fray.v2 import (
     ActorContext,

@@ -9,6 +9,7 @@ import pytest
 from iris.cli.job import (
     _parse_tpu_alternatives,
     _render_job_summary_text,
+    build_job_constraints,
     build_job_summary,
     build_resources,
     build_tpu_alternatives,
@@ -94,7 +95,7 @@ def test_executor_heuristic_small_cpu_job_gets_non_preemptible():
     preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
     assert preemptible is not None
     assert preemptible.key == WellKnownAttribute.PREEMPTIBLE
-    assert preemptible.value == "false"
+    assert preemptible.values[0].value == "false"
 
 
 def test_executor_heuristic_skipped_for_gpu_job():
@@ -135,7 +136,53 @@ def test_executor_heuristic_with_region_constraint():
 
     preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
     assert preemptible is not None
-    assert preemptible.value == "false"
+    assert preemptible.values[0].value == "false"
+
+
+# ---------------------------------------------------------------------------
+# build_job_constraints — --preemptible / --no-preemptible wiring (#4540)
+# ---------------------------------------------------------------------------
+
+
+def _preemptible_values(constraints: list[Constraint]) -> list[str]:
+    return [c.values[0].value for c in constraints if c.key == WellKnownAttribute.PREEMPTIBLE]
+
+
+def test_build_job_constraints_preemptible_true_emits_true_constraint():
+    """--preemptible forces a preemptible=true constraint and bypasses the heuristic."""
+    resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
+
+    constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, preemptible=True)
+
+    assert _preemptible_values(constraints) == ["true"]
+
+
+def test_build_job_constraints_preemptible_false_emits_false_constraint():
+    """--no-preemptible forces a preemptible=false constraint even for non-executor jobs."""
+    resources_proto = build_resources(tpu=None, gpu=None, cpu=4.0, memory="16GB", disk="5GB").to_proto()
+
+    constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, preemptible=False)
+
+    assert _preemptible_values(constraints) == ["false"]
+
+
+def test_build_job_constraints_preemptible_none_runs_heuristic():
+    """Default (None) preserves the executor heuristic on small CPU jobs."""
+    resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
+
+    constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, preemptible=None)
+
+    assert _preemptible_values(constraints) == ["false"]
+
+
+def test_build_job_constraints_preemptible_true_overrides_heuristic():
+    """Small CPU jobs normally auto-tag non-preemptible; --preemptible wins."""
+    resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
+
+    constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, preemptible=True)
+
+    # Exactly one preemptible constraint, and it reflects the user's choice.
+    assert _preemptible_values(constraints) == ["true"]
 
 
 # --tpu multi-variant parsing

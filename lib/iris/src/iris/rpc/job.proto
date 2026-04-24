@@ -232,6 +232,8 @@ message TaskStatus {
   bool can_be_scheduled = 17;         // Whether task is currently schedulable
   // field 18 was log_directory, removed
   string container_id = 19;           // Platform container identifier (Docker container ID, K8s pod name)
+  // Historical resource snapshots (oldest first). Populated only in GetTaskStatus detail view.
+  repeated ResourceUsage resource_history = 20;
 }
 
 // Record of a single task execution attempt
@@ -255,7 +257,7 @@ message ResourceUsage {
   int32 process_count = 6;
 }
 
-// Host-level resource snapshot collected by the worker during each heartbeat.
+// Host-level resource snapshot collected by the worker during each Ping.
 message WorkerResourceSnapshot {
   iris.time.Timestamp timestamp = 1;
   // Host CPU utilization as percentage (0-100 averaged across cores)
@@ -269,7 +271,7 @@ message WorkerResourceSnapshot {
   // Aggregate task stats
   int32 running_task_count = 7;
   int32 total_process_count = 8;
-  // Network bandwidth (bytes/sec, computed as delta between heartbeats)
+  // Network bandwidth (bytes/sec, computed as delta between Ping snapshots)
   int64 net_recv_bps = 9;
   int64 net_sent_bps = 10;
 }
@@ -529,10 +531,7 @@ message WorkerMetadata {
   // using format: key1=value1,key2=value2 (e.g., taint:maintenance=true,pool=large-jobs)
   map<string, AttributeValue> attributes = 40;
 
-  // DEPRECATED: No longer used for worker identification.
-  // Worker identity is now set via RegisterRequest.worker_id.
-  // Field kept for proto wire compatibility but ignored by the controller.
-  string vm_address = 41;
+  reserved 41;  // was vm_address, removed
 
   // Git commit hash baked into the worker image at build time (IRIS_GIT_HASH).
   // Allows the controller to surface per-worker version info for debugging.
@@ -560,10 +559,10 @@ enum PriorityBand {
 }
 
 // ============================================================================
-// HEARTBEAT PROTOCOL (Controller -> Worker)
+// TASK RUNTIME TYPES (shared between controller and worker)
 // ============================================================================
 
-// Task execution request sent from controller to worker via heartbeat.
+// Task execution request sent from controller to worker.
 // Elevated from the Worker message namespace to break the circular dependency
 // between controller.proto and worker.proto.
 message RunTaskRequest {
@@ -578,9 +577,15 @@ message RunTaskRequest {
   repeated string ports = 8;
   int32 attempt_id = 9;
   repeated Constraint constraints = 10; // Original job constraints for child-job inheritance metadata
+
+  // Per-task task container image. When empty, the worker uses its
+  // cluster-configured default_task_image. Used for jobs that need a
+  // custom runtime (e.g. an image with runsc/skopeo for sandboxing
+  // untrusted child workloads).
+  string task_image = 11;
 }
 
-// Lean task status reported by the worker during heartbeat.
+// Lean task status reported by the worker via PollTasks / UpdateTaskStatus.
 // Covers both running and completed tasks in a single type.
 // Elevated from the Controller message namespace to break the circular
 // dependency between controller.proto and worker.proto.
@@ -593,38 +598,6 @@ message WorkerTaskStatus {
   iris.time.Timestamp finished_at = 6;
   // field 7 was log_directory, removed
   ResourceUsage resource_usage = 8;
-  // Carried by old workers that predate push-based LogService.
-  // New workers push logs directly; this field is only populated during
-  // rolling upgrades and will be removed once all workers are updated.
-  repeated iris.logging.LogEntry log_entries = 9;
+  reserved 9;  // was log_entries (pushed via LogService now)
   string container_id = 10;         // Platform container identifier (Docker container ID, K8s pod name)
-}
-
-message HeartbeatRequest {
-  // Tasks to start on this worker
-  repeated RunTaskRequest tasks_to_run = 1;
-
-  // Tasks to kill on this worker
-  repeated string tasks_to_kill = 2;
-
-  // Tasks the controller believes this worker is running.
-  // Worker compares against its actual state and reports completions/failures.
-  repeated WorkerTaskStatus expected_tasks = 3;
-}
-
-message HeartbeatResponse {
-  // All tasks known to the worker (running + recently completed), reported as a
-  // single unified list.  Replaces the former running_tasks + completed_tasks split.
-  repeated WorkerTaskStatus tasks = 4;
-
-  // Current host-level resource snapshot
-  WorkerResourceSnapshot resource_snapshot = 3;
-
-  // Worker health status. When false, the worker has detected a local fault
-  // (disk full, cannot write tempfile, etc.) and should be immediately
-  // marked as permanently failed by the controller.
-  bool worker_healthy = 5;
-
-  // Human-readable description of the health check failure.
-  string health_error = 6;
 }

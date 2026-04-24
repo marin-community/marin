@@ -3,40 +3,19 @@
 
 """Tests for controller checkpoint: remote-only write and download-before-create restore."""
 
-from pathlib import Path
-
 from iris.cluster.controller.checkpoint import (
     download_checkpoint_to_local,
     prune_old_checkpoints,
     write_checkpoint,
 )
-from iris.cluster.controller.controller import (
-    Controller,
-    ControllerConfig,
-)
 from iris.cluster.controller.db import ControllerDB
 from rigging.timing import Duration
-from tests.cluster.controller.conftest import FakeProvider
 
 
-def _local_state_dir(tmp_path: Path, name: str = "state") -> Path:
-    d = tmp_path / name
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def _make_controller(tmp_path: Path, remote_state_dir: str | None = None, **kwargs) -> Controller:
-    if remote_state_dir is None:
-        remote_state_dir = f"file://{tmp_path}/remote"
-    state_dir = _local_state_dir(tmp_path)
-    config = ControllerConfig(remote_state_dir=remote_state_dir, local_state_dir=state_dir, **kwargs)
-    return Controller(config=config, provider=FakeProvider())
-
-
-def test_write_checkpoint_uploads_compressed(tmp_path):
+def test_write_checkpoint_uploads_compressed(tmp_path, make_controller):
     """write_checkpoint creates a timestamped directory with .zst files."""
     remote_dir = f"file://{tmp_path}/remote"
-    controller = _make_controller(tmp_path, remote_state_dir=remote_dir)
+    controller = make_controller(remote_state_dir=remote_dir)
 
     path, result = write_checkpoint(controller._db, remote_dir)
 
@@ -52,26 +31,22 @@ def test_write_checkpoint_uploads_compressed(tmp_path):
     assert result.task_count == 0
     assert result.worker_count == 0
 
-    controller._db.close()
 
-
-def test_begin_checkpoint_returns_remote_path(tmp_path):
+def test_begin_checkpoint_returns_remote_path(tmp_path, make_controller):
     """begin_checkpoint returns a remote path string."""
     remote_dir = f"file://{tmp_path}/remote"
-    controller = _make_controller(tmp_path, remote_state_dir=remote_dir)
+    controller = make_controller(remote_state_dir=remote_dir)
 
     path, result = controller.begin_checkpoint()
 
     assert path.startswith(f"file://{tmp_path}/remote/controller-state/")
     assert result.job_count == 0
 
-    controller._db.close()
 
-
-def test_atexit_checkpoint_writes_to_remote(tmp_path):
+def test_atexit_checkpoint_writes_to_remote(tmp_path, make_controller):
     """_atexit_checkpoint writes directly to remote storage."""
     remote_dir = f"file://{tmp_path}/remote"
-    controller = _make_controller(tmp_path, remote_state_dir=remote_dir)
+    controller = make_controller(remote_state_dir=remote_dir)
 
     controller._atexit_checkpoint()
 
@@ -79,8 +54,6 @@ def test_atexit_checkpoint_writes_to_remote(tmp_path):
     timestamped_dirs = [d for d in remote_state.iterdir() if d.is_dir()]
     assert len(timestamped_dirs) >= 1
     assert (timestamped_dirs[0] / "controller.sqlite3.zst").exists()
-
-    controller._db.close()
 
 
 def test_download_checkpoint_to_local(tmp_path):
@@ -117,12 +90,11 @@ def test_download_from_explicit_path(tmp_path):
     assert (local_db_dir / "controller.sqlite3").exists()
 
 
-def test_write_checkpoint_roundtrip(tmp_path):
+def test_write_checkpoint_roundtrip(tmp_path, make_controller):
     """Write then download produces a valid DB."""
     remote_dir = f"file://{tmp_path}/remote"
-    controller = _make_controller(tmp_path, remote_state_dir=remote_dir)
+    controller = make_controller(remote_state_dir=remote_dir)
     write_checkpoint(controller._db, remote_dir)
-    controller._db.close()
 
     local_db_dir = tmp_path / "restored"
     download_checkpoint_to_local(remote_dir, local_db_dir)
@@ -130,10 +102,10 @@ def test_write_checkpoint_roundtrip(tmp_path):
     restored_db.close()
 
 
-def test_write_checkpoint_cleans_up_temp_file(tmp_path):
+def test_write_checkpoint_cleans_up_temp_file(tmp_path, make_controller):
     """write_checkpoint does not leave temp files in the DB directory."""
     remote_dir = f"file://{tmp_path}/remote"
-    controller = _make_controller(tmp_path, remote_state_dir=remote_dir)
+    controller = make_controller(remote_state_dir=remote_dir)
     db_dir = controller._db.db_path.parent
 
     files_before = set(db_dir.iterdir())
@@ -143,8 +115,6 @@ def test_write_checkpoint_cleans_up_temp_file(tmp_path):
     new_files = files_after - files_before
     sqlite_temps = [f for f in new_files if ".sqlite3" in f.name and f.name != ControllerDB.DB_FILENAME]
     assert len(sqlite_temps) == 0
-
-    controller._db.close()
 
 
 def test_local_db_exists_skips_remote_download(tmp_path):
@@ -217,11 +187,10 @@ def test_download_from_explicit_path_pairs_profiles_db(tmp_path):
     assert (local_db_dir / "profiles.sqlite3").exists(), "profiles DB should be downloaded into local_db_dir"
 
 
-def test_periodic_checkpoint_inline(tmp_path):
+def test_periodic_checkpoint_inline(tmp_path, make_controller):
     """Controller writes periodic checkpoints when limiter fires."""
     remote_dir = f"file://{tmp_path}/remote"
-    controller = _make_controller(
-        tmp_path,
+    controller = make_controller(
         remote_state_dir=remote_dir,
         checkpoint_interval=Duration.from_seconds(0),
     )
@@ -234,8 +203,6 @@ def test_periodic_checkpoint_inline(tmp_path):
     timestamped_dirs = [d for d in remote_state.iterdir() if d.is_dir()]
     assert len(timestamped_dirs) >= 1
     assert (timestamped_dirs[0] / "controller.sqlite3.zst").exists()
-
-    controller._db.close()
 
 
 def test_download_uncompressed_fallback(tmp_path):

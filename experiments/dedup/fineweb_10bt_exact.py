@@ -14,7 +14,7 @@ import os
 from rigging.log_setup import configure_logging
 from rigging.filesystem import marin_prefix
 
-from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.canonical import fineweb_edu
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
@@ -25,10 +25,8 @@ OUTPUT_PREFIX = os.environ.get("OUTPUT_PREFIX", "exact-para-dedup-fineweb-10bt")
 
 
 def build_steps() -> list[StepSpec]:
-    download = download_hf_step(
-        "raw/fineweb-edu",
-        hf_dataset_id="HuggingFaceFW/fineweb-edu",
-        revision="87f0914",
+    download = fineweb_edu.download(
+        hf_urls_glob=["sample/10BT/*.parquet"],
     )
 
     dedup_step = StepSpec(
@@ -38,7 +36,7 @@ def build_steps() -> list[StepSpec]:
         fn=lambda op: dedup_exact_paragraph(
             input_paths=os.path.join(download.output_path, "sample/10BT"),
             output_path=op,
-            max_parallelism=4,
+            max_parallelism=128,
         ),
     )
     return [download, dedup_step]

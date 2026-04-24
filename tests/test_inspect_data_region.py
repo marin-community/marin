@@ -1,13 +1,76 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for region validation in inspect_data.py."""
+"""Tests for cluster-region / data-region validation helpers.
 
-import click
+These helpers used to live in ``scripts/debug/inspect_data.py`` (the Ray-only
+``inspect_data`` CLI). That script was deleted when Ray operator tooling was
+retired; the helpers were small enough that moving them here — the only
+importer — was simpler than finding a new home for them.
+"""
+
 import logging
 
+import click
 import pytest
 
-from scripts.debug.inspect_data import _normalize_cluster_region, _validate_data_region
+
+def _normalize_cluster_region(cluster: str) -> str:
+    """Extract the canonical region string from a --cluster argument.
+
+    Accepts region names like ``us-central2`` or ``marin-us-central2`` and
+    strips the ``marin-`` prefix if present.
+    """
+    region = cluster
+    if region.startswith("marin-"):
+        region = region[len("marin-") :]
+    return region
+
+
+def _validate_data_region(wandb_dict: dict, cluster: str) -> None:
+    """Ensure every component cache_dir lives in the same region as *cluster*.
+
+    Raises ``click.ClickException`` if any component's GCS bucket is in a
+    different region, preventing accidental cross-region egress charges.
+    """
+    from rigging.filesystem import REGION_TO_DATA_BUCKET
+
+    logger = logging.getLogger(__name__)
+
+    cluster_region = _normalize_cluster_region(cluster)
+
+    # Build reverse mapping: bucket name -> region
+    bucket_to_region: dict[str, str] = {bucket: region for region, bucket in REGION_TO_DATA_BUCKET.items()}
+
+    mismatches: list[str] = []
+    for name, cache_dir in wandb_dict.get("components", {}).items():
+        if not cache_dir or not cache_dir.startswith("gs://"):
+            continue
+        # Extract bucket name from gs://bucket/path
+        bucket_name = cache_dir.split("/")[2]
+        data_region = bucket_to_region.get(bucket_name)
+        if data_region is None:
+            # Unknown bucket — can't verify, warn but allow
+            logger.warning(
+                "Cannot determine region for bucket %r (component %r); skipping region check.",
+                bucket_name,
+                name,
+            )
+            continue
+        if data_region != cluster_region:
+            mismatches.append(
+                f"  - component {name!r}: bucket {bucket_name!r} is in {data_region}, "
+                f"but cluster is in {cluster_region}"
+            )
+
+    if mismatches:
+        detail = "\n".join(mismatches)
+        raise click.ClickException(
+            f"Cross-region data access detected! The data lives in a different region "
+            f"than the target cluster ({cluster_region}).\n"
+            f"This would incur significant egress charges.\n\n"
+            f"{detail}\n\n"
+            f"Please use --cluster <region> matching your data's region."
+        )
 
 
 def test_normalize_cluster_region_plain():

@@ -3,7 +3,7 @@
 
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
-from iris.cluster.controller.budget import compute_effective_band
+from iris.cluster.controller.budget import UserBudgetDefaults, compute_effective_band
 from iris.cluster.controller.transitions import RESERVATION_HOLDER_JOB_NAME, _resolve_task_failure_state
 from iris.cluster.controller.controller import (
     PreemptionCandidate,
@@ -16,7 +16,7 @@ from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 
-from iris.cluster.controller.transitions import Assignment
+from iris.cluster.controller.transitions import Assignment, HeartbeatApplyRequest, TaskUpdate
 
 from .conftest import (
     ControllerTestHarness,
@@ -416,7 +416,10 @@ def test_over_budget_user_tasks_preemptible():
     # Alice is over budget — her INTERACTIVE task should have effective band BATCH
     user_spend = {"alice": 10000}
     user_budget_limits = {"alice": 5000}
-    effective = compute_effective_band(job_pb2.PRIORITY_BAND_INTERACTIVE, "alice", user_spend, user_budget_limits)
+    defaults = UserBudgetDefaults()
+    effective = compute_effective_band(
+        job_pb2.PRIORITY_BAND_INTERACTIVE, "alice", user_spend, user_budget_limits, defaults
+    )
     assert effective == job_pb2.PRIORITY_BAND_BATCH
 
     victim = RunningTaskInfo(
@@ -443,7 +446,10 @@ def test_over_budget_production_not_preemptible():
     """Over-budget user's PRODUCTION tasks are NOT downgraded and stay non-preemptible by INTERACTIVE."""
     user_spend = {"alice": 10000}
     user_budget_limits = {"alice": 5000}
-    effective = compute_effective_band(job_pb2.PRIORITY_BAND_PRODUCTION, "alice", user_spend, user_budget_limits)
+    defaults = UserBudgetDefaults()
+    effective = compute_effective_band(
+        job_pb2.PRIORITY_BAND_PRODUCTION, "alice", user_spend, user_budget_limits, defaults
+    )
     assert effective == job_pb2.PRIORITY_BAND_PRODUCTION
 
 
@@ -462,7 +468,11 @@ def test_running_tasks_use_effective_band():
         user_budget_limits = {"alice": 5000}
 
         running = _get_running_tasks_with_band_and_value(
-            state._db, set(), user_spend=user_spend, user_budget_limits=user_budget_limits
+            state._db,
+            set(),
+            user_spend=user_spend,
+            user_budget_limits=user_budget_limits,
+            user_budget_defaults=UserBudgetDefaults(),
         )
 
         assert len(running) == 1
@@ -899,3 +909,72 @@ def test_preemption_retry_preserves_reservation_holder():
         assert (
             child_task_updated.state == job_pb2.TASK_STATE_KILLED
         ), "non-reservation child task must be killed on parent preemption retry"
+
+
+def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
+    """Regression: after preempt_task retries a task (state -> PENDING, attempt -> PREEMPTED),
+    a late worker heartbeat for the dead attempt_id must NOT revive the attempt row back
+    to RUNNING while leaving `error` and `finished_at_ms` set.
+
+    Observed in production (job /eczech/iris-run-exp109_bolinas_sweep_eval-...): the
+    attempt ended up in the impossible mixed state
+        state=RUNNING, error="Preempted by ...", finished_at_ms=<set>
+    because preempt_task leaves `tasks.current_attempt_id` pointing at the dead
+    attempt, so _apply_task_transitions' stale-attempt guard fails to fire and
+    overwrites `state` on the attempt row (COALESCE only protects
+    finished_at_ms / error / exit_code).
+    """
+    with make_controller_state() as state:
+        harness = ControllerTestHarness(state)
+        worker_id = harness.add_worker("w1", cpu=4)
+
+        tasks = harness.submit(
+            "/alice/batch-job",
+            cpu=1,
+            replicas=1,
+            max_retries_preemption=5,
+        )
+        task = tasks[0]
+
+        harness.dispatch(task, worker_id)
+        assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
+        dead_attempt_id = query_task(state, task.task_id).current_attempt_id
+        assert dead_attempt_id == 0
+
+        state.preempt_task(task.task_id, reason="Preempted by /bob/prod-job:0")
+
+        # Sanity: task went to PENDING (budget remains), attempt row is PREEMPTED-terminal.
+        assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_PENDING
+        attempt_after_preempt = query_attempt(state, task.task_id, dead_attempt_id)
+        assert attempt_after_preempt is not None
+        assert attempt_after_preempt.state == job_pb2.TASK_STATE_PREEMPTED
+        assert attempt_after_preempt.finished_at is not None
+        assert attempt_after_preempt.error == "Preempted by /bob/prod-job:0"
+
+        # Late heartbeat for the (now-dead) attempt 0 arrives: worker still thinks
+        # it is RUNNING. This simulates the RPC-in-flight race.
+        state.apply_task_updates(
+            HeartbeatApplyRequest(
+                worker_id=worker_id,
+                worker_resource_snapshot=None,
+                updates=[
+                    TaskUpdate(
+                        task_id=task.task_id,
+                        attempt_id=dead_attempt_id,
+                        new_state=job_pb2.TASK_STATE_RUNNING,
+                    )
+                ],
+            )
+        )
+
+        # The attempt row must remain in a consistent terminal state — NOT flipped
+        # back to RUNNING with preemption error/finished_at still set.
+        attempt_final = query_attempt(state, task.task_id, dead_attempt_id)
+        assert attempt_final is not None, "attempt row disappeared"
+        assert attempt_final.state == job_pb2.TASK_STATE_PREEMPTED, (
+            f"attempt {dead_attempt_id} was revived to state={attempt_final.state} "
+            f"(expected PREEMPTED={job_pb2.TASK_STATE_PREEMPTED}); "
+            f"error={attempt_final.error!r}, finished_at={attempt_final.finished_at}"
+        )
+        assert attempt_final.finished_at is not None
+        assert attempt_final.error == "Preempted by /bob/prod-job:0"

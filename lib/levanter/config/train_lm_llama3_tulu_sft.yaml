@@ -1,7 +1,7 @@
 data:
   train_weights:
     tulu: 1.0
-  tokenizer: stanford-crfm/marin-tokenizer
+  tokenizer: marin-community/marin-tokenizer
   cache_dir: gs://marin-us-central2/tokenized/marin-tokenizer/tulu-3-sft-mixture
   shuffle: true
   components:

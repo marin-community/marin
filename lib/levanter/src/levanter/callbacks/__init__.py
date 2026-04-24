@@ -34,15 +34,10 @@ def eval_loss_loop(
 ) -> tuple[float, dict[str, float]]:
 
     total_loss = 0.0
-    total_load_time = 0.0
-    total_loss_time = 0.0
-    accumulated_metrics = {}
+    accumulated_metrics: dict = {}
     n = 0
 
-    if name is not None:
-        desc = f"eval {name}"
-    else:
-        desc = "eval"
+    desc = f"eval {name}" if name is not None else "eval"
 
     _tqdm_logging_one_time_setup()
     pbar = tqdm(dataset, desc=desc, position=1, leave=False, total=max_batches)
@@ -80,7 +75,6 @@ def eval_loss_loop(
     if n > 0:
         total_loss /= n
 
-    # Unwrap metrics before returning
     plain_metrics = unwrap_metrics(accumulated_metrics)
     plain_metrics["timing/load_time"] = total_load_time
     plain_metrics["timing/loss_time"] = total_loss_time

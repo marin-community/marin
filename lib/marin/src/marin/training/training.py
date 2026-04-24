@@ -114,6 +114,7 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
         checkpointer=replace(
             pod_config.train_config.trainer.checkpointer,
             base_path=os.path.join(pod_config.output_path, DEFAULT_CHECKPOINTS_PATH),
+            temporary_base_path=marin_temp_bucket(ttl_days=14, prefix="checkpoints-temp"),
         ),
     )
     hf_output_path = os.path.join(pod_config.output_path, DEFAULT_HF_CHECKPOINTS_PATH)
@@ -264,28 +265,6 @@ def _maybe_auto_resolve_dpo_schedule(config: TrainDpoOnPodConfig) -> TrainDpoOnP
     )
 
 
-def _suppress_ray_config(config: TrainConfigT) -> TrainConfigT:
-    """
-    Levanter wants to auto-start the Ray cluster, but we're already in a Ray cluster. Disable that.
-    """
-    if config.trainer.ray.auto_start_cluster:
-        logger.info("Ray cluster is set to auto-start, but that's not what we want for Marin. Disabling.")
-        return replace(
-            config,
-            trainer=replace(
-                config.trainer,
-                ray=replace(config.trainer.ray, auto_start_cluster=False, start_workers=False),
-            ),
-        )
-    elif config.trainer.ray.start_workers:
-        logger.info("Ray cluster is set to start workers, but that's not what we want for Marin. Disabling.")
-        return replace(
-            config,
-            trainer=replace(config.trainer, ray=replace(config.trainer.ray, start_workers=False)),
-        )
-    return config
-
-
 def _maybe_override_auto_build_caches(config: TrainConfigT, auto_build: bool) -> TrainConfigT:
     data = config.data
     if data.auto_build_caches != auto_build:
@@ -401,7 +380,6 @@ def _prepare_training_run(
     logger.info(f"Using run ID: {config.train_config.trainer.id}")
 
     train_config = config.train_config
-    train_config = _suppress_ray_config(train_config)
     train_config = _maybe_override_auto_build_caches(train_config, config.auto_build_caches)
 
     # disable accelerator requirement when running without GPU/TPU resources

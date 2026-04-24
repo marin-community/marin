@@ -225,8 +225,8 @@ class LocalActorHandle:
     This allows the handle to be created before the actor instance exists,
     enabling actors to access their own handle during __init__.
 
-    Actors are responsible for their own thread safety. This matches Iris/Ray
-    behavior where actor methods can be called concurrently and the actor
+    Actors are responsible for their own thread safety. This matches the Iris
+    backend where actor methods can be called concurrently and the actor
     implementation must handle synchronization internally.
     """
 
@@ -248,12 +248,6 @@ class LocalActorHandle:
         if not callable(method):
             raise AttributeError(f"{method_name} is not callable on {type(instance).__name__}")
         return LocalActorMethod(method)
-
-    def shutdown(self) -> None:
-        """Shutdown the actor instance."""
-        instance = _local_actor_registry.get(self._endpoint)
-        if instance is not None:
-            instance.shutdown()
 
     def __getstate__(self) -> dict:
         """Serialize to just the endpoint name."""
@@ -336,8 +330,4 @@ class LocalActorGroup:
         for job in self._jobs:
             job.terminate()
         for handle in self._handles:
-            try:
-                handle.shutdown()
-            except Exception as e:
-                logger.warning("Error shutting down actor %s: %s", handle._endpoint, e)
             _local_actor_registry.pop(handle._endpoint, None)

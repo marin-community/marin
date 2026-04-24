@@ -12,18 +12,18 @@ They focus on:
 
 import threading
 
+
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
+from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.db import (
     ControllerDB,
     EndpointQuery,
     attempt_is_terminal,
-    endpoint_query_sql,
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
-    ENDPOINT_PROJECTION,
     JOB_DETAIL_PROJECTION,
     TASK_DETAIL_PROJECTION,
     WORKER_DETAIL_PROJECTION,
@@ -33,8 +33,6 @@ from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
-    HEARTBEAT_FAILURE_THRESHOLD,
-    HeartbeatAction,
     HeartbeatApplyRequest,
     MAX_REPLICAS_PER_JOB,
     PruneResult,
@@ -92,11 +90,9 @@ def _queued_dispatch(
 
 
 def _endpoints(state: ControllerTransitions, query: EndpointQuery = EndpointQuery()) -> list[EndpointRow]:
-    sql, params = endpoint_query_sql(query)
-    # Add ORDER BY to match original behavior
-    sql += " ORDER BY registered_at_ms DESC, endpoint_id ASC"
-    with state._db.snapshot() as q:
-        return ENDPOINT_PROJECTION.decode(q.fetchall(sql, tuple(params)))
+    rows = state._db.endpoints.query(query)
+    # Mirror the original helper's ordering (registered_at DESC, endpoint_id ASC).
+    return sorted(rows, key=lambda r: (-r.registered_at.epoch_ms(), r.endpoint_id))
 
 
 def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions):
@@ -109,13 +105,17 @@ def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions
         if job_id and job_id not in jobs:
             job = _query_job(state, job_id)
             if job:
+                resources = resource_spec_from_scalars(
+                    job.res_cpu_millicores,
+                    job.res_memory_bytes,
+                    job.res_disk_bytes,
+                    job.res_device_json,
+                )
                 jobs[job_id] = JobRequirements(
-                    resources=job.request.resources,
-                    constraints=list(job.request.constraints),
-                    is_coscheduled=job.request.HasField("coscheduling"),
-                    coscheduling_group_by=(
-                        job.request.coscheduling.group_by if job.request.HasField("coscheduling") else None
-                    ),
+                    resources=resources,
+                    constraints=constraints_from_json(job.constraints_json),
+                    is_coscheduled=job.has_coscheduling,
+                    coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
                 )
     return scheduler.create_scheduling_context(
         workers,
@@ -259,7 +259,7 @@ def test_cancel_job_releases_committed_worker_resources(harness):
     """cancel_job must decommit resources on workers that had active tasks.
 
     Regression: cancel_job marked tasks KILLED without calling _decommit_worker_resources.
-    apply_heartbeat then skipped the update (task already finished), so committed resources
+    apply_task_updates then skipped the update (task already finished), so committed resources
     were never released, permanently blocking scheduling on those workers.
     """
     w1 = harness.add_worker("w1")
@@ -322,22 +322,20 @@ def test_cancel_job_removes_endpoints_for_job_tree(state):
             endpoint_id="parent-ep",
             name="parent/actor",
             address="host1:9000",
-            job_id=JobName.root("test-user", "parent"),
+            task_id=parent_tasks[0].task_id,
             metadata={},
             registered_at=Timestamp.now(),
         ),
-        task_id=parent_tasks[0].task_id,
     )
     state.add_endpoint(
         EndpointRow(
             endpoint_id="child-ep",
             name="parent/child/actor",
             address="host2:9000",
-            job_id=JobName.from_string("/test-user/parent/child"),
+            task_id=child_tasks[0].task_id,
             metadata={},
             registered_at=Timestamp.now(),
         ),
-        task_id=child_tasks[0].task_id,
     )
 
     assert len(_endpoints(state, EndpointQuery())) == 2
@@ -594,11 +592,11 @@ def test_terminal_states_clean_up_endpoints(state):
         endpoint_id="ep1",
         name="j1/actor",
         address="a:1",
-        job_id=JobName.root("test-user", "j1"),
+        task_id=task.task_id,
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep, task.task_id)
+    state.add_endpoint(ep)
 
     # Verify endpoint visible while running
     assert len(_endpoints(state, EndpointQuery(exact_name="j1/actor"))) == 1
@@ -624,11 +622,11 @@ def test_endpoint_visibility_by_job_state(state):
         endpoint_id="ep-1",
         name="ns-1/actor",
         address="10.0.0.1:8080",
-        job_id=JobName.root("test-user", "ns-1"),
+        task_id=task.task_id,
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep, task_id=task.task_id)
+    state.add_endpoint(ep)
 
     # Visible while pending
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
@@ -660,11 +658,11 @@ def test_endpoint_deleted_on_task_failure_with_retry(state):
         endpoint_id="ep-1",
         name="ns-1/actor",
         address="10.0.0.1:8080",
-        job_id=JobName.root("test-user", "ns-1"),
+        task_id=task.task_id,
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep, task_id=task.task_id)
+    state.add_endpoint(ep)
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
     # Task fails but retries (goes back to PENDING)
@@ -691,11 +689,11 @@ def test_endpoint_deleted_on_worker_failure(state):
         endpoint_id="ep-1",
         name="ns-1/actor",
         address="10.0.0.1:8080",
-        job_id=JobName.root("test-user", "ns-1"),
+        task_id=task.task_id,
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep, task_id=task.task_id)
+    state.add_endpoint(ep)
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
     # Worker fails -> task retries to PENDING
@@ -737,11 +735,11 @@ def test_endpoint_survives_building_state(state):
         endpoint_id="ep-1",
         name="ns-1/actor",
         address="10.0.0.1:8080",
-        job_id=JobName.root("test-user", "ns-1"),
+        task_id=task.task_id,
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep, task_id=task.task_id)
+    state.add_endpoint(ep)
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
     # Transition to RUNNING — endpoint should survive
@@ -781,7 +779,7 @@ def test_namespace_isolation(state):
             endpoint_id="ep-1",
             name="ns-1/actor",
             address="10.0.0.1:8080",
-            job_id=JobName.root("test-user", "ns-1"),
+            task_id=tasks1[0].task_id,
             metadata={},
             registered_at=Timestamp.now(),
         )
@@ -791,7 +789,7 @@ def test_namespace_isolation(state):
             endpoint_id="ep-2",
             name="ns-2/actor",
             address="10.0.0.2:8080",
-            job_id=JobName.root("test-user", "ns-2"),
+            task_id=tasks2[0].task_id,
             metadata={},
             registered_at=Timestamp.now(),
         )
@@ -1045,7 +1043,7 @@ def test_coscheduled_task_failure_kills_siblings(state):
     tasks = submit_job(state, "j1", req)
 
     job = _query_job(state, JobName.root("test-user", "j1"))
-    assert job.request.HasField("coscheduling")
+    assert job.has_coscheduling
 
     # Dispatch all tasks
     for i, task in enumerate(tasks):
@@ -1207,7 +1205,7 @@ def test_non_coscheduled_task_failure_does_not_kill_siblings(state):
     tasks = submit_job(state, "j1", req)
 
     job = _query_job(state, JobName.root("test-user", "j1"))
-    assert not job.request.HasField("coscheduling")
+    assert not job.has_coscheduling
 
     for i, task in enumerate(tasks):
         dispatch_task(state, task, WorkerId(f"w{i}"))
@@ -1964,15 +1962,17 @@ def test_requeued_task_maintains_priority_position(state):
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
-    # Submit a deep job and a shallow job
+    # Submit a deep job (under an explicit parent tree) and a shallow job
+    submit_job(state, "tree", make_job_request("tree"), timestamp_ms=500)
     submit_job(state, "/test-user/tree/deep", make_job_request("deep"), timestamp_ms=1000)
     submit_job(state, "shallow", make_job_request("shallow"), timestamp_ms=2000)
 
     # Initially: deep job comes first
     pending = _schedulable_tasks(state)
-    assert len(pending) == 2
+    assert len(pending) == 3
     assert pending[0].job_id == JobName.from_string("/test-user/tree/deep")
-    assert pending[1].job_id == JobName.root("test-user", "shallow")
+    assert pending[1].job_id == JobName.root("test-user", "tree")
+    assert pending[2].job_id == JobName.root("test-user", "shallow")
 
     # Dispatch and fail the deep job's task (with retries enabled)
     deep_req = make_job_request("deep")
@@ -1999,142 +1999,6 @@ def test_requeued_task_maintains_priority_position(state):
     deep_idx = pending.index(deep_pending[0])
     shallow_idx = pending.index(shallow_pending[0])
     assert deep_idx < shallow_idx, "Requeued deep task should still come before shallow task"
-
-
-# =============================================================================
-# Heartbeat Dispatch Transition Tests
-# =============================================================================
-
-
-def test_fail_heartbeat_clears_dispatch_when_worker_fails(state):
-    """Dispatch buffer is cleared when worker hits failure threshold.
-
-    When consecutive heartbeat failures hit the threshold:
-    1. Worker is marked unhealthy
-    2. Running tasks transition to WORKER_FAILED
-    3. Pending dispatch buffer is cleared (not orphaned)
-    """
-    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
-
-    # Submit and dispatch a task
-    tasks = submit_job(state, "j1", make_job_request("job1"))
-    dispatch_task(state, tasks[0], worker_id)
-
-    # Buffer a dispatch for the worker
-    fake_request = job_pb2.RunTaskRequest(task_id="/test-user/fake/0")
-    state.buffer_dispatch(worker_id, fake_request)
-
-    # Verify dispatch is buffered (assignment already buffered one run request).
-    queued_run, queued_kill = _queued_dispatch(state, worker_id)
-    assert not queued_kill
-    assert len(queued_run) == 2
-
-    # Create a snapshot (simulating begin_heartbeat)
-    snapshot = state.begin_heartbeat(worker_id)
-    assert snapshot is not None
-    assert len(snapshot.tasks_to_run) == 2
-
-    # Verify buffer is now drained
-    queued_run, queued_kill = _queued_dispatch(state, worker_id)
-    assert not queued_run
-    assert not queued_kill
-
-    # Simulate repeated failures up to threshold
-    state.set_worker_consecutive_failures_for_test(worker_id, HEARTBEAT_FAILURE_THRESHOLD - 1)
-
-    # This fail_heartbeat should trigger worker failure
-    state.fail_heartbeat(snapshot, "Connection refused")
-
-    # Verify worker is now unhealthy
-    worker = _query_worker(state, worker_id)
-    assert worker is None
-
-    # Verify dispatch buffer was NOT repopulated (would be orphaned)
-    # The fix clears the dispatch buffer when worker fails
-    queued_run, _ = _queued_dispatch(state, worker_id)
-    assert not queued_run
-
-
-def test_fail_heartbeat_requeues_dispatch_for_retry(state):
-    """Heartbeat failure re-queues dispatches for the next heartbeat.
-
-    We cannot tell whether the worker received the previous heartbeat (RPC
-    timeout ≠ delivery failure), so we re-send the same RunTaskRequests.
-    If the worker did receive them, it will reject re-sends as benign
-    duplicates. If it did not, it will start them fresh.
-    """
-
-    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
-
-    req = make_job_request("job1")
-    req.max_retries_preemption = 5
-    tasks = submit_job(state, "j1", req)
-    task = tasks[0]
-
-    # Assign the task (creates attempt, commits resources)
-    state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_id)])
-    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
-    assert _query_task(state, task.task_id).current_attempt_id == 0
-
-    # Take snapshot (drains buffer)
-    snapshot = state.begin_heartbeat(worker_id)
-    assert snapshot is not None
-    assert len(snapshot.tasks_to_run) == 1
-
-    # Fail heartbeat (worker stays healthy - below threshold)
-    state.fail_heartbeat(snapshot, "Timeout")
-
-    worker = _query_worker(state, worker_id)
-    assert _query_worker(state, worker.worker_id).healthy
-    assert worker.consecutive_failures == 1
-
-    # Task stays ASSIGNED — we don't know if the worker received it
-    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
-    assert _query_task(state, task.task_id).preemption_count == 0
-    assert _query_task(state, task.task_id).failure_count == 0
-
-    # Dispatch re-queued for the next heartbeat (same attempt_id)
-    queued_run, queued_kill = _queued_dispatch(state, worker_id)
-    assert not queued_kill
-    assert len(queued_run) == 1
-    assert queued_run[0].attempt_id == 0
-
-
-def test_complete_heartbeat_processes_task_states(state):
-    """complete_heartbeat properly processes task state changes from response."""
-    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
-
-    # Submit and dispatch a task
-    tasks = submit_job(state, "j1", make_job_request("job1"))
-    dispatch_task(state, tasks[0], worker_id)
-
-    # Take snapshot
-    snapshot = state.begin_heartbeat(worker_id)
-    assert snapshot is not None
-
-    # Create a mock response with completed task
-    response = job_pb2.HeartbeatResponse(
-        worker_healthy=True,
-        tasks=[
-            job_pb2.WorkerTaskStatus(
-                task_id=tasks[0].task_id.to_wire(),
-                state=job_pb2.TASK_STATE_SUCCEEDED,
-                exit_code=0,
-                attempt_id=0,
-            )
-        ],
-    )
-
-    # Complete heartbeat
-    state.complete_heartbeat(snapshot, response)
-
-    # Verify task is now succeeded
-    task = _query_task(state, tasks[0].task_id)
-    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_SUCCEEDED
-
-    # Verify job is succeeded
-    job = _query_job(state, tasks[0].job_id)
-    assert _query_job(state, job.job_id).state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_worker_failed_from_assigned_is_delivery_failure(state):
@@ -2225,6 +2089,90 @@ def test_worker_failed_from_building_counts_as_preemption(state):
     assert _query_task(state, task.task_id).failure_count == 0
 
 
+def test_worker_failed_from_assigned_bumps_health_tracker(state):
+    """ASSIGNED -> WORKER_FAILED attributes the failure to the worker.
+
+    Regression for the TPU-iommu co-schedule loop: the task retries to PENDING
+    (no preemption-budget cost) but the health tracker must still bump so that
+    a host that repeatedly fails launches eventually crosses the threshold and
+    gets reaped.
+    """
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    req = make_job_request("job1")
+    req.max_retries_preemption = 5
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_id)])
+    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
+    assert state._health.snapshot().get(worker_id) is None
+
+    transition_task(
+        state,
+        task.task_id,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        error='TPU init failure ("Couldn\'t open iommu group")',
+    )
+
+    # Task retries without consuming preemption budget...
+    t = _query_task(state, task.task_id)
+    assert t.state == job_pb2.TASK_STATE_PENDING
+    assert t.preemption_count == 0
+    # ...but the worker is charged a build failure.
+    _, build_failures = state._health.snapshot()[worker_id]
+    assert build_failures == 1
+
+
+def test_failed_from_building_bumps_health_tracker(state):
+    """FAILED originating from BUILDING increments the build failure counter.
+
+    A task that never reaches RUNNING and then reports FAILED almost always
+    reflects infrastructure trouble (image pull, disk, DNS) rather than user
+    code. The tracker should record one build failure for that worker.
+    """
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    req = make_job_request("job1", max_retries_failure=5)
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_id)])
+    transition_task(state, task.task_id, job_pb2.TASK_STATE_BUILDING)
+    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_BUILDING
+
+    assert state._health.snapshot().get(worker_id) is None
+
+    transition_task(
+        state,
+        task.task_id,
+        job_pb2.TASK_STATE_FAILED,
+        error="image pull failed",
+    )
+
+    assert _query_task(state, task.task_id).failure_count == 1
+    _, build_failures = state._health.snapshot()[worker_id]
+    assert build_failures == 1
+
+
+def test_failed_from_running_does_not_bump_health_tracker(state):
+    """FAILED from RUNNING is treated as user code and must NOT move the score."""
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    req = make_job_request("job1", max_retries_failure=5)
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    dispatch_task(state, task, worker_id)
+    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
+
+    transition_task(
+        state,
+        task.task_id,
+        job_pb2.TASK_STATE_FAILED,
+        error="user code raised",
+    )
+
+    assert state._health.snapshot().get(worker_id) is None
+
+
 def test_fail_workers_by_ids_cascades_tasks(state):
     """fail_workers_by_ids fails sibling workers and cascades their tasks."""
 
@@ -2249,7 +2197,7 @@ def test_fail_workers_by_ids_cascades_tasks(state):
     assert result.removed_workers[0][0] == w2
     assert result.removed_workers[0][1] == "host2:8080"
     assert len(result.results) == 1
-    assert result.results[0].action == HeartbeatAction.WORKER_FAILED
+    assert result.results[0].worker_removed
 
     t2 = _query_task(state, tasks2[0].task_id)
     assert t2.state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PENDING)
@@ -2280,7 +2228,7 @@ def test_fail_workers_batch_force_removes_without_threshold(state):
     result = state.fail_workers_batch(["w1"], reason="slice terminated")
 
     assert len(result.results) == 1
-    assert result.results[0].action == HeartbeatAction.WORKER_FAILED
+    assert result.results[0].worker_removed
     assert _query_worker(state, worker_id) is None
 
 
@@ -2314,38 +2262,13 @@ def test_fail_workers_batch_does_not_block_readers(state):
 
     # fail_workers_batch should still complete even though the write lock is held,
     # because its lookup query uses read_snapshot (WAL reader).
-    # Note: the actual fail_heartbeat_for_worker inside will need the write lock
-    # for its transaction, so we test with unknown IDs to isolate the read path.
+    # The inner write transaction for actually failing workers still needs the
+    # write lock, so we test with unknown IDs to isolate the read path.
     result = state.fail_workers_batch(["w-nonexistent"], reason="test")
     assert result.removed_workers == []
 
     done.set()
     t.join(timeout=5)
-
-
-def test_fail_heartbeat_kills_requeue_only(state):
-    """Kill requests are still requeued on heartbeat failure (idempotent)."""
-    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
-
-    tasks = submit_job(state, "j1", make_job_request("job1"))
-    dispatch_task(state, tasks[0], worker_id)
-
-    # Buffer a kill
-    state.buffer_kill(worker_id, tasks[0].task_id.to_wire())
-
-    snapshot = state.begin_heartbeat(worker_id)
-    assert snapshot is not None
-    assert len(snapshot.tasks_to_kill) == 1
-
-    # Fail heartbeat
-    state.fail_heartbeat(snapshot, "Timeout")
-
-    worker = _query_worker(state, worker_id)
-    assert _query_worker(state, worker.worker_id).healthy
-
-    # Kills should be requeued
-    _, queued_kill = _queued_dispatch(state, worker_id)
-    assert len(queued_kill) == 1
 
 
 # =============================================================================
@@ -2772,8 +2695,8 @@ def test_holder_tasks_excluded_from_building_counts(state):
     assert building_counts.get(wid, 0) == 0
 
 
-def test_holder_tasks_excluded_from_heartbeat_expected_tasks(state):
-    """Holder tasks must not appear in heartbeat expected_tasks.
+def test_holder_tasks_excluded_from_poll_expected_tasks(state):
+    """Holder tasks must not appear in PollTasks expected_tasks.
 
     Holder tasks are virtual — never dispatched to the worker. If included
     in expected_tasks the worker reports "Task not found on worker", causing
@@ -2795,10 +2718,9 @@ def test_holder_tasks_excluded_from_heartbeat_expected_tasks(state):
     # Assign holder task to worker
     state.queue_assignments([Assignment(task_id=holder_tasks[0].task_id, worker_id=wid)])
 
-    # Heartbeat snapshot must NOT include the holder task
-    snapshot = state.begin_heartbeat(wid)
-    assert snapshot is not None
-    running_task_ids = {entry.task_id for entry in snapshot.running_tasks}
+    # Poll snapshot must NOT include the holder task
+    running, _ = state.get_running_tasks_for_poll()
+    running_task_ids = {entry.task_id for entry in running.get(wid, [])}
     assert holder_tasks[0].task_id not in running_task_ids
 
 
@@ -3041,11 +2963,11 @@ def test_endpoint_registered_after_task_terminal_is_orphaned(state):
         endpoint_id="orphan-ep",
         name="leak/actor",
         address="a:1",
-        job_id=JobName.root("test-user", "leak"),
+        task_id=task.task_id,
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep, task_id=task.task_id)
+    state.add_endpoint(ep)
 
     # BUG: The endpoint is now orphaned — the task is terminal so no
     # future transition will clean it up.
@@ -3097,8 +3019,6 @@ def test_prune_old_terminal_jobs(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        log_retention=Duration.from_seconds(86400),
-        txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
 
@@ -3130,8 +3050,6 @@ def test_prune_old_inactive_workers(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        log_retention=Duration.from_seconds(86400),
-        txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
 
@@ -3140,51 +3058,18 @@ def test_prune_old_inactive_workers(state):
     assert _query_worker(state, stale_wid) is None  # pruned
 
 
-def test_prune_old_logs_and_txn_actions(state):
-    """Old logs and txn_actions are pruned by their respective retentions."""
-    register_worker(state, "w1", "host:8080", make_worker_metadata())
+def test_submit_job_emits_structured_audit_log(state, caplog):
+    """submit_job logs a structured event=job_submitted line for the log-store audit trail."""
+    import logging
 
-    # Insert old logs directly
-    state._db.execute(
-        "INSERT INTO logs(key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)",
-        ("test-key", "test", "old log", 1000, 0),
-    )
-    state._db.execute(
-        "INSERT INTO logs(key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)",
-        ("test-key", "test", "recent log", Timestamp.now().epoch_ms(), 0),
-    )
+    req = make_job_request("audit-me")
+    with caplog.at_level(logging.INFO, logger="iris.cluster.controller.transitions"):
+        submit_job(state, "audit-me", req)
 
-    # Submit a job to generate txn_actions, then backdate some
-    req = make_job_request("txn-test")
-    submit_job(state, "txn-test", req)
-
-    # Backdate all existing txn_actions to epoch
-    state._db.execute("UPDATE txn_actions SET created_at_ms = 1000")
-
-    old_txn_count = state._db.fetchone("SELECT COUNT(*) as c FROM txn_actions")["c"]
-    old_log_count = state._db.fetchone("SELECT COUNT(*) as c FROM logs")["c"]
-
-    assert old_txn_count > 0
-    assert old_log_count == 2
-
-    result = state.prune_old_data(
-        job_retention=Duration.from_seconds(86400),
-        worker_retention=Duration.from_seconds(86400),
-        log_retention=Duration.from_seconds(86400),
-        txn_action_retention=Duration.from_seconds(86400),
-        profile_retention=Duration.from_seconds(86400),
-    )
-
-    assert result.logs_deleted == 1  # old log pruned, recent kept
-    assert result.txn_actions_deleted == old_txn_count
-
-    remaining_logs = state._db.fetchone("SELECT COUNT(*) as c FROM logs")["c"]
-    remaining_txn_actions = state._db.fetchone("SELECT COUNT(*) as c FROM txn_actions")["c"]
-
-    assert remaining_logs == 1  # only the recent log
-    # Incremental prune deletes old txn_actions in batches; no new aggregate
-    # action rows are recorded for log/txn_action cleanup.
-    assert remaining_txn_actions == 0
+    job_wire = JobName.root("test-user", "audit-me").to_wire()
+    expected = f"event=job_submitted entity={job_wire}"
+    messages = [r.getMessage() for r in caplog.records]
+    assert any(expected in msg for msg in messages), messages
 
 
 def test_prune_noop_when_nothing_old(state):
@@ -3193,8 +3078,6 @@ def test_prune_noop_when_nothing_old(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        log_retention=Duration.from_seconds(86400),
-        txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
 
@@ -3202,54 +3085,19 @@ def test_prune_noop_when_nothing_old(state):
     assert result.total == 0
 
 
-# =============================================================================
-# drain_dispatch_all Tests
-# =============================================================================
-
-
-def test_drain_dispatch_all_excludes_reservation_holders(state):
-    """drain_dispatch_all returns running tasks but filters out reservation-holder tasks."""
+def test_dispatch_propagates_task_image(state):
+    """task_image set on the LaunchJobRequest is copied into the dispatched RunTaskRequest."""
     wid = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
-    normal_req = make_job_request("normal-job")
-    normal_tasks = submit_job(state, "normal-job", normal_req)
-    dispatch_task(state, normal_tasks[0], wid)
-
-    holder_req = make_job_request("holder-job")
-    holder_tasks = submit_job(state, "holder-job", holder_req)
-    holder_job_id = JobName.root("test-user", "holder-job")
-    state._db.execute(
-        "UPDATE jobs SET is_reservation_holder = 1 WHERE job_id = ?",
-        (holder_job_id.to_wire(),),
+    req = make_job_request("img-job", task_image="custom/swetrace:dev")
+    tasks = submit_job(state, "img-job", req)
+    result = state.queue_assignments(
+        [Assignment(task_id=tasks[0].task_id, worker_id=wid)],
+        direct_dispatch=True,
     )
-    dispatch_task(state, holder_tasks[0], wid)
-
-    batches = state.drain_dispatch_all()
-    assert len(batches) == 1
-    batch = batches[0]
-    running_task_ids = {entry.task_id for entry in batch.running_tasks}
-
-    assert normal_tasks[0].task_id in running_task_ids
-    assert holder_tasks[0].task_id not in running_task_ids
-
-
-def test_drain_dispatch_all_drains_dispatch_queue(state):
-    """drain_dispatch_all drains queued dispatches and deletes them from the queue."""
-    wid = register_worker(state, "w1", "host:8080", make_worker_metadata())
-
-    req = make_job_request("j1")
-    tasks = submit_job(state, "j1", req)
-    state.queue_assignments([Assignment(task_id=tasks[0].task_id, worker_id=wid)])
-
-    rows_before = state._db.fetchall("SELECT * FROM dispatch_queue WHERE worker_id = ?", (str(wid),))
-    assert len(rows_before) > 0
-
-    batches = state.drain_dispatch_all()
-    assert len(batches) == 1
-    assert len(batches[0].tasks_to_run) > 0
-
-    rows_after = state._db.fetchall("SELECT * FROM dispatch_queue WHERE worker_id = ?", (str(wid),))
-    assert len(rows_after) == 0
+    assert len(result.start_requests) == 1
+    _, _, run_request = result.start_requests[0]
+    assert run_request.task_image == "custom/swetrace:dev"
 
 
 def test_prune_old_data_short_circuits_when_nothing_prunable(state):
@@ -3262,8 +3110,6 @@ def test_prune_old_data_short_circuits_when_nothing_prunable(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        log_retention=Duration.from_seconds(86400),
-        txn_action_retention=Duration.from_seconds(86400),
         profile_retention=Duration.from_seconds(86400),
     )
 
@@ -3453,6 +3299,17 @@ def test_apply_failed_with_retry(state):
     # Task should be PENDING again (1 failure <= 1 max_retries_failure).
     assert _task_state_direct(state, task_id) == job_pb2.TASK_STATE_PENDING
 
+    # The dead attempt 0 must have finished_at_ms stamped even though the task
+    # itself rolled back to PENDING. Otherwise the row is indistinguishable from
+    # a still-assigned attempt. Regression guard for the terminal_ms conflation.
+    with state._db.snapshot() as q:
+        attempts = ATTEMPT_PROJECTION.decode(
+            q.fetchall("SELECT * FROM task_attempts WHERE task_id = ?", (task_id.to_wire(),))
+        )
+    assert len(attempts) == 1
+    assert attempts[0].state == job_pb2.TASK_STATE_FAILED
+    assert attempts[0].finished_at is not None
+
     # Draining again should promote it for a second attempt.
     batch = state.drain_for_direct_provider()
     assert len(batch.tasks_to_run) == 1
@@ -3538,6 +3395,61 @@ def test_kill_non_terminal_direct_provider_tasks(state):
     result = state.cancel_job(JobName.from_wire("/user/job1"), reason="test kill")
 
     assert task_ids[0] in result.tasks_to_kill
+
+
+def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harness):
+    """Finalizing a reservation-holder task must not decommit a co-tenant's resources.
+
+    Regression: ``_kill_non_terminal_tasks`` passed ``resources`` into
+    ``_terminate_task`` unconditionally. Reservation-holder tasks never commit
+    on assignment (see ``_assign_task``), so decommitting them on termination
+    subtracts chips that were never added — on a worker co-tenanted by a real
+    task, this floored ``committed_*`` below the co-tenant's true reservation,
+    letting the scheduler double-book the VM (seen in prod: two v5p-8 jobs on
+    the same 4-chip VM, with the second crashing on ``/dev/vfio/0 busy``).
+    """
+    from iris.cluster.controller.transitions import _kill_non_terminal_tasks
+
+    worker_id = harness.add_worker("w1")
+
+    real_tasks = harness.submit("real-job", replicas=1)
+    harness.dispatch(real_tasks[0], worker_id)
+
+    baseline_cpu = _query_worker(harness.state, worker_id).committed_cpu_millicores
+    baseline_mem = _query_worker(harness.state, worker_id).committed_mem
+    assert baseline_cpu > 0
+
+    holder_tasks = harness.submit("holder-job", replicas=1)
+    holder_job_id = JobName.root("test-user", "holder-job")
+    harness.state._db.execute(
+        "UPDATE jobs SET is_reservation_holder = 1 WHERE job_id = ?",
+        (holder_job_id.to_wire(),),
+    )
+    dispatch_task(harness.state, holder_tasks[0], worker_id)
+
+    # Holder did not consume capacity.
+    assert _query_worker(harness.state, worker_id).committed_cpu_millicores == baseline_cpu
+    assert _query_worker(harness.state, worker_id).committed_mem == baseline_mem
+
+    # Exercise the exact finalization path: _finalize_terminal_job cascades to
+    # the holder sub-job via _kill_non_terminal_tasks. cancel_job has its own
+    # inline gated path and doesn't cover this.
+    with harness.state._db.transaction() as cur:
+        _kill_non_terminal_tasks(
+            cur,
+            harness.state._db.endpoints,
+            holder_job_id.to_wire(),
+            "Job finalized",
+            0,
+        )
+
+    # Holder's termination must not touch the co-tenant's committed counters.
+    assert (
+        _query_worker(harness.state, worker_id).committed_cpu_millicores == baseline_cpu
+    ), "holder finalization leaked committed_cpu_millicores onto co-tenant's reservation"
+    assert (
+        _query_worker(harness.state, worker_id).committed_mem == baseline_mem
+    ), "holder finalization leaked committed_mem onto co-tenant's reservation"
 
 
 def test_max_failures_kills_direct_provider_tasks(state):

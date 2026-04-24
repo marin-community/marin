@@ -19,8 +19,8 @@ dependencies = [
     "grpcio>=1.76.0",
     "httpx>=0.28.1",
     "humanfriendly>=10.0",
-    "pydantic>=2.12.5",
-    "PyJWT>=2.8.0",
+    "pydantic>=2.0",
+    "PyJWT>=2.12.0",
     "pyyaml>=6.0",
     "starlette>=0.50.0",
     "tabulate>=0.9.0",
@@ -63,10 +63,8 @@ dev = [
     "pytest-playwright>=0.6.2",
     "pytest-timeout",
     "pytest-xdist",
-    "pytest>=8.3.2",
+    "pytest>=8.4",
 ]
-
-[tool.hatch.build.hooks.custom]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/iris"]
@@ -81,13 +79,18 @@ packages = ["src/iris"]
 
 [tool.pytest.ini_options]
 timeout = 10
-addopts = "-n auto --durations=25 -m 'not slow and not docker' -v"
+timeout_method = "thread"
+addopts = "-n auto --durations=25 -m 'not slow and not docker and not e2e' -v"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "docker: marks tests requiring Docker runtime (slow, needs daemon)",
     "e2e: end-to-end cluster tests (chaos, dashboard, scheduling)",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
+# Cap assertion-diff output even under -v, so a single bad assertion
+# can't dump tens of KB of proto repr into CI logs.
+truncation_limit_lines = 100
+truncation_limit_chars = 10000
 log_level = "INFO"
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"

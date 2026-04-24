@@ -27,8 +27,15 @@ from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import job_pb2
+from iris.rpc import worker_pb2
 from rigging.timing import Duration
-from tests.cluster.worker.conftest import create_mock_container_handle, create_run_task_request
+from iris.cluster.worker.worker_types import LogLine
+from tests.cluster.worker.conftest import (
+    FakeContainerHandle,
+    FakeLogReader,
+    create_mock_container_handle,
+    create_run_task_request,
+)
 from iris.test_util import wait_for_condition
 
 pytestmark = pytest.mark.timeout(10)
@@ -149,6 +156,78 @@ def test_task_failure_on_nonzero_exit(mock_worker, mock_runtime):
     assert final_task.status == job_pb2.TASK_STATE_FAILED
     assert final_task.exit_code == 1
     assert "Exit code: 1" in final_task.error
+
+
+def test_tpu_bad_node_stderr_promotes_to_worker_failed(mock_worker, mock_runtime):
+    """Non-zero exit with TPU bad-node stderr -> WORKER_FAILED (issue #4783)."""
+    bad_node_stderr = [
+        LogLine.now(source="stdout", data="startup: launching vLLM engine"),
+        LogLine.now(
+            source="stderr",
+            data=(
+                "jax.errors.JaxRuntimeError: UNKNOWN: TPU initialization failed: "
+                "open(/dev/vfio/0): Device or resource busy: Device or resource busy; "
+                "Couldn't open iommu group /dev/vfio/0"
+            ),
+        ),
+    ]
+    populated_reader = FakeLogReader(_logs=list(bad_node_stderr))
+
+    class _HandleWithStderr(FakeContainerHandle):
+        def log_reader(self) -> FakeLogReader:
+            return populated_reader
+
+    mock_handle = _HandleWithStderr(
+        status_sequence=[
+            ContainerStatus(phase=ContainerPhase.RUNNING),
+            ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=1),
+        ]
+    )
+    mock_runtime.create_container = Mock(return_value=mock_handle)
+
+    request = create_run_task_request()
+    task_id = mock_worker.submit_task(request)
+
+    task = mock_worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    final_task = mock_worker.get_task(task_id)
+    assert final_task.status == job_pb2.TASK_STATE_WORKER_FAILED
+    assert final_task.exit_code == 1
+    assert final_task.error is not None
+    assert "TPU init failure" in final_task.error
+    assert "Couldn't open iommu group" in final_task.error
+
+
+def test_non_tpu_stderr_still_maps_to_failed(mock_worker, mock_runtime):
+    """Non-zero exit with unrelated stderr stays FAILED (no false promotion)."""
+    user_stderr = [
+        LogLine.now(source="stderr", data="Traceback (most recent call last):"),
+        LogLine.now(source="stderr", data='ValueError: bad user config: expected "foo"'),
+    ]
+    populated_reader = FakeLogReader(_logs=list(user_stderr))
+
+    class _HandleWithStderr(FakeContainerHandle):
+        def log_reader(self) -> FakeLogReader:
+            return populated_reader
+
+    mock_handle = _HandleWithStderr(
+        status_sequence=[
+            ContainerStatus(phase=ContainerPhase.RUNNING),
+            ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=1),
+        ]
+    )
+    mock_runtime.create_container = Mock(return_value=mock_handle)
+
+    request = create_run_task_request()
+    task_id = mock_worker.submit_task(request)
+
+    task = mock_worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    final_task = mock_worker.get_task(task_id)
+    assert final_task.status == job_pb2.TASK_STATE_FAILED
+    assert final_task.exit_code == 1
 
 
 def test_task_failure_on_error(mock_worker, mock_runtime):
@@ -346,8 +425,8 @@ def test_duplicate_attempt_rejected(mock_worker, mock_runtime):
     task.thread.join(timeout=15.0)
 
 
-def test_heartbeat_kill_is_non_blocking(mock_worker, mock_runtime):
-    """Heartbeat returns immediately when killing tasks, without waiting for container shutdown."""
+def test_stop_tasks_initiates_async_kill(mock_worker, mock_runtime):
+    """StopTasks signals the task to stop and returns without waiting for the kill to complete."""
     mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
 
     def slow_stop(force=False):
@@ -356,41 +435,26 @@ def test_heartbeat_kill_is_non_blocking(mock_worker, mock_runtime):
     mock_handle.stop_hook = slow_stop
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
-    task_id_wire = JobName.root("test-user", "hb-kill-task").task(0).to_wire()
+    task_id_wire = JobName.root("test-user", "stop-task").task(0).to_wire()
     request = create_run_task_request(task_id=task_id_wire)
     mock_worker.submit_task(request)
 
-    # Wait for task to reach RUNNING
     task = mock_worker.get_task(task_id_wire)
     wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
 
-    # Build a heartbeat that requests this task be killed.
-    # Include the task in expected_tasks so the reconciliation path doesn't
-    # also try to kill it -- we only want to exercise the tasks_to_kill path.
-    heartbeat_req = job_pb2.HeartbeatRequest(
-        tasks_to_kill=[task_id_wire],
-        expected_tasks=[
-            job_pb2.WorkerTaskStatus(task_id=task_id_wire, attempt_id=0),
-        ],
-    )
+    mock_worker.handle_stop_tasks(worker_pb2.Worker.StopTasksRequest(task_ids=[task_id_wire]))
 
-    response = mock_worker.handle_heartbeat(heartbeat_req)
-
-    # should_stop is set synchronously by the heartbeat before the async stop() runs
+    # should_stop is set synchronously before StopTasks returns.
     assert task.should_stop is True
-    # The task is not yet KILLED because slow_stop is async — confirms kill is non-blocking
+    # The container stop runs in a daemon thread, so the task hasn't been reaped yet.
     assert task.status != job_pb2.TASK_STATE_KILLED
 
-    # The response should still include the task's current state
-    assert len(response.tasks) >= 1
-
-    # Wait for the task to finish
     task.thread.join(timeout=15.0)
     assert task.status == job_pb2.TASK_STATE_KILLED
 
 
-def test_heartbeat_reconciliation_kill_is_non_blocking(mock_worker, mock_runtime):
-    """Tasks not in expected_tasks are killed asynchronously during heartbeat reconciliation."""
+def test_poll_tasks_reconciliation_kill_is_non_blocking(mock_worker, mock_runtime):
+    """Tasks not in expected_tasks are killed asynchronously during PollTasks reconciliation."""
     mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
 
     def slow_stop(force=False):
@@ -406,19 +470,91 @@ def test_heartbeat_reconciliation_kill_is_non_blocking(mock_worker, mock_runtime
     task = mock_worker.get_task(task_id_wire)
     wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
 
-    # Send heartbeat with empty expected_tasks -- the worker should kill
-    # the running task because it's no longer expected
-    heartbeat_req = job_pb2.HeartbeatRequest(expected_tasks=[])
+    # Clear recent-submissions tracking to simulate the task having been
+    # around long enough for the grace window to have elapsed; this test
+    # exercises reconciliation-driven kill, not grace-window protection.
+    mock_worker._recent_submissions.clear()
 
-    mock_worker.handle_heartbeat(heartbeat_req)
+    mock_worker.handle_poll_tasks(worker_pb2.Worker.PollTasksRequest(expected_tasks=[]))
 
-    # should_stop is set synchronously by the heartbeat before the async stop() runs
+    # should_stop is set synchronously by PollTasks before the async stop() runs
     assert task.should_stop is True
-    # The task is not yet KILLED because slow_stop is async — confirms kill is non-blocking
+    # The task is not yet KILLED because slow_stop runs in a daemon thread — confirms kill is non-blocking
     assert task.status != job_pb2.TASK_STATE_KILLED
 
     task.thread.join(timeout=15.0)
     assert task.status == job_pb2.TASK_STATE_KILLED
+
+
+def test_poll_tasks_grace_window_protects_freshly_submitted_task(mock_worker, mock_runtime):
+    """PollTasks must not kill a task submitted moments before the controller polls.
+
+    Reproduces the StartTasks → PollTasks race from iris #5041: the controller
+    dispatches a task via StartTasks but polls before its own expected_tasks view
+    includes the new task. Without the grace window, the worker would read the
+    task as "unexpected" and kill it, cascading the whole pool to KILLED.
+    """
+    mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
+    mock_runtime.create_container = Mock(return_value=mock_handle)
+
+    task_id_wire = JobName.root("test-user", "poll-race").task(0).to_wire()
+    request = create_run_task_request(task_id=task_id_wire)
+    mock_worker.submit_task(request)
+
+    task = mock_worker.get_task(task_id_wire)
+    wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
+
+    # Controller polls with the just-submitted task missing from expected_tasks
+    # (race: controller hasn't reconciled its own StartTasks response yet).
+    mock_worker.handle_poll_tasks(worker_pb2.Worker.PollTasksRequest(expected_tasks=[]))
+
+    # The task must not have been marked for kill.
+    assert task.should_stop is False
+    assert task.status == job_pb2.TASK_STATE_RUNNING
+
+    # Clean up.
+    mock_worker.kill_task(task_id_wire)
+    task.thread.join(timeout=15.0)
+
+
+def test_poll_tasks_kills_task_outside_grace_window(mock_worker, mock_runtime):
+    """Once the grace window has elapsed, reconciliation resumes killing unexpected tasks."""
+    mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
+    mock_runtime.create_container = Mock(return_value=mock_handle)
+
+    task_id_wire = JobName.root("test-user", "poll-post-grace").task(0).to_wire()
+    request = create_run_task_request(task_id=task_id_wire)
+    mock_worker.submit_task(request)
+
+    task = mock_worker.get_task(task_id_wire)
+    wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
+
+    # Simulate grace window elapsing by clearing recent-submissions tracking.
+    mock_worker._recent_submissions.clear()
+
+    mock_worker.handle_poll_tasks(worker_pb2.Worker.PollTasksRequest(expected_tasks=[]))
+
+    assert task.should_stop is True
+    task.thread.join(timeout=15.0)
+    assert task.status == job_pb2.TASK_STATE_KILLED
+
+
+def test_recent_submissions_prune_removes_stale_entries(mock_worker):
+    """Stale recent-submission entries are pruned to keep the dict bounded."""
+    key_fresh = ("task-fresh", 0)
+    key_stale = ("task-stale", 0)
+    grace = mock_worker._RECENT_SUBMISSION_GRACE_SECONDS
+    now = time.monotonic()
+    # now - (grace + 1): clearly older than the window -> should be pruned
+    mock_worker._recent_submissions[key_stale] = now - (grace + 1)
+    mock_worker._recent_submissions[key_fresh] = now
+
+    with mock_worker._lock:
+        recent = mock_worker._prune_and_get_recent_submission_keys()
+
+    assert key_fresh in recent
+    assert key_stale not in recent
+    assert key_stale not in mock_worker._recent_submissions
 
 
 def test_kill_nonexistent_task(mock_worker):
@@ -504,6 +640,48 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     assert "IRIS_TASK_ID" in env
 
 
+def test_task_image_override_uses_request_value(mock_bundle_store, mock_runtime, tmp_path):
+    """Per-task task_image overrides the worker's default_task_image."""
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        poll_interval=Duration.from_seconds(0.1),
+        cache_dir=tmp_path / "cache",
+        default_task_image="default/cluster-image:latest",
+    )
+    w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
+
+    request = create_run_task_request(task_image="custom/swetrace:dev")
+    task_id = w.submit_task(request)
+    task = w.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    assert mock_runtime.create_container.called
+    container_config = mock_runtime.create_container.call_args[0][0]
+    assert container_config.image == "custom/swetrace:dev"
+
+
+def test_task_image_default_used_when_override_empty(mock_bundle_store, mock_runtime, tmp_path):
+    """Empty task_image falls back to the cluster default."""
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        poll_interval=Duration.from_seconds(0.1),
+        cache_dir=tmp_path / "cache",
+        default_task_image="default/cluster-image:latest",
+    )
+    w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
+
+    request = create_run_task_request()  # task_image="" by default
+    task_id = w.submit_task(request)
+    task = w.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    assert mock_runtime.create_container.called
+    container_config = mock_runtime.create_container.call_args[0][0]
+    assert container_config.image == "default/cluster-image:latest"
+
+
 def test_port_binding_failure(mock_bundle_store, tmp_path):
     """Test that task fails when port binding fails.
 
@@ -544,6 +722,94 @@ def test_port_binding_failure(mock_bundle_store, tmp_path):
     assert final_task.status == job_pb2.TASK_STATE_FAILED
     assert final_task.error is not None
     assert "address already in use" in final_task.error
+
+
+# ============================================================================
+# Remote log handler attach tests (regression for #4794)
+# ============================================================================
+
+
+def _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime):
+    """Build a Worker and attach a fake LogPusher (normally built in start())."""
+    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
+
+    class _FakePusher:
+        def push(self, key, entries):
+            pass
+
+        def flush(self, timeout=None):
+            return True
+
+        def close(self):
+            pass
+
+    worker._log_pusher = _FakePusher()
+    return worker
+
+
+def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_store, mock_runtime, tmp_path):
+    """Worker known locally (e.g. via slice_id) attaches under worker_log_key
+    *before* register so pre-register failures ship remote logs."""
+    from iris.cluster.log_store import worker_log_key
+
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+        worker_id="w-1",
+    )
+    worker = _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime)
+
+    try:
+        worker._attach_log_handler()
+        assert worker._log_handler is not None
+        assert worker._log_handler.key == worker_log_key("w-1")
+    finally:
+        worker._detach_log_handler()
+
+
+def test_attach_log_handler_noop_without_worker_id(mock_bundle_store, mock_runtime, tmp_path):
+    """Before the worker_id is known, attach is a no-op."""
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+    )
+    worker = _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime)
+
+    worker._attach_log_handler()
+    assert worker._log_handler is None
+
+
+def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runtime, tmp_path):
+    """Re-attach under a new worker_id renames the handler's key in place."""
+    from iris.cluster.log_store import worker_log_key
+
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+        worker_id="w-1",
+    )
+    worker = _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime)
+
+    try:
+        worker._attach_log_handler()
+        first_handler = worker._log_handler
+        assert first_handler is not None
+
+        worker._attach_log_handler()
+        assert worker._log_handler is first_handler
+
+        worker._worker_id = "w-2"
+        worker._attach_log_handler()
+        assert worker._log_handler is first_handler
+        assert first_handler.key == worker_log_key("w-2")
+    finally:
+        worker._detach_log_handler()
 
 
 # ============================================================================
@@ -759,13 +1025,13 @@ def test_adopt_accepts_matching_worker_id(mock_worker, mock_runtime):
     assert adopted == 1
 
 
-def test_heartbeat_after_adoption_reports_running(mock_worker, mock_runtime):
-    """After adoption, heartbeat reconciliation should report the task as RUNNING."""
+def test_poll_tasks_after_adoption_reports_running(mock_worker, mock_runtime):
+    """After adoption, PollTasks reconciliation should report the task as RUNNING."""
     container = _make_discovered_container()
     mock_runtime.discover_containers = Mock(return_value=[container])
     mock_worker.adopt_running_containers()
 
-    heartbeat_req = job_pb2.HeartbeatRequest(
+    poll_req = worker_pb2.Worker.PollTasksRequest(
         expected_tasks=[
             job_pb2.WorkerTaskStatus(
                 task_id=container.task_id,
@@ -773,7 +1039,7 @@ def test_heartbeat_after_adoption_reports_running(mock_worker, mock_runtime):
             )
         ],
     )
-    response = mock_worker.handle_heartbeat(heartbeat_req)
+    response = mock_worker.handle_poll_tasks(poll_req)
 
     assert len(response.tasks) == 1
     task_status = response.tasks[0]
@@ -781,11 +1047,11 @@ def test_heartbeat_after_adoption_reports_running(mock_worker, mock_runtime):
     assert task_status.state == job_pb2.TASK_STATE_RUNNING
 
 
-def test_heartbeat_without_adoption_reports_worker_failed(mock_worker, mock_runtime):
+def test_poll_tasks_without_adoption_reports_worker_failed(mock_worker, mock_runtime):
     """Without adoption, expected tasks should report WORKER_FAILED."""
     mock_runtime.discover_containers = Mock(return_value=[])
 
-    heartbeat_req = job_pb2.HeartbeatRequest(
+    poll_req = worker_pb2.Worker.PollTasksRequest(
         expected_tasks=[
             job_pb2.WorkerTaskStatus(
                 task_id=JobName.root("test-user", "test-job").task(0).to_wire(),
@@ -793,7 +1059,7 @@ def test_heartbeat_without_adoption_reports_worker_failed(mock_worker, mock_runt
             )
         ],
     )
-    response = mock_worker.handle_heartbeat(heartbeat_req)
+    response = mock_worker.handle_poll_tasks(poll_req)
 
     assert len(response.tasks) == 1
     assert response.tasks[0].state == job_pb2.TASK_STATE_WORKER_FAILED

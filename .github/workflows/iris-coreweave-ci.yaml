@@ -15,10 +15,12 @@ permissions:
   pull-requests: read   # needed for issue_comment to access PR metadata
   statuses: write       # post commit status from issue_comment trigger
 
-# Single concurrency group — only one CW CI run at a time across all PRs.
-# The warm cluster is shared; concurrent runs would conflict.
+# Shared concurrency group with marin-canary-ferry-cw.yaml — both rebuild/roll
+# the shared iris-ci controller and submit against the shared H100 in
+# US-WEST-04A. Only one run cluster-wide at a time. cancel-in-progress=false
+# so a mid-flight canary is not killed by a PR firing.
 concurrency:
-  group: iris-coreweave-ci
+  group: iris-coreweave-ci-shared
   cancel-in-progress: false
 
 jobs:
@@ -44,7 +46,7 @@ jobs:
       IRIS_MANAGED_LABEL: iris-iris-ci-managed
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
 
@@ -60,7 +62,7 @@ jobs:
             -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -77,10 +79,10 @@ jobs:
           chmod 600 ~/.kube/coreweave-iris
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -104,7 +106,7 @@ jobs:
         run: |
           cd lib/iris && uv run --group dev iris -v \
             --config=examples/coreweave-ci.yaml \
-            cluster start
+            cluster start --fresh
 
       - name: Run integration tests
         env:
@@ -173,9 +175,9 @@ jobs:
           AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
           FSSPEC_S3: '{"endpoint_url": "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"}'
         run: |
-          IRIS_CONTROLLER_URL="http://localhost:${LOCAL_PORT}"
-          timeout 600 uv run tests/integration_test.py \
-            --controller-url "$IRIS_CONTROLLER_URL"
+          export IRIS_CONTROLLER_URL="http://localhost:${LOCAL_PORT}"
+          timeout 1800 uv run pytest tests/test_integration_test.py \
+            -m integration -o "addopts=" --timeout=900 -v -s
 
       - name: Stop port-forward
         if: always()
@@ -185,9 +187,14 @@ jobs:
 
       - name: Capture failure diagnostics
         if: failure()
+        env:
+          LOG_DIR: ${{ github.workspace }}/iris-cw-logs
         run: |
           export KUBECONFIG=~/.kube/coreweave-iris
-          echo "=== Controller logs ==="
+          mkdir -p "$LOG_DIR"
+
+          # Stream to the GH Actions log for quick triage…
+          echo "=== Controller logs (tail) ==="
           kubectl -n "$IRIS_NAMESPACE" logs -l app=iris-controller --tail=500 || true
           echo "=== Controller pod describe ==="
           kubectl -n "$IRIS_NAMESPACE" describe pod -l app=iris-controller || true
@@ -195,6 +202,36 @@ jobs:
           kubectl -n "$IRIS_NAMESPACE" get pods -l "$IRIS_MANAGED_LABEL=true" || true
           echo "=== Warning events ==="
           kubectl -n "$IRIS_NAMESPACE" get events --sort-by='.lastTimestamp' --field-selector type!=Normal || true
+
+          # …and also persist per-pod logs + describe so failures in worker
+          # containers are recoverable from the uploaded artifact, not just
+          # the controller's view.
+          kubectl -n "$IRIS_NAMESPACE" logs -l app=iris-controller --tail=-1 --all-containers \
+            > "$LOG_DIR/controller.log" 2>&1 || true
+          kubectl -n "$IRIS_NAMESPACE" logs -l app=iris-controller --tail=-1 --all-containers --previous \
+            > "$LOG_DIR/controller-previous.log" 2>&1 || true
+          kubectl -n "$IRIS_NAMESPACE" describe pod -l app=iris-controller \
+            > "$LOG_DIR/controller-describe.txt" 2>&1 || true
+
+          for pod in $(kubectl -n "$IRIS_NAMESPACE" get pods -l "$IRIS_MANAGED_LABEL=true" -o name 2>/dev/null); do
+            safe=$(echo "$pod" | tr '/' '-')
+            kubectl -n "$IRIS_NAMESPACE" logs "$pod" --tail=-1 --all-containers \
+              > "$LOG_DIR/${safe}.log" 2>&1 || true
+            kubectl -n "$IRIS_NAMESPACE" describe "$pod" \
+              > "$LOG_DIR/${safe}-describe.txt" 2>&1 || true
+          done
+
+          kubectl -n "$IRIS_NAMESPACE" get events --sort-by='.lastTimestamp' \
+            > "$LOG_DIR/events.txt" 2>&1 || true
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iris-cw-ci-logs
+          path: iris-cw-logs/
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Set commit status to result
         if: always() && github.event_name == 'issue_comment'

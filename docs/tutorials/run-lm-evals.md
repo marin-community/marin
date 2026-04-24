@@ -100,8 +100,6 @@ At the time of writing, `KEY_GENERATION_TASKS` includes:
 - `mmlu` 5-shot
 - `truthfulqa_mc2`
 
-There is no longer an in-repo `evaluate_alpaca_eval` helper, so Alpaca-specific guidance has been removed from this tutorial.
-
 ## 3. Build a Custom Eval Step
 
 Use the lower-level helpers when you want a custom task list or evaluator:
