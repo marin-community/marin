@@ -1,14 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Verify every Datakit source's pre-normalize step terminated SUCCESS.
+"""Verify every Datakit source's staged and normalized outputs terminated SUCCESS.
 
-For each :class:`marin.datakit.sources.DatakitSource`, the first pre-normalize
-step (``normalize_steps[:-1][0]``) is the staged raw dump the ferry expects
-to exist on GCS. The staging region is pinned via ``MARIN_PREFIX`` so
-``step.output_path`` resolves to ``gs://marin-us-central1/...`` regardless of
-the caller's environment. Enforced daily as a parallel lane of the
-datakit-smoke workflow.
+For each :class:`marin.datakit.sources.DatakitSource`, two independent
+``.executor_status`` checks run against GCS:
+
+* **pre-normalize** — the first step in ``normalize_steps`` (the raw
+  staged dump the ferry expects to already exist upstream).
+* **normalized** — ``source.normalized.output_path`` (the terminal
+  normalize step's output — what downstream sample/tokenize consumes).
+
+The staging region is pinned via ``MARIN_PREFIX`` so all ``output_path``s
+resolve to ``gs://marin-us-central1/...`` regardless of the caller's
+environment. Enforced daily as a parallel lane of the datakit-smoke
+workflow.
 """
 
 import logging
@@ -33,6 +39,22 @@ def _check(output_path: str) -> tuple[str, str]:
     return output_path, status or "MISSING"
 
 
+def _validate(label: str, paths: list[str]) -> list[tuple[str, str]]:
+    """Probe every path in parallel; log + return anything not SUCCESS."""
+    logger.info("Verifying %d unique %s paths under %s", len(paths), label, STAGING_PREFIX)
+    bad: list[tuple[str, str]] = []
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        for output_path, status in pool.map(_check, paths):
+            if status == STATUS_SUCCESS:
+                logger.debug("OK: %s", output_path)
+            else:
+                logger.error("%s %s: %s", label, status, output_path)
+                bad.append((output_path, status))
+    if not bad:
+        logger.info("All %d %s paths report SUCCESS", len(paths), label)
+    return bad
+
+
 def main() -> None:
     configure_logging()
     # Pin the staging region before building the registry — StepSpec caches
@@ -41,21 +63,17 @@ def main() -> None:
     os.environ["MARIN_PREFIX"] = STAGING_PREFIX
 
     sources = all_sources()
-    unique_paths = sorted({s.normalize_steps[:-1][0].output_path for s in sources.values()})
-    logger.info("Verifying %d unique pre-normalize paths under %s", len(unique_paths), STAGING_PREFIX)
+    pre_normalize_paths = sorted({s.normalize_steps[:-1][0].output_path for s in sources.values()})
+    normalized_paths = sorted({s.normalized.output_path for s in sources.values()})
 
-    bad: list[tuple[str, str]] = []
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        for output_path, status in pool.map(_check, unique_paths):
-            if status == STATUS_SUCCESS:
-                logger.debug("OK: %s", output_path)
-            else:
-                logger.error("%s: %s", status, output_path)
-                bad.append((output_path, status))
+    bad_pre = _validate("pre-normalize", pre_normalize_paths)
+    bad_norm = _validate("normalized", normalized_paths)
 
-    if bad:
-        raise SystemExit(f"{len(bad)}/{len(unique_paths)} pre-normalize paths not SUCCESS under {STAGING_PREFIX}")
-    logger.info("All %d pre-normalize paths report SUCCESS under %s", len(unique_paths), STAGING_PREFIX)
+    if bad_pre or bad_norm:
+        raise SystemExit(
+            f"{len(bad_pre)}/{len(pre_normalize_paths)} pre-normalize and "
+            f"{len(bad_norm)}/{len(normalized_paths)} normalized paths not SUCCESS under {STAGING_PREFIX}"
+        )
 
 
 if __name__ == "__main__":
