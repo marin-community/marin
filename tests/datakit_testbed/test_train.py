@@ -15,9 +15,9 @@ from experiments.datakit_testbed.sampler import build_testbed_steps
 from marin.datakit.sources import all_sources
 from experiments.datakit_testbed.train import (
     DEFAULT_TARGET_BUDGET_TOKENS,
-    build_testbed_tokenize_steps,
     simulated_experiment_budget,
 )
+from experiments.datakit_testbed.train import testbed_tokenize as _testbed_tokenize
 
 _SMOKE_SOURCE = all_sources()["nemotron_cc_code_v1/all"]
 
@@ -58,11 +58,9 @@ def test_tokenize_step_bridge_produces_training_ready_steps():
     from marin.processing.tokenize import TokenizeConfig
 
     steps = build_testbed_steps("run0", sources=[_SMOKE_SOURCE])
-    sampled = {_SMOKE_SOURCE.name: next(s for s in steps if s.name.startswith("datakit-testbed/"))}
-    tokenize_steps = build_testbed_tokenize_steps(sampled)
+    sampled = next(s for s in steps if s.name.startswith("datakit-testbed/"))
+    step = _testbed_tokenize(_SMOKE_SOURCE.name, sampled)
 
-    assert set(tokenize_steps) == {_SMOKE_SOURCE.name}
-    step = tokenize_steps[_SMOKE_SOURCE.name]
     assert isinstance(step, ExecutorStep)
     assert isinstance(step.config, TokenizeConfig)
 
@@ -73,12 +71,12 @@ def test_bridge_steps_compose_into_lm_mixture():
     Exercises step_to_lm_mixture_component + _verify_tokenizers_same, which
     silently failed on _StepSpecMigrationConfig before the bridge fix.
     """
-    from experiments.datakit_testbed.mixture import build_testbed_mixture
+    from marin.processing.tokenize import lm_mixture_data_config
 
     steps = build_testbed_steps("run0", sources=[_SMOKE_SOURCE])
-    sampled = {_SMOKE_SOURCE.name: next(s for s in steps if s.name.startswith("datakit-testbed/"))}
-    tokenize_steps = build_testbed_tokenize_steps(sampled)
+    sampled = next(s for s in steps if s.name.startswith("datakit-testbed/"))
+    tokenize_steps = {_SMOKE_SOURCE.name: _testbed_tokenize(_SMOKE_SOURCE.name, sampled)}
 
-    mixture = build_testbed_mixture(tokenize_steps, weights={_SMOKE_SOURCE.name: 1.0})
+    mixture = lm_mixture_data_config(components=tokenize_steps, weights={_SMOKE_SOURCE.name: 1.0})
     assert _SMOKE_SOURCE.name in mixture.train_weights
     assert mixture.train_weights[_SMOKE_SOURCE.name] == 1.0

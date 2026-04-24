@@ -28,10 +28,14 @@ from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.execution.step_spec import StepSpec
-from marin.processing.tokenize import TokenizeConfig, add_validation_sets_to_mixture, tokenize
+from marin.processing.tokenize import (
+    TokenizeConfig,
+    add_validation_sets_to_mixture,
+    lm_mixture_data_config,
+    tokenize,
+)
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-from experiments.datakit_testbed.mixture import build_testbed_mixture
 from experiments.datakit_testbed.settings import TESTBED_SEQ_LEN, TESTBED_TOKENIZER
 from experiments.defaults import default_validation_sets
 from experiments.grug.moe.heuristic import build_from_heuristic
@@ -61,10 +65,10 @@ def simulated_experiment_budget(*, train_batch_size: int, num_train_steps: int, 
     return int(train_batch_size) * int(num_train_steps) * int(seq_len)
 
 
-def _tokenize_step_for_source(
-    source_name: str,
+def testbed_tokenize(
+    bucket_name: str,
     sampled: StepSpec,
-    tokenizer: str,
+    tokenizer: str = TESTBED_TOKENIZER,
 ) -> TokenizerStep:
     """Convert a sample ``StepSpec`` into a training-ready ``TokenizerStep``.
 
@@ -76,7 +80,7 @@ def _tokenize_step_for_source(
     """
     sampled_exec = sampled.as_executor_step()
     return ExecutorStep(
-        name=os.path.join("datakit-testbed", "tokenized", source_name),
+        name=os.path.join("datakit-testbed", "tokenized", bucket_name),
         fn=tokenize,
         config=TokenizeConfig(
             train_paths=[sampled_exec / "outputs/main/**/*.parquet"],
@@ -87,23 +91,15 @@ def _tokenize_step_for_source(
     )
 
 
-def build_testbed_tokenize_steps(
-    sampled_by_source: dict[str, StepSpec],
-    tokenizer: str = TESTBED_TOKENIZER,
-) -> dict[str, TokenizerStep]:
-    """Build one training-ready ``TokenizerStep`` per sampled source."""
-    return {name: _tokenize_step_for_source(name, sampled, tokenizer) for name, sampled in sampled_by_source.items()}
-
-
 def run_testbed_config(
     *,
     name: str,
     tokenized_buckets: dict[str, TokenizerStep],
+    weights: dict[str, float],
     compute_budget_flops: float = DEFAULT_COMPUTE_BUDGET_FLOPS,
     hidden_dim: int = DEFAULT_HIDDEN_DIM,
     target_steps: int = DEFAULT_TARGET_STEPS,
     target_budget_tokens: int = DEFAULT_TARGET_BUDGET_TOKENS,
-    weights: dict[str, float] | None = None,
     tokenizer: str = TESTBED_TOKENIZER,
     wandb_group: str = "datakit-testbed",
     wandb_tags: Sequence[str] = ("datakit-testbed", "moe"),
@@ -119,13 +115,14 @@ def run_testbed_config(
             builds these from its own bucketed view of the sampled data
             — baseline buckets by provenance (one tokenize per source);
             other configs may bucket differently (e.g. by quality tier).
+        weights: Per-bucket mixture weights. Keys must match
+            ``tokenized_buckets``. Typically computed from on-disk
+            ``train/.stats.json`` via ``weights_from_tokenized_bucket_stats``.
         compute_budget_flops: FLOP budget fed to ``build_from_heuristic``.
         hidden_dim: Model hidden dimension for the heuristic.
         target_steps: Heuristic target steps; default ``2**14`` matches Grug.
         target_budget_tokens: Denominator for simulated-epoching slicing —
             "how many tokens would the full run consume". Default 1T per RFC.
-        weights: Optional explicit per-source mixture weights. Defaults to
-            proportional-by-``rough_token_count_b`` via the mixture builder.
         tokenizer: Tokenizer used across every component. Must match the
             training model's tokenizer; defaults to ``TESTBED_TOKENIZER``.
         wandb_group: Groups this run with siblings in the ranking protocol.
@@ -139,6 +136,8 @@ def run_testbed_config(
     """
     if not tokenized_buckets:
         raise ValueError("tokenized_buckets must be non-empty")
+    if weights.keys() != tokenized_buckets.keys():
+        raise ValueError(f"weights keys {sorted(weights)} must match tokenized_buckets keys {sorted(tokenized_buckets)}")
 
     model_cfg, opt_cfg, batch_size, steps = build_from_heuristic(
         budget=compute_budget_flops,
@@ -146,7 +145,7 @@ def run_testbed_config(
         target_steps=target_steps,
     )
 
-    data = build_testbed_mixture(tokenized_buckets, weights=weights)
+    data = lm_mixture_data_config(components=tokenized_buckets, weights=weights)
     data = add_validation_sets_to_mixture(
         data,
         default_validation_sets(tokenizer=tokenizer),

@@ -29,14 +29,14 @@ from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 
+from experiments.datakit_testbed.mixture import weights_from_tokenized_bucket_stats
 from experiments.datakit_testbed.sampler import build_testbed_steps
 from experiments.datakit_testbed.settings import TESTBED_TOKENIZER
-from experiments.datakit_testbed.train import build_testbed_tokenize_steps, run_testbed_config
+from experiments.datakit_testbed.train import run_testbed_config, testbed_tokenize
 
 logger = logging.getLogger(__name__)
 
 STAGING_PREFIX = "gs://marin-us-central1"
-RUN_ID = "baseline"
 TARGET_TOTAL_TOKENS_B = 10.0
 
 _SAMPLE_STEP_PREFIX = "datakit-testbed/"
@@ -45,40 +45,43 @@ _SAMPLE_STEP_PREFIX = "datakit-testbed/"
 def baseline(
     steps: list[StepSpec],
     *,
-    name: str = "baseline",
-    tokenizer: str = TESTBED_TOKENIZER,
-    **run_config_kwargs,
+    name: str,
+    tokenizer: str,
 ) -> ExecutorStep:
-    """Assemble the baseline training step off a testbed DAG.
+    """Assemble the baseline training step off a testbed DAG"""
 
-    Bucketing is "one tokenize per source" — the trivial control-arm
-    strategy. Other configurations build their own ``tokenized_buckets``
-    (e.g. by quality tier) and pass it to :func:`run_testbed_config`
-    directly.
-    """
     sampled_by_source = {
         s.name.removeprefix(_SAMPLE_STEP_PREFIX): s for s in steps if s.name.startswith(_SAMPLE_STEP_PREFIX)
     }
     if not sampled_by_source:
         raise ValueError("no sample steps found in the DAG (expected names under 'datakit-testbed/...')")
-    tokenized_buckets = build_testbed_tokenize_steps(sampled_by_source, tokenizer=tokenizer)
+
+    tokenized_buckets = {name: testbed_tokenize(name, sampled, tokenizer) for name, sampled in sampled_by_source.items()}
+    # NOTE: we need to execute tokenize to get the stats - in theory we don't need to get the stats from the disk,
+    # but we might as well, it's not a big deal.
+    executor_main(ExecutorMainConfig(), list(tokenized_buckets.values()))
+
+    weights = weights_from_tokenized_bucket_stats(tokenized_buckets)
     return run_testbed_config(
         name=name,
         tokenized_buckets=tokenized_buckets,
+        weights=weights,
         tokenizer=tokenizer,
-        **run_config_kwargs,
     )
 
 
 def main() -> None:
-    """Entry-point: materialize the ferry, then launch baseline training"""
+    """Entry-point: materialize ferry + tokenize, then launch baseline training"""
     os.environ["MARIN_PREFIX"] = STAGING_PREFIX
 
-    testbed_steps = build_testbed_steps(RUN_ID, target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
+    tokenizer = TESTBED_TOKENIZER
+    run_id = "baseline_test"
+
+    testbed_steps = build_testbed_steps(run_id, target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
     logger.info("Materializing %d ferry StepSpecs under %s", len(testbed_steps), STAGING_PREFIX)
     StepRunner().run(testbed_steps)
 
-    training_step = baseline(testbed_steps, name=RUN_ID)
+    training_step = baseline(testbed_steps, name=run_id, tokenizer=tokenizer)
     executor_main(ExecutorMainConfig(), [training_step])
 
 
