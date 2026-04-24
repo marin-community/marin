@@ -11,7 +11,7 @@ matching the RFC's "deliberately trivial" no-dedup baseline. The DAG shape is
 identical to the future dedup variant, so enabling real dedup later is a
 one-line swap in ``dag.py``.
 
-Output paths land under ``$MARIN_PREFIX/data/datakit/mini/$TESTBED_RUN_ID/...``.
+Output paths land under ``$MARIN_PREFIX/data/datakit/$TESTBED_RUN_ID/...``.
 ``MARIN_PREFIX`` defaults to a region-local temp bucket with 1-day TTL if unset,
 which is fine for shakeout; production runs should pin ``MARIN_PREFIX`` to
 ``gs://marin-us-central1/...`` to match the pre-staged raw dumps.

@@ -80,7 +80,7 @@ def testbed_tokenize(
     """
     sampled_exec = sampled.as_executor_step()
     return ExecutorStep(
-        name=os.path.join("data/datakit/mini", "tokenized", bucket_name),
+        name=os.path.join("data/datakit", "tokenized", bucket_name),
         fn=tokenize,
         config=TokenizeConfig(
             train_paths=[sampled_exec / "outputs/main/*.parquet"],
@@ -175,7 +175,7 @@ def run_testbed_config(
     )
 
     return ExecutorStep(
-        name=f"data/datakit/mini/train/{name}",
+        name=f"data/datakit/train/{name}",
         fn=run_grug_moe_trial,
         config=GrugMoeLaunchConfig(
             model=versioned(model_cfg),

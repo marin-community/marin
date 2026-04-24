@@ -29,14 +29,14 @@ def test_dag_single_source_shape():
     assert names == [
         "raw/nemotron_cc_code_v1",
         "normalized/nemotron_cc_code_v1/all",
-        "data/datakit/mini/nemotron_cc_code_v1/all",
+        "data/datakit/nemotron_cc_code_v1/all",
     ]
 
 
 def test_dag_has_one_sample_step_per_source():
     steps = build_testbed_steps("run0", sources=_ALL_LIST)
-    sample_names = {s.name for s in steps if s.name.startswith("data/datakit/mini/")}
-    assert sample_names == {f"data/datakit/mini/{s.name}" for s in _ALL_LIST}
+    sample_names = {s.name for s in steps if s.name.startswith("data/datakit/")}
+    assert sample_names == {f"data/datakit/{s.name}" for s in _ALL_LIST}
 
 
 def test_dag_nemotron_family_subsets_share_one_download_stepspec():
@@ -63,7 +63,7 @@ def test_dag_nemotron_family_subsets_share_one_download_stepspec():
 def test_dag_stops_at_sample():
     """The ferry emits sample steps only (no other testbed-specific stages)."""
     steps = build_testbed_steps("run0", sources=_ALL_LIST)
-    testbed_steps = [s for s in steps if s.name.startswith("data/datakit/mini/")]
+    testbed_steps = [s for s in steps if s.name.startswith("data/datakit/")]
     assert len(testbed_steps) == len(_ALL_LIST), "expected exactly one testbed step per source (the sampler)"
 
 
@@ -71,7 +71,7 @@ def test_dag_output_paths_namespaced_by_run_id():
     steps = build_testbed_steps("abc123", sources=_ALL_LIST)
     # Canonical source-pipeline artifacts (download, any transform/preprocess,
     # normalize) are run-independent. Only the testbed-specific sample stage
-    # must land under data/datakit/mini/abc123/...
+    # must land under data/datakit/abc123/...
     for step in steps:
         if step.name.startswith(("raw/", "processed/", "normalized/")):
             continue
@@ -91,5 +91,5 @@ def test_dag_starcoder2_subsets_get_distinct_download_names():
 def test_dag_full_testbed_builds():
     """Smoke test: building with the full registry does not raise."""
     steps = build_testbed_steps("run0", sources=_ALL_LIST)
-    sample_steps = [s for s in steps if s.name.startswith("data/datakit/mini/")]
+    sample_steps = [s for s in steps if s.name.startswith("data/datakit/")]
     assert len(sample_steps) == len(_ALL)
