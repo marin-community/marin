@@ -161,6 +161,7 @@ _FOLDBENCH_MONOMER_FIRST_10 = [
 TARGETS: list[ProteinTarget] = [
     ProteinTarget(pdb_id="1QYS", label="top7"),
     ProteinTarget(pdb_id="7BNY"),
+    ProteinTarget(pdb_id="1UBQ", label="ubiquitin"),
     *_FOLDBENCH_MONOMER_FIRST_10,
 ]
 

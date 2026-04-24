@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from urllib.request import urlopen
 
 import fsspec
+import io
 import numpy as np
 from rigging.filesystem import url_to_fs
 
@@ -445,7 +446,37 @@ def stage_model_locally(model_path: str) -> str:
 
 def _write_json(path: str, obj: dict) -> None:
     with fsspec.open(path, "w") as f:
-        json.dump(obj, f, indent=2)
+        json.dump(obj, f, indent=2, default=str)
+
+
+def _write_npz(path: str, **arrays) -> None:
+    buf = io.BytesIO()
+    np.savez_compressed(buf, **arrays)
+    buf.seek(0)
+    with fsspec.open(path, "wb") as f:
+        f.write(buf.getvalue())
+
+
+def _frequency_matrix(rollouts: list["ForcedRollout"], type_tok: str, seq_len: int) -> np.ndarray:
+    """Per-(i,j) fraction of rollouts that predicted this pair for this contact type."""
+    n = max(1, len(rollouts))
+    mat = np.zeros((seq_len, seq_len), dtype=np.float32)
+    for roll in rollouts:
+        pairs = _unique_pairs(roll, type_tok, seq_len)
+        for i, j in pairs:
+            mat[i - 1, j - 1] += 1
+            mat[j - 1, i - 1] += 1
+    mat /= n
+    return mat
+
+
+def _gt_matrix(gt_pairs, seq_len: int) -> np.ndarray:
+    mat = np.zeros((seq_len, seq_len), dtype=np.float32)
+    for i, j in gt_pairs:
+        if 1 <= i <= seq_len and 1 <= j <= seq_len:
+            mat[i - 1, j - 1] = 1
+            mat[j - 1, i - 1] = 1
+    return mat
 
 
 # ---- Main ----
@@ -458,14 +489,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", required=True, help="HF checkpoint path (gs://... or HF repo id).")
     parser.add_argument("--pdb-id", default="1QYS")
     parser.add_argument("--chain-id", default=None)
-    parser.add_argument("--num-rollouts", type=int, default=16)
+    parser.add_argument("--num-rollouts", type=int, default=10)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=-1)
     parser.add_argument("--max-model-len", type=int, default=8192)
     parser.add_argument("--tensor-parallel-size", type=int, default=4, help="4 for v5p-8.")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--consensus-threshold", type=float, default=0.5)
+    parser.add_argument(
+        "--sequence-override-source",
+        default=None,
+        help="Optional redesigns JSONL (e.g. from redesign_sequences.py). When set, prompt uses the "
+        "redesigned sequence but ground-truth contacts still come from the native PDB.",
+    )
+    parser.add_argument("--sequence-override-target-label", default=None)
+    parser.add_argument("--sequence-override-method", default=None)
+    parser.add_argument("--sequence-override-idx", type=int, default=None)
     args = parser.parse_args(argv)
+
+    override_fields = (
+        args.sequence_override_source,
+        args.sequence_override_target_label,
+        args.sequence_override_method,
+        args.sequence_override_idx,
+    )
+    if any(x is not None for x in override_fields) and not all(x is not None for x in override_fields):
+        parser.error("--sequence-override-* flags must all be set together.")
 
     os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
 
@@ -482,6 +531,47 @@ def main(argv: list[str] | None = None) -> int:
 
     if sum(counts.values()) == 0:
         raise RuntimeError("No ground-truth contacts found; aborting.")
+
+    # --- 1b. Optional sequence override (MPNN/SolubleMPNN redesigns) ---
+    sequence_for_prompt = list(structure.sequence)
+    override_info: dict | None = None
+    if args.sequence_override_source is not None:
+        with fsspec.open(args.sequence_override_source, "r") as f:
+            lines = [json.loads(l) for l in f.read().splitlines() if l.strip()]
+        matches = [
+            r
+            for r in lines
+            if r.get("target_label") == args.sequence_override_target_label
+            and r.get("method") == args.sequence_override_method
+            and int(r.get("redesign_idx", -1)) == args.sequence_override_idx
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"Expected 1 override match; got {len(matches)} for "
+                f"{args.sequence_override_target_label}/{args.sequence_override_method}#{args.sequence_override_idx}"
+            )
+        rec = matches[0]
+        redesigned = list(rec["sequence_3letter"])
+        if len(redesigned) != seq_len:
+            raise ValueError(f"Override sequence length {len(redesigned)} != PDB chain length {seq_len}")
+        hamming = sum(a != b for a, b in zip(structure.sequence, redesigned, strict=True))
+        logger.info(
+            "Sequence override (%s/%s #%d): Hamming = %d/%d",
+            args.sequence_override_target_label,
+            args.sequence_override_method,
+            args.sequence_override_idx,
+            hamming,
+            seq_len,
+        )
+        sequence_for_prompt = redesigned
+        override_info = {
+            "source": args.sequence_override_source,
+            "target_label": rec["target_label"],
+            "method": rec["method"],
+            "redesign_idx": rec["redesign_idx"],
+            "hamming_distance": hamming,
+            "mpnn_score": rec.get("mpnn_score"),
+        }
 
     # --- 2. Build the forced type-token sequence: x long, y medium, z short ---
     type_sequence: list[str] = []
@@ -508,7 +598,7 @@ def main(argv: list[str] | None = None) -> int:
     tokenizer = llm.get_tokenizer()
 
     # --- 4. Generate ---
-    prompt = build_prompt(structure.sequence)
+    prompt = build_prompt(sequence_for_prompt)
     logger.info("Generating %d rollouts (T=%.2f, top_k=%d)", args.num_rollouts, args.temperature, args.top_k)
     t0 = time.time()
     rollouts = generate_forced_rollouts(
@@ -537,7 +627,9 @@ def main(argv: list[str] | None = None) -> int:
         "pdb_id": args.pdb_id.upper(),
         "chain_id": args.chain_id,
         "sequence_length": seq_len,
-        "sequence_3letter": structure.sequence,
+        "native_sequence_3letter": structure.sequence,
+        "sequence_used_in_prompt": sequence_for_prompt,
+        "sequence_override": override_info,
         "ground_truth_counts": counts,
         "ground_truth_pairs_by_type": {t: sorted(pairs) for t, pairs in gt_by_type.items()},
         "inference": {
@@ -551,6 +643,29 @@ def main(argv: list[str] | None = None) -> int:
         "per_type": per_type_report,
     }
     _write_json(f"{output_dir}/summary.json", summary)
+
+    # Per-(i,j) frequency matrices per contact type + GT matrices, for plotting.
+    matrices: dict[str, np.ndarray] = {}
+    for type_tok in gt_by_type:
+        short_key = type_tok.strip("<>").replace("-range-contact", "")  # 'long', 'medium', 'short'
+        matrices[f"freq_{short_key}"] = _frequency_matrix(rollouts, type_tok, seq_len)
+        matrices[f"gt_{short_key}"] = _gt_matrix(gt_by_type[type_tok], seq_len)
+    # Also emit a single "all ranges" union GT matrix for quick comparison maps.
+    all_gt = set().union(*(gt_by_type[t] for t in gt_by_type))
+    matrices["gt_all"] = _gt_matrix(all_gt, seq_len)
+    # Per-rollout union matrix (any range) — useful for consensus overlays.
+    union_freq = np.zeros((seq_len, seq_len), dtype=np.float32)
+    n = max(1, len(rollouts))
+    for roll in rollouts:
+        union = set()
+        for type_tok in gt_by_type:
+            union |= _unique_pairs(roll, type_tok, seq_len)
+        for i, j in union:
+            union_freq[i - 1, j - 1] += 1
+            union_freq[j - 1, i - 1] += 1
+    union_freq /= n
+    matrices["freq_all"] = union_freq
+    _write_npz(f"{output_dir}/matrices.npz", **matrices)
 
     # Per-rollout raw predictions for downstream plotting.
     rollouts_dump = []

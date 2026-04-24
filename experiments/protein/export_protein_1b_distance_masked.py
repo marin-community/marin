@@ -29,7 +29,7 @@ from marin.execution.executor import executor_main
 from marin.export import convert_checkpoint_to_hf_step
 
 TRAINING_OUTPUT = "gs://marin-us-east5/checkpoints/protein-contacts-1b-3.5e-4-distance-masked-7d355e"
-CHECKPOINT_STEP = 8432  # latest available
+CHECKPOINT_STEP = 15049  # latest permanent checkpoint as of 2026-04-24
 
 
 def _trainer_from_training_step() -> TrainerConfig:

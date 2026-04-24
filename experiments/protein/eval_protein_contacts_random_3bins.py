@@ -300,11 +300,19 @@ def _run_rollouts(
     prompt = TokensPrompt(prompt_token_ids=base_ids)
 
     is_greedy = num_rollouts == 0 or temperature <= 0
+    # `ignore_eos=True` is critical: the legacy model's config.json declares
+    # eos_token_id=1 (which is `<eos>` in our reconstructed vocab), but the
+    # training format actually terminates documents with `<end>` (a control
+    # token). Without `ignore_eos`, vLLM stops whenever the model emits `<eos>`
+    # as a stray prediction, which happens within ~60-70 contact statements and
+    # truncates rollout diversity. The exp5 notebook avoided this by passing
+    # `eos_token_id=end_token_id` to HF .generate(), effectively the same fix.
     sampling = SamplingParams(
         temperature=max(temperature, 0.0),
         top_k=top_k if not is_greedy else -1,
         max_tokens=max_new_tokens,
         stop_token_ids=[end_id],
+        ignore_eos=True,
         n=max(num_rollouts, 1),
     )
     t0 = time.time()
