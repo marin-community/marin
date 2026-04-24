@@ -15,6 +15,7 @@ from typing import Literal
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from marin.execution.executor import executor_main
+from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
 from marin.processing.tokenize.data_configs import TokenizerStep
 
 FINEWEB2_DATASET_ID = "HuggingFaceFW/fineweb-2"
@@ -188,6 +189,21 @@ def fineweb2_multilingual_eval_bundle(*, tokenizer: str = llama3_tokenizer) -> d
         name_prefix="fineweb2_multilingual_eval",
         tokenizer=tokenizer,
     )
+
+
+def fineweb2_multilingual_raw_validation_sets(
+    *,
+    configs: Sequence[str] = FINEWEB2_MULTILINGUAL_EVAL_CONFIGS,
+    name_prefix: str = "fineweb2_multilingual",
+) -> dict[str, RawTextEvaluationDataset]:
+    """Return raw FineWeb2 multilingual held-out eval sets for perplexity-gap reports."""
+    return {
+        os.path.join(name_prefix, config): raw_text_dataset(
+            fineweb2_multilingual_parquet_pattern(config, FINEWEB2_EVAL_SPLIT),
+            tags=tuple(fineweb2_multilingual_tags(config)),
+        )
+        for config in configs
+    }
 
 
 if __name__ == "__main__":
