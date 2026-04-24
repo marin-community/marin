@@ -58,11 +58,11 @@ def _build_adamh_optimizer(hidden_dim: int, batch_size: int, tokens: float) -> G
     return heuristic.build_optimizer_config(batch_size, tokens, hidden_dim)
 
 
-def _build_muon_optimizer() -> GrugMuonConfig:
+def _build_muon_optimizer(warmup: float = 0.1) -> GrugMuonConfig:
     return GrugMuonConfig(
         learning_rate=0.02,
         adam_lr=6e-4,
-        warmup=0.1,
+        warmup=warmup,
         lr_schedule="linear",
         min_lr_ratio=0.0,
     )
@@ -73,6 +73,8 @@ CONFIGS: list[tuple[str, bool]] = [
     ("adamh", True),
     ("muon", False),
     ("muon", True),
+    ("muon-nowarmup", False),
+    ("muon-nowarmup", True),
 ]
 
 
@@ -89,6 +91,8 @@ def _make_steps() -> list[ExecutorStep]:
 
             if opt_name == "adamh":
                 optimizer = _build_adamh_optimizer(dim, batch, tokens)
+            elif opt_name == "muon-nowarmup":
+                optimizer = _build_muon_optimizer(warmup=0.0)
             else:
                 optimizer = _build_muon_optimizer()
 
