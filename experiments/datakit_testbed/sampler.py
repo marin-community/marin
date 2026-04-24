@@ -361,7 +361,7 @@ def build_testbed_steps(
     if not sources:
         raise ValueError("build_testbed_steps requires at least one source")
 
-    base = f"datakit_testbed/{run_id}"
+    base = f"datakit-testbed/{run_id}"
     fractions = proportional_sample_fractions(sources, target_total_tokens_b=target_total_tokens_b)
 
     # Walk each chain's transitive deps into the iterable — some sources

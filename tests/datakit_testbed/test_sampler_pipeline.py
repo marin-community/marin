@@ -71,7 +71,7 @@ def test_dag_output_paths_namespaced_by_run_id():
     steps = build_testbed_steps("abc123", sources=_ALL_LIST)
     # Canonical source-pipeline artifacts (download, any transform/preprocess,
     # normalize) are run-independent. Only the testbed-specific sample stage
-    # must land under datakit_testbed/abc123/...
+    # must land under datakit-testbed/abc123/...
     for step in steps:
         if step.name.startswith(("raw/", "processed/", "normalized/")):
             continue
