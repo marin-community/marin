@@ -50,6 +50,7 @@ from iris.cluster.controller.schema import (
     WorkerRow,
     tasks_with_attempts,
 )
+from iris.cluster.controller.autoscaler.slice_lifecycle import CloudReady
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.transitions import (
@@ -905,8 +906,8 @@ def make_autoscaler(
 def mark_discovered_ready(group: ScalingGroup, handles: list[MagicMock], timestamp: Timestamp | None = None) -> None:
     """Mark discovered slices as READY with their worker IDs."""
     for handle in handles:
-        worker_ids = [w.worker_id for w in handle.describe().workers]
-        group.mark_slice_ready(handle.slice_id, worker_ids, timestamp=timestamp)
+        workers = tuple(handle.describe().workers)
+        group.dispatch(handle.slice_id, CloudReady(workers=workers), now=timestamp)
 
 
 def mark_all_slices_ready(group: ScalingGroup) -> None:
@@ -918,8 +919,7 @@ def mark_all_slices_ready(group: ScalingGroup) -> None:
     for handle in group.slice_handles():
         desc = handle.describe()
         if desc.state == CloudSliceState.READY:
-            worker_ids = [w.worker_id for w in desc.workers]
-            group.mark_slice_ready(handle.slice_id, worker_ids)
+            group.dispatch(handle.slice_id, CloudReady(workers=tuple(desc.workers)))
 
 
 def make_gcp_provider(

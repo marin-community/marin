@@ -26,9 +26,7 @@ from collections.abc import Sequence
 from iris.cluster.constraints import Constraint
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import (
-    CloudSliceState,
     QuotaExhaustedError,
-    RemoteWorkerHandle,
     SliceHandle,
 )
 from iris.cluster.controller.autoscaler.models import (
@@ -36,10 +34,7 @@ from iris.cluster.controller.autoscaler.models import (
     ScalingAction,
     ScalingDecision,
 )
-from iris.cluster.controller.autoscaler.operations import (
-    restart_worker as restart_worker_operation,
-    terminate_slices_for_workers as terminate_slices_for_workers_operation,
-)
+from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
 from iris.cluster.controller.autoscaler.planning import ScalePlan, build_scale_plan
 from iris.cluster.controller.autoscaler.recovery import (
     load_autoscaler_checkpoint,
@@ -47,6 +42,19 @@ from iris.cluster.controller.autoscaler.recovery import (
 )
 from iris.cluster.controller.autoscaler.routing import job_feasibility, route_demand
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build_worker_config_for_group
+from iris.cluster.controller.autoscaler.slice_lifecycle import (
+    BecameFailed,
+    BecameReady,
+    CloudFailed,
+    IdleTimeout,
+    InternalTransition,
+    NoOp,
+    SliceEvent,
+    TransitionOutcome,
+    UnknownTimeout,
+    WorkerFailure,
+    cloud_event,
+)
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
@@ -59,11 +67,28 @@ from rigging.timing import Duration, Timestamp
 logger = logging.getLogger(__name__)
 
 
-# Slices that die within this time of creation trigger backoff (preemption detection)
-SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
-
-# After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
 DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
+
+
+def _failure_log(event: SliceEvent) -> tuple[str, str, str]:
+    """Map a terminal event to (action_type, reason, status) for the action log.
+
+    Keeps the action_log taxonomy readable:
+      - scale_down: healthy teardown of an idle slice
+      - worker_failed: explicit worker-side failure report
+      - slice_failed: everything else (cloud-side terminal states)
+    """
+    match event:
+        case IdleTimeout(target_capacity=target, ready_before=ready):
+            return "scale_down", f"idle slice (target={target}, ready={ready})", "completed"
+        case WorkerFailure(failed_worker_ids=ids):
+            return "worker_failed", f"workers failed: {', '.join(ids)}", "failed"
+        case CloudFailed(error_message=msg):
+            return "slice_failed", msg or "cloud slice failed", "failed"
+        case UnknownTimeout():
+            return "slice_failed", "cloud state UNKNOWN past timeout", "failed"
+        case _:
+            return "slice_failed", f"slice failed ({event.label})", "failed"
 
 
 class Autoscaler:
@@ -238,6 +263,37 @@ class Autoscaler:
         )
         return action
 
+    def _apply(self, outcome: TransitionOutcome, group: ScalingGroup) -> None:
+        """Execute caller-side work for a slice transition.
+
+        `ScalingGroup.dispatch()` has already mutated slice and (if triggered)
+        group-backoff state atomically. This method owns the externally-visible
+        side effects: worker registry, async terminate, and action-log entries.
+        """
+        match outcome:
+            case BecameReady(slice_id=slice_id, workers=workers):
+                self._worker_registry.register_slice_workers(list(workers), slice_id, group.name)
+                self._log_action(
+                    "slice_ready",
+                    group.name,
+                    slice_id,
+                    reason=f"bootstrap completed ({len(workers)} workers)",
+                )
+            case BecameFailed(slice_id=slice_id, handle=handle, event=event, triggered_backoff=triggered):
+                self._worker_registry.unregister_slice_workers(slice_id)
+                self._spawn_terminate(group, handle)
+                action_type, reason, status = _failure_log(event)
+                self._log_action(action_type, group.name, slice_id, reason=reason, status=status)
+                if triggered:
+                    self._log_action(
+                        "backoff_triggered",
+                        group.name,
+                        slice_id=slice_id,
+                        reason=f"short-lived slice failure ({event.label})",
+                    )
+            case NoOp() | InternalTransition():
+                return
+
     def evaluate(
         self,
         demand_entries: list[DemandEntry],
@@ -382,23 +438,8 @@ class Autoscaler:
         """Build per-group WorkerConfig by merging base config with scale group overrides."""
         return build_worker_config_for_group(self._base_worker_config, group.config)
 
-    def _register_slice_workers(
-        self,
-        workers: list[RemoteWorkerHandle],
-        slice_id: str,
-        scale_group: str,
-    ) -> None:
-        """Register all workers from a slice into the in-memory handle cache."""
-
-        self._worker_registry.register_slice_workers(workers, slice_id, scale_group)
-
-    def _unregister_slice_workers(self, slice_id: str, worker_ids: Sequence[str] | None = None) -> None:
-        """Remove tracked workers belonging to a slice from the handle cache."""
-
-        self._worker_registry.unregister_slice_workers(slice_id, worker_ids)
-
     def refresh(self, worker_status_map: WorkerStatusMap, timestamp: Timestamp | None = None) -> None:
-        """State-read phase: scale down idle slices from currently tracked state."""
+        """State-read phase: poll non-READY slices and scale down idle slices."""
         timestamp = timestamp or Timestamp.now()
 
         for group in self._groups.values():
@@ -409,63 +450,22 @@ class Autoscaler:
                     logger.warning("Failed to poll slice %s: %s", slice_id, e)
                     continue
 
-                if status.state == CloudSliceState.READY:
-                    worker_ids = [w.worker_id for w in status.workers]
-                    group.mark_slice_ready(slice_id, worker_ids)
-                    self._register_slice_workers(status.workers, slice_id, group.name)
-                    self._log_action(
-                        "slice_ready",
-                        group.name,
-                        slice_id,
-                        reason=f"bootstrap completed ({len(worker_ids)} workers)",
-                    )
-                elif status.state == CloudSliceState.FAILED:
-                    group.mark_slice_failed(slice_id, error_message=status.error_message)
-                    group.scale_down(slice_id)
-                    self._unregister_slice_workers(slice_id)
-                    group.record_failure()
-                    reason = status.error_message if status.error_message else "bootstrap failed"
-                    self._log_action(
-                        "slice_failed",
-                        group.name,
-                        slice_id,
-                        reason=reason,
-                        status="failed",
-                    )
-                elif status.state == CloudSliceState.UNKNOWN:
-                    age = Duration.from_ms(timestamp.epoch_ms() - handle.created_at.epoch_ms())
-                    if age >= self._unresolvable_timeout:
-                        group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
-                        group.scale_down(slice_id)
-                        self._unregister_slice_workers(slice_id)
-                        group.record_failure()
-                        self._log_action(
-                            "slice_failed",
-                            group.name,
-                            slice_id,
-                            reason=f"TPU unresolvable for {age}",
-                            status="failed",
-                        )
-                    else:
-                        logger.debug(
-                            "Slice %s UNKNOWN (age %s < timeout %s); will retry",
-                            slice_id,
-                            age,
-                            self._unresolvable_timeout,
-                        )
+                event = cloud_event(
+                    status.state,
+                    handle.created_at,
+                    timestamp,
+                    self._unresolvable_timeout,
+                    workers=status.workers,
+                    error_message=status.error_message,
+                )
+                if event is None:
+                    continue
+                self._apply(group.dispatch(slice_id, event, now=timestamp), group)
 
         for group in self._groups.values():
             target_capacity = min(group.current_demand + group.buffer_slices, group.max_slices)
-            ready_before = group.ready_slice_count()
-            scaled_down_handles = group.scale_down_if_idle(worker_status_map, target_capacity, timestamp)
-            for handle in scaled_down_handles:
-                self._unregister_slice_workers(handle.slice_id)
-                self._log_action(
-                    "scale_down",
-                    group.name,
-                    slice_id=handle.slice_id,
-                    reason=f"idle slice (target={target_capacity}, ready={ready_before})",
-                )
+            for outcome in group.scale_down_if_idle(worker_status_map, target_capacity, timestamp):
+                self._apply(outcome, group)
 
     def update(
         self,
@@ -500,8 +500,38 @@ class Autoscaler:
 
     def restart_worker(self, worker_id: str) -> None:
         """Restart a worker with a fresh bootstrap script using the latest image."""
+        if self._db is None:
+            raise ValueError("No DB configured — cannot look up worker")
 
-        restart_worker_operation(self._groups, self._db, worker_id, self._per_group_worker_config)
+        with self._db.read_snapshot() as snapshot:
+            rows = snapshot.raw(
+                "SELECT slice_id, scale_group FROM workers WHERE worker_id = ? AND slice_id != ''",
+                params=(worker_id,),
+            )
+        if not rows:
+            raise ValueError(f"Worker {worker_id} not found in workers table (or has no slice_id)")
+        row = rows[0]
+
+        group = self._groups.get(row.scale_group)
+        if group is None:
+            raise ValueError(f"Scale group {row.scale_group} not found for worker {worker_id}")
+
+        slice_handle = group.get_slice(row.slice_id)
+        if slice_handle is None:
+            raise ValueError(f"Slice {row.slice_id} not found in group {row.scale_group}")
+
+        workers = slice_handle.describe().workers
+        handle = next((w for w in workers if w.worker_id == worker_id), None)
+        if handle is None:
+            raise ValueError(f"Worker {worker_id} not found in slice {row.slice_id}")
+
+        worker_config = self._per_group_worker_config(group)
+        if worker_config is None:
+            raise ValueError("No base worker config — cannot build bootstrap script")
+
+        worker_config.worker_id = worker_id
+        worker_config.slice_id = row.slice_id
+        handle.restart_worker(build_worker_bootstrap_script(worker_config))
 
     def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
         """Restore tracked worker state from a snapshot. Called before loops start."""
@@ -593,31 +623,44 @@ class Autoscaler:
         Returns sibling worker IDs that should be failed immediately because
         their slices are being torn down.
         """
-        result = terminate_slices_for_workers_operation(
-            groups=self._groups,
-            worker_ids=worker_ids,
-            unregister_slice_workers=self._unregister_slice_workers,
-            log_action=self._log_action,
-            timestamp=Timestamp.now(),
-            short_lived_slice_threshold=SHORT_LIVED_SLICE_THRESHOLD,
-        )
-        for request in result.termination_requests:
+        if not worker_ids:
+            return []
 
-            def _terminate(
-                stop_event,
-                target_group: ScalingGroup = request.group,
-                target_slice_id: str = request.slice_id,
-                target_handle: SliceHandle = request.handle,
-            ) -> None:
-                del stop_event
-                self._terminate_slice_handle(target_group, target_slice_id, target_handle)
+        timestamp = Timestamp.now()
+        primary_workers = set(worker_ids)
+        sibling_worker_ids: set[str] = set()
+        slices_seen: set[str] = set()
 
-            self._threads.spawn(
-                target=_terminate,
-                name=f"slice-terminate-{request.slice_id}",
+        for worker_id in primary_workers:
+            slice_id, group = self._find_slice_for_worker(worker_id)
+            if not slice_id or group is None:
+                logger.debug("Worker %s not found in any managed slice", worker_id)
+                continue
+            if slice_id in slices_seen:
+                continue
+            slices_seen.add(slice_id)
+
+            slice_worker_ids = group.get_slice_worker_ids(slice_id)
+            sibling_worker_ids.update(wid for wid in slice_worker_ids if wid not in primary_workers)
+            failed = tuple(sorted(primary_workers & set(slice_worker_ids)))
+
+            self._apply(
+                group.dispatch(slice_id, WorkerFailure(failed_worker_ids=failed), now=timestamp),
+                group,
             )
 
-        return result.sibling_worker_ids
+        return sorted(sibling_worker_ids)
 
-    def _terminate_slice_handle(self, group: ScalingGroup, slice_id: str, handle: SliceHandle) -> None:
-        group._terminate_slice_handle(handle, context="cleaning up anyway")
+    def _find_slice_for_worker(self, worker_id: str) -> tuple[str | None, ScalingGroup | None]:
+        for group in self._groups.values():
+            slice_id = group.find_slice_for_worker(worker_id)
+            if slice_id is not None:
+                return slice_id, group
+        return None, None
+
+    def _spawn_terminate(self, group: ScalingGroup, handle: SliceHandle) -> None:
+        def _do_terminate(stop_event, g: ScalingGroup = group, h: SliceHandle = handle) -> None:
+            del stop_event
+            g._terminate_slice_handle(h, context="lifecycle teardown")
+
+        self._threads.spawn(target=_do_terminate, name=f"slice-terminate-{handle.slice_id}")

@@ -7,8 +7,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from iris.cluster.controller.autoscaler.models import RoutingDecision, ScalingAction, ScalingDecision
-from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, SliceLifecycleState
+from iris.cluster.controller.autoscaler.models import (
+    RoutingDecision,
+    ScalingAction,
+    ScalingDecision,
+    SliceLifecycleState,
+)
+from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from rigging.timing import Timestamp
 
 

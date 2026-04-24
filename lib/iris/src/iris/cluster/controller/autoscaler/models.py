@@ -5,11 +5,53 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
+from dataclasses import dataclass, field
+import enum
+from enum import Enum, StrEnum
 
 from iris.cluster.constraints import Constraint, PlacementRequirements
+from iris.cluster.providers.types import SliceHandle
 from iris.rpc import job_pb2
+from rigging.timing import Timestamp
+
+
+class SliceLifecycleState(StrEnum):
+    """Lifecycle state for a slice (VM group) in the autoscaler.
+
+    These states represent the dominant state of a slice based on its constituent VMs.
+    String values are lowercase names for use as dictionary keys and proto map keys.
+
+    States:
+    - REQUESTING: Scale-up operation in progress (tracked at ScalingGroup level)
+    - BOOTING: At least one VM is booting (VM_STATE_BOOTING)
+    - INITIALIZING: At least one VM is initializing (VM_STATE_INITIALIZING)
+    - READY: All VMs are ready (VM_STATE_READY)
+    - FAILED: At least one VM has failed (VM_STATE_FAILED or VM_STATE_PREEMPTED)
+
+    Note: These are slice-level aggregate states, not direct VM states.
+    """
+
+    REQUESTING = enum.auto()
+    BOOTING = enum.auto()
+    INITIALIZING = enum.auto()
+    READY = enum.auto()
+    FAILED = enum.auto()
+
+
+@dataclass
+class SliceState:
+    """Per-slice state tracked by ScalingGroup.
+
+    Consolidates the slice handle with its associated tracking state
+    (idle timeout, lifecycle) into a single structure.
+    lifecycle and worker_ids are populated eagerly by the bootstrap thread.
+    """
+
+    handle: SliceHandle
+    last_active: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
+    lifecycle: SliceLifecycleState = SliceLifecycleState.BOOTING
+    worker_ids: list[str] = field(default_factory=list)
+    error_message: str = ""
 
 
 class ScalingAction(Enum):
