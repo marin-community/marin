@@ -52,7 +52,7 @@ def baseline(
     """Assemble the baseline training step off a testbed DAG.
 
     Bucketing is "one tokenize per source" — the trivial control-arm
-    strategy. Other configurations build their own ``tokenized_by_source``
+    strategy. Other configurations build their own ``tokenized_buckets``
     (e.g. by quality tier) and pass it to :func:`run_testbed_config`
     directly.
     """
@@ -61,10 +61,10 @@ def baseline(
     }
     if not sampled_by_source:
         raise ValueError("no sample steps found in the DAG (expected names under 'datakit-testbed/...')")
-    tokenized_by_source = build_testbed_tokenize_steps(sampled_by_source, tokenizer=tokenizer)
+    tokenized_buckets = build_testbed_tokenize_steps(sampled_by_source, tokenizer=tokenizer)
     return run_testbed_config(
         name=name,
-        tokenized_by_source=tokenized_by_source,
+        tokenized_buckets=tokenized_buckets,
         tokenizer=tokenizer,
         **run_config_kwargs,
     )

@@ -98,7 +98,7 @@ def build_testbed_tokenize_steps(
 def run_testbed_config(
     *,
     name: str,
-    tokenized_by_source: dict[str, TokenizerStep],
+    tokenized_buckets: dict[str, TokenizerStep],
     compute_budget_flops: float = DEFAULT_COMPUTE_BUDGET_FLOPS,
     hidden_dim: int = DEFAULT_HIDDEN_DIM,
     target_steps: int = DEFAULT_TARGET_STEPS,
@@ -115,7 +115,7 @@ def run_testbed_config(
     Args:
         name: Config name — forms the executor step name and wandb run id.
             Use e.g. ``"baseline"`` for the trivial no-dedup run.
-        tokenized_by_source: Per-source tokenize ExecutorSteps. The caller
+        tokenized_buckets: Per-source tokenize ExecutorSteps. The caller
             builds these from its own bucketed view of the sampled data
             — baseline buckets by provenance (one tokenize per source);
             other configs may bucket differently (e.g. by quality tier).
@@ -137,8 +137,8 @@ def run_testbed_config(
         An ``ExecutorStep`` whose ``fn`` is ``run_grug_moe_trial``. Pass to
         ``executor_main`` to actually train.
     """
-    if not tokenized_by_source:
-        raise ValueError("tokenized_by_source must be non-empty")
+    if not tokenized_buckets:
+        raise ValueError("tokenized_buckets must be non-empty")
 
     model_cfg, opt_cfg, batch_size, steps = build_from_heuristic(
         budget=compute_budget_flops,
@@ -146,7 +146,7 @@ def run_testbed_config(
         target_steps=target_steps,
     )
 
-    data = build_testbed_mixture(tokenized_by_source, weights=weights)
+    data = build_testbed_mixture(tokenized_buckets, weights=weights)
     data = add_validation_sets_to_mixture(
         data,
         default_validation_sets(tokenizer=tokenizer),

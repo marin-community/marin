@@ -32,7 +32,7 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 logger = logging.getLogger(__name__)
 
 
-def weights_from_tokenized_stats(tokenized_by_source: dict[str, TokenizerStep]) -> dict[str, float]:
+def weights_from_tokenized_bucket_stats(tokenized_buckets: dict[str, TokenizerStep]) -> dict[str, float]:
     """Read each tokenize step's on-disk ``train/.stats.json`` for mixture weights.
 
     The ``tokenize`` fn writes ``<cache_path>/train/.stats.json`` with
@@ -44,7 +44,7 @@ def weights_from_tokenized_stats(tokenized_by_source: dict[str, TokenizerStep]) 
     the tokenize steps before calling.
     """
     weights: dict[str, float] = {}
-    for name, step in tokenized_by_source.items():
+    for name, step in tokenized_buckets.items():
         stats_path = f"{output_path_of(step)}/train/.stats.json"
         with open_url(stats_path) as f:
             stats = json.load(f)
@@ -53,19 +53,19 @@ def weights_from_tokenized_stats(tokenized_by_source: dict[str, TokenizerStep]) 
 
 
 def build_testbed_mixture(
-    tokenized_by_source: dict[str, TokenizerStep],
+    tokenized_buckets: dict[str, TokenizerStep],
     *,
     weights: dict[str, float] | None = None,
 ) -> LMMixtureDatasetConfig:
     """Build the proportional mixture over a set of tokenized caches.
 
     Args:
-        tokenized_by_source: Mapping from ``DatakitSource.name`` to its
+        tokenized_buckets: Mapping from ``DatakitSource.name`` to its
             tokenize :class:`TokenizerStep` (``ExecutorStep[TokenizeConfig]``).
             The step must already be materialized so
             ``train/.stats.json`` exists under its output path.
         weights: Optional explicit mixture weights. Keys must match
-            ``tokenized_by_source``. When ``None`` (default), weights are
+            ``tokenized_buckets``. When ``None`` (default), weights are
             read from each component's on-disk ``train/.stats.json``.
 
     Returns:
@@ -73,26 +73,24 @@ def build_testbed_mixture(
         ``simulated_epoching_train``.
 
     Raises:
-        ValueError: If ``tokenized_by_source`` is empty, or ``weights`` keys
-            don't match ``tokenized_by_source`` keys exactly.
+        ValueError: If ``tokenized_buckets`` is empty, or ``weights`` keys
+            don't match ``tokenized_buckets`` keys exactly.
     """
-    if not tokenized_by_source:
-        raise ValueError("tokenized_by_source must be non-empty")
+    if not tokenized_buckets:
+        raise ValueError("tokenized_buckets must be non-empty")
 
     if weights is None:
-        weights = weights_from_tokenized_stats(tokenized_by_source)
-    elif set(weights) != set(tokenized_by_source):
-        raise ValueError(
-            f"weights keys {sorted(weights)} must match tokenized_by_source keys {sorted(tokenized_by_source)}"
-        )
+        weights = weights_from_tokenized_bucket_stats(tokenized_buckets)
+    elif set(weights) != set(tokenized_buckets):
+        raise ValueError(f"weights keys {sorted(weights)} must match tokenized_buckets keys {sorted(tokenized_buckets)}")
 
     logger.info(
         "testbed mixture: %d components, total raw weight %.2eB",
-        len(tokenized_by_source),
+        len(tokenized_buckets),
         sum(weights.values()) / 1e9,
     )
 
     return lm_mixture_data_config(
-        components=tokenized_by_source,
+        components=tokenized_buckets,
         weights=weights,
     )
