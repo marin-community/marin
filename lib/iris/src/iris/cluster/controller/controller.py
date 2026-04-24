@@ -1078,7 +1078,6 @@ class Controller:
         self._health = WorkerHealthTracker()
         self._transitions = ControllerTransitions(
             store=self._store,
-            user_budget_defaults=config.user_budget_defaults,
             health=self._health,
         )
         self._scheduler = Scheduler()

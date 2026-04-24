@@ -990,7 +990,7 @@ class ControllerServiceImpl:
 
     Args:
         transitions: State machine for DB mutations (submit, cancel, register, etc.)
-        db: Query interface for direct DB reads
+        store: Controller store bundle (per-entity stores + transaction / read_snapshot).
         controller: Controller runtime for scheduling and worker management
         bundle_store: Bundle store for zip storage.
         log_service: LogService for fetching logs (in-process or remote proxy).

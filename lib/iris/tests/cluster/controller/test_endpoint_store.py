@@ -20,7 +20,7 @@ from .conftest import make_job_request, submit_job
 
 
 # --- Parity helper: the legacy SQL builder, preserved solely for parity tests.
-# Deleted from production; kept here so a parity test demonstrates the registry
+# Deleted from production; kept here so a parity test demonstrates the store
 # returns an identical row set for representative queries.
 def _endpoint_query_sql_legacy(query: EndpointQuery) -> tuple[str, list[object]]:
     from_clause = f"SELECT {ENDPOINT_PROJECTION.select_clause()} FROM endpoints e"

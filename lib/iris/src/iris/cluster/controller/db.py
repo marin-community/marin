@@ -258,6 +258,14 @@ class TransactionCursor:
         """Raw SQL script escape hatch."""
         return self._cursor.executescript(sql)
 
+    def fetchall(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
+        """Execute ``sql`` and return all rows. Mirrors :meth:`QuerySnapshot.fetchall`."""
+        return list(self._cursor.execute(sql, params).fetchall())
+
+    def fetchone(self, sql: str, params: tuple = ()) -> sqlite3.Row | None:
+        """Execute ``sql`` and return the first row, or None. Mirrors :meth:`QuerySnapshot.fetchone`."""
+        return self._cursor.execute(sql, params).fetchone()
+
     def on_commit(self, hook: Callable[[], None]) -> None:
         """Register ``hook`` to run after the transaction commits successfully."""
         self._commit_hooks.append(hook)

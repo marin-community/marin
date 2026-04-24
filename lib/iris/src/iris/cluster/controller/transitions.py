@@ -33,10 +33,15 @@ from iris.cluster.controller.db import (
     task_row_can_be_scheduled,
     task_row_is_finished,
 )
-from iris.cluster.controller.stores import ControllerStore, EndpointStore
+from iris.cluster.controller.stores import (
+    ControllerStore,
+    EndpointStore,
+    JobConfigInsertParams,
+    JobInsertParams,
+    JobStore,
+)
 from iris.cluster.controller.schema import (
     JOB_CONFIG_JOIN,
-    JOB_DETAIL_PROJECTION,
     TASK_DETAIL_PROJECTION,
     WORKER_DETAIL_PROJECTION,
     EndpointRow,
@@ -591,8 +596,8 @@ def _kill_non_terminal_tasks(
 
 
 def _cascade_children(
-    cur: Any,
-    registry,
+    cur: TransactionCursor,
+    store: ControllerStore,
     job_id: JobName,
     now_ms: int,
     reason: str,
@@ -608,58 +613,31 @@ def _cascade_children(
     tasks_to_kill: set[JobName] = set()
     task_kill_workers: dict[JobName, WorkerId] = {}
 
-    if exclude_reservation_holders:
-        # Skip reservation holder jobs and anything below them.
-        descendants = cur.execute(
-            "WITH RECURSIVE subtree(job_id) AS ("
-            "  SELECT job_id FROM jobs WHERE parent_job_id = ? AND is_reservation_holder = 0 "
-            "  UNION ALL "
-            "  SELECT j.job_id FROM jobs j JOIN subtree s ON j.parent_job_id = s.job_id"
-            "   WHERE j.is_reservation_holder = 0"
-            ") SELECT job_id FROM subtree",
-            (job_id.to_wire(),),
-        ).fetchall()
-    else:
-        descendants = cur.execute(
-            "WITH RECURSIVE subtree(job_id) AS ("
-            "  SELECT job_id FROM jobs WHERE parent_job_id = ? "
-            "  UNION ALL "
-            "  SELECT j.job_id FROM jobs j JOIN subtree s ON j.parent_job_id = s.job_id"
-            ") SELECT job_id FROM subtree",
-            (job_id.to_wire(),),
-        ).fetchall()
-    for child_row in descendants:
-        child_job_id = str(child_row["job_id"])
+    descendants = store.jobs.list_descendants(
+        cur,
+        job_id,
+        exclude_reservation_holders=exclude_reservation_holders,
+    )
+    for child_job_id in descendants:
         child_tasks_to_kill, child_task_kill_workers = _kill_non_terminal_tasks(
-            cur, registry, child_job_id, reason, now_ms
+            cur, store.endpoints, child_job_id.to_wire(), reason, now_ms
         )
         tasks_to_kill.update(child_tasks_to_kill)
         task_kill_workers.update(child_task_kill_workers)
-        terminal_placeholders = ",".join("?" for _ in TERMINAL_JOB_STATES)
-        cur.execute(
-            "UPDATE jobs SET state = ?, error = ?, finished_at_ms = COALESCE(finished_at_ms, ?) "
-            f"WHERE job_id = ? AND state NOT IN ({terminal_placeholders})",
-            (
-                job_pb2.JOB_STATE_KILLED,
-                reason,
-                now_ms,
-                child_job_id,
-                *TERMINAL_JOB_STATES,
-            ),
-        )
+        store.jobs.update_state_if_not_terminal(cur, child_job_id, job_pb2.JOB_STATE_KILLED, reason, now_ms)
     return tasks_to_kill, task_kill_workers
 
 
 def _cascade_terminal_job(
-    cur: Any,
-    registry,
+    cur: TransactionCursor,
+    store: ControllerStore,
     job_id: JobName,
     now_ms: int,
     reason: str,
 ) -> tuple[set[JobName], dict[JobName, WorkerId]]:
     """Kill remaining tasks and descendant jobs when a job reaches a terminal state."""
-    tasks_to_kill, task_kill_workers = _kill_non_terminal_tasks(cur, registry, job_id.to_wire(), reason, now_ms)
-    child_tasks_to_kill, child_task_kill_workers = _cascade_children(cur, registry, job_id, now_ms, reason)
+    tasks_to_kill, task_kill_workers = _kill_non_terminal_tasks(cur, store.endpoints, job_id.to_wire(), reason, now_ms)
+    child_tasks_to_kill, child_task_kill_workers = _cascade_children(cur, store, job_id, now_ms, reason)
     tasks_to_kill.update(child_tasks_to_kill)
     task_kill_workers.update(child_task_kill_workers)
     return tasks_to_kill, task_kill_workers
@@ -743,21 +721,18 @@ def _terminate_coscheduled_siblings(
     return tasks_to_kill, task_kill_workers
 
 
-def _resolve_preemption_policy(cur: Any, job_id: JobName) -> int:
+def _resolve_preemption_policy(jobs: JobStore, cur: TransactionCursor, job_id: JobName) -> int:
     """Resolve the effective preemption policy for a job.
 
     Defaults: single-task jobs → TERMINATE_CHILDREN, multi-task → PRESERVE_CHILDREN.
     """
-    row = cur.execute(
-        f"SELECT jc.preemption_policy, j.num_tasks FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
-        (job_id.to_wire(),),
-    ).fetchone()
-    if row is None:
+    info = jobs.get_preemption_info(cur, job_id)
+    if info is None:
         return job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
-    policy = int(row["preemption_policy"])
+    policy, num_tasks = info
     if policy != job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED:
         return policy
-    if int(row["num_tasks"]) <= 1:
+    if num_tasks <= 1:
         return job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
     return job_pb2.JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN
 
@@ -771,8 +746,8 @@ _TERMINAL_STATE_REASONS: dict[int, str] = {
 
 
 def _finalize_terminal_job(
-    cur: Any,
-    registry,
+    cur: TransactionCursor,
+    store: ControllerStore,
     job_id: JobName,
     terminal_state: int,
     now_ms: int,
@@ -787,13 +762,13 @@ def _finalize_terminal_job(
     Non-succeeded jobs cascade only if the preemption policy is TERMINATE_CHILDREN.
     """
     reason = _TERMINAL_STATE_REASONS.get(terminal_state, "Job finalized")
-    tasks_to_kill, task_kill_workers = _kill_non_terminal_tasks(cur, registry, job_id.to_wire(), reason, now_ms)
+    tasks_to_kill, task_kill_workers = _kill_non_terminal_tasks(cur, store.endpoints, job_id.to_wire(), reason, now_ms)
     should_cascade = True
     if terminal_state != job_pb2.JOB_STATE_SUCCEEDED:
-        policy = _resolve_preemption_policy(cur, job_id)
+        policy = _resolve_preemption_policy(store.jobs, cur, job_id)
         should_cascade = policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
     if should_cascade:
-        child_tasks_to_kill, child_task_kill_workers = _cascade_children(cur, registry, job_id, now_ms, reason)
+        child_tasks_to_kill, child_task_kill_workers = _cascade_children(cur, store, job_id, now_ms, reason)
         tasks_to_kill.update(child_tasks_to_kill)
         task_kill_workers.update(child_task_kill_workers)
     return tasks_to_kill, task_kill_workers
@@ -971,40 +946,34 @@ class ControllerTransitions:
     def __init__(
         self,
         store: ControllerStore,
-        user_budget_defaults: UserBudgetDefaults | None = None,
         health: WorkerHealthTracker | None = None,
     ):
         self._store = store
         # Escape hatch kept only while the phased migration moves SQL out of
-        # this file. Direct ``self._db`` SQL calls should decrease every phase
-        # and hit zero at the end.
+        # this file. Direct ``self._db`` calls should decrease every phase
+        # (jobs, tasks, attempts, workers, dispatch) and hit zero at the end;
+        # new code should go through ``self._store`` instead.
         self._db: ControllerDB = store._db
-        self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
         self._health = health or WorkerHealthTracker()
 
-    def _recompute_job_state(self, cur: Any, job_id: JobName) -> int | None:
-        row = cur.execute(
-            f"SELECT j.state, j.started_at_ms, jc.max_task_failures "
-            f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
-            (job_id.to_wire(),),
-        ).fetchone()
-        if row is None:
+    def _recompute_job_state(self, cur: TransactionCursor, job_id: JobName) -> int | None:
+        basis = self._store.jobs.get_recompute_basis(cur, job_id)
+        if basis is None:
             return None
-        current_state = int(row["state"])
+        current_state = basis.state
         if current_state in TERMINAL_JOB_STATES:
             return current_state
-        max_task_failures = int(row["max_task_failures"])
-        counts_rows = cur.execute(
+        counts_rows = cur.fetchall(
             "SELECT state, COUNT(*) AS c FROM tasks WHERE job_id = ? GROUP BY state",
             (job_id.to_wire(),),
-        ).fetchall()
+        )
         counts = {int(r["state"]): int(r["c"]) for r in counts_rows}
         total = sum(counts.values())
         new_state = current_state
         now_ms = Timestamp.now().epoch_ms()
         if total > 0 and counts.get(job_pb2.TASK_STATE_SUCCEEDED, 0) == total:
             new_state = job_pb2.JOB_STATE_SUCCEEDED
-        elif counts.get(job_pb2.TASK_STATE_FAILED, 0) > max_task_failures:
+        elif counts.get(job_pb2.TASK_STATE_FAILED, 0) > basis.max_task_failures:
             new_state = job_pb2.JOB_STATE_FAILED
         elif counts.get(job_pb2.TASK_STATE_UNSCHEDULABLE, 0) > 0:
             new_state = job_pb2.JOB_STATE_UNSCHEDULABLE
@@ -1022,42 +991,19 @@ class ControllerTransitions:
             or counts.get(job_pb2.TASK_STATE_RUNNING, 0) > 0
         ):
             new_state = job_pb2.JOB_STATE_RUNNING
-        elif row["started_at_ms"] is not None:
+        elif basis.started_at_ms is not None:
             # Retries put tasks back into PENDING; keep job running once it has started.
             new_state = job_pb2.JOB_STATE_RUNNING
         elif total > 0:
             new_state = job_pb2.JOB_STATE_PENDING
         if new_state == current_state:
             return new_state
-        terminal_placeholders = ",".join("?" for _ in TERMINAL_JOB_STATES)
-        error_row = cur.execute(
+        error_row = cur.fetchone(
             "SELECT error FROM tasks WHERE job_id = ? AND error IS NOT NULL ORDER BY task_index LIMIT 1",
             (job_id.to_wire(),),
-        ).fetchone()
-        error = str(error_row["error"]) if error_row is not None else None
-        cur.execute(
-            "UPDATE jobs SET state = ?, "
-            "started_at_ms = CASE WHEN ? = ? THEN COALESCE(started_at_ms, ?) ELSE started_at_ms END, "
-            f"finished_at_ms = CASE WHEN ? IN ({terminal_placeholders}) THEN ? ELSE finished_at_ms END, "
-            "error = CASE WHEN ? IN (?, ?, ?, ?) THEN ? ELSE error END "
-            "WHERE job_id = ?",
-            (
-                new_state,
-                new_state,
-                job_pb2.JOB_STATE_RUNNING,
-                now_ms,
-                new_state,
-                *TERMINAL_JOB_STATES,
-                now_ms,
-                new_state,
-                job_pb2.JOB_STATE_FAILED,
-                job_pb2.JOB_STATE_KILLED,
-                job_pb2.JOB_STATE_UNSCHEDULABLE,
-                job_pb2.JOB_STATE_WORKER_FAILED,
-                error,
-                job_id.to_wire(),
-            ),
         )
+        error = str(error_row["error"]) if error_row is not None else None
+        self._store.jobs.apply_recomputed_state(cur, job_id, new_state, now_ms, error)
         return new_state
 
     def replace_reservation_claims(self, claims: dict[WorkerId, ReservationClaim]) -> None:
@@ -1095,16 +1041,13 @@ class ControllerTransitions:
 
             parent_job_id = job_id.parent.to_wire() if job_id.parent is not None else None
             root_submitted_ms = effective_submission_ms
-            if parent_job_id is not None:
-                parent = cur.execute(
-                    "SELECT root_submitted_at_ms FROM jobs WHERE job_id = ?",
-                    (parent_job_id,),
-                ).fetchone()
+            if job_id.parent is not None:
                 # `launch_job` is responsible for rejecting submissions with a
                 # missing parent; if we reach here the parent row must exist.
-                if parent is None:
+                parent_root = self._store.jobs.get_root_submitted_at_ms(cur, job_id.parent)
+                if parent_root is None:
                     raise ValueError(f"Cannot submit job {job_id}: parent {parent_job_id} is absent from the database")
-                root_submitted_ms = int(parent["root_submitted_at_ms"])
+                root_submitted_ms = parent_root
 
             deadline_epoch_ms: int | None = None
             if request.HasField("scheduling_timeout") and request.scheduling_timeout.milliseconds > 0:
@@ -1114,10 +1057,7 @@ class ControllerTransitions:
                     .epoch_ms()
                 )
 
-            cur.execute(
-                "INSERT OR IGNORE INTO users(user_id, created_at_ms) VALUES (?, ?)",
-                (job_id.user, effective_submission_ms),
-            )
+            self._store.jobs.ensure_user(cur, job_id.user, effective_submission_ms)
             # No user_budgets row is created here: absence means "apply
             # UserBudgetDefaults". Rows exist only for tier seeds from cluster
             # config (see reconcile_user_budget_tiers) and admin overrides via
@@ -1175,67 +1115,57 @@ class ControllerTransitions:
             timeout_ms: int | None = int(request.timeout.milliseconds) if request.timeout.milliseconds > 0 else None
 
             job_name_lower = request.name.lower()
-            cur.execute(
-                "INSERT INTO jobs("
-                "job_id, user_id, parent_job_id, root_job_id, depth, state, submitted_at_ms, "
-                "root_submitted_at_ms, started_at_ms, finished_at_ms, scheduling_deadline_epoch_ms, "
-                "error, exit_code, num_tasks, is_reservation_holder, name, has_reservation"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0, ?, ?)",
-                (
-                    job_id.to_wire(),
-                    job_id.user,
-                    parent_job_id,
-                    job_id.root_job.to_wire(),
-                    job_id.depth,
-                    state,
-                    effective_submission_ms,
-                    root_submitted_ms,
-                    finished_ms,
-                    deadline_epoch_ms,
-                    validation_error,
-                    replicas,
-                    job_name_lower,
-                    has_reservation,
+            self._store.jobs.insert(
+                cur,
+                JobInsertParams(
+                    job_id=job_id,
+                    user_id=job_id.user,
+                    parent_job_id=parent_job_id,
+                    root_job_id=job_id.root_job.to_wire(),
+                    depth=job_id.depth,
+                    state=state,
+                    submitted_at_ms=effective_submission_ms,
+                    root_submitted_at_ms=root_submitted_ms,
+                    started_at_ms=None,
+                    finished_at_ms=finished_ms,
+                    scheduling_deadline_epoch_ms=deadline_epoch_ms,
+                    error=validation_error,
+                    exit_code=None,
+                    num_tasks=replicas,
+                    is_reservation_holder=False,
+                    name=job_name_lower,
+                    has_reservation=bool(has_reservation),
                 ),
             )
-            cur.execute(
-                "INSERT INTO job_config("
-                "job_id, name, has_reservation, "
-                "res_cpu_millicores, res_memory_bytes, res_disk_bytes, res_device_json, "
-                "constraints_json, has_coscheduling, coscheduling_group_by, "
-                "scheduling_timeout_ms, max_task_failures, "
-                "entrypoint_json, environment_json, bundle_id, ports_json, "
-                "max_retries_failure, max_retries_preemption, timeout_ms, "
-                "preemption_policy, existing_job_policy, priority_band, "
-                "task_image, submit_argv_json, reservation_json, fail_if_exists"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    job_id.to_wire(),
-                    job_name_lower,
-                    has_reservation,
-                    res_cpu,
-                    res_mem,
-                    res_disk,
-                    res_device,
-                    constraints_json,
-                    has_cosched,
-                    cosched_group,
-                    sched_timeout,
-                    max_failures,
-                    entrypoint_json,
-                    environment_json,
-                    request.bundle_id,
-                    ports_json,
-                    int(request.max_retries_failure),
-                    int(request.max_retries_preemption),
-                    timeout_ms,
-                    int(request.preemption_policy),
-                    int(request.existing_job_policy),
-                    int(request.priority_band),
-                    request.task_image,
-                    json.dumps(list(request.submit_argv)),
-                    reservation_json,
-                    1 if request.fail_if_exists else 0,
+            self._store.jobs.insert_config(
+                cur,
+                JobConfigInsertParams(
+                    job_id=job_id,
+                    name=job_name_lower,
+                    has_reservation=bool(has_reservation),
+                    res_cpu_millicores=res_cpu,
+                    res_memory_bytes=res_mem,
+                    res_disk_bytes=res_disk,
+                    res_device_json=res_device,
+                    constraints_json=constraints_json,
+                    has_coscheduling=bool(has_cosched),
+                    coscheduling_group_by=cosched_group,
+                    scheduling_timeout_ms=sched_timeout,
+                    max_task_failures=max_failures,
+                    entrypoint_json=entrypoint_json,
+                    environment_json=environment_json,
+                    bundle_id=request.bundle_id,
+                    ports_json=ports_json,
+                    max_retries_failure=int(request.max_retries_failure),
+                    max_retries_preemption=int(request.max_retries_preemption),
+                    timeout_ms=timeout_ms,
+                    preemption_policy=int(request.preemption_policy),
+                    existing_job_policy=int(request.existing_job_policy),
+                    priority_band=int(request.priority_band),
+                    task_image=request.task_image,
+                    submit_argv_json=json.dumps(list(request.submit_argv)),
+                    reservation_json=reservation_json,
+                    fail_if_exists=bool(request.fail_if_exists),
                 ),
             )
 
@@ -1297,54 +1227,56 @@ class ControllerTransitions:
                     holder_res_device = proto_to_json(holder_res.device) if holder_res else None
                     holder_constraints_json = constraints_to_json(holder_request.constraints)
                     holder_name_lower = holder_request.name.lower()
-                    cur.execute(
-                        "INSERT INTO jobs("
-                        "job_id, user_id, parent_job_id, root_job_id, depth, state, submitted_at_ms, "
-                        "root_submitted_at_ms, started_at_ms, finished_at_ms, scheduling_deadline_epoch_ms, "
-                        "error, exit_code, num_tasks, is_reservation_holder, name, has_reservation"
-                        ") VALUES ("
-                        "?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, 1, ?, 0"
-                        ")",
-                        (
-                            holder_id.to_wire(),
-                            holder_id.user,
-                            job_id.to_wire(),
-                            holder_id.root_job.to_wire(),
-                            holder_id.depth,
-                            job_pb2.JOB_STATE_PENDING,
-                            effective_submission_ms,
-                            root_submitted_ms,
-                            len(request.reservation.entries),
-                            holder_name_lower,
+                    self._store.jobs.insert(
+                        cur,
+                        JobInsertParams(
+                            job_id=holder_id,
+                            user_id=holder_id.user,
+                            parent_job_id=job_id.to_wire(),
+                            root_job_id=holder_id.root_job.to_wire(),
+                            depth=holder_id.depth,
+                            state=job_pb2.JOB_STATE_PENDING,
+                            submitted_at_ms=effective_submission_ms,
+                            root_submitted_at_ms=root_submitted_ms,
+                            started_at_ms=None,
+                            finished_at_ms=None,
+                            scheduling_deadline_epoch_ms=None,
+                            error=None,
+                            exit_code=None,
+                            num_tasks=len(request.reservation.entries),
+                            is_reservation_holder=True,
+                            name=holder_name_lower,
+                            has_reservation=False,
                         ),
                     )
                     holder_entrypoint_json = entrypoint_to_json(holder_request.entrypoint)
                     holder_environment_json = proto_to_json(holder_request.environment)
-                    cur.execute(
-                        "INSERT INTO job_config("
-                        "job_id, name, has_reservation, "
-                        "res_cpu_millicores, res_memory_bytes, res_disk_bytes, res_device_json, "
-                        "constraints_json, has_coscheduling, coscheduling_group_by, "
-                        "scheduling_timeout_ms, max_task_failures, "
-                        "entrypoint_json, environment_json, bundle_id, ports_json, "
-                        "max_retries_failure, max_retries_preemption, timeout_ms, "
-                        "preemption_policy, existing_job_policy, priority_band, "
-                        "task_image, reservation_json"
-                        ") VALUES ("
-                        "?, ?, 0, ?, ?, ?, ?, ?, 0, '', NULL, 0, "
-                        "?, ?, '', '[]', 0, ?, NULL, 0, 0, 0, '', NULL"
-                        ")",
-                        (
-                            holder_id.to_wire(),
-                            holder_name_lower,
-                            holder_res_cpu,
-                            holder_res_mem,
-                            holder_res_disk,
-                            holder_res_device,
-                            holder_constraints_json,
-                            holder_entrypoint_json,
-                            holder_environment_json,
-                            DEFAULT_MAX_RETRIES_PREEMPTION,
+                    self._store.jobs.insert_config(
+                        cur,
+                        JobConfigInsertParams(
+                            job_id=holder_id,
+                            name=holder_name_lower,
+                            has_reservation=False,
+                            res_cpu_millicores=holder_res_cpu,
+                            res_memory_bytes=holder_res_mem,
+                            res_disk_bytes=holder_res_disk,
+                            res_device_json=holder_res_device,
+                            constraints_json=holder_constraints_json,
+                            has_coscheduling=False,
+                            coscheduling_group_by="",
+                            scheduling_timeout_ms=None,
+                            max_task_failures=0,
+                            entrypoint_json=holder_entrypoint_json,
+                            environment_json=holder_environment_json,
+                            bundle_id="",
+                            ports_json="[]",
+                            max_retries_failure=0,
+                            max_retries_preemption=DEFAULT_MAX_RETRIES_PREEMPTION,
+                            timeout_ms=None,
+                            preemption_policy=0,
+                            existing_job_policy=0,
+                            priority_band=0,
+                            task_image="",
                         ),
                     )
                     holder_base = self._db.next_sequence("task_priority_insertion", cur=cur)
@@ -1379,17 +1311,10 @@ class ControllerTransitions:
     def cancel_job(self, job_id: JobName, reason: str) -> TxResult:
         """Cancel a job tree and return tasks that need kill RPCs."""
         with self._db.transaction() as cur:
-            subtree = cur.execute(
-                "WITH RECURSIVE subtree(job_id) AS ("
-                "  SELECT job_id FROM jobs WHERE job_id = ? "
-                "  UNION ALL "
-                "  SELECT j.job_id FROM jobs j JOIN subtree s ON j.parent_job_id = s.job_id"
-                ") SELECT job_id FROM subtree",
-                (job_id.to_wire(),),
-            ).fetchall()
+            subtree = self._store.jobs.list_subtree(cur, job_id)
             if not subtree:
                 return TxResult()
-            subtree_ids = [str(row["job_id"]) for row in subtree]
+            subtree_ids = [jid.to_wire() for jid in subtree]
             placeholders = ",".join("?" for _ in subtree_ids)
             running_rows = cur.execute(
                 f"SELECT t.task_id, t.current_worker_id AS worker_id, "
@@ -1444,19 +1369,15 @@ class ControllerTransitions:
             # Deliberately excludes JOB_STATE_WORKER_FAILED from the guard set:
             # worker-failed jobs should still be cancellable (transitioned to KILLED).
             cancel_guard_states = TERMINAL_JOB_STATES - {job_pb2.JOB_STATE_WORKER_FAILED}
-            cancel_guard_placeholders = ",".join("?" for _ in cancel_guard_states)
-            cur.execute(
-                f"UPDATE jobs SET state = ?, error = ?, finished_at_ms = COALESCE(finished_at_ms, ?) "
-                f"WHERE job_id IN ({placeholders}) AND state NOT IN ({cancel_guard_placeholders})",
-                (
-                    job_pb2.JOB_STATE_KILLED,
-                    reason,
-                    now_ms,
-                    *subtree_ids,
-                    *cancel_guard_states,
-                ),
+            self._store.jobs.bulk_update_state(
+                cur,
+                subtree,
+                job_pb2.JOB_STATE_KILLED,
+                reason,
+                now_ms,
+                cancel_guard_states,
             )
-            self._store.endpoints.remove_by_job_ids(cur, [JobName.from_wire(jid) for jid in subtree_ids])
+            self._store.endpoints.remove_by_job_ids(cur, subtree)
         log_event("job_cancelled", job_id.to_wire(), reason=reason)
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
@@ -1625,15 +1546,7 @@ class ControllerTransitions:
                     continue
                 job_id_wire = task.job_id.to_wire()
                 if job_id_wire not in job_cache:
-                    job_row = cur.execute(
-                        f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} "
-                        f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
-                        (job_id_wire,),
-                    ).fetchone()
-                    if job_row is None:
-                        rejected.append(assignment)
-                        continue
-                    decoded_job = JOB_DETAIL_PROJECTION.decode_one([job_row])
+                    decoded_job = self._store.jobs.get_detail(cur, task.job_id)
                     if decoded_job is None:
                         rejected.append(assignment)
                         continue
@@ -1699,11 +1612,7 @@ class ControllerTransitions:
                 jobs_to_update.add(job_id_wire)
                 accepted.append(assignment)
             for job_id_wire in jobs_to_update:
-                cur.execute(
-                    "UPDATE jobs SET state = CASE WHEN state = ? THEN ? ELSE state END, "
-                    "started_at_ms = COALESCE(started_at_ms, ?) WHERE job_id = ?",
-                    (job_pb2.JOB_STATE_PENDING, job_pb2.JOB_STATE_RUNNING, now_ms, job_id_wire),
-                )
+                self._store.jobs.mark_running_if_pending(cur, JobName.from_wire(job_id_wire), now_ms)
         for a in accepted:
             log_event("assignment_queued", a.task_id.to_wire(), worker=str(a.worker_id))
         return AssignmentResult(
@@ -1931,8 +1840,7 @@ class ControllerTransitions:
             # Fetch and cache job_config row (avoids re-querying per task in same job).
             job_id_wire = task.job_id.to_wire()
             if job_id_wire not in job_config_cache:
-                jc_row = cur.execute("SELECT * FROM job_config WHERE job_id = ?", (job_id_wire,)).fetchone()
-                job_config_cache[job_id_wire] = dict(jc_row) if jc_row is not None else None
+                job_config_cache[job_id_wire] = self._store.jobs.get_config(cur, task.job_id)
             jc = job_config_cache[job_id_wire]
 
             if worker_id is not None and task_state not in ACTIVE_TASK_STATES:
@@ -1975,7 +1883,7 @@ class ControllerTransitions:
             new_job_state = self._recompute_job_state(cur, job_id)
             if new_job_state in TERMINAL_JOB_STATES:
                 final_tasks_to_kill, final_task_kill_workers = _finalize_terminal_job(
-                    cur, self._store.endpoints, job_id, new_job_state, now_ms
+                    cur, self._store, job_id, new_job_state, now_ms
                 )
                 tasks_to_kill.update(final_tasks_to_kill)
                 task_kill_workers.update(final_task_kill_workers)
@@ -2159,16 +2067,16 @@ class ControllerTransitions:
             new_job_state = self._recompute_job_state(cur, parent_job_id)
             if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
                 cascaded_tasks_to_kill, cascaded_task_kill_workers = _cascade_terminal_job(
-                    cur, self._store.endpoints, parent_job_id, now_ms, f"Worker {worker_id} failed"
+                    cur, self._store, parent_job_id, now_ms, f"Worker {worker_id} failed"
                 )
                 tasks_to_kill.update(cascaded_tasks_to_kill)
                 task_kill_workers.update(cascaded_task_kill_workers)
             elif new_task_state == job_pb2.TASK_STATE_PENDING:
-                policy = _resolve_preemption_policy(cur, parent_job_id)
+                policy = _resolve_preemption_policy(self._store.jobs, cur, parent_job_id)
                 if policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
                     child_tasks_to_kill, child_task_kill_workers = _cascade_children(
                         cur,
-                        self._store.endpoints,
+                        self._store,
                         parent_job_id,
                         now_ms,
                         "Parent task preempted",
@@ -2350,17 +2258,15 @@ class ControllerTransitions:
             job_id = JobName.from_wire(str(row["job_id"]))
             new_job_state = self._recompute_job_state(cur, job_id)
             if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
-                cascade_kills, cascade_workers = _finalize_terminal_job(
-                    cur, self._store.endpoints, job_id, new_job_state, now_ms
-                )
+                cascade_kills, cascade_workers = _finalize_terminal_job(cur, self._store, job_id, new_job_state, now_ms)
                 tasks_to_kill.update(cascade_kills)
                 task_kill_workers.update(cascade_workers)
             elif new_state == job_pb2.TASK_STATE_PENDING:
-                policy = _resolve_preemption_policy(cur, job_id)
+                policy = _resolve_preemption_policy(self._store.jobs, cur, job_id)
                 if policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
                     child_kills, child_workers = _cascade_children(
                         cur,
-                        self._store.endpoints,
+                        self._store,
                         job_id,
                         now_ms,
                         reason,
@@ -2497,7 +2403,7 @@ class ControllerTransitions:
                 new_job_state = self._recompute_job_state(cur, JobName.from_wire(job_wire))
                 if new_job_state in TERMINAL_JOB_STATES:
                     final_kill, final_workers = _finalize_terminal_job(
-                        cur, self._store.endpoints, JobName.from_wire(job_wire), new_job_state, now_ms
+                        cur, self._store, JobName.from_wire(job_wire), new_job_state, now_ms
                     )
                     tasks_to_kill.update(final_kill)
                     task_kill_workers.update(final_workers)
@@ -2518,10 +2424,9 @@ class ControllerTransitions:
             True if the job was removed, False if it doesn't exist or is not finished
         """
         with self._db.transaction() as cur:
-            row = cur.execute("SELECT state FROM jobs WHERE job_id = ?", (job_id.to_wire(),)).fetchone()
-            if row is None:
+            state = self._store.jobs.get_state(cur, job_id)
+            if state is None:
                 return False
-            state = int(row["state"])
             if state not in (
                 job_pb2.JOB_STATE_SUCCEEDED,
                 job_pb2.JOB_STATE_FAILED,
@@ -2529,7 +2434,7 @@ class ControllerTransitions:
                 job_pb2.JOB_STATE_UNSCHEDULABLE,
             ):
                 return False
-            cur.execute("DELETE FROM jobs WHERE job_id = ?", (job_id.to_wire(),))
+            self._store.jobs.delete(cur, job_id)
         log_event("job_removed", job_id.to_wire(), state=state)
         return True
 
@@ -2713,9 +2618,6 @@ class ControllerTransitions:
         job_cutoff_ms = now_ms - job_retention.to_ms()
         worker_cutoff_ms = now_ms - worker_retention.to_ms()
 
-        terminal_states = tuple(TERMINAL_JOB_STATES)
-        placeholders = ",".join("?" * len(terminal_states))
-
         def _stopped() -> bool:
             return stop_event is not None and stop_event.is_set()
 
@@ -2723,20 +2625,15 @@ class ControllerTransitions:
         jobs_deleted = 0
         while not _stopped():
             with self._db.read_snapshot() as snap:
-                row = snap.fetchone(
-                    f"SELECT job_id FROM jobs WHERE state IN ({placeholders})"
-                    " AND finished_at_ms IS NOT NULL AND finished_at_ms < ? LIMIT 1",
-                    (*terminal_states, job_cutoff_ms),
-                )
-            if row is None:
+                job_name = self._store.jobs.find_prunable(snap, job_cutoff_ms)
+            if job_name is None:
                 break
-            job_id = row["job_id"]
             with self._db.transaction() as cur:
-                # Invalidate endpoint cache BEFORE the CASCADE so the registry
+                # Invalidate endpoint cache BEFORE the CASCADE so the cache
                 # drops rows SQLite is about to delete for us.
-                self._store.endpoints.remove_by_job_ids(cur, [JobName.from_wire(str(job_id))])
-                cur.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
-            log_event("job_pruned", str(job_id))
+                self._store.endpoints.remove_by_job_ids(cur, [job_name])
+                self._store.jobs.delete(cur, job_name)
+            log_event("job_pruned", job_name.to_wire())
             jobs_deleted += 1
             time.sleep(pause_between_s)
 
@@ -2913,7 +2810,7 @@ class ControllerTransitions:
     # --- Endpoint Management ---
 
     def add_endpoint(self, endpoint: EndpointRow) -> bool:
-        """Add an endpoint row through the endpoint registry.
+        """Add an endpoint row through the store's endpoint cache.
 
         Returns True if the endpoint was inserted, False if the task is already
         terminal (to prevent orphaned endpoints that would never be cleaned up).
@@ -3254,7 +3151,7 @@ class ControllerTransitions:
                             update.task_id.to_wire(),
                         ),
                     )
-                jc_row = cur.execute("SELECT * FROM job_config WHERE job_id = ?", (task.job_id.to_wire(),)).fetchone()
+                jc_row = self._store.jobs.get_config(cur, task.job_id)
 
                 if update.new_state in TERMINAL_TASK_STATES:
                     delete_task_endpoints(cur, self._store.endpoints, update.task_id.to_wire())
@@ -3279,7 +3176,7 @@ class ControllerTransitions:
                     new_job_state = self._recompute_job_state(cur, task.job_id)
                     if new_job_state in TERMINAL_JOB_STATES:
                         final_tasks_to_kill, final_task_kill_workers = _finalize_terminal_job(
-                            cur, self._store.endpoints, task.job_id, new_job_state, now_ms
+                            cur, self._store, task.job_id, new_job_state, now_ms
                         )
                         tasks_to_kill.update(final_tasks_to_kill)
                         task_kill_workers.update(final_task_kill_workers)
