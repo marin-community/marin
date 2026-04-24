@@ -26,6 +26,8 @@ class NemotronV2Dataset:
     revision: str
     subsets: dict[str, str] = field(default_factory=dict)
     """Maps subset_name -> glob pattern for parquet files within the download."""
+    subset_text_fields: dict[str, str] = field(default_factory=dict)
+    """Per-subset overrides for the text column. Subsets not listed use ``"text"``."""
     override_output_path: str | None = None
     """Allow to point at existing download output to avoid re-downloading"""
 
@@ -95,6 +97,14 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
             "synthetic_code_review": "Synthetic-Code/synthetic-code-review/**/*.parquet",
             "synthetic_rewriting": "Synthetic-Code/synthetic-rewriting/**/*.parquet",
             "synthetic_transpilation": "Synthetic-Code/synthetic-transpilation/**/*.parquet",
+        },
+        # Synthetic-Code/* parquet files store the document under `content`, not `text`.
+        subset_text_fields={
+            "synthetic_question_answering": "content",
+            "synthetic_student_teacher": "content",
+            "synthetic_code_review": "content",
+            "synthetic_rewriting": "content",
+            "synthetic_transpilation": "content",
         },
         override_output_path="raw/nemotron_pretraining_code_v2-d15a24",
     ),
@@ -167,7 +177,7 @@ def normalize_nemotron_v2_step(download: StepSpec, *, family: str, subset: str) 
     return normalize_step(
         name=f"normalized/{family}/{subset}",
         download=download,
-        text_field="text",
+        text_field=info.subset_text_fields.get(subset, "text"),
         id_field="id",
         file_extensions=(".parquet",),
         input_path=f"{download.output_path}/{subset_dir}",
