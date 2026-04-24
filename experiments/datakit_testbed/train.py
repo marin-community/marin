@@ -83,7 +83,7 @@ def testbed_tokenize(
         name=os.path.join("datakit-testbed", "tokenized", bucket_name),
         fn=tokenize,
         config=TokenizeConfig(
-            train_paths=[sampled_exec / "outputs/main/**/*.parquet"],
+            train_paths=[sampled_exec / "outputs/main/*.parquet"],
             validation_paths=versioned([]),
             cache_path=this_output_path(),
             tokenizer=versioned(tokenizer),

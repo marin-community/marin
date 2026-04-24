@@ -68,7 +68,7 @@ def tokenize_nemotron_v2_family(
             name=output_name,
             fn=tokenize,
             config=TokenizeConfig(
-                train_paths=[normalized_step / "outputs/main/**/*.parquet"],
+                train_paths=[normalized_step / "outputs/main/*.parquet"],
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
