@@ -5594,3 +5594,632 @@ Read:
 - move on from ceiling-body modeling for now; the remaining useful local path is
   explicit target-token scaling inside the current q/support/floor family or a
   better bounded law, not a return to GRP/Olmix ceiling structure
+
+## 2026-04-23 - q/support target-budget gain local study
+
+Ran a prediction-first diagnostic before doing more optimum/deployment work.
+The goal was to test whether the remaining fixed-`520M` compression can be
+repaired with lightweight target-budget gain terms on top of the current
+q/support floor family.
+
+Artifacts:
+
+- `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v27/code/run_qsupport_gain_local_study_20260423.py`
+- `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v27/reference_outputs/qsupport_gain_local_study_20260423/qsupport_gain_local_study_20260423_report.md`
+- `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v27/reference_outputs/qsupport_gain_local_study_20260423/qsupport_gain_local_study_20260423_metric_summary.csv`
+
+Important caveat:
+
+- refitting `qsupport_floor_ci_rpm100_gap015` to the full `100` L-BFGS
+  iterations can hit an exp-clip catastrophe on seed `11`
+- seed-11 quick check:
+  - maxiter `50`: overall RMSE `0.00879`, fixed-`520M` RMSE `0.00695`
+  - maxiter `100`: overall RMSE `8.93e7`, fixed-`520M` RMSE `1.35e8`
+- so the diagnostic uses a stable `rpm50` refit for 8-seed ablations and
+  treats the saved `rpm100` artifacts as the current predictive reference
+
+8-seed diagnostic results on the stable `rpm50` refit:
+
+| model | fixed-520M RMSE | fixed-520M Sp | fixed-520M std ratio | overall RMSE |
+|---|---:|---:|---:|---:|
+| `qsupport_floor_ci_rpm50_gap015_refit` | `0.006724` | `0.968376` | `0.631723` | `0.010964` |
+| `qsupport_head_logmu_global` | `0.006663` | `0.965897` | `0.623938` | `0.010845` |
+| `qsupport_head_logmu_family` | `0.006877` | `0.954359` | `0.624525` | `0.011299` |
+| `qsupport_plus_pair_gain_ridge` | `0.020006` | `0.173675` | `0.474819` | `0.017040` |
+| `qsupport_plus_row_residual_ridge` | `0.063031` | `0.954957` | `0.594712` | `0.063825` |
+
+Seed-7 current `rpm100` baseline, from the updated packet artifact:
+
+- fixed-`520M` RMSE `0.006275`
+- fixed-`520M` slope / std ratio `0.658 / 0.683`
+- fixed-`520M` same-mixture drops remain underpredicted:
+  - `0.5x -> 1.0x`: actual `0.02364`, predicted `0.01485`, ratio `0.633`
+  - `0.5x -> 2.0x`: actual `0.04958`, predicted `0.03439`, ratio `0.694`
+  - `1.0x -> 2.0x`: actual `0.02157`, predicted `0.01702`, ratio `0.789`
+
+Interpretation:
+
+- the remaining prediction failure really is a target-budget continuation
+  failure: same-mixture BPB drops with larger budget multipliers are too small
+  in the model
+- simply adding `log(mu)` features to the linear head does not solve it; it
+  slightly improves level / overall RMSE on the stable refit but leaves fixed
+  `520M` dispersion equally compressed or worse
+- a pair-gain residual learned from `130M`/`300M` matched pairs transfers
+  badly to `520M`; it can invert fixed-`520M` ranking
+- in-sample row residual correction is an obvious overfit and should not be
+  pursued
+- next prediction work should modify the structural scale-continuation law
+  itself, not add a shallow residual patch: likely candidates are monotone
+  token-scaling terms inside the floor-log body, target-budget-conditioned
+  q/support floor dynamics, or a same-mixture trajectory/anchor law when lower
+  scale or lower budget observations are actually available
+
+## 2026-04-23 - Fresh ChatGPT Pro packet v28
+
+Prepared a fresh packet for the next external modeling round, with a
+prediction-first framing:
+
+- packet root:
+  `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v28`
+- archive:
+  `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v28.zip`
+- prompt:
+  `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v28/PROMPT_FOR_FRESH_CHATGPT_PRO.md`
+
+Packet changes:
+
+- reframed the task as joint modeling of data mixture and scale, not as a
+  q/support followup
+- made GRP Power Family Penalty no-`L2` the first-principles donor to start
+  from
+- kept `qsupport_floor_ci_rpm100_gap015` as the predictive benchmark, but asked
+  sessions to try at least one independent model before inspecting q/support
+  internals
+- updated the benchmark contract to the current `26`-row fixed-`520M` basis:
+  `12` rows at `0.5x`, `12` at `1.0x`, `2` at `2.0x`
+- added the GRP no-`L2` `60M` vs `300M` fit artifacts to the packet so fresh
+  sessions see both the useful regression signal and the raw-optimum pathology
+- emphasized target-budget drop diagnostics as a required prediction gate
+
+The archive was rebuilt with an explicit zip writer that excludes `.DS_Store`
+and `__pycache__`.
+
+Follow-up after CC review:
+
+- removed bundled DML/BiMix `.tar.gz` archives from the packet because extracted
+  source trees are already present
+- updated DML/BiMix notes and manifest artifact labels to reference only the
+  extracted source directories
+- added `code/DO_NOT_READ_FIRST_QSUPPORT.md` to make the sealed-baseline
+  boundary harder to miss
+- added seed-7 training set size context (`567` rows / `274` training examples)
+- strengthened the archive requirement in the prompt/request: sessions must
+  return all code, CSVs, plots, reports, and model artifacts needed to reproduce
+  evaluation
+- added compact-budget guidance to the prompt (`<=100` preferred, `<=120`
+  acceptable for a cleaner or better-calibrated form)
+- rebuilt and verified the zip; size dropped from roughly `31M` to `23M`
+
+Second follow-up:
+
+- consolidated q/support-dependent implementation artifacts into
+  `DO_NOT_READ_FIRST_QSUPPORT/`
+- moved q/support-dependent scripts out of the main `code/` directory:
+  `run_qsupport_gain_local_study_20260423.py`,
+  `run_ceiling_head_local_study_20260423.py`, and
+  `run_grp_olmix_ceiling_body_local_study_20260423.py`
+- moved q/support `seed7_model.json` artifacts under
+  `DO_NOT_READ_FIRST_QSUPPORT/model_artifacts/`
+- left q/support metrics, reports, CSVs, and plots in `reference_outputs/`
+  because those are allowed for early benchmark/failure inspection
+- rebuilt and verified the zip; the main `code/` directory now has no
+  q/support implementation references
+
+## 2026-04-23 - Registry refresh with first 1.2B completions
+
+Refreshed the strong-tier run registry with:
+
+```bash
+uv run --with torch python \
+  experiments/domain_phase_mix/exploratory/two_phase_many/run_registry/build_run_registry.py \
+  --no-include-live-status
+```
+
+Snapshot before refresh:
+
+- `strong_tier_perplexity_ready.csv`: `104` ready rows
+- no ready `1_2b_24b` primary rows
+
+After refresh:
+
+- `strong_tier_perplexity_ready.csv`: `107` ready rows
+- new ready rows:
+  - `baseline_proportional`, `1_2b_24b`, `qsplit_baselines3_holdout`,
+    `1.0x`, BPB `0.832938`, executor `SUCCESS`
+  - `baseline_unimax`, `1_2b_24b`, `qsplit_baselines3_holdout`, `1.0x`,
+    BPB `0.827538`, executor `SUCCESS`
+  - `run_00125`, `520m_10p4b`, `qsplit_representative12`, `2.0x`,
+    BPB `0.846922`, executor `FAILED` but target eval exists at step `39671`
+
+CC-listed rows that were not new datapoints:
+
+- `run_00152` at `520M 0.5x` was already perplexity-ready; refresh updated
+  executor status to `SUCCESS`
+- `run_00018` and `run_00155` at `520M 1.0x` were already present
+
+Sanity checks:
+
+- baseline `1.0x` BPB decreases monotonically across qsplit replay scales:
+  - `baseline_unimax`: `130M 1.103117 > 300M 0.981139 > 520M 0.888729 >
+    1.2B 0.827538`
+  - `baseline_proportional`: `130M 1.112409 > 300M 0.990733 > 520M 0.895344 >
+    1.2B 0.832938`
+- available `520M` target-budget trajectories are also monotone:
+  - `baseline_proportional`: `0.922824 > 0.895344 > 0.873255`
+  - `baseline_unimax`: `0.917273 > 0.888729 > 0.867686`
+  - `run_00125`: `0.893318 > 0.867410 > 0.846922`
+
+Important data-contract issue found during 1.2B holdout evaluation:
+
+- the v28 packet already contained stale `1.2B` baseline rows, but their
+  mixture weights did not match the qsplit replay specs from
+  `two_phase_many.csv`
+- mean phase TV before patch:
+  - `baseline_unimax`: `0.2964`
+  - `baseline_proportional`: `0.2037`
+- the local 1.2B holdout evaluator now patches those weights from
+  `two_phase_many.csv` before fitting
+
+Added rerunnable evaluator:
+
+- `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/evaluate_qsupport_1p2b_holdout_20260423.py`
+- outputs:
+  `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v28/reference_outputs/qsupport_1p2b_holdout_20260423`
+
+Compact q/support 1.2B holdout result after label and weight patching:
+
+- train rows: `626`
+- held-out `1.2B` rows: `2`
+- train RMSE: `0.01898`
+- `1.2B` holdout RMSE: `0.11438`
+- `1.2B` holdout mean residual: `+0.05020`
+- `baseline_unimax`: actual `0.827538`, predicted `0.980518`
+- `baseline_proportional`: actual `0.832938`, predicted `0.780365`
+- rerunning the same holdout with `fit_maxiter=100` did not fix the failure:
+  holdout RMSE `0.11629`, `baseline_unimax` predicted `0.98315`,
+  `baseline_proportional` predicted `0.77972`
+
+Interpretation:
+
+- the new `1.2B` BPBs look plausible and internally consistent with lower
+  scale qsplit baselines
+- the current compact q/support law does not extrapolate robustly to `1.2B`;
+  even after patching stale packet weights, it predicts the two baseline
+  holdouts on opposite sides and badly misses the level
+- this strengthens the case that the next modeling work should prioritize
+  prediction shape / scale-continuation, not only fixed-`520M` calibration or
+  raw optimum quality
+
+Correction after packet-wide weight audit:
+
+- the earlier evaluator only patched the stale `1.2B` baseline weights
+- a full audit showed the v28 NPZ `weights` tensor was stale/misaligned for
+  `293 / 643` packet rows, mostly `60m_1p2b | legacy_swarm_60m`
+- the CSV phase-weight columns in `nd_scale_runs.csv` are the correct source of
+  truth; `baseline_unimax` and `baseline_proportional` do have matching weights
+  across 60M and qsplit replay rows
+- patched
+  `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v28/code/nd_scale_packet.py`
+  to reconstruct `weights` from `nd_scale_runs.csv` at load time
+- rebuilt
+  `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v28.zip`
+
+Updated compact q/support 1.2B holdout after the packet-wide weight fix:
+
+- loader audit: `0` weight mismatches after load
+- train RMSE: `0.026808`
+- 60M train RMSE: `0.037242`
+- 60M train slope: `0.243332`
+- `1.2B` holdout RMSE: `0.118990`
+
+Corrected baseline scaling rows:
+
+- `baseline_unimax`: `60M 1.083430`, `130M 1.103117`, `300M 0.981139`,
+  `520M 0.888729`, `1.2B 0.827538`
+- `baseline_proportional`: `60M 1.091835`, `130M 1.112409`,
+  `300M 0.990733`, `520M 0.895344`, `1.2B 0.832938`
+
+Interpretation update:
+
+- 60M should be treated as an apples-to-apples baseline mixture comparison
+  after weight reconstruction
+- the remaining oddity is that 130M 1.0x is worse than 60M for both baselines;
+  this is not a mixture-weight mismatch and needs a separate protocol or
+  training-quality sanity check
+
+Follow-up on the 130M oddity:
+
+- the 130M rung is not actually larger than the 60M rung under the
+  RegMix-style non-embedding parameter convention used elsewhere in this work
+- approximate non-embedding parameter counts:
+  - `60m_1p2b`: `59.0M` (`hidden_dim=768`, `intermediate_dim=1536`,
+    `num_layers=10`)
+  - `130m_2p6b`: `22.8M` (`hidden_dim=512`, `intermediate_dim=1792`,
+    `num_layers=6`)
+  - `300m_6b`: `102.6M`
+  - `520m_10p4b`: `339.8M`
+  - `1_2b_24b`: `906.0M`
+- this explains why the 130M rung can be worse than 60M despite matching
+  mixture weights
+- implication: joint N/D model fits should not treat the packet's nominal
+  `model_size` values as a clean monotone capacity axis without adding actual
+  parameter-count metadata
+
+Additional packet repair:
+
+- repaired v28 `data/nd_scale_packet.npz` so `weights` now match
+  `nd_scale_runs.csv` directly, not only through the patched loader
+- left a local backup at
+  `data/nd_scale_packet.npz.stale_weights_backup`
+- rebuilt the v28 zip after excluding the stale backup
+
+Corrected compact q/support refit:
+
+- added
+  `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/evaluate_qsupport_corrected_data_20260423.py`
+- evaluator applies refreshed registry labels, corrected packet weights, and
+  actual non-embedding parameter counts before fitting
+- outputs:
+  `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v28/reference_outputs/qsupport_corrected_data_20260423`
+
+Seed-7 corrected-data results:
+
+- train RMSE: `0.028409`
+- holdout RMSE: `0.026121`
+- fixed-520M RMSE: `0.020842`
+- fixed-520M slope: `0.474835`
+- fixed-520M std ratio: `0.536017`
+
+Fixed-520M multiplier mean residuals:
+
+- `0.5x`: `-0.026019`
+- `1.0x`: `-0.014795`
+- `2.0x`: `-0.000353`
+
+1.2B holdout corrected-data results:
+
+- holdout RMSE: `0.113156`
+- `baseline_unimax`: actual `0.827538`, predicted `0.987523`
+- `baseline_proportional`: actual `0.832938`, predicted `0.836612`
+
+Interpretation:
+
+- the q/support compact model does not survive the data correction cleanly
+- the fixed-520M compression/shape failure is back
+- the 1.2B failure is asymmetric, with unimax badly overpredicted while
+  proportional is close
+- q/support should be treated as a useful diagnostic donor, not a current
+  deployable lead, until rerun and redesigned on corrected scale metadata
+
+### 2026-04-23 16:50 - Actual non-embedding N rerun, rpm100
+
+Command:
+
+```bash
+uv run --with numpy --with pandas --with scipy --with jax --with jaxlib --with matplotlib --with scikit-learn python \
+  experiments/domain_phase_mix/exploratory/two_phase_many/evaluate_qsupport_corrected_data_20260423.py \
+  --fit-maxiter 100
+```
+
+Setup:
+
+- same compact q/support law as the prior corrected-data evaluator
+- packet weights reconstructed from `nd_scale_runs.csv`
+- refreshed registry labels applied before fitting
+- scale coordinate patched to actual non-embedding parameter counts:
+  `60M=58.998528M`, `130M=22.813184M`, `300M=102.648576M`,
+  `520M=339.7888M`, `1.2B=906.037248M`
+
+Results:
+
+- seed-7 train RMSE: `0.027675`
+- seed-7 holdout RMSE: `0.022455`
+- seed-7 fixed-520M RMSE: `0.009294`
+- seed-7 fixed-520M slope: `0.772215`
+- seed-7 fixed-520M std ratio: `0.886436`
+- 1.2B holdout RMSE: `0.111937`
+- `baseline_unimax`: actual `0.827538`, predicted `0.985812`
+- `baseline_proportional`: actual `0.832938`, predicted `0.829897`
+
+Comparison to nominal-`N` rpm100 q/support:
+
+- nominal `N` seed-7 fixed-520M RMSE was better (`0.006443`), but its
+  fixed-520M slope/std ratio were worse (`0.652945` / `0.680115`)
+- actual non-embedding `N` improves fixed-520M shape calibration but worsens
+  seed-7 random-supplement/general holdout error
+- nominal `N` and actual non-embedding `N` both fail the two-row 1.2B holdout,
+  but for different reasons:
+  - nominal `N`: unimax too high, proportional too low
+  - actual non-embedding `N`: proportional nearly fixed, unimax still far too
+    high
+
+Interpretation:
+
+- using nominal model-size labels is semantically wrong and should not remain
+  the default scale coordinate
+- switching to actual non-embedding `N` is not sufficient to make the current
+  q/support law trustworthy
+- the persistent unimax miss suggests either a model-form failure specific to
+  mixture/source geometry or a remaining data/protocol issue along the unimax
+  trajectory
+
+Audit checklist before another serious modeling packet:
+
+- define one canonical scale coordinate table with nominal label, non-embedding
+  params, tied-total params, untied-total params, optimizer family, architecture
+  family, sequence length, token budget, and source experiment
+- verify every same-mixture trajectory by immutable mixture vector equality,
+  not by run name alone
+- verify monotonicity only after sorting by the chosen actual scale coordinate,
+  not nominal rung label
+- split evaluation reports by source/family: legacy 60M swarm, 300M legacy
+  swarm, qsplit replay, stratified replay, and 1.2B baselines
+- run all headline candidates with at least three `N` conventions:
+  nominal labels, actual non-embedding params, and actual tied-total params
+- include leave-one-family/rung-out ablations, especially without 130M and
+  without legacy 60M, so we can identify fragile dependence on known confounds
+- audit target-budget multiplier semantics against effective epoching: each
+  proxy row should see the same per-domain epoch count implied by the target
+  budget, invariant across `N` and `D`
+- require plots for same-mixture scale trajectories, residuals by source,
+  residuals by actual `N`, and residuals by target-budget multiplier before
+  interpreting raw optima
+
+### 2026-04-23 17:05 - Scale-axis ablation on identical corrected data
+
+Command:
+
+```bash
+for axis in nominal non_embedding tied_total; do
+  uv run --with numpy --with pandas --with scipy --with jax --with jaxlib --with matplotlib --with scikit-learn python \
+    experiments/domain_phase_mix/exploratory/two_phase_many/evaluate_qsupport_corrected_data_20260423.py \
+    --fit-maxiter 100 \
+    --scale-axis "$axis" \
+    --out-dir "experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v28/reference_outputs/qsupport_scale_axis_${axis}_20260423"
+done
+```
+
+Summary artifact:
+
+- `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v28/reference_outputs/qsupport_scale_axis_ablation_20260423/scale_axis_metrics_summary.csv`
+- `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v28/reference_outputs/qsupport_scale_axis_ablation_20260423/scale_axis_1p2b_predictions.csv`
+- `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v28/reference_outputs/qsupport_scale_axis_ablation_20260423/scale_axis_ablation_summary.png`
+
+Key comparison:
+
+| scale axis | seed-7 holdout RMSE | fixed-520M RMSE | fixed-520M slope | fixed-520M std ratio | 1.2B RMSE |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| nominal | `0.023807` | `0.012804` | `0.774983` | `0.809717` | `0.117480` |
+| non-embedding | `0.022455` | `0.009294` | `0.772215` | `0.886436` | `0.111937` |
+| tied total | `0.024116` | `0.013541` | `0.495623` | `0.510790` | `0.111534` |
+
+1.2B residuals:
+
+| scale axis | baseline_proportional | baseline_unimax |
+| --- | ---: | ---: |
+| nominal | `-0.050155` | `+0.158391` |
+| non-embedding | `-0.003041` | `+0.158273` |
+| tied total | `-0.008996` | `+0.157477` |
+
+Interpretation:
+
+- actual non-embedding `N` is the best of the three for this compact q/support
+  law on corrected data
+- the improvement is real but incomplete: it improves fixed-520M RMSE and std
+  ratio, and fixes the 1.2B proportional baseline, but it does not fix the
+  unimax extrapolation
+- tied-total `N` behaves poorly on fixed-520M shape despite being closer to the
+  Chinchilla paper's stated parameter-count convention
+- next modeling should use non-embedding `N` as the default engineering
+  convention, while keeping tied-total and nominal as required sensitivity
+  checks
+
+### 2026-04-23 17:35 - RegMix and Olmix parameter-count convention audit
+
+Question:
+
+- The current ND packet mixes scale labels from multiple experiment lineages.
+  Before the full data audit, check whether RegMix/Olmix use total params or
+  non-embedding params for their small proxy names.
+
+RegMix finding:
+
+- The RegMix paper explicitly says its model-size names refer to
+  non-embedding parameters because embeddings dominate small models:
+  `/tmp/regmix_2407_01492/sections/00_Intro.tex`
+- RegMix `tinyllama_60M` code uses the architecture we copied:
+  `n_layer=10`, `n_head=8`, `n_embd=768`, `intermediate_size=1536`,
+  `vocab_size=50432`:
+  `/Users/calvinxu/Projects/Work/Marin/data-mixture/regmix/model_training/lit_gpt/config.py`
+- That architecture has approximately:
+  - non-embedding params: `58,998,528`
+  - tied total with RegMix vocab: `97,730,304`
+  - untied total with RegMix vocab: `136,462,080`
+  - tied total with our Llama3 vocab: `157,499,136`
+
+Olmix finding:
+
+- The Olmix paper describes proxy models of `1M`, `15M`, `30M`, and `60M`
+  parameters and gives their architecture table with `vocab_size=100,352`.
+  The `1M` row has `d_model=16`, so the embedding table alone is
+  `1,605,632` params; therefore the `1M` label cannot be total params.
+- The Olmix launch code makes the convention explicit operationally:
+  `num_params = model.num_non_embedding_params`, then uses that for
+  Chinchilla duration, warmup, batch size, and LR:
+  `/Users/calvinxu/Projects/Work/Marin/data-mixture/olmix/olmix/model/transformer.py`
+- Exact Olmix/olmo-core factory counts with `vocab_size=100,352`:
+  - `olmo3_30M`: non-embedding `29,102,336`, total `54,792,448`
+  - `olmo3_60M`: non-embedding `57,422,208`, total `95,957,376`
+  - `olmo2_30M`: non-embedding `29,102,336`, total `54,792,448`
+  - `olmo2_60M`: non-embedding `57,422,208`, total `95,957,376`
+
+Important local mismatch:
+
+- Our historical `olmo3_30m_proxy` in
+  `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/proxy_sweep.py`
+  is not Olmix-convention `30M`.
+- It was designed around approximately `30M` total params with the Llama3
+  vocab:
+  - hidden `224`, intermediate `560`, layers `4`, heads `4`
+  - non-embedding params: `2,311,904`
+  - embedding params: `28,729,344`
+  - tied total params: `31,041,248`
+- This means any row named `olmo3_30m_proxy` should be treated as a
+  `2.3M`-body model under the non-embedding convention, not as an Olmix-style
+  `30M` proxy.
+
+Interpretation:
+
+- RegMix and Olmix both support non-embedding `N` as the right convention for
+  small proxy modeling.
+- The current `60m_1p2b` label is semantically correct under that convention.
+- The 130M/300M/520M/1.2B Llama labels and the local `olmo3_30m_proxy` label
+  are not consistently non-embedding names.
+- The audit should treat nominal scale labels as display names only and build
+  a canonical scale table with actual non-embedding params, total params, and
+  architecture/source family for every row.
+
+### 2026-04-23 18:05 - Tied embedding convention audit
+
+Question:
+
+- Check whether Marin is the only lineage using tied input/output embeddings.
+
+Findings:
+
+- RegMix is untied. Its model creates a separate `lm_head =
+  nn.Linear(...)` and input token embedding `wte = nn.Embedding(...)`.
+  The checkpoint converter also exports `tie_word_embeddings: false`.
+- Olmix/olmo-core is also untied. The transformer builds a separate
+  `self.embeddings = nn.Embedding(...)` and `self.lm_head = lm_head.build(...)`;
+  `LMHead` contains `self.w_out = nn.Linear(...)`.
+- Olmix's `num_non_embedding_params` subtracts only the input embedding table
+  (`d_model * vocab_size`) from total params, so the output LM head remains
+  included in the reported non-embedding count.
+- The Marin domain-phase-mix proxy configs explicitly set
+  `tie_word_embeddings=True` for the local `olmo3_30m_proxy` and the RegMix
+  60M/130M/300M/520M/1.2B proxy rungs.
+
+Interpretation:
+
+- For the specific RegMix and Olmix references, yes: the Marin proxy sweep is
+  the tied-embedding outlier.
+- Tied embeddings are not intrinsically wrong, but they change total parameter
+  count substantially at small scales and break direct comparability with
+  RegMix/Olmix total-param accounting.
+- A robust registry audit should record at least:
+  `tie_word_embeddings`, input embedding params, output head params,
+  non-embedding params under the local code convention, and total params.
+
+### 2026-04-23 18:45 - Data provenance audit
+
+Artifact:
+
+- `docs/debug-log-domain-mix-data-audit.md`
+
+Findings:
+
+- Strong-tier simulated epoching is semantically correct. The dataset slice
+  ratio is `experiment_budget / target_budget`, so per-domain effective epochs
+  reduce to `phase_fraction * mixture_weight * target_budget / domain_tokens`;
+  actual proxy budget cancels for a fixed target-budget multiplier.
+- Strong-tier budget metadata is internally consistent: 121 rows have explicit
+  target-budget metadata, zero budget/step mismatches, and zero duplicate
+  strong-ready keys.
+- The run registry is valid as the operational provenance source for current
+  strong-tier rows, but not yet a complete modeling single source of truth:
+  580 historical/non-strong rows still lack `experiment_budget`.
+- The metric registry is stale relative to the run registry: 536 rows generated
+  on 2026-04-17 vs 701 run-registry rows refreshed on 2026-04-23.
+- Inclusion in fitting must use target-step perplexity availability, not
+  executor status. Four completed rows lack target-step evals, while twelve
+  failed/running rows are target-eval-ready.
+- After switching to non-embedding N, the old `130m_2p6b` cell is really
+  `22.8M/2.6B`; it can beat `60M/1.2B` on loss because it is much more
+  token-trained. N-only scale plots are misleading unless D is shown too.
+- The v28 packet still stores nominal `model_size` values, so fresh-session
+  quantitative cross-scale claims should be rerun after regenerating the packet
+  with explicit non-embedding N and actual D columns.
+
+Decision:
+
+- Keep historical scale keys as stable identifiers, but use display terminology
+  `20M/2.6B`, `60M/1.2B`, `100M/6B`, `340M/10.4B`, and `900M/24B`.
+- Before more modeling packets, create one canonical analysis dataset derived
+  from the registry with explicit param counts, budgets, and target-step label
+  status.
+
+### 2026-04-23 22:15 - Canonical analysis dataset and v29 packet
+
+Implemented the canonical derived modeling dataset:
+
+- builder:
+  `experiments/domain_phase_mix/exploratory/two_phase_many/analysis_dataset/build_analysis_dataset.py`
+- local outputs:
+  `analysis_dataset/nd_scale_runs.csv`,
+  `analysis_dataset/nd_scale_packet.npz`, and
+  `analysis_dataset/summary.json`
+- packet:
+  `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29`
+- archive:
+  `experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29.zip`
+
+Key semantics:
+
+- `model_size` now equals `non_embedding_params`
+- historical scale names are stable IDs only
+- display labels are `20M/2.6B`, `60M/1.2B`, `100M/6B`,
+  `340M/10.4B`, `900M/24B`
+- all strong-tier rows must be present in
+  `run_registry/strong_tier_perplexity_ready.csv` to survive into the modeling
+  dataset
+- strong-tier rows with old packet labels but no target-step eval are dropped
+
+Validation:
+
+- output rows: `629`
+- label sources: `522` packet historical, `107` registry target-step
+- fixed-520M qsplit target-step rows: `27`
+- 1.2B target-step rows: `2`
+- duplicate canonical modeling keys: `0`
+- rows missing primary labels: `0`
+- `model_size == non_embedding_params`: true
+- max phase-sum error: `8.88e-16`
+
+Smoke command:
+
+```bash
+PYTHONPATH=experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29/code \
+uv run python - <<'PY'
+from pathlib import Path
+import numpy as np
+from nd_scale_packet import load_packet
+
+root = Path("experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v29")
+packet = load_packet(root)
+frame = packet.frame
+assert len(frame) == len(packet.model_sizes)
+assert np.array_equal(packet.model_sizes, frame["non_embedding_params"].to_numpy(int))
+assert not np.any(packet.model_sizes == 130_000_000)
+assert np.allclose(packet.weights.sum(axis=2), 1.0)
+assert len(frame[(frame["scale"].eq("520m_10p4b")) & (frame["path"].eq("qsplit_representative12"))]) == 27
+assert len(frame[frame["scale"].eq("1_2b_24b")]) == 2
+PY
+```
+
+Caveat:
+
+- q/support reference metrics bundled in the packet were generated before the
+  latest `2.0x` fixed-520M target-step row was added; exact q/support baseline
+  numbers should be rerun on v29 before final comparison.

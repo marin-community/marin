@@ -23,10 +23,10 @@
     "two_phase_many_60m_export": 294
   },
   "logical_runs_by_status": {
-    "completed": 659,
-    "failed": 19,
+    "completed": 667,
+    "failed": 18,
     "planned": 2,
-    "running": 21
+    "running": 14
   },
   "qsplit240_300m_active_recovery_runs": [],
   "qsplit240_300m_incomplete_runs": [
@@ -38,15 +38,14 @@
   "strong_tier_checkpoint_backed_objective_by_scale_path_status": {
     "130m_2p6b|qsplit_representative12|completed": 36,
     "130m_2p6b|stratified|completed": 3,
-    "1_2b_24b|qsplit_baselines3_holdout|running": 3,
-    "1_2b_24b|stratified_holdout|failed": 1,
+    "1_2b_24b|qsplit_baselines3_holdout|completed": 3,
+    "1_2b_24b|stratified_holdout|completed": 1,
     "300m_6b|qsplit_representative12|completed": 36,
     "300m_6b|stratified|completed": 3,
-    "520m_10p4b|qsplit_representative12|completed": 14,
-    "520m_10p4b|qsplit_representative12|failed": 10,
-    "520m_10p4b|qsplit_representative12|running": 12,
-    "520m_10p4b|stratified|completed": 2,
-    "520m_10p4b|stratified|failed": 1
+    "520m_10p4b|qsplit_representative12|completed": 16,
+    "520m_10p4b|qsplit_representative12|failed": 11,
+    "520m_10p4b|qsplit_representative12|running": 9,
+    "520m_10p4b|stratified|completed": 3
   },
   "strong_tier_checkpoint_backed_objective_rows": 121,
   "strong_tier_child_job_count": 0,
@@ -60,15 +59,14 @@
   "strong_tier_logical_runs_by_scale_path_status": {
     "130m_2p6b|qsplit_representative12|completed": 36,
     "130m_2p6b|stratified|completed": 3,
-    "1_2b_24b|qsplit_baselines3_holdout|running": 3,
-    "1_2b_24b|stratified_holdout|failed": 1,
+    "1_2b_24b|qsplit_baselines3_holdout|completed": 3,
+    "1_2b_24b|stratified_holdout|completed": 1,
     "300m_6b|qsplit_representative12|completed": 36,
     "300m_6b|stratified|completed": 3,
-    "520m_10p4b|qsplit_representative12|completed": 14,
-    "520m_10p4b|qsplit_representative12|failed": 10,
-    "520m_10p4b|qsplit_representative12|running": 12,
-    "520m_10p4b|stratified|completed": 2,
-    "520m_10p4b|stratified|failed": 1
+    "520m_10p4b|qsplit_representative12|completed": 16,
+    "520m_10p4b|qsplit_representative12|failed": 11,
+    "520m_10p4b|qsplit_representative12|running": 9,
+    "520m_10p4b|stratified|completed": 3
   },
   "strong_tier_logical_runs_by_study_path": {
     "qsplit_baselines3_holdout": 3,
@@ -80,13 +78,14 @@
   "strong_tier_perplexity_ready_by_scale_path_status": {
     "130m_2p6b|qsplit_representative12|completed": 36,
     "130m_2p6b|stratified|completed": 3,
+    "1_2b_24b|qsplit_baselines3_holdout|completed": 3,
     "300m_6b|qsplit_representative12|completed": 36,
     "300m_6b|stratified|completed": 3,
-    "520m_10p4b|qsplit_representative12|completed": 14,
-    "520m_10p4b|qsplit_representative12|failed": 4,
-    "520m_10p4b|qsplit_representative12|running": 8
+    "520m_10p4b|qsplit_representative12|completed": 16,
+    "520m_10p4b|qsplit_representative12|failed": 5,
+    "520m_10p4b|qsplit_representative12|running": 6
   },
-  "strong_tier_perplexity_ready_rows": 104,
+  "strong_tier_perplexity_ready_rows": 108,
   "strong_tier_tracked_parent_job_ids": [
     "/calvinxu/dm-strong-tier-scaling-study-20260415-235849",
     "/calvinxu/dm-strong-tier-scaling-study-20260416-1115"
