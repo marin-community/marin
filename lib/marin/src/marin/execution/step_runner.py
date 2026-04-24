@@ -88,31 +88,31 @@ def _write_executor_info(step: StepSpec) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _flatten_transitive_deps(steps: Iterable[StepSpec]) -> list[StepSpec]:
-    """Walk transitive deps in post-order, deduping by ``output_path``.
+def _expand_unseen(step: StepSpec, seen: set[str]) -> list[StepSpec]:
+    """Return ``step`` and its transitive deps (post-order), excluding any in ``seen``.
 
-    Callers can pass only terminal steps; the runner resolves the full graph.
-    A cycle in the graph is a construction-time invariant violation and raises.
+    ``seen`` is mutated in place to include every returned step, so subsequent
+    calls skip nodes already scheduled by an earlier terminal. Cycles within
+    this expansion raise ``ValueError`` — by DAG construction they shouldn't
+    exist, but the check guards against silent hangs.
     """
-    seen: set[str] = set()
     in_stack: set[str] = set()
     ordered: list[StepSpec] = []
 
-    def visit(step: StepSpec) -> None:
-        path = step.output_path
+    def visit(s: StepSpec) -> None:
+        path = s.output_path
         if path in seen:
             return
         if path in in_stack:
-            raise ValueError(f"Cycle detected in step graph involving {step.name_with_hash}")
+            raise ValueError(f"Cycle detected in step graph involving {s.name_with_hash}")
         in_stack.add(path)
-        for dep in step.deps:
+        for dep in s.deps:
             visit(dep)
         in_stack.remove(path)
         seen.add(path)
-        ordered.append(step)
+        ordered.append(s)
 
-    for step in steps:
-        visit(step)
+    visit(step)
     return ordered
 
 
@@ -134,11 +134,14 @@ class StepRunner:
     ) -> None:
         """Eagerly run steps, launching each as soon as its deps are satisfied.
 
-        The input iterable may contain only the terminal steps you want to
-        reach; the runner walks transitive deps (deduped by ``output_path``)
-        before scheduling. Concurrency is bounded by the thread pool
-        (``max_concurrent`` workers, default 8). Already-succeeded deps
+        Steps are pulled from the iterable one at a time, so unbounded
+        generators are supported: the runner never consumes more than it
+        needs to make progress. For each pulled step, its unseen transitive
+        deps are scheduled in post-order before the step itself (deduped by
+        ``output_path`` across the whole run). Already-succeeded deps
         (``STATUS_SUCCESS`` on disk) resolve via the cache check.
+        Concurrency is bounded by the thread pool (``max_concurrent``
+        workers, default 8).
         """
         max_workers = max_concurrent or 8
         if max_workers < 1:
@@ -225,20 +228,21 @@ class StepRunner:
             else:
                 completed.add(path)
 
-        flattened = _flatten_transitive_deps(steps)
-        for step in flattened:
-            path_to_name[step.output_path] = step.name_with_hash
+        scheduled: set[str] = set()
+        for raw_step in steps:
+            for step in _expand_unseen(raw_step, scheduled):
+                path_to_name[step.output_path] = step.name_with_hash
 
-            _harvest()
-            _flush_waiting()
+                _harvest()
+                _flush_waiting()
 
-            path = step.output_path
-            if any(d in failed for d in step.dep_paths):
-                failed.add(path)
-            elif all(d in completed for d in step.dep_paths):
-                _do_launch(step)
-            else:
-                waiting.append(step)
+                path = step.output_path
+                if any(d in failed for d in step.dep_paths):
+                    failed.add(path)
+                elif all(d in completed for d in step.dep_paths):
+                    _do_launch(step)
+                else:
+                    waiting.append(step)
 
         # Drain remaining running and waiting steps
         while running or waiting:
