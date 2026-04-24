@@ -36,7 +36,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
 import pyarrow.parquet as pq
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from rigging.filesystem import url_to_fs
 
 from marin.datakit.normalize import NormalizedData

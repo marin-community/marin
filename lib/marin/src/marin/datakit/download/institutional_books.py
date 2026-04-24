@@ -16,7 +16,7 @@ missing or empty. Pages are joined with a blank line.
 
 from __future__ import annotations
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
