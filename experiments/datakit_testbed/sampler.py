@@ -68,10 +68,22 @@ def proportional_sample_fractions(
     simply contributes all of itself.
     """
     total_count = sum(s.rough_token_count_b for s in sources)
-    return {
+    fractions = {
         src.name: min(1.0, target_total_tokens_b * (src.rough_token_count_b / total_count) / src.rough_token_count_b)
         for src in sources
     }
+    clamped = sum(1 for f in fractions.values() if f >= 1.0)
+    logger.info(
+        "sampler: %d sources, total %.1fB tokens, target %.1fB → fractions range [%.4f, %.4f]"
+        " (%d sources clamped to 1.0)",
+        len(sources),
+        total_count,
+        target_total_tokens_b,
+        min(fractions.values()),
+        max(fractions.values()),
+        clamped,
+    )
+    return fractions
 
 
 def _copy_shard(src: str, dst: str) -> int:
@@ -96,6 +108,7 @@ def _sample_rows_within_shard(src: str, dst: str, sample_fraction: float) -> tup
     Returns ``(rows_in, rows_out)``. First-K is deterministic (no RNG) and
     matches the cross-shard "first K by filename" selection rule.
     """
+    logger.info("sampler: row-level sampling %s → %s (fraction=%.4f)", src, dst, sample_fraction)
     src_fs, src_path = url_to_fs(src)
     dst_fs, dst_path = url_to_fs(dst)
     parent = os.path.dirname(dst_path)
@@ -107,10 +120,12 @@ def _sample_rows_within_shard(src: str, dst: str, sample_fraction: float) -> tup
         rows_in = pf.metadata.num_rows
         rows_out = max(1, math.ceil(rows_in * sample_fraction))
         rows_out = min(rows_out, rows_in)
+        logger.info("sampler: reading %d/%d rows from %s", rows_out, rows_in, src)
         table = pf.read().slice(0, rows_out)
 
     with dst_fs.open(dst_path, "wb") as df:
         pq.write_table(table, df)
+    logger.info("sampler: wrote %d rows to %s (%d bytes)", rows_out, dst, dst_fs.size(dst_path) or 0)
 
     return rows_in, rows_out
 
@@ -148,9 +163,11 @@ def sample_normalized_shards(
         raise ValueError(f"sample_fraction must be in (0.0, 1.0]; got {sample_fraction}")
 
     input_base = source.main_output_dir.rstrip("/")
+    logger.info("sampler: starting (fraction=%.4f) %s → %s", sample_fraction, input_base, output_path)
     shards = sorted(fsspec_glob(f"{input_base}/**/*.parquet"))
     if not shards:
         raise ValueError(f"No parquet shards under {input_base}")
+    logger.info("sampler: discovered %d parquet shards under %s", len(shards), input_base)
 
     total = len(shards)
     main_out = f"{output_path.rstrip('/')}/outputs/main"
