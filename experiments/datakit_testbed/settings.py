@@ -23,8 +23,7 @@ The ferry's ``MARIN_PREFIX`` pins to ``gs://marin-us-central1/...``; every
 source in the registry must either be pre-staged there or downloadable into it.
 """
 
-# TODO(rav): update this to 1T
-RAW_TARGET_TOTAL_TOKENS_B: float = 10.0
+RAW_TARGET_TOTAL_TOKENS_B: float = 1000.0
 """Target size (billions of tokens) for the pre-normalize by-provenance sample.
 
 Drives per-source sampling fractions via

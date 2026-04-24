@@ -39,7 +39,7 @@ from experiments.datakit_testbed.train import run_testbed_config, testbed_tokeni
 logger = logging.getLogger(__name__)
 
 STAGING_PREFIX = "gs://marin-us-central1"
-TARGET_TOTAL_TOKENS_B = 10.0
+TARGET_TOTAL_TOKENS_B = 1000.0
 
 _SAMPLE_STEP_PREFIX = "data/datakit/"
 _FUZZY_DUPS_MAX_PARALLELISM = 128
