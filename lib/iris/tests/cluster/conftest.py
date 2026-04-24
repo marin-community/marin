@@ -23,6 +23,7 @@ from iris.cluster.controller.schema import (
     WORKER_DETAIL_PROJECTION,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -391,7 +392,8 @@ class ServiceTestHarness:
 
 def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "k8s_db")
-    state = ControllerTransitions(db=db)
+    store = ControllerStore(db)
+    state = ControllerTransitions(store=store)
 
     k8s = InMemoryK8sService()
     k8s.add_node_pool(
@@ -413,7 +415,7 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
 
     service = ControllerServiceImpl(
         state,
-        db,
+        store,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "k8s_bundles")),
         log_service=LogServiceImpl(),
@@ -431,14 +433,15 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
 
 def _make_gcp_harness(tmp_path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "gcp_db")
-    state = ControllerTransitions(db=db)
+    store = ControllerStore(db)
+    state = ControllerTransitions(store=store)
 
     ctrl = _HarnessController()
     ctrl.has_direct_provider = False
 
     service = ControllerServiceImpl(
         state,
-        db,
+        store,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "gcp_bundles")),
         log_service=LogServiceImpl(),

@@ -30,6 +30,7 @@ from iris.cluster.controller.schema import (
     EndpointRow,
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -90,7 +91,7 @@ def _queued_dispatch(
 
 
 def _endpoints(state: ControllerTransitions, query: EndpointQuery = EndpointQuery()) -> list[EndpointRow]:
-    rows = state._db.endpoints.query(query)
+    rows = state._store.endpoints.query(query)
     # Mirror the original helper's ordering (registered_at DESC, endpoint_id ASC).
     return sorted(rows, key=lambda r: (-r.registered_at.epoch_ms(), r.endpoint_id))
 
@@ -2746,7 +2747,7 @@ def test_snapshot_round_trip_preserves_reservation_holder(state):
         checkpoint_path = Path(tmpdir) / "controller.sqlite3"
         state._db.backup_to(checkpoint_path)
         restored_db = ControllerDB(db_dir=Path(tmpdir))
-        restored_state = ControllerTransitions(db=restored_db)
+        restored_state = ControllerTransitions(store=ControllerStore(restored_db))
 
         restored_holder = _query_job(restored_state, holder_job_id)
         assert restored_holder is not None
@@ -3437,7 +3438,7 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
     with harness.state._db.transaction() as cur:
         _kill_non_terminal_tasks(
             cur,
-            harness.state._db.endpoints,
+            harness.state._store.endpoints,
             holder_job_id.to_wire(),
             "Job finalized",
             0,

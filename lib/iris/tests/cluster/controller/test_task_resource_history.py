@@ -5,6 +5,7 @@
 
 import pytest
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -21,7 +22,7 @@ from rigging.timing import Timestamp
 @pytest.fixture
 def state(tmp_path):
     db = ControllerDB(db_dir=tmp_path)
-    s = ControllerTransitions(db=db)
+    s = ControllerTransitions(store=ControllerStore(db))
     yield s
     db.close()
 

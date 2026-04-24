@@ -679,7 +679,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
 
     auth_service = ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
         log_service=LogServiceImpl(),
@@ -710,7 +710,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
 
     auth_service = ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
         log_service=LogServiceImpl(),
@@ -1170,7 +1170,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         state,
-        db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=LogServiceImpl(),
@@ -1206,7 +1206,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         state,
-        db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=LogServiceImpl(),

@@ -90,6 +90,7 @@ from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.query import execute_raw_query
 from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     TASK_RESOURCE_HISTORY_RETENTION,
     ControllerTransitions,
@@ -989,7 +990,7 @@ class ControllerServiceImpl:
 
     Args:
         transitions: State machine for DB mutations (submit, cancel, register, etc.)
-        db: Query interface for direct DB reads
+        store: Controller store bundle (per-entity stores + transaction / read_snapshot).
         controller: Controller runtime for scheduling and worker management
         bundle_store: Bundle store for zip storage.
         log_service: LogService for fetching logs (in-process or remote proxy).
@@ -998,7 +999,7 @@ class ControllerServiceImpl:
     def __init__(
         self,
         transitions: ControllerTransitions,
-        db: ControllerDB,
+        store: ControllerStore,
         controller: ControllerProtocol,
         bundle_store: BundleStore,
         log_service: LogServiceImpl | LogServiceProxy,
@@ -1007,7 +1008,8 @@ class ControllerServiceImpl:
         user_budget_defaults: UserBudgetDefaults | None = None,
     ):
         self._transitions = transitions
-        self._db = db
+        self._store = store
+        self._db = store._db
         self._controller = controller
         self._bundle_store = bundle_store
         self._log_service = log_service
@@ -1742,7 +1744,7 @@ class ControllerServiceImpl:
         if prefix.startswith("/system/"):
             return self._list_system_endpoints(prefix, exact=request.exact)
 
-        endpoints = self._db.endpoints.query(
+        endpoints = self._store.endpoints.query(
             EndpointQuery(
                 exact_name=prefix if request.exact else None,
                 name_prefix=None if request.exact else prefix,

@@ -91,6 +91,7 @@ from iris.cluster.controller.scheduler import (
 )
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     RESERVATION_HOLDER_JOB_NAME,
     Assignment,
@@ -1038,6 +1039,7 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
+        self._store = ControllerStore(self._db)
 
         # ThreadContainer must be initialized before the log service setup
         # because _start_local_log_server spawns a uvicorn thread.
@@ -1075,7 +1077,7 @@ class Controller:
 
         self._health = WorkerHealthTracker()
         self._transitions = ControllerTransitions(
-            db=self._db,
+            store=self._store,
             health=self._health,
         )
         self._scheduler = Scheduler()
@@ -1084,7 +1086,7 @@ class Controller:
 
         self._service = ControllerServiceImpl(
             self._transitions,
-            self._db,
+            self._store,
             controller=self,
             bundle_store=self._bundle_store,
             log_service=self._remote_log_service,
