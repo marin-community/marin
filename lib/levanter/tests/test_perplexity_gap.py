@@ -13,6 +13,14 @@ import pytest
 
 import haliax
 
+from levanter.analysis.model_perplexity import (
+    ModelScoreReportBuilder,
+    ScoredDocument,
+    compare_scored_documents,
+    read_model_score_summary,
+    read_scored_documents,
+    write_model_score_files,
+)
 import levanter.analysis.perplexity_gap as gap_analysis
 from levanter.analysis.perplexity_gap import (
     GapReportBuilder,
@@ -281,6 +289,91 @@ def test_write_report_files_and_log_artifact_bundle():
     assert captured["files"] == ["report.md", "summary.json", "worst_documents.jsonl"]
     assert captured["summary"]["model_a"] == "a"
     assert captured["worst_documents"][0]["direction"] == "model_a_worse"
+
+
+def test_model_score_files_roundtrip():
+    document = RawTextDocument(
+        dataset_name="paloma/example",
+        tags=("paloma", "paloma/example"),
+        shard_name="docs",
+        row_index=0,
+        text="abc",
+    )
+    tokenized = TokenizedDocument(
+        token_ids=np.asarray([1, 2], dtype=np.int32),
+        byte_starts=np.asarray([0, 1], dtype=np.int32),
+        byte_ends=np.asarray([1, 3], dtype=np.int32),
+        num_bytes=3,
+    )
+    scored_document = ScoredDocument(
+        document=document,
+        per_byte_loss=np.asarray([0.1, 0.2, 0.3], dtype=np.float64),
+        tokenized=tokenized,
+    )
+    summary = ModelScoreReportBuilder(model_name="model-a")
+    summary.add_document(document=document, per_byte_loss=scored_document.per_byte_loss)
+    built_summary = summary.build_summary()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        write_model_score_files(tmpdir, built_summary, [scored_document])
+
+        loaded_summary = read_model_score_summary(tmpdir)
+        loaded_documents = read_scored_documents(tmpdir)
+
+    assert loaded_summary["model"] == "model-a"
+    assert loaded_summary["datasets"][0]["name"] == "paloma/example"
+    assert len(loaded_documents) == 1
+    assert loaded_documents[0].document == document
+    assert np.allclose(loaded_documents[0].per_byte_loss, scored_document.per_byte_loss)
+    assert loaded_documents[0].tokenized.num_bytes == tokenized.num_bytes
+    assert loaded_documents[0].tokenized.byte_starts.tolist() == tokenized.byte_starts.tolist()
+
+
+def test_compare_scored_documents_matches_direct_gap_builder():
+    document = RawTextDocument(
+        dataset_name="paloma/example",
+        tags=("paloma", "paloma/example"),
+        shard_name="docs",
+        row_index=0,
+        text="abc",
+    )
+    tokenized_a = TokenizedDocument(
+        token_ids=np.asarray([1], dtype=np.int32),
+        byte_starts=np.asarray([0], dtype=np.int32),
+        byte_ends=np.asarray([3], dtype=np.int32),
+        num_bytes=3,
+    )
+    tokenized_b = TokenizedDocument(
+        token_ids=np.asarray([1, 2], dtype=np.int32),
+        byte_starts=np.asarray([0, 1], dtype=np.int32),
+        byte_ends=np.asarray([1, 3], dtype=np.int32),
+        num_bytes=3,
+    )
+    losses_a = np.asarray([0.2, 0.2, 0.2], dtype=np.float64)
+    losses_b = np.asarray([0.0, 0.0, 0.0], dtype=np.float64)
+
+    direct_report = GapReportBuilder(model_a_name="a", model_b_name="b", output_path="/tmp/direct")
+    direct_report.add_document(
+        document=document,
+        per_byte_loss_a=losses_a,
+        per_byte_loss_b=losses_b,
+        tokenized_a=tokenized_a,
+        tokenized_b=tokenized_b,
+    )
+    direct_summary = direct_report.build_summary()
+
+    scored_summary = compare_scored_documents(
+        model_a_name="a",
+        model_b_name="b",
+        scored_documents_a=[ScoredDocument(document=document, per_byte_loss=losses_a, tokenized=tokenized_a)],
+        scored_documents_b=[ScoredDocument(document=document, per_byte_loss=losses_b, tokenized=tokenized_b)],
+        output_path="/tmp/from-scores",
+    )
+
+    assert scored_summary["datasets"] == direct_summary["datasets"]
+    assert scored_summary["pattern_buckets"] == direct_summary["pattern_buckets"]
+    assert scored_summary["top_literals"] == direct_summary["top_literals"]
+    assert scored_summary["top_documents"] == direct_summary["top_documents"]
 
 
 def test_render_report_markdown_escapes_table_boundaries():
