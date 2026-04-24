@@ -101,7 +101,7 @@ def _make_steps() -> list[ExecutorStep]:
                 optimizer = _build_muon_optimizer()
 
             pko_label = "pko" if use_pko else "nopko"
-            run_id = f"barebones-v2-{opt_name}-{pko_label}-d{dim}-{budget:.2e}"
+            run_id = f"barebones-v3-{opt_name}-{pko_label}-d{dim}-{budget:.2e}"
 
             steps.append(
                 ExecutorStep(

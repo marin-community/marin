@@ -318,6 +318,16 @@ def _make_train_step(
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
         params = optax.apply_updates(qb_params, updates)
 
+        # Debug: log per-block w_down norms, grad norms, and update norms.
+        for i, block in enumerate(params.blocks):
+            if hasattr(block.mlp, "w_down"):
+                p_norm = jnp.sqrt(jnp.sum(jnp.square(block.mlp.w_down.astype(jnp.float32))))
+                g_norm = jnp.sqrt(jnp.sum(jnp.square(grads.blocks[i].mlp.w_down.astype(jnp.float32))))
+                u_norm = jnp.sqrt(jnp.sum(jnp.square(updates.blocks[i].mlp.w_down.astype(jnp.float32))))
+                metrics[f"debug/block_{i}/w_down_param_norm"] = p_norm
+                metrics[f"debug/block_{i}/w_down_grad_norm"] = g_norm
+                metrics[f"debug/block_{i}/w_down_update_norm"] = u_norm
+
         if ema_beta is None:
             ema_params = None
         else:
