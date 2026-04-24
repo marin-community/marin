@@ -85,16 +85,24 @@ def frozen_clock() -> Iterator[FrozenClock]:
     construction so schema migrations use real time. The returned
     :class:`FrozenClock` is shared by scenario code (via ``clock.at()``)
     and every internal ``Timestamp.now()`` call inside transitions.
+
+    ``Timestamp.now`` is a ``classmethod``. Reading ``Timestamp.now``
+    goes through the descriptor protocol and returns a bound method,
+    not the descriptor itself — assigning that bound method back to
+    the class as a "restore" would leave ``Timestamp.now`` as a plain
+    method and break subclass binding. We save/restore the raw
+    descriptor via ``Timestamp.__dict__`` so the original classmethod
+    semantics are preserved byte-for-byte.
     """
     clock = FrozenClock()
-    saved_now = Timestamp.now
+    saved_now_desc = Timestamp.__dict__["now"]
     saved_now_ms = timing._now_ms
     Timestamp.now = classmethod(lambda cls: clock.now())  # type: ignore[method-assign]
     timing._now_ms = lambda: clock.now().epoch_ms()  # type: ignore[assignment]
     try:
         yield clock
     finally:
-        Timestamp.now = saved_now  # type: ignore[method-assign]
+        Timestamp.now = saved_now_desc  # type: ignore[method-assign]
         timing._now_ms = saved_now_ms  # type: ignore[assignment]
 
 

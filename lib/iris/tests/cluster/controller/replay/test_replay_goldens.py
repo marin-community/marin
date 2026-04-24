@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from rigging.timing import Timestamp
 
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.stores import ControllerStore
@@ -65,3 +66,28 @@ def test_scenario_matches_golden(
         pytest.fail(
             f"golden drift for scenario {scenario_name!r}:\n" f"  expected: {golden}\n" f"  actual:   {actual_path}",
         )
+
+
+def test_frozen_clock_restores_classmethod_descriptor() -> None:
+    """``frozen_clock`` must restore the exact ``classmethod`` descriptor, not a bound method.
+
+    Regression: a previous implementation saved ``Timestamp.now`` via
+    attribute access, which triggered the descriptor protocol and
+    captured a bound method. On teardown it assigned that bound method
+    back to the class, leaving ``Timestamp.now`` as a plain method for
+    the rest of the test process. Subclass calls stopped binding to
+    the subclass, and parallel tests ran with a corrupted
+    ``Timestamp`` class.
+    """
+    original = Timestamp.__dict__["now"]
+    assert isinstance(original, classmethod)
+
+    with frozen_clock():
+        pass
+
+    assert Timestamp.__dict__["now"] is original, (
+        "frozen_clock replaced Timestamp.now with a different descriptor; "
+        "the save/restore path must use ``__dict__`` to avoid the "
+        "descriptor-protocol capture that converts the classmethod into a "
+        "bound method."
+    )
