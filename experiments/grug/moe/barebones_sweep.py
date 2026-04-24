@@ -82,15 +82,19 @@ def _make_steps() -> list[ExecutorStep]:
     steps: list[ExecutorStep] = []
     for opt_name, use_pko in CONFIGS:
         for dim, budget in GATE1_CONFIGS:
+            # Use MoE baseline to get steps/batch/optimizer (same token count as baseline).
+            moe_model, adamh_optimizer, batch, num_steps = build_from_heuristic(budget=budget, hidden_dim=dim)
+
+            # Build barebones model with same layer count, then override to MHA.
             model = _build_barebones_model(dim)
+            # Set num_kv_heads from the GQA baseline so hashing is consistent,
+            # then override to MHA (num_kv_heads = num_heads).
+            model = dataclasses.replace(model, num_kv_heads=model.num_heads)
             if use_pko:
                 model = dataclasses.replace(model, partial_key_offset="every_4th", last_layer_pko=True)
 
-            fpt = compute_flops_per_token(model)
-            tokens, batch, num_steps = compute_tokens_and_batch(budget, fpt)
-
             if opt_name == "adamh":
-                optimizer = _build_adamh_optimizer(dim, batch, tokens)
+                optimizer = adamh_optimizer
             elif opt_name == "muon-nowarmup":
                 optimizer = _build_muon_optimizer(warmup=0.0)
             else:
