@@ -5,14 +5,16 @@
 
 import pytest
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.stores import ControllerStore
+from iris.cluster.controller.stores import (
+    TASK_RESOURCE_HISTORY_RETENTION,
+    TASK_RESOURCE_HISTORY_TERMINAL_TTL,
+    ControllerStore,
+)
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
     TaskUpdate,
-    TASK_RESOURCE_HISTORY_RETENTION,
-    TASK_RESOURCE_HISTORY_TERMINAL_TTL,
 )
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2, controller_pb2
@@ -126,7 +128,7 @@ def test_prune_logarithmic_downsampling(state):
 
     assert _count_history_rows(state, task_id) == threshold + 1
 
-    deleted = state.prune_task_resource_history()
+    deleted = state._store.tasks.prune_resource_history()
     assert deleted > 0
 
     remaining = _count_history_rows(state, task_id)
@@ -154,7 +156,7 @@ def test_prune_preserves_newest_rows(state):
             )
         ]
 
-    state.prune_task_resource_history()
+    state._store.tasks.prune_resource_history()
 
     # All of the newest N rows should still exist.
     with state._db.read_snapshot() as q:
@@ -175,7 +177,7 @@ def test_prune_noop_below_threshold(state):
     for i in range(TASK_RESOURCE_HISTORY_RETENTION):
         _send_resource_heartbeat(state, task_id, cpu=i, mem=i)
 
-    deleted = state.prune_task_resource_history()
+    deleted = state._store.tasks.prune_resource_history()
     assert deleted == 0
     assert _count_history_rows(state, task_id) == TASK_RESOURCE_HISTORY_RETENTION
 
@@ -199,7 +201,7 @@ def test_prune_evicts_terminal_task_history_past_ttl(state):
 
     _force_terminal(state, task_id, finished_age_ms=TASK_RESOURCE_HISTORY_TERMINAL_TTL.to_ms() * 2)
 
-    deleted = state.prune_task_resource_history()
+    deleted = state._store.tasks.prune_resource_history()
     assert deleted == 2
     assert _count_history_rows(state, task_id) == 0
 
@@ -213,7 +215,7 @@ def test_prune_keeps_terminal_task_history_within_ttl(state):
     # Terminal at half the TTL — must survive.
     _force_terminal(state, task_id, finished_age_ms=TASK_RESOURCE_HISTORY_TERMINAL_TTL.to_ms() // 2)
 
-    deleted = state.prune_task_resource_history()
+    deleted = state._store.tasks.prune_resource_history()
     assert deleted == 0
     assert _count_history_rows(state, task_id) == 2
 
@@ -233,7 +235,7 @@ def test_prune_keeps_running_task_history_regardless_of_finished_at(state):
         (stale_ms, task_id.to_wire()),
     )
 
-    deleted = state.prune_task_resource_history()
+    deleted = state._store.tasks.prune_resource_history()
     assert deleted == 0
     assert _count_history_rows(state, task_id) == 1
 

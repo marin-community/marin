@@ -1375,17 +1375,17 @@ class Controller:
                 break
 
             try:
-                self._transitions.prune_worker_task_history()
+                self._store.workers.prune_task_history()
             except Exception:
                 logger.exception("Worker task history cleanup failed")
 
             if resource_history_limiter.should_run():
                 try:
-                    self._transitions.prune_worker_resource_history()
+                    self._store.workers.prune_resource_history()
                 except Exception:
                     logger.exception("Worker resource history cleanup failed")
                 try:
-                    self._transitions.prune_task_resource_history()
+                    self._store.tasks.prune_resource_history()
                 except Exception:
                     logger.exception("Task resource history cleanup failed")
 

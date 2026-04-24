@@ -34,18 +34,39 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from threading import RLock
 
+from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.db import ControllerDB, EndpointQuery, QuerySnapshot, TransactionCursor
 from iris.cluster.controller.schema import (
+    ATTEMPT_PROJECTION,
     ENDPOINT_PROJECTION,
     JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
+    TASK_DETAIL_PROJECTION,
+    AttemptRow,
     EndpointRow,
     JobDetailRow,
+    TaskDetailRow,
 )
-from iris.cluster.types import TERMINAL_JOB_STATES, TERMINAL_TASK_STATES, JobName
+from iris.cluster.types import TERMINAL_JOB_STATES, TERMINAL_TASK_STATES, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
+from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+
+WORKER_TASK_HISTORY_RETENTION = 500
+"""Maximum worker_task_history rows retained per worker."""
+
+WORKER_RESOURCE_HISTORY_RETENTION = 500
+"""Maximum worker_resource_history rows retained per worker."""
+
+TASK_RESOURCE_HISTORY_RETENTION = 50
+"""Maximum task_resource_history rows retained per (task_id, attempt_id)."""
+
+TASK_RESOURCE_HISTORY_TERMINAL_TTL = Duration.from_hours(1)
+"""After a task reaches a terminal state, fully evict its resource history after this delay."""
+
+TASK_RESOURCE_HISTORY_DELETE_CHUNK = 1000
+"""Maximum task_ids per DELETE in task_resource_history pruning."""
 
 
 # Store read methods accept either a write cursor or a read snapshot. Writes
@@ -369,6 +390,81 @@ class JobRecomputeBasis:
     max_task_failures: int
 
 
+@dataclass(frozen=True, slots=True)
+class TaskInsertParams:
+    """Fields needed to insert one row into the ``tasks`` table."""
+
+    task_id: JobName
+    job_id: JobName
+    task_index: int
+    state: int
+    submitted_at_ms: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    priority_neg_depth: int
+    priority_root_submitted_ms: int
+    priority_insertion: int
+    priority_band: int
+
+
+@dataclass(frozen=True, slots=True)
+class TaskAttemptInsertParams:
+    """Fields needed to insert one row into ``task_attempts``."""
+
+    task_id: JobName
+    attempt_id: int
+    worker_id: WorkerId | None
+    state: int
+    created_at_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class TaskAttemptUpdateParams:
+    """Fields for applying a worker/direct-provider attempt update."""
+
+    task_id: JobName
+    attempt_id: int
+    state: int
+    started_at_ms: int | None
+    finished_at_ms: int | None
+    exit_code: int | None
+    error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TaskStateUpdateParams:
+    """Fields for applying a computed task state update."""
+
+    task_id: JobName
+    state: int
+    error: str | None
+    exit_code: int | None
+    started_at_ms: int | None
+    finished_at_ms: int | None
+    failure_count: int
+    preemption_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceUsageInsertParams:
+    task_id: JobName
+    attempt_id: int
+    cpu_millicores: int
+    memory_mb: int
+    disk_mb: int
+    memory_peak_mb: int
+    timestamp_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerAttributeParams:
+    key: str
+    value_type: str
+    str_value: str | None
+    int_value: int | None
+    float_value: float | None
+
+
 class JobStore:
     """Jobs, job_config, users, user_budgets.
 
@@ -668,12 +764,402 @@ class TaskStore:
     def __init__(self, db: ControllerDB) -> None:
         self._db = db
 
+    # -- Reads ---------------------------------------------------------------
+
+    def get_detail(self, tx: Tx, task_id: JobName) -> TaskDetailRow | None:
+        row = tx.fetchone(
+            f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} FROM tasks t WHERE t.task_id = ?",
+            (task_id.to_wire(),),
+        )
+        if row is None:
+            return None
+        return TASK_DETAIL_PROJECTION.decode_one([row])
+
+    def get_job_id(self, tx: Tx, task_id: JobName) -> JobName | None:
+        row = tx.fetchone("SELECT job_id FROM tasks WHERE task_id = ?", (task_id.to_wire(),))
+        return JobName.from_wire(str(row["job_id"])) if row is not None else None
+
+    def get_current_attempt_id(self, tx: Tx, task_id: JobName) -> int | None:
+        row = tx.fetchone("SELECT current_attempt_id FROM tasks WHERE task_id = ?", (task_id.to_wire(),))
+        return int(row["current_attempt_id"]) if row is not None else None
+
+    def get_priority_band_for_job(self, tx: Tx, job_id: JobName) -> int | None:
+        row = tx.fetchone(
+            "SELECT priority_band FROM tasks WHERE job_id = ? LIMIT 1",
+            (job_id.to_wire(),),
+        )
+        return int(row["priority_band"]) if row is not None else None
+
+    def state_counts_for_job(self, tx: Tx, job_id: JobName) -> dict[int, int]:
+        rows = tx.fetchall(
+            "SELECT state, COUNT(*) AS c FROM tasks WHERE job_id = ? GROUP BY state",
+            (job_id.to_wire(),),
+        )
+        return {int(row["state"]): int(row["c"]) for row in rows}
+
+    def first_error_for_job(self, tx: Tx, job_id: JobName) -> str | None:
+        row = tx.fetchone(
+            "SELECT error FROM tasks WHERE job_id = ? AND error IS NOT NULL ORDER BY task_index LIMIT 1",
+            (job_id.to_wire(),),
+        )
+        return str(row["error"]) if row is not None else None
+
+    # -- Writes --------------------------------------------------------------
+
+    def insert(self, cur: TransactionCursor, params: TaskInsertParams) -> None:
+        cur.execute(
+            "INSERT INTO tasks("
+            "task_id, job_id, task_index, state, error, exit_code, submitted_at_ms, started_at_ms, "
+            "finished_at_ms, max_retries_failure, max_retries_preemption, failure_count, preemption_count, "
+            "current_attempt_id, priority_neg_depth, priority_root_submitted_ms, "
+            "priority_insertion, priority_band"
+            ") VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, ?, ?, 0, 0, -1, ?, ?, ?, ?)",
+            (
+                params.task_id.to_wire(),
+                params.job_id.to_wire(),
+                params.task_index,
+                params.state,
+                params.submitted_at_ms,
+                params.max_retries_failure,
+                params.max_retries_preemption,
+                params.priority_neg_depth,
+                params.priority_root_submitted_ms,
+                params.priority_insertion,
+                params.priority_band,
+            ),
+        )
+
+    def mark_assigned(
+        self,
+        cur: TransactionCursor,
+        task_id: JobName,
+        attempt_id: int,
+        worker_id: WorkerId | None,
+        worker_address: str | None,
+        now_ms: int,
+    ) -> None:
+        if worker_id is not None:
+            cur.execute(
+                "UPDATE tasks SET state = ?, current_attempt_id = ?, "
+                "current_worker_id = ?, current_worker_address = ?, "
+                "started_at_ms = COALESCE(started_at_ms, ?) WHERE task_id = ?",
+                (job_pb2.TASK_STATE_ASSIGNED, attempt_id, str(worker_id), worker_address, now_ms, task_id.to_wire()),
+            )
+            return
+        cur.execute(
+            "UPDATE tasks SET state = ?, current_attempt_id = ?, "
+            "started_at_ms = COALESCE(started_at_ms, ?) WHERE task_id = ?",
+            (job_pb2.TASK_STATE_ASSIGNED, attempt_id, now_ms, task_id.to_wire()),
+        )
+
+    def assign(
+        self,
+        cur: TransactionCursor,
+        attempts: TaskAttemptStore,
+        task_id: JobName,
+        worker_id: WorkerId | None,
+        worker_address: str | None,
+        attempt_id: int,
+        now_ms: int,
+    ) -> None:
+        attempts.insert(
+            cur,
+            TaskAttemptInsertParams(
+                task_id=task_id,
+                attempt_id=attempt_id,
+                worker_id=worker_id,
+                state=job_pb2.TASK_STATE_ASSIGNED,
+                created_at_ms=now_ms,
+            ),
+        )
+        self.mark_assigned(cur, task_id, attempt_id, worker_id, worker_address, now_ms)
+
+    def apply_state_update(
+        self,
+        cur: TransactionCursor,
+        params: TaskStateUpdateParams,
+        active_states: set[int],
+    ) -> None:
+        if params.state in active_states:
+            cur.execute(
+                "UPDATE tasks SET state = ?, error = COALESCE(?, error), exit_code = COALESCE(?, exit_code), "
+                "started_at_ms = COALESCE(started_at_ms, ?), finished_at_ms = ?, "
+                "failure_count = ?, preemption_count = ? "
+                "WHERE task_id = ?",
+                (
+                    params.state,
+                    params.error,
+                    params.exit_code,
+                    params.started_at_ms,
+                    params.finished_at_ms,
+                    params.failure_count,
+                    params.preemption_count,
+                    params.task_id.to_wire(),
+                ),
+            )
+            return
+        cur.execute(
+            "UPDATE tasks SET state = ?, error = COALESCE(?, error), exit_code = COALESCE(?, exit_code), "
+            "started_at_ms = COALESCE(started_at_ms, ?), finished_at_ms = ?, "
+            "failure_count = ?, preemption_count = ?, "
+            "current_worker_id = NULL, current_worker_address = NULL "
+            "WHERE task_id = ?",
+            (
+                params.state,
+                params.error,
+                params.exit_code,
+                params.started_at_ms,
+                params.finished_at_ms,
+                params.failure_count,
+                params.preemption_count,
+                params.task_id.to_wire(),
+            ),
+        )
+
+    def mark_terminal(
+        self,
+        cur: TransactionCursor,
+        task_id: JobName,
+        state: int,
+        error: str | None,
+        finished_at_ms: int | None,
+        *,
+        failure_count: int | None = None,
+        preemption_count: int | None = None,
+        active_states: set[int],
+    ) -> None:
+        if finished_at_ms is not None:
+            set_clauses = ["state = ?", "error = ?", "finished_at_ms = COALESCE(finished_at_ms, ?)"]
+        else:
+            set_clauses = ["state = ?", "error = ?", "finished_at_ms = ?"]
+        params: list[object] = [state, error, finished_at_ms]
+
+        if failure_count is not None:
+            set_clauses.append("failure_count = ?")
+            params.append(failure_count)
+        if preemption_count is not None:
+            set_clauses.append("preemption_count = ?")
+            params.append(preemption_count)
+        if state not in active_states:
+            set_clauses.append("current_worker_id = NULL")
+            set_clauses.append("current_worker_address = NULL")
+
+        params.append(task_id.to_wire())
+        cur.execute(
+            f"UPDATE tasks SET {', '.join(set_clauses)} WHERE task_id = ?",
+            tuple(params),
+        )
+
+    def bulk_kill_non_terminal(
+        self,
+        cur: TransactionCursor,
+        job_ids: Sequence[JobName],
+        reason: str,
+        finished_at_ms: int,
+        terminal_states: set[int],
+    ) -> None:
+        if not job_ids:
+            return
+        wire_ids = [jid.to_wire() for jid in job_ids]
+        job_placeholders = ",".join("?" for _ in wire_ids)
+        terminal_placeholders = ",".join("?" for _ in terminal_states)
+        cur.execute(
+            f"UPDATE tasks SET state = ?, error = ?, finished_at_ms = COALESCE(finished_at_ms, ?), "
+            "current_worker_id = NULL, current_worker_address = NULL "
+            f"WHERE job_id IN ({job_placeholders}) AND state NOT IN ({terminal_placeholders})",
+            (
+                job_pb2.TASK_STATE_KILLED,
+                reason,
+                finished_at_ms,
+                *wire_ids,
+                *terminal_states,
+            ),
+        )
+
+    def update_container_id(self, cur: TransactionCursor, task_id: JobName, container_id: str) -> None:
+        cur.execute(
+            "UPDATE tasks SET container_id = ? WHERE task_id = ?",
+            (container_id, task_id.to_wire()),
+        )
+
+    def insert_resource_usage(self, cur: TransactionCursor, params: ResourceUsageInsertParams) -> None:
+        cur.execute(
+            "INSERT INTO task_resource_history"
+            "(task_id, attempt_id, cpu_millicores, memory_mb, disk_mb, memory_peak_mb, timestamp_ms) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                params.task_id.to_wire(),
+                params.attempt_id,
+                params.cpu_millicores,
+                params.memory_mb,
+                params.disk_mb,
+                params.memory_peak_mb,
+                params.timestamp_ms,
+            ),
+        )
+
+    def insert_resource_usage_many(
+        self,
+        cur: TransactionCursor,
+        params: Sequence[ResourceUsageInsertParams],
+    ) -> None:
+        if not params:
+            return
+        cur.executemany(
+            "INSERT INTO task_resource_history"
+            "(task_id, attempt_id, cpu_millicores, memory_mb, disk_mb, memory_peak_mb, timestamp_ms) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    p.task_id.to_wire(),
+                    p.attempt_id,
+                    p.cpu_millicores,
+                    p.memory_mb,
+                    p.disk_mb,
+                    p.memory_peak_mb,
+                    p.timestamp_ms,
+                )
+                for p in params
+            ],
+        )
+
+    def prune_resource_history(self) -> int:
+        """Prune task_resource_history rows using TTL eviction and logarithmic downsampling."""
+        now_ms = Timestamp.now().epoch_ms()
+        ttl_cutoff_ms = now_ms - TASK_RESOURCE_HISTORY_TERMINAL_TTL.to_ms()
+        terminal_placeholders = ",".join("?" for _ in TERMINAL_TASK_STATES)
+
+        with self._db.read_snapshot() as snap:
+            terminal_ids = [
+                str(row["task_id"])
+                for row in snap.fetchall(
+                    f"SELECT task_id FROM tasks "
+                    f"WHERE state IN ({terminal_placeholders}) "
+                    f"AND finished_at_ms IS NOT NULL AND finished_at_ms < ?",
+                    (*TERMINAL_TASK_STATES, ttl_cutoff_ms),
+                )
+            ]
+
+        evicted_terminal = 0
+        for chunk_start in range(0, len(terminal_ids), TASK_RESOURCE_HISTORY_DELETE_CHUNK):
+            chunk = terminal_ids[chunk_start : chunk_start + TASK_RESOURCE_HISTORY_DELETE_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            with self._db.transaction() as cur:
+                cur.execute(f"DELETE FROM task_resource_history WHERE task_id IN ({placeholders})", tuple(chunk))
+                evicted_terminal += cur.rowcount
+
+        threshold = TASK_RESOURCE_HISTORY_RETENTION * 2
+        with self._db.transaction() as cur:
+            overflows = cur.execute(
+                "SELECT task_id, attempt_id, COUNT(*) as cnt "
+                "FROM task_resource_history "
+                "GROUP BY task_id, attempt_id HAVING cnt > ?",
+                (threshold,),
+            ).fetchall()
+            ids_to_delete: list[int] = []
+            for row in overflows:
+                task_id, attempt_id = row["task_id"], row["attempt_id"]
+                all_ids = [
+                    r["id"]
+                    for r in cur.execute(
+                        "SELECT id FROM task_resource_history WHERE task_id = ? AND attempt_id = ? ORDER BY id ASC",
+                        (task_id, attempt_id),
+                    ).fetchall()
+                ]
+                older = all_ids[: len(all_ids) - TASK_RESOURCE_HISTORY_RETENTION]
+                ids_to_delete.extend(older[1::2])
+
+            total_deleted = 0
+            for chunk_start in range(0, len(ids_to_delete), 900):
+                chunk = ids_to_delete[chunk_start : chunk_start + 900]
+                placeholders = ",".join("?" * len(chunk))
+                cur.execute(f"DELETE FROM task_resource_history WHERE id IN ({placeholders})", tuple(chunk))
+                total_deleted += cur.rowcount
+        if evicted_terminal > 0:
+            logger.info("Evicted %d task_resource_history rows (terminal TTL)", evicted_terminal)
+        if total_deleted > 0:
+            logger.info("Pruned %d task_resource_history rows (log downsampling)", total_deleted)
+        return evicted_terminal + total_deleted
+
 
 class TaskAttemptStore:
     """Task attempts."""
 
     def __init__(self, db: ControllerDB) -> None:
         self._db = db
+
+    # -- Reads ---------------------------------------------------------------
+
+    def get(self, tx: Tx, task_id: JobName, attempt_id: int) -> AttemptRow | None:
+        row = tx.fetchone(
+            f"SELECT {ATTEMPT_PROJECTION.select_clause()} FROM task_attempts ta "
+            "WHERE ta.task_id = ? AND ta.attempt_id = ?",
+            (task_id.to_wire(), attempt_id),
+        )
+        if row is None:
+            return None
+        return ATTEMPT_PROJECTION.decode_one([row])
+
+    def get_state(self, tx: Tx, task_id: JobName, attempt_id: int) -> int | None:
+        row = tx.fetchone(
+            "SELECT state FROM task_attempts WHERE task_id = ? AND attempt_id = ?",
+            (task_id.to_wire(), attempt_id),
+        )
+        return int(row["state"]) if row is not None else None
+
+    def get_worker_id(self, tx: Tx, task_id: JobName, attempt_id: int) -> WorkerId | None:
+        row = tx.fetchone(
+            "SELECT worker_id FROM task_attempts WHERE task_id = ? AND attempt_id = ?",
+            (task_id.to_wire(), attempt_id),
+        )
+        if row is None or row["worker_id"] is None:
+            return None
+        return WorkerId(str(row["worker_id"]))
+
+    # -- Writes --------------------------------------------------------------
+
+    def insert(self, cur: TransactionCursor, params: TaskAttemptInsertParams) -> None:
+        cur.execute(
+            "INSERT INTO task_attempts(task_id, attempt_id, worker_id, state, created_at_ms) VALUES (?, ?, ?, ?, ?)",
+            (
+                params.task_id.to_wire(),
+                params.attempt_id,
+                str(params.worker_id) if params.worker_id is not None else None,
+                params.state,
+                params.created_at_ms,
+            ),
+        )
+
+    def mark_finished(
+        self,
+        cur: TransactionCursor,
+        task_id: JobName,
+        attempt_id: int,
+        state: int,
+        finished_at_ms: int,
+        error: str | None,
+    ) -> None:
+        cur.execute(
+            "UPDATE task_attempts SET state = ?, finished_at_ms = COALESCE(finished_at_ms, ?), error = ? "
+            "WHERE task_id = ? AND attempt_id = ?",
+            (state, finished_at_ms, error, task_id.to_wire(), attempt_id),
+        )
+
+    def apply_update(self, cur: TransactionCursor, params: TaskAttemptUpdateParams) -> None:
+        cur.execute(
+            "UPDATE task_attempts SET state = ?, started_at_ms = COALESCE(started_at_ms, ?), "
+            "finished_at_ms = COALESCE(finished_at_ms, ?), exit_code = COALESCE(?, exit_code), "
+            "error = COALESCE(?, error) WHERE task_id = ? AND attempt_id = ?",
+            (
+                params.state,
+                params.started_at_ms,
+                params.finished_at_ms,
+                params.exit_code,
+                params.error,
+                params.task_id.to_wire(),
+                params.attempt_id,
+            ),
+        )
 
 
 class WorkerStore:
@@ -682,6 +1168,141 @@ class WorkerStore:
     def __init__(self, db: ControllerDB) -> None:
         self._db = db
 
+    def active_healthy_address(self, tx: Tx, worker_id: WorkerId) -> str | None:
+        row = tx.fetchone(
+            "SELECT address FROM workers WHERE worker_id = ? AND active = 1 AND healthy = 1",
+            (str(worker_id),),
+        )
+        return str(row["address"]) if row is not None else None
+
+    def address(self, tx: Tx, worker_id: WorkerId) -> str | None:
+        row = tx.fetchone("SELECT address FROM workers WHERE worker_id = ?", (str(worker_id),))
+        return str(row["address"]) if row is not None else None
+
+    def add_committed_resources(
+        self,
+        cur: TransactionCursor,
+        worker_id: WorkerId,
+        resources: job_pb2.ResourceSpecProto,
+    ) -> None:
+        cur.execute(
+            "UPDATE workers SET committed_cpu_millicores = committed_cpu_millicores + ?, "
+            "committed_mem_bytes = committed_mem_bytes + ?, committed_gpu = committed_gpu + ?, "
+            "committed_tpu = committed_tpu + ? WHERE worker_id = ?",
+            (
+                int(resources.cpu_millicores),
+                int(resources.memory_bytes),
+                int(get_gpu_count(resources.device)),
+                int(get_tpu_count(resources.device)),
+                str(worker_id),
+            ),
+        )
+
+    def decommit_resources(
+        self,
+        cur: TransactionCursor,
+        worker_id: WorkerId,
+        resources: job_pb2.ResourceSpecProto,
+    ) -> None:
+        cur.execute(
+            "UPDATE workers SET committed_cpu_millicores = MAX(0, committed_cpu_millicores - ?), "
+            "committed_mem_bytes = MAX(0, committed_mem_bytes - ?), "
+            "committed_gpu = MAX(0, committed_gpu - ?), committed_tpu = MAX(0, committed_tpu - ?) "
+            "WHERE worker_id = ?",
+            (
+                int(resources.cpu_millicores),
+                int(resources.memory_bytes),
+                int(get_gpu_count(resources.device)),
+                int(get_tpu_count(resources.device)),
+                str(worker_id),
+            ),
+        )
+
+    def replace_attributes(
+        self,
+        cur: TransactionCursor,
+        worker_id: WorkerId,
+        attrs: Sequence[WorkerAttributeParams],
+    ) -> None:
+        cur.execute("DELETE FROM worker_attributes WHERE worker_id = ?", (str(worker_id),))
+        for attr in attrs:
+            cur.execute(
+                "INSERT INTO worker_attributes(worker_id, key, value_type, str_value, int_value, float_value) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (str(worker_id), attr.key, attr.value_type, attr.str_value, attr.int_value, attr.float_value),
+            )
+
+    def set_attribute_for_test(
+        self,
+        cur: TransactionCursor,
+        worker_id: WorkerId,
+        attr: WorkerAttributeParams,
+    ) -> None:
+        cur.execute(
+            "INSERT INTO worker_attributes(worker_id, key, value_type, str_value, int_value, float_value) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(worker_id, key) DO UPDATE SET "
+            "value_type=excluded.value_type, "
+            "str_value=excluded.str_value, "
+            "int_value=excluded.int_value, "
+            "float_value=excluded.float_value",
+            (str(worker_id), attr.key, attr.value_type, attr.str_value, attr.int_value, attr.float_value),
+        )
+
+    def update_attr_cache(self, worker_id: WorkerId, attrs: dict[str, AttributeValue]) -> None:
+        self._db.set_worker_attributes(worker_id, attrs)
+
+    def remove_from_attr_cache(self, worker_id: WorkerId) -> None:
+        self._db.remove_worker_from_attr_cache(worker_id)
+
+    def remove(self, cur: TransactionCursor, worker_id: WorkerId) -> None:
+        cur.execute("UPDATE task_attempts SET worker_id = NULL WHERE worker_id = ?", (str(worker_id),))
+        cur.execute("UPDATE tasks SET current_worker_id = NULL WHERE current_worker_id = ?", (str(worker_id),))
+        cur.execute("DELETE FROM dispatch_queue WHERE worker_id = ?", (str(worker_id),))
+        cur.execute("DELETE FROM workers WHERE worker_id = ?", (str(worker_id),))
+
+    def prune_task_history(self) -> int:
+        return self._prune_per_worker_history(
+            "worker_task_history",
+            WORKER_TASK_HISTORY_RETENTION,
+            order_by="assigned_at_ms DESC, id DESC",
+        )
+
+    def prune_resource_history(self) -> int:
+        return self._prune_per_worker_history(
+            "worker_resource_history",
+            WORKER_RESOURCE_HISTORY_RETENTION,
+        )
+
+    def _prune_per_worker_history(
+        self,
+        table: str,
+        retention: int,
+        order_by: str = "id DESC",
+    ) -> int:
+        with self._db.transaction() as cur:
+            rows = cur.execute(
+                f"SELECT worker_id, COUNT(*) as cnt FROM {table} GROUP BY worker_id HAVING cnt > ?",
+                (retention,),
+            ).fetchall()
+            total_deleted = 0
+            for row in rows:
+                worker_id = row["worker_id"]
+                cur.execute(
+                    f"DELETE FROM {table} "
+                    "WHERE worker_id = ? "
+                    f"AND id NOT IN ("
+                    f"  SELECT id FROM {table} "
+                    "  WHERE worker_id = ? "
+                    f"  ORDER BY {order_by} LIMIT ?"
+                    ")",
+                    (worker_id, worker_id, retention),
+                )
+                total_deleted += cur.rowcount
+        if total_deleted > 0:
+            logger.info("Pruned %d %s rows", total_deleted, table)
+        return total_deleted
+
 
 class DispatchQueueStore:
     """The dispatch_queue table."""
@@ -689,12 +1310,53 @@ class DispatchQueueStore:
     def __init__(self, db: ControllerDB) -> None:
         self._db = db
 
+    def enqueue_run(self, cur: TransactionCursor, worker_id: WorkerId, payload_proto: bytes, now_ms: int) -> None:
+        cur.execute(
+            "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
+            "VALUES (?, 'run', ?, NULL, ?)",
+            (str(worker_id), payload_proto, now_ms),
+        )
+
+    def enqueue_kill(self, cur: TransactionCursor, worker_id: WorkerId | None, task_id: JobName, now_ms: int) -> None:
+        cur.execute(
+            "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
+            "VALUES (?, 'kill', NULL, ?, ?)",
+            (str(worker_id) if worker_id is not None else None, task_id.to_wire(), now_ms),
+        )
+
+    def drain_direct_kills(self, cur: TransactionCursor) -> list[str]:
+        rows = cur.execute(
+            "SELECT task_id FROM dispatch_queue WHERE worker_id IS NULL AND kind = 'kill'",
+        ).fetchall()
+        tasks_to_kill = [str(row["task_id"]) for row in rows if row["task_id"] is not None]
+        if rows:
+            cur.execute("DELETE FROM dispatch_queue WHERE worker_id IS NULL AND kind = 'kill'")
+        return tasks_to_kill
+
 
 class ReservationStore:
     """Reservation claims and the meta(last_submission_ms) counter."""
 
     def __init__(self, db: ControllerDB) -> None:
         self._db = db
+
+    def replace_claims(self, cur: TransactionCursor, claims: dict[WorkerId, tuple[str, int]]) -> None:
+        cur.execute("DELETE FROM reservation_claims")
+        for worker_id, (job_id, entry_idx) in claims.items():
+            cur.execute(
+                "INSERT INTO reservation_claims(worker_id, job_id, entry_idx) VALUES (?, ?, ?)",
+                (str(worker_id), job_id, entry_idx),
+            )
+
+    def next_submission_ms(self, cur: TransactionCursor, submitted_ms: int) -> int:
+        row = cur.execute("SELECT value FROM meta WHERE key = 'last_submission_ms'").fetchone()
+        last_submission_ms = int(row["value"]) if row is not None else 0
+        effective_submission_ms = max(submitted_ms, last_submission_ms + 1)
+        if row is None:
+            cur.execute("INSERT INTO meta(key, value) VALUES ('last_submission_ms', ?)", (effective_submission_ms,))
+        else:
+            cur.execute("UPDATE meta SET value = ? WHERE key = 'last_submission_ms'", (effective_submission_ms,))
+        return effective_submission_ms
 
 
 # =============================================================================

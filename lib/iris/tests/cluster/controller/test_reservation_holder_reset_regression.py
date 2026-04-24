@@ -272,7 +272,7 @@ def test_reservation_holder_reassignment_across_successive_worker_failures(state
     ``tasks.current_attempt_id = -1`` while only DELETing the single current
     attempt row. Across repeated worker failures this left orphan attempt rows
     in ``task_attempts`` whose primary key collided with the next
-    ``_assign_task`` INSERT, raising ``sqlite3.IntegrityError`` and killing the
+    assignment attempt insert, raising ``sqlite3.IntegrityError`` and killing the
     scheduling thread.
 
     The fix routes holders through ``_terminate_task``, so the attempt row is

@@ -3403,7 +3403,7 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
 
     Regression: ``_kill_non_terminal_tasks`` passed ``resources`` into
     ``_terminate_task`` unconditionally. Reservation-holder tasks never commit
-    on assignment (see ``_assign_task``), so decommitting them on termination
+    on assignment, so decommitting them on termination
     subtracts chips that were never added — on a worker co-tenanted by a real
     task, this floored ``committed_*`` below the co-tenant's true reservation,
     letting the scheduler double-book the VM (seen in prod: two v5p-8 jobs on
@@ -3438,6 +3438,9 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
     with harness.state._db.transaction() as cur:
         _kill_non_terminal_tasks(
             cur,
+            harness.state._store.attempts,
+            harness.state._store.tasks,
+            harness.state._store.workers,
             harness.state._store.endpoints,
             holder_job_id.to_wire(),
             "Job finalized",

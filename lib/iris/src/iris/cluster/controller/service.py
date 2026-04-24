@@ -90,9 +90,8 @@ from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.query import execute_raw_query
 from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
-from iris.cluster.controller.stores import ControllerStore
+from iris.cluster.controller.stores import TASK_RESOURCE_HISTORY_RETENTION, ControllerStore
 from iris.cluster.controller.transitions import (
-    TASK_RESOURCE_HISTORY_RETENTION,
     ControllerTransitions,
     HeartbeatApplyRequest,
     task_updates_from_proto,
