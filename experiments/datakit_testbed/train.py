@@ -96,7 +96,7 @@ def build_testbed_tokenize_steps(
 def run_testbed_config(
     *,
     name: str,
-    sampled_by_source: dict[str, StepSpec],
+    tokenized_by_source: dict[str, TokenizerStep],
     compute_budget_flops: float = DEFAULT_COMPUTE_BUDGET_FLOPS,
     hidden_dim: int = DEFAULT_HIDDEN_DIM,
     target_steps: int = DEFAULT_TARGET_STEPS,
@@ -113,11 +113,10 @@ def run_testbed_config(
     Args:
         name: Config name — forms the executor step name and wandb run id.
             Use e.g. ``"baseline"`` for the trivial no-dedup run.
-        sampled_by_source: Per-source sample steps — usually built by
-            filtering :func:`build_testbed_steps`' return list for
-            entries whose name starts with ``datakit-testbed/``.
-            Tokenize ExecutorSteps are built internally on top of these
-            (see :func:`build_testbed_tokenize_steps`).
+        tokenized_by_source: Per-source tokenize ExecutorSteps. The caller
+            builds these from its own bucketed view of the sampled data
+            — baseline buckets by provenance (one tokenize per source);
+            other configs may bucket differently (e.g. by quality tier).
         compute_budget_flops: FLOP budget fed to ``build_from_heuristic``.
         hidden_dim: Model hidden dimension for the heuristic.
         target_steps: Heuristic target steps; default ``2**14`` matches Grug.
@@ -136,8 +135,8 @@ def run_testbed_config(
         An ``ExecutorStep`` whose ``fn`` is ``run_grug_moe_trial``. Pass to
         ``executor_main`` to actually train.
     """
-    if not sampled_by_source:
-        raise ValueError("sampled_by_source must be non-empty")
+    if not tokenized_by_source:
+        raise ValueError("tokenized_by_source must be non-empty")
 
     model_cfg, opt_cfg, batch_size, steps = build_from_heuristic(
         budget=compute_budget_flops,
@@ -145,7 +144,6 @@ def run_testbed_config(
         target_steps=target_steps,
     )
 
-    tokenized_by_source = build_testbed_tokenize_steps(sampled_by_source, tokenizer=tokenizer)
     data = build_testbed_mixture(tokenized_by_source, weights=weights)
     data = add_validation_sets_to_mixture(
         data,

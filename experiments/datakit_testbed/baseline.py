@@ -31,7 +31,7 @@ from marin.execution.step_spec import StepSpec
 
 from experiments.datakit_testbed.sampler import build_testbed_steps
 from experiments.datakit_testbed.settings import TESTBED_TOKENIZER
-from experiments.datakit_testbed.train import run_testbed_config
+from experiments.datakit_testbed.train import build_testbed_tokenize_steps, run_testbed_config
 
 logger = logging.getLogger(__name__)
 
@@ -51,50 +51,34 @@ def baseline(
 ) -> ExecutorStep:
     """Assemble the baseline training step off a testbed DAG.
 
-    Args:
-        steps: Return value of
-            :func:`experiments.datakit_testbed.sampler.build_testbed_steps`.
-        name: Config name — forms the executor step name and wandb run id.
-        tokenizer: Tokenizer to use across every component; must match
-            the training model's tokenizer.
-        **run_config_kwargs: Forwarded to
-            :func:`experiments.datakit_testbed.train.run_testbed_config`
-            (compute_budget_flops, hidden_dim, target_steps, weights,
-            tpu, wandb_group, etc.).
-
-    Returns:
-        An ``ExecutorStep`` whose ``fn`` is ``run_grug_moe_trial``. Pass
-        to ``executor_main`` to actually train.
+    Bucketing is "one tokenize per source" — the trivial control-arm
+    strategy. Other configurations build their own ``tokenized_by_source``
+    (e.g. by quality tier) and pass it to :func:`run_testbed_config`
+    directly.
     """
     sampled_by_source = {
         s.name.removeprefix(_SAMPLE_STEP_PREFIX): s for s in steps if s.name.startswith(_SAMPLE_STEP_PREFIX)
     }
     if not sampled_by_source:
         raise ValueError("no sample steps found in the DAG (expected names under 'datakit-testbed/...')")
+    tokenized_by_source = build_testbed_tokenize_steps(sampled_by_source, tokenizer=tokenizer)
     return run_testbed_config(
         name=name,
-        sampled_by_source=sampled_by_source,
+        tokenized_by_source=tokenized_by_source,
         tokenizer=tokenizer,
         **run_config_kwargs,
     )
 
 
 def main() -> None:
-    """Entry-point: materialize the ferry, then launch baseline training.
-
-    Runs against whichever sources already have a cached normalize (so no
-    extra normalize work happens here), targets
-    :data:`TARGET_TOTAL_TOKENS_B` billion tokens via proportional
-    sampling, then hands the resulting ferry off to the baseline training
-    config via :func:`executor_main`.
-    """
+    """Entry-point: materialize the ferry, then launch baseline training"""
     os.environ["MARIN_PREFIX"] = STAGING_PREFIX
 
-    ferry_steps = build_testbed_steps(RUN_ID, target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
-    logger.info("Materializing %d ferry StepSpecs under %s", len(ferry_steps), STAGING_PREFIX)
-    StepRunner().run(ferry_steps)
+    testbed_steps = build_testbed_steps(RUN_ID, target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
+    logger.info("Materializing %d ferry StepSpecs under %s", len(testbed_steps), STAGING_PREFIX)
+    StepRunner().run(testbed_steps)
 
-    training_step = baseline(ferry_steps, name=RUN_ID)
+    training_step = baseline(testbed_steps, name=RUN_ID)
     executor_main(ExecutorMainConfig(), [training_step])
 
 
