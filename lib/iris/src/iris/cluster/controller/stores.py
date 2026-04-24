@@ -30,13 +30,20 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+import time
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from threading import RLock
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.codec import resource_spec_from_scalars
-from iris.cluster.controller.db import ControllerDB, EndpointQuery, QuerySnapshot, TransactionCursor
+from iris.cluster.controller.db import (
+    ACTIVE_TASK_STATES,
+    ControllerDB,
+    EndpointQuery,
+    QuerySnapshot,
+    TransactionCursor,
+)
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
     ENDPOINT_PROJECTION,
@@ -1438,6 +1445,89 @@ class TaskStore:
             logger.info("Pruned %d task_resource_history rows (log downsampling)", total_deleted)
         return evicted_terminal + total_deleted
 
+    def _batch_prune_profiles(
+        self,
+        sql: str,
+        params: tuple[object, ...],
+        *,
+        stopped: Callable[[], bool],
+        pause_between_s: float,
+    ) -> int:
+        """Repeatedly delete one batch per transaction, sleeping between commits.
+
+        Each iteration commits its batch before sleeping so the writer lock
+        is released and other RPCs can interleave with pruning.
+        """
+        total = 0
+        while not stopped():
+            with self._db.transaction() as cur:
+                batch = cur.execute(sql, params).rowcount
+            if batch == 0:
+                break
+            total += batch
+            time.sleep(pause_between_s)
+        return total
+
+    def prune_stale_profiles(
+        self,
+        *,
+        cutoff_ms: int,
+        stopped: Callable[[], bool],
+        pause_between_s: float,
+    ) -> int:
+        """Delete ``task_profiles`` rows older than ``cutoff_ms`` in 1000-row batches."""
+        return self._batch_prune_profiles(
+            "DELETE FROM profiles.task_profiles WHERE rowid IN "
+            "(SELECT rowid FROM profiles.task_profiles WHERE captured_at_ms < ? LIMIT 1000)",
+            (cutoff_ms,),
+            stopped=stopped,
+            pause_between_s=pause_between_s,
+        )
+
+    def prune_orphan_profiles(
+        self,
+        *,
+        stopped: Callable[[], bool],
+        pause_between_s: float,
+    ) -> int:
+        """Delete ``task_profiles`` rows whose task has been pruned."""
+        return self._batch_prune_profiles(
+            "DELETE FROM profiles.task_profiles WHERE rowid IN "
+            "(SELECT p.rowid FROM profiles.task_profiles p"
+            " LEFT JOIN tasks t ON p.task_id = t.task_id"
+            " WHERE t.task_id IS NULL LIMIT 1000)",
+            (),
+            stopped=stopped,
+            pause_between_s=pause_between_s,
+        )
+
+    def set_state_for_test(
+        self,
+        cur: TransactionCursor,
+        task_id: JobName,
+        state: int,
+        *,
+        error: str | None = None,
+        exit_code: int | None = None,
+    ) -> None:
+        """Test helper: overwrite ``state`` / ``error`` / ``exit_code`` directly.
+
+        For non-active target states, also clears ``current_worker_id`` /
+        ``current_worker_address`` so the row is consistent with production
+        terminal-transition writes.
+        """
+        if state in ACTIVE_TASK_STATES:
+            cur.execute(
+                "UPDATE tasks SET state = ?, error = ?, exit_code = ? WHERE task_id = ?",
+                (state, error, exit_code, task_id.to_wire()),
+            )
+            return
+        cur.execute(
+            "UPDATE tasks SET state = ?, error = ?, exit_code = ?, "
+            "current_worker_id = NULL, current_worker_address = NULL WHERE task_id = ?",
+            (state, error, exit_code, task_id.to_wire()),
+        )
+
 
 class TaskAttemptStore:
     """Task attempts."""
@@ -1654,6 +1744,41 @@ class WorkerStore:
 
     def mark_unhealthy(self, cur: TransactionCursor, worker_id: WorkerId) -> None:
         cur.execute("UPDATE workers SET healthy = 0 WHERE worker_id = ?", (str(worker_id),))
+
+    def record_task_assignment(
+        self,
+        cur: TransactionCursor,
+        worker_id: WorkerId,
+        task_id: JobName,
+        now_ms: int,
+    ) -> None:
+        """Append a row to ``worker_task_history`` at task-assign time."""
+        cur.execute(
+            "INSERT INTO worker_task_history(worker_id, task_id, assigned_at_ms) VALUES (?, ?, ?)",
+            (str(worker_id), task_id.to_wire(), now_ms),
+        )
+
+    def find_prunable(self, tx: Tx, before_ms: int) -> WorkerId | None:
+        """Return one inactive-or-unhealthy worker whose heartbeat predates ``before_ms``."""
+        row = tx.fetchone(
+            "SELECT worker_id FROM workers " "WHERE (active = 0 OR healthy = 0) AND last_heartbeat_ms < ? LIMIT 1",
+            (before_ms,),
+        )
+        return WorkerId(str(row["worker_id"])) if row is not None else None
+
+    def set_health_for_test(self, cur: TransactionCursor, worker_id: WorkerId, healthy: bool) -> None:
+        """Test helper: overwrite ``healthy`` and reset/raise ``consecutive_failures``."""
+        cur.execute(
+            "UPDATE workers SET healthy = ?, consecutive_failures = ? WHERE worker_id = ?",
+            (1 if healthy else 0, 0 if healthy else 1, str(worker_id)),
+        )
+
+    def set_consecutive_failures_for_test(self, cur: TransactionCursor, worker_id: WorkerId, count: int) -> None:
+        """Test helper: overwrite ``consecutive_failures`` directly."""
+        cur.execute(
+            "UPDATE workers SET consecutive_failures = ? WHERE worker_id = ?",
+            (count, str(worker_id)),
+        )
 
     def apply_snapshots(
         self,

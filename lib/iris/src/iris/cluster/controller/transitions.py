@@ -11,7 +11,7 @@ import time
 import json
 import logging
 from dataclasses import dataclass, field
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from typing import NamedTuple
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
@@ -1231,10 +1231,7 @@ class ControllerTransitions:
                             cur, assignment.worker_id, run_request.SerializeToString(), now_ms
                         )
                     has_real_dispatch = True
-                cur.execute(
-                    "INSERT INTO worker_task_history(worker_id, task_id, assigned_at_ms) VALUES (?, ?, ?)",
-                    (str(assignment.worker_id), assignment.task_id.to_wire(), now_ms),
-                )
+                self._store.workers.record_task_assignment(cur, assignment.worker_id, assignment.task_id, now_ms)
                 jobs_to_update.add(job_id_wire)
                 accepted.append(assignment)
             for job_id_wire in jobs_to_update:
@@ -2030,27 +2027,6 @@ class ControllerTransitions:
         self._store.workers.remove_from_attr_cache(worker_id)
         return detail
 
-    def _batch_delete(
-        self,
-        sql: str,
-        params: tuple[object, ...],
-        stopped: Callable[[], bool],
-        pause_between_s: float,
-    ) -> int:
-        """Delete rows in batches, sleeping between transactions.
-
-        Returns the total number of rows deleted.
-        """
-        total = 0
-        while not stopped():
-            with self._db.transaction() as cur:
-                batch = cur.execute(sql, params).rowcount
-            if batch == 0:
-                break
-            total += batch
-            time.sleep(pause_between_s)
-        return total
-
     def prune_old_data(
         self,
         *,
@@ -2100,38 +2076,25 @@ class ControllerTransitions:
         workers_deleted = 0
         while not _stopped():
             with self._db.read_snapshot() as snap:
-                row = snap.fetchone(
-                    "SELECT worker_id FROM workers WHERE (active = 0 OR healthy = 0) AND last_heartbeat_ms < ? LIMIT 1",
-                    (worker_cutoff_ms,),
-                )
-            if row is None:
+                worker_id = self._store.workers.find_prunable(snap, worker_cutoff_ms)
+            if worker_id is None:
                 break
-            worker_id = row["worker_id"]
             with self._db.transaction() as cur:
-                _remove_worker(cur, self._store.workers, WorkerId(str(worker_id)))
+                _remove_worker(cur, self._store.workers, worker_id)
             log_event("worker_pruned", str(worker_id))
             workers_deleted += 1
             time.sleep(pause_between_s)
 
         # 3. Task profiles: batch of 1000 per transaction
         profile_cutoff_ms = now_ms - profile_retention.to_ms()
-        # 4a. Delete stale profiles by age.
-        profiles_deleted = self._batch_delete(
-            "DELETE FROM profiles.task_profiles WHERE rowid IN "
-            "(SELECT rowid FROM profiles.task_profiles WHERE captured_at_ms < ? LIMIT 1000)",
-            (profile_cutoff_ms,),
-            _stopped,
-            pause_between_s,
+        profiles_deleted = self._store.tasks.prune_stale_profiles(
+            cutoff_ms=profile_cutoff_ms,
+            stopped=_stopped,
+            pause_between_s=pause_between_s,
         )
-        # 4b. Delete orphan profiles whose task no longer exists.
-        profiles_deleted += self._batch_delete(
-            "DELETE FROM profiles.task_profiles WHERE rowid IN "
-            "(SELECT p.rowid FROM profiles.task_profiles p"
-            " LEFT JOIN tasks t ON p.task_id = t.task_id"
-            " WHERE t.task_id IS NULL LIMIT 1000)",
-            (),
-            _stopped,
-            pause_between_s,
+        profiles_deleted += self._store.tasks.prune_orphan_profiles(
+            stopped=_stopped,
+            pause_between_s=pause_between_s,
         )
 
         result = PruneResult(
@@ -2274,10 +2237,8 @@ class ControllerTransitions:
 
     def set_worker_health_for_test(self, worker_id: WorkerId, healthy: bool) -> None:
         """Test helper: set worker health in DB."""
-        self._db.execute(
-            "UPDATE workers SET healthy = ?, consecutive_failures = ? WHERE worker_id = ?",
-            (1 if healthy else 0, 0 if healthy else 1, str(worker_id)),
-        )
+        with self._store.transaction() as cur:
+            self._store.workers.set_health_for_test(cur, worker_id, healthy)
 
     def set_worker_attribute_for_test(self, worker_id: WorkerId, key: str, value: AttributeValue) -> None:
         """Test helper: upsert one worker attribute in DB."""
@@ -2590,10 +2551,8 @@ class ControllerTransitions:
 
     def set_worker_consecutive_failures_for_test(self, worker_id: WorkerId, consecutive_failures: int) -> None:
         """Test helper: set worker consecutive failure count in DB."""
-        self._db.execute(
-            "UPDATE workers SET consecutive_failures = ? WHERE worker_id = ?",
-            (consecutive_failures, str(worker_id)),
-        )
+        with self._store.transaction() as cur:
+            self._store.workers.set_consecutive_failures_for_test(cur, worker_id, consecutive_failures)
 
     def set_task_state_for_test(
         self,
@@ -2604,17 +2563,8 @@ class ControllerTransitions:
         exit_code: int | None = None,
     ) -> None:
         """Test helper: set task state directly in DB."""
-        if state in ACTIVE_TASK_STATES:
-            self._db.execute(
-                "UPDATE tasks SET state = ?, error = ?, exit_code = ? WHERE task_id = ?",
-                (state, error, exit_code, task_id.to_wire()),
-            )
-        else:
-            self._db.execute(
-                "UPDATE tasks SET state = ?, error = ?, exit_code = ?, "
-                "current_worker_id = NULL, current_worker_address = NULL WHERE task_id = ?",
-                (state, error, exit_code, task_id.to_wire()),
-            )
+        with self._store.transaction() as cur:
+            self._store.tasks.set_state_for_test(cur, task_id, state, error=error, exit_code=exit_code)
 
     def create_attempt_for_test(self, task_id: JobName, worker_id: WorkerId) -> int:
         """Test helper: append a new task_attempt without finalizing prior attempt."""
