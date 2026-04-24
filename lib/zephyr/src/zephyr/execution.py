@@ -1323,9 +1323,15 @@ def _regroup_result_refs(
     Each reducer reads the per-mapper ``.scatter_meta`` sidecars in parallel
     to build its own ``ScatterReader`` without coordinator-side consolidation.
     """
-    num_output = max(max(result_refs.keys(), default=0) + 1, input_shard_count)
-    if output_shard_count is not None:
-        num_output = max(num_output, output_shard_count)
+    if is_scatter and output_shard_count is not None:
+        # Scatter routes records into exactly ``output_shard_count`` buckets via
+        # ``hash(key) % output_shard_count``; spawning more reduce tasks than that
+        # produces empty output files for shard indices that no record hashes to.
+        num_output = output_shard_count
+    else:
+        num_output = max(max(result_refs.keys(), default=0) + 1, input_shard_count)
+        if output_shard_count is not None:
+            num_output = max(num_output, output_shard_count)
 
     if is_scatter:
         # Collect all scatter file paths from all workers. The coordinator
