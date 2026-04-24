@@ -73,6 +73,16 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    # Attention gate mode: "full" (default), "none", "truncated", "lora".
+    attn_gate_mode: str = "full"
+    # Fraction of hidden_dim for truncated gate_dim or LoRA low_rank.
+    # Only used when attn_gate_mode is "truncated" or "lora".
+    attn_gate_fraction: float = 1.0
+    # Partial key offset: "none" (default), "every_4th", "every_layer".
+    # Applies partial RoPE (first half of head_dim) and shifts stationary
+    # key dims forward by one position to enable 1-layer induction.
+    partial_key_offset: str = "none"
+    last_layer_pko: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -113,24 +123,51 @@ class CausalSelfAttention(eqx.Module):
     w_k: Float[Array, "D MH"]
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
-    attn_gate: Float[Array, "D N"]
+    attn_gate: Float[Array, "... N"] | None
+    attn_gate_up: Float[Array, "R N"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+
+        gate_mode = cfg.attn_gate_mode
+        gate_frac = cfg.attn_gate_fraction
+        attn_gate: jax.Array | None = None
+        attn_gate_up: jax.Array | None = None
+
+        if gate_mode == "full":
+            attn_gate = reshard(jnp.zeros((d, n)), P(None, None))
+        elif gate_mode == "truncated":
+            gate_dim = max(1, int(d * gate_frac))
+            attn_gate = reshard(jnp.zeros((gate_dim, n)), P(None, None))
+        elif gate_mode == "lora":
+            low_rank = max(1, int(d * gate_frac))
+            attn_gate = reshard(jnp.zeros((d, low_rank)), P(None, None))
+            attn_gate_up = reshard(jnp.zeros((low_rank, n)), P(None, None))
+        elif gate_mode == "none":
+            pass
+        else:
+            raise ValueError(f"Unknown attn_gate_mode: {gate_mode!r}")
+
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
-            attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            attn_gate=attn_gate,
+            attn_gate_up=attn_gate_up,
             cfg=cfg,
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        use_partial_key_offset: bool = False,
+    ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
@@ -140,7 +177,21 @@ class CausalSelfAttention(eqx.Module):
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
         q = rms_norm(q)
         k = rms_norm(k)
-        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+        if use_partial_key_offset:
+            # Partial RoPE: only rotate the first half of head dims.
+            # Concatenate rotated and stationary halves to avoid sharding issues
+            # with .at[].set() on model-sharded arrays.
+            half = head_dim // 2
+            q_rot, k_rot = apply_rotary_embedding(
+                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
+            )
+            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
+            # Shift stationary key dims forward by one position (enables 1-layer induction).
+            k_stationary = k[..., half:]
+            k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
+            k = jnp.concatenate([k_rot, k_shifted], axis=-1)
+        else:
+            q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
@@ -150,9 +201,22 @@ class CausalSelfAttention(eqx.Module):
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
-        # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
-        attn_out = gate * attn_out
+        # Headwise gating: sigmoid produces one scalar per head.
+        if self.attn_gate is not None:
+            if self.attn_gate_up is not None:
+                # LoRA: x @ W_down @ W_up -> [B, S, N]
+                gate_logits = jnp.einsum("bsd,dr->bsr", x, self.attn_gate)
+                gate_logits = jnp.einsum("bsr,rn->bsn", gate_logits, self.attn_gate_up)
+            else:
+                gate_dim = self.attn_gate.shape[0]
+                if gate_dim < x.shape[-1]:
+                    # Truncated: use first gate_dim elements of activation
+                    gate_logits = jnp.einsum("bsg,gn->bsn", x[..., :gate_dim], self.attn_gate)
+                else:
+                    # Full: x @ attn_gate -> [B, S, N]
+                    gate_logits = jnp.einsum("bsd,dn->bsn", x, self.attn_gate)
+            gate = 2 * jax.nn.sigmoid(gate_logits)[..., None]
+            attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
@@ -438,9 +502,10 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        use_partial_key_offset: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask)
+        x = x + self.attn(attn_in, mask, use_partial_key_offset=use_partial_key_offset)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -496,10 +561,15 @@ class Transformer(eqx.Module):
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
 
+        pko_mode = cfg.partial_key_offset
+        num_blocks = len(self.blocks)
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
-            layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            is_last = i == num_blocks - 1
+            is_long = i % 4 == 3 or (cfg.last_layer_pko and is_last)
+            layer_mask = long_mask if is_long else short_mask
+            use_pko = (pko_mode == "every_layer") or (pko_mode == "every_4th" and is_long)
+            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask, use_pko)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
