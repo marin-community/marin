@@ -1027,3 +1027,134 @@ A ~50-line script that loads the 6 `tracker_metrics.jsonl` files (3 × 1e20 + 3 
 - AdamH heuristic — William Held, PR #2447 "Beta2 gets a bit wacky with very large batch sizes...".
 
 When in doubt on scaling/analysis decisions, `git log --format='%an %s' -- <file>` → look for Will.
+
+---
+
+## Project goal #1 — midtraining loss predictor (detailed plan, 2026-04-23)
+
+### Why this is the right next thing
+
+Project goal #1 reads *"predict loss trajectory for midtraining."* The concrete operational payoff is: **given small pilot runs at 1e20 and 1e21, forecast final eval metrics at 1e22 and 1e23 without actually running them** (or at least: predict enough of the curve shape to reject bad LR schedules before committing v4-512 / v4-1024 compute). The sweep tracked in this logbook produces exactly the training signal such a predictor would consume.
+
+### Empirical pre-conditions already established
+
+1. **Noise floor ≈ 0.01 abs loss** on final train loss. Evidence: `lr=0.67` and `lr=0.67-v2` (identical config, different RNG/wandb run) finished at 0.781 and 0.781 respectively; `lr=0.83` and `lr=0.83-v2` at 0.772 and 0.782. Any predictor with MAE ≪ 0.01 is overfitting noise.
+2. **Per-step data source**: `tracker_metrics.jsonl` at the GCS output path ONLY contains `{"config": ..., "summary": ...}` — i.e. one row of final values, NOT a time-series. The time-series lives exclusively in W&B. Pull it via `wandb.Api().run(...).scan_history(keys=[...], page_size=2000)`. Train metrics come at every step (4768 rows / run); evals come at `steps_per_eval=200` cadence (~48 rows / run, including step 0 pre-training eval).
+3. **Three canonical 1e20 runs available with clean W&B**:
+   - `delphi-1e20-iso-d2048-L21-math-10b-lr0.5-4d19a2`
+   - `delphi-1e20-iso-d2048-L21-math-10b-lr0.67-v2-a176ff`
+   - `delphi-1e20-iso-d2048-L21-math-10b-lr0.83-v2-4487d2`
+4. **Retention degrades during midtrain** (confirmed empirically): Paloma c4_en starts at 2.8586 for all runs (pretrain-only), and ends at 3.15 (`lr=0.5`), 3.29 (`lr=0.67-v2`), 3.29 (`lr=0.83-v2`). Higher midtrain LR → more retention damage. This is the classic specialization/retention tradeoff. The predictor must handle both monotone-downward (train/loss on math) and monotone-upward (Paloma c4_en) metrics.
+
+### Functional form to fit
+
+Core: schedule-aware power-law in cumulative learning rate.
+
+```
+L(u) = L_∞ + A × (U - u)^c
+```
+
+where
+
+- `u(t) = Σ_{s ≤ t} lr(s)` = cumulative `optim/learning_rate` series from W&B.
+- `U = u(T)` = total LR budget consumed at end of training.
+- `L_∞`, `A`, `c` are the three fit parameters.
+- For monotone-decreasing metrics (train/loss): `A > 0`, `c > 0`, `L_∞` = asymptote from below.
+- For monotone-increasing metrics (Paloma retention): `A < 0`, `c > 0`, `L_∞` = asymptote from above.
+
+Why `optim/learning_rate` and not `optim/adam_lr`: peak LRs differ ~60× (2.24e-3 to 3.72e-3 for `learning_rate` vs 3.69e-5 to 6.13e-5 for `adam_lr`), and `learning_rate` governs the matrix-param updates that dominate midtraining dynamics.
+
+### Baselines (in order of ambition)
+
+| Baseline | Form | Fit on | Purpose |
+|---|---|---|---|
+| **B0: last-value** | `L̂ = L(t_prefix_end)` | — | Trivial control. Beats every other baseline at 99% prefix. |
+| **B1: raw-step power** | `L(t) = a + b/√t` | `step > 500`, back half of observed prefix | Schedule-unaware baseline. If B2 doesn't beat this, something's wrong. |
+| **B2: schedule-aware power** | `L(u) = L_∞ + A(U-u)^c` | `step > 500`, back half of prefix | The actual proposed predictor. |
+
+### Evaluation protocol
+
+**Target quantity:** EMA-smoothed loss over the last window `[4600, 4767]`. Using single-step final loss introduces ~0.01 noise; averaging over 167 points puts the target well below noise floor.
+
+**Metrics:**
+1. `train/loss` — smoothest curve, machinery validation (does the functional form fit anything?).
+2. `eval/paloma/c4_en/loss` — retention anchor. Rising; tests whether the form handles sign change.
+3. `eval/paloma/*_loss` aggregates — broader retention panel (future).
+4. Math-specific eval (pending) — actual scientific target.
+
+**Prefixes evaluated:** `{30%, 50%, 80%}` of total `num_train_steps` (so {1430, 2384, 3814} for 1e20 runs). Each prefix truncates the fit set; we then predict the step-4767 target from the remaining fit.
+
+**Tests (easiest → hardest, per project goal #1):**
+
+1. **Self-prefix** (tractable with only 3 runs): for each (run, metric), fit on first X% and predict own final. Pass = B2 MAE ≤ 2 × noise floor by prefix=30%.
+2. **Cross-LR, same base** (3 runs → LOO over lr_factor): fit shared `c` (+ optionally shared `A`) on two 1e20 runs; predict third run's final using only its first 30%. Pass = MAE ≤ 3 × noise floor.
+3. **Cross-base** (blocked on 1e21 sweep): fit all 1e20 curves; predict 1e21 finals from only `(lr_factor, base_params)` features + first 30% of 1e21. This is the project-goal-1 money shot.
+4. **Cross-scale** (blocked on 1e22/1e23 runs): extrapolate from 1e20 + 1e21 to larger bases.
+
+Tests 1-2 are validations of the functional form; tests 3-4 are the scientific claim.
+
+### Implementation plan
+
+**File:** `scripts/analysis/midtrain_loss_predictor.py`.
+
+**Dependencies available in the repo venv**: `pandas`, `numpy`, `scipy.optimize`, `wandb`, `matplotlib` (via plotly import guard). No new requirements.
+
+**Structure** (~250 lines):
+
+```python
+RUNS_1E20 = [
+    RunSpec("lr=0.5",  lr_factor=0.5,  wandb_name="delphi-...-lr0.5-4d19a2"),
+    RunSpec("lr=0.67", lr_factor=0.67, wandb_name="delphi-...-lr0.67-v2-a176ff"),
+    RunSpec("lr=0.83", lr_factor=0.83, wandb_name="delphi-...-lr0.83-v2-4487d2"),
+]
+
+def load_run(spec):  # wandb.Api().run.scan_history → DataFrame
+def ema_smooth(df, halflife=100):  # train/loss only; evals are already low-freq
+def compute_cumulative_lr(df):  # cumsum of optim/learning_rate
+def fit_last_value(df, prefix_frac, metric):
+def fit_sqrt_t(df, prefix_frac, metric, min_step=500):
+def fit_cumlr_power(df, prefix_frac, metric, min_step=500):  # L_∞ + A (U-u)^c
+def evaluate_final(df, metric, window=(4600, 4767)):  # target quantity
+
+def run_self_prefix(runs, metrics, prefixes):
+    # Returns DataFrame: (run, metric, prefix, baseline, predicted, target, abs_err)
+
+def run_cross_lr_loo(runs, metrics, prefixes):
+    # Hold out one LR; fit shared c on others; predict held-out final from its 30% prefix
+
+def main():
+    # 1. Load all runs
+    # 2. Run self_prefix + cross_lr_loo
+    # 3. Report tables: MAE per (baseline, prefix, metric)
+    # 4. Report c stability (fit c across prefixes; warn if std > 0.1)
+    # 5. Write CSV of full prediction table to scripts/analysis/midtrain_loss_predictor_out.csv
+    # 6. Print human-readable summary to stdout
+```
+
+**Outputs:**
+- Stdout: summary table (MAE per method × prefix × metric) + c-stability report.
+- CSV: `scripts/analysis/midtrain_loss_predictor_out.csv` with every prediction.
+- Optional: matplotlib figures for (a) loss vs step raw, (b) loss vs cumulative-LR (should show partial collapse across LR factors).
+
+**Execution:** `uv run python scripts/analysis/midtrain_loss_predictor.py`. Should complete in <2 min (3 W&B fetches + 3×3×3 = 27 fit calls).
+
+### Success criteria for phase 1
+
+- B2 (schedule-aware) beats B1 (raw-step) by >20% on MAE for train/loss at prefix ≤ 50%. If not, the `(U-u)^c` parameterization isn't adding value and we should revisit.
+- B2 MAE ≤ 2× noise floor (≤ 0.02) on self-prefix test at prefix=30% for train/loss.
+- `c` stable across prefixes (std ≤ 0.1 across {30%, 50%, 80%} prefix choices) per-run.
+- For Paloma c4_en (rising metric): B2 handles the sign change gracefully. If `c` has to go imaginary or fit fails numerically, need a separate form for rising metrics.
+- Cross-LR LOO MAE ≤ 3× noise floor on train/loss. Higher on Paloma is expected due to noisier eval series.
+
+Meeting these → good enough to commit 1e21 compute and run phase 2. Not meeting → stop, understand why, adjust form.
+
+### Out of scope for phase 1
+
+- Joint multi-metric fitting (we fit metric-by-metric).
+- Multi-base extrapolation (blocked on 1e21).
+- Uncertainty quantification (bootstrapping or Bayesian fit) — cheap win for phase 2.
+- Math-eval loss analysis — blocked on actual math evals being computed on the checkpoints (those are a separate step not yet done).
+
+### Status
+
+Phase 1 script is about to be implemented. Will append results table + c-stability observations to this section once it runs.
