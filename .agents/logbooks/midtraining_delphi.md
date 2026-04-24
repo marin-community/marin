@@ -32,7 +32,16 @@
 
 ## Goal
 
+### Overarching project goals (two tracks)
+
+1. **Predict loss trajectory for midtraining.** Build a calibrated expectation for how math-eval loss evolves when you continue-train an existing pretrain checkpoint on a math-heavy dataset, so that larger/more-expensive midtrain runs can be scoped (token budget, LR schedule, decay shape) from smaller runs instead of guessed. This Delphi × Nemotron-CC-Math sweep is a primary data point for that predictor.
+2. **Pick a good midtraining dataset.** Compare candidate math-heavy datasets (the Nemotron-CC-Math quality tiers being our current anchor) on their effect on post-midtrain downstream evals, so that future runs don't waste compute on a poorly-curated corpus.
+
+### This logbook's subgoal (the concrete sweep tracked here)
+
 Run a small LR sweep that continues-trains the two smallest existing AdamH-trained Marin checkpoints on **10 B tokens of `nemotron_cc_math_v1/4plus`**, to de-risk a Mantis-style math-midtraining recipe before spending v4-512 / v4-1024 time on Delphi 1e22 / 1e23. We're looking for the highest peak LR that still drops the math-eval loss monotonically.
+
+This subgoal feeds both tracks: the LR-factor × final-loss pairs inform the loss-trajectory predictor (track 1), and the dataset is held fixed at `nemotron_cc_math_v1/4plus` so the signal is attributable to LR choice — a prerequisite for the dataset-selection track (2), which requires LR to be a solved variable before dataset-quality can be cleanly isolated.
 
 ## User-specified constraints
 
