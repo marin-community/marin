@@ -30,6 +30,7 @@ from iris.cluster.controller.db import (
     FAILURE_TASK_STATES,
     NON_TERMINAL_TASK_STATES,
     ControllerDB,
+    QuerySnapshot,
     TransactionCursor,
     task_row_can_be_scheduled,
     task_row_is_finished,
@@ -697,12 +698,18 @@ class ControllerTransitions:
         health: WorkerHealthTracker | None = None,
     ):
         self._store = store
-        # Escape hatch kept only while the phased migration moves SQL out of
-        # this file. Direct ``self._db`` calls should decrease every phase
-        # (jobs, tasks, attempts, workers, dispatch) and hit zero at the end;
-        # new code should go through ``self._store`` instead.
-        self._db: ControllerDB = store._db
         self._health = health or WorkerHealthTracker()
+
+    @property
+    def _db(self) -> "ControllerDB":
+        """Compatibility shim for tests that read directly via ``state._db``.
+
+        Production code in this module never touches ``_db``; it routes
+        through ``self._store`` (transactions, snapshots) or store
+        sub-objects. This property exists only so existing tests can continue
+        to call ``state._db.snapshot(...)`` for ad-hoc reads.
+        """
+        return self._store._db
 
     def _recompute_job_state(self, cur: TransactionCursor, job_id: JobName) -> int | None:
         basis = self._store.jobs.get_recompute_basis(cur, job_id)
@@ -746,13 +753,12 @@ class ControllerTransitions:
         self._store.jobs.apply_recomputed_state(cur, job_id, new_state, now_ms, error)
         return new_state
 
-    def replace_reservation_claims(self, claims: dict[WorkerId, ReservationClaim]) -> None:
-        """Replace all reservation claims atomically."""
-        with self._db.transaction() as cur:
-            self._store.reservations.replace_claims(
-                cur,
-                {worker_id: (claim.job_id, claim.entry_idx) for worker_id, claim in claims.items()},
-            )
+    def replace_reservation_claims(self, cur: TransactionCursor, claims: dict[WorkerId, ReservationClaim]) -> None:
+        """Replace all reservation claims."""
+        self._store.reservations.replace_claims(
+            cur,
+            {worker_id: (claim.job_id, claim.entry_idx) for worker_id, claim in claims.items()},
+        )
 
     # =========================================================================
     # Command API
@@ -760,309 +766,309 @@ class ControllerTransitions:
 
     def submit_job(
         self,
+        cur: TransactionCursor,
         job_id: JobName,
         request: controller_pb2.Controller.LaunchJobRequest,
         ts: Timestamp,
     ) -> SubmitJobResult:
-        """Submit a job and expand its tasks in one DB transaction."""
+        """Insert the job row and expand its tasks. Caller owns the transaction."""
         submitted_ms = ts.epoch_ms()
         created_task_ids: list[JobName] = []
 
-        with self._db.transaction() as cur:
-            effective_submission_ms = self._store.reservations.next_submission_ms(cur, submitted_ms)
+        effective_submission_ms = self._store.reservations.next_submission_ms(cur, submitted_ms)
 
-            parent_job_id = job_id.parent.to_wire() if job_id.parent is not None else None
-            root_submitted_ms = effective_submission_ms
-            if job_id.parent is not None:
-                # `launch_job` is responsible for rejecting submissions with a
-                # missing parent; if we reach here the parent row must exist.
-                parent_root = self._store.jobs.get_root_submitted_at_ms(cur, job_id.parent)
-                if parent_root is None:
-                    raise ValueError(f"Cannot submit job {job_id}: parent {parent_job_id} is absent from the database")
-                root_submitted_ms = parent_root
+        parent_job_id = job_id.parent.to_wire() if job_id.parent is not None else None
+        root_submitted_ms = effective_submission_ms
+        if job_id.parent is not None:
+            # `launch_job` is responsible for rejecting submissions with a
+            # missing parent; if we reach here the parent row must exist.
+            parent_root = self._store.jobs.get_root_submitted_at_ms(cur, job_id.parent)
+            if parent_root is None:
+                raise ValueError(f"Cannot submit job {job_id}: parent {parent_job_id} is absent from the database")
+            root_submitted_ms = parent_root
 
-            deadline_epoch_ms: int | None = None
-            if request.HasField("scheduling_timeout") and request.scheduling_timeout.milliseconds > 0:
-                deadline_epoch_ms = (
-                    Timestamp.from_ms(effective_submission_ms)
-                    .add(duration_from_proto(request.scheduling_timeout))
-                    .epoch_ms()
-                )
+        deadline_epoch_ms: int | None = None
+        if request.HasField("scheduling_timeout") and request.scheduling_timeout.milliseconds > 0:
+            deadline_epoch_ms = (
+                Timestamp.from_ms(effective_submission_ms)
+                .add(duration_from_proto(request.scheduling_timeout))
+                .epoch_ms()
+            )
 
-            self._store.jobs.ensure_user(cur, job_id.user, effective_submission_ms)
-            # No user_budgets row is created here: absence means "apply
-            # UserBudgetDefaults". Rows exist only for tier seeds from cluster
-            # config (see reconcile_user_budget_tiers) and admin overrides via
-            # set_user_budget.
+        self._store.jobs.ensure_user(cur, job_id.user, effective_submission_ms)
+        # No user_budgets row is created here: absence means "apply
+        # UserBudgetDefaults". Rows exist only for tier seeds from cluster
+        # config (see reconcile_user_budget_tiers) and admin overrides via
+        # set_user_budget.
 
-            # Resolve priority band: use explicit request value, inherit from parent, or default to INTERACTIVE.
-            requested_band = int(request.priority_band)
-            if requested_band != job_pb2.PRIORITY_BAND_UNSPECIFIED:
-                band_sort_key = requested_band
-            elif job_id.parent is not None:
-                parent_band = self._store.tasks.get_priority_band_for_job(cur, job_id.parent)
-                if parent_band is not None:
-                    band_sort_key = parent_band
-                else:
-                    band_sort_key = job_pb2.PRIORITY_BAND_INTERACTIVE
+        # Resolve priority band: use explicit request value, inherit from parent, or default to INTERACTIVE.
+        requested_band = int(request.priority_band)
+        if requested_band != job_pb2.PRIORITY_BAND_UNSPECIFIED:
+            band_sort_key = requested_band
+        elif job_id.parent is not None:
+            parent_band = self._store.tasks.get_priority_band_for_job(cur, job_id.parent)
+            if parent_band is not None:
+                band_sort_key = parent_band
             else:
                 band_sort_key = job_pb2.PRIORITY_BAND_INTERACTIVE
+        else:
+            band_sort_key = job_pb2.PRIORITY_BAND_INTERACTIVE
 
-            replicas = int(request.replicas)
-            validation_error: str | None = None
-            if replicas < 1:
-                validation_error = f"Job {job_id} has invalid replicas={replicas}; must be >= 1"
-                replicas = 0
-            elif replicas > MAX_REPLICAS_PER_JOB:
-                validation_error = f"Job {job_id} replicas={replicas} exceeds max {MAX_REPLICAS_PER_JOB}"
-                replicas = 0
+        replicas = int(request.replicas)
+        validation_error: str | None = None
+        if replicas < 1:
+            validation_error = f"Job {job_id} has invalid replicas={replicas}; must be >= 1"
+            replicas = 0
+        elif replicas > MAX_REPLICAS_PER_JOB:
+            validation_error = f"Job {job_id} replicas={replicas} exceeds max {MAX_REPLICAS_PER_JOB}"
+            replicas = 0
 
-            state = job_pb2.JOB_STATE_PENDING if validation_error is None else job_pb2.JOB_STATE_FAILED
-            finished_ms = None if validation_error is None else effective_submission_ms
-            has_reservation = _has_reservation_flag(request)
+        state = job_pb2.JOB_STATE_PENDING if validation_error is None else job_pb2.JOB_STATE_FAILED
+        finished_ms = None if validation_error is None else effective_submission_ms
+        has_reservation = _has_reservation_flag(request)
 
-            # Scheduling fields extracted from request proto.
-            res = request.resources if request.HasField("resources") else None
-            res_cpu = int(res.cpu_millicores) if res else 0
-            res_mem = int(res.memory_bytes) if res else 0
-            res_disk = int(res.disk_bytes) if res else 0
-            res_device = proto_to_json(res.device) if res else None
-            constraints_json = constraints_to_json(request.constraints)
-            has_cosched = 1 if request.HasField("coscheduling") else 0
-            cosched_group = request.coscheduling.group_by if has_cosched else ""
-            sched_timeout: int | None = (
-                int(request.scheduling_timeout.milliseconds)
-                if request.HasField("scheduling_timeout") and request.scheduling_timeout.milliseconds > 0
-                else None
-            )
-            max_failures = int(request.max_task_failures)
-            # Serialize dispatch config fields for job_config.
-            entrypoint_json = entrypoint_to_json(request.entrypoint)
-            environment_json = proto_to_json(request.environment)
-            ports_json = json.dumps(list(request.ports)) if request.ports else "[]"
-            reservation_json = reservation_to_json(request)
-            timeout_ms: int | None = int(request.timeout.milliseconds) if request.timeout.milliseconds > 0 else None
+        # Scheduling fields extracted from request proto.
+        res = request.resources if request.HasField("resources") else None
+        res_cpu = int(res.cpu_millicores) if res else 0
+        res_mem = int(res.memory_bytes) if res else 0
+        res_disk = int(res.disk_bytes) if res else 0
+        res_device = proto_to_json(res.device) if res else None
+        constraints_json = constraints_to_json(request.constraints)
+        has_cosched = 1 if request.HasField("coscheduling") else 0
+        cosched_group = request.coscheduling.group_by if has_cosched else ""
+        sched_timeout: int | None = (
+            int(request.scheduling_timeout.milliseconds)
+            if request.HasField("scheduling_timeout") and request.scheduling_timeout.milliseconds > 0
+            else None
+        )
+        max_failures = int(request.max_task_failures)
+        # Serialize dispatch config fields for job_config.
+        entrypoint_json = entrypoint_to_json(request.entrypoint)
+        environment_json = proto_to_json(request.environment)
+        ports_json = json.dumps(list(request.ports)) if request.ports else "[]"
+        reservation_json = reservation_to_json(request)
+        timeout_ms: int | None = int(request.timeout.milliseconds) if request.timeout.milliseconds > 0 else None
 
-            job_name_lower = request.name.lower()
-            self._store.jobs.insert(
-                cur,
-                JobInsertParams(
-                    job_id=job_id,
-                    user_id=job_id.user,
-                    parent_job_id=parent_job_id,
-                    root_job_id=job_id.root_job.to_wire(),
-                    depth=job_id.depth,
-                    state=state,
-                    submitted_at_ms=effective_submission_ms,
-                    root_submitted_at_ms=root_submitted_ms,
-                    started_at_ms=None,
-                    finished_at_ms=finished_ms,
-                    scheduling_deadline_epoch_ms=deadline_epoch_ms,
-                    error=validation_error,
-                    exit_code=None,
-                    num_tasks=replicas,
-                    is_reservation_holder=False,
-                    name=job_name_lower,
-                    has_reservation=bool(has_reservation),
-                ),
-            )
-            self._store.jobs.insert_config(
-                cur,
-                JobConfigInsertParams(
-                    job_id=job_id,
-                    name=job_name_lower,
-                    has_reservation=bool(has_reservation),
-                    res_cpu_millicores=res_cpu,
-                    res_memory_bytes=res_mem,
-                    res_disk_bytes=res_disk,
-                    res_device_json=res_device,
-                    constraints_json=constraints_json,
-                    has_coscheduling=bool(has_cosched),
-                    coscheduling_group_by=cosched_group,
-                    scheduling_timeout_ms=sched_timeout,
-                    max_task_failures=max_failures,
-                    entrypoint_json=entrypoint_json,
-                    environment_json=environment_json,
-                    bundle_id=request.bundle_id,
-                    ports_json=ports_json,
-                    max_retries_failure=int(request.max_retries_failure),
-                    max_retries_preemption=int(request.max_retries_preemption),
-                    timeout_ms=timeout_ms,
-                    preemption_policy=int(request.preemption_policy),
-                    existing_job_policy=int(request.existing_job_policy),
-                    priority_band=int(request.priority_band),
-                    task_image=request.task_image,
-                    submit_argv_json=json.dumps(list(request.submit_argv)),
-                    reservation_json=reservation_json,
-                    fail_if_exists=bool(request.fail_if_exists),
-                ),
-            )
+        job_name_lower = request.name.lower()
+        self._store.jobs.insert(
+            cur,
+            JobInsertParams(
+                job_id=job_id,
+                user_id=job_id.user,
+                parent_job_id=parent_job_id,
+                root_job_id=job_id.root_job.to_wire(),
+                depth=job_id.depth,
+                state=state,
+                submitted_at_ms=effective_submission_ms,
+                root_submitted_at_ms=root_submitted_ms,
+                started_at_ms=None,
+                finished_at_ms=finished_ms,
+                scheduling_deadline_epoch_ms=deadline_epoch_ms,
+                error=validation_error,
+                exit_code=None,
+                num_tasks=replicas,
+                is_reservation_holder=False,
+                name=job_name_lower,
+                has_reservation=bool(has_reservation),
+            ),
+        )
+        self._store.jobs.insert_config(
+            cur,
+            JobConfigInsertParams(
+                job_id=job_id,
+                name=job_name_lower,
+                has_reservation=bool(has_reservation),
+                res_cpu_millicores=res_cpu,
+                res_memory_bytes=res_mem,
+                res_disk_bytes=res_disk,
+                res_device_json=res_device,
+                constraints_json=constraints_json,
+                has_coscheduling=bool(has_cosched),
+                coscheduling_group_by=cosched_group,
+                scheduling_timeout_ms=sched_timeout,
+                max_task_failures=max_failures,
+                entrypoint_json=entrypoint_json,
+                environment_json=environment_json,
+                bundle_id=request.bundle_id,
+                ports_json=ports_json,
+                max_retries_failure=int(request.max_retries_failure),
+                max_retries_preemption=int(request.max_retries_preemption),
+                timeout_ms=timeout_ms,
+                preemption_policy=int(request.preemption_policy),
+                existing_job_policy=int(request.existing_job_policy),
+                priority_band=int(request.priority_band),
+                task_image=request.task_image,
+                submit_argv_json=json.dumps(list(request.submit_argv)),
+                reservation_json=reservation_json,
+                fail_if_exists=bool(request.fail_if_exists),
+            ),
+        )
 
-            # Store workdir files in separate table.
-            self._store.jobs.insert_workdir_files(cur, job_id, dict(request.entrypoint.workdir_files))
+        # Store workdir files in separate table.
+        self._store.jobs.insert_workdir_files(cur, job_id, dict(request.entrypoint.workdir_files))
 
-            if validation_error is None:
-                insertion_base = self._store.jobs.reserve_priority_insertion_base(cur)
-                for idx in range(replicas):
-                    task_id = job_id.task(idx).to_wire()
-                    created_task_ids.append(JobName.from_wire(task_id))
+        if validation_error is None:
+            insertion_base = self._store.jobs.reserve_priority_insertion_base(cur)
+            for idx in range(replicas):
+                task_id = job_id.task(idx).to_wire()
+                created_task_ids.append(JobName.from_wire(task_id))
+                self._store.tasks.insert(
+                    cur,
+                    TaskInsertParams(
+                        task_id=JobName.from_wire(task_id),
+                        job_id=job_id,
+                        task_index=idx,
+                        state=job_pb2.TASK_STATE_PENDING,
+                        submitted_at_ms=effective_submission_ms,
+                        max_retries_failure=int(request.max_retries_failure),
+                        max_retries_preemption=int(request.max_retries_preemption),
+                        priority_neg_depth=-job_id.depth,
+                        priority_root_submitted_ms=root_submitted_ms,
+                        priority_insertion=insertion_base + idx,
+                        priority_band=band_sort_key,
+                    ),
+                )
+            if request.HasField("reservation") and request.reservation.entries:
+                holder_id = job_id.child(RESERVATION_HOLDER_JOB_NAME)
+                entry = request.reservation.entries[0]
+                holder_request = controller_pb2.Controller.LaunchJobRequest(
+                    name=holder_id.to_wire(),
+                    entrypoint=request.entrypoint,
+                    resources=entry.resources,
+                    environment=request.environment,
+                    replicas=len(request.reservation.entries),
+                    max_retries_preemption=DEFAULT_MAX_RETRIES_PREEMPTION,
+                )
+                merged = merge_constraints(
+                    constraints_from_resources(entry.resources),
+                    [Constraint.from_proto(c) for c in entry.constraints or request.constraints],
+                )
+                for constraint in merged:
+                    holder_request.constraints.append(constraint.to_proto())
+                holder_res = holder_request.resources if holder_request.HasField("resources") else None
+                holder_res_cpu = int(holder_res.cpu_millicores) if holder_res else 0
+                holder_res_mem = int(holder_res.memory_bytes) if holder_res else 0
+                holder_res_disk = int(holder_res.disk_bytes) if holder_res else 0
+                holder_res_device = proto_to_json(holder_res.device) if holder_res else None
+                holder_constraints_json = constraints_to_json(holder_request.constraints)
+                holder_name_lower = holder_request.name.lower()
+                self._store.jobs.insert(
+                    cur,
+                    JobInsertParams(
+                        job_id=holder_id,
+                        user_id=holder_id.user,
+                        parent_job_id=job_id.to_wire(),
+                        root_job_id=holder_id.root_job.to_wire(),
+                        depth=holder_id.depth,
+                        state=job_pb2.JOB_STATE_PENDING,
+                        submitted_at_ms=effective_submission_ms,
+                        root_submitted_at_ms=root_submitted_ms,
+                        started_at_ms=None,
+                        finished_at_ms=None,
+                        scheduling_deadline_epoch_ms=None,
+                        error=None,
+                        exit_code=None,
+                        num_tasks=len(request.reservation.entries),
+                        is_reservation_holder=True,
+                        name=holder_name_lower,
+                        has_reservation=False,
+                    ),
+                )
+                holder_entrypoint_json = entrypoint_to_json(holder_request.entrypoint)
+                holder_environment_json = proto_to_json(holder_request.environment)
+                self._store.jobs.insert_config(
+                    cur,
+                    JobConfigInsertParams(
+                        job_id=holder_id,
+                        name=holder_name_lower,
+                        has_reservation=False,
+                        res_cpu_millicores=holder_res_cpu,
+                        res_memory_bytes=holder_res_mem,
+                        res_disk_bytes=holder_res_disk,
+                        res_device_json=holder_res_device,
+                        constraints_json=holder_constraints_json,
+                        has_coscheduling=False,
+                        coscheduling_group_by="",
+                        scheduling_timeout_ms=None,
+                        max_task_failures=0,
+                        entrypoint_json=holder_entrypoint_json,
+                        environment_json=holder_environment_json,
+                        bundle_id="",
+                        ports_json="[]",
+                        max_retries_failure=0,
+                        max_retries_preemption=DEFAULT_MAX_RETRIES_PREEMPTION,
+                        timeout_ms=None,
+                        preemption_policy=0,
+                        existing_job_policy=0,
+                        priority_band=0,
+                        task_image="",
+                    ),
+                )
+                holder_base = self._store.jobs.reserve_priority_insertion_base(cur)
+                for idx in range(len(request.reservation.entries)):
+                    created_task_ids.append(holder_id.task(idx))
                     self._store.tasks.insert(
                         cur,
                         TaskInsertParams(
-                            task_id=JobName.from_wire(task_id),
-                            job_id=job_id,
+                            task_id=holder_id.task(idx),
+                            job_id=holder_id,
                             task_index=idx,
                             state=job_pb2.TASK_STATE_PENDING,
                             submitted_at_ms=effective_submission_ms,
-                            max_retries_failure=int(request.max_retries_failure),
-                            max_retries_preemption=int(request.max_retries_preemption),
-                            priority_neg_depth=-job_id.depth,
+                            max_retries_failure=0,
+                            max_retries_preemption=DEFAULT_MAX_RETRIES_PREEMPTION,
+                            priority_neg_depth=-holder_id.depth,
                             priority_root_submitted_ms=root_submitted_ms,
-                            priority_insertion=insertion_base + idx,
+                            priority_insertion=holder_base + idx,
                             priority_band=band_sort_key,
                         ),
                     )
-                if request.HasField("reservation") and request.reservation.entries:
-                    holder_id = job_id.child(RESERVATION_HOLDER_JOB_NAME)
-                    entry = request.reservation.entries[0]
-                    holder_request = controller_pb2.Controller.LaunchJobRequest(
-                        name=holder_id.to_wire(),
-                        entrypoint=request.entrypoint,
-                        resources=entry.resources,
-                        environment=request.environment,
-                        replicas=len(request.reservation.entries),
-                        max_retries_preemption=DEFAULT_MAX_RETRIES_PREEMPTION,
-                    )
-                    merged = merge_constraints(
-                        constraints_from_resources(entry.resources),
-                        [Constraint.from_proto(c) for c in entry.constraints or request.constraints],
-                    )
-                    for constraint in merged:
-                        holder_request.constraints.append(constraint.to_proto())
-                    holder_res = holder_request.resources if holder_request.HasField("resources") else None
-                    holder_res_cpu = int(holder_res.cpu_millicores) if holder_res else 0
-                    holder_res_mem = int(holder_res.memory_bytes) if holder_res else 0
-                    holder_res_disk = int(holder_res.disk_bytes) if holder_res else 0
-                    holder_res_device = proto_to_json(holder_res.device) if holder_res else None
-                    holder_constraints_json = constraints_to_json(holder_request.constraints)
-                    holder_name_lower = holder_request.name.lower()
-                    self._store.jobs.insert(
-                        cur,
-                        JobInsertParams(
-                            job_id=holder_id,
-                            user_id=holder_id.user,
-                            parent_job_id=job_id.to_wire(),
-                            root_job_id=holder_id.root_job.to_wire(),
-                            depth=holder_id.depth,
-                            state=job_pb2.JOB_STATE_PENDING,
-                            submitted_at_ms=effective_submission_ms,
-                            root_submitted_at_ms=root_submitted_ms,
-                            started_at_ms=None,
-                            finished_at_ms=None,
-                            scheduling_deadline_epoch_ms=None,
-                            error=None,
-                            exit_code=None,
-                            num_tasks=len(request.reservation.entries),
-                            is_reservation_holder=True,
-                            name=holder_name_lower,
-                            has_reservation=False,
-                        ),
-                    )
-                    holder_entrypoint_json = entrypoint_to_json(holder_request.entrypoint)
-                    holder_environment_json = proto_to_json(holder_request.environment)
-                    self._store.jobs.insert_config(
-                        cur,
-                        JobConfigInsertParams(
-                            job_id=holder_id,
-                            name=holder_name_lower,
-                            has_reservation=False,
-                            res_cpu_millicores=holder_res_cpu,
-                            res_memory_bytes=holder_res_mem,
-                            res_disk_bytes=holder_res_disk,
-                            res_device_json=holder_res_device,
-                            constraints_json=holder_constraints_json,
-                            has_coscheduling=False,
-                            coscheduling_group_by="",
-                            scheduling_timeout_ms=None,
-                            max_task_failures=0,
-                            entrypoint_json=holder_entrypoint_json,
-                            environment_json=holder_environment_json,
-                            bundle_id="",
-                            ports_json="[]",
-                            max_retries_failure=0,
-                            max_retries_preemption=DEFAULT_MAX_RETRIES_PREEMPTION,
-                            timeout_ms=None,
-                            preemption_policy=0,
-                            existing_job_policy=0,
-                            priority_band=0,
-                            task_image="",
-                        ),
-                    )
-                    holder_base = self._store.jobs.reserve_priority_insertion_base(cur)
-                    for idx in range(len(request.reservation.entries)):
-                        created_task_ids.append(holder_id.task(idx))
-                        self._store.tasks.insert(
-                            cur,
-                            TaskInsertParams(
-                                task_id=holder_id.task(idx),
-                                job_id=holder_id,
-                                task_index=idx,
-                                state=job_pb2.TASK_STATE_PENDING,
-                                submitted_at_ms=effective_submission_ms,
-                                max_retries_failure=0,
-                                max_retries_preemption=DEFAULT_MAX_RETRIES_PREEMPTION,
-                                priority_neg_depth=-holder_id.depth,
-                                priority_root_submitted_ms=root_submitted_ms,
-                                priority_insertion=holder_base + idx,
-                                priority_band=band_sort_key,
-                            ),
-                        )
 
         log_event("job_submitted", job_id.to_wire(), num_tasks=replicas, error=validation_error)
         return SubmitJobResult(job_id=job_id, task_ids=created_task_ids)
 
-    def cancel_job(self, job_id: JobName, reason: str) -> TxResult:
-        """Cancel a job tree and return tasks that need kill RPCs."""
-        with self._db.transaction() as cur:
-            subtree = self._store.jobs.list_subtree(cur, job_id)
-            if not subtree:
-                return TxResult()
-            running_rows = self._store.tasks.list_active(
-                cur,
-                TaskScope(job_subtree=subtree),
-                states=ACTIVE_TASK_STATES,
-            )
-            tasks_to_kill = {row.task_id for row in running_rows}
-            task_kill_workers = {
-                row.task_id: row.current_worker_id for row in running_rows if row.current_worker_id is not None
-            }
-            # Decommit resources for each active task on its assigned worker.
-            # cancel_job marks tasks as KILLED, but apply_heartbeat skips
-            # already-finished tasks (is_finished() check), so the normal
-            # heartbeat decommit path never fires for cancelled tasks.
-            # Direct-provider tasks have NULL worker_id — skip decommit for them.
-            for row in running_rows:
-                if row.current_worker_id is not None and not row.is_reservation_holder:
-                    self._store.workers.decommit_resources(cur, row.current_worker_id, row.resources)
-            now_ms = Timestamp.now().epoch_ms()
-            self._store.tasks.bulk_kill_non_terminal(cur, subtree, reason, now_ms, TERMINAL_TASK_STATES)
-            # Deliberately excludes JOB_STATE_WORKER_FAILED from the guard set:
-            # worker-failed jobs should still be cancellable (transitioned to KILLED).
-            cancel_guard_states = TERMINAL_JOB_STATES - {job_pb2.JOB_STATE_WORKER_FAILED}
-            self._store.jobs.bulk_update_state(
-                cur,
-                subtree,
-                job_pb2.JOB_STATE_KILLED,
-                reason,
-                now_ms,
-                cancel_guard_states,
-            )
-            self._store.endpoints.remove_by_job_ids(cur, subtree)
+    def cancel_job(self, cur: TransactionCursor, job_id: JobName, reason: str) -> TxResult:
+        """Cancel a job tree and return tasks that need kill RPCs. Caller owns the transaction."""
+        subtree = self._store.jobs.list_subtree(cur, job_id)
+        if not subtree:
+            return TxResult()
+        running_rows = self._store.tasks.list_active(
+            cur,
+            TaskScope(job_subtree=subtree),
+            states=ACTIVE_TASK_STATES,
+        )
+        tasks_to_kill = {row.task_id for row in running_rows}
+        task_kill_workers = {
+            row.task_id: row.current_worker_id for row in running_rows if row.current_worker_id is not None
+        }
+        # Decommit resources for each active task on its assigned worker.
+        # cancel_job marks tasks as KILLED, but apply_heartbeat skips
+        # already-finished tasks (is_finished() check), so the normal
+        # heartbeat decommit path never fires for cancelled tasks.
+        # Direct-provider tasks have NULL worker_id — skip decommit for them.
+        for row in running_rows:
+            if row.current_worker_id is not None and not row.is_reservation_holder:
+                self._store.workers.decommit_resources(cur, row.current_worker_id, row.resources)
+        now_ms = Timestamp.now().epoch_ms()
+        self._store.tasks.bulk_kill_non_terminal(cur, subtree, reason, now_ms, TERMINAL_TASK_STATES)
+        # Deliberately excludes JOB_STATE_WORKER_FAILED from the guard set:
+        # worker-failed jobs should still be cancellable (transitioned to KILLED).
+        cancel_guard_states = TERMINAL_JOB_STATES - {job_pb2.JOB_STATE_WORKER_FAILED}
+        self._store.jobs.bulk_update_state(
+            cur,
+            subtree,
+            job_pb2.JOB_STATE_KILLED,
+            reason,
+            now_ms,
+            cancel_guard_states,
+        )
+        self._store.endpoints.remove_by_job_ids(cur, subtree)
         log_event("job_cancelled", job_id.to_wire(), reason=reason)
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
     def register_or_refresh_worker(
         self,
+        cur: TransactionCursor,
         worker_id: WorkerId,
         address: str,
         metadata: job_pb2.WorkerMetadata,
@@ -1070,7 +1076,12 @@ class ControllerTransitions:
         slice_id: str = "",
         scale_group: str = "",
     ) -> TxResult:
-        """Register a new worker or refresh an existing one."""
+        """Register a new worker or refresh an existing one. Caller owns the transaction.
+
+        Returns the attribute dict that the caller should pass to
+        ``store.workers.update_attr_cache(worker_id, attrs)`` AFTER commit
+        so the in-memory scheduling cache stays in sync.
+        """
         attrs: list[WorkerAttributeParams] = []
         for key, proto in metadata.attributes.items():
             value = AttributeValue.from_proto(proto).value
@@ -1092,42 +1103,41 @@ class ControllerTransitions:
         else:
             device_type = ""
             device_variant = ""
-        with self._db.transaction() as cur:
-            self._store.workers.upsert(
-                cur,
-                WorkerUpsertParams(
-                    worker_id=worker_id,
-                    address=address,
-                    last_heartbeat_ms=now_ms,
-                    total_cpu_millicores=metadata.cpu_count * 1000,
-                    total_memory_bytes=metadata.memory_bytes,
-                    total_gpu_count=gpu_count,
-                    total_tpu_count=tpu_count,
-                    device_type=device_type,
-                    device_variant=device_variant,
-                    slice_id=slice_id,
-                    scale_group=scale_group,
-                    md_hostname=metadata.hostname,
-                    md_ip_address=metadata.ip_address,
-                    md_cpu_count=metadata.cpu_count,
-                    md_memory_bytes=metadata.memory_bytes,
-                    md_disk_bytes=metadata.disk_bytes,
-                    md_tpu_name=metadata.tpu_name,
-                    md_tpu_worker_hostnames=metadata.tpu_worker_hostnames,
-                    md_tpu_worker_id=metadata.tpu_worker_id,
-                    md_tpu_chips_per_host_bounds=metadata.tpu_chips_per_host_bounds,
-                    md_gpu_count=metadata.gpu_count,
-                    md_gpu_name=metadata.gpu_name,
-                    md_gpu_memory_mb=metadata.gpu_memory_mb,
-                    md_gce_instance_name=metadata.gce_instance_name,
-                    md_gce_zone=metadata.gce_zone,
-                    md_git_hash=metadata.git_hash,
-                    md_device_json=proto_to_json(metadata.device),
-                ),
-            )
-            self._store.workers.replace_attributes(cur, worker_id, attrs)
-        log_event("worker_registered", str(worker_id), address=address)
-        # Update in-memory attribute cache so scheduling sees the new worker immediately.
+        self._store.workers.upsert(
+            cur,
+            WorkerUpsertParams(
+                worker_id=worker_id,
+                address=address,
+                last_heartbeat_ms=now_ms,
+                total_cpu_millicores=metadata.cpu_count * 1000,
+                total_memory_bytes=metadata.memory_bytes,
+                total_gpu_count=gpu_count,
+                total_tpu_count=tpu_count,
+                device_type=device_type,
+                device_variant=device_variant,
+                slice_id=slice_id,
+                scale_group=scale_group,
+                md_hostname=metadata.hostname,
+                md_ip_address=metadata.ip_address,
+                md_cpu_count=metadata.cpu_count,
+                md_memory_bytes=metadata.memory_bytes,
+                md_disk_bytes=metadata.disk_bytes,
+                md_tpu_name=metadata.tpu_name,
+                md_tpu_worker_hostnames=metadata.tpu_worker_hostnames,
+                md_tpu_worker_id=metadata.tpu_worker_id,
+                md_tpu_chips_per_host_bounds=metadata.tpu_chips_per_host_bounds,
+                md_gpu_count=metadata.gpu_count,
+                md_gpu_name=metadata.gpu_name,
+                md_gpu_memory_mb=metadata.gpu_memory_mb,
+                md_gce_instance_name=metadata.gce_instance_name,
+                md_gce_zone=metadata.gce_zone,
+                md_git_hash=metadata.git_hash,
+                md_device_json=proto_to_json(metadata.device),
+            ),
+        )
+        self._store.workers.replace_attributes(cur, worker_id, attrs)
+        # Update in-memory attribute cache only after commit so a rolled-back tx
+        # doesn't leave the scheduling cache ahead of the durable row.
         attr_dict: dict[str, AttributeValue] = {}
         for attr in attrs:
             if attr.value_type == "int":
@@ -1136,11 +1146,13 @@ class ControllerTransitions:
                 attr_dict[attr.key] = AttributeValue(float(attr.float_value))
             else:
                 attr_dict[attr.key] = AttributeValue(str(attr.str_value or ""))
-        self._store.workers.update_attr_cache(worker_id, attr_dict)
+        cur.on_commit(lambda: self._store.workers.update_attr_cache(worker_id, attr_dict))
+        cur.on_commit(lambda: log_event("worker_registered", str(worker_id), address=address))
         return TxResult()
 
     def register_worker(
         self,
+        cur: TransactionCursor,
         worker_id: WorkerId,
         address: str,
         metadata: job_pb2.WorkerMetadata,
@@ -1149,6 +1161,7 @@ class ControllerTransitions:
         scale_group: str = "",
     ) -> WorkerRegistrationResult:
         self.register_or_refresh_worker(
+            cur,
             worker_id=worker_id,
             address=address,
             metadata=metadata,
@@ -1158,7 +1171,13 @@ class ControllerTransitions:
         )
         return WorkerRegistrationResult(worker_id=worker_id)
 
-    def queue_assignments(self, assignments: list[Assignment], *, direct_dispatch: bool = False) -> AssignmentResult:
+    def queue_assignments(
+        self,
+        cur: TransactionCursor,
+        assignments: list[Assignment],
+        *,
+        direct_dispatch: bool = False,
+    ) -> AssignmentResult:
         """Commit assignments and enqueue dispatches in one transaction.
 
         When direct_dispatch=True, collects (worker_id, address, RunTaskRequest)
@@ -1169,73 +1188,70 @@ class ControllerTransitions:
         rejected: list[Assignment] = []
         start_requests: list[tuple[WorkerId, str, job_pb2.RunTaskRequest]] = []
         has_real_dispatch = False
-        with self._db.transaction() as cur:
-            now_ms = Timestamp.now().epoch_ms()
-            job_cache: dict[str, JobDetailRow] = {}
-            jobs_to_update: set[str] = set()
-            for assignment in assignments:
-                task = self._store.tasks.get_detail(cur, assignment.task_id)
-                worker_address = self._store.workers.active_healthy_address(cur, assignment.worker_id)
-                if task is None or worker_address is None:
+        now_ms = Timestamp.now().epoch_ms()
+        job_cache: dict[str, JobDetailRow] = {}
+        jobs_to_update: set[str] = set()
+        for assignment in assignments:
+            task = self._store.tasks.get_detail(cur, assignment.task_id)
+            worker_address = self._store.workers.active_healthy_address(cur, assignment.worker_id)
+            if task is None or worker_address is None:
+                rejected.append(assignment)
+                continue
+            if not task_row_can_be_scheduled(task):
+                rejected.append(assignment)
+                continue
+            job_id_wire = task.job_id.to_wire()
+            if job_id_wire not in job_cache:
+                decoded_job = self._store.jobs.get_detail(cur, task.job_id)
+                if decoded_job is None:
                     rejected.append(assignment)
                     continue
-                if not task_row_can_be_scheduled(task):
-                    rejected.append(assignment)
-                    continue
-                job_id_wire = task.job_id.to_wire()
-                if job_id_wire not in job_cache:
-                    decoded_job = self._store.jobs.get_detail(cur, task.job_id)
-                    if decoded_job is None:
-                        rejected.append(assignment)
-                        continue
-                    job_cache[job_id_wire] = decoded_job
-                job = job_cache[job_id_wire]
-                attempt_id = task.current_attempt_id + 1
-                self._store.tasks.assign(
-                    cur,
-                    self._store.attempts,
-                    assignment.task_id,
-                    assignment.worker_id,
-                    worker_address,
-                    attempt_id,
-                    now_ms,
+                job_cache[job_id_wire] = decoded_job
+            job = job_cache[job_id_wire]
+            attempt_id = task.current_attempt_id + 1
+            self._store.tasks.assign(
+                cur,
+                self._store.attempts,
+                assignment.task_id,
+                assignment.worker_id,
+                worker_address,
+                attempt_id,
+                now_ms,
+            )
+            if not job.is_reservation_holder:
+                resources = resource_spec_from_scalars(
+                    job.res_cpu_millicores,
+                    job.res_memory_bytes,
+                    job.res_disk_bytes,
+                    job.res_device_json,
                 )
-                if not job.is_reservation_holder:
-                    resources = resource_spec_from_scalars(
-                        job.res_cpu_millicores,
-                        job.res_memory_bytes,
-                        job.res_disk_bytes,
-                        job.res_device_json,
-                    )
-                    self._store.workers.add_committed_resources(cur, assignment.worker_id, resources)
-                    entrypoint = proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint)
-                    # Load inline workdir files from the job_workdir_files table.
-                    for filename, data in self._store.jobs.get_workdir_files(cur, task.job_id).items():
-                        entrypoint.workdir_files[filename] = data
-                    run_request = job_pb2.RunTaskRequest(
-                        task_id=assignment.task_id.to_wire(),
-                        num_tasks=job.num_tasks,
-                        entrypoint=entrypoint,
-                        environment=proto_from_json(job.environment_json, job_pb2.EnvironmentConfig),
-                        bundle_id=job.bundle_id,
-                        resources=resources,
-                        ports=json.loads(job.ports_json),
-                        attempt_id=attempt_id,
-                        constraints=[c.to_proto() for c in constraints_from_json(job.constraints_json)],
-                        task_image=job.task_image,
-                    )
-                    if direct_dispatch:
-                        start_requests.append((assignment.worker_id, worker_address, run_request))
-                    else:
-                        self._store.dispatch.enqueue_run(
-                            cur, assignment.worker_id, run_request.SerializeToString(), now_ms
-                        )
-                    has_real_dispatch = True
-                self._store.workers.record_task_assignment(cur, assignment.worker_id, assignment.task_id, now_ms)
-                jobs_to_update.add(job_id_wire)
-                accepted.append(assignment)
-            for job_id_wire in jobs_to_update:
-                self._store.jobs.mark_running_if_pending(cur, JobName.from_wire(job_id_wire), now_ms)
+                self._store.workers.add_committed_resources(cur, assignment.worker_id, resources)
+                entrypoint = proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint)
+                # Load inline workdir files from the job_workdir_files table.
+                for filename, data in self._store.jobs.get_workdir_files(cur, task.job_id).items():
+                    entrypoint.workdir_files[filename] = data
+                run_request = job_pb2.RunTaskRequest(
+                    task_id=assignment.task_id.to_wire(),
+                    num_tasks=job.num_tasks,
+                    entrypoint=entrypoint,
+                    environment=proto_from_json(job.environment_json, job_pb2.EnvironmentConfig),
+                    bundle_id=job.bundle_id,
+                    resources=resources,
+                    ports=json.loads(job.ports_json),
+                    attempt_id=attempt_id,
+                    constraints=[c.to_proto() for c in constraints_from_json(job.constraints_json)],
+                    task_image=job.task_image,
+                )
+                if direct_dispatch:
+                    start_requests.append((assignment.worker_id, worker_address, run_request))
+                else:
+                    self._store.dispatch.enqueue_run(cur, assignment.worker_id, run_request.SerializeToString(), now_ms)
+                has_real_dispatch = True
+            self._store.workers.record_task_assignment(cur, assignment.worker_id, assignment.task_id, now_ms)
+            jobs_to_update.add(job_id_wire)
+            accepted.append(assignment)
+        for job_id_wire in jobs_to_update:
+            self._store.jobs.mark_running_if_pending(cur, JobName.from_wire(job_id_wire), now_ms)
         for a in accepted:
             log_event("assignment_queued", a.task_id.to_wire(), worker=str(a.worker_id))
         return AssignmentResult(
@@ -1502,17 +1518,16 @@ class ControllerTransitions:
             task_kill_workers=task_kill_workers,
         )
 
-    def apply_task_updates(self, req: HeartbeatApplyRequest) -> TxResult:
-        """Apply a batch of worker task updates atomically."""
-        with self._db.transaction() as cur:
-            now_ms = Timestamp.now().epoch_ms()
-            if not self._update_worker_health(cur, req, now_ms):
-                return TxResult()
-            result = self._apply_task_transitions(cur, req, now_ms)
+    def apply_task_updates(self, cur: TransactionCursor, req: HeartbeatApplyRequest) -> TxResult:
+        """Apply a batch of worker task updates within the caller's transaction."""
+        now_ms = Timestamp.now().epoch_ms()
+        if not self._update_worker_health(cur, req, now_ms):
+            return TxResult()
+        result = self._apply_task_transitions(cur, req, now_ms)
 
         return result
 
-    def apply_heartbeats_batch(self, requests: list[HeartbeatApplyRequest]) -> list[TxResult]:
+    def apply_heartbeats_batch(self, cur: TransactionCursor, requests: list[HeartbeatApplyRequest]) -> list[TxResult]:
         """Apply multiple heartbeats in a single transaction.
 
         Two-pass architecture to minimise SQL round-trips:
@@ -1528,96 +1543,95 @@ class ControllerTransitions:
         _empty = TxResult(tasks_to_kill=set())
         results: list[TxResult] = [_empty] * len(requests)
 
-        with self._db.transaction() as cur:
-            now_ms = Timestamp.now().epoch_ms()
+        now_ms = Timestamp.now().epoch_ms()
 
-            # ── Batch worker health updates ───────────────────────────────
-            existing_workers = self._store.workers.filter_existing(cur, [req.worker_id for req in requests])
-            self._store.workers.apply_snapshots(
-                cur,
-                [
-                    (req.worker_id, req.worker_resource_snapshot)
-                    for req in requests
-                    if str(req.worker_id) in existing_workers
-                ],
-                now_ms,
-                reset_health=True,
-            )
+        # ── Batch worker health updates ───────────────────────────────
+        existing_workers = self._store.workers.filter_existing(cur, [req.worker_id for req in requests])
+        self._store.workers.apply_snapshots(
+            cur,
+            [
+                (req.worker_id, req.worker_resource_snapshot)
+                for req in requests
+                if str(req.worker_id) in existing_workers
+            ],
+            now_ms,
+            reset_health=True,
+        )
 
-            # ── Bulk-fetch task rows for classification ───────────────────
-            all_task_ids: list[JobName] = []
-            for req in requests:
-                if str(req.worker_id) not in existing_workers:
+        # ── Bulk-fetch task rows for classification ───────────────────
+        all_task_ids: list[JobName] = []
+        for req in requests:
+            if str(req.worker_id) not in existing_workers:
+                continue
+            for update in req.updates:
+                if update.new_state not in (
+                    job_pb2.TASK_STATE_UNSPECIFIED,
+                    job_pb2.TASK_STATE_PENDING,
+                ):
+                    all_task_ids.append(update.task_id)
+
+        task_map = self._store.tasks.bulk_get_detail(cur, all_task_ids)
+
+        # ── Classify and split ────────────────────────────────────────
+        task_history_params: list[ResourceUsageInsertParams] = []
+        # (request_index, transition_request) pairs so results stay aligned.
+        transition_entries: list[tuple[int, HeartbeatApplyRequest]] = []
+
+        for req_idx, req in enumerate(requests):
+            if str(req.worker_id) not in existing_workers:
+                continue
+
+            transition_updates: list[TaskUpdate] = []
+            for update in req.updates:
+                task = task_map.get(update.task_id)
+                if task is None:
                     continue
-                for update in req.updates:
-                    if update.new_state not in (
-                        job_pb2.TASK_STATE_UNSPECIFIED,
-                        job_pb2.TASK_STATE_PENDING,
-                    ):
-                        all_task_ids.append(update.task_id)
 
-            task_map = self._store.tasks.bulk_get_detail(cur, all_task_ids)
+                prior_state = task.state
+                is_state_change = update.new_state != prior_state
+                has_terminal_data = update.error is not None or update.exit_code is not None
 
-            # ── Classify and split ────────────────────────────────────────
-            task_history_params: list[ResourceUsageInsertParams] = []
-            # (request_index, transition_request) pairs so results stay aligned.
-            transition_entries: list[tuple[int, HeartbeatApplyRequest]] = []
-
-            for req_idx, req in enumerate(requests):
-                if str(req.worker_id) not in existing_workers:
-                    continue
-
-                transition_updates: list[TaskUpdate] = []
-                for update in req.updates:
-                    task = task_map.get(update.task_id)
-                    if task is None:
+                if is_state_change or has_terminal_data:
+                    transition_updates.append(update)
+                else:
+                    # Steady-state: check finished / stale attempt before writing.
+                    if task_row_is_finished(task):
                         continue
-
-                    prior_state = task.state
-                    is_state_change = update.new_state != prior_state
-                    has_terminal_data = update.error is not None or update.exit_code is not None
-
-                    if is_state_change or has_terminal_data:
-                        transition_updates.append(update)
-                    else:
-                        # Steady-state: check finished / stale attempt before writing.
-                        if task_row_is_finished(task):
-                            continue
-                        if update.attempt_id != task.current_attempt_id:
-                            continue
-                        if update.resource_usage is not None:
-                            u = update.resource_usage
-                            task_history_params.append(
-                                ResourceUsageInsertParams(
-                                    task_id=update.task_id,
-                                    attempt_id=update.attempt_id,
-                                    cpu_millicores=u.cpu_millicores,
-                                    memory_mb=u.memory_mb,
-                                    disk_mb=u.disk_mb,
-                                    memory_peak_mb=u.memory_peak_mb,
-                                    timestamp_ms=now_ms,
-                                )
+                    if update.attempt_id != task.current_attempt_id:
+                        continue
+                    if update.resource_usage is not None:
+                        u = update.resource_usage
+                        task_history_params.append(
+                            ResourceUsageInsertParams(
+                                task_id=update.task_id,
+                                attempt_id=update.attempt_id,
+                                cpu_millicores=u.cpu_millicores,
+                                memory_mb=u.memory_mb,
+                                disk_mb=u.disk_mb,
+                                memory_peak_mb=u.memory_peak_mb,
+                                timestamp_ms=now_ms,
                             )
-
-                if transition_updates:
-                    transition_entries.append(
-                        (
-                            req_idx,
-                            HeartbeatApplyRequest(
-                                worker_id=req.worker_id,
-                                worker_resource_snapshot=None,  # already handled above
-                                updates=transition_updates,
-                            ),
                         )
+
+            if transition_updates:
+                transition_entries.append(
+                    (
+                        req_idx,
+                        HeartbeatApplyRequest(
+                            worker_id=req.worker_id,
+                            worker_resource_snapshot=None,  # already handled above
+                            updates=transition_updates,
+                        ),
                     )
+                )
 
-            # ── Pass 2a: batch task resource history writes ─────────────────
-            self._store.tasks.insert_resource_usage_many(cur, task_history_params)
+        # ── Pass 2a: batch task resource history writes ─────────────────
+        self._store.tasks.insert_resource_usage_many(cur, task_history_params)
 
-            # ── Pass 2b: transitions via existing state machine ───────────
-            for req_idx, treq in transition_entries:
-                tx_result = self._apply_task_transitions(cur, treq, now_ms)
-                results[req_idx] = TxResult(tasks_to_kill=tx_result.tasks_to_kill)
+        # ── Pass 2b: transitions via existing state machine ───────────
+        for req_idx, treq in transition_entries:
+            tx_result = self._apply_task_transitions(cur, treq, now_ms)
+            results[req_idx] = TxResult(tasks_to_kill=tx_result.tasks_to_kill)
 
         return results
 
@@ -1741,7 +1755,7 @@ class ControllerTransitions:
 
         for chunk_start in range(0, len(failures), chunk_size):
             chunk = failures[chunk_start : chunk_start + chunk_size]
-            with self._db.transaction() as cur:
+            with self._store.transaction() as cur:
                 now_ms = Timestamp.now().epoch_ms()
                 for worker_id, worker_address, error in chunk:
                     result = self._record_worker_failure(
@@ -1772,30 +1786,29 @@ class ControllerTransitions:
             results=results,
         )
 
-    def mark_task_unschedulable(self, task_id: JobName, reason: str) -> TxResult:
+    def mark_task_unschedulable(self, cur: TransactionCursor, task_id: JobName, reason: str) -> TxResult:
         """Mark a task as unschedulable using the task transition engine."""
-        with self._db.transaction() as cur:
-            job_id = self._store.tasks.get_job_id(cur, task_id)
-            if job_id is None:
-                return TxResult()
-            now_ms = Timestamp.now().epoch_ms()
-            _terminate_task(
-                cur,
-                self._store.attempts,
-                self._store.tasks,
-                self._store.workers,
-                self._store.endpoints,
-                task_id.to_wire(),
-                None,
-                job_pb2.TASK_STATE_UNSCHEDULABLE,
-                reason,
-                now_ms,
-            )
-            self._recompute_job_state(cur, job_id)
+        job_id = self._store.tasks.get_job_id(cur, task_id)
+        if job_id is None:
+            return TxResult()
+        now_ms = Timestamp.now().epoch_ms()
+        _terminate_task(
+            cur,
+            self._store.attempts,
+            self._store.tasks,
+            self._store.workers,
+            self._store.endpoints,
+            task_id.to_wire(),
+            None,
+            job_pb2.TASK_STATE_UNSCHEDULABLE,
+            reason,
+            now_ms,
+        )
+        self._recompute_job_state(cur, job_id)
         log_event("task_unschedulable", task_id.to_wire(), reason=reason)
         return TxResult()
 
-    def preempt_task(self, task_id: JobName, reason: str) -> TxResult:
+    def preempt_task(self, cur: TransactionCursor, task_id: JobName, reason: str) -> TxResult:
         """Preempt a running task, consuming from preemption retry budget.
 
         Marks the task as PREEMPTED (or retries as PENDING if budget remains),
@@ -1803,73 +1816,72 @@ class ControllerTransitions:
         """
         tasks_to_kill: set[JobName] = set()
         task_kill_workers: dict[JobName, WorkerId] = {}
-        with self._db.transaction() as cur:
-            row = self._store.tasks.get_with_resources(cur, task_id)
-            if row is None:
-                return TxResult()
+        row = self._store.tasks.get_with_resources(cur, task_id)
+        if row is None:
+            return TxResult()
 
-            prior_state = row.state
-            if prior_state not in ACTIVE_TASK_STATES:
-                return TxResult()
+        prior_state = row.state
+        if prior_state not in ACTIVE_TASK_STATES:
+            return TxResult()
 
-            now_ms = Timestamp.now().epoch_ms()
-            new_state, preemption_count = _resolve_task_failure_state(
-                prior_state,
-                row.preemption_count,
-                row.max_retries_preemption,
-                job_pb2.TASK_STATE_PREEMPTED,
-            )
-            # Fetch worker_id from the attempt for resource decommit.
-            attempt_worker = self._store.attempts.get_worker_id(cur, task_id, row.current_attempt_id)
-            attempt_worker_id = str(attempt_worker) if attempt_worker is not None else None
-            attempt_resources = row.resources if attempt_worker_id is not None else None
+        now_ms = Timestamp.now().epoch_ms()
+        new_state, preemption_count = _resolve_task_failure_state(
+            prior_state,
+            row.preemption_count,
+            row.max_retries_preemption,
+            job_pb2.TASK_STATE_PREEMPTED,
+        )
+        # Fetch worker_id from the attempt for resource decommit.
+        attempt_worker = self._store.attempts.get_worker_id(cur, task_id, row.current_attempt_id)
+        attempt_worker_id = str(attempt_worker) if attempt_worker is not None else None
+        attempt_resources = row.resources if attempt_worker_id is not None else None
 
-            _terminate_task(
-                cur,
-                self._store.attempts,
-                self._store.tasks,
-                self._store.workers,
-                self._store.endpoints,
-                task_id.to_wire(),
-                row.current_attempt_id,
-                new_state,
-                reason,
-                now_ms,
-                attempt_state=job_pb2.TASK_STATE_PREEMPTED,
-                worker_id=attempt_worker_id,
-                resources=attempt_resources,
-                preemption_count=preemption_count,
-            )
+        _terminate_task(
+            cur,
+            self._store.attempts,
+            self._store.tasks,
+            self._store.workers,
+            self._store.endpoints,
+            task_id.to_wire(),
+            row.current_attempt_id,
+            new_state,
+            reason,
+            now_ms,
+            attempt_state=job_pb2.TASK_STATE_PREEMPTED,
+            worker_id=attempt_worker_id,
+            resources=attempt_resources,
+            preemption_count=preemption_count,
+        )
 
-            # Recompute job state and cascade if terminal
-            job_id = row.job_id
-            new_job_state = self._recompute_job_state(cur, job_id)
-            if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
-                cascade_kills, cascade_workers = _finalize_terminal_job(cur, self._store, job_id, new_job_state, now_ms)
-                tasks_to_kill.update(cascade_kills)
-                task_kill_workers.update(cascade_workers)
-            elif new_state == job_pb2.TASK_STATE_PENDING:
-                policy = _resolve_preemption_policy(self._store.jobs, cur, job_id)
-                if policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
-                    child_kills, child_workers = _cascade_children(
-                        cur,
-                        self._store,
-                        job_id,
-                        now_ms,
-                        reason,
-                        exclude_reservation_holders=True,
-                    )
-                    tasks_to_kill.update(child_kills)
-                    task_kill_workers.update(child_workers)
+        # Recompute job state and cascade if terminal
+        job_id = row.job_id
+        new_job_state = self._recompute_job_state(cur, job_id)
+        if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
+            cascade_kills, cascade_workers = _finalize_terminal_job(cur, self._store, job_id, new_job_state, now_ms)
+            tasks_to_kill.update(cascade_kills)
+            task_kill_workers.update(cascade_workers)
+        elif new_state == job_pb2.TASK_STATE_PENDING:
+            policy = _resolve_preemption_policy(self._store.jobs, cur, job_id)
+            if policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
+                child_kills, child_workers = _cascade_children(
+                    cur,
+                    self._store,
+                    job_id,
+                    now_ms,
+                    reason,
+                    exclude_reservation_holders=True,
+                )
+                tasks_to_kill.update(child_kills)
+                task_kill_workers.update(child_workers)
 
-            if new_state == job_pb2.TASK_STATE_PREEMPTED:
-                tasks_to_kill.add(task_id)
+        if new_state == job_pb2.TASK_STATE_PREEMPTED:
+            tasks_to_kill.add(task_id)
 
         log_event("task_preempted", task_id.to_wire(), reason=reason)
 
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
-    def cancel_tasks_for_timeout(self, task_ids: set[JobName], reason: str) -> TxResult:
+    def cancel_tasks_for_timeout(self, cur: TransactionCursor, task_ids: set[JobName], reason: str) -> TxResult:
         """Mark executing tasks as FAILED due to execution timeout and return kill set.
 
         Each task is moved to TASK_STATE_FAILED with the given reason.
@@ -1881,116 +1893,113 @@ class ControllerTransitions:
         """
         if not task_ids:
             return TxResult()
-        with self._db.transaction() as cur:
-            rows = self._store.tasks.list_active(
+        rows = self._store.tasks.list_active(
+            cur,
+            TaskScope(task_ids=sorted(task_ids, key=lambda tid: tid.to_wire())),
+            states=EXECUTING_TASK_STATES,
+        )
+
+        # -- Phase 1: read all state before any mutations. --
+        now_ms = Timestamp.now().epoch_ms()
+        # Resources per job (all direct-timeout tasks in a job share job_config).
+        job_resources_cache: dict[str, job_pb2.ResourceSpecProto] = {}
+        # Collect directly-timed-out task wires for dedup against siblings.
+        direct_task_wires: set[str] = set()
+        # Per-job list of siblings to cascade (collected across all timed-out tasks).
+        siblings_by_job: dict[str, list[ActiveTaskRow]] = {}
+
+        for row in rows:
+            task_id_wire = row.task_id.to_wire()
+            direct_task_wires.add(task_id_wire)
+            job_id_wire = row.job_id.to_wire()
+            if job_id_wire not in job_resources_cache:
+                job_resources_cache[job_id_wire] = row.resources
+            siblings = _find_coscheduled_siblings(cur, self._store.tasks, row.job_id, row.task_id, row.has_coscheduling)
+            if siblings:
+                existing = siblings_by_job.get(job_id_wire, [])
+                existing.extend(siblings)
+                siblings_by_job[job_id_wire] = existing
+
+        # Deduplicate siblings: drop any that will already be terminated
+        # directly as timed-out tasks, and deduplicate across multiple
+        # trigger tasks within the same job.
+        for job_id_wire, siblings in siblings_by_job.items():
+            seen: set[str] = set()
+            deduped: list[ActiveTaskRow] = []
+            for sib in siblings:
+                sib_wire = sib.task_id.to_wire()
+                if sib_wire not in direct_task_wires and sib_wire not in seen:
+                    seen.add(sib_wire)
+                    deduped.append(sib)
+            siblings_by_job[job_id_wire] = deduped
+
+        # -- Phase 2: apply all mutations. --
+        tasks_to_kill: set[JobName] = set()
+        task_kill_workers: dict[JobName, WorkerId] = {}
+        jobs_to_update: set[str] = set()
+
+        for row in rows:
+            tid = row.task_id
+            tasks_to_kill.add(tid)
+            decommit_worker = None
+            decommit_resources = None
+            if row.current_worker_id is not None:
+                task_kill_workers[tid] = row.current_worker_id
+                if not row.is_reservation_holder:
+                    decommit_worker = str(row.current_worker_id)
+                    decommit_resources = row.resources
+            _terminate_task(
                 cur,
-                TaskScope(task_ids=sorted(task_ids, key=lambda tid: tid.to_wire())),
-                states=EXECUTING_TASK_STATES,
+                self._store.attempts,
+                self._store.tasks,
+                self._store.workers,
+                self._store.endpoints,
+                tid.to_wire(),
+                row.current_attempt_id,
+                job_pb2.TASK_STATE_FAILED,
+                reason,
+                now_ms,
+                worker_id=decommit_worker,
+                resources=decommit_resources,
+                failure_count=row.failure_count + 1,
             )
+            jobs_to_update.add(row.job_id.to_wire())
 
-            # -- Phase 1: read all state before any mutations. --
-            now_ms = Timestamp.now().epoch_ms()
-            # Resources per job (all direct-timeout tasks in a job share job_config).
-            job_resources_cache: dict[str, job_pb2.ResourceSpecProto] = {}
-            # Collect directly-timed-out task wires for dedup against siblings.
-            direct_task_wires: set[str] = set()
-            # Per-job list of siblings to cascade (collected across all timed-out tasks).
-            siblings_by_job: dict[str, list[ActiveTaskRow]] = {}
+        # Terminate coscheduled siblings (deduplicated, all reads already done).
+        for job_id_wire, siblings in siblings_by_job.items():
+            if not siblings:
+                continue
+            job_resources = job_resources_cache[job_id_wire]
+            # Pick the first direct-timeout task in this job as the "cause" for the error message.
+            cause_tid = next(r.task_id for r in rows if r.job_id.to_wire() == job_id_wire)
+            cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
+                cur,
+                self._store.attempts,
+                self._store.tasks,
+                self._store.workers,
+                self._store.endpoints,
+                siblings,
+                cause_tid,
+                job_resources,
+                now_ms,
+            )
+            tasks_to_kill.update(cascade_kill)
+            task_kill_workers.update(cascade_workers)
+            jobs_to_update.add(job_id_wire)
 
-            for row in rows:
-                task_id_wire = row.task_id.to_wire()
-                direct_task_wires.add(task_id_wire)
-                job_id_wire = row.job_id.to_wire()
-                if job_id_wire not in job_resources_cache:
-                    job_resources_cache[job_id_wire] = row.resources
-                siblings = _find_coscheduled_siblings(
-                    cur, self._store.tasks, row.job_id, row.task_id, row.has_coscheduling
+        for job_wire in jobs_to_update:
+            new_job_state = self._recompute_job_state(cur, JobName.from_wire(job_wire))
+            if new_job_state in TERMINAL_JOB_STATES:
+                final_kill, final_workers = _finalize_terminal_job(
+                    cur, self._store, JobName.from_wire(job_wire), new_job_state, now_ms
                 )
-                if siblings:
-                    existing = siblings_by_job.get(job_id_wire, [])
-                    existing.extend(siblings)
-                    siblings_by_job[job_id_wire] = existing
-
-            # Deduplicate siblings: drop any that will already be terminated
-            # directly as timed-out tasks, and deduplicate across multiple
-            # trigger tasks within the same job.
-            for job_id_wire, siblings in siblings_by_job.items():
-                seen: set[str] = set()
-                deduped: list[ActiveTaskRow] = []
-                for sib in siblings:
-                    sib_wire = sib.task_id.to_wire()
-                    if sib_wire not in direct_task_wires and sib_wire not in seen:
-                        seen.add(sib_wire)
-                        deduped.append(sib)
-                siblings_by_job[job_id_wire] = deduped
-
-            # -- Phase 2: apply all mutations. --
-            tasks_to_kill: set[JobName] = set()
-            task_kill_workers: dict[JobName, WorkerId] = {}
-            jobs_to_update: set[str] = set()
-
-            for row in rows:
-                tid = row.task_id
-                tasks_to_kill.add(tid)
-                decommit_worker = None
-                decommit_resources = None
-                if row.current_worker_id is not None:
-                    task_kill_workers[tid] = row.current_worker_id
-                    if not row.is_reservation_holder:
-                        decommit_worker = str(row.current_worker_id)
-                        decommit_resources = row.resources
-                _terminate_task(
-                    cur,
-                    self._store.attempts,
-                    self._store.tasks,
-                    self._store.workers,
-                    self._store.endpoints,
-                    tid.to_wire(),
-                    row.current_attempt_id,
-                    job_pb2.TASK_STATE_FAILED,
-                    reason,
-                    now_ms,
-                    worker_id=decommit_worker,
-                    resources=decommit_resources,
-                    failure_count=row.failure_count + 1,
-                )
-                jobs_to_update.add(row.job_id.to_wire())
-
-            # Terminate coscheduled siblings (deduplicated, all reads already done).
-            for job_id_wire, siblings in siblings_by_job.items():
-                if not siblings:
-                    continue
-                job_resources = job_resources_cache[job_id_wire]
-                # Pick the first direct-timeout task in this job as the "cause" for the error message.
-                cause_tid = next(r.task_id for r in rows if r.job_id.to_wire() == job_id_wire)
-                cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
-                    cur,
-                    self._store.attempts,
-                    self._store.tasks,
-                    self._store.workers,
-                    self._store.endpoints,
-                    siblings,
-                    cause_tid,
-                    job_resources,
-                    now_ms,
-                )
-                tasks_to_kill.update(cascade_kill)
-                task_kill_workers.update(cascade_workers)
-                jobs_to_update.add(job_id_wire)
-
-            for job_wire in jobs_to_update:
-                new_job_state = self._recompute_job_state(cur, JobName.from_wire(job_wire))
-                if new_job_state in TERMINAL_JOB_STATES:
-                    final_kill, final_workers = _finalize_terminal_job(
-                        cur, self._store, JobName.from_wire(job_wire), new_job_state, now_ms
-                    )
-                    tasks_to_kill.update(final_kill)
-                    task_kill_workers.update(final_workers)
+                tasks_to_kill.update(final_kill)
+                task_kill_workers.update(final_workers)
         for tid in tasks_to_kill:
             log_event("task_timeout", tid.to_wire(), reason=reason)
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
-    def remove_finished_job(self, job_id: JobName) -> bool:
+    def remove_finished_job(self, cur: TransactionCursor, job_id: JobName) -> bool:
         """Remove a finished job and its tasks from state.
 
         Only removes jobs that are in a terminal state (SUCCEEDED, FAILED, KILLED,
@@ -2002,29 +2011,27 @@ class ControllerTransitions:
         Returns:
             True if the job was removed, False if it doesn't exist or is not finished
         """
-        with self._db.transaction() as cur:
-            state = self._store.jobs.get_state(cur, job_id)
-            if state is None:
-                return False
-            if state not in (
-                job_pb2.JOB_STATE_SUCCEEDED,
-                job_pb2.JOB_STATE_FAILED,
-                job_pb2.JOB_STATE_KILLED,
-                job_pb2.JOB_STATE_UNSCHEDULABLE,
-            ):
-                return False
-            self._store.jobs.delete(cur, job_id)
+        state = self._store.jobs.get_state(cur, job_id)
+        if state is None:
+            return False
+        if state not in (
+            job_pb2.JOB_STATE_SUCCEEDED,
+            job_pb2.JOB_STATE_FAILED,
+            job_pb2.JOB_STATE_KILLED,
+            job_pb2.JOB_STATE_UNSCHEDULABLE,
+        ):
+            return False
+        self._store.jobs.delete(cur, job_id)
         log_event("job_removed", job_id.to_wire(), state=state)
         return True
 
-    def remove_worker(self, worker_id: WorkerId) -> WorkerDetailRow | None:
-        with self._db.transaction() as cur:
-            detail = self._store.workers.get_detail(cur, worker_id)
-            if detail is None:
-                return None
-            _remove_worker(cur, self._store.workers, worker_id)
-        log_event("worker_removed", str(worker_id))
-        self._store.workers.remove_from_attr_cache(worker_id)
+    def remove_worker(self, cur: TransactionCursor, worker_id: WorkerId) -> WorkerDetailRow | None:
+        detail = self._store.workers.get_detail(cur, worker_id)
+        if detail is None:
+            return None
+        _remove_worker(cur, self._store.workers, worker_id)
+        cur.on_commit(lambda: log_event("worker_removed", str(worker_id)))
+        cur.on_commit(lambda: self._store.workers.remove_from_attr_cache(worker_id))
         return detail
 
     def prune_old_data(
@@ -2059,11 +2066,11 @@ class ControllerTransitions:
         # 1. Jobs: one at a time (CASCADE to tasks → attempts, endpoints)
         jobs_deleted = 0
         while not _stopped():
-            with self._db.read_snapshot() as snap:
+            with self._store.read_snapshot() as snap:
                 job_name = self._store.jobs.find_prunable(snap, job_cutoff_ms)
             if job_name is None:
                 break
-            with self._db.transaction() as cur:
+            with self._store.transaction() as cur:
                 # Invalidate endpoint cache BEFORE the CASCADE so the cache
                 # drops rows SQLite is about to delete for us.
                 self._store.endpoints.remove_by_job_ids(cur, [job_name])
@@ -2075,11 +2082,11 @@ class ControllerTransitions:
         # 2. Workers: one at a time (CASCADE to attributes, task_history, resource_history)
         workers_deleted = 0
         while not _stopped():
-            with self._db.read_snapshot() as snap:
+            with self._store.read_snapshot() as snap:
                 worker_id = self._store.workers.find_prunable(snap, worker_cutoff_ms)
             if worker_id is None:
                 break
-            with self._db.transaction() as cur:
+            with self._store.transaction() as cur:
                 _remove_worker(cur, self._store.workers, worker_id)
             log_event("worker_pruned", str(worker_id))
             workers_deleted += 1
@@ -2109,7 +2116,7 @@ class ControllerTransitions:
                 result.workers_deleted,
                 result.profiles_deleted,
             )
-            self._db.optimize()
+            self._store.optimize()
 
         return result
 
@@ -2119,9 +2126,10 @@ class ControllerTransitions:
 
     def update_worker_pings(
         self,
+        cur: TransactionCursor,
         snapshots: Mapping[WorkerId, job_pb2.WorkerResourceSnapshot | None],
     ) -> None:
-        """Apply a batch of Ping RPC results in a single transaction.
+        """Apply a batch of Ping RPC results within the caller's transaction.
 
         For each entry, bumps last_heartbeat_ms; if the value is a snapshot,
         also rewrites the worker's snapshot_* columns and appends a row to
@@ -2135,37 +2143,37 @@ class ControllerTransitions:
             return
         now_ms = Timestamp.now().epoch_ms()
         items = list(snapshots.items())
-        with self._db.transaction() as cur:
-            self._store.workers.apply_snapshots(cur, items, now_ms, reset_health=False)
+        self._store.workers.apply_snapshots(cur, items, now_ms, reset_health=False)
 
     def get_running_tasks_for_poll(
         self,
+        snap: QuerySnapshot | TransactionCursor,
     ) -> tuple[dict[WorkerId, list[RunningTaskEntry]], dict[WorkerId, str]]:
         """Snapshot running tasks and worker addresses for PollTasks RPCs.
 
+        Caller passes an open read snapshot or transaction cursor.
         Returns (running_by_worker, worker_addresses) where running_by_worker
         maps worker_id to its list of running task entries and worker_addresses
         maps worker_id to its RPC address.
         """
-        with self._db.read_snapshot() as snap:
-            worker_addresses = self._store.workers.list_active_healthy(snap)
-            if not worker_addresses:
-                return {}, {}
-            worker_ids = list(worker_addresses.keys())
+        worker_addresses = self._store.workers.list_active_healthy(snap)
+        if not worker_addresses:
+            return {}, {}
+        worker_ids = list(worker_addresses.keys())
 
-            # Reservation holders are virtual — they live on ``current_worker_id``
-            # only as a scheduling anchor and never get a RunTaskRequest. Sending
-            # them in PollTasksRequest.expected_tasks makes the worker reconcile
-            # against its _tasks dict, miss, and return WORKER_FAILED every cycle,
-            # which drains the holder's preemption budget and (post the build-
-            # failure health hook) reaps the claimed worker for a harmless miss.
-            task_rows = self._store.tasks.list_active(
-                snap,
-                TaskScope(worker_ids=worker_ids),
-                states=ACTIVE_TASK_STATES,
-                exclude_reservation_holders=True,
-                order_by_task_id=True,
-            )
+        # Reservation holders are virtual — they live on ``current_worker_id``
+        # only as a scheduling anchor and never get a RunTaskRequest. Sending
+        # them in PollTasksRequest.expected_tasks makes the worker reconcile
+        # against its _tasks dict, miss, and return WORKER_FAILED every cycle,
+        # which drains the holder's preemption budget and (post the build-
+        # failure health hook) reaps the claimed worker for a harmless miss.
+        task_rows = self._store.tasks.list_active(
+            snap,
+            TaskScope(worker_ids=worker_ids),
+            states=ACTIVE_TASK_STATES,
+            exclude_reservation_holders=True,
+            order_by_task_id=True,
+        )
 
         running: dict[WorkerId, list[RunningTaskEntry]] = {}
         for row in task_rows:
@@ -2192,7 +2200,7 @@ class ControllerTransitions:
         """
         if not worker_ids:
             return WorkerFailureBatchResult()
-        with self._db.read_snapshot() as snap:
+        with self._store.read_snapshot() as snap:
             rows = self._store.workers.list_active_by_ids(snap, worker_ids)
         failures = [(row.worker_id, row.address, reason) for row in rows]
         if not failures:
@@ -2206,30 +2214,30 @@ class ControllerTransitions:
         )
 
     def load_workers_from_config(self, configs: list[WorkerConfig]) -> None:
-        """Load workers from static configuration."""
+        """Load workers from static configuration in a single transaction."""
         now = Timestamp.now()
-        for cfg in configs:
-            self.register_or_refresh_worker(
-                worker_id=WorkerId(cfg.worker_id),
-                address=cfg.address,
-                metadata=cfg.metadata,
-                ts=now,
-            )
+        with self._store.transaction() as cur:
+            for cfg in configs:
+                self.register_or_refresh_worker(
+                    cur,
+                    worker_id=WorkerId(cfg.worker_id),
+                    address=cfg.address,
+                    metadata=cfg.metadata,
+                    ts=now,
+                )
 
     # --- Endpoint Management ---
 
-    def add_endpoint(self, endpoint: EndpointRow) -> bool:
+    def add_endpoint(self, cur: TransactionCursor, endpoint: EndpointRow) -> bool:
         """Add an endpoint row through the store's endpoint cache.
 
         Returns True if the endpoint was inserted, False if the task is already
         terminal (to prevent orphaned endpoints that would never be cleaned up).
         """
-        with self._store.transaction() as cur:
-            return self._store.endpoints.add(cur, endpoint)
+        return self._store.endpoints.add(cur, endpoint)
 
-    def remove_endpoint(self, endpoint_id: str) -> EndpointRow | None:
-        with self._store.transaction() as cur:
-            return self._store.endpoints.remove(cur, endpoint_id)
+    def remove_endpoint(self, cur: TransactionCursor, endpoint_id: str) -> EndpointRow | None:
+        return self._store.endpoints.remove(cur, endpoint_id)
 
     # ---------------------------------------------------------------------
     # Test-only SQL mutation helpers
@@ -2266,6 +2274,7 @@ class ControllerTransitions:
 
     def drain_for_direct_provider(
         self,
+        cur: TransactionCursor,
         max_promotions: int = DIRECT_PROVIDER_PROMOTION_RATE,
     ) -> DirectProviderBatch:
         """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
@@ -2276,67 +2285,66 @@ class ControllerTransitions:
         - Already ASSIGNED/BUILDING/RUNNING tasks with NULL worker_id -> running_tasks
         - Kill entries with NULL worker_id -> tasks_to_kill (deleted from queue)
         """
-        with self._db.transaction() as cur:
-            now_ms = Timestamp.now().epoch_ms()
+        now_ms = Timestamp.now().epoch_ms()
 
-            newly_promoted: set[str] = set()
-            tasks_to_run: list[job_pb2.RunTaskRequest] = []
+        newly_promoted: set[str] = set()
+        tasks_to_run: list[job_pb2.RunTaskRequest] = []
 
-            pending_rows = self._store.tasks.list_pending_for_direct_provider(cur, max_promotions)
+        pending_rows = self._store.tasks.list_pending_for_direct_provider(cur, max_promotions)
 
-            for row in pending_rows:
-                attempt_id = row.current_attempt_id + 1
+        for row in pending_rows:
+            attempt_id = row.current_attempt_id + 1
 
-                self._store.tasks.assign(
-                    cur,
-                    self._store.attempts,
-                    row.task_id,
-                    None,
-                    None,
-                    attempt_id,
-                    now_ms,
-                )
-
-                entrypoint = proto_from_json(row.entrypoint_json, job_pb2.RuntimeEntrypoint)
-                # Load inline workdir files from the job_workdir_files table.
-                for filename, data in self._store.jobs.get_workdir_files(cur, row.job_id).items():
-                    entrypoint.workdir_files[filename] = data
-
-                run_req = job_pb2.RunTaskRequest(
-                    task_id=row.task_id.to_wire(),
-                    num_tasks=row.num_tasks,
-                    entrypoint=entrypoint,
-                    environment=proto_from_json(row.environment_json, job_pb2.EnvironmentConfig),
-                    bundle_id=row.bundle_id,
-                    resources=row.resources,
-                    ports=json.loads(row.ports_json),
-                    attempt_id=attempt_id,
-                    constraints=[c.to_proto() for c in constraints_from_json(row.constraints_json)],
-                    task_image=row.task_image,
-                )
-                # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
-                if row.timeout_ms is not None and row.timeout_ms > 0:
-                    run_req.timeout.milliseconds = row.timeout_ms
-                tasks_to_run.append(run_req)
-                newly_promoted.add(row.task_id.to_wire())
-
-            # Snapshot already-running tasks with NULL worker_id (excluding newly promoted).
-            running_rows = self._store.tasks.list_active(
+            self._store.tasks.assign(
                 cur,
-                TaskScope(null_worker=True),
-                states=ACTIVE_TASK_STATES,
-                order_by_task_id=True,
+                self._store.attempts,
+                row.task_id,
+                None,
+                None,
+                attempt_id,
+                now_ms,
             )
-            running_tasks = [
-                RunningTaskEntry(
-                    task_id=row.task_id,
-                    attempt_id=row.current_attempt_id,
-                )
-                for row in running_rows
-                if row.task_id.to_wire() not in newly_promoted
-            ]
 
-            tasks_to_kill = self._store.dispatch.drain_direct_kills(cur)
+            entrypoint = proto_from_json(row.entrypoint_json, job_pb2.RuntimeEntrypoint)
+            # Load inline workdir files from the job_workdir_files table.
+            for filename, data in self._store.jobs.get_workdir_files(cur, row.job_id).items():
+                entrypoint.workdir_files[filename] = data
+
+            run_req = job_pb2.RunTaskRequest(
+                task_id=row.task_id.to_wire(),
+                num_tasks=row.num_tasks,
+                entrypoint=entrypoint,
+                environment=proto_from_json(row.environment_json, job_pb2.EnvironmentConfig),
+                bundle_id=row.bundle_id,
+                resources=row.resources,
+                ports=json.loads(row.ports_json),
+                attempt_id=attempt_id,
+                constraints=[c.to_proto() for c in constraints_from_json(row.constraints_json)],
+                task_image=row.task_image,
+            )
+            # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
+            if row.timeout_ms is not None and row.timeout_ms > 0:
+                run_req.timeout.milliseconds = row.timeout_ms
+            tasks_to_run.append(run_req)
+            newly_promoted.add(row.task_id.to_wire())
+
+        # Snapshot already-running tasks with NULL worker_id (excluding newly promoted).
+        running_rows = self._store.tasks.list_active(
+            cur,
+            TaskScope(null_worker=True),
+            states=ACTIVE_TASK_STATES,
+            order_by_task_id=True,
+        )
+        running_tasks = [
+            RunningTaskEntry(
+                task_id=row.task_id,
+                attempt_id=row.current_attempt_id,
+            )
+            for row in running_rows
+            if row.task_id.to_wire() not in newly_promoted
+        ]
+
+        tasks_to_kill = self._store.dispatch.drain_direct_kills(cur)
 
         return DirectProviderBatch(
             tasks_to_run=tasks_to_run,
@@ -2344,7 +2352,7 @@ class ControllerTransitions:
             tasks_to_kill=tasks_to_kill,
         )
 
-    def apply_direct_provider_updates(self, updates: list[TaskUpdate]) -> TxResult:
+    def apply_direct_provider_updates(self, cur: TransactionCursor, updates: list[TaskUpdate]) -> TxResult:
         """Apply a batch of task state updates from a KubernetesProvider.
 
         Same state machine as apply_task_updates but without worker lookup,
@@ -2353,197 +2361,190 @@ class ControllerTransitions:
         tasks_to_kill: set[JobName] = set()
         task_kill_workers: dict[JobName, WorkerId] = {}
 
-        with self._db.transaction() as cur:
-            now_ms = Timestamp.now().epoch_ms()
-            cascaded_jobs: set[JobName] = set()
+        now_ms = Timestamp.now().epoch_ms()
+        cascaded_jobs: set[JobName] = set()
 
-            for update in updates:
-                task = self._store.tasks.get_detail(cur, update.task_id)
-                if task is None:
-                    continue
-                if task_row_is_finished(task) or update.new_state in (
-                    job_pb2.TASK_STATE_UNSPECIFIED,
-                    job_pb2.TASK_STATE_PENDING,
-                ):
-                    continue
-                if update.attempt_id != task.current_attempt_id:
-                    stale_state = self._store.attempts.get_state(cur, update.task_id, update.attempt_id)
-                    if stale_state is not None and stale_state not in TERMINAL_TASK_STATES:
-                        logger.error(
-                            "Stale attempt precondition violation: task=%s reported=%d current=%d stale_state=%s",
-                            update.task_id,
-                            update.attempt_id,
-                            task.current_attempt_id,
-                            stale_state,
-                        )
-                    continue
-                attempt = self._store.attempts.get(cur, update.task_id, update.attempt_id)
-                if attempt is None:
-                    continue
-                # See _apply_task_transitions for rationale: the current attempt may
-                # be terminal while the task is retrying in PENDING; late reports
-                # must not revive it.
-                if attempt.state in TERMINAL_TASK_STATES:
-                    logger.debug(
-                        "Dropping late update for terminal attempt: task=%s attempt=%d attempt_state=%d reported=%d",
+        for update in updates:
+            task = self._store.tasks.get_detail(cur, update.task_id)
+            if task is None:
+                continue
+            if task_row_is_finished(task) or update.new_state in (
+                job_pb2.TASK_STATE_UNSPECIFIED,
+                job_pb2.TASK_STATE_PENDING,
+            ):
+                continue
+            if update.attempt_id != task.current_attempt_id:
+                stale_state = self._store.attempts.get_state(cur, update.task_id, update.attempt_id)
+                if stale_state is not None and stale_state not in TERMINAL_TASK_STATES:
+                    logger.error(
+                        "Stale attempt precondition violation: task=%s reported=%d current=%d stale_state=%s",
                         update.task_id,
                         update.attempt_id,
-                        attempt.state,
-                        int(update.new_state),
+                        task.current_attempt_id,
+                        stale_state,
                     )
-                    continue
+                continue
+            attempt = self._store.attempts.get(cur, update.task_id, update.attempt_id)
+            if attempt is None:
+                continue
+            # See _apply_task_transitions for rationale: the current attempt may
+            # be terminal while the task is retrying in PENDING; late reports
+            # must not revive it.
+            if attempt.state in TERMINAL_TASK_STATES:
+                logger.debug(
+                    "Dropping late update for terminal attempt: task=%s attempt=%d attempt_state=%d reported=%d",
+                    update.task_id,
+                    update.attempt_id,
+                    attempt.state,
+                    int(update.new_state),
+                )
+                continue
 
-                if update.resource_usage is not None:
-                    ru = update.resource_usage
-                    self._store.tasks.insert_resource_usage(
-                        cur,
-                        ResourceUsageInsertParams(
-                            task_id=update.task_id,
-                            attempt_id=update.attempt_id,
-                            cpu_millicores=ru.cpu_millicores,
-                            memory_mb=ru.memory_mb,
-                            disk_mb=ru.disk_mb,
-                            memory_peak_mb=ru.memory_peak_mb,
-                            timestamp_ms=now_ms,
-                        ),
-                    )
-                if update.container_id is not None:
-                    self._store.tasks.update_container_id(cur, update.task_id, update.container_id)
-
-                terminal_ms: int | None = None
-                started_ms: int | None = None
-                task_state = task.state
-                task_error = update.error
-                task_exit = update.exit_code
-                failure_count = task.failure_count
-                preemption_count = task.preemption_count
-
-                if update.new_state == job_pb2.TASK_STATE_RUNNING:
-                    started_ms = now_ms
-                    task_state = job_pb2.TASK_STATE_RUNNING
-                elif update.new_state == job_pb2.TASK_STATE_BUILDING:
-                    task_state = job_pb2.TASK_STATE_BUILDING
-                elif update.new_state in (
-                    job_pb2.TASK_STATE_FAILED,
-                    job_pb2.TASK_STATE_WORKER_FAILED,
-                    job_pb2.TASK_STATE_KILLED,
-                    job_pb2.TASK_STATE_UNSCHEDULABLE,
-                    job_pb2.TASK_STATE_SUCCEEDED,
-                ):
-                    terminal_ms = now_ms
-                    task_state = int(update.new_state)
-                    if update.new_state == job_pb2.TASK_STATE_SUCCEEDED and task_exit is None:
-                        task_exit = 0
-                    if update.new_state == job_pb2.TASK_STATE_UNSCHEDULABLE and task_error is None:
-                        task_error = "Scheduling timeout exceeded"
-                    if update.new_state == job_pb2.TASK_STATE_FAILED:
-                        failure_count += 1
-                    if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and task.state in EXECUTING_TASK_STATES:
-                        preemption_count += 1
-                    # WORKER_FAILED while still ASSIGNED -> retry immediately as PENDING
-                    if (
-                        update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
-                        and task.state == job_pb2.TASK_STATE_ASSIGNED
-                    ):
-                        task_state = job_pb2.TASK_STATE_PENDING
-                        terminal_ms = None
-                    if update.new_state == job_pb2.TASK_STATE_FAILED and failure_count <= task.max_retries_failure:
-                        task_state = job_pb2.TASK_STATE_PENDING
-                        terminal_ms = None
-                    if (
-                        update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
-                        and preemption_count <= task.max_retries_preemption
-                        and task.state in EXECUTING_TASK_STATES
-                    ):
-                        task_state = job_pb2.TASK_STATE_PENDING
-                        terminal_ms = None
-
-                # An attempt is terminal whenever the update itself is terminal, even
-                # if the TASK rolls back to PENDING for a retry.
-                attempt_terminal_ms = now_ms if int(update.new_state) in TERMINAL_TASK_STATES else None
-
-                self._store.attempts.apply_update(
+            if update.resource_usage is not None:
+                ru = update.resource_usage
+                self._store.tasks.insert_resource_usage(
                     cur,
-                    TaskAttemptUpdateParams(
+                    ResourceUsageInsertParams(
                         task_id=update.task_id,
                         attempt_id=update.attempt_id,
-                        state=int(update.new_state),
-                        started_at_ms=started_ms,
-                        finished_at_ms=attempt_terminal_ms,
-                        exit_code=task_exit,
-                        error=update.error,
+                        cpu_millicores=ru.cpu_millicores,
+                        memory_mb=ru.memory_mb,
+                        disk_mb=ru.disk_mb,
+                        memory_peak_mb=ru.memory_peak_mb,
+                        timestamp_ms=now_ms,
                     ),
                 )
-                self._store.tasks.apply_state_update(
+            if update.container_id is not None:
+                self._store.tasks.update_container_id(cur, update.task_id, update.container_id)
+
+            terminal_ms: int | None = None
+            started_ms: int | None = None
+            task_state = task.state
+            task_error = update.error
+            task_exit = update.exit_code
+            failure_count = task.failure_count
+            preemption_count = task.preemption_count
+
+            if update.new_state == job_pb2.TASK_STATE_RUNNING:
+                started_ms = now_ms
+                task_state = job_pb2.TASK_STATE_RUNNING
+            elif update.new_state == job_pb2.TASK_STATE_BUILDING:
+                task_state = job_pb2.TASK_STATE_BUILDING
+            elif update.new_state in (
+                job_pb2.TASK_STATE_FAILED,
+                job_pb2.TASK_STATE_WORKER_FAILED,
+                job_pb2.TASK_STATE_KILLED,
+                job_pb2.TASK_STATE_UNSCHEDULABLE,
+                job_pb2.TASK_STATE_SUCCEEDED,
+            ):
+                terminal_ms = now_ms
+                task_state = int(update.new_state)
+                if update.new_state == job_pb2.TASK_STATE_SUCCEEDED and task_exit is None:
+                    task_exit = 0
+                if update.new_state == job_pb2.TASK_STATE_UNSCHEDULABLE and task_error is None:
+                    task_error = "Scheduling timeout exceeded"
+                if update.new_state == job_pb2.TASK_STATE_FAILED:
+                    failure_count += 1
+                if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and task.state in EXECUTING_TASK_STATES:
+                    preemption_count += 1
+                # WORKER_FAILED while still ASSIGNED -> retry immediately as PENDING
+                if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and task.state == job_pb2.TASK_STATE_ASSIGNED:
+                    task_state = job_pb2.TASK_STATE_PENDING
+                    terminal_ms = None
+                if update.new_state == job_pb2.TASK_STATE_FAILED and failure_count <= task.max_retries_failure:
+                    task_state = job_pb2.TASK_STATE_PENDING
+                    terminal_ms = None
+                if (
+                    update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
+                    and preemption_count <= task.max_retries_preemption
+                    and task.state in EXECUTING_TASK_STATES
+                ):
+                    task_state = job_pb2.TASK_STATE_PENDING
+                    terminal_ms = None
+
+            # An attempt is terminal whenever the update itself is terminal, even
+            # if the TASK rolls back to PENDING for a retry.
+            attempt_terminal_ms = now_ms if int(update.new_state) in TERMINAL_TASK_STATES else None
+
+            self._store.attempts.apply_update(
+                cur,
+                TaskAttemptUpdateParams(
+                    task_id=update.task_id,
+                    attempt_id=update.attempt_id,
+                    state=int(update.new_state),
+                    started_at_ms=started_ms,
+                    finished_at_ms=attempt_terminal_ms,
+                    exit_code=task_exit,
+                    error=update.error,
+                ),
+            )
+            self._store.tasks.apply_state_update(
+                cur,
+                TaskStateUpdateParams(
+                    task_id=update.task_id,
+                    state=task_state,
+                    error=task_error,
+                    exit_code=task_exit,
+                    started_at_ms=started_ms,
+                    finished_at_ms=terminal_ms,
+                    failure_count=failure_count,
+                    preemption_count=preemption_count,
+                ),
+                ACTIVE_TASK_STATES,
+            )
+            jc_row = self._store.jobs.get_config(cur, task.job_id)
+
+            if update.new_state in TERMINAL_TASK_STATES:
+                delete_task_endpoints(cur, self._store.endpoints, update.task_id.to_wire())
+
+            # Coscheduled sibling cascade.
+            if jc_row is not None and task_state in FAILURE_TASK_STATES:
+                has_cosched = bool(int(jc_row["has_coscheduling"]))
+                siblings = _find_coscheduled_siblings(cur, self._store.tasks, task.job_id, update.task_id, has_cosched)
+                job_resources = resource_spec_from_scalars(
+                    int(jc_row["res_cpu_millicores"]),
+                    int(jc_row["res_memory_bytes"]),
+                    int(jc_row["res_disk_bytes"]),
+                    jc_row["res_device_json"],
+                )
+                cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
                     cur,
-                    TaskStateUpdateParams(
-                        task_id=update.task_id,
-                        state=task_state,
-                        error=task_error,
-                        exit_code=task_exit,
-                        started_at_ms=started_ms,
-                        finished_at_ms=terminal_ms,
-                        failure_count=failure_count,
-                        preemption_count=preemption_count,
-                    ),
-                    ACTIVE_TASK_STATES,
+                    self._store.attempts,
+                    self._store.tasks,
+                    self._store.workers,
+                    self._store.endpoints,
+                    siblings,
+                    update.task_id,
+                    job_resources,
+                    now_ms,
                 )
-                jc_row = self._store.jobs.get_config(cur, task.job_id)
+                tasks_to_kill.update(cascade_kill)
+                task_kill_workers.update(cascade_workers)
 
-                if update.new_state in TERMINAL_TASK_STATES:
-                    delete_task_endpoints(cur, self._store.endpoints, update.task_id.to_wire())
-
-                # Coscheduled sibling cascade.
-                if jc_row is not None and task_state in FAILURE_TASK_STATES:
-                    has_cosched = bool(int(jc_row["has_coscheduling"]))
-                    siblings = _find_coscheduled_siblings(
-                        cur, self._store.tasks, task.job_id, update.task_id, has_cosched
+            if task.job_id not in cascaded_jobs:
+                new_job_state = self._recompute_job_state(cur, task.job_id)
+                if new_job_state in TERMINAL_JOB_STATES:
+                    final_tasks_to_kill, final_task_kill_workers = _finalize_terminal_job(
+                        cur, self._store, task.job_id, new_job_state, now_ms
                     )
-                    job_resources = resource_spec_from_scalars(
-                        int(jc_row["res_cpu_millicores"]),
-                        int(jc_row["res_memory_bytes"]),
-                        int(jc_row["res_disk_bytes"]),
-                        jc_row["res_device_json"],
-                    )
-                    cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
-                        cur,
-                        self._store.attempts,
-                        self._store.tasks,
-                        self._store.workers,
-                        self._store.endpoints,
-                        siblings,
-                        update.task_id,
-                        job_resources,
-                        now_ms,
-                    )
-                    tasks_to_kill.update(cascade_kill)
-                    task_kill_workers.update(cascade_workers)
+                    tasks_to_kill.update(final_tasks_to_kill)
+                    task_kill_workers.update(final_task_kill_workers)
+                    cascaded_jobs.add(task.job_id)
 
-                if task.job_id not in cascaded_jobs:
-                    new_job_state = self._recompute_job_state(cur, task.job_id)
-                    if new_job_state in TERMINAL_JOB_STATES:
-                        final_tasks_to_kill, final_task_kill_workers = _finalize_terminal_job(
-                            cur, self._store, task.job_id, new_job_state, now_ms
-                        )
-                        tasks_to_kill.update(final_tasks_to_kill)
-                        task_kill_workers.update(final_task_kill_workers)
-                        cascaded_jobs.add(task.job_id)
-
-            if tasks_to_kill or cascaded_jobs:
-                log_event("direct_provider_updates_applied", "direct")
-                for job_id in cascaded_jobs:
-                    log_event("job_terminated", job_id.to_wire(), trigger="direct_provider_updates_applied")
+        if tasks_to_kill or cascaded_jobs:
+            log_event("direct_provider_updates_applied", "direct")
+            for job_id in cascaded_jobs:
+                log_event("job_terminated", job_id.to_wire(), trigger="direct_provider_updates_applied")
 
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
-    def buffer_direct_kill(self, task_id: str) -> None:
+    def buffer_direct_kill(self, cur: TransactionCursor, task_id: str) -> None:
         """Buffer a kill request for a direct-provider task.
 
         Inserts a kill entry into dispatch_queue with worker_id=NULL.
         Drained by drain_for_direct_provider().
         """
-        with self._db.transaction() as cur:
-            self._store.dispatch.enqueue_kill(cur, None, JobName.from_wire(task_id), Timestamp.now().epoch_ms())
+        self._store.dispatch.enqueue_kill(cur, None, JobName.from_wire(task_id), Timestamp.now().epoch_ms())
 
     # =========================================================================
     # Test helpers
@@ -2576,7 +2577,7 @@ class ControllerTransitions:
             worker_address = self._store.workers.address(snap, worker_id) or str(worker_id)
         next_attempt_id = current_attempt_id + 1
         now_ms = Timestamp.now().epoch_ms()
-        with self._db.transaction() as cur:
+        with self._store.transaction() as cur:
             self._store.tasks.assign(
                 cur,
                 self._store.attempts,

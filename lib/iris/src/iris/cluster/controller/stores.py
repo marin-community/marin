@@ -2070,3 +2070,6 @@ class ControllerStore:
 
     def read_snapshot(self):
         return self._db.read_snapshot()
+
+    def optimize(self) -> None:
+        self._db.optimize()

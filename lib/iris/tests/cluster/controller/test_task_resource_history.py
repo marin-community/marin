@@ -43,23 +43,31 @@ def _setup_running_task(state: ControllerTransitions) -> tuple[JobName, JobName]
     Returns (job_id, task_id).
     """
     wid = WorkerId("w1")
-    state.register_or_refresh_worker(worker_id=wid, address="host:8080", metadata=WORKER_META, ts=Timestamp.now())
+    with state._store.transaction() as cur:
+        state.register_or_refresh_worker(
+            cur, worker_id=wid, address="host:8080", metadata=WORKER_META, ts=Timestamp.now()
+        )
 
     job_id = JobName.from_wire("/user/test-job")
-    state.submit_job(
-        job_id,
-        controller_pb2.Controller.LaunchJobRequest(name="/user/test-job", replicas=1),
-        Timestamp.now(),
-    )
-    task_id = job_id.task(0)
-    state.queue_assignments([Assignment(task_id=task_id, worker_id=wid)])
-    state.apply_task_updates(
-        HeartbeatApplyRequest(
-            worker_id=wid,
-            worker_resource_snapshot=None,
-            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+    with state._store.transaction() as cur:
+        state.submit_job(
+            cur,
+            job_id,
+            controller_pb2.Controller.LaunchJobRequest(name="/user/test-job", replicas=1),
+            Timestamp.now(),
         )
-    )
+    task_id = job_id.task(0)
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                worker_resource_snapshot=None,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+            ),
+        )
     return job_id, task_id
 
 
@@ -75,22 +83,24 @@ def _count_history_rows(state: ControllerTransitions, task_id: JobName, attempt_
 def _send_resource_heartbeat(state: ControllerTransitions, task_id: JobName, cpu: int = 1000, mem: int = 512):
     """Send a steady-state heartbeat with resource usage."""
     usage = job_pb2.ResourceUsage(cpu_millicores=cpu, memory_mb=mem, disk_mb=10)
-    state.apply_heartbeats_batch(
-        [
-            HeartbeatApplyRequest(
-                worker_id=WorkerId("w1"),
-                worker_resource_snapshot=job_pb2.WorkerResourceSnapshot(),
-                updates=[
-                    TaskUpdate(
-                        task_id=task_id,
-                        attempt_id=0,
-                        new_state=job_pb2.TASK_STATE_RUNNING,
-                        resource_usage=usage,
-                    ),
-                ],
-            )
-        ]
-    )
+    with state._store.transaction() as cur:
+        state.apply_heartbeats_batch(
+            cur,
+            [
+                HeartbeatApplyRequest(
+                    worker_id=WorkerId("w1"),
+                    worker_resource_snapshot=job_pb2.WorkerResourceSnapshot(),
+                    updates=[
+                        TaskUpdate(
+                            task_id=task_id,
+                            attempt_id=0,
+                            new_state=job_pb2.TASK_STATE_RUNNING,
+                            resource_usage=usage,
+                        ),
+                    ],
+                )
+            ],
+        )
 
 
 def test_heartbeat_inserts_history(state):
@@ -248,7 +258,9 @@ def test_cascade_delete_on_job_removal(state):
     assert _count_history_rows(state, task_id) == 1
 
     # Cancel the job (makes it terminal), then remove it.
-    state.cancel_job(job_id, reason="test cleanup")
-    state.remove_finished_job(job_id)
+    with state._store.transaction() as cur:
+        state.cancel_job(cur, job_id, reason="test cleanup")
+    with state._store.transaction() as cur:
+        state.remove_finished_job(cur, job_id)
 
     assert _count_history_rows(state, task_id) == 0

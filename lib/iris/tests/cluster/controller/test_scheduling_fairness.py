@@ -131,7 +131,8 @@ def test_depth_boost_within_band():
             environment=parent_req.environment,
             replicas=1,
         )
-        state.submit_job(child_id, child_req, Timestamp.now())
+        with state._store.transaction() as cur:
+            state.submit_job(cur, child_id, child_req, Timestamp.now())
         child_tasks = query_tasks_for_job(state, child_id)
 
         schedulable = _schedulable_tasks(state._db)
@@ -171,7 +172,8 @@ def test_child_inherits_parent_band():
             environment=parent_req.environment,
             replicas=1,
         )
-        state.submit_job(child_id, child_req, Timestamp.now())
+        with state._store.transaction() as cur:
+            state.submit_job(cur, child_id, child_req, Timestamp.now())
         child_tasks = query_tasks_for_job(state, child_id)
 
         # Child should have inherited PRODUCTION band
@@ -309,21 +311,25 @@ def test_unplaceable_tasks_do_not_starve_placeable_tasks(make_controller, tmp_pa
         tpu_req.resources.device.tpu.variant = "v5p-8"
         inject_device_constraints(tpu_req)
         jid = JobName.from_string(f"/alice/tpu-job-{i}")
-        ctrl._transitions.submit_job(jid, tpu_req, Timestamp.now())
+        with ctrl._transitions._store.transaction() as cur:
+            ctrl._transitions.submit_job(cur, jid, tpu_req, Timestamp.now())
 
     # Submit 1 CPU task for alice — this should be placeable on the CPU worker
     cpu_jid = JobName.from_string("/alice/cpu-job")
     cpu_req = make_job_request(name="/alice/cpu-job", cpu=1, replicas=1)
     inject_device_constraints(cpu_req)
-    ctrl._transitions.submit_job(cpu_jid, cpu_req, Timestamp.now())
+    with ctrl._transitions._store.transaction() as cur:
+        ctrl._transitions.submit_job(cur, cpu_jid, cpu_req, Timestamp.now())
 
     # Register exactly 1 CPU worker — no TPU workers
-    ctrl._transitions.register_or_refresh_worker(
-        worker_id=WorkerId("cpu-worker"),
-        address="cpu-worker:8080",
-        metadata=make_worker_metadata(cpu=4, memory_bytes=8 * 1024**3),
-        ts=Timestamp.now(),
-    )
+    with ctrl._transitions._store.transaction() as cur:
+        ctrl._transitions.register_or_refresh_worker(
+            cur,
+            worker_id=WorkerId("cpu-worker"),
+            address="cpu-worker:8080",
+            metadata=make_worker_metadata(cpu=4, memory_bytes=8 * 1024**3),
+            ts=Timestamp.now(),
+        )
 
     outcome = ctrl._run_scheduling()
 
