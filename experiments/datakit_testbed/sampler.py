@@ -39,11 +39,13 @@ import pyarrow.parquet as pq
 from rigging.filesystem import url_to_fs
 
 from marin.datakit.normalize import NormalizedData
+from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.artifact import Artifact
+from marin.execution.step_runner import check_cache
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_glob, fsspec_mkdirs
 
-from marin.datakit.sources import DatakitSource
+from experiments.datakit_testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
 
 logger = logging.getLogger(__name__)
 
@@ -226,3 +228,78 @@ def sample_normalized_shards_step(
         ),
         override_output_path=override_output_path,
     )
+
+
+def _sample_step_for(
+    src: DatakitSource,
+    normalized: StepSpec,
+    sample_fraction: float,
+    base: str,
+) -> StepSpec:
+    """Per-source post-normalize sampler. Copies first ceil(N * fraction) shards."""
+    return sample_normalized_shards_step(
+        name=f"datakit-testbed/sample/{src.name}",
+        normalized=normalized,
+        sample_fraction=sample_fraction,
+        override_output_path=f"{base}/{src.name}",
+    )
+
+
+def build_testbed_steps(
+    run_id: str,
+    sources: Sequence[DatakitSource] | None = None,
+    target_total_tokens_b: float = RAW_TARGET_TOTAL_TOKENS_B,
+) -> list[StepSpec]:
+    """Build the full Datakit Testbed ferry DAG.
+
+    Composes the canonical Datakit stages into one multi-source pipeline:
+    ``<source.normalize_steps> ─► sample[source]``.
+
+    Each :class:`DatakitSource` already carries its full
+    ``(download, ..., normalize)`` :class:`StepSpec` chain; this function
+    appends the testbed-specific sample stage on top of every source's
+    terminal normalize step. Tokenize runs in the training executor graph
+    (see :mod:`experiments.datakit_testbed.train`), not the ferry.
+
+    Args:
+        run_id: Per-run identifier; sample output paths land under
+            ``datakit_testbed/{run_id}/...``. Normalize outputs land at
+            canonical run-independent paths (``normalized/<name>-<hash>``)
+            so they're reused across runs.
+        sources: DatakitSource list to ferry. ``None`` auto-selects every
+            entry from :func:`all_sources` whose normalize output is
+            already cached on GCS, matching the run_source_sampling
+            script. Pass an explicit list to bypass this check.
+        target_total_tokens_b: Target total token count (in billions)
+            across the sampled set. Drives per-source sample fractions
+            via :func:`proportional_sample_fractions`. Default is
+            :data:`RAW_TARGET_TOTAL_TOKENS_B`.
+
+    Returns:
+        Flat list of :class:`StepSpec` covering every normalize chain plus
+        one sample step per source. Ready to hand to ``StepRunner().run()``.
+    """
+    if sources is None:
+        # TODO (rav): remove the check_cache when ready?
+        sources = tuple(s for s in all_sources().values() if check_cache(s.normalized.output_path))
+    if not sources:
+        raise ValueError("build_testbed_steps requires at least one source")
+
+    base = f"datakit_testbed/{run_id}"
+    fractions = proportional_sample_fractions(sources, target_total_tokens_b=target_total_tokens_b)
+
+    all_steps: list[StepSpec] = []
+    for src in sources:
+        # Each source contributes its own download → [preprocess] → normalize
+        # chain. Duplicates across sources dedupe by override_output_path at
+        # run time.
+        all_steps.extend(src.normalize_steps)
+        all_steps.append(_sample_step_for(src, src.normalized, fractions[src.name], base))
+
+    logger.info(
+        "Built testbed DAG: %d sources, %d steps (normalize chains + sample), target %.0fB tokens",
+        len(sources),
+        len(all_steps),
+        target_total_tokens_b,
+    )
+    return all_steps

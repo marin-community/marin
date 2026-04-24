@@ -32,7 +32,7 @@ from rigging.timing import log_time
 
 from marin.execution.step_runner import StepRunner
 
-from experiments.datakit_testbed.dag import build_testbed_steps
+from experiments.datakit_testbed.sampler import build_testbed_steps
 from marin.datakit.sources import all_sources
 
 from experiments.datakit_testbed.settings import TESTBED_STAGING_REGION

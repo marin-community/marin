@@ -11,7 +11,7 @@ a live smoke run, not unit tests.
 
 import pytest
 
-from experiments.datakit_testbed.dag import build_testbed_steps
+from experiments.datakit_testbed.sampler import build_testbed_steps
 from marin.datakit.sources import all_sources
 from experiments.datakit_testbed.train import (
     DEFAULT_TARGET_BUDGET_TOKENS,
