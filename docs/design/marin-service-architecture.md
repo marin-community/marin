@@ -122,7 +122,7 @@ We already do versions of this in provisioning and cluster startup. This RFC tur
 
 Iris already has endpoint registration semantics: coordinators register themselves, workers look them up, and the controller acts as the rendezvous point. The problem is that those semantics currently live inside Iris. A logging service, KV service, or future storage service should not need to import Iris internals just to resolve names.
 
-We move the endpoints service into `rigging` as a small reusable primitive:
+We move the endpoints service into `rigging` as a small reusable primitive. `rigging` is our home for transport-layer building blocks (server runtime, health, endpoints) and is intentionally not Iris-specific — any service, including Iris itself, consumes it as a library.
 
 ```text
 lib/rigging/endpoints/
@@ -154,46 +154,60 @@ The initial implementation can be in-memory. If controller restarts dropping reg
 
 For CLI args, config files, and client constructors, we need a compact serialization format for logical service references. URLs are a good fit because they already encode scheme, authority, path, and query parameters.
 
-Supported forms:
+A service reference is either a bare `host:port` literal or a URL. Bare `host:port` is not a scheme — it is the degenerate case where no resolution is needed, and is handled directly without entering the scheme dispatch. This keeps the common "I know exactly where the service is" case trivial.
+
+URL-form references use two schemes:
 
 ```text
-iris://<cluster>?endpoint=<name>
-gcp://<vm-name>
-<host>:<port>
+iris://<cluster>?endpoint=<name>    # go via a named cluster's endpoints service
+gcp://<vm-or-service-name>          # resolve a VM / managed instance by provider name
 ```
 
-The main scheme is `iris://`:
+The `<cluster>` authority in `iris://` is a cluster key — the same identifier already used by the `--cluster` flag and cluster config files. Today this is effectively always `marin`, but the scheme is multi-cluster ready: a second deployment (e.g. `openathena`) is just another entry.
+
+Examples:
 
 ```text
-iris://marin?endpoint=/system/logger
+iris://marin?endpoint=/system/logger       # logger on the marin cluster
+iris://openathena?endpoint=/system/logger  # logger on a separate cluster
+gcp://log-server                            # skip the cluster hop, hit the VM directly
+log-server.internal:8080                    # bare host:port, no resolution
 ```
 
-This means:
+`iris://marin?endpoint=/system/logger` resolves in four steps:
 
-1. Resolve the Marin Iris controller VM.
+1. Resolve the `marin` cluster's Iris controller VM.
 2. Connect to the endpoints service on that controller.
 3. Look up `/system/logger`.
 4. Connect the client to the returned `(host, port)`.
 
-Dispatch stays simple:
+Dispatch is small:
 
 ```python
-def resolve(url: ServiceURL) -> tuple[str, int]:
+def resolve(ref: str) -> tuple[str, int]:
+    # Bare host:port short-circuits — no URL parsing, no lookup.
+    if "://" not in ref:
+        host, port = ref.rsplit(":", 1)
+        return host, int(port)
+
+    url = ServiceURL.parse(ref)
     match url.scheme:
         case "iris":
             controller = vm_address(f"iris-controller-{url.host}", provider="gcp")
             return endpoint_lookup(controller, url.query["endpoint"])
         case "gcp":
             return vm_address(url.host, provider="gcp")
-        case "direct":
-            return url.host, url.port
 ```
 
 A registry of resolver plugins is unnecessary until we have enough schemes to justify it. A single `match` statement is easier to inspect and debug.
 
+`gcp://log-server` and bare `host:port` are first-class: if the endpoints service itself moves off the Iris controller (see §System services), clients can still reach it without going through `iris://`. `iris://` is the convenience form that chases the cluster's endpoints service; the other two forms are escape hatches that skip that hop.
+
 ### System services
 
-Some standing services are part of the cluster’s control plane rather than a user job. Current candidates are logging and shared KV. Both are used by Iris itself, so running them as ordinary Iris jobs creates a bootstrapping problem. They should be deployed and updated independently of the controller, while still being discoverable through the same endpoint mechanism.
+Some standing services are part of the cluster’s control plane rather than a user job. Current candidates are logging and shared KV. Both are used by the Iris controller itself, so running them as ordinary Iris-submitted jobs creates a bootstrapping problem.
+
+The model is: **system services are peers of the Iris controller, not children of it.** They are deployed and updated independently, owned by the cluster configuration rather than by Iris. Iris consumes them like any other client — by logical URL through the endpoints service — and has no privileged in-process pathway. This is what lets us move logging from in-controller to a dedicated VM without rewriting Iris's callers, and (symmetrically) lets a logging restart not require restarting Iris.
 
 Define system services in the cluster YAML:
 
@@ -210,21 +224,23 @@ system-services:
 Properties:
 
 * started or reconciled during cluster startup
-* independently restartable
-* registered with the cluster endpoints service
+* independently restartable, independent of the Iris controller lifecycle
+* registered with the cluster endpoints service on boot
 * addressable through the same URL scheme as any other service
 
-For example:
+Every caller — Iris included — reaches them the same way:
 
 ```text
 iris://marin?endpoint=/system/logger
 ```
 
-Operationally, this should support commands like:
+Operationally, the cluster CLI manages them like any other lifecycle target:
 
 ```bash
 iris cluster log-server restart
 ```
+
+Here `iris cluster` is the cluster-management CLI; `log-server` is the system-service name from the YAML. The CLI is not running logger in-process — it is reconciling the declared system service against its provider.
 
 Endpoints update when a service moves to a new VM. Callers continue to use the logical name.
 
@@ -288,9 +304,9 @@ Recommendation: prefer explicit behavior. Hidden auto-detection can be surprisin
 
 ### URL scheme extensibility
 
-We currently need `iris://`, `gcp://`, and direct `host:port` support.
+We currently need `iris://`, `gcp://`, and bare `host:port` support. Bare `host:port` is handled as a pre-match short-circuit; only URL-form references hit the scheme dispatch.
 
-Options:
+Options for additional schemes:
 
 * single `match` statement
 * resolver registry
@@ -375,10 +391,26 @@ with proxy_session("marin") as proxy:
 
 The session owns the `{service_name: local_port}` map and opens forwards on demand.
 
+### Option 3: private networking overlay (Tailscale, Cloudflare Zero Trust)
+
+A mesh VPN or zero-trust proxy removes the tunnel problem entirely. Laptops, CI runners, and cluster VMs all become addressable on the same private network; the tunnel layer disappears from application code, and `maybe_proxy` becomes a no-op everywhere. There is no client-library compatibility matrix to maintain (`grpc-python`, SOCKS, `ALL_PROXY`, etc.) because the transport below the client is just normal TCP over a routed interface.
+
+Rough cost for our scale (~25 users, pricing as of 2026):
+
+| Option | Plan | Cost/user | Annual @ 25 users | Notes |
+| --- | --- | --- | --- | --- |
+| Tailscale | Personal (free) | $0 | $0 | capped at 6 users — too small for us |
+| Tailscale | Standard | $8/mo | ~$2.4k/yr | unlimited users and devices |
+| Tailscale | Premium | $18/mo | ~$5.4k/yr | JIT access, network flow logs, priority support |
+| Cloudflare Zero Trust | Free | $0 | $0 | up to 50 users — covers us today |
+| Cloudflare Zero Trust | Pay-as-you-go | $7/mo | ~$2.1k/yr | billed annually, no user cap |
+
+Cloudflare Zero Trust's free tier is interesting precisely because it covers our current user count. The tradeoffs vs. Tailscale are the usual ones: Tailscale is a simpler WireGuard-style mesh; Cloudflare is an identity-aware reverse proxy with more policy surface and more lock-in. Either removes the SOCKS/`ssh -L` apparatus.
+
 ### Recommendation
 
-Standardize on HTTP-based Connect clients that support SOCKS in each language we care about. SOCKS handles the general case with one tunnel and composes naturally with service discovery.
+Near-term, standardize on HTTP-based Connect clients that support SOCKS, and keep the `ssh -L` helper for libraries (notably `grpc-python`) that ignore proxy env vars. This keeps us unblocked without a new vendor dependency.
 
-Keep the `ssh -L` helper for clients that cannot use SOCKS, especially grpc-python or any library that ignores standard proxy environment variables.
+Medium-term, seriously consider a private networking overlay — most likely Cloudflare Zero Trust's free tier while we are under 50 users, or Tailscale Standard once we exceed that threshold. Adopting one is non-breaking: `maybe_proxy` becomes a no-op, and service URLs and client APIs do not change.
 
 Auth remains SSH-based for now. A future private-networking layer can replace the tunnel implementation without changing service URLs or client APIs.
