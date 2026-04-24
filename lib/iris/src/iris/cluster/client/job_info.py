@@ -35,6 +35,9 @@ class JobInfo:
     controller_address: str | None = None
     """Address of the controller that started this job, if any."""
 
+    auth_token: str | None = None
+    """Bearer token for authenticating RPCs to the controller, if any."""
+
     advertise_host: str = "127.0.0.1"
     """The externally visible host name to use when advertising services."""
 
@@ -112,6 +115,7 @@ def get_job_info() -> JobInfo | None:
             attempt_id=attempt_id,
             worker_id=os.environ.get("IRIS_WORKER_ID"),
             controller_address=os.environ.get("IRIS_CONTROLLER_ADDRESS"),
+            auth_token=os.environ.get("IRIS_AUTH_TOKEN"),
             advertise_host=os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1"),
             extras=json.loads(os.environ.get("IRIS_JOB_EXTRAS", "[]")),
             pip_packages=json.loads(os.environ.get("IRIS_JOB_PIP_PACKAGES", "[]")),

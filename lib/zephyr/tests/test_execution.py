@@ -1086,6 +1086,91 @@ def test_execute_does_not_retry_worker_errors(local_client, tmp_path):
     assert elapsed < 15.0, f"Took {elapsed:.1f}s, expected fast failure (no retries)"
 
 
+# =============================================================================
+# _report_task_stats tests
+# =============================================================================
+
+
+def test_report_task_stats_skips_without_iris_client(actor_context, tmp_path):
+    """_report_task_stats is a no-op when _iris_client is None."""
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    assert coord._iris_client is None
+    # Should return silently without raising
+    coord._report_task_stats()
+
+
+def test_report_task_stats_calls_set_task_stats(actor_context, tmp_path):
+    """_report_task_stats calls set_task_stats with the task_id and shard progress."""
+    from collections import deque
+
+    from iris.cluster.client.job_info import set_job_info
+    from iris.cluster.types import JobName
+    from zephyr.plan import PhysicalStage, StageType
+
+    from iris.cluster.client.job_info import JobInfo
+
+    task_id = JobName.root("test-user", "zephyr-job").task(0)
+    try:
+        set_job_info(JobInfo(task_id=task_id))
+
+        coord = ZephyrCoordinator()
+        coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+        mock_client = MagicMock()
+        coord._iris_client = mock_client
+        coord._stage_name = "map-stage"
+        coord._stage_index = 1
+        coord._plan_stages = [PhysicalStage(operations=[], stage_type=StageType.WORKER)]
+        coord._total_shards = 10
+        coord._completed_shards = 4
+        coord._in_flight = {"worker-0": object()}
+        coord._task_queue = deque()
+
+        coord._report_task_stats()
+
+        mock_client.set_task_stats.assert_called_once()
+        req = mock_client.set_task_stats.call_args[0][0]
+        assert req.task_id == task_id.to_wire()
+        assert req.items_processed == 0  # no counters set
+        assert req.bytes_processed == 0
+        assert "Physical stages:" in req.status
+        assert "Shards: 4/10 complete, 1 in-flight, 0 queued" in req.status
+    finally:
+        set_job_info(None)
+
+
+def test_report_task_stats_handles_rpc_exception(actor_context, tmp_path, caplog):
+    """_report_task_stats logs a warning but does not propagate RPC errors."""
+    from iris.cluster.client.job_info import JobInfo, set_job_info
+    from iris.cluster.types import JobName
+    from zephyr.plan import PhysicalStage, StageType
+
+    task_id = JobName.root("test-user", "zephyr-job").task(0)
+    try:
+        set_job_info(JobInfo(task_id=task_id))
+
+        coord = ZephyrCoordinator()
+        coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+        mock_client = MagicMock()
+        mock_client.set_task_stats.side_effect = RuntimeError("connection refused")
+        coord._iris_client = mock_client
+        coord._stage_name = "map-stage"
+        coord._stage_index = 1
+        coord._plan_stages = [PhysicalStage(operations=[], stage_type=StageType.WORKER)]
+        coord._total_shards = 5
+        coord._completed_shards = 2
+
+        with caplog.at_level(logging.WARNING, logger="zephyr.execution"):
+            coord._report_task_stats()  # must not raise
+
+        assert any("Failed to report task stats" in r.message for r in caplog.records)
+    finally:
+        set_job_info(None)
+
+
 # --- Integration tests (all backends) ---
 
 
