@@ -51,10 +51,12 @@ def test_sample_takes_first_k_deterministically(tmp_path: Path):
     assert out.counters["sampler/selected_shards"] == 3
 
     sampled_shards = sorted(Path(out.main_output_dir).glob("*.parquet"))
+    # Output files are renamed to ``part-{i}-of-{N}`` where N reflects the
+    # sampled count, not the source total.
     assert [p.name for p in sampled_shards] == [
-        "part-0000.parquet",
-        "part-0001.parquet",
-        "part-0002.parquet",
+        "part-00000-of-00003.parquet",
+        "part-00001-of-00003.parquet",
+        "part-00002-of-00003.parquet",
     ]
 
 
@@ -94,10 +96,13 @@ def test_sample_preserves_content(tmp_path: Path):
     )
     out = sample_normalized_shards(source=source, output_path=str(tmp_path / "s"), sample_fraction=1.0)
 
-    for rel in ["part-0000.parquet", "part-0001.parquet"]:
-        src_rows = pq.read_table(Path(source.main_output_dir) / rel).to_pylist()
-        dst_rows = pq.read_table(Path(out.main_output_dir) / rel).to_pylist()
-        assert src_rows == dst_rows
+    # Input shards are renamed to ``part-{i}-of-{N}`` in lex order of the source,
+    # so row-by-row the outputs must equal the sources in the same order.
+    src_shards = sorted(Path(source.main_output_dir).glob("*.parquet"))
+    dst_shards = sorted(Path(out.main_output_dir).glob("*.parquet"))
+    assert len(src_shards) == len(dst_shards) == 2
+    for src, dst in zip(src_shards, dst_shards, strict=True):
+        assert pq.read_table(src).to_pylist() == pq.read_table(dst).to_pylist()
 
 
 def test_sample_invalid_fraction_raises(tmp_path: Path):

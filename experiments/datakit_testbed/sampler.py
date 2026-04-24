@@ -86,6 +86,11 @@ def proportional_sample_fractions(
     return fractions
 
 
+def _part_name(idx: int, total: int) -> str:
+    """``part-{idx}-of-{total}.parquet`` — matches normalize's zephyr writer."""
+    return f"part-{idx:05d}-of-{total:05d}.parquet"
+
+
 def _copy_shard(src: str, dst: str) -> int:
     """Copy a single file server-side. Both paths must share a backend."""
     src_fs, src_path = url_to_fs(src)
@@ -185,7 +190,7 @@ def sample_normalized_shards(
     # Fraction==1.0 short-circuit: take everything as-is.
     if sample_fraction >= 1.0:
         logger.info("sampler: fraction=1.0, copying all %d shards", total)
-        tasks = [(s, f"{main_out}/{os.path.relpath(s, input_base)}") for s in shards]
+        tasks = [(s, f"{main_out}/{_part_name(i, total)}") for i, s in enumerate(shards)]
         total_bytes = 0
         with ThreadPoolExecutor(max_workers=_COPY_PARALLELISM) as pool:
             for nbytes in pool.map(lambda args: _copy_shard(*args), tasks):
@@ -213,7 +218,7 @@ def sample_normalized_shards(
     # Case 1: target fits in one file — row-sample from the first shard only.
     if target_rows <= rows_per_file:
         src = shards[0]
-        dst = f"{main_out}/{os.path.relpath(src, input_base)}"
+        dst = f"{main_out}/{_part_name(0, 1)}"
         row_fraction = target_rows / rows_per_file
         rows_in, rows_out = _sample_rows_within_shard(src, dst, row_fraction)
         logger.info(
@@ -237,6 +242,8 @@ def sample_normalized_shards(
     # as fits, row-sample the next shard for the remainder.
     n_whole = min(target_rows // rows_per_file, total)
     remainder = target_rows - n_whole * rows_per_file
+    has_tail = remainder > 0 and n_whole < total
+    output_total = n_whole + (1 if has_tail else 0)
     whole_shards = shards[:n_whole]
     logger.info(
         "sampler: %d whole shards + %d remainder rows (from shard #%d if any)",
@@ -245,7 +252,7 @@ def sample_normalized_shards(
         n_whole,
     )
 
-    tasks = [(s, f"{main_out}/{os.path.relpath(s, input_base)}") for s in whole_shards]
+    tasks = [(s, f"{main_out}/{_part_name(i, output_total)}") for i, s in enumerate(whole_shards)]
     total_bytes = 0
     with ThreadPoolExecutor(max_workers=_COPY_PARALLELISM) as pool:
         for nbytes in pool.map(lambda args: _copy_shard(*args), tasks):
@@ -253,9 +260,9 @@ def sample_normalized_shards(
     logger.info("sampler: copied %d whole shards, %.1f GiB", n_whole, total_bytes / (1024**3))
 
     rows_out_total = n_whole * rows_per_file
-    if remainder > 0 and n_whole < total:
+    if has_tail:
         src = shards[n_whole]
-        dst = f"{main_out}/{os.path.relpath(src, input_base)}"
+        dst = f"{main_out}/{_part_name(n_whole, output_total)}"
         row_fraction = remainder / rows_per_file
         _, rows_out = _sample_rows_within_shard(src, dst, row_fraction)
         rows_out_total += rows_out
@@ -264,7 +271,7 @@ def sample_normalized_shards(
         main_output_dir=main_out,
         dup_output_dir=source.dup_output_dir,
         counters={
-            "sampler/selected_shards": n_whole + (1 if remainder > 0 else 0),
+            "sampler/selected_shards": output_total,
             "sampler/total_shards": total,
             "sampler/rows_out": rows_out_total,
             "sampler/target_rows": target_rows,
