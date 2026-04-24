@@ -12,7 +12,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from collections.abc import Callable, Iterable, Mapping
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
 from iris.cluster.controller.codec import (
@@ -54,7 +54,6 @@ from iris.cluster.controller.stores import (
 )
 from iris.cluster.controller.schema import (
     JOB_CONFIG_JOIN,
-    TASK_DETAIL_PROJECTION,
     EndpointRow,
     JobDetailRow,
     WorkerDetailRow,
@@ -678,26 +677,6 @@ def _resolve_task_failure_state(
 
 
 # =============================================================================
-# Batch helpers for apply_heartbeats_batch
-# =============================================================================
-
-
-def _bulk_fetch_tasks(cur: TransactionCursor, task_ids: list[str]) -> dict[str, Any]:
-    """Fetch task rows for all given IDs in chunked IN queries."""
-    result: dict[str, Any] = {}
-    for chunk_start in range(0, len(task_ids), 900):
-        chunk = task_ids[chunk_start : chunk_start + 900]
-        ph = ",".join("?" * len(chunk))
-        rows = cur.execute(
-            f"SELECT * FROM tasks WHERE task_id IN ({ph})",
-            tuple(chunk),
-        ).fetchall()
-        for r in rows:
-            result[str(r["task_id"])] = r
-    return result
-
-
-# =============================================================================
 # Controller Transitions
 # =============================================================================
 
@@ -1307,28 +1286,27 @@ class ControllerTransitions:
         job_config_cache: dict[str, dict | None] = {}
 
         for update in req.updates:
-            task_row = cur.execute("SELECT * FROM tasks WHERE task_id = ?", (update.task_id.to_wire(),)).fetchone()
-            if task_row is None:
+            task = self._store.tasks.get_detail(cur, update.task_id)
+            if task is None:
                 continue
-            task = TASK_DETAIL_PROJECTION.decode_one([task_row])
             if task_row_is_finished(task) or update.new_state in (
                 job_pb2.TASK_STATE_UNSPECIFIED,
                 job_pb2.TASK_STATE_PENDING,
             ):
                 continue
-            if update.attempt_id != int(task_row["current_attempt_id"]):
+            if update.attempt_id != task.current_attempt_id:
                 stale_state = self._store.attempts.get_state(cur, update.task_id, update.attempt_id)
                 if stale_state is not None and stale_state not in TERMINAL_TASK_STATES:
                     logger.error(
                         "Stale attempt precondition violation: task=%s reported=%d current=%d stale_state=%s",
                         update.task_id,
                         update.attempt_id,
-                        int(task_row["current_attempt_id"]),
+                        task.current_attempt_id,
                         stale_state,
                     )
                 continue
 
-            prior_state = int(task_row["state"])
+            prior_state = task.state
 
             # Fast path: task already in the reported state with no new data to apply.
             has_new_data = update.error is not None or update.exit_code is not None or update.resource_usage is not None
@@ -1371,8 +1349,8 @@ class ControllerTransitions:
             task_state = prior_state
             task_error = update.error
             task_exit = update.exit_code
-            failure_count = int(task_row["failure_count"])
-            preemption_count = int(task_row["preemption_count"])
+            failure_count = task.failure_count
+            preemption_count = task.preemption_count
 
             if update.new_state == job_pb2.TASK_STATE_RUNNING:
                 started_ms = now_ms
@@ -1416,14 +1394,12 @@ class ControllerTransitions:
                     # forever without draining preemption budget.
                     if worker_id is not None:
                         self._health.build_failed(WorkerId(str(worker_id)))
-                if update.new_state == job_pb2.TASK_STATE_FAILED and failure_count <= int(
-                    task_row["max_retries_failure"]
-                ):
+                if update.new_state == job_pb2.TASK_STATE_FAILED and failure_count <= task.max_retries_failure:
                     task_state = job_pb2.TASK_STATE_PENDING
                     terminal_ms = None
                 if (
                     update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
-                    and preemption_count <= int(task_row["max_retries_preemption"])
+                    and preemption_count <= task.max_retries_preemption
                     and prior_state in EXECUTING_TASK_STATES
                 ):
                     task_state = job_pb2.TASK_STATE_PENDING
@@ -1573,7 +1549,7 @@ class ControllerTransitions:
             )
 
             # ── Bulk-fetch task rows for classification ───────────────────
-            all_task_ids: list[str] = []
+            all_task_ids: list[JobName] = []
             for req in requests:
                 if str(req.worker_id) not in existing_workers:
                     continue
@@ -1582,9 +1558,9 @@ class ControllerTransitions:
                         job_pb2.TASK_STATE_UNSPECIFIED,
                         job_pb2.TASK_STATE_PENDING,
                     ):
-                        all_task_ids.append(update.task_id.to_wire())
+                        all_task_ids.append(update.task_id)
 
-            task_row_map = _bulk_fetch_tasks(cur, all_task_ids)
+            task_map = self._store.tasks.bulk_get_detail(cur, all_task_ids)
 
             # ── Classify and split ────────────────────────────────────────
             task_history_params: list[ResourceUsageInsertParams] = []
@@ -1597,12 +1573,11 @@ class ControllerTransitions:
 
                 transition_updates: list[TaskUpdate] = []
                 for update in req.updates:
-                    task_id_wire = update.task_id.to_wire()
-                    task_row = task_row_map.get(task_id_wire)
-                    if task_row is None:
+                    task = task_map.get(update.task_id)
+                    if task is None:
                         continue
 
-                    prior_state = int(task_row["state"])
+                    prior_state = task.state
                     is_state_change = update.new_state != prior_state
                     has_terminal_data = update.error is not None or update.exit_code is not None
 
@@ -1610,16 +1585,15 @@ class ControllerTransitions:
                         transition_updates.append(update)
                     else:
                         # Steady-state: check finished / stale attempt before writing.
-                        task = self._db.decode_task(task_row)
                         if task_row_is_finished(task):
                             continue
-                        if update.attempt_id != int(task_row["current_attempt_id"]):
+                        if update.attempt_id != task.current_attempt_id:
                             continue
                         if update.resource_usage is not None:
                             u = update.resource_usage
                             task_history_params.append(
                                 ResourceUsageInsertParams(
-                                    task_id=JobName.from_wire(task_id_wire),
+                                    task_id=update.task_id,
                                     attempt_id=update.attempt_id,
                                     cpu_millicores=u.cpu_millicores,
                                     memory_mb=u.memory_mb,
@@ -2445,23 +2419,22 @@ class ControllerTransitions:
             cascaded_jobs: set[JobName] = set()
 
             for update in updates:
-                task_row = cur.execute("SELECT * FROM tasks WHERE task_id = ?", (update.task_id.to_wire(),)).fetchone()
-                if task_row is None:
+                task = self._store.tasks.get_detail(cur, update.task_id)
+                if task is None:
                     continue
-                task = TASK_DETAIL_PROJECTION.decode_one([task_row])
                 if task_row_is_finished(task) or update.new_state in (
                     job_pb2.TASK_STATE_UNSPECIFIED,
                     job_pb2.TASK_STATE_PENDING,
                 ):
                     continue
-                if update.attempt_id != int(task_row["current_attempt_id"]):
+                if update.attempt_id != task.current_attempt_id:
                     stale_state = self._store.attempts.get_state(cur, update.task_id, update.attempt_id)
                     if stale_state is not None and stale_state not in TERMINAL_TASK_STATES:
                         logger.error(
                             "Stale attempt precondition violation: task=%s reported=%d current=%d stale_state=%s",
                             update.task_id,
                             update.attempt_id,
-                            int(task_row["current_attempt_id"]),
+                            task.current_attempt_id,
                             stale_state,
                         )
                     continue
@@ -2500,11 +2473,11 @@ class ControllerTransitions:
 
                 terminal_ms: int | None = None
                 started_ms: int | None = None
-                task_state = int(task_row["state"])
+                task_state = task.state
                 task_error = update.error
                 task_exit = update.exit_code
-                failure_count = int(task_row["failure_count"])
-                preemption_count = int(task_row["preemption_count"])
+                failure_count = task.failure_count
+                preemption_count = task.preemption_count
 
                 if update.new_state == job_pb2.TASK_STATE_RUNNING:
                     started_ms = now_ms
@@ -2526,27 +2499,22 @@ class ControllerTransitions:
                         task_error = "Scheduling timeout exceeded"
                     if update.new_state == job_pb2.TASK_STATE_FAILED:
                         failure_count += 1
-                    if (
-                        update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
-                        and int(task_row["state"]) in EXECUTING_TASK_STATES
-                    ):
+                    if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and task.state in EXECUTING_TASK_STATES:
                         preemption_count += 1
                     # WORKER_FAILED while still ASSIGNED -> retry immediately as PENDING
                     if (
                         update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
-                        and int(task_row["state"]) == job_pb2.TASK_STATE_ASSIGNED
+                        and task.state == job_pb2.TASK_STATE_ASSIGNED
                     ):
                         task_state = job_pb2.TASK_STATE_PENDING
                         terminal_ms = None
-                    if update.new_state == job_pb2.TASK_STATE_FAILED and failure_count <= int(
-                        task_row["max_retries_failure"]
-                    ):
+                    if update.new_state == job_pb2.TASK_STATE_FAILED and failure_count <= task.max_retries_failure:
                         task_state = job_pb2.TASK_STATE_PENDING
                         terminal_ms = None
                     if (
                         update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
-                        and preemption_count <= int(task_row["max_retries_preemption"])
-                        and int(task_row["state"]) in EXECUTING_TASK_STATES
+                        and preemption_count <= task.max_retries_preemption
+                        and task.state in EXECUTING_TASK_STATES
                     ):
                         task_state = job_pb2.TASK_STATE_PENDING
                         terminal_ms = None

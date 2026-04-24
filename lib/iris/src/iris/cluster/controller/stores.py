@@ -931,6 +931,27 @@ class TaskStore:
             return None
         return TASK_DETAIL_PROJECTION.decode_one([row])
 
+    def bulk_get_detail(self, tx: Tx, task_ids: Iterable[JobName]) -> dict[JobName, TaskDetailRow]:
+        """Return ``{task_id: TaskDetailRow}`` for all ``task_ids`` that exist.
+
+        Missing ids are silently absent from the result. Chunks internally
+        to stay under SQLite's statement-parameter limit.
+        """
+        result: dict[JobName, TaskDetailRow] = {}
+        ids = list(task_ids)
+        for chunk_start in range(0, len(ids), 900):
+            chunk = ids[chunk_start : chunk_start + 900]
+            if not chunk:
+                continue
+            placeholders = ",".join("?" for _ in chunk)
+            rows = tx.fetchall(
+                f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} " f"FROM tasks t WHERE t.task_id IN ({placeholders})",
+                tuple(tid.to_wire() for tid in chunk),
+            )
+            for task in TASK_DETAIL_PROJECTION.decode(rows):
+                result[task.task_id] = task
+        return result
+
     def get_job_id(self, tx: Tx, task_id: JobName) -> JobName | None:
         row = tx.fetchone("SELECT job_id FROM tasks WHERE task_id = ?", (task_id.to_wire(),))
         return JobName.from_wire(str(row["job_id"])) if row is not None else None
