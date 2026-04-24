@@ -125,11 +125,29 @@ def _sample_rows_within_shard(src: str, dst: str, sample_fraction: float) -> tup
         rows_in = pf.metadata.num_rows
         rows_out = max(1, math.ceil(rows_in * sample_fraction))
         rows_out = min(rows_out, rows_in)
-        logger.info("sampler: reading %d/%d rows from %s", rows_out, rows_in, src)
-        table = pf.read().slice(0, rows_out)
 
-    with dst_fs.open(dst_path, "wb") as df:
-        pq.write_table(table, df)
+        logger.info(
+            "sampler: streaming %d/%d rows from %s across %d source row groups",
+            rows_out,
+            rows_in,
+            src,
+            pf.num_row_groups,
+        )
+
+        # Stream source row groups through as-is; slice the last one if it
+        # would overshoot the budget. Each input table becomes one output
+        # row group (ParquetWriter's default), so the source's row-group
+        # layout is preserved.
+        remaining = rows_out
+        with dst_fs.open(dst_path, "wb") as df, pq.ParquetWriter(df, pf.schema_arrow) as writer:
+            for i in range(pf.num_row_groups):
+                if remaining <= 0:
+                    break
+                rg = pf.read_row_group(i)
+                if rg.num_rows > remaining:
+                    rg = rg.slice(0, remaining)
+                writer.write_table(rg)
+                remaining -= rg.num_rows
     logger.info("sampler: wrote %d rows to %s (%d bytes)", rows_out, dst, dst_fs.size(dst_path) or 0)
 
     return rows_in, rows_out
