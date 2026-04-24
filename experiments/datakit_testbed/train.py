@@ -115,7 +115,7 @@ def run_testbed_config(
             Use e.g. ``"baseline"`` for the trivial no-dedup run.
         sampled_by_source: Per-source sample steps — usually built by
             filtering :func:`build_testbed_steps`' return list for
-            entries whose name starts with ``datakit-testbed/sample/``.
+            entries whose name starts with ``datakit-testbed/``.
             Tokenize ExecutorSteps are built internally on top of these
             (see :func:`build_testbed_tokenize_steps`).
         compute_budget_flops: FLOP budget fed to ``build_from_heuristic``.

@@ -71,7 +71,7 @@ def main() -> None:
             visit(step)
         steps.append(
             sample_normalized_shards_step(
-                name=f"datakit-testbed/sample/{src.name}",
+                name=f"datakit-testbed/{src.name}",
                 normalized=src.normalized,
                 sample_fraction=fractions[src.name],
                 override_output_path=f"{base}/sample/{src.name}",

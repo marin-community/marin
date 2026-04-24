@@ -29,14 +29,14 @@ def test_dag_single_source_shape():
     assert names == [
         "raw/nemotron_cc_code_v1",
         "normalized/nemotron_cc_code_v1/all",
-        "datakit-testbed/sample/nemotron_cc_code_v1/all",
+        "datakit-testbed/nemotron_cc_code_v1/all",
     ]
 
 
 def test_dag_has_one_sample_step_per_source():
     steps = build_testbed_steps("run0", sources=_ALL_LIST)
-    sample_names = {s.name for s in steps if "/sample/" in s.name}
-    assert sample_names == {f"datakit-testbed/sample/{s.name}" for s in _ALL_LIST}
+    sample_names = {s.name for s in steps if s.name.startswith("datakit-testbed/")}
+    assert sample_names == {f"datakit-testbed/{s.name}" for s in _ALL_LIST}
 
 
 def test_dag_nemotron_family_subsets_share_one_download_stepspec():
@@ -61,10 +61,10 @@ def test_dag_nemotron_family_subsets_share_one_download_stepspec():
 
 
 def test_dag_stops_at_sample():
+    """The ferry emits sample steps only (no other testbed-specific stages)."""
     steps = build_testbed_steps("run0", sources=_ALL_LIST)
-    # The ferry stops at sample; tokenize lives in the training harness.
-    non_source_stages = {s.name.split("/", 2)[1] for s in steps if s.name.startswith("datakit-testbed/")}
-    assert non_source_stages == {"sample"}
+    testbed_steps = [s for s in steps if s.name.startswith("datakit-testbed/")]
+    assert len(testbed_steps) == len(_ALL_LIST), "expected exactly one testbed step per source (the sampler)"
 
 
 def test_dag_output_paths_namespaced_by_run_id():
@@ -91,5 +91,5 @@ def test_dag_starcoder2_subsets_get_distinct_download_names():
 def test_dag_full_testbed_builds():
     """Smoke test: building with the full registry does not raise."""
     steps = build_testbed_steps("run0", sources=_ALL_LIST)
-    sample_steps = [s for s in steps if s.name.startswith("datakit-testbed/sample/")]
+    sample_steps = [s for s in steps if s.name.startswith("datakit-testbed/")]
     assert len(sample_steps) == len(_ALL)

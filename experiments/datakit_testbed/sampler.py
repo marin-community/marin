@@ -238,7 +238,7 @@ def _sample_step_for(
 ) -> StepSpec:
     """Per-source post-normalize sampler. Copies first ceil(N * fraction) shards."""
     return sample_normalized_shards_step(
-        name=f"datakit-testbed/sample/{src.name}",
+        name=f"datakit-testbed/{src.name}",
         normalized=normalized,
         sample_fraction=sample_fraction,
         override_output_path=f"{base}/{src.name}",

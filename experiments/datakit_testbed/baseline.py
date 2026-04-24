@@ -39,7 +39,7 @@ STAGING_PREFIX = "gs://marin-us-central1"
 RUN_ID = "baseline"
 TARGET_TOTAL_TOKENS_B = 10.0
 
-_SAMPLE_STEP_PREFIX = "datakit-testbed/sample/"
+_SAMPLE_STEP_PREFIX = "datakit-testbed/"
 
 
 def baseline(
@@ -70,7 +70,7 @@ def baseline(
         s.name.removeprefix(_SAMPLE_STEP_PREFIX): s for s in steps if s.name.startswith(_SAMPLE_STEP_PREFIX)
     }
     if not sampled_by_source:
-        raise ValueError("no sample steps found in the DAG (expected names under 'datakit-testbed/sample/...')")
+        raise ValueError("no sample steps found in the DAG (expected names under 'datakit-testbed/...')")
     return run_testbed_config(
         name=name,
         sampled_by_source=sampled_by_source,
