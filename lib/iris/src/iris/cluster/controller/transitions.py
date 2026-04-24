@@ -921,15 +921,10 @@ class ControllerTransitions:
             )
 
             # Store workdir files in separate table.
-            if request.entrypoint.workdir_files:
-                for filename, data in request.entrypoint.workdir_files.items():
-                    cur.execute(
-                        "INSERT INTO job_workdir_files(job_id, filename, data) VALUES (?, ?, ?)",
-                        (job_id.to_wire(), filename, data),
-                    )
+            self._store.jobs.insert_workdir_files(cur, job_id, dict(request.entrypoint.workdir_files))
 
             if validation_error is None:
-                insertion_base = self._db.next_sequence("task_priority_insertion", cur=cur)
+                insertion_base = self._store.jobs.reserve_priority_insertion_base(cur)
                 for idx in range(replicas):
                     task_id = job_id.task(idx).to_wire()
                     created_task_ids.append(JobName.from_wire(task_id))
@@ -1025,7 +1020,7 @@ class ControllerTransitions:
                             task_image="",
                         ),
                     )
-                    holder_base = self._db.next_sequence("task_priority_insertion", cur=cur)
+                    holder_base = self._store.jobs.reserve_priority_insertion_base(cur)
                     for idx in range(len(request.reservation.entries)):
                         created_task_ids.append(holder_id.task(idx))
                         self._store.tasks.insert(
@@ -1237,12 +1232,8 @@ class ControllerTransitions:
                     self._store.workers.add_committed_resources(cur, assignment.worker_id, resources)
                     entrypoint = proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint)
                     # Load inline workdir files from the job_workdir_files table.
-                    wf_rows = cur.execute(
-                        "SELECT filename, data FROM job_workdir_files WHERE job_id = ?",
-                        (job_id_wire,),
-                    ).fetchall()
-                    for wf_row in wf_rows:
-                        entrypoint.workdir_files[wf_row["filename"]] = bytes(wf_row["data"])
+                    for filename, data in self._store.jobs.get_workdir_files(cur, task.job_id).items():
+                        entrypoint.workdir_files[filename] = data
                     run_request = job_pb2.RunTaskRequest(
                         task_id=assignment.task_id.to_wire(),
                         num_tasks=job.num_tasks,
@@ -2393,13 +2384,9 @@ class ControllerTransitions:
 
                 entrypoint = proto_from_json(str(row["entrypoint_json"]), job_pb2.RuntimeEntrypoint)
                 # Load inline workdir files from the job_workdir_files table.
-                job_id_wire = str(row["job_id"])
-                wf_rows = cur.execute(
-                    "SELECT filename, data FROM job_workdir_files WHERE job_id = ?",
-                    (job_id_wire,),
-                ).fetchall()
-                for wf_row in wf_rows:
-                    entrypoint.workdir_files[wf_row["filename"]] = bytes(wf_row["data"])
+                job_id = JobName.from_wire(str(row["job_id"]))
+                for filename, data in self._store.jobs.get_workdir_files(cur, job_id).items():
+                    entrypoint.workdir_files[filename] = data
 
                 run_req = job_pb2.RunTaskRequest(
                     task_id=task_id,

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from threading import RLock
 
@@ -713,6 +713,14 @@ class JobStore:
         )
         return JobName.from_wire(str(row["job_id"])) if row is not None else None
 
+    def get_workdir_files(self, tx: Tx, job_id: JobName) -> dict[str, bytes]:
+        """Return ``{filename: data}`` for all workdir files attached to a job."""
+        rows = tx.fetchall(
+            "SELECT filename, data FROM job_workdir_files WHERE job_id = ?",
+            (job_id.to_wire(),),
+        )
+        return {str(row["filename"]): bytes(row["data"]) for row in rows}
+
     # -- Writes --------------------------------------------------------------
 
     def update_state_if_not_terminal(
@@ -874,6 +882,27 @@ class JobStore:
     def delete(self, cur: TransactionCursor, job_id: JobName) -> None:
         """Delete a job row. ON DELETE CASCADE handles tasks, attempts, endpoints."""
         cur.execute("DELETE FROM jobs WHERE job_id = ?", (job_id.to_wire(),))
+
+    def insert_workdir_files(
+        self,
+        cur: TransactionCursor,
+        job_id: JobName,
+        files: Mapping[str, bytes],
+    ) -> None:
+        """Insert each ``{filename: data}`` pair as a row in ``job_workdir_files``."""
+        if not files:
+            return
+        cur.executemany(
+            "INSERT INTO job_workdir_files(job_id, filename, data) VALUES (?, ?, ?)",
+            [(job_id.to_wire(), name, data) for name, data in files.items()],
+        )
+
+    def reserve_priority_insertion_base(self, cur: TransactionCursor) -> int:
+        """Bump the ``task_priority_insertion`` sequence and return the new value.
+
+        Callers reserving N task slots use ``base + i`` for ``i in range(N)``.
+        """
+        return self._db.next_sequence("task_priority_insertion", cur=cur)
 
     # -- users / user_budgets ------------------------------------------------
 
