@@ -11,7 +11,7 @@ import time
 import json
 import logging
 from dataclasses import dataclass, field
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any, NamedTuple
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
@@ -50,11 +50,11 @@ from iris.cluster.controller.stores import (
     TaskStore,
     WorkerAttributeParams,
     WorkerStore,
+    WorkerUpsertParams,
 )
 from iris.cluster.controller.schema import (
     JOB_CONFIG_JOIN,
     TASK_DETAIL_PROJECTION,
-    WORKER_DETAIL_PROJECTION,
     EndpointRow,
     JobDetailRow,
     WorkerDetailRow,
@@ -678,119 +678,8 @@ def _resolve_task_failure_state(
 
 
 # =============================================================================
-# Worker resource snapshot writers
-# =============================================================================
-
-
-def _write_worker_snapshots(
-    cur: TransactionCursor,
-    items: Sequence[tuple[str, job_pb2.WorkerResourceSnapshot | None]],
-    now_ms: int,
-    *,
-    reset_health: bool,
-) -> None:
-    """Bump last_heartbeat for every worker; for entries with a snapshot, also
-    rewrite snapshot_* columns and append a worker_resource_history row.
-
-    A None snapshot means liveness-only: heartbeat path emits these for
-    workers that didn't ship a fresh resource snapshot this cycle, ping path
-    emits these on cycles where it skips the resource refresh.
-
-    Heartbeat path passes ``reset_health=True`` because a successful heartbeat
-    means the worker has recovered. Ping path passes False — the ping loop
-    tracks failures in-memory and removes workers via ``fail_workers_batch``.
-    """
-    if not items:
-        return
-
-    health_prefix = "healthy = 1, active = 1, consecutive_failures = 0, " if reset_health else ""
-
-    liveness_only = [(now_ms, wid) for wid, snap in items if snap is None]
-    if liveness_only:
-        cur.executemany(
-            f"UPDATE workers SET {health_prefix}last_heartbeat_ms = ? WHERE worker_id = ?",
-            liveness_only,
-        )
-
-    snapshot_binds = [
-        {
-            "worker_id": wid,
-            "now_ms": now_ms,
-            "host_cpu_percent": snap.host_cpu_percent,
-            "memory_used_bytes": snap.memory_used_bytes,
-            "memory_total_bytes": snap.memory_total_bytes,
-            "disk_used_bytes": snap.disk_used_bytes,
-            "disk_total_bytes": snap.disk_total_bytes,
-            "running_task_count": snap.running_task_count,
-            "total_process_count": snap.total_process_count,
-            "net_recv_bps": snap.net_recv_bps,
-            "net_sent_bps": snap.net_sent_bps,
-        }
-        for wid, snap in items
-        if snap is not None
-    ]
-    if not snapshot_binds:
-        return
-
-    cur.executemany(
-        f"UPDATE workers SET {health_prefix}last_heartbeat_ms = :now_ms, "
-        "snapshot_host_cpu_percent = :host_cpu_percent, "
-        "snapshot_memory_used_bytes = :memory_used_bytes, "
-        "snapshot_memory_total_bytes = :memory_total_bytes, "
-        "snapshot_disk_used_bytes = :disk_used_bytes, "
-        "snapshot_disk_total_bytes = :disk_total_bytes, "
-        "snapshot_running_task_count = :running_task_count, "
-        "snapshot_total_process_count = :total_process_count, "
-        "snapshot_net_recv_bps = :net_recv_bps, "
-        "snapshot_net_sent_bps = :net_sent_bps "
-        "WHERE worker_id = :worker_id",
-        snapshot_binds,
-    )
-    cur.executemany(
-        "INSERT INTO worker_resource_history ("
-        "worker_id, snapshot_host_cpu_percent, snapshot_memory_used_bytes, "
-        "snapshot_memory_total_bytes, snapshot_disk_used_bytes, snapshot_disk_total_bytes, "
-        "snapshot_running_task_count, snapshot_total_process_count, "
-        "snapshot_net_recv_bps, snapshot_net_sent_bps, timestamp_ms"
-        ") VALUES ("
-        ":worker_id, :host_cpu_percent, :memory_used_bytes, "
-        ":memory_total_bytes, :disk_used_bytes, :disk_total_bytes, "
-        ":running_task_count, :total_process_count, "
-        ":net_recv_bps, :net_sent_bps, :now_ms"
-        ")",
-        snapshot_binds,
-    )
-
-
-# =============================================================================
 # Batch helpers for apply_heartbeats_batch
 # =============================================================================
-
-
-def _batch_worker_health(
-    cur: TransactionCursor,
-    requests: list["HeartbeatApplyRequest"],
-    now_ms: int,
-) -> set[str]:
-    """Batch-update worker health, resource snapshots, and history.
-
-    Returns the set of worker IDs that actually exist in the DB so callers
-    can skip updates from stale/removed workers.
-    """
-    worker_ids = [str(req.worker_id) for req in requests]
-    if not worker_ids:
-        return set()
-
-    placeholders = ",".join("?" * len(worker_ids))
-    rows = cur.execute(
-        f"SELECT worker_id FROM workers WHERE worker_id IN ({placeholders})",
-        tuple(worker_ids),
-    ).fetchall()
-    existing = {str(r["worker_id"]) for r in rows}
-
-    items = [(str(req.worker_id), req.worker_resource_snapshot) for req in requests if str(req.worker_id) in existing]
-    _write_worker_snapshots(cur, items, now_ms, reset_health=True)
-    return existing
 
 
 def _bulk_fetch_tasks(cur: TransactionCursor, task_ids: list[str]) -> dict[str, Any]:
@@ -1231,64 +1120,36 @@ class ControllerTransitions:
             device_type = ""
             device_variant = ""
         with self._db.transaction() as cur:
-            md_device_json = proto_to_json(metadata.device)
-            cur.execute(
-                "INSERT INTO workers("
-                "worker_id, address, healthy, active, consecutive_failures, last_heartbeat_ms, "
-                "committed_cpu_millicores, committed_mem_bytes, committed_gpu, committed_tpu, "
-                "total_cpu_millicores, total_memory_bytes, total_gpu_count, total_tpu_count, "
-                "device_type, device_variant, slice_id, scale_group, "
-                "md_hostname, md_ip_address, md_cpu_count, md_memory_bytes, md_disk_bytes, "
-                "md_tpu_name, md_tpu_worker_hostnames, md_tpu_worker_id, md_tpu_chips_per_host_bounds, "
-                "md_gpu_count, md_gpu_name, md_gpu_memory_mb, "
-                "md_gce_instance_name, md_gce_zone, md_git_hash, md_device_json"
-                ") VALUES (?, ?, 1, 1, 0, ?, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, "
-                "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(worker_id) DO UPDATE SET "
-                "address=excluded.address, healthy=1, active=1, "
-                "consecutive_failures=0, last_heartbeat_ms=excluded.last_heartbeat_ms, "
-                "total_cpu_millicores=excluded.total_cpu_millicores, total_memory_bytes=excluded.total_memory_bytes, "
-                "total_gpu_count=excluded.total_gpu_count, total_tpu_count=excluded.total_tpu_count, "
-                "device_type=excluded.device_type, device_variant=excluded.device_variant, "
-                "slice_id=excluded.slice_id, scale_group=excluded.scale_group, "
-                "md_hostname=excluded.md_hostname, md_ip_address=excluded.md_ip_address, "
-                "md_cpu_count=excluded.md_cpu_count, md_memory_bytes=excluded.md_memory_bytes, "
-                "md_disk_bytes=excluded.md_disk_bytes, md_tpu_name=excluded.md_tpu_name, "
-                "md_tpu_worker_hostnames=excluded.md_tpu_worker_hostnames, "
-                "md_tpu_worker_id=excluded.md_tpu_worker_id, "
-                "md_tpu_chips_per_host_bounds=excluded.md_tpu_chips_per_host_bounds, "
-                "md_gpu_count=excluded.md_gpu_count, md_gpu_name=excluded.md_gpu_name, "
-                "md_gpu_memory_mb=excluded.md_gpu_memory_mb, "
-                "md_gce_instance_name=excluded.md_gce_instance_name, md_gce_zone=excluded.md_gce_zone, "
-                "md_git_hash=excluded.md_git_hash, md_device_json=excluded.md_device_json",
-                (
-                    str(worker_id),
-                    address,
-                    now_ms,
-                    metadata.cpu_count * 1000,
-                    metadata.memory_bytes,
-                    gpu_count,
-                    tpu_count,
-                    device_type,
-                    device_variant,
-                    slice_id,
-                    scale_group,
-                    metadata.hostname,
-                    metadata.ip_address,
-                    metadata.cpu_count,
-                    metadata.memory_bytes,
-                    metadata.disk_bytes,
-                    metadata.tpu_name,
-                    metadata.tpu_worker_hostnames,
-                    metadata.tpu_worker_id,
-                    metadata.tpu_chips_per_host_bounds,
-                    metadata.gpu_count,
-                    metadata.gpu_name,
-                    metadata.gpu_memory_mb,
-                    metadata.gce_instance_name,
-                    metadata.gce_zone,
-                    metadata.git_hash,
-                    md_device_json,
+            self._store.workers.upsert(
+                cur,
+                WorkerUpsertParams(
+                    worker_id=worker_id,
+                    address=address,
+                    last_heartbeat_ms=now_ms,
+                    total_cpu_millicores=metadata.cpu_count * 1000,
+                    total_memory_bytes=metadata.memory_bytes,
+                    total_gpu_count=gpu_count,
+                    total_tpu_count=tpu_count,
+                    device_type=device_type,
+                    device_variant=device_variant,
+                    slice_id=slice_id,
+                    scale_group=scale_group,
+                    md_hostname=metadata.hostname,
+                    md_ip_address=metadata.ip_address,
+                    md_cpu_count=metadata.cpu_count,
+                    md_memory_bytes=metadata.memory_bytes,
+                    md_disk_bytes=metadata.disk_bytes,
+                    md_tpu_name=metadata.tpu_name,
+                    md_tpu_worker_hostnames=metadata.tpu_worker_hostnames,
+                    md_tpu_worker_id=metadata.tpu_worker_id,
+                    md_tpu_chips_per_host_bounds=metadata.tpu_chips_per_host_bounds,
+                    md_gpu_count=metadata.gpu_count,
+                    md_gpu_name=metadata.gpu_name,
+                    md_gpu_memory_mb=metadata.gpu_memory_mb,
+                    md_gce_instance_name=metadata.gce_instance_name,
+                    md_gce_zone=metadata.gce_zone,
+                    md_git_hash=metadata.git_hash,
+                    md_device_json=proto_to_json(metadata.device),
                 ),
             )
             self._store.workers.replace_attributes(cur, worker_id, attrs)
@@ -1424,8 +1285,16 @@ class ControllerTransitions:
 
         Returns False if the worker doesn't exist (caller should bail).
         """
-        existing = _batch_worker_health(cur, [req], now_ms)
-        return str(req.worker_id) in existing
+        existing = self._store.workers.filter_existing(cur, [req.worker_id])
+        if str(req.worker_id) not in existing:
+            return False
+        self._store.workers.apply_snapshots(
+            cur,
+            [(req.worker_id, req.worker_resource_snapshot)],
+            now_ms,
+            reset_health=True,
+        )
+        return True
 
     def _apply_task_transitions(
         self,
@@ -1700,7 +1569,17 @@ class ControllerTransitions:
             now_ms = Timestamp.now().epoch_ms()
 
             # ── Batch worker health updates ───────────────────────────────
-            existing_workers = _batch_worker_health(cur, requests, now_ms)
+            existing_workers = self._store.workers.filter_existing(cur, [req.worker_id for req in requests])
+            self._store.workers.apply_snapshots(
+                cur,
+                [
+                    (req.worker_id, req.worker_resource_snapshot)
+                    for req in requests
+                    if str(req.worker_id) in existing_workers
+                ],
+                now_ms,
+                reset_health=True,
+            )
 
             # ── Bulk-fetch task rows for classification ───────────────────
             all_task_ids: list[str] = []
@@ -1863,20 +1742,13 @@ class ControllerTransitions:
         now_ms: int | None = None,
     ) -> WorkerFailureResult:
         """Remove a failed worker inside an existing transaction."""
-        row = cur.execute(
-            "SELECT last_heartbeat_ms FROM workers WHERE worker_id = ? AND active = 1",
-            (str(worker_id),),
-        ).fetchone()
-        if row is None:
+        status = self._store.workers.get_active_status(cur, worker_id)
+        if status is None:
             return WorkerFailureResult(worker_removed=True)
 
         now_ms = now_ms or Timestamp.now().epoch_ms()
-        last_heartbeat_ms = row["last_heartbeat_ms"]
-        last_contact_age_ms = None if last_heartbeat_ms is None else max(0, now_ms - int(last_heartbeat_ms))
-        cur.execute(
-            "UPDATE workers SET healthy = 0 WHERE worker_id = ?",
-            (str(worker_id),),
-        )
+        last_contact_age_ms = None if status.last_heartbeat_ms is None else max(0, now_ms - status.last_heartbeat_ms)
+        self._store.workers.mark_unhealthy(cur, worker_id)
         removal = self._remove_failed_worker(cur, worker_id, error, now_ms=now_ms)
         return WorkerFailureResult(
             tasks_to_kill=removal.tasks_to_kill,
@@ -2186,13 +2058,13 @@ class ControllerTransitions:
 
     def remove_worker(self, worker_id: WorkerId) -> WorkerDetailRow | None:
         with self._db.transaction() as cur:
-            row = cur.execute("SELECT * FROM workers WHERE worker_id = ?", (str(worker_id),)).fetchone()
-            if row is None:
+            detail = self._store.workers.get_detail(cur, worker_id)
+            if detail is None:
                 return None
             _remove_worker(cur, self._store.workers, worker_id)
         log_event("worker_removed", str(worker_id))
         self._store.workers.remove_from_attr_cache(worker_id)
-        return WORKER_DETAIL_PROJECTION.decode_one([row])
+        return detail
 
     def _batch_delete(
         self,
@@ -2335,9 +2207,9 @@ class ControllerTransitions:
         if not snapshots:
             return
         now_ms = Timestamp.now().epoch_ms()
-        items = [(str(wid), snap) for wid, snap in snapshots.items()]
+        items = list(snapshots.items())
         with self._db.transaction() as cur:
-            _write_worker_snapshots(cur, items, now_ms, reset_health=False)
+            self._store.workers.apply_snapshots(cur, items, now_ms, reset_health=False)
 
     def get_running_tasks_for_poll(
         self,
@@ -2349,16 +2221,10 @@ class ControllerTransitions:
         maps worker_id to its RPC address.
         """
         with self._db.read_snapshot() as snap:
-            worker_rows = snap.fetchall("SELECT worker_id, address FROM workers WHERE active = 1 AND healthy = 1")
-            worker_addresses: dict[WorkerId, str] = {}
-            worker_ids: list[WorkerId] = []
-            for row in worker_rows:
-                wid = WorkerId(str(row["worker_id"]))
-                worker_addresses[wid] = str(row["address"])
-                worker_ids.append(wid)
-
-            if not worker_ids:
+            worker_addresses = self._store.workers.list_active_healthy(snap)
+            if not worker_addresses:
                 return {}, {}
+            worker_ids = list(worker_addresses.keys())
 
             # Reservation holders are virtual — they live on ``current_worker_id``
             # only as a scheduling anchor and never get a RunTaskRequest. Sending
@@ -2399,15 +2265,8 @@ class ControllerTransitions:
         """
         if not worker_ids:
             return WorkerFailureBatchResult()
-        target_set = sorted(set(worker_ids))
-        placeholders = ",".join("?" for _ in target_set)
         with self._db.read_snapshot() as snap:
-            rows = WORKER_DETAIL_PROJECTION.decode(
-                snap.fetchall(
-                    f"SELECT * FROM workers WHERE active = 1 AND worker_id IN ({placeholders})",
-                    tuple(target_set),
-                )
-            )
+            rows = self._store.workers.list_active_by_ids(snap, worker_ids)
         failures = [(row.worker_id, row.address, reason) for row in rows]
         if not failures:
             return WorkerFailureBatchResult()

@@ -43,10 +43,12 @@ from iris.cluster.controller.schema import (
     JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
     TASK_DETAIL_PROJECTION,
+    WORKER_DETAIL_PROJECTION,
     AttemptRow,
     EndpointRow,
     JobDetailRow,
     TaskDetailRow,
+    WorkerDetailRow,
 )
 from iris.cluster.types import TERMINAL_JOB_STATES, TERMINAL_TASK_STATES, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
@@ -464,6 +466,54 @@ class WorkerAttributeParams:
     str_value: str | None
     int_value: int | None
     float_value: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerUpsertParams:
+    """All scalar columns written by a worker registration/refresh.
+
+    The upsert leaves ``committed_*`` counters and attributes untouched —
+    attributes are replaced via :meth:`WorkerStore.replace_attributes` and
+    resource commitment is tracked incrementally via
+    :meth:`WorkerStore.add_committed_resources` / ``decommit_resources``.
+    """
+
+    worker_id: WorkerId
+    address: str
+    last_heartbeat_ms: int
+    total_cpu_millicores: int
+    total_memory_bytes: int
+    total_gpu_count: int
+    total_tpu_count: int
+    device_type: str
+    device_variant: str
+    slice_id: str
+    scale_group: str
+    md_hostname: str
+    md_ip_address: str
+    md_cpu_count: int
+    md_memory_bytes: int
+    md_disk_bytes: int
+    md_tpu_name: str
+    md_tpu_worker_hostnames: str
+    md_tpu_worker_id: str
+    md_tpu_chips_per_host_bounds: str
+    md_gpu_count: int
+    md_gpu_name: str
+    md_gpu_memory_mb: int
+    md_gce_instance_name: str
+    md_gce_zone: str
+    md_git_hash: str
+    md_device_json: str
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveWorkerStatus:
+    """Minimal row used by the worker-failure path: confirms the worker is
+    active (non-None return) and reports its last heartbeat timestamp.
+    """
+
+    last_heartbeat_ms: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1361,6 +1411,208 @@ class WorkerStore:
     def address(self, tx: Tx, worker_id: WorkerId) -> str | None:
         row = tx.fetchone("SELECT address FROM workers WHERE worker_id = ?", (str(worker_id),))
         return str(row["address"]) if row is not None else None
+
+    def get_detail(self, tx: Tx, worker_id: WorkerId) -> WorkerDetailRow | None:
+        row = tx.fetchone(
+            f"SELECT {WORKER_DETAIL_PROJECTION.select_clause()} FROM workers w WHERE w.worker_id = ?",
+            (str(worker_id),),
+        )
+        return WORKER_DETAIL_PROJECTION.decode_one([row]) if row is not None else None
+
+    def get_active_status(self, tx: Tx, worker_id: WorkerId) -> ActiveWorkerStatus | None:
+        """Return heartbeat info for an active worker, or None if missing/inactive."""
+        row = tx.fetchone(
+            "SELECT last_heartbeat_ms FROM workers WHERE worker_id = ? AND active = 1",
+            (str(worker_id),),
+        )
+        if row is None:
+            return None
+        hb = row["last_heartbeat_ms"]
+        return ActiveWorkerStatus(last_heartbeat_ms=int(hb) if hb is not None else None)
+
+    def list_active_healthy(self, tx: Tx) -> dict[WorkerId, str]:
+        """Return ``{worker_id: address}`` for all active+healthy workers."""
+        rows = tx.fetchall("SELECT worker_id, address FROM workers WHERE active = 1 AND healthy = 1")
+        return {WorkerId(str(row["worker_id"])): str(row["address"]) for row in rows}
+
+    def list_active_by_ids(self, tx: Tx, worker_ids: Iterable[str]) -> list[WorkerDetailRow]:
+        """Return :class:`WorkerDetailRow` for all active workers whose id is in ``worker_ids``."""
+        ids = sorted({str(wid) for wid in worker_ids})
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        rows = tx.fetchall(
+            f"SELECT {WORKER_DETAIL_PROJECTION.select_clause()} "
+            f"FROM workers w WHERE w.active = 1 AND w.worker_id IN ({placeholders})",
+            tuple(ids),
+        )
+        return WORKER_DETAIL_PROJECTION.decode(rows)
+
+    def filter_existing(self, tx: Tx, worker_ids: Iterable[WorkerId]) -> set[str]:
+        """Return the subset of ``worker_ids`` (as strings) that have a ``workers`` row."""
+        ids = [str(wid) for wid in worker_ids]
+        if not ids:
+            return set()
+        placeholders = ",".join("?" for _ in ids)
+        rows = tx.fetchall(
+            f"SELECT worker_id FROM workers WHERE worker_id IN ({placeholders})",
+            tuple(ids),
+        )
+        return {str(r["worker_id"]) for r in rows}
+
+    def upsert(self, cur: TransactionCursor, params: WorkerUpsertParams) -> None:
+        """Insert a new worker row or refresh every field of an existing one.
+
+        On conflict the row is reset to healthy/active with zero
+        consecutive_failures (registration re-establishes a worker as good).
+        ``committed_*`` counters are left untouched because they reflect
+        concurrent scheduling decisions, not registration metadata.
+        """
+        cur.execute(
+            "INSERT INTO workers("
+            "worker_id, address, healthy, active, consecutive_failures, last_heartbeat_ms, "
+            "committed_cpu_millicores, committed_mem_bytes, committed_gpu, committed_tpu, "
+            "total_cpu_millicores, total_memory_bytes, total_gpu_count, total_tpu_count, "
+            "device_type, device_variant, slice_id, scale_group, "
+            "md_hostname, md_ip_address, md_cpu_count, md_memory_bytes, md_disk_bytes, "
+            "md_tpu_name, md_tpu_worker_hostnames, md_tpu_worker_id, md_tpu_chips_per_host_bounds, "
+            "md_gpu_count, md_gpu_name, md_gpu_memory_mb, "
+            "md_gce_instance_name, md_gce_zone, md_git_hash, md_device_json"
+            ") VALUES (?, ?, 1, 1, 0, ?, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, "
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(worker_id) DO UPDATE SET "
+            "address=excluded.address, healthy=1, active=1, "
+            "consecutive_failures=0, last_heartbeat_ms=excluded.last_heartbeat_ms, "
+            "total_cpu_millicores=excluded.total_cpu_millicores, total_memory_bytes=excluded.total_memory_bytes, "
+            "total_gpu_count=excluded.total_gpu_count, total_tpu_count=excluded.total_tpu_count, "
+            "device_type=excluded.device_type, device_variant=excluded.device_variant, "
+            "slice_id=excluded.slice_id, scale_group=excluded.scale_group, "
+            "md_hostname=excluded.md_hostname, md_ip_address=excluded.md_ip_address, "
+            "md_cpu_count=excluded.md_cpu_count, md_memory_bytes=excluded.md_memory_bytes, "
+            "md_disk_bytes=excluded.md_disk_bytes, md_tpu_name=excluded.md_tpu_name, "
+            "md_tpu_worker_hostnames=excluded.md_tpu_worker_hostnames, "
+            "md_tpu_worker_id=excluded.md_tpu_worker_id, "
+            "md_tpu_chips_per_host_bounds=excluded.md_tpu_chips_per_host_bounds, "
+            "md_gpu_count=excluded.md_gpu_count, md_gpu_name=excluded.md_gpu_name, "
+            "md_gpu_memory_mb=excluded.md_gpu_memory_mb, "
+            "md_gce_instance_name=excluded.md_gce_instance_name, md_gce_zone=excluded.md_gce_zone, "
+            "md_git_hash=excluded.md_git_hash, md_device_json=excluded.md_device_json",
+            (
+                str(params.worker_id),
+                params.address,
+                params.last_heartbeat_ms,
+                params.total_cpu_millicores,
+                params.total_memory_bytes,
+                params.total_gpu_count,
+                params.total_tpu_count,
+                params.device_type,
+                params.device_variant,
+                params.slice_id,
+                params.scale_group,
+                params.md_hostname,
+                params.md_ip_address,
+                params.md_cpu_count,
+                params.md_memory_bytes,
+                params.md_disk_bytes,
+                params.md_tpu_name,
+                params.md_tpu_worker_hostnames,
+                params.md_tpu_worker_id,
+                params.md_tpu_chips_per_host_bounds,
+                params.md_gpu_count,
+                params.md_gpu_name,
+                params.md_gpu_memory_mb,
+                params.md_gce_instance_name,
+                params.md_gce_zone,
+                params.md_git_hash,
+                params.md_device_json,
+            ),
+        )
+
+    def mark_unhealthy(self, cur: TransactionCursor, worker_id: WorkerId) -> None:
+        cur.execute("UPDATE workers SET healthy = 0 WHERE worker_id = ?", (str(worker_id),))
+
+    def apply_snapshots(
+        self,
+        cur: TransactionCursor,
+        items: Sequence[tuple[WorkerId, job_pb2.WorkerResourceSnapshot | None]],
+        now_ms: int,
+        *,
+        reset_health: bool,
+    ) -> None:
+        """Bump ``last_heartbeat_ms`` for every worker; for entries with a
+        snapshot also rewrite ``snapshot_*`` columns and append a
+        ``worker_resource_history`` row.
+
+        A ``None`` snapshot is a liveness-only update: the heartbeat path emits
+        these for workers that skipped their resource refresh this cycle, and
+        the ping path emits these on cycles where it skips the resource
+        refresh.
+
+        ``reset_health=True`` also clears ``healthy``/``active``/
+        ``consecutive_failures`` because a successful heartbeat proves
+        recovery. Ping path passes ``False`` — the ping loop tracks failures
+        in-memory and removes workers via ``fail_workers_batch``.
+        """
+        if not items:
+            return
+
+        health_prefix = "healthy = 1, active = 1, consecutive_failures = 0, " if reset_health else ""
+
+        liveness_only = [(now_ms, str(wid)) for wid, snap in items if snap is None]
+        if liveness_only:
+            cur.executemany(
+                f"UPDATE workers SET {health_prefix}last_heartbeat_ms = ? WHERE worker_id = ?",
+                liveness_only,
+            )
+
+        snapshot_binds = [
+            {
+                "worker_id": str(wid),
+                "now_ms": now_ms,
+                "host_cpu_percent": snap.host_cpu_percent,
+                "memory_used_bytes": snap.memory_used_bytes,
+                "memory_total_bytes": snap.memory_total_bytes,
+                "disk_used_bytes": snap.disk_used_bytes,
+                "disk_total_bytes": snap.disk_total_bytes,
+                "running_task_count": snap.running_task_count,
+                "total_process_count": snap.total_process_count,
+                "net_recv_bps": snap.net_recv_bps,
+                "net_sent_bps": snap.net_sent_bps,
+            }
+            for wid, snap in items
+            if snap is not None
+        ]
+        if not snapshot_binds:
+            return
+
+        cur.executemany(
+            f"UPDATE workers SET {health_prefix}last_heartbeat_ms = :now_ms, "
+            "snapshot_host_cpu_percent = :host_cpu_percent, "
+            "snapshot_memory_used_bytes = :memory_used_bytes, "
+            "snapshot_memory_total_bytes = :memory_total_bytes, "
+            "snapshot_disk_used_bytes = :disk_used_bytes, "
+            "snapshot_disk_total_bytes = :disk_total_bytes, "
+            "snapshot_running_task_count = :running_task_count, "
+            "snapshot_total_process_count = :total_process_count, "
+            "snapshot_net_recv_bps = :net_recv_bps, "
+            "snapshot_net_sent_bps = :net_sent_bps "
+            "WHERE worker_id = :worker_id",
+            snapshot_binds,
+        )
+        cur.executemany(
+            "INSERT INTO worker_resource_history ("
+            "worker_id, snapshot_host_cpu_percent, snapshot_memory_used_bytes, "
+            "snapshot_memory_total_bytes, snapshot_disk_used_bytes, snapshot_disk_total_bytes, "
+            "snapshot_running_task_count, snapshot_total_process_count, "
+            "snapshot_net_recv_bps, snapshot_net_sent_bps, timestamp_ms"
+            ") VALUES ("
+            ":worker_id, :host_cpu_percent, :memory_used_bytes, "
+            ":memory_total_bytes, :disk_used_bytes, :disk_total_bytes, "
+            ":running_task_count, :total_process_count, "
+            ":net_recv_bps, :net_sent_bps, :now_ms"
+            ")",
+            snapshot_binds,
+        )
 
     def add_committed_resources(
         self,
