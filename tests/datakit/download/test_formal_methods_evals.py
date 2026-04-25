@@ -30,6 +30,10 @@ from marin.datakit.download.formal_methods_evals import (
     archive_slice_step,
     download_archive_slice,
 )
+from experiments.evals.exp5060_formal_methods_evals import (
+    FORMAL_METHODS_SOURCES,
+    HARDWARE_RTL_SOURCES,
+)
 
 # A mix of SMT-LIB-style content exercising comments, long symbols, and Unicode.
 SMT_FILE_WITH_COMMENTS = """; comment at top
@@ -272,6 +276,68 @@ def test_jsonl_text_column_mode(make_zip_archive, tmp_path: Path) -> None:
     ]
 
 
+def test_json_array_and_list_text_column_mode(make_zip_archive, tmp_path: Path) -> None:
+    json_content = json.dumps(
+        [
+            {"Response": ["module a(); endmodule"]},
+            {"Response": ["module b(); endmodule", "module c(); endmodule"]},
+            {"Response": []},
+        ]
+    )
+    archive = make_zip_archive(
+        "rtl_coder.zip",
+        {"RTL-Coder-main/dataset/Resyn27k.json": json_content},
+    )
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    cfg = DownloadArchiveSliceConfig(
+        source=ArchiveSourceConfig(
+            slice_key="hardware_rtl/rtl_coder_test",
+            url=f"file://{archive}",
+            archive_format="zip",
+            include_globs=("*.json",),
+            content_mode="jsonl_text_column",
+            jsonl_text_column="Response",
+        ),
+        output_path=str(output_dir),
+    )
+
+    result = download_archive_slice(cfg)
+
+    assert result["records"] == 3
+    records = _read_jsonl_gz(output_dir / "data.jsonl.gz")
+    assert [r["text"] for r in records] == [
+        "module a(); endmodule",
+        "module b(); endmodule",
+        "module c(); endmodule",
+    ]
+
+
+def test_jsonl_text_column_mode_rejects_malformed_json(make_zip_archive, tmp_path: Path) -> None:
+    archive = make_zip_archive(
+        "broken.zip",
+        {"broken.jsonl": '{"code": "module a(); endmodule"}\n{"code": [not valid json]\n'},
+    )
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    cfg = DownloadArchiveSliceConfig(
+        source=ArchiveSourceConfig(
+            slice_key="hardware_rtl/broken_test",
+            url=f"file://{archive}",
+            archive_format="zip",
+            include_globs=("*.jsonl",),
+            content_mode="jsonl_text_column",
+            jsonl_text_column="code",
+        ),
+        output_path=str(output_dir),
+    )
+
+    with pytest.raises(ValueError, match="malformed JSONL line 2"):
+        download_archive_slice(cfg)
+
+
 def test_validate_rejects_unknown_format() -> None:
     with pytest.raises(ValueError, match="unsupported archive_format"):
         ArchiveSourceConfig(
@@ -312,3 +378,21 @@ def test_archive_slice_step_has_deterministic_name() -> None:
     )
     step = archive_slice_step(source)
     assert step.name == "raw/formal_methods/smt_lib"
+
+
+def test_exp5060_sources_match_expected_formats() -> None:
+    source_by_key = {source.slice_key: source for source in (*FORMAL_METHODS_SOURCES, *HARDWARE_RTL_SOURCES)}
+
+    assert source_by_key["formal_methods/tptp"].url == "https://tptp.org/TPTP/Archive/TPTP-v8.2.0.tgz"
+    assert source_by_key["formal_methods/dimacs_cnf"].archive_format == "tar.gz"
+    assert source_by_key["formal_methods/dimacs_cnf"].include_globs == ("*.cnf",)
+
+    rtl_repo = source_by_key["hardware_rtl/rtl_repo"]
+    assert rtl_repo.content_mode == "jsonl_text_column"
+    assert rtl_repo.jsonl_text_column == "label"
+    assert rtl_repo.include_globs == ("predictions/*.jsonl",)
+
+    rtl_coder = source_by_key["hardware_rtl/rtl_coder"]
+    assert rtl_coder.content_mode == "jsonl_text_column"
+    assert rtl_coder.jsonl_text_column == "Response"
+    assert rtl_coder.include_globs == ("dataset/*.json", "data_generation/data_sample.json")

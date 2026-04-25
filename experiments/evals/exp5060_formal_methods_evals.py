@@ -41,6 +41,7 @@ from fray.v2.types import ResourceConfig
 from experiments.llama import llama3_tokenizer
 from marin.datakit.download.formal_methods_evals import (
     DEFAULT_MAX_COMPRESSED_BYTES,
+    JSONL_TEXT_COLUMN_CONTENT_MODE,
     ArchiveSourceConfig,
     archive_slice_step,
 )
@@ -73,7 +74,7 @@ FORMAL_METHODS_SOURCES: tuple[ArchiveSourceConfig, ...] = (
         slice_key="formal_methods/tptp",
         # TPTP canonical distribution. The tarball is large (~1 GB); the byte budget caps
         # what is materialized downstream.
-        url="https://www.tptp.org/TPTP/Distribution/TPTP-v8.2.0.tgz",
+        url="https://tptp.org/TPTP/Archive/TPTP-v8.2.0.tgz",
         archive_format="tar.gz",
         include_globs=("*.p", "*.ax"),
         max_compressed_bytes=DEFAULT_MAX_COMPRESSED_BYTES,
@@ -87,18 +88,18 @@ FORMAL_METHODS_SOURCES: tuple[ArchiveSourceConfig, ...] = (
         # CoqGym vendors proof-state JSON under data/; we only want the Coq script text.
         exclude_globs=("*/node_modules/*", "*/.git/*"),
         max_compressed_bytes=DEFAULT_MAX_COMPRESSED_BYTES,
-        license_note="CoqGym MIT license per upstream README.",
+        license_note="CoqGym LGPL-2.1 license per upstream LICENSE.",
     ),
     ArchiveSourceConfig(
         slice_key="formal_methods/dimacs_cnf",
-        # MiniSat ships a compact set of DIMACS CNF regression instances. For SAT Competition
-        # benchmarks, repoint to the specific track tarball from
-        # https://satcompetition.github.io/2022/benchmarks.html.
-        url="https://github.com/niklasso/minisat/archive/refs/heads/master.zip",
-        archive_format="zip",
-        include_globs=("*.cnf", "*.dimacs"),
+        # SATLIB's bounded-model-checking suite is a compact DIMACS CNF sample. Larger SAT
+        # Competition archives can be added once the downloader streams zip files instead of
+        # materializing them in memory.
+        url="https://www.cs.ubc.ca/~hoos/SATLIB/Benchmarks/SAT/BMC/bmc.tar.gz",
+        archive_format="tar.gz",
+        include_globs=("*.cnf",),
         max_compressed_bytes=DEFAULT_MAX_COMPRESSED_BYTES,
-        license_note="MiniSat MIT license; DIMACS-format instances used for text PPL only.",
+        license_note="SATLIB public benchmark collection; DIMACS CNF instances used for text PPL only.",
     ),
 )
 
@@ -109,23 +110,27 @@ HARDWARE_RTL_SOURCES: tuple[ArchiveSourceConfig, ...] = (
         archive_format="zip",
         include_globs=("*.sv", "*.v"),
         max_compressed_bytes=DEFAULT_MAX_COMPRESSED_BYTES,
-        license_note="VerilogEval Apache-2.0 (NVIDIA).",
+        license_note="VerilogEval MIT license per upstream LICENSE.",
     ),
     ArchiveSourceConfig(
         slice_key="hardware_rtl/rtl_repo",
         url="https://github.com/AUCOHL/RTL-Repo/archive/refs/heads/main.zip",
         archive_format="zip",
-        include_globs=("*.sv", "*.v"),
+        include_globs=("predictions/*.jsonl",),
+        content_mode=JSONL_TEXT_COLUMN_CONTENT_MODE,
+        jsonl_text_column="label",
         max_compressed_bytes=DEFAULT_MAX_COMPRESSED_BYTES,
-        license_note="RTL-Repo: CC-BY-4.0 (AUCOHL).",
+        license_note="RTL-Repo Apache-2.0 license per upstream LICENSE.",
     ),
     ArchiveSourceConfig(
         slice_key="hardware_rtl/rtl_coder",
         url="https://github.com/hkust-zhiyao/RTL-Coder/archive/refs/heads/main.zip",
         archive_format="zip",
-        include_globs=("*.sv", "*.v"),
+        include_globs=("dataset/*.json", "data_generation/data_sample.json"),
+        content_mode=JSONL_TEXT_COLUMN_CONTENT_MODE,
+        jsonl_text_column="Response",
         max_compressed_bytes=DEFAULT_MAX_COMPRESSED_BYTES,
-        license_note="RTL-Coder Apache-2.0 (HKUST Zhiyao Lab).",
+        license_note="RTL-Coder repo has no top-level LICENSE; README describes the dataset as open-source.",
     ),
 )
 

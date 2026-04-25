@@ -56,8 +56,7 @@ RAW_FILE_CONTENT_MODE: str = "raw_file"
 """Wrap each archive member verbatim as {text: <file bytes>}."""
 
 JSONL_TEXT_COLUMN_CONTENT_MODE: str = "jsonl_text_column"
-"""Treat each ``.jsonl`` / ``.jsonl.gz`` archive member as a list of records and
-emit one record per JSONL row, pulling ``text`` from a configured column."""
+"""Treat line-oriented JSON archive members as records and emit text from a configured column."""
 
 _VALID_CONTENT_MODES: frozenset[str] = frozenset({RAW_FILE_CONTENT_MODE, JSONL_TEXT_COLUMN_CONTENT_MODE})
 
@@ -128,9 +127,7 @@ class _SourceFile:
     content: bytes
 
 
-_ARCHIVE_FORMATS: frozenset[str] = frozenset(
-    {"tar", "tar.gz", "tgz", "tar.bz2", "tar.xz", "tar.zst", "zip"}
-)
+_ARCHIVE_FORMATS: frozenset[str] = frozenset({"tar", "tar.gz", "tgz", "tar.bz2", "tar.xz", "tar.zst", "zip"})
 
 
 def _tar_mode(archive_format: str) -> str:
@@ -155,7 +152,7 @@ def _iter_tar_members(archive_bytes: bytes, archive_format: str) -> Iterator[_So
 
 
 def _iter_tar_zst_members(archive_bytes: bytes) -> Iterator[_SourceFile]:
-    import zstandard  # local import: optional-feeling but already a project dep
+    import zstandard  # loaded only for tar.zst archives
 
     dctx = zstandard.ZstdDecompressor()
     decompressed = dctx.decompress(archive_bytes, max_output_size=2**34)  # 16 GB ceiling
@@ -191,22 +188,44 @@ def _filter_members(
         yield sf
 
 
-def _iter_jsonl_bytes(raw: bytes) -> Iterator[dict[str, Any]]:
+def _iter_json_records(raw: bytes) -> Iterator[dict[str, Any]]:
     if raw[:2] == b"\x1f\x8b":  # gzip magic
         raw = gzip.decompress(raw)
-    for line in raw.splitlines():
+    stripped = raw.lstrip()
+    if stripped.startswith(b"["):
+        records = json.loads(raw)
+        if not isinstance(records, list):
+            raise ValueError("JSON archive member must contain a list of records")
+        for record in records:
+            if not isinstance(record, dict):
+                raise ValueError("JSON archive member list entries must be objects")
+            yield record
+        return
+    for line_number, line in enumerate(raw.splitlines(), start=1):
         if not line.strip():
             continue
         try:
-            yield json.loads(line)
-        except json.JSONDecodeError:
-            logger.debug("skipping malformed JSONL line")
-            continue
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"malformed JSONL line {line_number}") from exc
+        if not isinstance(record, dict):
+            raise ValueError(f"JSONL line {line_number} must be an object")
+        yield record
 
 
-def _emit_records(
-    source: ArchiveSourceConfig, filtered: Iterable[_SourceFile]
-) -> Iterator[tuple[str, str]]:
+def _text_values(record: dict[str, Any], column: str) -> Iterator[str]:
+    value = record.get(column)
+    if isinstance(value, str):
+        if value:
+            yield value
+        return
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, str) and item:
+                yield item
+
+
+def _emit_records(source: ArchiveSourceConfig, filtered: Iterable[_SourceFile]) -> Iterator[tuple[str, str]]:
     """Yield (filename, text) for each downstream record."""
     if source.content_mode == RAW_FILE_CONTENT_MODE:
         for sf in filtered:
@@ -216,23 +235,17 @@ def _emit_records(
     assert source.jsonl_text_column is not None
     column = source.jsonl_text_column
     for sf in filtered:
-        for idx, record in enumerate(_iter_jsonl_bytes(sf.content)):
-            text = record.get(column)
-            if not isinstance(text, str) or not text:
-                continue
-            yield f"{sf.filename}#{idx}", text
+        for idx, record in enumerate(_iter_json_records(sf.content)):
+            for value_idx, text in enumerate(_text_values(record, column)):
+                yield f"{sf.filename}#{idx}:{value_idx}", text
 
 
 def _http_session(timeout_seconds: int) -> requests.Session:
     session = requests.Session()
-    retries = Retry(
-        total=5, backoff_factor=1.5, status_forcelist=[500, 502, 503, 504], allowed_methods=["GET"]
-    )
+    retries = Retry(total=5, backoff_factor=1.5, status_forcelist=[500, 502, 503, 504], allowed_methods=["GET"])
     adapter = HTTPAdapter(max_retries=retries)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
-    # mypy: session doesn't have timeout attribute; callers pass it per-request
-    session.request_timeout_seconds = timeout_seconds  # type: ignore[attr-defined]
     return session
 
 
@@ -240,11 +253,11 @@ def _fetch_archive_bytes(url: str, timeout_seconds: int) -> bytes:
     """Fetch the archive into memory. For `file://` URLs and any fsspec path we fall back
     to ``open_url`` so tests and local fixtures work without a network round-trip."""
     if url.startswith("http://") or url.startswith("https://"):
-        session = _http_session(timeout_seconds)
         logger.info("fetching archive from %s", url)
-        response = session.get(url, timeout=timeout_seconds, stream=True)
-        response.raise_for_status()
-        return response.content
+        with _http_session(timeout_seconds) as session:
+            response = session.get(url, timeout=timeout_seconds, stream=True)
+            response.raise_for_status()
+            return response.content
     logger.info("reading archive via fsspec from %s", url)
     with open_url(url, "rb") as fh:
         return fh.read()
