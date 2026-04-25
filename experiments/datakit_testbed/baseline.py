@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 STAGING_PREFIX = "gs://marin-us-central1"
 TARGET_TOTAL_TOKENS_B = 1000.0
+MAX_STEP_CONCURRENCY = 42
 
 _SAMPLE_STEP_PREFIX = "data/datakit/normalized/"
 
@@ -67,7 +68,7 @@ def baseline(
         prefix=prefix,
         executor_info_base_path=os.path.join(prefix, "experiments"),
     )
-    tokenize_executor.run(list(tokenized_buckets.values()))
+    tokenize_executor.run(list(tokenized_buckets.values()), max_concurrent=MAX_STEP_CONCURRENCY)
 
     resolved_output_paths = {
         bucket_name: tokenize_executor.output_paths[step] for bucket_name, step in tokenized_buckets.items()
@@ -90,10 +91,10 @@ def main() -> None:
 
     testbed_steps = build_testbed_steps(target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
     logger.info("Materializing %d ferry StepSpecs under %s", len(testbed_steps), STAGING_PREFIX)
-    StepRunner().run(testbed_steps)
+    StepRunner().run(testbed_steps, max_concurrent=MAX_STEP_CONCURRENCY)
 
     training_step = baseline(testbed_steps, name=run_id, tokenizer=tokenizer)
-    executor_main(ExecutorMainConfig(max_concurrent=42), [training_step])
+    executor_main(ExecutorMainConfig(), [training_step])
 
 
 if __name__ == "__main__":
