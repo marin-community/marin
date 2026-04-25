@@ -26,6 +26,7 @@ _DEFAULT_GCP_PORT = 10002
 class ServiceURL:
     scheme: str
     host: str
+    port: int | None
     query: dict[str, str]
 
     @classmethod
@@ -35,13 +36,11 @@ class ServiceURL:
             raise ValueError(f"missing scheme in URL: {ref!r}")
         if parts.username or parts.password:
             raise ValueError(f"userinfo not supported in URL: {ref!r}")
-        if parts.port is not None:
-            raise ValueError(f"port not supported in URL: {ref!r}")
         host = parts.hostname or parts.netloc
         if not host:
             raise ValueError(f"missing host in URL: {ref!r}")
         query = {k: v[0] for k, v in parse_qs(parts.query).items() if v}
-        return cls(scheme=parts.scheme, host=host, query=query)
+        return cls(scheme=parts.scheme, host=host, port=parts.port, query=query)
 
 
 SchemeHandler = Callable[[ServiceURL], tuple[str, int]]
@@ -111,4 +110,4 @@ def _fetch_vm_aggregated(project_id: str, token: str, name: str) -> dict | None:
             params["pageToken"] = page_token
 
 
-register_scheme("gcp", lambda url: vm_address(url.host, "gcp"))
+register_scheme("gcp", lambda url: vm_address(url.host, "gcp", port=url.port or _DEFAULT_GCP_PORT))

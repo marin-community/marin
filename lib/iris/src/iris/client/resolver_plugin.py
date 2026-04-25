@@ -10,6 +10,8 @@ from iris.rpc.controller_pb2 import Controller as _Controller
 
 
 def _resolve_iris(url: ServiceURL) -> tuple[str, int]:
+    if url.port is not None:
+        raise ValueError(f"iris:// URLs cannot have a port (use ?endpoint=<name>): {url!r}")
     cluster = url.host
     name = url.query.get("endpoint")
     if not name:

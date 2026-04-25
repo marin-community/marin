@@ -40,9 +40,14 @@ def test_parse_rejects_userinfo():
         ServiceURL.parse("iris://user@marin?endpoint=/x")
 
 
-def test_parse_rejects_port():
-    with pytest.raises(ValueError, match="port not supported"):
-        ServiceURL.parse("gcp://log-server:1234")
+def test_parse_accepts_port():
+    url = ServiceURL.parse("gcp://log-server:1234")
+    assert url.host == "log-server"
+    assert url.port == 1234
+
+
+def test_parse_port_absent_when_omitted():
+    assert ServiceURL.parse("gcp://log-server").port is None
 
 
 def test_query_missing_key_absent():
@@ -71,13 +76,14 @@ def test_resolve_bare_host_port():
 def test_resolve_gcp_scheme_calls_vm_address(monkeypatch):
     calls: list[tuple] = []
 
-    def _fake_vm_address(name: str, provider: str):
-        calls.append((name, provider))
-        return ("10.0.0.7", 10002)
+    def _fake_vm_address(name: str, provider: str, *, port: int):
+        calls.append((name, provider, port))
+        return (name, port)
 
     monkeypatch.setattr(resolver_module, "vm_address", _fake_vm_address)
-    assert resolve("gcp://log-server") == ("10.0.0.7", 10002)
-    assert calls == [("log-server", "gcp")]
+    assert resolve("gcp://log-server") == ("log-server", 10002)
+    assert resolve("gcp://log-server:8080") == ("log-server", 8080)
+    assert calls == [("log-server", "gcp", 10002), ("log-server", "gcp", 8080)]
 
 
 def test_register_scheme_dispatches_to_handler(monkeypatch):
