@@ -10,8 +10,10 @@ agent is authorized to:
 - Submit Iris jobs and kill only jobs submitted by self
 - Run experiments through both gates autonomously
 
-Do not stop to ask for confirmation at any step. If something fails, diagnose
-and retry or report the failure — do not block waiting for input.
+Do not stop to ask for confirmation at any step. Do not stop at a code change,
+commit, or PR: submit the run to Iris and continue through the full gate
+procedure below. If something fails, diagnose and retry or report the failure —
+do not block waiting for input.
 
 ## Objective
 
@@ -166,6 +168,10 @@ Assume the user has already completed these before job submission:
 ## Job Submission
 
 Jobs in this directory are submitted to **Iris** on a **v5p-8**.
+Always submit the relevant MoE experiment run to Iris as part of this workflow.
+Do not leave a MoE experiment at "ready to run" unless a hard blocker prevents
+submission, such as missing authentication, unavailable required environment
+variables, or an Iris outage.
 
 ### Submission command
 
