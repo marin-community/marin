@@ -76,6 +76,25 @@ class ControllerProvider(Protocol):
         """
         ...
 
+    def tunnel_to(
+        self,
+        host: str,
+        port: int,
+        local_port: int | None = None,
+    ) -> AbstractContextManager[tuple[str, int]]:
+        """Create a tunnel to an arbitrary internal ``host:port`` and yield
+        the local ``(host, port)`` reachable from this process.
+
+        Used by ``iris.client.maybe_proxy`` for off-cluster access. Unlike
+        :meth:`tunnel`, the target is not the controller — it is any
+        cluster-internal address (a system-service VM, a K8s Service).
+
+        GCP: ``gcloud compute ssh`` to a cluster VM with ``-L``.
+        K8s: ``kubectl port-forward`` to a Service.
+        Manual/Local: nullcontext returning the input as-is.
+        """
+        ...
+
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         """Resolve a container image reference for this platform's registry.
 

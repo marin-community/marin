@@ -26,6 +26,8 @@ from iris.client.client import (
 from iris.client.resolver import ClusterResolver
 from iris.client.worker_pool import WorkerPool, WorkerPoolConfig
 
+from iris.client import resolver_plugin  # registers iris:// scheme
+
 __all__ = [
     "ClusterResolver",
     "EndpointRegistry",
