@@ -18,12 +18,13 @@ Formulas (fit on v16 LR sweep, 186 runs, R²=0.995):
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from levanter.utils.flop_utils import lm_flops_per_token
+from levanter.optim.util import CoefficientType
 
 from experiments.grug.moe.model import GrugModelConfig
-from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig, build_grug_moe_muonh_config
 
 SEQ_LEN: int = 4096
 MIN_BATCH_SIZE: int = 32
@@ -225,6 +226,42 @@ class MoeAdamHHeuristic:
 moe_adamh_heuristic = MoeAdamHHeuristic()
 
 
+@dataclass(frozen=True)
+class MoeMuonHHeuristic(MoeAdamHHeuristic):
+    """Provisional compute-scaling MuonH heuristic for Grug MoE.
+
+    Model sizing, batch sizing, Adam fallback LR, epsilon, and beta2 inherit
+    the AdamH heuristic. The MuonH matrix step gets its own multiplier so the
+    matrix update can be tuned independently of the Adam fallback path.
+    """
+
+    muonh_lr_multiplier: float = 1.0
+    adam_lr_multiplier: float = 1.0
+    momentum: float | None = None
+    coefficient_type: CoefficientType = "aol"
+    muon_epsilon: float = 1e-5
+
+    def build_optimizer_config(
+        self, batch_size: int, tokens: float, hidden_dim: int, seq_len: int = SEQ_LEN
+    ) -> GrugMoeMuonHConfig:
+        adamh_config = super().build_optimizer_config(batch_size, tokens, hidden_dim, seq_len=seq_len)
+        muonh_config = build_grug_moe_muonh_config(
+            adamh_config,
+            coefficient_type=self.coefficient_type,
+            muon_epsilon=self.muon_epsilon,
+        )
+        momentum = adamh_config.beta1 if self.momentum is None else self.momentum
+        return replace(
+            muonh_config,
+            learning_rate=min(self.max_learning_rate, adamh_config.learning_rate * self.muonh_lr_multiplier),
+            adam_lr=min(self.max_learning_rate, adamh_config.adam_lr * self.adam_lr_multiplier),
+            momentum=momentum,
+        )
+
+
+moe_muonh_heuristic = MoeMuonHHeuristic()
+
+
 def build_from_heuristic(
     *,
     budget: float,
@@ -242,6 +279,30 @@ def build_from_heuristic(
     `GrugMoeAdamHConfig` directly to `GrugMoeLaunchConfig`.
     """
     h = heuristic or MoeAdamHHeuristic()
+    model_cfg = h.build_model_config(hidden_dim, seq_len=seq_len)
+    fpt = compute_flops_per_token(model_cfg)
+    tokens, batch_size, num_steps = compute_tokens_and_batch(
+        budget,
+        fpt,
+        target_steps=target_steps,
+        min_batch_size=min_batch_size,
+        seq_len=seq_len,
+    )
+    optimizer_cfg = h.build_optimizer_config(batch_size, tokens, hidden_dim, seq_len=seq_len)
+    return model_cfg, optimizer_cfg, batch_size, num_steps
+
+
+def build_muonh_from_heuristic(
+    *,
+    budget: float,
+    hidden_dim: int,
+    heuristic: MoeMuonHHeuristic | None = None,
+    target_steps: int = DEFAULT_TARGET_STEPS,
+    min_batch_size: int = MIN_BATCH_SIZE,
+    seq_len: int = SEQ_LEN,
+) -> tuple[GrugModelConfig, GrugMoeMuonHConfig, int, int]:
+    """Construct a MuonH MoE run from the provisional MuonH heuristic."""
+    h = heuristic or MoeMuonHHeuristic()
     model_cfg = h.build_model_config(hidden_dim, seq_len=seq_len)
     fpt = compute_flops_per_token(model_cfg)
     tokens, batch_size, num_steps = compute_tokens_and_batch(
