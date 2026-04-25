@@ -1,17 +1,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# ruff: noqa
-# https://github.com/thinking-machines-lab/tinker-cookbook/blob/989f84926245b227634797b8eac46abe232f9c24/tinker_cookbook/renderers.py#L459
-
-from typing import Literal, NotRequired, TypedDict
-from levanter.tokenizers import MarinTokenizer
-import pydantic
 import json
-import re
 import logging
+import re
+from typing import Literal, NotRequired, TypedDict
+
+import pydantic
+from levanter.tokenizers import MarinTokenizer
 
 logger = logging.getLogger(__name__)
+
+TOOL_CALL_ARGUMENTS_KEY = "arguments"
+LEGACY_TOOL_CALL_ARGUMENTS_KEY = "args"
+TOOL_CALL_BLOCK_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
+MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
+QWEN_TOOL_PROMPT = (
+    "# Tools\n\n"
+    "You may call one or more functions to help with the user request.\n"
+    "The available tools are provided inside <tools></tools> XML tags.\n"
+    "When you call a tool, respond with a JSON object inside <tool_call></tool_call> "
+    'and use the keys "name" and "arguments".'
+)
 
 
 class StrictBase(pydantic.BaseModel):
@@ -63,6 +73,20 @@ class ToolCall(StrictBase):
 
     function: FunctionBody
     """The function body containing tool name and arguments."""
+
+
+class ToolSpec(StrictBase):
+    """Model-facing tool schema following the OpenAI function-tool format."""
+
+    class FunctionBody(pydantic.BaseModel):
+        """Tool definition with JSON-schema parameters."""
+
+        name: str
+        description: str
+        parameters: dict[str, object]
+
+    type: Literal["function"] = "function"
+    function: FunctionBody
 
 
 class ToolOk(StrictBase):
@@ -123,6 +147,20 @@ class ToolResult(StrictBase):
     """The actual execution result (success or error)."""
 
 
+class GeneratedAssistantTurn(StrictBase):
+    """Parsed assistant output suitable for environment tool execution."""
+
+    content: str
+    tool_calls: tuple[ToolCall, ...] = ()
+
+
+class AssistantTurnParseResult(StrictBase):
+    """Structured parse result for a generated assistant turn."""
+
+    assistant_turn: GeneratedAssistantTurn
+    parse_success: bool
+
+
 # NOTE: we use a broad type definition for the role to be flexible
 # Common roles are "user", "assistant", "system", "tool"
 Role = str
@@ -146,26 +184,92 @@ class Renderer:
         raise NotImplementedError
 
     def build_generation_prompt(
-        self, messages: list[Message], role: Role = "assistant", prefill: str | None = None
+        self,
+        messages: list[Message],
+        role: Role = "assistant",
+        prefill: str | None = None,
+        tools: list[ToolSpec] | None = None,
     ) -> list[int]:
         raise NotImplementedError
 
-    def parse_response(self, response: list[int]) -> tuple[Message, bool]:
+    def parse_response(self, response: list[int]) -> AssistantTurnParseResult:
         raise NotImplementedError
 
 
 def _tool_call_payload(tool_call: ToolCall) -> dict[str, object]:
     """Minimal JSON payload for embedding in <tool_call> blocks."""
-    # Convert from nested structure to flat format for compatibility
-    return {
+    payload = {
         "name": tool_call.function.name,
-        "args": json.loads(tool_call.function.arguments),
+        TOOL_CALL_ARGUMENTS_KEY: json.loads(tool_call.function.arguments),
     }
+    if tool_call.id is not None:
+        payload["id"] = tool_call.id
+    return payload
+
+
+def _tool_spec_payload(tool_spec: ToolSpec) -> dict[str, object]:
+    """Serialize a tool specification for prompt rendering."""
+    return tool_spec.model_dump(mode="python")
+
+
+def _compact_json_dumps(value: object) -> str:
+    """Serialize tool payloads compactly while preserving deliberate field order."""
+    return json.dumps(value, separators=(",", ":"))
+
+
+def _tool_call_arguments(payload: dict[str, object]) -> dict[str, object] | None:
+    arguments = payload.get(TOOL_CALL_ARGUMENTS_KEY)
+    if arguments is None:
+        arguments = payload.get(LEGACY_TOOL_CALL_ARGUMENTS_KEY)
+    if not isinstance(arguments, dict):
+        return None
+    return arguments
+
+
+def _qwen_tool_prompt(tools: list[ToolSpec]) -> str:
+    tool_lines = "\n".join(_compact_json_dumps(_tool_spec_payload(tool_spec)) for tool_spec in tools)
+    return f"{QWEN_TOOL_PROMPT}\n<tools>\n{tool_lines}\n</tools>"
+
+
+def _assistant_message_from_turn(turn: GeneratedAssistantTurn) -> Message:
+    message = Message(role="assistant", content=turn.content)
+    if turn.tool_calls:
+        message["tool_calls"] = list(turn.tool_calls)
+    return message
+
+
+def _parse_response_text(str_response: str, parse_success: bool) -> AssistantTurnParseResult:
+    return AssistantTurnParseResult(
+        assistant_turn=GeneratedAssistantTurn(content=str_response),
+        parse_success=parse_success,
+    )
+
+
+def _messages_with_tool_prompt(messages: list[Message], tools: list[ToolSpec]) -> list[Message]:
+    tool_prompt = _qwen_tool_prompt(tools)
+    if messages and messages[0]["role"] == "system":
+        updated_first_message = Message(
+            role=messages[0]["role"],
+            content=f"{messages[0]['content']}\n\n{tool_prompt}",
+        )
+        return [updated_first_message, *messages[1:]]
+    return [Message(role="system", content=tool_prompt), *messages]
+
+
+def _assistant_content_without_tool_calls(content: str) -> str:
+    """Remove raw tool-call XML from assistant text after structured parsing."""
+    without_tool_calls = TOOL_CALL_BLOCK_RE.sub("", content).strip()
+    return MULTI_NEWLINE_RE.sub("\n\n", without_tool_calls)
+
+
+def _ends_at_tool_call_boundary(content: str) -> bool:
+    """Return True when a stop-truncated response ends exactly at a tool call."""
+    return content.rstrip().endswith("</tool_call>")
 
 
 def parse_response_for_stop_token(
     response: list[int], tokenizer: MarinTokenizer, stop_token: int
-) -> tuple[Message, bool]:
+) -> AssistantTurnParseResult:
     """Parse response for a single stop token.
 
     We expect a properly rendered response to have exactly one stop token; but it may have zero if e.g. the model
@@ -176,10 +280,10 @@ def parse_response_for_stop_token(
     if emt_count == 0:
         str_response = tokenizer.decode(response)
         logger.debug(f"Response is not a valid assistant response: {str_response}")
-        return Message(role="assistant", content=str_response), False
+        return _parse_response_text(str_response, parse_success=False)
     elif emt_count == 1:
         str_response = tokenizer.decode(response[: response.index(stop_token)])
-        return Message(role="assistant", content=str_response), True
+        return _parse_response_text(str_response, parse_success=True)
     else:
         raise ValueError(
             f"When parsing response, expected to split into 1 or 2 pieces using stop tokens, but got {emt_count}. "
@@ -192,7 +296,8 @@ class Llama3Renderer(Renderer):
     Format like this:
         <|begin_of_text|><|start_header_id|>system<|end_header_id|>
 
-        You are a helpful AI assistant for travel tips and recommendations<|eot_id|><|start_header_id|>user<|end_header_id|>
+        You are a helpful AI assistant for travel tips and
+        recommendations<|eot_id|><|start_header_id|>user<|end_header_id|>
 
         What can you help me with?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
@@ -213,12 +318,18 @@ class Llama3Renderer(Renderer):
         )
 
     def build_generation_prompt(
-        self, messages: list[Message], role: Role = "assistant", prefill: str | None = None
+        self,
+        messages: list[Message],
+        role: Role = "assistant",
+        prefill: str | None = None,
+        tools: list[ToolSpec] | None = None,
     ) -> list[int]:
+        if tools:
+            raise NotImplementedError("Tool calling is not implemented for Llama3Renderer.")
         tokens: list[int] = []
         tokens.extend(self._bos_tokens)
         for message in messages:
-            ob_part, action_part, action_tail = self._render_message(message)
+            ob_part, action_part, _action_tail = self._render_message(message)
             tokens.extend(ob_part)
             tokens.extend(action_part)
         new_partial_message = Message(role=role, content="")
@@ -239,7 +350,7 @@ class Llama3Renderer(Renderer):
     def get_stop_sequences(self) -> list[int]:
         return [self._end_message_token]
 
-    def parse_response(self, response: list[int]) -> tuple[Message, bool]:
+    def parse_response(self, response: list[int]) -> AssistantTurnParseResult:
         return parse_response_for_stop_token(response, self.tokenizer, self._end_message_token)
 
 
@@ -291,7 +402,7 @@ class Qwen3Renderer(Renderer):
         if "tool_calls" in message:
             ac_content += "\n".join(
                 [
-                    f"<tool_call>\n{json.dumps(_tool_call_payload(tool_call))}\n</tool_call>"
+                    f"<tool_call>\n{_compact_json_dumps(_tool_call_payload(tool_call))}\n</tool_call>"
                     for tool_call in message["tool_calls"]
                 ]
             )
@@ -306,8 +417,14 @@ class Qwen3Renderer(Renderer):
         )
 
     def build_generation_prompt(
-        self, messages: list[Message], role: Role = "assistant", prefill: str | None = None
+        self,
+        messages: list[Message],
+        role: Role = "assistant",
+        prefill: str | None = None,
+        tools: list[ToolSpec] | None = None,
     ) -> list[int]:
+        if tools:
+            messages = _messages_with_tool_prompt(messages, tools)
         tokens: list[int] = []  # No BOS token for Qwen
         for idx, message in enumerate(messages):
             ob_part, action_part, _ = self._render_message(idx, message)
@@ -338,36 +455,49 @@ class Qwen3Renderer(Renderer):
         if not isinstance(tool_call, dict):
             return None
         name = tool_call.get("name")
-        args = tool_call.get("args")
+        arguments = _tool_call_arguments(tool_call)
         tool_id = tool_call.get("id")
-        if not isinstance(name, str) or not isinstance(args, dict):
+        if not isinstance(name, str) or arguments is None:
             return None
         if tool_id is not None and not isinstance(tool_id, str):
             tool_id = None
         # Convert to nested structure with arguments as JSON string
         return [
             ToolCall(
-                function=ToolCall.FunctionBody(name=name, arguments=json.dumps(args)),
+                function=ToolCall.FunctionBody(name=name, arguments=_compact_json_dumps(arguments)),
                 id=tool_id,
             )
         ]
 
-    def parse_response(self, response: list[int]) -> tuple[Message, bool]:
-        assistant_message, parse_success = parse_response_for_stop_token(
-            response, self.tokenizer, self._end_message_token
-        )
-        if not parse_success:
-            return assistant_message, False
+    def parse_response(self, response: list[int]) -> AssistantTurnParseResult:
+        parse_result = parse_response_for_stop_token(response, self.tokenizer, self._end_message_token)
+        assistant_message = _assistant_message_from_turn(parse_result.assistant_turn)
+        matches = TOOL_CALL_BLOCK_RE.findall(assistant_message["content"])
+        if not parse_result.parse_success:
+            if not matches or not _ends_at_tool_call_boundary(assistant_message["content"]):
+                return parse_result
 
-        # Follow Qwen docs and Qwen-Agent's tool calling prompt to use <tool_call>...</tool_call> tags to wrap the tool call.
+        # Follow Qwen docs and Qwen-Agent's tool calling prompt to use
+        # <tool_call>...</tool_call> tags to wrap the tool call.
         # - https://qwen.readthedocs.io/en/latest/getting_started/concepts.html#tool-calling
         # - https://github.com/QwenLM/Qwen-Agent/blob/main/qwen_agent/llm/fncall_prompts/nous_fncall_prompt.py#L279-L282
-        match = re.search(r"<tool_call>(.*?)</tool_call>", assistant_message["content"], re.DOTALL)
-        if match:
-            tool_calls = self._parse_tool_call(match.group(1))
-            if tool_calls is None:
-                return assistant_message, False
-            else:
-                assistant_message["tool_calls"] = tool_calls
-                return assistant_message, True
-        return assistant_message, True
+        if not matches:
+            return parse_result
+
+        tool_calls: list[ToolCall] = []
+        for match in matches:
+            parsed_tool_calls = self._parse_tool_call(match)
+            if parsed_tool_calls is None:
+                return AssistantTurnParseResult(
+                    assistant_turn=parse_result.assistant_turn,
+                    parse_success=False,
+                )
+            tool_calls.extend(parsed_tool_calls)
+
+        return AssistantTurnParseResult(
+            assistant_turn=GeneratedAssistantTurn(
+                content=_assistant_content_without_tool_calls(assistant_message["content"]),
+                tool_calls=tuple(tool_calls),
+            ),
+            parse_success=True,
+        )

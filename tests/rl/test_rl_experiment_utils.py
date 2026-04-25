@@ -163,6 +163,23 @@ def test_make_rl_step_uses_model_step_artifact_root_as_dependency(monkeypatch):
     assert step.config.experiment_config.model_config.artifact == output_path_of(model_step)
 
 
+def test_make_rl_step_forwards_runtime_env_vars_to_executor_job(monkeypatch):
+    monkeypatch.setenv("OPENREWARD_API_KEY", "openreward-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "tool-secret")
+    config = dataclasses.replace(
+        _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+        runtime_env_vars=["OPENREWARD_API_KEY", "OPENAI_API_KEY"],
+    )
+
+    step = make_rl_step(name="rl-test", config=config, curriculum=_test_curriculum())
+
+    assert step.config.experiment_config.runtime_env_vars == ["OPENREWARD_API_KEY", "OPENAI_API_KEY"]
+    assert step.fn.env_vars == {
+        "OPENREWARD_API_KEY": "openreward-secret",
+        "OPENAI_API_KEY": "tool-secret",
+    }
+
+
 def test_is_hf_checkpoint_recognizes_gcs_hf_exports(monkeypatch):
     hf_files = {
         "gs://marin-us-central1/models/test-model/hf/config.json",

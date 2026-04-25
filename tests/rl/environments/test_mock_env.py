@@ -93,9 +93,12 @@ def create_test_inference_context():
             temperature,
             n,
             max_tokens=None,
+            top_k=None,
             stop=None,
             system_prompt=None,
+            tools=None,
         ):
+            del temperature, max_tokens, top_k, stop, system_prompt, tools
             completions = []
             for prompt in prompts:
                 responses = [f"mock_response_{i}" for i in range(n)]

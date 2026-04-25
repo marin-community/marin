@@ -142,6 +142,7 @@ cpu = [
 ]
 
 rl = [
+    "openreward",
     "prime",
     "sympy>=1.12.1,<1.14",
     "verifiers==0.1.5",
