@@ -1149,36 +1149,40 @@ class ControllerServiceImpl:
                     f"(state={job_pb2.JobState.Name(parent_state)})",
                 )
 
-        existing_job = _read_job(self._db, job_id)
-        if existing_job:
-            policy = request.existing_job_policy
-            if policy == job_pb2.EXISTING_JOB_POLICY_ERROR:
-                raise ConnectError(
-                    Code.ALREADY_EXISTS,
-                    f"Job {job_id} already exists (state={job_pb2.JobState.Name(existing_job.state)})",
-                )
-            elif policy == job_pb2.EXISTING_JOB_POLICY_KEEP:
-                if not is_job_finished(existing_job.state):
-                    return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
-                # Job finished, replace it (KEEP only preserves running jobs)
-                with self._store.transaction() as cur:
+        # Existence check + conditional cleanup run in one transaction so a
+        # concurrent submitter cannot land a row between the read and the
+        # cleanup write. The new job's ``submit_job`` still opens its own
+        # transaction further down — between the two txs another submitter
+        # can race, but ``INSERT INTO jobs`` then PK-conflicts, which is a
+        # legitimate error rather than a correctness bug.
+        with self._store.transaction() as cur:
+            existing_state = self._store.jobs.get_state(cur, job_id)
+            if existing_state is not None:
+                policy = request.existing_job_policy
+                if policy == job_pb2.EXISTING_JOB_POLICY_ERROR:
+                    raise ConnectError(
+                        Code.ALREADY_EXISTS,
+                        f"Job {job_id} already exists (state={job_pb2.JobState.Name(existing_state)})",
+                    )
+                elif policy == job_pb2.EXISTING_JOB_POLICY_KEEP:
+                    if not is_job_finished(existing_state):
+                        return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
+                    # Job finished, replace it (KEEP only preserves running jobs)
                     self._transitions.remove_finished_job(cur, job_id)
-            elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
-                with self._store.transaction() as cur:
-                    if not is_job_finished(existing_job.state):
+                elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
+                    if not is_job_finished(existing_state):
                         self._transitions.cancel_job(cur, job_id, "Replaced by new submission")
                     self._transitions.remove_finished_job(cur, job_id)
-            elif is_job_finished(existing_job.state):
-                # Default/UNSPECIFIED: replace finished jobs
-                logger.info(
-                    "Replacing finished job %s (state=%s) with new submission",
-                    job_id,
-                    job_pb2.JobState.Name(existing_job.state),
-                )
-                with self._store.transaction() as cur:
+                elif is_job_finished(existing_state):
+                    # Default/UNSPECIFIED: replace finished jobs
+                    logger.info(
+                        "Replacing finished job %s (state=%s) with new submission",
+                        job_id,
+                        job_pb2.JobState.Name(existing_state),
+                    )
                     self._transitions.remove_finished_job(cur, job_id)
-            else:
-                raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
+                else:
+                    raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
 
         # Handle bundle_blob: upload to bundle store, then replace blob
         # with the resulting GCS path (preserving all other fields).

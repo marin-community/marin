@@ -1078,9 +1078,10 @@ class ControllerTransitions:
     ) -> TxResult:
         """Register a new worker or refresh an existing one. Caller owns the transaction.
 
-        Returns the attribute dict that the caller should pass to
-        ``store.workers.update_attr_cache(worker_id, attrs)`` AFTER commit
-        so the in-memory scheduling cache stays in sync.
+        The in-memory worker-attribute scheduling cache and the
+        ``worker_registered`` audit line are scheduled as post-commit
+        hooks on ``cur``; they fire only if the caller's transaction
+        commits.
         """
         attrs: list[WorkerAttributeParams] = []
         for key, proto in metadata.attributes.items():
