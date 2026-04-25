@@ -13,6 +13,7 @@ from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.normalize import normalize_step
 from marin.datakit.download.rollout_transforms import strip_think_tags
 from marin.execution.step_spec import StepSpec
 
@@ -90,4 +91,13 @@ def download_synthetic1_step() -> StepSpec:
             output_path=output_path,
         ),
         hash_attrs={"version": "v1"},
+    )
+
+
+def synthetic1_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the full ``(download+transform, normalize)`` chain for synthetic-1."""
+    processed = download_synthetic1_step()
+    return (
+        processed,
+        normalize_step(name="normalized/synthetic-1", download=processed),
     )
