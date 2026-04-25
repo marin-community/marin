@@ -166,12 +166,12 @@ defineExpose({ selectedAttemptId })
 
 <template>
   <div class="space-y-2">
-    <div class="flex items-center gap-3 text-sm">
+    <div class="flex flex-wrap items-center gap-2 sm:gap-3 text-sm">
       <input
         v-model="filter"
         type="text"
         placeholder="Filter logs..."
-        class="w-64 px-3 py-1.5 bg-surface border border-surface-border rounded
+        class="w-full sm:w-64 px-3 py-1.5 bg-surface border border-surface-border rounded
                text-sm font-mono placeholder:text-text-muted
                focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
       />

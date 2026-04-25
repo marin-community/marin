@@ -104,7 +104,7 @@ onUnmounted(() => {
   <div v-if="isLoginPage">
     <router-view />
   </div>
-  <div v-else class="min-h-screen bg-surface-raised">
+  <div v-else class="min-h-screen bg-surface-raised overflow-x-clip">
     <AppHeader title="Iris Controller Dashboard">
       <button
         class="flex items-center justify-center w-7 h-7 rounded-full border border-surface-border
