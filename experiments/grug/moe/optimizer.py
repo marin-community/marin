@@ -7,7 +7,7 @@ import jax
 import optax
 
 from levanter.optim import OptimizerConfig
-from experiments.grug.moe.adamh import scale_by_adamh
+from experiments.grug.moe.adamh import scale_by_adamh, scale_by_adamh_with_module_gradient_normalization
 from levanter.utils.jax_utils import leaf_key_paths
 
 
@@ -28,6 +28,9 @@ class GrugMoeAdamHConfig(OptimizerConfig):
     adam_lr: float = 6e-4
     expert_lr: float | None = None
 
+    def _scale_by_adamh(self, learning_rate):
+        return scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate)
+
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
@@ -39,14 +42,14 @@ class GrugMoeAdamHConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate))
+                components.append(self._scale_by_adamh(learning_rate))
                 return optax.chain(*components)
 
             def adamh_expert_transform():
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, expert_lr))
+                components.append(self._scale_by_adamh(expert_lr))
                 return optax.chain(*components)
 
             def adam_transform():
@@ -91,4 +94,21 @@ class GrugMoeAdamHConfig(OptimizerConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
-__all__ = ["GrugMoeAdamHConfig"]
+@OptimizerConfig.register_subclass("grug_moe_adamh_grad_norm")
+@dataclass(frozen=True)
+class GrugMoeAdamHGradientNormConfig(GrugMoeAdamHConfig):
+    """AdamH for Grug MoE with per-module gradient RMS normalization."""
+
+    gradient_norm_eps: float = 1e-16
+
+    def _scale_by_adamh(self, learning_rate):
+        return scale_by_adamh_with_module_gradient_normalization(
+            self.beta1,
+            self.beta2,
+            self.epsilon,
+            learning_rate,
+            gradient_norm_eps=self.gradient_norm_eps,
+        )
+
+
+__all__ = ["GrugMoeAdamHConfig", "GrugMoeAdamHGradientNormConfig"]
