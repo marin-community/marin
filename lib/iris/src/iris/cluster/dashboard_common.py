@@ -9,8 +9,11 @@ the frontend hasn't been built yet (e.g. in tests or local dev).
 """
 
 import logging
+import os
+import re
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +66,7 @@ DOCKER_VUE_DIST_DIR = Path("/app/dashboard/dist")
 
 # Allow browsers to cache static assets for up to 10 minutes before revalidating.
 STATIC_MAX_AGE_SECONDS = 600
+DASHBOARD_TITLE_ENV_VAR = "IRIS_DASHBOARD_TITLE"
 
 
 class _CacheControlStaticFiles:
@@ -163,6 +167,40 @@ _NOT_BUILT_HTML = """\
 """
 
 
+def dashboard_title_from_config(config: Any | None) -> str | None:
+    """Return a human-readable dashboard title from cluster config."""
+    if config is None:
+        return None
+    platform = getattr(config, "platform", None)
+    for value in (getattr(config, "name", ""), getattr(platform, "label_prefix", "")):
+        if value is None:
+            continue
+        title = str(value).strip()
+        if title:
+            return title
+    return None
+
+
+def _configured_dashboard_title(dashboard_title: str | None) -> str | None:
+    title = dashboard_title if dashboard_title is not None else os.environ.get(DASHBOARD_TITLE_ENV_VAR, "")
+    title = title.strip()
+    return title or None
+
+
+def _with_dashboard_title(html: str, dashboard_title: str | None) -> str:
+    title = _configured_dashboard_title(dashboard_title)
+    if title is None:
+        return html
+    escaped_title = escape(f"{title} | Iris", quote=False)
+    return re.sub(
+        r"<title>.*?</title>",
+        f"<title>{escaped_title}</title>",
+        html,
+        count=1,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+
 def html_shell(title: str, dashboard_type: str = "controller") -> str:
     """Return the pre-built HTML page for a dashboard.
 
@@ -178,4 +216,4 @@ def html_shell(title: str, dashboard_type: str = "controller") -> str:
     if not index_path.exists():
         logger.warning("Dashboard HTML %s not found; serving placeholder", index_path)
         return _NOT_BUILT_HTML
-    return index_path.read_text()
+    return _with_dashboard_title(index_path.read_text(), None)

@@ -13,11 +13,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shlex
 
 import yaml
 from google.protobuf.json_format import MessageToDict
 
 from collections.abc import Callable
+from iris.cluster.dashboard_common import DASHBOARD_TITLE_ENV_VAR, dashboard_title_from_config
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -362,6 +364,7 @@ sudo docker run -d --name {{ container_name }} \\
     --ulimit core=0:0 \\
     -v /var/cache/iris:/var/cache/iris \\
     {{ config_volume }} \\
+    {{ dashboard_env }} \\
     {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.controller.main serve \\
         --host 0.0.0.0 --port {{ port }} {{ config_flag }} {{ fresh_flag }}
@@ -434,6 +437,7 @@ def build_controller_bootstrap_script(
     docker_image: str,
     port: int,
     config_yaml: str = "",
+    dashboard_title: str | None = None,
     fresh: bool = False,
 ) -> str:
     """Build bootstrap script for controller VM.
@@ -442,6 +446,7 @@ def build_controller_bootstrap_script(
         docker_image: Docker image to run
         port: Controller port
         config_yaml: Optional YAML config to write to /etc/iris/config.yaml
+        dashboard_title: Optional browser title prefix for the dashboard
         fresh: When True, pass ``--fresh`` to the controller serve command so
             it starts with an empty local database and skips checkpoint restore.
     """
@@ -453,6 +458,8 @@ def build_controller_bootstrap_script(
         config_setup = "# No config file provided"
         config_volume = ""
         config_flag = ""
+    dashboard_title = (dashboard_title or "").strip()
+    dashboard_env = f"-e {DASHBOARD_TITLE_ENV_VAR}={shlex.quote(dashboard_title)}" if dashboard_title else ""
 
     return render_template(
         CONTROLLER_BOOTSTRAP_SCRIPT,
@@ -461,6 +468,7 @@ def build_controller_bootstrap_script(
         port=port,
         config_setup=config_setup,
         config_volume=config_volume,
+        dashboard_env=dashboard_env,
         config_flag=config_flag,
         fresh_flag="--fresh" if fresh else "",
     )
@@ -493,4 +501,10 @@ def build_controller_bootstrap_script_from_config(
 
     image = resolve_image(image, zone)
 
-    return build_controller_bootstrap_script(image, port, config_yaml, fresh=fresh)
+    return build_controller_bootstrap_script(
+        image,
+        port,
+        config_yaml,
+        dashboard_title=dashboard_title_from_config(config),
+        fresh=fresh,
+    )

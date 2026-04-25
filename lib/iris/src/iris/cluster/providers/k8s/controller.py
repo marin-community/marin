@@ -21,6 +21,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 from iris.cluster.config import config_to_dict
+from iris.cluster.dashboard_common import DASHBOARD_TITLE_ENV_VAR, dashboard_title_from_config
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.providers.types import InfraError, Labels
@@ -135,6 +136,7 @@ def _build_controller_deployment(
     port: int,
     node_selector: dict[str, str],
     s3_env_vars: list[dict],
+    dashboard_title: str | None = None,
     fresh: bool = False,
 ) -> dict:
     """Build the controller Deployment manifest as a dict."""
@@ -144,6 +146,9 @@ def _build_controller_deployment(
         "requests": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
         "limits": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
     }
+    env_vars = list(s3_env_vars)
+    if dashboard_title:
+        env_vars.append({"name": DASHBOARD_TITLE_ENV_VAR, "value": dashboard_title})
     return {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
@@ -176,7 +181,7 @@ def _build_controller_deployment(
                                 *(["--fresh"] if fresh else []),
                             ],
                             "ports": [{"containerPort": port}],
-                            "env": s3_env_vars,
+                            "env": env_vars,
                             "securityContext": {"capabilities": {"add": ["SYS_PTRACE"]}},
                             "resources": controller_resources,
                             "volumeMounts": [
@@ -311,6 +316,7 @@ class K8sControllerProvider:
             port=port,
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
             s3_env_vars=s3_env,
+            dashboard_title=dashboard_title_from_config(config),
             fresh=fresh,
         )
         self._kubectl.apply_json(deploy_manifest)

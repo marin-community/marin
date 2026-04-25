@@ -14,6 +14,7 @@ from iris.cluster.providers.gcp.bootstrap import (
     rewrite_ghcr_to_ar_remote,
     zone_to_multi_region,
 )
+from iris.cluster.dashboard_common import DASHBOARD_TITLE_ENV_VAR
 from iris.rpc import config_pb2
 
 
@@ -155,6 +156,19 @@ def test_build_controller_bootstrap_script_from_config_rewrites_ghcr_to_ar() -> 
         in script
     )
     assert 'sudo gcloud auth configure-docker "$AR_HOST" -q || true' in script
+
+
+def test_build_controller_bootstrap_script_sets_dashboard_title() -> None:
+    config = config_pb2.IrisClusterConfig()
+    config.platform.label_prefix = "marin-dev"
+    config.controller.image = "ghcr.io/marin-community/iris-controller:latest"
+    config.controller.gcp.zone = "us-central1-a"
+    config.controller.gcp.port = 10000
+    config.platform.gcp.project_id = "hai-gcp-models"
+
+    script = build_controller_bootstrap_script_from_config(config, resolve_image=lambda image, zone=None: image)
+
+    assert f"-e {DASHBOARD_TITLE_ENV_VAR}=marin-dev" in script
 
 
 # --- GcpWorkerProvider.resolve_image() tests ---

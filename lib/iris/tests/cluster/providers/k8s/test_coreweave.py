@@ -22,6 +22,7 @@ from iris.cluster.providers.k8s.controller import (
     _CONTROLLER_CPU_REQUEST,
     _CONTROLLER_MEMORY_REQUEST,
 )
+from iris.cluster.dashboard_common import DASHBOARD_TITLE_ENV_VAR
 from iris.cluster.providers.k8s.fake import InMemoryK8sService
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.providers.types import (
@@ -163,10 +164,11 @@ def test_start_controller_creates_all_resources():
 
     # Verify controller uses S3 env vars (no GCS credentials)
     container = deploy_spec["template"]["spec"]["containers"][0]
-    env_names = [e["name"] for e in container["env"]]
-    assert "AWS_ACCESS_KEY_ID" in env_names
-    assert "AWS_SECRET_ACCESS_KEY" in env_names
-    assert "GOOGLE_APPLICATION_CREDENTIALS" not in env_names
+    env_by_name = {e["name"]: e for e in container["env"]}
+    assert "AWS_ACCESS_KEY_ID" in env_by_name
+    assert "AWS_SECRET_ACCESS_KEY" in env_by_name
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in env_by_name
+    assert env_by_name[DASHBOARD_TITLE_ENV_VAR]["value"] == "iris"
     assert container["resources"]["requests"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
     assert container["resources"]["limits"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
 
