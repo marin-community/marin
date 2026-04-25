@@ -49,34 +49,17 @@ def main() -> None:
 
     fractions = proportional_sample_fractions(available, target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
 
-    # For each source, feed its full normalize chain (+ transitive deps) into
-    # the iterable alongside the sample step. StepRunner's dep-satisfaction
-    # loop only marks a step as ``completed`` when it sees the step go
-    # through its own cache check, so the normalize must be in the iterable
-    # even though it'll no-op — otherwise the sample step's dep check fails
-    # with "Iterable exhausted with unsatisfied dependencies".
-    seen: set[str] = set()
-    steps = []
-
-    def visit(step):
-        if step.output_path in seen:
-            return
-        for dep in step.deps:
-            visit(dep)
-        seen.add(step.output_path)
-        steps.append(step)
-
-    for src in available:
-        for step in src.normalize_steps:
-            visit(step)
-        steps.append(
-            sample_normalized_shards_step(
-                name=f"data/datakit/{src.name}",
-                normalized=src.normalized,
-                sample_fraction=fractions[src.name],
-                override_output_path=f"{base}/sample/{src.name}",
-            )
+    # Sample terminals — StepRunner walks each one's dep chain (normalize →
+    # transforms → download) automatically and dedupes by output_path.
+    steps = [
+        sample_normalized_shards_step(
+            name=f"data/datakit/{src.name}",
+            normalized=src.normalized,
+            sample_fraction=fractions[src.name],
+            override_output_path=f"{base}/sample/{src.name}",
         )
+        for src in available
+    ]
 
     logger.info(
         "Sampling %d / %d sources targeting %.1fB tokens under %s/ (TTL=%dd, skipped %d not-yet-normalized)",
