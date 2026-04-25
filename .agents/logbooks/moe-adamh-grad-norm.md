@@ -89,3 +89,34 @@
   explicitly revised.
 - Next action: continue babysitting d768, then close out the issue with the
   gate 1 table.
+
+### 2026-04-25 15:25 - MOE-AGNH-001 gate 1 final
+
+- Hypothesis: the d768 point may still show effective speedup, but gate 1
+  requires both d512 and d768 to exceed 1.0.
+- Command:
+  `.venv/bin/iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260425-184632`
+  plus W&B API summaries for
+  `understanding-sam/marin_moe/moe-adamh-grad-norm-d512-2p19e17` and
+  `understanding-sam/marin_moe/moe-adamh-grad-norm-d768-1p70e18`.
+- Config:
+  - d512 baseline: loss `3.8104`, throughput `405630` tokens/s, budget
+    `2.19e17`
+  - d512 variant: loss `3.815110206604004`, throughput `406982.727149109`
+    tokens/s, total tokens `837156864`, global step `6386`
+  - d768 baseline: loss `3.4339`, throughput `273532` tokens/s, budget
+    `1.70e18`
+  - d768 variant: loss `3.429192543029785`, throughput `274218.4171530239`
+    tokens/s, total tokens `2711355392`, global step `10342`
+- Result:
+
+  | Scale | Baseline loss | Variant loss | Loss delta | Baseline tok/s | Variant tok/s | Tok/s delta | Effective speedup |
+  |-------|---------------|--------------|------------|----------------|---------------|-------------|-------------------|
+  | d512  | 3.8104        | 3.815110     | +0.004710  | 405,630        | 406,983       | +0.333%     | 0.980893          |
+  | d768  | 3.4339        | 3.429193     | -0.004707  | 273,532        | 274,218       | +0.251%     | 1.030269          |
+
+- Interpretation: the d768 point is positive, but d512 fails the required
+  effective-speedup threshold. Gate 1 fails overall, so this variant should
+  not advance to gate 2 under `experiments/grug/moe/agent.md`.
+- Next action: post the final GitHub issue summary and close the experiment
+  issue as a completed negative result.
