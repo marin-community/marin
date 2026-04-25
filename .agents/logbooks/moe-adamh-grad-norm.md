@@ -42,3 +42,28 @@
 - Interpretation: ready to run gate 1 against d512 and d768 baselines.
 - Next action: create the GitHub experiment issue, push the branch, and submit
   the gate 1 Iris job.
+
+### 2026-04-25 11:46 - MOE-AGNH-001 gate 1 submitted
+
+- Hypothesis: the gradient-normalized AdamH variant can match or improve the
+  d512 and d768 compute-optimal MoE baselines without hurting throughput.
+- Command:
+  `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --memory=2G --disk=4G --cpu=1 --extra=cpu --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -e GRUG_MOE_ADAMH_GRAD_NORM_GATE gate1 -- python -m experiments.grug.moe.launch_adamh_grad_norm`
+- Config:
+  - commit: `d97fdc3131750bfaab552d459fd14e51bf8a2860`
+  - issue: https://github.com/marin-community/marin/issues/5180
+  - PR: https://github.com/marin-community/marin/pull/5181
+  - Iris parent job: `/kaiyue/iris-run-job-20260425-184632`
+  - data browser:
+    https://marin.community/data-browser/experiment?path=gs%3A//marin-us-east5/experiments/launch_adamh_grad_norm-7614bf.json
+  - W&B d512:
+    https://wandb.ai/understanding-sam/marin_moe/runs/moe-adamh-grad-norm-d512-2p19e17
+  - W&B d768:
+    https://wandb.ai/understanding-sam/marin_moe/runs/moe-adamh-grad-norm-d768-1p70e18
+- Result: submitted to Iris and dispatched both Fray TPU child jobs. The first
+  TPU allocation hit a device-busy bad-node signature; Iris retried
+  automatically and both child jobs reached `JOB_STATE_RUNNING`.
+- Interpretation: gate 1 is healthy enough to monitor for first eval/final
+  Paloma macro loss rather than resubmit immediately.
+- Next action: babysit the d512 and d768 jobs to terminal state, compare final
+  metrics with the README baselines, then decide whether to launch gate 2.
