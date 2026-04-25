@@ -5365,13 +5365,14 @@ source = { editable = "lib/rigging" }
 dependencies = [
     { name = "fsspec" },
     { name = "gcsfs" },
+    { name = "google-auth" },
+    { name = "httpx" },
     { name = "pyjwt" },
     { name = "s3fs" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-timeout" },
 ]
@@ -5380,13 +5381,14 @@ dev = [
 requires-dist = [
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "gcsfs", specifier = ">=2024.0.0" },
+    { name = "google-auth", specifier = ">=2.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "pyjwt", specifier = ">=2.12.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.28.1" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
 ]

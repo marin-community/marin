@@ -1,13 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end test for the iris resolver plugin.
-
-Spins up a minimal ControllerService over uvicorn that implements only
-``ListEndpoints``, monkey-patches ``vm_address`` to point at it, and
-verifies that ``rigging.resolver.resolve("iris://...")`` round-trips
-through the real Connect/RPC stack.
-"""
+"""End-to-end test for the iris resolver plugin."""
 
 import socket
 import threading
@@ -20,12 +14,11 @@ from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.routing import Mount
 
-# Importing iris.client activates the resolver plugin (registers iris://).
-import iris.client  # noqa: F401  -- intentional side-effect import for test
+import iris.client  # noqa: F401  -- side-effect import: registers iris:// scheme
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import ControllerServiceSync, ControllerServiceWSGIApplication
+from rigging import resolver as resolver_module
 from rigging.resolver import resolve
-from rigging.resolver import resolver as resolver_module
 from rigging.timing import Duration, ExponentialBackoff
 
 
@@ -121,9 +114,8 @@ def test_resolve_iris_round_trips(monkeypatch, stub_controller):
         # Direct test traffic at the in-process stub rather than GCP.
         return ("127.0.0.1", controller_port)
 
-    # The plugin imports vm_address from rigging.resolver.providers and
-    # binds it as a module-global at import time, so patch it where it's
-    # looked up (the plugin module).
+    # The plugin binds vm_address as a module-global at import time; patch
+    # it where it's looked up.
     from iris.client import resolver_plugin
 
     monkeypatch.setattr(resolver_plugin, "vm_address", _fake_vm_address)

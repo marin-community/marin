@@ -26,12 +26,7 @@ from iris.client.client import (
 from iris.client.resolver import ClusterResolver
 from iris.client.worker_pool import WorkerPool, WorkerPoolConfig
 
-# Side-effect import: registers the ``iris://`` URL scheme with
-# ``rigging.resolver``. Importing ``iris.client`` is the standard activation
-# path; off-cluster code that does not import iris cannot resolve ``iris://``
-# (raises ``ValueError("unsupported scheme: 'iris'")``), which is the right
-# failure mode.
-from iris.client import resolver_plugin
+from iris.client import resolver_plugin  # registers iris:// scheme
 
 __all__ = [
     "ClusterResolver",
