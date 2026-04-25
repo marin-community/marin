@@ -1437,9 +1437,7 @@ def _compute_averages(outputs):
             # echoes, error placeholders). np.mean over mixed strings blows up with a numpy dtype
             # error, so only aggregate numerics.
             if not isinstance(metric_value, (int, float, bool, np.number)):
-                logger.warning(
-                    "Skipping non-numeric metric %s=%r for task %s", metric, metric_value, task_name
-                )
+                logger.warning("Skipping non-numeric metric %s=%r for task %s", metric, metric_value, task_name)
                 continue
 
             valid_tasks.append((metric_value, sample_counts["effective"]))
