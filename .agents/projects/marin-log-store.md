@@ -95,11 +95,19 @@ No protobuf. No connect-python.
 ### What's landed in `lib/iris` for this project
 
 - `lib/iris/src/iris/client/resolver_plugin.py` — registers `iris://` with
-  `rigging.resolver`. Used **only** for actor-endpoint lookup (job-scoped
+  `rigging.resolver`. Delegates controller discovery to
+  `ControllerProvider.discover_controller(...)`, so the scheme works on
+  GCP (labeled VM), K8s/CoreWeave (Service DNS), and Manual/Local (static
+  address from YAML). Used **only** for actor-endpoint lookup (job-scoped
   rendezvous). System services like `finelog` are addressed via `gcp://`
-  directly; the iris:// hop is unnecessary for them.
+  (or whatever the cluster YAML carries) directly; the iris:// hop is
+  unnecessary for them.
 - `lib/iris/src/iris/client/__init__.py:29` — side-effect import that
   activates the plugin.
+- `iris.cluster.config.IRIS_CLUSTER_CONFIG_DIRS` and
+  `iris.cluster.config.load_cluster_config(name)` — the search path and
+  helper the plugin uses to find a cluster YAML by name. Moved from
+  `iris.cli.main` so the plugin doesn't depend on the CLI module.
 - `iris.cluster.controller.auth.JwtTokenManager` (`auth.py:172`) composes a
   `JwtVerifier`, owns the revocation set today via `_verifier.revoke(...)`
   (callers at `service.py:2190,2264`) and `_verifier.set_revocations(...)`
@@ -265,17 +273,58 @@ Built-in handlers (one, today):
 - `gcp://<vm-name>[:port]` — registered eagerly at import
   (`resolver.py:116`). Calls `gcp_vm_address(name, port=url.port or 10002)`.
   Port is taken from the URL when present (commit `91027b13d`), otherwise
-  defaults to 10002. This is the scheme system services use.
+  defaults to 10002. This is one form a system-service URL can take.
 
 `iris://<cluster>?endpoint=<name>` is **not** built into rigging. It lives
-in `iris.client.resolver_plugin`, which is side-effect imported by
-`iris/client/__init__.py:29`. The handler calls
-`ControllerServiceClientSync.list_endpoints(prefix=name, exact=True)`.
-**It is for actor endpoints only** — coordinator → worker rendezvous
-within a job. Per D3, system services do not pass through this path.
+in `iris.client.resolver_plugin` and is side-effect imported by
+`iris/client/__init__.py:29`. The handler is **platform-agnostic**: it
+loads the cluster's YAML config, asks the platform's `ControllerProvider`
+to discover the controller, and queries `ListEndpoints` over that
+address. Concretely:
+
+```python
+cluster_config = load_cluster_config(cluster)            # from YAML
+bundle = cluster_config.provider_bundle()                # ControllerProvider + WorkerProvider
+controller_addr = bundle.controller.discover_controller(  # platform-specific
+    cluster_config.proto.controller
+)
+# GCP   → labeled VM's internal_address:port
+# K8s   → "iris-controller-svc.iris.svc.cluster.local:10000"
+# Manual/Local → static address from config
+```
+
+The handler then opens a `ControllerServiceClientSync` to that address
+and runs `ListEndpoints(prefix=name, exact=True)`. No hard-coded
+`gcp_vm_address(f"iris-controller-{cluster}")` call — that was the
+GCP-only shape and it shipped briefly in `244b57135`/`9931883ea` but is
+gone now.
+
+`iris://` is for **actor endpoints** (coordinator → worker rendezvous
+within a job). Per D3, system services do not pass through this path —
+they're addressed by `gcp://...` (or whatever YAML carries) directly.
+
+**Off-cluster access.** Loading the YAML and calling `discover_controller`
+work fine from a laptop. **Connecting to the resolved address** does not,
+because internal IPs / cluster-local DNS aren't reachable from outside
+the cluster network. The existing pattern (used by the CLI at
+`iris/cli/main.py:117–127`) wraps the resolved address in
+`bundle.controller.tunnel(addr)` — a context manager that does SSH
+port-forward on GCP, `kubectl port-forward` on K8s, and nullcontext
+locally. The architecture doc's `maybe_proxy()` is the planned wrapper
+that fuses tunnel + resolver behind a context-managed
+`LogClient.connect(...)`. Until then, off-cluster code uses the explicit
+tunnel pattern; on-cluster code uses the resolver directly.
+
+**Why this matters for K8s clusters.** Earlier drafts of the plugin called
+`gcp_vm_address(f"iris-controller-{cluster}")` directly, which raises
+`LookupError` on CoreWeave/K8s clusters because there's no GCP VM with
+that name. Going through `ControllerProvider.discover_controller` makes
+`iris://` work on every cluster type iris already supports without per-
+scheme code.
 
 The architecture doc calls out `coreweave://` and `k8s://` as **known
-followups** — we do not stub them. A fresh scheme is a one-line
+followups** — we do not stub them. A fresh provider-style URL scheme
+(e.g. for a system service that lives on a K8s Service) is a one-line
 `register_scheme` call from whichever package owns the cluster type.
 
 ### D6. Resolver is synchronous and returns `(host, port)`
@@ -449,21 +498,36 @@ and D5, `iris://` is **only** for actor endpoints; system services use
 Tests: `lib/rigging/tests/test_resolver.py`,
 `lib/rigging/tests/test_jwt_verifier.py`.
 
-### Phase 2 — Iris resolver plugin **(landed)**
+### Phase 2 — Iris resolver plugin **(landed; cross-platform refactor follow-up)**
 
-Status: shipped alongside Phase 1. The module
-`lib/iris/src/iris/client/resolver_plugin.py` registers `iris://` at import
-(side-effect import at `iris/client/__init__.py:29`). The handler queries
-the existing `ControllerService.ListEndpoints(prefix=name, exact=True)` —
-so actor-endpoint reads work without any new RPC.
+Status: initial GCP-only version shipped in `244b57135`. The plugin now
+delegates to `ControllerProvider.discover_controller(...)` so `iris://`
+works on every iris-supported platform. Concretely:
 
-The plugin **only** serves the actor-endpoint use case, by D3. System
-services like the log server are addressed via `gcp://...` directly,
-without round-tripping through the controller.
+```python
+# lib/iris/src/iris/client/resolver_plugin.py
+def _resolve_iris(url):
+    cluster = url.host
+    name = url.query["endpoint"]
+    cfg = load_cluster_config(cluster)
+    bundle = cfg.provider_bundle()
+    controller_addr = bundle.controller.discover_controller(cfg.proto.controller)
+    with ControllerServiceClientSync(f"http://{controller_addr}") as client:
+        response = client.list_endpoints(... prefix=name, exact=True ...)
+    ...
+```
 
-Followup (not blocking, not yet present):
-`lib/iris/tests/client/test_resolver_plugin.py` covering the iris:// path
-end-to-end against a fake controller stub.
+This unblocks K8s/CoreWeave clusters (where `discover_controller` returns
+the Service DNS name `iris-controller-svc.iris.svc.cluster.local:10000`)
+without per-scheme code in the plugin.
+
+Off-cluster callers (laptop, CI runner) need to wrap usage in
+`bundle.controller.tunnel(addr)` because the resolved address is a
+cluster-internal IP / DNS name not routable from outside the VPC. The CLI
+already does this at `iris/cli/main.py:117–127`. `maybe_proxy()` (architecture-doc appendix) is the planned ergonomic wrapper.
+
+Tests: `lib/iris/tests/client/test_resolver_plugin.py` (six cases,
+including a K8s-Service-DNS controller address path and a GCP-IP path).
 
 ### Phase 3 — Create `lib/finelog`
 
@@ -1074,11 +1138,16 @@ These are all followups the architecture doc already calls out.
    the entire fleet of workers re-resolves at roughly the same time.
    Compute Engine API quotas are generous, but worth confirming under
    our worst-case fleet size.
-3. **Off-cluster CLI access** — once the log server is `gcp://...`, a CLI
-   on a laptop can't resolve it without GCP credentials *and* network
-   path. The architecture doc's `maybe_proxy` is the right place to
-   solve this; until it ships, off-cluster `iris logs` requires SSH
-   forwarding.
+3. **Off-cluster CLI access** — `iris://` resolution itself works from a
+   laptop (load YAML, call `discover_controller`), but the resolved
+   address is cluster-internal. Today's CLI handles this via
+   `bundle.controller.tunnel(addr)` (`iris/cli/main.py:117`). For
+   `gcp://` system-service URLs there is no equivalent, so a laptop
+   running `LogClient.connect("gcp://finelog-server")` would fail at
+   transport time. The architecture doc's `maybe_proxy()` is the right
+   place to solve this; until it ships, off-cluster `iris logs` should
+   route through the controller's `FetchLogs` proxy or open an explicit
+   tunnel.
 
 ---
 
