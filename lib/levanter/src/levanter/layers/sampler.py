@@ -114,9 +114,12 @@ class Sampler(eqx.Module):
             top_p_array = top_ps
         threshold = jnp.clip(jnp.asarray(top_p_array, dtype=jnp.float32), min=0.0, max=1.0)[..., None]
 
-        keep_sorted = cumulative_probs <= threshold
+        # Keep the smallest prefix whose cumulative mass reaches the threshold.
+        # The cutoff-crossing token should remain eligible, but we should not
+        # include the next token when the threshold is met exactly.
+        keep_sorted = cumulative_probs < threshold
         keep_sorted = jnp.concatenate(
-            [jnp.ones_like(keep_sorted[..., :1], dtype=bool), keep_sorted[..., 1:]],
+            [jnp.ones_like(keep_sorted[..., :1], dtype=bool), keep_sorted[..., :-1]],
             axis=-1,
         )
         filtered_sorted_logits = jnp.where(keep_sorted, sorted_logits, -jnp.inf)
