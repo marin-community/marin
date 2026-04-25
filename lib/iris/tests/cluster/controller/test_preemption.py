@@ -274,7 +274,8 @@ def test_preempted_task_retries():
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
 
         # Preempt
-        state.preempt_task(task.task_id, reason="Preempted by /bob/prod-job:0")
+        with state._store.transaction() as cur:
+            state.preempt_task(cur, task.task_id, reason="Preempted by /bob/prod-job:0")
 
         # Task should be PENDING (retry)
         updated = query_task(state, task.task_id)
@@ -300,7 +301,8 @@ def test_preempted_task_exhausted_retries():
         harness.dispatch(task, w1)
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
 
-        state.preempt_task(task.task_id, reason="preempted")
+        with state._store.transaction() as cur:
+            state.preempt_task(cur, task.task_id, reason="preempted")
 
         updated = query_task(state, task.task_id)
         assert updated.state == job_pb2.TASK_STATE_PREEMPTED
@@ -496,10 +498,12 @@ def test_preempted_assigned_task_always_retries():
         task = tasks[0]
 
         # Only assign, don't advance to RUNNING
-        state.queue_assignments([Assignment(task_id=task.task_id, worker_id=w1)])
+        with state._store.transaction() as cur:
+            state.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=w1)])
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
 
-        state.preempt_task(task.task_id, reason="preempted while assigned")
+        with state._store.transaction() as cur:
+            state.preempt_task(cur, task.task_id, reason="preempted while assigned")
 
         updated = query_task(state, task.task_id)
         assert updated.state == job_pb2.TASK_STATE_PENDING, "ASSIGNED tasks should always retry on preemption"
@@ -604,7 +608,8 @@ def test_preemption_across_multiple_workers():
 def test_preemption_nonexistent_task_is_noop():
     """Preempting a non-existent task is a no-op."""
     with make_controller_state() as state:
-        result = state.preempt_task(JobName.from_wire("/ghost/job:0"), reason="does not exist")
+        with state._store.transaction() as cur:
+            result = state.preempt_task(cur, JobName.from_wire("/ghost/job:0"), reason="does not exist")
         assert result.tasks_to_kill == set()
 
 
@@ -623,7 +628,8 @@ def test_preemption_terminal_task_is_noop():
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_SUCCEEDED
 
         # Preempt should be no-op
-        state.preempt_task(task.task_id, reason="too late")
+        with state._store.transaction() as cur:
+            state.preempt_task(cur, task.task_id, reason="too late")
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_SUCCEEDED
 
 
@@ -714,7 +720,8 @@ def test_preempt_task_retries_when_budget_remains():
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
 
         attempt_id_before = query_task(state, task.task_id).current_attempt_id
-        state.preempt_task(task.task_id, reason="Evicted by /bob/prod:0")
+        with state._store.transaction() as cur:
+            state.preempt_task(cur, task.task_id, reason="Evicted by /bob/prod:0")
 
         # Task retries to PENDING
         updated = query_task(state, task.task_id)
@@ -742,7 +749,8 @@ def test_preempt_task_terminal_when_budget_exhausted():
         task = tasks[0]
         harness.dispatch(task, w1)
 
-        result = state.preempt_task(task.task_id, reason="budget gone")
+        with state._store.transaction() as cur:
+            result = state.preempt_task(cur, task.task_id, reason="budget gone")
 
         updated = query_task(state, task.task_id)
         assert updated.state == job_pb2.TASK_STATE_PREEMPTED
@@ -794,14 +802,16 @@ def test_preempt_task_cascades_coscheduled_siblings():
             dispatch_task(state, task, WorkerId(f"w{i}"))
 
         # Preempt the first task — it goes terminal PREEMPTED
-        result0 = state.preempt_task(tasks[0].task_id, reason="preempted by prod")
+        with state._store.transaction() as cur:
+            result0 = state.preempt_task(cur, tasks[0].task_id, reason="preempted by prod")
         assert query_task(state, tasks[0].task_id).state == job_pb2.TASK_STATE_PREEMPTED
 
         # Second task is still running (preempt_task doesn't directly cascade siblings)
         assert query_task(state, tasks[1].task_id).state == job_pb2.TASK_STATE_RUNNING
 
         # Preempt the second task — now ALL tasks are terminal, job finalizes
-        result1 = state.preempt_task(tasks[1].task_id, reason="preempted by prod")
+        with state._store.transaction() as cur:
+            result1 = state.preempt_task(cur, tasks[1].task_id, reason="preempted by prod")
         assert query_task(state, tasks[1].task_id).state == job_pb2.TASK_STATE_PREEMPTED
 
         # Both tasks should be in the combined kill set
@@ -879,7 +889,8 @@ def test_preemption_retry_preserves_reservation_holder():
         dispatch_task(state, child_tasks[0], w2)
 
         # Preempt the parent task — it should retry (go PENDING)
-        state.preempt_task(parent_task.task_id, reason="Preempted by higher priority")
+        with state._store.transaction() as cur:
+            state.preempt_task(cur, parent_task.task_id, reason="Preempted by higher priority")
 
         # Parent task should be PENDING (retry)
         updated_parent = query_task(state, parent_task.task_id)
@@ -941,7 +952,8 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
         dead_attempt_id = query_task(state, task.task_id).current_attempt_id
         assert dead_attempt_id == 0
 
-        state.preempt_task(task.task_id, reason="Preempted by /bob/prod-job:0")
+        with state._store.transaction() as cur:
+            state.preempt_task(cur, task.task_id, reason="Preempted by /bob/prod-job:0")
 
         # Sanity: task went to PENDING (budget remains), attempt row is PREEMPTED-terminal.
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_PENDING
@@ -953,19 +965,21 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
 
         # Late heartbeat for the (now-dead) attempt 0 arrives: worker still thinks
         # it is RUNNING. This simulates the RPC-in-flight race.
-        state.apply_task_updates(
-            HeartbeatApplyRequest(
-                worker_id=worker_id,
-                worker_resource_snapshot=None,
-                updates=[
-                    TaskUpdate(
-                        task_id=task.task_id,
-                        attempt_id=dead_attempt_id,
-                        new_state=job_pb2.TASK_STATE_RUNNING,
-                    )
-                ],
+        with state._store.transaction() as cur:
+            state.apply_task_updates(
+                cur,
+                HeartbeatApplyRequest(
+                    worker_id=worker_id,
+                    worker_resource_snapshot=None,
+                    updates=[
+                        TaskUpdate(
+                            task_id=task.task_id,
+                            attempt_id=dead_attempt_id,
+                            new_state=job_pb2.TASK_STATE_RUNNING,
+                        )
+                    ],
+                ),
             )
-        )
 
         # The attempt row must remain in a consistent terminal state — NOT flipped
         # back to RUNNING with preemption error/finished_at still set.

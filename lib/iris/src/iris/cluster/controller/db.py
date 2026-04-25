@@ -155,6 +155,9 @@ EXECUTING_TASK_STATES: frozenset[int] = frozenset(
     }
 )
 
+# All non-terminal task states (ACTIVE plus PENDING). Complement of TERMINAL_TASK_STATES.
+NON_TERMINAL_TASK_STATES: frozenset[int] = ACTIVE_TASK_STATES | {job_pb2.TASK_STATE_PENDING}
+
 # Failure states that trigger coscheduled sibling cascades.
 FAILURE_TASK_STATES: frozenset[int] = frozenset(
     {
