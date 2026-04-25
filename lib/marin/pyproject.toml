@@ -17,6 +17,7 @@ dependencies = [
     "fasteners>=0.19",
     "flask>=3.1.3",
     "marin-fray",
+    "marin-iris",
     "marin-rigging",
     "fsspec>=2025.3.0",
     "gcsfs",
@@ -31,12 +32,12 @@ dependencies = [
     "lxml-html-clean>=0.4.4",
     "markdownify>=0.14.1",
     "multiprocess==0.70.16",
+    "mcp>=1.25.0",
     "numpy",
     "openai",
     "pandas>=2.0",
     "plotly",
     "pyarrow>=22",
-    "ray==2.54.0",
     "regex",
     "requests>=2.33.0",
     "resiliparse>=0.17.2",
@@ -51,6 +52,9 @@ dependencies = [
 
 [project.license]
 file = "../../LICENSE"
+
+[project.scripts]
+marin-mcp-babysitter = "marin.mcp.babysitter:main"
 
 [dependency-groups]
 test = [

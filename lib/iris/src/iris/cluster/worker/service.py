@@ -4,21 +4,18 @@
 """WorkerService RPC implementation using Connect RPC."""
 
 import logging
-import time
 from typing import Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
-from iris.chaos import chaos
 from iris.cluster.process_status import get_process_status as _get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.rpc import job_pb2
 from iris.rpc import worker_pb2
 from iris.rpc.errors import rpc_error_handler
-from rigging.log_setup import slow_log
 from rigging.timing import Timer
 
 logger = logging.getLogger(__name__)
@@ -34,7 +31,6 @@ class TaskProvider(Protocol):
     def get_task(self, task_id: str, attempt_id: int = -1) -> TaskInfo | None: ...
     def list_tasks(self) -> list[TaskInfo]: ...
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
-    def handle_heartbeat(self, request: job_pb2.HeartbeatRequest) -> job_pb2.HeartbeatResponse: ...
     def handle_ping(self, request: worker_pb2.Worker.PingRequest) -> worker_pb2.Worker.PingResponse: ...
     def handle_start_tasks(
         self, request: worker_pb2.Worker.StartTasksRequest
@@ -97,36 +93,6 @@ class WorkerServiceImpl:
         )
         response.uptime.milliseconds = self._timer.elapsed_ms()
         return response
-
-    def heartbeat(
-        self,
-        request: job_pb2.HeartbeatRequest,
-        _ctx: RequestContext,
-    ) -> job_pb2.HeartbeatResponse:
-        """Handle controller-initiated heartbeat.
-
-        Processes tasks_to_run and tasks_to_kill, then returns current state.
-        """
-        with rpc_error_handler("heartbeat"), slow_log(logger, "heartbeat rpc", threshold_ms=1000):
-            # Chaos injection for testing heartbeat failures and delays
-            if rule := chaos("worker.heartbeat"):
-                if rule.delay_seconds > 0:
-                    time.sleep(rule.delay_seconds)
-                if rule.error:
-                    raise rule.error
-                # If no error specified, raise generic RuntimeError
-                if not rule.delay_seconds:
-                    raise RuntimeError("chaos: worker.heartbeat")
-
-            logger.debug(
-                "heartbeat rpc received n_run=%d n_kill=%d n_expected=%d req_bytes=%d",
-                len(request.tasks_to_run),
-                len(request.tasks_to_kill),
-                len(request.expected_tasks),
-                request.ByteSize(),
-            )
-            # Delegate to worker for reconciliation
-            return self._provider.handle_heartbeat(request)
 
     def get_process_status(
         self,

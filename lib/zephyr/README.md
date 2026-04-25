@@ -42,7 +42,7 @@ ctx.execute(pipeline)
 - `.write_vortex(pattern)` - write to a Vortex file
 
 **Execution (`ZephyrContext`):**
-- `ZephyrContext(max_workers=N)` — auto-detects backend (Ray, Iris, or local) via `fray.v2.current_client()`
+- `ZephyrContext(max_workers=N)` — auto-detects backend (Ray, Iris, or local) via `fray.current_client()`
 - `ZephyrContext(client=LocalClient())` — explicit local backend (testing)
 - `ctx.execute(pipeline)` — runs the pipeline; returns a `ZephyrExecutionResult(results, counters)`
 

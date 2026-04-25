@@ -39,7 +39,7 @@ iris job bug-report /user/job-name      # structured diagnostic dump
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
 - **`--extra gpu`** installs CUDA jaxlib but does NOT request GPU hardware. Need both `--gpu H100x8 --extra gpu`.
 - **`--reserve`** holds capacity for scheduling only — does not attach accelerator devices. Use `--tpu`/`--gpu` on the task that needs hardware.
-- **`executor_main` parent jobs** (e.g., canary ferries) submit GPU sub-tasks via Fray. The parent must be CPU-only (`--cpu 1 --memory 16g`), otherwise it hogs the GPU node and deadlocks.
+- **`executor_main` parent jobs** (e.g., canary ferries) submit GPU sub-tasks via Fray. The parent must be CPU-only (`--cpu 1 --memory 2g`), otherwise it hogs the GPU node and deadlocks. Memory at or above 4 GB requires `--enable-extra-resources` (see "Validator opt-in" below).
 
 ## Task Operations
 
@@ -118,21 +118,31 @@ SELECT slice_id, lifecycle, scale_group, worker_ids FROM slices WHERE lifecycle=
 -- Task attempt history (debugging retries)
 SELECT task_id, attempt_id, state, exit_code, error FROM task_attempts
 WHERE task_id LIKE '%<job_fragment>%' ORDER BY attempt_id;
+```
 
--- What the controller has been doing
-SELECT kind, count(*) FROM txn_log GROUP BY kind ORDER BY count(*) DESC LIMIT 10;
+Controller audit events (`event=<kind> action=<action> entity=<id> ...`) are
+emitted as structured `logger.info` lines — query them through
+`iris process logs` with a substring filter, not via SQL. Example:
+
+```bash
+iris process logs --since 24h | grep 'event=worker_failed'
 ```
 
 Full table list: `iris query "SELECT name FROM sqlite_master WHERE type='table'"`.
 
 ### Offline checkpoint analysis
 
-For slow queries, trigger a checkpoint and query offline. **Never run expensive queries against the live DB** — they stall the controller.
+For slow queries, query offline. **Never run expensive queries against the live DB** — they stall the controller.
 
 ```bash
-iris cluster controller checkpoint           # trigger fresh checkpoint
 # Download the checkpoint file (path printed by command above)
 sqlite3 /tmp/controller.sqlite3 "SELECT ..."
+```
+
+Prefer to use the last checkpoint from GCS. Only take a new controller checkpoint if this is too old:
+
+```bash
+iris cluster controller checkpoint
 ```
 
 ## Users & Auth
@@ -160,7 +170,7 @@ iris key list / iris key revoke       # manage API keys
 
 1. **Committed resource leak** (`transitions.py`): `_decommit_worker_resources()` can miss certain task termination paths, leaving stale committed resources on workers. Symptom: workers show high committed CPU/memory/TPU with zero active tasks. Detect by joining `workers` against active tasks in `task_attempts`.
 
-2. **Heartbeat thread stall on gcloud subprocess** (#3678): The heartbeat loop calls `notify_worker_failed` -> `scale_down` -> `terminate` which runs a synchronous `gcloud compute tpus tpu-vm delete`. If the gcloud API hangs, **all task dispatch stops** because dispatches are delivered via heartbeats. Symptoms: `dispatch_queue` growing, tasks stuck in ASSIGNED (9), stale `last_heartbeat_ms`. Diagnose with `py-spy dump` — look for `subprocess.run` -> `terminate` on the heartbeat thread. Kill the stuck gcloud process to unblock.
+2. **Worker-failure thread stall on gcloud subprocess** (#3678): The reaper thread calls `notify_worker_failed` -> `scale_down` -> `terminate` which runs a synchronous `gcloud compute tpus tpu-vm delete`. If the gcloud API hangs, worker removals queue up. Symptoms: tasks stuck in ASSIGNED (9), stale `last_heartbeat_ms`. Diagnose with `py-spy dump` — look for `subprocess.run` -> `terminate` on the reaper thread. Kill the stuck gcloud process to unblock.
 
 ---
 

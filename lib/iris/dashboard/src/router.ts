@@ -31,10 +31,6 @@ const routes = [
     component: () => import('./components/controller/StatusTab.vue'),
   },
   {
-    path: '/transactions',
-    component: () => import('./components/controller/TransactionsTab.vue'),
-  },
-  {
     path: '/scheduler',
     component: () => import('./components/controller/SchedulerTab.vue'),
   },

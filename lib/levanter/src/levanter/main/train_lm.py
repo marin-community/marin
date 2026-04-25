@@ -20,7 +20,7 @@ import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config, save_hf_checkpoint_callback
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import LmDataConfig
@@ -174,7 +174,8 @@ def main(config: TrainLmConfig):
         state = trainer.initial_state(training_key, model_init=lambda: config.model.build(Vocab, key=model_key))
 
         if int(state.step) == 0 and config.initialize_from_checkpoint_path is not None:
-            state = load_checkpoint(state, config.initialize_from_checkpoint_path)
+            checkpoint_path = latest_checkpoint_path(config.initialize_from_checkpoint_path)
+            state = load_checkpoint(state, checkpoint_path)
             # reset to step 0, we're just initializing weights here
             state = dataclasses.replace(state, step=jnp.array(0))
 
@@ -319,7 +320,7 @@ def main(config: TrainLmConfig):
         ## OK, actually run training!
         trainer.train(state, train_loader)
 
-    # This isn't necessary except when Levanter is run in a subprocess (as happens w/ ray)
+    # This isn't necessary except when Levanter is run in a subprocess (as happens under Iris/Fray)
     trainer.tracker.finish()
 
 

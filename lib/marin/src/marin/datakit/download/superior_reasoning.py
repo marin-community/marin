@@ -9,7 +9,7 @@ Each row has a math prompt and a model response with reasoning traces.
 
 import hashlib
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 from zephyr.readers import load_jsonl
 

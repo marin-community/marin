@@ -14,7 +14,7 @@ from functools import lru_cache
 from typing import Any
 
 import jmp
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from marin.execution.remote import remote
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
@@ -207,6 +207,7 @@ def default_tokenize(
     sample_count: int | VersionedValue[int] | None = None,
     is_validation: bool = False,
     levanter_batch_size: int | None = None,
+    tags: Sequence[str] = (),
     resources: ResourceConfig | None = None,
     worker_resources: ResourceConfig | None = None,
 ) -> ExecutorStep:
@@ -227,6 +228,7 @@ def default_tokenize(
             for more details.
         sample_count: Optional limit on the number of samples to tokenize per shard. If ``None``, tokenize everything.
         is_validation: Whether the dataset is a validation set. Doesn't do anything for HF datasets.
+        tags: Tags to attach to the Levanter dataset source for tagged evaluation.
     Returns:
         An ExecutorStep that represents the tokenized dataset.
     """
@@ -246,6 +248,7 @@ def default_tokenize(
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
             levanter_batch_size=levanter_batch_size,
+            tags=[*tags],
             **extra_kwargs,
         )
     elif (
@@ -261,6 +264,7 @@ def default_tokenize(
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
             levanter_batch_size=levanter_batch_size,
+            tags=[*tags],
             **extra_kwargs,
         )
     else:
@@ -272,6 +276,7 @@ def default_tokenize(
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
             levanter_batch_size=levanter_batch_size,
+            tags=[*tags],
             **extra_kwargs,
         )
 
