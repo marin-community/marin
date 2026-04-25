@@ -138,8 +138,8 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
         # Instead of fighting it, let's just normalize it to something reasonable and move
         # forward.
         subset_normalize_worker_resources={
-            "sft_general": ResourceConfig(cpu=2, ram="32g", disk="10g"),
-            "sft_math": ResourceConfig(cpu=2, ram="32g", disk="10g"),
+            "sft_general": ResourceConfig(cpu=2, ram="64g", disk="10g"),
+            "sft_math": ResourceConfig(cpu=2, ram="64g", disk="10g"),
         },
         override_output_path="raw/nemotron_pretraining_sft_v1-10f77e",
     ),
