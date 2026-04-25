@@ -23,6 +23,7 @@ import logging
 from fray import ResourceConfig
 from zephyr import ZephyrContext, counters, write_parquet_file
 from zephyr.dataset import Dataset
+from marin.execution.step_spec import as_step_fn
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ def _iter_has_more_than_one(records: Iterator[T]) -> tuple[bool, T, Iterator[T]]
     return has_more_than_one, first, itertools.chain([first], rest)
 
 
+@as_step_fn
 def dedup_exact_paragraph(
     *,
     input_paths: str | list[str],

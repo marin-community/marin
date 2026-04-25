@@ -33,9 +33,8 @@ def build_steps() -> list[StepSpec]:
         name="exact_dedup_fineweb_10bt",
         output_path_prefix=f"{marin_prefix()}/tmp/{OUTPUT_PREFIX}",
         deps=[download],
-        fn=lambda op: dedup_exact_paragraph(
+        fn=dedup_exact_paragraph(
             input_paths=os.path.join(download.output_path, "sample/10BT"),
-            output_path=op,
             max_parallelism=128,
         ),
     )

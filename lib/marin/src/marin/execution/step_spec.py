@@ -8,11 +8,28 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import cached_property
+from functools import cached_property, wraps
 from typing import Any
 from urllib.parse import urlparse
 
 from rigging.filesystem import marin_prefix
+
+
+def as_step_fn(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorator that allows a function to either be called normally with output_path,
+    or curried by omitting output_path, returning a Callable[[str], Any] suitable for StepSpec.fn."""
+
+    @wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        if "output_path" not in kwargs:
+
+            def inner(output_path: str) -> Any:
+                return fn(*args, output_path=output_path, **kwargs)
+
+            return inner
+        return fn(*args, **kwargs)
+
+    return wrapper
 
 
 def _is_relative_path(url_or_path: str) -> bool:
