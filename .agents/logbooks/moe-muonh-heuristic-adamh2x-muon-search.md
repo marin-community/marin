@@ -30,3 +30,17 @@
 - Result: code validates with targeted pre-commit. Issue #5167 created and added as a sub-issue of #4281.
 - Interpretation: the launch surface is ready for Iris submission. The Vizier design runs two independent studies, one per scale, with three loops of four suggestions each.
 - Next action: commit, push, submit the AdamH 2x and Muon Vizier jobs, then record Iris job IDs.
+
+### 2026-04-24 17:10 - Iris submission
+- Hypothesis: AdamH 2x-batch control and Vizier Muon search can run through the standard Grug MoE Iris path on v5p-8.
+- Command:
+  - `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.moe.adamh_batch2x_gate1`
+  - `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.moe.muon_vizier_search`
+- Config:
+  - Commit: `9d815d70c`
+  - AdamH 2x parent job: `/pc0618/iris-run-job-20260425-000952`
+  - Muon Vizier parent job: `/pc0618/iris-run-job-20260425-001006`
+  - Hardware reservation: `v5p-8`
+- Result: both parent jobs submitted and running; both v5p-8 reservations were initially pending due to no matching worker with sufficient capacity.
+- Interpretation: launch succeeded. The next useful check is whether the reservations bind to workers and child training jobs start emitting W&B runs.
+- Next action: monitor Iris status and W&B run creation for `moe-adamh-batch2x-*` and `moe-muon-vizier-lr-beta-*`.
