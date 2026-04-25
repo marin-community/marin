@@ -183,3 +183,36 @@
   point finishes.
 - Next action: continue monitoring `d512-lr4x` and d768 startup; wait for d768
   first eval before making scale-sensitivity claims.
+
+### 2026-04-25 13:14 - d768 first meaningful eval
+
+- Hypothesis: d768 should reveal whether depth MuP keeps the LR optimum near
+  the same multiplier as d512 after the initial placeholder evals disappear.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260425-184727`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris still shows 8 succeeded jobs and 9 running jobs; no terminal failures.
+  - `d512-lr4x` remains running at W&B step 4042 with Paloma macro 4.7823.
+  - Seven d768 runs are running around W&B steps 1366-1391. The two highest LR
+    points, `2.83x` and `4x`, have not launched yet.
+  - Current d768 W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Tok/s |
+    | --- | --- | ---: | ---: | ---: | ---: |
+    | 0.25x | running | 1374 | 5.6296 | 4.4109 | 275,963 |
+    | 0.354x | running | 1382 | 5.2119 | 4.0573 | 275,795 |
+    | 0.5x | running | 1391 | 4.8381 | 4.0311 | 276,564 |
+    | 0.707x | running | 1371 | 4.6411 | 3.9799 | 274,922 |
+    | 1x | running | 1374 | 4.5468 | 3.9933 | 275,879 |
+    | 1.41x | running | 1367 | 4.5297 | 3.9370 | 274,950 |
+    | 2x | running | 1366 | 4.5989 | 4.0871 | 275,213 |
+    | 2.83x | missing | n/a | n/a | n/a | n/a |
+    | 4x | missing | n/a | n/a | n/a | n/a |
+
+- Interpretation: at this early d768 point, the best observed LR multiplier is
+  `1.41x`, with `1x` close behind and `2x` already slightly worse. This is not
+  final, but the usable LR band is centered near the d512 optimum rather than
+  moving dramatically.
+- Next action: continue normal cadence until `d512-lr4x` finishes and the
+  remaining d768 LR points launch.
