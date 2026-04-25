@@ -13,6 +13,8 @@ All use parquet format with a "text" field.
 from dataclasses import dataclass, field
 from functools import cache
 
+from fray import ResourceConfig
+
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
@@ -28,6 +30,8 @@ class NemotronV2Dataset:
     """Maps subset_name -> glob pattern for parquet files within the download."""
     subset_text_fields: dict[str, str] = field(default_factory=dict)
     """Per-subset overrides for the text column. Subsets not listed use ``"text"``."""
+    subset_normalize_worker_resources: dict[str, ResourceConfig] = field(default_factory=dict)
+    """Optional custom per-subset overrides for normalize worker resources"""
     override_output_path: str | None = None
     """Allow to point at existing download output to avoid re-downloading"""
 
@@ -129,6 +133,14 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
             "sft_general": "Nemotron-SFT-General/**/*.parquet",
             "sft_math": "Nemotron-SFT-MATH/**/*.parquet",
         },
+        # SFT-General and SFT-MATH have skewed shards and unrealistic row group sizes, e.g.:
+        # "NumRowGroups": 3", "RowGroups": [{ "NumRows": 262144, "TotalByteSize": 4715315268, ...
+        # Instead of fighting it, let's just normalize it to something reasonable and move
+        # forward.
+        subset_normalize_worker_resources={
+            "sft_general": ResourceConfig(cpu=2, ram="32g", disk="10g"),
+            "sft_math": ResourceConfig(cpu=2, ram="32g", disk="10g"),
+        },
         override_output_path="raw/nemotron_pretraining_sft_v1-10f77e",
     ),
     "nemotron_pretraining_specialized_v1_1": NemotronV2Dataset(
@@ -181,6 +193,7 @@ def normalize_nemotron_v2_step(download: StepSpec, *, family: str, subset: str) 
         id_field="id",
         file_extensions=(".parquet",),
         input_path=f"{download.output_path}/{subset_dir}",
+        worker_resources=info.subset_normalize_worker_resources.get(subset),
     )
 
 
