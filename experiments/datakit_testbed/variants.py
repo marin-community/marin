@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 STAGING_PREFIX = "gs://marin-us-central1"
 TARGET_TOTAL_TOKENS_B = 1000.0
-MAX_STEP_CONCURRENCY = 42
+MAX_STEP_CONCURRENCY = 20
 
 _SAMPLE_STEP_PREFIX = "data/datakit/normalized/"
 _FUZZY_DUPS_MAX_PARALLELISM = 128
