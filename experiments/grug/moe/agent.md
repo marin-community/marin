@@ -173,12 +173,18 @@ Do not leave a MoE experiment at "ready to run" unless a hard blocker prevents
 submission, such as missing authentication, unavailable required environment
 variables, or an Iris outage.
 
+The Iris entrypoint runs `executor_main`, so keep that parent job CPU-only. The
+`ExecutorStep` configs in the launch modules request `ResourceConfig.with_tpu("v5p-8")`
+for the training children.
+
 ### Submission command
 
 ```bash
 .venv/bin/iris --config lib/iris/examples/marin.yaml job run \
   --no-wait \
-  --reserve v5p-8 \
+  --cpu 1 \
+  --memory 2G \
+  --extra cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -- python -m experiments.grug.moe.launch
 ```
