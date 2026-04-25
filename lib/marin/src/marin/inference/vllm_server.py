@@ -287,6 +287,9 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     gpu_memory_utilization = engine_kwargs.get("gpu_memory_utilization")
     if gpu_memory_utilization is not None:
         args.extend(["--gpu-memory-utilization", str(gpu_memory_utilization)])
+    max_num_batched_tokens = engine_kwargs.get("max_num_batched_tokens")
+    if max_num_batched_tokens is not None:
+        args.extend(["--max-num-batched-tokens", str(max_num_batched_tokens)])
     return args
 
 
@@ -796,15 +799,28 @@ def _build_vllm_env_dict() -> dict[str, str]:
     return env
 
 
+_V5P_PATCH_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_vllm_v5p_patch")
+
+
 def _vllm_env() -> dict[str, str]:
     """Build the vLLM environment for the native (subprocess) backend.
 
-    Starts from ``os.environ`` and applies the canonical defaults.
+    Starts from ``os.environ`` and applies the canonical defaults. Also prepends
+    ``_V5P_PATCH_DIR`` to ``PYTHONPATH`` so the ``sitecustomize`` module there
+    runs at interpreter startup in the ``vllm serve`` subprocess — see the
+    docstring in that file for why we need to monkey-patch ``tpu_inference``'s
+    ragged-paged-attention block-size fallback on v5p.
     """
     env = dict(os.environ)
     canonical = _build_vllm_env_dict()
     for key, value in canonical.items():
         env.setdefault(key, value)
+
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    if existing_pythonpath:
+        env["PYTHONPATH"] = f"{_V5P_PATCH_DIR}{os.pathsep}{existing_pythonpath}"
+    else:
+        env["PYTHONPATH"] = _V5P_PATCH_DIR
     return env
 
 
