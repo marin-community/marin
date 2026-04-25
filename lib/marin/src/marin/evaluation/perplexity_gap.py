@@ -6,8 +6,8 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any
 
-from fray import current_client
-from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
+from fray.v2 import current_client
+from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from levanter.analysis.model_perplexity import compare_scored_outputs
 from levanter.analysis.perplexity_gap import write_report_files
 from levanter.data.text import DatasetComponent, HfDatasetSourceConfig, TextLmDatasetFormat, UrlDatasetSourceConfig
