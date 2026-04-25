@@ -86,3 +86,22 @@
 - Next action: retry submission after authenticating with an account that can
   list controller VMs in `hai-gcp-models`, or provide an explicit
   `--controller-url` for an existing Iris tunnel.
+
+### 2026-04-25 11:47 - Iris submission accepted
+
+- Hypothesis: after switching local GCP/ADC auth to `kaiyuewen3@gmail.com`,
+  the production Marin Iris controller can accept the depth MuP sweep.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --cpu 1 --memory 2G --extra cpu -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.moe.depth_mup_lr_sweep`
+- Config:
+  - submission worktree: `/tmp/marin-depth-mup-run-94fb32af1`
+  - code commit: `94fb32af1`
+  - coordinator resources: CPU-only (`cpu=1`, `memory=2G`, `extra=cpu`)
+  - child step resources: `ResourceConfig.with_tpu("v5p-8")`
+  - sweep grid: 36 steps (4 scales x 9 LR multipliers)
+- Result: Iris accepted coordinator job
+  `/kaiyue/iris-run-job-20260425-184727`.
+- Interpretation: the prior GCP permission/controller discovery blocker is
+  cleared. The experiment is now in the Iris startup window.
+- Next action: perform the 120-second startup check, then monitor on the normal
+  babysit cadence.
