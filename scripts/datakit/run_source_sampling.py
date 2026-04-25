@@ -53,7 +53,7 @@ def main() -> None:
     # transforms → download) automatically and dedupes by output_path.
     steps = [
         sample_normalized_shards_step(
-            name=f"data/datakit/{src.name}",
+            name=f"data/datakit/normalized/{src.name}",
             normalized=src.normalized,
             sample_fraction=fractions[src.name],
             override_output_path=f"{base}/sample/{src.name}",

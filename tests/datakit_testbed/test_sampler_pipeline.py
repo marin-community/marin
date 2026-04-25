@@ -30,14 +30,14 @@ def test_dag_single_source_emits_full_chain_in_order():
     assert names == [
         "raw/nemotron_cc_code_v1",
         "normalized/nemotron_cc_code_v1/all",
-        "data/datakit/nemotron_cc_code_v1/all",
+        "data/datakit/normalized/nemotron_cc_code_v1/all",
     ]
 
 
 def test_dag_stops_at_sample():
     """No testbed-specific stages beyond sample (guards against re-adding noop_dedup/consolidate)."""
     steps = build_testbed_steps(sources=_ALL_LIST)
-    testbed_steps = [s for s in steps if s.name.startswith("data/datakit/")]
+    testbed_steps = [s for s in steps if s.name.startswith("data/datakit/normalized/")]
     assert len(testbed_steps) == len(_ALL_LIST), "expected exactly one testbed step per source (the sampler)"
 
 

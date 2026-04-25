@@ -28,7 +28,7 @@ def test_tokenize_step_bridge_produces_training_ready_steps():
     from marin.processing.tokenize import TokenizeConfig
 
     steps = build_testbed_steps(sources=[_SMOKE_SOURCE])
-    sampled = next(s for s in steps if s.name.startswith("data/datakit/"))
+    sampled = next(s for s in steps if s.name.startswith("data/datakit/normalized/"))
     step = _testbed_tokenize(_SMOKE_SOURCE.name, sampled)
 
     assert isinstance(step, ExecutorStep)
@@ -44,7 +44,7 @@ def test_bridge_steps_compose_into_lm_mixture():
     from marin.processing.tokenize import lm_mixture_data_config
 
     steps = build_testbed_steps(sources=[_SMOKE_SOURCE])
-    sampled = next(s for s in steps if s.name.startswith("data/datakit/"))
+    sampled = next(s for s in steps if s.name.startswith("data/datakit/normalized/"))
     tokenize_steps = {_SMOKE_SOURCE.name: _testbed_tokenize(_SMOKE_SOURCE.name, sampled)}
 
     mixture = lm_mixture_data_config(components=tokenize_steps, weights={_SMOKE_SOURCE.name: 1.0})

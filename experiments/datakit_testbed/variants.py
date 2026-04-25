@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 STAGING_PREFIX = "gs://marin-us-central1"
 TARGET_TOTAL_TOKENS_B = 1000.0
 
-_SAMPLE_STEP_PREFIX = "data/datakit/"
+_SAMPLE_STEP_PREFIX = "data/datakit/normalized/"
 _FUZZY_DUPS_MAX_PARALLELISM = 128
 _MINHASH_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _FUZZY_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
@@ -137,7 +137,7 @@ def dedup(
         s.name.removeprefix(_SAMPLE_STEP_PREFIX): s for s in steps if s.name.startswith(_SAMPLE_STEP_PREFIX)
     }
     if not sampled_by_source:
-        raise ValueError("no sample steps found in the DAG (expected names under 'data/datakit/...')")
+        raise ValueError("no sample steps found in the DAG (expected names under 'data/datakit/normalized/...')")
 
     minhash_params = {
         "num_perms": fuzzy_dedup_num_perms,

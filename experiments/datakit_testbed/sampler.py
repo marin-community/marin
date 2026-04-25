@@ -338,7 +338,7 @@ def _sample_step_for(
 ) -> StepSpec:
     """Per-source post-normalize sampler. Copies first ceil(N * fraction) shards."""
     return sample_normalized_shards_step(
-        name=f"data/datakit/{src.name}",
+        name=f"data/datakit/normalized/{src.name}",
         normalized=normalized,
         sample_fraction=sample_fraction,
     )
@@ -357,7 +357,7 @@ def build_testbed_steps(
     ``(download, ..., normalize)`` :class:`StepSpec` chain; this function
     appends the testbed-specific sample stage on top of every source's
     terminal normalize step. Sample outputs land at hashed paths
-    (``data/datakit/{src.name}-{hash}/``) — the hash incorporates
+    (``data/datakit/normalized/{src.name}-{hash}/``) — the hash incorporates
     ``sample_fraction`` so different fractions don't collide. Tokenize
     runs in the training executor graph (see
     :mod:`experiments.datakit_testbed.train`), not the ferry.

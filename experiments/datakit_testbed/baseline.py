@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 STAGING_PREFIX = "gs://marin-us-central1"
 TARGET_TOTAL_TOKENS_B = 1000.0
 
-_SAMPLE_STEP_PREFIX = "data/datakit/"
+_SAMPLE_STEP_PREFIX = "data/datakit/normalized/"
 
 
 def baseline(
@@ -55,7 +55,7 @@ def baseline(
         s.name.removeprefix(_SAMPLE_STEP_PREFIX): s for s in steps if s.name.startswith(_SAMPLE_STEP_PREFIX)
     }
     if not sampled_by_source:
-        raise ValueError("no sample steps found in the DAG (expected names under 'data/datakit/...')")
+        raise ValueError("no sample steps found in the DAG (expected names under 'data/datakit/normalized/...')")
 
     tokenized_buckets = {name: testbed_tokenize(name, sampled, tokenizer) for name, sampled in sampled_by_source.items()}
     # Run tokenize steps through an Executor we keep a handle on so we can read
