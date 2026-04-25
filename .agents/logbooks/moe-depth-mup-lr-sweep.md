@@ -105,3 +105,25 @@
   cleared. The experiment is now in the Iris startup window.
 - Next action: perform the 120-second startup check, then monitor on the normal
   babysit cadence.
+
+### 2026-04-25 11:51 - Startup check
+
+- Hypothesis: transient TPU init failures should be recoverable by Iris task
+  retries if subsequent attempts get a usable v5p-8 worker.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260425-184727`
+  - `uv run iris --config lib/iris/examples/marin.yaml job summary --json /kaiyue/iris-run-job-20260425-184727/grug-train-moe-depth-mup-lr-d512-lr1x`
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs --since-seconds 900 --max-lines 500 /kaiyue/iris-run-job-20260425-184727/grug-train-moe-depth-mup-lr-d512-lr1x`
+- Result:
+  - coordinator: `JOB_STATE_RUNNING`
+  - d512 children visible: 8, all `JOB_STATE_RUNNING`
+  - sampled d512 `lr1x` child: 2 recovered preemptions from TPU init failures
+    (`Device or resource busy` / `No accelerator found`), then a running
+    attempt loading caches
+  - sample W&B run:
+    `https://wandb.ai/understanding-sam/marin_moe/runs/moe-depth-mup-lr-d512-lr1x`
+- Interpretation: Iris recovered from the initial bad-node symptoms without
+  job-level intervention. No training loss yet; cache/eval setup is still in
+  progress.
+- Next action: switch to the normal babysit cadence and watch for first loss
+  lines, terminal states, or repeated TPU bad-node errors.
