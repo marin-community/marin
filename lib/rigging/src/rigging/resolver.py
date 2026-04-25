@@ -6,6 +6,11 @@
 External schemes register handlers via :func:`register_scheme`; ``gcp://`` is
 built in. The iris-side ``iris://`` handler lives in
 ``iris.client.resolver_plugin`` and is installed when ``iris.client`` is imported.
+
+Off-cluster callers wrap their use of :func:`resolve` in
+:func:`rigging.proxy.proxy_stack`. Handlers themselves consult
+:func:`rigging.proxy.active_stack` to route unreachable addresses
+through tunnels — :func:`resolve` itself is pure dispatch.
 """
 
 from collections.abc import Callable
@@ -53,9 +58,10 @@ def is_registered(scheme: str) -> bool:
 
 
 def resolve(ref: str) -> tuple[str, int]:
+    """Resolve a URL or bare ``host:port`` reference."""
     if "://" not in ref:
-        host, port = ref.rsplit(":", 1)
-        return host, int(port)
+        host, port_str = ref.rsplit(":", 1)
+        return host, int(port_str)
     url = ServiceURL.parse(ref)
     handler = _HANDLERS.get(url.scheme)
     if handler is None:

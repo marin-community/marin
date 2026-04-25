@@ -419,6 +419,134 @@ Backoff/retry semantics on `LogPusher` are unchanged from today — push
 failures already retry with backoff. The new behavior is purely "evict
 cached `(host, port)` after a transport error" inside `RemoteLogClient`.
 
+### D13. Off-cluster access ships with finelog: per-service tunnels + auto-probe in the resolver
+
+The architecture-doc promise is *"lifting logging out doesn't require
+rewriting callers."* That promise fails if `LogClient.connect("gcp://finelog-server")`
+only works on-cluster — every off-cluster caller still needs the
+controller's `FetchLogs` proxy, the controller stays load-bearing for
+log traffic, and Phase 5.5/6 proxy deletion never lands. So we build
+the off-cluster path here.
+
+Three mechanisms considered, two ruled out:
+
+**1. SOCKS via `ssh -D` — not viable today.** The architecture-doc
+recommendation assumed our Connect/RPC stack is built on `httpx`. It is
+not. `connectrpc.client_sync.ConnectClientSync` uses `pyqwest.SyncClient`
+(reqwest under the hood). Verified: `pyqwest.SyncHTTPTransport.__init__`
+exposes no proxy parameter, and setting `ALL_PROXY=socks5://...` yields
+`ConnectionError: client error (Connect): unsupported scheme socks5` —
+pyqwest builds reqwest without the `socks` Cargo feature, so the scheme
+isn't compiled in. End-to-end test against the live marin cluster:
+- `gcloud compute ssh iris-controller-marin -- -D 127.0.0.1:11080 -N` came
+  up and `curl --socks5-hostname` round-tripped fine for raw HTTP.
+- The actual iris client stack rejected the same proxy.
+
+**2. Per-service `ssh -L` / `kubectl port-forward` with auto-probe — the
+chosen path, built in this project as a new phase.** Shape:
+
+```python
+# rigging.resolver — small additions.
+_active_session: ContextVar[ProxySession | None] = ContextVar("proxy", default=None)
+
+def resolve(ref: str) -> tuple[str, int]:
+    addr = _resolve_raw(ref)
+    session = _active_session.get()
+    if session is None:
+        return addr
+    if _is_reachable(addr, timeout=0.5):  # one TCP connect, short timeout
+        return addr
+    return session.proxy_address(addr)    # opens a tunnel lazily, caches it
+
+# iris.client.maybe_proxy — the session.
+class ProxySession:
+    def __init__(self, cluster: str):
+        self._bundle = load_cluster_config(cluster).provider_bundle()
+        self._stack = ExitStack()
+        self._tunnels: dict[tuple[str, int], tuple[str, int]] = {}
+
+    def proxy_address(self, remote):
+        if remote in self._tunnels: return self._tunnels[remote]
+        local = self._stack.enter_context(self._bundle.controller.tunnel_to(*remote))
+        self._tunnels[remote] = local
+        return local
+
+@contextmanager
+def maybe_proxy(cluster: str) -> Iterator[None]:
+    session = ProxySession(cluster)
+    token = _active_session.set(session)
+    try:
+        with session._stack:
+            yield
+    finally:
+        _active_session.reset(token)
+```
+
+Properties:
+
+- **Caller writes one path of code.** `LogClient.connect("gcp://finelog-server")`
+  works on-cluster (probe succeeds, no proxy) and off-cluster inside
+  `maybe_proxy(cluster)` (probe fails, tunnel opens, localhost address
+  returned). The architecture doc's concern about "hidden auto-detection
+  surprising on partial-cloud-access laptops" is handled correctly by
+  per-URL probing — only unreachable targets get proxied.
+- **Probe cost amortizes via D11.** First resolve pays the probe; cached
+  `(host, port)` is reused until D11 evicts on transport failure.
+- **Caller still opts in.** Outside `maybe_proxy(cluster)` the resolver
+  returns the unreachable address verbatim — no surprises in production
+  code.
+- **Lifetime: rely on context-manager-as-GC.** Tunnels live for the
+  duration of the `maybe_proxy` block. The resolver returns plain
+  `(host, port)` tuples that escape the session; we cannot ref-count or
+  TTL them. Cleanup happens at `__exit__`. Implication: `maybe_proxy` is
+  meant to bracket a logical task (CLI invocation, batch run), not be
+  held open forever. Long-lived off-cluster daemons either re-enter per
+  batch or accept that tunnels accumulate (bounded by distinct service
+  count, small in practice).
+
+What this requires:
+
+- `ControllerProvider.tunnel_to(host, port) -> ContextManager[tuple[str, int]]`
+  generalizes the existing `tunnel(controller_addr)` to arbitrary
+  internal targets. GCP threads `target_host`/`target_port` through the
+  existing `_gcp_tunnel` helpers; one `gcloud compute ssh -L` per
+  service, no ControlMaster optimization in v1 (one ssh handshake per
+  service is acceptable for off-cluster CLI use). K8s wraps
+  `kubectl port-forward svc/<name>`; pod-IP form is a followup.
+- `_is_reachable(host, port, timeout)` in `rigging.resolver` — one TCP
+  connect, 0.5s default timeout.
+- `iris.client.maybe_proxy` module + tests.
+- End-to-end test against the marin cluster.
+
+Honest size: ~180–200 LOC across rigging + iris, plus tests.
+
+**3. Cloudflare Zero Trust — the medium-term destination.** Per the
+architecture-doc cost analysis, the free tier covers our user count
+(<50). Once enrolled, laptops, CI runners, and cluster VMs share a
+private network; `maybe_proxy` becomes a no-op everywhere; internal
+addresses just work; no per-service tunneling code, no probe latency,
+no transport compatibility matrix. **Likely the right place to put
+engineering effort.** Tailscale Standard (~$2.4k/yr) is the alternative
+once we exceed the free tier.
+
+**Rejected options:**
+
+- **Controller-side proxy** (extend the existing `FetchLogs` forwarder to
+  cover all log-server traffic): undoes a chunk of the extraction's
+  value. The whole point is "log traffic doesn't go through the
+  controller." Off-cluster routing through the controller puts it back
+  on the critical path for those callers.
+- **Replace pyqwest with httpx** to enable SOCKS: reasonable but not
+  scoped to this project.
+
+**Scope:** Option (2) ships in this project as a new phase
+(see Phase 7.5). Option (3) is the post-finelog destination — once
+Cloudflare Zero Trust is enrolled, `maybe_proxy` becomes a no-op
+everywhere and the per-service tunnel code becomes dormant. We accept
+that some of (2)'s code may eventually be deleted; the alternative
+(ship finelog without an off-cluster path) breaks the architecture
+doc's promise on day one.
+
 ### D12. Restart-independence is a prod-config guarantee, not a dev-config one
 
 The goal "controller restarts do not restart the log server" holds **only**
@@ -1138,16 +1266,16 @@ These are all followups the architecture doc already calls out.
    the entire fleet of workers re-resolves at roughly the same time.
    Compute Engine API quotas are generous, but worth confirming under
    our worst-case fleet size.
-3. **Off-cluster CLI access** — `iris://` resolution itself works from a
-   laptop (load YAML, call `discover_controller`), but the resolved
-   address is cluster-internal. Today's CLI handles this via
-   `bundle.controller.tunnel(addr)` (`iris/cli/main.py:117`). For
-   `gcp://` system-service URLs there is no equivalent, so a laptop
-   running `LogClient.connect("gcp://finelog-server")` would fail at
-   transport time. The architecture doc's `maybe_proxy()` is the right
-   place to solve this; until it ships, off-cluster `iris logs` should
-   route through the controller's `FetchLogs` proxy or open an explicit
-   tunnel.
+3. **Off-cluster CLI access** — see D13. Resolution works from a laptop
+   (load YAML, call `discover_controller`), but the resolved address is
+   cluster-internal. Today's CLI handles `iris://` via
+   `bundle.controller.tunnel(addr)` (`iris/cli/main.py:117`). System
+   services (`gcp://...`) have no equivalent today; a laptop running
+   `LogClient.connect("gcp://finelog-server")` fails at transport time.
+   Three paths considered (SOCKS, per-service `ssh -L` with probe
+   auto-detection, Cloudflare Zero Trust) — none implemented in this
+   project. Until then, off-cluster `iris logs` should route through
+   the controller's `FetchLogs` proxy.
 
 ---
 
@@ -1178,6 +1306,10 @@ These are all followups the architecture doc already calls out.
       `lib/iris/AGENTS.md`, `lib/iris/OPS.md`, cluster-config reference.
 - [ ] Followup issue filed: CoreWeave/k8s VM-address helpers
       (`coreweave_vm_address`, `k8s_vm_address`).
-- [ ] Followup issue filed: `maybe_proxy` off-cluster tunnel integration.
+- [ ] Phase 7.5 (off-cluster access, D13): `maybe_proxy(cluster)` with
+      per-service `ssh -L` / `kubectl port-forward` + reachability probe
+      in the resolver. End-to-end test against marin.
+- [ ] Followup project filed: Cloudflare Zero Trust enrollment (free
+      tier covers <50 users); makes `maybe_proxy` a no-op.
 - [ ] Followup issue filed: declarative reconciler for `system_services`
       (auto-provisioning of the named VMs).
