@@ -67,3 +67,25 @@
   Paloma macro loss rather than resubmit immediately.
 - Next action: babysit the d512 and d768 jobs to terminal state, compare final
   metrics with the README baselines, then decide whether to launch gate 2.
+
+### 2026-04-25 12:40 - MOE-AGNH-001 d512 final
+
+- Hypothesis: d512 should show effective speedup greater than 1 versus the
+  README compute-optimal baseline.
+- Command: W&B API summary pull for
+  `understanding-sam/marin_moe/moe-adamh-grad-norm-d512-2p19e17`.
+- Config:
+  - budget: `2.19e17`
+  - baseline Paloma macro loss: `3.8104`
+  - baseline throughput: `405630` tokens/s
+  - variant Paloma macro loss: `3.815110206604004`
+  - variant throughput: `406982.727149109` tokens/s
+  - variant total tokens: `837156864`
+- Result: d512 Iris child job succeeded. Effective speedup is `0.980893`;
+  loss delta is `+0.004710` and throughput delta is `+0.333%`.
+- Interpretation: d512 does not clear gate 1. Since the d768 gate 1 child job
+  is already running, continue it to terminal state for the complete gate 1
+  comparison, but do not launch gate 2 unless the decision criteria are
+  explicitly revised.
+- Next action: continue babysitting d768, then close out the issue with the
+  gate 1 table.
