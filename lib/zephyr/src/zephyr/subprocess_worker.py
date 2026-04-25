@@ -149,6 +149,12 @@ def _periodic_status_logger(
     while not stop_event.wait(timeout=interval):
         if sys.is_finalizing():
             return
+        # Stages that don't yield through StatisticsGenerator (e.g. map-only
+        # stages whose output isn't observed item-by-item) never populate these
+        # counters. Logging zeros for them is misleading, so skip the line
+        # entirely until at least one counter has been recorded.
+        if item_key not in ctx._counters and byte_key not in ctx._counters:
+            continue
         items = ctx._counters.get(item_key, 0)
         bytes_processed = ctx._counters.get(byte_key, 0)
         elapsed = time.monotonic() - monotonic_start
