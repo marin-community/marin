@@ -1,0 +1,15 @@
+{
+  "cell_status_counts": {
+    "diagnostic_only": 8,
+    "needs_launch": 4,
+    "needs_relaunch": 1,
+    "target_ready": 12
+  },
+  "diagnostic_cells": 9,
+  "expected_cells": 25,
+  "include_diagnostics": true,
+  "manifest_rows": 25,
+  "metric": "eval/uncheatable_eval/bpb",
+  "missing_cells": 4,
+  "target_ready_cells": 12
+}

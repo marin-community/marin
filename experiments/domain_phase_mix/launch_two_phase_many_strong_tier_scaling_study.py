@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import fsspec
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, this_output_path
@@ -27,6 +27,7 @@ from experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline impo
     build_launch_artifacts as build_stratified_launch_artifacts,
 )
 from experiments.domain_phase_mix.qsplit240_replay import build_qsplit240_replay_launch_artifacts
+from experiments.domain_phase_mix.qsplit240_replay import skip_eval_harness_for_training_step
 from experiments.domain_phase_mix.scaling_study_recipes import (
     ScalingStudyCell,
     ScalingStudyPath,
@@ -92,6 +93,7 @@ def create_strong_tier_manifest_step(*, name_prefix: str, cells: list[ScalingStu
 def build_launch_steps(
     *,
     resume_latest_checkpoints: bool,
+    perplexity_only: bool,
     tpu_regions_override: tuple[str, ...] | None = None,
 ) -> tuple[list[ScalingStudyCell], list[object]]:
     """Build the full executor step graph for all new strong-tier submissions."""
@@ -125,6 +127,14 @@ def build_launch_steps(
                 eval_datasets_cache_path=EVAL_DATASETS_CACHE_PATH,
                 resume_latest_checkpoints=resume_latest_checkpoints,
             )
+            if perplexity_only:
+                qsplit_artifacts = replace(
+                    qsplit_artifacts,
+                    training_steps=[
+                        skip_eval_harness_for_training_step(training_step)
+                        for training_step in qsplit_artifacts.training_steps
+                    ],
+                )
             steps.extend(qsplit_artifacts.steps)
             continue
 
@@ -142,6 +152,11 @@ def build_launch_steps(
                 resume_latest_checkpoints=resume_latest_checkpoints,
                 cohort=cell.cohort,
             )
+            if perplexity_only:
+                stratified_artifacts = replace(
+                    stratified_artifacts,
+                    training_step=skip_eval_harness_for_training_step(stratified_artifacts.training_step),
+                )
             steps.extend(stratified_artifacts.steps)
             continue
 
@@ -159,6 +174,13 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
         action=argparse.BooleanOptionalAction,
         default=DEFAULT_RESUME_LATEST_CHECKPOINTS,
     )
+    parser.add_argument(
+        "--perplexity-only",
+        "--skip-eval-harness",
+        dest="skip_eval_harness",
+        action="store_true",
+        help="Set LEVANTER_SKIP_EVAL_HARNESS=1 on training steps.",
+    )
     return parser.parse_known_args()
 
 
@@ -169,6 +191,7 @@ def main() -> None:
     tpu_regions_override = tuple(args.tpu_regions.split(",")) if args.tpu_regions else None
     cells, steps = build_launch_steps(
         resume_latest_checkpoints=args.resume_latest_checkpoints,
+        perplexity_only=args.skip_eval_harness,
         tpu_regions_override=tpu_regions_override,
     )
     if os.getenv("CI") is not None:

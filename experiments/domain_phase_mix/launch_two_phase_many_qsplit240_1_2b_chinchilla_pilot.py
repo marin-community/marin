@@ -9,6 +9,7 @@ import argparse
 import logging
 import os
 import sys
+from dataclasses import replace
 
 from marin.execution.executor import ExecutorMainConfig, executor_main
 
@@ -27,12 +28,12 @@ from experiments.domain_phase_mix.qsplit240_replay import (
     BASELINES3_PANEL,
     DEFAULT_TARGET_BUDGET,
     DEFAULT_TARGET_BUDGET_MULTIPLIER,
-    DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
     build_qsplit240_replay_launch_artifacts,
     build_qsplit240_replay_run_specs,
     create_qsplit240_replay_experiment,
     normalize_tpu_regions,
     replay_description,
+    skip_eval_harness_for_training_step,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,8 +48,8 @@ SEQ_LEN = 2048
 NUM_TRAIN_STEPS = get_num_train_steps(EXPERIMENT_BUDGET, BATCH_SIZE, SEQ_LEN)
 DEFAULT_MAX_CONCURRENT = 1
 DEFAULT_TPU_TYPE = "v5p-64"
-DEFAULT_TPU_REGIONS = DEFAULT_REGION_AGNOSTIC_TPU_REGIONS
-DEFAULT_TPU_ZONE = None
+DEFAULT_TPU_REGIONS = ("us-east5",)
+DEFAULT_TPU_ZONE = "us-east5-a"
 DEFAULT_PANEL = BASELINES3_PANEL
 EVAL_DATASETS_CACHE_PATH = "gs://marin-us-central1/raw/eval-datasets/qsplit240-300m-6b-expanded-tasks"
 DEFAULT_RESUME_LATEST_CHECKPOINTS = True
@@ -140,6 +141,13 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
     parser.add_argument("--eval-datasets-cache-path", default=EVAL_DATASETS_CACHE_PATH)
     parser.add_argument(
+        "--perplexity-only",
+        "--skip-eval-harness",
+        dest="skip_eval_harness",
+        action="store_true",
+        help="Set LEVANTER_SKIP_EVAL_HARNESS=1 while keeping validation/perplexity and checkpointing.",
+    )
+    parser.add_argument(
         "--resume-latest-checkpoints",
         action=argparse.BooleanOptionalAction,
         default=DEFAULT_RESUME_LATEST_CHECKPOINTS,
@@ -161,6 +169,13 @@ def main() -> None:
         eval_datasets_cache_path=args.eval_datasets_cache_path,
         resume_latest_checkpoints=args.resume_latest_checkpoints,
     )
+    if args.skip_eval_harness:
+        artifacts = replace(
+            artifacts,
+            training_steps=[
+                skip_eval_harness_for_training_step(training_step) for training_step in artifacts.training_steps
+            ],
+        )
     if os.getenv("CI") is not None:
         logger.info(
             "Built qsplit240 1.2B pilot graph in CI with %d runs under panel %s; skipping executor launch.",

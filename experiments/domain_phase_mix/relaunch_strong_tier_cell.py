@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 
 from marin.execution.executor import ExecutorMainConfig, executor_main
 
@@ -19,6 +20,7 @@ from experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline impo
     build_launch_artifacts as build_stratified_launch_artifacts,
 )
 from experiments.domain_phase_mix.qsplit240_replay import build_qsplit240_replay_launch_artifacts
+from experiments.domain_phase_mix.qsplit240_replay import skip_eval_harness_for_training_step
 from experiments.domain_phase_mix.scaling_study_recipes import (
     ScalingStudyPath,
     build_strong_tier_cells,
@@ -38,6 +40,13 @@ def _parse_args() -> argparse.Namespace:
         "--resume-latest-checkpoints",
         action=argparse.BooleanOptionalAction,
         default=True,
+    )
+    parser.add_argument(
+        "--perplexity-only",
+        "--skip-eval-harness",
+        dest="skip_eval_harness",
+        action="store_true",
+        help="Set LEVANTER_SKIP_EVAL_HARNESS=1 on training steps.",
     )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -77,6 +86,13 @@ def main() -> None:
             eval_datasets_cache_path=EVAL_DATASETS_CACHE_PATH,
             resume_latest_checkpoints=args.resume_latest_checkpoints,
         )
+        if args.skip_eval_harness:
+            artifacts = replace(
+                artifacts,
+                training_steps=[
+                    skip_eval_harness_for_training_step(training_step) for training_step in artifacts.training_steps
+                ],
+            )
     else:
         artifacts = build_stratified_launch_artifacts(
             scale=cell.scale,
@@ -91,6 +107,11 @@ def main() -> None:
             resume_latest_checkpoints=args.resume_latest_checkpoints,
             cohort=cell.cohort,
         )
+        if args.skip_eval_harness:
+            artifacts = replace(
+                artifacts,
+                training_step=skip_eval_harness_for_training_step(artifacts.training_step),
+            )
 
     print(
         f"path={cell.path.value} scale={cell.scale.value} name_prefix={cell.name_prefix} "

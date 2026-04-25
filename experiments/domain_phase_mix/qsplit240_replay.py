@@ -62,6 +62,7 @@ DEFAULT_REGION_AGNOSTIC_TPU_REGIONS = ("us-east5", "us-central1")
 DEFAULT_TARGET_BUDGET = TARGET_BUDGET
 DEFAULT_TARGET_BUDGET_MULTIPLIER = 1.0
 EVAL_DATASETS_CACHE_DEP_ENV_VAR = "MARIN_EVAL_DATASETS_CACHE_DEPENDENCY"
+SKIP_EVAL_HARNESS_ENV_VAR = "LEVANTER_SKIP_EVAL_HARNESS"
 ALL_PANEL = "all"
 REPRESENTATIVE12_PANEL = "representative12"
 BASELINES3_PANEL = "baselines3"
@@ -498,6 +499,19 @@ def add_eval_cache_dependency_to_training_step(training_step: ExecutorStep, cach
         config=replace(config, env_vars=cast(dict[str, str], env_vars)),
         override_output_path=original_output_path,
     )
+
+
+def skip_eval_harness_for_training_step(training_step: ExecutorStep) -> ExecutorStep:
+    """Set Levanter's eval-harness skip env var on one training step."""
+    config = training_step.config
+    if not isinstance(config, TrainLmOnPodConfig):
+        raise TypeError(
+            f"Expected TrainLmOnPodConfig for qsplit240 training step {training_step.name!r}, got {type(config)!r}"
+        )
+
+    env_vars = dict(config.env_vars or {})
+    env_vars[SKIP_EVAL_HARNESS_ENV_VAR] = "1"
+    return replace(training_step, config=replace(config, env_vars=cast(dict[str, str], env_vars)))
 
 
 def build_qsplit240_replay_launch_artifacts(

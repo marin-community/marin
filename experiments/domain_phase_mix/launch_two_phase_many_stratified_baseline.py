@@ -9,7 +9,7 @@ import argparse
 import logging
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main
@@ -23,6 +23,7 @@ from experiments.domain_phase_mix.qsplit240_replay import (
     normalize_tpu_regions,
     resolve_latest_checkpoint_path,
     resolve_qsplit240_eval_cache_path_for_regions,
+    skip_eval_harness_for_training_step,
 )
 from experiments.domain_phase_mix.scaling_study_recipes import (
     ScalingStudyScale as StratifiedScale,
@@ -66,6 +67,13 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--target-budget", type=int)
     parser.add_argument("--target-budget-multiplier", type=float, default=DEFAULT_TARGET_BUDGET_MULTIPLIER)
     parser.add_argument("--eval-datasets-cache-path", default=EVAL_DATASETS_CACHE_PATH)
+    parser.add_argument(
+        "--perplexity-only",
+        "--skip-eval-harness",
+        dest="skip_eval_harness",
+        action="store_true",
+        help="Set LEVANTER_SKIP_EVAL_HARNESS=1 while keeping normal validation/perplexity evaluation.",
+    )
     parser.add_argument(
         "--resume-latest-checkpoints",
         action=argparse.BooleanOptionalAction,
@@ -208,6 +216,8 @@ def main() -> None:
         eval_datasets_cache_path=args.eval_datasets_cache_path,
         resume_latest_checkpoints=args.resume_latest_checkpoints,
     )
+    if args.skip_eval_harness:
+        artifacts = replace(artifacts, training_step=skip_eval_harness_for_training_step(artifacts.training_step))
     if os.getenv("CI") is not None:
         logger.info(
             "Built stratified baseline graph in CI for scale %s with target_budget=%d and multiplier=%.3f; "

@@ -132,6 +132,13 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--tpu-zone", default=None)
     parser.add_argument("--max-concurrent", type=int, default=1)
     parser.add_argument("--eval-datasets-cache-path", default=EVAL_DATASETS_CACHE_PATH)
+    parser.add_argument(
+        "--perplexity-only",
+        "--skip-eval-harness",
+        dest="skip_eval_harness",
+        action="store_true",
+        help="Set LEVANTER_SKIP_EVAL_HARNESS=1 on training steps.",
+    )
     return parser.parse_known_args()
 
 
@@ -194,9 +201,12 @@ def main() -> None:
             run_name=run_spec.run_name,
             data_seed=run_spec.data_seed,
         )
-        training_steps.append(
-            qsplit240_replay.add_eval_cache_dependency_to_training_step(training_step, cache_eval_datasets_step)
+        training_step = qsplit240_replay.add_eval_cache_dependency_to_training_step(
+            training_step, cache_eval_datasets_step
         )
+        if args.skip_eval_harness:
+            training_step = qsplit240_replay.skip_eval_harness_for_training_step(training_step)
+        training_steps.append(training_step)
 
     results_step = create_manifest_results_step(
         name_prefix=execution_name_prefix,

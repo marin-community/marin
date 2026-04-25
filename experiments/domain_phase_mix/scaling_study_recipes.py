@@ -229,8 +229,8 @@ SCALE_SPECS = {
         model_config=regmix_1_2b_proxy,
         optimizer_config=regmix_1_2b_muonh_base,
         tpu_type="v5p-64",
-        tpu_regions=DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
-        tpu_zone=None,
+        tpu_regions=("us-east5",),
+        tpu_zone="us-east5-a",
     ),
 }
 

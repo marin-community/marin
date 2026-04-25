@@ -31,6 +31,11 @@ from typing import Any
 import fsspec
 import pandas as pd
 
+from experiments.domain_phase_mix.launch_baseline_scaling_cell import (
+    BaselineScalingMethod,
+    baseline_scaling_source_experiment,
+    build_baseline_scaling_run_spec,
+)
 from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_300m_6b import (
     NAME as PENALTY_300M_SOURCE_EXPERIMENT,
 )
@@ -69,7 +74,9 @@ from experiments.domain_phase_mix.scaling_study_recipes import (
     ScalingStudyCell,
     ScalingStudyCellStatus,
     ScalingStudyPath,
+    ScalingStudyScale,
     build_strong_tier_cells,
+    resolve_scale_spec,
 )
 from experiments.domain_phase_mix.two_phase_many_genericfamily_penalty_raw_optima_baselines import (
     genericfamily_penalty_raw_optimum_summaries,
@@ -248,6 +255,14 @@ FAMILY_METADATA = {
         objective_metric=OBJECTIVE_METRIC,
         resubmit_supported=True,
     ),
+    "baseline_scaling_cells": FamilyMetadata(
+        family="baseline_scaling_cells",
+        scale="mixed",
+        launcher_module="experiments.domain_phase_mix.launch_baseline_scaling_cell",
+        resubmit_scope="run",
+        objective_metric=OBJECTIVE_METRIC,
+        resubmit_supported=True,
+    ),
     "regmix_raw_subset_optima": FamilyMetadata(
         family="regmix_raw_subset_optima",
         scale="60m_1p2b",
@@ -338,7 +353,8 @@ TRACKED_LIVE_JOBS = (
             "submit remotely via iris job run --job-name dm-grp-no-l2-1-2b-24b-<timestamp> "
             "--cpu 1 --memory 2GB --extra marin:tpu -- python "
             "experiments/domain_phase_mix/launch_two_phase_many_genericfamily_penalty_raw_optima_1_2b_24b.py "
-            "--variants power_family_penalty_no_l2 --max-concurrent 1"
+            "--variants power_family_penalty_no_l2 --tpu-type v5p-64 --tpu-region us-east5 "
+            "--tpu-zone us-east5-a --perplexity-only --max-concurrent 1"
         ),
     ),
     LiveJobSpec(
@@ -386,7 +402,9 @@ TRACKED_LIVE_JOBS = (
         label="1.2b-pilot",
         family="pilot_1_2b",
         launcher_module="experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot",
-        resubmit_hint="--max-concurrent 3",
+        resubmit_hint=(
+            "--tpu-type v5p-64 --tpu-region us-east5 --tpu-zone us-east5-a " "--perplexity-only --max-concurrent 3"
+        ),
     ),
     LiveJobSpec(
         job_id="/calvinxu/dm-stratified-520m-10p4b-20260414-232528",
@@ -400,7 +418,9 @@ TRACKED_LIVE_JOBS = (
         label="strat-1.2b",
         family="stratified_1_2b",
         launcher_module="experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline",
-        resubmit_hint="--scale 1_2b_24b",
+        resubmit_hint=(
+            "--scale 1_2b_24b --tpu-type v5p-64 --tpu-region us-east5 " "--tpu-zone us-east5-a --perplexity-only"
+        ),
     ),
     *tuple(
         LiveJobSpec(
@@ -1012,9 +1032,98 @@ def _penalty1_2b_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
         summaries=summaries,
         resubmit_hint_fn=lambda summary: (
             f"--variants {summary['variant_name']}",
-            f"--variants {summary['variant_name']} --tpu-type v5p-64 --tpu-region us-east5 --max-concurrent 1",
+            f"--variants {summary['variant_name']} --tpu-type v5p-64 --tpu-region us-east5 "
+            "--tpu-zone us-east5-a --perplexity-only --max-concurrent 1",
         ),
     )
+
+
+BASELINE_SCALING_REGISTRY_CELLS = (
+    (BaselineScalingMethod.GRP_NO_L2, ScalingStudyScale.REGMIX_130M_2P6B),
+    (BaselineScalingMethod.OLMIX, ScalingStudyScale.REGMIX_130M_2P6B),
+    (BaselineScalingMethod.OLMIX, ScalingStudyScale.REGMIX_520M_10P4B),
+)
+
+
+def _baseline_scaling_resubmit_hint(*, method: BaselineScalingMethod, scale: ScalingStudyScale) -> tuple[str, str]:
+    spec = resolve_scale_spec(scale)
+    selector = f"--method {method.value} --scale {scale.value}"
+    parts = [
+        selector,
+        f"--tpu-type {spec.tpu_type}",
+        "--tpu-region us-east5",
+        "--perplexity-only",
+        "--max-concurrent 1",
+    ]
+    if spec.tpu_zone is not None:
+        parts.insert(3, f"--tpu-zone {spec.tpu_zone}")
+    return selector, " ".join(parts)
+
+
+def _baseline_scaling_cell_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    family = "baseline_scaling_cells"
+    metadata = FAMILY_METADATA[family]
+    logical_rows: list[dict[str, Any]] = []
+    all_attempts: list[dict[str, Any]] = []
+    for method, scale in BASELINE_SCALING_REGISTRY_CELLS:
+        scale_spec = resolve_scale_spec(scale)
+        run_spec = build_baseline_scaling_run_spec(method=method, scale=scale)
+        source_experiment = baseline_scaling_source_experiment(method, scale)
+        registry_id = f"{family}:{source_experiment}:{run_spec.run_name}"
+        attempts = _scan_checkpoint_attempts(
+            family=family,
+            source_experiment=source_experiment,
+            run_name=run_spec.run_name,
+            run_id=run_spec.run_id,
+            objective_metric=metadata.objective_metric,
+            registry_id=registry_id,
+        )
+        all_attempts.extend(attempts)
+        canonical = _canonical_attempt(attempts)
+        selector, resubmit_hint = _baseline_scaling_resubmit_hint(method=method, scale=scale)
+        logical_rows.append(
+            {
+                "registry_id": registry_id,
+                "family": family,
+                "scale": scale.value,
+                "source_experiment": source_experiment,
+                "source_name_prefix": source_experiment,
+                "run_id": run_spec.run_id,
+                "run_name": run_spec.run_name,
+                "wandb_run_id": None if canonical is None else canonical["wandb_run_id"],
+                "checkpoint_root": None if canonical is None else canonical["checkpoint_root"],
+                "objective_metric": metadata.objective_metric,
+                "objective_metric_value": None if canonical is None else canonical["objective_metric_value"],
+                "canonical_attempt_root": None if canonical is None else canonical["attempt_root"],
+                "attempt_count": len(attempts),
+                "successful_attempt_count": sum(1 for attempt in attempts if attempt["executor_status"] == "SUCCESS"),
+                "launcher_module": metadata.launcher_module,
+                "resubmit_supported": metadata.resubmit_supported,
+                "resubmit_scope": metadata.resubmit_scope,
+                "resubmit_selector": selector,
+                "resubmit_hint": resubmit_hint,
+                "logical_status": (
+                    "planned" if canonical is None else _normalize_logical_status(str(canonical["executor_status"]))
+                ),
+                "source_status": None if canonical is None else canonical["executor_status"],
+                "experiment_budget": run_spec.experiment_budget,
+                "target_budget": run_spec.target_budget,
+                "target_budget_multiplier": run_spec.target_budget_multiplier,
+                "num_train_steps": run_spec.num_train_steps,
+                "batch_size": scale_spec.batch_size,
+                "seq_len": scale_spec.seq_len,
+                "tpu_type": scale_spec.tpu_type,
+                "tpu_regions": ",".join(scale_spec.tpu_regions),
+                "tpu_zone": scale_spec.tpu_zone,
+                "model_family": scale_spec.model_family,
+                "candidate_run_id": run_spec.candidate_run_id,
+                "candidate_run_name": run_spec.candidate_run_name,
+                "candidate_source_experiment": run_spec.candidate_source_experiment,
+                "study_panel": "baseline_scaling",
+                "study_cohort": run_spec.cohort,
+            }
+        )
+    return pd.DataFrame(logical_rows), all_attempts
 
 
 def _no_l2_subset_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
@@ -1501,6 +1610,7 @@ def build_registry(
         _penalty300m_rows,
         _penalty520m_rows,
         _penalty1_2b_rows,
+        _baseline_scaling_cell_rows,
         _no_l2_subset_rows,
         _olmix_subset_rows,
         _metric_objective_raw_optima_rows,
