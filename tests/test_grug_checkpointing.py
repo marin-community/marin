@@ -27,14 +27,13 @@ def test_restore_prefers_highest_step_over_latest_timestamp(tmp_path: Path):
 
     attempted: list[str] = []
 
-    def fake_load(state, path, *, discover_latest, axis_mapping, mesh, allow_partial):
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
         attempted.append(path)
-        assert discover_latest is False
         return {"loaded_from": path}
 
     loaded = restore_grug_state_from_checkpoint(
         {"state": "init"},
-        checkpoint_path=str(checkpoint_root),
+        checkpoint_search_paths=[str(checkpoint_root)],
         load_checkpoint_setting=True,
         mesh=None,
         allow_partial=False,
@@ -52,16 +51,15 @@ def test_restore_falls_back_to_older_checkpoint_when_latest_fails(tmp_path: Path
 
     attempted: list[str] = []
 
-    def fake_load(state, path, *, discover_latest, axis_mapping, mesh, allow_partial):
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
         attempted.append(path)
-        assert discover_latest is False
         if path.endswith("step-100"):
             raise FileNotFoundError(path)
         return {"loaded_from": path}
 
     loaded = restore_grug_state_from_checkpoint(
         {"state": "init"},
-        checkpoint_path=str(checkpoint_root),
+        checkpoint_search_paths=[str(checkpoint_root)],
         load_checkpoint_setting=None,
         mesh=None,
         allow_partial=False,
@@ -80,18 +78,100 @@ def test_restore_raises_when_required_and_no_checkpoint_loads(tmp_path: Path):
     checkpoint_root = tmp_path / "checkpoints"
     _write_checkpoint_metadata(checkpoint_root / "step-100", step=100, timestamp="2026-03-17T10:00:00")
 
-    def fake_load(state, path, *, discover_latest, axis_mapping, mesh, allow_partial):
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
         raise FileNotFoundError(path)
 
     with pytest.raises(FileNotFoundError, match="Could not load a checkpoint"):
         restore_grug_state_from_checkpoint(
             {"state": "init"},
-            checkpoint_path=str(checkpoint_root),
+            checkpoint_search_paths=[str(checkpoint_root)],
             load_checkpoint_setting=True,
             mesh=None,
             allow_partial=False,
             _load_fn=fake_load,
         )
+
+
+def test_restore_discovers_candidates_across_search_paths(tmp_path: Path):
+    permanent_root = tmp_path / "checkpoints"
+    temp_root = tmp_path / "checkpoints-temp"
+
+    _write_checkpoint_metadata(permanent_root / "step-100", step=100, timestamp="2026-03-17T00:00:00")
+    _write_checkpoint_metadata(temp_root / "step-150", step=150, timestamp="2026-03-17T06:00:00")
+
+    attempted: list[str] = []
+
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
+        attempted.append(path)
+        return {"loaded_from": path}
+
+    loaded = restore_grug_state_from_checkpoint(
+        {"state": "init"},
+        checkpoint_search_paths=[str(permanent_root), str(temp_root)],
+        load_checkpoint_setting=True,
+        mesh=None,
+        allow_partial=False,
+        _load_fn=fake_load,
+    )
+
+    # step-150 from temp root should be preferred (highest step).
+    assert attempted == [str(temp_root / "step-150")]
+    assert loaded == {"loaded_from": str(temp_root / "step-150")}
+
+
+def test_restore_respects_explicit_checkpoint_path_as_single_search_path(tmp_path: Path):
+    permanent_root = tmp_path / "checkpoints"
+    temp_root = tmp_path / "checkpoints-temp"
+    explicit_checkpoint = permanent_root / "step-100"
+
+    _write_checkpoint_metadata(explicit_checkpoint, step=100, timestamp="2026-03-17T00:00:00")
+    _write_checkpoint_metadata(temp_root / "step-150", step=150, timestamp="2026-03-17T06:00:00")
+
+    attempted: list[str] = []
+
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
+        attempted.append(path)
+        return {"loaded_from": path}
+
+    loaded = restore_grug_state_from_checkpoint(
+        {"state": "init"},
+        checkpoint_search_paths=[str(explicit_checkpoint)],
+        load_checkpoint_setting=True,
+        mesh=None,
+        allow_partial=False,
+        _load_fn=fake_load,
+    )
+
+    assert attempted == [str(explicit_checkpoint)]
+    assert loaded == {"loaded_from": str(explicit_checkpoint)}
+
+
+def test_restore_falls_back_from_temp_to_permanent(tmp_path: Path):
+    permanent_root = tmp_path / "checkpoints"
+    temp_root = tmp_path / "checkpoints-temp"
+
+    _write_checkpoint_metadata(permanent_root / "step-100", step=100, timestamp="2026-03-17T00:00:00")
+    _write_checkpoint_metadata(temp_root / "step-150", step=150, timestamp="2026-03-17T06:00:00")
+
+    attempted: list[str] = []
+
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
+        attempted.append(path)
+        if "step-150" in path:
+            raise FileNotFoundError(path)
+        return {"loaded_from": path}
+
+    loaded = restore_grug_state_from_checkpoint(
+        {"state": "init"},
+        checkpoint_search_paths=[str(permanent_root), str(temp_root)],
+        load_checkpoint_setting=None,
+        mesh=None,
+        allow_partial=False,
+        _load_fn=fake_load,
+    )
+
+    # Should fall back to step-100 from permanent root
+    assert loaded == {"loaded_from": str(permanent_root / "step-100")}
 
 
 def test_restore_supports_legacy_wrapped_and_current_checkpoint_formats(tmp_path: Path):
@@ -112,7 +192,7 @@ def test_restore_supports_legacy_wrapped_and_current_checkpoint_formats(tmp_path
 
     loaded_legacy = restore_grug_state_from_checkpoint(
         template_state,
-        checkpoint_path=str(checkpoint_root),
+        checkpoint_search_paths=[str(checkpoint_root)],
         load_checkpoint_setting=True,
         mesh=None,
         allow_partial=False,
@@ -125,7 +205,7 @@ def test_restore_supports_legacy_wrapped_and_current_checkpoint_formats(tmp_path
 
     loaded_current = restore_grug_state_from_checkpoint(
         template_state,
-        checkpoint_path=str(checkpoint_root),
+        checkpoint_search_paths=[str(checkpoint_root)],
         load_checkpoint_setting=True,
         mesh=None,
         allow_partial=False,

@@ -12,7 +12,9 @@ from threading import Thread
 
 import pytest
 from draccus.utils import Dataclass
+from fray.types import ResourceConfig
 from marin.execution import THIS_OUTPUT_PATH
+from marin.evaluation.perplexity_gap import GapFinderModelConfig, default_model_perplexity_gap, raw_text_dataset
 from marin.execution.executor import (
     Executor,
     ExecutorStep,
@@ -149,6 +151,42 @@ def test_status_file_reads_legacy_format(tmp_path):
 
     status_file = StatusFile(str(output_dir), worker_id="legacy-reader")
     assert status_file.status == "SUCCESS"
+
+
+def test_perplexity_gap_step_hash_changes_when_tokenizer_changes():
+    base_kwargs = dict(
+        name="marin-vs-qwen",
+        model_a=GapFinderModelConfig(
+            checkpoint_path="marin-community/marin-8b-base",
+            checkpoint_is_hf=True,
+            tokenizer="meta-llama/Llama-3.1-8B",
+        ),
+        datasets={"eval": raw_text_dataset("gs://example-bucket/eval.jsonl")},
+        resource_config=ResourceConfig.with_tpu("v5p-8", regions=["us-central1"]),
+    )
+    step_a = default_model_perplexity_gap(
+        **base_kwargs,
+        model_b=GapFinderModelConfig(
+            checkpoint_path="Qwen/Qwen3-8B-Base",
+            checkpoint_is_hf=True,
+            tokenizer="Qwen/Qwen3-8B",
+        ),
+    )
+    step_b = default_model_perplexity_gap(
+        **base_kwargs,
+        model_b=GapFinderModelConfig(
+            checkpoint_path="Qwen/Qwen3-8B-Base",
+            checkpoint_is_hf=True,
+            tokenizer="meta-llama/Llama-3.1-8B",
+        ),
+    )
+
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        executor = create_executor(temp_dir)
+        executor.compute_version(step_a, is_pseudo_dep=False)
+        executor.compute_version(step_b, is_pseudo_dep=False)
+
+        assert executor.output_paths[step_a] != executor.output_paths[step_b]
 
 
 def test_force_run_failed():

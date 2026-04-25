@@ -1,3 +1,4 @@
+from . import job_pb2 as _job_pb2
 from . import time_pb2 as _time_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
@@ -405,24 +406,20 @@ class CoreweaveControllerConfig(_message.Message):
     def __init__(self, port: _Optional[int] = ..., service_name: _Optional[str] = ..., scale_group: _Optional[str] = ...) -> None: ...
 
 class ControllerVmConfig(_message.Message):
-    __slots__ = ("image", "worker_timeout", "heartbeat_failure_threshold", "use_split_heartbeat", "gcp", "manual", "local", "coreweave")
+    __slots__ = ("image", "worker_timeout", "gcp", "manual", "local", "coreweave")
     IMAGE_FIELD_NUMBER: _ClassVar[int]
     WORKER_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
-    HEARTBEAT_FAILURE_THRESHOLD_FIELD_NUMBER: _ClassVar[int]
-    USE_SPLIT_HEARTBEAT_FIELD_NUMBER: _ClassVar[int]
     GCP_FIELD_NUMBER: _ClassVar[int]
     MANUAL_FIELD_NUMBER: _ClassVar[int]
     LOCAL_FIELD_NUMBER: _ClassVar[int]
     COREWEAVE_FIELD_NUMBER: _ClassVar[int]
     image: str
     worker_timeout: _time_pb2.Duration
-    heartbeat_failure_threshold: int
-    use_split_heartbeat: bool
     gcp: GcpControllerConfig
     manual: ManualControllerConfig
     local: LocalControllerConfig
     coreweave: CoreweaveControllerConfig
-    def __init__(self, image: _Optional[str] = ..., worker_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_failure_threshold: _Optional[int] = ..., use_split_heartbeat: _Optional[bool] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ..., local: _Optional[_Union[LocalControllerConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweaveControllerConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, image: _Optional[str] = ..., worker_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ..., local: _Optional[_Union[LocalControllerConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweaveControllerConfig, _Mapping]] = ...) -> None: ...
 
 class AutoscalerConfig(_message.Message):
     __slots__ = ("evaluation_interval", "scale_up_delay", "scale_down_delay", "startup_grace_period", "heartbeat_grace_period")
@@ -512,8 +509,18 @@ class KubernetesProviderConfig(_message.Message):
     controller_address: str
     def __init__(self, namespace: _Optional[str] = ..., kubeconfig: _Optional[str] = ..., default_image: _Optional[str] = ..., colocation_topology_key: _Optional[str] = ..., service_account: _Optional[str] = ..., host_network: _Optional[bool] = ..., cache_dir: _Optional[str] = ..., controller_address: _Optional[str] = ...) -> None: ...
 
+class UserBudgetTier(_message.Message):
+    __slots__ = ("user_ids", "budget_limit", "max_band")
+    USER_IDS_FIELD_NUMBER: _ClassVar[int]
+    BUDGET_LIMIT_FIELD_NUMBER: _ClassVar[int]
+    MAX_BAND_FIELD_NUMBER: _ClassVar[int]
+    user_ids: _containers.RepeatedScalarFieldContainer[str]
+    budget_limit: int
+    max_band: _job_pb2.PriorityBand
+    def __init__(self, user_ids: _Optional[_Iterable[str]] = ..., budget_limit: _Optional[int] = ..., max_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ...) -> None: ...
+
 class IrisClusterConfig(_message.Message):
-    __slots__ = ("name", "platform", "defaults", "storage", "controller", "scale_groups", "auth", "kubernetes_provider", "worker_provider")
+    __slots__ = ("name", "platform", "defaults", "storage", "controller", "scale_groups", "auth", "kubernetes_provider", "worker_provider", "user_budgets")
     class ScaleGroupsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -530,6 +537,7 @@ class IrisClusterConfig(_message.Message):
     AUTH_FIELD_NUMBER: _ClassVar[int]
     KUBERNETES_PROVIDER_FIELD_NUMBER: _ClassVar[int]
     WORKER_PROVIDER_FIELD_NUMBER: _ClassVar[int]
+    USER_BUDGETS_FIELD_NUMBER: _ClassVar[int]
     name: str
     platform: PlatformConfig
     defaults: DefaultsConfig
@@ -539,4 +547,5 @@ class IrisClusterConfig(_message.Message):
     auth: AuthConfig
     kubernetes_provider: KubernetesProviderConfig
     worker_provider: WorkerProviderConfig
-    def __init__(self, name: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., defaults: _Optional[_Union[DefaultsConfig, _Mapping]] = ..., storage: _Optional[_Union[StorageConfig, _Mapping]] = ..., controller: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ..., auth: _Optional[_Union[AuthConfig, _Mapping]] = ..., kubernetes_provider: _Optional[_Union[KubernetesProviderConfig, _Mapping]] = ..., worker_provider: _Optional[_Union[WorkerProviderConfig, _Mapping]] = ...) -> None: ...
+    user_budgets: _containers.RepeatedCompositeFieldContainer[UserBudgetTier]
+    def __init__(self, name: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., defaults: _Optional[_Union[DefaultsConfig, _Mapping]] = ..., storage: _Optional[_Union[StorageConfig, _Mapping]] = ..., controller: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ..., auth: _Optional[_Union[AuthConfig, _Mapping]] = ..., kubernetes_provider: _Optional[_Union[KubernetesProviderConfig, _Mapping]] = ..., worker_provider: _Optional[_Union[WorkerProviderConfig, _Mapping]] = ..., user_budgets: _Optional[_Iterable[_Union[UserBudgetTier, _Mapping]]] = ...) -> None: ...

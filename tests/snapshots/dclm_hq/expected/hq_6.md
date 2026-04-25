@@ -3,7 +3,9 @@
 # Thinking about style sheets
 
 Kevin Hughes (*kevinh@eit.COM*)  
-*Tue, 2 May 1995 04:07:10 +0500* * **Messages sorted by:** \[ date \]\[ thread \]\[ subject \]\[ author \]
+*Tue, 2 May 1995 04:07:10 +0500* 
+
+* **Messages sorted by:** \[ date \]\[ thread \]\[ subject \]\[ author \]
 * **Next message:** Robert A. Mesa: "Print Form Code"
 * **Previous message:** H&kon W Lie: "Parsability (re: Thinking about style sheets)"
 
@@ -619,7 +621,9 @@ WWW-HTML Apr-Jun 1995: Thinking about style sheets
 # Thinking about style sheets
 
 Kevin Hughes (*kevinh@eit.COM*)  
-*Tue, 2 May 1995 04:07:10 +0500* * **Messages sorted by:** \[ date \]\[ thread \]\[ subject \]\[ author \]
+*Tue, 2 May 1995 04:07:10 +0500* 
+
+* **Messages sorted by:** \[ date \]\[ thread \]\[ subject \]\[ author \]
 * **Next message:** Robert A. Mesa: "Print Form Code"
 * **Previous message:** H&kon W Lie: "Parsability (re: Thinking about style sheets)"
 
@@ -1235,7 +1239,9 @@ WWW-HTML Apr-Jun 1995: Thinking about style sheets
 # Thinking about style sheets
 
 Kevin Hughes (*kevinh@eit.COM*)  
-*Tue, 2 May 1995 04:07:10 +0500* * **Messages sorted by:** \[ date \]\[ thread \]\[ subject \]\[ author \]
+*Tue, 2 May 1995 04:07:10 +0500* 
+
+* **Messages sorted by:** \[ date \]\[ thread \]\[ subject \]\[ author \]
 * **Next message:** Robert A. Mesa: "Print Form Code"
 * **Previous message:** H&kon W Lie: "Parsability (re: Thinking about style sheets)"
 

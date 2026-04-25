@@ -128,6 +128,146 @@ def test_merge_split_encodings(local_gpt2_marin_tokenizer):
     assert short_out == reg_out
 
 
+# ---------------------------------------------------------------------------
+# BOS / EOS handling — regression tests for #5034
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def marin_tokenizer_with_bos():
+    """Real marin-tokenizer (Llama-3 BPE, BOS-only TemplateProcessing post-processor)."""
+    try:
+        return load_tokenizer("marin-community/marin-tokenizer")
+    except Exception as e:
+        pytest.skip(f"Cannot load marin-community/marin-tokenizer: {e}")
+
+
+def test_batch_tokenizer_prepends_bos(marin_tokenizer_with_bos):
+    """Every doc in the output must start with BOS when enforce_bos=True.
+
+    Regression test for https://github.com/marin-community/marin/issues/5034:
+    BatchTokenizer silently stopped prepending BOS after the kitoken backend
+    migration because the init probe ran with add_special_tokens=True but the
+    hot-path encode_batch did not, inverting the prepend decision.
+    """
+    tokenizer = marin_tokenizer_with_bos
+    bos_id = tokenizer.bos_token_id
+    assert bos_id is not None
+
+    bt = BatchTokenizer(tokenizer, enforce_bos=True, enforce_eos=False)
+    batch = [{"text": "hello world"}, {"text": "Anonymous 01/04/19 posted"}, {"text": "x"}]
+    out = bt(batch)
+
+    for i, item in enumerate(out):
+        ids = item["input_ids"]
+        assert ids[0] == bos_id, f"doc {i}: expected BOS at position 0, got {ids[:5]}"
+        assert ids.count(bos_id) == 1, f"doc {i}: expected exactly one BOS, got {ids.count(bos_id)}"
+
+
+def test_batch_tokenizer_appends_eos(marin_tokenizer_with_bos):
+    """Every doc must end with EOS when enforce_eos=True."""
+    tokenizer = marin_tokenizer_with_bos
+    eos_id = tokenizer.eos_token_id
+    assert eos_id is not None
+
+    bt = BatchTokenizer(tokenizer, enforce_bos=False, enforce_eos=True)
+    batch = [{"text": "hello world"}, {"text": "another doc"}]
+    out = bt(batch)
+
+    for i, item in enumerate(out):
+        ids = item["input_ids"]
+        assert ids[-1] == eos_id, f"doc {i}: expected EOS at end, got {ids[-5:]}"
+
+
+def test_batch_tokenizer_bos_disabled(marin_tokenizer_with_bos):
+    """With enforce_bos=False, doc must not start with BOS even though the tokenizer has one."""
+    tokenizer = marin_tokenizer_with_bos
+    bos_id = tokenizer.bos_token_id
+
+    bt = BatchTokenizer(tokenizer, enforce_bos=False, enforce_eos=False)
+    out = bt([{"text": "hello world"}])
+    ids = out[0]["input_ids"]
+    assert bos_id not in ids
+
+
+def test_batch_tokenizer_output_equals_direct_encode_plus_bos(marin_tokenizer_with_bos):
+    """BatchTokenizer(enforce_bos=True, enforce_eos=False) must equal [BOS] + encode(text)."""
+    tokenizer = marin_tokenizer_with_bos
+    bos_id = tokenizer.bos_token_id
+
+    bt = BatchTokenizer(tokenizer, enforce_bos=True, enforce_eos=False)
+    texts = ["hello world", "Anonymous 01/04/19", "The quick brown fox", "  leading space"]
+    out = bt([{"text": t} for t in texts])
+
+    for t, item in zip(texts, out):
+        expected = [bos_id] + tokenizer.encode(t, add_special_tokens=False)
+        assert item["input_ids"] == expected, f"text={t!r}: got {item['input_ids'][:10]}, expected {expected[:10]}"
+
+
+def test_batch_tokenizer_metadata_reflects_user_intent(marin_tokenizer_with_bos):
+    """metadata['append_bos'/'append_eos'] must track user intent, not internal detail.
+
+    Post-migration caches stored append_bos=False despite enforce_bos=True; this
+    invariant makes the metadata field a reliable signal for cache comparability.
+    """
+    tokenizer = marin_tokenizer_with_bos
+
+    bt_on = BatchTokenizer(tokenizer, enforce_bos=True, enforce_eos=True)
+    assert bt_on.metadata["append_bos"] is True
+    assert bt_on.metadata["append_eos"] is True
+
+    bt_off = BatchTokenizer(tokenizer, enforce_bos=False, enforce_eos=False)
+    assert bt_off.metadata["append_bos"] is False
+    assert bt_off.metadata["append_eos"] is False
+
+
+def test_batch_tokenizer_bos_survives_long_string_split(marin_tokenizer_with_bos):
+    """Long-string workaround must not duplicate or drop BOS across chunk boundaries."""
+    tokenizer = marin_tokenizer_with_bos
+    bos_id = tokenizer.bos_token_id
+
+    lorem = (
+        "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et "
+        "dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip "
+        "ex ea commodo consequat."
+    )
+
+    bt_split = BatchTokenizer(
+        tokenizer,
+        enforce_bos=True,
+        enforce_eos=False,
+        _workaround_len=len(lorem) // 3,
+        long_string_workaround=True,
+    )
+    bt_whole = BatchTokenizer(
+        tokenizer,
+        enforce_bos=True,
+        enforce_eos=False,
+        _workaround_len=50000,
+    )
+    batch = [{"text": lorem}]
+
+    split_out = bt_split(batch)
+    whole_out = bt_whole(batch)
+
+    assert split_out == whole_out
+    ids = split_out[0]["input_ids"]
+    assert ids[0] == bos_id
+    assert ids.count(bos_id) == 1
+
+
+def test_batch_tokenizer_no_bos_when_tokenizer_has_none(local_gpt2_marin_tokenizer):
+    """Tokenizer without a BOS id: enforce_bos=True is a no-op (and doesn't crash)."""
+    tokenizer = local_gpt2_marin_tokenizer
+    assert tokenizer.bos_token_id is None
+
+    bt = BatchTokenizer(tokenizer, enforce_bos=True, enforce_eos=False)
+    assert bt.metadata["append_bos"] is False
+
+    out = bt([{"text": "hello world"}])
+    assert len(out[0]["input_ids"]) > 0
+
+
 def test_prebuilt_cache_with_loss_weights(tmp_path):
     records = [
         {"input_ids": [1, 2, 3, 4], "loss_weights": [1.0, 0.5, 0.0, 1.0]},
@@ -421,12 +561,11 @@ def assert_loss_weight_matches_all_assistants(example, tokenizer):
     assert np.array_equal(loss_weight, expected), "loss_weight does not match assistant spans"
 
 
-@pytest.mark.ray
 def test_chat_dataset_build_and_pack(dummy_chat_data):
     with tempfile.TemporaryDirectory() as tmpdir:
         cache_dir = tmpdir
 
-        tokenizer = load_tokenizer("stanford-crfm/marin-tokenizer")
+        tokenizer = load_tokenizer("marin-community/marin-tokenizer")
 
         component = DatasetComponent(
             source=UrlDatasetSourceConfig(train_urls=[dummy_chat_data]),
@@ -454,11 +593,14 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
         assert sample["assistant_masks"].shape == sample["input_ids"].shape
         assert 8 < sample["assistant_masks"].sum() <= 10
         # assert sample["input_ids"].shape[0] > 20
-        assert (
-            tokenizer.decode(sample["input_ids"], skip_special_tokens=False)
-            == "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\nHello!<|eot_id|>\n<|start_header_id|>assistant"
-            "<|end_header_id|>\nHi there, how can I help?<|eot_id|>\n"
+        expected_rendered = tokenizer.apply_chat_template(
+            [
+                {"role": "user", "content": "Hello!"},
+                {"role": "assistant", "content": "Hi there, how can I help?"},
+            ],
+            tokenize=False,
         )
+        assert tokenizer.decode(sample["input_ids"], skip_special_tokens=False) == expected_rendered
 
         # now test packing
         Pos = hax.Axis("position", 100)

@@ -28,8 +28,11 @@ from starlette.routing import Mount
 
 from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import AuthInterceptor, NullAuthInterceptor
-from iris.rpc.interceptors import ConcurrencyLimitInterceptor
+from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, ConcurrencyLimitInterceptor, RequestTimingInterceptor
 from iris.rpc.logging_connect import LogServiceWSGIApplication
+from iris.rpc.stats import RpcStatsCollector
+from iris.rpc.stats_connect import StatsServiceWSGIApplication
+from iris.rpc.stats_service import RpcStatsService
 
 # Cap on concurrent FetchLogs RPCs. Each read can fan out into DuckDB scans
 # across hundreds of MB of parquet; allowing unbounded parallelism evicts the
@@ -55,19 +58,37 @@ def build_log_server_asgi(
     *,
     interceptors: Iterable[Interceptor] = (),
     max_concurrent_fetch_logs: int = _MAX_CONCURRENT_FETCH_LOGS,
+    stats_collector: RpcStatsCollector | None = None,
 ) -> Starlette:
     """Build the ASGI app that serves the LogService RPC endpoints.
 
     A ``ConcurrencyLimitInterceptor`` is appended to ``interceptors`` to cap
     parallel ``FetchLogs`` RPCs. Callers override ``max_concurrent_fetch_logs``
     in tests that want to exercise the cap deterministically.
+
+    When ``stats_collector`` is supplied a ``RequestTimingInterceptor`` is
+    inserted into the chain to feed it, and an ``iris.stats.StatsService``
+    endpoint is mounted alongside the LogService so the snapshot can be
+    fetched directly from the log-server process (no proxy yet — operators
+    curl ``/iris.stats.StatsService/GetRpcStats`` against the log-server
+    port).
     """
-    full_interceptors = (
-        *tuple(interceptors),
-        ConcurrencyLimitInterceptor({"FetchLogs": max_concurrent_fetch_logs}),
-    )
-    wsgi_app = LogServiceWSGIApplication(service=service, interceptors=full_interceptors)
-    return Starlette(routes=[Mount(wsgi_app.path, app=WSGIMiddleware(wsgi_app))])
+    chain: list[Interceptor] = list(interceptors)
+    if stats_collector is not None:
+        chain.append(RequestTimingInterceptor(collector=stats_collector))
+    chain.append(ConcurrencyLimitInterceptor({"FetchLogs": max_concurrent_fetch_logs}))
+    log_wsgi_app = LogServiceWSGIApplication(service=service, interceptors=tuple(chain))
+    routes = [Mount(log_wsgi_app.path, app=WSGIMiddleware(log_wsgi_app))]
+    if stats_collector is not None:
+        # Reuse the caller's auth chain (sans timing) so the stats endpoint
+        # is gated the same way as LogService but doesn't pollute its own
+        # numbers with self-reads.
+        stats_wsgi_app = StatsServiceWSGIApplication(
+            service=RpcStatsService(stats_collector),
+            interceptors=tuple(interceptors),
+        )
+        routes.append(Mount(stats_wsgi_app.path, app=WSGIMiddleware(stats_wsgi_app)))
+    return Starlette(routes=routes)
 
 
 def _build_auth_interceptors(signing_key: str | None, strict: bool) -> tuple[Interceptor, ...]:
@@ -109,7 +130,8 @@ def run_log_server(
 
     service = LogServiceImpl(log_dir=log_dir, remote_log_dir=remote_log_dir)
     interceptors = _build_auth_interceptors(signing_key, strict=strict_auth)
-    app = build_log_server_asgi(service, interceptors=interceptors)
+    stats_collector = RpcStatsCollector(slow_threshold_ms=SLOW_RPC_THRESHOLD_MS)
+    app = build_log_server_asgi(service, interceptors=interceptors, stats_collector=stats_collector)
 
     config = uvicorn.Config(
         app,

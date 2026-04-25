@@ -43,7 +43,7 @@ class SliceCacheConfig(TokenizeConfigBase):
     input_config: LmDatasetSourceConfigBase
     num_tokens: int
     cache_path: str = THIS_OUTPUT_PATH
-    tokenizer: str = "stanford-crfm/marin-tokenizer"
+    tokenizer: str = "marin-community/marin-tokenizer"
     seed: int = 42
 
     def as_lm_dataset_source_config(
@@ -201,7 +201,7 @@ def _patch_source_config(
     return dataclasses.replace(input_config, cache_dir=output_path, tags=base_tags + extra_tags)
 
 
-def _slice_cache_in_ray(cfg: SliceCacheConfig):
+def _slice_cache_entrypoint(cfg: SliceCacheConfig):
 
     configure_logging(level=logging.INFO)
     logger.info(f"Starting slice cache with config: {cfg}")
@@ -213,7 +213,7 @@ def slice_cache(
     input_config: LmDatasetSourceConfigBase,
     num_tokens: int,
     seed: int = 42,
-    tokenizer_spec: str = "stanford-crfm/marin-tokenizer",
+    tokenizer_spec: str = "marin-community/marin-tokenizer",
 ) -> ExecutorStep[SliceCacheConfig]:
     """High-level function to slice a Levanter cache.
 
@@ -231,7 +231,7 @@ def slice_cache(
 
     return ExecutorStep(
         name=output_path,
-        fn=_slice_cache_in_ray,
+        fn=_slice_cache_entrypoint,
         config=SliceCacheConfig(
             input_config=input_config,
             num_tokens=num_tokens,

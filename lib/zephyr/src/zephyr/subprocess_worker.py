@@ -16,17 +16,23 @@ via ``execution.ZephyrWorker._execute_shard``.
 
 import logging
 import os
+import re
 import sys
 import threading
+import time
 import traceback
 from contextlib import suppress
-from typing import Any
+from typing import Any, TypeVar
+from collections.abc import Iterator
 
 import cloudpickle
 from rigging.filesystem import open_url
 
+from zephyr import counters
 from zephyr.execution import (
     CounterSnapshot,
+    ZEPHYR_STAGE_BYTES_PROCESSED_KEY,
+    ZEPHYR_STAGE_ITEM_COUNT_KEY,
     _shared_data_path,
     _worker_ctx_var,
     _write_stage_output,
@@ -35,13 +41,31 @@ from zephyr.plan import Scatter, StageContext, run_stage
 
 logger = logging.getLogger(__name__)
 
-
 SUBPROCESS_COUNTER_FLUSH_INTERVAL = 5.0
 """How often the subprocess flushes its counter snapshot to the counter file.
 
 Matches the parent worker's heartbeat interval so each heartbeat reads at most
 one stale snapshot before the next flush lands.
 """
+
+
+T = TypeVar("T")
+
+
+class StatisticsGenerator:
+    """Wraps a generator and counts and sizes yielded items."""
+
+    def __init__(self, stage_name: str) -> None:
+        self._stage_name = stage_name
+
+    def wrap(self, gen: Iterator[T]) -> Iterator[T]:
+        for item in gen:
+            counters.increment(ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=self._stage_name), 1)
+            counters.increment(
+                ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=self._stage_name),
+                sys.getsizeof(item),
+            )
+            yield item
 
 
 class _SubprocessWorkerContext:
@@ -105,6 +129,45 @@ def _periodic_counter_writer(
             logger.warning("Failed to flush counter file to %s", counter_file, exc_info=True)
 
 
+def _periodic_status_logger(
+    stop_event: threading.Event,
+    ctx: _SubprocessWorkerContext,
+    stage_name: str,
+    execution_id: str,
+    shard_idx: int,
+    total_shards: int,
+    monotonic_start: float,
+    interval: float,
+) -> None:
+    """Log ``item_count`` / ``bytes_processed`` rates on a fixed interval (cf. coordinator ``_log_status``).
+
+    Runs in a dedicated daemon thread so logs are attributed to that thread name.
+    Reads ``ctx._counters`` the same way as the counter flusher (shallow copy).
+    """
+    item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
+    byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
+    while not stop_event.wait(timeout=interval):
+        if sys.is_finalizing():
+            return
+        items = ctx._counters.get(item_key, 0)
+        bytes_processed = ctx._counters.get(byte_key, 0)
+        elapsed = time.monotonic() - monotonic_start
+        item_rate = items / elapsed
+        byte_rate = bytes_processed / elapsed
+        logger.info(
+            "[%s] [%s] [%s] shard %d/%d; items=%d (%.1f/s), bytes_processed=%.1fMiB (%.1fMiB/s)",
+            execution_id,
+            stage_name,
+            threading.current_thread().name,
+            shard_idx,
+            total_shards,
+            items,
+            item_rate,
+            bytes_processed / (1024 * 1024),
+            byte_rate / (1024 * 1024),
+        )
+
+
 def execute_shard(task_file: str, result_file: str) -> None:
     """Entry point for subprocess shard execution.
 
@@ -132,16 +195,12 @@ def execute_shard(task_file: str, result_file: str) -> None:
     # a Python traceback on stderr instead of a bare ``returncode < 0``.
     configure_logging(level=logging.INFO)
 
-    ctx = _SubprocessWorkerContext("", "")
     counter_file = f"{result_file}.counters"
     stop_event = threading.Event()
-    flusher = threading.Thread(
-        target=_periodic_counter_writer,
-        args=(stop_event, ctx, counter_file, SUBPROCESS_COUNTER_FLUSH_INTERVAL),
-        daemon=True,
-        name="zephyr-subprocess-counter-flusher",
-    )
+    flusher: threading.Thread | None = None
+    status_logger: threading.Thread | None = None
     result_or_error: Any
+    ctx: _SubprocessWorkerContext | None = None
     try:
         with open(task_file, "rb") as f:
             task, chunk_prefix, execution_id = cloudpickle.load(f)
@@ -149,7 +208,32 @@ def execute_shard(task_file: str, result_file: str) -> None:
         ctx = _SubprocessWorkerContext(chunk_prefix, execution_id)
         _worker_ctx_var.set(ctx)
 
+        shard_monotonic_start = time.monotonic()
+
+        flusher = threading.Thread(
+            target=_periodic_counter_writer,
+            args=(stop_event, ctx, counter_file, SUBPROCESS_COUNTER_FLUSH_INTERVAL),
+            daemon=True,
+            name="zephyr-subprocess-counter-flusher",
+        )
         flusher.start()
+
+        status_logger = threading.Thread(
+            target=_periodic_status_logger,
+            args=(
+                stop_event,
+                ctx,
+                task.stage_name,
+                execution_id,
+                task.shard_idx,
+                task.total_shards,
+                shard_monotonic_start,
+                SUBPROCESS_COUNTER_FLUSH_INTERVAL,
+            ),
+            daemon=True,
+            name="zephyr-subprocess-status-logger",
+        )
+        status_logger.start()
 
         stage_ctx = StageContext(
             shard=task.shard,
@@ -158,12 +242,16 @@ def execute_shard(task_file: str, result_file: str) -> None:
             aux_shards=task.aux_shards,
         )
 
-        stage_dir = f"{chunk_prefix}/{execution_id}/{task.stage_name}"
+        # Sanitize for use as a path component: replace non-alphanumeric runs with '-'
+        output_stage_name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", task.stage_name).strip("-")
+        stage_dir = f"{chunk_prefix}/{execution_id}/{output_stage_name}"
         external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
         scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
 
+        output_counter = StatisticsGenerator(task.stage_name)
+
         result_or_error = _write_stage_output(
-            run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir),
+            output_counter.wrap(run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir)),
             source_shard=task.shard_idx,
             stage_dir=stage_dir,
             shard_idx=task.shard_idx,
@@ -176,18 +264,19 @@ def execute_shard(task_file: str, result_file: str) -> None:
         # at the subprocess origin. Attach the formatted traceback as a note
         # — ``__notes__`` survives pickling and Python prints it inline when
         # the exception eventually propagates.
-        import traceback
-
         logger.exception("Subprocess shard execution failed")
         e.add_note(f"--- subprocess traceback ---\n{traceback.format_exc().rstrip()}")
         result_or_error = e
     finally:
         stop_event.set()
-        if flusher.is_alive():
+        if flusher is not None and flusher.is_alive():
             flusher.join(timeout=2.0)
+        if status_logger is not None and status_logger.is_alive():
+            status_logger.join(timeout=2.0)
 
     with open(result_file, "wb") as f:
-        cloudpickle.dump((result_or_error, dict(ctx._counters)), f)
+        counters_out = dict(ctx._counters) if ctx is not None else {}
+        cloudpickle.dump((result_or_error, counters_out), f)
 
 
 def main() -> None:

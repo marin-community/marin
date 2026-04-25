@@ -7,12 +7,19 @@ These tests verify the RPC contract (input -> output) of the ControllerServiceIm
 State changes are verified via RPC calls rather than internal state inspection.
 """
 
+from datetime import date, timedelta
+
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
-from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.service import (
+    FEATURE_INTRODUCTION_DATE,
+    FRESHNESS_WINDOW,
+    ControllerServiceImpl,
+    _check_client_freshness,
+)
 from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.transitions import (
@@ -47,12 +54,14 @@ def _register_worker(state: ControllerTransitions, worker_id: WorkerId) -> None:
         memory_bytes=16 * 1024**3,
         disk_bytes=100 * 1024**3,
     )
-    state.register_or_refresh_worker(
-        worker_id=worker_id,
-        address=f"{worker_id}:8080",
-        metadata=metadata,
-        ts=Timestamp.now(),
-    )
+    with state._store.transaction() as cur:
+        state.register_or_refresh_worker(
+            cur,
+            worker_id=worker_id,
+            address=f"{worker_id}:8080",
+            metadata=metadata,
+            ts=Timestamp.now(),
+        )
 
 
 def _set_job_state(state: ControllerTransitions, job_id: JobName, state_value: int) -> None:
@@ -70,22 +79,27 @@ def _assign_and_transition(
     *,
     error: str | None = None,
 ) -> None:
-    state.queue_assignments([Assignment(task_id=task_id, worker_id=worker_id)])
-    state.apply_task_updates(
-        HeartbeatApplyRequest(
-            worker_id=worker_id,
-            worker_resource_snapshot=None,
-            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
-        )
-    )
-    if target_state != job_pb2.TASK_STATE_RUNNING:
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=worker_id)])
+    with state._store.transaction() as cur:
         state.apply_task_updates(
+            cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
                 worker_resource_snapshot=None,
-                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=target_state, error=error)],
-            )
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+            ),
         )
+    if target_state != job_pb2.TASK_STATE_RUNNING:
+        with state._store.transaction() as cur:
+            state.apply_task_updates(
+                cur,
+                HeartbeatApplyRequest(
+                    worker_id=worker_id,
+                    worker_resource_snapshot=None,
+                    updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=target_state, error=error)],
+                ),
+            )
 
 
 @pytest.fixture
@@ -363,6 +377,29 @@ def test_get_job_status_returns_status(service):
 
     assert response.job.job_id == JobName.root("test-user", "test-job").to_wire()
     assert response.job.state == job_pb2.JOB_STATE_PENDING
+
+
+def test_get_job_status_reports_has_children(service, state):
+    """GetJobStatus sets has_children so the dashboard can render the expand toggle."""
+    service.launch_job(make_job_request("parent-job"), None)
+    parent_id = JobName.root("test-user", "parent-job")
+
+    child_id = JobName.from_wire(parent_id.to_wire() + "/child")
+    child_req = controller_pb2.Controller.LaunchJobRequest(
+        name=child_id.to_wire(),
+        entrypoint=job_pb2.RuntimeEntrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+    )
+    child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
+    with state._store.transaction() as cur:
+        state.submit_job(cur, child_id, child_req, Timestamp.now())
+
+    parent = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=parent_id.to_wire()), None)
+    assert parent.job.has_children is True
+
+    child = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=child_id.to_wire()), None)
+    assert child.job.has_children is False
 
 
 def test_get_job_status_not_found(service):
@@ -650,7 +687,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
 
     auth_service = ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
         log_service=LogServiceImpl(),
@@ -681,7 +718,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
 
     auth_service = ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
         log_service=LogServiceImpl(),
@@ -772,6 +809,21 @@ def test_launch_job_rejects_child_of_failed_parent(service, state):
 
     assert exc_info.value.code == Code.FAILED_PRECONDITION
     assert "terminated" in exc_info.value.message.lower() or "failed" in exc_info.value.message.lower()
+
+
+def test_launch_job_rejects_child_of_absent_parent(service):
+    """Reject child submissions when the parent row is missing from the DB.
+
+    Simulates a controller restart where the checkpoint did not capture the
+    parent row but running processes keep submitting descendants. Previously
+    the guard only rejected terminated parents, leaving absent-parent children
+    inserted with `parent_job_id = NULL` and an orphaned `depth`.
+    """
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(make_job_request("/test-user/absent-parent/new-child"), None)
+
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+    assert "absent" in exc_info.value.message.lower() or "not found" in exc_info.value.message.lower()
 
 
 # =============================================================================
@@ -883,7 +935,8 @@ def test_list_jobs_all_scope_includes_descendants(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    state.submit_job(child_id, child_req, Timestamp.now())
+    with state._store.transaction() as cur:
+        state.submit_job(cur, child_id, child_req, Timestamp.now())
 
     request = controller_pb2.Controller.ListJobsRequest()
     response = service.list_jobs(request, None)
@@ -907,7 +960,8 @@ def test_list_jobs_job_query_roots_and_children(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    state.submit_job(child_id, child_req, Timestamp.now())
+    with state._store.transaction() as cur:
+        state.submit_job(cur, child_id, child_req, Timestamp.now())
 
     roots_response = service.list_jobs(
         controller_pb2.Controller.ListJobsRequest(
@@ -991,7 +1045,8 @@ def test_worker_addresses_for_tasks(state, service):
     service.launch_job(make_job_request("assigned-job"), None)
     job_id = JobName.root("test-user", "assigned-job")
     task_id = JobName.from_wire(job_id.to_wire() + "/0")
-    state.queue_assignments([Assignment(task_id=task_id, worker_id=WorkerId("w-1"))])
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=WorkerId("w-1"))])
 
     # Get tasks with attempts
     tasks = _query_tasks_with_attempts(state, job_id)
@@ -1126,7 +1181,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         state,
-        db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=LogServiceImpl(),
@@ -1162,7 +1217,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         state,
-        db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=LogServiceImpl(),
@@ -1200,21 +1255,24 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    state.submit_job(job_id, request, Timestamp.now())
+    with state._store.transaction() as cur:
+        state.submit_job(cur, job_id, request, Timestamp.now())
 
     w1 = WorkerId("w1")
-    state.register_or_refresh_worker(
-        worker_id=w1,
-        address="w1:8080",
-        metadata=job_pb2.WorkerMetadata(
-            hostname="w1",
-            ip_address="127.0.0.1",
-            cpu_count=8,
-            memory_bytes=16 * 1024**3,
-            disk_bytes=100 * 1024**3,
-        ),
-        ts=Timestamp.now(),
-    )
+    with state._store.transaction() as cur:
+        state.register_or_refresh_worker(
+            cur,
+            worker_id=w1,
+            address="w1:8080",
+            metadata=job_pb2.WorkerMetadata(
+                hostname="w1",
+                ip_address="127.0.0.1",
+                cpu_count=8,
+                memory_bytes=16 * 1024**3,
+                disk_bytes=100 * 1024**3,
+            ),
+            ts=Timestamp.now(),
+        )
     task_id = job_id.task(0)
     _assign_and_transition(state, task_id, w1, job_pb2.TASK_STATE_RUNNING)
 
@@ -1227,5 +1285,97 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         assert resp.total_running == 1
         assert resp.running_tasks[0].job_id == job_id.to_wire()
         assert resp.running_tasks[0].user_id == "alice"
+        # alice has no explicit user_budgets row but has an active task — the
+        # scheduler state must report her spend using UserBudgetDefaults so the
+        # dashboard renders Spent/Limit/Utilization instead of '-'.
+        alice_budget = next((b for b in resp.user_budgets if b.user_id == "alice"), None)
+        assert alice_budget is not None
+        assert alice_budget.budget_spent > 0
+        assert alice_budget.budget_limit == controller_service._user_budget_defaults.budget_limit
     finally:
         _verified_identity.reset(token)
+
+
+# =============================================================================
+# Client freshness tests
+# =============================================================================
+
+
+# Fixed reference point for helper unit tests so freshness behavior is
+# reproducible regardless of wall-clock date. Pick something far enough in the
+# future that FEATURE_INTRODUCTION_DATE has aged out for the past-grace test.
+_REF_NOW = date(2026, 6, 1)
+
+
+def test_check_client_freshness_accepts_today():
+    """A client built today is inside the window (upper edge)."""
+    _check_client_freshness(_REF_NOW.isoformat(), _REF_NOW)
+
+
+def test_check_client_freshness_accepts_at_window_edge():
+    """A client exactly FRESHNESS_WINDOW old is still accepted (lower edge)."""
+    edge = _REF_NOW - FRESHNESS_WINDOW
+    _check_client_freshness(edge.isoformat(), _REF_NOW)
+
+
+def test_check_client_freshness_rejects_over_window():
+    """A client one day past the window is rejected."""
+    stale = _REF_NOW - FRESHNESS_WINDOW - timedelta(days=1)
+    with pytest.raises(ConnectError) as exc_info:
+        _check_client_freshness(stale.isoformat(), _REF_NOW)
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+    assert stale.isoformat() in exc_info.value.message
+
+
+def test_check_client_freshness_empty_is_introduction_date():
+    """Empty string is substituted with FEATURE_INTRODUCTION_DATE."""
+    # Right at ship time: empty clients still inside window, succeed.
+    _check_client_freshness("", FEATURE_INTRODUCTION_DATE)
+    # Well past the grace period: empty clients fail.
+    well_past = FEATURE_INTRODUCTION_DATE + FRESHNESS_WINDOW + timedelta(days=1)
+    with pytest.raises(ConnectError) as exc_info:
+        _check_client_freshness("", well_past)
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+
+
+def test_check_client_freshness_rejects_malformed():
+    """Non-ISO strings are rejected as INVALID_ARGUMENT."""
+    with pytest.raises(ConnectError) as exc_info:
+        _check_client_freshness("not-a-date", _REF_NOW)
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
+def test_launch_job_root_with_fresh_client_date(service):
+    """Root submission with today's date succeeds end-to-end through launch_job."""
+    request = make_job_request("fresh-client")
+    request.client_revision_date = date.today().isoformat()
+    response = service.launch_job(request, None)
+    assert response.job_id == JobName.root("test-user", "fresh-client").to_wire()
+
+
+def test_launch_job_root_with_stale_client_date(service):
+    """Root submission with an ancient date is rejected end-to-end."""
+    request = make_job_request("stale-client")
+    request.client_revision_date = "2000-01-01"
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+
+
+def test_launch_job_nested_with_stale_client_date_is_exempt(service):
+    """Nested submissions bypass the freshness check (parent already running)."""
+    service.launch_job(make_job_request("parent-job"), None)
+    parent_id = JobName.root("test-user", "parent-job")
+
+    child_id = JobName.from_wire(parent_id.to_wire() + "/child")
+    assert not child_id.is_root
+    child_req = controller_pb2.Controller.LaunchJobRequest(
+        name=child_id.to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+    )
+    child_req.client_revision_date = "2000-01-01"
+
+    response = service.launch_job(child_req, None)
+    assert response.job_id == child_id.to_wire()

@@ -77,7 +77,7 @@ from tqdm_loggable.auto import tqdm
 
 import levanter.config
 from levanter.callbacks import StepInfo
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.data import batched
 from levanter.data.loader import stack_batches
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
@@ -1501,9 +1501,10 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
         else:
             with use_cpu_device():
                 model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
+                checkpoint_path = latest_checkpoint_path(config.checkpoint_path)
                 model = load_checkpoint(
                     model,
-                    config.checkpoint_path,
+                    checkpoint_path,
                     subpath="model",
                     axis_mapping=parameter_axis_mapping,
                 )

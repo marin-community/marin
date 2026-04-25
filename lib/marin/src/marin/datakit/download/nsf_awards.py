@@ -15,6 +15,7 @@ import zipfile
 from io import BytesIO
 
 import requests
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 from zephyr import Dataset, ZephyrContext, counters
 from zephyr.writers import write_parquet_file
@@ -151,3 +152,24 @@ def download_nsf_awards_step(
         fn=_run,
         hash_attrs={"min_year": min_year, "max_year": max_year},
     )
+
+
+def normalize_nsf_awards_step(download: StepSpec) -> StepSpec:
+    """Normalize NSF awards: generate content-hash IDs, preserve awd_id as source_id."""
+    return normalize_step(
+        name="normalized/nsf-awards",
+        download=download,
+        text_field="text",
+        id_field="awd_id",
+        file_extensions=(".parquet",),
+    )
+
+
+def nsf_awards_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the ``(download, normalize)`` chain for NSF awards.
+
+    Unlike the HF-backed families, the download here pulls from the NSF API
+    directly (no HF repo); the chain shape is otherwise identical.
+    """
+    download = download_nsf_awards_step()
+    return (download, normalize_nsf_awards_step(download))

@@ -10,7 +10,8 @@ from typing import Literal
 from urllib.parse import urlparse
 
 import requests
-from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray import current_client
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
@@ -225,20 +226,20 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
                 print(output)
 
-    cluster = current_cluster()
+    client = current_client()
     resources = ResourceConfig.with_tpu(args.tpu_type)
     job_request = JobRequest(
         name=f"vllm-smoke:{args.tpu_type}",
         entrypoint=Entrypoint.from_callable(_run),
         resources=resources,
-        environment=EnvironmentConfig.create(
+        environment=create_environment(
             extras=["eval", "tpu"],
             pip_packages=VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else (),
             env_vars=env_vars or None,
         ),
     )
-    job_id = cluster.launch(job_request)
-    cluster.wait(job_id, raise_on_failure=True)
+    job = client.submit(job_request)
+    job.wait(raise_on_failure=True)
     return 0
 
 

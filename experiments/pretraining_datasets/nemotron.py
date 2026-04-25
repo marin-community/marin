@@ -6,7 +6,7 @@
 import dataclasses
 import os.path
 
-from fray.v2.types import ResourceConfig
+from fray.types import ResourceConfig
 
 from experiments.defaults import DEFAULT_NEW_RUN_DATA_SHUFFLE
 from experiments.pretraining_datasets.dclm import dclm_components_llama3

@@ -128,14 +128,30 @@ def is_retryable_error(exc: Exception) -> bool:
     - ConnectError with Code.UNAVAILABLE (controller temporarily down)
     - ConnectError with Code.INTERNAL (network errors bubble up as INTERNAL)
     - ConnectError with Code.DEADLINE_EXCEEDED (client-side httpx read timeout)
+    - ConnectError with Code.RESOURCE_EXHAUSTED (server-side load shed; safe to
+      retry because the handler did not run)
 
     Does not retry on:
     - Application errors (NOT_FOUND, INVALID_ARGUMENT, ALREADY_EXISTS, etc.)
     - These indicate issues with the request itself, not transient failures
     """
     if isinstance(exc, ConnectError):
-        return exc.code in (Code.UNAVAILABLE, Code.INTERNAL, Code.DEADLINE_EXCEEDED)
+        return exc.code in (
+            Code.UNAVAILABLE,
+            Code.INTERNAL,
+            Code.DEADLINE_EXCEEDED,
+            Code.RESOURCE_EXHAUSTED,
+        )
     return False
+
+
+# Default retry budget: tolerate up to 30 minutes of transient controller
+# unavailability. The controller can stall for several minutes under heavy
+# load; a short budget (~3 min) caused clients — notably the
+# ExecutorStep → GetJobStatus polling loop — to crash even though the job
+# was still running server-side. See issue #4913.
+DEFAULT_RETRY_MAX_ELAPSED = 1800.0
+DEFAULT_RETRY_MAX_ATTEMPTS = 240
 
 
 def call_with_retry(
@@ -143,14 +159,16 @@ def call_with_retry(
     call_fn: Callable[[], T],
     *,
     on_retry: Callable[[Exception], None] | None = None,
-    max_attempts: int = 20,
-    max_elapsed: float | None = None,
+    max_attempts: int = DEFAULT_RETRY_MAX_ATTEMPTS,
+    max_elapsed: float | None = DEFAULT_RETRY_MAX_ELAPSED,
     backoff: ExponentialBackoff | None = None,
 ) -> T:
     """Execute an RPC call with exponential backoff retry.
 
     Retries stop when either ``max_attempts`` is exhausted **or**
-    ``max_elapsed`` seconds have passed, whichever comes first.
+    ``max_elapsed`` seconds have passed, whichever comes first. Defaults
+    tolerate ~30 minutes of transient controller unavailability so callers
+    survive heavy-load stalls without losing track of long-running jobs.
 
     Args:
         operation: Description of the operation for logging
@@ -158,9 +176,11 @@ def call_with_retry(
         on_retry: Optional callback invoked with the exception on every retryable
             failure, including the final attempt. Useful for clearing cached
             connections so subsequent calls can re-resolve endpoints.
-        max_attempts: Maximum number of attempts (default: 20)
+        max_attempts: Maximum number of attempts (default: 240; secondary cap —
+            ``max_elapsed`` is the authoritative wall-clock budget).
         max_elapsed: Maximum wall-clock seconds to keep retrying. ``None``
-            means no time limit (only ``max_attempts`` is used).
+            means no time limit (only ``max_attempts`` is used). Default:
+            1800s (30 min) — long enough to ride out controller restarts.
         backoff: Backoff configuration. A fresh copy is made internally so the
             caller's instance is not mutated. Defaults to
             ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0).

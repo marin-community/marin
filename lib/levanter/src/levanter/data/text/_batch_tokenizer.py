@@ -42,31 +42,14 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         self.max_length = max_length
         self._long_string_workaround = long_string_workaround
 
-        if tokenizer.bos_token_id is None:
-            enforce_bos = False
-        if tokenizer.eos_token_id is None:
-            enforce_eos = False
-
-        if enforce_eos or enforce_bos:
-            input_ids = tokenizer.encode("hi there", add_special_tokens=True)
-            should_append_eos = input_ids[-1] != tokenizer.eos_token_id and enforce_eos
-            should_append_bos = input_ids[0] != tokenizer.bos_token_id and enforce_bos
-        else:
-            should_append_eos = False
-            should_append_bos = False
-
-        self._need_to_add_eos = should_append_eos
-        self._need_to_add_bos = should_append_bos
+        self._append_bos = enforce_bos and tokenizer.bos_token_id is not None
+        self._append_eos = enforce_eos and tokenizer.eos_token_id is not None
         self._workaround_len = _workaround_len
 
     def __call__(self, batch: Sequence[dict]) -> list[dict]:
         batch_text = [example[self.text_field] for example in batch]
 
-        if self._need_to_add_bos:
-            bos = self.tokenizer.bos_token
-            assert bos is not None
-            batch_text = [bos + " " + d for d in batch_text]
-        if self._need_to_add_eos:
+        if self._append_eos:
             eos = self.tokenizer.eos_token
             assert eos is not None
             batch_text = [d + " " + eos for d in batch_text]
@@ -76,7 +59,16 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         else:
             needs_merge = []
 
-        encoded = self.tokenizer.encode_batch(batch_text)
+        encoded = self.tokenizer.encode_batch(batch_text, add_special_tokens=False)
+
+        if self._append_bos:
+            bos_id = self.tokenizer.bos_token_id
+            assert bos_id is not None
+            if needs_merge:
+                # Prepend BOS only to first chunks so the merged doc has a single BOS.
+                encoded = [[bos_id, *enc] if not merge else enc for enc, merge in zip(encoded, needs_merge)]
+            else:
+                encoded = [[bos_id, *enc] for enc in encoded]
 
         # Build a dict-of-lists structure analogous to the old BatchEncoding.
         encoding: dict[str, list] = {"input_ids": encoded}
@@ -121,8 +113,8 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
             "return_attention_mask": self.return_attention_mask,
             "padding": self.padding,
             "max_length": self.max_length,
-            "append_bos": self._need_to_add_bos,
-            "append_eos": self._need_to_add_eos,
+            "append_bos": self._append_bos,
+            "append_eos": self._append_eos,
         }
 
     @property

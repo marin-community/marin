@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
-from fray.v2 import JobHandle
+from fray import JobHandle
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.lm_model import LmConfig

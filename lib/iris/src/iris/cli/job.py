@@ -30,6 +30,7 @@ from iris.cluster.constraints import (
     WellKnownAttribute,
     device_variant_constraint,
     infer_preemptible_constraint,
+    preemptible_constraint,
     region_constraint,
     zone_constraint,
 )
@@ -532,6 +533,41 @@ def resolve_multinode_defaults(
     return replicas, coscheduling
 
 
+def build_job_constraints(
+    resources_proto: job_pb2.ResourceSpecProto,
+    tpu_variants: list[str],
+    replicas: int,
+    regions: tuple[str, ...] | None = None,
+    zone: str | None = None,
+    preemptible: bool | None = None,
+) -> list[Constraint]:
+    """Assemble the constraint list for a submitted job.
+
+    An explicit ``preemptible`` value wins over the executor heuristic:
+    ``infer_preemptible_constraint`` short-circuits when any preemptible
+    constraint is already present, so we append the user's choice first.
+    """
+    constraints: list[Constraint] = []
+    if regions:
+        constraints.append(region_constraint(list(regions)))
+    if zone:
+        constraints.append(zone_constraint(zone))
+    if len(tpu_variants) > 1:
+        constraints.append(device_variant_constraint(tpu_variants))
+    if preemptible is not None:
+        constraints.append(preemptible_constraint(preemptible))
+
+    # Executor heuristic: small CPU-only CLI jobs (no accelerators, 1 replica,
+    # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
+    # coordinators survive spot reclamation. Skipped when the user supplied
+    # --preemptible / --no-preemptible.
+    inferred = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    if inferred is not None:
+        constraints.append(inferred)
+        logger.info("Executor heuristic: auto-tagging job as non-preemptible")
+    return constraints
+
+
 def run_iris_job(
     command: list[str],
     env_vars: dict[str, str],
@@ -553,6 +589,7 @@ def run_iris_job(
     user: str | None = None,
     reserve: tuple[str, ...] | None = None,
     priority: str | None = None,
+    preemptible: bool | None = None,
     token_provider: TokenProvider | None = None,
     submit_argv: list[str] | None = None,
 ) -> int:
@@ -565,6 +602,8 @@ def run_iris_job(
         regions: If provided, restrict the job to workers in these regions.
         zone: If provided, restrict the job to workers in this zone.
         reserve: Reservation specs (e.g., ("4:H100x8", "v5litepod-16")).
+        preemptible: If True/False, force scheduling on (non-)preemptible workers
+            and bypass the executor heuristic. If None (default), the heuristic runs.
 
     Returns:
         Exit code: 0 for success, 1 for failure
@@ -579,25 +618,29 @@ def run_iris_job(
 
     replicas, coscheduling = resolve_multinode_defaults(primary_tpu, gpu, replicas)
 
-    constraints: list[Constraint] = []
-    if regions:
-        constraints.append(region_constraint(list(regions)))
-    if zone:
-        constraints.append(zone_constraint(zone))
-    if len(tpu_variants) > 1:
-        constraints.append(device_variant_constraint(tpu_variants))
-
-    # Executor heuristic: small CPU-only CLI jobs (no accelerators, 1 replica,
-    # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
-    # coordinators survive spot reclamation.
     resources_proto = resources.to_proto()
-    preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
-    if preemptible is not None:
-        constraints.append(preemptible)
-        logger.info("Executor heuristic: auto-tagging job as non-preemptible")
+    constraints = build_job_constraints(
+        resources_proto=resources_proto,
+        tpu_variants=tpu_variants,
+        replicas=replicas,
+        regions=regions,
+        zone=zone,
+        preemptible=preemptible,
+    )
 
     reservation: list[ReservationEntry] | None = None
     if reserve:
+        # --reserve is mutually exclusive with --region/--zone: the controller's
+        # claim loop only evaluates each reservation entry's own constraints, so
+        # job-level routing constraints would not gate worker claims (#4988).
+        # A caller who needs a specific region/zone should name it directly; a
+        # caller who uses a reservation is by definition not picking the region.
+        if regions or zone:
+            raise click.UsageError(
+                "--reserve cannot be combined with --region or --zone. "
+                "Use --region/--zone to target a specific location, or --reserve "
+                "to claim from a reservation (which chooses the location for you)."
+            )
         reservation = []
         for spec in reserve:
             reservation.extend(parse_reservation_spec(spec))
@@ -621,6 +664,8 @@ def run_iris_job(
         logger.info(f"Region constraint: {', '.join(regions)}")
     if zone:
         logger.info(f"Zone constraint: {zone}")
+    if preemptible is not None:
+        logger.info(f"Preemptible constraint: {preemptible}")
     if reservation:
         logger.info(f"Reservation: {len(reservation)} entries")
 
@@ -821,6 +866,16 @@ Examples:
     help="Priority band for scheduling (default: interactive). Lower bands run first; batch jobs yield to interactive.",
 )
 @click.option(
+    "--preemptible/--no-preemptible",
+    "preemptible",
+    default=None,
+    help=(
+        "Force scheduling on preemptible (--preemptible) or non-preemptible "
+        "(--no-preemptible) workers. Overrides the executor heuristic. "
+        "Default: heuristic-based (small CPU-only jobs pinned to non-preemptible)."
+    ),
+)
+@click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
     help="Terminate the job on Ctrl+C (default: terminate). Tunnel failures never kill the job.",
@@ -847,6 +902,7 @@ def run(
     extra: tuple[str, ...],
     reserve: tuple[str, ...],
     priority: str | None,
+    preemptible: bool | None,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
 ):
@@ -896,6 +952,7 @@ def run(
             zone=zone,
             reserve=reserve or None,
             priority=priority,
+            preemptible=preemptible,
             token_provider=ctx.obj.get("token_provider"),
             submit_argv=submit_argv,
         )
@@ -953,16 +1010,16 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
     controller_url = require_controller_url(ctx)
     client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
 
-    states: list[job_pb2.JobState] | None = None
+    state_value: job_pb2.JobState | None = None
     if state is not None:
         state_lower = state.lower()
         if state_lower not in _STATE_MAP:
             valid = ", ".join(sorted(_STATE_MAP.keys()))
             raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}")
-        states = [_STATE_MAP[state_lower]]
+        state_value = _STATE_MAP[state_lower]
 
     prefix_name = JobName.from_wire(prefix) if prefix else None
-    jobs = client.list_jobs(states=states, prefix=prefix_name)
+    jobs = client.list_jobs(state=state_value, prefix=prefix_name)
 
     # Sort by submitted_at descending (most recent first)
     jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)

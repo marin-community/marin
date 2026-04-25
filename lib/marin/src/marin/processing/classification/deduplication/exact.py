@@ -5,7 +5,6 @@ from typing import Any, TypeVar
 
 from collections.abc import Iterator
 from marin.processing.classification.deduplication.dedup_commons import (
-    DEFAULT_COORDINATOR_RESOURCES,
     DEFAULT_FILETYPES,
     DedupMode,
     _collect_input_files,
@@ -21,7 +20,7 @@ import dupekit
 from marin.utils import rebase_file_path
 import pyarrow as pa
 import logging
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from zephyr import ZephyrContext, counters, write_parquet_file
 from zephyr.dataset import Dataset
 
@@ -76,12 +75,14 @@ def dedup_exact_paragraph(
         ]
         return dupekit.transform(batch, pipeline)
 
-    ctx = ZephyrContext(
-        name="exact-para-dedup",
-        max_workers=max_parallelism,
-        resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
-        coordinator_resources=coordinator_resources or DEFAULT_COORDINATOR_RESOURCES,
-    )
+    ctx_kwargs: dict = {
+        "name": "exact-para-dedup",
+        "max_workers": max_parallelism,
+        "resources": worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+    }
+    if coordinator_resources is not None:
+        ctx_kwargs["coordinator_resources"] = coordinator_resources
+    ctx = ZephyrContext(**ctx_kwargs)
 
     def aggregate_and_write_to_corresponding_files(file_idx: int, records: Iterator[dict]) -> dict:
         # NOTE: all records belong to the specific file and are sorted by doc_id
@@ -208,12 +209,14 @@ def dedup_exact_document(
         ]
         return dupekit.transform(batch, pipeline)
 
-    ctx = ZephyrContext(
-        name="exact-doc-dedup",
-        max_workers=max_parallelism,
-        resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
-        coordinator_resources=coordinator_resources or DEFAULT_COORDINATOR_RESOURCES,
-    )
+    ctx_kwargs: dict = {
+        "name": "exact-doc-dedup",
+        "max_workers": max_parallelism,
+        "resources": worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+    }
+    if coordinator_resources is not None:
+        ctx_kwargs["coordinator_resources"] = coordinator_resources
+    ctx = ZephyrContext(**ctx_kwargs)
 
     aggregate_and_write = make_document_dedup_aggregator(
         idx_to_path=idx_to_path,
