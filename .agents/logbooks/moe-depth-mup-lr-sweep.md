@@ -216,3 +216,35 @@
   moving dramatically.
 - Next action: continue normal cadence until `d512-lr4x` finishes and the
   remaining d768 LR points launch.
+
+### 2026-04-25 13:35 - d512 complete
+
+- Hypothesis: including the delayed `4x` run should sharpen the d512 LR curve
+  and confirm whether the first scale is centered near the baseline multiplier.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260425-184727`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris shows 9 succeeded jobs and 9 running jobs; no terminal failures.
+  - All d512 runs are finished.
+  - d768 `2.83x` has launched and is running; d768 `4x` has not launched yet.
+  - Completed d512 W&B summaries:
+
+    | LR multiplier | Paloma macro | Train loss | Tok/s | Tokens |
+    | --- | ---: | ---: | ---: | ---: |
+    | 0.25x | 4.0652 | 3.7375 | 406,349 | 837,156,864 |
+    | 0.354x | 3.9475 | 3.6286 | 406,406 | 837,156,864 |
+    | 0.5x | 3.8671 | 3.5483 | 407,291 | 837,156,864 |
+    | 0.707x | 3.8302 | 3.5066 | 405,839 | 837,156,864 |
+    | 1x | 3.8188 | 3.4932 | 406,669 | 837,156,864 |
+    | 1.41x | 3.8284 | 3.5006 | 406,452 | 837,156,864 |
+    | 2x | 3.8695 | 3.5429 | 405,423 | 837,156,864 |
+    | 2.83x | 3.9301 | 3.6019 | 406,235 | 837,156,864 |
+    | 4x | 4.0568 | 3.7285 | 406,238 | 837,156,864 |
+
+- Interpretation: the completed d512 sweep is best at `1x`, with a relatively
+  shallow basin around `0.707x`-`1.41x` and clear degradation at both extremes.
+  Compared with the README baseline macro 3.8104, depth MuP at d512 is neutral
+  to slightly worse but does not require a shifted LR at this scale.
+- Next action: continue monitoring d768 through final summaries and the launch
+  of `d768-lr4x`.
