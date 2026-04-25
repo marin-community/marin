@@ -18,6 +18,7 @@ from levanter.analysis.model_perplexity import (
     ScoredDocument,
     compare_scored_documents,
     read_model_score_summary,
+    read_token_count_summary,
     read_scored_documents,
     write_model_score_files,
 )
@@ -325,8 +326,76 @@ def test_model_score_files_roundtrip():
     assert len(loaded_documents) == 1
     assert loaded_documents[0].document == document
     assert np.allclose(loaded_documents[0].per_byte_loss, scored_document.per_byte_loss)
+    assert loaded_documents[0].tokenized.token_ids.tolist() == tokenized.token_ids.tolist()
     assert loaded_documents[0].tokenized.num_bytes == tokenized.num_bytes
     assert loaded_documents[0].tokenized.byte_starts.tolist() == tokenized.byte_starts.tolist()
+
+
+def test_model_score_files_write_token_count_summary():
+    first_document = RawTextDocument(
+        dataset_name="paloma/example",
+        tags=("paloma", "paloma/example"),
+        shard_name="docs",
+        row_index=0,
+        text="abc",
+    )
+    second_document = RawTextDocument(
+        dataset_name="paloma/other",
+        tags=("paloma", "paloma/other"),
+        shard_name="docs",
+        row_index=1,
+        text="def",
+    )
+    first_scored_document = ScoredDocument(
+        document=first_document,
+        per_byte_loss=np.asarray([0.1, 0.2, 0.3], dtype=np.float64),
+        tokenized=TokenizedDocument(
+            token_ids=np.asarray([1, 2, 2, 3], dtype=np.int32),
+            byte_starts=np.asarray([0, 1, 1, 2], dtype=np.int32),
+            byte_ends=np.asarray([1, 2, 2, 3], dtype=np.int32),
+            num_bytes=3,
+        ),
+    )
+    second_scored_document = ScoredDocument(
+        document=second_document,
+        per_byte_loss=np.asarray([0.4, 0.5, 0.6], dtype=np.float64),
+        tokenized=TokenizedDocument(
+            token_ids=np.asarray([4, 4, 5], dtype=np.int32),
+            byte_starts=np.asarray([0, 0, 1], dtype=np.int32),
+            byte_ends=np.asarray([1, 1, 3], dtype=np.int32),
+            num_bytes=3,
+        ),
+    )
+
+    report = ModelScoreReportBuilder(model_name="model-a")
+    report.add_document(document=first_document, per_byte_loss=first_scored_document.per_byte_loss)
+    report.add_document(document=second_document, per_byte_loss=second_scored_document.per_byte_loss)
+    summary = report.build_summary()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        write_model_score_files(
+            tmpdir,
+            summary,
+            [first_scored_document, second_scored_document],
+            vocab_size=8,
+            token_id_to_text={1: "<bos>", 2: "ab", 3: "c", 4: "de", 5: "f"},
+        )
+        token_count_summary = read_token_count_summary(tmpdir)
+
+    assert token_count_summary["vocab_size"] == 8
+    assert token_count_summary["overall"]["total_tokens"] == 7
+    assert token_count_summary["overall"]["unique_tokens"] == 5
+    assert token_count_summary["overall"]["singleton_tokens"] == 3
+    assert token_count_summary["overall"]["rare_tokens_le_3"] == 5
+    assert token_count_summary["overall"]["unseen_tokens"] == 3
+    assert token_count_summary["datasets"][0]["name"] == "paloma/example"
+    assert token_count_summary["datasets"][0]["total_tokens"] == 4
+    assert token_count_summary["datasets"][0]["unique_tokens"] == 3
+    assert token_count_summary["datasets"][0]["rare_token_examples"][0] == {
+        "count": 1,
+        "token_id": 1,
+        "token_text": "<bos>",
+    }
 
 
 def test_compare_scored_documents_matches_direct_gap_builder():
