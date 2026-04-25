@@ -44,3 +44,16 @@
 - Result: both parent jobs submitted and running; both v5p-8 reservations were initially pending due to no matching worker with sufficient capacity.
 - Interpretation: launch succeeded. The next useful check is whether the reservations bind to workers and child training jobs start emitting W&B runs.
 - Next action: monitor Iris status and W&B run creation for `moe-adamh-batch2x-*` and `moe-muon-vizier-lr-beta-*`.
+
+### 2026-04-24 17:40 - align Muon Vizier search to exact gate-1 budgets
+- Hypothesis: Using the exact gate-1 d512 and d768 budgets keeps the W&B report overlays uniform across AdamH, Muon, MuonH, AdamH 2x, and Muon search runs.
+- Command:
+  - Stop non-uniform Muon Vizier parent: `.venv/bin/iris --config lib/iris/examples/marin.yaml job kill /pc0618/iris-run-job-20260425-001006`
+  - Planned exact Muon Vizier submission: `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.moe.muon_vizier_search`
+- Config:
+  - Stopped non-uniform Muon Vizier parent job: `/pc0618/iris-run-job-20260425-001006`
+  - Kept AdamH 2x parent job running: `/pc0618/iris-run-job-20260425-000952`
+  - New Muon Vizier search scales: `d512-gate1` at `2.19e17` FLOPs, `d768-gate1` at `1.70e18` FLOPs.
+- Result: the non-uniform parent and all c3e17/c1e18 child jobs were terminated. The Muon Vizier search now uses exact gate-1 scale names and budgets.
+- Interpretation: new W&B run IDs will be comparable to the report's existing gate-1 panels without mixing FLOP budgets.
+- Next action: validate, commit, push, and relaunch the exact Muon Vizier parent job.

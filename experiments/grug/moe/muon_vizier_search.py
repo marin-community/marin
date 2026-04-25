@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Vizier hyperparameter search for Grug MoE Muon at small budgets."""
+"""Vizier hyperparameter search for Grug MoE Muon at exact gate-1 budgets."""
 
 from __future__ import annotations
 
@@ -83,8 +83,8 @@ SWEEP = MuonSearchSettings(
         "beta2": (0.95, 0.999),
     },
     scales=(
-        MuonSearchScale("d512-c3e17", 3e17, 512),
-        MuonSearchScale("d768-c1e18", 1e18, 768),
+        MuonSearchScale("d512-gate1", 2.19e17, 512),
+        MuonSearchScale("d768-gate1", 1.70e18, 768),
     ),
     target_steps=2**14,
     seq_len=4096,
@@ -583,5 +583,5 @@ def _build_scale_chain(scale: MuonSearchScale) -> ExecutorStep:
 if __name__ == "__main__":
     executor_main(
         steps=[_build_scale_chain(scale) for scale in SWEEP.scales],
-        description="Grug MoE Muon Vizier LR/beta search at 3e17 and 1e18 FLOP scales.",
+        description="Grug MoE Muon Vizier LR/beta search at exact gate-1 FLOP scales.",
     )
