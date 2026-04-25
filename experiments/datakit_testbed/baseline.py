@@ -93,7 +93,7 @@ def main() -> None:
     StepRunner().run(testbed_steps)
 
     training_step = baseline(testbed_steps, name=run_id, tokenizer=tokenizer)
-    executor_main(ExecutorMainConfig(), [training_step])
+    executor_main(ExecutorMainConfig(max_concurrent=42), [training_step])
 
 
 if __name__ == "__main__":
