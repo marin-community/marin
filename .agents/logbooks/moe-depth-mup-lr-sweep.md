@@ -127,3 +127,28 @@
   progress.
 - Next action: switch to the normal babysit cadence and watch for first loss
   lines, terminal states, or repeated TPU bad-node errors.
+
+### 2026-04-25 12:04 - First progress check
+
+- Hypothesis: once the d512 children pass cache setup and first eval, the run
+  should produce comparable early loss/progress lines without more bad-node
+  intervention.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260425-184727`
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs --since-seconds 900 --max-lines 1200 --tail /kaiyue/iris-run-job-20260425-184727`
+- Result:
+  - 9 jobs visible: coordinator + 8 d512 children, all `JOB_STATE_RUNNING`
+  - each visible child still has `preemption_count=2` from the recovered TPU
+    init failures
+  - first eval/progress logs are present; sampled values:
+    - d512 `lr1x`: Paloma macro 4.830 at first post-start eval, train progress
+      ~1.35k / 6.39k steps with loss ~4.23
+    - d512 `lr0.5x`: Paloma macro 5.137, train progress ~1.35k / 6.39k steps
+      with loss ~4.38
+    - d512 `lr2.83x`: Paloma macro 5.147, train progress ~1.35k / 6.39k
+      steps with loss ~4.75
+- Interpretation: the sweep is now doing real training. Early d512 logs make
+  `lr1x` look better than the sampled lower/higher LR points, but this is still
+  too early to draw conclusions.
+- Next action: continue normal cadence until the d512 slice finishes and the
+  executor advances to the next scale.
