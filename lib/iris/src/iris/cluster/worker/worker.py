@@ -709,6 +709,7 @@ class Worker:
             port_allocator=self._port_allocator,
             log_pusher=self._log_pusher,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
+            auth_token=self._config.auth_token,
         )
         attempt.on_state_change = self._make_state_change_callback(attempt)
 

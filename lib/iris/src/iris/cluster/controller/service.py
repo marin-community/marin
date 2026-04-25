@@ -2708,3 +2708,23 @@ class ControllerServiceImpl:
                 )
             self._controller.wake()
         return controller_pb2.Controller.UpdateTaskStatusResponse()
+
+    # --- Task Stats Push ---
+
+    def set_task_stats(
+        self,
+        request: job_pb2.SetTaskStatsRequest,
+        _ctx: Any,
+    ) -> job_pb2.SetTaskStatsResponse:
+        """Task pushes progress stats (items/bytes processed) to the coordinator."""
+        task_id = JobName.from_wire(request.task_id)
+        task = _read_task_with_attempts(self._db, task_id)
+        if task is None:
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+        self._transitions.record_task_stats(
+            task_id,
+            request.items_processed,
+            request.bytes_processed,
+            request.status,
+        )
+        return job_pb2.SetTaskStatsResponse()

@@ -754,3 +754,19 @@ class WorkerTaskStatus(_message.Message):
     resource_usage: ResourceUsage
     container_id: str
     def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ..., container_id: _Optional[str] = ...) -> None: ...
+
+class SetTaskStatsRequest(_message.Message):
+    __slots__ = ("task_id", "items_processed", "bytes_processed", "status")
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_PROCESSED_FIELD_NUMBER: _ClassVar[int]
+    BYTES_PROCESSED_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    task_id: str
+    items_processed: int
+    bytes_processed: int
+    status: str
+    def __init__(self, task_id: _Optional[str] = ..., items_processed: _Optional[int] = ..., bytes_processed: _Optional[int] = ..., status: _Optional[str] = ...) -> None: ...
+
+class SetTaskStatsResponse(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...

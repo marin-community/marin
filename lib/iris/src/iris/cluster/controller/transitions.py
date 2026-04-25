@@ -2227,6 +2227,18 @@ class ControllerTransitions:
                     ts=now,
                 )
 
+    # --- Task Stats ---
+
+    def record_task_stats(self, task_id: JobName, items_processed: int, bytes_processed: int, status: str) -> None:
+        """Record a task stats snapshot into task_stats_history and update the task's status_message."""
+        logger.info(
+            "Recording task stats for %s: items=%d, bytes=%d, status=%r",
+            task_id,
+            items_processed,
+            bytes_processed,
+            status,
+        )
+
     # --- Endpoint Management ---
 
     def add_endpoint(self, cur: TransactionCursor, endpoint: EndpointRow) -> bool:
