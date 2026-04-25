@@ -152,3 +152,34 @@
   too early to draw conclusions.
 - Next action: continue normal cadence until the d512 slice finishes and the
   executor advances to the next scale.
+
+### 2026-04-25 12:42 - d512 partial completion
+
+- Hypothesis: final d512 W&B summaries should identify whether depth MuP shifts
+  the LR optimum away from the baseline formula before larger scales finish.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260425-184727`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - 8 d512 runs finished; delayed `d512-lr4x` is still running.
+  - 7 d768 runs are running.
+  - Completed d512 W&B summaries:
+
+    | LR multiplier | State | Paloma macro | Tok/s | Tokens |
+    | --- | --- | ---: | ---: | ---: |
+    | 0.25x | finished | 4.0652 | 406,349 | 837,156,864 |
+    | 0.354x | finished | 3.9475 | 406,406 | 837,156,864 |
+    | 0.5x | finished | 3.8671 | 407,291 | 837,156,864 |
+    | 0.707x | finished | 3.8302 | 405,839 | 837,156,864 |
+    | 1x | finished | 3.8188 | 406,669 | 837,156,864 |
+    | 1.41x | finished | 3.8284 | 406,452 | 837,156,864 |
+    | 2x | finished | 3.8695 | 405,423 | 837,156,864 |
+    | 2.83x | finished | 3.9301 | 406,235 | 837,156,864 |
+    | 4x | running | n/a | n/a | n/a |
+
+- Interpretation: among completed points, d512 is best at `1x` LR with Paloma
+  macro 3.8188. The compute-optimal baseline d512 macro is 3.8104, so depth MuP
+  is roughly neutral/slightly worse at this first scale before the delayed 4x
+  point finishes.
+- Next action: continue monitoring `d512-lr4x` and d768 startup; wait for d768
+  first eval before making scale-sensitivity claims.
