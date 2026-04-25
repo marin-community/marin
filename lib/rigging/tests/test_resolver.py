@@ -4,7 +4,7 @@
 import pytest
 
 from rigging import resolver as resolver_module
-from rigging.resolver import ServiceURL, resolve, vm_address
+from rigging.resolver import ServiceURL, gcp_vm_address, is_registered, register_scheme, resolve
 
 # ---------------------------------------------------------------------------
 # ServiceURL parsing
@@ -73,17 +73,17 @@ def test_resolve_bare_host_port():
     assert resolve("log-server.internal:10002") == ("log-server.internal", 10002)
 
 
-def test_resolve_gcp_scheme_calls_vm_address(monkeypatch):
+def test_resolve_gcp_scheme_calls_gcp_vm_address(monkeypatch):
     calls: list[tuple] = []
 
-    def _fake_vm_address(name: str, provider: str, *, port: int):
-        calls.append((name, provider, port))
+    def _fake(name: str, *, port: int):
+        calls.append((name, port))
         return (name, port)
 
-    monkeypatch.setattr(resolver_module, "vm_address", _fake_vm_address)
+    monkeypatch.setattr(resolver_module, "gcp_vm_address", _fake)
     assert resolve("gcp://log-server") == ("log-server", 10002)
     assert resolve("gcp://log-server:8080") == ("log-server", 8080)
-    assert calls == [("log-server", "gcp", 10002), ("log-server", "gcp", 8080)]
+    assert calls == [("log-server", 10002), ("log-server", 8080)]
 
 
 def test_register_scheme_dispatches_to_handler(monkeypatch):
@@ -93,8 +93,11 @@ def test_register_scheme_dispatches_to_handler(monkeypatch):
         captured.append(url)
         return ("plugin-host", 4242)
 
-    # Restore the registry after the test so the temporary scheme doesn't leak.
     monkeypatch.setitem(resolver_module._HANDLERS, "plugin", _handler)
+
+    assert not is_registered("not-registered-scheme")
+    assert is_registered("plugin")
+    assert is_registered("gcp")
 
     assert resolve("plugin://my-service?endpoint=/foo") == ("plugin-host", 4242)
     assert len(captured) == 1
@@ -103,24 +106,26 @@ def test_register_scheme_dispatches_to_handler(monkeypatch):
     assert captured[0].query == {"endpoint": "/foo"}
 
 
-@pytest.mark.parametrize("ref", ["coreweave://log-server", "iris://marin?endpoint=/system/log-server"])
+def test_register_scheme_installs_handler(monkeypatch):
+    monkeypatch.setattr(resolver_module, "_HANDLERS", dict(resolver_module._HANDLERS))
+    assert not is_registered("demo")
+    register_scheme("demo", lambda url: ("demo-host", 9999))
+    assert is_registered("demo")
+    assert resolve("demo://anything") == ("demo-host", 9999)
+
+
+@pytest.mark.parametrize("ref", ["coreweave://log-server", "k8s://foo"])
 def test_resolve_unsupported_scheme_raises(ref: str):
     with pytest.raises(ValueError, match="unsupported scheme"):
         resolve(ref)
 
 
 # ---------------------------------------------------------------------------
-# vm_address: GCP backend (mocked at the I/O boundary)
+# gcp_vm_address: GCP backend (mocked at the I/O boundary)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("provider", ["coreweave", "k8s"])
-def test_unsupported_provider_raises(provider: str):
-    with pytest.raises(ValueError, match=f"unsupported provider: {provider}"):
-        vm_address("vm", provider=provider)
-
-
-def test_vm_address_gcp_returns_internal_ip_and_default_port(monkeypatch):
+def test_gcp_vm_address_returns_internal_ip_and_default_port(monkeypatch):
     monkeypatch.setattr(resolver_module, "_gcp_credentials", lambda: ("test-project", "tok"))
 
     captured: list[tuple] = []
@@ -131,39 +136,39 @@ def test_vm_address_gcp_returns_internal_ip_and_default_port(monkeypatch):
 
     monkeypatch.setattr(resolver_module, "_fetch_vm_aggregated", _fake_fetch)
 
-    host, port = vm_address("log-server", provider="gcp")
+    host, port = gcp_vm_address("log-server")
     assert host == "10.0.0.42"
     assert port == 10002
     assert captured == [("test-project", "tok", "log-server")]
 
 
-def test_vm_address_gcp_explicit_port(monkeypatch):
+def test_gcp_vm_address_explicit_port(monkeypatch):
     monkeypatch.setattr(resolver_module, "_gcp_credentials", lambda: ("p", "t"))
     monkeypatch.setattr(
         resolver_module,
         "_fetch_vm_aggregated",
         lambda project_id, token, name: {"networkInterfaces": [{"networkIP": "10.0.0.5"}]},
     )
-    assert vm_address("log-server", provider="gcp", port=12345) == ("10.0.0.5", 12345)
+    assert gcp_vm_address("log-server", port=12345) == ("10.0.0.5", 12345)
 
 
-def test_vm_address_gcp_missing_vm_raises_lookup_error(monkeypatch):
+def test_gcp_vm_address_missing_vm_raises_lookup_error(monkeypatch):
     monkeypatch.setattr(resolver_module, "_gcp_credentials", lambda: ("p", "t"))
     monkeypatch.setattr(resolver_module, "_fetch_vm_aggregated", lambda *_args: None)
 
     with pytest.raises(LookupError, match="no GCP VM named"):
-        vm_address("missing-vm", provider="gcp")
+        gcp_vm_address("missing-vm")
 
 
-def test_vm_address_gcp_no_network_interfaces(monkeypatch):
+def test_gcp_vm_address_no_network_interfaces(monkeypatch):
     monkeypatch.setattr(resolver_module, "_gcp_credentials", lambda: ("p", "t"))
     monkeypatch.setattr(resolver_module, "_fetch_vm_aggregated", lambda *_args: {"networkInterfaces": []})
     with pytest.raises(LookupError, match="no network interfaces"):
-        vm_address("vm", provider="gcp")
+        gcp_vm_address("vm")
 
 
-def test_vm_address_gcp_no_internal_ip(monkeypatch):
+def test_gcp_vm_address_no_internal_ip(monkeypatch):
     monkeypatch.setattr(resolver_module, "_gcp_credentials", lambda: ("p", "t"))
     monkeypatch.setattr(resolver_module, "_fetch_vm_aggregated", lambda *_args: {"networkInterfaces": [{}]})
     with pytest.raises(LookupError, match="no networkIP"):
-        vm_address("vm", provider="gcp")
+        gcp_vm_address("vm")

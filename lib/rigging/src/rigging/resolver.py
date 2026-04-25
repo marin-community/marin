@@ -12,10 +12,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlsplit
 
-import google.auth
-import google.auth.transport.requests
-import httpx
-
 _COMPUTE_BASE = "https://compute.googleapis.com/compute/v1"
 _OAUTH_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 _TIMEOUT_SECONDS = 10.0
@@ -52,6 +48,10 @@ def register_scheme(scheme: str, handler: SchemeHandler) -> None:
     _HANDLERS[scheme] = handler
 
 
+def is_registered(scheme: str) -> bool:
+    return scheme in _HANDLERS
+
+
 def resolve(ref: str) -> tuple[str, int]:
     if "://" not in ref:
         host, port = ref.rsplit(":", 1)
@@ -63,9 +63,7 @@ def resolve(ref: str) -> tuple[str, int]:
     return handler(url)
 
 
-def vm_address(name: str, provider: str, *, port: int = _DEFAULT_GCP_PORT) -> tuple[str, int]:
-    if provider != "gcp":
-        raise ValueError(f"unsupported provider: {provider}")
+def gcp_vm_address(name: str, *, port: int = _DEFAULT_GCP_PORT) -> tuple[str, int]:
     return _gcp_internal_ip(name), port
 
 
@@ -84,6 +82,9 @@ def _gcp_internal_ip(name: str) -> str:
 
 
 def _gcp_credentials() -> tuple[str, str]:
+    import google.auth
+    import google.auth.transport.requests
+
     creds, project_id = google.auth.default(scopes=[_OAUTH_SCOPE])
     if not project_id:
         raise LookupError("google.auth.default() returned no project_id; set GOOGLE_CLOUD_PROJECT")
@@ -92,6 +93,8 @@ def _gcp_credentials() -> tuple[str, str]:
 
 
 def _fetch_vm_aggregated(project_id: str, token: str, name: str) -> dict | None:
+    import httpx
+
     url = f"{_COMPUTE_BASE}/projects/{project_id}/aggregated/instances"
     headers = {"Authorization": f"Bearer {token}"}
     params: dict[str, str] = {"filter": f"name eq {name}"}
@@ -110,4 +113,4 @@ def _fetch_vm_aggregated(project_id: str, token: str, name: str) -> dict | None:
             params["pageToken"] = page_token
 
 
-register_scheme("gcp", lambda url: vm_address(url.host, "gcp", port=url.port or _DEFAULT_GCP_PORT))
+register_scheme("gcp", lambda url: gcp_vm_address(url.host, port=url.port or _DEFAULT_GCP_PORT))

@@ -181,21 +181,11 @@ class JwtTokenManager:
     """
 
     def __init__(self, signing_key: str, db: ControllerDB | None = None):
+        self._signing_key = signing_key
         self._verifier = JwtVerifier(signing_key)
         self._db = db
         # Tracks the last wall-clock time we wrote last_used_at per jti.
         self._last_touched: dict[str, float] = {}
-
-    @property
-    def signing_key(self) -> str:
-        """HMAC secret used to sign and verify JWTs. Do not log or serialize."""
-        return self._verifier.signing_key
-
-    @property
-    def verifier(self) -> JwtVerifier:
-        """Underlying stateless verifier, suitable for handing to a log server
-        or other process that should validate but not issue tokens."""
-        return self._verifier
 
     def create_token(
         self,
@@ -212,7 +202,7 @@ class JwtTokenManager:
             "iat": int(now),
             "exp": int(now + ttl_seconds),
         }
-        return jwt.encode(payload, self._verifier.signing_key, algorithm=JWT_ALGORITHM)
+        return jwt.encode(payload, self._signing_key, algorithm=JWT_ALGORITHM)
 
     def verify(self, token: str) -> VerifiedIdentity:
         """Verify JWT signature and claims, check revocation.
@@ -276,6 +266,9 @@ class ControllerAuth:
     login_verifier: TokenVerifier | None = None
     gcp_project_id: str | None = None
     jwt_manager: JwtTokenManager | None = None
+    # HMAC signing key — handed to the log-server subprocess via env var. Do
+    # not log or serialize.
+    signing_key: str | None = None
     optional: bool = False
 
 
@@ -301,7 +294,12 @@ def create_controller_auth(
 
             worker_token = _create_worker_jwt(db, jwt_mgr, now)
             logger.info("Authentication disabled — null-auth mode (workers use JWT)")
-            return ControllerAuth(verifier=jwt_mgr, worker_token=worker_token, jwt_manager=jwt_mgr)
+            return ControllerAuth(
+                verifier=jwt_mgr,
+                worker_token=worker_token,
+                jwt_manager=jwt_mgr,
+                signing_key=signing_key,
+            )
         logger.info("Authentication disabled — null-auth mode, no DB")
         return ControllerAuth()
 
@@ -327,8 +325,8 @@ def create_controller_auth(
 
         verifier: TokenVerifier | None = jwt_mgr
     else:
-        ephemeral_key = secrets.token_hex(32)
-        jwt_mgr = JwtTokenManager(ephemeral_key)
+        signing_key = secrets.token_hex(32)
+        jwt_mgr = JwtTokenManager(signing_key)
         worker_token = jwt_mgr.create_token(WORKER_USER, "worker", f"iris_k_worker_{secrets.token_hex(8)}")
         verifier = None
 
@@ -361,6 +359,7 @@ def create_controller_auth(
         login_verifier=login_verifier,
         gcp_project_id=gcp_project_id,
         jwt_manager=jwt_mgr,
+        signing_key=signing_key,
         optional=optional,
     )
 

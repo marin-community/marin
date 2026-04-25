@@ -30,12 +30,6 @@ logger = logging.getLogger(__name__)
 SESSION_COOKIE = "iris_session"
 
 
-# `VerifiedIdentity` is defined in `rigging.auth` so the stateless
-# `JwtVerifier` (also in rigging) and the iris-side issuer share the same
-# type. Re-exported here for the many iris call sites that import
-# `from iris.rpc.auth import VerifiedIdentity`.
-
-
 def _extract_cookie(cookie_header: str, name: str) -> str | None:
     """Extract a named cookie value from a raw Cookie header."""
     if not cookie_header:
