@@ -335,19 +335,16 @@ def _sample_step_for(
     src: DatakitSource,
     normalized: StepSpec,
     sample_fraction: float,
-    base: str,
 ) -> StepSpec:
     """Per-source post-normalize sampler. Copies first ceil(N * fraction) shards."""
     return sample_normalized_shards_step(
         name=f"data/datakit/{src.name}",
         normalized=normalized,
         sample_fraction=sample_fraction,
-        override_output_path=f"{base}/{src.name}",
     )
 
 
 def build_testbed_steps(
-    run_id: str,
     sources: Sequence[DatakitSource] | None = None,
     target_total_tokens_b: float = RAW_TARGET_TOTAL_TOKENS_B,
 ) -> list[StepSpec]:
@@ -359,14 +356,13 @@ def build_testbed_steps(
     Each :class:`DatakitSource` already carries its full
     ``(download, ..., normalize)`` :class:`StepSpec` chain; this function
     appends the testbed-specific sample stage on top of every source's
-    terminal normalize step. Tokenize runs in the training executor graph
-    (see :mod:`experiments.datakit_testbed.train`), not the ferry.
+    terminal normalize step. Sample outputs land at hashed paths
+    (``data/datakit/{src.name}-{hash}/``) — the hash incorporates
+    ``sample_fraction`` so different fractions don't collide. Tokenize
+    runs in the training executor graph (see
+    :mod:`experiments.datakit_testbed.train`), not the ferry.
 
     Args:
-        run_id: Per-run identifier; sample output paths land under
-            ``data/datakit/{run_id}/...``. Normalize outputs land at
-            canonical run-independent paths (``normalized/<name>-<hash>``)
-            so they're reused across runs.
         sources: DatakitSource list to ferry. ``None`` auto-selects every
             entry from :func:`all_sources` whose normalize output is
             already cached on GCS, matching the run_source_sampling
@@ -386,7 +382,6 @@ def build_testbed_steps(
     if not sources:
         raise ValueError("build_testbed_steps requires at least one source")
 
-    base = f"data/datakit/{run_id}"
     fractions = proportional_sample_fractions(sources, target_total_tokens_b=target_total_tokens_b)
 
     # Flat list of every source's normalize chain + terminal sample step.
@@ -396,7 +391,7 @@ def build_testbed_steps(
     all_steps: list[StepSpec] = []
     for src in sources:
         all_steps.extend(src.normalize_steps)
-        all_steps.append(_sample_step_for(src, src.normalized, fractions[src.name], base))
+        all_steps.append(_sample_step_for(src, src.normalized, fractions[src.name]))
 
     logger.info(
         "Built testbed DAG: %d sources, %d steps (normalize chains + sample), target %.0fB tokens",

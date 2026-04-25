@@ -85,13 +85,12 @@ def main() -> None:
 
     marin_prefix = os.environ["MARIN_PREFIX"]
     logger.info("MARIN_PREFIX defaulted to %s", marin_prefix)
-    run_id = os.environ["TESTBED_RUN_ID"]
 
     _guard_staged_regions(marin_prefix)
 
     _write_status("running", marin_prefix)
     with log_time("Datakit testbed ferry total wall time"):
-        dag = build_testbed_steps(run_id)
+        dag = build_testbed_steps()
         logger.info(
             "Running %d steps across %d tokenized sources",
             len(dag.all_steps),

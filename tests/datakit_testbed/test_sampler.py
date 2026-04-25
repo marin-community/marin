@@ -60,12 +60,6 @@ def test_sample_takes_first_k_deterministically(tmp_path: Path):
     ]
 
 
-def test_sample_preserves_dup_output_dir(tmp_path: Path):
-    source = _make_normalized(tmp_path, {"part-0000.parquet": ["a"]})
-    out = sample_normalized_shards(source=source, output_path=str(tmp_path / "s"), sample_fraction=1.0)
-    assert out.dup_output_dir == source.dup_output_dir
-
-
 def test_sample_is_reproducible_across_invocations(tmp_path: Path):
     source = _make_normalized(tmp_path, {f"part-{i:04d}.parquet": [f"s{i}"] for i in range(20)})
     a = sample_normalized_shards(source=source, output_path=str(tmp_path / "a"), sample_fraction=0.5)

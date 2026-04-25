@@ -88,7 +88,7 @@ def main() -> None:
     tokenizer = TESTBED_TOKENIZER
     run_id = "baseline"
 
-    testbed_steps = build_testbed_steps(run_id, target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
+    testbed_steps = build_testbed_steps(target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
     logger.info("Materializing %d ferry StepSpecs under %s", len(testbed_steps), STAGING_PREFIX)
     StepRunner().run(testbed_steps)
 

@@ -3,7 +3,7 @@
 
 """Datakit Testbed fuzzy-dedup variant — non-trivial dedup arm of the ranking protocol.
 
-Shares the sample stage (``build_testbed_steps(run_id, ...)``) with the
+Shares the sample stage (``build_testbed_steps(...)``) with the
 baseline and with other fuzzy-dedup variants so one set of sampled
 parquet serves every hyperparam sweep. Each variant then MinHash→fuzzy-dups
 →consolidates the sampled data with its own fuzzy-dedup parameters,
@@ -197,7 +197,7 @@ def main() -> None:
     tokenizer = TESTBED_TOKENIZER
     run_id = "fuzzy_dedup"
 
-    testbed_steps = build_testbed_steps(run_id, target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
+    testbed_steps = build_testbed_steps(target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
     logger.info("Materializing %d ferry StepSpecs under %s", len(testbed_steps), STAGING_PREFIX)
     StepRunner().run(testbed_steps)
 
