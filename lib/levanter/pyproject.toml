@@ -70,7 +70,7 @@ dependencies = [
     "deepdiff>=8.6.2",
     "lenses",
     "jinja2",  # needed for apply_chat_template
-    "protobuf>=6,<7",  # ensure TB/XProf compatibility
+    "protobuf>=6",
     "immutabledict",
 ]
 
