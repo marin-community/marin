@@ -248,3 +248,38 @@
   to slightly worse but does not require a shifted LR at this scale.
 - Next action: continue monitoring d768 through final summaries and the launch
   of `d768-lr4x`.
+
+### 2026-04-25 16:09 - d768 partial completion and d1024 startup
+
+- Hypothesis: the first finished d768 points should show whether the LR optimum
+  shifts materially from the d512 optimum before the delayed high-LR points
+  finish.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260425-184727`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris shows 16 succeeded jobs and 9 running jobs; no terminal failures.
+  - Seven d768 low-to-2x jobs are finished.
+  - d768 `2.83x` is still running at W&B step 8160 with Paloma macro 3.8212.
+  - d768 `4x` has launched and is running at W&B step 47.
+  - The first six d1024 jobs have launched (`0.25x` through `1.41x`), with no
+    W&B training summaries yet.
+  - Finished d768 W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Tok/s |
+    | --- | --- | ---: | ---: | ---: | ---: |
+    | 0.25x | finished | 10342 | 3.5921 | 3.3211 | 273,923 |
+    | 0.354x | finished | 10342 | 3.5244 | 3.2554 | 275,041 |
+    | 0.5x | finished | 10342 | 3.4701 | 3.2025 | 275,812 |
+    | 0.707x | finished | 10342 | 3.4387 | 3.1675 | 274,990 |
+    | 1x | finished | 10342 | 3.4279 | 3.1535 | 274,617 |
+    | 1.41x | finished | 10342 | 3.4295 | 3.1581 | 273,881 |
+    | 2x | finished | 10342 | 3.4724 | 3.1922 | 274,267 |
+    | 2.83x | running | 8160 | 3.8212 | 3.4842 | 272,446 |
+    | 4x | running | 47 | 11.7911 | 10.9101 | 277,573 |
+
+- Interpretation: among finished d768 points, the optimum remains at `1x`, with
+  `1.41x` effectively tied and `0.707x` close. This matches the d512 optimum
+  more than it suggests a scale-dependent LR shift, but the high-LR tail is not
+  finished yet.
+- Next action: continue monitoring d768 `2.83x`/`4x` and d1024 startup.
