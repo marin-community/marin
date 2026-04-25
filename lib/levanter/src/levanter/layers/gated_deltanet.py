@@ -36,9 +36,13 @@ import jax
 import jax.numpy as jnp
 from jax import lax
 
+import numpy as np
+
 import haliax as hax
 import haliax.nn as hnn
 from haliax import Axis, NamedArray
+from haliax._src.state_dict import with_prefix
+from haliax.state_dict import ModuleWithStateDictSerialization
 
 
 # ---------- small utilities ----------
@@ -558,7 +562,7 @@ def chunk_gated_delta_rule(
 # ---------- Layer ----------
 
 
-class GatedDeltaNet(eqx.Module):
+class GatedDeltaNet(ModuleWithStateDictSerialization, eqx.Module):
     """Complete Gated DeltaNet layer (projections + conv + kernels + norm + out proj).
 
     Block structure (per token t):
@@ -849,7 +853,12 @@ class GatedDeltaNet(eqx.Module):
             new_state = (new_conv_state, S_new)
         return y_out, new_state
 
-    def to_state_dict(self) -> dict[str, jnp.ndarray]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
+        # Map internal field names to HF checkpoint key names
+        return {"o_norm": "norm"}
+
+    def _packed_state_dict(self) -> dict[str, jnp.ndarray]:
+        """Return state dict in packed (internal) format."""
         return {
             "in_proj_qkvz.weight": jnp.array(self.in_proj_qkvz.weight.array),
             "in_proj_ba.weight": jnp.array(self.in_proj_ba.weight.array),
@@ -861,6 +870,7 @@ class GatedDeltaNet(eqx.Module):
         }
 
     def load_state_dict(self, state: dict[str, jnp.ndarray]) -> "GatedDeltaNet":
+        """Load from packed format (in_proj_qkvz, in_proj_ba)."""
         cfg = self.config
 
         def _assign_linear_weight(named_linear: hnn.Linear, np_weight: jnp.ndarray, out_axis: Axis, in_axis: Axis):
@@ -894,9 +904,151 @@ class GatedDeltaNet(eqx.Module):
         )
 
     @classmethod
-    def from_state_dict(cls, config: GatedDeltaNetConfig, state: dict[str, jnp.ndarray], *, key) -> "GatedDeltaNet":
-        """
-        Build a fresh layer from config + state dict.
-        """
+    def create_from_state_dict(
+        cls, config: GatedDeltaNetConfig, state: dict[str, jnp.ndarray], *, key
+    ) -> "GatedDeltaNet":
+        """Build a fresh layer from config + packed state dict."""
         layer = cls.init(config, key=key)
         return layer.load_state_dict(state)
+
+    # -- haliax state dict protocol (for HFCheckpointConverter integration) --
+
+    def _repack_hf_split_to_packed(self, state_dict: dict, prefix: str | None) -> dict[str, jnp.ndarray]:
+        """Convert HF checkpoint format (split projections) to internal packed format.
+
+        HF checkpoint stores: in_proj_qkv, in_proj_z, in_proj_a, in_proj_b (4 separate).
+        Levanter uses: in_proj_qkvz (QKVZ packed), in_proj_ba (ba packed).
+
+        The packed format interleaves per K-head:
+          qkvz: [Q_h(dk), K_h(dk), V_chunk(ratio*dv), Z_chunk(ratio*dv)] per K-head
+          ba:   [b_chunk(ratio), a_chunk(ratio)] per K-head
+        """
+        cfg = self.config
+        ratio = cfg.num_v_heads // cfg.num_k_heads
+        hidden = cfg.Embed.size
+
+        def _get(key):
+            full_key = with_prefix(prefix, key) if prefix else key
+            return np.asarray(state_dict[full_key], dtype=np.float32)
+
+        # QKV: (2*key_dim + value_dim, hidden) → split into Q, K, V
+        qkv_w = _get("in_proj_qkv.weight")
+        q_w = qkv_w[: cfg.key_dim]
+        k_w = qkv_w[cfg.key_dim : 2 * cfg.key_dim]
+        v_w = qkv_w[2 * cfg.key_dim :]
+        z_w = _get("in_proj_z.weight")
+
+        # Reshape to per-head and interleave [Q, K, V_chunk, Z_chunk]
+        q_h = q_w.reshape(cfg.num_k_heads, cfg.head_k_dim, hidden)
+        k_h = k_w.reshape(cfg.num_k_heads, cfg.head_k_dim, hidden)
+        v_h = v_w.reshape(cfg.num_k_heads, ratio * cfg.head_v_dim, hidden)
+        z_h = z_w.reshape(cfg.num_k_heads, ratio * cfg.head_v_dim, hidden)
+        qkvz_w = np.concatenate([q_h, k_h, v_h, z_h], axis=1).reshape(-1, hidden)
+
+        # ba: interleave [b_chunk, a_chunk] per K-head
+        b_w = _get("in_proj_b.weight").reshape(cfg.num_k_heads, ratio, hidden)
+        a_w = _get("in_proj_a.weight").reshape(cfg.num_k_heads, ratio, hidden)
+        ba_w = np.concatenate([b_w, a_w], axis=1).reshape(-1, hidden)
+
+        conv_w = _get("conv1d.weight").squeeze(1)  # (C, 1, K) → (C, K)
+
+        return {
+            "in_proj_qkvz.weight": qkvz_w,
+            "in_proj_ba.weight": ba_w,
+            "conv_weight": conv_w,
+            "A_log": _get("A_log"),
+            "dt_bias": _get("dt_bias"),
+            "o_norm.weight": _get("norm.weight"),
+            "out_proj.weight": _get("out_proj.weight"),  # keep as-is; Linear handles reshape
+        }
+
+    def _repack_packed_to_hf_split(self, prefix: str | None) -> dict[str, np.ndarray]:
+        """Convert internal packed format to HF checkpoint format (split projections)."""
+        cfg = self.config
+        ratio = cfg.num_v_heads // cfg.num_k_heads
+        hidden = cfg.Embed.size
+
+        # Unpack qkvz
+        qkvz_w = np.asarray(self.in_proj_qkvz.weight.array, dtype=np.float32)
+        per_head = 2 * cfg.head_k_dim + 2 * ratio * cfg.head_v_dim
+        qkvz_h = qkvz_w.reshape(cfg.num_k_heads, per_head, hidden)
+
+        q_h = qkvz_h[:, : cfg.head_k_dim]
+        k_h = qkvz_h[:, cfg.head_k_dim : 2 * cfg.head_k_dim]
+        v_h = qkvz_h[:, 2 * cfg.head_k_dim : 2 * cfg.head_k_dim + ratio * cfg.head_v_dim]
+        z_h = qkvz_h[:, 2 * cfg.head_k_dim + ratio * cfg.head_v_dim :]
+
+        qkv_w = np.concatenate([q_h.reshape(-1, hidden), k_h.reshape(-1, hidden), v_h.reshape(-1, hidden)], axis=0)
+        z_w = z_h.reshape(-1, hidden)
+
+        # Unpack ba
+        ba_w = np.asarray(self.in_proj_ba.weight.array, dtype=np.float32)
+        ba_h = ba_w.reshape(cfg.num_k_heads, 2 * ratio, hidden)
+        b_w = ba_h[:, :ratio].reshape(-1, hidden)
+        a_w = ba_h[:, ratio:].reshape(-1, hidden)
+
+        conv_w = np.asarray(self.conv_weight, dtype=np.float32)[:, np.newaxis, :]  # (C, K) → (C, 1, K)
+
+        out_w = np.asarray(self.out_proj.weight.array, dtype=np.float32)
+        if out_w.ndim == 3:
+            out_w = out_w.reshape(hidden, -1)
+
+        result = {
+            "in_proj_qkv.weight": qkv_w,
+            "in_proj_z.weight": z_w,
+            "in_proj_a.weight": a_w,
+            "in_proj_b.weight": b_w,
+            "conv1d.weight": conv_w,
+            "A_log": np.asarray(self.A_log, dtype=np.float32),
+            "dt_bias": np.asarray(self.dt_bias, dtype=np.float32),
+            "norm.weight": np.asarray(self.o_norm.weight.array, dtype=np.float32),
+            "out_proj.weight": out_w,
+        }
+        return {with_prefix(prefix, k): v for k, v in result.items()}
+
+    def to_state_dict(self, prefix: str | None = None) -> dict:
+        """Serialize to HF checkpoint format (split projections)."""
+        return self._repack_packed_to_hf_split(prefix)
+
+    def from_state_dict(self, state_dict: dict, prefix: str | None = None) -> "GatedDeltaNet":
+        """Load from HF checkpoint format or packed format.
+
+        Transforms HF split keys (in_proj_qkv, in_proj_z, in_proj_a, in_proj_b)
+        into the packed keys that GDN's child modules expect (in_proj_qkvz, in_proj_ba),
+        then delegates to the default handler which recurses into children normally.
+
+        Also handles conv1d.weight → conv_weight rename and squeeze.
+        """
+        from haliax._src.state_dict import default_eqx_module_from_state_dict
+
+        split_key = with_prefix(prefix, "in_proj_qkv.weight")
+
+        if split_key in state_dict:
+            # HF checkpoint format — repack split projections into packed keys
+            packed = self._repack_hf_split_to_packed(state_dict, prefix)
+            # Write packed values into state dict under the keys children expect.
+            # _state_dict_key_map maps o_norm→norm, so norm.weight is already correct.
+            # The other fields use their field names directly as keys.
+            state_dict[with_prefix(prefix, "in_proj_qkvz.weight")] = packed["in_proj_qkvz.weight"]
+            state_dict[with_prefix(prefix, "in_proj_ba.weight")] = packed["in_proj_ba.weight"]
+            state_dict[with_prefix(prefix, "conv_weight")] = packed["conv_weight"]
+            # norm.weight is already at the right key (via _state_dict_key_map o_norm→norm)
+
+        else:
+            # Packed format — normalize key variants
+            conv1d_key = with_prefix(prefix, "conv1d.weight")
+            conv_key = with_prefix(prefix, "conv_weight")
+            if conv1d_key in state_dict and conv_key not in state_dict:
+                state_dict[conv_key] = np.asarray(state_dict[conv1d_key]).squeeze(1)
+
+            # Handle o_norm.weight vs norm.weight (key_map expects "norm")
+            onorm_key = with_prefix(prefix, "o_norm.weight")
+            norm_key = with_prefix(prefix, "norm.weight")
+            if onorm_key in state_dict and norm_key not in state_dict:
+                state_dict[norm_key] = state_dict[onorm_key]
+
+        # Don't reshape out_proj.weight here — the flatten/unflatten pipeline
+        # (from_torch_compatible_state_dict) handles Linear 2D↔articulated conversion.
+
+        # Delegate to default handler which recurses into children
+        return default_eqx_module_from_state_dict(self, state_dict, prefix)
