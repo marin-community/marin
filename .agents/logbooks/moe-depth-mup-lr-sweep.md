@@ -65,3 +65,24 @@
 - Interpretation: local behavior is wired correctly; no TPU jobs launched yet.
 - Next action: run broader contract checks, then decide whether to submit the
   sweep jobs.
+
+### 2026-04-25 11:33 - Iris submission blocked
+
+- Hypothesis: the depth MuP LR sweep can be submitted through the standard MoE
+  Iris command once the branch is pushed.
+- Command:
+  - `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.moe.depth_mup_lr_sweep`
+  - `.venv/bin/iris --config lib/iris/examples/marin-dev.yaml job run --no-wait --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.moe.depth_mup_lr_sweep`
+- Config:
+  - active GCP account: `kaiyuew@stanford.edu`
+  - GCP project: `hai-gcp-models`
+  - `WANDB_API_KEY`: present
+  - controller tunnel: none found on `localhost:10000`
+- Result: both production and dev configs failed before creating a job:
+  `GCP API error 403: Required 'compute.instances.list' permission for
+  'projects/hai-gcp-models'`.
+- Interpretation: the run submission is blocked by local GCP permissions, not
+  by the experiment code or Iris job configuration.
+- Next action: retry submission after authenticating with an account that can
+  list controller VMs in `hai-gcp-models`, or provide an explicit
+  `--controller-url` for an existing Iris tunnel.
