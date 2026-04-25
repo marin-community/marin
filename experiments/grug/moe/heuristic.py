@@ -116,6 +116,7 @@ class MoeAdamHHeuristic:
     base_hidden_layer_ratio: int = 64
     layer_scaling_factor: float = 4.0
     layer_formula_offset: int = 9
+    depth_mup_residual_scaling: bool = False
 
     # --- Constraints ---
     max_learning_rate: float = 0.05
@@ -219,6 +220,7 @@ class MoeAdamHHeuristic:
             sliding_window=seq_len,
             initializer_std=0.5 / math.sqrt(hidden_size),
             qk_mult=1.3,
+            depth_mup_residual_scaling=self.depth_mup_residual_scaling,
         )
 
 

@@ -6,7 +6,7 @@ This workflow is designed to run end-to-end without human confirmation. The
 agent is authorized to:
 
 - Create branches, commit, and push without asking
-- Create GitHub experiment issues and post comments
+- Create GitHub experiment issues and post comments as `whenwen`
 - Submit Iris jobs and kill only jobs submitted by self
 - Run experiments through both gates autonomously
 
@@ -117,6 +117,13 @@ Most promotable changes will land in one of three files:
 ## Documentation & GitHub Issues
 
 Create a new branch for each experiment issue. Branch off `main`.
+
+For GitHub write actions in this workflow, **do not use the GitHub connector**.
+Create experiment issues, PRs, labels, issue comments, and review-thread updates
+through local GitHub auth as `whenwen` (for example `gh`, or GitHub
+REST/GraphQL with the local token if `gh` is unavailable). Before the first
+write action, verify the authenticated user is `whenwen`; if it is not, stop and
+report the mismatch.
 
 Follow `.agents/skills/agent-research/SKILL.md` for all documentation, logbooks,
 W&B tracking, and GitHub experiment issue management tied to work in this
