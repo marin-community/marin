@@ -2543,9 +2543,11 @@ class ControllerTransitions:
         """Buffer a kill request for a direct-provider task.
 
         Inserts a kill entry into dispatch_queue with worker_id=NULL.
-        Drained by drain_for_direct_provider().
+        Drained by drain_for_direct_provider(). ``task_id`` is stored
+        verbatim — callers in direct-provider land may pass IDs that
+        aren't canonical ``JobName`` strings.
         """
-        self._store.dispatch.enqueue_kill(cur, None, JobName.from_wire(task_id), Timestamp.now().epoch_ms())
+        self._store.dispatch.enqueue_kill(cur, None, task_id, Timestamp.now().epoch_ms())
 
     # =========================================================================
     # Test helpers

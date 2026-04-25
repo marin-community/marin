@@ -2001,11 +2001,14 @@ class DispatchQueueStore:
             (str(worker_id), payload_proto, now_ms),
         )
 
-    def enqueue_kill(self, cur: TransactionCursor, worker_id: WorkerId | None, task_id: JobName, now_ms: int) -> None:
+    def enqueue_kill(self, cur: TransactionCursor, worker_id: WorkerId | None, task_id: str, now_ms: int) -> None:
+        """Insert a kill entry. ``task_id`` is stored verbatim — direct-provider
+        callers may pass non-canonical IDs (e.g. K8s pod-derived strings) and
+        the dispatch_queue.task_id column is plain TEXT."""
         cur.execute(
             "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
             "VALUES (?, 'kill', NULL, ?, ?)",
-            (str(worker_id) if worker_id is not None else None, task_id.to_wire(), now_ms),
+            (str(worker_id) if worker_id is not None else None, task_id, now_ms),
         )
 
     def drain_direct_kills(self, cur: TransactionCursor) -> list[str]:
