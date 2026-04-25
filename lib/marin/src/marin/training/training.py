@@ -84,10 +84,19 @@ TrainOnPodConfigT = TypeVar("TrainOnPodConfigT", TrainLmOnPodConfig, TrainDpoOnP
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
+TEMPORARY_CHECKPOINTS_PREFIX = "checkpoints-temp"
 
 
 def _cli_helpers_module():
     return importlib.import_module("levanter.infra.cli_helpers")
+
+
+def _temporary_checkpoint_base_path(output_path: str) -> str:
+    """Return a temporary checkpoint namespace scoped to one executor output path."""
+    output_path_name = os.path.basename(output_path.rstrip("/"))
+    if not output_path_name:
+        raise ValueError(f"Could not derive temporary checkpoint namespace from output_path={output_path!r}")
+    return os.path.join(marin_temp_bucket(ttl_days=14, prefix=TEMPORARY_CHECKPOINTS_PREFIX), output_path_name)
 
 
 def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodConfigT:
@@ -109,7 +118,7 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
         checkpointer=replace(
             pod_config.train_config.trainer.checkpointer,
             base_path=os.path.join(pod_config.output_path, DEFAULT_CHECKPOINTS_PATH),
-            temporary_base_path=marin_temp_bucket(ttl_days=14, prefix="checkpoints-temp"),
+            temporary_base_path=_temporary_checkpoint_base_path(pod_config.output_path),
         ),
     )
 

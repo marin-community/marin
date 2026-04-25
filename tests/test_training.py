@@ -16,6 +16,7 @@ from marin.training.training import (
     TrainLmOnPodConfig,
     _doublecheck_paths,
     _prepare_training_run,
+    _update_config_to_use_out_path,
 )
 
 
@@ -143,3 +144,24 @@ def test_prepare_training_run_adds_eval_extra_for_lm_eval_harness(trainer_config
         _, _, _, extras = _prepare_training_run(config)
 
     assert extras == ["tpu", "eval"]
+
+
+def test_output_path_scopes_temporary_checkpoints(trainer_config):
+    """Executor output paths namespace temporary checkpoints to avoid cross-run restores."""
+    config = TrainLmOnPodConfig(
+        train_config=train_lm.TrainLmConfig(
+            data=MockDataConfig(cache_dir="gs://bucket/path"),
+            trainer=trainer_config,
+        ),
+        resources=ResourceConfig.with_tpu("v4-8"),
+        output_path="gs://marin-us-east5/experiments/checkpoints/foo/bar/output-hash/",
+    )
+
+    with patch(
+        "marin.training.training.marin_temp_bucket", return_value="gs://marin-tmp-us-east5/ttl=14d/checkpoints-temp"
+    ):
+        updated = _update_config_to_use_out_path(config)
+
+    checkpointer = updated.train_config.trainer.checkpointer
+    assert checkpointer.base_path == "gs://marin-us-east5/experiments/checkpoints/foo/bar/output-hash/checkpoints"
+    assert checkpointer.temporary_base_path == "gs://marin-tmp-us-east5/ttl=14d/checkpoints-temp/output-hash"
