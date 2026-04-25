@@ -17,6 +17,11 @@ import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
+import { useMediaQuery } from '@/composables/useMediaQuery'
+
+// Tailwind's `sm` breakpoint is 640px. Cards on mobile, table on desktop.
+// v-if-switched (not CSS-hidden) so only one variant is in the DOM.
+const isMobile = useMediaQuery('(max-width: 639px)')
 
 const props = defineProps<{
   jobId: string
@@ -836,7 +841,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </h3>
         </div>
         <!-- Mobile: card grid (one card per child job) -->
-        <div class="sm:hidden grid grid-cols-1 gap-2">
+        <div v-if="isMobile" class="grid grid-cols-1 gap-2">
           <div
             v-for="node in flattenedChildJobs"
             :key="'child-card-' + node.job.jobId"
@@ -888,7 +893,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         </div>
 
         <!-- Desktop: table -->
-        <div class="hidden sm:block overflow-x-auto">
+        <div v-else class="overflow-x-auto">
         <table class="w-full border-collapse">
           <thead>
             <tr class="border-b border-surface-border">
@@ -993,7 +998,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
 
       <template v-else>
       <!-- Mobile: card grid (one card per task) -->
-      <div class="sm:hidden grid grid-cols-1 gap-2">
+      <div v-if="isMobile" class="grid grid-cols-1 gap-2">
         <div
           v-for="task in paginatedTasks"
           :key="'task-card-' + task.taskId"
@@ -1056,7 +1061,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
       </div>
 
       <!-- Desktop: table -->
-      <div class="hidden sm:block overflow-x-auto">
+      <div v-else class="overflow-x-auto">
         <table class="w-full border-collapse md:table-fixed">
           <colgroup class="hidden md:table-column-group">
             <col class="w-[4%]" />

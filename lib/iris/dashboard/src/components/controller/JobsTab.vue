@@ -10,6 +10,13 @@ import { timestampMs, formatDuration, formatRelativeTime } from '@/utils/formatt
 import { flattenLoadedJobTree, getLeafJobName } from '@/utils/jobTree'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
+import { useMediaQuery } from '@/composables/useMediaQuery'
+
+// Tailwind's `sm` breakpoint is 640px. Below that we render mobile cards;
+// at/above we render the desktop table. Switched via v-if so only one
+// variant is in the DOM at a time (otherwise duplicate text trips Playwright
+// locator's `.first` matcher in CI).
+const isMobile = useMediaQuery('(max-width: 639px)')
 
 const PAGE_SIZE = 50
 
@@ -550,12 +557,12 @@ function sortIndicator(field: SortField): string {
       : (hasActiveFilter ? 'No jobs matching filter' : 'No jobs')"
   />
 
-  <!-- Mobile/desktop split: cards on xs, table on sm+. Pagination is shared. -->
+  <!-- Mobile/desktop split: cards on xs, table on sm+. Pagination is shared.
+       Switched via v-if (not CSS) so only one variant renders, keeping the DOM
+       free of duplicate text-content that confuses Playwright `.first` matchers. -->
   <template v-else>
-  <!-- Mobile: stacked card-grid (one card per job).
-       Tables don't fit on phones once you have a status badge + progress bar +
-       a job-name column, so on xs we render a vertical grid of cards instead. -->
-  <div class="sm:hidden grid grid-cols-1 gap-2">
+  <!-- Mobile: stacked card-grid (one card per job). -->
+  <div v-if="isMobile" class="grid grid-cols-1 gap-2">
     <div
       v-for="node in flattenedJobs"
       :key="'card-' + node.job.jobId"
@@ -637,7 +644,7 @@ function sortIndicator(field: SortField): string {
   </div>
 
   <!-- Desktop: tabular layout (sm+) -->
-  <div class="hidden sm:block overflow-x-auto">
+  <div v-else class="overflow-x-auto">
     <table class="w-full border-collapse">
       <thead>
         <tr class="border-b border-surface-border">
