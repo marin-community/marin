@@ -4,8 +4,11 @@
 """Auth setup for the controller — single source of truth for verifier creation.
 
 All tokens are JWTs signed with a persistent HMAC-SHA256 key stored in the
-controller_secrets table. Verification is a pure crypto check plus an
-in-memory revocation set — no per-RPC database hit.
+controller_secrets table. Verification is a pure crypto check (delegated to
+``rigging.auth.JwtVerifier``) plus a controller-local revocation set lookup —
+no per-RPC database hit. Revocation lives only in this process; verifiers
+running elsewhere (e.g. the log server) accept any signed, non-expired token
+until it expires.
 """
 
 from __future__ import annotations
@@ -173,17 +176,19 @@ class JwtTokenManager:
     """Issues HMAC-SHA256 JWTs and verifies them against a DB-backed
     revocation set.
 
-    Composes a `rigging.auth.JwtVerifier` for signature/expiry/revocation
-    checks; adds the issuer half (`create_token`), DB-backed revocation
-    hydration (`load_revocations`), and sampled `last_used_at` write-back
-    on the verify hot path (at most once per key per
-    ``_TOUCH_INTERVAL_SECONDS``).
+    Composes a `rigging.auth.JwtVerifier` for signature/expiry checks
+    only — revocation is owned here, locally to the controller process,
+    and never crosses a process boundary. Adds the issuer half
+    (`create_token`), DB-backed revocation hydration (`load_revocations`),
+    and sampled `last_used_at` write-back on the verify hot path (at most
+    once per key per ``_TOUCH_INTERVAL_SECONDS``).
     """
 
     def __init__(self, signing_key: str, db: ControllerDB | None = None):
         self._signing_key = signing_key
         self._verifier = JwtVerifier(signing_key)
         self._db = db
+        self._revoked_jtis: set[str] = set()
         # Tracks the last wall-clock time we wrote last_used_at per jti.
         self._last_touched: dict[str, float] = {}
 
@@ -211,7 +216,10 @@ class JwtTokenManager:
         per ``_TOUCH_INTERVAL_SECONDS`` to avoid hot-path DB writes.
         """
         identity, payload = self._verifier.verify_full(token)
-        self._maybe_touch(payload.get("jti", ""))
+        jti = payload.get("jti", "")
+        if jti in self._revoked_jtis:
+            raise ValueError("Token has been revoked")
+        self._maybe_touch(jti)
         return identity
 
     def _maybe_touch(self, jti: str) -> None:
@@ -230,7 +238,7 @@ class JwtTokenManager:
 
     def revoke(self, jti: str) -> None:
         """Add a JTI to the in-memory revocation set."""
-        self._verifier.revoke(jti)
+        self._revoked_jtis.add(jti)
 
     def load_revocations(self, db: ControllerDB) -> None:
         """Load revoked key_ids from api_keys into the revocation set.
@@ -248,7 +256,7 @@ class JwtTokenManager:
                 (now_ms,),
                 decoders={"key_id": str},
             )
-            self._verifier.set_revocations({row.key_id for row in rows})
+            self._revoked_jtis = {row.key_id for row in rows}
 
 
 # ---------------------------------------------------------------------------

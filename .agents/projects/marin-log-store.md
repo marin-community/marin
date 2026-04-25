@@ -1,22 +1,35 @@
 # Marin Log-Store Extraction Plan
 
-**Status:** Draft · 2026-04-24
+**Status:** Draft · 2026-04-25
 **Owner:** Russell
 **Related design:** `docs/design/marin-service-architecture.md`
 
 ## Goal
 
-Lift logging out of `lib/iris` into a new `lib/finelog` package, and in doing so
-introduce the generic service primitives the architecture doc calls for:
+Lift logging out of `lib/iris` into a new `lib/finelog` package, and in doing
+so introduce the service primitives the architecture doc calls for:
 
-1. A reusable `EndpointsService` in `lib/rigging` (Register / Lookup / List /
-   Unregister) that Iris hosts but does not own.
-2. A URL-scheme resolver in `lib/rigging` supporting `iris://`, `gcp://`, and
-   bare `host:port`.
-3. A domain-level `LogClient` / `LogServer` pair in `lib/finelog`, independent
+1. A pluggable URL resolver in `lib/rigging` that converts logical service
+   references (`gcp://<vm>[:port]`, `iris://<cluster>?endpoint=<name>`, bare
+   `host:port`) into `(host, port)`. Schemes register handlers; `iris://`
+   lives in `iris.client.resolver_plugin` so `rigging` stays proto-free and
+   iris-free.
+2. A domain-level `LogClient` / `LogServer` pair in `lib/finelog`, independent
    of the Iris controller process.
-4. A Dockerfile and declarative `system-services` entry so the log-server can
-   run on its own VM and be restarted independently of the Iris controller.
+3. A Dockerfile and declarative `system-services` cluster YAML entry so the
+   log-server runs as an independently-deployed GCP VM. Workers and the
+   controller find it through the resolver, **not** through any registration
+   RPC.
+
+We deliberately do **not** introduce a new `EndpointsService` RPC, a
+self-registration heartbeat, or any controller-mediated lookup for the log
+server. System services like `finelog` live at a stable provider-managed
+identity (e.g. a GCP VM named `finelog-server`); the resolver translates that
+identity to a current `(host, port)` on demand. When the VM is recreated, the
+resolver returns the new IP on the next call. See D3, D7.
+
+(`finelog` because it is fine. The name was chosen for tone, not technical
+content; do not read meaning into it.)
 
 The migration must finish with no caller (worker, controller, CLI, test) still
 importing `iris.log_server` or `iris.cluster.log_store`. Controller restarts
@@ -59,25 +72,62 @@ what exists today — verify before acting on it.
 
 ### What `lib/rigging` has today
 
-- Utilities only: `filesystem.py`, `timing.py`, `log_setup.py`, `distributed_lock.py`, `config_discovery.py`.
-- No proto infra, no buf.yaml, no service-layer code.
-- Dependencies are limited to `fsspec`, `gcsfs`, `s3fs`. No protobuf.
+Phase 0 + Phase 1 of this plan have already shipped on `rjpower/log-store`
+(commits `244b57135`, `468dbfcaf`, `91027b13d`):
 
-### Authn wrinkle
+- `lib/rigging/src/rigging/auth.py` — `JwtVerifier` (Phase 0). The verifier
+  is currently *not* fully stateless: it carries a `_revoked_jtis` set
+  (`auth.py:27`) plus `revoke()` / `set_revocations()` plus a check at
+  `auth.py:44`. We are jettisoning all four (see D4).
+- `lib/rigging/src/rigging/resolver.py` — `ServiceURL`, `register_scheme`,
+  `is_registered`, `resolve`, `gcp_vm_address`, plus the eagerly-registered
+  `gcp://` handler (`resolver.py:116`). Single flat file (the originally-
+  planned `resolver/` subpackage was collapsed in `468dbfcaf`; the
+  speculative `provider=` arg was dropped from the helper in `9931883ea`).
+- `lib/rigging/tests/test_resolver.py`, `test_jwt_verifier.py` cover them.
 
-`iris.log_server.main._build_auth_interceptors` (line 112) uses a
+Other utilities unchanged: `filesystem.py`, `timing.py`, `log_setup.py`,
+`distributed_lock.py`, `config_discovery.py`.
+
+Dependencies: `fsspec`, `gcsfs`, `s3fs`, `google-auth`, `httpx`, `PyJWT`.
+No protobuf. No connect-python.
+
+### What's landed in `lib/iris` for this project
+
+- `lib/iris/src/iris/client/resolver_plugin.py` — registers `iris://` with
+  `rigging.resolver`. Used **only** for actor-endpoint lookup (job-scoped
+  rendezvous). System services like `finelog` are addressed via `gcp://`
+  directly; the iris:// hop is unnecessary for them.
+- `lib/iris/src/iris/client/__init__.py:29` — side-effect import that
+  activates the plugin.
+- `iris.cluster.controller.auth.JwtTokenManager` (`auth.py:172`) composes a
+  `JwtVerifier`, owns the revocation set today via `_verifier.revoke(...)`
+  (callers at `service.py:2190,2264`) and `_verifier.set_revocations(...)`
+  (callers at `auth.py:293,315`). The plan moves that revocation set into
+  `JwtTokenManager` itself so the rigging verifier becomes pure stateless.
+
+### Authn wrinkle (Phase 0, landed)
+
+`iris.log_server.main._build_auth_interceptors` (line 112) used a
 **function-scope import** of `iris.cluster.controller.auth.JwtTokenManager` —
 the log server verifies tokens signed by the controller. The function-scope
-import is a deliberate workaround acknowledged in the existing code comments,
-because a top-level import would violate the iris rule
-"all imports at top of file." When the log server moves out of `lib/iris`,
-that workaround is no longer viable: any import shape
-(`finelog → iris.controller.auth`) is a reverse dependency.
+import was a deliberate workaround acknowledged in the existing code
+comments, because a top-level import would violate the iris rule "all
+imports at top of file." Once the log server moved out of `lib/iris`, that
+workaround was no longer viable: any import shape (`finelog →
+iris.controller.auth`) is a reverse dependency.
 
-This forces a concrete extraction: `JwtTokenManager` splits into
-`rigging.auth.JwtVerifier` (stateless verify/decode) and a thin iris-side
-issuer (DB-backed token creation, revocation). Both the log server and the
-controller import the verifier from rigging. See D4 and Phase 0.
+The split landed in `244b57135`: `JwtTokenManager` now composes a
+`rigging.auth.JwtVerifier` (signature/expiry only, intended-stateless) and
+keeps the issuer half locally. The verifier is shared between the log
+server and the controller.
+
+**Followup in this plan (D4):** the verifier still carries a revocation set
+that doesn't survive a process boundary cleanly. We drop revocation from
+the verifier entirely; the controller-side `JwtTokenManager` owns its own
+revocation set locally. The log server doesn't need revocation at all —
+JWTs are short-lived (15 min default), so revocation is a nice-to-have on
+the issuer side, not a security boundary on the verifier side.
 
 ### `time.proto` wrinkle
 
@@ -126,80 +176,107 @@ create `lib/rigging/src/rigging/proto/time.proto` with a minimal
 both iris and finelog depend on it. `iris.time.Timestamp` goes away after a
 one-shot rewrite of `.proto` imports.
 
-### D3. We do not add a new endpoints RPC at all
+### D3. No new endpoints RPC; system services bypass the controller entirely
 
-(Revised 2026-04-25: was originally "add `rigging.endpoints.EndpointsService` as
-a second service alongside `ControllerService`." That added too much surface for
-the actual benefit at our scale.)
+(Revised 2026-04-25: was originally "add `rigging.endpoints.EndpointsService`
+as a second service alongside `ControllerService`." Then briefly "piggy-back
+on `ControllerService.ListEndpoints` for system endpoints." Settled on the
+shape below: the controller is not in the system-service lookup path at all.)
 
 Two independent things carry the word "endpoint":
 
-- **Actor endpoints** (job-scoped rendezvous written by coordinators and read
-  by workers — the `EndpointStore` SQL table).
-- **System endpoints** (cluster-scoped service addresses like
-  `/system/log-server`).
+- **Actor endpoints** — job-scoped rendezvous written by coordinators and
+  read by workers. Stored in the `EndpointStore` SQL table; reachable via
+  `ControllerService.{Register,Unregister,List}Endpoint`. Continues
+  unchanged. The `iris://<cluster>?endpoint=<name>` resolver scheme exists
+  for these.
+- **System endpoints** — cluster-scoped service addresses like the
+  log-server.
 
-The architecture doc's `EndpointsService` was a generic primitive for the
-latter. We can defer that abstraction: today there's exactly one cluster type
-(`marin`), and iris's existing `ControllerService.ListEndpoints` already
-returns both flavors merged (`_system_endpoints` dict + `EndpointStore`). We
-piggy-back on it.
+For system services we **bypass** the controller's endpoint lookup. The log
+server is a GCP-managed VM with a stable name (e.g. `finelog-server`).
+Cluster YAML names it; the cluster YAML value is itself a resolver URL
+(`gcp://finelog-server` in prod, `127.0.0.1:<port>` in dev). Workers and the
+controller pass that URL straight to `LogClient.connect(...)`, which calls
+`rigging.resolver.resolve(...)`.
 
 In this project we:
 
 - **Do NOT** add a new `EndpointsService` proto/server/client.
-- For system-service lookup, callers route through the URL resolver (D5),
-  whose `iris://` handler is a plugin that calls
-  `ControllerServiceClientSync.list_endpoints(prefix=..., exact=True)`.
-- The plugin lives in `iris.client`, not `rigging`. `rigging.resolver` stays
-  proto-free and has no iris dependency.
-- System-service addresses are still seeded into the controller's existing
-  `_system_endpoints` dict from cluster YAML at boot, exactly as today.
-- Self-registration RPCs are out of scope; cluster orchestration places
-  services and writes their addresses into config.
+- **Do NOT** seed `/system/log-server` into the controller's
+  `_system_endpoints` dict in prod. (The dev/in-process path keeps doing
+  it for backwards-compat with any code that still queries
+  `ListEndpoints(prefix="/system/...")`. New code does not.)
+- **Do NOT** add a self-registration RPC or heartbeat. The log server
+  doesn't tell anyone where it is. Its identity is its GCP VM name; the
+  resolver is the only mediator.
+- Move VM-recovery logic into the resolver retry path (D11): when a `gcp://`
+  resolution becomes stale (VM recreated, IP changed), the next
+  `RemoteLogClient` call evicts its cached transport and re-resolves,
+  which finds the new address.
 
-This keeps the blast radius small and is genuinely simpler than the original
-two-service plan: no new wire surface, no new bootstrap order, no
-double-source-of-truth between actor and system endpoints.
+This is materially simpler than going through the controller for system
+services: no new RPC, no controller-side state, no controller-restart
+recovery story, no race between seeding and clients connecting, no
+controller hop on every push.
 
-### D4. JWT verifier moves to `lib/rigging`
+### D4. JWT verifier in `lib/rigging` is pure stateless
 
-`JwtTokenManager` has two halves: issuance (needs DB for revocation) and
-verification (stateless). The verifier half moves to
-`rigging.auth.JwtVerifier`. Iris keeps the issuer (a subclass / composition)
-in `lib/iris`. This is strictly additive; no wire changes. The concrete
-extraction lives in **Phase 0** (see §Phasing) — it ships before anything
-else because both the new log-server process and the existing in-iris
-verification path depend on it.
+The Phase-0 extraction (landed) put the verifier in `rigging.auth`. We now
+strip the revocation set out of it as well:
 
-### D5. URL-scheme resolver is a small registry
+- `rigging.auth.JwtVerifier` becomes signature + expiry only. Drop
+  `_revoked_jtis`, `revoke()`, `set_revocations()`, and the in-`verify_full`
+  revocation check (`auth.py:27,44,53,56`).
+- `iris.cluster.controller.auth.JwtTokenManager` keeps a revocation set
+  *of its own*, checked locally inside its `verify()` after delegating to
+  `_verifier.verify_full`. Existing callers
+  (`service.py:2190`, `:2264`, `auth.py:293`, `:315`) continue to work
+  unchanged.
+- The log-server's verifier doesn't get a revocation set at all. JWTs are
+  15-minute-TTL by default; issuer-side revocation is a soft-delete that
+  takes effect within one TTL when the controller stops reissuing.
 
-(Revised 2026-04-25: was originally a single `match` statement; we found a
-registry buys nontrivial decoupling at almost no cost — `rigging` doesn't have
-to know about iris-specific RPCs.)
+Why this matters for the log-server extraction: the verifier is the only
+auth code that crosses the new process boundary. Keeping it stateless means
+no revocation-list sync between controller and log-server, no shared
+mutable state, no "what if the controller's revocation set is newer than
+the log-server's" race. The cost is at most one TTL of acceptance lag for a
+revoked credential — acceptable for our threat model and operationally
+identical to the cost we already pay when a token is signed but
+not-yet-revoked.
 
-The resolver in `lib/rigging/src/rigging/resolver/` exposes:
+### D5. URL-scheme resolver is a small registry (landed)
+
+The resolver lives at `lib/rigging/src/rigging/resolver.py` (single flat
+file; the originally-planned `resolver/` subpackage was collapsed in
+`468dbfcaf`).
 
 ```python
 def register_scheme(scheme: str, handler: Callable[[ServiceURL], tuple[str, int]]) -> None: ...
 def resolve(ref: str) -> tuple[str, int]: ...
 ```
 
-`resolve` short-circuits bare `host:port`, parses URLs into `ServiceURL`, and
-dispatches to a registered handler. Built-in handlers:
+`resolve` short-circuits bare `host:port`, parses URLs into `ServiceURL`,
+and dispatches to a registered handler.
 
-- `gcp://<vm-name>` — registered eagerly in `rigging.resolver`. Uses
-  `vm_address(name, provider="gcp")`.
+Built-in handlers (one, today):
 
-`iris://` is **not** built into rigging. `iris.client.resolver_plugin` calls
-`register_scheme("iris", ...)` at import time; the handler uses iris's
-existing `ControllerServiceClientSync.list_endpoints`. Importing `iris.client`
-activates the plugin. Off-cluster contexts that don't import iris simply
-can't resolve `iris://`, which is the right failure mode.
+- `gcp://<vm-name>[:port]` — registered eagerly at import
+  (`resolver.py:116`). Calls `gcp_vm_address(name, port=url.port or 10002)`.
+  Port is taken from the URL when present (commit `91027b13d`), otherwise
+  defaults to 10002. This is the scheme system services use.
+
+`iris://<cluster>?endpoint=<name>` is **not** built into rigging. It lives
+in `iris.client.resolver_plugin`, which is side-effect imported by
+`iris/client/__init__.py:29`. The handler calls
+`ControllerServiceClientSync.list_endpoints(prefix=name, exact=True)`.
+**It is for actor endpoints only** — coordinator → worker rendezvous
+within a job. Per D3, system services do not pass through this path.
 
 The architecture doc calls out `coreweave://` and `k8s://` as **known
-followups** — we do not stub them in this project. A fresh scheme is a
-one-line `register_scheme` call from whichever package owns the cluster type.
+followups** — we do not stub them. A fresh scheme is a one-line
+`register_scheme` call from whichever package owns the cluster type.
 
 ### D6. Resolver is synchronous and returns `(host, port)`
 
@@ -214,22 +291,41 @@ project. The CLI invocation shape does not need to leak tunnel details
 today: the CLI runs on a cluster VM via the existing SSH path, same as
 today.
 
-### D8. Cluster YAML gains `system-services:`
+### D8. Cluster YAML gains `system_services:` as a name → resolver-URL map
 
-```yaml
-system-services:
-  log-server:
-    provider: gcp
-    vm-type: n2-standard-4
-    image: marin/finelog:${TAG}
-    health: /healthz
-    env:
-      FINELOG_REMOTE_DIR: gs://marin/logs
+`IrisClusterConfig` is a **proto** message (`lib/iris/src/iris/rpc/config.proto:476`),
+not a Python dataclass. Adding system-services is a proto-schema change.
+
+```protobuf
+// lib/iris/src/iris/rpc/config.proto
+message IrisClusterConfig {
+  // ... existing fields ...
+
+  // System services live as cluster peers (typically GCP VMs). Each value
+  // is a resolver URL understood by rigging.resolver.resolve(). Today
+  // that means gcp://<vm>[:port] for VMs and bare host:port for pinned
+  // dev endpoints.
+  map<string, string> system_services = 90;
+}
 ```
 
-Reconciliation is the cluster CLI's job, not the controller's. For this
-migration we wire the declaration into config-loading only; the actual
-reconciler is added in a sibling phase (§4).
+YAML form:
+
+```yaml
+system_services:
+  log-server: gcp://finelog-server
+```
+
+That's the entire schema. We deliberately do not introduce
+`SystemServiceConfig` with `provider/vm_type/image/health/env` fields in
+this project — those are for the reconciler followup, and adding dead
+config now would pre-commit to a schema we haven't validated. The
+controller and the worker only need a string they can hand to
+`LogClient.connect(...)`.
+
+Reconciliation (auto-spinning the VM) is **not** part of this project; we
+accept that the GCP VM exists, named as the YAML promises. Phase 7 documents
+the operator runbook.
 
 ### D9. Local-dev fallback: `finelog.client.StderrLogClient`
 
@@ -245,189 +341,129 @@ The helper depends on `finelog.LogLevel` enum values. Putting it in
 (reverse dependency). Place it at `finelog/store/_types.py` next to the
 other enum/keyname helpers. Close Open Question #2.
 
-### D11. `RemoteLogClient.connect()` caches, re-resolves on failure
+### D11. `RemoteLogClient` caches, re-resolves on failure (load-bearing for VM moves)
 
-The resolved `(host, port)` is cached for the lifetime of the client. On
-any RPC-layer error that indicates the target has gone away (connect
-refused, TLS handshake failure, HTTP 5xx from a stale VM), the client
-evicts its cached transport and re-runs the resolver on the next call.
-This matches today's `LogPusher` retry/backoff semantics and lets us move
-the log server to a new VM without restarting workers.
+`RemoteLogClient.connect(url)` stores the URL and lazily resolves it on
+first send. The resolved `(host, port)` is cached for the lifetime of the
+client. On any transport-layer error that indicates the target has gone
+away — connect refused, TLS handshake failure, HTTP 5xx from a stale VM —
+the client evicts its cached transport and re-runs the resolver on the
+next call.
+
+This is **the only mechanism** by which we recover from a log-server VM
+moving (deletion + recreation, IP reassignment, image roll). Specifically:
+
+1. Operator recreates the `finelog-server` GCP VM. The new VM gets a new
+   internal IP.
+2. Workers are still pushing to the old IP. The next push fails with
+   connect-refused.
+3. `RemoteLogClient` evicts the cached transport and calls
+   `rigging.resolver.resolve("gcp://finelog-server")` again.
+4. The resolver hits the GCP API (`resolver.py:_fetch_vm_aggregated`) and
+   returns the new IP.
+5. Push succeeds against the new VM.
+
+There is no controller involvement in this loop. The resolver going
+directly to GCP is what makes it work without a heartbeat.
+
+Backoff/retry semantics on `LogPusher` are unchanged from today — push
+failures already retry with backoff. The new behavior is purely "evict
+cached `(host, port)` after a transport error" inside `RemoteLogClient`.
 
 ### D12. Restart-independence is a prod-config guarantee, not a dev-config one
 
 The goal "controller restarts do not restart the log server" holds **only**
-when `system_services.log-server.address` is set in cluster config. In the
-dev / single-box path (`system_services: {}`), the log server runs
-in-process as a sibling thread; controller restart does restart it — same
-as today. Document this in the cluster YAML reference.
+when `system_services.log-server` is a `gcp://...` URL pointing at a
+real, externally-managed VM. In the dev / single-box path
+(`system_services: {}` or unset), the controller spins up an in-process
+log server on a dynamic port and uses `127.0.0.1:<port>` as the URL;
+controller restart does restart it — same as today. Document this in the
+cluster YAML reference.
 
 ---
 
 ## Phasing
 
-Phases are ordered so each one can land, be tested, and be reverted on its own.
-Phase 0 is an auth prerequisite. Phases 1–3 are strictly additive (no Iris
-behavior change). Phase 4 is the bootstrap glue. Phase 5 cuts over Iris
-internals. Phase 6 deletes the old paths. Phase 7 is operational polish.
+Phases 0–2 have already shipped on `rjpower/log-store` (commits
+`244b57135`, `468dbfcaf`, `91027b13d`). Phase 3 introduces `lib/finelog`.
+Phase 4 wires cluster YAML. Phase 5 cuts Iris callers over to
+`finelog.client`. Phase 6 deletes the old paths. Phase 7 is operational
+polish.
 
 **Core migration:** Phases 0–6 minus the "optional cut-overs" noted inside
 Phase 5 (CLI direct-connect and dashboard forwarder deletion).
 
-**Operational followup:** Phase 7 and the optional Phase 5 cut-overs can land
-as a separate PR stack and do not block deletion in Phase 6.
+**Operational followup:** Phase 7 and the optional Phase 5 cut-overs can
+land as a separate PR stack and do not block deletion in Phase 6.
 
-### Phase 0 — Split `JwtTokenManager` into verifier + issuer
+### Phase 0 — Split `JwtTokenManager` into verifier + issuer **(landed; followup pending)**
 
-Smallest possible step, runs before proto work. Pure refactor, no wire
-changes.
+Status: shipped in `244b57135`. Followup work for **this** plan: drop the
+revocation set from `rigging.auth.JwtVerifier` (D4). After the followup:
 
-- Extract the stateless verify/decode half of
-  `iris.cluster.controller.auth.JwtTokenManager` into
-  `rigging.auth.JwtVerifier`.
-- Leave the issuer half (DB-backed token creation, revocation list
-  hydration) in `iris.cluster.controller.auth`; have it compose a
-  `JwtVerifier` rather than subclassing.
-- Update `iris.log_server.main._build_auth_interceptors` to import
-  `JwtVerifier` from rigging at the top of the file, removing the
-  function-scope workaround.
-- Port existing JWT tests to cover the verifier in its new home.
+- `JwtVerifier` is pure stateless: signature + expiry checks only.
+- `iris.cluster.controller.auth.JwtTokenManager` keeps its own
+  `_revoked_jtis` set and applies the check inside its `verify()` after
+  delegating to `_verifier.verify_full(...)`.
+- Existing controller callers (`service.py:2190`, `:2264`, `auth.py:293`,
+  `:315`) keep working unchanged because `JwtTokenManager.revoke(...)` and
+  `JwtTokenManager.load_revocations(db)` survive — only their internal
+  delegation to the verifier changes.
+- The log-server's verifier (in finelog) takes a stock `JwtVerifier` with
+  no revocation list. JWTs are short-lived (15 min default); revoke-on-
+  controller eventually-consistent on log-server is acceptable.
 
-**Done when:** `uv run pyrefly` passes, all existing auth tests pass,
-`JwtTokenManager` no longer exposes its verify half directly.
+**Done when:** `uv run pyrefly` passes; all existing auth tests pass; the
+verifier exposes only `verify(token)` and `verify_full(token)`.
 
-### Phase 1 — Resolver registry in `lib/rigging`
+### Phase 1 — Resolver in `lib/rigging` **(landed)**
 
-(Revised 2026-04-25: this phase originally added an `EndpointsService` proto +
-in-memory server + Connect client. That was struck out per D3. The phase now
-delivers only the resolver, which keeps `rigging` proto-free.)
+Status: shipped in `244b57135`, refined in `468dbfcaf`, `91027b13d`. The
+landed file is **flat** (`lib/rigging/src/rigging/resolver.py`), not a
+subpackage.
 
-Phase 1 has only the resolver infrastructure (formerly Phase 2). No new RPCs,
-no buf.yaml, no proto generation in rigging.
+What it provides today (verified against `resolver.py`):
 
-The resolver and its layout move here from the old Phase 2; see §Phase 2
-below for the full spec.
+- `ServiceURL.parse(ref)` (`resolver.py:32–43`) — wraps `urllib.parse.urlsplit`.
+  Surfaces `scheme`, `host`, `port`, and a `query: dict[str, str]`
+  (first value per key). Rejects URLs with userinfo or a missing host.
+- `register_scheme(scheme, handler)` (`resolver.py:51`) — adds a handler
+  to a module-level `_HANDLERS` dict.
+- `resolve(ref)` (`resolver.py:55`) — short-circuits bare `host:port`,
+  otherwise parses and dispatches via `_HANDLERS`. Unknown scheme →
+  `ValueError`.
+- `gcp_vm_address(name, *, port=10002)` (`resolver.py:66`) — hits Compute
+  Engine `aggregated/instances` via `google.auth` + `httpx` (lazy-imported),
+  returns `(internal_ip, port)`. CoreWeave / k8s would each get their own
+  helper if added.
+- `is_registered(scheme)` (`resolver.py:54`) — predicate so callers and
+  tests don't have to peek at `_HANDLERS`.
+- `gcp://` is registered eagerly (`resolver.py:116`):
+  `register_scheme("gcp", lambda url: gcp_vm_address(url.host, port=url.port or 10002))`.
+  This lets callers say `gcp://my-vm:9000` to override the default port.
 
-### Phase 2 — Resolver in `lib/rigging`
+`iris://` lives in `iris.client.resolver_plugin` (Phase 2 below). Per D3
+and D5, `iris://` is **only** for actor endpoints; system services use
+`gcp://...` directly.
 
-**Add the URL-scheme resolver.**
+Tests: `lib/rigging/tests/test_resolver.py`,
+`lib/rigging/tests/test_jwt_verifier.py`.
 
-```
-lib/rigging/src/rigging/resolver/
-  __init__.py     # exports resolve, ServiceURL, vm_address
-  url.py          # ServiceURL parse/format
-  providers.py    # vm_address(name, provider) with gcp/coreweave/k8s match
-  resolver.py    # resolve(ref: str) -> tuple[str, int]
-```
+### Phase 2 — Iris resolver plugin **(landed)**
 
-`ServiceURL`:
+Status: shipped alongside Phase 1. The module
+`lib/iris/src/iris/client/resolver_plugin.py` registers `iris://` at import
+(side-effect import at `iris/client/__init__.py:29`). The handler queries
+the existing `ControllerService.ListEndpoints(prefix=name, exact=True)` —
+so actor-endpoint reads work without any new RPC.
 
-- Parses `scheme://authority?endpoint=<path>`.
-- Uses stdlib `urllib.parse`. No URL validation beyond scheme / authority /
-  query-param extraction.
+The plugin **only** serves the actor-endpoint use case, by D3. System
+services like the log server are addressed via `gcp://...` directly,
+without round-tripping through the controller.
 
-`resolve`:
-
-```python
-_HANDLERS: dict[str, Callable[[ServiceURL], tuple[str, int]]] = {}
-
-def register_scheme(scheme: str, handler) -> None:
-    _HANDLERS[scheme] = handler
-
-def resolve(ref: str) -> tuple[str, int]:
-    if "://" not in ref:
-        host, port = ref.rsplit(":", 1)
-        return host, int(port)
-    url = ServiceURL.parse(ref)
-    handler = _HANDLERS.get(url.scheme)
-    if handler is None:
-        raise ValueError(f"unsupported scheme: {url.scheme!r}")
-    return handler(url)
-```
-
-`gcp://` is registered eagerly at module-load time inside
-`rigging.resolver`:
-
-```python
-def _resolve_gcp(url: ServiceURL) -> tuple[str, int]:
-    return vm_address(url.host, provider="gcp")
-
-register_scheme("gcp", _resolve_gcp)
-```
-
-`iris://` is **not** registered by rigging — that handler lives in
-`iris.client.resolver_plugin` (see Phase 1.5). Off-cluster code that doesn't
-import iris cannot resolve `iris://` by design.
-
-`vm_address`:
-
-- Initial implementation: **GCP only**. Non-gcp `provider` values raise
-  `ValueError(f"unsupported provider: {provider}")`. CoreWeave and k8s are
-  known followups per the architecture doc.
-- Accepts `name` and `provider`; returns `(host, port)` by metadata server
-  lookup (GCP instance attributes). Tests mock the GCP client.
-
-**Where does the GCP lookup code live today?** Provisioning has bits of this
-scattered; we'll consolidate them here in a followup, not in this phase. For
-now, `vm_address(gcp)` uses the same `google.cloud.compute_v1` client that
-iris already uses (already a transitive dep via `google-cloud-tpu`).
-
-**Tests.** Under `lib/rigging/tests/resolver/`:
-
-- `test_url.py` — parse / format round-trips, bare `host:port`, missing scheme,
-  missing authority, query param extraction.
-- `test_resolve.py` — resolve(bare) short-circuits; resolve(gcp://) uses
-  mocked `vm_address`; unknown scheme raises; `register_scheme` allows a
-  test-local handler to be installed and called.
-- `test_providers_gcp.py` — `vm_address` with a mock GCP client.
-
-**Done when:** `cd lib/rigging && uv run pytest` is green.
-
-### Phase 1.5 — Iris resolver plugin
-
-A small new module `lib/iris/src/iris/client/resolver_plugin.py`. On import
-it registers an `iris://` handler:
-
-```python
-from rigging.resolver import register_scheme, ServiceURL
-from rigging.resolver.providers import vm_address
-from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.controller_pb2 import Controller as _Controller
-
-def _resolve_iris(url: ServiceURL) -> tuple[str, int]:
-    cluster = url.host
-    name = url.query["endpoint"]
-    controller_host, controller_port = vm_address(
-        f"iris-controller-{cluster}", provider="gcp"
-    )
-    client = ControllerServiceClientSync(
-        address=f"http://{controller_host}:{controller_port}"
-    )
-    response = client.list_endpoints(
-        _Controller.ListEndpointsRequest(prefix=name, exact=True)
-    )
-    if not response.endpoints:
-        raise KeyError(f"endpoint not found: {name}")
-    address = response.endpoints[0].address
-    host, port = address.rsplit(":", 1)
-    return host, int(port)
-
-register_scheme("iris", _resolve_iris)
-```
-
-Importing `iris.client` activates the plugin (via a side-effect import in
-`iris/client/__init__.py`). Off-cluster code that doesn't import iris has no
-`iris://` handler and gets `unsupported scheme` — that's the right failure.
-
-**Tests.** Under `lib/iris/tests/client/`:
-
-- `test_resolver_plugin.py` — registers a fake `vm_address` and a fake
-  in-process `ControllerService` to verify the iris:// path. Use the
-  existing iris testing patterns for spinning a controller stub.
-
-**Done when:** `iris.client` import installs the handler and a workspace
-import of `rigging.resolver.resolve("iris://marin?endpoint=/x")` succeeds
-in an iris-imported context.
+Followup (not blocking, not yet present):
+`lib/iris/tests/client/test_resolver_plugin.py` covering the iris:// path
+end-to-end against a fake controller stub.
 
 ### Phase 3 — Create `lib/finelog`
 
@@ -605,76 +641,62 @@ This is the interface-stability payoff the architecture doc describes.
 **Done when:** `cd lib/finelog && uv run pytest` is green. `lib/iris` is
 unchanged at this point — we only **added** a package.
 
-### Phase 4 — Embed `EndpointsService` in the Iris controller
+### Phase 4 — Cluster YAML carries the system-service URL
 
-**Single integration point.** In `iris.cluster.controller.controller.py`
-where the controller's ASGI stack is assembled, add one more mount:
+No new RPC. No controller-side seeding logic for the prod path. The
+controller's only job in this phase is to read a string from cluster YAML
+and pass it through to whoever connects.
 
-```python
-from rigging.endpoints import EndpointsServiceImpl
-from rigging.endpoints_connect import EndpointsServiceWSGIApplication
+**Proto change.** Add a field to `IrisClusterConfig`
+(`lib/iris/src/iris/rpc/config.proto:476`):
 
-endpoints_svc = EndpointsServiceImpl()
-# Pre-seed ONLY the explicitly-configured external services. Self-registered
-# system services (Phase 5.3's in-process log server, Phase 7's out-of-
-# process log server) register themselves via the service's own
-# EndpointsClient — Phase 4 does not seed those to avoid race conditions
-# with the self-registering writer.
-for name, svc in cluster_config.system_services.items():
-    if svc.address:
-        endpoints_svc.register(f"/system/{name}", svc.address)
-
-routes.append(Mount(
-    EndpointsServiceWSGIApplication.path,
-    app=WSGIMiddleware(EndpointsServiceWSGIApplication(service=endpoints_svc))
-))
+```protobuf
+// Cluster-scoped service URLs (resolver references). Each value is
+// understood by rigging.resolver.resolve(). Today: gcp://<vm>[:port] for
+// GCP-hosted services, bare host:port for pinned dev endpoints.
+map<string, string> system_services = 90;
 ```
 
-The existing `ControllerService.ListEndpoints` RPC is unchanged. We now have
-**two** ways to look up `/system/log-server`:
+This is wire-additive (new field number; existing clients ignore it).
 
-- Legacy: `ControllerService.ListEndpoints(prefix="/system/log-server")` —
-  still works; merges actor and system endpoints.
-- New: `EndpointsService.Lookup(name="/system/log-server")` — only system
-  endpoints.
+**Plumbing.** Three places touch this:
 
-New callers (phase 5) use the new path. Legacy callers keep working.
+1. `iris.cluster.config.IrisConfig` (the Python proto wrapper at
+   `config.py:1082`) — gains an accessor like `system_service(name) -> str
+   | None`. No new dataclass; we read the proto map directly.
+2. `iris.cluster.controller.controller.ControllerConfig.log_service_address`
+   (`controller.py:959`) is **removed**. Replaced by reading
+   `cluster_config.system_services["log-server"]` at the same boot site.
+3. The controller hands the string to `LogClient.connect(...)` — see
+   Phase 5.3.
 
-**Cluster config.** Add a `system_services` section to cluster YAML parsing
-(`lib/iris/src/iris/cluster/config.py` or wherever `IrisClusterConfig` is
-defined):
+**The dev / in-process path** (`system_services` does not contain
+`log-server`): the controller spins up an in-process `LogServiceImpl` on a
+dynamic port and uses `f"127.0.0.1:{port}"` (a bare host:port URL) as its
+log-server URL. Same shape, different value — every caller still goes
+through `LogClient.connect`. The `_system_endpoints` dict is no longer
+written to in this phase; if any legacy reader still needs
+`ListEndpoints(prefix="/system/log-server")` to return something, that
+reader needs a Phase-5 cutover instead of new seeding.
 
-```python
-@dataclass
-class SystemServiceConfig:
-    provider: str               # "gcp" | "external"
-    address: str | None = None  # for external or already-provisioned services
-    vm_type: str | None = None
-    image: str | None = None
-    health: str = "/healthz"
-    env: dict[str, str] = field(default_factory=dict)
-
-@dataclass
-class IrisClusterConfig:
-    ...
-    system_services: dict[str, SystemServiceConfig] = field(default_factory=dict)
-```
-
-The controller only reads `address` from this config and seeds the
-`EndpointsService`. **Provisioning** (spinning up the actual VM) is a sibling
-concern; for this phase we accept a pre-provisioned address (`address:
-10.0.0.5:10002` or `iris-controller-marin.internal:10002`). Full
-declarative provisioning is a followup.
+**What we don't add:** `SystemServiceConfig` with provider/vm-type/image/
+health/env fields. Those are reconciler-scope. Adding them now as dead
+config preselects a schema we haven't validated.
 
 **Tests.**
 
-- `lib/iris/tests/cluster/controller/test_endpoints_service.py` — controller
-  starts, exposes EndpointsService over its port, pre-seeded entries are
-  present, Register/Unregister work.
+- `lib/iris/tests/cluster/test_system_services_config.py` — load a YAML
+  fragment with `system_services: {log-server: gcp://finelog-server}`;
+  assert `IrisConfig` exposes the URL string verbatim.
+- A fake-handler resolver test: register a fake `gcp` handler in
+  `rigging.resolver`, set `system_services.log-server: gcp://finelog-test`,
+  call `resolve(...)` against the loaded URL, assert the fake handler
+  fires with `host="finelog-test"`.
 - Existing actor-endpoint tests must not regress.
 
-**Done when:** both endpoint services run side-by-side in the controller and
-a client can round-trip through `rigging.resolver.resolve("iris://marin?endpoint=/system/log-server")`.
+**Done when:** `IrisClusterConfig` carries the new field; the controller
+reads it; the dev/in-process fallback is unchanged in user-visible
+behavior. No new RPC surface.
 
 ### Phase 5 — Cut Iris over to `finelog.client`
 
@@ -686,27 +708,31 @@ once.
 
 `lib/iris/src/iris/cluster/worker/worker.py`:
 
-- Delete `_resolve_log_service`.
+- Delete `_resolve_log_service` and the `ControllerService.ListEndpoints`
+  call at `worker.py:194–202,266–275`.
 - Replace `LogPusher(server_url=..., resolver=self._resolve_log_service)` with:
 
   ```python
-  from finelog.client import RemoteLogClient, LogPusher, StderrLogClient
+  from finelog.client import RemoteLogClient, LogPusher
 
+  # Set by the controller at job-launch time. In prod this is the value
+  # of system_services["log-server"] from cluster YAML (e.g.
+  # "gcp://finelog-server"). In dev it is the controller's
+  # 127.0.0.1:<port>. Bare host:port also works.
   log_endpoint = self._worker_config.log_endpoint
-      or f"iris://{self._cluster_name}?endpoint=/system/log-server"
-
-  try:
-      log_client = RemoteLogClient.connect(log_endpoint)
-  except Exception:
-      # Off-cluster or unavailable — fall back to stderr so task logs
-      # aren't silently dropped.
-      logger.warning("log server unreachable; using stderr fallback")
-      log_client = StderrLogClient()
-
+  log_client = RemoteLogClient.connect(log_endpoint)
   self._log_pusher = LogPusher(log_client)
   ```
 
-- `WorkerConfig` gains `log_endpoint: str | None = None`.
+- `WorkerConfig` gains `log_endpoint: str` (required, not optional). The
+  controller populates it from `cluster_config.system_services["log-server"]`
+  for prod and from `127.0.0.1:<dev-port>` in the in-process dev path.
+
+- **No stderr fallback in the worker.** If the log endpoint is unreachable,
+  let `LogPusher`'s existing retry/backoff handle it; if it stays down,
+  let it fail loudly. Stderr-on-a-headless-VM is silent loss in disguise,
+  and the cluster is misconfigured if the log endpoint is missing — fail
+  fast.
 
 **5.2 — LogEntry → LogMessage call-site rewrite.** The `LogPusher` queue
 element type changes from `iris.rpc.logging_pb2.LogEntry` to
@@ -747,54 +773,59 @@ All fields 2 / 9 on those RPCs are now wire-typed against `finelog.LogEntry`
 
 `lib/iris/src/iris/cluster/controller/controller.py`:
 
-- Delete top-of-file imports from `iris.log_server.*` (lines 110–112).
-- Delete the in-process LogPusher / LogServiceProxy wiring (lines
-  ~1045–1071), including the `self._log_server: uvicorn.Server | None`
-  field at 1055.
-- Delete the `_start_local_log_server` method and its call site at 1060
-  (method body runs ~1162–1201).
-- Delete the `self._service._system_endpoints["/system/log-server"] = ...`
-  insertion (line ~1256).
+- Delete the import `from iris.log_server.main import build_log_server_asgi`
+  (`controller.py:111`).
+- Delete `self._log_server: uvicorn.Server | None = None`
+  (`controller.py:1055`).
+- Delete the in-process `LogPusher` / `LogServiceProxy` wiring at
+  `controller.py:1045–1071`, including the conditional at
+  `controller.py:1057–1060` (`if config.log_service_address: … else: …
+  self._start_local_log_server()`).
+- Delete the `_start_local_log_server` method (`controller.py:1162–1201`).
+- Delete the `self._service._system_endpoints["/system/log-server"] = …`
+  write (`controller.py:1256`). Per D3 we no longer write
+  `/system/log-server` into the controller's endpoint dict.
 - Delete the dashboard's legacy `PushLogs` forwarder at
-  `controller.py:281–282` (unless deferred to the optional follow-up
-  stack).
-- Replace with:
+  `controller.py:281–282` (or defer it to 5.5 if Phase 5 is too big).
+- Delete `ControllerConfig.log_service_address` (`controller.py:959`) and
+  the `main.py:241,253` plumbing that constructs it.
 
-  ```python
-  from finelog.client import RemoteLogClient, LogPusher
-  from finelog.server.app import build_asgi as build_finelog_asgi
-  from finelog.server.service import LogServiceImpl
+Replace with:
 
-  log_svc_cfg = config.system_services.get("log-server")
-  if log_svc_cfg and log_svc_cfg.address:
-      # Prod path: out-of-process log server declared in cluster YAML.
-      log_client = RemoteLogClient.connect(log_svc_cfg.address)
-  else:
-      # Dev / single-box mode: finelog code bound in a local uvicorn
-      # thread, registered in our own EndpointsService. Same behaviour as
-      # today's _start_local_log_server, just reading finelog's modules.
-      log_client = self._start_in_process_finelog(endpoints_svc)
+```python
+from finelog.client import RemoteLogClient, LogPusher
+from finelog.server.app import build_asgi as build_finelog_asgi
+from finelog.server.service import LogServiceImpl
 
-  self._controller_log_pusher = LogPusher(log_client)
-  ```
+log_url = cluster_config.system_services.get("log-server")
+if log_url:
+    # Prod path: log-server is a separate VM (typically gcp://finelog-server).
+    pass  # log_url goes straight to LogClient.connect below.
+else:
+    # Dev / single-box mode: bind finelog locally, get back a host:port URL.
+    log_url = self._start_in_process_finelog()
 
-- `_start_in_process_finelog` is the Phase-5.3 replacement for
-  `_start_local_log_server`. It:
-  1. Builds a `LogServiceImpl` against a MemStore (dev) or
-     `DuckDBLogStore` (if configured).
-  2. Spawns a uvicorn thread on a dynamic port (existing
-     `self._threads.spawn_server` pattern).
-  3. Registers `/system/log-server` into the controller's
-     `EndpointsServiceImpl` directly (same process, same object — no RPC
-     hop to register).
-  4. Returns a `RemoteLogClient` that targets that local port, so the
-     controller and the workers use the same code path (no
-     in-process-only client type).
+log_client = RemoteLogClient.connect(log_url)
+self._controller_log_pusher = LogPusher(log_client)
 
-- The subprocess supervisor `iris.cluster.controller.main._start_log_server`
-  (main.py:47, Popen at :230) is removed outright in Phase 5.3. Anyone
-  running the old bash flow should use the new Phase 7 Docker image. No
-  `--legacy-inprocess-log-server` flag.
+# Workers receive the same URL via WorkerConfig at launch time.
+self._worker_log_endpoint = log_url
+```
+
+`_start_in_process_finelog` is the Phase-5.3 replacement for
+`_start_local_log_server`. It:
+
+1. Builds a `LogServiceImpl` against a MemStore (dev) or `DuckDBLogStore`
+   (if configured).
+2. Spawns a uvicorn thread on a dynamic port (existing
+   `self._threads.spawn_server` pattern).
+3. **Returns** the bare URL `f"127.0.0.1:{port}"`. It does **not** write
+   to `self._service._system_endpoints`. Callers reach it through the
+   returned URL like any other.
+
+The subprocess supervisor `iris.cluster.controller.main._start_log_server`
+(`main.py:47`, Popen at `:230`) is removed in Phase 5.3. Operators running
+that flow migrate to the Phase-7 Docker image.
 
 **5.4 — CLI (optional — can ship after 6).**
 
@@ -873,29 +904,31 @@ ENTRYPOINT ["finelog-server"]
 CMD ["--port", "10002", "--log-dir", "/var/cache/finelog/logs"]
 ```
 
-**Registration on boot.** The `finelog-server` entrypoint registers itself
-with the cluster EndpointsService on startup:
+**No registration, no heartbeat.** Per D3, the `finelog-server` process
+does not register itself with the controller. The cluster YAML names the
+GCP VM (`gcp://finelog-server`); workers and the controller resolve that
+URL through the GCP Compute API on demand. Recovery from a VM
+restart/recreate is D11's cached-transport eviction on the next push.
 
-```python
-# finelog/server/main.py
-if os.environ.get("FINELOG_REGISTER_URL"):
-    # e.g. "iris://marin"
-    client = EndpointsClient.connect(resolve_controller(os.environ["FINELOG_REGISTER_URL"]))
-    client.register("/system/log-server", f"{my_host}:{port}")
-```
+**Operator runbook (VM moves).** When an operator recreates the
+`finelog-server` VM:
 
-Controller restarts drop registrations (because the EndpointsServiceImpl is
-in-memory). The log server re-registers on a periodic heartbeat (every 30s)
-to heal this. That heartbeat is part of Phase 7, not Phase 3.
+1. The new VM gets a new internal IP. The VM name is unchanged.
+2. In-flight workers' next `RemoteLogClient` push fails with
+   connect-refused.
+3. `RemoteLogClient` evicts its cached `(host, port)` and re-resolves
+   `gcp://finelog-server`. The GCP API returns the new IP.
+4. Push succeeds. No worker restart, no controller restart, no operator
+   touchpoint beyond replacing the VM.
 
-**SQLite-backed endpoints (followup, not in this plan).** The architecture
-doc calls this out as "if controller restarts dropping registrations becomes a
-problem, we can back it with SQLite." Heartbeat is simpler; defer the SQLite
-work.
+If the VM **name** changes, operators must update cluster YAML and bounce
+the controller (workers pick up the new URL via `WorkerConfig` on next
+launch). This is the documented operator step; it is rare and worth a
+controller restart.
 
-**Cluster CLI.** `iris cluster log-server restart` invokes the same path as
-any other system service. The CLI contract for this is part of the
-provisioning followup, not this project.
+**Cluster CLI.** `iris cluster log-server restart` is the same shape as any
+other system-service lifecycle command. The CLI contract is part of the
+reconciler followup, not this project.
 
 ---
 
@@ -903,71 +936,61 @@ provisioning followup, not this project.
 
 ### Unit tests
 
-Each phase lands its own pytest suite:
-
-- `lib/rigging/tests/endpoints/` — Register/Unregister/Lookup/List semantics.
-- `lib/rigging/tests/resolver/` — URL parsing, resolver dispatch, provider
-  stubs.
-- `lib/finelog/tests/` — client behaviour (Pusher batching/backoff, Stderr
-  fallback, connect()), server (MemStore + DuckDB stores), proto round-trips.
+- `lib/rigging/tests/test_resolver.py` (landed) — URL parsing, resolver
+  dispatch, gcp:// handler, register_scheme override path.
+- `lib/rigging/tests/test_jwt_verifier.py` (landed) — verifier signature
+  + expiry. After D4 lands, no revocation tests here (revocation moves
+  to iris-side `JwtTokenManager` tests).
+- `lib/finelog/tests/` — client behaviour (Pusher batching/backoff,
+  connect()), server (MemStore + DuckDB stores), proto round-trips.
 
 ### Integration tests
 
-- `lib/rigging/tests/test_end_to_end.py` — real uvicorn process hosting
-  EndpointsService; resolver round-trips.
-- `lib/finelog/tests/test_end_to_end.py` — real finelog-server on a dynamic
-  port; `LogClient.connect("host:port").write_batch(...).query(...)` returns
-  the written entries.
-- `lib/iris/tests/cluster/controller/test_endpoints_service.py` — Iris
-  controller exposes EndpointsService, preseeds system-services from config,
-  a client outside iris can resolve them.
-- `lib/iris/tests/e2e/test_attempt_logs.py` (existing, ported) — end-to-end
-  task log flow with the split log-server binary. This is the keystone test.
+- `lib/finelog/tests/test_end_to_end.py` — real finelog-server on a
+  dynamic port; `LogClient.connect("127.0.0.1:<port>").write_batch(...)
+  .query(...)` returns the written entries.
+- `lib/iris/tests/cluster/test_system_services_config.py` (new) — load a
+  YAML with `system_services: {log-server: gcp://finelog-test}`; a fake
+  `gcp` handler installed via `register_scheme` for the test resolves
+  the URL; assert the controller's `_worker_log_endpoint` matches what
+  was configured and `WorkerConfig.log_endpoint` carries it through.
+- `lib/iris/tests/e2e/test_attempt_logs.py` (existing, ported) — end-to-
+  end task log flow with the split log-server binary. Keystone test.
 
-**Multi-process lifecycle tests (new — one of the review's blocker calls).**
+**Lifecycle tests focused on D11 (the only recovery mechanism).**
 
-- `test_bootstrap_order_controller_before_logserver`: start a controller
-  with `system_services.log-server.address` pointing at a port that is
-  not yet listening. Start a worker. Worker's first `push()` must fall
-  back to `StderrLogClient` **or** retry-and-backoff without crashing.
-  Then start the finelog-server at that address; the worker's next
-  `push()` must succeed. This exercises the "controller exists, log
-  server does not yet exist" window.
-- `test_heartbeat_reregister_after_controller_restart`: start finelog
-  server with `FINELOG_REGISTER_URL=iris://marin`; it registers. Kill and
-  restart the controller process (discarding the in-memory
-  EndpointsService state). Within one heartbeat interval, `Lookup` must
-  return the log server again. Use a short interval in the test fixture
-  (1s) so this runs in seconds.
-- `test_logserver_moves_vm_reresolve`: simulate the log server process
-  moving to a new address. Confirm `LogPusher` / `RemoteLogClient`
-  re-resolves through `EndpointsService` rather than reusing the stale
-  `(host, port)` (D11 behaviour).
-- `test_client_cache_eviction_on_rpc_failure`: unit-level check for D11:
-  after a transport error, the next call on the same `RemoteLogClient`
-  re-invokes the resolver.
-- `test_auth_verifier_shared_between_controller_and_logserver`: Phase 0
-  sanity — a token issued by the controller's `JwtTokenManager` passes
-  verification in `finelog-server`'s `JwtVerifier`.
+- `test_logserver_moves_reresolve`: simulate two GCP IPs returned by a
+  fake `gcp_vm_address` — first call returns IP A, second returns IP B
+  (mimicking a VM recreation). Spin two `LogServiceImpl` instances on
+  those ports. Have a `RemoteLogClient` push successfully against IP A;
+  shut down the IP-A server; assert the next push, after a transport
+  error, re-resolves and lands on IP B without restarting the client.
+- `test_client_cache_eviction_on_rpc_failure`: unit-level check for D11
+  — after a transport error, the next call on the same `RemoteLogClient`
+  re-invokes `rigging.resolver.resolve(...)`.
+- `test_auth_verifier_pure_stateless`: D4 sanity — a token issued by
+  `JwtTokenManager` verifies in a stock `JwtVerifier(signing_key)` with
+  no revocation list configured.
 
 ### Manual / acceptance tests
 
 Before merging Phase 5:
 
-1. `iris cluster up` on a dev cluster with `system_services: {}` (no
-   log-server configured). Controller should start an in-process log server
-   via the Phase 5.3 `_start_local_inprocess_log_server` path. Submit a tiny
-   job; confirm logs appear in `iris logs`.
-2. Stand up a finelog-server container on a second VM; add `log-server:`
-   under `system_services` in cluster config with that address; restart
-   controller. Submit a job; confirm logs appear.
-3. Kill the controller VM mid-job. Restart it. The log-server keeps running;
-   the worker's next push re-resolves through the new controller's
-   EndpointsService (populated from the heartbeat in Phase 7).
-4. Kill the log-server VM mid-job. Workers fall back to stderr (visible in
-   `docker logs`). Restart log-server. Workers resume pushing (cached client
-   re-resolves after the first failed send — existing behaviour of
-   `LogPusher`).
+1. `iris cluster up` on a dev cluster with `system_services: {}`.
+   Controller starts an in-process finelog (Phase 5.3
+   `_start_in_process_finelog`). Submit a tiny job; confirm logs appear
+   in `iris logs`.
+2. Stand up a finelog-server VM on GCP named `finelog-server`; add
+   `system_services: {log-server: gcp://finelog-server}` to cluster YAML;
+   restart controller. Submit a job; confirm logs appear.
+3. Kill the controller VM mid-job. Restart it. The log-server keeps
+   running; workers' in-flight pushes succeed against their cached
+   `(host, port)`. Workers launched after restart get the same URL via
+   the new controller's `WorkerConfig`.
+4. Recreate the `finelog-server` VM mid-job (new IP, same name). The
+   first push after the change fails with connect-refused; the cached
+   transport is evicted; the next push re-resolves through the GCP API
+   and lands on the new IP. No worker restart.
 
 ### Pyrefly / lint
 
@@ -987,10 +1010,9 @@ Run after each phase, not at the end. Easier to isolate the failure.
 | Risk | Probability | Severity | Mitigation |
 | --- | --- | --- | --- |
 | `package iris.logging` rename breaks unknown external callers | Medium | Medium | Grep the whole tree for `iris.logging.` literals; communicate in PR description. |
-| `JwtTokenManager` split creates cycle | Medium | Low | Move verifier to `rigging.auth`. Iris imports rigging already. |
-| In-memory EndpointsService drops registrations on controller restart | High | Medium | Log-server heartbeat every 30s (Phase 7). |
-| Worker without log-server endpoint drops task logs silently | Medium | High | `StderrLogClient` fallback + explicit warn log. |
-| Migration straddles multiple PRs; `main` breaks between them | Medium | High | Phases 1–3 are additive-only. Phase 5 per-caller commits. No phase requires a squash-merge across boundaries. |
+| Worker without log endpoint configured fails at startup | Medium | Low | `WorkerConfig.log_endpoint` is required, populated by the controller from cluster YAML or the dev in-process URL. A misconfigured cluster fails fast at job launch rather than silently dropping logs. |
+| GCP API rate-limit / outage during VM-recreate recovery | Low | Medium | Resolver caches `(host, port)`; only a transport error triggers a re-resolve. A burst of failures after a VM move means at most N re-resolves where N = active workers. Acceptable for our scale (~100s of workers). Worth measuring under traffic. |
+| Migration straddles multiple PRs; `main` breaks between them | Medium | High | Phases 0–3 are additive-only. Phase 5 per-caller commits. No phase requires a squash-merge across boundaries. |
 | DuckDB `.duckdb` files on controller VM get orphaned after split | Low | Low | Document a one-time `gsutil cp` migration in the Phase 7 runbook. Log data in GCS is unaffected. |
 | `fetch_logs` latency regresses when CLI talks directly to log-server | Low | Low | Direction is controller→log-server proxy today (extra hop). Going direct is an improvement, not a regression. |
 | Dependency direction inversion (finelog importing iris) | Low | High | Enforce via import-lint check in pre-commit. `AGENTS.md` codifies only the iris-downstream edges (`{iris, haliax} → {levanter, zephyr} → marin`); rigging's upstream position is de-facto (verified: `iris/pyproject.toml` declares `marin-rigging`, `rigging/pyproject.toml` has no iris dep). This project should amend `AGENTS.md` to state the rule explicitly: `rigging` upstream of `{iris, finelog, levanter, zephyr, marin}`. |
@@ -999,14 +1021,21 @@ Run after each phase, not at the end. Easier to isolate the failure.
 
 ## What this plan deliberately does not do
 
-- Migrate **actor** endpoints (coordinators registering via `ControllerService.RegisterEndpoint`) to `EndpointsService`. That is the architecture doc's "Migrate Iris endpoint writers" followup; do it after this.
-- Implement `vm_address` for CoreWeave or k8s. Stub only.
-- Implement `maybe_proxy` tunnel logic. No-op shim only.
-- Introduce SQLite-backed endpoint persistence. Heartbeats only.
-- Reconcile system-services from cluster YAML (i.e., auto-spin-up VMs). We
-  accept pre-provisioned addresses.
-- Move `connect-python` / proto infrastructure into a shared location. Each
-  package has its own buf.yaml.
+- Introduce a new `EndpointsService` RPC, or any other service-discovery RPC.
+  Per D3, system services live at provider-managed identities; the resolver
+  is the only mediator.
+- Migrate **actor** endpoints (coordinators registering via
+  `ControllerService.RegisterEndpoint`) anywhere. They keep their existing
+  shape. The `iris://` resolver scheme already covers the read path for
+  out-of-process readers.
+- Implement CoreWeave / k8s VM-address helpers. GCP only today
+  (`gcp_vm_address`).
+- Implement `maybe_proxy` tunnel logic. Off-cluster access lives in the
+  architecture-doc appendix; not in scope here.
+- Reconcile system-services from cluster YAML (i.e., auto-spin-up VMs).
+  We accept that the named VM exists.
+- Move `connect-python` / proto infrastructure into a shared location.
+  Each package has its own buf.yaml.
 
 These are all followups the architecture doc already calls out.
 
@@ -1014,46 +1043,72 @@ These are all followups the architecture doc already calls out.
 
 ## Open questions resolved
 
-1. **`rigging` depending on `connect-python`** — accepted. Unavoidable once
-   it hosts a service. connect-python is small and iris already pulls it in.
-2. **`str_to_log_level` location** — `finelog.store._types` (D10).
-3. **Proto package name: `finelog` vs `finelog.v1`** — `finelog`. Matches
+1. **No new `EndpointsService` RPC** — D3. System services bypass the
+   controller entirely; the resolver goes straight to GCP.
+2. **No heartbeat / self-registration** — D3, D11. The resolver re-resolves
+   on transport failure, which is sufficient to follow a VM through a
+   recreate.
+3. **JWT verifier is pure stateless** — D4. Revocation set lives only on
+   the iris-side `JwtTokenManager`; the verifier in rigging just checks
+   signature + expiry.
+4. **`rigging` does NOT depend on `connect-python`** — confirmed; with
+   no `EndpointsService`, no proto infrastructure is needed in rigging.
+5. **`str_to_log_level` location** — `finelog.store._types` (D10).
+6. **Proto package name: `finelog` vs `finelog.v1`** — `finelog`. Matches
    existing iris convention (unversioned).
-4. **`LogMessage` shape** — dataclass. Consistent with rest of
-   iris/rigging; no runtime validation needed for internal types.
-5. **Controller `FetchLogs` proxy** — keep it until Phase 5.4/5.5 ships as a
-   follow-up. Not blocking Phase 6 deletion.
+7. **`LogMessage` shape** — dataclass. No runtime validation needed for
+   internal types.
+8. **Controller `FetchLogs` proxy** — keep it until Phase 5.4/5.5 ships as
+   a follow-up. Not blocking Phase 6 deletion.
+9. **Cluster YAML schema** — `system_services: map<string, string>` (URLs).
+   Provider/vm-type/image/health/env stay out until the reconciler
+   followup.
 
 ## Still-open questions (not blocking — called out for the implementer)
 
-1. **Heartbeat interval and jitter** — Phase 7 says 30s. Under heavy load or
-   JWT TTL constraints this may need to shift. Implementer picks a value
-   and documents it in Phase 7's PR.
-2. **DuckDB page cache behaviour** — the existing log server caps
+1. **DuckDB page cache behaviour** — the existing log server caps
    `FetchLogs` concurrency at 4 to avoid thrashing. When log-server moves
    to a dedicated VM, the cap may relax. Leave the default at 4; tune on
    real traffic.
-3. **Cluster YAML schema finalization** — `SystemServiceConfig` shape in D8
-   is a straw-man. The `provider`/`vm_type`/`image` fields are not used
-   until the reconciler followup; should they live there now, or should
-   Phase 4 accept only `address` and defer the full schema?
+2. **GCP API quota during recovery** — see risk table. After a VM move,
+   the entire fleet of workers re-resolves at roughly the same time.
+   Compute Engine API quotas are generous, but worth confirming under
+   our worst-case fleet size.
+3. **Off-cluster CLI access** — once the log server is `gcp://...`, a CLI
+   on a laptop can't resolve it without GCP credentials *and* network
+   path. The architecture doc's `maybe_proxy` is the right place to
+   solve this; until it ships, off-cluster `iris logs` requires SSH
+   forwarding.
 
 ---
 
 ## Rollout checklist
 
-- [ ] Phase 0 landed; `JwtVerifier` in `rigging.auth`, issuer composes it in `iris.cluster.controller.auth`.
-- [ ] Phase 1 landed; `lib/rigging` tests green; `EndpointsService` round-trips.
-- [ ] Phase 2 landed; resolver tests green; `iris://` and `gcp://` schemes work.
+- [x] Phase 0 landed (`244b57135`); `JwtVerifier` in `rigging.auth`,
+      `JwtTokenManager` composes it in `iris.cluster.controller.auth`.
+- [x] Phase 1 landed (`244b57135`, `468dbfcaf`, `91027b13d`); resolver
+      tests green; `gcp://` scheme works including port override.
+- [x] Phase 2 landed (`244b57135`); `iris://` plugin registered for
+      actor endpoints. Followup test `test_resolver_plugin.py` pending.
+- [ ] Phase 0 followup (D4): drop revocation from `rigging.auth.JwtVerifier`;
+      move the set into iris-side `JwtTokenManager`.
 - [ ] Phase 3 landed; `lib/finelog` tests green; `lib/iris` unchanged.
-- [ ] Phase 4 landed; controller exposes `EndpointsService`; behaviour change = nil (no log-server reconfigured yet).
-- [ ] Phase 5.1–5.3 landed; worker + task + controller cut over; bootstrap-order and heartbeat tests green; e2e log flow green.
-- [ ] Phase 6 landed; `iris/log_server/`, `iris/cluster/log_store/`, `iris/logging.py`, `iris.logging` proto all deleted; iris protos reference `finelog.LogEntry` directly.
-- [ ] Phase 7 landed; log-server Docker image published; heartbeat wired; cluster YAML reference documented.
-- [ ] Optional: Phase 5.4 landed (CLI goes direct to log-server); Phase 5.5 landed (dashboard forwarder removed).
-- [ ] Docs updated: `AGENTS.md` (rigging dep-direction rule), `lib/iris/AGENTS.md`, `lib/iris/OPS.md`, cluster-config reference.
-- [ ] Followup issue filed: migrate actor endpoints to `EndpointsService`.
-- [ ] Followup issue filed: CoreWeave/k8s `vm_address` providers.
+- [ ] Phase 4 landed; `IrisClusterConfig.system_services` proto field
+      added; controller reads it; no behavior change yet for the dev
+      path.
+- [ ] Phase 5.1–5.3 landed; worker + task + controller cut over; D11
+      re-resolve test green; e2e log flow green.
+- [ ] Phase 6 landed; `iris/log_server/`, `iris/cluster/log_store/`,
+      `iris/logging.py`, `iris.logging` proto all deleted; iris protos
+      reference `finelog.LogEntry` directly.
+- [ ] Phase 7 landed; log-server Docker image published; cluster YAML
+      reference documented; operator runbook for VM-recreate documented.
+- [ ] Optional: Phase 5.4 (CLI goes direct to log-server); Phase 5.5
+      (dashboard forwarder removed).
+- [ ] Docs updated: `AGENTS.md` (rigging dep-direction rule),
+      `lib/iris/AGENTS.md`, `lib/iris/OPS.md`, cluster-config reference.
+- [ ] Followup issue filed: CoreWeave/k8s VM-address helpers
+      (`coreweave_vm_address`, `k8s_vm_address`).
 - [ ] Followup issue filed: `maybe_proxy` off-cluster tunnel integration.
-- [ ] Followup issue filed: declarative reconciler for `system_services` (auto-provisioning).
-- [ ] Followup issue filed: SQLite-backed `EndpointsService` (currently in-memory + heartbeat).
+- [ ] Followup issue filed: declarative reconciler for `system_services`
+      (auto-provisioning of the named VMs).

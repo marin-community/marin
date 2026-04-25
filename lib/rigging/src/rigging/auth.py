@@ -3,9 +3,9 @@
 
 """Stateless JWT verification.
 
-Issuance and DB-backed revocation hydration live in
-``iris.cluster.controller.auth``; the verifier only does signature/expiry checks
-plus an in-memory revocation set lookup.
+Signature and expiry only. Revocation, when needed, is layered on by the
+issuer-side caller (e.g. ``iris.cluster.controller.auth.JwtTokenManager``)
+and never crosses a process boundary.
 """
 
 from dataclasses import dataclass
@@ -24,7 +24,6 @@ class VerifiedIdentity:
 class JwtVerifier:
     def __init__(self, signing_key: str):
         self._signing_key = signing_key
-        self._revoked_jtis: set[str] = set()
 
     @property
     def signing_key(self) -> str:
@@ -41,17 +40,8 @@ class JwtVerifier:
         except jwt.InvalidTokenError as exc:
             raise ValueError(f"Invalid token: {exc}") from exc
 
-        if payload.get("jti", "") in self._revoked_jtis:
-            raise ValueError("Token has been revoked")
-
         identity = VerifiedIdentity(
             user_id=payload["sub"],
             role=payload.get("role", "user"),
         )
         return identity, payload
-
-    def revoke(self, jti: str) -> None:
-        self._revoked_jtis.add(jti)
-
-    def set_revocations(self, jtis: set[str]) -> None:
-        self._revoked_jtis = set(jtis)

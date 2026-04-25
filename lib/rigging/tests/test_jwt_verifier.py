@@ -56,36 +56,6 @@ def test_verify_rejects_garbage_string():
         verifier.verify("not-a-jwt")
 
 
-def test_revoke_rejects_revoked_jti():
-    verifier = JwtVerifier("test-key-revoke-abc1234567890")
-    token = _mint(verifier.signing_key, jti="revoke-me")
-    verifier.revoke("revoke-me")
-    with pytest.raises(ValueError, match="revoked"):
-        verifier.verify(token)
-
-
-def test_revoke_only_blocks_named_jti():
-    verifier = JwtVerifier("test-key-revoke-narrow")
-    revoked = _mint(verifier.signing_key, jti="bad")
-    other = _mint(verifier.signing_key, jti="good")
-    verifier.revoke("bad")
-    with pytest.raises(ValueError, match="revoked"):
-        verifier.verify(revoked)
-    assert verifier.verify(other).user_id == "alice"
-
-
-def test_set_revocations_replaces_set():
-    verifier = JwtVerifier("test-key-set-revocations")
-    verifier.revoke("first")
-    first_token = _mint(verifier.signing_key, jti="first")
-    second_token = _mint(verifier.signing_key, jti="second")
-
-    verifier.set_revocations({"second", "third"})
-    assert verifier.verify(first_token).user_id == "alice"
-    with pytest.raises(ValueError, match="revoked"):
-        verifier.verify(second_token)
-
-
 def test_verify_full_returns_payload():
     verifier = JwtVerifier("test-key-verify-full")
     token = _mint(verifier.signing_key, sub="carol", role="admin", jti="kx")
