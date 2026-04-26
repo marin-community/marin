@@ -99,7 +99,7 @@ class GrugMoeAdamHConfig(OptimizerConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
-            if "token_embed" in path_lower or "output_proj" in path_lower:
+            if "token_embed" in path_lower:
                 return "adamh_embed" if use_adamh_embed else "adam"
             if "router_bias" in path_lower or "attn_gate" in path_lower or ".router" in path_lower:
                 return "adam"
