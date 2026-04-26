@@ -327,3 +327,52 @@ def test_lora_works_with_checkpointer():
             destination="loraized",
         )
         checkpointer.wait_until_finished()
+
+
+def test_loraize_a_init_mode_zero():
+    """A=0 init: lora_A all zeros, lora_B has non-zero entries from default Linear.init."""
+    k0 = jax.random.PRNGKey(0)
+    k1 = jax.random.PRNGKey(1)
+
+    class Module(eqx.Module):
+        first: hnn.Linear
+        second: hnn.Linear
+
+        def __call__(self, x):
+            return self.second(self.first(x))
+
+    module = Module(first=hnn.Linear.init(In, Mid, key=k0), second=hnn.Linear.init(Mid, Out, key=k1))
+
+    loraized = loraize(module, LoraConfig(r=8, target_modules=["first"], a_init_mode="zero"), key=k0)
+    assert isinstance(loraized.first, LoraLinear)
+    assert hax.all(loraized.first.lora.lora_A.weight == 0.0)
+    assert not hax.all(loraized.first.lora.lora_B.weight == 0.0)
+
+    # B @ A = 0 at init, so the loraized output matches the base output.
+    input = hax.random.normal(k0, (In,))
+    base_first_out = module.first(input)
+    loraized_first_out = loraized.first(input)
+    assert hax.all(hax.isclose(base_first_out, loraized_first_out))
+
+
+def test_loraize_a_zero_and_b_zero_degenerate():
+    """A=0 and B=0 together: degenerate identity init (no learning), but must not crash."""
+    k0 = jax.random.PRNGKey(0)
+    k1 = jax.random.PRNGKey(1)
+
+    class Module(eqx.Module):
+        first: hnn.Linear
+        second: hnn.Linear
+
+        def __call__(self, x):
+            return self.second(self.first(x))
+
+    module = Module(first=hnn.Linear.init(In, Mid, key=k0), second=hnn.Linear.init(Mid, Out, key=k1))
+
+    loraized = loraize(
+        module,
+        LoraConfig(r=8, target_modules=["first"], a_init_mode="zero", zero_init_b=True),
+        key=k0,
+    )
+    assert hax.all(loraized.first.lora.lora_A.weight == 0.0)
+    assert hax.all(loraized.first.lora.lora_B.weight == 0.0)

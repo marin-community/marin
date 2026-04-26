@@ -51,9 +51,10 @@ def _config() -> SimpleDPOConfig:
             r=64,
             alpha=64,
             dropout=0.0,
-            zero_init_b=True,
             target_modules=None,
         ),
+        # default_dpo() applies the rescue init (a_init_mode="zero",
+        # zero_init_b=False) automatically; see Bug-1 logbook for details.
         reference=AdapterBaseReferenceConfig(),  # reference = adapter base = SFT
         train_seq_len=4096,
         max_seq_len=4096,

@@ -49,7 +49,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, TypeVar, Union
+from typing import Dict, List, Literal, Optional, Tuple, TypeVar, Union
 
 import equinox as eqx
 import jax
@@ -110,6 +110,20 @@ class LoraConfig:
     This is the standard PEFT convention and is critical for DPO, where
     non-zero initialization causes immediate policy-reference divergence.
     Default is False for backward compatibility with existing SFT configs."""
+    a_init_mode: Literal["random", "zero"] = "random"
+    """How to initialize the LoRA A matrix.
+
+    - ``"random"`` (default): the standard LoRA-paper convention. A is drawn
+      from the default :class:`haliax.nn.Linear` init; whether ``B@A`` is zero
+      at init is then controlled by ``zero_init_b``.
+    - ``"zero"``: A is identically zero and B is randomly initialized. ``B@A``
+      is still zero at init (so the policy matches the reference for DPO),
+      but the first live optimizer step flows through the full-rank A matrix
+      instead of the degenerate zero-init B matrix. This avoids the FSDP
+      all-reduce-noise sigma-sensitivity issue near pi=pi_ref documented in
+      ``.agents/logbooks/bug_1_dpo_lora_physical_topology.md`` and is the
+      DPO-correct default chosen by :func:`experiments.defaults.default_dpo`.
+    """
     exclude_modules: Optional[List[str]] = None
     """modules to exclude from LoRA. Defaults to ["lm_head"] to avoid breaking get_lm_head().weight access."""
     # TODO: bias
@@ -166,19 +180,37 @@ class LowRankLinear(eqx.Module):
         return z * self.scale
 
     @staticmethod
-    def init(In: hax.Axis, Out: Axis, r: int, alpha: float, dropout_prob: float, *, key, zero_init_b: bool = False):
+    def init(
+        In: hax.Axis,
+        Out: Axis,
+        r: int,
+        alpha: float,
+        dropout_prob: float,
+        *,
+        key,
+        zero_init_b: bool = False,
+        a_init_mode: Literal["random", "zero"] = "random",
+    ):
         """
         Initializes a LowRankLinear module.
 
         Args:
             zero_init_b: If True, zero-initialize the B matrix so the adapter starts as identity
-                (W + alpha/r * 0 * A = W). This is the standard PEFT convention and is critical
-                for DPO where policy must match reference at initialization.
+                (W + alpha/r * B @ A = W). This is the standard PEFT convention.
+            a_init_mode: ``"random"`` (default) initializes A from the default Linear init.
+                ``"zero"`` initializes A to zeros, leaving B random — ``B @ A = 0`` at init
+                either way, but the first live optimizer step flows through A instead of B,
+                which avoids the DPO sigma-sensitivity issue documented in Bug-1.
         """
         _R = hax.Axis(LORA_R, r)
         key_A, key_B = jax.random.split(key)
         # Peft always uses out_first=True (i.e. normal Torch convention) for linear, even for gpt2-style Conv1d
-        lora_A = hnn.Linear.init(In, _R, key=key_A, use_bias=False, out_first=True)
+        if a_init_mode == "zero":
+            a_joint_spec = hax.concat_axis_specs(_R, In)
+            zero_a_weight = hax.zeros(a_joint_spec)
+            lora_A = hnn.Linear(weight=zero_a_weight, bias=None, In=In, Out=_R)
+        else:
+            lora_A = hnn.Linear.init(In, _R, key=key_A, use_bias=False, out_first=True)
         if zero_init_b:
             # out_first=True means weight shape is (Out, In) — matching PEFT convention
             joint_spec = hax.concat_axis_specs(Out, _R)
@@ -216,11 +248,29 @@ class LoraLinear(ModuleWithStateDictSerialization):
         return dataclasses.replace(self.wrapped, weight=weight)
 
     @staticmethod
-    def init(wrapped: hnn.Linear, r: int, alpha: float, dropout: float = 0.0, *, key, zero_init_b: bool = False):
+    def init(
+        wrapped: hnn.Linear,
+        r: int,
+        alpha: float,
+        dropout: float = 0.0,
+        *,
+        key,
+        zero_init_b: bool = False,
+        a_init_mode: Literal["random", "zero"] = "random",
+    ):
         """
         Initializes a LoraLinear module.
         """
-        lora = LowRankLinear.init(wrapped.In, wrapped.Out, r, alpha, dropout, key=key, zero_init_b=zero_init_b)
+        lora = LowRankLinear.init(
+            wrapped.In,
+            wrapped.Out,
+            r,
+            alpha,
+            dropout,
+            key=key,
+            zero_init_b=zero_init_b,
+            a_init_mode=a_init_mode,
+        )
         return LoraLinear(wrapped, lora)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
@@ -321,7 +371,13 @@ def _loraize(model: M, config: LoraConfig, key: jax.random.PRNGKey, prefix: str,
             my_key = next(key_iter)
             batched_key = shaped_rng_split(my_key, [axis.size for axis in batch_dims])
             return _batchify_ctor(LoraLinear.init)(
-                module, config.r, config.alpha, config.dropout, key=batched_key, zero_init_b=config.zero_init_b
+                module,
+                config.r,
+                config.alpha,
+                config.dropout,
+                key=batched_key,
+                zero_init_b=config.zero_init_b,
+                a_init_mode=config.a_init_mode,
             )
         else:
             return module
