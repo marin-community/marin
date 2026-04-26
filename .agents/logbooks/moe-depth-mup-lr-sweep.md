@@ -717,3 +717,39 @@
 - Next action: continue d1024 until the current children finish and the
   executor launches d1024 `4x`, then continue through d1280 for the full gate-2
   procedure.
+
+### 2026-04-26 01:48 - d1024 ~10k checkpoint
+
+- Hypothesis: if depth MuP is reducing LR sensitivity at d1024, the later
+  checkpoints should keep the useful region broad and central rather than
+  collapsing to a single low-LR point.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris still shows 9 running jobs and 1 succeeded child; there are no active
+    failures or pending reasons.
+  - All sampled started W&B configs still report
+    `model.depth_mup_residual_scaling=True`.
+  - d1024 latest W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Notes |
+    | --- | --- | ---: | ---: | ---: | --- |
+    | 0.25x | running | 10239 | 3.3537 | 2.9764 | ~10k eval |
+    | 0.354x | running | 10384 | 3.3016 | 3.0810 | ~10k eval |
+    | 0.5x | running | 10016 | 3.2694 | 2.9634 | ~10k eval |
+    | 0.707x | running | 10191 | 3.2568 | 2.9816 | ~10k eval, current best |
+    | 1x | running | 10171 | 3.2648 | 2.9873 | ~10k eval |
+    | 1.41x | running | 10163 | 3.2983 | 2.9167 | ~10k eval |
+    | 2x | running | 9387 | 3.4593 | 3.1498 | latest eval around 9k |
+    | 2.83x | running | 6570 | 3.8586 | 3.4723 | latest eval around 6k |
+    | 4x | missing | n/a | n/a | n/a | queued |
+
+- Interpretation: d1024 remains best at `0.707x`, but `1x` is only about
+  0.008 Paloma macro behind and `0.5x` is about 0.013 behind. This is the
+  strongest central-basin result so far: the useful region now spans `0.5x`
+  through `1.41x`, with `0.707x`/`1x` clearly ahead. It still does not prove
+  strong LR scale-invariance because d512/d768 completed at `1x`, while d1024
+  is currently best one step lower.
+- Next action: continue d1024 to completion so `4x` can launch, then continue
+  through d1280 for the full gate-2 procedure.
