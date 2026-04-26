@@ -91,6 +91,7 @@ from iris.cluster.controller.scheduler import (
 )
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     RESERVATION_HOLDER_JOB_NAME,
     Assignment,
@@ -441,12 +442,14 @@ def _get_running_tasks_with_band_and_value(
     claimed_workers: set[WorkerId],
     user_spend: dict[str, int] | None = None,
     user_budget_limits: dict[str, int] | None = None,
+    user_budget_defaults: UserBudgetDefaults | None = None,
 ) -> list[RunningTaskInfo]:
     """Query running tasks with band, worker, resource spec, and coscheduling status.
 
     Skips tasks on reservation-claimed workers since those workers are spoken for.
     When ``user_spend`` and ``user_budget_limits`` are provided, the effective band
     is computed so over-budget users' tasks are treated as BATCH for preemption.
+    Users without a budget row fall back to ``user_budget_defaults``.
     """
     with db.read_snapshot() as q:
         rows = q.raw(
@@ -465,6 +468,7 @@ def _get_running_tasks_with_band_and_value(
         )
     _spend = user_spend or {}
     _limits = user_budget_limits or {}
+    _defaults = user_budget_defaults or UserBudgetDefaults()
     result: list[RunningTaskInfo] = []
     for row in rows:
         wid = row.worker_id
@@ -476,7 +480,7 @@ def _get_running_tasks_with_band_and_value(
             row.res_disk_bytes,
             row.res_device_json,
         )
-        band = compute_effective_band(row.priority_band, row.task_id.user, _spend, _limits)
+        band = compute_effective_band(row.priority_band, row.task_id.user, _spend, _limits, _defaults)
         result.append(
             RunningTaskInfo(
                 task_id=row.task_id,
@@ -1035,6 +1039,7 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
+        self._store = ControllerStore(self._db)
 
         # ThreadContainer must be initialized before the log service setup
         # because _start_local_log_server spawns a uvicorn thread.
@@ -1072,8 +1077,7 @@ class Controller:
 
         self._health = WorkerHealthTracker()
         self._transitions = ControllerTransitions(
-            db=self._db,
-            user_budget_defaults=config.user_budget_defaults,
+            store=self._store,
             health=self._health,
         )
         self._scheduler = Scheduler()
@@ -1082,12 +1086,13 @@ class Controller:
 
         self._service = ControllerServiceImpl(
             self._transitions,
-            self._db,
+            self._store,
             controller=self,
             bundle_store=self._bundle_store,
             log_service=self._remote_log_service,
             auth=config.auth,
             system_endpoints={},
+            user_budget_defaults=config.user_budget_defaults,
         )
         self._dashboard = ControllerDashboard(
             self._service,
@@ -1370,17 +1375,17 @@ class Controller:
                 break
 
             try:
-                self._transitions.prune_worker_task_history()
+                self._store.workers.prune_task_history()
             except Exception:
                 logger.exception("Worker task history cleanup failed")
 
             if resource_history_limiter.should_run():
                 try:
-                    self._transitions.prune_worker_resource_history()
+                    self._store.workers.prune_resource_history()
                 except Exception:
                     logger.exception("Worker resource history cleanup failed")
                 try:
-                    self._transitions.prune_task_resource_history()
+                    self._store.tasks.prune_resource_history()
                 except Exception:
                     logger.exception("Task resource history cleanup failed")
 
@@ -1451,13 +1456,16 @@ class Controller:
         assert isinstance(self._provider, K8sTaskProvider)
         provider = self._provider
         max_promotions = self._promotion_bucket.available
-        batch = self._transitions.drain_for_direct_provider(
-            max_promotions=max_promotions,
-        )
+        with self._store.transaction() as cur:
+            batch = self._transitions.drain_for_direct_provider(
+                cur,
+                max_promotions=max_promotions,
+            )
         if batch.tasks_to_run:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
         result = provider.sync(batch)
-        tx_result = self._transitions.apply_direct_provider_updates(result.updates)
+        with self._store.transaction() as cur:
+            tx_result = self._transitions.apply_direct_provider_updates(cur, result.updates)
         self._provider_scheduling_events = list(result.scheduling_events) if result.scheduling_events else []
         self._provider_capacity = result.capacity
         if tx_result.tasks_to_kill:
@@ -1620,7 +1628,8 @@ class Controller:
         for wid in stale:
             del claims[wid]
         if stale and persisted:
-            self._transitions.replace_reservation_claims(claims)
+            with self._store.transaction() as cur:
+                self._transitions.replace_reservation_claims(cur, claims)
             log_event("reservation_claims_cleaned", "controller", count=len(stale))
         return bool(stale)
 
@@ -1668,7 +1677,8 @@ class Controller:
                     changed = True
                     break
         if changed and persisted:
-            self._transitions.replace_reservation_claims(claims)
+            with self._store.transaction() as cur:
+                self._transitions.replace_reservation_claims(cur, claims)
             log_event("reservation_claims_updated", "controller", total_claims=len(claims))
         return changed
 
@@ -1764,7 +1774,8 @@ class Controller:
             if self._config.dry_run:
                 logger.info("[DRY-RUN] Would update %d reservation claims", len(claims))
             else:
-                self._transitions.replace_reservation_claims(claims)
+                with self._store.transaction() as cur:
+                    self._transitions.replace_reservation_claims(cur, claims)
         return claims
 
     def _read_scheduling_state(self) -> _SchedulingStateRead:
@@ -1854,8 +1865,11 @@ class Controller:
         with self._db.read_snapshot() as budget_snapshot:
             user_spend = compute_user_spend(budget_snapshot)
         user_budget_limits = self._db.get_all_user_budget_limits()
+        defaults = self._config.user_budget_defaults
         task_band_map: dict[JobName, int] = {
-            task.task_id: compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
+            task.task_id: compute_effective_band(
+                task.priority_band, task.task_id.user, user_spend, user_budget_limits, defaults
+            )
             for task in pending_tasks
         }
         tasks_by_band: dict[int, list[JobName]] = defaultdict(list)
@@ -1966,11 +1980,18 @@ class Controller:
         if unscheduled:
             claimed_workers = set(claims.keys())
             running_info = _get_running_tasks_with_band_and_value(
-                self._db, claimed_workers, user_spend=order.user_spend, user_budget_limits=order.user_budget_limits
+                self._db,
+                claimed_workers,
+                user_spend=order.user_spend,
+                user_budget_limits=order.user_budget_limits,
+                user_budget_defaults=self._config.user_budget_defaults,
             )
             preemptions = _run_preemption_pass(unscheduled, running_info, context)
             for preemptor_name, victim_id in preemptions:
-                preempt_result = self._transitions.preempt_task(victim_id, reason=f"Preempted by {preemptor_name}")
+                with self._store.transaction() as cur:
+                    preempt_result = self._transitions.preempt_task(
+                        cur, victim_id, reason=f"Preempted by {preemptor_name}"
+                    )
                 self.kill_tasks_on_workers(preempt_result.tasks_to_kill)
             if preemptions:
                 logger.info("Preemption pass: %d tasks preempted", len(preemptions))
@@ -2040,7 +2061,8 @@ class Controller:
         for task in timed_out:
             logger.warning("Task %s exceeded execution timeout, killing", task.task_id)
         task_ids = {t.task_id for t in timed_out}
-        result = self._transitions.cancel_tasks_for_timeout(task_ids, reason="Execution timeout exceeded")
+        with self._store.transaction() as cur:
+            result = self._transitions.cancel_tasks_for_timeout(cur, task_ids, reason="Execution timeout exceeded")
         if result.tasks_to_kill:
             self.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
 
@@ -2055,10 +2077,12 @@ class Controller:
         else:
             timeout = None
         logger.warning(f"Task {task.task_id} exceeded scheduling timeout ({timeout}), marking as UNSCHEDULABLE")
-        result = self._transitions.mark_task_unschedulable(
-            task.task_id,
-            reason=f"Scheduling timeout exceeded ({timeout})",
-        )
+        with self._store.transaction() as cur:
+            result = self._transitions.mark_task_unschedulable(
+                cur,
+                task.task_id,
+                reason=f"Scheduling timeout exceeded ({timeout})",
+            )
         if result.tasks_to_kill:
             self.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
 
@@ -2087,8 +2111,9 @@ class Controller:
             self._stop_tasks_direct(task_ids, task_kill_workers)
             return
         # K8s: buffer direct kills for the provider sync loop.
-        for task_id in task_ids:
-            self._transitions.buffer_direct_kill(task_id.to_wire())
+        with self._store.transaction() as cur:
+            for task_id in task_ids:
+                self._transitions.buffer_direct_kill(cur, task_id.to_wire())
 
     # =========================================================================
     # Worker lifecycle RPC dispatch (StartTasks / StopTasks / Ping / PollTasks)
@@ -2104,7 +2129,8 @@ class Controller:
                 logger.info("[DRY-RUN] Would assign task %s to worker %s", task_id, worker_id)
             return
         command = [Assignment(task_id=task_id, worker_id=worker_id) for task_id, worker_id in assignments]
-        result = self._transitions.queue_assignments(command, direct_dispatch=True)
+        with self._store.transaction() as cur:
+            result = self._transitions.queue_assignments(cur, command, direct_dispatch=True)
 
         # Group StartTasks payloads by (worker_id, address)
         by_worker: dict[tuple[WorkerId, str], list[job_pb2.RunTaskRequest]] = {}
@@ -2233,7 +2259,8 @@ class Controller:
                         self._health.ping(result.worker_id, healthy=True)
                         ping_snapshots[result.worker_id] = result.resource_snapshot if update_resources else None
 
-                self._transitions.update_worker_pings(ping_snapshots)
+                with self._store.transaction() as cur:
+                    self._transitions.update_worker_pings(cur, ping_snapshots)
 
                 unhealthy = self._health.workers_over_threshold()
                 if unhealthy:
@@ -2256,7 +2283,8 @@ class Controller:
         """Poll all workers for task state and feed results into the updater queue."""
         if self._config.dry_run:
             return
-        running, addresses = self._transitions.get_running_tasks_for_poll()
+        with self._store.read_snapshot() as snap:
+            running, addresses = self._transitions.get_running_tasks_for_poll(snap)
         if not running:
             return
         poll_results = self._provider.poll_workers(running, addresses)
@@ -2284,7 +2312,8 @@ class Controller:
             if not requests or stop_event.is_set():
                 continue
             try:
-                results = self._transitions.apply_heartbeats_batch(requests)
+                with self._store.transaction() as cur:
+                    results = self._transitions.apply_heartbeats_batch(cur, requests)
                 all_tasks_to_kill: set[JobName] = set()
                 all_task_kill_workers: dict[JobName, WorkerId] = {}
                 for result in results:

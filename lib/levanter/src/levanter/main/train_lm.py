@@ -327,7 +327,7 @@ def main(config: TrainLmConfig):
     if trainer.config.checkpointer is not None:
         trainer._checkpointer.wait_until_finished()
 
-    # This isn't necessary except when Levanter is run in a subprocess (as happens w/ ray)
+    # This isn't necessary except when Levanter is run in a subprocess (as happens under Iris/Fray)
     trainer.tracker.finish()
 
 

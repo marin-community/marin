@@ -124,3 +124,15 @@ scale_groups:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         mode: GCP_SLICE_MODE_VM
         machine_type: n2-highmem-2
+
+# ---------------------------------------------------------------------------
+# User budget tiers (dev)
+#
+# Minimal tier list for exercising the budget path end-to-end. Everyone
+# else falls through to UserBudgetDefaults (INTERACTIVE with a small
+# budget that degrades to BATCH once exceeded).
+# ---------------------------------------------------------------------------
+user_budgets:
+  - user_ids: [power]
+    budget_limit: 75000
+    max_band: PRIORITY_BAND_PRODUCTION

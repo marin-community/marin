@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 
 import huggingface_hub
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from rigging.filesystem import open_url, url_to_fs
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version

@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.main import train_lm
 from levanter.eval_harness import LmEvalHarnessConfig

@@ -10,10 +10,11 @@ a resolved flag indicating whether the trajectory solved the issue.
 
 import hashlib
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.normalize import normalize_step
 from marin.datakit.download.rollout_transforms import load_parquet_batched
 from marin.execution.step_spec import StepSpec
 
@@ -82,4 +83,13 @@ def download_swe_rebench_openhands_step() -> StepSpec:
             output_path=output_path,
         ),
         hash_attrs={"version": "v2"},
+    )
+
+
+def swe_rebench_openhands_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the full ``(download+transform, normalize)`` chain for swe-rebench-openhands."""
+    processed = download_swe_rebench_openhands_step()
+    return (
+        processed,
+        normalize_step(name="normalized/swe-rebench-openhands", download=processed),
     )

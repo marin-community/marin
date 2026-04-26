@@ -98,9 +98,9 @@ from urllib.parse import urlparse
 
 import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
-from fray.v2.client import current_client, set_current_client
-from fray.v2.iris_backend import FrayIrisClient
-from fray.v2.types import TpuConfig
+from fray.client import current_client, set_current_client
+from fray.iris_backend import FrayIrisClient
+from fray.types import TpuConfig
 from iris.cluster.constraints import WellKnownAttribute
 from rigging.filesystem import collect_gcs_paths
 from rigging.filesystem import get_bucket_location, open_url
@@ -307,7 +307,6 @@ def _allowed_regions_for_step(
 
 
 def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
-    from fray.v2.client import current_client
     from iris.rpc import config_pb2
 
     try:
@@ -541,8 +540,6 @@ def _component_tpu_pins(
 
 
 def _iris_backend_is_active() -> bool:
-    from fray.v2.client import current_client
-
     try:
         client = current_client()
     except Exception:

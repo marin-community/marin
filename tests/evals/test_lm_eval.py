@@ -149,7 +149,6 @@ def test_evaluate_levanter_lm_evaluation_harness_dispatches_remotely_and_preserv
     assert step.fn.resources == resource_config
     assert step.fn.pip_dependency_groups == ["eval", "tpu"]
     assert step.config.evaluator == "levanter_lm_evaluation_harness"
-    assert step.config.launch_with_ray is False
     assert step.config.eval_datasets_cache_path.value == "gs://unit-test/cache"
     assert step.config.eval_datasets_cache_dependency == cache_dependency
 

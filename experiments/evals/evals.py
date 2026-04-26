@@ -41,6 +41,7 @@ from experiments.evals.task_configs import (
 )
 
 EVAL_DEPENDENCY_GROUPS = ["eval", "vllm", "tpu"]
+LEVANTER_EVAL_DEPENDENCY_GROUPS = ["eval", "tpu"]
 EVALCHEMY_DEPENDENCY_GROUPS = ["evalchemy", "vllm", "tpu"]
 
 logger = logging.getLogger(__name__)
@@ -174,6 +175,8 @@ def evaluate_levanter_lm_evaluation_harness(
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
     discover_latest_checkpoint: bool = True,
+    eval_datasets_cache_path: str | None = None,
+    eval_datasets_cache_dependency: InputName | str | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using Levanter LM Evaluation Harness.
@@ -181,7 +184,7 @@ def evaluate_levanter_lm_evaluation_harness(
     logger.info(f"Running evals on the following tasks: {evals}")
     return ExecutorStep(
         name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}",
-        fn=remote(evaluate, resources=resource_config, pip_dependency_groups=EVAL_DEPENDENCY_GROUPS),
+        fn=remote(evaluate, resources=resource_config, pip_dependency_groups=LEVANTER_EVAL_DEPENDENCY_GROUPS),
         config=EvaluationConfig(
             evaluator="levanter_lm_evaluation_harness",
             model_name=None,  # imputed automatically
@@ -192,6 +195,8 @@ def evaluate_levanter_lm_evaluation_harness(
             max_eval_instances=versioned(max_eval_instances),
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
+            eval_datasets_cache_path=versioned(eval_datasets_cache_path),
+            eval_datasets_cache_dependency=eval_datasets_cache_dependency,
         ),
     )
 

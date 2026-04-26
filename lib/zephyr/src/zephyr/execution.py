@@ -35,9 +35,9 @@ from typing import Any, Protocol
 
 import cloudpickle
 from rigging.filesystem import open_url, url_to_fs
-from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
-from fray.v2.client import JobHandle
-from fray.v2.types import Entrypoint, JobRequest
+from fray import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
+from fray.client import JobHandle
+from fray.types import Entrypoint, JobRequest
 from rigging.filesystem import marin_temp_bucket
 from rigging.timing import ExponentialBackoff, log_time
 
@@ -52,6 +52,7 @@ from zephyr.plan import (
     StageType,
     compute_plan,
 )
+from zephyr.shuffle import ListShard, MemChunk, _write_scatter
 from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -112,18 +113,6 @@ class PickleDiskChunk:
         with open_url(self.path, "rb") as f:
             return pickle.load(f)
 
-
-# ---------------------------------------------------------------------------
-# Scatter Parquet support (imported from shuffle.py)
-# ---------------------------------------------------------------------------
-
-from zephyr.shuffle import (  # noqa: E402
-    ListShard,
-    MemChunk,
-    ScatterReader,  # noqa: F401 — re-exported for plan.py and external callers
-    ScatterWriter,  # noqa: F401 — re-exported for external callers
-    _write_scatter,
-)
 
 # ---------------------------------------------------------------------------
 # Task result
@@ -344,7 +333,7 @@ class ZephyrCoordinator:
     """
 
     def __init__(self):
-        from fray.v2 import current_actor
+        from fray import current_actor
 
         # Task management state
         self._task_queue: deque[ShardTask] = deque()
@@ -993,10 +982,6 @@ class ZephyrCoordinator:
             self._chunk_prefix = prefix
             self._execution_id = execution_id
 
-    def start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
-        """Load a new stage's tasks into the queue (legacy compat)."""
-        self._start_stage(stage_name, tasks, is_last_stage=is_last_stage)
-
     def check_heartbeats(self, timeout: float = 120.0) -> None:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""
         with self._lock:
@@ -1019,7 +1004,7 @@ class ZephyrWorker:
     """
 
     def __init__(self, coordinator_handle: ActorHandle):
-        from fray.v2 import current_actor
+        from fray import current_actor
 
         self._coordinator = coordinator_handle
         self._shutdown_event = threading.Event()
@@ -1338,11 +1323,14 @@ def _regroup_result_refs(
     Each reducer reads the per-mapper ``.scatter_meta`` sidecars in parallel
     to build its own ``ScatterReader`` without coordinator-side consolidation.
     """
-    num_output = max(max(result_refs.keys(), default=0) + 1, input_shard_count)
-    if output_shard_count is not None:
-        num_output = max(num_output, output_shard_count)
-
     if is_scatter:
+        # Scatter routes records into exactly ``output_shard_count`` buckets via
+        # ``hash(key) % output_shard_count``; spawning more reduce tasks than that
+        # produces empty output files for shard indices that no record hashes to.
+        # When output_shard_count is None (group_by auto-detect), inherit the
+        # input shard count.
+        num_output = output_shard_count if output_shard_count is not None else input_shard_count
+
         # Collect all scatter file paths from all workers. The coordinator
         # does NOT read the sidecars or write a consolidated manifest —
         # reducers do their own parallel sidecar reads.
@@ -1353,7 +1341,9 @@ def _regroup_result_refs(
         shared_refs = MemChunk(items=all_paths)
         return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
 
-    # Non-scatter: each result's shard maps to its own index
+    # Non-scatter: 1:1 mapping from input shard index to output. Resharding
+    # to a different shard count belongs to ReshardOp, not here.
+    num_output = max(max(result_refs.keys(), default=0) + 1, input_shard_count)
     return [result_refs[idx].shard if idx in result_refs else ListShard(refs=[]) for idx in range(num_output)]
 
 
@@ -1403,7 +1393,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
     to disk. The coordinator monitors worker job health directly in its
     maintenance loop (no separate watchdog thread).
     """
-    from fray.v2.client import current_client
+    from fray.client import current_client
     from iris.cluster.client.job_info import get_job_info
 
     logger.info("Loading coordinator config from %s", config_path)
@@ -1557,12 +1547,12 @@ class ZephyrContext:
 
     def __post_init__(self):
         if self.client is None:
-            from fray.v2.client import current_client
+            from fray.client import current_client
 
             self.client = current_client()
 
         if self.max_workers is None:
-            from fray.v2.local_backend import LocalClient
+            from fray.local_backend import LocalClient
 
             if isinstance(self.client, LocalClient):
                 self.max_workers = os.cpu_count() or 1
@@ -1675,7 +1665,7 @@ class ZephyrContext:
                 # resources are requested by the coordinator/worker children.
                 # Set the context var so the coordinator job inherits self.client
                 # instead of auto-detecting (which may pick a different backend).
-                from fray.v2.client import set_current_client
+                from fray.client import set_current_client
 
                 with set_current_client(self.client):
                     self._coordinator_job = self.client.submit(

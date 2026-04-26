@@ -9,11 +9,12 @@ Each row has a math prompt and a model response with reasoning traces.
 
 import hashlib
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.normalize import normalize_step
 from marin.datakit.download.rollout_transforms import strip_think_tags
 from marin.execution.step_spec import StepSpec
 
@@ -79,4 +80,13 @@ def download_superior_reasoning_step() -> StepSpec:
             output_path=output_path,
         ),
         hash_attrs={"version": "v1"},
+    )
+
+
+def superior_reasoning_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the full ``(download+transform, normalize)`` chain for superior-reasoning."""
+    processed = download_superior_reasoning_step()
+    return (
+        processed,
+        normalize_step(name="normalized/superior-reasoning", download=processed),
     )

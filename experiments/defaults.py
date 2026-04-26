@@ -15,7 +15,7 @@ from functools import lru_cache
 from typing import Any
 
 import jmp
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from marin.execution.remote import remote
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig

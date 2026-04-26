@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import draccus
 import pyarrow.parquet as pq
 import s3fs
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from rigging.filesystem import open_url, url_to_fs
 from marin.utils import fsspec_glob
 from zephyr import Dataset, InputFileSpec, ZephyrContext, load_jsonl, load_parquet, write_jsonl_file

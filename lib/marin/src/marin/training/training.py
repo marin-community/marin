@@ -11,7 +11,7 @@ from collections.abc import Callable
 from typing import TypeVar
 
 import draccus
-from fray.v2 import (
+from fray import (
     CpuConfig,
     Entrypoint,
     GpuConfig,
@@ -97,6 +97,10 @@ def _temporary_checkpoint_base_path(output_path: str) -> str:
     if not output_path_name:
         raise ValueError(f"Could not derive temporary checkpoint namespace from output_path={output_path!r}")
     return os.path.join(marin_temp_bucket(ttl_days=14, prefix=TEMPORARY_CHECKPOINTS_PREFIX), output_path_name)
+
+
+def _requires_eval_extra(config: TrainOnPodConfigT) -> bool:
+    return isinstance(config, TrainLmOnPodConfig) and getattr(config.train_config, "eval_harness", None) is not None
 
 
 def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodConfigT:
@@ -257,6 +261,8 @@ def _prepare_training_run(
         extras.append("tpu")
     elif isinstance(config.resources.device, GpuConfig):
         extras.append("gpu")
+    if _requires_eval_extra(config):
+        extras.append("eval")
 
     return config, train_config, env, extras
 
@@ -286,10 +292,9 @@ def _submit_training_job(
 
 
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
-    """Run the Levanter LM training main function on a Ray cluster.
+    """Run the Levanter LM training main function by submitting a job to Fray.
 
-    This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
-    It should also be run with a Ray cluster already running.
+    Expects the following env vars (in the process env or ``config.env_vars``):
 
     - WANDB_API_KEY: The API key for Weights and Biases.
     - RUN_ID: (Optional) The run ID for this training run. Will default to a random UID if not set.
@@ -298,7 +303,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     This function makes a number of changes to the config and ensures a few things are set:
     - The run ID is set, or sets a default if not.
     - WANDB_API_KEY is set.
-    - It disables the auto-ray-start and auto-worker-start options since we're already in a Ray cluster.
+    - Accelerator-appropriate extras (``tpu``/``gpu``) are selected for the Fray environment.
     - It checks that configured GCS paths are in the same region as the VM (except train/validation source URLs).
     """
     config, train_config, env, extras = _prepare_training_run(config)
