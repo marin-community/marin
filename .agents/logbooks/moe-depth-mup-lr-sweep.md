@@ -753,3 +753,39 @@
   is currently best one step lower.
 - Next action: continue d1024 to completion so `4x` can launch, then continue
   through d1280 for the full gate-2 procedure.
+
+### 2026-04-26 02:42 - d1024 ~11k checkpoint
+
+- Hypothesis: if the d1024 LR optimum is moving toward the completed d512/d768
+  optimum as training progresses, the 11k checkpoint should put `1x` at or
+  near the top of the central basin.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris still shows 9 running jobs and 1 succeeded child; there are no active
+    failures or pending reasons.
+  - All sampled started W&B configs still report
+    `model.depth_mup_residual_scaling=True`.
+  - d1024 latest W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Notes |
+    | --- | --- | ---: | ---: | ---: | --- |
+    | 0.25x | running | 11250 | 3.3310 | 2.9703 | ~11k eval |
+    | 0.354x | running | 11393 | 3.2769 | 3.0313 | ~11k eval |
+    | 0.5x | running | 11025 | 3.2383 | 2.9207 | ~11k eval |
+    | 0.707x | running | 11207 | 3.2212 | 2.9555 | ~11k eval |
+    | 1x | running | 11180 | 3.2178 | 2.9406 | ~11k eval, current best |
+    | 1.41x | running | 11172 | 3.2408 | 2.8913 | ~11k eval |
+    | 2x | running | 10398 | 3.3750 | 3.1257 | latest eval around 10k |
+    | 2.83x | running | 7579 | 3.7899 | 3.3614 | latest eval around 7k |
+    | 4x | missing | n/a | n/a | n/a | queued |
+
+- Interpretation: d1024 now prefers `1x`, matching the completed d512/d768
+  optima for the first time in this sweep. The margin is narrow: `0.707x` is
+  only about 0.003 Paloma macro behind, and `0.5x`/`1.41x` remain within about
+  0.023. This is the best LR-sensitivity result so far, but it is still partial
+  because the d1024 sweep has not finished, `4x` has not launched, and d1280 is
+  still pending.
+- Next action: continue d1024 to completion so `4x` can launch, then continue
+  through d1280 for the full gate-2 procedure.
