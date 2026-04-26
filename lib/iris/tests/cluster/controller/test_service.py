@@ -1379,3 +1379,36 @@ def test_launch_job_nested_with_stale_client_date_is_exempt(service):
 
     response = service.launch_job(child_req, None)
     assert response.job_id == child_id.to_wire()
+
+
+# =============================================================================
+# Task Status Text Push Tests
+# =============================================================================
+
+
+def test_set_task_status_text_returns_response(service):
+    """set_task_status_text accepts a valid task and returns an empty response."""
+    service.launch_job(make_job_request("stats-job"), None)
+    task_id = JobName.root("test-user", "stats-job").task(0)
+
+    request = job_pb2.SetTaskStatusTextRequest(
+        task_id=task_id.to_wire(),
+        status_text_md="Physical stages:\n→ 1. Map\n\nShards: 3/10 complete, 2 in-flight, 5 queued",
+    )
+    response = service.set_task_status_text(request, None)
+
+    assert response == job_pb2.SetTaskStatusTextResponse()
+
+
+def test_set_task_status_text_unknown_task_raises_not_found(service):
+    """set_task_status_text raises NOT_FOUND for a task that doesn't exist."""
+    task_id = JobName.root("test-user", "nonexistent-job").task(0)
+
+    request = job_pb2.SetTaskStatusTextRequest(
+        task_id=task_id.to_wire(),
+        status_text_md="",
+    )
+    with pytest.raises(ConnectError) as exc_info:
+        service.set_task_status_text(request, None)
+
+    assert exc_info.value.code == Code.NOT_FOUND

@@ -3607,3 +3607,18 @@ def test_job_cancel_marks_job_killed(harness) -> None:
     with harness.state._store.transaction() as cur:
         harness.state.cancel_job(cur, jid, reason="manual")
     assert harness.query_job(jid).state == job_pb2.JOB_STATE_KILLED
+
+
+# =============================================================================
+# Task Status Text
+# =============================================================================
+
+
+def test_record_task_status_text_stores_in_memory(state) -> None:
+    """record_task_status_text stores the status text via TaskStore."""
+    tasks = submit_job(state, "stats-job", make_job_request("stats-job"))
+    task_id = tasks[0].task_id
+
+    state.record_task_status_text(task_id, status_text_md="**in progress**")
+
+    assert state._store.tasks.get_status_text(task_id.to_wire()) == "**in progress**"

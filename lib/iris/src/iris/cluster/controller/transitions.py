@@ -2227,6 +2227,12 @@ class ControllerTransitions:
                     ts=now,
                 )
 
+    # --- Task Status Text ---
+
+    def record_task_status_text(self, task_id: JobName, status_text_md: str) -> None:
+        """Update the task's markdown status text for UI display (held in memory only)."""
+        self._store.tasks.set_status_text(task_id.to_wire(), status_text_md)
+
     # --- Endpoint Management ---
 
     def add_endpoint(self, cur: TransactionCursor, endpoint: EndpointRow) -> bool:

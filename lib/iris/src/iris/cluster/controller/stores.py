@@ -951,6 +951,15 @@ class TaskStore:
 
     def __init__(self, db: ControllerDB) -> None:
         self._db = db
+        self._status_text: dict[str, str] = {}  # task_id wire → status_text_md
+
+    def set_status_text(self, task_id: str, status_text_md: str) -> None:
+        """Store the latest markdown status text for a task (in memory only)."""
+        self._status_text[task_id] = status_text_md
+
+    def get_status_text(self, task_id: str) -> str:
+        """Return the latest markdown status text for a task, or empty string if none."""
+        return self._status_text.get(task_id, "")
 
     # -- Reads ---------------------------------------------------------------
 
