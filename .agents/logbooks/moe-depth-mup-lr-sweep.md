@@ -283,3 +283,37 @@
   more than it suggests a scale-dependent LR shift, but the high-LR tail is not
   finished yet.
 - Next action: continue monitoring d768 `2.83x`/`4x` and d1024 startup.
+
+### 2026-04-25 17:12 - d1024 first meaningful eval
+
+- Hypothesis: early d1024 evals should show whether the LR basin remains near
+  the d512/d768 optimum as model scale increases.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260425-184727`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris shows 17 succeeded jobs and 9 running jobs; no terminal failures.
+  - d768 `2.83x` finished with Paloma macro 3.5249; d768 `4x` remains running
+    at W&B step 3545 with Paloma macro 4.7201.
+  - d1024 `0.25x` through `2x` are running. The first six d1024 runs have
+    moved beyond placeholder evals; `2x` has just launched and still has only
+    the initial placeholder eval.
+  - d1024 W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Tok/s |
+    | --- | --- | ---: | ---: | ---: | ---: |
+    | 0.25x | running | 1111 | 5.2304 | 4.4190 | 177,844 |
+    | 0.354x | running | 1127 | 4.7424 | 4.0443 | 178,745 |
+    | 0.5x | running | 1121 | 4.4787 | 4.0458 | 177,431 |
+    | 0.707x | running | 1114 | 4.2972 | 3.8251 | 177,874 |
+    | 1x | running | 1084 | 4.1957 | 3.7822 | 177,617 |
+    | 1.41x | running | 1091 | 4.1650 | 3.7849 | 177,541 |
+    | 2x | running | 134 | 11.7908 | 8.6933 | 179,158 |
+    | 2.83x | missing | n/a | n/a | n/a | n/a |
+    | 4x | missing | n/a | n/a | n/a | n/a |
+
+- Interpretation: early d1024 is best at `1.41x`, with `1x` close behind and
+  the lower LR points clearly worse. This is still early, but the best point is
+  within one sweep step of the d512/d768 optimum rather than moving far away.
+- Next action: continue monitoring d1024 through later evals and wait for
+  d768 `4x` to finish.
