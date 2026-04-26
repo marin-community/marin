@@ -358,6 +358,53 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
     assert len(coord._task_queue) == 1  # task was requeued
 
 
+def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_path, caplog):
+    """Map-only stages don't populate item/byte counters, so the coordinator's
+    status log should drop the ``items=... bytes_processed=...`` segment rather
+    than print misleading zeros. Once either counter is recorded, the segment
+    reappears."""
+    from zephyr.execution import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="map_only",
+    )
+    coord._start_stage("map_only", [task])
+
+    # No counters recorded → throughput segment is suppressed.
+    with caplog.at_level(logging.INFO, logger="zephyr.execution"):
+        caplog.clear()
+        coord._log_status()
+    msgs = [r.getMessage() for r in caplog.records if "complete" in r.getMessage()]
+    assert msgs, "expected a status line"
+    assert all("items=" not in m and "bytes_processed=" not in m for m in msgs), msgs
+
+    # Once a counter snapshot exists, the throughput segment reappears.
+    coord._worker_counters["worker-A"] = CounterSnapshot(
+        counters={ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name="map_only"): 7}, generation=1
+    )
+    with caplog.at_level(logging.INFO, logger="zephyr.execution"):
+        caplog.clear()
+        coord._log_status()
+    msgs = [r.getMessage() for r in caplog.records if "complete" in r.getMessage()]
+    assert msgs and "items=7" in msgs[-1] and "bytes_processed=0.0MiB" in msgs[-1], msgs
+
+    # Same when only the byte counter is present.
+    coord._worker_counters["worker-A"] = CounterSnapshot(
+        counters={ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name="map_only"): 1024}, generation=2
+    )
+    with caplog.at_level(logging.INFO, logger="zephyr.execution"):
+        caplog.clear()
+        coord._log_status()
+    msgs = [r.getMessage() for r in caplog.records if "complete" in r.getMessage()]
+    assert msgs and "items=0" in msgs[-1] and "bytes_processed=" in msgs[-1], msgs
+
+
 def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
     """When a task is requeued after heartbeat timeout, the original worker's
     stale result (from a previous attempt) is rejected by the coordinator."""
