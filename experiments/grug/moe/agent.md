@@ -6,12 +6,14 @@ This workflow is designed to run end-to-end without human confirmation. The
 agent is authorized to:
 
 - Create branches, commit, and push without asking
-- Create GitHub experiment issues and post comments
+- Create GitHub experiment issues and post comments as `whenwen`
 - Submit Iris jobs and kill only jobs submitted by self
 - Run experiments through both gates autonomously
 
-Do not stop to ask for confirmation at any step. If something fails, diagnose
-and retry or report the failure — do not block waiting for input.
+Do not stop to ask for confirmation at any step. Do not stop at a code change,
+commit, or PR: submit the run to Iris and continue through the full gate
+procedure below. If something fails, diagnose and retry or report the failure —
+do not block waiting for input.
 
 ## Objective
 
@@ -118,6 +120,13 @@ Most promotable changes will land in one of three files:
 
 Create a new branch for each experiment issue. Branch off `main`.
 
+For GitHub write actions in this workflow, **do not use the GitHub connector**.
+Create experiment issues, PRs, labels, issue comments, and review-thread updates
+through local GitHub auth as `whenwen` (for example `gh`, or GitHub
+REST/GraphQL with the local token if `gh` is unavailable). Before the first
+write action, verify the authenticated user is `whenwen`; if it is not, stop and
+report the mismatch.
+
 Follow `.agents/skills/agent-research/SKILL.md` for all documentation, logbooks,
 W&B tracking, and GitHub experiment issue management tied to work in this
 directory. Pay attention to this file carefully.
@@ -159,13 +168,23 @@ Assume the user has already completed these before job submission:
 ## Job Submission
 
 Jobs in this directory are submitted to **Iris** on a **v5p-8**.
+Always submit the relevant MoE experiment run to Iris as part of this workflow.
+Do not leave a MoE experiment at "ready to run" unless a hard blocker prevents
+submission, such as missing authentication, unavailable required environment
+variables, or an Iris outage.
+
+The Iris entrypoint runs `executor_main`, so keep that parent job CPU-only. The
+`ExecutorStep` configs in the launch modules request `ResourceConfig.with_tpu("v5p-8")`
+for the training children.
 
 ### Submission command
 
 ```bash
 .venv/bin/iris --config lib/iris/examples/marin.yaml job run \
   --no-wait \
-  --reserve v5p-8 \
+  --cpu 1 \
+  --memory 2G \
+  --extra cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -- python -m experiments.grug.moe.launch
 ```
