@@ -19,7 +19,7 @@ from openai.types.chat import ChatCompletion
 from levanter.tokenizers import MarinTokenizer
 from levanter.models.lm_model import LmHeadModel
 import haliax as hax
-from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext, PromptLike
 
 # TODO(chris): use a different weight transfer method update model, take it out from here
 from marin.rl.weight_transfer.arrow_flight import update_model
@@ -85,10 +85,9 @@ class LevanterInferenceContext(BaseInferenceContext):
     def shutdown(self) -> None:
         self._inference_server.shutdown()
 
-    # TODO: add support for ChatCompletion style [ { role, content} ] messages
     def batch_completions(
         self,
-        prompts: list[str] | list[list[dict]],
+        prompts: list[PromptLike],
         temperature: float,
         n: int,
         max_tokens: int | None = None,
@@ -108,10 +107,17 @@ class LevanterInferenceContext(BaseInferenceContext):
         asyncio.set_event_loop(loop)
         client = self.openai_client()
 
-        async def create_completion(prompt: str) -> ChatCompletion:
+        async def create_completion(prompt: PromptLike) -> ChatCompletion:
+            if isinstance(prompt, list):
+                messages = prompt
+            elif system_prompt is not None:
+                messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
+            else:
+                messages = [{"role": "user", "content": prompt}]
+
             return await client.chat.completions.create(
                 model=getattr(self._inference_server.config, "model_name", "test-model"),
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
                 logprobs=True,
                 max_tokens=max_tokens,
                 temperature=temperature,

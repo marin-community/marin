@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from .base import BaseInferenceContext
+from .base import BaseInferenceContext, PromptLike
 from .levanter import LevanterInferenceContext, LevanterInferenceContextConfig
 from .vllm import (
     vLLMInferenceContext,
@@ -19,6 +19,7 @@ __all__ = [
     "BaseInferenceContext",
     "LevanterInferenceContext",
     "LevanterInferenceContextConfig",
+    "PromptLike",
     "VLLMSamplingConfig",
     "vLLMInferenceContext",
     "vLLMInferenceContextConfig",

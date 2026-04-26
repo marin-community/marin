@@ -16,11 +16,14 @@ def create_test_rollout(
     env_name: str = "test_env",
     episode_reward: float = 1.0,
     unique_id: int = 12345,
+    response_loss_mask: np.ndarray | None = None,
 ) -> Rollout:
     """Create a test rollout with predictable token values."""
     prompt_tokens = np.full(prompt_len, unique_id, dtype=np.int32)
     response_tokens = np.arange(response_len, dtype=np.int32) + 1000
     response_logprobs = np.full(response_len, -0.5, dtype=np.float32)
+    if response_loss_mask is None:
+        response_loss_mask = np.ones(response_len, dtype=np.float32)
     token_rewards = np.full(response_len, 0.1, dtype=np.float32)
 
     return Rollout(
@@ -29,6 +32,7 @@ def create_test_rollout(
         prompt_tokens=prompt_tokens,
         response_tokens=response_tokens,
         response_logprobs=response_logprobs,
+        response_loss_mask=response_loss_mask,
         token_rewards=token_rewards,
         episode_reward=episode_reward,
         temperature=1.0,
@@ -108,6 +112,28 @@ def test_loss_weights_have_advantage():
     # Should be 0 for prompt tokens, advantage for response tokens, 0 for padding
     expected_weights = np.array([0, 0, 0, 0, 2.5, 2.5, 2.5] + [0] * 9, dtype=np.float32)
     np.testing.assert_array_equal(loss_weights, expected_weights)
+
+
+def test_sparse_response_loss_mask_is_preserved():
+    """Test that sparse response masks propagate into training masks and weights."""
+    response_loss_mask = np.array([1.0, 0.0, 1.0], dtype=np.float32)
+    rollout = create_test_rollout(prompt_len=4, response_len=3, response_loss_mask=response_loss_mask)
+
+    result = train_batch.convert_rollout_to_training_format(rollout, 2.5, max_tokens=16, pad_token_id=0, pad_to=16)
+
+    expected_loss_mask = np.array([0, 0, 0, 0, 1, 0, 1] + [0] * 9, dtype=np.float32)
+    expected_loss_weights = np.array([0, 0, 0, 0, 2.5, 0, 2.5] + [0] * 9, dtype=np.float32)
+    expected_policy_logprobs = np.array([0, 0, 0, 0, -0.5, 0, -0.5] + [0] * 9, dtype=np.float32)
+
+    np.testing.assert_array_equal(result["loss_masks"], expected_loss_mask)
+    np.testing.assert_array_equal(result["loss_weights"], expected_loss_weights)
+    np.testing.assert_array_equal(result["policy_logprobs"], expected_policy_logprobs)
+
+
+def test_rollout_rejects_mismatched_response_loss_mask():
+    """Test that rollout construction rejects mismatched response loss masks."""
+    with pytest.raises(ValueError, match="response_loss_mask length must match response_tokens length"):
+        create_test_rollout(response_len=3, response_loss_mask=np.array([1.0, 0.0], dtype=np.float32))
 
 
 def test_token_sequence_shifted_correctly():
