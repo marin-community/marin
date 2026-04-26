@@ -1665,6 +1665,18 @@ def _adjust_config(task_dict, fewshot_random_seed=0):
     return adjusted_task_dict
 
 
+def _encode_batch_texts(tokenizer, texts: list[str]) -> list[list[int]]:
+    """Batch-tokenize text for Marin tokenizers and HF fast tokenizers."""
+    if hasattr(tokenizer, "encode_batch"):
+        encoded = tokenizer.encode_batch(texts)
+        if encoded and hasattr(encoded[0], "ids"):
+            return [encoding.ids for encoding in encoded]
+        return encoded
+
+    encoded = tokenizer(texts, add_special_tokens=False, truncation=False, padding=False)
+    return encoded["input_ids"]
+
+
 def _iterate_tokenized_requests(
     requests: list[Instance], tokenizer: MarinTokenizer, max_length: int, batch_size: int
 ) -> Iterator[PromptCompletion]:
@@ -1684,8 +1696,8 @@ def _iterate_tokenized_requests(
         combined_batch = [combined_texts[i] for i in batch_indices]
         context_batch = [contexts[i] for i in batch_indices]
         # Tokenize batched inputs
-        combined_encodings = {"input_ids": tokenizer.encode_batch(combined_batch)}
-        context_encodings = {"input_ids": tokenizer.encode_batch(context_batch)}
+        combined_encodings = {"input_ids": _encode_batch_texts(tokenizer, combined_batch)}
+        context_encodings = {"input_ids": _encode_batch_texts(tokenizer, context_batch)}
 
         for off in range(len(batch_indices)):
             i = batch_indices[off]

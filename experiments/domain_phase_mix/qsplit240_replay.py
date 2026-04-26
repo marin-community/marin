@@ -24,8 +24,8 @@ import numpy as np
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import Executor, ExecutorStep, output_path_of, this_output_path
-from marin.training.training import TrainLmOnPodConfig
-from rigging.filesystem import marin_prefix
+from marin.training.training import TEMPORARY_CHECKPOINTS_PREFIX, TrainLmOnPodConfig
+from rigging.filesystem import REGION_TO_TMP_BUCKET, marin_prefix
 
 from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.determinism_analysis import (
@@ -67,7 +67,8 @@ ALL_PANEL = "all"
 REPRESENTATIVE12_PANEL = "representative12"
 BASELINES3_PANEL = "baselines3"
 CHECKPOINT_STEP_METADATA_GLOB = "checkpoints/step-*/metadata.json"
-CHECKPOINT_STEP_PATTERN = re.compile(r"/checkpoints/step-(\d+)/")
+TEMPORARY_CHECKPOINT_TTL_DAYS = 14
+CHECKPOINT_STEP_PATTERN = re.compile(r"/step-(\d+)/")
 
 
 @dataclass(frozen=True)
@@ -150,12 +151,49 @@ def mirror_path(path: str) -> str:
     return mirror_marin_path(path)
 
 
+def checkpoint_initialization_path(checkpoint_path: str) -> str:
+    """Return the path to pass to Levanter for checkpoint initialization.
+
+    Permanent checkpoints are safe to access through mirror://. Time-policy
+    preemption checkpoints live in region-local marin-tmp buckets; those are not
+    scanned by MirrorFileSystem, so they must stay as concrete gs:// paths.
+    """
+    if checkpoint_path.startswith("gs://marin-tmp-"):
+        return checkpoint_path
+    return mirror_path(checkpoint_path)
+
+
+def _temporary_checkpoint_metadata_glob(*, run_name: str, region: str) -> str | None:
+    temp_bucket = REGION_TO_TMP_BUCKET.get(region)
+    if temp_bucket is None:
+        return None
+    return (
+        f"gs://{temp_bucket}/ttl={TEMPORARY_CHECKPOINT_TTL_DAYS}d/"
+        f"{TEMPORARY_CHECKPOINTS_PREFIX}/{run_name}-*/step-*/metadata.json"
+    )
+
+
+def _checkpoint_metadata_globs(
+    *,
+    experiment_name_prefix: str,
+    run_name: str,
+    region: str,
+) -> tuple[str, ...]:
+    permanent_glob = (
+        f"gs://marin-{region}/checkpoints/{experiment_name_prefix}/{run_name}-*/{CHECKPOINT_STEP_METADATA_GLOB}"
+    )
+    temporary_glob = _temporary_checkpoint_metadata_glob(run_name=run_name, region=region)
+    if temporary_glob is None:
+        return (permanent_glob,)
+    return permanent_glob, temporary_glob
+
+
 def _checkpoint_root_from_metadata_path(metadata_path: str) -> tuple[str, int] | None:
     match = CHECKPOINT_STEP_PATTERN.search(metadata_path)
     if match is None:
         return None
     step = int(match.group(1))
-    checkpoint_root = metadata_path.split("/checkpoints/step-", 1)[0]
+    checkpoint_root = metadata_path[: match.start()]
     return checkpoint_root, step
 
 
@@ -230,20 +268,22 @@ def resolve_latest_checkpoint_root(
     """Resolve the highest-step checkpoint root for a run across one or more regions."""
     best_checkpoint: tuple[int, str] | None = None
     for region in normalize_tpu_regions(checkpoint_regions):
-        pattern = (
-            f"gs://marin-{region}/checkpoints/{experiment_name_prefix}/{run_name}-*/{CHECKPOINT_STEP_METADATA_GLOB}"
-        )
-        fs, _, _ = fsspec.get_fs_token_paths(pattern)
-        for match in fs.glob(pattern):
-            full_match = match if str(match).startswith("gs://") else f"gs://{match}"
-            if not _is_committed_checkpoint_metadata(fs, full_match):
-                continue
-            resolved = _checkpoint_root_from_metadata_path(full_match)
-            if resolved is None:
-                continue
-            checkpoint_root, step = resolved
-            if best_checkpoint is None or step > best_checkpoint[0]:
-                best_checkpoint = (step, checkpoint_root)
+        for pattern in _checkpoint_metadata_globs(
+            experiment_name_prefix=experiment_name_prefix,
+            run_name=run_name,
+            region=region,
+        ):
+            fs, _, _ = fsspec.get_fs_token_paths(pattern)
+            for match in fs.glob(pattern):
+                full_match = match if str(match).startswith("gs://") else f"gs://{match}"
+                if not _is_committed_checkpoint_metadata(fs, full_match):
+                    continue
+                resolved = _checkpoint_root_from_metadata_path(full_match)
+                if resolved is None:
+                    continue
+                checkpoint_root, step = resolved
+                if best_checkpoint is None or step > best_checkpoint[0]:
+                    best_checkpoint = (step, checkpoint_root)
 
     if best_checkpoint is None:
         return None
@@ -259,20 +299,22 @@ def resolve_latest_checkpoint_path(
     """Resolve the highest-step concrete checkpoint directory for a run."""
     best_checkpoint: tuple[int, str] | None = None
     for region in normalize_tpu_regions(checkpoint_regions):
-        pattern = (
-            f"gs://marin-{region}/checkpoints/{experiment_name_prefix}/{run_name}-*/{CHECKPOINT_STEP_METADATA_GLOB}"
-        )
-        fs, _, _ = fsspec.get_fs_token_paths(pattern)
-        for match in fs.glob(pattern):
-            full_match = match if str(match).startswith("gs://") else f"gs://{match}"
-            if not _is_committed_checkpoint_metadata(fs, full_match):
-                continue
-            resolved = _checkpoint_path_from_metadata_path(full_match)
-            if resolved is None:
-                continue
-            checkpoint_path, step = resolved
-            if best_checkpoint is None or step > best_checkpoint[0]:
-                best_checkpoint = (step, checkpoint_path)
+        for pattern in _checkpoint_metadata_globs(
+            experiment_name_prefix=experiment_name_prefix,
+            run_name=run_name,
+            region=region,
+        ):
+            fs, _, _ = fsspec.get_fs_token_paths(pattern)
+            for match in fs.glob(pattern):
+                full_match = match if str(match).startswith("gs://") else f"gs://{match}"
+                if not _is_committed_checkpoint_metadata(fs, full_match):
+                    continue
+                resolved = _checkpoint_path_from_metadata_path(full_match)
+                if resolved is None:
+                    continue
+                checkpoint_path, step = resolved
+                if best_checkpoint is None or step > best_checkpoint[0]:
+                    best_checkpoint = (step, checkpoint_path)
 
     if best_checkpoint is None:
         return None
@@ -600,7 +642,7 @@ def build_qsplit240_replay_launch_artifacts(
                 checkpoint_regions=tpu_regions,
             )
             if latest_checkpoint_path is not None:
-                train_kwargs["initialize_from_checkpoint_path"] = mirror_path(latest_checkpoint_path)
+                train_kwargs["initialize_from_checkpoint_path"] = checkpoint_initialization_path(latest_checkpoint_path)
                 train_kwargs["reset_data_loader_on_init"] = False
         training_step = experiment.create_training_step(
             weight_config=WeightConfig(run_id=spec.run_id, phase_weights=spec.phase_weights),

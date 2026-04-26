@@ -56,6 +56,19 @@ MMLU_TASKS = (
     MMLU_5_SHOT,
 )
 
+BBH_COT_3_SHOT = EvalTaskConfig(name="bbh_cot_fewshot", num_fewshot=3)
+GSM8K_5_SHOT = EvalTaskConfig(name="gsm8k", num_fewshot=5, task_alias="gsm8k_5shot")
+GSM8K_COT_8_SHOT = EvalTaskConfig(name="gsm8k_cot", num_fewshot=8)
+HUMANEVAL_10_SHOT = EvalTaskConfig(name="humaneval", num_fewshot=10, task_alias="humaneval_10shot")
+NQ_OPEN_0_SHOT = EvalTaskConfig(name="nq_open", num_fewshot=0, task_alias="nq_open")
+TRIVIAQA_0_SHOT = EvalTaskConfig(name="triviaqa", num_fewshot=0, task_alias="triviaqa")
+
+# Hard-metric generation tasks run through the vLLM-backed lm-eval harness.
+HUMANEVAL_GSM8K_TASKS = (
+    GSM8K_5_SHOT,
+    HUMANEVAL_10_SHOT,
+)
+
 PUBMED_QA = EvalTaskConfig("pubmedqa", 0, task_alias="pubmedqa_0shot")
 MEDMCQA = EvalTaskConfig("medmcqa", 0, task_alias="medmcqa_0shot")
 HEADQA = EvalTaskConfig("headqa_en", 0, task_alias="headqa_en_0shot")
@@ -83,16 +96,17 @@ CORE_TASKS_PLUS_LEADERBOARD = (
 CORE_TASKS_PLUS_MMLU = CORE_TASKS + MMLU_TASKS
 
 BASE_GENERATION_TASKS = (
-    EvalTaskConfig(name="bbh_cot_fewshot", num_fewshot=3),
-    EvalTaskConfig(name="gsm8k_cot", num_fewshot=8),
-    EvalTaskConfig(name="nq_open", num_fewshot=0, task_alias="nq_open"),
-    EvalTaskConfig(name="triviaqa", num_fewshot=0, task_alias="triviaqa"),
+    BBH_COT_3_SHOT,
+    GSM8K_COT_8_SHOT,
+    *HUMANEVAL_GSM8K_TASKS,
+    NQ_OPEN_0_SHOT,
+    TRIVIAQA_0_SHOT,
 )
 
 # Settings are chosen to compare to Olmo2
 KEY_GENERATION_TASKS = (
     EvalTaskConfig(name="ifeval", num_fewshot=0),
-    EvalTaskConfig(name="gsm8k_cot", num_fewshot=8),
+    GSM8K_COT_8_SHOT,
     EvalTaskConfig(name="drop", num_fewshot=0),
     EvalTaskConfig(name="humaneval", num_fewshot=10),
     EvalTaskConfig(name="bbh_cot_fewshot", num_fewshot=3, task_alias="bbh"),
@@ -139,7 +153,7 @@ REASONING_TASKS = (
 
 # Mathematical and Arithmetic Tasks
 MATH_TASKS = (
-    EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_5shot"),  # included in core tasks
+    GSM8K_5_SHOT,  # included in core tasks
     EvalTaskConfig(name="gsm8k_cot", num_fewshot=8, task_alias="gsm8k_cot_8shot"),
     EvalTaskConfig("arithmetic_1dc", 0, task_alias="arithmetic_1dc_0shot"),
     EvalTaskConfig("arithmetic_2da", 0, task_alias="arithmetic_2da_0shot"),

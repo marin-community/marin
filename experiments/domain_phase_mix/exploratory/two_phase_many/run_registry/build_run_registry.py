@@ -1040,8 +1040,11 @@ def _penalty1_2b_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
 
 BASELINE_SCALING_REGISTRY_CELLS = (
     (BaselineScalingMethod.GRP_NO_L2, ScalingStudyScale.REGMIX_130M_2P6B),
+    (BaselineScalingMethod.GRP_NO_L2, ScalingStudyScale.REGMIX_300M_6B),
     (BaselineScalingMethod.OLMIX, ScalingStudyScale.REGMIX_130M_2P6B),
     (BaselineScalingMethod.OLMIX, ScalingStudyScale.REGMIX_520M_10P4B),
+    (BaselineScalingMethod.UNIFORM, ScalingStudyScale.REGMIX_520M_10P4B),
+    (BaselineScalingMethod.UNIFORM, ScalingStudyScale.REGMIX_1_2B_24B),
 )
 
 
@@ -1052,6 +1055,7 @@ def _baseline_scaling_resubmit_hint(*, method: BaselineScalingMethod, scale: Sca
         selector,
         f"--tpu-type {spec.tpu_type}",
         "--tpu-region us-east5",
+        "--no-resume-latest-checkpoints",
         "--perplexity-only",
         "--max-concurrent 1",
     ]

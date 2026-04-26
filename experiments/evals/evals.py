@@ -45,6 +45,38 @@ EVALCHEMY_DEPENDENCY_GROUPS = ["evalchemy", "vllm", "tpu"]
 
 logger = logging.getLogger(__name__)
 
+LM_EVAL_CODE_ENV_VARS: dict[str, str] = {
+    "HF_ALLOW_CODE_EVAL": "1",
+}
+TPU_VLLM_ENV_VARS: dict[str, str] = {
+    "MARIN_VLLM_MODE": "native",
+    "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
+    "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1",
+    "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION": "1",
+    "VLLM_TPU_SKIP_PRECOMPILE": "1",
+}
+
+
+def _is_tpu_resource(resource_config: ResourceConfig | None) -> bool:
+    if resource_config is None:
+        return False
+    return getattr(getattr(resource_config, "device", None), "kind", None) == "tpu"
+
+
+def _needs_code_eval(evals: Sequence[EvalTaskConfig]) -> bool:
+    return any(task.name == "humaneval" for task in evals)
+
+
+def _lm_eval_env_vars(
+    resource_config: ResourceConfig | None, evals: Sequence[EvalTaskConfig], env_vars: dict[str, str] | None
+) -> dict[str, str]:
+    merged = dict(LM_EVAL_CODE_ENV_VARS) if _needs_code_eval(evals) else {}
+    if _is_tpu_resource(resource_config):
+        merged.update(TPU_VLLM_ENV_VARS)
+    if env_vars:
+        merged.update(env_vars)
+    return merged
+
 
 def evaluate_lm_evaluation_harness(
     model_name: str,
@@ -56,6 +88,7 @@ def evaluate_lm_evaluation_harness(
     apply_chat_template: bool = False,
     wandb_tags: list[str] | None = None,
     discover_latest_checkpoint: bool = True,
+    env_vars: dict[str, str] | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
@@ -64,10 +97,16 @@ def evaluate_lm_evaluation_harness(
         model_name (str): Name of the model.
         model_path (str): Path to the model.
         evals (list[EvalTaskConfig]): List of evaluations to run with LM Evaluation Harness.
+        env_vars (dict[str, str] | None): Additional environment variables to set on the child worker.
     """
     return ExecutorStep(
         name=f"evaluation/lm_evaluation_harness/{model_name}",
-        fn=remote(evaluate, resources=resource_config, pip_dependency_groups=EVAL_DEPENDENCY_GROUPS),
+        fn=remote(
+            evaluate,
+            resources=resource_config,
+            env_vars=_lm_eval_env_vars(resource_config, evals, env_vars),
+            pip_dependency_groups=EVAL_DEPENDENCY_GROUPS,
+        ),
         config=EvaluationConfig(
             evaluator="lm_evaluation_harness",
             model_name=model_name,

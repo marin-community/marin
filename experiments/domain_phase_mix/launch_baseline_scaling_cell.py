@@ -35,11 +35,11 @@ from experiments.domain_phase_mix.qsplit240_replay import (
     Qsplit240ReplayLaunchArtifacts,
     Qsplit240ReplayRunSpec,
     add_eval_cache_dependency_to_training_step,
+    checkpoint_initialization_path,
     build_qsplit240_replay_run_specs,
     create_cache_eval_datasets_step,
     create_qsplit240_replay_experiment,
     create_run_manifest_step,
-    mirror_path,
     normalize_tpu_regions,
     resolve_latest_checkpoint_path,
     resolve_qsplit240_eval_cache_path_for_regions,
@@ -56,6 +56,11 @@ from experiments.domain_phase_mix.two_phase_many_genericfamily_penalty_raw_optim
 from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_uncheatable import (
     RUN_NAME as OLMIX_UNCHEATABLE_RUN_NAME,
 )
+from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
+    STRATIFIED_RUN_ID,
+    STRATIFIED_RUN_NAME,
+    create_stratified_weight_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +75,7 @@ class BaselineScalingMethod(StrEnum):
 
     GRP_NO_L2 = "grp_no_l2"
     OLMIX = "olmix"
+    UNIFORM = "uniform"
 
 
 @dataclass(frozen=True)
@@ -141,6 +147,26 @@ def build_baseline_scaling_run_spec(
             phase_weights=summary.phase_weights,
         )
 
+    if method == BaselineScalingMethod.UNIFORM:
+        weight_config = create_stratified_weight_config()
+        return Qsplit240ReplayRunSpec(
+            run_id=STRATIFIED_RUN_ID,
+            run_name=STRATIFIED_RUN_NAME,
+            cohort=f"baseline_scaling_{method.value}_{scale.value}",
+            model_family=scale_spec.model_family,
+            trainer_seed=None,
+            data_seed=STRATIFIED_RUN_ID,
+            simulated_epoch_subset_seed=None,
+            candidate_run_id=STRATIFIED_RUN_ID,
+            candidate_run_name=STRATIFIED_RUN_NAME,
+            candidate_source_experiment=baseline_scaling_source_experiment(method, scale),
+            experiment_budget=experiment_budget,
+            target_budget=target_budget,
+            target_budget_multiplier=target_budget_multiplier,
+            num_train_steps=num_train_steps,
+            phase_weights=weight_config.phase_weights,
+        )
+
     raise ValueError(f"Unsupported baseline-scaling method: {method!r}")
 
 
@@ -204,7 +230,7 @@ def build_launch_artifacts(
             checkpoint_regions=tpu_regions,
         )
         if latest_checkpoint_path is not None:
-            train_kwargs["initialize_from_checkpoint_path"] = mirror_path(latest_checkpoint_path)
+            train_kwargs["initialize_from_checkpoint_path"] = checkpoint_initialization_path(latest_checkpoint_path)
             train_kwargs["reset_data_loader_on_init"] = False
 
     training_step = experiment.create_training_step(

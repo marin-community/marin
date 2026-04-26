@@ -5,22 +5,22 @@ import time
 
 import pytest
 from fray.cluster import ResourceConfig
-from marin.evaluation.evaluation_config import EvaluationConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig, convert_to_levanter_task_config
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.run import evaluate
 from marin.execution.remote import RemoteCallable
 
 from experiments.evals.task_configs import (
+    BASE_GENERATION_TASKS,
+    HUMANEVAL_GSM8K_TASKS,
     MMLU_SL_VERB_5_SHOT,
     MMLU_SL_VERB_DOC_TO_CHOICE,
-    EvalTaskConfig,
-    convert_to_levanter_task_config,
 )
 from experiments.evals.olmo_base_easy_overlap import (
     OLMO_BASE_EASY_OVERLAP_TASKS,
     add_olmo_base_easy_overlap_metrics,
 )
-from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
+from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness, evaluate_lm_evaluation_harness
 
 
 @pytest.fixture
@@ -73,6 +73,32 @@ def test_olmo_base_easy_overlap_suite_uses_expected_aliases_and_shots():
         "medmcqa_5shot",
     ]
     assert [task.num_fewshot for task in OLMO_BASE_EASY_OVERLAP_TASKS] == [5, 5, 5, 5, 5, 5, 5, 5, 5, 0, 5]
+
+
+def test_base_generation_suite_includes_gsm8k_and_humaneval_hard_metrics():
+    task_aliases = [task.task_alias for task in BASE_GENERATION_TASKS]
+
+    assert [task.task_alias for task in HUMANEVAL_GSM8K_TASKS] == ["gsm8k_5shot", "humaneval_10shot"]
+    assert "gsm8k_5shot" in task_aliases
+    assert "humaneval_10shot" in task_aliases
+
+
+def test_evaluate_lm_evaluation_harness_sets_code_eval_and_tpu_vllm_env():
+    resource_config = ResourceConfig.with_tpu("v5p-8")
+    step = evaluate_lm_evaluation_harness(
+        model_name="unit-test-model",
+        model_path="gs://unit-test/checkpoint",
+        evals=list(HUMANEVAL_GSM8K_TASKS),
+        resource_config=resource_config,
+        env_vars={"EXTRA_ENV": "1"},
+    )
+
+    assert isinstance(step.fn, RemoteCallable)
+    assert step.fn.resources == resource_config
+    assert step.fn.env_vars["HF_ALLOW_CODE_EVAL"] == "1"
+    assert step.fn.env_vars["MARIN_VLLM_MODE"] == "native"
+    assert step.fn.env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] == "0"
+    assert step.fn.env_vars["EXTRA_ENV"] == "1"
 
 
 def test_add_olmo_base_easy_overlap_metrics_derives_mmlu_category_bpbs_and_macro():

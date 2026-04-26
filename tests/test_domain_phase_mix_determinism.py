@@ -2312,6 +2312,9 @@ def test_resolve_latest_checkpoint_root_picks_highest_step_across_regions(monkey
         def open(self, path: str, mode: str = "rb") -> BytesIO:
             return BytesIO(b'{"is_temporary": false}')
 
+        def exists(self, path: str) -> bool:
+            return path.endswith("/manifest.ocdbt") or path.endswith("/d")
+
     monkeypatch.setattr(qsplit240_replay.fsspec, "get_fs_token_paths", lambda pattern: (FakeFs(), None, None))
 
     checkpoint_root = qsplit240_replay.resolve_latest_checkpoint_root(
@@ -2338,6 +2341,9 @@ def test_resolve_latest_checkpoint_path_picks_concrete_step_across_regions(monke
         def open(self, path: str, mode: str = "rb") -> BytesIO:
             return BytesIO(b'{"is_temporary": false}')
 
+        def exists(self, path: str) -> bool:
+            return path.endswith("/manifest.ocdbt") or path.endswith("/d")
+
     monkeypatch.setattr(qsplit240_replay.fsspec, "get_fs_token_paths", lambda pattern: (FakeFs(), None, None))
 
     checkpoint_path = qsplit240_replay.resolve_latest_checkpoint_path(
@@ -2349,17 +2355,54 @@ def test_resolve_latest_checkpoint_path_picks_concrete_step_across_regions(monke
     assert checkpoint_path == "gs://marin-us-central1/checkpoints/unit/prefix/run_00125-central/checkpoints/step-6000"
 
 
-def test_resolve_latest_checkpoint_path_skips_temporary_metadata(monkeypatch):
+def test_resolve_latest_checkpoint_path_uses_newer_temporary_checkpoint(monkeypatch):
     class FakeFs:
         def glob(self, pattern: str) -> list[str]:
-            return [
-                "gs://marin-us-east5/checkpoints/unit/prefix/run_00125-temp/checkpoints/step-8000/metadata.json",
-                "gs://marin-us-east5/checkpoints/unit/prefix/run_00125-committed/checkpoints/step-6000/metadata.json",
-            ]
+            return {
+                "gs://marin-us-east5/checkpoints/unit/prefix/run_00125-*/checkpoints/step-*/metadata.json": [
+                    "gs://marin-us-east5/checkpoints/unit/prefix/run_00125-committed/checkpoints/step-6000/metadata.json",
+                ],
+                ("gs://marin-tmp-us-east5/ttl=14d/checkpoints-temp/" "run_00125-*/step-*/metadata.json"): [
+                    "gs://marin-tmp-us-east5/ttl=14d/checkpoints-temp/run_00125-temp/step-8000/metadata.json",
+                ],
+            }.get(pattern, [])
 
         def open(self, path: str, mode: str = "rb") -> BytesIO:
-            is_temporary = "temp" in path
+            is_temporary = "marin-tmp" in path
             return BytesIO(json.dumps({"is_temporary": is_temporary}).encode())
+
+        def exists(self, path: str) -> bool:
+            return path.endswith("/manifest.ocdbt") or path.endswith("/d")
+
+    monkeypatch.setattr(qsplit240_replay.fsspec, "get_fs_token_paths", lambda pattern: (FakeFs(), None, None))
+
+    checkpoint_path = qsplit240_replay.resolve_latest_checkpoint_path(
+        experiment_name_prefix="unit/prefix",
+        run_name="run_00125",
+        checkpoint_regions=("us-east5",),
+    )
+
+    assert checkpoint_path == "gs://marin-tmp-us-east5/ttl=14d/checkpoints-temp/run_00125-temp/step-8000"
+
+
+def test_resolve_latest_checkpoint_path_skips_temporary_metadata_without_tensor_data(monkeypatch):
+    class FakeFs:
+        def glob(self, pattern: str) -> list[str]:
+            return {
+                "gs://marin-us-east5/checkpoints/unit/prefix/run_00125-*/checkpoints/step-*/metadata.json": [
+                    "gs://marin-us-east5/checkpoints/unit/prefix/run_00125-committed/checkpoints/step-6000/metadata.json",
+                ],
+                ("gs://marin-tmp-us-east5/ttl=14d/checkpoints-temp/" "run_00125-*/step-*/metadata.json"): [
+                    "gs://marin-tmp-us-east5/ttl=14d/checkpoints-temp/run_00125-temp/step-8000/metadata.json",
+                ],
+            }.get(pattern, [])
+
+        def open(self, path: str, mode: str = "rb") -> BytesIO:
+            is_temporary = "marin-tmp" in path
+            return BytesIO(json.dumps({"is_temporary": is_temporary}).encode())
+
+        def exists(self, path: str) -> bool:
+            return "run_00125-committed" in path and (path.endswith("/manifest.ocdbt") or path.endswith("/d"))
 
     monkeypatch.setattr(qsplit240_replay.fsspec, "get_fs_token_paths", lambda pattern: (FakeFs(), None, None))
 
@@ -2370,6 +2413,15 @@ def test_resolve_latest_checkpoint_path_skips_temporary_metadata(monkeypatch):
     )
 
     assert checkpoint_path == "gs://marin-us-east5/checkpoints/unit/prefix/run_00125-committed/checkpoints/step-6000"
+
+
+def test_checkpoint_initialization_path_does_not_mirror_temp_bucket_checkpoints():
+    assert (
+        qsplit240_replay.checkpoint_initialization_path(
+            "gs://marin-tmp-us-east5/ttl=14d/checkpoints-temp/run_00125-temp/step-8000"
+        )
+        == "gs://marin-tmp-us-east5/ttl=14d/checkpoints-temp/run_00125-temp/step-8000"
+    )
 
 
 def test_mirror_path_rebases_marin_bucket_urls_to_bucket_relative_paths():

@@ -18,8 +18,8 @@ from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b import
 from experiments.domain_phase_mix.qsplit240_replay import (
     DEFAULT_TARGET_BUDGET_MULTIPLIER,
     Qsplit240ReplayRunSpec,
+    checkpoint_initialization_path,
     create_run_manifest_step,
-    mirror_path,
     normalize_tpu_regions,
     resolve_latest_checkpoint_path,
     resolve_qsplit240_eval_cache_path_for_regions,
@@ -144,7 +144,7 @@ def build_launch_artifacts(
             checkpoint_regions=tpu_regions,
         )
         if latest_checkpoint_path is not None:
-            train_kwargs["initialize_from_checkpoint_path"] = mirror_path(latest_checkpoint_path)
+            train_kwargs["initialize_from_checkpoint_path"] = checkpoint_initialization_path(latest_checkpoint_path)
             train_kwargs["reset_data_loader_on_init"] = False
 
     experiment = create_two_phase_dolma3_dolmino_top_level_experiment(

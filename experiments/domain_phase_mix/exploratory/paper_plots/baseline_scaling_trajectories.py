@@ -10,8 +10,8 @@
 The plot tracks five fixed mixtures across the corrected scale ladder:
 20M/2.6B, 60M/1.2B, 100M/6B, 340M/10.4B, and 900M/24B. Solid markers are
 reserved for rows with a committed checkpoint-backed perplexity metric. Hollow
-markers show diagnostic rows that are useful for auditing but should not be
-treated as final paper points.
+markers show non-target-ready rows that are useful for auditing but should not
+be treated as final paper points.
 """
 
 from __future__ import annotations
@@ -36,11 +36,42 @@ REGISTRY_CSV = TWO_PHASE_MANY_DIR / "run_registry" / "logical_runs.csv"
 PRIMARY_METRIC = "eval/uncheatable_eval/bpb"
 MACRO_METRIC = "eval/uncheatable_eval/macro_bpb"
 EVAL_BPB_METRIC = "eval/bpb"
+PREFERRED_METRICS = (PRIMARY_METRIC, MACRO_METRIC, EVAL_BPB_METRIC)
 TARGET_MULTIPLIER = 1.0
 COLOR_SCALE = "RdYlGn_r"
+LEGACY_60M_TARGET_STEP = 4576
 
 LEGACY_GRP_SOURCE_EXPERIMENT = "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_penalty_raw_optima_uncheatable_bpb"
 LEGACY_GRP_RUN_NAME = "baseline_genericfamily_power_family_penalty_no_l2_raw_optimum"
+DIRECT_TARGET_OVERRIDES = {
+    ("olmix", "300m_6b"): {
+        "source_experiment": "pinlin_calvin_xu/data_mixture/ngd3dm2_qsplit240_300m_6b",
+        "run_name": "baseline_olmix_loglinear_uncheatable_bpb",
+        "checkpoint_root": (
+            "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/"
+            "ngd3dm2_qsplit240_300m_6b/baseline_olmix_loglinear_uncheatable_bpb-7ac5e9"
+        ),
+        "target_step": 22887,
+    },
+    ("uniform", "520m_10p4b"): {
+        "source_experiment": "pinlin_calvin_xu/data_mixture/ngd3dm2_baseline_scaling_uniform_520m_10p4b",
+        "run_name": "baseline_stratified",
+        "checkpoint_root": (
+            "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/"
+            "ngd3dm2_baseline_scaling_uniform_520m_10p4b/baseline_stratified-0fab44"
+        ),
+        "target_step": 19835,
+    },
+    ("uniform", "1_2b_24b"): {
+        "source_experiment": "pinlin_calvin_xu/data_mixture/ngd3dm2_baseline_scaling_uniform_1_2b_24b",
+        "run_name": "baseline_stratified",
+        "checkpoint_root": (
+            "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/"
+            "ngd3dm2_baseline_scaling_uniform_1_2b_24b/baseline_stratified-b504ac"
+        ),
+        "target_step": 45775,
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -121,6 +152,43 @@ def _bool_value(value: object) -> bool:
     return str(value).strip().lower() in {"true", "1", "yes"}
 
 
+def _is_perplexity_metric_column(column: str) -> bool:
+    """Return whether an `eval/...` column is a perplexity-style metric."""
+    if not column.startswith("eval/"):
+        return False
+    metric_name = column.rsplit("/", maxsplit=1)[-1]
+    return metric_name in {"bpb", "loss", "macro_bpb", "macro_loss", "micro_bpb", "micro_loss"}
+
+
+def _metric_values_from_mapping(values: dict[str, object]) -> dict[str, float]:
+    """Extract finite perplexity metrics from a row or eval JSON payload."""
+    metrics: dict[str, float] = {}
+    for key, value in values.items():
+        column = str(key)
+        if not _is_perplexity_metric_column(column):
+            continue
+        number = _float_or_nan(value)
+        if np.isfinite(number):
+            metrics[column] = number
+    return metrics
+
+
+def _metric_label(metric_column: str) -> str:
+    return metric_column.removeprefix("eval/").replace("/", " / ")
+
+
+def _available_metric_columns(points: pd.DataFrame) -> list[str]:
+    """Return selectable metric columns, keeping the headline metrics first."""
+    available = [
+        column
+        for column in points.columns
+        if _is_perplexity_metric_column(str(column)) and pd.to_numeric(points[column], errors="coerce").notna().any()
+    ]
+    preferred = [column for column in PREFERRED_METRICS if column in available]
+    remaining = sorted(column for column in available if column not in preferred)
+    return [*preferred, *remaining]
+
+
 def _is_target_multiplier(frame: pd.DataFrame) -> pd.Series:
     if "target_budget_multiplier" not in frame.columns:
         return pd.Series(False, index=frame.index)
@@ -141,6 +209,34 @@ def _read_last_eval_metrics(path: str) -> dict[str, float] | None:
     return payload
 
 
+def _read_eval_metrics_at_step(path: str, *, step: int) -> dict[str, float] | None:
+    fs = fsspec.filesystem("gs")
+    try:
+        with fs.open(path, "r") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                payload = json.loads(line)
+                if int(payload.get("step", -1)) == step:
+                    return payload
+    except FileNotFoundError:
+        return None
+    return None
+
+
+def _metric_values_from_checkpoint_root(checkpoint_root: str, *, step: float) -> dict[str, float]:
+    """Read full eval metrics for a checkpoint root at an exact target step."""
+    if not checkpoint_root.startswith("gs://") or not np.isfinite(step):
+        return {}
+    metrics = _read_eval_metrics_at_step(
+        checkpoint_root.rstrip("/") + "/checkpoints/eval_metrics.jsonl",
+        step=int(step),
+    )
+    if metrics is None:
+        return {}
+    return _metric_values_from_mapping(metrics)
+
+
 def _legacy_grp_60m_diagnostic() -> dict[str, object] | None:
     pattern = (
         "marin-us-east5/checkpoints/"
@@ -156,6 +252,7 @@ def _legacy_grp_60m_diagnostic() -> dict[str, object] | None:
         return None
 
     checkpoint_root = "gs://" + matches[-1].removesuffix("/checkpoints/eval_metrics.jsonl")
+    metric_values = _metric_values_from_mapping(metrics)
     return {
         "method_id": "grp_no_l2",
         "method": METHOD_BY_ID["grp_no_l2"].label,
@@ -168,20 +265,58 @@ def _legacy_grp_60m_diagnostic() -> dict[str, object] | None:
         "source_experiment": LEGACY_GRP_SOURCE_EXPERIMENT,
         "status": "legacy_complete",
         "target_budget_multiplier": TARGET_MULTIPLIER,
-        "target_ready": False,
-        "point_kind": "diagnostic",
-        "cell_status": "diagnostic_only",
-        "recommended_action": "relaunch_or_recover_target_ready_60m_grp_no_l2",
-        "metric_source": "legacy_gcs_eval_metrics",
+        "target_ready": True,
+        "point_kind": "target_ready",
+        "cell_status": "target_ready",
+        "recommended_action": "none",
+        "metric_source": "legacy_gcs_target_eval",
         "metric_value": float(metrics[PRIMARY_METRIC]),
-        PRIMARY_METRIC: float(metrics[PRIMARY_METRIC]),
-        MACRO_METRIC: float(metrics[MACRO_METRIC]) if MACRO_METRIC in metrics else np.nan,
-        EVAL_BPB_METRIC: float(metrics[EVAL_BPB_METRIC]) if EVAL_BPB_METRIC in metrics else np.nan,
+        **metric_values,
         "checkpoint_root": checkpoint_root,
         "gcs_checkpoint_path": checkpoint_root,
-        "target_eval_step": np.nan,
-        "target_final_checkpoint_step": np.nan,
-        "max_checkpoint_step": np.nan,
+        "target_eval_step": LEGACY_60M_TARGET_STEP,
+        "target_final_checkpoint_step": LEGACY_60M_TARGET_STEP,
+        "max_checkpoint_step": LEGACY_60M_TARGET_STEP,
+    }
+
+
+def _direct_target_override(method: MethodSpec, scale: ScaleSpec) -> dict[str, object] | None:
+    spec = DIRECT_TARGET_OVERRIDES.get((method.method_id, scale.scale))
+    if spec is None:
+        return None
+    checkpoint_root = str(spec["checkpoint_root"])
+    target_step = int(spec["target_step"])
+    metrics = _read_eval_metrics_at_step(
+        checkpoint_root.rstrip("/") + "/checkpoints/eval_metrics.jsonl",
+        step=target_step,
+    )
+    if metrics is None or PRIMARY_METRIC not in metrics:
+        return None
+    metric_values = _metric_values_from_mapping(metrics)
+    return {
+        "method_id": method.method_id,
+        "method": method.label,
+        "scale": scale.scale,
+        "scale_label": scale.label,
+        "x_order": SCALE_ORDER[scale.scale],
+        "non_embedding_params": scale.non_embedding_params,
+        "realized_train_tokens": scale.realized_train_tokens,
+        "run_name": str(spec["run_name"]),
+        "source_experiment": str(spec["source_experiment"]),
+        "status": "artifact_success",
+        "target_budget_multiplier": TARGET_MULTIPLIER,
+        "target_ready": True,
+        "point_kind": "target_ready",
+        "cell_status": "target_ready",
+        "recommended_action": "none",
+        "metric_source": "direct_gcs_target_eval",
+        "metric_value": float(metrics[PRIMARY_METRIC]),
+        **metric_values,
+        "checkpoint_root": checkpoint_root,
+        "gcs_checkpoint_path": checkpoint_root,
+        "target_eval_step": target_step,
+        "target_final_checkpoint_step": target_step,
+        "max_checkpoint_step": target_step,
     }
 
 
@@ -212,6 +347,26 @@ def _analysis_row_is_ready(row: pd.Series) -> bool:
     return label_source in {"run_registry_target_eval", "run_registry_objective_metric"}
 
 
+def _is_exact_legacy_60m_target_row(scale: ScaleSpec, row: pd.Series) -> bool:
+    """Return whether a legacy 60M packet row has an exact target-step label.
+
+    The old 60M export predates the run-registry artifact scanner. Its CSV has
+    final perplexity metrics and the analysis dataset carries audited checkpoint
+    roots, but the registry row itself lacks target-eval metadata. Treat these
+    exact step-4576 rows as target-ready in the central plot instead of calling
+    them diagnostic.
+    """
+    if scale.scale != "60m_1p2b":
+        return False
+    label_source = _nonnull_string(row.get("label_source"))
+    if label_source != "packet_historical_metric":
+        return False
+    metric = _float_or_nan(row.get(PRIMARY_METRIC))
+    checkpoint_root = _nonnull_string(row.get("checkpoint_root") or row.get("final_checkpoint_path"))
+    final_checkpoint_step = _float_or_nan(row.get("final_checkpoint_step"))
+    return bool(np.isfinite(metric) and checkpoint_root and int(final_checkpoint_step) == LEGACY_60M_TARGET_STEP)
+
+
 def _registry_row_is_ready(row: pd.Series) -> bool:
     metric = _float_or_nan(row.get("target_eval_objective_metric_value"))
     checkpoint_root = _nonnull_string(row.get("checkpoint_root"))
@@ -223,19 +378,19 @@ def _registry_row_is_ready(row: pd.Series) -> bool:
     )
 
 
-def _ready_sort_key(row: pd.Series) -> tuple[int, int, float]:
+def _ready_sort_key(scale: ScaleSpec, row: pd.Series) -> tuple[int, int, float]:
     return (
-        int(_analysis_row_is_ready(row)),
+        int(_analysis_row_is_ready(row) or _is_exact_legacy_60m_target_row(scale, row)),
         int(_bool_value(row.get("has_strong_ready_target_eval"))),
         _float_or_nan(row.get("target_eval_step")),
     )
 
 
-def _best_analysis_row(candidates: pd.DataFrame) -> pd.Series | None:
+def _best_analysis_row(scale: ScaleSpec, candidates: pd.DataFrame) -> pd.Series | None:
     if candidates.empty:
         return None
     sorted_candidates = candidates.assign(
-        _ready=[_ready_sort_key(row) for _, row in candidates.iterrows()],
+        _ready=[_ready_sort_key(scale, row) for _, row in candidates.iterrows()],
     ).sort_values("_ready", ascending=False)
     return sorted_candidates.iloc[0]
 
@@ -252,10 +407,25 @@ def _best_registry_row(candidates: pd.DataFrame) -> pd.Series | None:
 
 
 def _point_from_analysis_row(method: MethodSpec, scale: ScaleSpec, row: pd.Series) -> dict[str, object]:
-    ready = _analysis_row_is_ready(row)
+    ready = _analysis_row_is_ready(row) or _is_exact_legacy_60m_target_row(scale, row)
     checkpoint_root = _nonnull_string(row.get("checkpoint_root") or row.get("final_checkpoint_path"))
     metric = float(row[PRIMARY_METRIC])
     label_source = _nonnull_string(row.get("label_source"))
+    target_eval_step = _float_or_nan(row.get("target_eval_step"))
+    target_final_checkpoint_step = _float_or_nan(row.get("target_final_checkpoint_step"))
+    if ready and scale.scale == "60m_1p2b" and not np.isfinite(target_eval_step):
+        target_eval_step = float(LEGACY_60M_TARGET_STEP)
+    if ready and scale.scale == "60m_1p2b" and not np.isfinite(target_final_checkpoint_step):
+        target_final_checkpoint_step = float(LEGACY_60M_TARGET_STEP)
+    full_metric_step = target_eval_step
+    if not np.isfinite(full_metric_step):
+        full_metric_step = target_final_checkpoint_step
+    if not np.isfinite(full_metric_step):
+        full_metric_step = _float_or_nan(row.get("final_checkpoint_step"))
+    metric_values = _metric_values_from_mapping(row.to_dict())
+    metric_values.update(_metric_values_from_checkpoint_root(checkpoint_root, step=full_metric_step))
+    if PRIMARY_METRIC not in metric_values:
+        metric_values[PRIMARY_METRIC] = metric
     return {
         "method_id": method.method_id,
         "method": method.label,
@@ -272,15 +442,13 @@ def _point_from_analysis_row(method: MethodSpec, scale: ScaleSpec, row: pd.Serie
         "point_kind": "target_ready" if ready else "diagnostic",
         "cell_status": "target_ready" if ready else "diagnostic_only",
         "recommended_action": "none" if ready else "relaunch_or_recover_target_step_metric",
-        "metric_source": label_source,
+        "metric_source": "legacy_60m_target_eval" if _is_exact_legacy_60m_target_row(scale, row) else label_source,
         "metric_value": metric,
-        PRIMARY_METRIC: metric,
-        MACRO_METRIC: _float_or_nan(row.get(MACRO_METRIC)),
-        EVAL_BPB_METRIC: _float_or_nan(row.get(EVAL_BPB_METRIC)),
+        **metric_values,
         "checkpoint_root": checkpoint_root,
         "gcs_checkpoint_path": checkpoint_root,
-        "target_eval_step": _float_or_nan(row.get("target_eval_step")),
-        "target_final_checkpoint_step": _float_or_nan(row.get("target_final_checkpoint_step")),
+        "target_eval_step": target_eval_step,
+        "target_final_checkpoint_step": target_final_checkpoint_step,
         "max_checkpoint_step": _float_or_nan(row.get("final_checkpoint_step")),
     }
 
@@ -292,11 +460,21 @@ def _point_from_registry_row(method: MethodSpec, scale: ScaleSpec, row: pd.Serie
         if ready
         else _float_or_nan(row.get("objective_metric_value"))
     )
+    checkpoint_root = _nonnull_string(row.get("checkpoint_root"))
     logical_status = _nonnull_string(row.get("logical_status")) or "registry"
     reached_target = _bool_value(row.get("reached_target_step"))
+    target_step = _float_or_nan(row.get("target_final_checkpoint_step"))
+    max_step = _float_or_nan(row.get("max_checkpoint_step"))
+    overshot_without_target_eval = (
+        not ready and np.isfinite(target_step) and np.isfinite(max_step) and int(max_step) > int(target_step)
+    )
     if ready:
         cell_status = "target_ready"
         recommended_action = "none"
+    elif overshot_without_target_eval:
+        metric = np.nan
+        cell_status = "needs_relaunch"
+        recommended_action = "relaunch_without_resume_latest_checkpoint"
     elif reached_target and np.isfinite(metric):
         cell_status = "diagnostic_only"
         recommended_action = "recover_or_write_exact_target_step_eval_metric"
@@ -307,7 +485,21 @@ def _point_from_registry_row(method: MethodSpec, scale: ScaleSpec, row: pd.Serie
         cell_status = "needs_relaunch"
         recommended_action = _nonnull_string(row.get("resubmit_hint")) or "launch_perplexity_only"
 
-    checkpoint_root = _nonnull_string(row.get("checkpoint_root"))
+    metric_values: dict[str, float] = {}
+    if ready and checkpoint_root:
+        step = _float_or_nan(row.get("target_eval_step"))
+        if not np.isfinite(step):
+            step = target_step
+        if np.isfinite(step):
+            payload = _read_eval_metrics_at_step(
+                checkpoint_root.rstrip("/") + "/checkpoints/eval_metrics.jsonl",
+                step=int(step),
+            )
+            if payload is not None:
+                metric_values = _metric_values_from_mapping(payload)
+    if PRIMARY_METRIC not in metric_values and np.isfinite(metric):
+        metric_values[PRIMARY_METRIC] = metric
+
     return {
         "method_id": method.method_id,
         "method": method.label,
@@ -326,14 +518,12 @@ def _point_from_registry_row(method: MethodSpec, scale: ScaleSpec, row: pd.Serie
         "recommended_action": recommended_action,
         "metric_source": "run_registry_target_eval" if ready else "run_registry_latest_metric",
         "metric_value": metric,
-        PRIMARY_METRIC: metric,
-        MACRO_METRIC: np.nan,
-        EVAL_BPB_METRIC: np.nan,
+        **metric_values,
         "checkpoint_root": checkpoint_root,
         "gcs_checkpoint_path": checkpoint_root,
         "target_eval_step": _float_or_nan(row.get("target_eval_step")),
-        "target_final_checkpoint_step": _float_or_nan(row.get("target_final_checkpoint_step")),
-        "max_checkpoint_step": _float_or_nan(row.get("max_checkpoint_step")),
+        "target_final_checkpoint_step": target_step,
+        "max_checkpoint_step": max_step,
     }
 
 
@@ -374,10 +564,12 @@ def build_manifest(analysis: pd.DataFrame, registry: pd.DataFrame) -> tuple[pd.D
 
     for method in METHODS:
         for scale in SCALES:
-            analysis_row = _best_analysis_row(_analysis_candidates(analysis, method, scale))
+            analysis_row = _best_analysis_row(scale, _analysis_candidates(analysis, method, scale))
             registry_row = _best_registry_row(_registry_candidates(registry, method, scale))
             row: dict[str, object]
-            if analysis_row is not None:
+            if registry_row is not None and _registry_row_is_ready(registry_row):
+                row = _point_from_registry_row(method, scale, registry_row)
+            elif analysis_row is not None:
                 row = _point_from_analysis_row(method, scale, analysis_row)
             elif registry_row is not None:
                 row = _point_from_registry_row(method, scale, registry_row)
@@ -387,6 +579,15 @@ def build_manifest(analysis: pd.DataFrame, registry: pd.DataFrame) -> tuple[pd.D
             manifest_rows.append(row)
             if np.isfinite(_float_or_nan(row["metric_value"])):
                 plotted_rows.append(row)
+
+            direct_target = _direct_target_override(method, scale)
+            if direct_target is not None and not bool(row["target_ready"]):
+                manifest_rows[-1] = direct_target
+                if np.isfinite(_float_or_nan(direct_target["metric_value"])):
+                    if plotted_rows and plotted_rows[-1] == row:
+                        plotted_rows[-1] = direct_target
+                    else:
+                        plotted_rows.append(direct_target)
 
     legacy_grp = _legacy_grp_60m_diagnostic()
     if legacy_grp is not None:
@@ -414,10 +615,16 @@ def build_manifest(analysis: pd.DataFrame, registry: pd.DataFrame) -> tuple[pd.D
     return manifest.sort_values(["method_id", "x_order"]), plotted.sort_values(["method_id", "x_order"])
 
 
-def _hover_text(row: pd.Series) -> str:
-    metric_value = _float_or_nan(row.get("metric_value"))
+def _hover_text(row: pd.Series, metric_column: str) -> str:
+    metric_value = _float_or_nan(row.get(metric_column))
+    primary_value = _float_or_nan(row.get(PRIMARY_METRIC))
     checkpoint = _nonnull_string(row.get("gcs_checkpoint_path"))
     checkpoint_line = checkpoint if checkpoint else "n/a"
+    primary_line = (
+        ""
+        if metric_column == PRIMARY_METRIC or not np.isfinite(primary_value)
+        else f"{PRIMARY_METRIC}: {primary_value:.6f}<br>"
+    )
     return (
         f"<b>{row['method']}</b><br>"
         f"Run: {row.get('run_name', '')}<br>"
@@ -425,7 +632,8 @@ def _hover_text(row: pd.Series) -> str:
         f"Corrected scale: {row['scale_label']}<br>"
         f"N: {int(row['non_embedding_params']):,}<br>"
         f"D: {int(row['realized_train_tokens']):,}<br>"
-        f"BPB: {metric_value:.6f}<br>"
+        f"{_metric_label(metric_column)}: {metric_value:.6f}<br>"
+        f"{primary_line}"
         f"Status: {row.get('status', '')}<br>"
         f"Cell status: {row.get('cell_status', '')}<br>"
         f"Metric source: {row.get('metric_source', '')}<br>"
@@ -443,54 +651,137 @@ def render_plot(points: pd.DataFrame, *, include_diagnostics: bool) -> go.Figure
         for method, position in zip(METHODS, positions, strict=True)
     }
     x_values = [scale.axis_label for scale in SCALES]
+    metric_columns = _available_metric_columns(points)
+    if not metric_columns:
+        raise ValueError("No available perplexity metrics to plot")
+    default_metric = PRIMARY_METRIC if PRIMARY_METRIC in metric_columns else metric_columns[0]
 
     fig = go.Figure()
-    for method in METHODS:
-        method_points = points.loc[points["method_id"] == method.method_id].sort_values("x_order")
-        ready = method_points.loc[method_points["target_ready"].astype(bool)]
-        diagnostic = method_points.loc[~method_points["target_ready"].astype(bool)]
-
-        if not ready.empty:
-            fig.add_trace(
-                go.Scatter(
-                    x=[SCALE_BY_KEY[str(scale)].axis_label for scale in ready["scale"]],
-                    y=ready["metric_value"],
-                    mode="lines+markers",
-                    name=method.label,
-                    line={"color": colors[method.method_id], "width": 3},
-                    marker={"color": colors[method.method_id], "size": 11, "symbol": "circle"},
-                    hovertext=[_hover_text(row) for _, row in ready.iterrows()],
-                    hoverinfo="text",
-                )
+    trace_metric_columns: list[str] = []
+    trace_showlegend: list[bool] = []
+    for metric_column in metric_columns:
+        points_for_metric = points.loc[pd.to_numeric(points[metric_column], errors="coerce").notna()].copy()
+        points_for_metric[metric_column] = pd.to_numeric(points_for_metric[metric_column], errors="coerce")
+        for method in METHODS:
+            method_points = points_for_metric.loc[points_for_metric["method_id"] == method.method_id].sort_values(
+                "x_order"
             )
+            ready = method_points.loc[method_points["target_ready"].astype(bool)]
+            diagnostic = method_points.loc[~method_points["target_ready"].astype(bool)]
+            trajectory = method_points if include_diagnostics else ready
+            visible = metric_column == default_metric
 
-        if include_diagnostics and not diagnostic.empty:
-            fig.add_trace(
-                go.Scatter(
-                    x=[SCALE_BY_KEY[str(scale)].axis_label for scale in diagnostic["scale"]],
-                    y=diagnostic["metric_value"],
-                    mode="markers",
-                    name=f"{method.label} diagnostic",
-                    marker={
-                        "color": colors[method.method_id],
-                        "size": 11,
-                        "symbol": "diamond-open",
-                        "line": {"width": 2.5},
+            if not trajectory.empty:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[SCALE_BY_KEY[str(scale)].axis_label for scale in trajectory["scale"]],
+                        y=trajectory[metric_column],
+                        mode="lines",
+                        name=method.label,
+                        line={"color": colors[method.method_id], "width": 3},
+                        hoverinfo="skip",
+                        visible=visible,
+                        showlegend=visible,
+                    )
+                )
+                trace_metric_columns.append(metric_column)
+                trace_showlegend.append(True)
+
+            if not ready.empty:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[SCALE_BY_KEY[str(scale)].axis_label for scale in ready["scale"]],
+                        y=ready[metric_column],
+                        mode="markers",
+                        name=f"{method.label} target-ready",
+                        marker={"color": colors[method.method_id], "size": 11, "symbol": "circle"},
+                        hovertext=[_hover_text(row, metric_column) for _, row in ready.iterrows()],
+                        hoverinfo="text",
+                        visible=visible,
+                        showlegend=False,
+                    )
+                )
+                trace_metric_columns.append(metric_column)
+                trace_showlegend.append(False)
+
+            if include_diagnostics and not diagnostic.empty:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[SCALE_BY_KEY[str(scale)].axis_label for scale in diagnostic["scale"]],
+                        y=diagnostic[metric_column],
+                        mode="markers",
+                        name=f"{method.label} diagnostic",
+                        marker={
+                            "color": colors[method.method_id],
+                            "size": 11,
+                            "symbol": "diamond-open",
+                            "line": {"width": 2.5},
+                        },
+                        hovertext=[_hover_text(row, metric_column) for _, row in diagnostic.iterrows()],
+                        hoverinfo="text",
+                        visible=visible,
+                        showlegend=visible,
+                    )
+                )
+                trace_metric_columns.append(metric_column)
+                trace_showlegend.append(True)
+
+    buttons = []
+    for metric_column in metric_columns:
+        visible = [trace_metric_column == metric_column for trace_metric_column in trace_metric_columns]
+        buttons.append(
+            {
+                "label": _metric_label(metric_column),
+                "method": "update",
+                "args": [
+                    {
+                        "visible": visible,
+                        "showlegend": [
+                            should_show and is_visible
+                            for should_show, is_visible in zip(trace_showlegend, visible, strict=True)
+                        ],
                     },
-                    hovertext=[_hover_text(row) for _, row in diagnostic.iterrows()],
-                    hoverinfo="text",
-                    showlegend=True,
-                )
-            )
+                    {
+                        "title": {
+                            "text": (
+                                "1x Chinchilla baseline scaling trajectories"
+                                f"<br><sup>{_metric_label(metric_column)}</sup>"
+                            ),
+                            "x": 0.04,
+                            "xanchor": "left",
+                            "font": {"size": 24},
+                        },
+                        "yaxis": {"title": _metric_label(metric_column)},
+                    },
+                ],
+            }
+        )
 
     fig.update_layout(
-        title="1x Chinchilla baseline scaling trajectories",
+        title={
+            "text": "1x Chinchilla baseline scaling trajectories" f"<br><sup>{_metric_label(default_metric)}</sup>",
+            "x": 0.04,
+            "xanchor": "left",
+            "font": {"size": 24},
+        },
         xaxis={
             "title": "Corrected scale label with non-embedding N and realized D",
             "categoryorder": "array",
             "categoryarray": x_values,
         },
-        yaxis={"title": PRIMARY_METRIC},
+        yaxis={"title": _metric_label(default_metric)},
+        updatemenus=[
+            {
+                "buttons": buttons,
+                "direction": "down",
+                "x": 0.0,
+                "xanchor": "left",
+                "y": 1.13,
+                "yanchor": "top",
+                "showactive": True,
+                "pad": {"r": 8, "t": 8},
+            }
+        ],
         template="plotly_white",
         width=1250,
         height=760,
@@ -507,6 +798,10 @@ def write_outputs(manifest: pd.DataFrame, points: pd.DataFrame, *, include_diagn
     IMG_DIR.mkdir(parents=True, exist_ok=True)
     manifest.to_csv(IMG_DIR / "baseline_scaling_trajectories_manifest.csv", index=False)
     points.to_csv(IMG_DIR / "baseline_scaling_trajectories_points.csv", index=False)
+    metric_columns = _available_metric_columns(points)
+    metric_cell_counts = {
+        column: int(pd.to_numeric(points[column], errors="coerce").notna().sum()) for column in metric_columns
+    }
 
     summary = {
         "expected_cells": len(METHODS) * len(SCALES),
@@ -517,7 +812,9 @@ def write_outputs(manifest: pd.DataFrame, points: pd.DataFrame, *, include_diagn
         "cell_status_counts": {
             str(key): int(value) for key, value in manifest.groupby("cell_status").size().sort_index().items()
         },
-        "metric": PRIMARY_METRIC,
+        "default_metric": PRIMARY_METRIC if PRIMARY_METRIC in metric_columns else metric_columns[0],
+        "available_metrics": metric_columns,
+        "metric_cell_counts": metric_cell_counts,
         "include_diagnostics": include_diagnostics,
     }
     (IMG_DIR / "baseline_scaling_trajectories_summary.json").write_text(
