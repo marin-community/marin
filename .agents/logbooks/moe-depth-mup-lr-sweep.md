@@ -352,3 +352,40 @@
   at this checkpoint.
 - Next action: continue the normal babysit cadence until d768 `4x` finishes or
   the next d1024 launches/evals create a clearer scale trend.
+
+### 2026-04-25 18:59 - d1024 third eval snapshot
+
+- Hypothesis: the ~3k-step d1024 eval should test whether the `0.707x` best
+  point from the previous checkpoint is stable or whether the basin shifts back
+  toward `1x`.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs --since-seconds 900 --max-lines 1500 --tail /kaiyue/iris-run-job-20260425-184727`
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260425-184727`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris shows 17 succeeded jobs and 9 running jobs; no terminal failures.
+  - d768 `4x` is still running at W&B step 8864 with Paloma macro 4.0186 after
+    one preemption.
+  - d1024 `0.5x` also picked up one preemption and has not posted its ~3k-step
+    eval yet.
+  - d1024 W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Tok/s |
+    | --- | --- | ---: | ---: | ---: | ---: |
+    | 0.25x | running | 3081 | 3.7652 | 3.3393 | 177,525 |
+    | 0.354x | running | 3105 | 3.6933 | 3.3829 | 178,385 |
+    | 0.5x | running | 2860 | 3.8318 | 3.3356 | 176,744 |
+    | 0.707x | running | 3085 | 3.6647 | 3.3696 | 177,297 |
+    | 1x | running | 3053 | 3.7080 | 3.3664 | 177,281 |
+    | 1.41x | running | 3061 | 3.8062 | 3.4856 | 177,299 |
+    | 2x | running | 2116 | 4.0351 | 3.7342 | 177,468 |
+    | 2.83x | missing | n/a | n/a | n/a | n/a |
+    | 4x | missing | n/a | n/a | n/a | n/a |
+
+- Interpretation: the third d1024 checkpoint keeps `0.707x` as the best
+  observed multiplier, with `0.354x` and `1x` close but worse. The missing
+  `0.5x` third eval makes the center of the basin incomplete, but the optimum
+  still appears to overlap the d512/d768 `0.707x`-`1x` region rather than
+  moving far with scale.
+- Next action: continue monitoring until d1024 `0.5x` catches up, d768 `4x`
+  finishes, or the next d1024 jobs launch.
