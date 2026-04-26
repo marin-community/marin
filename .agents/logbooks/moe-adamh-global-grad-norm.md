@@ -320,3 +320,23 @@
   state; d1280 remains the long pole.
 - Next action: continue monitoring until d1024 finishes, record its final
   metrics, and keep d1280 running to completion for the gate-2 decision.
+
+### 2026-04-26 10:11 - MOE-AGGN-001 d1024 gate-2 result
+
+- Result: d1024 finished successfully on Iris.
+- Metrics:
+  - W&B run:
+    https://wandb.ai/understanding-sam/marin_moe/runs/moe-adamh-global-grad-norm-d1024-9p00e18
+  - Iris child:
+    `/kaiyue/iris-run-job-20260426-051330/grug-train-moe-adamh-global-grad-norm-d1024-9p00e18`
+  - global_step: `12648`
+  - eval/paloma/macro_loss: `3.166934013366699`
+  - throughput/tokens_per_second: `177281.21442588005`
+  - throughput/total_tokens: `6631718912`
+  - effective speedup vs README baseline: `0.9687810633605517`
+- Interpretation: d1024 misses the `>1.0` effective-speedup criterion. Under
+  the all-four-points gate-2 rule, this variant cannot pass gate 2 even if
+  d1280 improves. d1280 is still running so the experiment has the complete
+  four-point evidence and scaling-law fit.
+- Next action: continue monitoring d1280 to terminal state, then compute the
+  final d1280 speedup and four-point scaling-law projection.
