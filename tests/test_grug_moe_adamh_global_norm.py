@@ -9,6 +9,18 @@ from experiments.grug.moe.adamh import normalize_gradients_to_unit_rms
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeAdamHGlobalGradientNormConfig
 
 
+class _FakeHugeGradientLeaf:
+    shape = (1,)
+    size = 2**31
+    dtype = jnp.float32
+
+    def astype(self, dtype):
+        return jnp.array([2.0], dtype=dtype)
+
+    def __mul__(self, value):
+        return self.astype(self.dtype) * value
+
+
 def _assert_tree_allclose(actual, expected, *, rtol=1e-6, atol=1e-6):
     actual_leaves = jax.tree.leaves(actual)
     expected_leaves = jax.tree.leaves(expected)
@@ -38,6 +50,13 @@ def test_global_gradient_normalization_scales_full_tree_to_unit_rms():
     np.testing.assert_allclose(_tree_rms(normalized), 1.0, rtol=1e-6)
     np.testing.assert_allclose(normalized["block"]["attn"]["w_q"], jnp.full((2, 2), 2.0 * expected_inv_rms))
     np.testing.assert_allclose(normalized["block"]["mlp"]["w_gate_up"], jnp.full((2,), 6.0 * expected_inv_rms))
+
+
+def test_global_gradient_normalization_handles_more_than_int32_elements():
+    normalized = normalize_gradients_to_unit_rms({"huge": _FakeHugeGradientLeaf()}, eps=0.0)
+
+    expected_inv_rms = jax.lax.rsqrt(jnp.array(4.0, dtype=jnp.float32) / jnp.array(2**31, dtype=jnp.float32))
+    np.testing.assert_allclose(normalized["huge"], jnp.array([2.0 * expected_inv_rms]), rtol=1e-6)
 
 
 def test_global_gradient_normalized_config_matches_manual_global_normalization():

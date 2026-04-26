@@ -35,7 +35,8 @@ def normalize_gradients_to_unit_rms(updates: optax.Updates, eps: float = 1e-16) 
     if num_elements == 0:
         return updates
 
-    inv_rms = jax.lax.rsqrt(square_sum / num_elements + eps)
+    element_count = jnp.array(float(num_elements), dtype=square_sum.dtype)
+    inv_rms = jax.lax.rsqrt(square_sum / element_count + eps)
     for index, leaf in enumerate(leaves):
         if leaf is None or not hasattr(leaf, "shape"):
             continue
