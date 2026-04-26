@@ -427,3 +427,29 @@
   full restart of completed points.
 - Next action: continue short-cadence monitoring until the restarted tasks show
   sustained post-retry training progress, then return to the normal cadence.
+
+### 2026-04-25 19:26 - recovery heartbeat and CI closure
+
+- Hypothesis: after the replacement launch stabilizes, the sweep should behave
+  like a normal executor run with 8 concurrent child steps.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs --since-seconds 900 --max-lines 1800 --tail /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+  - `curl -fsS ... /repos/marin-community/marin/commits/117f0f414/check-runs`
+- Result:
+  - Iris shows 8 active child runs plus the parent, all `JOB_STATE_RUNNING`.
+  - No active child has nonzero `failure_count` or a `pending_reason`.
+  - Recent logs show d768 `4x` around 9.66k/10.3k steps after Paloma macro
+    3.8426, so it should finish soon.
+  - d1024 children are making post-retry progress: `0.354x` is around
+    3.35k/12.6k, `0.5x` around 3.00k/12.6k, and `2x` around 2.35k/12.6k.
+  - W&B still reports `model.depth_mup_residual_scaling=True` for every
+    started run.
+  - GitHub checks on `117f0f414` are complete: relevant checks passed and the
+    rest were skipped.
+- Interpretation: no intervention is needed. The missing d1024 `2.83x`/`4x`
+  and d1280 runs are expected because `StepRunner` defaults to 8 concurrent
+  steps; they should enqueue after current active children finish or skip.
+- Next action: return to the normal babysit cadence and wait for d768 `4x` to
+  finish or for the next executor wave to launch.
