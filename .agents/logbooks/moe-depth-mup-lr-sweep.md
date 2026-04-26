@@ -680,3 +680,40 @@
   prefers one LR step lower.
 - Next action: continue d1024 until `4x` launches and the d1024 sweep finishes,
   then continue through the d1280 sweep before fitting the gate-2 scaling law.
+
+### 2026-04-26 00:54 - d1024 ~9k checkpoint
+
+- Hypothesis: if the d1024 optimum is drifting within the central basin, the
+  next comparable checkpoint should show whether `0.5x` remains best or whether
+  `0.707x`/`1x` catch up as training progresses.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris still shows 9 running jobs and 1 succeeded child; there are no active
+    failures or pending reasons.
+  - All sampled started W&B configs still report
+    `model.depth_mup_residual_scaling=True`.
+  - d1024 latest W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Notes |
+    | --- | --- | ---: | ---: | ---: | --- |
+    | 0.25x | running | 9246 | 3.3779 | 3.0685 | ~9k eval |
+    | 0.354x | running | 9392 | 3.3301 | 3.0579 | ~9k eval |
+    | 0.5x | running | 9028 | 3.3026 | 3.0315 | ~9k eval |
+    | 0.707x | running | 9201 | 3.2986 | 2.9236 | ~9k eval, current best |
+    | 1x | running | 9184 | 3.3198 | 3.0911 | ~9k eval |
+    | 1.41x | running | 9173 | 3.3655 | 3.0964 | ~9k eval |
+    | 2x | running | 8396 | 3.5443 | 3.2410 | latest eval around 8k |
+    | 2.83x | running | 5586 | 3.9453 | 3.5868 | latest eval around 5k |
+    | 4x | missing | n/a | n/a | n/a | queued |
+
+- Interpretation: the d1024 best point moved from `0.5x` at ~8k to `0.707x`
+  at ~9k, with `0.5x` only about 0.004 Paloma macro behind. This is a stronger
+  central-basin result than the earlier checkpoints, but it is still not strong
+  LR scale-invariance: completed d512/d768 prefer `1x`, while d1024 is best
+  one LR step lower at the current checkpoint. The high-LR side remains much
+  worse.
+- Next action: continue d1024 until the current children finish and the
+  executor launches d1024 `4x`, then continue through d1280 for the full gate-2
+  procedure.
