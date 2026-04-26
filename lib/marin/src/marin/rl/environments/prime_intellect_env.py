@@ -10,6 +10,7 @@ from typing import Any, ClassVar, cast
 
 import jax.numpy as jnp
 import numpy as np
+from marin.rl.decoding import DecodingConfig, DecodingStrategy, stop_strings_for_decoding
 
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.process_vllm_results import process_vllm_chat_results
@@ -75,16 +76,14 @@ class PrimeIntellectEnv(MarinEnv):
         inference_ctx: BaseInferenceContext,
         n_examples: int,
         n_generations: int,
-        temperature: float,
+        decoding: DecodingConfig,
         prng_key,
         mode: str = "train",
-        max_tokens: int | None = None,
-        top_k: int | None = None,
-        stop: list[str] | None = None,
         system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample problems and generate responses using the model."""
         del prng_key, system_prompt
+        decoding = inference_ctx.resolve_decoding(decoding)
         self._ensure_verifiers_installed()
         from verifiers.types import GenerateOutputs
         import subprocess
@@ -98,11 +97,11 @@ class PrimeIntellectEnv(MarinEnv):
 
         # Prepare sampling arguments
         sampling_args = {
-            "max_tokens": max_tokens or self.max_tokens,
-            "temperature": temperature,
-            "top_k": top_k,
+            "max_tokens": decoding.max_output_tokens or self.max_tokens,
+            "temperature": 0.0 if decoding.strategy == DecodingStrategy.GREEDY else decoding.temperature,
+            "top_k": decoding.top_k,
             "logprobs": True,
-            "stop": stop,
+            "stop": stop_strings_for_decoding(decoding, inference_ctx.tokenizer),
             # Note: return_tokens_as_token_ids is not supported by current vLLM version
             # We use convert_tokens_to_ids() in process_vllm_results.py instead
         }
@@ -174,8 +173,7 @@ class PrimeIntellectEnv(MarinEnv):
                     response_logprobs=response_logprobs,
                     token_rewards=token_rewards,
                     episode_reward=float(reward),
-                    temperature=temperature,
-                    top_k=top_k,
+                    decoding=decoding.as_trace(),
                     is_truncated=False,  # prime intellect doesn't seem to report this easily
                 )
                 rollouts.append(rollout)

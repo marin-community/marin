@@ -4,9 +4,10 @@
 from .base import BaseInferenceContext
 from .levanter import LevanterInferenceContext, LevanterInferenceContextConfig
 from .vllm import (
+    VLLMEngineConfig,
+    VLLMFallbackSamplingConfig,
     vLLMInferenceContext,
     vLLMInferenceContextConfig,
-    VLLMSamplingConfig,
     MODEL_MAPPINGS,
     MODEL_TRANSPOSE_KEYS,
 )
@@ -19,7 +20,8 @@ __all__ = [
     "BaseInferenceContext",
     "LevanterInferenceContext",
     "LevanterInferenceContextConfig",
-    "VLLMSamplingConfig",
+    "VLLMEngineConfig",
+    "VLLMFallbackSamplingConfig",
     "vLLMInferenceContext",
     "vLLMInferenceContextConfig",
 ]

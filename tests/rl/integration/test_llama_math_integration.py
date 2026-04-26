@@ -20,6 +20,7 @@ from levanter.tokenizers import load_tokenizer
 from transformers import AutoConfig
 
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
+from marin.rl.decoding import DecodingConfig
 from marin.rl.environments import EnvConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
@@ -47,11 +48,13 @@ def get_stop_tokens(tokenizer_name: str):
 def create_simple_math_curriculum(run_id: str) -> CurriculumConfig:
     """Create simplified math curriculum for testing."""
     default_sampling = SamplingParams(
-        temperature=1.0,
         n_prompts=1,
         n_generations_per_prompt=1,
-        max_tokens=MAX_TOKENS,
-        stop_tokens=get_stop_tokens(MODEL_NAME),
+        train_decoding=DecodingConfig(
+            temperature=1.0,
+            max_output_tokens=MAX_TOKENS,
+            stop_token_ids=get_stop_tokens(MODEL_NAME),
+        ),
     )
 
     lessons = {

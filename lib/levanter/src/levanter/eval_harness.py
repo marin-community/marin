@@ -869,6 +869,7 @@ class LevanterHarnessLM(TemplateLM):
             # Extract parameters from processed kwargs
             max_gen_toks = gen_kwargs["max_gen_toks"]
             temperature = gen_kwargs["temperature"]
+            top_p = gen_kwargs["top_p"]
             n_generations = gen_kwargs["n"]
             seed = gen_kwargs.get("seed")
             stop_tokens = gen_kwargs.get("stop_tokens")
@@ -880,6 +881,7 @@ class LevanterHarnessLM(TemplateLM):
                 max_num_tokens=jnp.array(len(toks) + max_gen_toks, dtype=jnp.int32),
                 stop_tokens=stop_tokens,
                 temperature=jnp.array(temperature, dtype=jnp.float32),
+                top_p=jnp.array(top_p, dtype=jnp.float32),
                 key=jrandom.fold_in(base_key if seed is None else jrandom.PRNGKey(seed), i),
             )
             gen_requests.append(
@@ -978,6 +980,12 @@ class LevanterHarnessLM(TemplateLM):
             kwargs["n"] = int(kwargs["n"])
         else:
             kwargs.setdefault("n", 1)
+
+        # Handle top_p parameter
+        if "top_p" in kwargs and kwargs["top_p"] is not None:
+            kwargs["top_p"] = float(kwargs["top_p"])
+        else:
+            kwargs.setdefault("top_p", 1.0)
 
         # Handle seed parameter
         if "seed" in kwargs and kwargs["seed"] is not None:

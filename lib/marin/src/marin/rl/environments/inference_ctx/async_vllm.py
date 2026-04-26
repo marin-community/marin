@@ -3,6 +3,7 @@
 
 import os
 import logging
+from dataclasses import replace
 
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
@@ -36,8 +37,7 @@ class AsyncvLLMInferenceContext(vLLMInferenceContext):
     """Inference context for async vLLM."""
 
     def __init__(self, inference_config: vLLMInferenceContextConfig):
-        inference_config.mode = InferenceMode.ASYNC
-        super().__init__(inference_config)
+        super().__init__(replace(inference_config, engine=replace(inference_config.engine, mode=InferenceMode.ASYNC)))
 
     def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> None:
         # Serialize numpy arrays to (bytes, dtype, shape) tuples to survive RPC serialization.

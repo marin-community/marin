@@ -155,6 +155,7 @@ class InferenceRequest:
     prompt_tokens: List[int]
     max_tokens: int
     temperature: float
+    top_p: float | None
     stop_tokens: List[int] | None
     seed: int | None
     future: asyncio.Future
@@ -267,6 +268,7 @@ class InferenceContext:
         prompt_tokens: List[int],
         max_tokens: int,
         temperature: float,
+        top_p: float | None,
         stop_tokens: Optional[List[int]],
         seed: int | None,
         future: asyncio.Future,
@@ -282,6 +284,7 @@ class InferenceContext:
             prompt_tokens=prompt_tokens,
             max_tokens=max_tokens,
             temperature=temperature,
+            top_p=top_p,
             stop_tokens=stop_tokens,
             seed=seed,
             future=future,
@@ -391,6 +394,7 @@ class InferenceContext:
                 max_num_tokens=jnp.array(len(req.prompt_tokens) + req.max_tokens, dtype=jnp.int32),
                 stop_tokens=stop_ids,
                 temperature=jnp.array(req.temperature, dtype=jnp.float32),
+                top_p=jnp.array(1.0 if req.top_p is None else req.top_p, dtype=jnp.float32),
                 key=jrandom.PRNGKey(req.seed if req.seed is not None else i),
             )
 
@@ -499,6 +503,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                 prompt_tokens=prompt_tokens,
                 max_tokens=request.max_tokens,
                 temperature=request.temperature,
+                top_p=request.top_p,
                 stop_tokens=stop_tokens,
                 seed=request.seed,
                 future=future,
@@ -618,6 +623,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
             prompt_tokens=prompt_tokens,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
+            top_p=request.top_p,
             stop_tokens=stop_tokens,
             seed=request.seed,
             future=future,

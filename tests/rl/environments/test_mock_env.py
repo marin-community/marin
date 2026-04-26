@@ -8,6 +8,7 @@ from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
 from openai.types.completion_usage import CompletionUsage
 
+from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.mock_env import (
     AdditionTask,
     MoarCatsTask,
@@ -90,10 +91,8 @@ def create_test_inference_context():
         def batch_completions(
             self,
             prompts,
-            temperature,
             n,
-            max_tokens=None,
-            stop=None,
+            decoding,
             system_prompt=None,
         ):
             completions = []
@@ -119,7 +118,7 @@ def create_test_inference_context():
             env_name,
             env_example_id,
             reward,
-            temperature,
+            decoding,
             system_prompt=None,
             correctness_reward=None,
         ):
@@ -136,7 +135,7 @@ def create_test_inference_context():
                 response_logprobs=jnp.array(response_logprobs, dtype=jnp.float32),
                 token_rewards=token_rewards,
                 episode_reward=float(reward),
-                temperature=temperature,
+                decoding=decoding.as_trace(),
                 is_truncated=False,
                 correctness_reward=correctness_reward,
             )
@@ -152,7 +151,7 @@ def create_test_inference_context():
                     env_name,
                     env_example_id,
                     reward,
-                    temperature=1.0,
+                    decoding=DecodingConfig(temperature=1.0),
                 )
                 rollouts.append(rollout)
 

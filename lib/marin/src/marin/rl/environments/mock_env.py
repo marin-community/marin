@@ -12,6 +12,7 @@ import jax
 import numpy as np
 from levanter.tokenizers import MarinTokenizer
 
+from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import RolloutGroup
 
@@ -276,12 +277,9 @@ class MockEnv(MarinEnv):
         inference_ctx: BaseInferenceContext,
         n_examples: int,
         n_generations: int,
-        temperature: float,
+        decoding: DecodingConfig,
         prng_key,
         mode: str = "train",
-        max_tokens: int | None = None,
-        top_k: int | None = None,
-        stop: list[str] | None = None,
         system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample examples, generate responses, and create rollouts."""
@@ -306,10 +304,9 @@ class MockEnv(MarinEnv):
         prompts = list(sampled_examples.keys())
         completions = inference_ctx.batch_completions(
             prompts=prompts,
-            temperature=temperature,
             n=n_generations,
-            max_tokens=max_tokens,
-            stop=stop,
+            decoding=decoding,
+            system_prompt=system_prompt,
         )
 
         # Evaluate and create rollouts
@@ -328,7 +325,7 @@ class MockEnv(MarinEnv):
                     env_name=f"mock_env:{self.task_type}",
                     env_example_id=hash(prompt),
                     reward=reward,
-                    temperature=temperature,
+                    decoding=decoding,
                 )
 
                 group.append(rollout)
