@@ -607,3 +607,40 @@
   around 5k, and `2.83x` remains poor by around 2k.
 - Next action: continue d1024 until `4x` launches and the d1024 sweep
   finishes, then continue through d1280 for the full gate-2 procedure.
+
+### 2026-04-25 23:04 - d1024 ~7k checkpoint
+
+- Hypothesis: if the d1024 optimum is settling, the next comparable central
+  checkpoint should identify whether the best point remains at `0.5x` or
+  moves toward the completed d512/d768 `1x` optimum.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs --since-seconds 600 --max-lines 1600 --tail /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris shows 9 running jobs and 1 succeeded child; there are no active
+    failures or pending reasons.
+  - All sampled started W&B configs still report
+    `model.depth_mup_residual_scaling=True`.
+  - d1024 latest W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Notes |
+    | --- | --- | ---: | ---: | ---: | --- |
+    | 0.25x | running | 7213 | 3.4436 | 3.0721 | ~7k eval |
+    | 0.354x | running | 7372 | 3.3989 | 3.1928 | ~7k eval |
+    | 0.5x | running | 7010 | 3.3799 | 3.0645 | ~7k eval, current best |
+    | 0.707x | running | 7164 | 3.3868 | 3.1016 | ~7k eval |
+    | 1x | running | 7156 | 3.4217 | 3.1752 | ~7k eval |
+    | 1.41x | running | 7155 | 3.5006 | 3.1962 | ~7k eval |
+    | 2x | running | 6378 | 3.6968 | 3.3081 | latest eval around 6k |
+    | 2.83x | running | 3564 | 4.1101 | 3.7340 | latest eval around 3k |
+    | 4x | missing | n/a | n/a | n/a | queued |
+
+- Interpretation: the d1024 best point remains `0.5x`, but the `0.707x`
+  point is very close. The central basin is strengthening as training
+  progresses, while `1x` remains behind and the high-LR side remains clearly
+  worse. This still does not match strong depth-wise LR invariance, because
+  the completed d512/d768 sweeps prefer `1x` while d1024 continues to prefer
+  a lower multiplier.
+- Next action: continue d1024 until the current 8 active children complete and
+  the executor launches d1024 `4x`, then continue into d1280.
