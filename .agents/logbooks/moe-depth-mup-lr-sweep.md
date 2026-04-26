@@ -644,3 +644,39 @@
   a lower multiplier.
 - Next action: continue d1024 until the current 8 active children complete and
   the executor launches d1024 `4x`, then continue into d1280.
+
+### 2026-04-26 00:01 - d1024 ~8k checkpoint
+
+- Hypothesis: after the partial ~8k evals, `0.5x` needed one more checkpoint
+  to determine whether d1024's best point had moved to `0.707x` or remained at
+  the lower central multiplier.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris still shows 9 running jobs and 1 succeeded child; there are no active
+    failures or pending reasons.
+  - All sampled started W&B configs still report
+    `model.depth_mup_residual_scaling=True`.
+  - d1024 latest W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Notes |
+    | --- | --- | ---: | ---: | ---: | --- |
+    | 0.25x | running | 8282 | 3.4091 | 3.1121 | ~8k eval |
+    | 0.354x | running | 8431 | 3.3613 | 3.1196 | ~8k eval |
+    | 0.5x | running | 8068 | 3.3354 | 3.0344 | ~8k eval, current best |
+    | 0.707x | running | 8236 | 3.3393 | 3.0529 | ~8k eval |
+    | 1x | running | 8216 | 3.3648 | 3.0430 | ~8k eval |
+    | 1.41x | running | 8212 | 3.4289 | 3.2039 | ~8k eval |
+    | 2x | running | 7439 | 3.6178 | 3.2974 | latest eval around 7k |
+    | 2.83x | running | 4627 | 4.0216 | 3.6519 | latest eval around 4k |
+    | 4x | missing | n/a | n/a | n/a | queued |
+
+- Interpretation: the d1024 best point remains `0.5x`, but `0.707x` is only
+  about 0.004 Paloma macro behind at comparable progress. The useful LR basin
+  is now clearly central (`0.354x` through `1x`), while `2x` and `2.83x` are
+  still much worse at their latest evals. This does not show strong LR
+  scale-invariance, because completed d512/d768 prefer `1x` and d1024 still
+  prefers one LR step lower.
+- Next action: continue d1024 until `4x` launches and the d1024 sweep finishes,
+  then continue through the d1280 sweep before fitting the gate-2 scaling law.
