@@ -70,3 +70,17 @@
 - Result: exact Muon Vizier parent submitted and running; its v5p-8 reservation is pending. The stopped non-uniform c3e17/c1e18 children remain killed. AdamH 2x d512 and d768 children remain running.
 - Interpretation: the replacement search is now aligned with the report's gate-1 budgets; the next useful status check is whether the exact `d512-gate1` and `d768-gate1` loop-0 child jobs start.
 - Next action: monitor Iris for exact child creation and W&B for the new gate-1 run IDs.
+
+### 2026-04-26 14:45 - exact gate-1 Muon Vizier resubmission fix
+- Hypothesis: the Vizier update step failed because training trials did not write `tracker_metrics.jsonl` into the executor step output. Setting the W&B replicate path to the trial output path should make the metric file available to the update step.
+- Command:
+  - Status check: `.venv/bin/iris --config lib/iris/examples/marin.yaml job list --prefix /pc0618/iris-run-job-20260425-003753 --json`
+  - Planned resubmission: `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.moe.muon_vizier_search`
+- Config:
+  - Previous exact Muon Vizier parent job: `/pc0618/iris-run-job-20260425-003753`
+  - Previous result: parent failed; `d512` had 3 succeeded trials and 1 killed/failed trial; `d768` had 4 succeeded training trials but failed update due to missing `tracker_metrics.jsonl`.
+  - Resubmission run prefix: `moe-muon-vizier-lr-beta-r2`
+  - Fix: set `WandbConfig.replicate_path` to the train step output path so `tracker_metrics.jsonl` is emitted where the Vizier update step reads it.
+- Result: pending validation and Iris resubmission.
+- Interpretation: the resubmission should avoid W&B run ID reuse and should let the Vizier update stage consume completed trial metrics.
+- Next action: validate, commit, push, and launch the `r2` exact gate-1 Muon Vizier parent.

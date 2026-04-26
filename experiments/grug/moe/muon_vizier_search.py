@@ -71,7 +71,7 @@ class MuonSearchSettings:
 
 
 SWEEP = MuonSearchSettings(
-    experiment_name="moe-muon-vizier-lr-beta",
+    experiment_name="moe-muon-vizier-lr-beta-r2",
     study_owner="marin",
     num_loops=3,
     suggestions_per_loop=4,
@@ -273,6 +273,7 @@ def _build_base_launch_config(scale: MuonSearchScale) -> tuple[GrugMoeLaunchConf
             tags=list(SWEEP.base_train_tags),
             group=f"{SWEEP.experiment_name}-{scale.name}",
             name=None,
+            replicate_path=this_output_path(),
         ),
         optimizer=optimizer_cfg,
         grug_trainer=GrugTrainerConfig(
