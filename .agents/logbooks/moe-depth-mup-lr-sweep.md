@@ -571,3 +571,39 @@
   is poor by ~1k).
 - Next action: continue d1024 to completion and let the executor launch d1024
   `4x` and then d1280 before making the gate-2 scaling-law call.
+
+### 2026-04-25 22:13 - d1024 ~6k checkpoint
+
+- Hypothesis: the d1024 central-basin optimum should become clearer once the
+  `0.5x`, `0.707x`, `1x`, and `1.41x` runs all publish comparable ~6k evals.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs --since-seconds 900 --max-lines 1800 --tail /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris shows the parent plus 8 running d1024 children and 1 succeeded d768
+    child; there are still no active child failures or pending reasons.
+  - All sampled started W&B configs still report
+    `model.depth_mup_residual_scaling=True`.
+  - d1024 latest W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Notes |
+    | --- | --- | ---: | ---: | ---: | --- |
+    | 0.25x | running | 6283 | 3.4918 | 3.1274 | ~6k eval |
+    | 0.354x | running | 6442 | 3.4441 | 3.1142 | ~6k eval |
+    | 0.5x | running | 6082 | 3.4266 | 3.0811 | ~6k eval, current best |
+    | 0.707x | running | 6233 | 3.4394 | 3.1220 | ~6k eval |
+    | 1x | running | 6230 | 3.4777 | 3.1569 | ~6k eval |
+    | 1.41x | running | 6219 | 3.5561 | 3.1399 | ~6k eval |
+    | 2x | running | 5450 | 3.7702 | 3.4310 | latest eval around 5k |
+    | 2.83x | running | 2639 | 4.2020 | 3.7672 | latest eval around 2k |
+    | 4x | missing | n/a | n/a | n/a | queued |
+
+- Interpretation: the d1024 best point is still `0.5x`, now with `0.707x`
+  and `0.354x` both close enough to define a central basin. This remains a
+  useful LR-sensitivity signal, but not a clean scale-invariance result:
+  d512/d768 completed best at `1x`, while d1024 is currently best one LR step
+  lower. The high-LR side is consistently poor; `2x` remains much worse at
+  around 5k, and `2.83x` remains poor by around 2k.
+- Next action: continue d1024 until `4x` launches and the d1024 sweep
+  finishes, then continue through d1280 for the full gate-2 procedure.
