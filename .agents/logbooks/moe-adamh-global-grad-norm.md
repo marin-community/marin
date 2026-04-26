@@ -82,3 +82,28 @@
   baselines using the `agent.md` effective-speedup formula.
 - Next action: monitor to terminal state; launch gate 2 only if both gate-1
   effective speedups exceed 1.0.
+
+### 2026-04-25 18:53 - MOE-AGGN-001 preemption recovery fix
+
+- Hypothesis: the gate-1 parent launcher inherited its storage prefix from the
+  launcher worker region, so a parent preemption could move the executor prefix
+  from `gs://marin-us-central1` to `gs://marin-us-east5` and make child jobs
+  miss existing checkpoints.
+- Command:
+  `.venv/bin/iris --config lib/iris/examples/marin.yaml job stop /kaiyue/iris-run-job-20260426-011219`
+- Config:
+  - observed saved checkpoint:
+    `gs://marin-us-central1/grug/moe-adamh-global-grad-norm/d512-2p19e17-2406f6/checkpoints/step-4000`
+  - observed restart search path:
+    `gs://marin-us-east5/grug/moe-adamh-global-grad-norm/d512-2p19e17-2406f6/checkpoints`
+  - fix: default `launch_adamh_global_grad_norm.py` to
+    `ExecutorMainConfig(prefix=os.environ.get("MARIN_PREFIX", "gs://marin-us-central1"))`.
+- Result: stopped the self-submitted gate-1 parent and both child jobs after
+  the prefix mismatch appeared. Focused optimizer tests and launch selector
+  smoke still passed after the prefix fix.
+- Interpretation: gate 1 should be resubmitted in `us-central1` with
+  `MARIN_PREFIX=gs://marin-us-central1`; d512 can restore from the existing
+  central1 checkpoint, and future parent preemptions should not change the
+  storage prefix.
+- Next action: lint, commit, push, then resubmit gate 1 with a pinned launcher
+  region and continue monitoring to terminal state.

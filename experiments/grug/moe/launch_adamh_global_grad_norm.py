@@ -8,7 +8,7 @@ import os
 
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, this_output_path, versioned
 
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import (
@@ -20,6 +20,7 @@ from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeAdamHGloba
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 _TARGET_STEPS: int = 2**14
+_DEFAULT_PREFIX: str = "gs://marin-us-central1"
 _GATE_SPECS: dict[str, tuple[tuple[str, float, int], ...]] = {
     "gate1": (
         ("d512-2p19e17", 2.19e17, 512),
@@ -101,6 +102,7 @@ def _selected_specs() -> tuple[tuple[str, float, int], ...]:
 
 if __name__ == "__main__":
     executor_main(
+        ExecutorMainConfig(prefix=os.environ.get("MARIN_PREFIX", _DEFAULT_PREFIX)),
         steps=[_make_step(label, budget, hidden_dim) for label, budget, hidden_dim in _selected_specs()],
         description="Grug MoE AdamH with global gradient RMS normalization.",
     )
