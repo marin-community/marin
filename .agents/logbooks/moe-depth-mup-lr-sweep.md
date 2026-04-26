@@ -534,3 +534,40 @@
 - Next action: continue d1024 until `2.83x` and `4x` have comparable evals and
   the d1024 runs complete; then proceed through d1280 before final scaling-law
   interpretation.
+
+### 2026-04-25 21:16 - d1024 ~5k checkpoint
+
+- Hypothesis: if the apparent d1024 optimum shift at ~4k was transient, the
+  next central-basin checkpoint should move back toward the completed d512/d768
+  `1x` optimum; if it persists, the best point should remain below `1x`.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs --since-seconds 180 --max-lines 500 --tail /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris still shows the parent plus 8 running d1024 children and 1 succeeded
+    d768 child; active children have no failure counts or pending reasons.
+  - All sampled started W&B configs still have
+    `model.depth_mup_residual_scaling=True`.
+  - d1024 latest W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Notes |
+    | --- | --- | ---: | ---: | ---: | --- |
+    | 0.25x | running | 5181 | 3.5508 | 3.1868 | ~5k eval |
+    | 0.354x | running | 5380 | 3.5036 | 3.1477 | ~5k eval |
+    | 0.5x | running | 5014 | 3.4841 | 3.1850 | ~5k eval, current best |
+    | 0.707x | running | 5165 | 3.5002 | 3.1170 | ~5k eval |
+    | 1x | running | 5141 | 3.5450 | 3.2167 | ~5k eval |
+    | 1.41x | running | 5135 | 3.6300 | 3.2511 | ~5k eval |
+    | 2x | running | 4358 | 3.8529 | 3.4772 | latest eval around 4k |
+    | 2.83x | running | 1555 | 4.3148 | 3.9647 | latest eval around 1k |
+    | 4x | missing | n/a | n/a | n/a | queued |
+
+- Interpretation: the d1024 best point remains `0.5x`, with `0.707x` and
+  `0.354x` close behind. This is still a central LR basin, but it is not
+  scale-invariant in the strong sense: the completed d512/d768 sweeps prefer
+  `1x`, while d1024 is currently best one LR step lower. The high-LR side is
+  clearly worse at comparable progress (`2x` is much worse by ~4k, and `2.83x`
+  is poor by ~1k).
+- Next action: continue d1024 to completion and let the executor launch d1024
+  `4x` and then d1280 before making the gate-2 scaling-law call.
