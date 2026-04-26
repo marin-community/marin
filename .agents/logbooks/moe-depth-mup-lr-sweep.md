@@ -950,3 +950,55 @@
   not competitive so far: `1.41x` and `2x` are clearly behind.
 - Next action: continue monitoring d1024 `4x`, finish the visible d1280 runs,
   and let d1280 `2.83x`/`4x` launch when slots free.
+
+### 2026-04-26 16:03 - d1024 complete and d1280 2.83x launched
+
+- Hypothesis: the d1024 high-LR tail should not overturn the central `1x`
+  optimum, and freeing that slot should let the queued d1280 tail begin.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris shows 19 jobs under the resubmitted parent: 9 running and 10
+    succeeded, with no active failures or pending reasons.
+  - d1024 is now fully complete. All d1024 W&B configs report
+    `model.depth_mup_residual_scaling=True`.
+  - d1280 `2.83x` has launched and its W&B config reports
+    `model.depth_mup_residual_scaling=True`; d1280 `4x` is still queued.
+  - d1024 final W&B summaries and speedups against the README baseline
+    (`loss=3.1605`, `tokens_per_second=175165`, `budget=9.00e18`):
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Tok/s | Effective speedup | Notes |
+    | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+    | 0.25x | finished | 12648 | 3.3098 | 2.9255 | 178025 | 0.385 | final |
+    | 0.354x | finished | 12648 | 3.2494 | 2.8670 | 177079 | 0.561 | final |
+    | 0.5x | finished | 12648 | 3.2040 | 2.8200 | 177231 | 0.755 | final |
+    | 0.707x | finished | 12648 | 3.1743 | 2.7920 | 177528 | 0.923 | final |
+    | 1x | finished | 12648 | 3.1564 | 2.7747 | 177045 | 1.039 | final, best |
+    | 1.41x | finished | 12648 | 3.1582 | 2.7814 | 176738 | 1.025 | final, near tie |
+    | 2x | finished | 12648 | 3.1881 | 2.8087 | 176511 | 0.837 | final |
+    | 2.83x | finished | 12648 | 3.2337 | 2.8533 | 176451 | 0.619 | final |
+    | 4x | finished | 12648 | 3.3533 | 2.9729 | 177390 | 0.294 | final |
+
+  - d1280 latest W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Notes |
+    | --- | --- | ---: | ---: | ---: | --- |
+    | 0.25x | running | 4664 | 3.4018 | 3.0257 | latest eval around 4.6k |
+    | 0.354x | running | 4598 | 3.3561 | 2.9663 | latest eval around 4.6k |
+    | 0.5x | running | 4539 | 3.3485 | 2.9807 | latest eval, current best |
+    | 0.707x | running | 4550 | 3.3581 | 2.9503 | latest eval, close |
+    | 1x | running | 4551 | 3.4037 | 3.0608 | latest eval |
+    | 1.41x | running | 4368 | 3.4855 | 3.1594 | latest eval |
+    | 2x | running | 3263 | 3.6977 | 3.3666 | latest eval |
+    | 2.83x | running | n/a | n/a | n/a | launched |
+    | 4x | missing | n/a | n/a | n/a | queued |
+
+- Interpretation: d1024 passes the per-scale effective speedup check, but only
+  narrowly. The useful basin remains centered at `1x` with `1.41x` essentially
+  tied, while the high-LR tail is clearly worse. Across d512, d768, and d1024,
+  the completed optima are all at `1x`; d1280 is the only scale currently
+  trending lower (`0.5x` at this checkpoint). Gate 2 still depends on d1280
+  finals and the four-point scaling-law projection.
+- Next action: continue monitoring d1280 through completion, including the
+  newly launched `2.83x` run and queued `4x`.
