@@ -453,3 +453,48 @@
   steps; they should enqueue after current active children finish or skip.
 - Next action: return to the normal babysit cadence and wait for d768 `4x` to
   finish or for the next executor wave to launch.
+
+### 2026-04-25 19:41 - d768 sweep complete
+
+- Hypothesis: if depth MuP reduces LR sensitivity across small MoE scales, the
+  d512 and d768 LR optima should stay near the same multiplier, even if the
+  quality delta versus baseline is small.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs --since-seconds 420 --max-lines 1200 --tail /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+  - `uv run python - <<'PY' ... effective_speedup(...) ... PY`
+- Result:
+  - d768 `4x` finished successfully with Paloma macro 3.6372 and 274,573 tok/s.
+  - The executor immediately launched d1024 `2.83x`.
+  - The completed d768 LR curve is:
+
+    | LR multiplier | Paloma macro | Tok/s |
+    | --- | ---: | ---: |
+    | 0.25x | 3.5921 | 273,923 |
+    | 0.354x | 3.5244 | 275,041 |
+    | 0.5x | 3.4701 | 275,812 |
+    | 0.707x | 3.4387 | 274,990 |
+    | 1x | 3.4279 | 274,617 |
+    | 1.41x | 3.4295 | 273,881 |
+    | 2x | 3.4724 | 274,267 |
+    | 2.83x | 3.5249 | 273,856 |
+    | 4x | 3.6372 | 274,573 |
+
+  - Effective-speedup comparison against README baselines:
+
+    | Scale | Best depth-MuP LR | Baseline macro | Depth-MuP macro | Baseline tok/s | Depth-MuP tok/s | Speedup |
+    | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+    | d512 | 1x | 3.8104 | 3.8188 | 405,630 | 406,669 | 0.963 |
+    | d768 | 1x | 3.4339 | 3.4279 | 273,532 | 274,617 | 1.040 |
+
+  - d1024 `0.5x` caught up and posted Paloma macro 3.6554 at the ~3k-step
+    eval, which is slightly better than the previous best observed `0.707x`
+    checkpoint at 3.6647.
+- Interpretation: depth MuP does not pass gate 1 as a promotable change at the
+  current small-scale optima because d512 is slower than baseline on effective
+  speedup. The LR-optimum stability signal is still useful: both completed
+  small scales prefer `1x`, and the d1024 partial curve is currently centered
+  in the `0.5x`-`0.707x`-`1x` basin rather than moving to an extreme LR.
+- Next action: continue d1024 through `2.83x`/`4x`, then continue to d1280 for
+  the full MoE procedure before making a final recommendation.
