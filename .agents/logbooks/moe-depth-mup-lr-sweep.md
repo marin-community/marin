@@ -389,3 +389,41 @@
   moving far with scale.
 - Next action: continue monitoring until d1024 `0.5x` catches up, d768 `4x`
   finishes, or the next d1024 jobs launch.
+
+### 2026-04-25 19:10 - interruption recovery
+
+- Context: while responding to a corrected instruction, the original Iris
+  parent job `/kaiyue/iris-run-job-20260425-184727` was stopped after it had
+  completed 17 children and still had 8 active children.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job stop /kaiyue/iris-run-job-20260425-184727`
+  - `uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --cpu 1 --memory 2G --extra cpu -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.moe.depth_mup_lr_sweep`
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Replacement parent job: `/kaiyue/iris-run-job-20260426-020352`.
+  - The executor relaunched only the 8 unfinished children plus the parent, so
+    the completed d512 and d768 low-to-2.83x runs were not rerun.
+  - Several early replacement attempts hit TPU device-busy startup errors
+    (`No accelerator found` / `Device or resource busy`), but Iris retried.
+  - At the 19:10 check all 8 unfinished children were running in Iris, and W&B
+    had recovered the checked run IDs to `running` with
+    `model.depth_mup_residual_scaling=True`.
+  - Recovery checkpoint W&B summaries:
+
+    | Run | State | Step | Paloma macro | Train loss |
+    | --- | --- | ---: | ---: | ---: |
+    | d768 4x | running | 8999 | 4.0186 | 3.4979 |
+    | d1024 0.25x | running | 3155 | 3.7652 | 3.4442 |
+    | d1024 0.354x | running | 3179 | 3.6933 | 3.4104 |
+    | d1024 0.5x | running | 2900 | 3.8318 | 3.3211 |
+    | d1024 0.707x | running | 3155 | 3.6647 | 3.3581 |
+    | d1024 1x | running | 3132 | 3.7080 | 3.3675 |
+    | d1024 1.41x | running | 3136 | 3.8062 | 3.4573 |
+    | d1024 2x | running | 2190 | 4.0351 | 3.6537 |
+
+- Interpretation: the depth MuP sweep remains valid and continuing after
+  recovery. The replacement job is a continuation of unfinished work, not a
+  full restart of completed points.
+- Next action: continue short-cadence monitoring until the restarted tasks show
+  sustained post-retry training progress, then return to the normal cadence.
