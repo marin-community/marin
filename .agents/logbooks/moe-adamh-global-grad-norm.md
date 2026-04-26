@@ -96,8 +96,8 @@
     `gs://marin-us-central1/grug/moe-adamh-global-grad-norm/d512-2p19e17-2406f6/checkpoints/step-4000`
   - observed restart search path:
     `gs://marin-us-east5/grug/moe-adamh-global-grad-norm/d512-2p19e17-2406f6/checkpoints`
-  - fix: default `launch_adamh_global_grad_norm.py` to
-    `ExecutorMainConfig(prefix=os.environ.get("MARIN_PREFIX", "gs://marin-us-central1"))`.
+  - fix: default `MARIN_PREFIX` to `gs://marin-us-central1` before the
+    launch file builds import-time data configs.
 - Result: stopped the self-submitted gate-1 parent and both child jobs after
   the prefix mismatch appeared. Focused optimizer tests and launch selector
   smoke still passed after the prefix fix.
@@ -107,3 +107,46 @@
   storage prefix.
 - Next action: lint, commit, push, then resubmit gate 1 with a pinned launcher
   region and continue monitoring to terminal state.
+
+### 2026-04-25 18:56 - MOE-AGGN-001 gate 1 resubmitted
+
+- Hypothesis: pinning the launcher to `us-central1` and setting
+  `MARIN_PREFIX=gs://marin-us-central1` will keep executor output paths stable
+  across parent restarts and allow checkpoint restore.
+- Command:
+  `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --memory=2G --disk=4G --cpu=1 --extra=cpu --region us-central1 --no-preemptible -e WANDB_API_KEY "$WANDB_API_KEY" -e MARIN_PREFIX gs://marin-us-central1 -e GRUG_MOE_ADAMH_GLOBAL_GRAD_NORM_GATE gate1 -- python -m experiments.grug.moe.launch_adamh_global_grad_norm`
+- Config:
+  - commit: `dabbc2b52`
+  - Iris parent job: `/kaiyue/iris-run-job-20260426-015624`
+  - data browser:
+    https://marin.community/data-browser/experiment?path=gs%3A//marin-us-central1/experiments/launch_adamh_global_grad_norm-7d0e46.json
+  - d512 output:
+    `gs://marin-us-central1/grug/moe-adamh-global-grad-norm/d512-2p19e17-2406f6`
+  - d768 output:
+    `gs://marin-us-central1/grug/moe-adamh-global-grad-norm/d768-1p70e18-591709`
+- Result: d512 restored from
+  `gs://marin-us-central1/grug/moe-adamh-global-grad-norm/d512-2p19e17-2406f6/checkpoints/step-3000`;
+  d768 restored from
+  `gs://marin-us-central1/grug/moe-adamh-global-grad-norm/d768-1p70e18-591709/checkpoints/step-1000`.
+- Interpretation: the storage-prefix issue is fixed for the live run. The
+  incomplete d512 step-4000 save was skipped automatically; step-3000 is the
+  latest loadable checkpoint.
+- Next action: continue monitoring gate 1 to terminal state.
+
+### 2026-04-25 19:11 - MOE-AGGN-001 launch dry-run fix
+
+- Hypothesis: the launch file can keep the manual `us-central1` default while
+  still honoring CI's `--prefix` dry-run argument if it mirrors that CLI prefix
+  into `MARIN_PREFIX` before importing the shared MoE launch data config.
+- Command:
+  `WANDB_MODE=disabled uv run python experiments/grug/moe/launch_adamh_global_grad_norm.py --dry_run True --executor_info_base_path "$tmp" --prefix "$tmp"`
+- Result: dry-run output paths now stay under the temporary executor prefix,
+  including raw dataset overrides. The runpy dry-run path used by
+  `tests/test_dry_run.py` also passed, and
+  `uv run --with pytest --with pytest-timeout pytest tests/test_grug_moe_adamh_global_norm.py -q`
+  passed.
+- Interpretation: this should fix the PR CI timeout and temporary-directory
+  collision from commit `dabbc2b52` without changing the live Iris run, which
+  already passes `MARIN_PREFIX=gs://marin-us-central1`.
+- Next action: run pre-commit, commit and push the PR fix, then continue
+  monitoring gate 1.
