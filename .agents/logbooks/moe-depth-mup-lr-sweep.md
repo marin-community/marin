@@ -824,3 +824,40 @@
   behind the central basin and `2.83x` much worse.
 - Next action: continue until the d1024 children finish and `4x` launches, then
   continue through d1280 for the full gate-2 procedure.
+
+### 2026-04-26 04:17 - d1024 central finals and d1280 launch
+
+- Hypothesis: final central d1024 runs should confirm whether the near-final
+  `1x` lead was stable, while d1280 startup should preserve the
+  `depth_mup_residual_scaling=True` configuration on new children.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris shows 16 jobs under the resubmitted parent: 9 running and 7
+    succeeded, with no active failures or pending reasons.
+  - d1280 has expanded through `1x` on Iris and W&B. Visible d1280 W&B runs
+    for `0.25x`, `0.354x`, `0.5x`, `0.707x`, and `1x` all report
+    `model.depth_mup_residual_scaling=True`.
+  - d1024 latest W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Notes |
+    | --- | --- | ---: | ---: | ---: | --- |
+    | 0.25x | finished | 12648 | 3.3098 | 2.9255 | final |
+    | 0.354x | finished | 12648 | 3.2494 | 2.8670 | final |
+    | 0.5x | finished | 12648 | 3.2040 | 2.8200 | final |
+    | 0.707x | finished | 12648 | 3.1743 | 2.7920 | final |
+    | 1x | finished | 12648 | 3.1564 | 2.7747 | final, current best |
+    | 1.41x | finished | 12648 | 3.1582 | 2.7814 | final |
+    | 2x | running | 12129 | 3.2204 | 2.8781 | latest eval around 12k |
+    | 2.83x | running | 9306 | 3.5865 | 3.1841 | latest eval around 9k |
+    | 4x | running | 208 | 11.7908 | 5.5612 | started |
+
+- Interpretation: d1024 now has a stable final central optimum at `1x`,
+  matching the completed d512 and d768 optima. The central basin remains broad:
+  `1.41x` is only 0.0018 Paloma macro behind `1x`, and `0.707x` is 0.0179
+  behind. This is the strongest evidence so far that depth MuP reduced
+  cross-scale LR drift in the useful LR range, although gate-2 still depends on
+  the d1024 high-LR tail and the full d1280 sweep.
+- Next action: continue monitoring d1024 high-LR tail and the full d1280 sweep
+  through completion before fitting the variant scaling law.
