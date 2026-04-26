@@ -913,3 +913,40 @@
   runs to reach useful evals before interpreting the d1280 optimum.
 - Next action: continue monitoring d1024 `4x` and all d1280 runs through
   completion.
+
+### 2026-04-26 13:00 - d1280 ~3.4k checkpoint
+
+- Hypothesis: if the d1280 first-eval `1x` lead was only startup noise, the
+  central basin should separate after a few thousand steps.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris shows 18 jobs under the resubmitted parent: 9 running and 9
+    succeeded, with no active failures or pending reasons.
+  - All sampled started W&B configs still report
+    `model.depth_mup_residual_scaling=True`.
+  - d1024 `4x` remains running at step 9386 with Paloma macro 3.7908, still far
+    worse than the completed d1024 central basin.
+  - d1280 latest W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Notes |
+    | --- | --- | ---: | ---: | ---: | --- |
+    | 0.25x | running | 3418 | 3.5127 | 3.1934 | latest eval around 3.4k |
+    | 0.354x | running | 3352 | 3.4541 | 3.1222 | latest eval around 3.3k |
+    | 0.5x | running | 3417 | 3.4267 | 3.0511 | latest eval, current best |
+    | 0.707x | running | 3312 | 3.4378 | 3.0896 | latest eval, close second |
+    | 1x | running | 3306 | 3.4820 | 3.1645 | latest eval |
+    | 1.41x | running | 3127 | 3.5648 | 3.2401 | latest eval |
+    | 2x | running | 2027 | 3.8160 | 3.4494 | latest eval |
+    | 2.83x | missing | n/a | n/a | n/a | queued |
+    | 4x | missing | n/a | n/a | n/a | queued |
+
+- Interpretation: d1280 no longer mirrors the d512/d768/d1024 `1x` optimum
+  at this checkpoint. The best visible point has moved to `0.5x`, with
+  `0.707x` close behind and `1x` about 0.055 Paloma macro worse. This may still
+  move as training progresses, but the d1280 trend is now closer to the early
+  d1024 behavior than to the completed d1024 central final. The high-LR side is
+  not competitive so far: `1.41x` and `2x` are clearly behind.
+- Next action: continue monitoring d1024 `4x`, finish the visible d1280 runs,
+  and let d1280 `2.83x`/`4x` launch when slots free.
