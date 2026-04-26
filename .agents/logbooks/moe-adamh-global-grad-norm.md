@@ -299,3 +299,24 @@
 - Interpretation: both large runs are past startup and first meaningful evals.
   Current losses are still early; final gate-2 decision remains pending.
 - Next action: continue polling until both runs reach terminal state.
+
+### 2026-04-26 08:16 - MOE-AGGN-001 gate 2 six-hour heartbeat
+
+- Result: both gate-2 runs remain healthy and continue making progress.
+- Status:
+  - Iris parent: `JOB_STATE_RUNNING`, `failure_count=0`
+  - d1024: `JOB_STATE_RUNNING`, `failure_count=0`, `preemption_count=2`
+  - d1280: `JOB_STATE_RUNNING`, `failure_count=0`, `preemption_count=3`
+- W&B:
+  - d1024 global_step: `10922`
+  - d1024 eval/paloma/macro_loss: `3.2749111652374268`
+  - d1024 throughput/tokens_per_second: `176874.8128817064`
+  - d1024 throughput/total_tokens: `5726797824`
+  - d1280 global_step: `3882`
+  - d1280 eval/paloma/macro_loss: `3.494645118713379`
+  - d1280 throughput/tokens_per_second: `128412.9145324166`
+  - d1280 throughput/total_tokens: `4071620608`
+- Interpretation: no intervention is needed. d1024 is approaching terminal
+  state; d1280 remains the long pole.
+- Next action: continue monitoring until d1024 finishes, record its final
+  metrics, and keep d1280 running to completion for the gate-2 decision.
