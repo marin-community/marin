@@ -47,3 +47,38 @@
   only if both small-scale effective speedups exceed 1.0.
 - Next action: add focused optimizer tests, implement the global-normalized
   optimizer and launch wiring, then submit gate 1 to Iris.
+
+### 2026-04-25 18:12 - MOE-AGGN-001 gate 1 submitted
+
+- Hypothesis: global gradient RMS normalization can recover the d512 point
+  while preserving the d768 improvement seen in #5180.
+- Command:
+  `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --memory=2G --disk=4G --cpu=1 --extra=cpu --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -e GRUG_MOE_ADAMH_GLOBAL_GRAD_NORM_GATE gate1 -- python -m experiments.grug.moe.launch_adamh_global_grad_norm`
+- Config:
+  - commit: `6c6675b3e9e633ef5344b1ee83b4931db2cd18a8`
+  - issue: https://github.com/marin-community/marin/issues/5182
+  - PR: https://github.com/marin-community/marin/pull/5183
+  - Iris parent job: `/kaiyue/iris-run-job-20260426-011219`
+  - data browser:
+    https://marin.community/data-browser/experiment?path=gs%3A//marin-us-central1/experiments/launch_adamh_global_grad_norm-374368.json
+  - d512 step:
+    `grug/moe-adamh-global-grad-norm/d512-2p19e17_b769d61c`
+  - d512 output:
+    `gs://marin-us-central1/grug/moe-adamh-global-grad-norm/d512-2p19e17-2406f6`
+  - d512 W&B:
+    https://wandb.ai/understanding-sam/marin_moe/runs/moe-adamh-global-grad-norm-d512-2p19e17
+  - d768 step:
+    `grug/moe-adamh-global-grad-norm/d768-1p70e18_e21b2843`
+  - d768 output:
+    `gs://marin-us-central1/grug/moe-adamh-global-grad-norm/d768-1p70e18-591709`
+  - d768 W&B:
+    https://wandb.ai/understanding-sam/marin_moe/runs/moe-adamh-global-grad-norm-d768-1p70e18
+- Result: submitted to Iris and dispatched both Fray TPU child jobs. Initial
+  allocations hit the TPU device-busy/no-accelerator bad-node signature, then
+  Iris retried automatically. At startup stabilization both child jobs were
+  `JOB_STATE_RUNNING` with `failure_count=0`.
+- Interpretation: gate 1 is now a live Iris run. Continue babysitting until
+  both d512 and d768 reach terminal state, then compare against the README
+  baselines using the `agent.md` effective-speedup formula.
+- Next action: monitor to terminal state; launch gate 2 only if both gate-1
+  effective speedups exceed 1.0.
