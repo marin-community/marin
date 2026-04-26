@@ -4,16 +4,38 @@ import { computed } from 'vue'
 const props = withDefaults(defineProps<{
   data: number[]
   color?: string
-  width?: number
+  /**
+   * Rendered SVG width. Pass a number for a fixed pixel width, or a CSS
+   * length string (e.g. `'100%'`) to fill the container responsively.
+   * Defaults to `'100%'` so the chart stretches to its parent.
+   */
+  width?: number | string
   height?: number
+  /**
+   * Width of the SVG viewBox coordinate system used for path calculations.
+   * Only used when `width` is a string; with a numeric `width`, the rendered
+   * width also serves as the viewBox width. The path is drawn at this resolution
+   * and then stretched horizontally to the rendered width via
+   * `preserveAspectRatio="none"`.
+   */
+  viewBoxWidth?: number
   fillColor?: string
 }>(), {
   color: 'var(--color-accent, #2563eb)',
-  width: 64,
+  width: '100%',
   height: 20,
+  viewBoxWidth: 200,
 })
 
 const PAD = 1
+
+const vbWidth = computed(() =>
+  typeof props.width === 'number' ? props.width : props.viewBoxWidth
+)
+
+const svgWidth = computed(() =>
+  typeof props.width === 'number' ? String(props.width) : props.width
+)
 
 /**
  * Build the SVG polyline points string from the data array.
@@ -26,7 +48,7 @@ const points = computed(() => {
   const data = props.data.length === 1 ? [props.data[0], props.data[0]] : props.data
   const max = Math.max(...data)
 
-  const innerW = props.width - 2 * PAD
+  const innerW = vbWidth.value - 2 * PAD
   const innerH = props.height - 2 * PAD
 
   return data.map((v, i) => {
@@ -41,7 +63,7 @@ const points = computed(() => {
 /** Area fill polygon: the line points plus closing along the bottom edge. */
 const areaPoints = computed(() => {
   if (!points.value) return ''
-  const innerW = props.width - 2 * PAD
+  const innerW = vbWidth.value - 2 * PAD
   const innerH = props.height - 2 * PAD
   const bottomRight = `${(PAD + innerW).toFixed(1)},${(PAD + innerH).toFixed(1)}`
   const bottomLeft = `${PAD.toFixed(1)},${(PAD + innerH).toFixed(1)}`
@@ -54,10 +76,10 @@ const hasData = computed(() => props.data && props.data.length >= 1)
 <template>
   <svg
     v-if="hasData"
-    class="sparkline"
-    :width="width"
+    class="sparkline block"
+    :width="svgWidth"
     :height="height"
-    :viewBox="`0 0 ${width} ${height}`"
+    :viewBox="`0 0 ${vbWidth} ${height}`"
     preserveAspectRatio="none"
   >
     <polygon
@@ -71,6 +93,7 @@ const hasData = computed(() => props.data && props.data.length >= 1)
       stroke-width="1.5"
       stroke-linecap="round"
       stroke-linejoin="round"
+      vector-effect="non-scaling-stroke"
       :points="points"
     />
   </svg>
