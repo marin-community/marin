@@ -12,8 +12,9 @@ from contextlib import contextmanager
 from rigging.filesystem import open_url, url_to_fs
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.evaluators.evaluator import Evaluator
 from marin.evaluation.utils import is_remote_path, upload_to_gcs
+from marin.inference.model_config import ModelConfig
 from marin.inference.vllm_server import VllmEnvironment
 
 logger = logging.getLogger(__name__)
