@@ -52,7 +52,7 @@ def _tokenize_step(extracted_step: ExecutorStep) -> ExecutorStep:
         fn=tokenize,
         config=TokenizeConfig(
             train_paths=[extracted_step.as_input_name() / "train/*.jsonl"],
-            validation_paths=versioned([extracted_step.as_input_name() / "dev/*.jsonl"]),
+            validation_paths=[extracted_step.as_input_name() / "dev/*.jsonl"],
             cache_path=this_output_path(),
             tokenizer=versioned(llama3_tokenizer),
         ),

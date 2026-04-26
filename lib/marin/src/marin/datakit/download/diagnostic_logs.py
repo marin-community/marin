@@ -43,9 +43,8 @@ _DEV_BUCKETS = 100
 _TEST_BUCKETS = 100
 _PARTITION_HASH_PERSON = b"diag-log-v1"
 
-_PATH_SIGNAL_PATTERNS = (
-    "/log/",
-    "/logs/",
+_PATH_SEGMENT_SIGNALS = frozenset({"log", "logs"})
+_PATH_SUBSTRING_SIGNALS = (
     "stacktrace",
     "stack-trace",
     "traceback",
@@ -57,7 +56,6 @@ _PATH_SIGNAL_PATTERNS = (
     "failure",
     "error",
 )
-_PATH_SIGNAL_RE = re.compile("|".join(re.escape(signal) for signal in _PATH_SIGNAL_PATTERNS))
 
 _CONTENT_SIGNAL_RE = re.compile(
     r"(?im)"
@@ -81,10 +79,36 @@ _REDACTION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         r"\g<key>=<REDACTED_SECRET>",
     ),
-    (re.compile(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[A-Za-z]{2,}\b"), "<REDACTED_EMAIL>"),
-    (re.compile(r"(?:(?:/Users|/home)/[^/\s]+)"), "<REDACTED_USER_HOME>"),
-    (re.compile(r"\b[A-Za-z]:\\Users\\[^\\\s]+"), "<REDACTED_WINDOWS_USER_HOME>"),
     (re.compile(r"gs://marin-[^)\s]+"), "gs://<REDACTED_INTERNAL_BUCKET>"),
+)
+_EMAIL_RE = re.compile(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[A-Za-z]{2,}\b")
+_UNIX_USER_HOME_RE = re.compile(r"(?P<prefix>(?:/Users|/home)/)(?P<name>[^/\s]+)")
+_WINDOWS_USER_HOME_RE = re.compile(r"(?P<prefix>\b[A-Za-z]:\\Users\\)(?P<name>[^\\\s]+)")
+_USERNAME_RE_TEMPLATE = r"(?<![A-Za-z0-9_.@%+-]){username}(?![A-Za-z0-9_.@%+-])"
+_MIN_USERNAME_LENGTH = 4
+_USERNAME_DENYLIST = frozenset(
+    {
+        "admin",
+        "build",
+        "cache",
+        "debug",
+        "error",
+        "false",
+        "guest",
+        "home",
+        "local",
+        "login",
+        "logs",
+        "none",
+        "null",
+        "root",
+        "runner",
+        "system",
+        "test",
+        "true",
+        "user",
+        "users",
+    }
 )
 
 
@@ -124,23 +148,23 @@ SOURCE_INVENTORY: tuple[DiagnosticLogSource, ...] = (
     DiagnosticLogSource(
         name="ghalogs",
         source_url=GHALOGS_RECORD_URL,
-        source_license="unspecified (Zenodo access_right=open; no explicit rights metadata)",
+        source_license="Creative Commons Attribution Share Alike 4.0 International",
         source_format="runs.json.gz, repositories.json.gz, github_run_logs.zip",
         compressed_size_bytes=GHALOGS_TOTAL_BYTES,
         contamination_risk="high: public CI logs can contain secrets and internal paths",
-        status=DiagnosticSourceStatus.BLOCKED_LICENSE,
-        provenance_notes="DOI 10.5281/zenodo.14796970, published 2025-02-03.",
+        status=DiagnosticSourceStatus.TRAINING_READY,
+        provenance_notes="DOI 10.5281/zenodo.14796970, published 2025-02-03; Zenodo license id cc-by-sa-4.0.",
         rough_tokens_b=None,
     ),
     DiagnosticLogSource(
         name="logchunks",
         source_url=LOGCHUNKS_RECORD_URL,
-        source_license="unspecified (Zenodo access_right=open; no explicit rights metadata)",
+        source_license="Creative Commons Attribution 4.0 International",
         source_format="LogChunks.zip (XML chunk annotations)",
         compressed_size_bytes=LOGCHUNKS_TOTAL_BYTES,
         contamination_risk="medium: labeled failure snippets may include local paths and user names",
-        status=DiagnosticSourceStatus.BLOCKED_LICENSE,
-        provenance_notes="DOI 10.5281/zenodo.3632351, published 2020-01-31.",
+        status=DiagnosticSourceStatus.EVAL_ONLY,
+        provenance_notes="DOI 10.5281/zenodo.3632351, published 2020-01-31; eval-only despite acceptable license.",
         rough_tokens_b=None,
     ),
     DiagnosticLogSource(
@@ -150,8 +174,8 @@ SOURCE_INVENTORY: tuple[DiagnosticLogSource, ...] = (
         source_format="mixed plain-text log files grouped by dataset",
         compressed_size_bytes=LOGHUB_REPO_SIZE_BYTES,
         contamination_risk="medium: includes system identifiers and infrastructure paths",
-        status=DiagnosticSourceStatus.BLOCKED_LICENSE,
-        provenance_notes="LICENSE file restricts usage to research/academic work.",
+        status=DiagnosticSourceStatus.EVAL_ONLY,
+        provenance_notes="LICENSE file restricts usage to research/academic work; acceptable only for eval use.",
         rough_tokens_b=None,
     ),
     DiagnosticLogSource(
@@ -203,18 +227,86 @@ def training_ready_sources() -> tuple[DiagnosticLogSource, ...]:
     return tuple(source for source in SOURCE_INVENTORY if source.status == DiagnosticSourceStatus.TRAINING_READY)
 
 
+@dataclass
+class _DocumentIdentityPseudonymizer:
+    identity_ids: dict[str, str]
+    username_ids: dict[str, str]
+
+    @classmethod
+    def from_text(cls, text: str) -> _DocumentIdentityPseudonymizer:
+        pseudonymizer = cls(identity_ids={}, username_ids={})
+        for match in _EMAIL_RE.finditer(text):
+            pseudonymizer._register_email(match.group(0))
+        for pattern in (_UNIX_USER_HOME_RE, _WINDOWS_USER_HOME_RE):
+            for match in pattern.finditer(text):
+                pseudonymizer._register_username(match.group("name"))
+        return pseudonymizer
+
+    def pseudonymize(self, text: str) -> str:
+        pseudonymized = _EMAIL_RE.sub(self._replace_email, text)
+        pseudonymized = _UNIX_USER_HOME_RE.sub(self._replace_home_path, pseudonymized)
+        pseudonymized = _WINDOWS_USER_HOME_RE.sub(self._replace_home_path, pseudonymized)
+        for username in sorted(self.username_ids, key=len, reverse=True):
+            pattern = re.compile(_USERNAME_RE_TEMPLATE.format(username=re.escape(username)), re.IGNORECASE)
+            pseudonymized = pattern.sub(self.username_ids[username], pseudonymized)
+        return pseudonymized
+
+    def _register_email(self, email: str) -> str:
+        local_part = email.split("@", maxsplit=1)[0].split("+", maxsplit=1)[0]
+        return self._register_username(local_part)
+
+    def _register_username(self, username: str) -> str:
+        canonical = username.casefold()
+        if canonical not in self.identity_ids:
+            self.identity_ids[canonical] = f"<USER_{len(self.identity_ids)}>"
+        user_id = self.identity_ids[canonical]
+
+        for candidate in _username_candidates(username):
+            existing = self.username_ids.get(candidate)
+            if existing is None:
+                self.username_ids[candidate] = user_id
+        return user_id
+
+    def _replace_email(self, match: re.Match[str]) -> str:
+        return self._register_email(match.group(0)).replace(">", "_EMAIL>")
+
+    def _replace_home_path(self, match: re.Match[str]) -> str:
+        return f"{match.group('prefix')}{self._register_username(match.group('name'))}"
+
+
+def _username_candidates(username: str) -> tuple[str, ...]:
+    candidates = {username}
+    candidates.update(part for part in re.split(r"[._-]+", username) if part)
+    return tuple(candidate for candidate in candidates if _is_safe_username_candidate(candidate))
+
+
+def _is_safe_username_candidate(candidate: str) -> bool:
+    normalized = candidate.casefold()
+    return (
+        len(candidate) >= _MIN_USERNAME_LENGTH
+        and any(char.isalpha() for char in candidate)
+        and normalized not in _USERNAME_DENYLIST
+    )
+
+
 def sanitize_diagnostic_log_text(text: str) -> str:
-    """Redact sensitive tokens, identities, and internal paths from log text."""
+    """Redact secrets and per-document pseudonymize user identities in log text."""
     sanitized = text
     for pattern, replacement in _REDACTION_RULES:
         sanitized = pattern.sub(replacement, sanitized)
-    return sanitized
+    return _DocumentIdentityPseudonymizer.from_text(sanitized).pseudonymize(sanitized)
+
+
+def _path_has_signal(path_value: str) -> bool:
+    if any(segment in _PATH_SEGMENT_SIGNALS for segment in path_value.split("/")):
+        return True
+    return any(signal in path_value for signal in _PATH_SUBSTRING_SIGNALS)
 
 
 def looks_like_diagnostic_log_row(path: str, content: str) -> bool:
     """Return True if path/content indicate a diagnostic log fixture or stack trace."""
     path_value = path.lower()
-    if not _PATH_SIGNAL_RE.search(path_value):
+    if not _path_has_signal(path_value):
         return False
     return _CONTENT_SIGNAL_RE.search(content) is not None
 

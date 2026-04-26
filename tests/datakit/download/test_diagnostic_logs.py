@@ -10,6 +10,7 @@ import pyarrow.parquet as pq
 from marin.datakit.download.diagnostic_logs import (
     DiagnosticSourceStatus,
     extract_starcoder_fixture_logs,
+    looks_like_diagnostic_log_row,
     sanitize_diagnostic_log_text,
     source_inventory,
     starcoder_fixture_row_to_record,
@@ -36,29 +37,35 @@ def test_source_inventory_contains_required_candidates():
     assert "logchunks" in inventory
     assert "loghub" in inventory
     assert "github_fixture_logs_from_source_corpora" in inventory
-    assert inventory["ghalogs"].status == DiagnosticSourceStatus.BLOCKED_LICENSE
-    assert inventory["logchunks"].status == DiagnosticSourceStatus.BLOCKED_LICENSE
-    assert inventory["loghub"].status == DiagnosticSourceStatus.BLOCKED_LICENSE
+    assert inventory["ghalogs"].status == DiagnosticSourceStatus.TRAINING_READY
+    assert inventory["logchunks"].status == DiagnosticSourceStatus.EVAL_ONLY
+    assert inventory["loghub"].status == DiagnosticSourceStatus.EVAL_ONLY
 
 
 def test_training_ready_sources_are_opt_in_and_narrow():
     ready = training_ready_sources()
-    assert [source.name for source in ready] == ["github_fixture_logs_from_source_corpora"]
+    assert [source.name for source in ready] == ["ghalogs", "github_fixture_logs_from_source_corpora"]
 
 
 def test_sanitize_diagnostic_log_text_redacts_secrets_and_identifiers():
     text = (
         "token=supersecretvalue123 ghp_abcdefghijklmnopqrstuvwxyz123456 "
-        "email me at foo@example.com path=/Users/alice/project"
+        "email alice@example.com path=/Users/alice/project user Alice failed"
     )
     redacted = sanitize_diagnostic_log_text(text)
     assert "supersecretvalue123" not in redacted
-    assert "foo@example.com" not in redacted
+    assert "alice@example.com" not in redacted
     assert "/Users/alice" not in redacted
+    assert "user Alice failed" not in redacted
     assert "<REDACTED_SECRET>" in redacted
     assert "<REDACTED_GITHUB_TOKEN>" in redacted
-    assert "<REDACTED_EMAIL>" in redacted
-    assert "<REDACTED_USER_HOME>" in redacted
+    assert "<USER_0_EMAIL>" in redacted
+    assert "/Users/<USER_0>/project" in redacted
+    assert "user <USER_0> failed" in redacted
+
+
+def test_root_level_log_directory_is_detected():
+    assert looks_like_diagnostic_log_row("logs/build.txt", "ERROR traceback (most recent call last)")
 
 
 def test_starcoder_fixture_row_to_record_detects_and_sanitizes():
