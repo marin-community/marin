@@ -27,14 +27,22 @@ class GrugMoeAdamHConfig(OptimizerConfig):
     max_grad_norm: float | None = 1.0
     adam_lr: float = 6e-4
     expert_lr: float | None = None
+    # If set, route embed/output_proj to AdamH with lr = learning_rate * embed_adamh_lr_mult.
+    # If None (default), embeds use Adam at adam_lr.
+    embed_adamh_lr_mult: float | None = None
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
         expert_lr_val = self.expert_lr if self.expert_lr is not None else self.learning_rate
         expert_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=expert_lr_val)
+        if self.embed_adamh_lr_mult is not None:
+            embed_lr = self.learning_rate * self.embed_adamh_lr_mult
+            embed_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=embed_lr)
+        else:
+            embed_lr_schedule = None
 
-        def optimizer(learning_rate, adam_lr, expert_lr):
+        def optimizer(learning_rate, adam_lr, expert_lr, embed_lr=None):
             def adamh_transform():
                 components = []
                 if self.max_grad_norm:
@@ -49,6 +57,13 @@ class GrugMoeAdamHConfig(OptimizerConfig):
                 components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, expert_lr))
                 return optax.chain(*components)
 
+            def adamh_embed_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, embed_lr))
+                return optax.chain(*components)
+
             def adam_transform():
                 components = []
                 if self.max_grad_norm:
@@ -57,29 +72,35 @@ class GrugMoeAdamHConfig(OptimizerConfig):
                 components.append(optax.scale(-adam_lr))
                 return optax.chain(*components)
 
-            return optax.multi_transform(
-                {
-                    "adamh": adamh_transform(),
-                    "adamh_expert": adamh_expert_transform(),
-                    "adam": adam_transform(),
-                },
-                self.create_mask,
-            )
+            transforms = {
+                "adamh": adamh_transform(),
+                "adamh_expert": adamh_expert_transform(),
+                "adam": adam_transform(),
+            }
+            if embed_lr is not None:
+                transforms["adamh_embed"] = adamh_embed_transform()
 
-        return optax.inject_hyperparams(optimizer)(
-            learning_rate=learning_rate_schedule,
-            adam_lr=adam_lr_schedule,
-            expert_lr=expert_lr_schedule,
-        )
+            return optax.multi_transform(transforms, self.create_mask)
+
+        inject_kwargs = {
+            "learning_rate": learning_rate_schedule,
+            "adam_lr": adam_lr_schedule,
+            "expert_lr": expert_lr_schedule,
+        }
+        if embed_lr_schedule is not None:
+            inject_kwargs["embed_lr"] = embed_lr_schedule
+
+        return optax.inject_hyperparams(optimizer)(**inject_kwargs)
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
+        use_adamh_embed = self.embed_adamh_lr_mult is not None
 
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
-            if "token_embed" in path_lower:
-                return "adam"
+            if "token_embed" in path_lower or "output_proj" in path_lower:
+                return "adamh_embed" if use_adamh_embed else "adam"
             if "router_bias" in path_lower or "attn_gate" in path_lower or ".router" in path_lower:
                 return "adam"
             if ".mlp.w_" in path_lower or ".shared.w_" in path_lower:
