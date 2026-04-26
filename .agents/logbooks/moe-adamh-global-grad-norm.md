@@ -233,3 +233,50 @@
   partial run was also stopped so both gate-2 points use the same code.
 - Next action: run pre-commit, commit and push the overflow fix, resubmit
   gate 2, update the issue via raw GitHub REST, and continue monitoring.
+
+### 2026-04-25 22:13 - MOE-AGGN-001 gate 2 resubmitted
+
+- Result: fixed gate 2 submitted to Iris.
+- Command:
+  `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --memory=2G --disk=4G --cpu=1 --extra=cpu --region us-central1 --no-preemptible -e WANDB_API_KEY "$WANDB_API_KEY" -e MARIN_PREFIX gs://marin-us-central1 -e GRUG_MOE_ADAMH_GLOBAL_GRAD_NORM_GATE gate2 -- python -m experiments.grug.moe.launch_adamh_global_grad_norm`
+- Config:
+  - commit: `30fc0cb4a`
+  - Iris parent job: `/kaiyue/iris-run-job-20260426-051330`
+  - data browser:
+    https://marin.community/data-browser/experiment?path=gs%3A//marin-us-central1/experiments/launch_adamh_global_grad_norm-ab8ea2.json
+  - d1024 output:
+    `gs://marin-us-central1/grug/moe-adamh-global-grad-norm/d1024-9p00e18-9f3972`
+  - d1280 output:
+    `gs://marin-us-central1/grug/moe-adamh-global-grad-norm/d1280-2p83e19-ed47e1`
+  - issue update, submitted with raw GitHub REST:
+    https://github.com/marin-community/marin/issues/5182#issuecomment-4321313483
+- Startup status: parent, d1024 child, and d1280 child are all
+  `JOB_STATE_RUNNING` with `failure_count=0` and `preemption_count=0`.
+- Next action: watch both children for restored checkpoints and
+  `Progress on:train`, then monitor to terminal state.
+
+### 2026-04-25 22:20 - MOE-AGGN-001 gate 2 startup stabilized
+
+- Result: the fixed gate-2 children moved past the previous overflow failure.
+- Status:
+  - Iris parent job: `JOB_STATE_RUNNING`
+  - d1024 child: `JOB_STATE_RUNNING`, `failure_count=0`,
+    `preemption_count=2`
+  - d1280 child: `JOB_STATE_RUNNING`, `failure_count=0`,
+    `preemption_count=2`
+- Logs:
+  - Both children initially hit the TPU device-busy/no-accelerator startup
+    signature and Iris retried automatically.
+  - d1024 found no valid checkpoint under
+    `gs://marin-us-central1/grug/moe-adamh-global-grad-norm/d1024-9p00e18-9f3972/checkpoints`
+    and started from scratch.
+  - d1280 found no valid checkpoint under
+    `gs://marin-us-central1/grug/moe-adamh-global-grad-norm/d1280-2p83e19-ed47e1/checkpoints`
+    and started from scratch.
+  - Both children reached `Progress on:train`; d1024 reached step 1 and
+    entered the first eval.
+  - No `OverflowError` appeared after the fixed commit.
+- Interpretation: the fixed code is past the known d1280 staging failure.
+  Continue monitoring at a longer cadence until terminal state.
+- Next action: wait for W&B summaries to report training/eval metrics, then
+  keep polling until both gate-2 runs finish.
