@@ -498,3 +498,39 @@
   in the `0.5x`-`0.707x`-`1x` basin rather than moving to an extreme LR.
 - Next action: continue d1024 through `2.83x`/`4x`, then continue to d1280 for
   the full MoE procedure before making a final recommendation.
+
+### 2026-04-25 20:22 - d1024 ~4k checkpoint
+
+- Hypothesis: after the d512 and d768 optima landed at `1x`, the next d1024
+  checkpoint tests whether depth MuP keeps the best LR in the same central
+  basin or shifts the optimum with scale.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs --since-seconds 480 --max-lines 1400 --tail /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris shows the parent plus 8 running d1024 children and 1 succeeded d768
+    child; all active children have `failure_count=0` and no `pending_reason`.
+  - d1024 `0.5x` posted its ~4k eval, completing the central-basin checkpoint.
+  - d1024 latest W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Notes |
+    | --- | --- | ---: | ---: | ---: | --- |
+    | 0.25x | running | 4199 | 3.6384 | 3.2433 | ~4k eval |
+    | 0.354x | running | 4373 | 3.5845 | 3.2604 | ~4k eval |
+    | 0.5x | running | 4006 | 3.5592 | 3.2101 | ~4k eval, current best |
+    | 0.707x | running | 4152 | 3.5724 | 3.1670 | ~4k eval |
+    | 1x | running | 4156 | 3.6264 | 3.2520 | ~4k eval |
+    | 1.41x | running | 4155 | 3.7062 | 3.3162 | ~4k eval |
+    | 2x | running | 3379 | 3.9430 | 3.5878 | latest eval around 3k |
+    | 2.83x | running | 572 | 11.7908 | 4.0274 | startup eval only |
+    | 4x | missing | n/a | n/a | n/a | queued |
+
+- Interpretation: d1024 currently prefers `0.5x`, with `0.707x` close behind.
+  This is one LR step lower than the completed d512/d768 `1x` optima, so depth
+  MuP has not made the LR optimum perfectly scale-invariant. It has not moved
+  to an extreme LR either: the useful basin remains central (`0.354x`-`1x`),
+  and high LR points are clearly worse at the available checkpoints.
+- Next action: continue d1024 until `2.83x` and `4x` have comparable evals and
+  the d1024 runs complete; then proceed through d1280 before final scaling-law
+  interpretation.
