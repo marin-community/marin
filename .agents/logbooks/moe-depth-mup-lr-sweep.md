@@ -789,3 +789,38 @@
   still pending.
 - Next action: continue d1024 to completion so `4x` can launch, then continue
   through d1280 for the full gate-2 procedure.
+
+### 2026-04-26 03:35 - d1024 ~12k checkpoint
+
+- Hypothesis: as d1024 approaches the target step count, the LR optimum should
+  either stabilize at `1x` or expose whether the previous `1x` lead was a
+  transient staggered-eval artifact.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris still shows 9 running jobs and 1 succeeded child; there are no active
+    failures or pending reasons.
+  - All sampled started W&B configs still report
+    `model.depth_mup_residual_scaling=True`.
+  - d1024 latest W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Notes |
+    | --- | --- | ---: | ---: | ---: | --- |
+    | 0.25x | running | 12239 | 3.3155 | 3.0738 | ~12k eval |
+    | 0.354x | running | 12378 | 3.2565 | 2.8767 | ~12k eval |
+    | 0.5x | running | 12008 | 3.2136 | 2.8795 | ~12k eval |
+    | 0.707x | running | 12203 | 3.1862 | 2.8542 | ~12k eval |
+    | 1x | running | 12171 | 3.1725 | 2.8307 | ~12k eval, current best |
+    | 1.41x | running | 12155 | 3.1810 | 2.8783 | ~12k eval |
+    | 2x | running | 11382 | 3.2994 | 2.9638 | latest eval around 11k |
+    | 2.83x | running | 8565 | 3.6840 | 3.4015 | latest eval around 8k |
+    | 4x | missing | n/a | n/a | n/a | queued |
+
+- Interpretation: d1024's central optimum has stabilized at `1x` by the
+  near-final central checkpoint. This now matches the completed d512/d768
+  optima, and the central basin remains broad: `1.41x` and `0.707x` are within
+  about 0.014 Paloma macro of `1x`. The high-LR side is still poor, with `2x`
+  behind the central basin and `2.83x` much worse.
+- Next action: continue until the d1024 children finish and `4x` launches, then
+  continue through d1280 for the full gate-2 procedure.
