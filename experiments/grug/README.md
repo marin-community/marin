@@ -84,6 +84,7 @@ Useful flags:
 
 - `z_loss_weight` in `GrugTrainerConfig`: weight on the logsumexp stabilization term in LM loss.
 - `ema_beta` in `GrugTrainerConfig`: exponential moving average (EMA) coefficient for eval/checkpoint model; `None` disables EMA.
+- `log_activation_grad_rms` in `GrugTrainerConfig`: when enabled, logs `grad/activation_rms` from hidden-state gradients observed just before the LM head loss.
 
 ## Checkpoints and resume
 
@@ -133,6 +134,7 @@ Useful flags:
 - `eval/<tag>/loss`, `eval/<tag>/micro_loss`, `eval/<tag>/macro_loss`: per-tag loss views.
 - `eval/bpb`, `eval/macro_bpb`, `eval/<tag>/bpb`, `eval/<tag>/macro_bpb`: bits-per-byte metrics when tokenizer/BPB logging is enabled.
 - `grad/*`, `params/*`, `updates/*`, `opt_state/*`: optional watch metrics (norms/histograms) when watch is enabled.
+- `grad/activation_rms`: optional RMS of hidden-state gradients at the pre-logits activation when `log_activation_grad_rms=True`.
 
 ## What should stay consistent
 

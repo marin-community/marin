@@ -13,6 +13,7 @@ from jaxtyping import PRNGKeyArray
 import haliax as hax
 from haliax import Axis, NamedArray, NamedOrNumeric
 
+from levanter.backward_metrics import BackwardMetricSink, observe_grad_sumsq
 from levanter.layers.attention import AttentionMask
 from levanter.models.loss import maybe_fused_next_token_loss
 
@@ -265,6 +266,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         logsumexp_weight: Optional[float] = None,
         loss_dtype: Optional[jnp.dtype] = jnp.float32,
         logit_soft_cap: Optional[float] = None,
+        backward_sink: Optional[BackwardMetricSink] = None,
     ) -> jnp.ndarray | NamedArray:
         """
         Compute next-token cross-entropy for a language modeling example.
@@ -272,12 +274,21 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         If `reduction` is not None, the loss is reduced across `reduction_axis` (`None` means all axes).
         If `reduction` is None, the loss is returned unreduced as a `NamedArray` with axes
         (*batch axes, sequence_length).
+
+        If ``backward_sink`` is provided, activation gradients are observed via
+        ``observe_grad_sumsq`` during the backward pass.  The sink is threaded
+        through the computation so that differentiating w.r.t. it yields the
+        accumulated gradient statistics.  The sink is **not** returned; its
+        gradient is the only output channel for backward metrics.
         """
         activations = self.activations(example.tokens, example.attn_mask, key=key)
 
         aux_loss = 0
         if isinstance(activations, tuple):
             activations, aux_loss = activations
+
+        if backward_sink is not None:
+            activations, backward_sink = observe_grad_sumsq(activations, backward_sink)
 
         loss = maybe_fused_next_token_loss(
             self.Pos,

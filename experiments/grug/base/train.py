@@ -22,6 +22,7 @@ from jaxtyping import PRNGKeyArray
 
 import levanter.callbacks as callbacks
 import levanter.tracker
+from levanter.backward_metrics import empty_sink, grad_rms_from_sink
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.data import AsyncDataset, DataLoader
@@ -54,6 +55,7 @@ class GrugTrainerConfig:
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
+    log_activation_grad_rms: bool = False  # Log RMS of hidden-state gradients observed before LM head loss.
 
 
 @dataclass(frozen=True)
@@ -250,6 +252,7 @@ def _make_train_step(
     *,
     z_loss_weight: float,
     ema_beta: float | None,
+    log_activation_grad_rms: bool = False,
     watch_config: WatchConfig | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
@@ -264,7 +267,7 @@ def _make_train_step(
 
     @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
-        def loss_fn(params):
+        def loss_fn(params, backward_sink):
             compute_params = mp.cast_to_compute(params)
             return compute_params.next_token_loss(
                 batch.tokens,
@@ -272,9 +275,15 @@ def _make_train_step(
                 mask=batch.attn_mask,
                 reduction="mean",
                 logsumexp_weight=z_loss,
+                backward_sink=backward_sink,
             )
 
-        loss, grads = jax.value_and_grad(loss_fn)(state.params)
+        backward_sink = empty_sink("grad_sumsq", "grad_count") if log_activation_grad_rms else None
+        if log_activation_grad_rms:
+            loss, (grads, backward_metrics) = jax.value_and_grad(loss_fn, argnums=(0, 1))(state.params, backward_sink)
+        else:
+            loss, grads = jax.value_and_grad(lambda params: loss_fn(params, backward_sink))(state.params)
+            backward_metrics = None
         updates, opt_state = optimizer.update(grads, state.opt_state, state.params)
         params = optax.apply_updates(state.params, updates)
 
@@ -312,7 +321,11 @@ def _make_train_step(
             ema_params=ema_params,
         )
 
-        return next_state, {"train/loss": loss}, watch_stats
+        metrics = {"train/loss": loss}
+        if backward_metrics is not None:
+            metrics["grad/activation_rms"] = grad_rms_from_sink(backward_metrics)
+
+        return next_state, metrics, watch_stats
 
     return train_step
 
@@ -334,6 +347,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         trainer.mp,
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
+        log_activation_grad_rms=config.trainer.log_activation_grad_rms,
         watch_config=watch_config if watch_config.is_enabled else None,
     )
 
@@ -460,6 +474,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
+                    levanter.tracker.log(metrics, step=step)
                     state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
                     last_loss = metrics["train/loss"]
                     last_step_duration = duration

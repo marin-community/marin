@@ -262,7 +262,11 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
             model=_small_model_config(model_module.GrugModelConfig, vocab_size=vocab_size, seq_len=seq_len),
             data=data_config,
             resources=ResourceConfig.with_cpu(),
-            trainer=train_module.GrugTrainerConfig(trainer=trainer_config, log_every=1),
+            trainer=train_module.GrugTrainerConfig(
+                trainer=trainer_config,
+                log_every=1,
+                log_activation_grad_rms=True,
+            ),
             eval=train_module.GrugEvalConfig(
                 eval_batch_size=1,
                 steps_per_eval=1,
@@ -282,6 +286,7 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     summary = finish_records[0]["summary"]
 
     required_keys = [
+        "grad/activation_rms",
         "train/loss",
         "global_step",
         "throughput/duration",
