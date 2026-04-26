@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 try:
+    from marin.rl.kl_regularization import KLConfig, KLMode
     from marin.rl import train_batch
     from marin.rl.replay_buffer import ReplayBuffer, ReplayDataLoader
     from marin.rl.rl_losses import RLOOLoss
@@ -108,7 +109,7 @@ def test_replay_buffer():
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
         filter_out_groups_with_no_variance=False,
-        loss_module=RLOOLoss(),
+        loss_module=RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
         seed=42,
     )
 
@@ -160,7 +161,7 @@ def test_replay_buffer_recency_bias():
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
         filter_out_groups_with_no_variance=False,
-        loss_module=RLOOLoss(),
+        loss_module=RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
         seed=42,
     )
     replay_buffer.add_batches(batches)
@@ -196,7 +197,7 @@ def test_replay_buffer_capacity_eviction():
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
         filter_out_groups_with_no_variance=False,
-        loss_module=RLOOLoss(),
+        loss_module=RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
         seed=42,
     )
 
@@ -224,7 +225,7 @@ def test_replay_buffer_max_resamples():
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
         filter_out_groups_with_no_variance=False,
-        loss_module=RLOOLoss(),
+        loss_module=RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
         seed=42,
     )
 
@@ -263,7 +264,7 @@ def test_replay_buffer_max_resamples_disabled():
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
         filter_out_groups_with_no_variance=False,
-        loss_module=RLOOLoss(),
+        loss_module=RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
         seed=42,
     )
 
@@ -298,7 +299,7 @@ def test_replay_buffer_max_resamples_multiple_envs():
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
         filter_out_groups_with_no_variance=False,
-        loss_module=RLOOLoss(),
+        loss_module=RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
         seed=42,
     )
 
@@ -339,7 +340,7 @@ def test_replay_buffer_weight_step_filtering():
         max_rollout_step_delay=30,
         max_rollout_timestamp_delay=3600.0,
         filter_out_groups_with_no_variance=False,
-        loss_module=RLOOLoss(),
+        loss_module=RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
         seed=42,
     )
 
@@ -402,7 +403,7 @@ def test_replay_buffer_rollout_delay_progressive():
         max_rollout_step_delay=10,
         max_rollout_timestamp_delay=3600.0,
         filter_out_groups_with_no_variance=False,
-        loss_module=RLOOLoss(),
+        loss_module=RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
         seed=42,
     )
 
@@ -453,7 +454,7 @@ def test_is_rollout_fresh():
         max_rollout_step_delay=10,
         max_rollout_timestamp_delay=100.0,
         filter_out_groups_with_no_variance=False,
-        loss_module=RLOOLoss(),
+        loss_module=RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
         seed=42,
     )
 
