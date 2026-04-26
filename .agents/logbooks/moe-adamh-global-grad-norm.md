@@ -280,3 +280,22 @@
   Continue monitoring at a longer cadence until terminal state.
 - Next action: wait for W&B summaries to report training/eval metrics, then
   keep polling until both gate-2 runs finish.
+
+### 2026-04-26 02:16 - MOE-AGGN-001 gate 2 in progress
+
+- Result: both gate-2 runs remain healthy after early checkpoints and evals.
+- Status:
+  - d1024: `JOB_STATE_RUNNING`, `failure_count=0`, `preemption_count=2`
+  - d1280: `JOB_STATE_RUNNING`, `failure_count=0`, `preemption_count=3`
+- W&B:
+  - d1024 global_step: `4253`
+  - d1024 eval/paloma/macro_loss: `3.633437633514404`
+  - d1024 throughput/tokens_per_second: `177121.1369216933`
+  - d1024 throughput/total_tokens: `2230321152`
+  - d1280 global_step: `1448`
+  - d1280 eval/paloma/macro_loss: `3.872636079788208`
+  - d1280 throughput/tokens_per_second: `128544.70010125235`
+  - d1280 throughput/total_tokens: `1519386624`
+- Interpretation: both large runs are past startup and first meaningful evals.
+  Current losses are still early; final gate-2 decision remains pending.
+- Next action: continue polling until both runs reach terminal state.
