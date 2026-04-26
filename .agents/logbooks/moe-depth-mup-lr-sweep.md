@@ -861,3 +861,55 @@
   the d1024 high-LR tail and the full d1280 sweep.
 - Next action: continue monitoring d1024 high-LR tail and the full d1280 sweep
   through completion before fitting the variant scaling law.
+
+### 2026-04-26 07:24 - d1024 high-LR tail and first d1280 evals
+
+- Hypothesis: d1024's high-LR tail should not overturn the central `1x`
+  optimum, and the first d1280 evals should show whether the central-basin
+  optimum remains near `1x` at the next model scale.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris shows 18 jobs under the resubmitted parent: 9 running and 9
+    succeeded, with no active failures or pending reasons.
+  - All sampled started W&B configs still report
+    `model.depth_mup_residual_scaling=True`. This now includes the newly
+    visible d1280 `2x` run.
+  - d1024 latest W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Notes |
+    | --- | --- | ---: | ---: | ---: | --- |
+    | 0.25x | finished | 12648 | 3.3098 | 2.9255 | final |
+    | 0.354x | finished | 12648 | 3.2494 | 2.8670 | final |
+    | 0.5x | finished | 12648 | 3.2040 | 2.8200 | final |
+    | 0.707x | finished | 12648 | 3.1743 | 2.7920 | final |
+    | 1x | finished | 12648 | 3.1564 | 2.7747 | final, current best |
+    | 1.41x | finished | 12648 | 3.1582 | 2.7814 | final |
+    | 2x | finished | 12648 | 3.1881 | 2.8087 | final |
+    | 2.83x | finished | 12648 | 3.2337 | 2.8533 | final |
+    | 4x | running | 3668 | 4.3954 | 4.0098 | latest eval around 3.6k |
+
+  - d1280 latest W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Notes |
+    | --- | --- | ---: | ---: | ---: | --- |
+    | 0.25x | running | 1290 | 4.5794 | 3.7965 | first useful eval |
+    | 0.354x | running | 1280 | 4.2801 | 3.5666 | first useful eval |
+    | 0.5x | running | 1256 | 4.0786 | 3.5370 | first useful eval |
+    | 0.707x | running | 1262 | 3.9623 | 3.4835 | first useful eval |
+    | 1x | running | 1205 | 3.8947 | 3.5163 | first useful eval, current best |
+    | 1.41x | running | 990 | 11.8015 | 3.5376 | pre-first useful eval |
+    | 2x | running | n/a | n/a | n/a | launched |
+    | 2.83x | missing | n/a | n/a | n/a | queued |
+    | 4x | missing | n/a | n/a | n/a | queued |
+
+- Interpretation: d1024's high-LR side is now almost fully characterized. The
+  `2x` and `2.83x` finals are worse than the central basin, so d1024 remains
+  best at `1x`, with `1.41x` essentially tied and `0.707x` still close. The
+  first d1280 useful evals are early but point in the same direction: among the
+  runs that have reached a useful eval, `1x` is currently best and the loss
+  improves monotonically from `0.25x` through `1x`. Need the `1.41x+` d1280
+  runs to reach useful evals before interpreting the d1280 optimum.
+- Next action: continue monitoring d1024 `4x` and all d1280 runs through
+  completion.
