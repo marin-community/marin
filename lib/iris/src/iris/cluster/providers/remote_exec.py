@@ -33,11 +33,14 @@ def _extend_gcloud_ssh_options(
     *,
     ssh_key_file: str | None = None,
     impersonate_service_account: str | None = None,
+    tunnel_through_iap: bool = False,
 ) -> list[str]:
     if ssh_key_file:
         cmd.append(f"--ssh-key-file={ssh_key_file}")
     if impersonate_service_account:
         cmd.append(f"--impersonate-service-account={impersonate_service_account}")
+    if tunnel_through_iap:
+        cmd.append("--tunnel-through-iap")
     return cmd
 
 
@@ -99,6 +102,7 @@ class GcloudRemoteExec:
     ssh_user: str | None = None
     ssh_key_file: str | None = None
     impersonate_service_account: str | None = None
+    tunnel_through_iap: bool = False
     _address: str = ""
 
     @property
@@ -111,8 +115,12 @@ class GcloudRemoteExec:
 
     def _build_cmd(self, command: str) -> list[str]:
         target = f"{self.ssh_user}@{self.vm_id}" if self.ssh_user else self.vm_id
+        # `gcloud compute tpus tpu-vm ssh` only accepts --tunnel-through-iap in
+        # the alpha track, so we switch tracks when IAP is required.
+        track = ["alpha"] if self.tunnel_through_iap else []
         cmd = [
             "gcloud",
+            *track,
             "compute",
             "tpus",
             "tpu-vm",
@@ -126,6 +134,7 @@ class GcloudRemoteExec:
             cmd,
             ssh_key_file=self.ssh_key_file,
             impersonate_service_account=self.impersonate_service_account,
+            tunnel_through_iap=self.tunnel_through_iap,
         )
         cmd.extend(
             [
