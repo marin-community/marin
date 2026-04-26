@@ -317,3 +317,38 @@
   within one sweep step of the d512/d768 optimum rather than moving far away.
 - Next action: continue monitoring d1024 through later evals and wait for
   d768 `4x` to finish.
+
+### 2026-04-25 18:05 - d1024 second eval snapshot
+
+- Hypothesis: the next d1024 eval should clarify whether the early best point
+  remains at the high side of the basin or moves back toward the d512/d768
+  optimum.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs --since-seconds 900 --max-lines 1500 --tail /kaiyue/iris-run-job-20260425-184727`
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260425-184727`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris shows 17 succeeded jobs and 9 running jobs; no terminal failures.
+  - d768 `4x` is still running at W&B step 6453 with Paloma macro 4.3554.
+  - d1024 `0.25x` through `2x` are running. `2.83x`, `4x`, and all d1280
+    runs have not launched yet.
+  - d1024 W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Tok/s |
+    | --- | --- | ---: | ---: | ---: | ---: |
+    | 0.25x | running | 2086 | 4.0084 | 3.6512 | 177,663 |
+    | 0.354x | running | 2103 | 3.8979 | 3.4492 | 178,420 |
+    | 0.5x | running | 2093 | 3.8318 | 3.5104 | 176,989 |
+    | 0.707x | running | 2088 | 3.8059 | 3.4784 | 177,492 |
+    | 1x | running | 2060 | 3.8305 | 3.4729 | 177,034 |
+    | 1.41x | running | 2066 | 3.9059 | 3.5336 | 177,487 |
+    | 2x | running | 1122 | 4.1707 | 3.7606 | 177,537 |
+    | 2.83x | missing | n/a | n/a | n/a | n/a |
+    | 4x | missing | n/a | n/a | n/a | n/a |
+
+- Interpretation: by the second d1024 eval, the best observed point has moved
+  to `0.707x`, with `0.5x` and `1x` essentially close behind. The basin still
+  overlaps the d512/d768 optimum, but the early `1.41x` advantage did not hold
+  at this checkpoint.
+- Next action: continue the normal babysit cadence until d768 `4x` finishes or
+  the next d1024 launches/evals create a clearer scale trend.
