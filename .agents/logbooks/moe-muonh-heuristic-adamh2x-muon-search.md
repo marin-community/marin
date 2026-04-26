@@ -81,6 +81,6 @@
   - Previous result: parent failed; `d512` had 3 succeeded trials and 1 killed/failed trial; `d768` had 4 succeeded training trials but failed update due to missing `tracker_metrics.jsonl`.
   - Resubmission run prefix: `moe-muon-vizier-lr-beta-r2`
   - Fix: set `WandbConfig.replicate_path` to the train step output path so `tracker_metrics.jsonl` is emitted where the Vizier update step reads it.
-- Result: pending validation and Iris resubmission.
-- Interpretation: the resubmission should avoid W&B run ID reuse and should let the Vizier update stage consume completed trial metrics.
-- Next action: validate, commit, push, and launch the `r2` exact gate-1 Muon Vizier parent.
+- Result: validation passed; commit `cf138520e` was pushed; exact `r2` Muon Vizier parent `/pc0618/iris-run-job-20260426-230157` was submitted and is running with its v5p-8 reservation assigned.
+- Interpretation: the resubmission avoids W&B run ID reuse and should let the Vizier update stage consume completed trial metrics.
+- Next action: monitor for `moe-muon-vizier-lr-beta-r2-d512-gate1-*` and `moe-muon-vizier-lr-beta-r2-d768-gate1-*` child runs, then verify the update step finds `tracker_metrics.jsonl`.
