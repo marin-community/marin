@@ -18,10 +18,11 @@ from iris.cli.token_store import cluster_name_from_url, load_any_token, load_tok
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
 from iris.cluster.types import JobName
-from iris.rpc import controller_pb2, job_pb2, logging_pb2
+from finelog.rpc import logging_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider, TokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.logging_connect import LogServiceClientSync
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
 from mcp.server.fastmcp import FastMCP
 from rigging.timing import Timestamp
