@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import posixpath
-from enum import StrEnum
+from enum import StrEnum, auto
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,24 +32,24 @@ class ManifestModel(BaseModel):
 class UsagePolicy(StrEnum):
     """Policy gate for whether a source is allowed in training or eval."""
 
-    TRAINING_ALLOWED = "training_allowed"
-    EVAL_ONLY = "eval_only"
-    BLOCKED = "blocked"
+    TRAINING_ALLOWED = auto()
+    EVAL_ONLY = auto()
+    BLOCKED = auto()
 
 
 class IdentityTreatment(StrEnum):
     """How person-identifying strings should be handled during ingestion."""
 
-    PRESERVE = "preserve"
-    PSEUDONYMIZE = "pseudonymize"
-    DROP = "drop"
+    PRESERVE = auto()
+    PSEUDONYMIZE = auto()
+    DROP = auto()
 
 
 class SecretRedaction(StrEnum):
     """Whether source text requires secret redaction before downstream use."""
 
-    NONE = "none"
-    REQUIRED = "required"
+    NONE = auto()
+    REQUIRED = auto()
 
 
 class IngestionPolicy(ManifestModel):
