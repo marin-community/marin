@@ -145,9 +145,10 @@ SOURCE_INVENTORY: tuple[IngestionSourceManifest, ...] = (
         ),
         staging=StagingMetadata(
             transform_name="extract_ghalogs",
-            output_filename="metadata.json",
-            record_provenance_fields=("id", "archive_path", "partition"),
-            metadata={"output_layout": "train/dev/test/issue_5093_holdout jsonl partitions plus metadata.json"},
+            metadata={
+                "output_layout": "train/dev/test/issue_5093_holdout jsonl partitions plus metadata.json",
+                "provenance_fields": ["id", "archive_path", "partition"],
+            },
         ),
         epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
         issue_numbers=(PUBLIC_DIAGNOSTIC_LOGS_ISSUE,),
@@ -172,8 +173,7 @@ SOURCE_INVENTORY: tuple[IngestionSourceManifest, ...] = (
         ),
         staging=StagingMetadata(
             transform_name="extract_logchunks",
-            output_filename="data-00000-of-00001.jsonl",
-            record_provenance_fields=("id", "source_path", "category", "log_path"),
+            metadata={"provenance_fields": ["id", "source_path", "category", "log_path"]},
         ),
         epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
         issue_numbers=(PUBLIC_DIAGNOSTIC_LOGS_ISSUE,),
@@ -198,8 +198,7 @@ SOURCE_INVENTORY: tuple[IngestionSourceManifest, ...] = (
         ),
         staging=StagingMetadata(
             transform_name="extract_loghub",
-            output_filename="data-00000-of-00001.jsonl",
-            record_provenance_fields=("id", "source_path"),
+            metadata={"provenance_fields": ["id", "source_path"]},
         ),
         epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
         issue_numbers=(PUBLIC_DIAGNOSTIC_LOGS_ISSUE,),
@@ -661,7 +660,7 @@ def extract_diagnostic_logs_step(
             "max_logchunks_examples": max_logchunks_examples,
             "max_loghub_files": max_loghub_files,
             "split_policy": "97% train / 1% dev / 1% test / 1% issue_5093_holdout",
-            "source_manifest_fingerprints": {
+            "source_content_fingerprints": {
                 source.source_label: source.fingerprint()
                 for source in source_inventory()
                 if source.source_label in {"ghalogs", "logchunks", "loghub"}

@@ -19,6 +19,7 @@ from marin.utils import fsspec_mkdirs
 
 JsonScalar = str | int | float | bool | None
 JsonValue = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
+INGESTION_METADATA_SCHEMA_VERSION = 1
 
 
 def _json_ready(value: Any) -> Any:
@@ -91,15 +92,19 @@ class SampleCapConfig:
 
 @dataclass(frozen=True)
 class StagingMetadata:
-    """How a source is rendered into downstream text records."""
+    """How a source is rendered into downstream text records.
+
+    This block is the source -> text projection contract. Keep only fields
+    that affect or meaningfully describe the emitted text surface here.
+    Filesystem plumbing and runtime output details belong in
+    ``MaterializedOutputMetadata`` instead.
+    """
 
     transform_name: str
     serializer_name: str | None = None
     split: str | None = None
     subset: str | None = None
     preserve_header: bool | None = None
-    output_filename: str = "staged.jsonl.gz"
-    record_provenance_fields: tuple[str, ...] = ()
     metadata: dict[str, JsonValue] = field(default_factory=dict)
 
 
@@ -129,7 +134,34 @@ class IngestionSourceManifest:
         payload["policy"]["eval_only"] = self.policy.eval_only
         return payload
 
+    def content_fingerprint_payload(self) -> dict[str, Any]:
+        """Return the subset of manifest fields that can affect staged bytes."""
+        return _json_ready(
+            {
+                "dataset_key": self.dataset_key,
+                "slice_key": self.slice_key,
+                "source_label": self.source_label,
+                "source_urls": self.source_urls,
+                "source_format": self.source_format,
+                "surface_form": self.surface_form,
+                "policy": {
+                    "requires_sanitization": self.policy.requires_sanitization,
+                    "identity_treatment": self.policy.identity_treatment,
+                    "secret_redaction": self.policy.secret_redaction,
+                },
+                "staging": asdict(self.staging),
+                "sample_caps": asdict(self.sample_caps),
+                "source_metadata": self.source_metadata,
+            }
+        )
+
     def fingerprint(self) -> str:
+        """Return the content hash used for cache keys and config validation."""
+        blob = json.dumps(self.content_fingerprint_payload(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+    def provenance_fingerprint(self) -> str:
+        """Return an exact hash over the full manifest payload."""
         blob = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
@@ -156,8 +188,9 @@ def render_ingestion_metadata(
     """Render the sidecar payload for a materialized source."""
 
     return {
-        "schema_version": 1,
-        "manifest_fingerprint": manifest.fingerprint(),
+        "schema_version": INGESTION_METADATA_SCHEMA_VERSION,
+        "manifest_fingerprint": manifest.provenance_fingerprint(),
+        "content_fingerprint": manifest.fingerprint(),
         "source_manifest": manifest.to_dict(),
         "materialized_output": materialized_output.to_dict(),
     }

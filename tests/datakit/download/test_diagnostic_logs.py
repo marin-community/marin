@@ -139,6 +139,7 @@ def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
     )
 
     metadata = json.loads((output_dir / "metadata.json").read_text())
+    assert "content_fingerprint" in metadata
     assert metadata["source_manifest"]["source_label"] == "ghalogs"
     assert metadata["source_manifest"]["policy"]["training_allowed"] is True
     assert metadata["source_manifest"]["policy"]["requires_sanitization"] is True
