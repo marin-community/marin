@@ -24,6 +24,8 @@ from pathlib import Path
 import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
+from rigging.config_discovery import resolve_cluster_config
+
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.protocols import WorkerInfraProvider
@@ -1329,3 +1331,44 @@ def clear_remote_state(remote_state_dir: str) -> None:
     fs, path = fsspec.core.url_to_fs(remote_state_dir)
     if fs.exists(path):
         fs.rm(path, recursive=True)
+
+
+def _bundled_iris_examples_dir() -> str | None:
+    """Return the iris package's bundled examples/ dir when it ships on disk.
+
+    Wheel installs (site-packages): hatchling force-includes the yamls at
+    ``iris/examples/``. Editable workspace installs leave them at
+    ``lib/iris/examples/`` reachable via parents[3] from this file.
+    """
+    here = Path(__file__).resolve()
+    wheel_path = here.parent.parent / "examples"
+    if wheel_path.is_dir():
+        return str(wheel_path)
+    editable_path = here.parents[3] / "examples"
+    if editable_path.is_dir():
+        return str(editable_path)
+    return None
+
+
+# Directories searched (in priority order) to resolve ``--cluster=<name>`` to
+# a YAML config file. Relative paths are resolved against the marin project
+# root by ``rigging.config_discovery``; absolute paths are used as-is.
+IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
+    p
+    for p in (
+        "~/.config/marin/clusters",  # user override — checked first
+        "lib/iris/examples",  # in-tree marin checkout
+        _bundled_iris_examples_dir(),  # editable install from sibling workspace
+    )
+    if p is not None
+)
+
+
+def load_cluster_config(name_or_path: str) -> IrisConfig:
+    """Load an ``IrisConfig`` by cluster name or YAML path.
+
+    A literal file path is loaded directly. A bare cluster name (e.g.
+    ``"marin"``) is resolved against ``IRIS_CLUSTER_CONFIG_DIRS``.
+    """
+    path = resolve_cluster_config(name_or_path, IRIS_CLUSTER_CONFIG_DIRS)
+    return IrisConfig.load(path)

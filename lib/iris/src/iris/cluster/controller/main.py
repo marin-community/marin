@@ -231,7 +231,7 @@ def run_controller_serve(
         port=log_port,
         log_dir=log_dir,
         remote_log_dir=remote_log_dir,
-        signing_key=auth.jwt_manager.signing_key if auth.jwt_manager else None,
+        signing_key=auth.signing_key,
         strict_auth=auth.provider is not None,
     )
     try:

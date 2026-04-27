@@ -477,6 +477,14 @@ class ManualControllerProvider:
     ) -> AbstractContextManager[str]:
         return nullcontext(address)
 
+    def tunnel_to(
+        self,
+        host: str,
+        port: int,
+        local_port: int | None = None,
+    ) -> AbstractContextManager[tuple[str, int]]:
+        return nullcontext((host, port))
+
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         return image
 

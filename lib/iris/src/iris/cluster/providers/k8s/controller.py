@@ -15,8 +15,9 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -35,6 +36,20 @@ _DEFAULT_POLL_INTERVAL = 10.0
 # Maximum time to wait for the controller Deployment to become available (seconds).
 # Includes time for the autoscaler to provision a node.
 _DEPLOYMENT_READY_TIMEOUT = 2400.0
+
+
+@contextmanager
+def _wrap_kubectl_pf_as_host_port(
+    cm: AbstractContextManager[str],
+) -> Iterator[tuple[str, int]]:
+    """Adapt a port-forward yielding a URL string to one yielding ``(host, port)``."""
+    with cm as url:
+        parsed = urlparse(url)
+        host = parsed.hostname or "127.0.0.1"
+        if parsed.port is None:
+            raise ValueError(f"port-forward yielded URL without port: {url!r}")
+        yield (host, parsed.port)
+
 
 # Default kubectl timeout for CoreWeave operations (seconds).
 # CoreWeave bare-metal provisioning/deprovisioning is slow; 60s is not enough.
@@ -391,6 +406,27 @@ class K8sControllerProvider:
             service_name=service_name,
             remote_port=remote_port,
             local_port=local_port,
+        )
+
+    def tunnel_to(
+        self,
+        host: str,
+        port: int,
+        local_port: int | None = None,
+    ) -> AbstractContextManager[tuple[str, int]]:
+        # Service-DNS form only in v1; pod-IP form is a followup.
+        if not host.endswith(".svc.cluster.local"):
+            raise NotImplementedError(
+                f"K8s tunnel_to expects <svc>.<ns>.svc.cluster.local form, got {host!r}. "
+                "Pod-IP / external DNS forms are not yet implemented."
+            )
+        service_name = host.split(".")[0]
+        return _wrap_kubectl_pf_as_host_port(
+            self._kubectl.port_forward(
+                service_name=service_name,
+                remote_port=port,
+                local_port=local_port,
+            )
         )
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:

@@ -33,6 +33,7 @@ from iris.rpc.logging_connect import LogServiceWSGIApplication
 from iris.rpc.stats import RpcStatsCollector
 from iris.rpc.stats_connect import StatsServiceWSGIApplication
 from iris.rpc.stats_service import RpcStatsService
+from rigging.auth import JwtVerifier
 
 # Cap on concurrent FetchLogs RPCs. Each read can fan out into DuckDB scans
 # across hundreds of MB of parquet; allowing unbounded parallelism evicts the
@@ -106,12 +107,7 @@ def _build_auth_interceptors(signing_key: str | None, strict: bool) -> tuple[Int
     """
     if not signing_key:
         return (NullAuthInterceptor(),)
-    # Local import: JwtTokenManager lives in controller.auth to stay close
-    # to the DB-backed token issuance path. The log server only needs the
-    # verifier half.
-    from iris.cluster.controller.auth import JwtTokenManager
-
-    verifier = JwtTokenManager(signing_key)
+    verifier = JwtVerifier(signing_key)
     if strict:
         return (AuthInterceptor(verifier=verifier),)
     return (NullAuthInterceptor(verifier=verifier),)

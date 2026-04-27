@@ -4,8 +4,11 @@
 """Auth setup for the controller — single source of truth for verifier creation.
 
 All tokens are JWTs signed with a persistent HMAC-SHA256 key stored in the
-controller_secrets table. Verification is a pure crypto check plus an
-in-memory revocation set — no per-RPC database hit.
+controller_secrets table. Verification is a pure crypto check (delegated to
+``rigging.auth.JwtVerifier``) plus a controller-local revocation set lookup —
+no per-RPC database hit. Revocation lives only in this process; verifiers
+running elsewhere (e.g. the log server) accept any signed, non-expired token
+until it expires.
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from iris.rpc.auth import (
     VerifiedIdentity,
     hash_token,
 )
+from rigging.auth import JWT_ALGORITHM, JwtVerifier
 from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
@@ -169,25 +173,24 @@ _TOUCH_INTERVAL_SECONDS = 300  # 5 minutes
 
 
 class JwtTokenManager:
-    """Creates and verifies HMAC-SHA256 JWT tokens.
+    """Issues HMAC-SHA256 JWTs and verifies them against a DB-backed
+    revocation set.
 
-    Verification is a pure crypto operation followed by an in-memory
-    revocation check — no DB hit on the hot path. An optional DB reference
-    enables sampled last_used_at write-back (at most once per key per
-    ``_TOUCH_INTERVAL_SECONDS``).
+    Composes a `rigging.auth.JwtVerifier` for signature/expiry checks
+    only — revocation is owned here, locally to the controller process,
+    and never crosses a process boundary. Adds the issuer half
+    (`create_token`), DB-backed revocation hydration (`load_revocations`),
+    and sampled `last_used_at` write-back on the verify hot path (at most
+    once per key per ``_TOUCH_INTERVAL_SECONDS``).
     """
 
     def __init__(self, signing_key: str, db: ControllerDB | None = None):
         self._signing_key = signing_key
-        self._revoked_jtis: set[str] = set()
+        self._verifier = JwtVerifier(signing_key)
         self._db = db
+        self._revoked_jtis: set[str] = set()
         # Tracks the last wall-clock time we wrote last_used_at per jti.
         self._last_touched: dict[str, float] = {}
-
-    @property
-    def signing_key(self) -> str:
-        """HMAC secret used to sign and verify JWTs. Do not log or serialize."""
-        return self._signing_key
 
     def create_token(
         self,
@@ -204,7 +207,7 @@ class JwtTokenManager:
             "iat": int(now),
             "exp": int(now + ttl_seconds),
         }
-        return jwt.encode(payload, self._signing_key, algorithm="HS256")
+        return jwt.encode(payload, self._signing_key, algorithm=JWT_ALGORITHM)
 
     def verify(self, token: str) -> VerifiedIdentity:
         """Verify JWT signature and claims, check revocation.
@@ -212,23 +215,12 @@ class JwtTokenManager:
         On success, updates ``last_used_at`` in the DB at most once per key
         per ``_TOUCH_INTERVAL_SECONDS`` to avoid hot-path DB writes.
         """
-        try:
-            payload = jwt.decode(token, self._signing_key, algorithms=["HS256"])
-        except jwt.ExpiredSignatureError as exc:
-            raise ValueError("Token has expired") from exc
-        except jwt.InvalidTokenError as exc:
-            raise ValueError(f"Invalid token: {exc}") from exc
-
+        identity, payload = self._verifier.verify_full(token)
         jti = payload.get("jti", "")
         if jti in self._revoked_jtis:
             raise ValueError("Token has been revoked")
-
         self._maybe_touch(jti)
-
-        return VerifiedIdentity(
-            user_id=payload["sub"],
-            role=payload.get("role", "user"),
-        )
+        return identity
 
     def _maybe_touch(self, jti: str) -> None:
         """Write last_used_at to DB if enough time has elapsed since the last write."""
@@ -282,6 +274,9 @@ class ControllerAuth:
     login_verifier: TokenVerifier | None = None
     gcp_project_id: str | None = None
     jwt_manager: JwtTokenManager | None = None
+    # HMAC signing key — handed to the log-server subprocess via env var. Do
+    # not log or serialize.
+    signing_key: str | None = None
     optional: bool = False
 
 
@@ -307,7 +302,12 @@ def create_controller_auth(
 
             worker_token = _create_worker_jwt(db, jwt_mgr, now)
             logger.info("Authentication disabled — null-auth mode (workers use JWT)")
-            return ControllerAuth(verifier=jwt_mgr, worker_token=worker_token, jwt_manager=jwt_mgr)
+            return ControllerAuth(
+                verifier=jwt_mgr,
+                worker_token=worker_token,
+                jwt_manager=jwt_mgr,
+                signing_key=signing_key,
+            )
         logger.info("Authentication disabled — null-auth mode, no DB")
         return ControllerAuth()
 
@@ -333,8 +333,8 @@ def create_controller_auth(
 
         verifier: TokenVerifier | None = jwt_mgr
     else:
-        ephemeral_key = secrets.token_hex(32)
-        jwt_mgr = JwtTokenManager(ephemeral_key)
+        signing_key = secrets.token_hex(32)
+        jwt_mgr = JwtTokenManager(signing_key)
         worker_token = jwt_mgr.create_token(WORKER_USER, "worker", f"iris_k_worker_{secrets.token_hex(8)}")
         verifier = None
 
@@ -367,6 +367,7 @@ def create_controller_auth(
         login_verifier=login_verifier,
         gcp_project_id=gcp_project_id,
         jwt_manager=jwt_mgr,
+        signing_key=signing_key,
         optional=optional,
     )
 

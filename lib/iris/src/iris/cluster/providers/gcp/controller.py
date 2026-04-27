@@ -122,6 +122,23 @@ class GcpControllerProvider:
             local_port=local_port,
         )
 
+    def tunnel_to(
+        self,
+        host: str,
+        port: int,
+        local_port: int | None = None,
+    ) -> AbstractContextManager[tuple[str, int]]:
+        if self.worker_provider.gcp_service.mode == ServiceMode.LOCAL:
+            return nullcontext((host, port))
+        return _gcp_tunnel_via_controller(
+            project=self.worker_provider.project_id,
+            label_prefix=self.worker_provider.label_prefix,
+            ssh_config=self.worker_provider.ssh_config,
+            target_host=host,
+            target_port=port,
+            local_port=local_port,
+        )
+
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         return self.worker_provider.resolve_image(image, zone)
 
@@ -177,6 +194,8 @@ def _build_tunnel_ssh_cmd(
     ssh_config: config_pb2.SshConfig | None,
     effective_service_account: str | None,
     force_metadata: bool = False,
+    target_host: str = "localhost",
+    target_port: int = 10000,
 ) -> list[str]:
     auth_mode = _ssh_auth_mode(ssh_config)
     use_os_login = auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN and not force_metadata
@@ -205,7 +224,7 @@ def _build_tunnel_ssh_cmd(
         [
             "--",
             "-L",
-            f"127.0.0.1:{local_port}:localhost:10000",
+            f"127.0.0.1:{local_port}:{target_host}:{target_port}",
             "-N",
             "-o",
             "BatchMode=yes",
@@ -247,6 +266,8 @@ def _establish_tunnel(
     ssh_config: config_pb2.SshConfig | None,
     effective_service_account: str | None,
     timeout: float,
+    target_host: str = "localhost",
+    target_port: int = 10000,
 ) -> subprocess.Popen:
     """Start an SSH tunnel subprocess and wait for the port to be ready.
 
@@ -260,6 +281,8 @@ def _establish_tunnel(
         local_port=local_port,
         ssh_config=ssh_config,
         effective_service_account=effective_service_account,
+        target_host=target_host,
+        target_port=target_port,
     )
 
     proc = subprocess.Popen(
@@ -285,6 +308,8 @@ def _establish_tunnel(
                 ssh_config=ssh_config,
                 effective_service_account=effective_service_account,
                 force_metadata=True,
+                target_host=target_host,
+                target_port=target_port,
             )
             proc = subprocess.Popen(
                 cmd,
@@ -304,27 +329,13 @@ def _establish_tunnel(
     return proc
 
 
-@contextmanager
-def _gcp_tunnel(
+def _resolve_controller_vm(
+    *,
     project: str,
     label_prefix: str,
-    ssh_config: config_pb2.SshConfig | None,
-    local_port: int | None = None,
-    timeout: float = 60.0,
-) -> Iterator[str]:
-    """SSH tunnel to the controller VM, yielding the local URL.
-
-    Binds explicitly to 127.0.0.1 to avoid conflicts with other processes
-    that may be listening on the same port on a different address family (IPv6).
-    Picks a free port automatically if none is specified.
-    """
-    effective_service_account = ssh_impersonate_service_account(ssh_config)
-    key_file = ssh_key_file(ssh_config, effective_service_account)
-    _check_gcloud_ssh_key(key_file)
-
-    if local_port is None:
-        local_port = find_free_port(start=10000)
-
+    effective_service_account: str | None,
+) -> tuple[str, str]:
+    """Find the controller VM by label. Returns (vm_name, zone)."""
     labels = Labels(label_prefix)
     label_filter = f"labels.{labels.iris_controller}=true AND status=RUNNING"
     cmd = [
@@ -342,12 +353,42 @@ def _gcp_tunnel(
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0 or not result.stdout.strip():
         raise RuntimeError(f"No controller VM found (label={labels.iris_controller}=true, project={project})")
-
     parts = result.stdout.strip().split()
-    vm_name = parts[0]
-    zone = parts[1] if len(parts) > 1 else ""
+    return parts[0], (parts[1] if len(parts) > 1 else "")
 
-    logger.info("Establishing SSH tunnel to %s (zone=%s)...", vm_name, zone)
+
+@contextmanager
+def _gcp_tunnel_via_controller(
+    *,
+    project: str,
+    label_prefix: str,
+    ssh_config: config_pb2.SshConfig | None,
+    target_host: str,
+    target_port: int,
+    local_port: int | None = None,
+    timeout: float = 60.0,
+) -> Iterator[tuple[str, int]]:
+    """SSH through the controller VM with ``-L``, yielding the local
+    ``(host, port)`` reachable from this process.
+
+    The controller VM is reused as the SSH bastion for any internal
+    target, so off-cluster callers can reach arbitrary cluster-internal
+    addresses without separately authenticating to each VM.
+    """
+    effective_service_account = ssh_impersonate_service_account(ssh_config)
+    key_file = ssh_key_file(ssh_config, effective_service_account)
+    _check_gcloud_ssh_key(key_file)
+
+    if local_port is None:
+        local_port = find_free_port(start=10000)
+
+    vm_name, zone = _resolve_controller_vm(
+        project=project,
+        label_prefix=label_prefix,
+        effective_service_account=effective_service_account,
+    )
+
+    logger.info("Establishing SSH tunnel via %s (zone=%s) -> %s:%d ...", vm_name, zone, target_host, target_port)
 
     proc = retry_with_backoff(
         lambda: _establish_tunnel(
@@ -358,16 +399,18 @@ def _gcp_tunnel(
             ssh_config=ssh_config,
             effective_service_account=effective_service_account,
             timeout=timeout,
+            target_host=target_host,
+            target_port=target_port,
         ),
         retryable=lambda e: isinstance(e, RuntimeError) and _is_transient_ssh_error(str(e)),
         max_attempts=3,
         backoff=ExponentialBackoff(initial=5.0, maximum=30.0, factor=2.0),
-        operation=f"SSH tunnel to {vm_name}",
+        operation=f"SSH tunnel via {vm_name} -> {target_host}:{target_port}",
     )
 
     try:
-        logger.info("Tunnel ready: 127.0.0.1:%d -> %s:10000", local_port, vm_name)
-        yield f"http://127.0.0.1:{local_port}"
+        logger.info("Tunnel ready: 127.0.0.1:%d -> %s:%d", local_port, target_host, target_port)
+        yield ("127.0.0.1", local_port)
     finally:
         proc.terminate()
         try:
@@ -375,3 +418,28 @@ def _gcp_tunnel(
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+
+
+@contextmanager
+def _gcp_tunnel(
+    project: str,
+    label_prefix: str,
+    ssh_config: config_pb2.SshConfig | None,
+    local_port: int | None = None,
+    timeout: float = 60.0,
+) -> Iterator[str]:
+    """SSH tunnel to the controller VM, yielding the local URL.
+
+    Backward-compatible wrapper for the controller-tunnel use case;
+    delegates to :func:`_gcp_tunnel_via_controller`.
+    """
+    with _gcp_tunnel_via_controller(
+        project=project,
+        label_prefix=label_prefix,
+        ssh_config=ssh_config,
+        target_host="localhost",
+        target_port=10000,
+        local_port=local_port,
+        timeout=timeout,
+    ) as (host, port):
+        yield f"http://{host}:{port}"
