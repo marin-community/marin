@@ -5,6 +5,7 @@ import functools
 import logging
 import os
 import subprocess
+import threading
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import fields, is_dataclass
@@ -21,6 +22,7 @@ from huggingface_hub.utils import HfHubHTTPError
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
+_HF_DATASET_LOAD_LOCK = threading.Lock()
 
 
 def fsspec_exists(file_path):
@@ -146,12 +148,21 @@ def load_dataset_with_backoff(
     **dataset_kwargs: Any,
 ):
     return call_with_hf_backoff(
-        lambda: datasets.load_dataset(**dataset_kwargs),
+        # datasets.load_dataset is not thread-safe under local concurrent step
+        # materialization because tqdm's global lock can be torn down by another
+        # load. Serialize builder creation/process startup here and let the
+        # heavier downstream streaming work proceed outside the lock.
+        lambda: _load_dataset_serialized(**dataset_kwargs),
         context=context,
         max_attempts=max_attempts,
         initial_delay=initial_delay,
         max_delay=max_delay,
     )
+
+
+def _load_dataset_serialized(**dataset_kwargs: Any):
+    with _HF_DATASET_LOAD_LOCK:
+        return datasets.load_dataset(**dataset_kwargs)
 
 
 def fsspec_size(file_path: str) -> int:
