@@ -25,6 +25,11 @@ z-loss only). The architecture choices are hardcoded in
   experts (not softmax).
 - **Shared expert**: one always-on dense MLP per block in parallel with the
   routed experts (contributes to every token).
+- **Depth MuP residual scaling**: optional, controlled by
+  `depth_mup_residual_scaling` in `GrugModelConfig`. When enabled, each
+  attention and MLP residual update is scaled by `1 / sqrt(num_layers)`.
+  The baseline recipe leaves this off; `depth_mup_lr_sweep.py` enables it for
+  the depth MuP ablation.
 - **GatedNorm**: rank-128 low-rank gating on RMS-normalized input pre-attention
   and pre-MLP. Acts as a learned per-token gate over the hidden dimension.
 - **XSA (Exclusive Self-Attention)**: after attention, subtract the component
@@ -60,6 +65,19 @@ R²=0.995) and are all anchored at **seq_len = 4096**.
 entry point — `launch.py` uses it to produce the baseline step. Callers that
 want full manual control pass `GrugModelConfig` and `GrugMoeAdamHConfig`
 directly to `GrugMoeLaunchConfig`.
+
+## Depth MuP LR sweep
+
+`depth_mup_lr_sweep.py` launches the depth MuP ablation. It uses the same
+compute-optimal d512, d768, d1024, and d1280 budgets as the baseline table
+below, enables `depth_mup_residual_scaling=True`, and sweeps a log-spaced set of
+LR multipliers around the v16 Adam/AdamH formula:
+
+`0.25x, 0.354x, 0.5x, 0.707x, 1x, 1.414x, 2x, 2.828x, 4x`
+
+Both the Adam LR and AdamH LR are multiplied by the same factor. The intended
+readout is whether the fitted LR optimum has lower scale sensitivity than the
+v16 fit from #4225.
 
 ## v16 isoflop sweep
 
@@ -164,5 +182,7 @@ Predicted macro uses `loss(C) = 1.6 + 95.18 · C^(-0.0941)`.
   `build_from_heuristic` entry point.
 - [`launch.py`](./launch.py) — `GrugMoeLaunchConfig`, baseline `ExecutorStep`,
   and `executor_main` wiring.
+- [`depth_mup_lr_sweep.py`](./depth_mup_lr_sweep.py) — depth MuP residual
+  scaling LR sweep across the compute-optimal MoE scales.
 - [`adamh.py`](./adamh.py) — shared AdamH utilities.
 - [`agent.md`](./agent.md) — agent guide for running ablation experiments on Iris.

@@ -8,6 +8,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+import math
 
 from dataclasses import dataclass
 
@@ -72,6 +73,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    depth_mup_residual_scaling: bool = False
     moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -83,6 +85,8 @@ class GrugModelConfig:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
             raise ValueError("max_seq_len must be positive")
+        if self.num_layers <= 0:
+            raise ValueError("num_layers must be positive")
         if self.num_experts <= 0:
             raise ValueError("num_experts must be positive")
         if self.num_experts_per_token <= 0:
@@ -101,6 +105,12 @@ class GrugModelConfig:
                 f"hidden_dim={self.hidden_dim} is not divisible by num_heads={self.num_heads}; set head_dim explicitly"
             )
         return self.hidden_dim // self.num_heads
+
+    @property
+    def residual_update_scale(self) -> float:
+        if not self.depth_mup_residual_scaling:
+            return 1.0
+        return 1.0 / math.sqrt(self.num_layers)
 
 
 def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
@@ -416,6 +426,7 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    residual_update_scale: float = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
@@ -433,6 +444,7 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            residual_update_scale=cfg.residual_update_scale,
         )
 
     @named_call
@@ -442,12 +454,12 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask)
+        x = x + self.residual_update_scale * self.attn(attn_in, mask)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
-        x = x + mlp_out
+        x = x + self.residual_update_scale * mlp_out
         return x, router_stats
 
 
