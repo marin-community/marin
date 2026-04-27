@@ -107,24 +107,61 @@ def _instance_describe(name: str, project: str, zone: str) -> dict | None:
     return json.loads(result.stdout)
 
 
+def _ssh_args(cfg: FinelogConfig, command: str) -> list[str]:
+    """Build a `gcloud compute ssh` argv that respects the config's service account.
+
+    When the deployment specifies a service account, the gcloud client
+    impersonates it for SSH-key push (mirroring iris's pattern in
+    `iris.cluster.providers.remote_exec`). Without impersonation, an
+    operator without OS Login privileges on the VM cannot connect even
+    if they have the role on its service account.
+    """
+    assert cfg.deployment.gcp is not None
+    gcp = cfg.deployment.gcp
+    args = [
+        "gcloud",
+        "compute",
+        "ssh",
+        cfg.name,
+        f"--project={gcp.project}",
+        f"--zone={gcp.zone}",
+        f"--command={command}",
+    ]
+    if gcp.service_account:
+        args.append(f"--impersonate-service-account={gcp.service_account}")
+    return args
+
+
 def _wait_health(name: str, project: str, zone: str, port: int, max_attempts: int = 60) -> bool:
-    """Poll the VM's /health endpoint over SSH+curl. Returns True on success."""
+    """Wait for the bootstrap script to report finelog healthy.
+
+    Polls the VM's serial console output (no SSH required, so this works on
+    VMs that enforce OS Login restricting the operator's account). The
+    bootstrap script in ``bootstrap.py`` validates ``/health`` from inside
+    the VM and prints sentinel markers; we just look for them.
+    """
+    del port  # the bootstrap script polls /health itself; we read its verdict.
+    healthy_marker = "[finelog-init] finelog is healthy"
+    failed_marker = "[finelog-init] FAILED"
     for _ in range(max_attempts):
         result = subprocess.run(
             [
                 "gcloud",
                 "compute",
-                "ssh",
+                "instances",
+                "get-serial-port-output",
                 name,
                 f"--project={project}",
                 f"--zone={zone}",
-                f"--command=curl -sf http://localhost:{port}/health > /dev/null",
             ],
             capture_output=True,
             text=True,
         )
         if result.returncode == 0:
-            return True
+            if healthy_marker in result.stdout:
+                return True
+            if failed_marker in result.stdout:
+                return False
         time.sleep(3)
     return False
 
@@ -218,15 +255,7 @@ def gcp_restart(cfg: FinelogConfig) -> None:
 
     click.echo(f"Re-running bootstrap on {cfg.name} via SSH...")
     result = subprocess.run(
-        [
-            "gcloud",
-            "compute",
-            "ssh",
-            cfg.name,
-            f"--project={gcp.project}",
-            f"--zone={gcp.zone}",
-            "--command=bash -s",
-        ],
+        _ssh_args(cfg, "bash -s"),
         input=bootstrap,
         text=True,
     )
@@ -261,15 +290,7 @@ def gcp_status(cfg: FinelogConfig) -> None:
     fmt = "{{.State.Status}}"
     probe_cmd = f"sudo docker inspect --format='{fmt}' {CONTAINER_NAME} 2>/dev/null || echo not_found"
     probe = subprocess.run(
-        [
-            "gcloud",
-            "compute",
-            "ssh",
-            cfg.name,
-            f"--project={gcp.project}",
-            f"--zone={gcp.zone}",
-            f"--command={probe_cmd}",
-        ],
+        _ssh_args(cfg, probe_cmd),
         capture_output=True,
         text=True,
     )
@@ -282,18 +303,9 @@ def gcp_status(cfg: FinelogConfig) -> None:
 def gcp_logs(cfg: FinelogConfig, *, tail: int, follow: bool) -> None:
     """Tail finelog container logs over SSH."""
     assert cfg.deployment.gcp is not None
-    gcp = cfg.deployment.gcp
     follow_flag = "-f" if follow else ""
     cmd = f"sudo docker logs {CONTAINER_NAME} --tail {tail} {follow_flag}".strip()
-    args = [
-        "gcloud",
-        "compute",
-        "ssh",
-        cfg.name,
-        f"--project={gcp.project}",
-        f"--zone={gcp.zone}",
-        f"--command={cmd}",
-    ]
+    args = _ssh_args(cfg, cmd)
     if follow:
         proc = subprocess.Popen(args)
         try:
