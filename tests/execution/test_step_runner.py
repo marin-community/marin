@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 from fray.types import ResourceConfig
 from rigging.filesystem import MARIN_CROSS_REGION_OVERRIDE_ENV
+from rigging.filesystem import region_from_prefix
 
 from marin.execution.artifact import Artifact, PathMetadata
 from marin.execution.executor import _dag_tpu_regions, Executor, ExecutorStep, resolve_executor_step
@@ -38,6 +39,21 @@ class TrainMetadata:
 class NestedMetadata:
     path: str
     resources: ResourceConfig
+
+
+class PermissionDenied(Exception):
+    pass
+
+
+@pytest.fixture(autouse=True)
+def _stub_bucket_location_for_marin_paths(monkeypatch):
+    def fake_get_bucket_location(bucket: str) -> str:
+        region = region_from_prefix(f"gs://{bucket}")
+        if region is None:
+            raise PermissionDenied(f"no bucket metadata access for {bucket}")
+        return region
+
+    monkeypatch.setattr("marin.execution.executor.get_bucket_location", fake_get_bucket_location)
 
 
 # ---------------------------------------------------------------------------
