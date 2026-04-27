@@ -141,7 +141,11 @@ def cli() -> None:
 @click.option("--boot-disk-size", type=int, default=DEFAULT_BOOT_DISK_SIZE, show_default=True, help="GB")
 @click.option("--image", default=DEFAULT_IMAGE, show_default=True, help="Finelog Docker image (tag or digest)")
 @click.option("--port", type=int, default=DEFAULT_PORT, show_default=True)
-@click.option("--remote-log-dir", required=True, help="GCS path for FINELOG_REMOTE_DIR (e.g. gs://my-bucket/finelog)")
+@click.option(
+    "--remote-log-dir",
+    default="",
+    help="GCS path for FINELOG_REMOTE_DIR (e.g. gs://my-bucket/finelog); empty disables offload",
+)
 @click.option("--service-account", default=None, help="VM service account email")
 @click.option("--network-tag", "network_tags", multiple=True, help="Network tag (repeatable)")
 @click.option("--wait/--no-wait", default=True, help="Wait for /health after create")
@@ -211,7 +215,7 @@ def create_cmd(
 @click.option("--zone", default=DEFAULT_ZONE, show_default=True)
 @click.option("--image", default=DEFAULT_IMAGE, show_default=True)
 @click.option("--port", type=int, default=DEFAULT_PORT, show_default=True)
-@click.option("--remote-log-dir", required=True)
+@click.option("--remote-log-dir", default="")
 def restart_cmd(
     name: str,
     project: str | None,

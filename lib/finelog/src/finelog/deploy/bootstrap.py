@@ -106,8 +106,6 @@ def render_bootstrap(image: str, port: int, remote_log_dir: str) -> str:
         raise ValueError("image is required")
     if port <= 0:
         raise ValueError("port must be > 0")
-    if not remote_log_dir:
-        raise ValueError("remote_log_dir is required")
     return render_template(
         BOOTSTRAP_SCRIPT,
         docker_image=image,
