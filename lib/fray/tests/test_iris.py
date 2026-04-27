@@ -16,9 +16,12 @@ from fray.iris_backend import (
     FrayIrisClient,
     IrisActorHandle,
     convert_constraints,
+    resolve_coscheduling,
 )
 from fray.types import (
+    CpuConfig,
     Entrypoint,
+    GpuConfig,
     JobRequest,
     ResourceConfig,
     TpuConfig,
@@ -266,3 +269,88 @@ class TestWithTpuFlexible:
         rc = ResourceConfig.with_tpu(["v5p-16", "v4-16"], slice_count=2)
         # v5p-16 has vm_count=2, so replicas = 2 * 2 = 4
         assert rc.replicas == 4
+
+
+class TestResolveCoscheduling:
+    """Coscheduling decisions made by the fray Iris backend.
+
+    Mirrors the contract enforced by ``iris/cli/job.py``:
+    only multi-VM TPU slices need ``tpu-name`` coscheduling.
+    """
+
+    def test_single_replica_returns_none(self):
+        assert resolve_coscheduling(TpuConfig(variant="v5p-16"), replicas=1) is None
+        assert resolve_coscheduling(GpuConfig(variant="H100", count=1), replicas=1) is None
+        assert resolve_coscheduling(CpuConfig(), replicas=1) is None
+
+    def test_single_vm_tpu_does_not_coschedule(self):
+        # v5p-8 has vm_count=1: each replica is an independent slice. Grouping
+        # by tpu-name with count>1 would be unschedulable because no tpu-name
+        # has more than one worker for this variant.
+        assert resolve_coscheduling(TpuConfig(variant="v5p-8"), replicas=4) is None
+        assert resolve_coscheduling(TpuConfig(variant="v6e-8"), replicas=2) is None
+        assert resolve_coscheduling(TpuConfig(variant="v4-8"), replicas=8) is None
+
+    def test_multi_vm_tpu_coschedules_by_tpu_name(self):
+        # v5p-16 has vm_count=2: a single slice spans 2 VMs that must share a tpu-name.
+        cfg = resolve_coscheduling(TpuConfig(variant="v5p-16"), replicas=2)
+        assert cfg is not None
+        assert cfg.group_by == "tpu-name"
+
+        # v6e-32 has vm_count=8.
+        cfg = resolve_coscheduling(TpuConfig(variant="v6e-32"), replicas=8)
+        assert cfg is not None
+        assert cfg.group_by == "tpu-name"
+
+    def test_multi_replica_gpu_coschedules_by_pool(self):
+        cfg = resolve_coscheduling(GpuConfig(variant="H100", count=8), replicas=4)
+        assert cfg is not None
+        assert cfg.group_by == "pool"
+
+    def test_multi_replica_cpu_returns_none(self):
+        assert resolve_coscheduling(CpuConfig(), replicas=4) is None
+
+
+class TestActorGroupCoscheduling:
+    """create_actor_group must pass appropriate coscheduling to Iris.submit()."""
+
+    def test_single_vm_tpu_count_gt_one_no_coscheduling(self):
+        # Regression test: count=4 on a v5p-8 (vm_count=1) used to set
+        # coscheduling=tpu-name, which made the job unschedulable because
+        # each v5p-8 slice has a single worker per tpu-name.
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-v5p8")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+
+        class _DummyActor:
+            pass
+
+        client.create_actor_group(
+            _DummyActor,
+            name="actor",
+            count=4,
+            resources=ResourceConfig.with_tpu("v5p-8"),
+        )
+
+        kwargs = fake_iris.submit.call_args.kwargs
+        assert kwargs["coscheduling"] is None
+        assert kwargs["replicas"] == 4
+
+    def test_multi_vm_tpu_coschedules_by_tpu_name(self):
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-v5p16")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+
+        class _DummyActor:
+            pass
+
+        client.create_actor_group(
+            _DummyActor,
+            name="actor",
+            count=2,
+            resources=ResourceConfig.with_tpu("v5p-16"),
+        )
+
+        kwargs = fake_iris.submit.call_args.kwargs
+        assert kwargs["coscheduling"] is not None
+        assert kwargs["coscheduling"].group_by == "tpu-name"
