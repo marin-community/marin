@@ -70,6 +70,7 @@ class GrugModelConfig:
     sliding_window: int = 4096
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
+    embed_initializer_std: float | None = None  # If set, overrides initializer_std for token_embed.
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
@@ -462,9 +463,8 @@ class Transformer(eqx.Module):
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Transformer":
         embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
-        token_embed = reshard(
-            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
-        )
+        embed_std = cfg.embed_initializer_std if cfg.embed_initializer_std is not None else cfg.initializer_std
+        token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), embed_std), Pembed_vocab)
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
         blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
         return Transformer(
