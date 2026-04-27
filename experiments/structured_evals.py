@@ -126,8 +126,6 @@ STRUCTURED_EVAL_MANIFESTS: dict[str, IngestionSourceManifest] = {
             transform_name="stage_table_record_source",
             serializer_name="totto",
             split="validation",
-            output_filename="staged.jsonl.gz",
-            record_provenance_fields=("dataset", "split", "subset", "serializer", "index"),
             metadata={"raw_source_type": "huggingface_parquet"},
         ),
         epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
@@ -154,8 +152,6 @@ STRUCTURED_EVAL_MANIFESTS: dict[str, IngestionSourceManifest] = {
             transform_name="stage_table_record_source",
             serializer_name="wikitablequestions",
             split="validation",
-            output_filename="staged.jsonl.gz",
-            record_provenance_fields=("dataset", "split", "subset", "serializer", "index"),
             metadata={"raw_source_type": "huggingface_parquet"},
         ),
         epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
@@ -196,9 +192,8 @@ def _staged_step(dataset_key: str, spec: dict[str, ExecutorStep | IngestionSourc
             split=manifest.staging.split or "validation",
             subset=manifest.staging.subset,
             max_bytes_per_source=manifest.sample_caps.max_bytes_per_source or DEFAULT_MAX_BYTES_PER_SOURCE,
-            output_filename=manifest.staging.output_filename,
             source_manifest=manifest,
-            manifest_fingerprint=manifest.fingerprint(),
+            content_fingerprint=manifest.fingerprint(),
         ),
     )
 

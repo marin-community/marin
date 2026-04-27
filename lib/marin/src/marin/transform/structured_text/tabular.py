@@ -71,9 +71,9 @@ class TabularStagingConfig:
             ``.jsonl.gz``.
         source_manifest: Optional typed source manifest used for writing a
             ``metadata.json`` sidecar.
-        manifest_fingerprint: Optional explicit fingerprint copied from the
-            source manifest into the step config so metadata-only changes
-            can participate in executor hashing.
+        content_fingerprint: Optional explicit hash copied from the source
+            manifest into the step config so text-projection changes
+            participate in executor hashing.
     """
 
     input_path: str
@@ -86,7 +86,7 @@ class TabularStagingConfig:
     output_filename: str = "staged.jsonl.gz"
     extra_metadata: dict[str, str] = field(default_factory=dict)
     source_manifest: IngestionSourceManifest | None = None
-    manifest_fingerprint: str = ""
+    content_fingerprint: str = ""
 
 
 def serialize_csv_document(header_line: str | None, body_lines: Iterable[str]) -> str:
@@ -241,11 +241,11 @@ def stage_tabular_source(cfg: TabularStagingConfig) -> dict[str, int | str]:
     source_files = _iter_source_files(cfg.input_path, cfg.file_extensions)
     if not source_files:
         raise ValueError(f"No source files with extensions {cfg.file_extensions} found under {cfg.input_path}")
-    if cfg.source_manifest is not None and cfg.manifest_fingerprint:
+    if cfg.source_manifest is not None and cfg.content_fingerprint:
         expected = cfg.source_manifest.fingerprint()
-        if cfg.manifest_fingerprint != expected:
+        if cfg.content_fingerprint != expected:
             raise ValueError(
-                f"manifest_fingerprint mismatch: config has {cfg.manifest_fingerprint}, source manifest has {expected}"
+                f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
             )
 
     output_path = cfg.output_path

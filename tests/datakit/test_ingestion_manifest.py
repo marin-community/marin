@@ -40,8 +40,10 @@ def _manifest() -> IngestionSourceManifest:
             transform_name="stage_table_record_source",
             serializer_name="totto",
             split="validation",
-            output_filename="staged.jsonl.gz",
-            record_provenance_fields=("dataset", "split", "serializer", "index"),
+            metadata={
+                "output_filename": "staged.jsonl.gz",
+                "provenance_fields": ["dataset", "split", "serializer", "index"],
+            },
         ),
         epic_issue=5005,
         issue_numbers=(5059,),
@@ -52,7 +54,7 @@ def _manifest() -> IngestionSourceManifest:
     )
 
 
-def test_manifest_fingerprint_changes_when_policy_metadata_changes():
+def test_content_fingerprint_ignores_provenance_only_metadata():
     manifest = _manifest()
     updated = replace(
         manifest,
@@ -62,7 +64,22 @@ def test_manifest_fingerprint_changes_when_policy_metadata_changes():
         ),
     )
 
+    assert manifest.fingerprint() == updated.fingerprint()
+    assert manifest.provenance_fingerprint() != updated.provenance_fingerprint()
+
+
+def test_content_fingerprint_changes_when_text_projection_changes():
+    manifest = _manifest()
+    updated = replace(
+        manifest,
+        staging=replace(
+            manifest.staging,
+            serializer_name="wikitablequestions",
+        ),
+    )
+
     assert manifest.fingerprint() != updated.fingerprint()
+    assert manifest.provenance_fingerprint() != updated.provenance_fingerprint()
 
 
 def test_write_ingestion_metadata_json_includes_policy_and_runtime_fields(tmp_path):
@@ -83,6 +100,8 @@ def test_write_ingestion_metadata_json_includes_policy_and_runtime_fields(tmp_pa
     payload = json.loads((tmp_path / "metadata.json").read_text(encoding="utf-8"))
     assert metadata_path == str(tmp_path / "metadata.json")
     assert payload == render_ingestion_metadata(manifest, materialized_output)
+    assert payload["manifest_fingerprint"] == manifest.provenance_fingerprint()
+    assert payload["content_fingerprint"] == manifest.fingerprint()
     assert payload["source_manifest"]["policy"]["training_allowed"] is False
     assert payload["source_manifest"]["policy"]["eval_only"] is True
     assert payload["source_manifest"]["compressed_size_bytes"] == 123_456

@@ -66,9 +66,9 @@ class TableRecordStagingConfig:
             ``provenance`` field.
         source_manifest: Optional typed source manifest used for writing
             ``metadata.json`` alongside the staged JSONL.
-        manifest_fingerprint: Optional explicit fingerprint copied from the
-            source manifest into the step config so metadata-only changes
-            can participate in executor hashing.
+        content_fingerprint: Optional explicit hash copied from the source
+            manifest into the step config so text-projection changes
+            participate in executor hashing.
     """
 
     input_path: str
@@ -81,7 +81,7 @@ class TableRecordStagingConfig:
     output_filename: str = "staged.jsonl.gz"
     extra_metadata: dict[str, str] = field(default_factory=dict)
     source_manifest: IngestionSourceManifest | None = None
-    manifest_fingerprint: str = ""
+    content_fingerprint: str = ""
 
 
 def _format_cell(cell_value: Any) -> str:
@@ -278,11 +278,11 @@ def stage_table_record_source(cfg: TableRecordStagingConfig) -> dict[str, int | 
     if cfg.serializer_name not in SERIALIZERS:
         raise ValueError(f"Unknown serializer {cfg.serializer_name!r}; known: {sorted(SERIALIZERS)}")
     serializer = SERIALIZERS[cfg.serializer_name]
-    if cfg.source_manifest is not None and cfg.manifest_fingerprint:
+    if cfg.source_manifest is not None and cfg.content_fingerprint:
         expected = cfg.source_manifest.fingerprint()
-        if cfg.manifest_fingerprint != expected:
+        if cfg.content_fingerprint != expected:
             raise ValueError(
-                f"manifest_fingerprint mismatch: config has {cfg.manifest_fingerprint}, source manifest has {expected}"
+                f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
             )
 
     fsspec_mkdirs(cfg.output_path, exist_ok=True)

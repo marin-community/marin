@@ -144,8 +144,7 @@ def _manifest(source_label: str = "test:csv") -> IngestionSourceManifest:
         staging=StagingMetadata(
             transform_name="stage_tabular_source",
             preserve_header=True,
-            output_filename="staged.jsonl.gz",
-            record_provenance_fields=("file", "chunk_index", "header_preserved"),
+            metadata={"output_filename": "staged.jsonl.gz"},
         ),
         sample_caps=SampleCapConfig(max_bytes_per_source=1024, max_bytes_per_document=1024),
     )
@@ -174,7 +173,7 @@ def test_stage_tabular_preserves_delimiters_and_missing_values(tmp_path):
         source_label="test:csv",
         max_bytes_per_document=1024,
         source_manifest=manifest,
-        manifest_fingerprint=manifest.fingerprint(),
+        content_fingerprint=manifest.fingerprint(),
     )
     result = stage_tabular_source(cfg)
     assert result["record_count"] == 1
@@ -196,6 +195,7 @@ def test_stage_tabular_preserves_delimiters_and_missing_values(tmp_path):
     metadata = json.loads((output_dir / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["source_manifest"]["source_label"] == "test:csv"
     assert metadata["source_manifest"]["staging"]["preserve_header"] is True
+    assert metadata["source_manifest"]["staging"]["metadata"]["output_filename"] == "staged.jsonl.gz"
     assert metadata["materialized_output"]["metadata"]["source_file_count"] == 1
 
 

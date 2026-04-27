@@ -213,8 +213,7 @@ def _manifest(*, serializer_name: str, source_label: str = "wtq:test") -> Ingest
             transform_name="stage_table_record_source",
             serializer_name=serializer_name,
             split="validation",
-            output_filename="staged.jsonl.gz",
-            record_provenance_fields=("dataset", "split", "subset", "serializer", "index"),
+            metadata={"output_filename": "staged.jsonl.gz"},
         ),
         epic_issue=5005,
         issue_numbers=(5059,),
@@ -232,7 +231,7 @@ def test_stage_table_record_source_end_to_end_wtq(tmp_path):
         source_label="wtq:test",
         serializer_name="wikitablequestions",
         source_manifest=manifest,
-        manifest_fingerprint=manifest.fingerprint(),
+        content_fingerprint=manifest.fingerprint(),
     )
 
     with patch(
@@ -252,6 +251,7 @@ def test_stage_table_record_source_end_to_end_wtq(tmp_path):
     metadata = json.loads((tmp_path / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["source_manifest"]["source_label"] == "wtq:test"
     assert metadata["source_manifest"]["staging"]["serializer_name"] == "wikitablequestions"
+    assert metadata["source_manifest"]["staging"]["metadata"]["output_filename"] == "staged.jsonl.gz"
     assert metadata["materialized_output"]["record_count"] == 3
 
 
