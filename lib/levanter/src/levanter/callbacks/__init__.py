@@ -144,7 +144,11 @@ def profile_ctx(
     _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
     logger.info("Starting profiler.")
 
-    os.makedirs(path, exist_ok=True)
+    # Ensure destination exists
+    try:
+        os.makedirs(path, exist_ok=True)
+    except Exception:
+        pass
 
     if device_profile:
         jax.profiler.start_trace(path, create_perfetto_link=_create_perfetto_link, create_perfetto_trace=True)
