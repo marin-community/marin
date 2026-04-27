@@ -36,7 +36,7 @@ from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_d
 from marin.execution.executor import ExecutorStep, this_output_path
 from marin.transform.huggingface.raw_text import HfRawTextMaterializationConfig, materialize_hf_raw_text
 
-from experiments.bio_chem_notation import bio_chem_raw_validation_sets
+from experiments.bio_chem_notation import BIO_CHEM_SLICES, BioChemSlice, bio_chem_raw_validation_sets
 from experiments.defaults import default_raw_validation_sets
 from experiments.exp5056_raw_web_markup_ppl import (
     RAW_WEB_MARKUP_HF_SURFACES,
@@ -55,11 +55,12 @@ from experiments.evals.paired_robustness_ppl import (
     paired_robustness_slices,
 )
 from experiments.evals.synthetic_reasoning_ppl import synthetic_reasoning_raw_validation_sets
+from marin.datakit.download.bio_chem._runtime import bio_chem_slice_step
+from marin.datakit.download.bio_chem.refseq import REFSEQ_SLICES
 
 EXCLUDED_DATASET_KEYS = frozenset(
     {
         "agent_traces/openhands_swe_rebench",
-        "bio_chem/refseq/refseq_viral_gff",
         "bio_chem/rcsb/rcsb_mmcif",
     }
 )
@@ -112,6 +113,22 @@ def _paraphrase_only_validation_sets() -> dict[str, RawTextEvaluationDataset]:
     return paired_robustness_raw_validation_sets(slices=paraphrase_slices)
 
 
+def _mega_bio_chem_validation_sets() -> dict[str, RawTextEvaluationDataset]:
+    refseq_fasta_only_step = bio_chem_slice_step(
+        name="raw/bio_chem/refseq_viral_fasta_only",
+        slices=(REFSEQ_SLICES[0],),
+    )
+    mega_slices: tuple[BioChemSlice, ...] = (
+        BioChemSlice("refseq", "refseq_viral_fasta", refseq_fasta_only_step),
+        *tuple(
+            slice_
+            for slice_ in BIO_CHEM_SLICES
+            if slice_.slice_name not in {"refseq_viral_fasta", "refseq_viral_gff", "rcsb_mmcif"}
+        ),
+    )
+    return bio_chem_raw_validation_sets(slices=mega_slices)
+
+
 def mega_available_raw_validation_sets() -> dict[str, RawTextEvaluationDataset]:
     """Return the merged raw eval bundle for all currently runnable sources."""
     datasets: dict[str, RawTextEvaluationDataset] = {}
@@ -120,7 +137,7 @@ def mega_available_raw_validation_sets() -> dict[str, RawTextEvaluationDataset]:
         fineweb2_multilingual_raw_validation_sets(),
         _svg_only_raw_web_markup_validation_sets(),
         binary_network_security_raw_validation_sets(),
-        _without_excluded(bio_chem_raw_validation_sets()),
+        _mega_bio_chem_validation_sets(),
         exp5060_raw_validation_sets(),
         synthetic_reasoning_raw_validation_sets(),
         _paraphrase_only_validation_sets(),
