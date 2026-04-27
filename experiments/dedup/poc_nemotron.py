@@ -105,7 +105,7 @@ def fuzzy_dedup_steps() -> list[StepSpec]:
         q: normalize_step(
             name=f"normalized_nemotron/{q}",
             download=raw_data_step,
-            input_path=path,
+            relative_input_path=path,
         )
         for q, path in quality_paths.items()
     }

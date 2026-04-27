@@ -24,7 +24,7 @@ def build_steps() -> list[StepSpec]:
     normalized = normalize_step(
         name="normalized/fineweb-edu-sample-10bt",
         download=raw,
-        input_path=raw.output_path + "/sample/10BT",
+        relative_input_path=raw.output_path + "/sample/10BT",
     )
     minhash = StepSpec(
         name="minhash/fineweb-edu-sample-10bt",

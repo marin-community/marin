@@ -96,7 +96,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         download=download,
         text_field="text",
         id_field="id",
-        input_path=medium_input,
+        relative_input_path=medium_input,
         worker_resources=ResourceConfig(cpu=2, ram="16g", disk="5g"),
         max_workers=512,
         override_output_path=f"{base}/normalize",
