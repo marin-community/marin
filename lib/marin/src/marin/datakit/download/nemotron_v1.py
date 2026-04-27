@@ -158,5 +158,5 @@ def normalize_nemotron_v1_step(download: StepSpec, *, split: str) -> StepSpec:
         text_field="text",
         id_field="id",
         file_extensions=(".jsonl.zst",),
-        relative_input_path=f"{download.output_path}/{_NEMOTRON_V1_DATA_ROOT}/{rel_path}",
+        relative_input_path=f"{_NEMOTRON_V1_DATA_ROOT}/{rel_path}",
     )

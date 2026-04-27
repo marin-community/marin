@@ -87,8 +87,6 @@ def build_steps(run_id: str) -> list[StepSpec]:
         override_output_path=NEMOTRON_RAW_PATH,
     )
 
-    medium_input = f"{download.output_path}/{NEMOTRON_DATA_SUBDIR}/{NEMOTRON_MEDIUM_DIR}"
-
     # Sizes mirror validate_normalize_phase1.py, which ran successfully on
     # nemotron_v1 in eu-west4. 512 workers across all fan-out stages.
     normalized = normalize_step(
@@ -96,7 +94,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         download=download,
         text_field="text",
         id_field="id",
-        relative_input_path=medium_input,
+        relative_input_path=f"{NEMOTRON_DATA_SUBDIR}/{NEMOTRON_MEDIUM_DIR}",
         worker_resources=ResourceConfig(cpu=2, ram="16g", disk="5g"),
         max_workers=512,
         override_output_path=f"{base}/normalize",
