@@ -23,7 +23,7 @@ edition = "2023";
 
 package iris.logging;
 
-import "iris_time.proto";
+import "time.proto";
 
 option features.field_presence = EXPLICIT;
 

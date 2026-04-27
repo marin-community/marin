@@ -1,4 +1,4 @@
-from . import iris_time_pb2 as _iris_time_pb2
+from . import time_pb2 as _time_pb2
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
@@ -30,10 +30,10 @@ class LogEntry(_message.Message):
     ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
     LEVEL_FIELD_NUMBER: _ClassVar[int]
     KEY_FIELD_NUMBER: _ClassVar[int]
-    timestamp: _iris_time_pb2.Timestamp
+    timestamp: _time_pb2.Timestamp
     source: str
     data: str
     attempt_id: int
     level: LogLevel
     key: str
-    def __init__(self, timestamp: _Optional[_Union[_iris_time_pb2.Timestamp, _Mapping]] = ..., source: _Optional[str] = ..., data: _Optional[str] = ..., attempt_id: _Optional[int] = ..., level: _Optional[_Union[LogLevel, str]] = ..., key: _Optional[str] = ...) -> None: ...
+    def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., source: _Optional[str] = ..., data: _Optional[str] = ..., attempt_id: _Optional[int] = ..., level: _Optional[_Union[LogLevel, str]] = ..., key: _Optional[str] = ...) -> None: ...

@@ -22,10 +22,9 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
-from . import time_pb2 as time__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rlogging.proto\x12\x0f\x66inelog.logging\x1a\ntime.proto\"\xcf\x01\n\x08LogEntry\x12\x35\n\ttimestamp\x18\x01 \x01(\x0b\x32\x17.finelog.time.TimestampR\ttimestamp\x12\x16\n\x06source\x18\x02 \x01(\tR\x06source\x12\x12\n\x04\x64\x61ta\x18\x03 \x01(\tR\x04\x64\x61ta\x12\x1d\n\nattempt_id\x18\x04 \x01(\x05R\tattemptId\x12/\n\x05level\x18\x05 \x01(\x0e\x32\x19.finelog.logging.LogLevelR\x05level\x12\x10\n\x03key\x18\x06 \x01(\tR\x03key\"?\n\x08LogBatch\x12\x33\n\x07\x65ntries\x18\x01 \x03(\x0b\x32\x19.finelog.logging.LogEntryR\x07\x65ntries\"X\n\x0fPushLogsRequest\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x33\n\x07\x65ntries\x18\x02 \x03(\x0b\x32\x19.finelog.logging.LogEntryR\x07\x65ntries\"\x12\n\x10PushLogsResponse\"\xc9\x01\n\x10\x46\x65tchLogsRequest\x12\x16\n\x06source\x18\x01 \x01(\tR\x06source\x12\x19\n\x08since_ms\x18\x02 \x01(\x03R\x07sinceMs\x12\x16\n\x06\x63ursor\x18\x03 \x01(\x03R\x06\x63ursor\x12\x1c\n\tsubstring\x18\x04 \x01(\tR\tsubstring\x12\x1b\n\tmax_lines\x18\x05 \x01(\x05R\x08maxLines\x12\x12\n\x04tail\x18\x06 \x01(\x08R\x04tail\x12\x1b\n\tmin_level\x18\x07 \x01(\tR\x08minLevel\"`\n\x11\x46\x65tchLogsResponse\x12\x33\n\x07\x65ntries\x18\x01 \x03(\x0b\x32\x19.finelog.logging.LogEntryR\x07\x65ntries\x12\x16\n\x06\x63ursor\x18\x02 \x01(\x03R\x06\x63ursor*\x8e\x01\n\x08LogLevel\x12\x15\n\x11LOG_LEVEL_UNKNOWN\x10\x00\x12\x13\n\x0fLOG_LEVEL_DEBUG\x10\x01\x12\x12\n\x0eLOG_LEVEL_INFO\x10\x02\x12\x15\n\x11LOG_LEVEL_WARNING\x10\x03\x12\x13\n\x0fLOG_LEVEL_ERROR\x10\x04\x12\x16\n\x12LOG_LEVEL_CRITICAL\x10\x05\x32\xb1\x01\n\nLogService\x12O\n\x08PushLogs\x12 .finelog.logging.PushLogsRequest\x1a!.finelog.logging.PushLogsResponse\x12R\n\tFetchLogs\x12!.finelog.logging.FetchLogsRequest\x1a\".finelog.logging.FetchLogsResponseB\x80\x01\n\x13\x63om.finelog.loggingB\x0cLoggingProtoP\x01\xa2\x02\x03\x46LX\xaa\x02\x0f\x46inelog.Logging\xca\x02\x0f\x46inelog\\Logging\xe2\x02\x1b\x46inelog\\Logging\\GPBMetadata\xea\x02\x10\x46inelog::Loggingb\x08\x65\x64itionsp\xe8\x07')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rlogging.proto\x12\x0f\x66inelog.logging\"&\n\tTimestamp\x12\x19\n\x08\x65poch_ms\x18\x01 \x01(\x03R\x07\x65pochMs\"\xd2\x01\n\x08LogEntry\x12\x38\n\ttimestamp\x18\x01 \x01(\x0b\x32\x1a.finelog.logging.TimestampR\ttimestamp\x12\x16\n\x06source\x18\x02 \x01(\tR\x06source\x12\x12\n\x04\x64\x61ta\x18\x03 \x01(\tR\x04\x64\x61ta\x12\x1d\n\nattempt_id\x18\x04 \x01(\x05R\tattemptId\x12/\n\x05level\x18\x05 \x01(\x0e\x32\x19.finelog.logging.LogLevelR\x05level\x12\x10\n\x03key\x18\x06 \x01(\tR\x03key\"?\n\x08LogBatch\x12\x33\n\x07\x65ntries\x18\x01 \x03(\x0b\x32\x19.finelog.logging.LogEntryR\x07\x65ntries\"X\n\x0fPushLogsRequest\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x33\n\x07\x65ntries\x18\x02 \x03(\x0b\x32\x19.finelog.logging.LogEntryR\x07\x65ntries\"\x12\n\x10PushLogsResponse\"\xc9\x01\n\x10\x46\x65tchLogsRequest\x12\x16\n\x06source\x18\x01 \x01(\tR\x06source\x12\x19\n\x08since_ms\x18\x02 \x01(\x03R\x07sinceMs\x12\x16\n\x06\x63ursor\x18\x03 \x01(\x03R\x06\x63ursor\x12\x1c\n\tsubstring\x18\x04 \x01(\tR\tsubstring\x12\x1b\n\tmax_lines\x18\x05 \x01(\x05R\x08maxLines\x12\x12\n\x04tail\x18\x06 \x01(\x08R\x04tail\x12\x1b\n\tmin_level\x18\x07 \x01(\tR\x08minLevel\"`\n\x11\x46\x65tchLogsResponse\x12\x33\n\x07\x65ntries\x18\x01 \x03(\x0b\x32\x19.finelog.logging.LogEntryR\x07\x65ntries\x12\x16\n\x06\x63ursor\x18\x02 \x01(\x03R\x06\x63ursor*\x8e\x01\n\x08LogLevel\x12\x15\n\x11LOG_LEVEL_UNKNOWN\x10\x00\x12\x13\n\x0fLOG_LEVEL_DEBUG\x10\x01\x12\x12\n\x0eLOG_LEVEL_INFO\x10\x02\x12\x15\n\x11LOG_LEVEL_WARNING\x10\x03\x12\x13\n\x0fLOG_LEVEL_ERROR\x10\x04\x12\x16\n\x12LOG_LEVEL_CRITICAL\x10\x05\x32\xb1\x01\n\nLogService\x12O\n\x08PushLogs\x12 .finelog.logging.PushLogsRequest\x1a!.finelog.logging.PushLogsResponse\x12R\n\tFetchLogs\x12!.finelog.logging.FetchLogsRequest\x1a\".finelog.logging.FetchLogsResponseB\x80\x01\n\x13\x63om.finelog.loggingB\x0cLoggingProtoP\x01\xa2\x02\x03\x46LX\xaa\x02\x0f\x46inelog.Logging\xca\x02\x0f\x46inelog\\Logging\xe2\x02\x1b\x46inelog\\Logging\\GPBMetadata\xea\x02\x10\x46inelog::Loggingb\x08\x65\x64itionsp\xe8\x07')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,20 +32,22 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'logging_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\023com.finelog.loggingB\014LoggingProtoP\001\242\002\003FLX\252\002\017Finelog.Logging\312\002\017Finelog\\Logging\342\002\033Finelog\\Logging\\GPBMetadata\352\002\020Finelog::Logging'
-  _globals['_LOGLEVEL']._serialized_start=734
-  _globals['_LOGLEVEL']._serialized_end=876
-  _globals['_LOGENTRY']._serialized_start=47
-  _globals['_LOGENTRY']._serialized_end=254
-  _globals['_LOGBATCH']._serialized_start=256
-  _globals['_LOGBATCH']._serialized_end=319
-  _globals['_PUSHLOGSREQUEST']._serialized_start=321
-  _globals['_PUSHLOGSREQUEST']._serialized_end=409
-  _globals['_PUSHLOGSRESPONSE']._serialized_start=411
-  _globals['_PUSHLOGSRESPONSE']._serialized_end=429
-  _globals['_FETCHLOGSREQUEST']._serialized_start=432
-  _globals['_FETCHLOGSREQUEST']._serialized_end=633
-  _globals['_FETCHLOGSRESPONSE']._serialized_start=635
-  _globals['_FETCHLOGSRESPONSE']._serialized_end=731
-  _globals['_LOGSERVICE']._serialized_start=879
-  _globals['_LOGSERVICE']._serialized_end=1056
+  _globals['_LOGLEVEL']._serialized_start=765
+  _globals['_LOGLEVEL']._serialized_end=907
+  _globals['_TIMESTAMP']._serialized_start=34
+  _globals['_TIMESTAMP']._serialized_end=72
+  _globals['_LOGENTRY']._serialized_start=75
+  _globals['_LOGENTRY']._serialized_end=285
+  _globals['_LOGBATCH']._serialized_start=287
+  _globals['_LOGBATCH']._serialized_end=350
+  _globals['_PUSHLOGSREQUEST']._serialized_start=352
+  _globals['_PUSHLOGSREQUEST']._serialized_end=440
+  _globals['_PUSHLOGSRESPONSE']._serialized_start=442
+  _globals['_PUSHLOGSRESPONSE']._serialized_end=460
+  _globals['_FETCHLOGSREQUEST']._serialized_start=463
+  _globals['_FETCHLOGSREQUEST']._serialized_end=664
+  _globals['_FETCHLOGSRESPONSE']._serialized_start=666
+  _globals['_FETCHLOGSRESPONSE']._serialized_end=762
+  _globals['_LOGSERVICE']._serialized_start=910
+  _globals['_LOGSERVICE']._serialized_end=1087
 # @@protoc_insertion_point(module_scope)

@@ -16,7 +16,12 @@ edition = "2023";
 
 package finelog.logging;
 
-import "time.proto";
+// Timestamp representing milliseconds since Unix epoch. Inlined here (not a
+// separate time.proto) so the file basename does not collide with iris's
+// time.proto in the protobuf descriptor pool when both packages load.
+message Timestamp {
+  int64 epoch_ms = 1;
+}
 
 // Best-effort parsed log level for a log entry.
 enum LogLevel {
@@ -34,7 +39,7 @@ enum LogLevel {
 // Conventions like "/user/<job>/<task>:<attempt>" or "/system/worker/<id>"
 // are caller-defined.
 message LogEntry {
-  finelog.time.Timestamp timestamp = 1;
+  Timestamp timestamp = 1;
   string source = 2;      // Free-form: "stdout", "stderr", "build", "process", ...
   string data = 3;        // Log line content
   int32 attempt_id = 4;   // Caller-defined; finelog stores and echoes it back

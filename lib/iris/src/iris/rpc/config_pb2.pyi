@@ -1,5 +1,5 @@
 from . import job_pb2 as _job_pb2
-from . import iris_time_pb2 as _iris_time_pb2
+from . import time_pb2 as _time_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
@@ -329,13 +329,13 @@ class WorkerConfig(_message.Message):
     gpu_count: int
     capacity_type: CapacityType
     worker_attributes: _containers.ScalarMap[str, str]
-    poll_interval: _iris_time_pb2.Duration
-    heartbeat_timeout: _iris_time_pb2.Duration
+    poll_interval: _time_pb2.Duration
+    heartbeat_timeout: _time_pb2.Duration
     slice_id: str
     platform: PlatformConfig
     storage_prefix: str
     auth_token: str
-    def __init__(self, docker_image: _Optional[str] = ..., host: _Optional[str] = ..., port: _Optional[int] = ..., port_range: _Optional[str] = ..., worker_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., cache_dir: _Optional[str] = ..., default_task_image: _Optional[str] = ..., task_env: _Optional[_Mapping[str, str]] = ..., runtime: _Optional[str] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., gpu_count: _Optional[int] = ..., capacity_type: _Optional[_Union[CapacityType, str]] = ..., worker_attributes: _Optional[_Mapping[str, str]] = ..., poll_interval: _Optional[_Union[_iris_time_pb2.Duration, _Mapping]] = ..., heartbeat_timeout: _Optional[_Union[_iris_time_pb2.Duration, _Mapping]] = ..., slice_id: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., storage_prefix: _Optional[str] = ..., auth_token: _Optional[str] = ...) -> None: ...
+    def __init__(self, docker_image: _Optional[str] = ..., host: _Optional[str] = ..., port: _Optional[int] = ..., port_range: _Optional[str] = ..., worker_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., cache_dir: _Optional[str] = ..., default_task_image: _Optional[str] = ..., task_env: _Optional[_Mapping[str, str]] = ..., runtime: _Optional[str] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., gpu_count: _Optional[int] = ..., capacity_type: _Optional[_Union[CapacityType, str]] = ..., worker_attributes: _Optional[_Mapping[str, str]] = ..., poll_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., slice_id: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., storage_prefix: _Optional[str] = ..., auth_token: _Optional[str] = ...) -> None: ...
 
 class SshConfig(_message.Message):
     __slots__ = ("user", "key_file", "port", "connect_timeout", "auth_mode", "os_login_user", "impersonate_service_account")
@@ -355,11 +355,11 @@ class SshConfig(_message.Message):
     user: str
     key_file: str
     port: int
-    connect_timeout: _iris_time_pb2.Duration
+    connect_timeout: _time_pb2.Duration
     auth_mode: SshConfig.AuthMode
     os_login_user: str
     impersonate_service_account: str
-    def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., port: _Optional[int] = ..., connect_timeout: _Optional[_Union[_iris_time_pb2.Duration, _Mapping]] = ..., auth_mode: _Optional[_Union[SshConfig.AuthMode, str]] = ..., os_login_user: _Optional[str] = ..., impersonate_service_account: _Optional[str] = ...) -> None: ...
+    def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., port: _Optional[int] = ..., connect_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., auth_mode: _Optional[_Union[SshConfig.AuthMode, str]] = ..., os_login_user: _Optional[str] = ..., impersonate_service_account: _Optional[str] = ...) -> None: ...
 
 class StorageConfig(_message.Message):
     __slots__ = ("local_state_dir", "remote_state_dir")
@@ -416,12 +416,12 @@ class ControllerVmConfig(_message.Message):
     LOCAL_FIELD_NUMBER: _ClassVar[int]
     COREWEAVE_FIELD_NUMBER: _ClassVar[int]
     image: str
-    worker_timeout: _iris_time_pb2.Duration
+    worker_timeout: _time_pb2.Duration
     gcp: GcpControllerConfig
     manual: ManualControllerConfig
     local: LocalControllerConfig
     coreweave: CoreweaveControllerConfig
-    def __init__(self, image: _Optional[str] = ..., worker_timeout: _Optional[_Union[_iris_time_pb2.Duration, _Mapping]] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ..., local: _Optional[_Union[LocalControllerConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweaveControllerConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, image: _Optional[str] = ..., worker_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ..., local: _Optional[_Union[LocalControllerConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweaveControllerConfig, _Mapping]] = ...) -> None: ...
 
 class AutoscalerConfig(_message.Message):
     __slots__ = ("evaluation_interval", "scale_up_delay", "scale_down_delay", "startup_grace_period", "heartbeat_grace_period")
@@ -430,12 +430,12 @@ class AutoscalerConfig(_message.Message):
     SCALE_DOWN_DELAY_FIELD_NUMBER: _ClassVar[int]
     STARTUP_GRACE_PERIOD_FIELD_NUMBER: _ClassVar[int]
     HEARTBEAT_GRACE_PERIOD_FIELD_NUMBER: _ClassVar[int]
-    evaluation_interval: _iris_time_pb2.Duration
-    scale_up_delay: _iris_time_pb2.Duration
-    scale_down_delay: _iris_time_pb2.Duration
-    startup_grace_period: _iris_time_pb2.Duration
-    heartbeat_grace_period: _iris_time_pb2.Duration
-    def __init__(self, evaluation_interval: _Optional[_Union[_iris_time_pb2.Duration, _Mapping]] = ..., scale_up_delay: _Optional[_Union[_iris_time_pb2.Duration, _Mapping]] = ..., scale_down_delay: _Optional[_Union[_iris_time_pb2.Duration, _Mapping]] = ..., startup_grace_period: _Optional[_Union[_iris_time_pb2.Duration, _Mapping]] = ..., heartbeat_grace_period: _Optional[_Union[_iris_time_pb2.Duration, _Mapping]] = ...) -> None: ...
+    evaluation_interval: _time_pb2.Duration
+    scale_up_delay: _time_pb2.Duration
+    scale_down_delay: _time_pb2.Duration
+    startup_grace_period: _time_pb2.Duration
+    heartbeat_grace_period: _time_pb2.Duration
+    def __init__(self, evaluation_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_up_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_down_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., startup_grace_period: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_grace_period: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class DefaultsConfig(_message.Message):
     __slots__ = ("ssh", "autoscaler", "worker", "task_env")

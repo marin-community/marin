@@ -37,7 +37,7 @@ class LogLine(BaseModel):
             source=self.source,
             data=self.data,
         )
-        # finelog.logging.LogEntry uses finelog.time.Timestamp; assign directly.
+        # finelog.logging.LogEntry uses finelog.logging.Timestamp; assign directly.
         proto.timestamp.epoch_ms = Timestamp.from_seconds(self.timestamp.timestamp()).epoch_ms()
         return proto
 

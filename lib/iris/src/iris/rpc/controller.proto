@@ -24,7 +24,7 @@ package iris.cluster;
 import "job.proto";
 import "iris_logging.proto";
 import "query.proto";
-import "iris_time.proto";
+import "time.proto";
 import "vm.proto";
 
 // ============================================================================

@@ -1,4 +1,4 @@
-from . import iris_time_pb2 as _iris_time_pb2
+from . import time_pb2 as _time_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
@@ -34,8 +34,8 @@ class RpcMethodStats(_message.Message):
     p99_ms: float
     bucket_upper_bounds_ms: _containers.RepeatedScalarFieldContainer[int]
     bucket_counts: _containers.RepeatedScalarFieldContainer[int]
-    last_call: _iris_time_pb2.Timestamp
-    def __init__(self, method: _Optional[str] = ..., count: _Optional[int] = ..., error_count: _Optional[int] = ..., total_duration_ms: _Optional[float] = ..., max_duration_ms: _Optional[float] = ..., p50_ms: _Optional[float] = ..., p95_ms: _Optional[float] = ..., p99_ms: _Optional[float] = ..., bucket_upper_bounds_ms: _Optional[_Iterable[int]] = ..., bucket_counts: _Optional[_Iterable[int]] = ..., last_call: _Optional[_Union[_iris_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    last_call: _time_pb2.Timestamp
+    def __init__(self, method: _Optional[str] = ..., count: _Optional[int] = ..., error_count: _Optional[int] = ..., total_duration_ms: _Optional[float] = ..., max_duration_ms: _Optional[float] = ..., p50_ms: _Optional[float] = ..., p95_ms: _Optional[float] = ..., p99_ms: _Optional[float] = ..., bucket_upper_bounds_ms: _Optional[_Iterable[int]] = ..., bucket_counts: _Optional[_Iterable[int]] = ..., last_call: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class RpcCallSample(_message.Message):
     __slots__ = ("method", "timestamp", "duration_ms", "peer", "user_agent", "caller", "error_code", "error_message", "request_preview")
@@ -49,7 +49,7 @@ class RpcCallSample(_message.Message):
     ERROR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
     REQUEST_PREVIEW_FIELD_NUMBER: _ClassVar[int]
     method: str
-    timestamp: _iris_time_pb2.Timestamp
+    timestamp: _time_pb2.Timestamp
     duration_ms: float
     peer: str
     user_agent: str
@@ -57,7 +57,7 @@ class RpcCallSample(_message.Message):
     error_code: str
     error_message: str
     request_preview: str
-    def __init__(self, method: _Optional[str] = ..., timestamp: _Optional[_Union[_iris_time_pb2.Timestamp, _Mapping]] = ..., duration_ms: _Optional[float] = ..., peer: _Optional[str] = ..., user_agent: _Optional[str] = ..., caller: _Optional[str] = ..., error_code: _Optional[str] = ..., error_message: _Optional[str] = ..., request_preview: _Optional[str] = ...) -> None: ...
+    def __init__(self, method: _Optional[str] = ..., timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., duration_ms: _Optional[float] = ..., peer: _Optional[str] = ..., user_agent: _Optional[str] = ..., caller: _Optional[str] = ..., error_code: _Optional[str] = ..., error_message: _Optional[str] = ..., request_preview: _Optional[str] = ...) -> None: ...
 
 class GetRpcStatsResponse(_message.Message):
     __slots__ = ("methods", "slow_samples", "discovery_samples", "collector_started_at")
@@ -68,5 +68,5 @@ class GetRpcStatsResponse(_message.Message):
     methods: _containers.RepeatedCompositeFieldContainer[RpcMethodStats]
     slow_samples: _containers.RepeatedCompositeFieldContainer[RpcCallSample]
     discovery_samples: _containers.RepeatedCompositeFieldContainer[RpcCallSample]
-    collector_started_at: _iris_time_pb2.Timestamp
-    def __init__(self, methods: _Optional[_Iterable[_Union[RpcMethodStats, _Mapping]]] = ..., slow_samples: _Optional[_Iterable[_Union[RpcCallSample, _Mapping]]] = ..., discovery_samples: _Optional[_Iterable[_Union[RpcCallSample, _Mapping]]] = ..., collector_started_at: _Optional[_Union[_iris_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    collector_started_at: _time_pb2.Timestamp
+    def __init__(self, methods: _Optional[_Iterable[_Union[RpcMethodStats, _Mapping]]] = ..., slow_samples: _Optional[_Iterable[_Union[RpcCallSample, _Mapping]]] = ..., discovery_samples: _Optional[_Iterable[_Union[RpcCallSample, _Mapping]]] = ..., collector_started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...

@@ -17,7 +17,7 @@ edition = "2023";
 package iris.config;
 
 import "job.proto";
-import "iris_time.proto";
+import "time.proto";
 
 // Enable explicit presence tracking for all fields to support HasField on scalars
 option features.field_presence = EXPLICIT;

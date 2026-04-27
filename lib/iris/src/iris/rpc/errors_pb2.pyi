@@ -1,4 +1,4 @@
-from . import iris_time_pb2 as _iris_time_pb2
+from . import time_pb2 as _time_pb2
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
 from collections.abc import Mapping as _Mapping
@@ -15,5 +15,5 @@ class ErrorDetails(_message.Message):
     exception_type: str
     message: str
     traceback: str
-    timestamp: _iris_time_pb2.Timestamp
-    def __init__(self, exception_type: _Optional[str] = ..., message: _Optional[str] = ..., traceback: _Optional[str] = ..., timestamp: _Optional[_Union[_iris_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    timestamp: _time_pb2.Timestamp
+    def __init__(self, exception_type: _Optional[str] = ..., message: _Optional[str] = ..., traceback: _Optional[str] = ..., timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...

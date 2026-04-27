@@ -22,10 +22,10 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
-from . import iris_time_pb2 as iris__time__pb2
+from . import time_pb2 as time__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0bstats.proto\x12\niris.stats\x1a\x0firis_time.proto\"\x14\n\x12GetRpcStatsRequest\"\x85\x03\n\x0eRpcMethodStats\x12\x16\n\x06method\x18\x01 \x01(\tR\x06method\x12\x14\n\x05\x63ount\x18\x02 \x01(\x03R\x05\x63ount\x12\x1f\n\x0b\x65rror_count\x18\x03 \x01(\x03R\nerrorCount\x12*\n\x11total_duration_ms\x18\x04 \x01(\x01R\x0ftotalDurationMs\x12&\n\x0fmax_duration_ms\x18\x05 \x01(\x01R\rmaxDurationMs\x12\x15\n\x06p50_ms\x18\x06 \x01(\x01R\x05p50Ms\x12\x15\n\x06p95_ms\x18\x07 \x01(\x01R\x05p95Ms\x12\x15\n\x06p99_ms\x18\x08 \x01(\x01R\x05p99Ms\x12\x33\n\x16\x62ucket_upper_bounds_ms\x18\t \x03(\x03R\x13\x62ucketUpperBoundsMs\x12#\n\rbucket_counts\x18\n \x03(\x03R\x0c\x62ucketCounts\x12\x31\n\tlast_call\x18\x0b \x01(\x0b\x32\x14.iris.time.TimestampR\x08lastCall\"\xb4\x02\n\rRpcCallSample\x12\x16\n\x06method\x18\x01 \x01(\tR\x06method\x12\x32\n\ttimestamp\x18\x02 \x01(\x0b\x32\x14.iris.time.TimestampR\ttimestamp\x12\x1f\n\x0b\x64uration_ms\x18\x03 \x01(\x01R\ndurationMs\x12\x12\n\x04peer\x18\x04 \x01(\tR\x04peer\x12\x1d\n\nuser_agent\x18\x05 \x01(\tR\tuserAgent\x12\x16\n\x06\x63\x61ller\x18\x06 \x01(\tR\x06\x63\x61ller\x12\x1d\n\nerror_code\x18\x07 \x01(\tR\terrorCode\x12#\n\rerror_message\x18\x08 \x01(\tR\x0c\x65rrorMessage\x12\'\n\x0frequest_preview\x18\t \x01(\tR\x0erequestPreview\"\x99\x02\n\x13GetRpcStatsResponse\x12\x34\n\x07methods\x18\x01 \x03(\x0b\x32\x1a.iris.stats.RpcMethodStatsR\x07methods\x12<\n\x0cslow_samples\x18\x02 \x03(\x0b\x32\x19.iris.stats.RpcCallSampleR\x0bslowSamples\x12\x46\n\x11\x64iscovery_samples\x18\x03 \x03(\x0b\x32\x19.iris.stats.RpcCallSampleR\x10\x64iscoverySamples\x12\x46\n\x14\x63ollector_started_at\x18\x04 \x01(\x0b\x32\x14.iris.time.TimestampR\x12\x63ollectorStartedAt2^\n\x0cStatsService\x12N\n\x0bGetRpcStats\x12\x1e.iris.stats.GetRpcStatsRequest\x1a\x1f.iris.stats.GetRpcStatsResponseBe\n\x0e\x63om.iris.statsB\nStatsProtoP\x01\xa2\x02\x03ISX\xaa\x02\nIris.Stats\xca\x02\nIris\\Stats\xe2\x02\x16Iris\\Stats\\GPBMetadata\xea\x02\x0bIris::Statsb\x08\x65\x64itionsp\xe8\x07')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0bstats.proto\x12\niris.stats\x1a\ntime.proto\"\x14\n\x12GetRpcStatsRequest\"\x85\x03\n\x0eRpcMethodStats\x12\x16\n\x06method\x18\x01 \x01(\tR\x06method\x12\x14\n\x05\x63ount\x18\x02 \x01(\x03R\x05\x63ount\x12\x1f\n\x0b\x65rror_count\x18\x03 \x01(\x03R\nerrorCount\x12*\n\x11total_duration_ms\x18\x04 \x01(\x01R\x0ftotalDurationMs\x12&\n\x0fmax_duration_ms\x18\x05 \x01(\x01R\rmaxDurationMs\x12\x15\n\x06p50_ms\x18\x06 \x01(\x01R\x05p50Ms\x12\x15\n\x06p95_ms\x18\x07 \x01(\x01R\x05p95Ms\x12\x15\n\x06p99_ms\x18\x08 \x01(\x01R\x05p99Ms\x12\x33\n\x16\x62ucket_upper_bounds_ms\x18\t \x03(\x03R\x13\x62ucketUpperBoundsMs\x12#\n\rbucket_counts\x18\n \x03(\x03R\x0c\x62ucketCounts\x12\x31\n\tlast_call\x18\x0b \x01(\x0b\x32\x14.iris.time.TimestampR\x08lastCall\"\xb4\x02\n\rRpcCallSample\x12\x16\n\x06method\x18\x01 \x01(\tR\x06method\x12\x32\n\ttimestamp\x18\x02 \x01(\x0b\x32\x14.iris.time.TimestampR\ttimestamp\x12\x1f\n\x0b\x64uration_ms\x18\x03 \x01(\x01R\ndurationMs\x12\x12\n\x04peer\x18\x04 \x01(\tR\x04peer\x12\x1d\n\nuser_agent\x18\x05 \x01(\tR\tuserAgent\x12\x16\n\x06\x63\x61ller\x18\x06 \x01(\tR\x06\x63\x61ller\x12\x1d\n\nerror_code\x18\x07 \x01(\tR\terrorCode\x12#\n\rerror_message\x18\x08 \x01(\tR\x0c\x65rrorMessage\x12\'\n\x0frequest_preview\x18\t \x01(\tR\x0erequestPreview\"\x99\x02\n\x13GetRpcStatsResponse\x12\x34\n\x07methods\x18\x01 \x03(\x0b\x32\x1a.iris.stats.RpcMethodStatsR\x07methods\x12<\n\x0cslow_samples\x18\x02 \x03(\x0b\x32\x19.iris.stats.RpcCallSampleR\x0bslowSamples\x12\x46\n\x11\x64iscovery_samples\x18\x03 \x03(\x0b\x32\x19.iris.stats.RpcCallSampleR\x10\x64iscoverySamples\x12\x46\n\x14\x63ollector_started_at\x18\x04 \x01(\x0b\x32\x14.iris.time.TimestampR\x12\x63ollectorStartedAt2^\n\x0cStatsService\x12N\n\x0bGetRpcStats\x12\x1e.iris.stats.GetRpcStatsRequest\x1a\x1f.iris.stats.GetRpcStatsResponseBe\n\x0e\x63om.iris.statsB\nStatsProtoP\x01\xa2\x02\x03ISX\xaa\x02\nIris.Stats\xca\x02\nIris\\Stats\xe2\x02\x16Iris\\Stats\\GPBMetadata\xea\x02\x0bIris::Statsb\x08\x65\x64itionsp\xe8\x07')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,14 +33,14 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'stats_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\016com.iris.statsB\nStatsProtoP\001\242\002\003ISX\252\002\nIris.Stats\312\002\nIris\\Stats\342\002\026Iris\\Stats\\GPBMetadata\352\002\013Iris::Stats'
-  _globals['_GETRPCSTATSREQUEST']._serialized_start=44
-  _globals['_GETRPCSTATSREQUEST']._serialized_end=64
-  _globals['_RPCMETHODSTATS']._serialized_start=67
-  _globals['_RPCMETHODSTATS']._serialized_end=456
-  _globals['_RPCCALLSAMPLE']._serialized_start=459
-  _globals['_RPCCALLSAMPLE']._serialized_end=767
-  _globals['_GETRPCSTATSRESPONSE']._serialized_start=770
-  _globals['_GETRPCSTATSRESPONSE']._serialized_end=1051
-  _globals['_STATSSERVICE']._serialized_start=1053
-  _globals['_STATSSERVICE']._serialized_end=1147
+  _globals['_GETRPCSTATSREQUEST']._serialized_start=39
+  _globals['_GETRPCSTATSREQUEST']._serialized_end=59
+  _globals['_RPCMETHODSTATS']._serialized_start=62
+  _globals['_RPCMETHODSTATS']._serialized_end=451
+  _globals['_RPCCALLSAMPLE']._serialized_start=454
+  _globals['_RPCCALLSAMPLE']._serialized_end=762
+  _globals['_GETRPCSTATSRESPONSE']._serialized_start=765
+  _globals['_GETRPCSTATSRESPONSE']._serialized_end=1046
+  _globals['_STATSSERVICE']._serialized_start=1048
+  _globals['_STATSSERVICE']._serialized_end=1142
 # @@protoc_insertion_point(module_scope)

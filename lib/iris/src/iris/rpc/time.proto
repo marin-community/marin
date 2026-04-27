@@ -14,15 +14,34 @@
 
 edition = "2023";
 
-package finelog.time;
+package iris.time;
 
 // Timestamp representing milliseconds since Unix epoch.
 // Provides type safety and prevents mixing with other int64 fields.
+//
+// Use this instead of raw int64 for all timestamp fields to ensure:
+// - Consistent units (always milliseconds)
+// - Type safety (cannot accidentally use as duration or other int64)
+// - Clear semantics in protocol definitions
+//
+// Example usage in other protos:
+//   import "time.proto";
+//   message TaskStatus {
+//     iris.time.Timestamp started_at = 1;
+//     iris.time.Timestamp finished_at = 2;
+//   }
 message Timestamp {
   int64 epoch_ms = 1;
 }
 
 // Duration representing a time interval in milliseconds.
+// Separate from Timestamp to distinguish points in time from intervals.
+//
+// Example usage:
+//   message Config {
+//     iris.time.Duration timeout = 1;
+//     iris.time.Duration retry_interval = 2;
+//   }
 message Duration {
   int64 milliseconds = 1;
 }
