@@ -386,3 +386,31 @@
   d1280 is now past the 9k eval and should finish after the remaining long
   tail of training and final eval/checkpoint.
 - Next action: continue monitoring d1280 until terminal state.
+
+### 2026-04-27 04:42 - MOE-AGGN-001 final gate-2 result
+
+- Result: d1280 and the gate-2 parent finished successfully on Iris.
+- Metrics:
+  - d1280 W&B:
+    https://wandb.ai/understanding-sam/marin_moe/runs/moe-adamh-global-grad-norm-d1280-2p83e19
+  - d1280 Iris child:
+    `/kaiyue/iris-run-job-20260426-051330/grug-train-moe-adamh-global-grad-norm-d1280-2p83e19`
+  - d1280 global_step: `11806`
+  - d1280 eval/paloma/macro_loss: `3.0103940963745117`
+  - d1280 throughput/tokens_per_second: `128145.97386012795`
+  - d1280 throughput/total_tokens: `12380536832`
+  - d1280 effective speedup vs README baseline: `0.970053895309745`
+- Gate-2 effective speedups:
+  - d512: `1.0143777998139154`
+  - d768: `1.043646604830193`
+  - d1024: `0.9687810633605517`
+  - d1280: `0.970053895309745`
+- Four-point scaling-law fit with `L_inf=1.6`:
+  - fit: `loss(C) = 1.6 + 87.61568636886787 * C^-0.09219276663884278`
+  - projection at `1e21`: `2.6151582960317317` vs baseline `2.606`
+  - projection at `1e23`: `2.263969660031245` vs baseline `2.252`
+- Interpretation: the variant fails gate 2. It misses the required
+  effective-speedup threshold at both large scales and projects slightly worse
+  than the baseline at both requested budgets.
+- Next action: post the final issue update and close the experiment issue as a
+  negative result.
