@@ -540,6 +540,57 @@ def _is_gcs_protocol(protocol: str) -> bool:
     return protocol in ("gs", "gcs")
 
 
+def _bucket_from_gcs_url(url: str) -> str | None:
+    """Return the bucket name from a ``gs://``/``gcs://`` URL, or ``None``."""
+    for scheme in ("gs://", "gcs://"):
+        if url.startswith(scheme):
+            return url[len(scheme) :].split("/", 1)[0]
+    return None
+
+
+def _is_cross_region_url(url: str) -> bool:
+    """Return True if *url* points to a GCS bucket in a different region than the VM."""
+    if os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
+        return False
+    bucket = _bucket_from_gcs_url(url)
+    if bucket is None:
+        return False
+    vm_region = _cached_marin_region()
+    if vm_region is None:
+        return False
+    bucket_location = _cached_bucket_location(bucket)
+    if bucket_location is None:
+        return False
+    return not _regions_match(vm_region, bucket_location)
+
+
+def record_transfer(size: int, url: str, *, budget: TransferBudget | None = None) -> None:
+    """Charge *size* bytes against the cross-region transfer budget.
+
+    Always safe to call: no-op for non-GCS URLs, same-region buckets, when the
+    VM region is unknown, or when the override env var is set.  Raises
+    :class:`TransferBudgetExceeded` if the recorded transfer would push the
+    cumulative total past the budget.
+
+    Used by callers (e.g. tensorstore-based code) that bypass fsspec but still
+    want to charge against the shared cross-region transfer budget.
+
+    Args:
+        size: Number of bytes to charge.
+        url: GCS URL (``gs://bucket/key``) being read or written.  Used both
+            to decide whether the transfer is cross-region and as the path
+            string in any raised :class:`TransferBudgetExceeded`.
+        budget: Budget to charge against.  Defaults to the process-global
+            singleton shared with :class:`CrossRegionGuardedFS` and
+            :class:`MirrorFileSystem`.
+    """
+    if size <= 0:
+        return
+    if not _is_cross_region_url(url):
+        return
+    (budget if budget is not None else _global_transfer_budget).record(size, url)
+
+
 class CrossRegionGuardedFS:
     """Wrapper around a GCS fsspec filesystem that enforces a cross-region transfer budget.
 
