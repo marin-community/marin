@@ -19,6 +19,7 @@ def _event(
     event_id: str,
     before_sha: str = "a" * 40,
     after_sha: str = "b" * 40,
+    html_url: str = "https://api.github.com/repos/marin-community/marin/issues/comments/112233445566",
 ) -> dict:
     return {
         "id": event_id,
@@ -32,7 +33,7 @@ def _event(
             "head": "c" * 40,
             "comment": {
                 "id": 112233445566,
-                "html_url": "https://api.github.com/repos/marin-community/marin/issues/comments/112233445566",
+                "html_url": html_url,
             },
         },
     }
@@ -68,7 +69,11 @@ def test_download_gh_archive_events_filters_masks_and_serializes(tmp_path: Path)
         ],
         f"{base_url}/2024-02-01-1.json.gz": [
             _event(event_type="IssuesEvent", event_id="1234567890126"),
-            _event(event_type="IssueCommentEvent", event_id="1234567890127"),
+            _event(
+                event_type="IssueCommentEvent",
+                event_id="1234567890127",
+                html_url="https://example.com/[maintainer=@hsjobeki]",
+            ),
             _event(event_type="WorkflowRunEvent", event_id="1234567890128"),
         ],
     }
@@ -98,6 +103,11 @@ def test_download_gh_archive_events_filters_masks_and_serializes(tmp_path: Path)
     assert push_payload["repo"]["id"] == "<INT_10>"
     assert push_payload["created_at"] == "<DATE:2024-02-01>"
     assert push_text == json.dumps(push_payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+    comment_rows = _read_jsonl_gz(tmp_path / "gh_archive_eval" / "IssueCommentEvent" / "part-00000.jsonl.gz")
+    assert len(comment_rows) == 1
+    comment_payload = json.loads(comment_rows[0]["text"])
+    assert comment_payload["payload"]["comment"]["html_url"] == "https://example.com/[maintainer=@hsjobeki]"
 
     assert not (tmp_path / "gh_archive_eval" / "WatchEvent").exists()
 
