@@ -537,7 +537,7 @@ class EndpointSpec(_message.Message):
     def __init__(self, uri: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class IrisClusterConfig(_message.Message):
-    __slots__ = ("name", "platform", "defaults", "storage", "controller", "scale_groups", "auth", "kubernetes_provider", "worker_provider", "user_budgets", "endpoints")
+    __slots__ = ("name", "platform", "defaults", "storage", "controller", "scale_groups", "auth", "kubernetes_provider", "worker_provider", "user_budgets", "endpoints", "log_server_config")
     class ScaleGroupsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -563,6 +563,7 @@ class IrisClusterConfig(_message.Message):
     WORKER_PROVIDER_FIELD_NUMBER: _ClassVar[int]
     USER_BUDGETS_FIELD_NUMBER: _ClassVar[int]
     ENDPOINTS_FIELD_NUMBER: _ClassVar[int]
+    LOG_SERVER_CONFIG_FIELD_NUMBER: _ClassVar[int]
     name: str
     platform: PlatformConfig
     defaults: DefaultsConfig
@@ -574,4 +575,5 @@ class IrisClusterConfig(_message.Message):
     worker_provider: WorkerProviderConfig
     user_budgets: _containers.RepeatedCompositeFieldContainer[UserBudgetTier]
     endpoints: _containers.MessageMap[str, EndpointSpec]
-    def __init__(self, name: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., defaults: _Optional[_Union[DefaultsConfig, _Mapping]] = ..., storage: _Optional[_Union[StorageConfig, _Mapping]] = ..., controller: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ..., auth: _Optional[_Union[AuthConfig, _Mapping]] = ..., kubernetes_provider: _Optional[_Union[KubernetesProviderConfig, _Mapping]] = ..., worker_provider: _Optional[_Union[WorkerProviderConfig, _Mapping]] = ..., user_budgets: _Optional[_Iterable[_Union[UserBudgetTier, _Mapping]]] = ..., endpoints: _Optional[_Mapping[str, EndpointSpec]] = ...) -> None: ...
+    log_server_config: str
+    def __init__(self, name: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., defaults: _Optional[_Union[DefaultsConfig, _Mapping]] = ..., storage: _Optional[_Union[StorageConfig, _Mapping]] = ..., controller: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ..., auth: _Optional[_Union[AuthConfig, _Mapping]] = ..., kubernetes_provider: _Optional[_Union[KubernetesProviderConfig, _Mapping]] = ..., worker_provider: _Optional[_Union[WorkerProviderConfig, _Mapping]] = ..., user_budgets: _Optional[_Iterable[_Union[UserBudgetTier, _Mapping]]] = ..., endpoints: _Optional[_Mapping[str, EndpointSpec]] = ..., log_server_config: _Optional[str] = ...) -> None: ...

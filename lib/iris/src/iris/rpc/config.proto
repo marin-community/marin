@@ -522,4 +522,10 @@ message IrisClusterConfig {
   // Cluster endpoints (logical name -> EndpointSpec). When /system/log-server
   // is omitted, the Controller hosts a bundled in-process MemStore log server.
   map<string, EndpointSpec> endpoints = 90;
+
+  // Name of a finelog config (looked up via the finelog config search path).
+  // When set, iris auto-derives /system/log-server from it and the iris CLI
+  // can manage the deployment via `iris cluster log-server` subcommands.
+  // Mutually exclusive with endpoints[/system/log-server].
+  string log_server_config = 20;
 }

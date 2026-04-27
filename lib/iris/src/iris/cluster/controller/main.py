@@ -19,6 +19,7 @@ from pathlib import Path
 
 
 import click
+from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
 
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
@@ -50,6 +51,16 @@ def _resolve_cluster_endpoints(cluster_config: config_pb2.IrisClusterConfig) -> 
     resolved: dict[str, str] = {}
     for name, spec in cluster_config.endpoints.items():
         resolved[name] = resolve_endpoint_uri(spec.uri, dict(spec.metadata))
+
+    if cluster_config.log_server_config:
+        if LOG_SERVER_ENDPOINT_NAME in cluster_config.endpoints:
+            raise ValueError(
+                f"cannot set both log_server_config={cluster_config.log_server_config!r} "
+                f"and endpoints[{LOG_SERVER_ENDPOINT_NAME}] in the same cluster config"
+            )
+        fcfg = load_finelog_config(cluster_config.log_server_config)
+        uri, meta = derive_endpoint_uri(fcfg)
+        resolved[LOG_SERVER_ENDPOINT_NAME] = resolve_endpoint_uri(uri, meta)
     return resolved
 
 
