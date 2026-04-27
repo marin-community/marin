@@ -5,7 +5,7 @@
 
 ``tabular.py`` handles raw CSV/TSV files where the ingestion contract is
 "never reparse the bytes the source wrote". HF-hosted table datasets like
-ToTTo and WikiTableQuestions arrive as pre-parsed Parquet with nested
+ToTTo, WikiTableQuestions, and GitTables arrive as pre-parsed Parquet with nested
 structure (lists of cells, metadata fields). For those datasets the
 byte-preservation concern collapses to one rule: **every cell value that
 was a string in the source must survive into the emitted text verbatim**.
@@ -200,7 +200,57 @@ def serialize_wikitablequestions_example(example: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+def serialize_gittables_example(example: dict[str, Any]) -> str:
+    """Serialize a GitTables example into a PPL document.
+
+    The public Hugging Face mirror exposes each record as a relational table
+    plus lightweight provenance. We keep the table cells verbatim in TSV form
+    and prepend a small metadata header with the original CSV URL, license, and
+    shape so the resulting text retains the path/URL/schema surfaces that make
+    GitTables interesting for gap analysis.
+    """
+
+    metadata_lines: list[str] = []
+    database_id = _format_cell(example.get("database_id", ""))
+    table_id = _format_cell(example.get("table_id", ""))
+    if database_id:
+        metadata_lines.append(f"database_id: {database_id}")
+    if table_id:
+        metadata_lines.append(f"table_id: {table_id}")
+
+    context = example.get("context") or {}
+    if isinstance(context, dict):
+        csv_url = _format_cell(context.get("csv_url", ""))
+        license_value = _format_cell(context.get("license", ""))
+        number_rows = _format_cell(context.get("number_rows", ""))
+        number_columns = _format_cell(context.get("number_columns", ""))
+        if csv_url:
+            metadata_lines.append(f"csv_url: {csv_url}")
+        if license_value:
+            metadata_lines.append(f"license: {license_value}")
+        if number_rows:
+            metadata_lines.append(f"rows: {number_rows}")
+        if number_columns:
+            metadata_lines.append(f"columns: {number_columns}")
+
+    table_rows = example.get("table") or []
+    serialized_rows: list[str] = []
+    for row in table_rows:
+        row_values = row.values() if isinstance(row, dict) else row
+        serialized_rows.append(TABLE_CELL_DELIMITER.join(_format_cell(cell) for cell in row_values))
+    table_block = TABLE_ROW_DELIMITER.join(serialized_rows)
+
+    parts: list[str] = []
+    if metadata_lines:
+        parts.append("\n".join(metadata_lines))
+    if table_block:
+        parts.append(table_block)
+
+    return "\n\n".join(parts)
+
+
 SERIALIZERS: dict[str, Any] = {
+    "gittables": serialize_gittables_example,
     "totto": serialize_totto_example,
     "wikitablequestions": serialize_wikitablequestions_example,
 }

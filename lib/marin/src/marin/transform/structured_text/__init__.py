@@ -10,6 +10,7 @@ numeric literals, headers, and missing-value markers. Parsing a numeric field
 and re-emitting it via ``repr(float(...))`` silently changes the digits the
 tokenizer sees, which defeats the purpose of these slices.
 
-See ``tabular`` for raw CSV/TSV staging and ``table_records`` for HF
-parquet-based table datasets (ToTTo, WikiTableQuestions).
+See ``tabular`` for raw CSV/TSV staging, ``table_records`` for HF
+parquet-based table datasets (ToTTo, WikiTableQuestions, GitTables), and
+``web_data_commons`` for the WebTables sample archives.
 """
