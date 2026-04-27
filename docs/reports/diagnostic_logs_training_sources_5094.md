@@ -19,7 +19,7 @@ Source metadata came from the official APIs on April 26, 2026:
 
 ## Sanitization Rules
 
-Apply sanitization before any training or eval materialization:
+Apply sanitization before partition materialization and tokenization:
 
 - redact GitHub tokens (`ghp_`, `github_pat_`, etc.)
 - redact AWS access keys (`AKIA...`)
@@ -33,4 +33,11 @@ Rules are codified in `marin.datakit.download.diagnostic_logs.sanitize_diagnosti
 
 ## Ingest Scope
 
-This PR only records source gating and reusable sanitization. It does not add extraction or tokenization wiring. Promotion to full ingest is deferred until GHALogs sanitization/governance is reviewed and eval-only packaging is defined for LogChunks/LogHub.
+This PR adds a sample-capped GHALogs ingest path over an already-staged `github_run_logs.zip`:
+
+- input: a staged GHALogs record directory containing `github_run_logs.zip`
+- max zip members read: 10,000 by default
+- output: partitioned sanitized JSONL plus metadata counters
+- tokenization: train/dev JSONL with the Llama 3 tokenizer
+
+The experiment entry point is `experiments/exp5094_public_diagnostic_logs.py` with required `--source_path` to the staged GHALogs files. Full-corpus promotion is deferred until GHALogs sanitization/governance is reviewed and eval-only packaging is defined for LogChunks/LogHub.

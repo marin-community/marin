@@ -6,8 +6,17 @@
 import json
 
 import click
+from levanter.data.text import TextLmDatasetFormat
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.processing.tokenize import TokenizeConfig, tokenize
 
-from marin.datakit.download.diagnostic_logs import DiagnosticSourceStatus, source_inventory
+from experiments.llama import llama3_tokenizer
+from marin.datakit.download.diagnostic_logs import (
+    DEFAULT_GHALOGS_MAX_MEMBERS,
+    DiagnosticSourceStatus,
+    extract_ghalogs_step,
+    source_inventory,
+)
 
 
 def _inventory_payload() -> list[dict[str, object]]:
@@ -27,6 +36,27 @@ def _inventory_payload() -> list[dict[str, object]]:
             }
         )
     return payload
+
+
+def _extract_step(source_path: str, max_members: int) -> ExecutorStep:
+    return extract_ghalogs_step(
+        source_path=source_path,
+        max_members=max_members,
+    ).as_executor_step()
+
+
+def _tokenize_step(extracted_step: ExecutorStep) -> ExecutorStep:
+    return ExecutorStep(
+        name="tokenized/diagnostic_logs/ghalogs_sample",
+        fn=tokenize,
+        config=TokenizeConfig(
+            train_paths=[extracted_step.as_input_name() / "train/*.jsonl"],
+            validation_paths=[extracted_step.as_input_name() / "dev/*.jsonl"],
+            cache_path=this_output_path(),
+            tokenizer=versioned(llama3_tokenizer),
+            format=TextLmDatasetFormat(text_key="text"),
+        ),
+    )
 
 
 @click.group(invoke_without_command=True)
@@ -49,6 +79,38 @@ def cli(
 def inventory_cmd() -> None:
     """Print source inventory and gating status as JSON."""
     click.echo(json.dumps(_inventory_payload(), indent=2, sort_keys=True))
+
+
+@cli.command("extract")
+@click.option("--source_path", required=True, help="Path to staged GHALogs files containing github_run_logs.zip.")
+@click.option("--max_members", default=DEFAULT_GHALOGS_MAX_MEMBERS, show_default=True, type=int)
+def extract_cmd(source_path: str, max_members: int) -> None:
+    """Extract a capped sample of partitioned diagnostic logs from staged GHALogs."""
+    step = _extract_step(source_path, max_members)
+    executor_main(steps=[step], description="Issue #5094 extract GHALogs diagnostic log sample")
+
+
+@cli.command("tokenize")
+@click.option("--source_path", required=True, help="Path to staged GHALogs files containing github_run_logs.zip.")
+@click.option("--max_members", default=DEFAULT_GHALOGS_MAX_MEMBERS, show_default=True, type=int)
+def tokenize_cmd(source_path: str, max_members: int) -> None:
+    """Tokenize the same capped GHALogs sample (train/dev only)."""
+    extract_step = _extract_step(source_path, max_members)
+    tokenize_step = _tokenize_step(extract_step)
+    executor_main(steps=[extract_step, tokenize_step], description="Issue #5094 tokenize GHALogs sample")
+
+
+@cli.command("all")
+@click.option("--source_path", required=True, help="Path to staged GHALogs files containing github_run_logs.zip.")
+@click.option("--max_members", default=DEFAULT_GHALOGS_MAX_MEMBERS, show_default=True, type=int)
+def all_cmd(source_path: str, max_members: int) -> None:
+    """Run sample extraction and tokenization for GHALogs."""
+    extract_step = _extract_step(source_path, max_members)
+    tokenize_step = _tokenize_step(extract_step)
+    executor_main(
+        steps=[extract_step, tokenize_step],
+        description="Issue #5094 GHALogs diagnostic logs sample",
+    )
 
 
 if __name__ == "__main__":
