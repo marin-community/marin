@@ -15,8 +15,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from fray.v2 import ResourceConfig
-from fray.v2.local_backend import LocalClient
+from fray import ResourceConfig
+from fray.local_backend import LocalClient
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import (

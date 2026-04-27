@@ -54,12 +54,14 @@ def _register_worker(state: ControllerTransitions, worker_id: WorkerId) -> None:
         memory_bytes=16 * 1024**3,
         disk_bytes=100 * 1024**3,
     )
-    state.register_or_refresh_worker(
-        worker_id=worker_id,
-        address=f"{worker_id}:8080",
-        metadata=metadata,
-        ts=Timestamp.now(),
-    )
+    with state._store.transaction() as cur:
+        state.register_or_refresh_worker(
+            cur,
+            worker_id=worker_id,
+            address=f"{worker_id}:8080",
+            metadata=metadata,
+            ts=Timestamp.now(),
+        )
 
 
 def _set_job_state(state: ControllerTransitions, job_id: JobName, state_value: int) -> None:
@@ -77,22 +79,27 @@ def _assign_and_transition(
     *,
     error: str | None = None,
 ) -> None:
-    state.queue_assignments([Assignment(task_id=task_id, worker_id=worker_id)])
-    state.apply_task_updates(
-        HeartbeatApplyRequest(
-            worker_id=worker_id,
-            worker_resource_snapshot=None,
-            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
-        )
-    )
-    if target_state != job_pb2.TASK_STATE_RUNNING:
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=worker_id)])
+    with state._store.transaction() as cur:
         state.apply_task_updates(
+            cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
                 worker_resource_snapshot=None,
-                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=target_state, error=error)],
-            )
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+            ),
         )
+    if target_state != job_pb2.TASK_STATE_RUNNING:
+        with state._store.transaction() as cur:
+            state.apply_task_updates(
+                cur,
+                HeartbeatApplyRequest(
+                    worker_id=worker_id,
+                    worker_resource_snapshot=None,
+                    updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=target_state, error=error)],
+                ),
+            )
 
 
 @pytest.fixture
@@ -385,7 +392,8 @@ def test_get_job_status_reports_has_children(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    state.submit_job(child_id, child_req, Timestamp.now())
+    with state._store.transaction() as cur:
+        state.submit_job(cur, child_id, child_req, Timestamp.now())
 
     parent = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=parent_id.to_wire()), None)
     assert parent.job.has_children is True
@@ -679,7 +687,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
 
     auth_service = ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
         log_service=LogServiceImpl(),
@@ -710,7 +718,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
 
     auth_service = ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
         log_service=LogServiceImpl(),
@@ -927,7 +935,8 @@ def test_list_jobs_all_scope_includes_descendants(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    state.submit_job(child_id, child_req, Timestamp.now())
+    with state._store.transaction() as cur:
+        state.submit_job(cur, child_id, child_req, Timestamp.now())
 
     request = controller_pb2.Controller.ListJobsRequest()
     response = service.list_jobs(request, None)
@@ -951,7 +960,8 @@ def test_list_jobs_job_query_roots_and_children(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    state.submit_job(child_id, child_req, Timestamp.now())
+    with state._store.transaction() as cur:
+        state.submit_job(cur, child_id, child_req, Timestamp.now())
 
     roots_response = service.list_jobs(
         controller_pb2.Controller.ListJobsRequest(
@@ -1035,7 +1045,8 @@ def test_worker_addresses_for_tasks(state, service):
     service.launch_job(make_job_request("assigned-job"), None)
     job_id = JobName.root("test-user", "assigned-job")
     task_id = JobName.from_wire(job_id.to_wire() + "/0")
-    state.queue_assignments([Assignment(task_id=task_id, worker_id=WorkerId("w-1"))])
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=WorkerId("w-1"))])
 
     # Get tasks with attempts
     tasks = _query_tasks_with_attempts(state, job_id)
@@ -1170,7 +1181,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         state,
-        db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=LogServiceImpl(),
@@ -1206,7 +1217,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         state,
-        db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=LogServiceImpl(),
@@ -1244,21 +1255,24 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    state.submit_job(job_id, request, Timestamp.now())
+    with state._store.transaction() as cur:
+        state.submit_job(cur, job_id, request, Timestamp.now())
 
     w1 = WorkerId("w1")
-    state.register_or_refresh_worker(
-        worker_id=w1,
-        address="w1:8080",
-        metadata=job_pb2.WorkerMetadata(
-            hostname="w1",
-            ip_address="127.0.0.1",
-            cpu_count=8,
-            memory_bytes=16 * 1024**3,
-            disk_bytes=100 * 1024**3,
-        ),
-        ts=Timestamp.now(),
-    )
+    with state._store.transaction() as cur:
+        state.register_or_refresh_worker(
+            cur,
+            worker_id=w1,
+            address="w1:8080",
+            metadata=job_pb2.WorkerMetadata(
+                hostname="w1",
+                ip_address="127.0.0.1",
+                cpu_count=8,
+                memory_bytes=16 * 1024**3,
+                disk_bytes=100 * 1024**3,
+            ),
+            ts=Timestamp.now(),
+        )
     task_id = job_id.task(0)
     _assign_and_transition(state, task_id, w1, job_pb2.TASK_STATE_RUNNING)
 

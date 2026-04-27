@@ -320,7 +320,7 @@ def main(config: TrainLmConfig):
         ## OK, actually run training!
         trainer.train(state, train_loader)
 
-    # This isn't necessary except when Levanter is run in a subprocess (as happens w/ ray)
+    # This isn't necessary except when Levanter is run in a subprocess (as happens under Iris/Fray)
     trainer.tracker.finish()
 
 

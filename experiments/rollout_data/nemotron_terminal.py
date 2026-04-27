@@ -8,7 +8,7 @@ Usage:
       -- python -m experiments.rollout_data.nemotron_terminal
 """
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from marin.datakit.download.nemotron_terminal import download_nemotron_terminal_step
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec

@@ -210,12 +210,14 @@ def _register_worker(
     metadata: job_pb2.WorkerMetadata | None = None,
 ) -> WorkerId:
     wid = WorkerId(worker_id)
-    state.register_or_refresh_worker(
-        worker_id=wid,
-        address=f"{worker_id}:8080",
-        metadata=metadata or _cpu_metadata(),
-        ts=Timestamp.now(),
-    )
+    with state._store.transaction() as cur:
+        state.register_or_refresh_worker(
+            cur,
+            worker_id=wid,
+            address=f"{worker_id}:8080",
+            metadata=metadata or _cpu_metadata(),
+            ts=Timestamp.now(),
+        )
     return wid
 
 
@@ -226,7 +228,8 @@ def _submit_job(
 ) -> JobName:
     jid = JobName.root("test-user", job_id)
     request.name = jid.to_wire()
-    state.submit_job(jid, request, Timestamp.now())
+    with state._store.transaction() as cur:
+        state.submit_job(cur, jid, request, Timestamp.now())
     return jid
 
 
@@ -449,7 +452,8 @@ def test_cleanup_removes_dead_worker_claims(ctrl):
         job_id=JobName.root("test-user", "j1").to_wire(),
         entry_idx=99,
     )
-    ctrl.state.replace_reservation_claims(claims)
+    with ctrl.state._store.transaction() as cur:
+        ctrl.state.replace_reservation_claims(cur, claims)
     assert len(ctrl.reservation_claims) == 2
 
     ctrl._cleanup_stale_claims()
@@ -470,7 +474,8 @@ def test_cleanup_removes_finished_job_claims(ctrl):
     assert len(ctrl.reservation_claims) == 1
 
     # Kill the job to mark it as finished.
-    ctrl.state.cancel_job(jid, reason="test")
+    with ctrl.state._store.transaction() as cur:
+        ctrl.state.cancel_job(cur, jid, reason="test")
 
     job = _query_job(ctrl.state, jid)
     assert is_job_finished(job.state)
@@ -1016,7 +1021,8 @@ def test_find_reservation_ancestor_returns_parent_with_reservation(ctrl):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    ctrl.state.submit_job(child_jid, child_req, Timestamp.now())
+    with ctrl.state._store.transaction() as cur:
+        ctrl.state.submit_job(cur, child_jid, child_req, Timestamp.now())
 
     result = _find_reservation_ancestor(ctrl._db, child_jid)
     assert result == parent_jid
@@ -1039,7 +1045,8 @@ def test_find_reservation_ancestor_returns_grandparent(ctrl):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    ctrl.state.submit_job(parent_jid, parent_req, Timestamp.now())
+    with ctrl.state._store.transaction() as cur:
+        ctrl.state.submit_job(cur, parent_jid, parent_req, Timestamp.now())
 
     # Grandchild
     gc_jid = JobName.from_string("/test-user/gp/parent/gc")
@@ -1050,7 +1057,8 @@ def test_find_reservation_ancestor_returns_grandparent(ctrl):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    ctrl.state.submit_job(gc_jid, gc_req, Timestamp.now())
+    with ctrl.state._store.transaction() as cur:
+        ctrl.state.submit_job(cur, gc_jid, gc_req, Timestamp.now())
 
     result = _find_reservation_ancestor(ctrl._db, gc_jid)
     assert result == gp_jid
@@ -1088,7 +1096,8 @@ def test_find_reservation_ancestor_returns_none_when_no_ancestor_has_reservation
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    ctrl.state.submit_job(child_jid, child_req, Timestamp.now())
+    with ctrl.state._store.transaction() as cur:
+        ctrl.state.submit_job(cur, child_jid, child_req, Timestamp.now())
 
     assert _find_reservation_ancestor(ctrl._db, child_jid) is None
 
@@ -1127,7 +1136,8 @@ def test_taint_exemption_for_children_of_reservation_job(ctrl):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    ctrl.state.submit_job(child_jid, child_req, Timestamp.now())
+    with ctrl.state._store.transaction() as cur:
+        ctrl.state.submit_job(cur, child_jid, child_req, Timestamp.now())
 
     # Build scheduling state — child should be in has_reservation
     pending = _schedulable_tasks(ctrl.state)
@@ -1192,7 +1202,8 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
         ],
     )
     child_a_req.name = child_a_jid.to_wire()
-    ctrl.state.submit_job(child_a_jid, child_a_req, Timestamp.now())
+    with ctrl.state._store.transaction() as cur:
+        ctrl.state.submit_job(cur, child_a_jid, child_a_req, Timestamp.now())
 
     # Child-B reserves 2 A100
     child_b_jid = JobName.from_string("/test-user/root/child-b")
@@ -1203,7 +1214,8 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
         ],
     )
     child_b_req.name = child_b_jid.to_wire()
-    ctrl.state.submit_job(child_b_jid, child_b_req, Timestamp.now())
+    with ctrl.state._store.transaction() as cur:
+        ctrl.state.submit_job(cur, child_b_jid, child_b_req, Timestamp.now())
 
     ctrl._claim_workers_for_reservations()
     assert len(ctrl.reservation_claims) == 4
@@ -1221,7 +1233,8 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    ctrl.state.submit_job(gc_a_jid, gc_a_req, Timestamp.now())
+    with ctrl.state._store.transaction() as cur:
+        ctrl.state.submit_job(cur, gc_a_jid, gc_a_req, Timestamp.now())
 
     # Grandchild-B (under child-B) requesting A100
     gc_b_jid = JobName.from_string("/test-user/root/child-b/gc-b")
@@ -1236,7 +1249,8 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    ctrl.state.submit_job(gc_b_jid, gc_b_req, Timestamp.now())
+    with ctrl.state._store.transaction() as cur:
+        ctrl.state.submit_job(cur, gc_b_jid, gc_b_req, Timestamp.now())
 
     # Build scheduling state
     pending = _schedulable_tasks(ctrl.state)
@@ -1381,7 +1395,8 @@ def test_holder_task_worker_death_no_failure_record(state):
         worker_id = _register_worker(state, f"worker-{cycle}")
 
         # Assign the holder task to the worker (mimics what the scheduler does).
-        state.queue_assignments([Assignment(task_id=holder_task.task_id, worker_id=worker_id)])
+        with state._store.transaction() as cur:
+            state.queue_assignments(cur, [Assignment(task_id=holder_task.task_id, worker_id=worker_id)])
         current_holder = _query_task_with_attempts(state, holder_task.task_id)
         assert current_holder is not None
         assert current_holder.state == job_pb2.TASK_STATE_ASSIGNED
@@ -1439,14 +1454,17 @@ def test_get_running_tasks_for_poll_excludes_reservation_holders(state):
     (real_task,) = _submit_job_tasks(state, "real-job", real_request)
 
     worker_id = _register_worker(state, "w1")
-    state.queue_assignments(
-        [
-            Assignment(task_id=holder_task.task_id, worker_id=worker_id),
-            Assignment(task_id=real_task.task_id, worker_id=worker_id),
-        ]
-    )
+    with state._store.transaction() as cur:
+        state.queue_assignments(
+            cur,
+            [
+                Assignment(task_id=holder_task.task_id, worker_id=worker_id),
+                Assignment(task_id=real_task.task_id, worker_id=worker_id),
+            ],
+        )
 
-    running, _addresses = state.get_running_tasks_for_poll()
+    with state._store.read_snapshot() as snap:
+        running, _addresses = state.get_running_tasks_for_poll(snap)
 
     task_ids = {entry.task_id for entry in running.get(worker_id, [])}
     assert real_task.task_id in task_ids, "real task must still appear for polling"
@@ -1482,27 +1500,31 @@ def test_holder_task_removed_from_worker_when_parent_succeeds(state):
     wid_holder = _register_worker(state, "worker-holder")
     wid_parent = _register_worker(state, "worker-parent")
 
-    state.queue_assignments([Assignment(task_id=holder_task.task_id, worker_id=wid_holder)])
-    state.queue_assignments([Assignment(task_id=parent_task.task_id, worker_id=wid_parent)])
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=holder_task.task_id, worker_id=wid_holder)])
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=parent_task.task_id, worker_id=wid_parent)])
 
     assert holder_task.task_id in _worker_running_tasks(state, wid_holder)
 
     # Parent task succeeds → _finalize_job_state(SUCCEEDED) → _cancel_child_jobs
     # → holder task killed → running_tasks entry discarded.
     parent_task = _query_task_with_attempts(state, parent_task.task_id)
-    state.apply_task_updates(
-        HeartbeatApplyRequest(
-            worker_id=wid_parent,
-            worker_resource_snapshot=None,
-            updates=[
-                TaskUpdate(
-                    task_id=parent_task.task_id,
-                    attempt_id=parent_task.current_attempt_id,
-                    new_state=job_pb2.TASK_STATE_SUCCEEDED,
-                )
-            ],
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid_parent,
+                worker_resource_snapshot=None,
+                updates=[
+                    TaskUpdate(
+                        task_id=parent_task.task_id,
+                        attempt_id=parent_task.current_attempt_id,
+                        new_state=job_pb2.TASK_STATE_SUCCEEDED,
+                    )
+                ],
+            ),
         )
-    )
 
     holder_task = _query_task(state, holder_task.task_id)
     assert holder_task is not None
@@ -1533,7 +1555,8 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
     parent_task = parent_tasks[0]
 
     wid = _register_worker(state, "worker")
-    state.queue_assignments([Assignment(task_id=holder_task.task_id, worker_id=wid)])
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=holder_task.task_id, worker_id=wid)])
 
     assert holder_task.task_id in _worker_running_tasks(state, wid)
 
@@ -1550,7 +1573,8 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
     # Fire JobCancelledEvent. All parent tasks are now terminal so the loop
     # skips them. Only the explicit _cancel_child_jobs call at the end of
     # _on_job_cancelled can clean up the holder.
-    state.cancel_job(parent_job_id, reason="manual cancel")
+    with state._store.transaction() as cur:
+        state.cancel_job(cur, parent_job_id, reason="manual cancel")
 
     holder_task = _query_task(state, holder_task.task_id)
     assert holder_task is not None

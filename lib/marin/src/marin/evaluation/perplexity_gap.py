@@ -5,8 +5,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-from fray.v2 import current_client
-from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
+from fray import current_client
+from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from levanter.data.text import DatasetComponent, HfDatasetSourceConfig, TextLmDatasetFormat, UrlDatasetSourceConfig
 from levanter.main.perplexity_gap import (
     GapFinderConfig as LevanterGapFinderConfig,

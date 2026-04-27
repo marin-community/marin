@@ -23,14 +23,15 @@ from unittest.mock import Mock
 
 import pytest
 
-from fray.v2.iris_backend import FrayIrisClient
-from fray.v2.types import Entrypoint as FrayEntrypoint
-from fray.v2.types import GpuConfig, JobRequest, ResourceConfig
+from fray.iris_backend import FrayIrisClient
+from fray.types import Entrypoint as FrayEntrypoint
+from fray.types import GpuConfig, JobRequest, ResourceConfig
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.log_server.server import LogServiceImpl
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
@@ -75,9 +76,11 @@ class ServiceTestHarness:
 
     def sync_k8s(self) -> None:
         assert self.k8s_provider is not None, "sync_k8s requires K8s harness"
-        batch = self.state.drain_for_direct_provider()
+        with self.state._store.transaction() as cur:
+            batch = self.state.drain_for_direct_provider(cur)
         result = self.k8s_provider.sync(batch)
-        self.state.apply_direct_provider_updates(result.updates)
+        with self.state._store.transaction() as cur:
+            self.state.apply_direct_provider_updates(cur, result.updates)
 
 
 def _make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:
@@ -139,7 +142,8 @@ def _get_iris_pods(k8s: InMemoryK8sService) -> list[dict]:
 def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "cw_db")
     log_service = LogServiceImpl(log_dir=tmp_path / "cw_logs")
-    state = ControllerTransitions(db=db)
+    store = ControllerStore(db)
+    state = ControllerTransitions(store=store)
 
     k8s = InMemoryK8sService()
     k8s.add_node_pool(
@@ -181,7 +185,7 @@ def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
 
     service = ControllerServiceImpl(
         state,
-        db,
+        store,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "cw_bundles")),
         log_service=log_service,
