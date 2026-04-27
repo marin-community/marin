@@ -4,10 +4,14 @@
 """In-process RPC statistics collector.
 
 Tracks per-method call counts, a fixed-bucket latency histogram, and two
-bounded ring buffers of sampled calls:
-- ``slow_samples``: last N calls whose duration exceeded the slow threshold.
+per-method ring buffers of sampled calls:
+- ``slow_samples``: last N slow-or-errored calls for each method.
 - ``discovery_samples``: at most one call per method per interval regardless
   of latency, so operators can see what a typical request looks like.
+
+Both rings are keyed by method so a chatty method cannot evict another
+method's samples — in particular, error samples for a rarely-called method
+stay visible regardless of background slow-call volume on other methods.
 
 Everything lives in memory on the process that owns the collector; stats
 reset when that process restarts. Designed to be cheap on the hot path:
@@ -57,10 +61,11 @@ def _make_bucket_bounds() -> tuple[int, ...]:
 # needing to read them back.
 BUCKET_UPPER_BOUNDS_MS: tuple[int, ...] = _make_bucket_bounds()
 
-# Default sample ring sizes. Tuned so the whole structure stays <1 MB even
-# with many methods; request previews are capped separately below.
-DEFAULT_SLOW_SAMPLES = 50
-DEFAULT_DISCOVERY_SAMPLES = 20
+# Per-method sample ring sizes. Kept small so every method retains a few
+# of each kind without the structure blowing up across many methods;
+# request previews are capped separately below.
+DEFAULT_SLOW_SAMPLES_PER_METHOD = 5
+DEFAULT_DISCOVERY_SAMPLES_PER_METHOD = 5
 DEFAULT_DISCOVERY_INTERVAL = 30.0
 DEFAULT_REQUEST_PREVIEW_BYTES = 1024
 
@@ -91,19 +96,21 @@ class RpcStatsCollector:
         self,
         *,
         slow_threshold_ms: float,
-        slow_samples: int = DEFAULT_SLOW_SAMPLES,
-        discovery_samples: int = DEFAULT_DISCOVERY_SAMPLES,
+        slow_samples_per_method: int = DEFAULT_SLOW_SAMPLES_PER_METHOD,
+        discovery_samples_per_method: int = DEFAULT_DISCOVERY_SAMPLES_PER_METHOD,
         discovery_interval: float = DEFAULT_DISCOVERY_INTERVAL,
         request_preview_bytes: int = DEFAULT_REQUEST_PREVIEW_BYTES,
     ):
         self._slow_threshold_ms = slow_threshold_ms
+        self._slow_samples_per_method = slow_samples_per_method
+        self._discovery_samples_per_method = discovery_samples_per_method
         self._discovery_interval_ms = int(discovery_interval * 1000)
         self._request_preview_bytes = request_preview_bytes
         self._lock = threading.Lock()
         self._methods: dict[str, stats_pb2.RpcMethodStats] = {}
         self._last_discovery_ms: dict[str, int] = {}
-        self._slow: deque[stats_pb2.RpcCallSample] = deque(maxlen=slow_samples)
-        self._discovery: deque[stats_pb2.RpcCallSample] = deque(maxlen=discovery_samples)
+        self._slow: dict[str, deque[stats_pb2.RpcCallSample]] = {}
+        self._discovery: dict[str, deque[stats_pb2.RpcCallSample]] = {}
         self._started_at_ms = int(time.time() * 1000)
 
     # -- Hot path ------------------------------------------------------
@@ -150,9 +157,17 @@ class RpcStatsCollector:
                 error_message=error_message,
             )
             if is_slow:
-                self._slow.append(sample)
+                slow_ring = self._slow.get(method)
+                if slow_ring is None:
+                    slow_ring = deque(maxlen=self._slow_samples_per_method)
+                    self._slow[method] = slow_ring
+                slow_ring.append(sample)
             if is_discovery:
-                self._discovery.append(sample)
+                discovery_ring = self._discovery.get(method)
+                if discovery_ring is None:
+                    discovery_ring = deque(maxlen=self._discovery_samples_per_method)
+                    self._discovery[method] = discovery_ring
+                discovery_ring.append(sample)
                 self._last_discovery_ms[method] = now_ms
 
     def _build_sample(
@@ -197,8 +212,10 @@ class RpcStatsCollector:
                 m.p95_ms = _percentile_ms(state.bucket_counts, 95)
                 m.p99_ms = _percentile_ms(state.bucket_counts, 99)
                 m.bucket_upper_bounds_ms.extend(BUCKET_UPPER_BOUNDS_MS)
-            response.slow_samples.extend(self._slow)
-            response.discovery_samples.extend(self._discovery)
+            for slow_ring in self._slow.values():
+                response.slow_samples.extend(slow_ring)
+            for discovery_ring in self._discovery.values():
+                response.discovery_samples.extend(discovery_ring)
         response.methods.sort(key=lambda m: m.method)
         return response
 

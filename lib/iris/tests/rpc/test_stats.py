@@ -53,7 +53,7 @@ def test_collector_records_counts_and_histogram():
 
 
 def test_collector_captures_slow_samples_and_respects_bound():
-    collector = RpcStatsCollector(slow_threshold_ms=1000, slow_samples=3, discovery_samples=0)
+    collector = RpcStatsCollector(slow_threshold_ms=1000, slow_samples_per_method=3, discovery_samples_per_method=0)
 
     for i in range(5):
         collector.record(method="ListJobs", duration_ms=2000 + i, request=_request(), ctx=_ctx())
@@ -71,7 +71,7 @@ def test_collector_captures_slow_samples_and_respects_bound():
 
 
 def test_collector_records_errors_and_fast_calls_stay_out_of_slow_ring():
-    collector = RpcStatsCollector(slow_threshold_ms=1000, discovery_samples=0)
+    collector = RpcStatsCollector(slow_threshold_ms=1000, discovery_samples_per_method=0)
 
     collector.record(method="LaunchJob", duration_ms=5, request=_request(), ctx=_ctx())
     collector.record(
@@ -96,8 +96,8 @@ def test_collector_records_errors_and_fast_calls_stay_out_of_slow_ring():
 def test_discovery_samples_throttled_per_method():
     collector = RpcStatsCollector(
         slow_threshold_ms=1000,
-        slow_samples=0,
-        discovery_samples=10,
+        slow_samples_per_method=0,
+        discovery_samples_per_method=10,
         discovery_interval=3600,
     )
 
@@ -115,8 +115,8 @@ def test_discovery_samples_throttled_per_method():
 def test_discovery_samples_capture_after_interval_elapses():
     collector = RpcStatsCollector(
         slow_threshold_ms=1000,
-        slow_samples=0,
-        discovery_samples=10,
+        slow_samples_per_method=0,
+        discovery_samples_per_method=10,
         discovery_interval=0,  # never throttle
     )
 
@@ -125,6 +125,49 @@ def test_discovery_samples_capture_after_interval_elapses():
 
     snap = collector.snapshot_proto()
     assert len(snap.discovery_samples) == 3
+
+
+def test_per_method_rings_isolate_chatty_methods_from_quiet_ones():
+    """A flood of slow calls on one method must not evict samples for others.
+
+    Regression for #5206: previously a single global ring let any chatty
+    method age out error/discovery samples for unrelated methods, so the
+    dashboard would show empty tabs on quiet methods.
+    """
+    collector = RpcStatsCollector(
+        slow_threshold_ms=1000,
+        slow_samples_per_method=5,
+        discovery_samples_per_method=5,
+        discovery_interval=0,  # never throttle so every call is also "discovery"
+    )
+
+    # One error on the quiet method we care about.
+    collector.record(
+        method="LaunchJob",
+        duration_ms=10,
+        request=_request(),
+        ctx=_ctx(),
+        error_code="INTERNAL",
+        error_message="boom",
+    )
+    # Two hundred slow calls on a different chatty method.
+    for _ in range(200):
+        collector.record(method="FetchLogs", duration_ms=2000, request=_request(), ctx=_ctx())
+
+    snap = collector.snapshot_proto()
+
+    launch_slow = [s for s in snap.slow_samples if s.method == "LaunchJob"]
+    fetch_slow = [s for s in snap.slow_samples if s.method == "FetchLogs"]
+    launch_recent = [s for s in snap.discovery_samples if s.method == "LaunchJob"]
+    fetch_recent = [s for s in snap.discovery_samples if s.method == "FetchLogs"]
+
+    # Quiet method's error survived the flood.
+    assert len(launch_slow) == 1
+    assert launch_slow[0].error_code == "INTERNAL"
+    assert len(launch_recent) == 1
+    # Chatty method is bounded per-method, not by the quiet method's traffic.
+    assert len(fetch_slow) == 5
+    assert len(fetch_recent) == 5
 
 
 def test_stats_service_returns_snapshot():
