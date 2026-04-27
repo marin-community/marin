@@ -544,7 +544,7 @@ class ProxyControllerDashboard:
         method = request.path_params["method"]
         body = await request.body()
         upstream_resp = await self._client.post(
-            f"/iris.logging.LogService/{method}",
+            f"/finelog.logging.LogService/{method}",
             content=body,
             headers={"content-type": request.headers.get("content-type", "application/json")},
         )

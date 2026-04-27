@@ -24,7 +24,8 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpe
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.env_probe import EnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import config_pb2, logging_pb2
+from finelog.rpc import logging_pb2
+from iris.rpc import config_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
