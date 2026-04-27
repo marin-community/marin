@@ -33,6 +33,8 @@ from haliax.jax_utils import is_in_jit, is_jax_array_like
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 from jaxtyping import PyTree
 
+import rigging.filesystem  # noqa: F401  # registers mirror://, mirrortmp:// fsspec protocols
+
 from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
     tree_deserialize_leaves_tensorstore,
@@ -392,6 +394,7 @@ class Checkpointer:
         step_policies: Sequence[CheckpointInterval],
         *,
         temporary_base_path: Optional[PathLike] = None,
+        temporary_search_paths: Optional[Sequence[PathLike]] = None,
         keep_params: PyTree[FilterSpec] = True,
         dt_now_injection: Optional[Callable[[], datetime.datetime]] = None,
         delete_old_temp_checkpoints: bool = True,
@@ -413,6 +416,10 @@ class Checkpointer:
             temporary_base_path: separate base path for time-policy (temporary) checkpoints. When set,
                 temporary checkpoints are written here instead of base_path. Permanent (step-policy)
                 checkpoints always go to base_path. If None, all checkpoints go to base_path.
+            temporary_search_paths: additional roots searched **only** for prior-temporary-checkpoint
+                discovery (cleanup bookkeeping and resume). Writes never target these. Used to plug
+                in cross-region search URLs (e.g. ``mirrortmp://...``) so a multi-region resume can
+                find a temp checkpoint written in another region.
             keep_params: a PyTree of FilterSpecs that specifies which parameters to keep in the checkpoint
             dt_now_injection: a function that returns the current time. useful for testing
             delete_old_temp_checkpoints: if True, carry forward a temporary checkpoint discovered at startup so the
@@ -422,6 +429,9 @@ class Checkpointer:
         """
         self.base_path = str(base_path)
         self.temporary_base_path = str(temporary_base_path) if temporary_base_path is not None else None
+        self.temporary_search_paths: list[str] = (
+            [str(p) for p in temporary_search_paths] if temporary_search_paths else []
+        )
         self.save_interval = save_interval
         self.step_policies = list(step_policies)
         self.keep_params = keep_params
@@ -455,23 +465,24 @@ class Checkpointer:
             self._async_checkpoint_remover_thread.start()
             self._checkpoint_being_removed = None
 
-        # discover latest checkpoint and see if it's temporary
+        # discover latest checkpoint across base + temp + search-only roots and see if it's temporary
         self._last_temporary_checkpoint = None
-        # Check both base_path and temporary_base_path for prior temporary checkpoints
-        search_paths = [self.base_path]
+        cleanup_roots: list[str] = [self.base_path]
         if self.temporary_base_path is not None:
-            search_paths.append(self.temporary_base_path)
-        for search_path in search_paths:
-            latest_checkpoint = discover_latest_checkpoint(search_path)
-            if latest_checkpoint is not None and delete_old_temp_checkpoints:
+            cleanup_roots.append(self.temporary_base_path)
+        cleanup_roots.extend(self.temporary_search_paths)
+        latest_checkpoint = discover_latest_checkpoint(cleanup_roots[0], *cleanup_roots[1:]) if cleanup_roots else None
+        if latest_checkpoint is not None and delete_old_temp_checkpoints:
+            try:
                 metadata = _load_metadata(latest_checkpoint)
-                if metadata.get("is_temporary", False):
-                    logger.info(
-                        f"Found prior temporary checkpoint {latest_checkpoint}. We will delete it after"
-                        " saving a new checkpoint."
-                    )
-                    self._last_temporary_checkpoint = latest_checkpoint
-                    break
+            except FileNotFoundError:
+                metadata = {}
+            if metadata.get("is_temporary", False):
+                logger.info(
+                    f"Found prior temporary checkpoint {latest_checkpoint}. We will delete it after"
+                    " saving a new checkpoint."
+                )
+                self._last_temporary_checkpoint = latest_checkpoint
 
     def load_checkpoint(
         self,
@@ -792,6 +803,7 @@ def load_checkpoint(
 
     """
     checkpoint_path = str(checkpoint_path)
+    checkpoint_path = _stage_for_tensorstore(checkpoint_path)
 
     if is_in_jit():
         logger.warning("Loading checkpoint in jit. This is not recommended and probably won't work.")
@@ -963,12 +975,32 @@ def discover_latest_checkpoint(checkpoint_path: PathLike, *additional_paths: Pat
 
 
 def latest_checkpoint_path(checkpoint_path: PathLike, *additional_paths: PathLike) -> str:
-    """Return the latest concrete checkpoint path across one or more search roots."""
+    """Return the latest concrete checkpoint path across one or more search roots.
+
+    The returned URL is always tensorstore-readable: virtual schemes that expose a
+    ``stage_to_local`` hook on their fsspec filesystem (notably ``mirror://`` /
+    ``mirrortmp://``) are resolved to a concrete ``gs://`` / ``file://`` URL before
+    return.
+    """
     latest = discover_latest_checkpoint(checkpoint_path, *additional_paths)
     if latest is None:
         search_paths = [str(checkpoint_path)] + [str(path) for path in additional_paths]
         raise FileNotFoundError(f"Could not discover checkpoint under any of: {search_paths}")
-    return latest
+    return _stage_for_tensorstore(latest)
+
+
+def _stage_for_tensorstore(checkpoint_path: str) -> str:
+    """If the path's fsspec filesystem exposes ``stage_to_local``, apply it.
+
+    No-op for plain ``gs://`` / ``s3://`` / ``file://`` — they pass through.
+    For ``mirror://`` / ``mirrortmp://`` URLs this stages the discovered tree
+    locally and returns the local concrete URL, which TensorStore can then read.
+    """
+    fs, plain_path = _get_fs_and_plain_path(checkpoint_path)
+    stager = getattr(fs, "stage_to_local", None)
+    if stager is None:
+        return checkpoint_path
+    return stager(plain_path)
 
 
 def _discover_latest_checkpoint_single(checkpoint_path: str) -> Optional[str]:
@@ -1015,6 +1047,12 @@ class CheckpointerConfig:
     """Separate base path for temporary (time-policy) checkpoints. When set, temporary checkpoints
     are written here instead of base_path, allowing use of region-local storage with lifecycle TTL."""
 
+    temporary_search_paths: List[str] = field(default_factory=list)
+    """Additional roots searched **only** for prior-temporary-checkpoint discovery (cleanup
+    bookkeeping and resume).  Writes never target these.  Used to plug in cross-region search
+    URLs (e.g. ``mirrortmp://ttl=14d/checkpoints-temp/<run-id>``) so a multi-region resume can
+    find a temp checkpoint written in another region."""
+
     save_interval: timedelta = timedelta(minutes=15)
     # TODO: I'd like to write this, but it's not supported by draccus
     # keep: List[CheckpointInterval] = field(default_factory=lambda: [CheckpointInterval(every=1000)])
@@ -1046,6 +1084,17 @@ class CheckpointerConfig:
             return os.path.expanduser(os.path.join(self.temporary_base_path, run_id))
         return os.path.expanduser(self.temporary_base_path)
 
+    def expanded_temporary_search_paths(self, run_id) -> List[str]:
+        """Search-only roots; entries already include the run-id literal where needed.
+
+        We do **not** auto-append run-id here: callers compose these with the explicit
+        run-id (e.g. Marin's training wrapper does this in ``_enforce_run_id``), since
+        ``append_run_id_to_base_path`` may be ``False`` for imputed run-ids and the
+        bare ``checkpoints-temp/`` root must never be globbed.
+        """
+        del run_id
+        return [os.path.expanduser(p) for p in self.temporary_search_paths]
+
     def create(self, run_id) -> Checkpointer:
         keeps = [CheckpointInterval(**k) for k in self.keep]
         return Checkpointer(
@@ -1053,6 +1102,7 @@ class CheckpointerConfig:
             save_interval=self.save_interval,
             step_policies=keeps,
             temporary_base_path=self.expanded_temporary_path(run_id),
+            temporary_search_paths=self.expanded_temporary_search_paths(run_id),
             delete_old_temp_checkpoints=self.delete_old_temp_checkpoints,
             delete_previous_temporary_checkpoint_after_save=self.delete_previous_temporary_checkpoint_after_save,
             debug=self.debug,
@@ -1064,6 +1114,9 @@ class CheckpointerConfig:
             self.base_path = os.path.expanduser(self.base_path)
         if isinstance(self.temporary_base_path, str):
             self.temporary_base_path = os.path.expanduser(self.temporary_base_path)
+        self.temporary_search_paths = [
+            os.path.expanduser(p) if isinstance(p, str) else p for p in self.temporary_search_paths
+        ]
         if isinstance(self.debug, dict):
             self.debug = CheckpointDebugConfig(**self.debug)
 

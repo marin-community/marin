@@ -157,8 +157,22 @@ def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
         logger.warning(f"Run ID not set. Using default: {run_id}")
 
     append_id_to_checkpoints = not config.impute_run_id_from_output_path
+
+    # Cross-region temp checkpoint discovery: include all marin-tmp-* buckets in the search
+    # via mirrortmp://.  Use the explicit run_id literal — append_run_id_to_base_path may be
+    # False for imputed run-ids, which would otherwise cause discovery to glob the shared
+    # ``checkpoints-temp/`` root across all runs.
+    mirror_search_path = f"mirrortmp://ttl=14d/checkpoints-temp/{run_id}"
+    existing_search_paths = list(config.train_config.trainer.checkpointer.temporary_search_paths)
+    if mirror_search_path not in existing_search_paths:
+        merged_search_paths = [*existing_search_paths, mirror_search_path]
+    else:
+        merged_search_paths = existing_search_paths
+
     checkpointer_config = replace(
-        config.train_config.trainer.checkpointer, append_run_id_to_base_path=append_id_to_checkpoints
+        config.train_config.trainer.checkpointer,
+        append_run_id_to_base_path=append_id_to_checkpoints,
+        temporary_search_paths=merged_search_paths,
     )
 
     inner_config = replace(

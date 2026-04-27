@@ -865,6 +865,7 @@ class TrainerConfig:
         temp_path = self.checkpointer.expanded_temporary_path(run_id)
         if temp_path is not None:
             paths.append(temp_path)
+        paths.extend(self.checkpointer.expanded_temporary_search_paths(run_id))
         return paths
 
     initialize_from: Optional[str] = None  # Levanter trainer checkpoint to initialize from

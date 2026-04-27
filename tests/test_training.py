@@ -14,6 +14,7 @@ from levanter.trainer import TrainerConfig
 from marin.training.training import (
     TrainLmOnPodConfig,
     _doublecheck_paths,
+    _enforce_run_id,
 )
 
 
@@ -116,3 +117,100 @@ def test_pathlib_path_handling(trainer_config):
         )
         with pytest.raises(ValueError, match="not in the same region"):
             _doublecheck_paths(config)
+
+
+# ---------------------------------------------------------------------------
+# Cross-region temp checkpoint search-path wiring (mirrortmp://)
+# ---------------------------------------------------------------------------
+
+
+def _make_train_config(*, output_path: str | None, run_id: str | None, impute: bool) -> TrainLmOnPodConfig:
+    return TrainLmOnPodConfig(
+        train_config=train_lm.TrainLmConfig(
+            data={"train_urls": ["gs://bucket/path"]},  # type: ignore[arg-type]
+            trainer=TrainerConfig(id=run_id, checkpointer=CheckpointerConfig()),
+        ),
+        resources=ResourceConfig.with_tpu("v4-8"),
+        output_path=output_path,
+        impute_run_id_from_output_path=impute,
+    )
+
+
+def test_enforce_run_id_imputed_includes_run_id_literal_in_mirror_search_path():
+    """impute_run_id_from_output_path=True ⇒ search path contains the imputed run-id literal,
+    not the bare ``checkpoints-temp/`` root (which would glob across all runs)."""
+    config = _make_train_config(
+        output_path="gs://marin-us-central1/runs/foo-abc123",
+        run_id=None,
+        impute=True,
+    )
+    enforced = _enforce_run_id(config)
+    search_paths = enforced.train_config.trainer.checkpointer.temporary_search_paths
+    assert "mirrortmp://ttl=14d/checkpoints-temp/foo-abc123" in search_paths
+    # Bare prefix without run-id must never appear.
+    assert "mirrortmp://ttl=14d/checkpoints-temp" not in search_paths
+    assert "mirrortmp://ttl=14d/checkpoints-temp/" not in search_paths
+
+
+def test_enforce_run_id_explicit_includes_run_id_literal_in_mirror_search_path():
+    config = _make_train_config(
+        output_path="gs://marin-us-central1/runs/whatever",
+        run_id="my-explicit-run",
+        impute=False,
+    )
+    enforced = _enforce_run_id(config)
+    search_paths = enforced.train_config.trainer.checkpointer.temporary_search_paths
+    assert "mirrortmp://ttl=14d/checkpoints-temp/my-explicit-run" in search_paths
+
+
+def test_enforce_run_id_appends_to_existing_search_paths():
+    """Pre-existing entries on the user-supplied config are preserved; mirror entry is appended."""
+    base_config = _make_train_config(
+        output_path="gs://marin-us-central1/runs/foo-abc123",
+        run_id=None,
+        impute=True,
+    )
+    base_config = dataclasses.replace(
+        base_config,
+        train_config=dataclasses.replace(
+            base_config.train_config,
+            trainer=dataclasses.replace(
+                base_config.train_config.trainer,
+                checkpointer=dataclasses.replace(
+                    base_config.train_config.trainer.checkpointer,
+                    temporary_search_paths=["custom://prior/entry"],
+                ),
+            ),
+        ),
+    )
+    enforced = _enforce_run_id(base_config)
+    paths = enforced.train_config.trainer.checkpointer.temporary_search_paths
+    assert paths == [
+        "custom://prior/entry",
+        "mirrortmp://ttl=14d/checkpoints-temp/foo-abc123",
+    ]
+
+
+def test_enforce_run_id_dedupes_existing_mirror_entry():
+    """Idempotent: re-running _enforce_run_id (or a user pre-supplying the entry) doesn't duplicate."""
+    config = _make_train_config(
+        output_path="gs://marin-us-central1/runs/foo-abc123",
+        run_id=None,
+        impute=True,
+    )
+    config = dataclasses.replace(
+        config,
+        train_config=dataclasses.replace(
+            config.train_config,
+            trainer=dataclasses.replace(
+                config.train_config.trainer,
+                checkpointer=dataclasses.replace(
+                    config.train_config.trainer.checkpointer,
+                    temporary_search_paths=["mirrortmp://ttl=14d/checkpoints-temp/foo-abc123"],
+                ),
+            ),
+        ),
+    )
+    enforced = _enforce_run_id(config)
+    paths = enforced.train_config.trainer.checkpointer.temporary_search_paths
+    assert paths.count("mirrortmp://ttl=14d/checkpoints-temp/foo-abc123") == 1

@@ -32,7 +32,9 @@ from levanter.checkpoint import (
     CheckpointInterval,
     _collect_debug_checkpointer_state,
     _load_metadata,
+    _stage_for_tensorstore,
     discover_latest_checkpoint,
+    latest_checkpoint_path,
     load_checkpoint,
     load_checkpoint_or_initialize,
     register_debug_checkpointer_state_provider,
@@ -778,3 +780,174 @@ def test_backward_compatibility_with_ocdbt():
         )
         assert all(np.isclose(restored_state.training_key, initial_state.training_key))
         assert restored_state.step == initial_state.step
+
+
+# ---------------------------------------------------------------------------
+# Cross-region temp-checkpoint discovery (mirrortmp:// search paths)
+# ---------------------------------------------------------------------------
+
+
+def test_checkpointer_config_temporary_search_paths_default_empty():
+    config = CheckpointerConfig()
+    assert config.temporary_search_paths == []
+    assert config.expanded_temporary_search_paths("run1") == []
+
+
+def test_checkpointer_config_temporary_search_paths_expanduser():
+    config = CheckpointerConfig(temporary_search_paths=["~/foo", "/abs/bar", "mirrortmp://x/y"])
+    # ~ expanded; absolute and mirror URLs preserved.
+    assert config.temporary_search_paths[0] == os.path.expanduser("~/foo")
+    assert config.temporary_search_paths[1] == "/abs/bar"
+    assert config.temporary_search_paths[2] == "mirrortmp://x/y"
+
+
+def test_checkpointer_config_expanded_temporary_search_paths_does_not_append_run_id():
+    """Search paths are *literal*: callers compose explicit run-ids into them, since
+    append_run_id_to_base_path may be False for imputed run-ids."""
+    config = CheckpointerConfig(temporary_search_paths=["mirrortmp://ttl=14d/checkpoints-temp/run-A"])
+    paths = config.expanded_temporary_search_paths("run-A")
+    assert paths == ["mirrortmp://ttl=14d/checkpoints-temp/run-A"]
+    # The bare prefix without the run-id should never appear.
+    assert "mirrortmp://ttl=14d/checkpoints-temp" not in paths
+
+
+def test_trainer_config_checkpoint_search_paths_includes_temp_search_paths():
+    config = dataclasses.replace(
+        TrainerConfig(),
+        checkpointer=CheckpointerConfig(
+            base_path="/tmp/test-perm",
+            temporary_base_path="/tmp/test-temp",
+            temporary_search_paths=["mirrortmp://ttl=14d/checkpoints-temp/run-A"],
+            append_run_id_to_base_path=True,
+        ),
+    )
+    paths = config.checkpoint_search_paths("run-A")
+    assert paths == [
+        "/tmp/test-perm/run-A",
+        "/tmp/test-temp/run-A",
+        "mirrortmp://ttl=14d/checkpoints-temp/run-A",
+    ]
+
+    # When load_checkpoint_path is set, it overrides everything (existing contract).
+    pinned = dataclasses.replace(config, load_checkpoint_path="/explicit/step-100")
+    assert pinned.checkpoint_search_paths("run-A") == ["/explicit/step-100"]
+
+
+def test_checkpointer_init_discovers_from_temporary_search_paths(tmp_path):
+    """Cleanup bookkeeping picks the global-max temp checkpoint across all roots."""
+    permanent = tmp_path / "perm"
+    permanent.mkdir()
+    local_temp = tmp_path / "tmp_local"
+    local_temp.mkdir()
+    remote_temp = tmp_path / "tmp_remote"
+    remote_temp.mkdir()
+
+    # local-temp at step 3 (older); remote-temp at step 7 (newer).
+    save_checkpoint({"x": 1}, step=3, checkpoint_path=str(local_temp / "step-3"), is_temporary=True)
+    save_checkpoint({"x": 1}, step=7, checkpoint_path=str(remote_temp / "step-7"), is_temporary=True)
+
+    checkpointer = Checkpointer(
+        base_path=str(permanent),
+        save_interval=timedelta(seconds=10),
+        step_policies=[CheckpointInterval(every=100, until=None)],
+        temporary_base_path=str(local_temp),
+        temporary_search_paths=[str(remote_temp)],
+    )
+    # Global max wins — step-7 (remote), not step-3 (local).
+    assert checkpointer._last_temporary_checkpoint == str(remote_temp / "step-7")
+
+
+def test_checkpointer_init_picks_global_max_via_search_paths_only(tmp_path):
+    """Even with no temporary_base_path, search paths still drive cleanup discovery."""
+    permanent = tmp_path / "perm"
+    permanent.mkdir()
+    remote_temp = tmp_path / "tmp_remote"
+    remote_temp.mkdir()
+    save_checkpoint({"x": 1}, step=42, checkpoint_path=str(remote_temp / "step-42"), is_temporary=True)
+
+    checkpointer = Checkpointer(
+        base_path=str(permanent),
+        save_interval=timedelta(seconds=10),
+        step_policies=[CheckpointInterval(every=100, until=None)],
+        temporary_base_path=None,
+        temporary_search_paths=[str(remote_temp)],
+    )
+    assert checkpointer._last_temporary_checkpoint == str(remote_temp / "step-42")
+
+
+def test_stage_for_tensorstore_passthrough_for_plain_filesystems(tmp_path):
+    """gs://, file://, s3:// (anything without a stage_to_local hook) returns the input unchanged."""
+    p = str(tmp_path / "step-1")
+    save_checkpoint({"x": 1}, step=1, checkpoint_path=p)
+    assert _stage_for_tensorstore(p) == p
+    assert _stage_for_tensorstore(f"file://{p}") == f"file://{p}"
+
+
+def test_stage_for_tensorstore_invokes_stager(monkeypatch, tmp_path):
+    """When the fs exposes stage_to_local, the helper calls it and returns its result."""
+    real_target = str(tmp_path / "step-1")
+    save_checkpoint({"x": 1}, step=1, checkpoint_path=real_target)
+
+    captured: dict[str, str] = {}
+
+    class _FakeFS:
+        def stage_to_local(self, path: str) -> str:
+            captured["path"] = path
+            return real_target
+
+    monkeypatch.setattr(
+        "levanter.checkpoint._get_fs_and_plain_path",
+        lambda p, fs=None: (_FakeFS(), "checkpoints-temp/run-A/step-1"),
+    )
+    out = _stage_for_tensorstore("mirrortmp://checkpoints-temp/run-A/step-1")
+    assert out == real_target
+    assert captured["path"] == "checkpoints-temp/run-A/step-1"
+
+
+def test_latest_checkpoint_path_returns_concrete_url(monkeypatch, tmp_path):
+    """latest_checkpoint_path returns a URL that has been passed through stage_to_local."""
+    real_target = str(tmp_path / "step-7")
+    save_checkpoint({"x": 1}, step=7, checkpoint_path=real_target, is_temporary=True)
+
+    discovered_virtual = "mirrortmp://run-A/step-7"
+
+    def fake_discover(*paths):
+        return discovered_virtual
+
+    class _FakeFS:
+        def stage_to_local(self, path: str) -> str:
+            assert path == "run-A/step-7"
+            return real_target
+
+    monkeypatch.setattr("levanter.checkpoint.discover_latest_checkpoint", fake_discover)
+    monkeypatch.setattr(
+        "levanter.checkpoint._get_fs_and_plain_path",
+        lambda p, fs=None: (_FakeFS(), "run-A/step-7"),
+    )
+    out = latest_checkpoint_path(discovered_virtual)
+    # URL is concrete (no virtual scheme) — TensorStore can read it.
+    assert out == real_target
+    assert "mirrortmp" not in out
+
+
+def test_load_checkpoint_invokes_stage_for_tensorstore(monkeypatch, tmp_path):
+    """A virtual URL passed to load_checkpoint is staged before TensorStore touches it."""
+    initial_state = _make_state(step=10, key=jax.random.PRNGKey(0))
+    real_target = str(tmp_path / "step-10")
+    save_checkpoint(initial_state, step=10, checkpoint_path=real_target)
+
+    class _FakeFS:
+        def stage_to_local(self, path: str) -> str:
+            return real_target
+
+    monkeypatch.setattr(
+        "levanter.checkpoint._get_fs_and_plain_path",
+        lambda p, fs=None: (_FakeFS(), "run-A/step-10"),
+    )
+    rep_state = _make_state(step=0, key=jax.random.PRNGKey(1))
+    restored = load_checkpoint(rep_state, "mirrortmp://run-A/step-10")
+    # If staging didn't happen, build_kvstore_spec would have raised on the mirrortmp:// URL.
+    assert_trees_all_close(
+        jax.tree_util.tree_leaves(arrays_only(restored.model)),
+        jax.tree_util.tree_leaves(arrays_only(initial_state.model)),
+    )

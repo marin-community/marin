@@ -694,22 +694,67 @@ def filesystem(protocol: str, **kwargs: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
+_BUCKET_FAMILY_MAPS: dict[str, dict[str, str]] = {
+    "data": REGION_TO_DATA_BUCKET,
+    "tmp": REGION_TO_TMP_BUCKET,
+}
+
+
+def _bucket_map_for_family(family: str) -> dict[str, str]:
+    try:
+        return _BUCKET_FAMILY_MAPS[family]
+    except KeyError as e:
+        raise ValueError(f"Unknown mirror bucket family: {family!r}") from e
+
+
 def _all_data_bucket_prefixes() -> list[str]:
     """Return gs:// prefixes for all known marin data buckets."""
     return [f"gs://{bucket}" for bucket in REGION_TO_DATA_BUCKET.values()]
 
 
-def _mirror_remote_prefixes(local_prefix: str) -> list[str]:
+def _mirror_remote_prefixes(local_prefix: str, family: str = "data") -> list[str]:
     """Remote marin buckets to scan for mirror reads.
 
     The cross-region mirror only exists on GCS, and scanning GCS buckets
     requires GCP credentials.  Return an empty list unless the local prefix
     is itself a ``gs://`` URL — otherwise non-GCP runs (CoreWeave S3, local
     dev) would emit anonymous-caller 401s from gcsfs on every mirror read.
+
+    *family* selects the bucket family: ``"data"`` (primary) or ``"tmp"``.
     """
     if not local_prefix.startswith("gs://"):
         return []
-    return [p for p in _all_data_bucket_prefixes() if not local_prefix.startswith(p)]
+    all_prefixes = [f"gs://{bucket}" for bucket in _bucket_map_for_family(family).values()]
+    return [p for p in all_prefixes if not local_prefix.startswith(p)]
+
+
+def _mirror_local_prefix(family: str) -> str:
+    """Local prefix for the mirror filesystem of *family*.
+
+    ``data``: ``marin_prefix()`` (``gs://marin-{region}`` or local fallback).
+    ``tmp``:  ``gs://marin-tmp-{region}`` on GCS with a known region;
+              ``<marin_prefix>/tmp`` (matching ``marin_temp_bucket``'s
+              non-GCS fallback) otherwise.
+
+    Note the asymmetry: the GCS tmp prefix is the *bucket-level* path
+    without ``/ttl={N}d``; the TTL segment must appear in callers' paths
+    (e.g. ``mirrortmp://ttl=14d/...``).
+    """
+    if family == "data":
+        return marin_prefix().rstrip("/")
+    if family == "tmp":
+        mp = marin_prefix().rstrip("/")
+        if mp.startswith("gs://"):
+            region = marin_region()
+            if region:
+                bucket = REGION_TO_TMP_BUCKET.get(region)
+                if bucket:
+                    return f"gs://{bucket}"
+            return f"{mp}/tmp"
+        if "://" not in mp:
+            mp = f"file://{mp}"
+        return f"{mp}/tmp"
+    raise ValueError(f"Unknown mirror bucket family: {family!r}")
 
 
 class MirrorFileSystem(fsspec.AbstractFileSystem):
@@ -720,9 +765,13 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
     Writes always target the local prefix.
 
     Cross-region copies are charged against the shared ``TransferBudget``.
+
+    Subclasses select a different bucket family by overriding ``_bucket_family``
+    (e.g. ``MirrorTmpFileSystem`` scopes to ``REGION_TO_TMP_BUCKET``).
     """
 
     protocol = "mirror"
+    _bucket_family: str = "data"
 
     def __init__(
         self,
@@ -731,8 +780,8 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
-        self._local_prefix = marin_prefix().rstrip("/")
-        self._remote_prefixes = _mirror_remote_prefixes(self._local_prefix)
+        self._local_prefix = _mirror_local_prefix(self._bucket_family)
+        self._remote_prefixes = _mirror_remote_prefixes(self._local_prefix, self._bucket_family)
         self._budget = budget if budget is not None else _global_transfer_budget
         self._worker_id = default_worker_id()
 
@@ -831,10 +880,113 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
 
         source_prefix = self._find_in_remote_prefixes(path)
         if source_prefix is None:
-            raise FileNotFoundError(f"mirror://{path} not found in any marin bucket")
+            raise FileNotFoundError(f"{self.protocol}://{path} not found in any marin bucket")
 
         self._copy_to_local(source_prefix, path)
         return local_url
+
+    def stage_to_local(self, path: str) -> str:
+        """Stage *path* (a directory or file) from the first matching remote
+        prefix into the local prefix and return the local concrete URL.
+
+        Re-stages *missing-or-mismatched* files when the local directory
+        already exists but is incomplete (e.g. a partial prior stage that
+        crashed mid-copy).  Used by readers that bypass fsspec — typically
+        TensorStore — and need a tensorstore-compatible URL.
+        """
+        path = self._strip_protocol(path)
+        local_url = self._local_url(path)
+        source_prefix = self._find_in_remote_prefixes(path)
+        if source_prefix is None:
+            if self._fs_exists(local_url):
+                return local_url
+            raise FileNotFoundError(f"{self.protocol}://{path} not found in any marin bucket")
+
+        self._stage_tree_to_local(source_prefix, path)
+        return local_url
+
+    def _stage_tree_to_local(self, source_prefix: str, path: str) -> None:
+        """Copy missing-or-mismatched files from a remote tree into the local tree.
+
+        Holds a single lock at the root path.  Charges the active budget for
+        the sum of bytes that need to be copied (re-staged bytes only — does
+        not double-charge files already present locally with matching size).
+        """
+        local_url = self._local_url(path)
+        remote_url = self._remote_url(source_prefix, path)
+        lock = create_lock(self._lock_path_for(path), self._worker_id)
+
+        if not lock.try_acquire():
+            for _ in range(60):
+                time.sleep(2)
+                if not lock.has_active_holder():
+                    break
+            if not lock.try_acquire():
+                raise RuntimeError(f"Could not acquire mirror lock for {path} after waiting")
+
+        try:
+            src_fs, src_root = self._get_fs_and_path(remote_url)
+
+            # Single-file source: fall back to the per-file path which has
+            # the same lock+budget+copy semantics.
+            if not src_fs.isdir(src_root):
+                src_size = self._fs_size(remote_url)
+                if self._fs_exists(local_url):
+                    local_size = self._fs_size(local_url)
+                    if src_size is not None and src_size == local_size:
+                        return
+                if src_size is not None:
+                    self._active_budget().record(src_size, remote_url)
+                logger.info("Mirror: copying %s → %s", remote_url, local_url)
+                self._fs_copy(remote_url, local_url)
+                return
+
+            info_map = src_fs.find(src_root, withdirs=False, detail=True)
+            if not info_map:
+                return
+
+            src_root_norm = src_root.rstrip("/")
+            remote_root_norm = remote_url.rstrip("/")
+            local_root_norm = local_url.rstrip("/")
+
+            plan: list[tuple[str, str]] = []
+            total_bytes = 0
+            expected_local_urls: list[str] = []
+
+            for src_path, info in info_map.items():
+                size = int(info.get("size") or 0)
+                rel = src_path
+                if rel.startswith(src_root_norm + "/"):
+                    rel = rel[len(src_root_norm) + 1 :]
+                elif rel == src_root_norm:
+                    rel = ""
+                file_remote_url = f"{remote_root_norm}/{rel}" if rel else remote_url
+                file_local_url = f"{local_root_norm}/{rel}" if rel else local_url
+                expected_local_urls.append(file_local_url)
+
+                if self._fs_exists(file_local_url):
+                    try:
+                        local_size = self._fs_size(file_local_url)
+                    except Exception:
+                        local_size = None
+                    if local_size is not None and local_size == size:
+                        continue
+
+                plan.append((file_remote_url, file_local_url))
+                total_bytes += size
+
+            if total_bytes > 0:
+                self._active_budget().record(total_bytes, remote_url)
+
+            for file_remote_url, file_local_url in plan:
+                logger.info("Mirror: copying %s → %s", file_remote_url, file_local_url)
+                self._fs_copy(file_remote_url, file_local_url)
+
+            for file_local_url in expected_local_urls:
+                if not self._fs_exists(file_local_url):
+                    raise RuntimeError(f"stage_to_local incomplete: {file_local_url} missing after copy")
+        finally:
+            lock.release()
 
     # -- fsspec interface: info/ls/exists -------------------------------------
 
@@ -953,5 +1105,20 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         return self._budget.bytes_used
 
 
-# Register the mirror:// protocol with fsspec.
+class MirrorTmpFileSystem(MirrorFileSystem):
+    """Cross-region mirror over the ``marin-tmp-{region}`` bucket family.
+
+    Discovery only — temporary checkpoints are still *written* directly to
+    the region-local ``gs://marin-tmp-{region}`` bucket via Levanter's
+    ``temporary_base_path``.  The ``mirrortmp://`` protocol exists so the
+    resume search loop can union-list temp checkpoints across regions and
+    stage the freshest one to local before TensorStore reads it.
+    """
+
+    protocol = "mirrortmp"
+    _bucket_family = "tmp"
+
+
+# Register the mirror:// and mirrortmp:// protocols with fsspec.
 fsspec.register_implementation("mirror", MirrorFileSystem)
+fsspec.register_implementation("mirrortmp", MirrorTmpFileSystem)
