@@ -8,11 +8,12 @@ import re
 import tempfile
 import time
 from dataclasses import asdict, dataclass
-from threading import Thread
+from threading import Event, Thread
 
 import pytest
 from draccus.utils import Dataclass
 from fray.types import ResourceConfig
+import marin.execution.executor_step_status as executor_step_status
 from marin.execution import THIS_OUTPUT_PATH
 from marin.evaluation.perplexity_gap import GapFinderModelConfig, default_model_perplexity_gap, raw_text_dataset
 from marin.execution.executor import (
@@ -30,6 +31,7 @@ from marin.execution.executor import (
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
+    step_lock,
 )
 
 
@@ -151,6 +153,31 @@ def test_status_file_reads_legacy_format(tmp_path):
 
     status_file = StatusFile(str(output_dir), worker_id="legacy-reader")
     assert status_file.status == "SUCCESS"
+
+
+def test_step_lock_terminal_status_does_not_race_heartbeat(tmp_path, monkeypatch):
+    terminal_status_written = Event()
+    heartbeat_waiting = Event()
+    heartbeat_after_terminal_status = Event()
+    original_refresh_lock = StatusFile.refresh_lock
+
+    def refresh_lock(status_file: StatusFile) -> None:
+        heartbeat_waiting.set()
+        assert terminal_status_written.wait(timeout=1)
+        try:
+            original_refresh_lock(status_file)
+        finally:
+            heartbeat_after_terminal_status.set()
+
+    monkeypatch.setattr(executor_step_status, "HEARTBEAT_INTERVAL", 0)
+    monkeypatch.setattr(StatusFile, "refresh_lock", refresh_lock)
+
+    with step_lock(str(tmp_path), "step") as status_file:
+        assert heartbeat_waiting.wait(timeout=1)
+        status_file.write_status(STATUS_SUCCESS)
+        terminal_status_written.set()
+        assert heartbeat_after_terminal_status.wait(timeout=1)
+    assert not StatusFile(str(tmp_path), "check").has_active_lock()
 
 
 def test_perplexity_gap_step_hash_changes_when_tokenizer_changes():
