@@ -29,6 +29,7 @@ from marin.datakit.ingestion_manifest import (
 from marin.transform.structured_text.table_records import (
     TABLE_CELL_DELIMITER,
     TableRecordStagingConfig,
+    serialize_gittables_example,
     serialize_totto_example,
     serialize_wikitablequestions_example,
     stage_table_record_source,
@@ -182,6 +183,40 @@ def test_serialize_wtq_preserves_numeric_literal_cells():
 
 
 # ---------------------------------------------------------------------------
+# GitTables serializer
+# ---------------------------------------------------------------------------
+
+
+def _gittables_fixture() -> dict:
+    return {
+        "database_id": "42",
+        "table_id": "sample_repo/users",
+        "table": [
+            ["id", "name", "score"],
+            ["1", "Ada", "3.14159265358979323846"],
+            ["2", "José", ""],
+        ],
+        "context": {
+            "csv_url": "https://github.com/example/repo/raw/main/users.csv",
+            "license": "MIT",
+            "number_rows": 2,
+            "number_columns": 3,
+        },
+    }
+
+
+def test_serialize_gittables_preserves_metadata_and_cells():
+    text = serialize_gittables_example(_gittables_fixture())
+    assert "database_id: 42" in text
+    assert "table_id: sample_repo/users" in text
+    assert "csv_url: https://github.com/example/repo/raw/main/users.csv" in text
+    assert "license: MIT" in text
+    assert "id\tname\tscore" in text
+    assert "1\tAda\t3.14159265358979323846" in text
+    assert "2\tJosé\t" in text
+
+
+# ---------------------------------------------------------------------------
 # End-to-end staging via a fake HF iterator
 # ---------------------------------------------------------------------------
 
@@ -191,15 +226,25 @@ def _read_staged_records(output_path: Path, filename: str = "staged.jsonl.gz") -
         return [json.loads(line) for line in handle if line.strip()]
 
 
-def _manifest(*, serializer_name: str, source_label: str = "wtq:test") -> IngestionSourceManifest:
+def _manifest(
+    *,
+    serializer_name: str,
+    source_label: str = "wtq:test",
+    dataset_key: str = "Stanford/wikitablequestions",
+    slice_key: str = "structured_text/wikitablequestions/validation",
+    source_urls: tuple[str, ...] = ("https://huggingface.co/datasets/Stanford/wikitablequestions",),
+    source_license: str = "CC BY 4.0",
+    surface_form: str = "wikipedia_table_tsv_plus_question_answer_lines",
+    source_metadata: dict[str, object] | None = None,
+) -> IngestionSourceManifest:
     return IngestionSourceManifest(
-        dataset_key="Stanford/wikitablequestions",
-        slice_key="structured_text/wikitablequestions/validation",
+        dataset_key=dataset_key,
+        slice_key=slice_key,
         source_label=source_label,
-        source_urls=("https://huggingface.co/datasets/Stanford/wikitablequestions",),
-        source_license="CC BY 4.0",
+        source_urls=source_urls,
+        source_license=source_license,
         source_format="huggingface_parquet_table_records",
-        surface_form="wikipedia_table_tsv_plus_question_answer_lines",
+        surface_form=surface_form,
         policy=IngestionPolicy(
             usage_policy=UsagePolicy.EVAL_ONLY,
             use_policy="Eval-only structured-text probe.",
@@ -219,7 +264,7 @@ def _manifest(*, serializer_name: str, source_label: str = "wtq:test") -> Ingest
         epic_issue=5005,
         issue_numbers=(5059,),
         sample_caps=SampleCapConfig(max_bytes_per_source=30 * 1024 * 1024),
-        source_metadata={"hf_revision": "fac45b3184e0ce9b79eecac454acf17e0a51f94e"},
+        source_metadata=source_metadata or {"hf_revision": "fac45b3184e0ce9b79eecac454acf17e0a51f94e"},
     )
 
 
@@ -253,6 +298,41 @@ def test_stage_table_record_source_end_to_end_wtq(tmp_path):
     assert metadata["source_manifest"]["source_label"] == "wtq:test"
     assert metadata["source_manifest"]["staging"]["serializer_name"] == "wikitablequestions"
     assert metadata["materialized_output"]["record_count"] == 3
+
+
+def test_stage_table_record_source_end_to_end_gittables(tmp_path):
+    fixtures = [_gittables_fixture()]
+    manifest = _manifest(
+        serializer_name="gittables",
+        source_label="gittables:test",
+        dataset_key="target-benchmark/gittables-corpus",
+        slice_key="structured_text/gittables/train",
+        source_urls=("https://gittables.github.io/",),
+        source_license="Mixed per-table licenses",
+        surface_form="tsv_table_plus_csv_url_and_license",
+        source_metadata={"hf_revision": "401ebb35a14b2d6aa1135bce5d81d55e1f3cbf51"},
+    )
+    cfg = TableRecordStagingConfig(
+        input_path="fake://gittables",
+        output_path=str(tmp_path),
+        source_label="gittables:test",
+        serializer_name="gittables",
+        split="train",
+        source_manifest=manifest,
+        content_fingerprint=manifest.fingerprint(),
+    )
+
+    with patch(
+        "marin.transform.structured_text.table_records._load_hf_iterable",
+        return_value=iter(fixtures),
+    ):
+        result = stage_table_record_source(cfg)
+
+    assert result["record_count"] == 1
+    records = _read_staged_records(tmp_path)
+    assert records[0]["provenance"]["serializer"] == "gittables"
+    assert "csv_url: https://github.com/example/repo/raw/main/users.csv" in records[0]["text"]
+    assert "1\tAda\t3.14159265358979323846" in records[0]["text"]
 
 
 def test_stage_table_record_source_loads_downloaded_parquet_split(tmp_path):
