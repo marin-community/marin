@@ -21,7 +21,6 @@ def test_mega_available_bundle_covers_representative_families() -> None:
         "chat/wildchat",
         "fineweb2_multilingual/deu_Latn",
         "raw_web_markup/svg_stack/svg_xml_val",
-        "structured_text/totto",
         "binary_network_security/uwf_zeek",
         "bio_chem/uniprot/uniprot_sprot_dat",
         "formal_methods/smt_lib",
@@ -33,3 +32,7 @@ def test_mega_available_bundle_covers_representative_families() -> None:
 
     missing = expected_keys.difference(datasets)
     assert not missing, f"mega bundle is missing expected dataset keys: {sorted(missing)}"
+    assert "agent_traces/openhands_swe_rebench" not in datasets
+    assert "bio_chem/rcsb/rcsb_mmcif" not in datasets
+    assert "raw_web_markup/textocr/ocr_strings" not in datasets
+    assert "paired_robustness_ppl/translation/flores_eng_deu/dev/target_given_source" not in datasets
