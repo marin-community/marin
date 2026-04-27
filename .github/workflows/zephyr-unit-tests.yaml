@@ -33,6 +33,10 @@ jobs:
   zephyr-tests:
     needs: changes
     if: needs.changes.outputs.should_run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -60,7 +64,10 @@ jobs:
           python -m pip install --upgrade pip
           uv sync --package marin-zephyr --group test --frozen
 
-      - name: Test with pytest
+      - name: Test with pytest (shard ${{ matrix.shard }}/4)
         run: |
           # important: don't cd into lib/zephyr so that ray uv integration doesn't freak out
-          uv run --package marin-zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/
+          # Shard across runners (pytest-split): session-scoped Iris fixtures make pytest-xdist a poor fit here.
+          uv run --package marin-zephyr --frozen pytest \
+            --splits 4 --group ${{ matrix.shard }} \
+            --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/
