@@ -10,7 +10,9 @@ from collections.abc import Iterable
 from connectrpc.interceptor import Interceptor
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
-from starlette.routing import Mount
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
+from starlette.routing import Mount, Route
 
 from finelog.rpc.logging_connect import LogServiceWSGIApplication
 from finelog.server.interceptors import ConcurrencyLimitInterceptor
@@ -38,5 +40,12 @@ def build_log_server_asgi(
     chain: list[Interceptor] = list(interceptors)
     chain.append(ConcurrencyLimitInterceptor({"FetchLogs": max_concurrent_fetch_logs}))
     log_wsgi_app = LogServiceWSGIApplication(service=service, interceptors=tuple(chain))
-    routes = [Mount(log_wsgi_app.path, app=WSGIMiddleware(log_wsgi_app))]
+
+    async def _health(_: Request) -> PlainTextResponse:
+        return PlainTextResponse("ok")
+
+    routes = [
+        Route("/health", _health),
+        Mount(log_wsgi_app.path, app=WSGIMiddleware(log_wsgi_app)),
+    ]
     return Starlette(routes=routes)

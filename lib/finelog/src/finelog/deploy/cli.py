@@ -182,6 +182,7 @@ def create_cmd(
         f"--zone={zone}",
         f"--machine-type={machine_type}",
         f"--boot-disk-size={boot_disk_size}GB",
+        "--boot-disk-type=pd-ssd",
         "--image-family=debian-12",
         "--image-project=debian-cloud",
         f"--metadata-from-file=startup-script={startup_path}",
