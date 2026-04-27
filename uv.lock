@@ -4913,6 +4913,7 @@ dependencies = [
     { name = "marin-rigging" },
     { name = "protobuf" },
     { name = "pyarrow" },
+    { name = "pyyaml" },
     { name = "starlette" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -4935,6 +4936,7 @@ requires-dist = [
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "protobuf", specifier = ">=5.0" },
     { name = "pyarrow", specifier = ">=19.0.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "starlette", specifier = ">=0.50.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
 ]

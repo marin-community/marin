@@ -15,6 +15,7 @@ dependencies = [
     "fsspec>=2024.0.0",
     "protobuf>=5.0",
     "pyarrow>=19.0.0",
+    "pyyaml>=6.0",
     "starlette>=0.50.0",
     "uvicorn[standard]>=0.23.0",
 ]
@@ -34,6 +35,9 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/finelog"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"config" = "config"
 
 [tool.pytest.ini_options]
 timeout = 10
