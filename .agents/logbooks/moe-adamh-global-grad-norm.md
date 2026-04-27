@@ -363,3 +363,26 @@
   d1280 is still running to complete the four-point evidence and final
   scaling-law projection.
 - Next action: continue monitoring d1280 until terminal state.
+
+### 2026-04-26 22:21 - MOE-AGGN-001 d1280 in progress heartbeat
+
+- Result: d1280 remains healthy and continues training; d1024 remains
+  finished.
+- Status:
+  - Iris parent: `JOB_STATE_RUNNING`, `failure_count=0`
+  - d1024: `JOB_STATE_SUCCEEDED`, `failure_count=0`,
+    `preemption_count=3`
+  - d1280: `JOB_STATE_RUNNING`, `failure_count=0`,
+    `preemption_count=8`
+- W&B:
+  - d1024 final eval/paloma/macro_loss: `3.166934013366699`
+  - d1024 final throughput/tokens_per_second: `177281.21442588005`
+  - d1024 effective speedup: `0.9687810633605517`
+  - d1280 global_step: `9266`
+  - d1280 eval/paloma/macro_loss: `3.1323108673095703`
+  - d1280 throughput/tokens_per_second: `128158.1291560675`
+  - d1280 throughput/total_tokens: `9717153792`
+- Interpretation: the variant remains blocked on the d1024 speedup miss, but
+  d1280 is now past the 9k eval and should finish after the remaining long
+  tail of training and final eval/checkpoint.
+- Next action: continue monitoring d1280 until terminal state.
