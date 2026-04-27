@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 # Evalchemy git repo and commit to use
 EVALCHEMY_REPO = "https://github.com/teetone/evalchemy.git"
-EVALCHEMY_COMMIT = "7f24168"  # 2026-03-31: Added OlympiadBench Physics, coverage for science
+EVALCHEMY_COMMIT = "9723775"  # 2026-04-26: TTC with vLLM n=8 candidates, n=5 validation votes, single-call inference
 
 
 # Evalchemy benchmarks that have hardcoded n_repeat values and their paths.

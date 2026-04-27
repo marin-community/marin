@@ -24,10 +24,13 @@ __all__ = [
     "CODEELO",
     "CODEFORCES",
     "EVALCHEMY_CODE_TASKS",
+    "EVALCHEMY_CODE_TTC_TASKS",
     "EVALCHEMY_CORE_TASKS",
     "EVALCHEMY_MATH_TASKS",
+    "EVALCHEMY_MATH_TTC_TASKS",
     "EVALCHEMY_REASONING_TASKS",
     "EVALCHEMY_SCIENCE_TASKS",
+    "EVALCHEMY_SCIENCE_TTC_TASKS",
     "GPQA_DIAMOND",
     "HMMT",
     "HUMANEVAL_PLUS",
@@ -40,6 +43,21 @@ __all__ = [
     "MBPP_PLUS",
     "OLYMPIADBENCH",
     "OLYMPIADBENCH_PHYSICS",
+    # TTC variants
+    "AIME24_TTC",
+    "AIME25_TTC",
+    "AIME26_TTC",
+    "AMC23_TTC",
+    "GPQA_DIAMOND_TTC",
+    "HLE_TTC",
+    "HMMT_TTC",
+    "JEEBENCH_TTC",
+    "LIVECODEBENCH_TTC",
+    "LIVECODEBENCH_V5_OFFICIAL_TTC",
+    "LIVECODEBENCH_V6_OFFICIAL_TTC",
+    "MATH500_TTC",
+    "OLYMPIADBENCH_PHYSICS_TTC",
+    "OLYMPIADBENCH_TTC",
 ]
 
 # =============================================================================
@@ -94,6 +112,35 @@ ALICE_IN_WONDERLAND = EvalTaskConfig(name="AIW", num_fewshot=0, task_alias="AIW"
 HUMANITYS_LAST_EXAM = EvalTaskConfig(name="HLE", num_fewshot=0, task_alias="HLE", task_kwargs={"n_repeat": 1})
 
 # =============================================================================
+# TTC (Test-Time Compute) tasks — generate N candidates + UQ filter
+# =============================================================================
+# TTC benchmarks use the same scoring as originals but generate 8 candidates
+# per problem and apply 3-stage UQ validation to pick the best one.
+# n_candidates can be overridden via task_kwargs.
+AIME24_TTC = EvalTaskConfig(name="AIME24_TTC", num_fewshot=0, task_alias="AIME24_TTC")
+AIME25_TTC = EvalTaskConfig(name="AIME25_TTC", num_fewshot=0, task_alias="AIME25_TTC")
+AIME26_TTC = EvalTaskConfig(name="AIME26_TTC", num_fewshot=0, task_alias="AIME26_TTC")
+AMC23_TTC = EvalTaskConfig(name="AMC23_TTC", num_fewshot=0, task_alias="AMC23_TTC")
+MATH500_TTC = EvalTaskConfig(name="MATH500_TTC", num_fewshot=0, task_alias="MATH500_TTC")
+HMMT_TTC = EvalTaskConfig(name="HMMT_TTC", num_fewshot=0, task_alias="HMMT_TTC")
+OLYMPIADBENCH_TTC = EvalTaskConfig(name="OlympiadBench_TTC", num_fewshot=0, task_alias="OlympiadBench_TTC")
+
+GPQA_DIAMOND_TTC = EvalTaskConfig(name="GPQADiamond_TTC", num_fewshot=0, task_alias="GPQADiamond_TTC")
+JEEBENCH_TTC = EvalTaskConfig(name="JEEBench_TTC", num_fewshot=0, task_alias="JEEBench_TTC")
+OLYMPIADBENCH_PHYSICS_TTC = EvalTaskConfig(
+    name="OlympiadBench_Physics_TTC", num_fewshot=0, task_alias="OlympiadBench_Physics_TTC"
+)
+HLE_TTC = EvalTaskConfig(name="HLE_TTC", num_fewshot=0, task_alias="HLE_TTC")
+
+LIVECODEBENCH_TTC = EvalTaskConfig(name="LiveCodeBench_TTC", num_fewshot=0, task_alias="LiveCodeBench_TTC")
+LIVECODEBENCH_V5_OFFICIAL_TTC = EvalTaskConfig(
+    name="LiveCodeBenchv5_official_TTC", num_fewshot=0, task_alias="LiveCodeBenchv5_official_TTC"
+)
+LIVECODEBENCH_V6_OFFICIAL_TTC = EvalTaskConfig(
+    name="LiveCodeBenchv6_official_TTC", num_fewshot=0, task_alias="LiveCodeBenchv6_official_TTC"
+)
+
+# =============================================================================
 # Task groups
 # =============================================================================
 EVALCHEMY_MATH_TASKS = (AIME24, AIME25, AIME26, AMC23, MATH500, HMMT, OLYMPIADBENCH)
@@ -109,6 +156,11 @@ EVALCHEMY_CODE_TASKS = (
 )
 EVALCHEMY_SCIENCE_TASKS = (GPQA_DIAMOND, JEEBENCH)
 EVALCHEMY_REASONING_TASKS = (ALICE_IN_WONDERLAND, HUMANITYS_LAST_EXAM)
+
+# TTC task groups
+EVALCHEMY_MATH_TTC_TASKS = (AIME24_TTC, AIME25_TTC, AIME26_TTC, AMC23_TTC, MATH500_TTC, HMMT_TTC, OLYMPIADBENCH_TTC)
+EVALCHEMY_SCIENCE_TTC_TASKS = (GPQA_DIAMOND_TTC, JEEBENCH_TTC, HLE_TTC, OLYMPIADBENCH_PHYSICS_TTC)
+EVALCHEMY_CODE_TTC_TASKS = (LIVECODEBENCH_TTC, LIVECODEBENCH_V5_OFFICIAL_TTC, LIVECODEBENCH_V6_OFFICIAL_TTC)
 
 # Combined core tasks for comprehensive evaluation
 EVALCHEMY_CORE_TASKS = (

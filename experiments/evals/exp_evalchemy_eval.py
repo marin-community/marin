@@ -52,6 +52,21 @@ from experiments.evals.evalchemy_task_configs import (
     MATH500,
     OLYMPIADBENCH,
     OLYMPIADBENCH_PHYSICS,
+    # TTC variants
+    AIME24_TTC,
+    AIME25_TTC,
+    AIME26_TTC,
+    AMC23_TTC,
+    GPQA_DIAMOND_TTC,
+    HLE_TTC,
+    HMMT_TTC,
+    JEEBENCH_TTC,
+    LIVECODEBENCH_TTC,
+    LIVECODEBENCH_V5_OFFICIAL_TTC,
+    LIVECODEBENCH_V6_OFFICIAL_TTC,
+    MATH500_TTC,
+    OLYMPIADBENCH_PHYSICS_TTC,
+    OLYMPIADBENCH_TTC,
 )
 from experiments.evals.evals import run_evalchemy_experiment
 
@@ -101,10 +116,27 @@ CODE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
     # ([CODEFORCES, CODEELO], SEEDS[:3]),
 ]
 
+# TTC suites — same seed structure as originals
+MATH_TTC_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
+    ([AIME24_TTC, AIME25_TTC, AIME26_TTC, AMC23_TTC, HMMT_TTC], SEEDS[:10]),
+    ([MATH500_TTC, OLYMPIADBENCH_TTC], SEEDS[:1]),
+]
+
+SCIENCE_TTC_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
+    ([GPQA_DIAMOND_TTC, JEEBENCH_TTC, HLE_TTC, OLYMPIADBENCH_PHYSICS_TTC], SEEDS[:3]),
+]
+
+CODE_TTC_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
+    ([LIVECODEBENCH_TTC, LIVECODEBENCH_V5_OFFICIAL_TTC, LIVECODEBENCH_V6_OFFICIAL_TTC], SEEDS[:6]),
+]
+
 SUITE_TO_TASK_SEED_GROUPS: dict[str, list[tuple[list, list[int]]]] = {
     "math": MATH_TASK_SEED_GROUPS,
     "science": SCIENCE_TASK_SEED_GROUPS,
     "code": CODE_TASK_SEED_GROUPS,
+    "math_ttc": MATH_TTC_TASK_SEED_GROUPS,
+    "science_ttc": SCIENCE_TTC_TASK_SEED_GROUPS,
+    "code_ttc": CODE_TTC_TASK_SEED_GROUPS,
 }
 
 # =============================================================================
@@ -172,7 +204,7 @@ if __name__ == "__main__":
         "--suite",
         type=str,
         default="math",
-        choices=["math", "science", "code", "all"],
+        choices=["math", "science", "code", "all", "math_ttc", "science_ttc", "code_ttc", "all_ttc"],
         help="Eval suite to run (default: math)",
     )
     parser.add_argument(
@@ -191,6 +223,8 @@ if __name__ == "__main__":
 
     if args.suite == "all":
         suites = ["math", "science", "code"]
+    elif args.suite == "all_ttc":
+        suites = ["math_ttc", "science_ttc", "code_ttc"]
     else:
         suites = [args.suite]
 
