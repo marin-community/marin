@@ -302,9 +302,10 @@ def test_enforce_run_id_leaves_temp_base_path_alone_if_none():
     assert cp.temporary_base_path is None
 
 
-def test_enforce_run_id_temp_write_matches_mirror_search_in_midtraining():
-    """End-to-end alignment check: in midtraining, the directory the temp writes target
-    is exactly what the mirrortmp:// search path resolves to."""
+def test_temp_write_path_matches_mirror_search_path_for_resume():
+    """Alignment invariant: the directory the temp writes target must equal the
+    directory the mirrortmp:// search path resolves to.  If they diverge, a cross-region
+    resume can't find the temp checkpoint written before preemption."""
     config = _make_train_config(
         output_path="gs://marin-us-central1/runs/foo-abc123",
         run_id=None,
