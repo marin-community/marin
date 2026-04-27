@@ -15,6 +15,7 @@ from rigging.filesystem import open_url
 import pyarrow.parquet as pq
 
 from levanter.utils import fsspec_utils
+from levanter.utils import cloud_utils
 
 from ..data import AsyncDataset
 from ..utils.fsspec_utils import expand_glob
@@ -233,6 +234,7 @@ class TextUrlDataSource(ShardedDataSource[str]):
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[str]:
         url = self.base_ds._shard_name_to_url_mapping[shard_name]
+        cloud_utils.assert_gcs_path_region_compatible(url, purpose="text shard load")
         i = 0
         compression = "infer"
         if url.endswith(".zstd"):  # hacky way to detect zstd
@@ -314,7 +316,8 @@ class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, s
         import librosa  # noqa F401
 
         def _load_audio_file(file_name, sampling_rate):
-            with open_url(audio_pointer, "rb", compression="infer") as f:
+            cloud_utils.assert_gcs_path_region_compatible(file_name, purpose="audio file load")
+            with open_url(file_name, "rb", compression="infer") as f:
                 array, sr = librosa.load(f, sr=sampling_rate)
             return {"array": array, "sampling_rate": sr}
 
@@ -339,6 +342,7 @@ class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, s
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[Tuple[np.ndarray, int, str]]:
         url = self._shard_name_to_url_mapping[shard_name]
+        cloud_utils.assert_gcs_path_region_compatible(url, purpose="audio shard load")
         i = 0
         with open_url(url, "r", compression="infer") as f:
             format = _sniff_format_for_dataset(url)
@@ -449,6 +453,7 @@ class JsonlDataSource(UrlBackedShardedDataSource[dict]):
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
         url = self._shard_name_to_url_mapping[shard_name]
+        cloud_utils.assert_gcs_path_region_compatible(url, purpose="jsonl shard load")
         i = 0
         with open_url(url, "r", compression="infer") as f:
             # TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
@@ -465,6 +470,7 @@ class JsonDataSource(UrlBackedShardedDataSource[dict]):
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
         url = self._shard_name_to_url_mapping[shard_name]
+        cloud_utils.assert_gcs_path_region_compatible(url, purpose="json shard load")
         with open_url(url, "r", compression="infer") as f:
             data = json.load(f)
             return iter(data[row:])

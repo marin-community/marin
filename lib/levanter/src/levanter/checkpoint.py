@@ -38,6 +38,7 @@ from levanter.tensorstore_serialization import (
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
 )
+from levanter.utils import cloud_utils
 from levanter.utils import fsspec_utils
 from levanter.utils.jax_utils import broadcast_one_to_all
 from levanter.utils.types import FilterSpec
@@ -446,6 +447,7 @@ class Checkpointer:
 
         # The default of 5 minutes is too short even for modestly sized models for some reason
         self._manager = GlobalAsyncCheckpointManager(timeout_secs=60 * 30)
+        cloud_utils.assert_gcs_path_region_compatible(self.base_path, purpose="checkpoint initialization")
 
         if jax.process_index() == 0:
             self._async_checkpoint_remover_queue: queue.Queue[str] = queue.Queue(maxsize=-1)
@@ -641,6 +643,7 @@ class Checkpointer:
         base = base_path_override if base_path_override is not None else self.base_path
         path = os.path.join(base, destination)
         logger.info(f"Saving checkpoint at step {step} to {path}")
+        cloud_utils.assert_gcs_path_region_compatible(path, purpose="checkpoint save")
 
         save_checkpoint(
             tree,
@@ -692,6 +695,7 @@ def save_checkpoint(
     checkpoint_path = str(checkpoint_path)
     checkpoint_debug = debug or CheckpointDebugConfig()
     logger.info(f"Saving checkpoint to {checkpoint_path} for step {step}")
+    cloud_utils.assert_gcs_path_region_compatible(checkpoint_path, purpose="checkpoint save")
     progress_logger: _CheckpointProgressLogger | None = None
     if checkpoint_debug.enabled:
         if not tracemalloc.is_tracing():
@@ -793,6 +797,7 @@ def load_checkpoint(
 
     """
     checkpoint_path = str(checkpoint_path)
+    cloud_utils.assert_gcs_path_region_compatible(checkpoint_path, purpose="checkpoint load")
 
     if is_in_jit():
         logger.warning("Loading checkpoint in jit. This is not recommended and probably won't work.")
@@ -943,6 +948,7 @@ def discover_latest_checkpoint(checkpoint_path: PathLike, *additional_paths: Pat
     best_key: tuple[datetime.datetime, int] | None = None
 
     for cp_path in all_paths:
+        cloud_utils.assert_gcs_path_region_compatible(cp_path, purpose="discover latest checkpoint")
         found = _discover_latest_checkpoint_single(cp_path)
         if found is None:
             continue
@@ -1087,6 +1093,7 @@ def is_checkpoint_path(path: str) -> bool:
     Check if a given path is a checkpoint path.
     """
     try:
+        cloud_utils.assert_gcs_path_region_compatible(path, purpose="checkpoint path check")
         if not fsspec_utils.exists(path):
             return False
         # Sometimes we have incomplete checkpoints due to preemption or other issues.

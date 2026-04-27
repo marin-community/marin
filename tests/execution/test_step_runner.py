@@ -248,6 +248,33 @@ def test_step_spec_as_executor_step_round_trip():
     assert resolved.dep_paths == [dep.output_path]
 
 
+def test_step_spec_as_executor_step_infers_region_for_remote_fn():
+    @remote
+    def my_fn(output_path):
+        return output_path
+
+    step = StepSpec(
+        name="tokenize",
+        output_path_prefix="gs://marin-us-central2",
+        hash_attrs={"input_path": "gs://marin-us-central2/raw/data"},
+        fn=my_fn,
+    )
+
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved = resolve_executor_step(
+            step.as_executor_step(),
+            config={"attrs": step.hash_attrs},
+            output_path=step.output_path,
+            deps=[],
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == ["us-central2"]
+
+
 # ---------------------------------------------------------------------------
 # StepRunner tests: three-step pipeline
 # ---------------------------------------------------------------------------
@@ -880,6 +907,27 @@ def test_resolve_executor_step_raises_for_dual_region_bucket_location():
                 config={"input_path": "gs://external-bucket/path/to/data"},
                 output_path="/out/test-abc",
             )
+
+
+def test_resolve_executor_step_prefers_bucket_metadata_for_noncanonical_marin_bucket():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+        patch("marin.execution.executor.get_bucket_location", return_value="us-central2"),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"input_path": "gs://marin-data/path/to/data"},
+            output_path="/out/test-abc",
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == ["us-central2"]
 
 
 def test_resolve_executor_step_skips_bucket_location_permission_failures():

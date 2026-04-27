@@ -26,6 +26,7 @@ from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 
 from levanter._debug_logging import flush_debug_output
+from levanter.utils import cloud_utils
 from levanter.utils import fsspec_utils, jax_utils
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,7 @@ def build_kvstore_spec(path: str) -> dict:
 
         return spec
     elif parsed.scheme == "gs":
+        cloud_utils.assert_gcs_path_region_compatible(path, purpose="tensorstore kvstore")
         return {"driver": "gcs", "bucket": parsed.netloc, "path": parsed.path.lstrip("/")}
     elif parsed.scheme in ("", "file"):
         return {"driver": "file", "path": os.path.abspath(path)}

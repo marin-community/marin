@@ -20,7 +20,6 @@ import braceexpand
 import draccus
 import fsspec
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url, url_to_fs
 from datasets import load_dataset_builder
 from fray import ResourceConfig
 from levanter.data.text import (
@@ -34,6 +33,7 @@ from levanter.data.text import (
 from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
 from levanter.store.cache import consolidate_shard_caches
 from levanter.store.tree_store import TreeStore
+from rigging.filesystem import check_gcs_paths_same_region, open_url, url_to_fs
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
 from zephyr.dataset import FileEntry
 from zephyr.readers import InputFileSpec, load_file
@@ -280,6 +280,27 @@ def _expand_tokenize_paths(input_paths: list[str]) -> list[str]:
     return patterns
 
 
+def _source_url_strings(split_name: str, paths: Sequence[object]) -> Iterator[tuple[str, str]]:
+    for index, path in enumerate(paths):
+        if isinstance(path, VersionedValue):
+            path = path.value
+        if isinstance(path, InputName):
+            path = path.name
+        if isinstance(path, str):
+            yield f"{split_name}[{index}]", path
+
+
+def _check_source_urls_same_region(train_paths: Sequence[object], validation_paths: Sequence[object]) -> None:
+    source_urls = {
+        **dict(_source_url_strings("train_urls", train_paths)),
+        **dict(_source_url_strings("validation_urls", validation_paths)),
+    }
+    gcs_source_urls = {key: path for key, path in source_urls.items() if path.startswith("gs://")}
+    if not gcs_source_urls:
+        return
+    check_gcs_paths_same_region(gcs_source_urls, local_ok=True, skip_if_prefix_contains=())
+
+
 def _bundle_files_by_size(files: list[FileEntry], max_bytes: int):
     """Bundle files into groups, with each group having a total size less than max_bytes."""
     current_group: list[str] = []
@@ -345,6 +366,7 @@ def tokenize(config: TokenizeConfigBase):
     """
 
     if isinstance(config, TokenizeConfig):
+        _check_source_urls_same_region(config.train_paths, config.validation_paths)
         train_patterns = _expand_tokenize_paths(config.train_paths) if config.train_paths else []
         validation_patterns = _expand_tokenize_paths(config.validation_paths) if config.validation_paths else []
     elif isinstance(config, HfTokenizeConfig):
@@ -361,6 +383,7 @@ def tokenize(config: TokenizeConfigBase):
 
         train_patterns = list(data_files.get("train", []))
         validation_patterns = list(data_files.get("validation", data_files.get("test", [])))
+        _check_source_urls_same_region(train_patterns, validation_patterns)
     else:
         raise ValueError(f"Unknown config type: {type(config)}")
 

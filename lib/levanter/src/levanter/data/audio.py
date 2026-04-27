@@ -31,6 +31,7 @@ from levanter.data.mixture import MixtureDataset, StopStrategy
 from levanter.data.sharded_datasource import AudioTextUrlDataSource, ShardedDataSource, WrappedHFDataSource
 from levanter.data.text import BatchTokenizer
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
+from levanter.utils import cloud_utils
 
 # intercept the logging nonsense here
 from levanter.models.asr_model import AudioTextExample
@@ -210,6 +211,7 @@ class AudioDatasetSourceConfig:
             raise ValueError(f"Unknown split {split}")
 
         def fsspec_expand_glob(url):
+            cloud_utils.assert_gcs_path_region_compatible(url, purpose="audio glob expansion")
             if "*" in url:
                 fs = url_to_fs(url)[0]
                 return fs.glob(url)

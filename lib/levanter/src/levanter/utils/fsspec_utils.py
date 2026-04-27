@@ -8,15 +8,19 @@ import braceexpand
 import fsspec
 from rigging.filesystem import url_to_fs
 
+from . import cloud_utils
+
 
 def exists(url, **kwargs) -> bool:
     """Check if a file exists on a remote filesystem."""
+    cloud_utils.assert_gcs_path_region_compatible(url, purpose="filesystem exists")
     fs, path = url_to_fs(url, **kwargs)
     return fs.exists(path)
 
 
 def mkdirs(path):
     """Create a directory and any necessary parent directories."""
+    cloud_utils.assert_gcs_path_region_compatible(path, purpose="filesystem mkdirs")
     fs, path = url_to_fs(path)
     fs.makedirs(path, exist_ok=True)
 
@@ -31,6 +35,7 @@ def expand_glob(url):
     ['s3://bucket/2023/a.json', 's3://bucket/2024/b.json', ...]
     """
     for candidate in braceexpand.braceexpand(url):
+        cloud_utils.assert_gcs_path_region_compatible(candidate, purpose="glob expansion")
         fs, path = url_to_fs(candidate)
 
         if glob.has_magic(path):
@@ -44,6 +49,7 @@ def expand_glob(url):
 def remove(url, *, recursive=False, **kwargs):
     """Remove a file from a remote filesystem."""
     # TODO: better to use a STS deletion policy or job for this one.
+    cloud_utils.assert_gcs_path_region_compatible(url, purpose="filesystem remove")
     fs, path = url_to_fs(url, **kwargs)
 
     fs.rm(path, recursive=recursive)

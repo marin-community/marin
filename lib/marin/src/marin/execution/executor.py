@@ -177,25 +177,34 @@ def _is_bucket_location_permission_error(exc: Exception) -> bool:
 
 
 def _region_for_gcs_path(path: str, *, step_name: str, bucket_region_cache: dict[str, str]) -> str | None:
-    region = region_from_prefix(path)
-    if region is not None:
-        return _normalize_region(region, step_name=step_name, path=path)
-
     bucket, _ = split_gcs_path(path)
-    if bucket not in bucket_region_cache:
-        try:
-            bucket_region_cache[bucket] = get_bucket_location(path)
-        except Exception as e:
-            if _is_bucket_location_permission_error(e):
-                logger.warning(
-                    "Could not infer bucket location for %s due to permission error; "
-                    "skipping this path for region inference.",
-                    path,
-                    exc_info=True,
-                )
-                return None
+    try:
+        if bucket not in bucket_region_cache:
+            bucket_region_cache[bucket] = get_bucket_location(bucket)
+        return _normalize_region(bucket_region_cache[bucket], step_name=step_name, path=path)
+    except Exception as e:
+        if not _is_bucket_location_permission_error(e):
             raise
-    return _normalize_region(bucket_region_cache[bucket], step_name=step_name, path=path)
+
+    region = region_from_prefix(path)
+    if region is None:
+        logger.warning(
+            "Could not infer bucket location for %s due to permission error; skipping this path for region inference.",
+            path,
+            exc_info=True,
+        )
+        return None
+
+    try:
+        return _normalize_region(region, step_name=step_name, path=path)
+    except ValueError:
+        logger.warning(
+            "Could not infer a concrete region for %s because bucket metadata access failed and the bucket name does "
+            "not encode a regional location.",
+            path,
+            exc_info=True,
+        )
+        return None
 
 
 def _infer_gcs_regions(
@@ -676,7 +685,18 @@ def resolve_executor_step(
     # Short-circuit for StepSpec -> ExecutorStep -> StepSpec round-trip.
     original: StepSpec | None = getattr(step, "_original_step_spec", None)
     if original is not None:
-        return dataclasses.replace(original, deps=deps or [])
+        original_fn = original.fn
+        if isinstance(original_fn, RemoteCallable):
+            original_fn = _maybe_attach_inferred_region_constraint(
+                step_name=step.name,
+                remote_fn=original_fn,
+                config=config,
+                output_path=output_path,
+                deps=deps,
+                dag_tpu_regions=dag_tpu_regions,
+                forced_region=forced_region,
+            )
+        return dataclasses.replace(original, deps=deps or [], fn=original_fn)
 
     remote_callable = step.fn if isinstance(step.fn, RemoteCallable) else None
     if remote_callable is not None:

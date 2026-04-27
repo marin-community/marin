@@ -53,6 +53,7 @@ from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
 from levanter.models.asr_model import ASRMixin
 from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.utils import cloud_utils
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.hf_utils import HfTokenizer
@@ -314,6 +315,7 @@ def _load_torch(path, dtype, fs: AbstractFileSystem | None = None):
 
 def _load_safe_tensors(path, dtype, fs: AbstractFileSystem | None = None):
     """Stream a safetensors shard from remote storage and return JAX arrays."""
+    cloud_utils.assert_gcs_path_region_compatible(path, purpose="hf safetensors load")
     if fs is None:
         fs, stripped = url_to_fs(path, asynchronous=True)
         path = stripped
@@ -723,6 +725,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         final_state_dict = {}
 
+        cloud_utils.assert_gcs_path_region_compatible(url, purpose="hf checkpoint load")
         fs: AbstractFileSystem
         fs, path = url_to_fs(url)
 

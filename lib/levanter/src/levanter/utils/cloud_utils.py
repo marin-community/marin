@@ -8,13 +8,13 @@ import os
 import shutil
 import tempfile
 import time
-import urllib.parse
 from typing import Optional
 
 import fsspec
 import jax
 import requests  # type: ignore
 from fsspec import AbstractFileSystem
+from rigging.filesystem import check_path_in_region, runtime_gcp_region
 
 from levanter.utils.jax_utils import sync_global_devices
 
@@ -47,6 +47,19 @@ def _checked_delete(url):
     except requests.exceptions.RequestException:
         logger.exception(f"Could not delete {url} from metadata server. Is this a TPU VM?", exc_info=True)
         raise
+
+
+def assert_gcs_path_region_compatible(path: str, *, purpose: str | None = None) -> None:
+    """Raise if a gs:// path points at a bucket in a different region than the current host."""
+    if not path.startswith("gs://"):
+        return
+
+    current_region = runtime_gcp_region()
+    if current_region is None:
+        logger.debug("Skipping GCS region check for %s because the current region is unknown", path)
+        return
+
+    check_path_in_region(purpose or "GCS path", path, current_region, local_ok=True)
 
 
 def _shutdown_tpu_with_queued_resource():

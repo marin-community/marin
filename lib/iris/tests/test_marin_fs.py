@@ -24,6 +24,7 @@ from rigging.filesystem import (
     open_url,
     region_from_metadata,
     region_from_prefix,
+    runtime_gcp_region,
     url_to_fs,
 )
 
@@ -53,6 +54,8 @@ def test_region_from_metadata_returns_none_on_failure():
     [
         ("gs://marin-us-east1/scratch", "us-east1"),
         ("gs://marin-us-central2/data", "us-central2"),
+        ("gs://marin-tmp-us-east1/ttl=30d/cache", "us-east1"),
+        ("gs://marin-tmp-eu-west4/ttl=30d/cache", "europe-west4"),
         # Abbreviated bucket name normalizes to canonical GCP region.
         ("gs://marin-eu-west4/tokenized", "europe-west4"),
         ("gs://other-bucket/foo", None),
@@ -90,6 +93,19 @@ def test_marin_prefix_falls_back_to_local():
 def test_marin_region_from_metadata():
     with patch(
         "rigging.filesystem.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-east1-c")
+    ):
+        assert marin_region() == "us-east1"
+
+
+def test_runtime_gcp_region_from_iris_worker_region():
+    with patch.dict(os.environ, {"IRIS_WORKER_REGION": "US-CENTRAL2", "MARIN_PREFIX": "gs://marin-us-east1"}):
+        assert runtime_gcp_region() == "us-central2"
+
+
+def test_marin_region_ignores_iris_worker_region():
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {"IRIS_WORKER_REGION": "US-CENTRAL2", "MARIN_PREFIX": "gs://marin-us-east1"}),
     ):
         assert marin_region() == "us-east1"
 

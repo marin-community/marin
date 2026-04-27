@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+from unittest.mock import patch
 
 import jax
 import numpy as np
@@ -120,6 +121,31 @@ def test_mixed_paths_one_invalid_inputname():
         )
     assert "contains a forbidden pattern ('test' or 'validation')" in str(excinfo.value)
     assert "gs://bucket/data/test/file2.jsonl" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "train_paths, validation_paths, expected_key",
+    [
+        (["gs://bucket/data/train/file.jsonl"], [], "train_urls[0]"),
+        ([], ["gs://bucket/data/eval/file.jsonl"], "validation_urls[0]"),
+    ],
+)
+def test_tokenize_checks_source_regions_before_expanding_paths(train_paths, validation_paths, expected_key):
+    config = TokenizeConfig(
+        train_paths=train_paths,
+        validation_paths=validation_paths,
+        cache_path=DUMMY_CACHE_PATH,
+        tokenizer=DUMMY_TOKENIZER,
+    )
+
+    with (
+        patch("rigging.filesystem.marin_region", return_value="us-central1"),
+        patch("rigging.filesystem.get_bucket_location", return_value="us-east1"),
+    ):
+        with pytest.raises(ValueError, match="not in the same region") as excinfo:
+            tokenize(config)
+
+    assert expected_key in str(excinfo.value)
 
 
 @pytest.mark.parametrize(

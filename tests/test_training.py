@@ -15,6 +15,7 @@ from levanter.trainer import TrainerConfig
 from marin.training.training import (
     TrainLmOnPodConfig,
     _doublecheck_paths,
+    _region_for_gcs_path,
     _update_config_to_use_out_path,
     temporary_checkpoint_base_path,
 )
@@ -65,6 +66,13 @@ def test_lm_config_with_train_urls_allowed_out_of_region(trainer_config):
             resources=ResourceConfig.with_tpu("v4-8"),
         )
         _doublecheck_paths(config)
+
+
+def test_region_for_gcs_path_prefers_bucket_metadata_for_noncanonical_marin_bucket():
+    with patch("marin.training.training.get_bucket_location", return_value="us-central2"):
+        region = _region_for_gcs_path("gs://marin-data/cache", bucket_region_cache={})
+
+    assert region == "us-central2"
 
 
 def test_temporary_checkpoint_base_path_follows_output_path_region():

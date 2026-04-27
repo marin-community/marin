@@ -6,6 +6,7 @@ import importlib
 import logging
 import os
 import urllib.parse
+import re
 from copy import deepcopy
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -24,7 +25,16 @@ from fray import (
 )
 from mergedeep import mergedeep
 
-from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
+from rigging.filesystem import (
+    REGION_TO_TMP_BUCKET,
+    check_gcs_paths_same_region,
+    check_path_in_region,
+    collect_gcs_paths,
+    get_bucket_location,
+    marin_temp_bucket,
+    region_from_prefix,
+    split_gcs_path,
+)
 from marin.training.run_environment import add_run_env_variables
 
 logger = logging.getLogger(__name__)
@@ -87,6 +97,9 @@ DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
 TEMPORARY_CHECKPOINT_TTL_DAYS = 14
 TEMPORARY_CHECKPOINTS_PATH = "checkpoints-temp"
+_SOURCE_URL_FIELDS = ("train_urls", "validation_urls")
+_NON_REGIONAL_BUCKET_LOCATIONS = {"us", "eu", "asia", "nam4", "eur4", "asia1"}
+_GCP_REGION_PATTERN = re.compile(r"^[a-z]+-[a-z0-9]+[0-9]$")
 
 
 def _cli_helpers_module():
@@ -203,6 +216,126 @@ def _normalize_jax_compilation_cache_dir(path: str) -> str:
     return path
 
 
+def _skip_source_url_fields(include_source_urls: bool) -> tuple[str, ...]:
+    return () if include_source_urls else _SOURCE_URL_FIELDS
+
+
+def _normalize_region(region: str, *, path: str) -> str:
+    normalized = region.lower()
+    if normalized in _NON_REGIONAL_BUCKET_LOCATIONS or "+" in normalized or not _GCP_REGION_PATTERN.match(normalized):
+        raise ValueError(
+            f"Training config references {path!r} in a non-regional bucket location ({normalized!r}); "
+            "cannot infer a single TPU/VM region."
+        )
+    return normalized
+
+
+def _is_bucket_location_permission_error(exc: Exception) -> bool:
+    return isinstance(exc, PermissionError) or exc.__class__.__name__ in {"Forbidden", "PermissionDenied"}
+
+
+def _region_for_gcs_path(path: str, *, bucket_region_cache: dict[str, str]) -> str | None:
+    bucket, _ = split_gcs_path(path)
+
+    try:
+        if bucket not in bucket_region_cache:
+            bucket_region_cache[bucket] = get_bucket_location(bucket)
+        return _normalize_region(bucket_region_cache[bucket], path=path)
+    except Exception as e:
+        if not _is_bucket_location_permission_error(e):
+            raise
+
+    region = region_from_prefix(path)
+    if region is None:
+        logger.warning(
+            "Could not infer bucket location for %s due to permission error; skipping this path for training region "
+            "inference.",
+            path,
+            exc_info=True,
+        )
+        return None
+
+    try:
+        return _normalize_region(region, path=path)
+    except ValueError:
+        logger.warning(
+            "Could not infer a concrete region for %s because bucket metadata access failed and the bucket name does "
+            "not encode a regional location.",
+            path,
+            exc_info=True,
+        )
+        return None
+
+
+def _infer_single_gcs_region(train_config: object, *, include_source_urls: bool) -> str | None:
+    """Infer the one concrete region required by resolved GCS paths in a training config."""
+    bucket_region_cache: dict[str, str] = {}
+    region_to_evidence: dict[str, list[str]] = {}
+    skip_fields = _skip_source_url_fields(include_source_urls)
+
+    for key, path in collect_gcs_paths(train_config, skip_if_prefix_contains=skip_fields):
+        region = _region_for_gcs_path(path, bucket_region_cache=bucket_region_cache)
+        if region is None:
+            continue
+        region_to_evidence.setdefault(region, []).append(f"{key}={path}")
+
+    if not region_to_evidence:
+        return None
+    if len(region_to_evidence) > 1:
+        detail = "; ".join(
+            f"{region}: {', '.join(sorted(evidence)[:3])}" for region, evidence in sorted(region_to_evidence.items())
+        )
+        raise ValueError(
+            "Training config references GCS paths in multiple regions. "
+            f"Found regions {{{', '.join(sorted(region_to_evidence))}}}. {detail}"
+        )
+    return next(iter(region_to_evidence))
+
+
+def _regional_temp_bucket(region: str, *, ttl_days: int, prefix: str) -> str:
+    bucket = REGION_TO_TMP_BUCKET.get(region)
+    if bucket is None:
+        raise ValueError(f"No Marin temp bucket is configured for region {region!r}.")
+    path = f"gs://{bucket}/ttl={ttl_days}d"
+    if prefix:
+        path = f"{path}/{prefix.strip('/')}"
+    return path
+
+
+def _align_resources_to_gcs_region(config: TrainOnPodConfigT) -> tuple[TrainOnPodConfigT, str | None]:
+    """Pin child training resources to the region implied by resolved GCS paths."""
+    inferred_region = _infer_single_gcs_region(
+        config.train_config,
+        include_source_urls=config.auto_build_caches,
+    )
+    if inferred_region is None:
+        return config, None
+
+    resource_regions = config.resources.regions
+    if resource_regions:
+        explicit_regions = {region.lower() for region in resource_regions}
+        if inferred_region not in explicit_regions:
+            raise ValueError(
+                f"Training job resources allow regions {sorted(explicit_regions)}, but resolved GCS paths require "
+                f"{inferred_region!r}. Running this TPU/VM job elsewhere would read or write across regions."
+            )
+
+    resources = dataclasses.replace(config.resources, regions=[inferred_region])
+    return replace(config, resources=resources), inferred_region
+
+
+def _check_jax_compilation_cache_region(env: dict[str, str], *, region: str | None, local_ok: bool) -> None:
+    cache_dir = env.get("JAX_COMPILATION_CACHE_DIR")
+    if cache_dir is None:
+        return
+    if not cache_dir.startswith("gs://"):
+        return
+    if region is not None:
+        check_path_in_region("JAX_COMPILATION_CACHE_DIR", cache_dir, region, local_ok=local_ok)
+        return
+    check_gcs_paths_same_region({"JAX_COMPILATION_CACHE_DIR": cache_dir}, local_ok=local_ok)
+
+
 def _disable_xla_autotune_subcache(env: dict) -> None:
     """Disable XLA's per-fusion autotune sub-cache for remote compilation caches.
 
@@ -236,6 +369,18 @@ def _prepare_training_run(
         logger.info(f"Using output path: {config.output_path}")
         config = _update_config_to_use_out_path(config)
 
+    config = _enforce_run_id(config)
+    logger.info(f"Using run ID: {config.train_config.trainer.id}")
+
+    train_config = config.train_config
+    train_config = _maybe_override_auto_build_caches(train_config, config.auto_build_caches)
+    config = replace(config, train_config=train_config)
+
+    training_region: str | None = None
+    if not isinstance(config.resources.device, CpuConfig):
+        config, training_region = _align_resources_to_gcs_region(config)
+        train_config = config.train_config
+
     env = _add_default_env_variables(
         config.env_vars or {},
         default_launch_config.env_for_accel(config.resources.device.variant),
@@ -246,25 +391,26 @@ def _prepare_training_run(
     env = add_run_env_variables(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
-        env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(
-            marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
+        cache_dir = (
+            _regional_temp_bucket(training_region, ttl_days=30, prefix="compilation-cache")
+            if training_region is not None
+            else marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
         )
+        env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(cache_dir)
         logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
     _disable_xla_autotune_subcache(env)
-
-    config = _enforce_run_id(config)
-    logger.info(f"Using run ID: {config.train_config.trainer.id}")
-
-    train_config = config.train_config
-    train_config = _maybe_override_auto_build_caches(train_config, config.auto_build_caches)
-
     # disable accelerator requirement when running without GPU/TPU resources
     if config.resources.device.kind == "cpu":
         trainer = replace(train_config.trainer, require_accelerator=False)
         train_config = replace(train_config, trainer=trainer)
 
     if not isinstance(config.resources.device, CpuConfig):
-        _doublecheck_paths(config)
+        _check_jax_compilation_cache_region(env, region=training_region, local_ok=False)
+        _doublecheck_paths(
+            config,
+            region=training_region,
+            include_source_urls=config.auto_build_caches,
+        )
 
     extras: list[str] = []
     if isinstance(config.resources.device, TpuConfig):
@@ -353,7 +499,12 @@ def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
     )
 
 
-def _doublecheck_paths(config: TrainOnPodConfigT):
+def _doublecheck_paths(
+    config: TrainOnPodConfigT,
+    *,
+    region: str | None = None,
+    include_source_urls: bool = False,
+) -> TrainOnPodConfigT:
     """
     Double-check that we're not using local paths in some of the standard places that Levanter sets defaults.
     Also check that the paths are in the same region as the VM, to avoid performance issues and billing surprises.
@@ -365,6 +516,8 @@ def _doublecheck_paths(config: TrainOnPodConfigT):
     check_gcs_paths_same_region(
         config.train_config,
         local_ok=local_ok,
+        region=region,
+        skip_if_prefix_contains=_skip_source_url_fields(include_source_urls),
     )
     return config
 

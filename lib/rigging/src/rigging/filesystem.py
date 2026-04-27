@@ -82,7 +82,20 @@ REGION_TO_DATA_BUCKET: dict[str, str] = {
 # Derived from REGION_TO_DATA_BUCKET so that region_from_prefix can return
 # canonical region names even when the bucket uses abbreviated naming
 # (e.g. "marin-eu-west4" → "europe-west4" instead of "eu-west4").
-_BUCKET_TO_REGION: dict[str, str] = {bucket: region for region, bucket in REGION_TO_DATA_BUCKET.items()}
+_REGION_ALIASES: dict[str, str] = {
+    "eu-west4": "europe-west4",
+}
+
+
+def _canonical_region(region: str) -> str:
+    normalized = region.lower()
+    return _REGION_ALIASES.get(normalized, normalized)
+
+
+_BUCKET_TO_REGION: dict[str, str] = {
+    **{bucket: _canonical_region(region) for region, bucket in REGION_TO_DATA_BUCKET.items()},
+    **{bucket: _canonical_region(region) for region, bucket in REGION_TO_TMP_BUCKET.items()},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +168,19 @@ def marin_region() -> str | None:
       2. Infer from ``MARIN_PREFIX`` environment variable
     """
     return region_from_metadata() or region_from_prefix(os.environ.get("MARIN_PREFIX", ""))
+
+
+def runtime_gcp_region() -> str | None:
+    """Return the runtime's concrete GCP region, if detectable.
+
+    Resolution order:
+      1. ``IRIS_WORKER_REGION`` environment variable
+      2. GCS instance metadata server
+    """
+    iris_worker_region = os.environ.get("IRIS_WORKER_REGION")
+    if iris_worker_region:
+        return _canonical_region(iris_worker_region)
+    return region_from_metadata()
 
 
 def _append_path_prefix(path: str, prefix: str) -> str:

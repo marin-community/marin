@@ -28,6 +28,7 @@ from zephyr import Dataset, ZephyrContext
 from zephyr.writers import write_levanter_cache
 
 from levanter.data.dataset import AsyncDataset
+from levanter.utils import cloud_utils
 from levanter.utils.jax_utils import broadcast_one_to_all
 
 from ..data._preprocessor import BatchProcessor, BatchResult, dict_from_record_batch
@@ -68,6 +69,7 @@ def build_or_load_cache(
     """
     Build or load a TreeCache from a sharded data source using a Zephyr backend.
     """
+    cloud_utils.assert_gcs_path_region_compatible(cache_dir, purpose="cache load or build")
     metadata = CacheMetadata(preprocessor_metadata=processor.metadata)
     try:
         return TreeCache.load(cache_dir, processor.output_exemplar, metadata)
@@ -135,6 +137,7 @@ class TreeCache(AsyncDataset[T_co]):
     @staticmethod
     def load(cache_dir: str, exemplar: T, options: Optional["CacheMetadata"] = None) -> "TreeCache":
         logger.info(f"Loading cache from {cache_dir}")
+        cloud_utils.assert_gcs_path_region_compatible(cache_dir, purpose="cache load")
         ledger = CacheLedger.load(cache_dir, options)
 
         if not ledger.is_finished:
@@ -185,6 +188,7 @@ class CacheLedger:
         ledger_path = os.path.join(cache_dir, LEDGER_FILE_NAME)
         try:
             logger.info(f"Attempting to load cache ledger from {ledger_path}")
+            cloud_utils.assert_gcs_path_region_compatible(ledger_path, purpose="cache ledger load")
             with open_url(ledger_path) as file:
                 cache_ledger = CacheLedger.from_json(file.read())  # type: ignore[arg-type]
             if metadata:
