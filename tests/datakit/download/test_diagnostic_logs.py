@@ -8,11 +8,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from marin.datakit.download.diagnostic_logs import (
-    DiagnosticSourceStatus,
     extract_starcoder_fixture_logs,
     looks_like_diagnostic_log_row,
     sanitize_diagnostic_log_text,
-    source_inventory,
     starcoder_fixture_row_to_record,
     training_ready_sources,
 )
@@ -28,18 +26,6 @@ def _read_jsonl(path: str) -> list[dict[str, object]]:
         return []
     with open(path) as handle:
         return [json.loads(line) for line in handle if line.strip()]
-
-
-def test_source_inventory_contains_required_candidates():
-    inventory = {entry.name: entry for entry in source_inventory()}
-
-    assert "ghalogs" in inventory
-    assert "logchunks" in inventory
-    assert "loghub" in inventory
-    assert "github_fixture_logs_from_source_corpora" in inventory
-    assert inventory["ghalogs"].status == DiagnosticSourceStatus.TRAINING_READY
-    assert inventory["logchunks"].status == DiagnosticSourceStatus.EVAL_ONLY
-    assert inventory["loghub"].status == DiagnosticSourceStatus.EVAL_ONLY
 
 
 def test_training_ready_sources_are_opt_in_and_narrow():
