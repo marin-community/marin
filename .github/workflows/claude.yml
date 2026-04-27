@@ -117,8 +117,7 @@ jobs:
 
             ## Actionability check (do this first)
 
-            This repo has no issue templates — authors write free-form. Before
-            doing anything else, read the issue and decide whether it is
+            Before doing anything else, read the issue and decide whether it is
             actionable. An actionable issue states what is broken or what
             needs to be done in concrete terms, names the affected area
             (file, module, command, or feature), and (for bugs) gives enough
@@ -126,7 +125,7 @@ jobs:
             requests, there must be a clear definition of done.
 
             If the issue is too vague, missing reproduction steps, or has no
-            clear acceptance criteria, do NOT open a PR. Post a single
+            clear acceptance criteria, do NOT open a PR. Post a
             comment listing exactly what additional information you need
             (concrete reproduction steps, error messages, expected vs actual
             behavior, file/module pointers, or a definition of done) and
