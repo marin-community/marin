@@ -41,7 +41,7 @@ class MyConfig:
     m: int
 
 
-# Different Ray processes running `ExecutorStep`s cannot share variables, so use filesystem.
+# Different processes running `ExecutorStep`s cannot share variables, so use filesystem.
 # Helper functions
 
 

@@ -159,12 +159,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--tpu-type",
         default="v5p-8",
-        help="TPU type to request when launching via Ray/Fray (default: v5p-8).",
+        help="TPU type to request when launching via Fray (default: v5p-8).",
     )
     parser.add_argument(
         "--local",
         action="store_true",
-        help="Run in the current process instead of launching a Ray/Fray job.",
+        help="Run in the current process instead of launching a Fray job.",
     )
     args = parser.parse_args(argv)
 
