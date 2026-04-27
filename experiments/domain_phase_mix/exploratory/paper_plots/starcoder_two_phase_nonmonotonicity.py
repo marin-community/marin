@@ -206,18 +206,7 @@ def _plot_landscape(ax: Axes3D, frame: pd.DataFrame, slice_rows: pd.DataFrame) -
     ax.set_xlabel(r"Phase 0 StarCoder ($p_0$)", fontsize=9.5, color=PAPER_TEXT, labelpad=4)
     ax.set_ylabel(r"Phase 1 StarCoder ($p_1$)", fontsize=9.5, color=PAPER_TEXT, labelpad=4)
     ax.set_zlabel("")
-    ax.set_title("Two-phase loss landscape", fontsize=13, color=PAPER_TEXT, pad=9)
-    ax.text2D(
-        0.5,
-        0.985,
-        "loss: paloma/dolma_100_programing_languages/bpb",
-        transform=ax.transAxes,
-        ha="center",
-        va="top",
-        fontsize=6.4,
-        fontname="DejaVu Sans Mono",
-        color=PAPER_TEXT,
-    )
+    ax.set_title("")
     ax.view_init(elev=25, azim=-141)
     ax.set_box_aspect((1.0, 1.0, 0.95), zoom=1.0)
     _style_3d_axis(ax)
@@ -323,7 +312,19 @@ def main() -> None:
         }
     )
 
-    landscape_figure = plt.figure(figsize=LANDSCAPE_FIGSIZE, constrained_layout=True)
+    landscape_figure = plt.figure(figsize=LANDSCAPE_FIGSIZE, constrained_layout=False)
+    landscape_figure.subplots_adjust(left=0.02, right=0.98, bottom=0.10, top=0.80)
+    landscape_figure.suptitle("Two-phase loss landscape", y=0.985, fontsize=13, color=PAPER_TEXT)
+    landscape_figure.text(
+        0.5,
+        0.915,
+        "loss: paloma/dolma_100_programing_languages/bpb",
+        ha="center",
+        va="top",
+        fontsize=6.4,
+        fontname="DejaVu Sans Mono",
+        color=PAPER_TEXT,
+    )
     landscape_axis = landscape_figure.add_subplot(1, 1, 1, projection="3d")
     _plot_landscape(landscape_axis, frame, slice_rows)
     landscape_figure.savefig(LANDSCAPE_OUTPUT_STEM.with_suffix(".png"), dpi=DPI, bbox_inches="tight", pad_inches=0.24)
