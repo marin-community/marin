@@ -1,0 +1,6 @@
+# NLTK auto-downloads stopwords + tagger data on first import.
+# These are recreated on demand; don't commit binary corpora.
+.nltk_data/
+
+__pycache__/
+*.pyc

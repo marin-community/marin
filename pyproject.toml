@@ -20,6 +20,19 @@ dependencies = [
     # top level deps. try to keep these small.
     "watchdog",
     "dupekit >= 0.1.0",
+    # IFBench / IFEvalG verifier dependencies (experiments/ifbench/verifiers).
+    # See `.agents/logbooks/dpo_sft.md` § "Verifier vendor plan".
+    # `setuptools<81` is required by `syllapy` (uses deprecated pkg_resources).
+    "nltk",
+    "langdetect",
+    "immutabledict",
+    "emoji",
+    "syllapy",
+    "unicodedata2",
+    "absl-py",
+    "setuptools<81",
+    # Together Batch API upload client (Files API uses a signed-upload dance).
+    "together>=1.5.13",
 ]
 
 [tool.uv]
@@ -88,6 +101,8 @@ ignore = ["F722", "B008", "UP015", "A005", "I001", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
+"experiments/ifbench/verifiers/ifbench/instructions.py" = ["B007", "B905", "E402", "E501", "F841", "UP045"]
+"experiments/ifbench/verifiers/ifevalg/instructions.py" = ["B905", "E501"]
 
 
 [tool.mypy]
