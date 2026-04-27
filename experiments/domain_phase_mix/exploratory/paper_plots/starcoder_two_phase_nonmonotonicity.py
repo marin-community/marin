@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.axes import Axes
 from matplotlib.colors import Normalize
+from matplotlib.font_manager import FontProperties
 from matplotlib.lines import Line2D
 from mpl_toolkits.mplot3d import Axes3D, proj3d
 
@@ -33,6 +34,7 @@ SLICE_OUTPUT_STEM = IMG_DIR / "starcoder_two_phase_slice"
 LANDSCAPE_FIGSIZE = (4.7, 4.3)
 SLICE_FIGSIZE = (4.7, 3.85)
 DPI = 300
+MONO_FONT = FontProperties(family=["IBM Plex Mono", "Menlo", "DejaVu Sans Mono", "monospace"])
 
 
 def _projected_marker(
@@ -313,16 +315,16 @@ def main() -> None:
     )
 
     landscape_figure = plt.figure(figsize=LANDSCAPE_FIGSIZE, constrained_layout=False)
-    landscape_figure.subplots_adjust(left=0.02, right=0.98, bottom=0.10, top=0.80)
+    landscape_figure.subplots_adjust(left=0.02, right=0.98, bottom=0.09, top=0.86)
     landscape_figure.suptitle("Two-phase loss landscape", y=0.985, fontsize=13, color=PAPER_TEXT)
     landscape_figure.text(
         0.5,
-        0.915,
+        0.925,
         "loss: paloma/dolma_100_programing_languages/bpb",
         ha="center",
         va="top",
         fontsize=6.4,
-        fontname="DejaVu Sans Mono",
+        fontproperties=MONO_FONT,
         color=PAPER_TEXT,
     )
     landscape_axis = landscape_figure.add_subplot(1, 1, 1, projection="3d")
