@@ -3074,6 +3074,37 @@ def test_prune_old_terminal_jobs(state):
     assert _query_task(state, old_tasks[0].task_id) is None
 
 
+def test_prune_evicts_status_text_cache(state):
+    """prune_old_data evicts _status_text entries for pruned jobs; other tasks are unaffected."""
+    wid = register_worker(state, "w1", "host:8080", make_worker_metadata())
+
+    old_tasks = submit_job(state, "old-job", make_job_request("old-job"))
+    dispatch_task(state, old_tasks[0], wid)
+    transition_task(state, old_tasks[0].task_id, job_pb2.TASK_STATE_SUCCEEDED)
+
+    kept_tasks = submit_job(state, "kept-job", make_job_request("kept-job"))
+    dispatch_task(state, kept_tasks[0], wid)
+    transition_task(state, kept_tasks[0].task_id, job_pb2.TASK_STATE_SUCCEEDED)
+
+    old_job_id = JobName.root("test-user", "old-job")
+    state._db.execute(
+        "UPDATE jobs SET finished_at_ms = 1000 WHERE job_id = ?",
+        (old_job_id.to_wire(),),
+    )
+
+    state.record_task_status_text(old_tasks[0].task_id, "old status")
+    state.record_task_status_text(kept_tasks[0].task_id, "kept status")
+
+    state.prune_old_data(
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        profile_retention=Duration.from_seconds(86400),
+    )
+
+    assert state._store.tasks.get_status_text(old_tasks[0].task_id.to_wire()) == ""
+    assert state._store.tasks.get_status_text(kept_tasks[0].task_id.to_wire()) == "kept status"
+
+
 def test_prune_old_inactive_workers(state):
     """Inactive workers with stale heartbeats are pruned; active workers are kept."""
 

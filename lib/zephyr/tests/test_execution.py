@@ -33,7 +33,10 @@ from zephyr.execution import (
     _get_stage_description,
     zephyr_worker_ctx,
 )
-from zephyr.plan import compute_plan
+from iris.client.client import IrisContext, iris_ctx_scope
+from iris.cluster.client.job_info import JobInfo, set_job_info
+from iris.cluster.types import JobName
+from zephyr.plan import Join, Map, PhysicalPlan, PhysicalStage, Reshard, SourceItem, StageType, compute_plan
 
 
 def test_counter_flusher(tmp_path):
@@ -1204,24 +1207,18 @@ def test_stage_index_correct_with_join(local_client, tmp_path):
 
 def test_get_stage_description_worker_stage():
     """Normal WORKER stages with no hints return just the stage name."""
-    from zephyr.plan import Map, PhysicalStage, StageType
-
     stage = PhysicalStage(operations=[Map(fn=lambda x: x)], stage_type=StageType.WORKER)
     assert _get_stage_description(stage) == "Map"
 
 
 def test_get_stage_description_reshard_stage():
     """RESHARD stages include the stage name and a reshard hint."""
-    from zephyr.plan import PhysicalStage, Reshard, StageType
-
     stage = PhysicalStage(operations=[Reshard(num_shards=8)], stage_type=StageType.RESHARD, output_shards=8)
     assert _get_stage_description(stage) == "Reshard [reshard→8]"
 
 
 def test_get_stage_description_join_stage():
     """Stages containing a Join op include the stage name and a join hint with the right-plan item count."""
-    from zephyr.plan import Join, Map, PhysicalPlan, PhysicalStage, SourceItem, StageType
-
     right_items = [SourceItem(shard_idx=i, data=i) for i in range(5)]
     right_plan = PhysicalPlan(source_items=right_items, stages=[])
     stage = PhysicalStage(
@@ -1241,11 +1238,6 @@ def test_report_task_stats_skips_without_iris_ctx(actor_context, tmp_path):
 
 def test_report_task_stats_handles_rpc_exception(actor_context, tmp_path, caplog):
     """_report_task_stats logs a warning but does not propagate RPC errors."""
-    from iris.client.client import IrisContext, iris_ctx_scope
-    from iris.cluster.client.job_info import JobInfo, set_job_info
-    from iris.cluster.types import JobName
-    from zephyr.plan import PhysicalStage, StageType
-
     task_id = JobName.root("test-user", "zephyr-job").task(0)
     try:
         set_job_info(JobInfo(task_id=task_id))
@@ -1257,7 +1249,7 @@ def test_report_task_stats_handles_rpc_exception(actor_context, tmp_path, caplog
         coord = ZephyrCoordinator()
         coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
         coord._stage_name = "map-stage"
-        coord._stage_index = 1
+        coord._current_stage_index = 1
         coord._plan_stages = [PhysicalStage(operations=[], stage_type=StageType.WORKER)]
         coord._total_shards = 5
         coord._completed_shards = 2

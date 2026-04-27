@@ -2075,6 +2075,7 @@ class ControllerTransitions:
                 # Invalidate endpoint cache BEFORE the CASCADE so the cache
                 # drops rows SQLite is about to delete for us.
                 self._store.endpoints.remove_by_job_ids(cur, [job_name])
+                self._store.tasks.remove_status_text_by_job_ids([job_name])
                 self._store.jobs.delete(cur, job_name)
             log_event("job_pruned", job_name.to_wire())
             jobs_deleted += 1

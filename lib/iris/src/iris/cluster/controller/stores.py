@@ -961,6 +961,14 @@ class TaskStore:
         """Return the latest markdown status text for a task, or empty string if none."""
         return self._status_text.get(task_id, "")
 
+    def remove_status_text_by_job_ids(self, job_ids: Sequence[JobName]) -> None:
+        """Evict status-text cache entries for all tasks owned by any of ``job_ids``."""
+        if not job_ids:
+            return
+        prefixes = tuple(f"{jid.to_wire()}/" for jid in job_ids)
+        for key in [k for k in self._status_text if k.startswith(prefixes)]:
+            del self._status_text[key]
+
     # -- Reads ---------------------------------------------------------------
 
     def get_detail(self, tx: Tx, task_id: JobName) -> TaskDetailRow | None:
