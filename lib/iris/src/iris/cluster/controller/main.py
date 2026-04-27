@@ -34,7 +34,7 @@ LOCAL_STATE_DIR_DEFAULT = Path("/var/cache/iris/controller")
 DRY_RUN_STATE_DIR_ROOT = Path("/tmp/dry-run")
 HOURLY_CHECKPOINT_SECONDS = 3600.0
 
-LOG_SERVER_ENDPOINT_NAME = "/system/log_server"
+LOG_SERVER_ENDPOINT_NAME = "/system/log-server"
 
 
 def _resolve_cluster_endpoints(cluster_config: config_pb2.IrisClusterConfig) -> dict[str, str]:
@@ -43,7 +43,7 @@ def _resolve_cluster_endpoints(cluster_config: config_pb2.IrisClusterConfig) -> 
     Each EndpointSpec is dispatched through ``resolve_endpoint_uri`` so callers
     can declare ``http://``, ``gcp://``, or ``k8s://`` schemes uniformly.
 
-    ``/system/log_server`` is optional: when absent, the Controller starts a
+    ``/system/log-server`` is optional: when absent, the Controller starts a
     bundled in-process MemStore-backed log server as a fallback (capped, lossy
     on restart). Production deployments should declare an external endpoint.
     """

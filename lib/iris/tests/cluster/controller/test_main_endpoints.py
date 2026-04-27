@@ -22,7 +22,7 @@ def test_resolve_dispatches_http_uri():
 
 
 def test_resolve_does_not_require_log_server():
-    """No /system/log_server in config is fine — Controller falls back to a
+    """No /system/log-server in config is fine — Controller falls back to a
     bundled in-process MemStore log server (see iris.cluster.controller.controller
     for the fallback wiring)."""
     cfg = config_pb2.IrisClusterConfig()

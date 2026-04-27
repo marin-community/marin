@@ -967,7 +967,7 @@ class ControllerConfig:
     When set, the controller connects to the existing server. When None,
     the Controller starts an in-process LogServiceImpl on a free port (used by
     tests and local-mode runs). In production this address is sourced from
-    `endpoints["/system/log_server"]` and passed in here by the daemon entrypoint."""
+    `endpoints["/system/log-server"]` and passed in here by the daemon entrypoint."""
 
     endpoints: dict[str, str] = field(default_factory=dict)
     """Resolved cluster endpoints: logical name -> concrete URL. Built from
@@ -1175,7 +1175,7 @@ class Controller:
         """Start a bundled in-process MemStore-backed log server and return its address.
 
         Used as a fallback when ``cluster_config.endpoints`` does not declare
-        ``/system/log_server`` (and in tests). MemStore is capped at
+        ``/system/log-server`` (and in tests). MemStore is capped at
         ``BUNDLED_LOG_SERVER_MAX_ROWS`` with FIFO eviction so a chatty job
         cannot OOM the controller; logs are lost on controller restart. For
         production deployments, run finelog-server out-of-band and point the
@@ -1277,18 +1277,10 @@ class Controller:
             self._service._system_endpoints[name] = url
             logger.info("Registered system endpoint %s -> %s", name, url)
 
-        # Always advertise the in-use log server address under /system/log_server.
+        # Always advertise the in-use log server address under /system/log-server.
         # If the daemon supplied it via endpoints, this is a no-op overwrite with
         # the same value; in tests the in-process server's address lands here.
-        self._service._system_endpoints["/system/log_server"] = self._log_service_address
-        # Backward-compat alias for one release; workers and clients should
-        # migrate to the underscore form. Logged at warning level so operators
-        # can tell when something still depends on it.
         self._service._system_endpoints["/system/log-server"] = self._log_service_address
-        logger.warning(
-            "Registered deprecated alias /system/log-server -> %s (use /system/log_server)",
-            self._log_service_address,
-        )
 
     def stop(self) -> None:
         """Stop all background components gracefully. Idempotent.

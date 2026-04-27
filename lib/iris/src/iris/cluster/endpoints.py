@@ -3,14 +3,14 @@
 
 """Resolve cluster endpoint URIs declared in the cluster config.
 
-Endpoints map logical names like ``/system/log_server`` to concrete URLs.
+Endpoints map logical names like ``/system/log-server`` to concrete URLs.
 The cluster config carries them as ``EndpointSpec`` entries with a scheme-tagged
 URI; this module dispatches by scheme and returns a concrete ``http(s)://`` URL.
 
 Example YAML:
 
     endpoints:
-      /system/log_server:
+      /system/log-server:
         uri: http://log-server.iris.svc.cluster.local:10001
 """
 

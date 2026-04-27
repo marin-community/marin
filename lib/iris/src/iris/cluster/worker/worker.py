@@ -264,7 +264,7 @@ class Worker:
                 interceptors=interceptors,
             )
             self._log_pusher = LogPusher(
-                "/system/log_server",
+                "/system/log-server",
                 interceptors=interceptors,
                 resolver=self._resolve_log_service,
             )
@@ -402,7 +402,7 @@ class Worker:
         This loop runs continuously until shutdown. On each iteration:
         1. Reset worker state (kill all containers)
         2. Attach the remote log handler so pre-registration log lines ship
-           to the central log server (and a refreshed /system/log_server
+           to the central log server (and a refreshed /system/log-server
            endpoint is picked up after any log-server failover)
         3. Register with controller (retry until accepted)
         4. If the controller assigned a worker_id we didn't know locally,

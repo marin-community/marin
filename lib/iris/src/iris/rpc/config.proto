@@ -478,7 +478,7 @@ message UserBudgetTier {
 // ENDPOINT CONFIGURATION
 // ============================================================================
 
-// A scheme-tagged endpoint backing a logical service name (e.g. /system/log_server).
+// A scheme-tagged endpoint backing a logical service name (e.g. /system/log-server).
 // Resolution happens at controller startup via iris.cluster.endpoints.resolve_endpoint_uri.
 message EndpointSpec {
   string uri = 1;                     // http(s)://host:port, gcp://<service>, k8s://<service>[.<ns>]
@@ -519,7 +519,7 @@ message IrisClusterConfig {
   // (set at first job submission via INSERT OR IGNORE).
   repeated UserBudgetTier user_budgets = 80;
 
-  // Cluster endpoints (logical name -> EndpointSpec). Required: must define
-  // /system/log_server (the finelog log server).
+  // Cluster endpoints (logical name -> EndpointSpec). When /system/log-server
+  // is omitted, the Controller hosts a bundled in-process MemStore log server.
   map<string, EndpointSpec> endpoints = 90;
 }
