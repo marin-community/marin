@@ -369,8 +369,17 @@ def _validate_dpo_config(config: TrainDpoConfig) -> None:
     if isinstance(config.reference, AdapterBaseReferenceConfig):
         if isinstance(config.adapter, NoAdaptationConfig):
             raise ValueError("reference.type=adapter_base requires a non-none adapter.")
-        if isinstance(config.adapter, LoraAdaptationConfig) and not config.adapter.zero_init_b:
-            raise ValueError("adapter.type=lora with reference.type=adapter_base requires zero_init_b=true.")
+        if isinstance(config.adapter, LoraAdaptationConfig):
+            # Require B @ A = 0 so policy == reference at step 0: implicit reward is 0 and DPO loss is log 2.
+            # Exactly one factor must be zero so gradients can still flow.
+            has_zero_b = config.adapter.zero_init_b
+            has_zero_a = config.adapter.a_init_mode == "zero"
+            if has_zero_b == has_zero_a:
+                raise ValueError(
+                    "adapter.type=lora with reference.type=adapter_base requires zero adapter delta at init "
+                    "with exactly one zero LoRA factor: set either zero_init_b=true or a_init_mode='zero', "
+                    "but not both."
+                )
         return
 
     raise TypeError(f"Unsupported reference configuration: {type(config.reference).__name__}")

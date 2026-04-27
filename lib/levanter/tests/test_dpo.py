@@ -157,14 +157,45 @@ def test_adapter_base_reference_requires_non_none_adapter():
         _validate_dpo_config(config)
 
 
-def test_lora_adapter_base_reference_requires_zero_init_b():
+def test_lora_adapter_base_reference_requires_zero_initial_delta():
     config = TrainDpoConfig(
         model=_tiny_gpt2_config(),
         reference=AdapterBaseReferenceConfig(),
-        adapter=LoraAdaptationConfig(zero_init_b=False),
+        adapter=LoraAdaptationConfig(zero_init_b=False, a_init_mode="random"),
     )
 
-    with pytest.raises(ValueError, match="requires zero_init_b=true"):
+    with pytest.raises(ValueError, match="requires zero adapter delta at init"):
+        _validate_dpo_config(config)
+
+
+def test_lora_adapter_base_reference_accepts_zero_init_b():
+    config = TrainDpoConfig(
+        model=_tiny_gpt2_config(),
+        reference=AdapterBaseReferenceConfig(),
+        adapter=LoraAdaptationConfig(zero_init_b=True, a_init_mode="random"),
+    )
+
+    _validate_dpo_config(config)
+
+
+def test_lora_adapter_base_reference_accepts_zero_a_init():
+    config = TrainDpoConfig(
+        model=_tiny_gpt2_config(),
+        reference=AdapterBaseReferenceConfig(),
+        adapter=LoraAdaptationConfig(zero_init_b=False, a_init_mode="zero"),
+    )
+
+    _validate_dpo_config(config)
+
+
+def test_lora_adapter_base_reference_rejects_both_factors_zero():
+    config = TrainDpoConfig(
+        model=_tiny_gpt2_config(),
+        reference=AdapterBaseReferenceConfig(),
+        adapter=LoraAdaptationConfig(zero_init_b=True, a_init_mode="zero"),
+    )
+
+    with pytest.raises(ValueError, match="exactly one zero LoRA factor"):
         _validate_dpo_config(config)
 
 
