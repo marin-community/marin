@@ -169,9 +169,23 @@ def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     else:
         merged_search_paths = existing_search_paths
 
+    # Align the temp *write* destination with the mirror search path: in midtraining
+    # (impute_run_id_from_output_path=True ⇒ append_run_id_to_base_path=False), Levanter's
+    # ``expanded_temporary_path(run_id)`` returns ``temporary_base_path`` *without* appending
+    # run_id, so writes would land at ``.../checkpoints-temp/step-N`` (no run-id segment) and
+    # the mirror search path ``mirrortmp://.../checkpoints-temp/{run_id}/`` would never match
+    # them.  Inline run_id here when Levanter wouldn't.  Idempotent — does not double-append
+    # if the user (or a re-entrant call) already supplied a run-id-suffixed path.
+    existing_temp_base = config.train_config.trainer.checkpointer.temporary_base_path
+    new_temp_base = existing_temp_base
+    if existing_temp_base is not None and not append_id_to_checkpoints:
+        if not existing_temp_base.rstrip("/").endswith(f"/{run_id}"):
+            new_temp_base = f"{existing_temp_base.rstrip('/')}/{run_id}"
+
     checkpointer_config = replace(
         config.train_config.trainer.checkpointer,
         append_run_id_to_base_path=append_id_to_checkpoints,
+        temporary_base_path=new_temp_base,
         temporary_search_paths=merged_search_paths,
     )
 

@@ -214,3 +214,110 @@ def test_enforce_run_id_dedupes_existing_mirror_entry():
     enforced = _enforce_run_id(config)
     paths = enforced.train_config.trainer.checkpointer.temporary_search_paths
     assert paths.count("mirrortmp://ttl=14d/checkpoints-temp/foo-abc123") == 1
+
+
+def _with_temp_base_path(config: TrainLmOnPodConfig, temp_base: str) -> TrainLmOnPodConfig:
+    """Inject a ``temporary_base_path`` (simulating ``_update_config_to_use_out_path``)."""
+    return dataclasses.replace(
+        config,
+        train_config=dataclasses.replace(
+            config.train_config,
+            trainer=dataclasses.replace(
+                config.train_config.trainer,
+                checkpointer=dataclasses.replace(
+                    config.train_config.trainer.checkpointer,
+                    temporary_base_path=temp_base,
+                ),
+            ),
+        ),
+    )
+
+
+def test_enforce_run_id_inlines_run_id_into_temp_base_path_in_midtraining():
+    """Midtraining (impute=True ⇒ append_run_id_to_base_path=False) ⇒ Levanter's
+    ``expanded_temporary_path`` would NOT append run_id, so writes would land at
+    ``.../checkpoints-temp/step-N`` and the mirror search path with run_id would never
+    match.  Marin must inline run_id into ``temporary_base_path`` so writes and search
+    agree on the same directory."""
+    config = _make_train_config(
+        output_path="gs://marin-us-central1/runs/foo-abc123",
+        run_id=None,
+        impute=True,
+    )
+    config = _with_temp_base_path(config, "gs://marin-tmp-us-central1/ttl=14d/checkpoints-temp")
+
+    enforced = _enforce_run_id(config)
+    cp = enforced.train_config.trainer.checkpointer
+
+    # 1. Run-id is inlined.
+    assert cp.temporary_base_path == "gs://marin-tmp-us-central1/ttl=14d/checkpoints-temp/foo-abc123"
+    # 2. expanded_temporary_path does NOT double-append (append_run_id_to_base_path=False).
+    assert cp.expanded_temporary_path("foo-abc123") == "gs://marin-tmp-us-central1/ttl=14d/checkpoints-temp/foo-abc123"
+    # 3. Aligned with the mirror search path — write destination and search root agree.
+    assert "mirrortmp://ttl=14d/checkpoints-temp/foo-abc123" in cp.temporary_search_paths
+
+
+def test_enforce_run_id_does_not_double_append_when_levanter_will_append():
+    """Non-midtraining (impute=False ⇒ append_run_id_to_base_path=True) ⇒ Levanter
+    *will* append run_id in ``expanded_temporary_path``.  Marin must NOT pre-inline,
+    or we'd end up with ``.../checkpoints-temp/run-X/run-X``."""
+    config = _make_train_config(
+        output_path="gs://marin-us-central1/runs/whatever",
+        run_id="my-explicit-run",
+        impute=False,
+    )
+    config = _with_temp_base_path(config, "gs://marin-tmp-us-central1/ttl=14d/checkpoints-temp")
+
+    enforced = _enforce_run_id(config)
+    cp = enforced.train_config.trainer.checkpointer
+
+    # Marin did NOT pre-inline; Levanter appends on its own.
+    assert cp.temporary_base_path == "gs://marin-tmp-us-central1/ttl=14d/checkpoints-temp"
+    assert cp.append_run_id_to_base_path is True
+    assert (
+        cp.expanded_temporary_path("my-explicit-run")
+        == "gs://marin-tmp-us-central1/ttl=14d/checkpoints-temp/my-explicit-run"
+    )
+
+
+def test_enforce_run_id_temp_base_path_inline_is_idempotent():
+    """Pre-supplied ``temporary_base_path`` already ending in ``/{run_id}`` is left alone."""
+    config = _make_train_config(
+        output_path="gs://marin-us-central1/runs/foo-abc123",
+        run_id=None,
+        impute=True,
+    )
+    config = _with_temp_base_path(config, "gs://marin-tmp-us-central1/ttl=14d/checkpoints-temp/foo-abc123")
+    enforced = _enforce_run_id(config)
+    cp = enforced.train_config.trainer.checkpointer
+    assert cp.temporary_base_path == "gs://marin-tmp-us-central1/ttl=14d/checkpoints-temp/foo-abc123"
+
+
+def test_enforce_run_id_leaves_temp_base_path_alone_if_none():
+    """No ``temporary_base_path`` set (e.g. ``_update_config_to_use_out_path`` short-circuited
+    on ``output_path is None``) ⇒ no inline; Marin doesn't fabricate a path."""
+    config = _make_train_config(output_path=None, run_id="my-run", impute=False)
+    enforced = _enforce_run_id(config)
+    cp = enforced.train_config.trainer.checkpointer
+    assert cp.temporary_base_path is None
+
+
+def test_enforce_run_id_temp_write_matches_mirror_search_in_midtraining():
+    """End-to-end alignment check: in midtraining, the directory the temp writes target
+    is exactly what the mirrortmp:// search path resolves to."""
+    config = _make_train_config(
+        output_path="gs://marin-us-central1/runs/foo-abc123",
+        run_id=None,
+        impute=True,
+    )
+    config = _with_temp_base_path(config, "gs://marin-tmp-us-central1/ttl=14d/checkpoints-temp")
+
+    enforced = _enforce_run_id(config)
+    cp = enforced.train_config.trainer.checkpointer
+
+    write_dir = cp.expanded_temporary_path("foo-abc123")
+    search_url = next(p for p in cp.temporary_search_paths if p.startswith("mirrortmp://"))
+
+    # Strip the bucket-family prefix from each side and compare the *path* portion.
+    assert write_dir.endswith("/ttl=14d/checkpoints-temp/foo-abc123")
+    assert search_url.endswith("/ttl=14d/checkpoints-temp/foo-abc123")
