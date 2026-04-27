@@ -14,7 +14,7 @@ import fsspec
 import jax
 from fsspec import AbstractFileSystem
 
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import is_checkpoint_path, load_checkpoint
 
 logger = logging.getLogger(__name__)
 
@@ -74,19 +74,37 @@ def restore_grug_state_from_checkpoint(
     *,
     checkpoint_path: str | None,
     load_checkpoint_setting: bool | None,
+    initialize_from: str | None = None,
     mesh: jax.sharding.Mesh | None,
     allow_partial: bool,
     _load_fn: Callable[..., StateT] = load_checkpoint,
 ) -> StateT:
-    if checkpoint_path is None:
-        if load_checkpoint_setting:
+    effective_checkpoint_path = checkpoint_path
+    effective_load_checkpoint = load_checkpoint_setting
+
+    if effective_load_checkpoint is True and effective_checkpoint_path is None:
+        raise FileNotFoundError("load_checkpoint=True but no checkpoint path is configured.")
+    if effective_load_checkpoint is None:
+        effective_load_checkpoint = effective_checkpoint_path is not None and is_checkpoint_path(
+            effective_checkpoint_path
+        )
+
+    if effective_load_checkpoint is False and initialize_from is not None:
+        logger.info("Initializing grug state from external checkpoint %s", initialize_from)
+        if not is_checkpoint_path(initialize_from):
+            raise ValueError(f"initialize_from must be a checkpoint path, got {initialize_from}")
+        effective_checkpoint_path = initialize_from
+        effective_load_checkpoint = True
+
+    if effective_checkpoint_path is None:
+        if effective_load_checkpoint:
             raise FileNotFoundError("load_checkpoint=True but no checkpoint path is configured.")
         return state
 
-    if load_checkpoint_setting is False:
+    if effective_load_checkpoint is False:
         return state
 
-    candidates = _checkpoint_candidates(checkpoint_path)
+    candidates = _checkpoint_candidates(effective_checkpoint_path)
     last_error: FileNotFoundError | None = None
 
     for candidate in candidates:
@@ -98,8 +116,8 @@ def restore_grug_state_from_checkpoint(
                 allow_partial=allow_partial,
                 load_fn=_load_fn,
             )
-            if candidate != checkpoint_path:
-                logger.info("Loaded checkpoint %s from %s", checkpoint_path, candidate)
+            if candidate != effective_checkpoint_path:
+                logger.info("Loaded checkpoint %s from %s", effective_checkpoint_path, candidate)
             return loaded
         except FileNotFoundError as exc:
             last_error = exc
@@ -107,15 +125,15 @@ def restore_grug_state_from_checkpoint(
                 "Checkpoint candidate %s could not be loaded (%s). Trying an older checkpoint.", candidate, exc
             )
 
-    if load_checkpoint_setting is True:
+    if effective_load_checkpoint is True:
         attempted = ", ".join(candidates)
         if last_error is None:
-            raise FileNotFoundError(f"Could not find checkpoint at {checkpoint_path}")
+            raise FileNotFoundError(f"Could not find checkpoint at {effective_checkpoint_path}")
         raise FileNotFoundError(
-            f"Could not load a checkpoint from {checkpoint_path}. Attempted: {attempted}"
+            f"Could not load a checkpoint from {effective_checkpoint_path}. Attempted: {attempted}"
         ) from last_error
 
-    logger.info(f"Checkpoint not found at {checkpoint_path}. Starting from scratch.")
+    logger.info(f"Checkpoint not found at {effective_checkpoint_path}. Starting from scratch.")
     return state
 
 

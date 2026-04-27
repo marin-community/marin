@@ -2,6 +2,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Resume the 1e23 EP8 ragged run from the verified same-region backup checkpoint.
+
+Parent run:
+- moe_1e23_d5120_bs2048_ep8_ragged_48l_rayuvtpu_20260417_0945
+
+Warm-start checkpoint:
+- gs://marin-us-central2/checkpoints/moe-1e23-backup/step-45207
+
+Change vs parent:
+- max_grad_norm: 1.0 -> 1.5
+"""
+
 from __future__ import annotations
 
 import dataclasses
@@ -24,9 +36,12 @@ from experiments.grug.moe.launch import (
     versioned,
 )
 from fray.cluster import ResourceConfig
+from levanter.trainer import TrainerConfig
 
-RUN_ID = _resolve_run_id("moe_1e23_d5120_bs2048_ep8_ragged_48l_rayuvtpu_20260417_0945")
-STEP_NAME = "grug/moe_1e23_d5120_bs2048_ep8_ragged_48l_fix_a2a_20260417_0945"
+BACKUP_CHECKPOINT = "gs://marin-us-central2/checkpoints/moe-1e23-backup/step-45207"
+RUN_ID = _resolve_run_id("moe_1e23_d5120_bs2048_ep8_ragged_48l_resume45207_clip15_20260427")
+STEP_NAME = "grug/moe_1e23_d5120_bs2048_ep8_ragged_48l_resume45207_clip15_20260427"
+DESCRIPTION = "Resume the Grug MoE 1e23 ragged EP8 run from the backed-up step-45207 checkpoint with max_grad_norm=1.5."
 
 
 ragged_ep8_fix = ExecutorStep(
@@ -52,14 +67,17 @@ ragged_ep8_fix = ExecutorStep(
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
             project="dial_moe",
-            tags=["adamh", "qb", "sharded-qb", "gatednorm", "xsa", "zloss", "eq3e3", "ragged-fix"],
+            tags=["adamh", "qb", "sharded-qb", "gatednorm", "xsa", "zloss", "eq3e3", "ragged-fix", "resume", "clip15"],
             group="moe-iter04",
             name=None,
         ),
-        optimizer=versioned(_baseline_optimizer),
+        optimizer=versioned(dataclasses.replace(_baseline_optimizer, max_grad_norm=1.5)),
         priority_band="production",
         grug_trainer=versioned(
             GrugTrainerConfig(
+                trainer=TrainerConfig(
+                    initialize_from=BACKUP_CHECKPOINT,
+                ),
                 z_loss_weight=1e-4,
                 ema_beta=None,
                 log_every=1,
@@ -81,5 +99,5 @@ ragged_ep8_fix = ExecutorStep(
 if __name__ == "__main__":
     executor_main(
         steps=[ragged_ep8_fix],
-        description="Grug MoE 1e23 ragged EP8 relaunch after ragged_all_to_all offset fix.",
+        description=DESCRIPTION,
     )

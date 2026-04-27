@@ -429,6 +429,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state,
             checkpoint_path=checkpoint_path,
             load_checkpoint_setting=trainer.load_checkpoint,
+            initialize_from=trainer.initialize_from,
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )

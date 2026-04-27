@@ -21,7 +21,6 @@ from levanter.data.text import LmDataConfig
 from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
-from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
@@ -85,7 +84,8 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
 
 def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     # Map template launch knobs onto full Levanter TrainerConfig.
-    trainer = TrainerConfig(
+    trainer = dataclasses.replace(
+        config.grug_trainer.trainer,
         id=config.run_id,
         seed=config.seed,
         train_batch_size=config.batch_size,
