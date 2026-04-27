@@ -11,7 +11,9 @@ import json
 import logging
 import os.path
 import re
+import xml.etree.ElementTree as ET
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -26,11 +28,15 @@ GHALOGS_RECORD_URL = "https://zenodo.org/records/14796970"
 LOGCHUNKS_RECORD_URL = "https://zenodo.org/records/3632351"
 LOGHUB_REPO_URL = "https://github.com/logpai/loghub"
 GHALOGS_ZIP_FILENAME = "github_run_logs.zip"
+LOGCHUNKS_ZIP_FILENAME = "LogChunks.zip"
+LOGHUB_DIRNAME = "loghub"
 
 GHALOGS_TOTAL_BYTES = 143_425_404_506
 LOGCHUNKS_TOTAL_BYTES = 24_108_826
 LOGHUB_REPO_SIZE_BYTES = 7_513_088
 DEFAULT_GHALOGS_MAX_MEMBERS = 10_000
+DEFAULT_LOGCHUNKS_MAX_EXAMPLES = 10_000
+DEFAULT_LOGHUB_MAX_FILES = 100
 
 _PARTITION_BUCKETS = 10_000
 _ISSUE_5093_HOLDOUT_BUCKETS = 100
@@ -285,6 +291,58 @@ def ghalogs_member_to_record(member_path: str, content: bytes) -> dict[str, str]
     }
 
 
+def logchunks_example_to_record(source_path: str, example_index: int, example: ET.Element) -> dict[str, str] | None:
+    """Convert one LogChunks XML example into a sanitized eval-only record."""
+    chunk = example.findtext("Chunk")
+    if chunk is None or not chunk.strip():
+        return None
+
+    log_path = example.findtext("Log") or ""
+    keywords = example.findtext("Keywords") or ""
+    category = example.findtext("Category") or ""
+    split_key = f"logchunks:{source_path}:{example_index}"
+    row_id = hashlib.sha256(split_key.encode("utf-8")).hexdigest()
+
+    return {
+        "id": row_id,
+        "text": sanitize_diagnostic_log_text(chunk.strip()),
+        "source": "logchunks",
+        "source_path": source_path,
+        "log_path": log_path,
+        "keywords": keywords,
+        "category": category,
+    }
+
+
+def loghub_file_to_record(source_path: str, content: bytes) -> dict[str, str] | None:
+    """Convert one LogHub raw log file into a sanitized eval-only record."""
+    text = content.decode("utf-8", errors="replace").strip()
+    if not text:
+        return None
+
+    split_key = f"loghub:{source_path}"
+    row_id = hashlib.sha256(split_key.encode("utf-8")).hexdigest()
+
+    return {
+        "id": row_id,
+        "text": sanitize_diagnostic_log_text(text),
+        "source": "loghub",
+        "source_path": source_path,
+    }
+
+
+def _write_jsonl_records(output_file: str, records: Iterable[dict[str, str]]) -> int:
+    kept_records = 0
+    output_dir = os.path.dirname(output_file)
+    fsspec_mkdirs(output_dir, exist_ok=True)
+    with fsspec.open(output_file, "wt", encoding="utf-8") as writer:
+        for record in records:
+            kept_records += 1
+            writer.write(json.dumps(record, ensure_ascii=False))
+            writer.write("\n")
+    return kept_records
+
+
 def extract_ghalogs(
     input_path: str,
     output_path: str,
@@ -347,25 +405,147 @@ def extract_ghalogs(
         json.dump(metadata, handle, indent=2, sort_keys=True)
 
 
-def extract_ghalogs_step(
+def _iter_logchunks_records(archive_path: str, max_examples: int) -> Iterable[dict[str, str]]:
+    seen_examples = 0
+    with fsspec.open(archive_path, "rb") as archive_handle, zipfile.ZipFile(archive_handle) as archive:
+        for member in archive.infolist():
+            if seen_examples >= max_examples:
+                break
+            if member.is_dir() or not member.filename.endswith(".xml") or member.filename.startswith("__MACOSX/"):
+                continue
+
+            with archive.open(member, "r") as member_handle:
+                root = ET.parse(member_handle).getroot()
+
+            for example in root.findall("Example"):
+                if seen_examples >= max_examples:
+                    break
+                record = logchunks_example_to_record(member.filename, seen_examples, example)
+                seen_examples += 1
+                if record is not None:
+                    yield record
+
+
+def extract_logchunks(
+    input_path: str,
+    output_path: str,
+    *,
+    max_examples: int = DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
+) -> None:
+    """Extract a capped sample of sanitized eval-only records from staged LogChunks."""
+    if max_examples <= 0:
+        raise ValueError(f"max_examples must be positive, got {max_examples}")
+
+    archive_path = os.path.join(input_path, LOGCHUNKS_ZIP_FILENAME)
+    output_file = os.path.join(output_path, "eval_only", "logchunks", "data-00000-of-00001.jsonl")
+    kept_records = _write_jsonl_records(output_file, _iter_logchunks_records(archive_path, max_examples))
+
+    metadata = {
+        "source": "logchunks",
+        "source_url": LOGCHUNKS_RECORD_URL,
+        "source_archive": archive_path,
+        "sample_limits": {"max_examples": max_examples},
+        "counters": {"kept_records": kept_records},
+        "status": DiagnosticSourceStatus.EVAL_ONLY.value,
+    }
+    with fsspec.open(
+        os.path.join(output_path, "eval_only", "logchunks", "metadata.json"), "wt", encoding="utf-8"
+    ) as handle:
+        json.dump(metadata, handle, indent=2, sort_keys=True)
+
+
+def _source_path(fs: fsspec.AbstractFileSystem, relative_path: str) -> str:
+    protocol = fs.protocol
+    if isinstance(protocol, tuple):
+        protocol = protocol[0]
+    if protocol in (None, "", "file"):
+        return relative_path
+    return f"{protocol}://{relative_path}"
+
+
+def _list_loghub_files(input_path: str, max_files: int) -> list[str]:
+    fs, relative_root = fsspec.core.url_to_fs(input_path)
+    pattern = os.path.join(relative_root.rstrip("/"), "**", "*_2k.log")
+    paths = sorted(fs.glob(pattern, recursive=True))
+    return [_source_path(fs, path) for path in paths[:max_files]]
+
+
+def _iter_loghub_records(input_path: str, max_files: int) -> Iterable[dict[str, str]]:
+    for log_path in _list_loghub_files(input_path, max_files):
+        with fsspec.open(log_path, "rb") as handle:
+            record = loghub_file_to_record(log_path, handle.read())
+        if record is not None:
+            yield record
+
+
+def extract_loghub(
+    input_path: str,
+    output_path: str,
+    *,
+    max_files: int = DEFAULT_LOGHUB_MAX_FILES,
+) -> None:
+    """Extract sanitized eval-only records from a staged LogHub checkout."""
+    if max_files <= 0:
+        raise ValueError(f"max_files must be positive, got {max_files}")
+
+    loghub_path = os.path.join(input_path, LOGHUB_DIRNAME)
+    output_file = os.path.join(output_path, "eval_only", "loghub", "data-00000-of-00001.jsonl")
+    kept_records = _write_jsonl_records(output_file, _iter_loghub_records(loghub_path, max_files))
+
+    metadata = {
+        "source": "loghub",
+        "source_url": LOGHUB_REPO_URL,
+        "source_path": loghub_path,
+        "sample_limits": {"max_files": max_files},
+        "counters": {"kept_records": kept_records},
+        "status": DiagnosticSourceStatus.EVAL_ONLY.value,
+    }
+    with fsspec.open(
+        os.path.join(output_path, "eval_only", "loghub", "metadata.json"), "wt", encoding="utf-8"
+    ) as handle:
+        json.dump(metadata, handle, indent=2, sort_keys=True)
+
+
+def extract_diagnostic_logs(
+    input_path: str,
+    output_path: str,
+    *,
+    max_ghalogs_members: int = DEFAULT_GHALOGS_MAX_MEMBERS,
+    max_logchunks_examples: int = DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
+    max_loghub_files: int = DEFAULT_LOGHUB_MAX_FILES,
+) -> None:
+    """Extract GHALogs for training plus LogChunks/LogHub as eval-only records."""
+    extract_ghalogs(input_path, output_path, max_members=max_ghalogs_members)
+    extract_logchunks(input_path, output_path, max_examples=max_logchunks_examples)
+    extract_loghub(input_path, output_path, max_files=max_loghub_files)
+
+
+def extract_diagnostic_logs_step(
     *,
     source_path: str,
-    max_members: int = DEFAULT_GHALOGS_MAX_MEMBERS,
+    max_ghalogs_members: int = DEFAULT_GHALOGS_MAX_MEMBERS,
+    max_logchunks_examples: int = DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
+    max_loghub_files: int = DEFAULT_LOGHUB_MAX_FILES,
 ) -> StepSpec:
-    """Return a StepSpec that materializes a capped sample of partitioned GHALogs records."""
+    """Return a StepSpec that materializes diagnostic-log records."""
     return StepSpec(
-        name="processed/diagnostic_logs/ghalogs_sample",
-        fn=lambda output_path: extract_ghalogs(
+        name="processed/diagnostic_logs/public_sample",
+        fn=lambda output_path: extract_diagnostic_logs(
             source_path,
             output_path,
-            max_members=max_members,
+            max_ghalogs_members=max_ghalogs_members,
+            max_logchunks_examples=max_logchunks_examples,
+            max_loghub_files=max_loghub_files,
         ),
         hash_attrs={
             "version": "v1",
             "sample_only": True,
             "source_path": source_path,
-            "max_members": max_members,
+            "max_ghalogs_members": max_ghalogs_members,
+            "max_logchunks_examples": max_logchunks_examples,
+            "max_loghub_files": max_loghub_files,
             "split_policy": "97% train / 1% dev / 1% test / 1% issue_5093_holdout",
+            "eval_only_sources": "logchunks/loghub",
             "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",
         },
     )

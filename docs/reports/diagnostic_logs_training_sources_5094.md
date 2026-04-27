@@ -33,11 +33,13 @@ Rules are codified in `marin.datakit.download.diagnostic_logs.sanitize_diagnosti
 
 ## Ingest Scope
 
-This PR adds a sample-capped GHALogs ingest path over an already-staged `github_run_logs.zip`:
+This PR adds sample-capped public diagnostic-log ingest over already-staged source files:
 
-- input: a staged GHALogs record directory containing `github_run_logs.zip`
-- max zip members read: 10,000 by default
-- output: partitioned sanitized JSONL plus metadata counters
-- tokenization: train/dev JSONL with the Llama 3 tokenizer
+- GHALogs input: `github_run_logs.zip`
+- LogChunks input: `LogChunks.zip`
+- LogHub input: a `loghub/` checkout containing `*_2k.log` files
+- GHALogs output: partitioned sanitized JSONL plus metadata counters
+- LogChunks/LogHub output: sanitized eval-only JSONL plus metadata counters
+- tokenization: GHALogs train/dev JSONL with the Llama 3 tokenizer
 
-The experiment entry point is `experiments/exp5094_public_diagnostic_logs.py` with required `--source_path` to the staged GHALogs files. Full-corpus promotion is deferred until GHALogs sanitization/governance is reviewed and eval-only packaging is defined for LogChunks/LogHub.
+The experiment entry point is `experiments/exp5094_public_diagnostic_logs.py` with required `--source_path` to the staged source root. Full-corpus promotion is deferred until GHALogs sanitization/governance is reviewed and eval-only packaging is defined for LogChunks/LogHub.

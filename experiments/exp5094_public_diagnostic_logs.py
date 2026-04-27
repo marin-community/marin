@@ -13,8 +13,10 @@ from marin.processing.tokenize import TokenizeConfig, tokenize
 from experiments.llama import llama3_tokenizer
 from marin.datakit.download.diagnostic_logs import (
     DEFAULT_GHALOGS_MAX_MEMBERS,
+    DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
+    DEFAULT_LOGHUB_MAX_FILES,
     DiagnosticSourceStatus,
-    extract_ghalogs_step,
+    extract_diagnostic_logs_step,
     source_inventory,
 )
 
@@ -38,10 +40,17 @@ def _inventory_payload() -> list[dict[str, object]]:
     return payload
 
 
-def _extract_step(source_path: str, max_members: int) -> ExecutorStep:
-    return extract_ghalogs_step(
+def _extract_step(
+    source_path: str,
+    max_ghalogs_members: int,
+    max_logchunks_examples: int,
+    max_loghub_files: int,
+) -> ExecutorStep:
+    return extract_diagnostic_logs_step(
         source_path=source_path,
-        max_members=max_members,
+        max_ghalogs_members=max_ghalogs_members,
+        max_logchunks_examples=max_logchunks_examples,
+        max_loghub_files=max_loghub_files,
     ).as_executor_step()
 
 
@@ -82,34 +91,55 @@ def inventory_cmd() -> None:
 
 
 @cli.command("extract")
-@click.option("--source_path", required=True, help="Path to staged GHALogs files containing github_run_logs.zip.")
-@click.option("--max_members", default=DEFAULT_GHALOGS_MAX_MEMBERS, show_default=True, type=int)
-def extract_cmd(source_path: str, max_members: int) -> None:
-    """Extract a capped sample of partitioned diagnostic logs from staged GHALogs."""
-    step = _extract_step(source_path, max_members)
-    executor_main(steps=[step], description="Issue #5094 extract GHALogs diagnostic log sample")
+@click.option("--source_path", required=True, help="Path to staged diagnostic-log source files.")
+@click.option("--max_ghalogs_members", default=DEFAULT_GHALOGS_MAX_MEMBERS, show_default=True, type=int)
+@click.option("--max_logchunks_examples", default=DEFAULT_LOGCHUNKS_MAX_EXAMPLES, show_default=True, type=int)
+@click.option("--max_loghub_files", default=DEFAULT_LOGHUB_MAX_FILES, show_default=True, type=int)
+def extract_cmd(
+    source_path: str,
+    max_ghalogs_members: int,
+    max_logchunks_examples: int,
+    max_loghub_files: int,
+) -> None:
+    """Extract capped samples of public diagnostic logs."""
+    step = _extract_step(source_path, max_ghalogs_members, max_logchunks_examples, max_loghub_files)
+    executor_main(steps=[step], description="Issue #5094 extract public diagnostic log sample")
 
 
 @cli.command("tokenize")
-@click.option("--source_path", required=True, help="Path to staged GHALogs files containing github_run_logs.zip.")
-@click.option("--max_members", default=DEFAULT_GHALOGS_MAX_MEMBERS, show_default=True, type=int)
-def tokenize_cmd(source_path: str, max_members: int) -> None:
+@click.option("--source_path", required=True, help="Path to staged diagnostic-log source files.")
+@click.option("--max_ghalogs_members", default=DEFAULT_GHALOGS_MAX_MEMBERS, show_default=True, type=int)
+@click.option("--max_logchunks_examples", default=DEFAULT_LOGCHUNKS_MAX_EXAMPLES, show_default=True, type=int)
+@click.option("--max_loghub_files", default=DEFAULT_LOGHUB_MAX_FILES, show_default=True, type=int)
+def tokenize_cmd(
+    source_path: str,
+    max_ghalogs_members: int,
+    max_logchunks_examples: int,
+    max_loghub_files: int,
+) -> None:
     """Tokenize the same capped GHALogs sample (train/dev only)."""
-    extract_step = _extract_step(source_path, max_members)
+    extract_step = _extract_step(source_path, max_ghalogs_members, max_logchunks_examples, max_loghub_files)
     tokenize_step = _tokenize_step(extract_step)
     executor_main(steps=[extract_step, tokenize_step], description="Issue #5094 tokenize GHALogs sample")
 
 
 @cli.command("all")
-@click.option("--source_path", required=True, help="Path to staged GHALogs files containing github_run_logs.zip.")
-@click.option("--max_members", default=DEFAULT_GHALOGS_MAX_MEMBERS, show_default=True, type=int)
-def all_cmd(source_path: str, max_members: int) -> None:
-    """Run sample extraction and tokenization for GHALogs."""
-    extract_step = _extract_step(source_path, max_members)
+@click.option("--source_path", required=True, help="Path to staged diagnostic-log source files.")
+@click.option("--max_ghalogs_members", default=DEFAULT_GHALOGS_MAX_MEMBERS, show_default=True, type=int)
+@click.option("--max_logchunks_examples", default=DEFAULT_LOGCHUNKS_MAX_EXAMPLES, show_default=True, type=int)
+@click.option("--max_loghub_files", default=DEFAULT_LOGHUB_MAX_FILES, show_default=True, type=int)
+def all_cmd(
+    source_path: str,
+    max_ghalogs_members: int,
+    max_logchunks_examples: int,
+    max_loghub_files: int,
+) -> None:
+    """Run sample extraction and tokenization for public diagnostic logs."""
+    extract_step = _extract_step(source_path, max_ghalogs_members, max_logchunks_examples, max_loghub_files)
     tokenize_step = _tokenize_step(extract_step)
     executor_main(
         steps=[extract_step, tokenize_step],
-        description="Issue #5094 GHALogs diagnostic logs sample",
+        description="Issue #5094 public diagnostic logs sample",
     )
 
 
