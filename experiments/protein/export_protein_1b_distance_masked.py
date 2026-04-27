@@ -29,7 +29,10 @@ from marin.execution.executor import executor_main
 from marin.export import convert_checkpoint_to_hf_step
 
 TRAINING_OUTPUT = "gs://marin-us-east5/checkpoints/protein-contacts-1b-3.5e-4-distance-masked-7d355e"
-CHECKPOINT_STEP = 15049  # latest permanent checkpoint as of 2026-04-24
+CHECKPOINT_STEP = 31337  # latest temp checkpoint with metadata.json as of 2026-04-27 13:16Z
+# Permanent checkpoints in this run lack metadata.json (only the latest temp does), so
+# we point at the parent dir and let levanter pick whatever loadable ckpt is current at job
+# start. CHECKPOINT_STEP is used only for the output directory name.
 
 
 def _trainer_from_training_step() -> TrainerConfig:
@@ -41,11 +44,12 @@ def _trainer_from_training_step() -> TrainerConfig:
 
 hf_export = convert_checkpoint_to_hf_step(
     name=f"hf/protein-contacts-1b-3.5e-4-distance-masked-step-{CHECKPOINT_STEP}",
-    checkpoint_path=f"{TRAINING_OUTPUT}/checkpoints/step-{CHECKPOINT_STEP}",
+    checkpoint_path=f"{TRAINING_OUTPUT}/checkpoints",
     trainer=_trainer_from_training_step(),
     model=protein_llama_1b,
     tokenizer=PROTEIN_TOKENIZER,
     use_cpu=True,
+    discover_latest=True,
     override_output_path=f"{TRAINING_OUTPUT}/hf/step-{CHECKPOINT_STEP}",
 )
 
