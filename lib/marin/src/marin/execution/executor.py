@@ -676,7 +676,16 @@ def resolve_executor_step(
     # Short-circuit for StepSpec -> ExecutorStep -> StepSpec round-trip.
     original: StepSpec | None = getattr(step, "_original_step_spec", None)
     if original is not None:
-        return dataclasses.replace(original, deps=deps or [])
+        # ``as_executor_step()`` pins ``override_output_path=original.output_path``
+        # on the ExecutorStep so the executor preserves the original placement.
+        # Mirror that pin on the resolved StepSpec — otherwise replacing deps
+        # with executor-built stubs (which lack the originals' ``hash_attrs``)
+        # would change ``name_with_hash`` and silently shift ``output_path``.
+        return dataclasses.replace(
+            original,
+            deps=deps or list(original.deps),
+            override_output_path=original.output_path,
+        )
 
     remote_callable = step.fn if isinstance(step.fn, RemoteCallable) else None
     if remote_callable is not None:
