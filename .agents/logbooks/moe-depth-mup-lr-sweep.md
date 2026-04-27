@@ -1002,3 +1002,39 @@
   finals and the four-point scaling-law projection.
 - Next action: continue monitoring d1280 through completion, including the
   newly launched `2.83x` run and queued `4x`.
+
+### 2026-04-26 17:13 - d1280 central 5k checkpoint
+
+- Hypothesis: the d1280 lower-LR shift seen around 3.4k steps should either
+  persist after the central runs reach a comparable 5k eval boundary, or move
+  back toward the d512/d768/d1024 `1x` optimum if it was transient.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /kaiyue/iris-run-job-20260426-020352`
+  - `uv run python - <<'PY' ... wandb.Api().runs('understanding-sam/marin_moe', filters={'display_name': name}) ... PY`
+- Result:
+  - Iris shows 19 jobs under the resubmitted parent: 9 running and 10
+    succeeded, with no active failures or pending reasons.
+  - All sampled started d1280 runs report
+    `model.depth_mup_residual_scaling=True`.
+  - d1280 latest W&B summaries:
+
+    | LR multiplier | State | Step | Paloma macro | Train loss | Notes |
+    | --- | --- | ---: | ---: | ---: | --- |
+    | 0.25x | running | 5125 | 3.3413 | 3.0819 | latest eval around 5k |
+    | 0.354x | running | 5061 | 3.2959 | 2.9775 | latest eval around 5k |
+    | 0.5x | running | 5000 | 3.2837 | 2.9756 | latest eval, current best |
+    | 0.707x | running | 5012 | 3.2984 | 3.0002 | latest eval, close |
+    | 1x | running | 5015 | 3.3493 | 2.9842 | latest eval |
+    | 1.41x | running | 4853 | 3.4855 | 3.1420 | latest eval around 4.8k |
+    | 2x | running | 3745 | 3.6977 | 3.2900 | latest eval around 3.7k |
+    | 2.83x | running | 414 | 11.8015 | 4.0294 | startup placeholder |
+    | 4x | missing | n/a | n/a | n/a | queued |
+
+- Interpretation: the d1280 lower-LR shift has persisted through the comparable
+  central 5k boundary. The best visible run is `0.5x`, with `0.354x` and
+  `0.707x` close; `1x` is about 0.066 Paloma macro behind `0.5x`. This is the
+  first clear sign that the depth-MuP LR optimum may still drift down at the
+  largest scale, despite the completed d512/d768/d1024 optima all landing at
+  `1x`. This is still a checkpoint, not a final d1280 result.
+- Next action: continue monitoring to d1280 finals, let `2.83x` reach useful
+  evals, and wait for queued `4x` to launch.
