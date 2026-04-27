@@ -201,7 +201,7 @@ Run with:
 python -m levanter.main.train_lm --config_path my_config.yaml
 ```
 
-The cache will build on-the-fly using Ray, and training will begin as soon as data is ready.
+The cache will build on-the-fly using Levanter's Zephyr-backed preprocessing pipeline, and training will begin as soon as data is ready.
 
 ---
 

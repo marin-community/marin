@@ -314,10 +314,9 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
 
 def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
-    """Run the Levanter DPO training main function on a Ray cluster.
+    """Run the Levanter DPO training main function through Fray.
 
     This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
-    It should also be run with a Ray cluster already running.
     """
     config, train_config, env, extras = _prepare_training_run(config)
 
@@ -352,7 +351,7 @@ def _add_default_env_variables(env: dict, default_env: dict | None):
         default_env = deepcopy(default_env)
         env = mergedeep.merge(default_env, env)
 
-    # Ray gets mad if the values aren't all strings, but e.g. ints
+    # Task environment values are serialized as strings.
     env = {str(k): str(v) for k, v in env.items()}
     return env
 

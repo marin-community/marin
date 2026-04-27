@@ -247,10 +247,10 @@ def _hacky_remove_tpu_lockfile():
     This is a hack to remove the lockfile that TPU pods create on the host filesystem.
 
     libtpu only allows one process to access the TPU at a time, and it uses a lockfile to enforce this.
-    Ordinarily a lockfile would be removed when the process exits, but in the case of Ray, the process is
-    a long-running daemon that doesn't typically exit until the node is shut down. This means that the lockfile
-    persists across Ray tasks. This doesn't apply to tasks that fork a new process to do the TPU work, but
-    does apply to tasks that run the TPU code in the same process as the Ray worker.
+    Ordinarily a lockfile would be removed when the process exits, but a long-running worker process may not exit until
+    the node is shut down. This means that the lockfile can persist across tasks. This doesn't apply to tasks that fork a
+    new process to do the TPU work, but does apply to tasks that run the TPU code in the same long-running worker
+    process.
     """
     try:
         os.unlink("/tmp/libtpu_lockfile")

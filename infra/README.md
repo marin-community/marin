@@ -40,7 +40,7 @@ abstraction that handles parallelism and fault tolerance automatically.
 from zephyr import Dataset, flow_backend
 
 def process_file(input_path: str, output_path: str) -> None:
-    # Your processing logic here - no @ray.remote needed
+    # Your processing logic here - no manual worker orchestration needed
     ...
 
 def main():
@@ -57,7 +57,7 @@ def main():
 
 - **Quick start**: See `lib/zephyr/README.md`
 - **Design & API**: See `lib/zephyr/docs/design.md`
-- **Migration patterns**: See `.agents/docs/zephyr-migration.md` for patterns like bounded parallel map, flat_map for file processing, and nested parallelism
+- **Archived migration patterns**: See `.agents/docs/zephyr-migration.md` for historical examples of replacing legacy distributed loops with Zephyr patterns
 
 ### Design Principles
 

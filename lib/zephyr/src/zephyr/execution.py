@@ -278,7 +278,7 @@ class ZephyrWorkerError(RuntimeError):
 # Application errors that should never be retried by the execute() retry loop.
 # These are deterministic errors (bad plan, invalid config, programming bugs)
 # that would fail identically on every attempt. Infrastructure errors (OSError,
-# RuntimeError from dead actors, Ray actor errors) are NOT listed here so they
+# RuntimeError from dead actors, backend actor errors) are NOT listed here so they
 # remain retryable.
 _NON_RETRYABLE_ERRORS = (ZephyrWorkerError, ValueError, TypeError, KeyError, AttributeError, MemoryError)
 

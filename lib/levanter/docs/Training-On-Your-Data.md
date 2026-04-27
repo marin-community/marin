@@ -194,7 +194,7 @@ end of documents.
 
 ### Online Preprocessing
 
-We have a sophisticated caching mechanism using [Ray](https://docs.ray.io/en/latest/)
+We have a sophisticated caching mechanism using Zephyr-backed preprocessing
 that builds a cache of preprocessed data on the fly. Online caching happens transparently
 in the background, using the mostly-idle CPU-cores of the machine(s) you are training on.
 
