@@ -145,9 +145,11 @@ class NpmRegistryMetadataSource:
             staging=StagingMetadata(
                 transform_name="download_npm_registry_metadata",
                 serializer_name="canonical_registry_json",
-                output_filename=DEFAULT_OUTPUT_FILENAME,
-                record_provenance_fields=("package_name", "version", "source_url"),
-                metadata={"excluded_fields": ("readme", "readmeFilename", "maintainers", "users", "contributors")},
+                metadata={
+                    "output_filename": DEFAULT_OUTPUT_FILENAME,
+                    "provenance_fields": ["package_name", "version", "source_url"],
+                    "excluded_fields": ["readme", "readmeFilename", "maintainers", "users", "contributors"],
+                },
             ),
             epic_issue=EPIC_5005,
             issue_numbers=(PACKAGE_METADATA_ISSUE,),
@@ -332,7 +334,7 @@ def npm_registry_metadata_step(
                     "registry_base_url": source.registry_base_url,
                     "package_names": list(source.package_names),
                     "max_versions_per_package": source.max_versions_per_package,
-                    "manifest_fingerprint": manifest.fingerprint(),
+                    "content_fingerprint": manifest.fingerprint(),
                 }
             ),
         ),
