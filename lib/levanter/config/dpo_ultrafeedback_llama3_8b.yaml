@@ -72,8 +72,13 @@ optimizer:
   warmup: 0.1
   max_grad_norm: 1.0
 
-reference_model_path: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--main
-reference_is_hf: true
+adapter:
+  type: none
+
+reference:
+  type: separate
+  model_path: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--main
+  is_hf: true
 beta: 0.01
 validation_split_fraction: null
 

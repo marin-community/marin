@@ -18,6 +18,7 @@ from fray import ResourceConfig
 from marin.execution.remote import remote
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
+from levanter.adaptation import LoraAdaptationConfig, NoAdaptationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import (
     BlockShuffleConfig,
@@ -27,7 +28,7 @@ from levanter.data.text import (
     TextLmDatasetFormat,
 )
 from levanter.eval_harness import LmEvalHarnessConfig
-from levanter.main.train_dpo import TrainDpoConfig
+from levanter.main.train_dpo import SeparateReferenceConfig, TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
@@ -61,6 +62,7 @@ from marin.processing.tokenize import (
     TokenizerStep,
     add_validation_sets_to_mixture,
     lm_data_config,
+    lm_mixture_data_config,
     tokenize,
 )
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
@@ -76,6 +78,10 @@ logger = logging.getLogger(__name__)
 
 HF_BUCKET_URI_PREFIX = "hf://buckets/"
 HF_BUCKET_PATH_PREFIX = "buckets/"
+_WANDB_NAME_MAX_LENGTH = 64
+_WANDB_NAME_MIN_PREFIX_LENGTH = 24
+_WANDB_NAME_AGGRESSIVE_TRUNCATION_CHARS = 16
+_WANDB_SUFFIX_MARKERS = ("_seed", "-seed", "_step", "-step")
 
 
 def _is_hf_bucket_path(path: str) -> bool:
@@ -96,21 +102,75 @@ DEFAULT_NEW_RUN_DATA_SHUFFLE = BlockShuffleConfig(
 """Hierarchical block-shuffle default for newly constructed training runs."""
 
 
+def _preferred_wandb_suffix_start(name: str) -> int | None:
+    """Return the preferred suffix start for a truncated W&B run name.
+
+    We prefer underscore-delimited semantic tails like ``lr7.5e-7_seed2`` or
+    ``foo_step400``. This avoids splitting on the ``-`` inside scientific
+    notation, which would corrupt names like ``lr7.5e-7``.
+    """
+    for marker in _WANDB_SUFFIX_MARKERS:
+        marker_start = name.rfind(marker)
+        if marker_start == -1:
+            continue
+
+        prior_slash = name.rfind("/", 0, marker_start)
+        prior_underscore = name.rfind("_", 0, marker_start)
+        if prior_underscore > prior_slash:
+            return prior_underscore
+        return marker_start
+
+    last_underscore = name.rfind("_")
+    if last_underscore == -1:
+        return None
+
+    prior_slash = name.rfind("/", 0, last_underscore)
+    second_last_underscore = name.rfind("_", 0, last_underscore)
+    if second_last_underscore > prior_slash:
+        return second_last_underscore
+
+    return last_underscore
+
+
 def _truncate_wandb_name(name: str) -> str:
-    """Truncate a run name to fit WANDB's 64-character limit, preserving the trailing suffix."""
-    if len(name) <= 64:
+    """Truncate a run name to fit W&B's 64-character limit without mangling semantic suffixes."""
+    if len(name) <= _WANDB_NAME_MAX_LENGTH:
         return name
+
     old_name = name
-    if "-" not in name:
-        name = name[:64]
+    suffix_start = _preferred_wandb_suffix_start(name)
+
+    if suffix_start is None:
+        name = name[:_WANDB_NAME_MAX_LENGTH]
+        preserved_suffix = ""
     else:
-        prefix, suffix = name.rsplit("-", 1)
-        if len(suffix) >= 64:
-            suffix = suffix[:64]
-            name = suffix
+        suffix = name[suffix_start:]
+        preserved_suffix = suffix
+        if len(suffix) >= _WANDB_NAME_MAX_LENGTH:
+            name = name[:_WANDB_NAME_MAX_LENGTH]
+            preserved_suffix = ""
         else:
-            name = prefix[: 63 - len(suffix)] + "-" + suffix
+            prefix_budget = _WANDB_NAME_MAX_LENGTH - len(suffix)
+            prefix = name[:prefix_budget]
+
+            # Prefer trimming at a token boundary so the retained prefix stays readable.
+            boundary = max(prefix.rfind("_"), prefix.rfind("/"))
+            if boundary >= _WANDB_NAME_MIN_PREFIX_LENGTH:
+                prefix = prefix[:boundary]
+
+            name = prefix + suffix
+
     logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
+
+    removed_chars = len(old_name) - len(name)
+    retained_prefix_len = len(name) - len(preserved_suffix)
+    if removed_chars >= _WANDB_NAME_AGGRESSIVE_TRUNCATION_CHARS or retained_prefix_len < _WANDB_NAME_MIN_PREFIX_LENGTH:
+        logger.warning(
+            "W&B run name %r required aggressive truncation to %r. Consider shortening the explicit name.",
+            old_name,
+            name,
+        )
+
     return name
 
 
@@ -650,6 +710,12 @@ def default_dpo(
     preference_data = PreferenceLmDataConfig.from_lm_data_config(pretraining_data)
     preference_data = dataclasses.replace(preference_data, permutation_type="feistel")
     dpo_tokenizer_name = unwrap_versioned_value(preference_data.tokenizer)
+    lm_validation_data = lm_mixture_data_config(
+        default_validation_sets(tokenizer=dpo_tokenizer_name),
+        {},
+        missing_weights_are_validation=True,
+        include_raw_paths=False,
+    )
 
     name = _truncate_wandb_name(name)
 
@@ -658,12 +724,58 @@ def default_dpo(
 
     train_length = _validate_train_length(dpo_config.train_seq_len, model_config)
 
-    schedule = BatchSchedule(unwrap_versioned_value(dpo_config.train_batch_size))
-    total_examples = schedule.global_data_offset_by_step(dpo_config.num_train_steps)
+    requested_num_train_steps = dpo_config.num_train_steps
+    auto_num_epochs = None
+    if requested_num_train_steps is None:
+        requested_num_train_steps = 1
+        auto_num_epochs = dpo_config.num_epochs
 
-    reference_model_path = dpo_config.reference_model_path or dpo_config.model_name_or_path
-    if reference_model_path is None:
-        raise ValueError("reference_model_path must be set for DPO training.")
+    requested_steps_per_eval = dpo_config.steps_per_eval
+    auto_validation_runs = None
+    if requested_steps_per_eval is None:
+        requested_steps_per_eval = 1
+        auto_validation_runs = 5
+
+    schedule = BatchSchedule(unwrap_versioned_value(dpo_config.train_batch_size))
+    total_examples = schedule.global_data_offset_by_step(requested_num_train_steps)
+
+    reference = dpo_config.reference
+    if isinstance(reference, SeparateReferenceConfig) and not reference.model_path:
+        reference_model_path = dpo_config.reference_model_path or dpo_config.model_name_or_path
+        if reference_model_path is None:
+            raise ValueError("reference_model_path must be set for DPO training when using a separate reference.")
+        reference = dataclasses.replace(
+            reference,
+            model_path=reference_model_path,
+            is_hf=dpo_config.reference_is_hf,
+        )
+
+    # Force the DPO-correct LoRA init for any LoraAdaptationConfig adapter.
+    # The standard LoRA-paper init (B=0, A=Gaussian) interacts pathologically
+    # with FSDP all-reduce noise on canonical-mesh v5p-8 (Bug-1): a 6-seed
+    # mesh-permutation sweep showed a deterministic ~14x rate gap between
+    # canonical and reverse device permutations driven by ~3.8% per-element
+    # bit-noise on the first live grad_B, amplified through the DPO sigmoid
+    # near pi=pi_ref. Flipping to A=0 / B=Gaussian preserves B@A=0 at init
+    # but routes the first live optimizer step through the full-rank A
+    # matrix, decoupling first-step direction-picking from the sigma-
+    # sensitive point. A 17-run LR sweep on bloom-speceval-v2 confirmed
+    # strict dominance of A=0 over B=0 at every LR. Users who specifically
+    # want the LoRA-paper init can construct SimpleDPOConfig/TrainDpoConfig
+    # directly and skip default_dpo().
+    if isinstance(dpo_config.adapter, LoraAdaptationConfig):
+        dpo_config = dataclasses.replace(
+            dpo_config,
+            adapter=dataclasses.replace(
+                dpo_config.adapter,
+                a_init_mode="zero",
+                zero_init_b=False,
+            ),
+        )
+
+    hf_save_dtype = dpo_config.hf_save_dtype
+    if not isinstance(dpo_config.adapter, NoAdaptationConfig) and hf_save_dtype is not None:
+        raise ValueError("hf_save_dtype is not supported with adapter-based DPO exports.")
 
     inner_config = TrainDpoConfig(
         data=preference_data,
@@ -674,8 +786,8 @@ def default_dpo(
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=dpo_config.train_batch_size,
-            num_train_steps=dpo_config.num_train_steps,
-            steps_per_eval=dpo_config.steps_per_eval,
+            num_train_steps=requested_num_train_steps,
+            steps_per_eval=requested_steps_per_eval,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
                 keep=_checkpoint_keep(steps_per_export),
@@ -687,6 +799,8 @@ def default_dpo(
                     "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
                 }
             ),
+            per_device_eval_parallelism=dpo_config.per_device_eval_parallelism,
+            profiler=dpo_config.profiler,
             allow_partial_checkpoint=dpo_config.allow_partial_checkpoint,
             allow_nondivisible_batch_size=True,
             quantization=QuantizationConfig(int8=dpo_config.int8) if dpo_config.int8 else None,
@@ -696,6 +810,7 @@ def default_dpo(
         initialize_from_hf=dpo_config.model_name_or_path if initialize_from_hf else False,
         train_seq_len=train_length,
         model=model_config,
+        adapter=dpo_config.adapter,
         optimizer=AdamConfig(
             learning_rate=dpo_config.learning_rate,
             weight_decay=dpo_config.weight_decay,
@@ -705,12 +820,13 @@ def default_dpo(
             min_lr_ratio=dpo_config.min_lr_ratio,
             max_grad_norm=dpo_config.max_grad_norm,
         ),
-        reference_model_path=reference_model_path,
-        reference_is_hf=dpo_config.reference_is_hf,
+        reference=reference,
         beta=dpo_config.beta,
         validation_split_fraction=dpo_config.validation_split_fraction,
+        reference_eval_cache=dpo_config.reference_eval_cache,
+        lm_validation_data=lm_validation_data,
         hf_save_steps=steps_per_export_hf,
-        hf_save_dtype=dpo_config.hf_save_dtype,
+        hf_save_dtype=hf_save_dtype,
         hf_generation_eos_token_ids=dpo_config.hf_generation_eos_token_ids,
         data_seed=dpo_config.seed,
     )
@@ -719,6 +835,8 @@ def default_dpo(
         train_config=inner_config,
         resources=dpo_config.resources,
         output_path=this_output_path(),
+        auto_num_epochs=auto_num_epochs,
+        auto_validation_runs=auto_validation_runs,
     )
 
     model_config = unwrap_versioned_value(model_config)
@@ -726,11 +844,19 @@ def default_dpo(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a model (tokenizer={dpo_tokenizer_name}) for "
-            f"{dpo_config.num_train_steps} (steps) * "
-            f"{dpo_config.train_batch_size} (batch_size) * "
-            f"{train_length} (train_seq_len) "
-            f"= {total_examples * train_length} tokens."
+            (
+                f"Train a model (tokenizer={dpo_tokenizer_name}) for "
+                f"{requested_num_train_steps} (steps) * "
+                f"{dpo_config.train_batch_size} (batch_size) * "
+                f"{train_length} (train_seq_len) "
+                f"= {total_examples * train_length} tokens."
+            )
+            if auto_num_epochs is None
+            else (
+                f"Train a model (tokenizer={dpo_tokenizer_name}) for "
+                f"{dpo_config.num_epochs:g} epoch(s) with runtime-resolved step count "
+                f"and train_seq_len={train_length}."
+            )
         ),
         fn=run_levanter_train_dpo,
         config=config,

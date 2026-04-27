@@ -280,6 +280,11 @@ class WandbConfig(TrackerConfig):
 
         assert r is not None
 
+        configured_tags = tuple(self.tags)
+        if r.tags != configured_tags:
+            logger.info("Correcting wandb run tags from %s to %s", r.tags, configured_tags)
+            r.tags = configured_tags
+
         if r.step != 0:
             logger.info("Resuming wandb run. Attempting to mitigate issues.")
 

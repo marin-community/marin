@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from .cache_stats import (
+    TokenizedCacheStats,
+    read_tokenized_cache_stats,
+    tokenized_cache_stats_path,
+)
 from .data_configs import (
     TokenizerStep,
     add_validation_sets_to_mixture,
