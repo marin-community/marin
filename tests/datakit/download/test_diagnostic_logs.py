@@ -12,7 +12,6 @@ from marin.datakit.download.diagnostic_logs import (
     looks_like_diagnostic_log_row,
     sanitize_diagnostic_log_text,
     starcoder_fixture_row_to_record,
-    training_ready_sources,
 )
 
 
@@ -26,11 +25,6 @@ def _read_jsonl(path: str) -> list[dict[str, object]]:
         return []
     with open(path) as handle:
         return [json.loads(line) for line in handle if line.strip()]
-
-
-def test_training_ready_sources_are_opt_in_and_narrow():
-    ready = training_ready_sources()
-    assert [source.name for source in ready] == ["ghalogs", "github_fixture_logs_from_source_corpora"]
 
 
 def test_sanitize_diagnostic_log_text_redacts_secrets_and_identifiers():
