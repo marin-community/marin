@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from dataclasses import replace
 
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
@@ -55,12 +54,12 @@ def _manifest() -> IngestionSourceManifest:
 
 def test_content_fingerprint_ignores_provenance_only_metadata():
     manifest = _manifest()
-    updated = replace(
-        manifest,
-        policy=replace(
-            manifest.policy,
-            contamination_risk="medium: still held out, but with different review outcome",
-        ),
+    updated = manifest.model_copy(
+        update={
+            "policy": manifest.policy.model_copy(
+                update={"contamination_risk": "medium: still held out, but with different review outcome"}
+            )
+        }
     )
 
     assert manifest.fingerprint() == updated.fingerprint()
@@ -69,12 +68,8 @@ def test_content_fingerprint_ignores_provenance_only_metadata():
 
 def test_content_fingerprint_changes_when_text_projection_changes():
     manifest = _manifest()
-    updated = replace(
-        manifest,
-        staging=replace(
-            manifest.staging,
-            serializer_name="wikitablequestions",
-        ),
+    updated = manifest.model_copy(
+        update={"staging": manifest.staging.model_copy(update={"serializer_name": "wikitablequestions"})}
     )
 
     assert manifest.fingerprint() != updated.fingerprint()
