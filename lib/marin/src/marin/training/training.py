@@ -109,12 +109,17 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
     if pod_config.output_path is None:
         return pod_config
 
+    output_path_name = os.path.basename(pod_config.output_path.rstrip("/"))
+    temporary_checkpoint_path = os.path.join(
+        marin_temp_bucket(ttl_days=14, prefix="checkpoints-temp"),
+        output_path_name,
+    )
     trainer = replace(
         pod_config.train_config.trainer,
         checkpointer=replace(
             pod_config.train_config.trainer.checkpointer,
             base_path=os.path.join(pod_config.output_path, DEFAULT_CHECKPOINTS_PATH),
-            temporary_base_path=marin_temp_bucket(ttl_days=14, prefix="checkpoints-temp"),
+            temporary_base_path=temporary_checkpoint_path,
         ),
     )
     hf_output_path = os.path.join(pod_config.output_path, DEFAULT_HF_CHECKPOINTS_PATH)

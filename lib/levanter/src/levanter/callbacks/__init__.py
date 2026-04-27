@@ -34,6 +34,8 @@ def eval_loss_loop(
 ) -> tuple[float, dict[str, float]]:
 
     total_loss = 0.0
+    total_load_time = 0.0
+    total_loss_time = 0.0
     accumulated_metrics: dict = {}
     n = 0
 

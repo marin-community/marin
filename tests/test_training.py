@@ -22,7 +22,9 @@ from marin.training.training import (
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
     _doublecheck_paths,
+    _enforce_run_id,
     _maybe_auto_resolve_dpo_schedule,
+    _update_config_to_use_out_path,
 )
 
 
@@ -144,6 +146,28 @@ def test_read_tokenized_cache_stats(tmp_path):
 
     assert stats.total_tokens == 123
     assert stats.total_elements == 45
+
+
+def test_output_path_temp_checkpoint_path_is_run_scoped(trainer_config):
+    config = TrainLmOnPodConfig(
+        train_config=train_lm.TrainLmConfig(
+            data={"train_urls": []},  # type: ignore[arg-type]
+            trainer=dataclasses.replace(trainer_config, id=None),
+        ),
+        resources=ResourceConfig.with_tpu("v4-8"),
+        output_path="gs://bucket/checkpoints/dpo/example-run",
+    )
+
+    with patch("marin.training.training.marin_temp_bucket", return_value="gs://tmp/ttl=14d/checkpoints-temp"):
+        updated = _enforce_run_id(_update_config_to_use_out_path(config))
+
+    checkpointer = updated.train_config.trainer.checkpointer
+
+    assert updated.train_config.trainer.id == "example-run"
+    assert checkpointer.append_run_id_to_base_path is False
+    assert checkpointer.base_path == "gs://bucket/checkpoints/dpo/example-run/checkpoints"
+    assert checkpointer.temporary_base_path == "gs://tmp/ttl=14d/checkpoints-temp/example-run"
+    assert checkpointer.expanded_temporary_path("example-run") == "gs://tmp/ttl=14d/checkpoints-temp/example-run"
 
 
 def test_auto_resolve_dpo_schedule_from_stats(trainer_config, tmp_path):

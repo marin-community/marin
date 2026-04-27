@@ -235,12 +235,17 @@ def test_eval_loss_loop(has_metrics, max_batches):
     expected_loss = sum(range(1, n_batches + 1)) / n_batches
 
     assert jnp.allclose(avg_loss, expected_loss, atol=1e-5)
+    assert avg_metrics["timing/load_time"] >= 0.0
+    assert avg_metrics["timing/loss_time"] >= 0.0
+    assert avg_metrics["timing/num_batches"] == float(n_batches)
+
+    metric_keys = {key for key in avg_metrics if not key.startswith("timing/")}
 
     if has_metrics:
         assert jnp.allclose(avg_metrics["metric_a"], expected_loss * 2, atol=1e-5)
         assert jnp.allclose(avg_metrics["metric_b"], expected_loss + 10, atol=1e-5)
     else:
-        assert len(avg_metrics) == 0
+        assert metric_keys == set()
 
 
 @pytest.mark.parametrize(
