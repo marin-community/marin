@@ -20,7 +20,7 @@ import numpy as np
 import pyarrow as pa
 import tensorstore as ts
 from dataclasses_json import dataclass_json
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from fsspec import AbstractFileSystem
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging

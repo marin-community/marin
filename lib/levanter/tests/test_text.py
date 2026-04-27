@@ -561,7 +561,6 @@ def assert_loss_weight_matches_all_assistants(example, tokenizer):
     assert np.array_equal(loss_weight, expected), "loss_weight does not match assistant spans"
 
 
-@pytest.mark.ray
 def test_chat_dataset_build_and_pack(dummy_chat_data):
     with tempfile.TemporaryDirectory() as tmpdir:
         cache_dir = tmpdir

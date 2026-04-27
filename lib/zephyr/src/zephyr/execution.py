@@ -18,7 +18,6 @@ import itertools
 import logging
 import os
 import pickle
-import re
 import signal
 import sys
 from datetime import datetime, timezone
@@ -36,9 +35,9 @@ from typing import Any, Protocol
 
 import cloudpickle
 from rigging.filesystem import open_url, url_to_fs
-from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
-from fray.v2.client import JobHandle
-from fray.v2.types import Entrypoint, JobRequest
+from fray import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
+from fray.client import JobHandle
+from fray.types import Entrypoint, JobRequest
 from rigging.filesystem import marin_temp_bucket
 from rigging.timing import ExponentialBackoff, log_time
 
@@ -53,6 +52,7 @@ from zephyr.plan import (
     StageType,
     compute_plan,
 )
+from zephyr.shuffle import ListShard, MemChunk, _write_scatter
 from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -61,6 +61,9 @@ logger = logging.getLogger(__name__)
 # requeues (re-registration, heartbeat timeout) do not count — they retry
 # unbounded. `_check_worker_group` backstops if workers fully exhaust Iris retries.
 MAX_SHARD_FAILURES = 3
+
+ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/stage/{stage_name}/item_count"
+ZEPHYR_STAGE_BYTES_PROCESSED_KEY = "zephyr/stage/{stage_name}/bytes_processed"
 
 
 class ShardFailureKind(enum.StrEnum):
@@ -110,18 +113,6 @@ class PickleDiskChunk:
         with open_url(self.path, "rb") as f:
             return pickle.load(f)
 
-
-# ---------------------------------------------------------------------------
-# Scatter Parquet support (imported from shuffle.py)
-# ---------------------------------------------------------------------------
-
-from zephyr.shuffle import (  # noqa: E402
-    ListShard,
-    MemChunk,
-    ScatterReader,  # noqa: F401 — re-exported for plan.py and external callers
-    ScatterWriter,  # noqa: F401 — re-exported for external callers
-    _write_scatter,
-)
 
 # ---------------------------------------------------------------------------
 # Task result
@@ -342,7 +333,7 @@ class ZephyrCoordinator:
     """
 
     def __init__(self):
-        from fray.v2 import current_actor
+        from fray import current_actor
 
         # Task management state
         self._task_queue: deque[ShardTask] = deque()
@@ -377,6 +368,9 @@ class ZephyrCoordinator:
         self._is_last_stage: bool = False
         self._initialized: bool = False
         self._pipeline_running: bool = False
+
+        # Set at each _start_stage so _log_status can show average throughput since stage start.
+        self._stage_monotonic_start: float | None = None
 
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
@@ -492,8 +486,19 @@ class ZephyrCoordinator:
             retried = {idx: att for idx, att in self._task_attempts.items() if att > 0}
         alive = sum(1 for s in states if s in {WorkerState.READY, WorkerState.BUSY})
         dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
+
+        totals = self.get_counters()
+        items = totals.get(ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=self._stage_name), 0)
+        bytes_processed = totals.get(ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=self._stage_name), 0)
+        elapsed = time.monotonic() - (
+            self._stage_monotonic_start if self._stage_monotonic_start is not None else float("inf")
+        )
+        item_rate = items / elapsed
+        byte_rate = bytes_processed / elapsed
+
         logger.info(
-            "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
+            "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead; "
+            "items=%d (%.1f/s), bytes_processed=%.1fMiB (%.1fMiB/s)",
             self._execution_id,
             self._stage_name,
             self._completed_shards,
@@ -503,6 +508,10 @@ class ZephyrCoordinator:
             alive,
             len(self._worker_handles),
             dead,
+            items,
+            item_rate,
+            bytes_processed / (1024 * 1024),
+            byte_rate / (1024 * 1024),
         )
         if retried:
             attempts_histogram = dict(sorted(Counter(retried.values()).items()))
@@ -768,6 +777,7 @@ class ZephyrCoordinator:
             # Only reset in-flight worker snapshots; completed snapshots
             # accumulate across stages for full pipeline visibility.
             self._worker_counters = {}
+            self._stage_monotonic_start = time.monotonic()
 
     def _wait_for_stage(self) -> None:
         """Block until current stage completes or error occurs."""
@@ -865,7 +875,7 @@ class ZephyrCoordinator:
                 aux_per_shard = self._compute_join_aux(stage.operations, shards, stage_idx)
 
                 # Build and submit tasks
-                tasks = _compute_tasks_from_shards(shards, stage, aux_per_shard, stage_name=stage_label)
+                tasks = _compute_tasks_from_shards(shards, stage, stage_name=stage_label, aux_per_shard=aux_per_shard)
                 logger.info("[%s] Starting stage %s with %d tasks", self._execution_id, stage_label, len(tasks))
                 self._start_stage(stage_label, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
 
@@ -972,10 +982,6 @@ class ZephyrCoordinator:
             self._chunk_prefix = prefix
             self._execution_id = execution_id
 
-    def start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
-        """Load a new stage's tasks into the queue (legacy compat)."""
-        self._start_stage(stage_name, tasks, is_last_stage=is_last_stage)
-
     def check_heartbeats(self, timeout: float = 120.0) -> None:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""
         with self._lock:
@@ -998,7 +1004,7 @@ class ZephyrWorker:
     """
 
     def __init__(self, coordinator_handle: ActorHandle):
-        from fray.v2 import current_actor
+        from fray import current_actor
 
         self._coordinator = coordinator_handle
         self._shutdown_event = threading.Event()
@@ -1317,11 +1323,14 @@ def _regroup_result_refs(
     Each reducer reads the per-mapper ``.scatter_meta`` sidecars in parallel
     to build its own ``ScatterReader`` without coordinator-side consolidation.
     """
-    num_output = max(max(result_refs.keys(), default=0) + 1, input_shard_count)
-    if output_shard_count is not None:
-        num_output = max(num_output, output_shard_count)
-
     if is_scatter:
+        # Scatter routes records into exactly ``output_shard_count`` buckets via
+        # ``hash(key) % output_shard_count``; spawning more reduce tasks than that
+        # produces empty output files for shard indices that no record hashes to.
+        # When output_shard_count is None (group_by auto-detect), inherit the
+        # input shard count.
+        num_output = output_shard_count if output_shard_count is not None else input_shard_count
+
         # Collect all scatter file paths from all workers. The coordinator
         # does NOT read the sidecars or write a consolidated manifest —
         # reducers do their own parallel sidecar reads.
@@ -1332,7 +1341,9 @@ def _regroup_result_refs(
         shared_refs = MemChunk(items=all_paths)
         return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
 
-    # Non-scatter: each result's shard maps to its own index
+    # Non-scatter: 1:1 mapping from input shard index to output. Resharding
+    # to a different shard count belongs to ReshardOp, not here.
+    num_output = max(max(result_refs.keys(), default=0) + 1, input_shard_count)
     return [result_refs[idx].shard if idx in result_refs else ListShard(refs=[]) for idx in range(num_output)]
 
 
@@ -1382,7 +1393,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
     to disk. The coordinator monitors worker job health directly in its
     maintenance loop (no separate watchdog thread).
     """
-    from fray.v2.client import current_client
+    from fray.client import current_client
     from iris.cluster.client.job_info import get_job_info
 
     logger.info("Loading coordinator config from %s", config_path)
@@ -1536,12 +1547,12 @@ class ZephyrContext:
 
     def __post_init__(self):
         if self.client is None:
-            from fray.v2.client import current_client
+            from fray.client import current_client
 
             self.client = current_client()
 
         if self.max_workers is None:
-            from fray.v2.local_backend import LocalClient
+            from fray.local_backend import LocalClient
 
             if isinstance(self.client, LocalClient):
                 self.max_workers = os.cpu_count() or 1
@@ -1654,7 +1665,7 @@ class ZephyrContext:
                 # resources are requested by the coordinator/worker children.
                 # Set the context var so the coordinator job inherits self.client
                 # instead of auto-detecting (which may pick a different backend).
-                from fray.v2.client import set_current_client
+                from fray.client import set_current_client
 
                 with set_current_client(self.client):
                     self._coordinator_job = self.client.submit(
@@ -1760,15 +1771,12 @@ def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
 def _compute_tasks_from_shards(
     shard_refs: list[Shard],
     stage,
+    stage_name: str,
     aux_per_shard: list[dict[int, Shard]] | None = None,
-    stage_name: str | None = None,
 ) -> list[ShardTask]:
     """Convert shard references into ShardTasks for the coordinator."""
     total = len(shard_refs)
     tasks = []
-    # Sanitize for use as a path component: replace non-alphanumeric runs with '-'
-    raw_name = stage_name or stage.stage_name(max_length=60)
-    output_stage_name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", raw_name).strip("-")
 
     for i, shard in enumerate(shard_refs):
         aux_shards = None
@@ -1781,7 +1789,7 @@ def _compute_tasks_from_shards(
                 total_shards=total,
                 shard=shard,
                 operations=stage.operations,
-                stage_name=output_stage_name,
+                stage_name=stage_name,
                 aux_shards=aux_shards,
             )
         )

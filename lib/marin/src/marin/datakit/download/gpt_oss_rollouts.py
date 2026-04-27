@@ -12,11 +12,12 @@ assistant response. We render these into a single document.
 
 import hashlib
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "andyrdt/gpt-oss-20b-rollouts"
@@ -87,4 +88,13 @@ def download_gpt_oss_rollouts_step() -> StepSpec:
             output_path=output_path,
         ),
         hash_attrs={"version": "v2"},
+    )
+
+
+def gpt_oss_rollouts_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the full ``(download+transform, normalize)`` chain for gpt-oss-rollouts."""
+    processed = download_gpt_oss_rollouts_step()
+    return (
+        processed,
+        normalize_step(name="normalized/gpt-oss-rollouts", download=processed),
     )

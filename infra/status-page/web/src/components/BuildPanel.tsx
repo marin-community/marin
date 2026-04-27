@@ -172,6 +172,9 @@ export function BuildPanel() {
   const { data, isLoading, error, dataUpdatedAt } = useBuilds();
   const latest = data?.commits?.[0];
   const successRate = data?.successRate ?? null;
+  // GitHub history is newest-first, but the visual strip should move forward
+  // in time left-to-right so the latest commit lands at the right edge.
+  const visualCommits = [...(data?.commits ?? [])].reverse();
   const finalized = (data?.commits ?? []).filter(
     (c) => c.state === "SUCCESS" || c.state === "FAILURE" || c.state === "ERROR",
   ).length;
@@ -211,7 +214,7 @@ export function BuildPanel() {
                 1px on mobile so 100 dots aren't dominated by spacing
                 in a ~340px wide card. */}
             <div className="mt-3 flex gap-px sm:gap-[3px]">
-              {data.commits.map((c) => (
+              {visualCommits.map((c) => (
                 <a
                   key={c.oid}
                   href={c.url}

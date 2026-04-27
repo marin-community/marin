@@ -14,6 +14,7 @@ from typing import Literal
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
+from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
 from marin.execution.executor import executor_main
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
 from marin.processing.tokenize.data_configs import TokenizerStep

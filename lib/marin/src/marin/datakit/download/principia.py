@@ -9,7 +9,7 @@ answer, topic, and answer type. We render these into a single document.
 
 import hashlib
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step

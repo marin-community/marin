@@ -1044,10 +1044,9 @@ class K8sTaskProvider:
     Implements the "direct provider" interface used by the controller when no
     separate worker daemon is involved. The controller calls sync() with a
     DirectProviderBatch and receives back a DirectProviderSyncResult — not the
-    standard TaskProvider/DispatchBatch/HeartbeatApplyRequest protocol used by
-    worker-based providers (e.g. GCP). This is intentional: K8s pods are
-    launched and monitored directly via kubectl rather than through a worker
-    gRPC daemon.
+    per-worker RPC-based TaskProvider protocol used by GCP. This is intentional:
+    K8s pods are launched and monitored directly via kubectl rather than
+    through a worker gRPC daemon.
 
     Capacity is derived from node allocatable resources minus running pod
     resource requests, queried via kubectl each sync cycle.

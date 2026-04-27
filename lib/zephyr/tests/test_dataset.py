@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from fray.v2 import ResourceConfig
-from fray.v2.local_backend import LocalClient
+from fray import ResourceConfig
+from fray.local_backend import LocalClient
 from zephyr import Dataset, load_file, load_parquet
 from zephyr._test_helpers import SampleDataclass
 from zephyr.dataset import FilterOp, GlobSource, MapOp, WindowOp, resolve_glob

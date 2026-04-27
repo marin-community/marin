@@ -163,3 +163,13 @@ def normalize_nsf_awards_step(download: StepSpec) -> StepSpec:
         id_field="awd_id",
         file_extensions=(".parquet",),
     )
+
+
+def nsf_awards_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the ``(download, normalize)`` chain for NSF awards.
+
+    Unlike the HF-backed families, the download here pulls from the NSF API
+    directly (no HF repo); the chain shape is otherwise identical.
+    """
+    download = download_nsf_awards_step()
+    return (download, normalize_nsf_awards_step(download))

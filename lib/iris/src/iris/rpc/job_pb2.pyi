@@ -736,7 +736,7 @@ class RunTaskRequest(_message.Message):
     def __init__(self, task_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., entrypoint: _Optional[_Union[RuntimeEntrypoint, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ..., task_image: _Optional[str] = ...) -> None: ...
 
 class WorkerTaskStatus(_message.Message):
-    __slots__ = ("task_id", "attempt_id", "state", "exit_code", "error", "finished_at", "resource_usage", "log_entries", "container_id")
+    __slots__ = ("task_id", "attempt_id", "state", "exit_code", "error", "finished_at", "resource_usage", "container_id")
     TASK_ID_FIELD_NUMBER: _ClassVar[int]
     ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
@@ -744,7 +744,6 @@ class WorkerTaskStatus(_message.Message):
     ERROR_FIELD_NUMBER: _ClassVar[int]
     FINISHED_AT_FIELD_NUMBER: _ClassVar[int]
     RESOURCE_USAGE_FIELD_NUMBER: _ClassVar[int]
-    LOG_ENTRIES_FIELD_NUMBER: _ClassVar[int]
     CONTAINER_ID_FIELD_NUMBER: _ClassVar[int]
     task_id: str
     attempt_id: int
@@ -753,28 +752,5 @@ class WorkerTaskStatus(_message.Message):
     error: str
     finished_at: _time_pb2.Timestamp
     resource_usage: ResourceUsage
-    log_entries: _containers.RepeatedCompositeFieldContainer[_logging_pb2.LogEntry]
     container_id: str
-    def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ..., log_entries: _Optional[_Iterable[_Union[_logging_pb2.LogEntry, _Mapping]]] = ..., container_id: _Optional[str] = ...) -> None: ...
-
-class HeartbeatRequest(_message.Message):
-    __slots__ = ("tasks_to_run", "tasks_to_kill", "expected_tasks")
-    TASKS_TO_RUN_FIELD_NUMBER: _ClassVar[int]
-    TASKS_TO_KILL_FIELD_NUMBER: _ClassVar[int]
-    EXPECTED_TASKS_FIELD_NUMBER: _ClassVar[int]
-    tasks_to_run: _containers.RepeatedCompositeFieldContainer[RunTaskRequest]
-    tasks_to_kill: _containers.RepeatedScalarFieldContainer[str]
-    expected_tasks: _containers.RepeatedCompositeFieldContainer[WorkerTaskStatus]
-    def __init__(self, tasks_to_run: _Optional[_Iterable[_Union[RunTaskRequest, _Mapping]]] = ..., tasks_to_kill: _Optional[_Iterable[str]] = ..., expected_tasks: _Optional[_Iterable[_Union[WorkerTaskStatus, _Mapping]]] = ...) -> None: ...
-
-class HeartbeatResponse(_message.Message):
-    __slots__ = ("tasks", "resource_snapshot", "worker_healthy", "health_error")
-    TASKS_FIELD_NUMBER: _ClassVar[int]
-    RESOURCE_SNAPSHOT_FIELD_NUMBER: _ClassVar[int]
-    WORKER_HEALTHY_FIELD_NUMBER: _ClassVar[int]
-    HEALTH_ERROR_FIELD_NUMBER: _ClassVar[int]
-    tasks: _containers.RepeatedCompositeFieldContainer[WorkerTaskStatus]
-    resource_snapshot: WorkerResourceSnapshot
-    worker_healthy: bool
-    health_error: str
-    def __init__(self, tasks: _Optional[_Iterable[_Union[WorkerTaskStatus, _Mapping]]] = ..., resource_snapshot: _Optional[_Union[WorkerResourceSnapshot, _Mapping]] = ..., worker_healthy: _Optional[bool] = ..., health_error: _Optional[str] = ...) -> None: ...
+    def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ..., container_id: _Optional[str] = ...) -> None: ...

@@ -106,6 +106,14 @@ message Controller {
     // Empty when submitted programmatically. Bookkeeping only; not
     // interpreted by the controller.
     repeated string submit_argv = 35;
+
+    // ISO date (YYYY-MM-DD) of the client's marin-iris build. For wheels this
+    // is stamped at build time by scripts/python_libs_package.py; for editable
+    // installs it's derived from `git log` on the iris source tree. Root
+    // submissions older than FRESHNESS_WINDOW (today - 14d) are rejected.
+    // Nested submissions (is_root == false) are exempt. Empty string is
+    // interpreted as FEATURE_INTRODUCTION_DATE — see service.py.
+    string client_revision_date = 36;
   }
 
   message LaunchJobResponse {
@@ -241,7 +249,7 @@ message Controller {
     repeated string running_job_ids = 5;
     string address = 6;                    // Worker RPC address (host:port)
     iris.job.WorkerMetadata metadata = 7;           // Full worker metadata
-    string status_message = 8;             // Error or status message (e.g., "Heartbeat timeout", "Worker crashed")
+    string status_message = 8;             // Error or status message (e.g., "Ping timeout", "Worker crashed")
   }
 
   message ListWorkersRequest {}
@@ -389,10 +397,10 @@ message Controller {
     // Recent tasks that ran or are running on this worker (newest first)
     repeated iris.job.TaskStatus recent_tasks = 6;
 
-    // Current host-level resource snapshot (from latest heartbeat)
+    // Current host-level resource snapshot (from latest Ping)
     iris.job.WorkerResourceSnapshot current_resources = 7;
 
-    // Recent resource history (ring buffer of snapshots from heartbeats)
+    // Recent resource history (ring buffer of Ping snapshots)
     repeated iris.job.WorkerResourceSnapshot resource_history = 8;
   }
 

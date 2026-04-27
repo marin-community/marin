@@ -6,7 +6,9 @@
 from pathlib import Path
 
 import pytest
+from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.db import ControllerDB, UserBudget
+from iris.rpc import config_pb2, job_pb2
 from rigging.timing import Timestamp
 
 
@@ -115,3 +117,89 @@ def test_list_user_budgets(db: ControllerDB) -> None:
 
 def test_list_user_budgets_empty(db: ControllerDB) -> None:
     assert db.list_user_budgets() == []
+
+
+# --- reconcile_user_budget_tiers ------------------------------------------------
+
+
+def _tier(user_ids: list[str], budget_limit: int, max_band: int) -> config_pb2.UserBudgetTier:
+    return config_pb2.UserBudgetTier(user_ids=user_ids, budget_limit=budget_limit, max_band=max_band)
+
+
+def test_reconcile_creates_rows_for_fresh_users(db: ControllerDB) -> None:
+    """On a fresh DB, reconcile_user_budget_tiers upserts the intended rows.
+
+    Without this, listed users would have no row and fall back to
+    UserBudgetDefaults when the scheduler or launch-job guard looks them up.
+    """
+    tiers = [
+        _tier(["alice", "bob"], 75000, job_pb2.PRIORITY_BAND_PRODUCTION),
+        _tier(["carol"], 75000, job_pb2.PRIORITY_BAND_INTERACTIVE),
+    ]
+    count = reconcile_user_budget_tiers(db, tiers, Timestamp.from_ms(1000))
+    assert count == 3
+
+    alice = db.get_user_budget("alice")
+    assert alice is not None
+    assert alice.budget_limit == 75000
+    assert alice.max_band == job_pb2.PRIORITY_BAND_PRODUCTION
+
+    carol = db.get_user_budget("carol")
+    assert carol is not None
+    assert carol.max_band == job_pb2.PRIORITY_BAND_INTERACTIVE
+
+
+def test_reconcile_upserts_existing_rows(db: ControllerDB) -> None:
+    """Running reconcile twice updates rows to the latest config values."""
+    first = [_tier(["dave"], 10_000, job_pb2.PRIORITY_BAND_BATCH)]
+    reconcile_user_budget_tiers(db, first, Timestamp.from_ms(1000))
+
+    # Promote dave: new budget + higher band.
+    second = [_tier(["dave"], 75_000, job_pb2.PRIORITY_BAND_PRODUCTION)]
+    reconcile_user_budget_tiers(db, second, Timestamp.from_ms(2000))
+
+    dave = db.get_user_budget("dave")
+    assert dave is not None
+    assert dave.budget_limit == 75_000
+    assert dave.max_band == job_pb2.PRIORITY_BAND_PRODUCTION
+
+
+def test_reconcile_later_tier_overrides_earlier(db: ControllerDB) -> None:
+    """If a user_id appears in multiple tiers, later tiers win."""
+    tiers = [
+        _tier(["eve"], 75000, job_pb2.PRIORITY_BAND_INTERACTIVE),
+        _tier(["eve"], 75000, job_pb2.PRIORITY_BAND_PRODUCTION),
+    ]
+    reconcile_user_budget_tiers(db, tiers, Timestamp.from_ms(1000))
+
+    eve = db.get_user_budget("eve")
+    assert eve is not None
+    assert eve.max_band == job_pb2.PRIORITY_BAND_PRODUCTION
+
+
+def test_reconcile_no_tiers_is_noop(db: ControllerDB) -> None:
+    """Empty config leaves the DB untouched."""
+    assert reconcile_user_budget_tiers(db, [], Timestamp.from_ms(1000)) == 0
+    assert db.list_user_budgets() == []
+
+
+def test_reconcile_rejects_unspecified_band(db: ControllerDB) -> None:
+    """A config missing max_band surfaces as a ValueError, not a silent BATCH."""
+    tiers = [_tier(["frank"], 75000, job_pb2.PRIORITY_BAND_UNSPECIFIED)]
+    with pytest.raises(ValueError, match="max_band must be one of"):
+        reconcile_user_budget_tiers(db, tiers, Timestamp.from_ms(1000))
+
+
+def test_reconcile_rejects_empty_user_id(db: ControllerDB) -> None:
+    tiers = [_tier(["grace", ""], 75000, job_pb2.PRIORITY_BAND_INTERACTIVE)]
+    with pytest.raises(ValueError, match="empty entry"):
+        reconcile_user_budget_tiers(db, tiers, Timestamp.from_ms(1000))
+
+
+def test_reconcile_creates_user_row_for_fk(db: ControllerDB) -> None:
+    """user_budgets has a FK on users; reconcile must ensure_user first."""
+    tiers = [_tier(["henry"], 75000, job_pb2.PRIORITY_BAND_INTERACTIVE)]
+    reconcile_user_budget_tiers(db, tiers, Timestamp.from_ms(1000))
+
+    row = db.fetchone("SELECT user_id FROM users WHERE user_id = ?", ("henry",))
+    assert row is not None
