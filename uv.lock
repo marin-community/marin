@@ -4906,6 +4906,7 @@ name = "marin-finelog"
 version = "0.1.0"
 source = { editable = "lib/finelog" }
 dependencies = [
+    { name = "click" },
     { name = "connect-python" },
     { name = "duckdb" },
     { name = "fsspec" },
@@ -4927,6 +4928,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.3.1" },
     { name = "connect-python", specifier = ">=0.9.0" },
     { name = "duckdb", specifier = ">=1.0.0" },
     { name = "fsspec", specifier = ">=2024.0.0" },

@@ -9,6 +9,7 @@ description = "Standalone log store + log service: structured-log ingest, query,
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "marin-rigging",
+    "click>=8.3.1",
     "connect-python>=0.9.0",
     "duckdb>=1.0.0",
     "fsspec>=2024.0.0",
@@ -20,6 +21,7 @@ dependencies = [
 
 [project.scripts]
 finelog-server = "finelog.server.main:main"
+finelog = "finelog.deploy.cli:cli"
 
 [dependency-groups]
 dev = [
