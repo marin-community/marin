@@ -167,9 +167,12 @@ def _common_crawl_manifest(*, slice_key: str, archive_kind: CommonCrawlArchiveKi
         policy=_common_crawl_policy(),
         staging=StagingMetadata(
             transform_name="download_common_crawl_sample",
-            output_filename=COMMON_CRAWL_OUTPUT_FILENAME,
-            record_provenance_fields=("id", "source_file", "record_index", "warc_type", "target_uri"),
-            metadata={"archive_kind": archive_kind.value, "crawl_id": COMMON_CRAWL_CRAWL_ID},
+            metadata={
+                "archive_kind": archive_kind.value,
+                "crawl_id": COMMON_CRAWL_CRAWL_ID,
+                "output_filename": COMMON_CRAWL_OUTPUT_FILENAME,
+                "provenance_fields": ["id", "source_file", "record_index", "warc_type", "target_uri"],
+            },
         ),
         epic_issue=COMMON_CRAWL_EPIC,
         issue_numbers=(COMMON_CRAWL_ISSUE,),
@@ -532,7 +535,7 @@ def common_crawl_sample_step(
             cache_key=versioned(
                 {
                     "slice_key": source.manifest.slice_key,
-                    "manifest_fingerprint": source.manifest.fingerprint(),
+                    "content_fingerprint": source.manifest.fingerprint(),
                     "archive_kind": source.archive_kind.value,
                     "crawl_id": source.crawl_id,
                     "base_url": source.base_url,

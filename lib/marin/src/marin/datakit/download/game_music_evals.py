@@ -46,7 +46,7 @@ class LichessPgnStagingConfig:
     output_filename: str = DEFAULT_OUTPUT_FILENAME
     http_timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS
     source_manifest: IngestionSourceManifest | None = None
-    manifest_fingerprint: str = ""
+    content_fingerprint: str = ""
 
 
 @dataclass(frozen=True)
@@ -63,7 +63,7 @@ class HfJsonTextStagingConfig:
     output_filename: str = DEFAULT_OUTPUT_FILENAME
     http_timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS
     source_manifest: IngestionSourceManifest | None = None
-    manifest_fingerprint: str = ""
+    content_fingerprint: str = ""
     source_file_url_override: str | None = None
 
 
@@ -82,15 +82,15 @@ def _build_session() -> requests.Session:
     return session
 
 
-def _validate_manifest(source_manifest: IngestionSourceManifest | None, manifest_fingerprint: str) -> None:
+def _validate_manifest(source_manifest: IngestionSourceManifest | None, content_fingerprint: str) -> None:
     if source_manifest is None:
         return
-    if not manifest_fingerprint:
-        raise ValueError("manifest_fingerprint is required when source_manifest is set")
+    if not content_fingerprint:
+        raise ValueError("content_fingerprint is required when source_manifest is set")
     expected = source_manifest.fingerprint()
-    if manifest_fingerprint != expected:
+    if content_fingerprint != expected:
         raise ValueError(
-            f"manifest_fingerprint mismatch: config has {manifest_fingerprint}, source manifest has {expected}"
+            f"content_fingerprint mismatch: config has {content_fingerprint}, source manifest has {expected}"
         )
 
 
@@ -159,7 +159,7 @@ def _lichess_record_id(game_text: str, index: int, source_label: str) -> str:
 def stage_lichess_pgn_sample(config: LichessPgnStagingConfig) -> dict[str, int | str]:
     """Stream a bounded official Lichess PGN sample into JSONL.gz."""
 
-    _validate_manifest(config.source_manifest, config.manifest_fingerprint)
+    _validate_manifest(config.source_manifest, config.content_fingerprint)
     fsspec_mkdirs(config.output_path, exist_ok=True)
 
     session = _build_session()
@@ -230,7 +230,7 @@ def _iter_json_examples(payload: Any):
 def stage_hf_json_text_source(config: HfJsonTextStagingConfig) -> dict[str, int | str]:
     """Stage a bounded raw text field from an HF JSON or JSONL file into JSONL.gz."""
 
-    _validate_manifest(config.source_manifest, config.manifest_fingerprint)
+    _validate_manifest(config.source_manifest, config.content_fingerprint)
     source_url = config.source_file_url_override or _hf_resolve_url(
         config.dataset_id, config.revision, config.split_filename
     )

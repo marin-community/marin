@@ -66,9 +66,9 @@ class TableRecordStagingConfig:
             ``provenance`` field.
         source_manifest: Optional typed source manifest used for writing
             ``metadata.json`` alongside the staged JSONL.
-        manifest_fingerprint: Optional explicit fingerprint copied from the
-            source manifest into the step config so metadata-only changes
-            can participate in executor hashing.
+        content_fingerprint: Optional explicit hash copied from the source
+            manifest into the step config so text-projection changes
+            participate in executor hashing.
     """
 
     input_path: str
@@ -81,7 +81,7 @@ class TableRecordStagingConfig:
     output_filename: str = "staged.jsonl.gz"
     extra_metadata: dict[str, str] = field(default_factory=dict)
     source_manifest: IngestionSourceManifest | None = None
-    manifest_fingerprint: str = ""
+    content_fingerprint: str = ""
 
 
 def _format_cell(cell_value: Any) -> str:
@@ -287,14 +287,20 @@ def _find_split_parquet_files(input_path: str, split: str, subset: str | None) -
     roots.append(root)
 
     matches: list[str] = []
+    fallback_parquet_files: list[str] = []
     for candidate_root in roots:
         if fs.isfile(candidate_root):
             candidates = [candidate_root]
             selected = [path for path in candidates if path.endswith(".parquet")]
         else:
             candidates = list(fs.find(candidate_root, withdirs=False))
-            selected = [path for path in candidates if _parquet_file_matches_split(path, split)]
+            parquet_candidates = [path for path in candidates if path.endswith(".parquet")]
+            selected = [path for path in parquet_candidates if _parquet_file_matches_split(path, split)]
+            fallback_parquet_files.extend(parquet_candidates)
         matches.extend(selected)
+
+    if not matches and len(set(fallback_parquet_files)) == 1:
+        matches = fallback_parquet_files
 
     if not matches:
         raise FileNotFoundError(f"No parquet files found for split {split!r} under {input_path}")
@@ -328,11 +334,11 @@ def stage_table_record_source(cfg: TableRecordStagingConfig) -> dict[str, int | 
     if cfg.serializer_name not in SERIALIZERS:
         raise ValueError(f"Unknown serializer {cfg.serializer_name!r}; known: {sorted(SERIALIZERS)}")
     serializer = SERIALIZERS[cfg.serializer_name]
-    if cfg.source_manifest is not None and cfg.manifest_fingerprint:
+    if cfg.source_manifest is not None and cfg.content_fingerprint:
         expected = cfg.source_manifest.fingerprint()
-        if cfg.manifest_fingerprint != expected:
+        if cfg.content_fingerprint != expected:
             raise ValueError(
-                f"manifest_fingerprint mismatch: config has {cfg.manifest_fingerprint}, source manifest has {expected}"
+                f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
             )
 
     fsspec_mkdirs(cfg.output_path, exist_ok=True)

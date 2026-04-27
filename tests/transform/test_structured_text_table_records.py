@@ -258,8 +258,10 @@ def _manifest(
             transform_name="stage_table_record_source",
             serializer_name=serializer_name,
             split="validation",
-            output_filename="staged.jsonl.gz",
-            record_provenance_fields=("dataset", "split", "subset", "serializer", "index"),
+            metadata={
+                "output_filename": "staged.jsonl.gz",
+                "provenance_fields": ["dataset", "split", "subset", "serializer", "index"],
+            },
         ),
         epic_issue=5005,
         issue_numbers=(5059,),
@@ -277,7 +279,7 @@ def test_stage_table_record_source_end_to_end_wtq(tmp_path):
         source_label="wtq:test",
         serializer_name="wikitablequestions",
         source_manifest=manifest,
-        manifest_fingerprint=manifest.fingerprint(),
+        content_fingerprint=manifest.fingerprint(),
     )
 
     with patch(
@@ -355,6 +357,37 @@ def test_stage_table_record_source_loads_downloaded_parquet_split(tmp_path):
     records = _read_staged_records(output_dir)
     assert len(records) == 1
     assert records[0]["id"] == "wtq:test:validation:00000000"
+
+
+def test_stage_table_record_source_loads_single_root_parquet_when_split_named_file_is_absent(tmp_path):
+    input_dir = tmp_path / "raw"
+    output_dir = tmp_path / "staged"
+    input_dir.mkdir()
+    Dataset.from_list(
+        [
+            {
+                "table_id": "users",
+                "rows": [["1", "Ada"]],
+                "columns": ["id", "name"],
+                "csv_url": "https://github.com/example/repo/raw/main/users.csv",
+                "license": "MIT",
+            }
+        ]
+    ).to_parquet(input_dir / "corpus_train.parquet")
+
+    cfg = TableRecordStagingConfig(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        source_label="gittables:test",
+        serializer_name="gittables",
+        split="train",
+    )
+    result = stage_table_record_source(cfg)
+
+    assert result["record_count"] == 1
+    records = _read_staged_records(output_dir)
+    assert len(records) == 1
+    assert records[0]["id"] == "gittables:test:train:00000000"
 
 
 def test_stage_table_record_source_respects_byte_cap(tmp_path):

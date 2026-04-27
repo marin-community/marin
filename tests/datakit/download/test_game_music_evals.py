@@ -89,8 +89,10 @@ def _source_manifest(
         ),
         staging=StagingMetadata(
             transform_name="test_fixture",
-            output_filename="data.jsonl.gz",
-            record_provenance_fields=("index",),
+            metadata={
+                "output_filename": "data.jsonl.gz",
+                "provenance_fields": ["index"],
+            },
         ),
         epic_issue=5005,
         issue_numbers=(5062,),
@@ -143,7 +145,7 @@ def test_stage_lichess_pgn_sample_preserves_symbolic_text_and_writes_metadata(
             source_label=manifest.source_label,
             max_records=1,
             source_manifest=manifest,
-            manifest_fingerprint=manifest.fingerprint(),
+            content_fingerprint=manifest.fingerprint(),
         )
     )
 
@@ -157,7 +159,8 @@ def test_stage_lichess_pgn_sample_preserves_symbolic_text_and_writes_metadata(
     assert records[0]["provenance"]["index"] == 0
 
     metadata = json.loads((output_dir / "metadata.json").read_text(encoding="utf-8"))
-    assert metadata["manifest_fingerprint"] == manifest.fingerprint()
+    assert metadata["content_fingerprint"] == manifest.fingerprint()
+    assert metadata["manifest_fingerprint"] == manifest.provenance_fingerprint()
     assert metadata["materialized_output"]["record_count"] == 1
     assert metadata["materialized_output"]["metadata"]["source_url"] == source_url
     assert result["output_file"].endswith("data.jsonl.gz")
@@ -201,7 +204,7 @@ def test_stage_hf_json_text_source_preserves_abc_notation_and_caps_examples(
             source_label=manifest.source_label,
             max_examples=1,
             source_manifest=manifest,
-            manifest_fingerprint=manifest.fingerprint(),
+            content_fingerprint=manifest.fingerprint(),
             source_file_url_override=f"{base_url}/validation.json",
         )
     )

@@ -12,13 +12,9 @@ Notably excluded for now:
   self-contained upstream materializer
 - diagnostic-log eval builders (#5093/#5104): current branch expects pre-staged
   source inputs rather than fetching its own held-out slices
-- in-progress follow-up branches for #5053/#5056 WARC-WAT/#5059 wave 2/#5061
-  basic package metadata/#5062 first-pass game-music
 - unstable slices on this branch:
   - ``agent_traces/openhands_swe_rebench``: HF loader startup is still hanging
     locally
-  - ``structured_text/*``: staged parquet discovery does not match the current
-    raw HF snapshot layout
   - ``bio_chem/refseq/refseq_viral_gff``: the expected RefSeq viral GFF file
     no longer exists at the upstream NCBI release path
   - ``bio_chem/rcsb/rcsb_mmcif``: upstream sample URL currently 404s
@@ -44,9 +40,14 @@ from experiments.exp5056_raw_web_markup_ppl import (
     RAW_WEB_MARKUP_PREFIX,
     SVG_STACK_DATASET_ID,
 )
+from experiments.structured_evals import structured_evals_raw_validation_sets
 from experiments.evals.asr_ocr_noisy_ppl import noisy_asr_ocr_raw_validation_sets
+from experiments.evals.exp5053_lm_eval_bridge import lm_eval_bridge_raw_validation_sets
+from experiments.evals.exp5056_common_crawl_raw_web import common_crawl_raw_validation_sets
 from experiments.evals.exp5057_binary_network_security_evals import binary_network_security_raw_validation_sets
 from experiments.evals.exp5060_formal_methods_evals import exp5060_raw_validation_sets
+from experiments.evals.exp5061_package_metadata_evals import package_metadata_raw_validation_sets
+from experiments.evals.exp5062_game_music_evals import game_music_raw_validation_sets
 from experiments.evals.fineweb2_multilingual import fineweb2_multilingual_raw_validation_sets
 from experiments.evals.gh_archive_structured_output import gh_archive_structured_output_raw_validation_sets
 from experiments.evals.paired_robustness_ppl import (
@@ -62,6 +63,14 @@ EXCLUDED_DATASET_KEYS = frozenset(
     {
         "agent_traces/openhands_swe_rebench",
         "bio_chem/rcsb/rcsb_mmcif",
+    }
+)
+
+WORKING_STRUCTURED_TEXT_KEYS = frozenset(
+    {
+        "structured_text/gittables",
+        "structured_text/web_data_commons_sample10",
+        "structured_text/web_data_commons_sample1k",
     }
 )
 
@@ -129,16 +138,29 @@ def _mega_bio_chem_validation_sets() -> dict[str, RawTextEvaluationDataset]:
     return bio_chem_raw_validation_sets(slices=mega_slices)
 
 
+def _working_structured_evals_validation_sets() -> dict[str, RawTextEvaluationDataset]:
+    return {
+        key: dataset
+        for key, dataset in structured_evals_raw_validation_sets().items()
+        if key in WORKING_STRUCTURED_TEXT_KEYS
+    }
+
+
 def mega_available_raw_validation_sets() -> dict[str, RawTextEvaluationDataset]:
     """Return the merged raw eval bundle for all currently runnable sources."""
     datasets: dict[str, RawTextEvaluationDataset] = {}
     for dataset_map in (
         _without_excluded(default_raw_validation_sets()),
+        lm_eval_bridge_raw_validation_sets(),
         fineweb2_multilingual_raw_validation_sets(),
         _svg_only_raw_web_markup_validation_sets(),
+        common_crawl_raw_validation_sets(),
         binary_network_security_raw_validation_sets(),
         _mega_bio_chem_validation_sets(),
+        _working_structured_evals_validation_sets(),
         exp5060_raw_validation_sets(),
+        package_metadata_raw_validation_sets(),
+        game_music_raw_validation_sets(),
         synthetic_reasoning_raw_validation_sets(),
         _paraphrase_only_validation_sets(),
         noisy_asr_ocr_raw_validation_sets(),
@@ -147,5 +169,24 @@ def mega_available_raw_validation_sets() -> dict[str, RawTextEvaluationDataset]:
         overlap = set(datasets).intersection(dataset_map)
         if overlap:
             raise ValueError(f"Duplicate dataset keys in mega bundle: {sorted(overlap)}")
+        datasets.update(dataset_map)
+    return datasets
+
+
+def mega_followup_raw_validation_sets() -> dict[str, RawTextEvaluationDataset]:
+    """Return only the slices added after the first mega and delta runs.
+
+    This keeps the incremental rerun cheap while the HTML/report layer can still
+    aggregate it with the earlier successful mega and delta outputs.
+    """
+    datasets: dict[str, RawTextEvaluationDataset] = {}
+    for dataset_map in (
+        lm_eval_bridge_raw_validation_sets(),
+        _working_structured_evals_validation_sets(),
+        package_metadata_raw_validation_sets(),
+    ):
+        overlap = set(datasets).intersection(dataset_map)
+        if overlap:
+            raise ValueError(f"Duplicate dataset keys in mega follow-up bundle: {sorted(overlap)}")
         datasets.update(dataset_map)
     return datasets

@@ -57,8 +57,10 @@ LICHESS_PGN_2013_01_MANIFEST = IngestionSourceManifest(
     policy=_eval_only_policy("Official Lichess public database sample, bounded to a small deterministic month slice."),
     staging=StagingMetadata(
         transform_name="stage_lichess_pgn_sample",
-        output_filename="data.jsonl.gz",
-        record_provenance_fields=("index", "source_url"),
+        metadata={
+            "output_filename": "data.jsonl.gz",
+            "provenance_fields": ["index", "source_url"],
+        },
     ),
     epic_issue=EPIC_5005,
     issue_numbers=(ISSUE_5062,),
@@ -80,9 +82,11 @@ IRISHMAN_ABC_MANIFEST = IngestionSourceManifest(
     ),
     staging=StagingMetadata(
         transform_name="stage_hf_json_text_source",
-        output_filename="data.jsonl.gz",
         split="validation",
-        record_provenance_fields=("dataset_id", "revision", "split_filename", "index"),
+        metadata={
+            "output_filename": "data.jsonl.gz",
+            "provenance_fields": ["dataset_id", "revision", "split_filename", "index"],
+        },
     ),
     epic_issue=EPIC_5005,
     issue_numbers=(ISSUE_5062,),
@@ -100,7 +104,7 @@ LICHESS_PGN_RAW = ExecutorStep(
         source_label=LICHESS_PGN_2013_01_MANIFEST.source_label,
         max_records=LICHESS_PGN_2013_01_MANIFEST.sample_caps.max_records or 2048,
         source_manifest=LICHESS_PGN_2013_01_MANIFEST,
-        manifest_fingerprint=LICHESS_PGN_2013_01_MANIFEST.fingerprint(),
+        content_fingerprint=LICHESS_PGN_2013_01_MANIFEST.fingerprint(),
     ),
 )
 
@@ -116,7 +120,7 @@ IRISHMAN_ABC_RAW = ExecutorStep(
         source_label=IRISHMAN_ABC_MANIFEST.source_label,
         max_examples=IRISHMAN_ABC_MANIFEST.sample_caps.max_examples or 2048,
         source_manifest=IRISHMAN_ABC_MANIFEST,
-        manifest_fingerprint=IRISHMAN_ABC_MANIFEST.fingerprint(),
+        content_fingerprint=IRISHMAN_ABC_MANIFEST.fingerprint(),
     ),
 )
 
