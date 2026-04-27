@@ -36,7 +36,7 @@ from __future__ import annotations
 import logging
 import os
 
-from fray.v2.types import ResourceConfig
+from fray import ResourceConfig
 
 from experiments.llama import llama3_tokenizer
 from marin.datakit.download.formal_methods_evals import (

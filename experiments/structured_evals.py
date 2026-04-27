@@ -38,6 +38,7 @@ from marin.datakit.ingestion_manifest import (
     UsagePolicy,
 )
 from marin.datakit.download.huggingface import DownloadConfig as HfDownloadConfig, download_hf
+from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
@@ -206,6 +207,17 @@ def _staged_step(dataset_key: str, spec: dict[str, ExecutorStep | IngestionSourc
 STRUCTURED_EVAL_STAGED: dict[str, ExecutorStep] = {
     key: _staged_step(key, spec) for key, spec in STRUCTURED_EVAL_SOURCES.items()
 }
+
+
+def structured_evals_raw_validation_sets() -> dict[str, RawTextEvaluationDataset]:
+    """Register the staged structured-text slices for raw PPL evaluation."""
+    datasets: dict[str, RawTextEvaluationDataset] = {}
+    for key, staged in STRUCTURED_EVAL_STAGED.items():
+        datasets[os.path.join("structured_text", key)] = raw_text_dataset(
+            staged.cd("staged.jsonl.gz"),
+            tags=("structured_text", f"issue:{STRUCTURED_TEXT_ISSUE}", key),
+        )
+    return datasets
 
 
 # ---------------------------------------------------------------------------

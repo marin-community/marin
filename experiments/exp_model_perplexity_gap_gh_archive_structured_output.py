@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from fray.v2.types import ResourceConfig
+from fray import ResourceConfig
 
 from experiments.evals.gh_archive_structured_output import gh_archive_structured_output_raw_validation_sets
 from marin.evaluation.perplexity_gap import GapFinderModelConfig, default_model_perplexity_gap

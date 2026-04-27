@@ -9,7 +9,7 @@ This expands the canonical bundle/model registry into:
 - the default pairwise gap reports derived from those cached scores
 """
 
-from fray.v2.types import ResourceConfig
+from fray import ResourceConfig
 
 from experiments.evals.perplexity_gap_registry import build_registered_perplexity_gap_coverage_plan
 from marin.execution.executor import executor_main

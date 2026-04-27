@@ -3,7 +3,7 @@
 
 """Run opt-in ASR/OCR noisy-text perplexity-gap reports for issue #5097."""
 
-from fray.v2.types import ResourceConfig
+from fray import ResourceConfig
 
 from experiments.defaults import default_raw_validation_sets
 from experiments.evals.asr_ocr_noisy_ppl import noisy_asr_ocr_raw_validation_sets

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from fray.v2.types import ResourceConfig
+from fray import ResourceConfig
 
 from experiments.evals.perplexity_gap_registry import build_registered_perplexity_gap_coverage_plan
 

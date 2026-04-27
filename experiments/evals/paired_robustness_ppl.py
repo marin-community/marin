@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 import datasets
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
 from marin.execution.executor import ExecutorStep, this_output_path
 from marin.execution.remote import remote

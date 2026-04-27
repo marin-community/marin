@@ -3,7 +3,7 @@
 
 """Run opt-in paired robustness perplexity-gap reports for issue #5096."""
 
-from fray.v2.types import ResourceConfig
+from fray import ResourceConfig
 
 from experiments.defaults import default_raw_validation_sets
 from experiments.evals.paired_robustness_ppl import paired_robustness_raw_steps, paired_robustness_raw_validation_sets
