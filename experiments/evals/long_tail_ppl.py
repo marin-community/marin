@@ -24,6 +24,7 @@ TIME_SERIES_ISSUE = 5059
 FORMAL_HARDWARE_ISSUE = 5060
 PACKAGE_METADATA_ISSUE = 5061
 GAME_MUSIC_ISSUE = 5062
+DIAGNOSTIC_LOGS_ISSUE = 5093
 
 
 class LongTailPplFamily(StrEnum):
@@ -36,6 +37,7 @@ class LongTailPplFamily(StrEnum):
     FORMAL_HARDWARE = "formal_hardware"
     PACKAGE_METADATA = "package_metadata"
     GAME_MUSIC = "game_music"
+    DIAGNOSTIC_LOGS = "diagnostic_logs"
 
 
 @dataclass(frozen=True)
@@ -200,7 +202,7 @@ LONG_TAIL_PPL_SLICES: tuple[LongTailPplSlice, ...] = (
         name="uwf_zeek",
         family=LongTailPplFamily.BINARY_NETWORK_SECURITY,
         issue_number=BINARY_RAW_ISSUE,
-        source_url="https://datasets.uwf.edu/",
+        source_url="https://datasets.uwf.edu/data/UWF-ZeekDataSum25-2/csv/",
         surface_form="zeek_logs",
         raw_relative_path="binary/uwf/zeek.jsonl.gz",
         notes="Preserve Zeek field names, hashes, IPs, and delimiter structure.",
@@ -379,7 +381,12 @@ LONG_TAIL_PPL_SLICES: tuple[LongTailPplSlice, ...] = (
         raw_relative_path="formal/hwmcc/aiger_btor.jsonl.gz",
         notes="Use textual renderings only; preserve solver and model-checking syntax.",
     ),
-    # Package metadata
+    # Package metadata — surfaces from issue #5061 DoD:
+    # registry JSON, dependency-graph rows, version constraints, advisory text,
+    # release metadata, and lockfile-like records. All entries are deterministic
+    # file paths under raw_root; ingestion is deferred (no BigQuery, no bulk HF
+    # mirroring). deps.dev BigQuery ingest is tracked separately per reviewer
+    # approval to defer the BigQuery tooling.
     _slice(
         name="deps_dev",
         family=LongTailPplFamily.PACKAGE_METADATA,
@@ -387,7 +394,10 @@ LONG_TAIL_PPL_SLICES: tuple[LongTailPplSlice, ...] = (
         source_url="https://docs.deps.dev/bigquery/v1/",
         surface_form="dependency_rows",
         raw_relative_path="packages/deps_dev/rows.jsonl.gz",
-        notes="Preserve package names, semver constraints, hashes, and dependency edges.",
+        notes=(
+            "Preserve package names, semver constraints, hashes, and dependency edges. "
+            "BigQuery ingest is deferred; sample into region-local GCS with documented queries."
+        ),
     ),
     _slice(
         name="ecosystem_ms_libraries_io",
@@ -399,13 +409,112 @@ LONG_TAIL_PPL_SLICES: tuple[LongTailPplSlice, ...] = (
         notes="Keep repository/package metadata, licenses, and release records literal.",
     ),
     _slice(
+        name="libraries_io_dependencies",
+        family=LongTailPplFamily.PACKAGE_METADATA,
+        issue_number=PACKAGE_METADATA_ISSUE,
+        source_url="https://libraries.io/data",
+        surface_form="dependency_edges",
+        raw_relative_path="packages/libraries_io/dependencies.jsonl.gz",
+        notes="Preserve package names, semver constraints, scopes, and platform markers per edge.",
+    ),
+    _slice(
+        name="pypi_registry_json",
+        family=LongTailPplFamily.PACKAGE_METADATA,
+        issue_number=PACKAGE_METADATA_ISSUE,
+        source_url="https://warehouse.pypa.io/api-reference/json.html",
+        surface_form="registry_json",
+        raw_relative_path="packages/pypi/registry.jsonl.gz",
+        notes="Preserve PyPI JSON API envelopes, classifiers, requires_dist strings, and file digests.",
+    ),
+    _slice(
         name="npm_registry_metadata",
         family=LongTailPplFamily.PACKAGE_METADATA,
         issue_number=PACKAGE_METADATA_ISSUE,
         source_url="https://docs.npmjs.com/policies/crawlers/",
         surface_form="registry_json",
         raw_relative_path="packages/npm/registry.jsonl.gz",
-        notes="Preserve CouchDB-style package JSON and nested version fields.",
+        notes="Preserve CouchDB-style package JSON, scoped names, and nested version fields.",
+    ),
+    _slice(
+        name="crates_io_registry_json",
+        family=LongTailPplFamily.PACKAGE_METADATA,
+        issue_number=PACKAGE_METADATA_ISSUE,
+        source_url="https://doc.rust-lang.org/cargo/reference/registry-web-api.html",
+        surface_form="registry_json",
+        raw_relative_path="packages/crates_io/registry.jsonl.gz",
+        notes="Preserve crate versions, yanked flags, feature maps, and checksum fields.",
+    ),
+    _slice(
+        name="rubygems_registry_json",
+        family=LongTailPplFamily.PACKAGE_METADATA,
+        issue_number=PACKAGE_METADATA_ISSUE,
+        source_url="https://guides.rubygems.org/rubygems-org-api/",
+        surface_form="registry_json",
+        raw_relative_path="packages/rubygems/registry.jsonl.gz",
+        notes="Keep gem dependencies, runtime/development scopes, and SHA-256 digests literal.",
+    ),
+    _slice(
+        name="nuget_registry_index",
+        family=LongTailPplFamily.PACKAGE_METADATA,
+        issue_number=PACKAGE_METADATA_ISSUE,
+        source_url="https://learn.microsoft.com/nuget/api/registration-base-url-resource",
+        surface_form="registry_json",
+        raw_relative_path="packages/nuget/registration_index.jsonl.gz",
+        notes="Preserve NuGet registration envelopes, framework target strings, and catalog URLs.",
+    ),
+    _slice(
+        name="maven_central_metadata",
+        family=LongTailPplFamily.PACKAGE_METADATA,
+        issue_number=PACKAGE_METADATA_ISSUE,
+        source_url="https://central.sonatype.org/search/rest-api-guide/",
+        surface_form="maven_pom_xml",
+        raw_relative_path="packages/maven/metadata.jsonl.gz",
+        notes="Preserve group/artifact/version coordinates, scopes, exclusions, and XML layout.",
+    ),
+    _slice(
+        name="go_modules_proxy",
+        family=LongTailPplFamily.PACKAGE_METADATA,
+        issue_number=PACKAGE_METADATA_ISSUE,
+        source_url="https://proxy.golang.org/",
+        surface_form="go_mod_sum",
+        raw_relative_path="packages/go_modules/proxy.jsonl.gz",
+        notes="Keep module paths, pseudo-versions, and h1: sum strings exactly as served.",
+    ),
+    _slice(
+        name="ghsa_advisories",
+        family=LongTailPplFamily.PACKAGE_METADATA,
+        issue_number=PACKAGE_METADATA_ISSUE,
+        source_url="https://github.com/github/advisory-database",
+        surface_form="advisory_osv_json",
+        raw_relative_path="packages/ghsa/advisories.jsonl.gz",
+        notes="Preserve GHSA IDs, CVE aliases, affected-ranges, and OSV JSON punctuation.",
+    ),
+    _slice(
+        name="osv_advisories",
+        family=LongTailPplFamily.PACKAGE_METADATA,
+        issue_number=PACKAGE_METADATA_ISSUE,
+        source_url="https://osv.dev/",
+        surface_form="advisory_osv_json",
+        raw_relative_path="packages/osv/advisories.jsonl.gz",
+        notes="Keep OSV schema fields, semver ranges, and ecosystem tags literal.",
+    ),
+    _slice(
+        name="npm_release_metadata",
+        family=LongTailPplFamily.PACKAGE_METADATA,
+        issue_number=PACKAGE_METADATA_ISSUE,
+        source_url="https://docs.npmjs.com/cli/v10/using-npm/registry",
+        surface_form="release_metadata",
+        raw_relative_path="packages/npm/release_metadata.jsonl.gz",
+        notes="Keep dist-tags, tarball URLs, integrity hashes, and publish timestamps per release.",
+    ),
+    _slice(
+        name="pypi_release_metadata",
+        family=LongTailPplFamily.PACKAGE_METADATA,
+        issue_number=PACKAGE_METADATA_ISSUE,
+        source_url="https://warehouse.pypa.io/api-reference/json.html",
+        surface_form="release_metadata",
+        raw_relative_path="packages/pypi/release_metadata.jsonl.gz",
+        notes="Keep file digests, upload_time, requires_python, and yanked reason strings.",
     ),
     _slice(
         name="package_lock_corpora",
@@ -415,6 +524,18 @@ LONG_TAIL_PPL_SLICES: tuple[LongTailPplSlice, ...] = (
         surface_form="lockfile",
         raw_relative_path="packages/package_lock/lockfiles.jsonl.gz",
         notes="Later pipeline work should keep lockfile structure, URLs, and checksums intact.",
+    ),
+    _slice(
+        name="the_stack_v2_lockfiles",
+        family=LongTailPplFamily.PACKAGE_METADATA,
+        issue_number=PACKAGE_METADATA_ISSUE,
+        source_url="https://huggingface.co/datasets/bigcode/the-stack-v2",
+        surface_form="lockfile",
+        raw_relative_path="packages/the_stack_v2/lockfiles.jsonl.gz",
+        notes=(
+            "Filename-filtered stopgap (package-lock.json, yarn.lock, poetry.lock, Pipfile.lock, "
+            "Cargo.lock, Gemfile.lock, go.sum) until the corpus from #4961 lands."
+        ),
     ),
     # Game / music
     _slice(
@@ -443,6 +564,125 @@ LONG_TAIL_PPL_SLICES: tuple[LongTailPplSlice, ...] = (
         surface_form="abc_notation",
         raw_relative_path="music/abc/notation.jsonl.gz",
         notes="Keep ABC headers, barlines, and note-length annotations.",
+    ),
+    # Diagnostic logs — surfaces from issue #5093 DoD: held-out PPL/gap eval
+    # registers that agents read during debugging (CI logs, compiler/linker
+    # output, pytest failures, stack traces, package install errors, system
+    # and application logs). Entries are metadata-only; they stay outside
+    # default_raw_validation_sets so worst-doc artifacts only show up when an
+    # experiment opts in via long_tail_raw_validation_sets(family=...).
+    _slice(
+        name="ghalogs",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://zenodo.org/records/14796970",
+        surface_form="github_actions_log",
+        raw_relative_path="diagnostic_logs/ghalogs/runs.jsonl.gz",
+        notes="Preserve GHA timestamps, ANSI control codes, step boundaries, and exit-status lines.",
+    ),
+    _slice(
+        name="logchunks",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://papertalk.org/papertalks/24713",
+        surface_form="failure_log_chunk",
+        raw_relative_path="diagnostic_logs/logchunks/chunks.jsonl.gz",
+        notes="Keep chunked failure-context windows and surrounding log boundaries intact.",
+    ),
+    _slice(
+        name="loghub_apache",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/logpai/loghub",
+        surface_form="application_log",
+        raw_relative_path="diagnostic_logs/loghub/apache.jsonl.gz",
+        notes="Preserve Apache access/error log line layout, IPs, and status codes.",
+    ),
+    _slice(
+        name="loghub_linux",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/logpai/loghub",
+        surface_form="system_log",
+        raw_relative_path="diagnostic_logs/loghub/linux.jsonl.gz",
+        notes="Preserve syslog timestamps, hostnames, daemon names, and PIDs literal.",
+    ),
+    _slice(
+        name="loghub_hdfs",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/logpai/loghub",
+        surface_form="distributed_system_log",
+        raw_relative_path="diagnostic_logs/loghub/hdfs.jsonl.gz",
+        notes="Preserve block IDs, datanode hosts, and Hadoop log severity prefixes.",
+    ),
+    _slice(
+        name="loghub_openssh",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/logpai/loghub",
+        surface_form="auth_log",
+        raw_relative_path="diagnostic_logs/loghub/openssh.jsonl.gz",
+        notes="Keep sshd auth-failure templates, user/IP fields, and reason strings literal.",
+    ),
+    _slice(
+        name="loghub_thunderbird",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/logpai/loghub",
+        surface_form="hpc_supercomputer_log",
+        raw_relative_path="diagnostic_logs/loghub/thunderbird.jsonl.gz",
+        notes="Preserve Thunderbird HPC node IDs, kernel events, and alert prefixes.",
+    ),
+    _slice(
+        name="pytest_failures",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/marin-community/marin/issues/5093",
+        surface_form="pytest_failure_output",
+        raw_relative_path="diagnostic_logs/pytest_failures/failures.jsonl.gz",
+        notes="Keep traceback layout, FAILED/ERROR markers, and assertion-diff blocks intact.",
+    ),
+    _slice(
+        name="compiler_linker_output",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/marin-community/marin/issues/5093",
+        surface_form="compiler_diagnostic_text",
+        raw_relative_path="diagnostic_logs/compiler_linker/output.jsonl.gz",
+        notes="Preserve file:line:col diagnostic format, error codes, and template-instantiation traces.",
+    ),
+    _slice(
+        name="stack_traces",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/marin-community/marin/issues/5093",
+        surface_form="exception_stack_trace",
+        raw_relative_path="diagnostic_logs/stack_traces/traces.jsonl.gz",
+        notes="Keep frame-by-frame layout, exception class names, and 'Caused by'/'During handling' markers.",
+    ),
+    _slice(
+        name="package_install_errors",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/marin-community/marin/issues/5093",
+        surface_form="package_install_failure",
+        raw_relative_path="diagnostic_logs/package_install_errors/errors.jsonl.gz",
+        notes="Preserve pip/uv/apt/conda resolver output, dependency conflict tables, and exit codes.",
+    ),
+    _slice(
+        name="marin_internal_logs_sanitized",
+        family=LongTailPplFamily.DIAGNOSTIC_LOGS,
+        issue_number=DIAGNOSTIC_LOGS_ISSUE,
+        source_url="https://github.com/marin-community/marin/issues/5093",
+        surface_form="marin_gha_iris_zephyr_log",
+        raw_relative_path="diagnostic_logs/marin_internal/sanitized.jsonl.gz",
+        notes=(
+            "Held-out eval-only slice from Marin GHA / Iris / Zephyr logs. "
+            "Mirror only after PII + secret + GCS-path scrub; never include in any training mixture. "
+            "Leakage policy: contributors' GitHub handles, internal hostnames, bucket names, "
+            "and access tokens must be redacted before this path is populated."
+        ),
     ),
 )
 
