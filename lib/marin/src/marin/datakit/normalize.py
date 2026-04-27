@@ -456,7 +456,11 @@ def normalize_step(
             Defaults to ``DedupMode.EXACT``; use ``DedupMode.NONE`` to skip.
     """
     if relative_input_path:
-        resolved_input = f"{download.output_path}/{relative_input_path}"
+        # ``os.path.join`` collapses redundant separators when ``download.output_path``
+        # ends with ``/`` (e.g. ``override_output_path="gs://.../nemotro-cc-eeb783/"``);
+        # naive f-string concatenation would yield ``gs://.../nemotro-cc-eeb783//<rel>``,
+        # which ``_discover_files`` then fails to resolve on GCS.
+        resolved_input = os.path.join(download.output_path, relative_input_path)
     else:
         resolved_input = download.output_path
 
