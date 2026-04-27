@@ -102,17 +102,13 @@ _HF_RETRY_KEYWORDS = (
 
 
 def _hf_should_retry(exc: Exception) -> bool:
-    if isinstance(exc, HfHubHTTPError):
-        status = getattr(exc, "status_code", None)
-        response = getattr(exc, "response", None)
-        if response is not None and hasattr(response, "status_code"):
-            status = response.status_code
-        if status is None:
-            return True
-        return status == 429 or status >= 500
     if isinstance(exc, requests.exceptions.HTTPError):
+        # HfHubHTTPError subclasses HTTPError; retry it on unknown status because the
+        # hub SDK can raise without an attached response on transient failures.
         status = getattr(getattr(exc, "response", None), "status_code", None)
-        return status == 429 or (status is not None and status >= 500)
+        if status is None:
+            return isinstance(exc, HfHubHTTPError)
+        return status == 429 or status >= 500
     if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
         return True
     message = str(exc).lower()
