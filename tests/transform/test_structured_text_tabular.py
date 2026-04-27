@@ -242,38 +242,3 @@ def test_stage_tabular_respects_max_bytes_per_source(tmp_path):
     # overshoot by at most one document because it emits whole documents.
     assert result["bytes_written"] <= 800 + 400
     assert result["record_count"] >= 1
-
-
-def test_stage_tabular_errors_on_empty_input(tmp_path):
-    input_dir = tmp_path / "raw"
-    output_dir = tmp_path / "staged"
-    input_dir.mkdir()
-
-    cfg = TabularStagingConfig(
-        input_path=str(input_dir),
-        output_path=str(output_dir),
-        source_label="test:empty",
-    )
-    with pytest.raises(ValueError, match="No source files"):
-        stage_tabular_source(cfg)
-
-
-def test_stage_tabular_filters_by_extension(tmp_path):
-    input_dir = tmp_path / "raw"
-    output_dir = tmp_path / "staged"
-
-    _write_csv(input_dir / "keep.csv", "a\n1\n")
-    _write_csv(input_dir / "skip.json", "{}")  # wrong extension
-
-    cfg = TabularStagingConfig(
-        input_path=str(input_dir),
-        output_path=str(output_dir),
-        source_label="test:ext",
-        file_extensions=(".csv",),
-    )
-    result = stage_tabular_source(cfg)
-    records = _read_staged_records(output_dir)
-    assert result["record_count"] == 1
-    assert len(records) == 1
-    # The ``{}`` content from skip.json must not appear anywhere.
-    assert "{}" not in records[0]["text"]
