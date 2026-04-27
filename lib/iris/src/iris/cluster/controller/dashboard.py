@@ -483,7 +483,7 @@ class ProxyControllerDashboard:
             Route("/health", self._health),
             Route("/auth/{path:path}", self._proxy_auth),
             Route("/iris.cluster.ControllerService/{method}", self._proxy_rpc, methods=["POST"]),
-            Route("/iris.logging.LogService/{method}", self._proxy_log_rpc, methods=["POST"]),
+            Route("/finelog.logging.LogService/{method}", self._proxy_log_rpc, methods=["POST"]),
             static_files_mount(),
         ]
 

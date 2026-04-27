@@ -15,7 +15,7 @@ from google.protobuf import json_format
 from iris.cli.bug_report import gather_bug_report
 from iris.cli.job import build_job_summary
 from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token
-from iris.cluster.log_store import build_log_source
+from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2, logging_pb2
