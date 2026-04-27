@@ -70,6 +70,7 @@ class GrugModelConfig:
     sliding_window: int = 4096
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
+    lm_head_init_scale: float = 1.0
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     moe_implementation: MoeImplementation | None = None
@@ -467,7 +468,10 @@ class Transformer(eqx.Module):
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
-        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
+        output_proj = reshard(
+            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std * cfg.lm_head_init_scale),
+            Plm_head,
+        )
         blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
         return Transformer(
             token_embed=token_embed,
