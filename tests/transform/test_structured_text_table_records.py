@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from datasets import Dataset
 
 from marin.transform.structured_text.table_records import (
     TABLE_CELL_DELIMITER,
@@ -161,7 +162,7 @@ def test_serialize_wtq_preserves_unicode_and_empty_cells():
     assert "Fráncia" in text
     assert "日本" in text
     # Empty cell must be preserved as an empty field between tab delimiters.
-    assert "日本\t\n" in text or text.endswith("日本\t") or "日本\t" in text
+    assert text.endswith("日本\t") or "日本\t\n" in text
 
 
 def test_serialize_wtq_preserves_numeric_literal_cells():
@@ -203,6 +204,28 @@ def test_stage_table_record_source_end_to_end_wtq(tmp_path):
         assert "Q: Which building is taller?" in record["text"]
         assert record["source"] == "wtq:test"
         assert record["provenance"]["serializer"] == "wikitablequestions"
+
+
+def test_stage_table_record_source_loads_downloaded_parquet_split(tmp_path):
+    input_dir = tmp_path / "raw"
+    output_dir = tmp_path / "staged"
+    input_dir.mkdir()
+    Dataset.from_list([_wtq_fixture()]).to_parquet(input_dir / "validation-00000-of-00001.parquet")
+    Dataset.from_list([_wtq_fixture()]).to_parquet(input_dir / "train-00000-of-00001.parquet")
+
+    cfg = TableRecordStagingConfig(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        source_label="wtq:test",
+        serializer_name="wikitablequestions",
+        split="validation",
+    )
+    result = stage_table_record_source(cfg)
+
+    assert result["record_count"] == 1
+    records = _read_staged_records(output_dir)
+    assert len(records) == 1
+    assert records[0]["id"] == "wtq:test:validation:00000000"
 
 
 def test_stage_table_record_source_respects_byte_cap(tmp_path):

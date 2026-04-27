@@ -181,15 +181,13 @@ def _read_text_file_lines(fs, path: str) -> list[str]:
     """Read ``path`` via fsspec and return its lines with line terminators preserved.
 
     ``str.splitlines(keepends=True)`` keeps each line's original terminator,
-    which is how we keep byte-for-byte fidelity.
+    which is how we keep byte-for-byte fidelity. Non-UTF-8 inputs are rejected
+    instead of repaired because replacement characters would corrupt the byte
+    stream this eval is meant to measure.
     """
     with fs.open(path, "rb") as f:
         raw = f.read()
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        text = raw.decode("utf-8", errors="replace")
-        logger.warning("Non-UTF-8 bytes in %s; replaced with U+FFFD", path)
+    text = raw.decode("utf-8")
     return text.splitlines(keepends=True)
 
 
@@ -252,19 +250,17 @@ def stage_tabular_source(cfg: TabularStagingConfig) -> dict[str, int | str]:
                     )
                     break
 
-                try:
-                    lines = _read_text_file_lines(fs, path)
-                except Exception:  # intentionally broad: one bad file should not kill staging
-                    logger.exception("Failed to read %s; skipping.", path)
-                    continue
-
+                lines = _read_text_file_lines(fs, path)
                 if not lines:
                     continue
 
                 if cfg.preserve_header:
                     header = _first_non_blank_line(lines)
-                    # Drop the header from the body — it gets reintroduced by serialize_csv_document
-                    body_lines = [line for line in lines if line != header] if header else lines
+                    if header is not None:
+                        header_idx = lines.index(header)
+                        body_lines = lines[:header_idx] + lines[header_idx + 1 :]
+                    else:
+                        body_lines = lines
                 else:
                     header = None
                     body_lines = lines

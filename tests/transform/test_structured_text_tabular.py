@@ -154,6 +154,41 @@ def test_stage_tabular_preserves_delimiters_and_missing_values(tmp_path):
     assert '"δ, d"' in record["text"]
 
 
+def test_stage_tabular_preserves_repeated_header_like_rows(tmp_path):
+    input_dir = tmp_path / "raw"
+    output_dir = tmp_path / "staged"
+
+    content = "id,value\n1,alpha\nid,value\n2,beta\n"
+    _write_csv(input_dir / "repeated.csv", content)
+
+    cfg = TabularStagingConfig(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        source_label="test:repeated",
+        max_bytes_per_document=1024,
+    )
+    result = stage_tabular_source(cfg)
+
+    assert result["record_count"] == 1
+    records = _read_staged_records(output_dir)
+    assert records[0]["text"] == content
+
+
+def test_stage_tabular_rejects_non_utf8_input(tmp_path):
+    input_dir = tmp_path / "raw"
+    output_dir = tmp_path / "staged"
+    input_dir.mkdir()
+    (input_dir / "bad.csv").write_bytes(b"id,value\n1,\xff\n")
+
+    cfg = TabularStagingConfig(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        source_label="test:bad",
+    )
+    with pytest.raises(UnicodeDecodeError):
+        stage_tabular_source(cfg)
+
+
 def test_stage_tabular_chunks_large_file_and_replicates_header(tmp_path):
     input_dir = tmp_path / "raw"
     output_dir = tmp_path / "staged"
