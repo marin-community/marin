@@ -78,6 +78,9 @@ the v16 compute-optimal baseline.
 - **Wandb group:** `lm-head-init-sweep` in project `marin_moe`.
 - **Run ID pattern:** `lm-head-init-{2x|4x}-d{dim}-{budget}` e.g.
   `lm-head-init-2x-d512-2.19e17`.
-- **Result:** pending — gate 1 jobs submitted. See issue for live updates.
+- **Result:** pending — gate 1 parent submitted as
+  `/kaiyue/iris-run-job-20260427-225917` at 2026-04-27 22:59:26 UTC.
+  Children will be 4 v5p-8 jobs (d512×{2x,4x}, d768×{2x,4x}).
+  Tracking issue: marin-community/marin#5222.
 - **Next action:** wait ~3h for d768 to finish; pull final macro and tok/s
   from wandb; compute effective speedup.
