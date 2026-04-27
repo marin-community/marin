@@ -37,26 +37,26 @@ abstraction that handles parallelism and fault tolerance automatically.
 ### Quick Example
 
 ```python
-from zephyr import Dataset, flow_backend
+from zephyr import Dataset, ZephyrContext
 
 def process_file(input_path: str, output_path: str) -> None:
     # Your processing logic here - no manual worker orchestration needed
     ...
 
 def main():
-    backend = flow_backend()  # Backend configured via CLI flags
+    ctx = ZephyrContext(max_workers=100)
     pipeline = (
         Dataset.from_list(input_files)
-        .filter(lambda f: not output_exists(f))
-        .map(lambda f: process_file(f["input"], f["output"]))
+        .filter(lambda task: not output_exists(task["output"]))
+        .map(lambda task: process_file(task["input"], task["output"]))
     )
-    list(backend.execute(pipeline))
+    ctx.execute(pipeline)
 ```
 
 ### Documentation
 
 - **Quick start**: See `lib/zephyr/README.md`
-- **Design & API**: See `lib/zephyr/docs/design.md`
+- **Operational notes**: See `lib/zephyr/OPS.md`
 - **Archived migration patterns**: See `.agents/docs/zephyr-migration.md` for historical examples of replacing legacy distributed loops with Zephyr patterns
 
 ### Design Principles

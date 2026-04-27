@@ -1470,7 +1470,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
     finally:
         # Signal coordinator shutdown first so workers receive SHUTDOWN from
         # pull_task and self-terminate via shutdown_event → exit_actor()
-        # before worker_group.shutdown() sends __ray_terminate__.
+        # before worker_group.shutdown() tears down any remaining actors.
         with suppress(Exception):
             coordinator.shutdown.remote().result(timeout=10.0)
         if worker_group is not None:
