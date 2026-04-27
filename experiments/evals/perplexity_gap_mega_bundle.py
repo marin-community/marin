@@ -19,6 +19,8 @@ Notably excluded for now:
     locally
   - ``structured_text/*``: staged parquet discovery does not match the current
     raw HF snapshot layout
+  - ``bio_chem/refseq/refseq_viral_gff``: the expected RefSeq viral GFF file
+    no longer exists at the upstream NCBI release path
   - ``bio_chem/rcsb/rcsb_mmcif``: upstream sample URL currently 404s
   - raw OCR/TextOCR/OCR-VQA surfaces: the shared materializer is hitting HF
     dataset-server 429s; keep SVG only for now
@@ -57,6 +59,7 @@ from experiments.evals.synthetic_reasoning_ppl import synthetic_reasoning_raw_va
 EXCLUDED_DATASET_KEYS = frozenset(
     {
         "agent_traces/openhands_swe_rebench",
+        "bio_chem/refseq/refseq_viral_gff",
         "bio_chem/rcsb/rcsb_mmcif",
     }
 )
