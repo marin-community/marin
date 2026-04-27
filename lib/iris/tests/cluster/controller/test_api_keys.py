@@ -25,7 +25,7 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import ControllerTransitions
-from iris.log_server.server import LogServiceImpl
+from finelog.server import LogServiceImpl
 from iris.rpc import config_pb2
 from iris.rpc import job_pb2
 from iris.rpc.auth import _verified_identity

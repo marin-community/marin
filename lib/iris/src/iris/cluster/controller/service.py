@@ -97,7 +97,10 @@ from iris.cluster.controller.transitions import (
     task_updates_from_proto,
 )
 from iris.cluster.controller.provider import ProviderError
-from iris.cluster.log_store import build_log_source, worker_log_key
+from finelog.client import LogServiceProxy
+from finelog.rpc import logging_pb2
+from finelog.server import LogServiceImpl
+from iris.cluster.log_store_helpers import build_log_source, worker_log_key
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import (
@@ -109,9 +112,8 @@ from iris.cluster.types import (
     get_tpu_count,
     is_job_finished,
 )
-from iris.log_server.client import LogServiceProxy
-from iris.log_server.server import LogServiceImpl
-from iris.rpc import logging_pb2, vm_pb2
+from iris.rpc import logging_pb2 as iris_logging_pb2
+from iris.rpc import vm_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from iris.rpc import worker_pb2
@@ -120,6 +122,21 @@ from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp, Timer
 
 logger = logging.getLogger(__name__)
+
+
+def _to_iris_log_entries(entries) -> list[iris_logging_pb2.LogEntry]:
+    """Transcode finelog.logging.LogEntry messages to iris.logging.LogEntry.
+
+    The wire formats are identical (matching field numbers/types); we round-trip
+    through the binary serializer to switch Python types at the iris RPC boundary.
+    """
+    out: list[iris_logging_pb2.LogEntry] = []
+    for e in entries:
+        dst = iris_logging_pb2.LogEntry()
+        dst.ParseFromString(e.SerializeToString())
+        out.append(dst)
+    return out
+
 
 DEFAULT_MAX_TOTAL_LINES = 100000
 
@@ -1935,7 +1952,7 @@ class ControllerServiceImpl:
 
         batch = controller_pb2.Controller.TaskLogBatch(
             task_id=request.id,
-            logs=entries,
+            logs=_to_iris_log_entries(entries),
         )
 
         truncated = max_lines > 0 and len(fetch_response.entries) >= max_lines
@@ -2085,7 +2102,7 @@ class ControllerServiceImpl:
         )
 
         # Fetch worker daemon logs via LogService
-        worker_log_entries: list[logging_pb2.LogEntry] = []
+        worker_log_entries: list[iris_logging_pb2.LogEntry] = []
         try:
             fetch_resp = self._log_service.fetch_logs(
                 logging_pb2.FetchLogsRequest(
@@ -2095,7 +2112,7 @@ class ControllerServiceImpl:
                 ),
                 ctx,
             )
-            worker_log_entries = list(fetch_resp.entries)
+            worker_log_entries = _to_iris_log_entries(fetch_resp.entries)
         except Exception:
             logger.debug("Failed to fetch worker logs for %s", request.id, exc_info=True)
 

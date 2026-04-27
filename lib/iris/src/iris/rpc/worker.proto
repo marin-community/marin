@@ -23,7 +23,7 @@ edition = "2023";
 package iris.cluster;
 
 import "job.proto";
-import "time.proto";
+import "iris_time.proto";
 
 // ============================================================================
 // WORKER SERVICE MESSAGES

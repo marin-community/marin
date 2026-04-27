@@ -10,9 +10,10 @@ import pytest
 from iris.cluster.controller.transitions import ClusterCapacity, RunningTaskEntry, SchedulingEvent
 import time
 
-from iris.cluster.log_store._types import TaskAttempt, task_log_key
-from iris.log_server.server import LogServiceImpl
-from iris.rpc import logging_pb2
+from iris.cluster.log_store_helpers import task_log_key
+from iris.cluster.types import TaskAttempt
+from finelog.server import LogServiceImpl
+from finelog.rpc import logging_pb2
 from iris.cluster.providers.k8s.tasks import (
     K8sTaskProvider,
     _GC_MAX_AGE_SECONDS,

@@ -1,0 +1,16 @@
+# finelog log-server PersistentVolumeClaim.
+#
+# 10Gi is comfortable when --remote-log-dir is enabled (segments offload
+# to GCS). Scale to 20–50Gi if running without remote offload.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: log-server-cache
+  labels:
+    app: log-server
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi

@@ -16,7 +16,7 @@ edition = "2023";
 
 package iris.vm;
 
-import "time.proto";
+import "iris_time.proto";
 import "config.proto";
 
 // VM lifecycle states

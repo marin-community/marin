@@ -105,14 +105,12 @@ from iris.cluster.controller.transitions import (
     log_event,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.log_store import CONTROLLER_LOG_KEY
+from finelog.client import LogPusher, LogServiceProxy, RemoteLogHandler
+from finelog.server import LogServiceImpl
+from finelog.server.asgi import build_log_server_asgi
+from iris.cluster.log_store_helpers import CONTROLLER_LOG_KEY
 from iris.cluster.providers.types import find_free_port, resolve_external_host
-from iris.log_server.client import LogPusher, LogServiceProxy, RemoteLogHandler
-from iris.log_server.main import build_log_server_asgi
-from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider
-from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS
-from iris.rpc.stats import RpcStatsCollector
 from iris.cluster.types import (
     JobName,
     WorkerStatus,
@@ -959,8 +957,14 @@ class ControllerConfig:
     log_service_address: str | None = None
     """Address of an externally-hosted log server (e.g. http://localhost:10001).
     When set, the controller connects to the existing server. When None,
-    the Controller starts an in-process LogServiceImpl on a free port.
-    Either way, all controller code accesses the log server via RPC clients."""
+    the Controller starts an in-process LogServiceImpl on a free port (used by
+    tests and local-mode runs). In production this address is sourced from
+    `endpoints["/system/log_server"]` and passed in here by the daemon entrypoint."""
+
+    endpoints: dict[str, str] = field(default_factory=dict)
+    """Resolved cluster endpoints: logical name -> concrete URL. Built from
+    cluster_config.endpoints by the daemon entrypoint. Registered into the
+    controller service's _system_endpoints during start()."""
 
 
 def _log_client_interceptors(config: "ControllerConfig") -> tuple:
@@ -1175,13 +1179,12 @@ class Controller:
         # still accepted in null-auth/test mode, matching the dashboard's
         # behaviour. Real workers attach JWTs that the verifier validates.
         interceptors = (NullAuthInterceptor(verifier=self._config.auth_verifier),)
-        # Stats collector for the in-process log server. Snapshot is reachable
-        # via /iris.stats.StatsService/GetRpcStats on the log-server port.
-        self._log_stats_collector = RpcStatsCollector(slow_threshold_ms=SLOW_RPC_THRESHOLD_MS)
+        # finelog's ASGI builder owns the FetchLogs concurrency interceptor
+        # and does not collect RPC stats — production stats live in the
+        # dedicated finelog-server deployment.
         app = build_log_server_asgi(
             self._log_service,
             interceptors=interceptors,
-            stats_collector=self._log_stats_collector,
         )
         log_server_config = uvicorn.Config(
             app,
@@ -1252,9 +1255,24 @@ class Controller:
             timeout=Duration.from_seconds(5.0),
         )
 
-        # Register log server endpoint so workers can resolve it via ListEndpoints.
+        # Register configured cluster endpoints so workers can resolve them via ListEndpoints.
+        # Endpoints are pre-resolved (scheme dispatched) by the daemon entrypoint.
+        for name, url in self._config.endpoints.items():
+            self._service._system_endpoints[name] = url
+            logger.info("Registered system endpoint %s -> %s", name, url)
+
+        # Always advertise the in-use log server address under /system/log_server.
+        # If the daemon supplied it via endpoints, this is a no-op overwrite with
+        # the same value; in tests the in-process server's address lands here.
+        self._service._system_endpoints["/system/log_server"] = self._log_service_address
+        # Backward-compat alias for one release; workers and clients should
+        # migrate to the underscore form. Logged at warning level so operators
+        # can tell when something still depends on it.
         self._service._system_endpoints["/system/log-server"] = self._log_service_address
-        logger.info("Registered system endpoint /system/log-server -> %s", self._log_service_address)
+        logger.warning(
+            "Registered deprecated alias /system/log-server -> %s (use /system/log_server)",
+            self._log_service_address,
+        )
 
     def stop(self) -> None:
         """Stop all background components gracefully. Idempotent.

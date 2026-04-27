@@ -47,12 +47,12 @@ from iris.cluster.dashboard_common import (
     requires_auth,
     static_files_mount,
 )
-from iris.log_server.client import LogServiceProxy
-from iris.log_server.server import LogServiceImpl
+from finelog.client import LogServiceProxy
+from finelog.rpc.logging_connect import LogServiceWSGIApplication
+from finelog.server import LogServiceImpl
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.controller_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, ConcurrencyLimitInterceptor, RequestTimingInterceptor
-from iris.rpc.logging_connect import LogServiceWSGIApplication
 from iris.rpc.stats import RpcStatsCollector
 from iris.rpc.stats_connect import StatsServiceWSGIApplication
 from iris.rpc.stats_service import RpcStatsService
@@ -293,7 +293,8 @@ class ControllerDashboard:
         # from the proto in the LogService migration).  Register the already-
         # intercepted LogService FetchLogs endpoint under the old path so the
         # Connect protocol handles encoding, compression, and auth correctly.
-        _LOG_FETCH_ENDPOINT = "/iris.logging.LogService/FetchLogs"
+        # The LogService now lives under the finelog.logging proto package.
+        _LOG_FETCH_ENDPOINT = "/finelog.logging.LogService/FetchLogs"
         _COMPAT_FETCH_ENDPOINT = "/iris.cluster.ControllerService/FetchLogs"
         rpc_wsgi_app._endpoints[_COMPAT_FETCH_ENDPOINT] = log_wsgi_app._endpoints[_LOG_FETCH_ENDPOINT]
 

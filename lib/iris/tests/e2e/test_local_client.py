@@ -11,7 +11,7 @@ import pytest
 
 from iris.client.client import IrisClient, Job
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName
-from iris.rpc import logging_pb2
+from finelog.rpc import logging_pb2
 from iris.rpc import job_pb2
 
 pytestmark = pytest.mark.e2e

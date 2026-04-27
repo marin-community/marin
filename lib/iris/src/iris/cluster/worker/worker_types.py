@@ -8,10 +8,9 @@ from typing import Protocol
 
 from pydantic import BaseModel
 
-from iris.rpc import logging_pb2
+from finelog.rpc import logging_pb2
 from iris.rpc import job_pb2
 from iris.rpc.job_pb2 import TaskState
-from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
 
 
@@ -38,7 +37,8 @@ class LogLine(BaseModel):
             source=self.source,
             data=self.data,
         )
-        proto.timestamp.CopyFrom(timestamp_to_proto(Timestamp.from_seconds(self.timestamp.timestamp())))
+        # finelog.logging.LogEntry uses finelog.time.Timestamp; assign directly.
+        proto.timestamp.epoch_ms = Timestamp.from_seconds(self.timestamp.timestamp()).epoch_ms()
         return proto
 
 

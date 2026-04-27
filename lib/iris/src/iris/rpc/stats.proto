@@ -20,7 +20,7 @@ edition = "2023";
 // implemented by controller, worker, or log server processes.
 package iris.stats;
 
-import "time.proto";
+import "iris_time.proto";
 
 message GetRpcStatsRequest {}
 

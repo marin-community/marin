@@ -1,0 +1,23 @@
+# finelog log-server ClusterIP Service.
+#
+# Iris references this service from its endpoints config as
+# `k8s://log-server`, which resolves to
+# log-server.<namespace>.svc.cluster.local:10001.
+#
+# Security: the server is unauthenticated by design. Restrict access via
+# NetworkPolicy / firewall — do NOT add an Ingress or LoadBalancer.
+apiVersion: v1
+kind: Service
+metadata:
+  name: log-server
+  labels:
+    app: log-server
+spec:
+  type: ClusterIP
+  selector:
+    app: log-server
+  ports:
+    - name: rpc
+      port: 10001
+      targetPort: 10001
+      protocol: TCP

@@ -16,7 +16,7 @@ edition = "2023";
 
 package iris.rpc;
 
-import "time.proto";
+import "iris_time.proto";
 
 // Rich error details for debugging RPC failures.
 // Attached to ConnectError via add_detail() for structured error reporting.

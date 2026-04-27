@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-finelog"
+version = "0.1.0"
+description = "Standalone log store + log service: structured-log ingest, query, and persistence."
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "marin-rigging",
+    "connect-python>=0.9.0",
+    "duckdb>=1.0.0",
+    "fsspec>=2024.0.0",
+    "protobuf>=5.0",
+    "pyarrow>=19.0.0",
+    "starlette>=0.50.0",
+    "uvicorn[standard]>=0.23.0",
+]
+
+[project.scripts]
+finelog-server = "finelog.server.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "pytest-asyncio",
+    "pytest-timeout",
+    "pytest-xdist",
+    "gcsfs>=2024.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/finelog"]
+
+[tool.pytest.ini_options]
+timeout = 10
+timeout_method = "thread"
+addopts = "-n auto --durations=25 -v"
+filterwarnings = ["ignore::DeprecationWarning"]
+log_level = "INFO"
+log_format = "%(asctime)s %(levelname)s %(message)s"
+log_date_format = "%Y-%m-%d %H:%M:%S"

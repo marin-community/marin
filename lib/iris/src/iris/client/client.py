@@ -39,7 +39,7 @@ from iris.cluster.client import (
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.cluster.providers.local.cluster import LocalCluster, make_local_cluster_config
 from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
-from iris.cluster.log_store import build_log_source
+from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,

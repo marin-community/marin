@@ -1,5 +1,5 @@
 from . import job_pb2 as _job_pb2
-from . import time_pb2 as _time_pb2
+from . import iris_time_pb2 as _iris_time_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
@@ -28,17 +28,17 @@ class Worker(_message.Message):
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
         TERM_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
         task_id: str
-        term_timeout: _time_pb2.Duration
-        def __init__(self, task_id: _Optional[str] = ..., term_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
+        term_timeout: _iris_time_pb2.Duration
+        def __init__(self, task_id: _Optional[str] = ..., term_timeout: _Optional[_Union[_iris_time_pb2.Duration, _Mapping]] = ...) -> None: ...
     class HealthResponse(_message.Message):
         __slots__ = ("healthy", "uptime", "running_tasks")
         HEALTHY_FIELD_NUMBER: _ClassVar[int]
         UPTIME_FIELD_NUMBER: _ClassVar[int]
         RUNNING_TASKS_FIELD_NUMBER: _ClassVar[int]
         healthy: bool
-        uptime: _time_pb2.Duration
+        uptime: _iris_time_pb2.Duration
         running_tasks: int
-        def __init__(self, healthy: _Optional[bool] = ..., uptime: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., running_tasks: _Optional[int] = ...) -> None: ...
+        def __init__(self, healthy: _Optional[bool] = ..., uptime: _Optional[_Union[_iris_time_pb2.Duration, _Mapping]] = ..., running_tasks: _Optional[int] = ...) -> None: ...
     class ExecInContainerRequest(_message.Message):
         __slots__ = ("task_id", "command", "timeout_seconds")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]

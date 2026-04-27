@@ -25,15 +25,15 @@ from pathlib import Path
 
 from iris.cluster.controller.transitions import ClusterCapacity, DirectProviderSyncResult, SchedulingEvent
 from iris.cluster.controller.transitions import DirectProviderBatch, RunningTaskEntry, TaskUpdate
-from iris.cluster.log_store._types import LogPusherProtocol, TaskAttempt, task_log_key
+from finelog.rpc import logging_pb2
+from finelog.types import LogPusherProtocol, str_to_log_level
+from iris.cluster.log_store_helpers import task_log_key
 from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
-from iris.cluster.types import JobName, get_gpu_count
-from iris.logging import str_to_log_level
+from iris.cluster.types import JobName, TaskAttempt, get_gpu_count
 from rigging.log_setup import parse_log_level
-from iris.rpc import logging_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from iris.rpc import worker_pb2
@@ -527,7 +527,8 @@ def _kubectl_log_line_to_log_entry(kll: KubectlLogLine, attempt_id: int) -> logg
     level_name = parse_log_level(kll.data)
     level = str_to_log_level(level_name)
     entry = logging_pb2.LogEntry(source=kll.stream, data=kll.data, attempt_id=attempt_id, level=level)
-    entry.timestamp.CopyFrom(timestamp_to_proto(Timestamp.from_seconds(kll.timestamp.timestamp())))
+    # finelog's LogEntry.timestamp is a finelog.time.Timestamp; assign epoch_ms directly.
+    entry.timestamp.epoch_ms = Timestamp.from_seconds(kll.timestamp.timestamp()).epoch_ms()
     return entry
 
 

@@ -13,9 +13,9 @@ from pathlib import Path
 import uvicorn
 
 from iris.chaos import chaos
-from iris.cluster.log_store import worker_log_key
+from iris.cluster.log_store_helpers import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
-from iris.log_server.client import LogPusher, RemoteLogHandler
+from finelog.client import LogPusher, RemoteLogHandler
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
 from iris.cluster.types import JobName, TaskAttempt as TaskAttemptId
 from iris.cluster.bundle import BundleStore
@@ -264,7 +264,7 @@ class Worker:
                 interceptors=interceptors,
             )
             self._log_pusher = LogPusher(
-                "/system/log-server",
+                "/system/log_server",
                 interceptors=interceptors,
                 resolver=self._resolve_log_service,
             )
@@ -402,7 +402,7 @@ class Worker:
         This loop runs continuously until shutdown. On each iteration:
         1. Reset worker state (kill all containers)
         2. Attach the remote log handler so pre-registration log lines ship
-           to the central log server (and a refreshed /system/log-server
+           to the central log server (and a refreshed /system/log_server
            endpoint is picked up after any log-server failover)
         3. Register with controller (retry until accepted)
         4. If the controller assigned a worker_id we didn't know locally,
