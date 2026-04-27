@@ -25,6 +25,11 @@ from dataclasses import dataclass, field
 from rigging.filesystem import open_url, url_to_fs
 from zephyr.writers import atomic_rename
 
+from marin.datakit.ingestion_manifest import (
+    IngestionSourceManifest,
+    MaterializedOutputMetadata,
+    write_ingestion_metadata_json,
+)
 from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
@@ -64,6 +69,11 @@ class TabularStagingConfig:
         output_filename: Name of the single staged JSONL output file, written
             under ``output_path``. Relative path; must end in ``.jsonl`` or
             ``.jsonl.gz``.
+        source_manifest: Optional typed source manifest used for writing a
+            ``metadata.json`` sidecar.
+        manifest_fingerprint: Optional explicit fingerprint copied from the
+            source manifest into the step config so metadata-only changes
+            can participate in executor hashing.
     """
 
     input_path: str
@@ -75,6 +85,8 @@ class TabularStagingConfig:
     preserve_header: bool = True
     output_filename: str = "staged.jsonl.gz"
     extra_metadata: dict[str, str] = field(default_factory=dict)
+    source_manifest: IngestionSourceManifest | None = None
+    manifest_fingerprint: str = ""
 
 
 def serialize_csv_document(header_line: str | None, body_lines: Iterable[str]) -> str:
@@ -229,6 +241,12 @@ def stage_tabular_source(cfg: TabularStagingConfig) -> dict[str, int | str]:
     source_files = _iter_source_files(cfg.input_path, cfg.file_extensions)
     if not source_files:
         raise ValueError(f"No source files with extensions {cfg.file_extensions} found under {cfg.input_path}")
+    if cfg.source_manifest is not None and cfg.manifest_fingerprint:
+        expected = cfg.source_manifest.fingerprint()
+        if cfg.manifest_fingerprint != expected:
+            raise ValueError(
+                f"manifest_fingerprint mismatch: config has {cfg.manifest_fingerprint}, source manifest has {expected}"
+            )
 
     output_path = cfg.output_path
     fsspec_mkdirs(output_path, exist_ok=True)
@@ -310,8 +328,21 @@ def stage_tabular_source(cfg: TabularStagingConfig) -> dict[str, int | str]:
         total_text_bytes,
         out_file,
     )
-    return {
+    result: dict[str, int | str] = {
         "record_count": record_count,
         "bytes_written": total_text_bytes,
         "output_file": out_file,
     }
+    if cfg.source_manifest is not None:
+        result["metadata_file"] = write_ingestion_metadata_json(
+            manifest=cfg.source_manifest,
+            materialized_output=MaterializedOutputMetadata(
+                input_path=cfg.input_path,
+                output_path=cfg.output_path,
+                output_file=out_file,
+                record_count=record_count,
+                bytes_written=total_text_bytes,
+                metadata={"source_file_count": len(source_files)},
+            ),
+        )
+    return result

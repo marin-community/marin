@@ -17,6 +17,15 @@ from unittest.mock import patch
 import pytest
 from datasets import Dataset
 
+from marin.datakit.ingestion_manifest import (
+    IdentityTreatment,
+    IngestionPolicy,
+    IngestionSourceManifest,
+    SampleCapConfig,
+    SecretRedaction,
+    StagingMetadata,
+    UsagePolicy,
+)
 from marin.transform.structured_text.table_records import (
     TABLE_CELL_DELIMITER,
     TableRecordStagingConfig,
@@ -182,13 +191,48 @@ def _read_staged_records(output_path: Path, filename: str = "staged.jsonl.gz") -
         return [json.loads(line) for line in handle if line.strip()]
 
 
+def _manifest(*, serializer_name: str, source_label: str = "wtq:test") -> IngestionSourceManifest:
+    return IngestionSourceManifest(
+        dataset_key="Stanford/wikitablequestions",
+        slice_key="structured_text/wikitablequestions/validation",
+        source_label=source_label,
+        source_urls=("https://huggingface.co/datasets/Stanford/wikitablequestions",),
+        source_license="CC BY 4.0",
+        source_format="huggingface_parquet_table_records",
+        surface_form="wikipedia_table_tsv_plus_question_answer_lines",
+        policy=IngestionPolicy(
+            usage_policy=UsagePolicy.EVAL_ONLY,
+            use_policy="Eval-only structured-text probe.",
+            requires_sanitization=False,
+            identity_treatment=IdentityTreatment.PRESERVE,
+            secret_redaction=SecretRedaction.NONE,
+            contamination_risk="high: held-out eval contamination if reused in training",
+            provenance_notes="Pinned HF revision.",
+        ),
+        staging=StagingMetadata(
+            transform_name="stage_table_record_source",
+            serializer_name=serializer_name,
+            split="validation",
+            output_filename="staged.jsonl.gz",
+            record_provenance_fields=("dataset", "split", "subset", "serializer", "index"),
+        ),
+        epic_issue=5005,
+        issue_numbers=(5059,),
+        sample_caps=SampleCapConfig(max_bytes_per_source=30 * 1024 * 1024),
+        source_metadata={"hf_revision": "fac45b3184e0ce9b79eecac454acf17e0a51f94e"},
+    )
+
+
 def test_stage_table_record_source_end_to_end_wtq(tmp_path):
     fixtures = [_wtq_fixture() for _ in range(3)]
+    manifest = _manifest(serializer_name="wikitablequestions")
     cfg = TableRecordStagingConfig(
         input_path="fake://wtq",
         output_path=str(tmp_path),
         source_label="wtq:test",
         serializer_name="wikitablequestions",
+        source_manifest=manifest,
+        manifest_fingerprint=manifest.fingerprint(),
     )
 
     with patch(
@@ -198,12 +242,17 @@ def test_stage_table_record_source_end_to_end_wtq(tmp_path):
         result = stage_table_record_source(cfg)
 
     assert result["record_count"] == 3
+    assert result["metadata_file"] == str(tmp_path / "metadata.json")
     records = _read_staged_records(tmp_path)
     assert len(records) == 3
     for record in records:
         assert "Q: Which building is taller?" in record["text"]
         assert record["source"] == "wtq:test"
         assert record["provenance"]["serializer"] == "wikitablequestions"
+    metadata = json.loads((tmp_path / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["source_manifest"]["source_label"] == "wtq:test"
+    assert metadata["source_manifest"]["staging"]["serializer_name"] == "wikitablequestions"
+    assert metadata["materialized_output"]["record_count"] == 3
 
 
 def test_stage_table_record_source_loads_downloaded_parquet_split(tmp_path):

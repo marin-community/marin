@@ -28,17 +28,29 @@ replace the value in the matching ``versioned(...)`` call.
 
 import os.path
 
+from marin.datakit.ingestion_manifest import (
+    IdentityTreatment,
+    IngestionPolicy,
+    IngestionSourceManifest,
+    SampleCapConfig,
+    SecretRedaction,
+    StagingMetadata,
+    UsagePolicy,
+)
 from marin.datakit.download.huggingface import DownloadConfig as HfDownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
 from marin.transform.structured_text.table_records import (
+    DEFAULT_MAX_BYTES_PER_SOURCE,
     TableRecordStagingConfig,
     stage_table_record_source,
 )
 
 # cyclic dependency, matches the indirection in experiments/paloma.py
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
+LONG_TAIL_PPL_EPIC_ISSUE = 5005
+STRUCTURED_TEXT_ISSUE = 5059
 
 
 # ---------------------------------------------------------------------------
@@ -84,36 +96,109 @@ wikitablequestions_raw = ExecutorStep(
 # Staging (raw HF parquet -> byte-preserving JSONL with single `text` field)
 # ---------------------------------------------------------------------------
 
+
+def _eval_only_policy(provenance_notes: str) -> IngestionPolicy:
+    return IngestionPolicy(
+        usage_policy=UsagePolicy.EVAL_ONLY,
+        use_policy="Eval-only structured-text PPL probe. Do not mix into training without explicit follow-up review.",
+        requires_sanitization=False,
+        identity_treatment=IdentityTreatment.PRESERVE,
+        secret_redaction=SecretRedaction.NONE,
+        contamination_risk="high: direct contamination if the held-out probe slice is copied into training data",
+        provenance_notes=provenance_notes,
+    )
+
+
+STRUCTURED_EVAL_MANIFESTS: dict[str, IngestionSourceManifest] = {
+    "totto": IngestionSourceManifest(
+        dataset_key="GEM/totto",
+        slice_key="structured_text/totto/validation",
+        source_label="totto:validation",
+        source_urls=("https://huggingface.co/datasets/GEM/totto",),
+        source_license="CC BY-SA 3.0",
+        source_format="huggingface_parquet_table_records",
+        surface_form="wikipedia_table_tsv_plus_summary_sentence",
+        policy=_eval_only_policy(
+            "Public Wikipedia-derived table-to-text dataset mirrored on Hugging Face; "
+            "staged from a pinned dataset revision."
+        ),
+        staging=StagingMetadata(
+            transform_name="stage_table_record_source",
+            serializer_name="totto",
+            split="validation",
+            output_filename="staged.jsonl.gz",
+            record_provenance_fields=("dataset", "split", "subset", "serializer", "index"),
+            metadata={"raw_source_type": "huggingface_parquet"},
+        ),
+        epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
+        issue_numbers=(STRUCTURED_TEXT_ISSUE,),
+        sample_caps=SampleCapConfig(max_bytes_per_source=DEFAULT_MAX_BYTES_PER_SOURCE),
+        source_metadata={
+            "hf_dataset_id": "GEM/totto",
+            "hf_revision": "5e745cedfd0050cc18aa143e5325d03061941d7d",
+            "hf_urls_glob": "**/*.parquet,*.md",
+        },
+    ),
+    "wikitablequestions": IngestionSourceManifest(
+        dataset_key="Stanford/wikitablequestions",
+        slice_key="structured_text/wikitablequestions/validation",
+        source_label="wikitablequestions:validation",
+        source_urls=("https://huggingface.co/datasets/Stanford/wikitablequestions",),
+        source_license="CC BY 4.0",
+        source_format="huggingface_parquet_table_records",
+        surface_form="wikipedia_table_tsv_plus_question_answer_lines",
+        policy=_eval_only_policy(
+            "Public Wikipedia-table QA dataset mirrored on Hugging Face; staged from a pinned dataset revision."
+        ),
+        staging=StagingMetadata(
+            transform_name="stage_table_record_source",
+            serializer_name="wikitablequestions",
+            split="validation",
+            output_filename="staged.jsonl.gz",
+            record_provenance_fields=("dataset", "split", "subset", "serializer", "index"),
+            metadata={"raw_source_type": "huggingface_parquet"},
+        ),
+        epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
+        issue_numbers=(STRUCTURED_TEXT_ISSUE,),
+        sample_caps=SampleCapConfig(max_bytes_per_source=DEFAULT_MAX_BYTES_PER_SOURCE),
+        source_metadata={
+            "hf_dataset_id": "Stanford/wikitablequestions",
+            "hf_revision": "fac45b3184e0ce9b79eecac454acf17e0a51f94e",
+            "hf_urls_glob": "**/*.parquet,*.md",
+        },
+    ),
+}
+
+
 STRUCTURED_EVAL_SOURCES = {
-    "totto": {
-        "raw_step": totto_raw,
-        "serializer_name": "totto",
-        "subset": None,
-        "split": "validation",
-        "source_label": "totto:validation",
-    },
+    "totto": {"raw_step": totto_raw, "manifest": STRUCTURED_EVAL_MANIFESTS["totto"]},
     "wikitablequestions": {
         "raw_step": wikitablequestions_raw,
-        "serializer_name": "wikitablequestions",
-        "subset": None,
-        "split": "validation",
-        "source_label": "wikitablequestions:validation",
+        "manifest": STRUCTURED_EVAL_MANIFESTS["wikitablequestions"],
     },
 }
 
 
-def _staged_step(dataset_key: str, spec: dict) -> ExecutorStep:
+def _staged_step(dataset_key: str, spec: dict[str, ExecutorStep | IngestionSourceManifest]) -> ExecutorStep:
     """Build the staging ExecutorStep for one structured-eval source."""
+    manifest = spec["manifest"]
+    raw_step = spec["raw_step"]
+    assert isinstance(manifest, IngestionSourceManifest)
+    assert isinstance(raw_step, ExecutorStep)
     return ExecutorStep(
         name=f"evaluation/structured-text/{dataset_key}",
         fn=stage_table_record_source,
         config=TableRecordStagingConfig(
-            input_path=output_path_of(spec["raw_step"]),
+            input_path=output_path_of(raw_step),
             output_path=this_output_path(),
-            source_label=spec["source_label"],
-            serializer_name=spec["serializer_name"],
-            split=spec["split"],
-            subset=spec["subset"],
+            source_label=manifest.source_label,
+            serializer_name=manifest.staging.serializer_name or "",
+            split=manifest.staging.split or "validation",
+            subset=manifest.staging.subset,
+            max_bytes_per_source=manifest.sample_caps.max_bytes_per_source or DEFAULT_MAX_BYTES_PER_SOURCE,
+            output_filename=manifest.staging.output_filename,
+            source_manifest=manifest,
+            manifest_fingerprint=manifest.fingerprint(),
         ),
     )
 

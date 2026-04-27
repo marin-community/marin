@@ -14,6 +14,15 @@ from pathlib import Path
 
 import pytest
 
+from marin.datakit.ingestion_manifest import (
+    IdentityTreatment,
+    IngestionPolicy,
+    IngestionSourceManifest,
+    SampleCapConfig,
+    SecretRedaction,
+    StagingMetadata,
+    UsagePolicy,
+)
 from marin.transform.structured_text.tabular import (
     TabularStagingConfig,
     chunk_lines_by_bytes,
@@ -114,6 +123,34 @@ def _read_staged_records(output_path: Path, filename: str = "staged.jsonl.gz") -
         return [json.loads(line) for line in handle if line.strip()]
 
 
+def _manifest(source_label: str = "test:csv") -> IngestionSourceManifest:
+    return IngestionSourceManifest(
+        dataset_key="tabular/test_csv",
+        slice_key="structured_text/test_csv",
+        source_label=source_label,
+        source_urls=("https://example.com/test.csv",),
+        source_license="test-only",
+        source_format="raw_csv_files",
+        surface_form="byte_preserved_csv_chunks",
+        policy=IngestionPolicy(
+            usage_policy=UsagePolicy.EVAL_ONLY,
+            use_policy="Eval-only probe.",
+            requires_sanitization=False,
+            identity_treatment=IdentityTreatment.PRESERVE,
+            secret_redaction=SecretRedaction.NONE,
+            contamination_risk="low: local test fixture",
+            provenance_notes="Synthetic fixture.",
+        ),
+        staging=StagingMetadata(
+            transform_name="stage_tabular_source",
+            preserve_header=True,
+            output_filename="staged.jsonl.gz",
+            record_provenance_fields=("file", "chunk_index", "header_preserved"),
+        ),
+        sample_caps=SampleCapConfig(max_bytes_per_source=1024, max_bytes_per_document=1024),
+    )
+
+
 def test_stage_tabular_preserves_delimiters_and_missing_values(tmp_path):
     # Input exercises: empty cells, exotic unicode, varying numeric precision,
     # quoted commas, tabs, and NA markers.
@@ -129,15 +166,19 @@ def test_stage_tabular_preserves_delimiters_and_missing_values(tmp_path):
         '4,"δ, d","1.4142135623730951",m/s\n'
     )
     _write_csv(input_dir / "a.csv", content)
+    manifest = _manifest()
 
     cfg = TabularStagingConfig(
         input_path=str(input_dir),
         output_path=str(output_dir),
         source_label="test:csv",
         max_bytes_per_document=1024,
+        source_manifest=manifest,
+        manifest_fingerprint=manifest.fingerprint(),
     )
     result = stage_tabular_source(cfg)
     assert result["record_count"] == 1
+    assert result["metadata_file"] == str(output_dir / "metadata.json")
 
     records = _read_staged_records(output_dir)
     assert len(records) == 1
@@ -152,6 +193,10 @@ def test_stage_tabular_preserves_delimiters_and_missing_values(tmp_path):
     assert ",,s\n" in record["text"]  # empty-cell delimiter survived
     assert "γ" in record["text"]  # noqa: RUF001 -- see fixture above
     assert '"δ, d"' in record["text"]
+    metadata = json.loads((output_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["source_manifest"]["source_label"] == "test:csv"
+    assert metadata["source_manifest"]["staging"]["preserve_header"] is True
+    assert metadata["materialized_output"]["metadata"]["source_file_count"] == 1
 
 
 def test_stage_tabular_preserves_repeated_header_like_rows(tmp_path):

@@ -25,6 +25,11 @@ from typing import Any
 from rigging.filesystem import open_url, url_to_fs
 from zephyr.writers import atomic_rename
 
+from marin.datakit.ingestion_manifest import (
+    IngestionSourceManifest,
+    MaterializedOutputMetadata,
+    write_ingestion_metadata_json,
+)
 from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
@@ -59,6 +64,11 @@ class TableRecordStagingConfig:
         output_filename: Name of the single JSONL output file.
         extra_metadata: Extra key/values baked into every record's
             ``provenance`` field.
+        source_manifest: Optional typed source manifest used for writing
+            ``metadata.json`` alongside the staged JSONL.
+        manifest_fingerprint: Optional explicit fingerprint copied from the
+            source manifest into the step config so metadata-only changes
+            can participate in executor hashing.
     """
 
     input_path: str
@@ -70,6 +80,8 @@ class TableRecordStagingConfig:
     max_bytes_per_source: int = DEFAULT_MAX_BYTES_PER_SOURCE
     output_filename: str = "staged.jsonl.gz"
     extra_metadata: dict[str, str] = field(default_factory=dict)
+    source_manifest: IngestionSourceManifest | None = None
+    manifest_fingerprint: str = ""
 
 
 def _format_cell(cell_value: Any) -> str:
@@ -266,6 +278,12 @@ def stage_table_record_source(cfg: TableRecordStagingConfig) -> dict[str, int | 
     if cfg.serializer_name not in SERIALIZERS:
         raise ValueError(f"Unknown serializer {cfg.serializer_name!r}; known: {sorted(SERIALIZERS)}")
     serializer = SERIALIZERS[cfg.serializer_name]
+    if cfg.source_manifest is not None and cfg.manifest_fingerprint:
+        expected = cfg.source_manifest.fingerprint()
+        if cfg.manifest_fingerprint != expected:
+            raise ValueError(
+                f"manifest_fingerprint mismatch: config has {cfg.manifest_fingerprint}, source manifest has {expected}"
+            )
 
     fsspec_mkdirs(cfg.output_path, exist_ok=True)
     out_file = posixpath.join(cfg.output_path, cfg.output_filename)
@@ -313,8 +331,20 @@ def stage_table_record_source(cfg: TableRecordStagingConfig) -> dict[str, int | 
         total_text_bytes,
         out_file,
     )
-    return {
+    result: dict[str, int | str] = {
         "record_count": record_count,
         "bytes_written": total_text_bytes,
         "output_file": out_file,
     }
+    if cfg.source_manifest is not None:
+        result["metadata_file"] = write_ingestion_metadata_json(
+            manifest=cfg.source_manifest,
+            materialized_output=MaterializedOutputMetadata(
+                input_path=cfg.input_path,
+                output_path=cfg.output_path,
+                output_file=out_file,
+                record_count=record_count,
+                bytes_written=total_text_bytes,
+            ),
+        )
+    return result
