@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 # Evalchemy git repo and commit to use
 EVALCHEMY_REPO = "https://github.com/teetone/evalchemy.git"
-EVALCHEMY_COMMIT = "102d1c0"  # 2026-04-27: support UQ TTC for reasoning evals
+EVALCHEMY_COMMIT = "f5982ae"  # 2026-04-27: support UQ TTC for reasoning evals
 
 
 # Evalchemy benchmarks that have hardcoded n_repeat values and their paths.
