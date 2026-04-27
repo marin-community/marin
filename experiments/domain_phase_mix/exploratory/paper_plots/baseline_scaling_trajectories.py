@@ -25,7 +25,14 @@ import fsspec
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.colors import sample_colorscale
+
+from experiments.domain_phase_mix.exploratory.paper_plots.paper_plot_style import (
+    configure_interactive_layout,
+    configure_static_layout,
+    method_color,
+    method_dash,
+    write_static_images,
+)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 IMG_DIR = SCRIPT_DIR / "img"
@@ -38,8 +45,12 @@ MACRO_METRIC = "eval/uncheatable_eval/macro_bpb"
 EVAL_BPB_METRIC = "eval/bpb"
 PREFERRED_METRICS = (PRIMARY_METRIC, MACRO_METRIC, EVAL_BPB_METRIC)
 TARGET_MULTIPLIER = 1.0
-COLOR_SCALE = "RdYlGn_r"
 LEGACY_60M_TARGET_STEP = 4576
+METRIC_DISPLAY_NAMES = {
+    PRIMARY_METRIC: "Uncheatable BPB",
+    MACRO_METRIC: "Uncheatable macro BPB",
+    EVAL_BPB_METRIC: "Validation BPB",
+}
 
 LEGACY_GRP_SOURCE_EXPERIMENT = "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_penalty_raw_optima_uncheatable_bpb"
 LEGACY_GRP_RUN_NAME = "baseline_genericfamily_power_family_penalty_no_l2_raw_optimum"
@@ -86,11 +97,7 @@ class ScaleSpec:
     @property
     def axis_label(self) -> str:
         """Return the multiline x-axis label for paper plots."""
-        return (
-            f"{self.label}<br>"
-            f"N={self.non_embedding_params / 1_000_000:.1f}M<br>"
-            f"D={self.realized_train_tokens / 1_000_000_000:.1f}B"
-        )
+        return self.label
 
 
 @dataclass(frozen=True)
@@ -174,6 +181,8 @@ def _metric_values_from_mapping(values: dict[str, object]) -> dict[str, float]:
 
 
 def _metric_label(metric_column: str) -> str:
+    if metric_column in METRIC_DISPLAY_NAMES:
+        return METRIC_DISPLAY_NAMES[metric_column]
     return metric_column.removeprefix("eval/").replace("/", " / ")
 
 
@@ -645,11 +654,6 @@ def _hover_text(row: pd.Series, metric_column: str) -> str:
 
 def render_plot(points: pd.DataFrame, *, include_diagnostics: bool) -> go.Figure:
     """Create the Plotly figure for the central paper plot."""
-    positions = np.linspace(0.05, 0.95, len(METHODS))
-    colors = {
-        method.method_id: sample_colorscale(COLOR_SCALE, float(position))[0]
-        for method, position in zip(METHODS, positions, strict=True)
-    }
     x_values = [scale.axis_label for scale in SCALES]
     metric_columns = _available_metric_columns(points)
     if not metric_columns:
@@ -678,7 +682,11 @@ def render_plot(points: pd.DataFrame, *, include_diagnostics: bool) -> go.Figure
                         y=trajectory[metric_column],
                         mode="lines",
                         name=method.label,
-                        line={"color": colors[method.method_id], "width": 3},
+                        line={
+                            "color": method_color(method.method_id),
+                            "width": 3.6,
+                            "dash": method_dash(method.method_id),
+                        },
                         hoverinfo="skip",
                         visible=visible,
                         showlegend=visible,
@@ -694,7 +702,12 @@ def render_plot(points: pd.DataFrame, *, include_diagnostics: bool) -> go.Figure
                         y=ready[metric_column],
                         mode="markers",
                         name=f"{method.label} target-ready",
-                        marker={"color": colors[method.method_id], "size": 11, "symbol": "circle"},
+                        marker={
+                            "color": method_color(method.method_id),
+                            "size": 9,
+                            "symbol": "circle",
+                            "line": {"color": "white", "width": 1.1},
+                        },
                         hovertext=[_hover_text(row, metric_column) for _, row in ready.iterrows()],
                         hoverinfo="text",
                         visible=visible,
@@ -712,10 +725,10 @@ def render_plot(points: pd.DataFrame, *, include_diagnostics: bool) -> go.Figure
                         mode="markers",
                         name=f"{method.label} diagnostic",
                         marker={
-                            "color": colors[method.method_id],
-                            "size": 11,
+                            "color": method_color(method.method_id),
+                            "size": 8,
                             "symbol": "diamond-open",
-                            "line": {"width": 2.5},
+                            "line": {"width": 2.0},
                         },
                         hovertext=[_hover_text(row, metric_column) for _, row in diagnostic.iterrows()],
                         hoverinfo="text",
@@ -751,45 +764,35 @@ def render_plot(points: pd.DataFrame, *, include_diagnostics: bool) -> go.Figure
                             "xanchor": "left",
                             "font": {"size": 24},
                         },
-                        "yaxis": {"title": _metric_label(metric_column)},
+                        "yaxis": {
+                            "title": _metric_label(metric_column),
+                        },
                     },
                 ],
             }
         )
 
+    configure_interactive_layout(
+        fig,
+        title=f"1x Chinchilla baseline scaling trajectories<br><sup>{_metric_label(default_metric)}</sup>",
+        y_title=_metric_label(default_metric),
+        x_title="Scale (non-embedding params / training tokens)",
+    )
     fig.update_layout(
-        title={
-            "text": "1x Chinchilla baseline scaling trajectories" f"<br><sup>{_metric_label(default_metric)}</sup>",
-            "x": 0.04,
-            "xanchor": "left",
-            "font": {"size": 24},
-        },
-        xaxis={
-            "title": "Corrected scale label with non-embedding N and realized D",
-            "categoryorder": "array",
-            "categoryarray": x_values,
-        },
-        yaxis={"title": _metric_label(default_metric)},
         updatemenus=[
             {
                 "buttons": buttons,
                 "direction": "down",
-                "x": 0.0,
-                "xanchor": "left",
-                "y": 1.13,
+                "x": 1.0,
+                "xanchor": "right",
+                "y": 1.22,
                 "yanchor": "top",
                 "showactive": True,
-                "pad": {"r": 8, "t": 8},
+                "pad": {"r": 0, "t": 0},
             }
         ],
-        template="plotly_white",
-        width=1250,
-        height=760,
-        legend={"x": 1.02, "y": 0.5, "xanchor": "left", "yanchor": "middle"},
-        margin={"l": 80, "r": 260, "t": 90, "b": 105},
     )
-    fig.update_xaxes(showgrid=True, gridcolor="rgba(0,0,0,0.08)")
-    fig.update_yaxes(showgrid=True, gridcolor="rgba(0,0,0,0.10)")
+    fig.update_xaxes(categoryorder="array", categoryarray=x_values)
     return fig
 
 
@@ -824,7 +827,13 @@ def write_outputs(manifest: pd.DataFrame, points: pd.DataFrame, *, include_diagn
 
     fig = render_plot(points, include_diagnostics=include_diagnostics)
     fig.write_html(IMG_DIR / "baseline_scaling_trajectories.html", include_plotlyjs="cdn")
-    fig.write_image(IMG_DIR / "baseline_scaling_trajectories.png", scale=2)
+    static_fig = go.Figure(fig)
+    configure_static_layout(
+        static_fig,
+        y_title=_metric_label(summary["default_metric"]),
+        x_title="Scale (non-embedding params / training tokens)",
+    )
+    write_static_images(static_fig, IMG_DIR / "baseline_scaling_trajectories")
 
 
 def _parse_args() -> argparse.Namespace:

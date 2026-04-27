@@ -23,7 +23,14 @@ import re
 import fsspec
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.colors import sample_colorscale
+
+from experiments.domain_phase_mix.exploratory.paper_plots.paper_plot_style import (
+    configure_interactive_layout,
+    configure_static_layout,
+    method_color,
+    method_dash,
+    write_static_images,
+)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 IMG_DIR = SCRIPT_DIR / "img"
@@ -31,7 +38,6 @@ MANIFEST_CSV = IMG_DIR / "baseline_scaling_trajectories_manifest.csv"
 ALL_SOURCES_CSV = IMG_DIR / "baseline_scaling_downstream_eval_metrics_all_sources.csv"
 MERGED_METRICS_CSV = IMG_DIR / "baseline_scaling_downstream_eval_metrics_merged.csv"
 
-COLOR_SCALE = "RdYlGn_r"
 LM_EVAL_METRIC_SUFFIX = ",none"
 RESULT_GLOBS = (
     "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
@@ -140,11 +146,7 @@ METHOD_ORDER = ("grp_no_l2", "proportional", "olmix", "uniform", "unimax")
 
 
 def _axis_label(row: pd.Series) -> str:
-    return (
-        f"{row['scale_label']}<br>"
-        f"N={float(row['non_embedding_params']) / 1_000_000:.1f}M<br>"
-        f"D={float(row['realized_train_tokens']) / 1_000_000_000:.1f}B"
-    )
+    return str(row["scale_label"])
 
 
 def _metric_key(metric_column: str) -> str:
@@ -385,17 +387,8 @@ def _hover_text(row: pd.Series, metric_column: str) -> str:
     )
 
 
-def _colors() -> dict[str, str]:
-    sampled = sample_colorscale(
-        COLOR_SCALE,
-        [index / (len(METHOD_ORDER) - 1) for index in range(len(METHOD_ORDER))],
-    )
-    return dict(zip(METHOD_ORDER, sampled, strict=True))
-
-
 def render_plot(metrics: pd.DataFrame, spec: EvalPlotSpec) -> go.Figure:
     """Render one downstream-eval trajectory plot."""
-    colors = _colors()
     fig = go.Figure()
     metric_columns = _available_metric_columns(metrics, spec)
     if not metric_columns:
@@ -416,8 +409,16 @@ def render_plot(metrics: pd.DataFrame, spec: EvalPlotSpec) -> go.Figure:
                     y=[_display_value(metric_column, value) for value in method_rows[metric_column]],
                     mode="lines+markers",
                     name=str(method_rows.iloc[0]["method"]),
-                    line={"color": colors[method_id], "width": 3},
-                    marker={"color": colors[method_id], "size": 11},
+                    line={
+                        "color": method_color(method_id),
+                        "width": 3.6,
+                        "dash": method_dash(method_id),
+                    },
+                    marker={
+                        "color": method_color(method_id),
+                        "size": 9,
+                        "line": {"color": "white", "width": 1.1},
+                    },
                     hovertext=[_hover_text(row, metric_column) for _, row in method_rows.iterrows()],
                     hoverinfo="text",
                     visible=visible,
@@ -444,7 +445,6 @@ def render_plot(metrics: pd.DataFrame, spec: EvalPlotSpec) -> go.Figure:
                         },
                         "yaxis": {
                             "title": _y_title(metric_column),
-                            "gridcolor": "rgba(0,0,0,0.12)",
                         },
                     },
                 ],
@@ -452,41 +452,29 @@ def render_plot(metrics: pd.DataFrame, spec: EvalPlotSpec) -> go.Figure:
         )
 
     scale_axis_rows = pd.read_csv(MANIFEST_CSV).drop_duplicates("scale").sort_values("x_order")
+    configure_interactive_layout(
+        fig,
+        title=f"{spec.title}<br><sup>{_metric_label(default_metric)}</sup>",
+        y_title=_y_title(default_metric),
+        x_title="Scale (non-embedding params / training tokens)",
+    )
     fig.update_layout(
-        title={
-            "text": f"{spec.title}<br><sup>{_metric_label(default_metric)}</sup>",
-            "x": 0.04,
-            "xanchor": "left",
-            "font": {"size": 24},
-        },
-        xaxis={
-            "title": "Corrected scale label with non-embedding N and realized D",
-            "categoryorder": "array",
-            "categoryarray": [_axis_label(row) for _, row in scale_axis_rows.iterrows()],
-            "gridcolor": "rgba(0,0,0,0.10)",
-        },
-        yaxis={
-            "title": _y_title(default_metric),
-            "gridcolor": "rgba(0,0,0,0.12)",
-        },
         updatemenus=[
             {
                 "buttons": buttons,
                 "direction": "down",
-                "x": 0.0,
-                "xanchor": "left",
-                "y": 1.13,
+                "x": 1.0,
+                "xanchor": "right",
+                "y": 1.22,
                 "yanchor": "top",
                 "showactive": True,
-                "pad": {"r": 8, "t": 8},
+                "pad": {"r": 0, "t": 0},
             }
         ],
-        template="plotly_white",
-        width=1500,
-        height=900,
-        legend={"title": "", "x": 1.02, "y": 0.5, "xanchor": "left", "yanchor": "middle"},
-        margin={"l": 90, "r": 240, "t": 110, "b": 140},
-        font={"size": 16, "color": "#253858"},
+    )
+    fig.update_xaxes(
+        categoryorder="array",
+        categoryarray=[_axis_label(row) for _, row in scale_axis_rows.iterrows()],
     )
     return fig
 
@@ -499,14 +487,21 @@ def main() -> None:
         fig = render_plot(metrics, spec)
         html_path = IMG_DIR / f"{spec.output_stem}.html"
         png_path = IMG_DIR / f"{spec.output_stem}.png"
+        pdf_path = IMG_DIR / f"{spec.output_stem}.pdf"
         fig.write_html(html_path, include_plotlyjs="cdn")
-        fig.write_image(png_path, scale=2)
         available_metric_columns = _available_metric_columns(metrics, spec)
         default_metric = (
             spec.default_metric_column
             if spec.default_metric_column in available_metric_columns
             else available_metric_columns[0]
         )
+        static_fig = go.Figure(fig)
+        configure_static_layout(
+            static_fig,
+            y_title=_y_title(default_metric),
+            x_title="Scale (non-embedding params / training tokens)",
+        )
+        write_static_images(static_fig, IMG_DIR / spec.output_stem)
         available = _numeric_column(metrics, default_metric).notna()
         summary_rows.append(
             {
@@ -516,10 +511,12 @@ def main() -> None:
                 "available_cells": int(available.sum()),
                 "html_path": str(html_path),
                 "png_path": str(png_path),
+                "pdf_path": str(pdf_path),
             }
         )
         print(f"Wrote {html_path}")
         print(f"Wrote {png_path}")
+        print(f"Wrote {pdf_path}")
     pd.DataFrame.from_records(summary_rows).to_csv(
         IMG_DIR / "baseline_scaling_downstream_eval_plot_summary.csv", index=False
     )
