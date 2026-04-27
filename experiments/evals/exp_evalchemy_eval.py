@@ -191,7 +191,7 @@ def determine_tensor_parallel_size(tpu_type: str) -> int:
 # call. Set to None to run all eval steps in a single executor_main call.
 # WARNING: Setting this value higher will cause many jobs to be launched in parallel.
 #          Please be mindful of other users sharing the cluster.
-MAX_PARALLEL_JOBS = 3
+MAX_PARALLEL_JOBS = 8
 
 # =============================================================================
 # Main Execution
