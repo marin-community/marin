@@ -27,10 +27,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -184,13 +184,52 @@ jobs:
           retention-days: 1
           if-no-files-found: ignore
 
+  # Parallel lane: verify every DatakitSource.staged_path resolves to a
+  # non-empty prefix under gs://marin-us-central1. Cheap (metadata only) and
+  # independent of the ferry, so runs alongside datakit-smoke.
+  datakit-sources-staged:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: datakit-sources-staged
+      cancel-in-progress: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=cpu --no-default-groups
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Verify datakit source staging paths
+        shell: bash -l {0}
+        run: .venv/bin/python scripts/datakit/validate_source_staging.py
+
   # Separate job so Slack always fires, even if the main job is force-killed
-  # after its grace window. `needs.datakit-smoke.result` reflects the main
-  # job outcome; failure()/cancelled() context functions only see this job's
+  # after its grace window. `needs.*.result` reflects the upstream job
+  # outcomes; failure()/cancelled() context functions only see this job's
   # steps.
   notify-slack:
-    needs: datakit-smoke
-    if: always() && (needs.datakit-smoke.result == 'failure' || needs.datakit-smoke.result == 'cancelled') && github.event_name == 'schedule'
+    needs: [datakit-smoke, datakit-sources-staged]
+    if: |
+      always() && github.event_name == 'schedule' && (
+        needs.datakit-smoke.result == 'failure' || needs.datakit-smoke.result == 'cancelled'
+        || needs.datakit-sources-staged.result == 'failure' || needs.datakit-sources-staged.result == 'cancelled'
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Download Slack message

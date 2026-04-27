@@ -38,17 +38,14 @@ import os
 from collections.abc import Iterator
 from typing import Any
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from pydantic import BaseModel
 from zephyr import Dataset, ZephyrContext, counters, write_parquet_file
 
 from marin.execution.artifact import Artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.connected_components import connected_components
-from marin.processing.classification.deduplication.dedup_commons import (
-    DEFAULT_COORDINATOR_RESOURCES,
-    _load_batches,
-)
+from marin.processing.classification.deduplication.dedup_commons import _load_batches
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
 from marin.utils import fsspec_glob
 
@@ -236,6 +233,7 @@ def compute_fuzzy_dups_attrs(
     inputs: list[MinHashAttrData],
     output_path: str,
     cc_max_iterations: int = 10,
+    cc_resume: bool = False,
     max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
@@ -283,12 +281,14 @@ def compute_fuzzy_dups_attrs(
         params,
     )
 
-    ctx = ZephyrContext(
-        name="fuzzy-dups",
-        max_workers=max_parallelism,
-        resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
-        coordinator_resources=coordinator_resources or DEFAULT_COORDINATOR_RESOURCES,
-    )
+    ctx_kwargs: dict = {
+        "name": "fuzzy-dups",
+        "max_workers": max_parallelism,
+        "resources": worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+    }
+    if coordinator_resources is not None:
+        ctx_kwargs["coordinator_resources"] = coordinator_resources
+    ctx = ZephyrContext(**ctx_kwargs)
 
     # Cap shard count at max_parallelism. Each group reads its attr files
     # sequentially and emits bucket records; file_idx is preserved on the entry
@@ -300,7 +300,11 @@ def compute_fuzzy_dups_attrs(
 
     bucket_ds = Dataset.from_list(entry_groups).flat_map(_emit_bucket_records)
     converged, cc_files = connected_components(
-        bucket_ds, ctx, output_dir=f"{output_path}/metadata/cc", max_iterations=cc_max_iterations
+        bucket_ds,
+        ctx,
+        output_dir=f"{output_path}/metadata/cc",
+        max_iterations=cc_max_iterations,
+        resume=cc_resume,
     )
     if not converged:
         # TODO (rav): log the number of changed nodes?

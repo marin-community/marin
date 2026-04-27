@@ -295,19 +295,19 @@ def _list_descendant_jobs(
         return []
 
     try:
-        log_resp = client.get_task_logs(
-            controller_pb2.Controller.GetTaskLogsRequest(
-                id=job_id.to_wire(),
-                include_children=True,
-                max_total_lines=1,
-                tail=True,
+        list_resp = client.list_jobs(
+            controller_pb2.Controller.ListJobsRequest(
+                query=controller_pb2.Controller.JobQuery(
+                    parent_job_id=job_id.to_wire(),
+                    scope=controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN,
+                )
             )
         )
     except Exception:
         logger.warning("Failed to fetch descendant job statuses for %s", job_id, exc_info=True)
         return []
 
-    return [_build_descendant_job_report(job) for job in log_resp.child_job_statuses]
+    return [_build_descendant_job_report(job) for job in list_resp.jobs]
 
 
 def _build_descendant_job_report(job: job_pb2.JobStatus) -> DescendantJobReport:

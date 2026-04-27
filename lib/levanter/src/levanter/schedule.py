@@ -28,8 +28,9 @@ def value_at_step(schedule_or_t: Sequence[ScheduleStep[T]] | T, step: int) -> T:
     if not isinstance(schedule_or_t, Sequence) or (schedule_or_t and not isinstance(schedule_or_t[0], ScheduleStep)):
         return schedule_or_t  # type: ignore
 
-    for i, step_ in enumerate(schedule_or_t):
-        # we use start now
+    # Iterate in reverse to find the last segment whose start is <= step.
+    # A forward loop would always stop at the first segment (typically start=0).
+    for step_ in reversed(schedule_or_t):
         if step >= step_.start:
             return step_.value
 

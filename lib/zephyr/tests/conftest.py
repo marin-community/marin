@@ -16,9 +16,9 @@ from pathlib import Path
 from rigging.timing import ExponentialBackoff
 
 import pytest
-from fray.v2 import ResourceConfig
-from fray.v2.iris_backend import FrayIrisClient
-from fray.v2.local_backend import LocalClient
+from fray import ResourceConfig
+from fray.iris_backend import FrayIrisClient
+from fray.local_backend import LocalClient
 from zephyr import load_file
 from zephyr.execution import ZephyrContext
 
@@ -68,6 +68,13 @@ def zephyr_ctx(local_client, tmp_path_factory):
 # --- Multi-backend fixtures (integration tests) ---
 
 
+def _parent_holder_entrypoint():
+    """Long-running no-op that keeps the integration-test parent job alive."""
+    import time
+
+    time.sleep(3600)
+
+
 @pytest.fixture(params=["local", "iris"], scope="session")
 def integration_client(request):
     """Parametrized fixture providing Local and Iris clients.
@@ -80,16 +87,28 @@ def integration_client(request):
         client.shutdown(wait=True)
     elif request.param == "iris":
         from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
-        from iris.cluster.types import JobName
+        from iris.cluster.types import Entrypoint, ResourceSpec
 
         iris_cluster = request.getfixturevalue("iris_cluster")
         iris_client = IrisClient.remote(iris_cluster, workspace=ZEPHYR_ROOT)
         client = FrayIrisClient.from_iris_client(iris_client)
 
-        ctx = IrisContext(job_id=JobName.root("test-user", "test"), client=iris_client)
-        with iris_ctx_scope(ctx):
-            yield client
-        client.shutdown(wait=True)
+        # Submit a long-running parent job so child submissions have a live
+        # parent row in the controller DB. Absent parents are rejected with
+        # FAILED_PRECONDITION, so simulating a parent context without a real
+        # parent no longer works.
+        parent_job = iris_client.submit(
+            entrypoint=Entrypoint.from_callable(_parent_holder_entrypoint),
+            name="test",
+            resources=ResourceSpec(cpu=1, memory="512m"),
+        )
+        try:
+            ctx = IrisContext(job_id=parent_job.job_id, client=iris_client)
+            with iris_ctx_scope(ctx):
+                yield client
+        finally:
+            iris_client.terminate(parent_job.job_id)
+            client.shutdown(wait=True)
     else:
         raise ValueError(f"Unknown backend: {request.param}")
 
@@ -114,7 +133,7 @@ def actor_context():
     """Provide a fake actor context so ZephyrCoordinator can call current_actor()."""
     from unittest.mock import MagicMock
 
-    from fray.v2.actor import ActorContext, _reset_current_actor, _set_current_actor
+    from fray.actor import ActorContext, _reset_current_actor, _set_current_actor
 
     token = _set_current_actor(ActorContext(handle=MagicMock(), index=0, group_name="test-coord"))
     yield

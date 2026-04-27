@@ -53,10 +53,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -75,10 +75,10 @@ jobs:
           chmod 600 ~/.kube/coreweave-iris
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -220,7 +220,11 @@ jobs:
         # provisioning before we noticed.
         if: failure() || cancelled()
         run: |
-          KCI="kubectl --kubeconfig ~/.kube/coreweave-iris"
+          # $HOME, not ~: tilde inside a double-quoted string is NOT expanded
+          # by bash. Passing "~/.kube/..." to kubectl makes it stat a literal
+          # "~" path and emit 'no such file or directory', which silently
+          # empties every diagnostic file below.
+          KCI="kubectl --kubeconfig $HOME/.kube/coreweave-iris"
           JOB_ID="${{ steps.submit.outputs.job_id }}"
           # iris.job_id labels replace '/' with '.' on k8s (see
           # lib/iris/src/iris/cluster/providers/k8s/tasks.py).
@@ -280,7 +284,7 @@ jobs:
           claude_args: |
             --model opus
             --max-turns 500
-            --allowedTools "Bash(kubectl:*),Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*)"
+            --allowedTools "Bash(kubectl:*),Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(ls:*),Bash(wc:*),Bash(find:*),Bash(awk:*),Bash(sed:*),Bash(date:*),Bash(echo:*),Bash(tr:*),Bash(sort:*),Bash(uniq:*),Bash(curl:*),Write,Read,Edit"
         env:
           CANARY_LANE: gpu
           CANARY_JOB_ID: ${{ steps.submit.outputs.job_id }}
@@ -291,6 +295,19 @@ jobs:
           WANDB_PROJECT: ${{ env.WANDB_PROJECT }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      # claude-code-action writes the full agent trace (prompt, tool calls,
+      # tool results, final message) to this path. Uploading it is the only
+      # way to see *what Claude actually did* after the fact — the step log
+      # hides the transcript with "full output hidden for security".
+      - name: Upload Claude triage log
+        if: (failure() || cancelled()) && github.event_name == 'schedule'
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-triage-log-${{ github.run_id }}
+          path: /home/runner/work/_temp/claude-execution-output.json
+          retention-days: 30
+          if-no-files-found: warn
 
       # Upload Claude's Slack message (if it was written) so the separate
       # notify-slack job can pick it up. We run Slack notify in a separate

@@ -30,7 +30,7 @@ import argparse
 import logging
 import os
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, load_parquet
 
 from experiments.swe_rebench_trace.run_one import trace_swe_row

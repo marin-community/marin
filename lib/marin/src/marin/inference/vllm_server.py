@@ -475,6 +475,13 @@ def _detect_tpu_environment() -> bool:
     if glob.glob("/dev/accel*"):
         return True
 
+    # v5+/v6e TPUs expose devices under /dev/vfio/ (VFIO passthrough); the
+    # /dev/vfio/vfio control node exists even without TPUs, so skip it.
+    # See lib/iris/src/iris/cluster/runtime/docker.py:_discover_tpu_device_mappings
+    # for the authoritative v4-vs-v5+ device-node split.
+    if any(os.path.basename(p) != "vfio" for p in glob.glob("/dev/vfio/*")):
+        return True
+
     # Heuristic fallbacks for TPU pods / libtpu environments.
     for key in (
         "TPU_ACCELERATOR_TYPE",

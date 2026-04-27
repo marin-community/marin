@@ -98,7 +98,7 @@ def resolve_memory_spec(memory_config: job_pb2.MemoryProfile, duration_seconds: 
     )
 
 
-def build_pyspy_cmd(spec: CpuProfileSpec, py_spy_bin: str, output_path: str) -> list[str]:
+def build_pyspy_cmd(spec: CpuProfileSpec, py_spy_bin: str, output_path: str, *, subprocesses: bool = True) -> list[str]:
     return [
         py_spy_bin,
         "record",
@@ -112,7 +112,7 @@ def build_pyspy_cmd(spec: CpuProfileSpec, py_spy_bin: str, output_path: str) -> 
         spec.py_spy_format,
         "--output",
         output_path,
-        "--subprocesses",
+        *(["--subprocesses"] if subprocesses else []),
         *(["--native"] if spec.native else []),
     ]
 
@@ -143,9 +143,13 @@ def build_memray_transform_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_p
         raise RuntimeError(f"Unknown memray reporter: {spec.reporter}")
 
 
-def build_pyspy_dump_cmd(pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool = False) -> list[str]:
+def build_pyspy_dump_cmd(
+    pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool = False, subprocesses: bool = True
+) -> list[str]:
     """Build a py-spy dump command for thread-level stack traces."""
-    cmd = [py_spy_bin, "dump", "--pid", pid, "--subprocesses"]
+    cmd = [py_spy_bin, "dump", "--pid", pid]
+    if subprocesses:
+        cmd.append("--subprocesses")
     if include_locals:
         cmd.append("--locals")
     return cmd
@@ -161,7 +165,7 @@ def profile_local_process(duration_seconds: int, profile_type: job_pb2.ProfileTy
 
     if profile_type.HasField("threads"):
         _check_tool("py-spy")
-        return run_pyspy_dump(pid, include_locals=profile_type.threads.locals)
+        return run_pyspy_dump(pid, include_locals=profile_type.threads.locals, subprocesses=False)
     elif profile_type.HasField("cpu"):
         _check_tool("py-spy")
         return _run_pyspy_record(pid, duration_seconds, profile_type.cpu)
@@ -172,9 +176,11 @@ def profile_local_process(duration_seconds: int, profile_type: job_pb2.ProfileTy
         raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
 
-def run_pyspy_dump(pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool = False) -> bytes:
+def run_pyspy_dump(
+    pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool = False, subprocesses: bool = True
+) -> bytes:
     """Run py-spy dump to collect thread stacks from a process."""
-    cmd = build_pyspy_dump_cmd(pid, py_spy_bin, include_locals=include_locals)
+    cmd = build_pyspy_dump_cmd(pid, py_spy_bin, include_locals=include_locals, subprocesses=subprocesses)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if result.returncode != 0:
         raise RuntimeError(f"py-spy dump failed: {result.stderr}")
@@ -189,7 +195,7 @@ def _run_pyspy_record(pid: str, duration_seconds: int, cpu_config: job_pb2.CpuPr
         with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
             output_path = f.name
 
-        cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path=output_path)
+        cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path=output_path, subprocesses=False)
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
         if result.returncode != 0:
             raise RuntimeError(f"py-spy record failed: {result.stderr}")

@@ -5,7 +5,7 @@
 
 import os
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step

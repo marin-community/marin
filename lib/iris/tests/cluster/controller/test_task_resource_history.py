@@ -5,13 +5,16 @@
 
 import pytest
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.stores import (
+    TASK_RESOURCE_HISTORY_RETENTION,
+    TASK_RESOURCE_HISTORY_TERMINAL_TTL,
+    ControllerStore,
+)
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
     TaskUpdate,
-    TASK_RESOURCE_HISTORY_RETENTION,
-    TASK_RESOURCE_HISTORY_TERMINAL_TTL,
 )
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2, controller_pb2
@@ -21,7 +24,7 @@ from rigging.timing import Timestamp
 @pytest.fixture
 def state(tmp_path):
     db = ControllerDB(db_dir=tmp_path)
-    s = ControllerTransitions(db=db)
+    s = ControllerTransitions(store=ControllerStore(db))
     yield s
     db.close()
 
@@ -40,23 +43,31 @@ def _setup_running_task(state: ControllerTransitions) -> tuple[JobName, JobName]
     Returns (job_id, task_id).
     """
     wid = WorkerId("w1")
-    state.register_or_refresh_worker(worker_id=wid, address="host:8080", metadata=WORKER_META, ts=Timestamp.now())
+    with state._store.transaction() as cur:
+        state.register_or_refresh_worker(
+            cur, worker_id=wid, address="host:8080", metadata=WORKER_META, ts=Timestamp.now()
+        )
 
     job_id = JobName.from_wire("/user/test-job")
-    state.submit_job(
-        job_id,
-        controller_pb2.Controller.LaunchJobRequest(name="/user/test-job", replicas=1),
-        Timestamp.now(),
-    )
-    task_id = job_id.task(0)
-    state.queue_assignments([Assignment(task_id=task_id, worker_id=wid)])
-    state.apply_task_updates(
-        HeartbeatApplyRequest(
-            worker_id=wid,
-            worker_resource_snapshot=None,
-            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+    with state._store.transaction() as cur:
+        state.submit_job(
+            cur,
+            job_id,
+            controller_pb2.Controller.LaunchJobRequest(name="/user/test-job", replicas=1),
+            Timestamp.now(),
         )
-    )
+    task_id = job_id.task(0)
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                worker_resource_snapshot=None,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+            ),
+        )
     return job_id, task_id
 
 
@@ -72,22 +83,24 @@ def _count_history_rows(state: ControllerTransitions, task_id: JobName, attempt_
 def _send_resource_heartbeat(state: ControllerTransitions, task_id: JobName, cpu: int = 1000, mem: int = 512):
     """Send a steady-state heartbeat with resource usage."""
     usage = job_pb2.ResourceUsage(cpu_millicores=cpu, memory_mb=mem, disk_mb=10)
-    state.apply_heartbeats_batch(
-        [
-            HeartbeatApplyRequest(
-                worker_id=WorkerId("w1"),
-                worker_resource_snapshot=job_pb2.WorkerResourceSnapshot(),
-                updates=[
-                    TaskUpdate(
-                        task_id=task_id,
-                        attempt_id=0,
-                        new_state=job_pb2.TASK_STATE_RUNNING,
-                        resource_usage=usage,
-                    ),
-                ],
-            )
-        ]
-    )
+    with state._store.transaction() as cur:
+        state.apply_heartbeats_batch(
+            cur,
+            [
+                HeartbeatApplyRequest(
+                    worker_id=WorkerId("w1"),
+                    worker_resource_snapshot=job_pb2.WorkerResourceSnapshot(),
+                    updates=[
+                        TaskUpdate(
+                            task_id=task_id,
+                            attempt_id=0,
+                            new_state=job_pb2.TASK_STATE_RUNNING,
+                            resource_usage=usage,
+                        ),
+                    ],
+                )
+            ],
+        )
 
 
 def test_heartbeat_inserts_history(state):
@@ -125,7 +138,7 @@ def test_prune_logarithmic_downsampling(state):
 
     assert _count_history_rows(state, task_id) == threshold + 1
 
-    deleted = state.prune_task_resource_history()
+    deleted = state._store.tasks.prune_resource_history()
     assert deleted > 0
 
     remaining = _count_history_rows(state, task_id)
@@ -153,7 +166,7 @@ def test_prune_preserves_newest_rows(state):
             )
         ]
 
-    state.prune_task_resource_history()
+    state._store.tasks.prune_resource_history()
 
     # All of the newest N rows should still exist.
     with state._db.read_snapshot() as q:
@@ -174,7 +187,7 @@ def test_prune_noop_below_threshold(state):
     for i in range(TASK_RESOURCE_HISTORY_RETENTION):
         _send_resource_heartbeat(state, task_id, cpu=i, mem=i)
 
-    deleted = state.prune_task_resource_history()
+    deleted = state._store.tasks.prune_resource_history()
     assert deleted == 0
     assert _count_history_rows(state, task_id) == TASK_RESOURCE_HISTORY_RETENTION
 
@@ -198,7 +211,7 @@ def test_prune_evicts_terminal_task_history_past_ttl(state):
 
     _force_terminal(state, task_id, finished_age_ms=TASK_RESOURCE_HISTORY_TERMINAL_TTL.to_ms() * 2)
 
-    deleted = state.prune_task_resource_history()
+    deleted = state._store.tasks.prune_resource_history()
     assert deleted == 2
     assert _count_history_rows(state, task_id) == 0
 
@@ -212,7 +225,7 @@ def test_prune_keeps_terminal_task_history_within_ttl(state):
     # Terminal at half the TTL — must survive.
     _force_terminal(state, task_id, finished_age_ms=TASK_RESOURCE_HISTORY_TERMINAL_TTL.to_ms() // 2)
 
-    deleted = state.prune_task_resource_history()
+    deleted = state._store.tasks.prune_resource_history()
     assert deleted == 0
     assert _count_history_rows(state, task_id) == 2
 
@@ -232,7 +245,7 @@ def test_prune_keeps_running_task_history_regardless_of_finished_at(state):
         (stale_ms, task_id.to_wire()),
     )
 
-    deleted = state.prune_task_resource_history()
+    deleted = state._store.tasks.prune_resource_history()
     assert deleted == 0
     assert _count_history_rows(state, task_id) == 1
 
@@ -245,7 +258,9 @@ def test_cascade_delete_on_job_removal(state):
     assert _count_history_rows(state, task_id) == 1
 
     # Cancel the job (makes it terminal), then remove it.
-    state.cancel_job(job_id, reason="test cleanup")
-    state.remove_finished_job(job_id)
+    with state._store.transaction() as cur:
+        state.cancel_job(cur, job_id, reason="test cleanup")
+    with state._store.transaction() as cur:
+        state.remove_finished_job(cur, job_id)
 
     assert _count_history_rows(state, task_id) == 0

@@ -128,13 +128,20 @@ def is_retryable_error(exc: Exception) -> bool:
     - ConnectError with Code.UNAVAILABLE (controller temporarily down)
     - ConnectError with Code.INTERNAL (network errors bubble up as INTERNAL)
     - ConnectError with Code.DEADLINE_EXCEEDED (client-side httpx read timeout)
+    - ConnectError with Code.RESOURCE_EXHAUSTED (server-side load shed; safe to
+      retry because the handler did not run)
 
     Does not retry on:
     - Application errors (NOT_FOUND, INVALID_ARGUMENT, ALREADY_EXISTS, etc.)
     - These indicate issues with the request itself, not transient failures
     """
     if isinstance(exc, ConnectError):
-        return exc.code in (Code.UNAVAILABLE, Code.INTERNAL, Code.DEADLINE_EXCEEDED)
+        return exc.code in (
+            Code.UNAVAILABLE,
+            Code.INTERNAL,
+            Code.DEADLINE_EXCEEDED,
+            Code.RESOURCE_EXHAUSTED,
+        )
     return False
 
 

@@ -85,35 +85,39 @@ def test_non_holder_task_not_reset_like_reservation_holder_on_worker_failure(sta
     other_task = other_tasks[0]
 
     worker_id = _register_worker(state, "co-located-worker")
-    state.queue_assignments(
-        [
-            Assignment(task_id=holder_task.task_id, worker_id=worker_id),
-            Assignment(task_id=parent_task.task_id, worker_id=worker_id),
-            Assignment(task_id=other_task.task_id, worker_id=worker_id),
-        ]
-    )
+    with state._store.transaction() as cur:
+        state.queue_assignments(
+            cur,
+            [
+                Assignment(task_id=holder_task.task_id, worker_id=worker_id),
+                Assignment(task_id=parent_task.task_id, worker_id=worker_id),
+                Assignment(task_id=other_task.task_id, worker_id=worker_id),
+            ],
+        )
 
     # Move the non-holder task to RUNNING so WORKER_FAILED counts as a
     # preemption (not a delivery failure). This matches the production shape:
     # task had actually executed on the worker before it died.
-    state.apply_task_updates(
-        HeartbeatApplyRequest(
-            worker_id=worker_id,
-            worker_resource_snapshot=None,
-            updates=[
-                TaskUpdate(
-                    task_id=parent_task.task_id,
-                    attempt_id=query_task(state, parent_task.task_id).current_attempt_id,
-                    new_state=job_pb2.TASK_STATE_RUNNING,
-                ),
-                TaskUpdate(
-                    task_id=other_task.task_id,
-                    attempt_id=query_task(state, other_task.task_id).current_attempt_id,
-                    new_state=job_pb2.TASK_STATE_RUNNING,
-                ),
-            ],
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=worker_id,
+                worker_resource_snapshot=None,
+                updates=[
+                    TaskUpdate(
+                        task_id=parent_task.task_id,
+                        attempt_id=query_task(state, parent_task.task_id).current_attempt_id,
+                        new_state=job_pb2.TASK_STATE_RUNNING,
+                    ),
+                    TaskUpdate(
+                        task_id=other_task.task_id,
+                        attempt_id=query_task(state, other_task.task_id).current_attempt_id,
+                        new_state=job_pb2.TASK_STATE_RUNNING,
+                    ),
+                ],
+            ),
         )
-    )
 
     # Capture the non-holder task's pre-failure attempt state so we can
     # assert on preservation.
@@ -200,11 +204,14 @@ def test_resubmitted_task_does_not_inherit_prior_worker_task_history(state):
 
     worker_id = _register_worker(state, "history-worker")
     # queue_assignments inserts worker_task_history(worker_id, task_id, ...).
-    state.queue_assignments([Assignment(task_id=task_v1.task_id, worker_id=worker_id)])
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_v1.task_id, worker_id=worker_id)])
     # Cancel to terminal, then remove the finished job. The job's tasks + attempts
     # cascade; worker_task_history does NOT (no FK on task_id).
-    state.cancel_job(job_id, "Terminated by user")
-    assert state.remove_finished_job(job_id) is True
+    with state._store.transaction() as cur:
+        state.cancel_job(cur, job_id, "Terminated by user")
+    with state._store.transaction() as cur:
+        assert state.remove_finished_job(cur, job_id) is True
 
     # === Round 2: re-submit the same job name ========================
     request2 = make_job_request("reusable-job-name", max_retries_preemption=0)
@@ -257,7 +264,8 @@ def test_reservation_holder_task_is_still_reset_on_worker_failure(state):
     holder_task = query_tasks_for_job(state, holder_job_id)[0]
 
     worker_id = _register_worker(state, "w-holder-only")
-    state.queue_assignments([Assignment(task_id=holder_task.task_id, worker_id=worker_id)])
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=holder_task.task_id, worker_id=worker_id)])
 
     fail_worker(state, worker_id, "crash")
 
@@ -265,3 +273,93 @@ def test_reservation_holder_task_is_still_reset_on_worker_failure(state):
     assert after is not None
     assert after.state == job_pb2.TASK_STATE_PENDING
     assert after.preemption_count == 0
+
+
+def test_reservation_holder_reassignment_across_successive_worker_failures(state):
+    """Regression (iris-outage 2026-04): the old holder-reset branch reset
+    ``tasks.current_attempt_id = -1`` while only DELETing the single current
+    attempt row. Across repeated worker failures this left orphan attempt rows
+    in ``task_attempts`` whose primary key collided with the next
+    assignment attempt insert, raising ``sqlite3.IntegrityError`` and killing the
+    scheduling thread.
+
+    The fix routes holders through ``_terminate_task``, so the attempt row is
+    preserved in a terminal state and ``current_attempt_id`` advances
+    monotonically. This test fails holder+non-holder reservation tasks across
+    three successive workers and pins the advancing-attempt invariant.
+    """
+    request = _make_job_request_with_reservation(
+        reservation_entries=[_make_reservation_entry()],
+    )
+    parent_job_id = _submit_job(state, "res-job", request)
+    holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
+    holder_task = query_tasks_for_job(state, holder_job_id)[0]
+    non_holder_task = query_tasks_for_job(state, parent_job_id)[0]
+
+    expected_attempts = 0
+    for cycle_idx, worker_name in enumerate(("w-res-1", "w-res-2", "w-res-3")):
+        worker_id = _register_worker(state, worker_name)
+        # Assignment issued by scheduler: attempt_id = current_attempt_id + 1.
+        with state._store.transaction() as cur:
+            state.queue_assignments(
+                cur,
+                [
+                    Assignment(task_id=holder_task.task_id, worker_id=worker_id),
+                    Assignment(task_id=non_holder_task.task_id, worker_id=worker_id),
+                ],
+            )
+        expected_attempts += 1
+
+        holder_assigned = query_task_with_attempts(state, holder_task.task_id)
+        assert holder_assigned is not None
+        assert holder_assigned.current_attempt_id == cycle_idx, (
+            f"cycle {cycle_idx}: holder current_attempt_id did not advance "
+            f"monotonically (got {holder_assigned.current_attempt_id}, "
+            f"expected {cycle_idx})"
+        )
+        assert len(holder_assigned.attempts) == expected_attempts, (
+            f"cycle {cycle_idx}: expected {expected_attempts} attempt rows on "
+            f"holder, got {len(holder_assigned.attempts)}; orphan/missing rows "
+            f"indicate the legacy holder-reset branch is still live"
+        )
+
+        non_holder_assigned = query_task_with_attempts(state, non_holder_task.task_id)
+        assert non_holder_assigned is not None
+        assert non_holder_assigned.state == job_pb2.TASK_STATE_ASSIGNED, (
+            f"cycle {cycle_idx}: non-holder was not scheduled onto the new worker "
+            f"(state={non_holder_assigned.state}); holder failure left the "
+            f"reservation in an unschedulable state"
+        )
+
+        # Fail the worker. On old code the third pass raises IntegrityError
+        # from queue_assignments above (not here); we assert no exception
+        # propagates through this call either.
+        fail_worker(state, worker_id, f"simulated crash {cycle_idx}")
+
+        holder_after_fail = query_task_with_attempts(state, holder_task.task_id)
+        assert holder_after_fail is not None
+        assert holder_after_fail.state == job_pb2.TASK_STATE_PENDING
+        # preemption_count for holders stays at 0: the fix preserves the
+        # reset-preemption-count semantic for reservation holders so they can
+        # re-acquire a worker without hitting retry caps.
+        assert holder_after_fail.preemption_count == 0
+        # Attempt rows must be preserved across the failure (terminal state
+        # written, no DELETE). The old branch deleted the current attempt row.
+        assert len(holder_after_fail.attempts) == expected_attempts, (
+            f"cycle {cycle_idx}: holder attempt rows were DELETEd by the "
+            f"legacy holder-reset branch (have {len(holder_after_fail.attempts)}, "
+            f"expected {expected_attempts})"
+        )
+        latest_attempt = max(holder_after_fail.attempts, key=lambda a: a.attempt_id)
+        assert latest_attempt.state == job_pb2.TASK_STATE_WORKER_FAILED, (
+            f"cycle {cycle_idx}: latest holder attempt should be marked "
+            f"WORKER_FAILED, got state={latest_attempt.state}"
+        )
+
+    # Final invariant: three cycles produced attempts 0,1,2 and the holder is
+    # PENDING again, ready for the next scheduling pass without any orphan
+    # task_attempts row that would collide on INSERT.
+    final = query_task_with_attempts(state, holder_task.task_id)
+    assert final is not None
+    attempt_ids = sorted(a.attempt_id for a in final.attempts)
+    assert attempt_ids == [0, 1, 2], f"holder attempt_id sequence was not monotonic across failures: " f"{attempt_ids}"

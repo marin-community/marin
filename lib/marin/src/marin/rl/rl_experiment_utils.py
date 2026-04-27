@@ -9,7 +9,7 @@ import uuid
 from urllib.parse import urlparse
 
 import jmp
-from fray.v2.types import ResourceConfig
+from fray.types import ResourceConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.layers.attention import AttentionBackend

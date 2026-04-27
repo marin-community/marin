@@ -62,7 +62,7 @@ data:
     type: prebuilt
     input_ids_key: input_ids
     loss_weights_key: loss_weights
-  tokenizer: stanford-crfm/marin-tokenizer
+  tokenizer: marin-community/marin-tokenizer
   cache_dir: gs://bucket/cache
 ```
 
@@ -94,7 +94,7 @@ data:
     owt: 0.5
     alpaca: 0.3
     tulu: 0.2
-  tokenizer: stanford-crfm/marin-tokenizer
+  tokenizer: marin-community/marin-tokenizer
   cache_dir: gs://bucket/cache
 ```
 
@@ -107,7 +107,7 @@ data:
 
     To use a chat format, your tokenizer must have a `chat_template`, or you must provide one in the config.
     This template must be formatted to work for training (which most are not, and it is not well documented in Hugging Face).
-    The `stanford-crfm/marin-tokenizer` has a default template that works. See our [chat template docs](../reference/Data-Formats.md#chat-templates) for more details.
+    The `marin-community/marin-tokenizer` has a default template that works. See our [chat template docs](../reference/Data-Formats.md#chat-templates) for more details.
 
 https://github.com/huggingface/transformers/blob/main/src/transformers/tokenization_utils_base.py#L1530
 
@@ -186,7 +186,7 @@ data:
   train_weights:
     - [0, {"owt": 0.5, "alpaca": 0.3, "tulu": 0.2}]
     - [1000, {"owt": 0.2, "alpaca": 0.4, "tulu": 0.4}]
-  tokenizer: stanford-crfm/marin-tokenizer
+  tokenizer: marin-community/marin-tokenizer
 ```
 
 (Again, the weights need not sum to 1.)

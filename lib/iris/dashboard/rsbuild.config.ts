@@ -20,6 +20,7 @@ export default defineConfig({
     templateParameters: {
       title: 'Iris Dashboard',
     },
+    favicon: './favicon.ico',
   },
   server: {
     proxy: {

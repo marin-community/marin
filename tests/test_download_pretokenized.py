@@ -17,7 +17,7 @@ from marin.processing.tokenize.download_pretokenized import (
 )
 
 HF_REPO_ID = "marin-community/fineweb-edu-pretokenized-10K"
-TOKENIZER_NAME = "stanford-crfm/marin-tokenizer"
+TOKENIZER_NAME = "marin-community/marin-tokenizer"
 
 
 def test_download_and_load_cache():

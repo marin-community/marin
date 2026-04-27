@@ -11,7 +11,7 @@ proper job hierarchy, cascading cleanup, and region inheritance.
 import dataclasses
 import logging
 
-from fray.v2 import (
+from fray import (
     Client,
     Entrypoint,
     JobHandle,
@@ -22,7 +22,7 @@ from fray.v2 import (
     current_client,
     wait_all,
 )
-from fray.v2.actor import HostedActor
+from fray.actor import HostedActor
 from marin.rl.curriculum import Curriculum
 from marin.rl.placement import resolve_launcher_region, singleton_region_list
 from marin.rl.rl_job import RLJob, RLJobConfig

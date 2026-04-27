@@ -13,7 +13,7 @@ import jax
 from haliax import Axis
 
 import levanter
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef, load_tokenizer, HFCompatConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
@@ -67,8 +67,9 @@ def main(config: ConvertLmConfig):
         model: LmHeadModel = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
         trainable, non_trainable = eqx.partition(model, is_inexact_arrayish)
         # TODO: don't load the entire checkpoint into CPU memory when we only need our share of the model
-        logger.info(f"Loading checkpoint from {config.checkpoint_path}...")
-        trainable = load_checkpoint(trainable, config.checkpoint_path, subpath="model")
+        checkpoint_path = latest_checkpoint_path(config.checkpoint_path)
+        logger.info(f"Loading checkpoint from {checkpoint_path}...")
+        trainable = load_checkpoint(trainable, checkpoint_path, subpath="model")
 
         assert trainable is not None
         model = eqx.combine(trainable, non_trainable)

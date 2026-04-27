@@ -7,9 +7,13 @@ Used on both the client (before capturing argv for bookkeeping) and the
 controller (when returning job requests via RPC).
 """
 
+import json
+import logging
 import re
 
 from iris.rpc import controller_pb2
+
+logger = logging.getLogger(__name__)
 
 SENSITIVE_ENV_KEY_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", re.IGNORECASE)
 REDACTED_VALUE = "**REDACTED**"
@@ -58,6 +62,35 @@ def redact_request_env_vars(
         if is_sensitive_env_key(key):
             env_vars[key] = REDACTED_VALUE
     return redacted
+
+
+def _redact_tree(node):
+    """Walk a parsed-JSON tree, redacting values under sensitive-looking keys."""
+    if isinstance(node, dict):
+        return {k: REDACTED_VALUE if is_sensitive_env_key(k) else _redact_tree(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_redact_tree(v) for v in node]
+    return node
+
+
+def redact_json_preview(rendered: str) -> str:
+    """Return *rendered* with values under sensitive-looking keys replaced.
+
+    The input is arbitrary JSON (typically a protobuf rendered via
+    ``MessageToJson``). Any key matching :data:`SENSITIVE_ENV_KEY_RE` at
+    any depth has its value replaced with :data:`REDACTED_VALUE`; this also
+    covers map<string,string> fields like ``env_vars`` where secrets tend
+    to live. Unparseable input is returned unchanged so callers never lose
+    the preview entirely.
+    """
+    if not rendered:
+        return rendered
+    try:
+        tree = json.loads(rendered)
+    except ValueError:
+        logger.debug("redact_json_preview: input was not valid JSON, returning as-is")
+        return rendered
+    return json.dumps(_redact_tree(tree), separators=(",", ":"))
 
 
 def redact_submit_argv(argv: list[str]) -> list[str]:

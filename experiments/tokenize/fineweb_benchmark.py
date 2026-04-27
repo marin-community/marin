@@ -28,7 +28,7 @@ from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
 from zephyr.readers import load_file
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig, tokenize

@@ -11,6 +11,7 @@ from collections.abc import Iterator
 import requests
 import zstandard
 from rigging.filesystem import open_url
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_exists
 from fray.cluster import ResourceConfig
@@ -121,4 +122,41 @@ def download_nemotron_v1_step() -> StepSpec:
         fn=lambda output_path: download_nemotron_cc(output_path=output_path),
         # NOTE: use the existing output to avoid re-downloading. Yes this is missing the `n`.
         override_output_path="raw/nemotro-cc-eeb783",
+    )
+
+
+_NEMOTRON_V1_DATA_ROOT = "contrib/Nemotron/Nemotron-CC/data-jsonl"
+
+# Maps split name → relative path under data-jsonl/ that the normalize
+# step should point at. Each split gets its own normalize StepSpec because
+# normalize now processes a single directory (no subdirectory grouping).
+NEMOTRON_V1_SPLITS: dict[str, str] = {
+    "hq_actual": "quality=high/kind=actual",
+    "hq_synth": "quality=high/kind=synthetic",
+    "medium_high": "quality=medium-high",
+    "medium": "quality=medium",
+    "medium_low": "quality=medium-low",
+    "low_actual": "quality=low/kind=actual",
+    "low_synth": "quality=low/kind=synthetic",
+}
+
+
+def normalize_nemotron_v1_step(download: StepSpec, *, split: str) -> StepSpec:
+    """Normalize one Nemotron-CC v1 split.
+
+    The download writes dolma-format records ``{id, text, source, format,
+    metadata}`` as ``.jsonl.zst`` under nested ``quality=<x>/kind=<y>/``
+    directories. Each split gets its own normalize step pointing at the
+    corresponding subdirectory.
+    """
+    if split not in NEMOTRON_V1_SPLITS:
+        raise ValueError(f"Unknown split {split!r}. Choose from: {sorted(NEMOTRON_V1_SPLITS)}")
+    rel_path = NEMOTRON_V1_SPLITS[split]
+    return normalize_step(
+        name=f"normalized/nemotron_v1/{split}",
+        download=download,
+        text_field="text",
+        id_field="id",
+        file_extensions=(".jsonl.zst",),
+        input_path=f"{download.output_path}/{_NEMOTRON_V1_DATA_ROOT}/{rel_path}",
     )

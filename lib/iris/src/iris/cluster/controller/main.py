@@ -23,15 +23,15 @@ from pathlib import Path
 import click
 
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
+from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
 from iris.cluster.providers.types import port_is_open, resolve_external_host
 from iris.log_server.main import (
     AUTH_STRICT_ENV_VAR as LOG_SERVER_AUTH_STRICT_ENV_VAR,
     JWT_KEY_ENV_VAR as LOG_SERVER_JWT_KEY_ENV_VAR,
 )
 from iris.rpc import config_pb2
-from rigging.timing import Duration, ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -127,13 +127,6 @@ def run_controller_serve(
         local_state_dir = LOCAL_STATE_DIR_DEFAULT
     logger.info("Controller local state dir: %s (dry_run=%s)", local_state_dir, dry_run)
 
-    heartbeat_failure_threshold = cluster_config.controller.heartbeat_failure_threshold or HEARTBEAT_FAILURE_THRESHOLD
-    use_split_heartbeat = (
-        cluster_config.controller.use_split_heartbeat
-        if cluster_config.controller.HasField("use_split_heartbeat")
-        else True
-    )
-
     # --- Restore or reuse local DB ---
     local_state_dir.mkdir(parents=True, exist_ok=True)
     db_dir = local_state_dir / "db"
@@ -222,6 +215,13 @@ def run_controller_serve(
     if auth.worker_token and base_worker_config is not None:
         base_worker_config.auth_token = auth.worker_token
 
+    # Reconcile per-user budget tiers from the cluster config into the DB.
+    # Runs after migrations have cleared user_budgets (see migration 0037).
+    # Unlisted users are left without a row and fall through to
+    # UserBudgetDefaults when the scheduler and launch-job guard look them up.
+    if cluster_config and cluster_config.user_budgets:
+        reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
+
     # --- Start log server subprocess ---
     log_port = port + LOG_SERVER_PORT_OFFSET
     log_dir = local_state_dir / "logs"
@@ -244,7 +244,6 @@ def run_controller_serve(
             host=host,
             port=port,
             remote_state_dir=remote_state_dir,
-            heartbeat_failure_threshold=heartbeat_failure_threshold,
             checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
             local_state_dir=local_state_dir,
             auth_verifier=auth.verifier,
@@ -252,7 +251,6 @@ def run_controller_serve(
             auth=auth,
             dry_run=dry_run,
             log_service_address=log_service_address,
-            use_split_heartbeat=use_split_heartbeat,
         )
 
         controller = Controller(

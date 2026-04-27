@@ -90,13 +90,10 @@ class Map:
 
     Attributes:
         fn: Composed function that transforms an iterator to an iterator
-        requires_full_shard: True if any composed op needs full shard context
-            (e.g., MapShardOp). When True, chunk parallelism is disabled.
         needs_shard_context: True if fn expects (stream, shard_info: ShardInfo).
     """
 
     fn: Callable[[Iterator], Iterator]
-    requires_full_shard: bool = False
     needs_shard_context: bool = False
 
 
@@ -345,12 +342,10 @@ class FusionState:
         if not self.pending_fusible:
             return
 
-        requires_full_shard = any(isinstance(op, MapShardOp) for op in self.pending_fusible)
-        needs_shard_context = requires_full_shard
+        needs_shard_context = any(isinstance(op, MapShardOp) for op in self.pending_fusible)
         self.current_ops.append(
             Map(
                 fn=compose_map(self.pending_fusible[:]),
-                requires_full_shard=requires_full_shard,
                 needs_shard_context=needs_shard_context,
             )
         )
@@ -843,7 +838,7 @@ def run_stage(
         elif isinstance(op, Reduce):
             # Build ScatterReader directly from per-mapper sidecars, then
             # merge sorted chunks and reduce per key.
-            from zephyr.execution import ScatterReader
+            from zephyr.shuffle import ScatterReader
 
             shard = ctx.shard
             if not isinstance(shard, ScatterReader):

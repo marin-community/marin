@@ -55,7 +55,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 # Rigging is a workspace-local dep not on PyPI with a compatible API.
 # Copy only metadata first so source changes don't bust the dep cache.
 COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
-COPY lib/iris/pyproject.toml lib/iris/hatch_build.py ./lib/iris/
+COPY lib/iris/pyproject.toml ./lib/iris/
 RUN --mount=type=cache,target=/root/.cache/uv \
     printf '[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging"]\n\n[tool.uv.sources]\nmarin-rigging = { workspace = true }\n' > pyproject.toml \
     && uv sync --package marin-iris --no-install-project

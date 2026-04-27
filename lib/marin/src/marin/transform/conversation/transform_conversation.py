@@ -138,8 +138,7 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
     extra_columns: dict[str, object] = {}
     for source_column, target_column in metadata_remap.items():
         if target_column in _RESERVED_TOP_LEVEL_FIELDS:
-            logging.log(
-                logging.WARNING,
+            logger.warning(
                 f"Skipping remap for column '{source_column}' because target '{target_column}' is reserved.",
             )
             continue
@@ -151,9 +150,7 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
             content = message.get("content")
             if isinstance(content, str):
                 message["content"] = _apply_replacements(content, replacements)
-        transformed_row_messages = [_normalize_tool_structures(message) for message in transformed_row_messages]
-    else:
-        transformed_row_messages = [_normalize_tool_structures(message) for message in transformed_row_messages]
+    transformed_row_messages = [_normalize_tool_structures(message) for message in transformed_row_messages]
     if adapter.extra_metadata_fn:
         extra_from_fn = adapter.extra_metadata_fn(row)
         if extra_from_fn:
@@ -203,7 +200,7 @@ def _get_available_subsets(cfg: TransformSFTDatasetConfig) -> Sequence[str | Non
     try:
         subsets = datasets.get_dataset_config_names(cfg.source)
     except Exception as exc:
-        logging.log(logging.WARNING, f"Unable to fetch dataset configs for {cfg.source}: {exc}")
+        logger.warning(f"Unable to fetch dataset configs for {cfg.source}: {exc}")
         subsets = []
     if not subsets:
         return [None]
@@ -217,7 +214,7 @@ def _get_available_splits(cfg: TransformSFTDatasetConfig, subset: str | None) ->
     try:
         split_names = datasets.get_dataset_split_names(cfg.source, name=subset)
     except Exception as exc:
-        logging.log(logging.WARNING, f"Unable to fetch splits for {cfg.source} (subset={subset}): {exc}")
+        logger.warning(f"Unable to fetch splits for {cfg.source} (subset={subset}): {exc}")
         split_names = ["train"]
     if not split_names:
         return ["train"]
@@ -260,10 +257,10 @@ def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
             requested = set(configured_splits)
             missing = sorted(requested - set(splits))
             if missing:
-                logging.log(logging.WARNING, f"Requested split(s) {missing} for {source} skipped.")
+                logger.warning(f"Requested split(s) {missing} for {source} skipped.")
             splits = [split for split in splits if split in requested]
         if not splits:
-            logging.log(logging.WARNING, f"No splits to process for subset={subset}; skipping.")
+            logger.warning(f"No splits to process for subset={subset}; skipping.")
             continue
 
         # 3. For each split, enumerate shards
@@ -283,7 +280,6 @@ def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
 
             dataset = load_dataset_with_backoff(
                 context=f"{source} subset={subset_name} split={split}",
-                logger=logger,
                 **dataset_kwargs,
             )
             num_shards = dataset.num_shards
@@ -319,7 +315,7 @@ def process_shard_task(task: ShardTask) -> dict:
     # If output already exists, skip the work to let Zephyr resume cleanly without sentinels.
     fs, _ = url_to_fs(output_filename)
     if fs.exists(output_filename):
-        logging.info(
+        logger.info(
             f"Skipping subset={subset_name} split={task.split} shard={task.shard_idx} "
             f"because output exists: {output_filename}"
         )
@@ -343,7 +339,6 @@ def process_shard_task(task: ShardTask) -> dict:
 
     dataset = load_dataset_with_backoff(
         context=f"{task.source} subset={subset_name} split={task.split} shard={task.shard_idx}",
-        logger=logger,
         **dataset_kwargs,
     )
     shard_dataset = dataset.shard(num_shards=task.num_shards, index=task.shard_idx)
@@ -357,7 +352,7 @@ def process_shard_task(task: ShardTask) -> dict:
 
     result = write_jsonl_file(transform_records(), output_filename)
 
-    logging.info(
+    logger.info(
         f"Wrote {result['count']} rows to {result['path']} "
         f"for subset={subset_name} split={task.split} shard={task.shard_idx}"
     )

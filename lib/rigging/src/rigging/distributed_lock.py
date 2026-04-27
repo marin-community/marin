@@ -161,7 +161,7 @@ class DistributedLease(abc.ABC):
             _, lock_data = self._read_with_generation()
             if lock_data and lock_data.worker_id == self.worker_id:
                 self._delete()
-                logger.debug("[%s] Released lock %s", self.worker_id, self.lock_path)
+                logger.info("Released lock path=%s worker=%s", self.lock_path, self.worker_id)
         except FileNotFoundError:
             pass
 

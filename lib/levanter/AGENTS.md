@@ -12,7 +12,7 @@ JAX-based language model training library using Haliax named tensors and Equinox
 
 ```bash
 # Default test suite
-uv run pytest tests -m "not entry and not slow and not ray"
+uv run pytest tests -m "not entry and not slow"
 ```
 
 - Mark long-running tests with `@pytest.mark.slow`.

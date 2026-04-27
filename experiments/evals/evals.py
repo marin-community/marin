@@ -11,6 +11,7 @@ from collections.abc import Sequence
 
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
+from marin.evaluation.evaluators.harbor_evaluator import HARBOR_EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.run import evaluate
 from marin.execution.remote import remote
 from marin.execution.executor import (
@@ -406,7 +407,7 @@ def evaluate_harbor(
         dataset: Harbor dataset name (e.g., "aime", "terminal-bench", "swebench-verified")
         version: Dataset version (e.g., "1.0", "2.0")
         max_eval_instances: Limit number of tasks to run
-        resource_config: Resource configuration for Ray
+        resource_config: Resource configuration for direct Iris execution
         apply_chat_template: Whether to apply chat template (not used by Harbor)
         wandb_tags: Tags for W&B logging
         generation_params: Generation parameters (not used by Harbor)
@@ -440,12 +441,17 @@ def evaluate_harbor(
         }
     }
 
-    # When model_path is set, the evaluator launches a fray sub-job for vLLM serving
-    # with the correct resources. The outer executor step runs on CPU.
+    # When model_path is set, the evaluator launches a colocated vLLM server on
+    # the accelerator resources. The outer executor step runs on CPU for API models.
     dispatch_resources = ResourceConfig.with_cpu() if model_path else resource_config
     return ExecutorStep(
         name=f"evaluation/harbor/{model_name}-{dataset}-{version}",
-        fn=remote(evaluate, resources=dispatch_resources, pip_dependency_groups=["harbor"]),
+        fn=remote(
+            evaluate,
+            resources=dispatch_resources,
+            env_vars=env_vars_from_keys(HARBOR_EVAL_ENV_KEYS),
+            pip_dependency_groups=["harbor"],
+        ),
         config=EvaluationConfig(
             evaluator="harbor",
             model_name=model_name,

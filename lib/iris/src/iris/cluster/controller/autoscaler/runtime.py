@@ -23,7 +23,7 @@ import logging
 from collections import deque
 from collections.abc import Sequence
 
-from iris.cluster.constraints import Constraint, WellKnownAttribute
+from iris.cluster.constraints import Constraint
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import (
     CloudSliceState,
@@ -46,7 +46,7 @@ from iris.cluster.controller.autoscaler.recovery import (
     restore_autoscaler_state,
 )
 from iris.cluster.controller.autoscaler.routing import job_feasibility, route_demand
-from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
+from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build_worker_config_for_group
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
@@ -228,6 +228,14 @@ class Autoscaler:
             status=status,
         )
         self._action_log.append(action)
+        logger.info(
+            "event=autoscaler action=%s entity=%s trigger=- group=%s status=%s reason=%s",
+            action_type,
+            slice_id or scale_group,
+            scale_group,
+            status,
+            reason,
+        )
         return action
 
     def evaluate(
@@ -372,39 +380,7 @@ class Autoscaler:
 
     def _per_group_worker_config(self, group: ScalingGroup) -> config_pb2.WorkerConfig | None:
         """Build per-group WorkerConfig by merging base config with scale group overrides."""
-        if not self._base_worker_config:
-            return None
-
-        wc = config_pb2.WorkerConfig()
-        wc.CopyFrom(self._base_worker_config)
-
-        # Accelerator config from scale group resources
-        resources = group.config.resources if group.config.HasField("resources") else None
-        if resources is not None:
-            wc.accelerator_type = resources.device_type
-            if resources.device_variant:
-                wc.accelerator_variant = resources.device_variant
-            if resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and resources.device_count > 0:
-                wc.gpu_count = resources.device_count
-            wc.capacity_type = resources.capacity_type
-
-        # Worker attributes from scale group
-        if group.config.HasField("worker"):
-            for k, v in group.config.worker.attributes.items():
-                wc.worker_attributes[k] = v
-
-        region = group.region
-        if region and not wc.worker_attributes.get(WellKnownAttribute.REGION):
-            wc.worker_attributes[WellKnownAttribute.REGION] = region
-
-        zone = group.zone
-        if zone and not wc.worker_attributes.get(WellKnownAttribute.ZONE):
-            wc.worker_attributes[WellKnownAttribute.ZONE] = zone
-
-        if group.config.name:
-            wc.worker_attributes["scale-group"] = group.config.name
-
-        return wc
+        return build_worker_config_for_group(self._base_worker_config, group.config)
 
     def _register_slice_workers(
         self,

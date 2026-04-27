@@ -195,7 +195,6 @@ class WorkerDispatcher:
         self._timeout = timeout
         self._discover_backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
         self._actor_client: ActorClient | None = None
-        self._stop_event: threading.Event | None = None
 
     def make_target(self) -> Callable[..., None]:
         """Create a thread target that carries the current context.
@@ -211,27 +210,19 @@ class WorkerDispatcher:
         return target
 
     def _run(self, stop_event: threading.Event) -> None:
-        self._stop_event = stop_event
         while not stop_event.is_set():
             if self.state.status == WorkerStatus.PENDING:
-                self._discover_endpoint()
+                self._discover_endpoint(stop_event)
                 continue
 
             if self.state.status == WorkerStatus.FAILED:
                 break
 
-            if self._actor_client is None:
-                self._actor_client = ActorClient(
-                    resolver=self._resolver,
-                    name=self.state.worker_name,
-                    call_timeout=self._timeout,
-                )
-
             task = self._get_task()
             if task:
                 self._execute_task(task)
 
-    def _discover_endpoint(self) -> None:
+    def _discover_endpoint(self, stop_event: threading.Event) -> None:
         logger.debug(
             "Discovering endpoint for worker %s (name=%s)",
             self.state.worker_id,
@@ -252,10 +243,7 @@ class WorkerDispatcher:
             logger.info("Worker %s discovered at %s", self.state.worker_id, endpoint.url)
         else:
             logger.debug("Worker %s not found, waiting...", self.state.worker_id)
-            if self._stop_event:
-                self._stop_event.wait(self._discover_backoff.next_interval())
-            else:
-                time.sleep(self._discover_backoff.next_interval())
+            stop_event.wait(self._discover_backoff.next_interval())
 
     def _get_task(self) -> PendingTask | None:
         """Try to get a task from the queue."""

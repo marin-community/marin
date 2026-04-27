@@ -41,7 +41,15 @@ def k8s() -> InMemoryK8sService:
 
 @pytest.fixture
 def log_service() -> LogServiceImpl:
-    return LogServiceImpl()
+    svc = LogServiceImpl()
+    original_fetch = svc.fetch_logs
+
+    def fetch_logs(request, ctx):
+        svc._log_store._compact_step()
+        return original_fetch(request, ctx)
+
+    svc.fetch_logs = fetch_logs  # type: ignore[method-assign]
+    return svc
 
 
 @pytest.fixture

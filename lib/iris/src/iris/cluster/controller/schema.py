@@ -1112,62 +1112,6 @@ DISPATCH_QUEUE = Table(
     indexes=("CREATE INDEX IF NOT EXISTS idx_dispatch_worker ON dispatch_queue(worker_id, id)",),
 )
 
-TXN_LOG = Table(
-    "txn_log",
-    "tl",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column("kind", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("payload_json", "TEXT", "NOT NULL", python_name="payload", python_type=dict, decoder=_decode_json_dict),
-        Column(
-            "created_at_ms",
-            "INTEGER",
-            "NOT NULL",
-            python_name="created_at",
-            python_type=Timestamp,
-            decoder=decode_timestamp_ms,
-        ),
-    ),
-    triggers=(
-        # Migration 0004_worker_indexes rewrote the trigger from 0001
-        """CREATE TRIGGER IF NOT EXISTS trg_txn_log_retention
-AFTER INSERT ON txn_log
-WHEN (SELECT COUNT(*) FROM txn_log) > 1100
-BEGIN
-  DELETE FROM txn_log WHERE id <= (
-    SELECT id FROM txn_log ORDER BY id DESC LIMIT 1 OFFSET 1000
-  );
-END;""",
-    ),
-)
-
-TXN_ACTIONS = Table(
-    "txn_actions",
-    "ta2",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column(
-            "txn_id",
-            "INTEGER",
-            "NOT NULL REFERENCES txn_log(id) ON DELETE CASCADE",
-            python_type=int,
-            decoder=int,
-        ),
-        Column("action", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("entity_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("details_json", "TEXT", "NOT NULL", python_name="details", python_type=dict, decoder=_decode_json_dict),
-        Column(
-            "created_at_ms",
-            "INTEGER",
-            "NOT NULL",
-            python_name="timestamp",
-            python_type=Timestamp,
-            decoder=decode_timestamp_ms,
-        ),
-    ),
-    indexes=("CREATE INDEX IF NOT EXISTS idx_txn_actions_txn ON txn_actions(txn_id, id)",),
-)
-
 # Migration 0003: restructured scaling_groups
 SCALING_GROUPS = Table(
     "scaling_groups",
@@ -1370,8 +1314,6 @@ MAIN_TABLES: tuple[Table, ...] = (
     TASK_RESOURCE_HISTORY,
     ENDPOINTS,
     DISPATCH_QUEUE,
-    TXN_LOG,
-    TXN_ACTIONS,
     SCALING_GROUPS,
     SLICES,
     RESERVATION_CLAIMS,
@@ -1630,16 +1572,6 @@ class EndpointRow:
     task_id: JobName
     metadata: dict
     registered_at: Timestamp
-
-
-@dataclass(frozen=True, slots=True)
-class TransactionActionRow:
-    """Transaction action log entry."""
-
-    timestamp: Timestamp
-    action: str
-    entity_id: str
-    details: dict
 
 
 @dataclass(frozen=True, slots=True)
@@ -1945,15 +1877,6 @@ ENDPOINT_PROJECTION = ENDPOINTS.projection(
     "metadata_json",
     "registered_at_ms",
     row_cls=EndpointRow,
-)
-
-# Transaction action row.
-TXN_ACTION_PROJECTION = TXN_ACTIONS.projection(
-    "created_at_ms",
-    "action",
-    "entity_id",
-    "details_json",
-    row_cls=TransactionActionRow,
 )
 
 # API key row.

@@ -176,7 +176,9 @@ def require_controller_url(ctx: click.Context) -> str:
             f"Could not connect to controller (config: {config_file}). "
             "Check that the controller is running and reachable."
         )
-    raise click.ClickException("Either --controller-url or --config is required")
+    raise click.ClickException(
+        "No controller specified. Pass --cluster=<name> (see `iris cluster list`), --controller-url, or --config."
+    )
 
 
 @click.group()
@@ -217,7 +219,9 @@ def iris(
             logger.info("Resolved cluster %r to config: %s", cluster_name, resolved)
             config_file = str(resolved)
         except FileNotFoundError:
-            pass  # Fall through to token-only mode; error will surface if a command needs a controller
+            raise click.UsageError(
+                f"Unknown cluster {cluster_name!r}. Run `iris cluster list` to see available clusters."
+            ) from None
 
     # Validate mutually exclusive options
     if controller_url and config_file:

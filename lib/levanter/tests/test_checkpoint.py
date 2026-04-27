@@ -39,6 +39,7 @@ from levanter.checkpoint import (
     save_checkpoint,
     unregister_debug_checkpointer_state_provider,
 )
+from levanter.trainer import TrainerConfig
 from levanter.trainer_state import TrainerState
 
 
@@ -206,7 +207,6 @@ def test_checkpoint_simple():
         restored_state = load_checkpoint(
             rep_state,
             checkpoint_path=tmpdir,
-            discover_latest=False,
         )
 
         assert_trees_all_equal(
@@ -245,7 +245,7 @@ def test_checkpoint_steps():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         save_checkpoint(state, step=3, checkpoint_path=tmpdir)
-        restored_state = load_checkpoint(rep_state, checkpoint_path=tmpdir, discover_latest=False)
+        restored_state = load_checkpoint(rep_state, checkpoint_path=tmpdir)
 
         assert_trees_all_equal(
             jax.tree_util.tree_leaves(arrays_only(restored_state)),
@@ -263,6 +263,104 @@ def test_checkpoint_discovery():
         assert latest == f"{tempdir}/step-30"
 
         assert discover_latest_checkpoint("file:///tmp/does-not-exist") is None
+
+
+def test_checkpoint_discovery_across_multiple_paths():
+    with tempfile.TemporaryDirectory() as permanent_dir, tempfile.TemporaryDirectory() as temp_dir:
+        save_checkpoint(dict(model=1), step=10, checkpoint_path=f"{permanent_dir}/step-10", is_temporary=False)
+        save_checkpoint(dict(model=2), step=15, checkpoint_path=f"{temp_dir}/step-15", is_temporary=True)
+
+        # Without additional paths, only permanent_dir is searched
+        latest_single = discover_latest_checkpoint(permanent_dir)
+        assert latest_single == f"{permanent_dir}/step-10"
+
+        # With additional paths, the newer checkpoint in temp_dir wins
+        latest_both = discover_latest_checkpoint(permanent_dir, temp_dir)
+        assert latest_both == f"{temp_dir}/step-15"
+
+
+def test_checkpointer_temporary_base_path_routes_temp_checkpoints():
+    fake_now = datetime.datetime(2021, 1, 1, 0, 0, 0)
+    tick = 10
+
+    def advance_time(delta_seconds):
+        nonlocal fake_now
+        fake_now += timedelta(seconds=delta_seconds)
+
+    with tempfile.TemporaryDirectory() as permanent_dir, tempfile.TemporaryDirectory() as temp_dir:
+        checkpointer = Checkpointer(
+            permanent_dir,
+            timedelta(seconds=tick),
+            [CheckpointInterval(every=5, until=None)],
+            temporary_base_path=temp_dir,
+            dt_now_injection=lambda: fake_now,
+        )
+
+        # Step 0 doesn't save
+        _on_step(checkpointer, 0)
+
+        # Time-based save goes to temp_dir
+        advance_time(tick)
+        _on_step(checkpointer, 1)
+        checkpointer.wait_until_finished()
+        assert _get_checkpoint_steps(temp_dir) == [1]
+        assert _get_checkpoint_steps(permanent_dir) == []
+
+        # Step-based save goes to permanent_dir
+        advance_time(tick)
+        _on_step(checkpointer, 5)
+        checkpointer.wait_until_finished()
+        assert _get_checkpoint_steps(permanent_dir) == [5]
+        # Old temp checkpoint should be deleted
+        assert _get_checkpoint_steps(temp_dir) == []
+
+        # Another time-based save goes to temp_dir
+        advance_time(tick)
+        _on_step(checkpointer, 6)
+        checkpointer.wait_until_finished()
+        assert _get_checkpoint_steps(temp_dir) == [6]
+        assert _get_checkpoint_steps(permanent_dir) == [5]
+
+
+def test_checkpointer_config_temporary_base_path():
+    config = dataclasses.replace(
+        CheckpointerConfig(),
+        base_path="/tmp/test-perm",
+        temporary_base_path="/tmp/test-temp",
+        append_run_id_to_base_path=False,
+    )
+    assert config.expanded_path("run1") == "/tmp/test-perm"
+    assert config.expanded_temporary_path("run1") == "/tmp/test-temp"
+
+    config_with_run_id = dataclasses.replace(
+        CheckpointerConfig(),
+        base_path="/tmp/test-perm",
+        temporary_base_path="/tmp/test-temp",
+        append_run_id_to_base_path=True,
+    )
+    assert config_with_run_id.expanded_path("run1") == "/tmp/test-perm/run1"
+    assert config_with_run_id.expanded_temporary_path("run1") == "/tmp/test-temp/run1"
+
+
+def test_checkpointer_config_no_temporary_base_path():
+    config = CheckpointerConfig()
+    assert config.temporary_base_path is None
+    assert config.expanded_temporary_path("run1") is None
+
+
+def test_trainer_config_checkpoint_search_paths():
+    config = dataclasses.replace(
+        TrainerConfig(),
+        checkpointer=CheckpointerConfig(
+            base_path="/tmp/test-perm",
+            temporary_base_path="/tmp/test-temp",
+            append_run_id_to_base_path=True,
+        ),
+    )
+    assert config.checkpoint_search_paths("run1") == ["/tmp/test-perm/run1", "/tmp/test-temp/run1"]
+
+    pinned_config = dataclasses.replace(config, load_checkpoint_path="/tmp/test-perm/run1/step-100")
+    assert pinned_config.checkpoint_search_paths("run1") == ["/tmp/test-perm/run1/step-100"]
 
 
 def test_checkpointer_config_propagates_debug_settings():
@@ -463,10 +561,14 @@ def test_load_from_checkpoint_or_initialize():
         filtered = eqx.filter(model0, is_checkpointed)
         save_checkpoint(filtered, step=0, checkpoint_path=tmpdir)
 
-        loaded = load_checkpoint_or_initialize(init_fn, tmpdir, is_checkpointed=is_checkpointed, donate_args=False)(k1)
+        loaded = load_checkpoint_or_initialize(init_fn, [tmpdir], is_checkpointed=is_checkpointed, donate_args=False)(
+            k1
+        )
         assert not any(jax.tree_util.tree_leaves(eqx.filter(loaded, lambda x: isinstance(x, ShapeDtypeStruct))))
 
-        loaded2 = load_checkpoint(eqx.filter(model1, is_checkpointed), tmpdir, discover_latest=True)
+        latest_checkpoint = discover_latest_checkpoint(tmpdir)
+        assert latest_checkpoint is not None
+        loaded2 = load_checkpoint(eqx.filter(model1, is_checkpointed), latest_checkpoint)
         loaded2 = eqx.combine(loaded2, model1)
 
         assert_trees_all_equal(
@@ -495,6 +597,42 @@ def test_load_from_checkpoint_or_initialize():
         )
 
 
+def test_load_from_checkpoint_or_initialize_searches_additional_paths():
+    In = Axis("in", 2)
+    Out = Axis("out", 1)
+
+    def init_fn(key):
+        return hax.nn.MLP.init(In, Out, 2, 1, key=key, use_bias=False, use_final_bias=False)
+
+    with use_test_mesh(), tempfile.TemporaryDirectory() as permanent_dir, tempfile.TemporaryDirectory() as temp_dir:
+        k0 = jax.random.PRNGKey(0)
+        k1 = jax.random.PRNGKey(1)
+        model0 = eqx.filter_jit(init_fn)(k0)
+        model1 = eqx.filter_jit(init_fn)(k1)
+
+        is_checkpointed = hax.tree_util.tree_map(lambda _: False, model0)
+        is_checkpointed = eqx.tree_at(lambda t: t.layers[-1], is_checkpointed, replace=True)
+
+        filtered = eqx.filter(model0, is_checkpointed)
+        save_checkpoint(filtered, step=0, checkpoint_path=temp_dir)
+
+        loaded = load_checkpoint_or_initialize(
+            init_fn,
+            [permanent_dir, temp_dir],
+            is_checkpointed=is_checkpointed,
+            donate_args=False,
+        )(k1)
+
+        assert_trees_all_equal(
+            jax.tree_util.tree_leaves(arrays_only(eqx.filter(loaded, is_checkpointed))),
+            jax.tree_util.tree_leaves(arrays_only(eqx.filter(model0, is_checkpointed))),
+        )
+        assert_trees_all_equal(
+            jax.tree_util.tree_leaves(arrays_only(eqx.filter(loaded, is_checkpointed, inverse=True))),
+            jax.tree_util.tree_leaves(arrays_only(eqx.filter(model1, is_checkpointed, inverse=True))),
+        )
+
+
 def test_load_from_checkpoint_or_initialize_works_if_file_not_found():
     In = Axis("in", 2)
     Out = Axis("out", 1)
@@ -511,9 +649,9 @@ def test_load_from_checkpoint_or_initialize_works_if_file_not_found():
         is_checkpointed = jtu.tree_map(lambda _: False, model0)
         is_checkpointed = eqx.tree_at(lambda t: t.layers[-1], is_checkpointed, replace=True)
 
-        loaded = load_checkpoint_or_initialize(init_fn, "kanmfklafnmjlkanfjklanfjkh", is_checkpointed=is_checkpointed)(
-            k1
-        )
+        loaded = load_checkpoint_or_initialize(
+            init_fn, ["kanmfklafnmjlkanfjklanfjkh"], is_checkpointed=is_checkpointed
+        )(k1)
 
         assert not any(jax.tree_util.tree_leaves(eqx.filter(loaded, lambda x: isinstance(x, ShapeDtypeStruct))))
         # should be the same as model1
@@ -548,7 +686,7 @@ def test_load_from_checkpoint_allows_partial_checkpoints():
 
         loaded = load_checkpoint_or_initialize(
             init_fn,
-            tmpdir,
+            [tmpdir],
             is_checkpointed=is_checkpointed,
             allow_partial=True,
         )(k1, True)
@@ -631,7 +769,6 @@ def test_backward_compatibility_with_ocdbt():
         restored_state = load_checkpoint(
             rep_state,
             checkpoint_path=tmpdir,
-            discover_latest=False,
         )
 
         # Verify the data was loaded correctly

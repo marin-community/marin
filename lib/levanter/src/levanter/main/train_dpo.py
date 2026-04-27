@@ -17,7 +17,7 @@ from haliax.partitioning import named_jit, round_axis_for_partitioning
 import levanter
 import levanter.callbacks
 from levanter import callbacks
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config
 from levanter.data.dataset import AsyncDataset
 from levanter.data.mixture import MixtureDataset
@@ -379,9 +379,8 @@ def main(config: TrainDpoConfig):
             elif config.initialize_from_checkpoint_path is not None:
                 with use_cpu_device():
                     policy_model = eqx.filter_eval_shape(config.model.build, Vocab, key=init_policy_key)
-                    policy_model = load_checkpoint(
-                        policy_model, config.initialize_from_checkpoint_path, subpath="model"
-                    )
+                    checkpoint_path = latest_checkpoint_path(config.initialize_from_checkpoint_path)
+                    policy_model = load_checkpoint(policy_model, checkpoint_path, subpath="model")
                 policy_model = hax.shard(policy_model, parameter_axis_mapping)
                 policy_model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(policy_model)
             else:
@@ -406,7 +405,8 @@ def main(config: TrainDpoConfig):
         else:
             with use_cpu_device():
                 reference_model = eqx.filter_eval_shape(config.model.build, Vocab, key=model_key)
-                reference_model = load_checkpoint(reference_model, config.reference_model_path, subpath="model")
+                checkpoint_path = latest_checkpoint_path(config.reference_model_path)
+                reference_model = load_checkpoint(reference_model, checkpoint_path, subpath="model")
             reference_model = hax.shard(reference_model, parameter_axis_mapping)
 
         reference_model = cast(LmHeadModel, inference_mode(reference_model, True))

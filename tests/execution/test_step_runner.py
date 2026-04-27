@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from fray.v2.types import ResourceConfig
+from fray.types import ResourceConfig
 from rigging.filesystem import MARIN_CROSS_REGION_OVERRIDE_ENV
 
 from marin.execution.artifact import Artifact, PathMetadata
@@ -370,6 +370,153 @@ def test_runner_max_concurrent(tmp_path: Path):
 
     train_artifact = Artifact.load(steps[2].output_path, TrainMetadata)
     assert train_artifact.tokens_seen > 0
+
+
+def test_runner_walks_transitive_deps(tmp_path: Path):
+    """Passing only terminal steps should cause the runner to walk and run transitive deps."""
+    executed: list[str] = []
+
+    def record(name: str):
+        def _fn(output_path: str) -> PathMetadata:
+            executed.append(name)
+            return PathMetadata(path=output_path)
+
+        return _fn
+
+    dep = StepSpec(
+        name="dep",
+        override_output_path=(tmp_path / "dep").as_posix(),
+        fn=record("dep"),
+    )
+    mid = StepSpec(
+        name="mid",
+        override_output_path=(tmp_path / "mid").as_posix(),
+        deps=[dep],
+        fn=record("mid"),
+    )
+    terminal = StepSpec(
+        name="terminal",
+        override_output_path=(tmp_path / "terminal").as_posix(),
+        deps=[mid],
+        fn=record("terminal"),
+    )
+
+    StepRunner().run([terminal])
+
+    assert executed == ["dep", "mid", "terminal"]
+
+
+def test_runner_walks_transitive_deps_with_cache_hit(tmp_path: Path):
+    """Deps already succeeded on disk must be recognized via cache-hit during the walk."""
+    dep = StepSpec(
+        name="dep",
+        override_output_path=(tmp_path / "dep").as_posix(),
+        fn=lambda output_path: PathMetadata(path=output_path),
+    )
+    downstream_ran: list[str] = []
+
+    def run_downstream(output_path: str) -> PathMetadata:
+        downstream_ran.append(output_path)
+        return PathMetadata(path=output_path)
+
+    downstream = StepSpec(
+        name="downstream",
+        override_output_path=(tmp_path / "downstream").as_posix(),
+        deps=[dep],
+        fn=run_downstream,
+    )
+
+    # Prime the cache for ``dep`` only.
+    StepRunner().run([dep])
+    assert downstream_ran == []
+
+    # Pass only ``downstream``; the runner walks deps and cache-hits ``dep``.
+    StepRunner().run([downstream])
+    assert downstream_ran == [(tmp_path / "downstream").as_posix()]
+
+
+def test_runner_consumes_unbounded_iterator(tmp_path: Path):
+    """The runner must not pre-consume the iterable — it must support unbounded generators.
+
+    The generator yields forever unless ``stop`` is set; we set it from inside
+    a terminal's function after N terminals have executed. A batch-flatten
+    implementation would try to exhaust the generator before running any step
+    and hang (caught by the per-test timeout).
+    """
+    import threading
+
+    stop = threading.Event()
+    executed: list[str] = []
+    lock = threading.Lock()
+    n_terminals = 3
+
+    def on_execute(name: str):
+        def _fn(output_path: str) -> PathMetadata:
+            with lock:
+                executed.append(name)
+                # Count terminals executed; signal the generator to stop once
+                # we've run enough.
+                terminal_count = sum(1 for e in executed if e.startswith("t_"))
+            if terminal_count >= n_terminals:
+                stop.set()
+            return PathMetadata(path=output_path)
+
+        return _fn
+
+    dep = StepSpec(
+        name="shared_dep",
+        override_output_path=(tmp_path / "shared_dep").as_posix(),
+        fn=on_execute("dep"),
+    )
+
+    def unbounded_generator():
+        i = 0
+        while not stop.is_set():
+            name = f"t_{i}"
+            yield StepSpec(
+                name=name,
+                override_output_path=(tmp_path / name).as_posix(),
+                deps=[dep],
+                fn=on_execute(name),
+            )
+            i += 1
+
+    StepRunner().run(unbounded_generator())
+
+    assert "dep" in executed
+    terminals = [e for e in executed if e.startswith("t_")]
+    assert len(terminals) >= n_terminals
+
+
+def test_runner_dedups_shared_deps(tmp_path: Path):
+    """A dep shared by multiple terminals must be executed exactly once."""
+    dep_runs: list[str] = []
+
+    def run_dep(output_path: str) -> PathMetadata:
+        dep_runs.append(output_path)
+        return PathMetadata(path=output_path)
+
+    dep = StepSpec(
+        name="shared_dep",
+        override_output_path=(tmp_path / "shared_dep").as_posix(),
+        fn=run_dep,
+    )
+    a = StepSpec(
+        name="a",
+        override_output_path=(tmp_path / "a").as_posix(),
+        deps=[dep],
+        fn=lambda output_path: PathMetadata(path=output_path),
+    )
+    b = StepSpec(
+        name="b",
+        override_output_path=(tmp_path / "b").as_posix(),
+        deps=[dep],
+        fn=lambda output_path: PathMetadata(path=output_path),
+    )
+
+    StepRunner().run([a, b])
+
+    assert dep_runs == [(tmp_path / "shared_dep").as_posix()]
 
 
 def test_runner_preserves_underlying_step_exception(tmp_path: Path):
@@ -1038,12 +1185,12 @@ def test_runner_propagates_context_vars(tmp_path):
 
 
 def test_runner_propagates_fray_client(tmp_path):
-    """StepRunner explicitly propagates the fray v2 client to worker threads.
+    """StepRunner explicitly propagates the fray client to worker threads.
 
     This tests the explicit client capture path (not just generic contextvars)
     to ensure current_client() returns the correct client inside step functions.
     """
-    from fray.v2.client import current_client, set_current_client
+    from fray.client import current_client, set_current_client
 
     class FakeClient:
         """Marker client to verify propagation."""

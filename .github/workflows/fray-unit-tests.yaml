@@ -18,13 +18,15 @@ jobs:
     outputs:
       should_run: ${{ steps.filter.outputs.relevant }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
             relevant:
               - 'lib/fray/**'
+              # fray imports from iris; run fray tests on any iris change so cross-layer breakage is caught here.
+              - 'lib/iris/**'
               - 'uv.lock'
               - '.github/workflows/fray-unit-tests.yaml'
 
@@ -35,10 +37,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 

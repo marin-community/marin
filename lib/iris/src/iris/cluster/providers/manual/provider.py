@@ -334,7 +334,15 @@ class ManualWorkerProvider:
         return results
 
     def list_all_slices(self) -> list[ManualSliceHandle]:
-        return self.list_slices(zones=[], labels={self._iris_labels.iris_managed: "true"})
+        """List autoscaler-managed slices.
+
+        Excludes slices tagged iris_manual=true (operator-created via
+        `iris cluster create-slice`), which the autoscaler and
+        `iris cluster stop` must not see or terminate.
+        """
+        all_managed = self.list_slices(zones=[], labels={self._iris_labels.iris_managed: "true"})
+        manual_label = self._iris_labels.iris_manual
+        return [s for s in all_managed if s.labels.get(manual_label) != "true"]
 
     def list_vms(
         self,

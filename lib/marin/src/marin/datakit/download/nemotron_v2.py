@@ -13,6 +13,7 @@ All use parquet format with a "text" field.
 from dataclasses import dataclass, field
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 
@@ -130,4 +131,25 @@ def download_nemotron_v2_step(family: str) -> StepSpec:
         hf_dataset_id=info.hf_dataset_id,
         revision=info.revision,
         override_output_path=info.override_output_path,
+    )
+
+
+def normalize_nemotron_v2_step(download: StepSpec, *, family: str, subset: str) -> StepSpec:
+    """Normalize one subset of a Nemotron v2 family.
+
+    Each subset gets its own normalize step because normalize now processes a
+    single directory. The subset's glob pattern (e.g. ``Diverse-QA/**/*.parquet``)
+    is used to derive the input subdirectory under the family download.
+    """
+    info = NEMOTRON_V2_DATASETS[family]
+    glob_pattern = info.subsets[subset]
+    # Extract the directory prefix from the glob (e.g. "Diverse-QA/**/*.parquet" → "Diverse-QA")
+    subset_dir = glob_pattern.split("/**")[0]
+    return normalize_step(
+        name=f"normalized/{family}/{subset}",
+        download=download,
+        text_field="text",
+        id_field="id",
+        file_extensions=(".parquet",),
+        input_path=f"{download.output_path}/{subset_dir}",
     )

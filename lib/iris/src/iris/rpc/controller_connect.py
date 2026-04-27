@@ -58,9 +58,6 @@ class ControllerService(Protocol):
     async def get_autoscaler_status(self, request: controller__pb2.Controller.GetAutoscalerStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetAutoscalerStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def get_transactions(self, request: controller__pb2.Controller.GetTransactionsRequest, ctx: RequestContext) -> controller__pb2.Controller.GetTransactionsResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
     async def list_users(self, request: controller__pb2.Controller.ListUsersRequest, ctx: RequestContext) -> controller__pb2.Controller.ListUsersResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -262,16 +259,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get_autoscaler_status,
-                ),
-                "/iris.cluster.ControllerService/GetTransactions": Endpoint.unary(
-                    method=MethodInfo(
-                        name="GetTransactions",
-                        service_name="iris.cluster.ControllerService",
-                        input=controller__pb2.Controller.GetTransactionsRequest,
-                        output=controller__pb2.Controller.GetTransactionsResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.get_transactions,
                 ),
                 "/iris.cluster.ControllerService/ListUsers": Endpoint.unary(
                     method=MethodInfo(
@@ -766,26 +753,6 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def get_transactions(
-        self,
-        request: controller__pb2.Controller.GetTransactionsRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> controller__pb2.Controller.GetTransactionsResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetTransactions",
-                service_name="iris.cluster.ControllerService",
-                input=controller__pb2.Controller.GetTransactionsRequest,
-                output=controller__pb2.Controller.GetTransactionsResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
     async def list_users(
         self,
         request: controller__pb2.Controller.ListUsersRequest,
@@ -1254,8 +1221,6 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_autoscaler_status(self, request: controller__pb2.Controller.GetAutoscalerStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetAutoscalerStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def get_transactions(self, request: controller__pb2.Controller.GetTransactionsRequest, ctx: RequestContext) -> controller__pb2.Controller.GetTransactionsResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_users(self, request: controller__pb2.Controller.ListUsersRequest, ctx: RequestContext) -> controller__pb2.Controller.ListUsersResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_task_logs(self, request: controller__pb2.Controller.GetTaskLogsRequest, ctx: RequestContext) -> controller__pb2.Controller.GetTaskLogsResponse:
@@ -1435,16 +1400,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get_autoscaler_status,
-                ),
-                "/iris.cluster.ControllerService/GetTransactions": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="GetTransactions",
-                        service_name="iris.cluster.ControllerService",
-                        input=controller__pb2.Controller.GetTransactionsRequest,
-                        output=controller__pb2.Controller.GetTransactionsResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.get_transactions,
                 ),
                 "/iris.cluster.ControllerService/ListUsers": EndpointSync.unary(
                     method=MethodInfo(
@@ -1933,26 +1888,6 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.GetAutoscalerStatusRequest,
                 output=controller__pb2.Controller.GetAutoscalerStatusResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def get_transactions(
-        self,
-        request: controller__pb2.Controller.GetTransactionsRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> controller__pb2.Controller.GetTransactionsResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetTransactions",
-                service_name="iris.cluster.ControllerService",
-                input=controller__pb2.Controller.GetTransactionsRequest,
-                output=controller__pb2.Controller.GetTransactionsResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

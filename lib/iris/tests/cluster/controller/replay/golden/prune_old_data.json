@@ -1,0 +1,100 @@
+{
+  "dispatch_queue": [
+    {
+      "created_at_ms": 1704067200000,
+      "id": 1,
+      "kind": "run",
+      "payload_proto": "ChYvdGVzdC11c2VyL3BydW5lLWpvYi8wEAEaFBISCgZweXRob24KAi1jCgRwYXNzIgAqADINCOgHIICAgIAEKgBIAEgAWgA=",
+      "task_id": null,
+      "worker_id": "w-prune"
+    }
+  ],
+  "endpoints": [],
+  "job_config": [],
+  "job_workdir_files": [],
+  "jobs": [],
+  "meta": [
+    {
+      "key": "last_submission_ms",
+      "value": 1704067200000
+    },
+    {
+      "key": "task_priority_insertion",
+      "value": 1
+    }
+  ],
+  "reservation_claims": [],
+  "scaling_groups": [],
+  "slices": [],
+  "task_attempts": [],
+  "task_resource_history": [],
+  "tasks": [],
+  "user_budgets": [],
+  "users": [
+    {
+      "created_at_ms": 1704067200000,
+      "display_name": null,
+      "role": "user",
+      "user_id": "test-user"
+    }
+  ],
+  "worker_attributes": [
+    {
+      "float_value": null,
+      "int_value": null,
+      "key": "device-type",
+      "str_value": "cpu",
+      "value_type": "str",
+      "worker_id": "w-prune"
+    }
+  ],
+  "worker_resource_history": [],
+  "worker_task_history": [],
+  "workers": [
+    {
+      "active": 1,
+      "address": "w-prune:8080",
+      "committed_cpu_millicores": 0,
+      "committed_gpu": 0,
+      "committed_mem_bytes": 0,
+      "committed_tpu": 0,
+      "consecutive_failures": 0,
+      "device_type": "",
+      "device_variant": "",
+      "healthy": 1,
+      "last_heartbeat_ms": 1704067200001,
+      "md_cpu_count": 8,
+      "md_device_json": "{\"cpu\": {\"variant\": \"cpu\"}}",
+      "md_disk_bytes": 17179869184,
+      "md_gce_instance_name": "",
+      "md_gce_zone": "",
+      "md_git_hash": "",
+      "md_gpu_count": 0,
+      "md_gpu_memory_mb": 0,
+      "md_gpu_name": "",
+      "md_hostname": "replay-worker",
+      "md_ip_address": "127.0.0.1",
+      "md_memory_bytes": 17179869184,
+      "md_tpu_chips_per_host_bounds": "",
+      "md_tpu_name": "",
+      "md_tpu_worker_hostnames": "",
+      "md_tpu_worker_id": "",
+      "scale_group": "",
+      "slice_id": "",
+      "snapshot_disk_total_bytes": null,
+      "snapshot_disk_used_bytes": null,
+      "snapshot_host_cpu_percent": null,
+      "snapshot_memory_total_bytes": null,
+      "snapshot_memory_used_bytes": null,
+      "snapshot_net_recv_bps": null,
+      "snapshot_net_sent_bps": null,
+      "snapshot_running_task_count": null,
+      "snapshot_total_process_count": null,
+      "total_cpu_millicores": 8000,
+      "total_gpu_count": 0,
+      "total_memory_bytes": 17179869184,
+      "total_tpu_count": 0,
+      "worker_id": "w-prune"
+    }
+  ]
+}

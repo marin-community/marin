@@ -5,7 +5,7 @@
 
 from experiments.defaults import default_tokenize
 from experiments.marin_models import marin_tokenizer
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from marin.datakit.download.starcoder2_extras import (
     SUBSETS,

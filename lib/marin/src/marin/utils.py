@@ -154,26 +154,6 @@ def load_dataset_with_backoff(
     )
 
 
-def load_tokenizer_with_backoff(
-    tokenizer_name: str,
-    *,
-    context: str | None = None,
-    max_attempts: int = 6,
-    initial_delay: float = 2.0,
-    max_delay: float = 60.0,
-):
-    from levanter.tokenizers import load_tokenizer
-
-    load_context = context or f"tokenizer={tokenizer_name}"
-    return call_with_hf_backoff(
-        lambda: load_tokenizer(tokenizer_name),
-        context=load_context,
-        max_attempts=max_attempts,
-        initial_delay=initial_delay,
-        max_delay=max_delay,
-    )
-
-
 def fsspec_size(file_path: str) -> int:
     """Get file size (in bytes) of a file on an `fsspec` filesystem."""
     fs = url_to_fs(file_path)[0]

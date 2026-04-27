@@ -73,39 +73,44 @@ def _worker_attr(state: ControllerTransitions, worker_id: WorkerId, key: str):
 
 
 def assign_task_to_worker(state: ControllerTransitions, task, worker_id: WorkerId) -> None:
-    state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_id)])
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)])
 
 
 def transition_task_to_running(state: ControllerTransitions, task) -> None:
-    state.apply_task_updates(
-        HeartbeatApplyRequest(
-            worker_id=task.current_worker_id,
-            worker_resource_snapshot=None,
-            updates=[
-                TaskUpdate(
-                    task_id=task.task_id,
-                    attempt_id=task.current_attempt_id,
-                    new_state=job_pb2.TASK_STATE_RUNNING,
-                )
-            ],
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=task.current_worker_id,
+                worker_resource_snapshot=None,
+                updates=[
+                    TaskUpdate(
+                        task_id=task.task_id,
+                        attempt_id=task.current_attempt_id,
+                        new_state=job_pb2.TASK_STATE_RUNNING,
+                    )
+                ],
+            ),
         )
-    )
 
 
 def transition_task_to_state(state: ControllerTransitions, task, new_state: int) -> None:
-    state.apply_task_updates(
-        HeartbeatApplyRequest(
-            worker_id=task.current_worker_id,
-            worker_resource_snapshot=None,
-            updates=[
-                TaskUpdate(
-                    task_id=task.task_id,
-                    attempt_id=task.current_attempt_id,
-                    new_state=new_state,
-                )
-            ],
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=task.current_worker_id,
+                worker_resource_snapshot=None,
+                updates=[
+                    TaskUpdate(
+                        task_id=task.task_id,
+                        attempt_id=task.current_attempt_id,
+                        new_state=new_state,
+                    )
+                ],
+            ),
         )
-    )
 
 
 def _build_context(scheduler, state):

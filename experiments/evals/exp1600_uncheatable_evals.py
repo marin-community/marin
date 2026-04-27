@@ -77,6 +77,15 @@ def uncheatable_eval_tokenized(
     return uncheatable_eval_steps
 
 
+def uncheatable_eval_raw_validation_sets(*, uncheatable_eval_raw: ExecutorStep = uncheatable_eval):
+    from marin.evaluation.perplexity_gap import raw_text_dataset
+
+    return {
+        os.path.join("uncheatable_eval", dataset): raw_text_dataset(uncheatable_eval_raw.cd(path_part))
+        for dataset, path_part in ((dataset, ALL_UNCHEATABLE_EVAL_DATASETS[dataset]) for dataset in ACTIVE_DATASETS)
+    }
+
+
 @dataclass
 class ModelConfig:
     model_name: str

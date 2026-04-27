@@ -9,9 +9,9 @@ from marin.processing.tokenize.data_configs import _are_tokenizers_equivalent
 def test_are_tokenizers_equivalent():
     # Test cases where tokenizers should be equivalent
     equivalent_pairs = [
-        ("meta-llama/Meta-Llama-3.1-8B", "stanford-crfm/marin-tokenizer"),
+        ("meta-llama/Meta-Llama-3.1-8B", "marin-community/marin-tokenizer"),
         ("meta-llama/Meta-Llama-3.1-8B", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
-        ("stanford-crfm/marin-tokenizer", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
+        ("marin-community/marin-tokenizer", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
     ]
 
     for t1, t2 in equivalent_pairs:
@@ -23,7 +23,7 @@ def test_are_tokenizers_equivalent():
     # Test cases where tokenizers should be different
     different_pairs = [
         ("meta-llama/Meta-Llama-3.1-8B", "EleutherAI/gpt-neox-20b"),
-        ("stanford-crfm/marin-tokenizer", "EleutherAI/gpt-neox-20b"),
+        ("marin-community/marin-tokenizer", "EleutherAI/gpt-neox-20b"),
         ("meta-llama/Meta-Llama-3.1-8B-Instruct", "EleutherAI/gpt-neox-20b"),
     ]
 
@@ -36,7 +36,7 @@ def test_are_tokenizers_equivalent():
     # Test that a tokenizer is equivalent to itself
     for t in [
         "meta-llama/Meta-Llama-3.1-8B",
-        "stanford-crfm/marin-tokenizer",
+        "marin-community/marin-tokenizer",
         "meta-llama/Meta-Llama-3.1-8B-Instruct",
         "EleutherAI/gpt-neox-20b",
     ]:

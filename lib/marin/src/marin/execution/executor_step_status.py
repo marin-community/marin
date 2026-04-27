@@ -120,6 +120,12 @@ class StatusFile:
             f.write(status)
 
         if status != STATUS_RUNNING:
+            logger.info(
+                "Releasing lock path=%s worker=%s reason=terminal_status:%s",
+                self._lock_path,
+                self.worker_id,
+                status,
+            )
             self.release_lock()
         logger.debug("[%s] Wrote status %s to %s", self.worker_id, status, self.path)
 

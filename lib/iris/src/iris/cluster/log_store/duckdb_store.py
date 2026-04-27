@@ -13,9 +13,8 @@ Lifecycle of a log entry:
 
     1. Appended to ``_pending`` (plain Python list) under ``_memory_lock``.
     2. A single background thread wakes periodically and:
-       a. Every ``compact_interval_sec`` (default 1s): if ``_pending`` has at
-          least ``_CHUNK_THRESHOLD`` rows, convert it to an Arrow ``Table`` and
-          append to ``_chunks`` (power-of-2 merged).
+       a. Every ``compact_interval_sec`` (default 1s): convert ``_pending``
+          to an Arrow ``Table`` and append to ``_chunks`` (power-of-2 merged).
        b. Every ``flush_interval_sec`` (default 60s), or under backpressure:
           seal RAM data into ``_flushing`` and write a standalone
           ``tmp_*.parquet`` segment to local disk. Existing segments are
@@ -34,7 +33,7 @@ Lifecycle of a log entry:
 
 Read path: DuckDB ``read_parquet()`` over local segments (tmp + log), UNION
 ALL pyarrow tables for in-RAM data (``_chunks``, ``_flushing.table`` if
-present, and ``_pending``). Relies entirely on DuckDB's per-row-group parquet
+present). Relies entirely on DuckDB's per-row-group parquet
 stats for pruning — files are sorted by ``(key, seq)`` so row-group ``key``
 bounds are tight enough that file-level Python filtering would add nothing.
 The per-read working set is capped by ``_MAX_PARQUET_BYTES_PER_READ``, which
@@ -115,8 +114,15 @@ DEFAULT_COMPACTION_INTERVAL_SEC = 600.0  # merge small tmp parquets into one arc
 DEFAULT_MAX_TMP_SEGMENTS_BEFORE_COMPACT = 10
 
 # Default caps for local Parquet retention.
-DEFAULT_MAX_LOCAL_SEGMENTS = 50
-DEFAULT_MAX_LOCAL_BYTES = 5 * 1024**3  # 5 GB
+# The read path has no remote fallback yet (see module docstring TODO): once a
+# parquet is GC'd locally, its rows are unreachable via FetchLogs even though
+# they're durable on GCS. Sized to keep ~2 weeks of the production `marin`
+# cluster's ingest (~6-7 GB/day, ~30 GB bucket total at 2026-04-21) fully
+# local. The per-read working set is still bounded by _MAX_PARQUET_BYTES_PER_READ
+# (2.5 GB, newest-first), so raising the retention cap does not affect query
+# time — verified via lib/iris/scripts/benchmark_log_store.py --corpus-dir.
+DEFAULT_MAX_LOCAL_SEGMENTS = 1000
+DEFAULT_MAX_LOCAL_BYTES = 100 * 1024**3  # 100 GB
 
 _ROW_GROUP_SIZE = 16_384
 
@@ -210,11 +216,6 @@ def _build_buffer_table(buffer: list[tuple]) -> pa.Table:
 # ---------------------------------------------------------------------------
 # Internal data structures
 # ---------------------------------------------------------------------------
-
-
-# Rows in _pending below this count aren't worth converting to Arrow yet —
-# the per-chunk overhead (array construction, metadata) dominates.
-_CHUNK_THRESHOLD = 1024
 
 
 def _merge_chunks(chunks: list[pa.Table]) -> list[pa.Table]:
@@ -314,13 +315,19 @@ def _next_cursor_id() -> int:
 
 
 class _ConnectionPool:
-    """Single DuckDB database with cursor-based concurrency.
+    """Two DuckDB databases: one for reads, one for compaction.
 
-    One ``duckdb.connect()`` call creates the shared buffer pool and the
-    parquet object cache (``enable_object_cache=true``), which caches parquet
-    footers and row-group stats across queries. Callers get cursors via
-    ``conn.cursor()`` which share that pool, keeping total memory bounded by a
-    single ``memory_limit``.
+    Reads share a single ``duckdb.connect()`` with ``enable_object_cache``
+    so parquet footer / row-group stats are cached across queries. Callers
+    get cursors via ``conn.cursor()`` which share that connection's thread
+    pool and buffer pool.
+
+    Compaction runs on a second, isolated connection. Sharing one connection
+    across reads and compaction starves the compaction COPY's sort phase:
+    DuckDB schedules concurrent cursors cooperatively over a fixed worker
+    pool, so ~16 in-flight fetch_logs cursors stretch a 2s compaction past
+    10s and reads on top of it time out. The dedicated connection has its
+    own thread pool so compaction's sort cost is independent of reader load.
 
     RAM tables are registered with unique names (incorporating a monotonic
     counter) so concurrent cursors don't collide on table names.
@@ -332,6 +339,9 @@ class _ConnectionPool:
         # reads over the same segment set don't re-parse metadata. This is the
         # single most impactful setting for read latency on the log store.
         self._conn.execute("SET enable_object_cache=true")
+        # Compaction writes a fresh file each run, so no object cache benefit.
+        # Bounded memory so it can't starve the read path under pressure.
+        self._compaction_conn = duckdb.connect(config={"memory_limit": memory_limit, "threads": "4"})
 
     @contextmanager
     def checkout(self, buffer_tables: list[pa.Table]) -> Iterator[tuple[duckdb.DuckDBPyConnection, list[str]]]:
@@ -354,8 +364,20 @@ class _ConnectionPool:
                 cursor.unregister(name)
             cursor.close()
 
+    @contextmanager
+    def compaction_checkout(self) -> Iterator[duckdb.DuckDBPyConnection]:
+        """Cursor on the dedicated compaction connection. No RAM tables needed —
+        compaction only reads already-flushed tmp_*.parquet files.
+        """
+        cursor = self._compaction_conn.cursor()
+        try:
+            yield cursor
+        finally:
+            cursor.close()
+
     def close(self) -> None:
         self._conn.close()
+        self._compaction_conn.close()
 
 
 class DuckDBLogStore:
@@ -395,6 +417,9 @@ class DuckDBLogStore:
 
         # ---- shared mutable state (all guarded by _memory_lock) ----
         self._memory_lock = Lock()
+        # Serializes _flush_step so test _force_flush + bg thread can't both
+        # be mid-write against the same tmp filename simultaneously.
+        self._flush_lock = Lock()
         self._next_seq = _recover_max_seq(self._log_dir)
         self._pending: list[tuple] = []  # hot write list, converted by bg thread
         self._chunks: list[pa.Table] = []  # power-of-2 merged arrow tables
@@ -500,7 +525,7 @@ class DuckDBLogStore:
         regular expression and matched with DuckDB's ``regexp_matches()``.
         Otherwise it is treated as an exact key lookup.
         """
-        min_level_enum = str_to_log_level(min_level) if min_level else 0
+        min_level_enum = str_to_log_level(min_level)
         is_pattern = bool(REGEX_META_RE.search(key))
 
         if not is_pattern:
@@ -606,11 +631,16 @@ class DuckDBLogStore:
             self._wake.clear()
 
     def _compact_step(self) -> None:
-        """Move ``_pending`` into a new Arrow chunk (if big enough)."""
+        """Graduate ``_pending`` row tuples into an Arrow chunk.
+
+        Always drains: readers see ``_chunks`` directly, so leaving rows in
+        ``_pending`` would hide them until the next flush. ``_merge_chunks``
+        keeps the chunk list logarithmic even under low-rate writes.
+        """
         with self._memory_lock:
-            if len(self._pending) < _CHUNK_THRESHOLD:
-                return
             rows = self._pending
+            if not rows:
+                return
             self._pending = []
         table = _build_buffer_table(rows)
         with self._memory_lock:
@@ -618,47 +648,52 @@ class DuckDBLogStore:
             self._chunks = _merge_chunks(self._chunks)
 
     def _flush_step(self) -> None:
-        """Seal any RAM data into a Parquet segment on disk."""
-        with self._memory_lock:
-            if not self._chunks and not self._pending:
-                return
-            tables = list(self._chunks)
-            if self._pending:
-                tables.append(_build_buffer_table(self._pending))
-                self._pending = []
+        """Seal any RAM data into a Parquet segment on disk.
 
-        # Concat + sort outside the lock — hundreds of ms on large flushes.
-        # Safe because _chunks has a single writer (_compact_step), which
-        # runs serially with _flush_step in the bg thread.
-        # Sort by (key, seq) so Parquet row-group stats on `key` are tight,
-        # letting DuckDB skip row groups that don't contain the target key.
-        new_table = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
-        new_table = new_table.sort_by([("key", "ascending"), ("seq", "ascending")])
-        seq_col = new_table.column("seq")
-        sealed = _SealedBuffer(
-            table=new_table,
-            min_seq=pc.min(seq_col).as_py(),
-            max_seq=pc.max(seq_col).as_py(),
-        )
-
-        with self._memory_lock:
-            self._chunks = []
-            self._flushing = sealed
-
-        try:
-            self._write_new_segment(sealed)
-        except Exception:
-            logger.warning("Flush failed, restoring data to chunks", exc_info=True)
+        The flush lock serializes with any concurrent caller (test
+        ``_force_flush`` vs bg thread) so two writers can't race on the same
+        tmp filename.
+        """
+        with self._flush_lock:
             with self._memory_lock:
-                self._chunks.insert(0, sealed.table)
-                self._flushing = None
-            return
+                if not self._chunks and not self._pending:
+                    return
+                tables = list(self._chunks)
+                if self._pending:
+                    tables.append(_build_buffer_table(self._pending))
+                    self._pending = []
 
-        with self._flush_generation_cond:
-            self._flush_generation += 1
-            self._flush_generation_cond.notify_all()
+            # Concat + sort outside the memory lock — hundreds of ms on large
+            # flushes. Sort by (key, seq) so Parquet row-group stats on `key`
+            # are tight, letting DuckDB skip row groups that don't contain
+            # the target key.
+            new_table = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
+            new_table = new_table.sort_by([("key", "ascending"), ("seq", "ascending")])
+            seq_col = new_table.column("seq")
+            sealed = _SealedBuffer(
+                table=new_table,
+                min_seq=pc.min(seq_col).as_py(),
+                max_seq=pc.max(seq_col).as_py(),
+            )
 
-        self._gc_local_segments()
+            with self._memory_lock:
+                self._chunks = []
+                self._flushing = sealed
+
+            try:
+                self._write_new_segment(sealed)
+            except Exception:
+                logger.warning("Flush failed, restoring data to chunks", exc_info=True)
+                with self._memory_lock:
+                    self._chunks.insert(0, sealed.table)
+                    self._flushing = None
+                return
+
+            with self._flush_generation_cond:
+                self._flush_generation += 1
+                self._flush_generation_cond.notify_all()
+
+            self._gc_local_segments()
 
     def _write_new_segment(self, sealed: _SealedBuffer) -> None:
         """Write a sealed buffer as a new tmp_ Parquet file.
@@ -731,10 +766,10 @@ class DuckDBLogStore:
         sql = (
             f"COPY (SELECT * FROM read_parquet([{paths_sql}]) ORDER BY key, seq) "
             f"TO '{staging_path}' "
-            f"(FORMAT 'parquet', ROW_GROUP_SIZE {_ROW_GROUP_SIZE}, COMPRESSION 'zstd')"
+            f"(FORMAT 'parquet', ROW_GROUP_SIZE {_ROW_GROUP_SIZE}, COMPRESSION 'zstd', COMPRESSION_LEVEL 1)"
         )
         try:
-            with self._pool.checkout([]) as (conn, _):
+            with self._pool.compaction_checkout() as conn:
                 conn.execute(sql)
         except Exception:
             logger.warning("Compaction failed, leaving tmp segments in place", exc_info=True)
@@ -968,10 +1003,6 @@ class DuckDBLogStore:
             ram_tables: list[pa.Table] = list(self._chunks)
             if self._flushing is not None:
                 ram_tables.append(self._flushing.table)
-            pending_snapshot = list(self._pending) if self._pending else None
-
-        if pending_snapshot:
-            ram_tables.append(_build_buffer_table(pending_snapshot))
 
         segments = _cap_segments(segments)
         parquet_files = [s.path for s in segments]

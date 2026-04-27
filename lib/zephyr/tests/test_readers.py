@@ -151,6 +151,30 @@ def test_iter_parquet_row_groups_skips_all_non_matching(tmp_path):
     assert tables == []
 
 
+def test_iter_parquet_row_groups_filters_within_row_group(tmp_path):
+    """Row-level filtering when a row group contains multiple predicate values."""
+    path = str(tmp_path / "mixed.parquet")
+    # Single row group with mixed shard values
+    rows = [{"shard": s, "val": f"s{s}-{i}"} for s in range(3) for i in range(2)]
+    pq.write_table(pa.Table.from_pylist(rows), path, row_group_size=100)
+
+    tables = list(iter_parquet_row_groups(path, equality_predicates={"shard": 1}))
+    assert len(tables) == 1
+    assert tables[0].column("val").to_pylist() == ["s1-0", "s1-1"]
+
+
+def test_iter_parquet_row_groups_predicate_columns_dropped(tmp_path):
+    """Predicate columns not in requested columns are read for filtering then dropped."""
+    path = str(tmp_path / "drop.parquet")
+    rows = [{"shard": s, "data": f"d{s}"} for s in range(3)]
+    pq.write_table(pa.Table.from_pylist(rows), path, row_group_size=100)
+
+    tables = list(iter_parquet_row_groups(path, columns=["data"], equality_predicates={"shard": 2}))
+    assert len(tables) == 1
+    assert tables[0].column_names == ["data"]
+    assert tables[0].column("data").to_pylist() == ["d2"]
+
+
 def test_load_parquet_no_dataset_api(tmp_path, monkeypatch):
     """Verify that load_parquet does NOT import pyarrow.dataset."""
     import sys

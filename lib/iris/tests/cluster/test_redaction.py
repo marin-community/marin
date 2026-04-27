@@ -3,11 +3,35 @@
 
 """Tests for iris.cluster.redaction."""
 
+import json
+
 from iris.cluster.redaction import (
     REDACTED_VALUE,
     is_sensitive_env_key,
+    redact_json_preview,
     redact_submit_argv,
 )
+
+
+def test_redact_json_preview_redacts_nested_sensitive_keys():
+    raw = json.dumps(
+        {
+            "name": "train-job",
+            "environment": {"env_vars": {"HF_TOKEN": "hf_xyz", "LOG_LEVEL": "info"}},
+            "metadata": [{"api_key": "sk-abc"}, {"benign": "ok"}],
+        }
+    )
+    out = json.loads(redact_json_preview(raw))
+    assert out["environment"]["env_vars"]["HF_TOKEN"] == REDACTED_VALUE
+    assert out["environment"]["env_vars"]["LOG_LEVEL"] == "info"
+    assert out["metadata"][0]["api_key"] == REDACTED_VALUE
+    assert out["metadata"][1]["benign"] == "ok"
+    assert out["name"] == "train-job"
+
+
+def test_redact_json_preview_passes_through_invalid_json():
+    assert redact_json_preview("not json{{{") == "not json{{{"
+    assert redact_json_preview("") == ""
 
 
 def test_is_sensitive_env_key_matches_common_secret_names():

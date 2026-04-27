@@ -25,7 +25,7 @@ from enum import StrEnum
 from typing import Any
 
 import dupekit
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from pydantic import BaseModel
 from rigging.filesystem import url_to_fs
 from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
