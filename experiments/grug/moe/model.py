@@ -72,6 +72,9 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    # Gemma2-style tanh soft-cap on the final lm_head logits: y = c * tanh(logits / c).
+    # None disables the cap. Gemma 2 uses 30.0 for final logits.
+    lm_head_soft_cap: float | None = None
     moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -91,6 +94,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.lm_head_soft_cap is not None and self.lm_head_soft_cap <= 0:
+            raise ValueError("lm_head_soft_cap must be positive when set")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -522,7 +527,11 @@ class Transformer(eqx.Module):
     ) -> Float[Array, "B S V"]:
         batch_spec = _batch_spec()
         hidden, _ = self(token_ids, mask=mask)
-        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+        out = jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+        cap = self.config.lm_head_soft_cap
+        if cap is not None:
+            out = cap * jnp.tanh(out / cap)
+        return out
 
     def next_token_loss(
         self,
@@ -546,6 +555,7 @@ class Transformer(eqx.Module):
             weight=loss_weight,
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
+            logit_soft_cap=self.config.lm_head_soft_cap,
             dtype=loss_dtype,
         )
         # No load-balancing loss; router z-loss only.

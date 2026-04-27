@@ -55,6 +55,7 @@ def fused_linear_softmax_cross_entropy_loss(
     weight: jax.Array | None = None,
     reduction: str = "mean",
     logsumexp_weight: float | None = None,
+    logit_soft_cap: float | None = None,
     dtype: jnp.dtype = jnp.float32,
     precision: jax.lax.PrecisionLike = None,
     implementation: str | tuple[str, ...] | None = None,
@@ -68,6 +69,8 @@ def fused_linear_softmax_cross_entropy_loss(
         weight: Optional per-example weights with shape matching labels.
         reduction: One of {"mean", "sum", "none"}.
         logsumexp_weight: Optional z-loss weight (logsumexp^2 term).
+        logit_soft_cap: Optional Gemma2-style tanh soft cap on logits:
+            ``logits := c * tanh(logits / c)``. Applied inside the fused kernel.
         dtype: Accumulator dtype for logits/logsumexp.
         precision: Optional matmul precision override for XLA/reference paths.
         implementation: Optional fused CE backend selection override.
@@ -112,7 +115,7 @@ def fused_linear_softmax_cross_entropy_loss(
             weight=flat_weight,
             logsumexp_weight=logsumexp_weight,
             dtype=dtype,
-            logit_soft_cap=None,
+            logit_soft_cap=logit_soft_cap,
             precision=precision,
             implementation=implementation,
         )
