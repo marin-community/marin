@@ -119,3 +119,28 @@ def test_append_batch(store: MemStore):
     )
     assert store.has_logs("/job/a/0:0")
     assert store.has_logs("/job/b/0:0")
+
+
+def test_max_rows_evicts_oldest_via_append():
+    store = MemStore(max_rows=10)
+    for i in range(25):
+        store.append(KEY, [_entry(f"line-{i}", epoch_ms=i)])
+    result = store.get_logs(KEY)
+    assert [e.data for e in result.entries] == [f"line-{i}" for i in range(15, 25)]
+    store.close()
+
+
+def test_max_rows_evicts_oldest_via_append_batch():
+    store = MemStore(max_rows=10)
+    store.append_batch([(KEY, [_entry(f"line-{i}", epoch_ms=i) for i in range(25)])])
+    result = store.get_logs(KEY)
+    assert [e.data for e in result.entries] == [f"line-{i}" for i in range(15, 25)]
+    store.close()
+
+
+def test_max_rows_none_is_unbounded():
+    store = MemStore(max_rows=None)
+    store.append(KEY, [_entry(f"line-{i}", epoch_ms=i) for i in range(5000)])
+    result = store.get_logs(KEY, max_lines=10000)
+    assert len(result.entries) == 5000
+    store.close()

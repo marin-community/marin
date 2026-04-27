@@ -45,13 +45,20 @@ def _rows_to_entries(rows: list[_Row], include_key: bool, exact_key: str | None 
 
 
 class MemStore:
-    """In-memory LogStore drop-in for tests. Thread-safe, zero dependencies beyond protobuf."""
+    """In-memory LogStore drop-in for tests. Thread-safe, zero dependencies beyond protobuf.
+
+    ``max_rows`` caps total retained entries; oldest are evicted FIFO when the
+    cap is exceeded. ``None`` (the default) is unbounded — fine for tests, not
+    for any path that ingests untrusted volumes (e.g. the controller's bundled
+    fallback log server, which sets an explicit cap).
+    """
 
     def __init__(
         self,
         log_dir: Path | None = None,
         *,
         remote_log_dir: str = "",
+        max_rows: int | None = None,
         max_local_segments: int = 50,
         max_local_bytes: int = 5 * 1024**3,
         flush_interval_sec: float = 600.0,
@@ -61,6 +68,14 @@ class MemStore:
         self._lock = Lock()
         self._rows: list[_Row] = []
         self._next_seq = 1
+        self._max_rows = max_rows
+
+    def _trim_locked(self) -> None:
+        if self._max_rows is None:
+            return
+        excess = len(self._rows) - self._max_rows
+        if excess > 0:
+            del self._rows[:excess]
 
     def append(self, key: str, entries: list) -> None:
         if not entries:
@@ -77,6 +92,7 @@ class MemStore:
                 self._rows.extend(
                     (first_seq + i, key, e.source, e.data, e.timestamp.epoch_ms, e.level) for i, e in enumerate(entries)
                 )
+            self._trim_locked()
 
     def get_logs(
         self,

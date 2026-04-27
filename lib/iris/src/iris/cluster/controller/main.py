@@ -38,23 +38,18 @@ LOG_SERVER_ENDPOINT_NAME = "/system/log_server"
 
 
 def _resolve_cluster_endpoints(cluster_config: config_pb2.IrisClusterConfig) -> dict[str, str]:
-    """Resolve ``cluster_config.endpoints`` to concrete URLs and require log server.
+    """Resolve ``cluster_config.endpoints`` to concrete URLs.
 
     Each EndpointSpec is dispatched through ``resolve_endpoint_uri`` so callers
     can declare ``http://``, ``gcp://``, or ``k8s://`` schemes uniformly.
+
+    ``/system/log_server`` is optional: when absent, the Controller starts a
+    bundled in-process MemStore-backed log server as a fallback (capped, lossy
+    on restart). Production deployments should declare an external endpoint.
     """
     resolved: dict[str, str] = {}
     for name, spec in cluster_config.endpoints.items():
         resolved[name] = resolve_endpoint_uri(spec.uri, dict(spec.metadata))
-    if LOG_SERVER_ENDPOINT_NAME not in resolved:
-        raise ValueError(
-            f"endpoints config must define {LOG_SERVER_ENDPOINT_NAME} "
-            "(no in-process fallback after the finelog extraction). "
-            "Run finelog-server out-of-band and add an entry like:\n"
-            "  endpoints:\n"
-            f"    {LOG_SERVER_ENDPOINT_NAME}:\n"
-            "      uri: http://log-server.iris.svc.cluster.local:10001"
-        )
     return resolved
 
 
@@ -94,8 +89,16 @@ def run_controller_serve(
     # Resolve cluster endpoints up front so a misconfigured config fails before
     # we touch DBs, providers, or the autoscaler.
     endpoints = _resolve_cluster_endpoints(cluster_config)
-    log_service_address = endpoints[LOG_SERVER_ENDPOINT_NAME]
-    logger.info("Resolved %d cluster endpoints; log server: %s", len(endpoints), log_service_address)
+    log_service_address = endpoints.get(LOG_SERVER_ENDPOINT_NAME, "")
+    if log_service_address:
+        logger.info("Resolved %d cluster endpoints; log server: %s", len(endpoints), log_service_address)
+    else:
+        logger.warning(
+            "%s not in endpoints config — Controller will host a bundled in-process "
+            "MemStore log server. Logs are lost on restart and capped in memory. "
+            "Run finelog-server out-of-band for production.",
+            LOG_SERVER_ENDPOINT_NAME,
+        )
 
     if state_dir is not None:
         local_state_dir = state_dir

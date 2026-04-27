@@ -108,6 +108,7 @@ from iris.cluster.controller.worker_health import WorkerHealthTracker
 from finelog.client import LogPusher, LogServiceProxy, RemoteLogHandler
 from finelog.server import LogServiceImpl
 from finelog.server.asgi import build_log_server_asgi
+from finelog.store.mem_store import MemStore
 from iris.cluster.log_store_helpers import CONTROLLER_LOG_KEY
 from iris.cluster.providers.types import find_free_port, resolve_external_host
 from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider
@@ -161,6 +162,13 @@ def _drain_queue(q: queue_mod.Queue, timeout: float = 1.0) -> list:
 
 # Log a detailed per-phase scheduling trace every this many rounds.
 _SCHEDULING_TRACE_INTERVAL = 50
+
+# Cap on the bundled in-process log server's MemStore. ~256 bytes/row puts
+# this under ~50 MB of resident size for the controller — large enough to
+# tail a chatty job for a while, small enough that an unbounded ingest can't
+# OOM the process. Operators who need real log retention run finelog-server
+# externally and declare it in cluster_config.endpoints.
+BUNDLED_LOG_SERVER_MAX_ROWS = 200_000
 
 # Taint attribute injected onto claimed workers to prevent non-reservation
 # jobs from landing on them.  Non-reservation jobs get a NOT_EXISTS constraint
@@ -1164,15 +1172,23 @@ class Controller:
         return self._started
 
     def _start_local_log_server(self) -> str:
-        """Start an in-process log server on a free port and return its address.
+        """Start a bundled in-process MemStore-backed log server and return its address.
 
-        Used in local/test mode when no external log server is configured.
-        The server runs in a background thread managed by the ThreadContainer.
+        Used as a fallback when ``cluster_config.endpoints`` does not declare
+        ``/system/log_server`` (and in tests). MemStore is capped at
+        ``BUNDLED_LOG_SERVER_MAX_ROWS`` with FIFO eviction so a chatty job
+        cannot OOM the controller; logs are lost on controller restart. For
+        production deployments, run finelog-server out-of-band and point the
+        endpoints config at it.
+
+        TODO(#5215): when rigging-mediated log sinks land, this fallback
+        becomes a NullSink + StderrSink pair instead of a bundled server,
+        and the LogPusher / LogServiceProxy wiring below stops being a
+        special case.
         """
         log_server_port = find_free_port()
         self._log_service = LogServiceImpl(
-            log_dir=self._config.local_state_dir / "logs",
-            remote_log_dir=f"{self._config.remote_state_dir.rstrip('/')}/logs",
+            log_store=MemStore(max_rows=BUNDLED_LOG_SERVER_MAX_ROWS),
         )
 
         # Wrap the verifier in NullAuthInterceptor so anonymous calls are
