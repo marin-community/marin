@@ -144,11 +144,7 @@ def profile_ctx(
     _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
     logger.info("Starting profiler.")
 
-    # Ensure destination exists
-    try:
-        os.makedirs(path, exist_ok=True)
-    except Exception:
-        pass
+    os.makedirs(path, exist_ok=True)
 
     if device_profile:
         jax.profiler.start_trace(path, create_perfetto_link=_create_perfetto_link, create_perfetto_trace=True)
@@ -168,6 +164,13 @@ def profile_ctx(
             txt_summary_path = os.path.join(path, f"{host_profile_basename}.txt")
         except Exception as e:  # pragma: no cover - optional/diagnostic path
             logger.warning(f"Failed to start cProfile host profiler: {e}")
+
+    def _try_log_host_artifact(artifact_path: str, description: str) -> None:
+        try:
+            levanter.tracker.current_tracker().log_artifact(artifact_path, type="host_profile")
+        except Exception:
+            logger.warning(f"Failed to log host profile {description}", exc_info=True)
+
     try:
         yield
     finally:
@@ -186,7 +189,7 @@ def profile_ctx(
                         s.stream = f  # type: ignore
                         s.print_stats(host_profile_topn)
             except Exception:  # pragma: no cover - optional/diagnostic path
-                logger.warn("Failed to log host profile stats", exc_info=True)
+                logger.warning("Failed to log host profile stats", exc_info=True)
 
         # Start periodic flushing before stop_trace since it may block when perfetto is enabled
         if create_perfetto_link and jax.process_index() == 0:
@@ -205,17 +208,10 @@ def profile_ctx(
             event.set()
 
         levanter.tracker.current_tracker().log_artifact(path, type="jax_profile")
-        # Log host stats if available
         if stats_path is not None and os.path.exists(stats_path):
-            try:
-                levanter.tracker.current_tracker().log_artifact(stats_path, type="host_profile")
-            except Exception:
-                logger.warn("Failed to log host profile stats", exc_info=True)
+            _try_log_host_artifact(stats_path, "stats")
         if txt_summary_path is not None and os.path.exists(txt_summary_path):
-            try:
-                levanter.tracker.current_tracker().log_artifact(txt_summary_path, type="host_profile")
-            except Exception:
-                logger.warn("Failed to log host profile summary", exc_info=True)
+            _try_log_host_artifact(txt_summary_path, "summary")
         barrier_sync()
 
 
