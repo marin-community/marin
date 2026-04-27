@@ -15,29 +15,14 @@ from marin.datakit.download.diagnostic_logs import (
     DEFAULT_GHALOGS_MAX_MEMBERS,
     DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
     DEFAULT_LOGHUB_MAX_FILES,
-    DiagnosticSourceStatus,
+    blocked_sources,
     extract_diagnostic_logs_step,
     source_inventory,
 )
 
 
 def _inventory_payload() -> list[dict[str, object]]:
-    payload = []
-    for source in source_inventory():
-        payload.append(
-            {
-                "name": source.name,
-                "status": source.status.value,
-                "source_url": source.source_url,
-                "license": source.source_license,
-                "format": source.source_format,
-                "compressed_size_bytes": source.compressed_size_bytes,
-                "rough_tokens_b": source.rough_tokens_b,
-                "risk": source.contamination_risk,
-                "provenance_notes": source.provenance_notes,
-            }
-        )
-    return payload
+    return [source.to_dict() for source in source_inventory()]
 
 
 def _extract_step(
@@ -144,7 +129,7 @@ def all_cmd(
 
 
 if __name__ == "__main__":
-    blocked = [entry.name for entry in source_inventory() if entry.status == DiagnosticSourceStatus.BLOCKED_LICENSE]
+    blocked = [entry.source_label for entry in blocked_sources()]
     if blocked:
         click.echo(
             "Blocked external sources (license/provenance review required before training ingest): " + ", ".join(blocked)

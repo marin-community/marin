@@ -18,6 +18,18 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 import fsspec
+from marin.datakit.ingestion_manifest import (
+    IdentityTreatment,
+    IngestionPolicy,
+    IngestionSourceManifest,
+    JsonValue,
+    MaterializedOutputMetadata,
+    SampleCapConfig,
+    SecretRedaction,
+    StagingMetadata,
+    UsagePolicy,
+    write_ingestion_metadata_json,
+)
 from marin.utils import fsspec_mkdirs
 
 from marin.execution.step_spec import StepSpec
@@ -37,6 +49,8 @@ LOGHUB_REPO_SIZE_BYTES = 7_513_088
 DEFAULT_GHALOGS_MAX_MEMBERS = 10_000
 DEFAULT_LOGCHUNKS_MAX_EXAMPLES = 10_000
 DEFAULT_LOGHUB_MAX_FILES = 100
+LONG_TAIL_PPL_EPIC_ISSUE = 5005
+PUBLIC_DIAGNOSTIC_LOGS_ISSUE = 5094
 
 _PARTITION_BUCKETS = 10_000
 _ISSUE_5093_HOLDOUT_BUCKETS = 100
@@ -87,14 +101,6 @@ _USERNAME_DENYLIST = frozenset(
 )
 
 
-class DiagnosticSourceStatus(StrEnum):
-    """Training eligibility for a candidate source."""
-
-    TRAINING_READY = "training_ready"
-    BLOCKED_LICENSE = "blocked_license"
-    EVAL_ONLY = "eval_only"
-
-
 class DiagnosticPartition(StrEnum):
     """Stable split assignment for diagnostic logs."""
 
@@ -104,88 +110,166 @@ class DiagnosticPartition(StrEnum):
     ISSUE_5093_HOLDOUT = "issue_5093_holdout"
 
 
-@dataclass(frozen=True)
-class DiagnosticLogSource:
-    """Metadata and policy for one diagnostic-log candidate source."""
+def _source_policy(
+    *,
+    usage_policy: UsagePolicy,
+    use_policy: str,
+    contamination_risk: str,
+    provenance_notes: str,
+) -> IngestionPolicy:
+    return IngestionPolicy(
+        usage_policy=usage_policy,
+        use_policy=use_policy,
+        requires_sanitization=True,
+        identity_treatment=IdentityTreatment.PSEUDONYMIZE,
+        secret_redaction=SecretRedaction.REQUIRED,
+        contamination_risk=contamination_risk,
+        provenance_notes=provenance_notes,
+    )
 
-    name: str
-    source_url: str
-    source_license: str
-    source_format: str
-    compressed_size_bytes: int | None
-    contamination_risk: str
-    status: DiagnosticSourceStatus
-    provenance_notes: str
-    rough_tokens_b: float | None
 
-
-SOURCE_INVENTORY: tuple[DiagnosticLogSource, ...] = (
-    DiagnosticLogSource(
-        name="ghalogs",
-        source_url=GHALOGS_RECORD_URL,
+SOURCE_INVENTORY: tuple[IngestionSourceManifest, ...] = (
+    IngestionSourceManifest(
+        dataset_key="ghalogs/public",
+        slice_key="diagnostic_logs/ghalogs/public_sample",
+        source_label="ghalogs",
+        source_urls=(GHALOGS_RECORD_URL,),
         source_license="Creative Commons Attribution Share Alike 4.0 International",
         source_format="runs.json.gz, repositories.json.gz, github_run_logs.zip",
+        surface_form="sanitized_github_actions_logs",
+        policy=_source_policy(
+            usage_policy=UsagePolicy.TRAINING_ALLOWED,
+            use_policy="Training and eval source after sanitization and sample-capped extraction.",
+            contamination_risk="high: public CI logs can contain secrets and internal paths",
+            provenance_notes="DOI 10.5281/zenodo.14796970, published 2025-02-03; Zenodo license id cc-by-sa-4.0.",
+        ),
+        staging=StagingMetadata(
+            transform_name="extract_ghalogs",
+            output_filename="metadata.json",
+            record_provenance_fields=("id", "archive_path", "partition"),
+            metadata={"output_layout": "train/dev/test/issue_5093_holdout jsonl partitions plus metadata.json"},
+        ),
+        epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
+        issue_numbers=(PUBLIC_DIAGNOSTIC_LOGS_ISSUE,),
+        sample_caps=SampleCapConfig(max_members=DEFAULT_GHALOGS_MAX_MEMBERS),
         compressed_size_bytes=GHALOGS_TOTAL_BYTES,
-        contamination_risk="high: public CI logs can contain secrets and internal paths",
-        status=DiagnosticSourceStatus.TRAINING_READY,
-        provenance_notes="DOI 10.5281/zenodo.14796970, published 2025-02-03; Zenodo license id cc-by-sa-4.0.",
         rough_tokens_b=None,
+        source_metadata={"archive_filename": GHALOGS_ZIP_FILENAME},
     ),
-    DiagnosticLogSource(
-        name="logchunks",
-        source_url=LOGCHUNKS_RECORD_URL,
+    IngestionSourceManifest(
+        dataset_key="logchunks/public",
+        slice_key="diagnostic_logs/logchunks/eval_only",
+        source_label="logchunks",
+        source_urls=(LOGCHUNKS_RECORD_URL,),
         source_license="Creative Commons Attribution 4.0 International",
         source_format="LogChunks.zip (XML chunk annotations)",
+        surface_form="sanitized_diagnostic_log_chunks",
+        policy=_source_policy(
+            usage_policy=UsagePolicy.EVAL_ONLY,
+            use_policy="Eval-only diagnostic-log source. Do not mix into training.",
+            contamination_risk="medium: labeled failure snippets may include local paths and user names",
+            provenance_notes="DOI 10.5281/zenodo.3632351, published 2020-01-31; eval-only despite acceptable license.",
+        ),
+        staging=StagingMetadata(
+            transform_name="extract_logchunks",
+            output_filename="data-00000-of-00001.jsonl",
+            record_provenance_fields=("id", "source_path", "category", "log_path"),
+        ),
+        epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
+        issue_numbers=(PUBLIC_DIAGNOSTIC_LOGS_ISSUE,),
+        sample_caps=SampleCapConfig(max_examples=DEFAULT_LOGCHUNKS_MAX_EXAMPLES),
         compressed_size_bytes=LOGCHUNKS_TOTAL_BYTES,
-        contamination_risk="medium: labeled failure snippets may include local paths and user names",
-        status=DiagnosticSourceStatus.EVAL_ONLY,
-        provenance_notes="DOI 10.5281/zenodo.3632351, published 2020-01-31; eval-only despite acceptable license.",
         rough_tokens_b=None,
+        source_metadata={"archive_filename": LOGCHUNKS_ZIP_FILENAME},
     ),
-    DiagnosticLogSource(
-        name="loghub",
-        source_url=LOGHUB_REPO_URL,
+    IngestionSourceManifest(
+        dataset_key="loghub/public",
+        slice_key="diagnostic_logs/loghub/eval_only",
+        source_label="loghub",
+        source_urls=(LOGHUB_REPO_URL,),
         source_license="custom research/academic-only license",
         source_format="mixed plain-text log files grouped by dataset",
+        surface_form="sanitized_raw_system_logs",
+        policy=_source_policy(
+            usage_policy=UsagePolicy.EVAL_ONLY,
+            use_policy="Eval-only diagnostic-log source. Do not mix into training.",
+            contamination_risk="medium: includes system identifiers and infrastructure paths",
+            provenance_notes="LICENSE file restricts usage to research/academic work; acceptable only for eval use.",
+        ),
+        staging=StagingMetadata(
+            transform_name="extract_loghub",
+            output_filename="data-00000-of-00001.jsonl",
+            record_provenance_fields=("id", "source_path"),
+        ),
+        epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
+        issue_numbers=(PUBLIC_DIAGNOSTIC_LOGS_ISSUE,),
+        sample_caps=SampleCapConfig(max_files=DEFAULT_LOGHUB_MAX_FILES),
         compressed_size_bytes=LOGHUB_REPO_SIZE_BYTES,
-        contamination_risk="medium: includes system identifiers and infrastructure paths",
-        status=DiagnosticSourceStatus.EVAL_ONLY,
-        provenance_notes="LICENSE file restricts usage to research/academic work; acceptable only for eval use.",
         rough_tokens_b=None,
+        source_metadata={"source_dirname": LOGHUB_DIRNAME},
     ),
-    DiagnosticLogSource(
-        name="marin_owned_ci_iris_zephyr_logs",
-        source_url="internal",
+    IngestionSourceManifest(
+        dataset_key="marin_internal/ci_logs",
+        slice_key="diagnostic_logs/marin_internal/eval_only",
+        source_label="marin_owned_ci_iris_zephyr_logs",
+        source_urls=("internal",),
         source_license="not public",
         source_format="internal run logs",
-        compressed_size_bytes=None,
-        contamination_risk="high: internal infra identifiers and sensitive traces",
-        status=DiagnosticSourceStatus.EVAL_ONLY,
-        provenance_notes="Eval-only until governance and sanitization policy is explicitly approved.",
-        rough_tokens_b=None,
+        surface_form="sanitized_internal_ci_logs",
+        policy=_source_policy(
+            usage_policy=UsagePolicy.EVAL_ONLY,
+            use_policy="Eval-only until governance and sanitization policy is explicitly approved.",
+            contamination_risk="high: internal infra identifiers and sensitive traces",
+            provenance_notes="Eval-only until governance and sanitization policy is explicitly approved.",
+        ),
+        staging=StagingMetadata(transform_name="internal_only"),
+        epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
+        issue_numbers=(PUBLIC_DIAGNOSTIC_LOGS_ISSUE,),
     ),
-    DiagnosticLogSource(
-        name="issue_5093_eval_slices",
-        source_url="https://github.com/marin-community/marin/issues/5093",
+    IngestionSourceManifest(
+        dataset_key="marin_eval/diagnostic_logs_holdout",
+        slice_key="diagnostic_logs/issue_5093_holdout/eval_only",
+        source_label="issue_5093_eval_slices",
+        source_urls=("https://github.com/marin-community/marin/issues/5093",),
         source_license="eval holdout policy",
         source_format="held-out eval slices",
-        compressed_size_bytes=None,
-        contamination_risk="high: direct eval contamination",
-        status=DiagnosticSourceStatus.EVAL_ONLY,
-        provenance_notes="Never include in training.",
-        rough_tokens_b=None,
+        surface_form="held_out_diagnostic_log_slices",
+        policy=_source_policy(
+            usage_policy=UsagePolicy.EVAL_ONLY,
+            use_policy="Eval-only holdout. Never include in training.",
+            contamination_risk="high: direct eval contamination",
+            provenance_notes="Never include in training.",
+        ),
+        staging=StagingMetadata(transform_name="holdout_only"),
+        epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
+        issue_numbers=(PUBLIC_DIAGNOSTIC_LOGS_ISSUE, 5093),
     ),
 )
+SOURCE_MANIFESTS = {source.source_label: source for source in SOURCE_INVENTORY}
 
 
-def source_inventory() -> tuple[DiagnosticLogSource, ...]:
+def source_manifest(source_label: str) -> IngestionSourceManifest:
+    """Return the manifest for one named diagnostic-log source."""
+
+    return SOURCE_MANIFESTS[source_label]
+
+
+def source_inventory() -> tuple[IngestionSourceManifest, ...]:
     """Return the immutable source inventory for public diagnostic logs."""
+
     return SOURCE_INVENTORY
 
 
-def training_ready_sources() -> tuple[DiagnosticLogSource, ...]:
+def training_ready_sources() -> tuple[IngestionSourceManifest, ...]:
     """Return only source entries that are approved for training ingestion."""
-    return tuple(source for source in SOURCE_INVENTORY if source.status == DiagnosticSourceStatus.TRAINING_READY)
+
+    return tuple(source for source in SOURCE_INVENTORY if source.policy.training_allowed)
+
+
+def blocked_sources() -> tuple[IngestionSourceManifest, ...]:
+    """Return source entries blocked from both training and eval use."""
+
+    return tuple(source for source in SOURCE_INVENTORY if source.policy.usage_policy == UsagePolicy.BLOCKED)
 
 
 @dataclass
@@ -331,16 +415,42 @@ def loghub_file_to_record(source_path: str, content: bytes) -> dict[str, str] | 
     }
 
 
-def _write_jsonl_records(output_file: str, records: Iterable[dict[str, str]]) -> int:
+def _write_jsonl_records(output_file: str, records: Iterable[dict[str, str]]) -> tuple[int, int]:
     kept_records = 0
+    bytes_written = 0
     output_dir = os.path.dirname(output_file)
     fsspec_mkdirs(output_dir, exist_ok=True)
     with fsspec.open(output_file, "wt", encoding="utf-8") as writer:
         for record in records:
             kept_records += 1
-            writer.write(json.dumps(record, ensure_ascii=False))
+            payload = json.dumps(record, ensure_ascii=False)
+            bytes_written += len(payload.encode("utf-8")) + 1
+            writer.write(payload)
             writer.write("\n")
-    return kept_records
+    return kept_records, bytes_written
+
+
+def _write_source_metadata(
+    *,
+    manifest: IngestionSourceManifest,
+    input_path: str,
+    output_path: str,
+    output_file: str,
+    record_count: int,
+    bytes_written: int,
+    metadata: dict[str, JsonValue],
+) -> str:
+    return write_ingestion_metadata_json(
+        manifest=manifest,
+        materialized_output=MaterializedOutputMetadata(
+            input_path=input_path,
+            output_path=output_path,
+            output_file=output_file,
+            record_count=record_count,
+            bytes_written=bytes_written,
+            metadata=metadata,
+        ),
+    )
 
 
 def extract_ghalogs(
@@ -356,6 +466,7 @@ def extract_ghalogs(
     archive_path = os.path.join(input_path, GHALOGS_ZIP_FILENAME)
     counters = {"seen_members": 0, "kept_records": 0}
     partition_counts = {partition.value: 0 for partition in DiagnosticPartition}
+    total_bytes_written = 0
 
     output_file_paths: dict[str, str] = {}
     for partition in DiagnosticPartition:
@@ -389,20 +500,27 @@ def extract_ghalogs(
                 counters["kept_records"] += 1
                 partition = record["partition"]
                 partition_counts[partition] += 1
-                writers[partition].write(json.dumps(record, ensure_ascii=False))
+                payload = json.dumps(record, ensure_ascii=False)
+                total_bytes_written += len(payload.encode("utf-8")) + 1
+                writers[partition].write(payload)
                 writers[partition].write("\n")
 
-    metadata = {
-        "source": "ghalogs",
-        "source_url": GHALOGS_RECORD_URL,
-        "source_archive": archive_path,
-        "sample_limits": {"max_members": max_members},
-        "counters": counters,
-        "partition_counts": partition_counts,
-        "training_ready_sources": [source.name for source in training_ready_sources()],
-    }
-    with fsspec.open(os.path.join(output_path, "metadata.json"), "wt", encoding="utf-8") as handle:
-        json.dump(metadata, handle, indent=2, sort_keys=True)
+    _write_source_metadata(
+        manifest=source_manifest("ghalogs"),
+        input_path=input_path,
+        output_path=output_path,
+        output_file=output_file_paths[DiagnosticPartition.TRAIN.value],
+        record_count=counters["kept_records"],
+        bytes_written=total_bytes_written,
+        metadata={
+            "source_archive": archive_path,
+            "sample_limits": {"max_members": max_members},
+            "counters": counters,
+            "partition_counts": partition_counts,
+            "partition_files": output_file_paths,
+            "training_ready_sources": [source.source_label for source in training_ready_sources()],
+        },
+    )
 
 
 def _iter_logchunks_records(archive_path: str, max_examples: int) -> Iterable[dict[str, str]]:
@@ -438,20 +556,19 @@ def extract_logchunks(
 
     archive_path = os.path.join(input_path, LOGCHUNKS_ZIP_FILENAME)
     output_file = os.path.join(output_path, "eval_only", "logchunks", "data-00000-of-00001.jsonl")
-    kept_records = _write_jsonl_records(output_file, _iter_logchunks_records(archive_path, max_examples))
-
-    metadata = {
-        "source": "logchunks",
-        "source_url": LOGCHUNKS_RECORD_URL,
-        "source_archive": archive_path,
-        "sample_limits": {"max_examples": max_examples},
-        "counters": {"kept_records": kept_records},
-        "status": DiagnosticSourceStatus.EVAL_ONLY.value,
-    }
-    with fsspec.open(
-        os.path.join(output_path, "eval_only", "logchunks", "metadata.json"), "wt", encoding="utf-8"
-    ) as handle:
-        json.dump(metadata, handle, indent=2, sort_keys=True)
+    kept_records, bytes_written = _write_jsonl_records(output_file, _iter_logchunks_records(archive_path, max_examples))
+    _write_source_metadata(
+        manifest=source_manifest("logchunks"),
+        input_path=input_path,
+        output_path=os.path.join(output_path, "eval_only", "logchunks"),
+        output_file=output_file,
+        record_count=kept_records,
+        bytes_written=bytes_written,
+        metadata={
+            "source_archive": archive_path,
+            "sample_limits": {"max_examples": max_examples},
+        },
+    )
 
 
 def _source_path(fs: fsspec.AbstractFileSystem, relative_path: str) -> str:
@@ -490,20 +607,19 @@ def extract_loghub(
 
     loghub_path = os.path.join(input_path, LOGHUB_DIRNAME)
     output_file = os.path.join(output_path, "eval_only", "loghub", "data-00000-of-00001.jsonl")
-    kept_records = _write_jsonl_records(output_file, _iter_loghub_records(loghub_path, max_files))
-
-    metadata = {
-        "source": "loghub",
-        "source_url": LOGHUB_REPO_URL,
-        "source_path": loghub_path,
-        "sample_limits": {"max_files": max_files},
-        "counters": {"kept_records": kept_records},
-        "status": DiagnosticSourceStatus.EVAL_ONLY.value,
-    }
-    with fsspec.open(
-        os.path.join(output_path, "eval_only", "loghub", "metadata.json"), "wt", encoding="utf-8"
-    ) as handle:
-        json.dump(metadata, handle, indent=2, sort_keys=True)
+    kept_records, bytes_written = _write_jsonl_records(output_file, _iter_loghub_records(loghub_path, max_files))
+    _write_source_metadata(
+        manifest=source_manifest("loghub"),
+        input_path=input_path,
+        output_path=os.path.join(output_path, "eval_only", "loghub"),
+        output_file=output_file,
+        record_count=kept_records,
+        bytes_written=bytes_written,
+        metadata={
+            "source_path": loghub_path,
+            "sample_limits": {"max_files": max_files},
+        },
+    )
 
 
 def extract_diagnostic_logs(
@@ -538,14 +654,18 @@ def extract_diagnostic_logs_step(
             max_loghub_files=max_loghub_files,
         ),
         hash_attrs={
-            "version": "v1",
+            "version": "v2",
             "sample_only": True,
             "source_path": source_path,
             "max_ghalogs_members": max_ghalogs_members,
             "max_logchunks_examples": max_logchunks_examples,
             "max_loghub_files": max_loghub_files,
             "split_policy": "97% train / 1% dev / 1% test / 1% issue_5093_holdout",
-            "eval_only_sources": "logchunks/loghub",
+            "source_manifest_fingerprints": {
+                source.source_label: source.fingerprint()
+                for source in source_inventory()
+                if source.source_label in {"ghalogs", "logchunks", "loghub"}
+            },
             "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",
         },
     )

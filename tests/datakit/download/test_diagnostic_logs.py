@@ -11,6 +11,7 @@ from marin.datakit.download.diagnostic_logs import (
     logchunks_example_to_record,
     loghub_file_to_record,
     sanitize_diagnostic_log_text,
+    source_inventory,
 )
 
 
@@ -85,6 +86,15 @@ def test_loghub_file_to_record_sanitizes():
     assert "<USER_0_EMAIL>" in record["text"]
 
 
+def test_source_inventory_uses_shared_manifest_policy_metadata():
+    inventory = {source.source_label: source for source in source_inventory()}
+
+    assert inventory["ghalogs"].policy.training_allowed is True
+    assert inventory["ghalogs"].policy.requires_sanitization is True
+    assert inventory["logchunks"].policy.eval_only is True
+    assert inventory["loghub"].compressed_size_bytes == 7_513_088
+
+
 def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
@@ -129,9 +139,12 @@ def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
     )
 
     metadata = json.loads((output_dir / "metadata.json").read_text())
-    assert metadata["sample_limits"]["max_members"] == 1
-    assert metadata["counters"]["seen_members"] == 1
-    assert metadata["counters"]["kept_records"] == 1
+    assert metadata["source_manifest"]["source_label"] == "ghalogs"
+    assert metadata["source_manifest"]["policy"]["training_allowed"] is True
+    assert metadata["source_manifest"]["policy"]["requires_sanitization"] is True
+    assert metadata["materialized_output"]["metadata"]["sample_limits"]["max_members"] == 1
+    assert metadata["materialized_output"]["metadata"]["counters"]["seen_members"] == 1
+    assert metadata["materialized_output"]["record_count"] == 1
 
     kept_records = []
     for partition in ("train", "dev", "test", "issue_5093_holdout"):
@@ -145,3 +158,5 @@ def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
     loghub_records = _read_jsonl(str(output_dir / "eval_only" / "loghub" / "data-00000-of-00001.jsonl"))
     assert len(loghub_records) == 1
     assert loghub_records[0]["source"] == "loghub"
+    loghub_metadata = json.loads((output_dir / "eval_only" / "loghub" / "metadata.json").read_text())
+    assert loghub_metadata["source_manifest"]["policy"]["eval_only"] is True
