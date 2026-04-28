@@ -74,7 +74,7 @@ Bad questions are ones research could have answered. Don't ask things you could 
 Read `.agents/projects/design-template.md`, fill in each section. Guidelines:
 
 - **~1000 words is the target, not a hard limit.** Concision is a virtue; spend words where they buy clarity. If you're at 1200, look for cuts. If 800 is genuinely tighter than 600, ship 800. The goal is "good design" not "short doc" — but a doc that's mostly load-bearing detail is better than one that buries the decision in throat-clearing.
-- Reference real `file.py:line` paths from research, not placeholders.
+- Reference real `file.py:line` paths from research, not placeholders. For load-bearing citations (anything you expect a reviewer to click), convert to commit-pinned permalinks before publishing — see "Linking conventions" below.
 - One small code snippet (10-30 lines) only if prose is genuinely worse. Default to no snippet.
 - Open Questions section is non-empty — if the design has no unknowns, ask the user what they want feedback on.
 - Don't add a backwards-compat section by default. Mention compat only if the change genuinely needs migration (persisted data, public API consumed externally, etc.).
@@ -117,11 +117,35 @@ Show the user a brief summary: what you incorporated (in design vs spec), what y
 
 Two actions, can run together. After this, the skill is done.
 
-1. **Commit and PR** via the `pull-request` skill. Branch `design/<slug>`. Single commit adding the `.agents/projects/<slug>/` directory (design.md, research.md, and spec.md — all three are always present). PR title `[Design] <slug>`. **PR body is a short summary (3–6 sentences) of the proposal — the framing paragraph plus the one-line gist of the design — with explicit links to the three sibling files (`design.md`, `spec.md`, `research.md`) and a "Discussion welcome — see Open Questions in `design.md`" footer.** The full 1-pager lives in `design.md` on the branch, not in the PR description; reviewers click through. This keeps the PR body, `design.md`, `spec.md`, and `research.md` as four peer artifacts (one summary + three files) rather than duplicating `design.md` into the PR body. Labels `design` and `agent-generated`.
+1. **Commit and PR** via the `pull-request` skill. Branch `design/<slug>`. Single commit adding the `.agents/projects/<slug>/` directory (design.md, research.md, and spec.md — all three are always present). PR title `[Design] <slug>`. **PR body is a short summary (3–6 sentences) of the proposal — the framing paragraph plus the one-line gist of the design — with explicit links to the three sibling files (`design.md`, `spec.md`, `research.md`) and a "Discussion welcome — see Open Questions in `design.md`" footer.** Use absolute branch-rooted URLs for those file links (relative paths 404 from PR descriptions — see "Linking conventions"). The full 1-pager lives in `design.md` on the branch, not in the PR description; reviewers click through. This keeps the PR body, `design.md`, `spec.md`, and `research.md` as four peer artifacts (one summary + three files) rather than duplicating `design.md` into the PR body. Labels `design` and `agent-generated`.
 
 2. **Discord ping.** Run `python scripts/ops/discord.py --channel code-review` with a 2-line message: PR title + URL + the framing paragraph (or a one-sentence compression of it). Send it; no need to confirm exact text unless the user asked.
 
 Once both have happened, you're done. Feedback lives on the PR; the user can start implementation in parallel; the 1-pager is a snapshot, not a living doc.
+
+---
+
+# Linking conventions
+
+Two failure modes worth heading off — neither is intuitive, and reviewers complain about both:
+
+1. **Code citations in `design.md` / `spec.md` / `research.md` go stale.** Plain `path:line` text (e.g. `executor.py:1037`) is fine while you're drafting locally, but the file evolves and the line number drifts within days. **Anything you expect a reviewer to click should be a commit-pinned permalink:**
+
+   ```
+   https://github.com/marin-community/marin/blob/<sha>/lib/marin/src/marin/execution/executor.py#L1037
+   ```
+
+   Use the design-branch HEAD SHA (`git rev-parse HEAD`) — the citation freezes to a known state, and a reviewer six weeks later still lands on the right line. Run a permalink pass at the end of Phase 4 (Draft) and Phase 5 (Spec) to convert key citations from `path:line` text into permalinks. Plain text refs are OK for incidental mentions; permalinks for anything load-bearing.
+
+2. **Relative paths in the PR description don't render.** A PR body with `[design.md](.agents/projects/<slug>/design.md)` *looks* like a working link in the editor, but GitHub does not resolve relative paths from PR descriptions — the link 404s. **In the PR body, use absolute branch-rooted URLs:**
+
+   ```
+   https://github.com/marin-community/marin/blob/design/<slug>/.agents/projects/<slug>/design.md
+   ```
+
+   Branch (not SHA) is right here: reviewers want the latest version when they click through during review. Inside the docs, the inverse — pin to a SHA so citations are reproducible.
+
+Both rules apply equally to spec.md / research.md / Discord pings and to inline references inside design.md. If a reviewer says "these links don't work but the bottom ones do," it's almost always rule 2.
 
 ---
 
