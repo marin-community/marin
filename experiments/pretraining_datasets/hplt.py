@@ -5,28 +5,22 @@
 
 HPLT v3.0 English data filtered to non-Common Crawl sources only (WIDE, survey crawls),
 with register-based quality filtering. This avoids redundancy with Nemotron CC while
-adding ~450B unique tokens from European web crawls.
+adding ~612.7B unique tokens from European web crawls.
 """
 
 import os.path
 
-from fray.v2 import ResourceConfig
-from marin.datakit.download.hplt import download_hplt_v3_step
-from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
+from fray import ResourceConfig
+from marin.datakit.download.hplt import download_hplt_v3_step, normalize_hplt_v3_step
+from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-
-def hplt_v3_download() -> ExecutorStep:
-    return download_hplt_v3_step().as_executor_step()
-
-
 HPLT_DATASETS = {
-    "all": ["*.jsonl.zst"],
+    "all": ["*.parquet"],
 }
 
-
-_HPLT_V3_DATA_PATH = InputName.hardcoded("raw/hplt_v3_2a08d6f3")
+hplt_v3_normalized = normalize_hplt_v3_step(download_hplt_v3_step()).as_executor_step()
 
 
 def tokenize_hplt_v3(
@@ -45,7 +39,7 @@ def tokenize_hplt_v3(
         name=output_path,
         fn=tokenize,
         config=TokenizeConfig(
-            train_paths=[_HPLT_V3_DATA_PATH / "*.jsonl.zst"],
+            train_paths=[output_path_of(hplt_v3_normalized, "outputs/main/*.parquet")],
             validation_paths=versioned([]),
             cache_path=this_output_path(),
             tokenizer=versioned(tokenizer),
