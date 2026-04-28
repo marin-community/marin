@@ -119,6 +119,7 @@ train_config = SimpleTrainConfig(
     warmup=0.1,
     train_seq_len=8192,
     steps_per_eval=500,
+    steps_per_export=5000,
     env_vars={"WANDB_ENTITY": "timodonnell"},
 )
 
