@@ -20,7 +20,9 @@ HPLT_DATASETS = {
     "all": ["*.parquet"],
 }
 
-hplt_v3_normalized = normalize_hplt_v3_step(download_hplt_v3_step()).as_executor_step()
+_hplt_v3_download_spec = download_hplt_v3_step()
+hplt_v3_download = _hplt_v3_download_spec.as_executor_step()
+hplt_v3_normalized = normalize_hplt_v3_step(_hplt_v3_download_spec).as_executor_step()
 
 
 def tokenize_hplt_v3(
