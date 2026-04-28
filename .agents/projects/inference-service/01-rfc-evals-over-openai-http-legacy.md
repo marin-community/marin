@@ -1,4 +1,8 @@
-# RFC 1: Evals Over OpenAI-Compatible HTTP
+# Legacy RFC 1: Evals Over OpenAI-Compatible HTTP
+
+> [!NOTE]
+> Superseded by [`01-rfc-served-model-lm-eval.md`](./01-rfc-served-model-lm-eval.md).
+> This document is kept as historical context for the broader eval migration attempt and closed draft PR [#4841](https://github.com/marin-community/marin/pull/4841).
 
 This doc only covers the eval-side contract.
 

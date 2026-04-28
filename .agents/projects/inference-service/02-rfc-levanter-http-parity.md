@@ -1,6 +1,6 @@
 # RFC 2: Levanter HTTP Parity For Evals
 
-This doc is intentionally narrow. It covers the changes needed in Levanter's OpenAI-compatible HTTP layer so that Levanter can satisfy [`01-rfc-evals-over-openai-http.md`](./01-rfc-evals-over-openai-http.md).
+This doc is intentionally narrow. It covers the changes needed in Levanter's OpenAI-compatible HTTP layer so that Levanter can satisfy [`01-rfc-served-model-lm-eval.md`](./01-rfc-served-model-lm-eval.md).
 
 It does not cover the Iris proxy / broker / worker system. That lives in [`03-rfc-iris-inference-service.md`](./03-rfc-iris-inference-service.md).
 
@@ -15,7 +15,7 @@ Once that gap is closed, `levanter_lm_evaluation_harness` should disappear and L
 ## Goals
 
 - Use [`levanter.inference.openai.InferenceServer`](../../../lib/levanter/src/levanter/inference/openai.py) as the single Levanter serving surface for evals.
-- Bring that server up to the parity needed by [`01-rfc-evals-over-openai-http.md`](./01-rfc-evals-over-openai-http.md).
+- Bring that server up to the parity needed by [`01-rfc-served-model-lm-eval.md`](./01-rfc-served-model-lm-eval.md).
 - Delete [`levanter_lm_eval_evaluator.py`](../../../lib/marin/src/marin/evaluation/evaluators/levanter_lm_eval_evaluator.py) once the shared HTTP path works.
 - Keep the scope tight: implement the HTTP behavior current evals need.
 
