@@ -26,12 +26,14 @@ from marin.execution.remote import remote
 
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, NEMOTRON_MIX_WITH_DEFAULT_VALIDATION, run_grug_moe_trial
-from experiments.grug.moe.optimizer import GrugMoeMuonConfig, build_grug_moe_muon_config
+from experiments.grug.moe.optimizer import GrugMoeMuonConfig, GrugMoeMuonHConfig, build_grug_moe_muon_config
+from experiments.grug.moe.optimizer import build_grug_moe_muonh_config
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 logger = logging.getLogger(__name__)
 
 FloatRange = tuple[float, float]
+SearchOptimizerConfig = GrugMoeMuonConfig | GrugMoeMuonHConfig
 SUGGESTIONS_FILENAME = "vizier_suggestions.json"
 UPDATE_FILENAME = "vizier_update.json"
 RESOURCE_FILENAME = "vizier_resource.json"
@@ -62,6 +64,9 @@ class MuonSearchSettings:
     vizier_algorithm: str
     coefficient_type: CoefficientType
     base_train_tags: tuple[str, ...]
+    batch_multiplier: int = 1
+    optimizer_family: str = "muon"
+    matrix_lr_multiplier_name: str = "muon_lr_multiplier"
 
     def study_id(self, scale: MuonSearchScale) -> str:
         return f"{self.experiment_name}-{scale.name}"
@@ -116,9 +121,11 @@ class VizierTrainConfig:
     suggestions_path: str
     suggestion_index: int
     base_launch_config: GrugMoeLaunchConfig
-    base_optimizer: GrugMoeMuonConfig
+    base_optimizer: SearchOptimizerConfig
     scale_name: str
     loop_index: int
+    experiment_name: str
+    matrix_lr_multiplier_name: str
 
 
 @dataclass(frozen=True)
@@ -232,18 +239,22 @@ def _metric_goal(mode: str) -> Any:
     raise ValueError(f"Unsupported metric mode: {mode}")
 
 
-def _extract_muon_hparams(suggestion: dict[str, object]) -> dict[str, float]:
+def _extract_muon_hparams(suggestion: dict[str, object], matrix_lr_multiplier_name: str) -> dict[str, float]:
     parameters = suggestion["parameters"]
     if not isinstance(parameters, Mapping):
         raise ValueError(f"Expected suggestion parameters mapping, got {type(parameters)!r}")
-    required = ("muon_lr_multiplier", "adam_lr_multiplier", "momentum", "beta1", "beta2")
+    required = (matrix_lr_multiplier_name, "adam_lr_multiplier", "momentum", "beta1", "beta2")
     return {name: float(parameters[name]) for name in required}
 
 
-def _trial_optimizer(base_optimizer: GrugMoeMuonConfig, hparams: dict[str, float]) -> GrugMoeMuonConfig:
+def _trial_optimizer(
+    base_optimizer: SearchOptimizerConfig,
+    hparams: dict[str, float],
+    matrix_lr_multiplier_name: str,
+) -> SearchOptimizerConfig:
     return replace(
         base_optimizer,
-        learning_rate=base_optimizer.learning_rate * hparams["muon_lr_multiplier"],
+        learning_rate=base_optimizer.learning_rate * hparams[matrix_lr_multiplier_name],
         adam_lr=base_optimizer.adam_lr * hparams["adam_lr_multiplier"],
         momentum=hparams["momentum"],
         beta1=hparams["beta1"],
@@ -251,13 +262,25 @@ def _trial_optimizer(base_optimizer: GrugMoeMuonConfig, hparams: dict[str, float
     )
 
 
-def _build_base_launch_config(scale: MuonSearchScale) -> tuple[GrugMoeLaunchConfig, GrugMoeMuonConfig]:
-    model_cfg, _adamh_optimizer, batch_size, num_steps = build_from_heuristic(
+def _build_base_launch_config(scale: MuonSearchScale) -> tuple[GrugMoeLaunchConfig, SearchOptimizerConfig]:
+    model_cfg, adamh_optimizer, batch_size, num_steps = build_from_heuristic(
         budget=scale.budget,
         hidden_dim=scale.hidden_dim,
         target_steps=SWEEP.target_steps,
     )
-    optimizer_cfg = build_grug_moe_muon_config(hidden_dim=scale.hidden_dim, coefficient_type=SWEEP.coefficient_type)
+    if SWEEP.batch_multiplier < 1:
+        raise ValueError(f"batch_multiplier must be >= 1, got {SWEEP.batch_multiplier}")
+    baseline_tokens = num_steps * batch_size * SWEEP.seq_len
+    batch_size *= SWEEP.batch_multiplier
+    num_steps = max(1, round(baseline_tokens / (batch_size * SWEEP.seq_len)))
+
+    if SWEEP.optimizer_family == "muon":
+        optimizer_cfg = build_grug_moe_muon_config(hidden_dim=scale.hidden_dim, coefficient_type=SWEEP.coefficient_type)
+    elif SWEEP.optimizer_family == "muonh":
+        optimizer_cfg = build_grug_moe_muonh_config(adamh_optimizer, coefficient_type=SWEEP.coefficient_type)
+    else:
+        raise ValueError(f"Unsupported optimizer_family: {SWEEP.optimizer_family}")
+
     launch_config = GrugMoeLaunchConfig(
         model=model_cfg,
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
@@ -341,14 +364,14 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
         raise IndexError(f"Suggestion index {config.suggestion_index} out of range")
 
     suggestion = suggestions[config.suggestion_index]
-    hparams = _extract_muon_hparams(suggestion)
+    hparams = _extract_muon_hparams(suggestion, config.matrix_lr_multiplier_name)
     trial_id = int(suggestion["trial_id"])
     base = config.base_launch_config
 
     tags = list(getattr(base.tracker, "tags", []) or [])
     tags.extend(
         [
-            f"muon_lr_mult={hparams['muon_lr_multiplier']}",
+            f"{config.matrix_lr_multiplier_name}={hparams[config.matrix_lr_multiplier_name]}",
             f"adam_lr_mult={hparams['adam_lr_multiplier']}",
             f"momentum={hparams['momentum']}",
             f"beta1={hparams['beta1']}",
@@ -361,9 +384,9 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
 
     launch_config = replace(
         base,
-        run_id=f"{SWEEP.experiment_name}-{config.scale_name}-loop{config.loop_index}-trial{trial_id}",
+        run_id=f"{config.experiment_name}-{config.scale_name}-loop{config.loop_index}-trial{trial_id}",
         tracker=replace(base.tracker, tags=tags, name=None),
-        optimizer=_trial_optimizer(config.base_optimizer, hparams),
+        optimizer=_trial_optimizer(config.base_optimizer, hparams, config.matrix_lr_multiplier_name),
     )
     run_grug_moe_trial(launch_config)
 
@@ -498,7 +521,7 @@ def _build_train_step(
     suggestion_index: int,
     suggestions_path: str,
     base_launch_config: GrugMoeLaunchConfig,
-    base_optimizer: GrugMoeMuonConfig,
+    base_optimizer: SearchOptimizerConfig,
 ) -> ExecutorStep:
     return ExecutorStep(
         name=os.path.join("checkpoints", f"{SWEEP.study_id(scale)}-loop{loop_index}-trial{suggestion_index}"),
@@ -510,6 +533,8 @@ def _build_train_step(
             base_optimizer=base_optimizer,
             scale_name=scale.name,
             loop_index=loop_index,
+            experiment_name=SWEEP.experiment_name,
+            matrix_lr_multiplier_name=SWEEP.matrix_lr_multiplier_name,
         ),
     )
 

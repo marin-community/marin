@@ -84,3 +84,17 @@
 - Result: validation passed; commit `cf138520e` was pushed; exact `r2` Muon Vizier parent `/pc0618/iris-run-job-20260426-230157` was submitted and is running with its v5p-8 reservation assigned.
 - Interpretation: the resubmission avoids W&B run ID reuse and should let the Vizier update stage consume completed trial metrics.
 - Next action: monitor for `moe-muon-vizier-lr-beta-r2-d512-gate1-*` and `moe-muon-vizier-lr-beta-r2-d768-gate1-*` child runs, then verify the update step finds `tracker_metrics.jsonl`.
+
+### 2026-04-28 - gate-1 2x-batch Vizier follow-ups
+- Hypothesis: Retuning Muon and MuonH under the same 2x-batch token budget can separate optimizer-specific gains from batch-size effects and may recover the step-wise advantage expected from larger-batch Muon-family updates.
+- Planned command:
+  - `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.moe.muon_vizier_batch2x_gate1`
+  - `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.moe.muonh_vizier_batch2x_gate1`
+- Config:
+  - Muon 2x Vizier prefix: `moe-muon-vizier-lr-beta-batch2x`
+  - MuonH 2x Vizier prefix: `moe-muonh-vizier-lr-beta-batch2x`
+  - Scales: exact gate-1 `d512-gate1` at `2.19e17` FLOPs and `d768-gate1` at `1.70e18` FLOPs.
+  - Batch sizes and steps: `d512` batch `64`, steps `3194`; `d768` batch `128`, steps `5172`, preserving the gate-1 token counts.
+  - Search space: matrix LR multiplier in `[0.5, 3.0]`, Adam fallback LR multiplier in `[0.5, 3.0]`, momentum in `[0.92, 0.99]`, beta1 in `[0.70, 0.95]`, beta2 in `[0.95, 0.999]`.
+  - Muon uses AOL coefficients; MuonH uses the existing quintic MuonH coefficient path to match the prior MuonH 2x-batch ablation.
+- Result: pending validation, commit, push, and Iris submission.
