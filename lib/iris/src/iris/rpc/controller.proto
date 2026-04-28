@@ -22,7 +22,7 @@ edition = "2023";
 package iris.cluster;
 
 import "job.proto";
-import "logging.proto";
+import "iris_logging.proto";
 import "query.proto";
 import "time.proto";
 import "vm.proto";

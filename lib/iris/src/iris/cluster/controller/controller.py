@@ -105,14 +105,13 @@ from iris.cluster.controller.transitions import (
     log_event,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.log_store import CONTROLLER_LOG_KEY
+from finelog.client import LogPusher, LogServiceProxy, RemoteLogHandler
+from finelog.server import LogServiceImpl
+from finelog.server.asgi import build_log_server_asgi
+from finelog.store.mem_store import MemStore
+from iris.cluster.log_store_helpers import CONTROLLER_LOG_KEY
 from iris.cluster.providers.types import find_free_port, resolve_external_host
-from iris.log_server.client import LogPusher, LogServiceProxy, RemoteLogHandler
-from iris.log_server.main import build_log_server_asgi
-from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider
-from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS
-from iris.rpc.stats import RpcStatsCollector
 from iris.cluster.types import (
     JobName,
     WorkerStatus,
@@ -163,6 +162,13 @@ def _drain_queue(q: queue_mod.Queue, timeout: float = 1.0) -> list:
 
 # Log a detailed per-phase scheduling trace every this many rounds.
 _SCHEDULING_TRACE_INTERVAL = 50
+
+# Cap on the bundled in-process log server's MemStore. ~256 bytes/row puts
+# this under ~50 MB of resident size for the controller — large enough to
+# tail a chatty job for a while, small enough that an unbounded ingest can't
+# OOM the process. Operators who need real log retention run finelog-server
+# externally and declare it in cluster_config.endpoints.
+BUNDLED_LOG_SERVER_MAX_ROWS = 200_000
 
 # Taint attribute injected onto claimed workers to prevent non-reservation
 # jobs from landing on them.  Non-reservation jobs get a NOT_EXISTS constraint
@@ -959,8 +965,14 @@ class ControllerConfig:
     log_service_address: str | None = None
     """Address of an externally-hosted log server (e.g. http://localhost:10001).
     When set, the controller connects to the existing server. When None,
-    the Controller starts an in-process LogServiceImpl on a free port.
-    Either way, all controller code accesses the log server via RPC clients."""
+    the Controller starts an in-process LogServiceImpl on a free port (used by
+    tests and local-mode runs). In production this address is sourced from
+    `endpoints["/system/log-server"]` and passed in here by the daemon entrypoint."""
+
+    endpoints: dict[str, str] = field(default_factory=dict)
+    """Resolved cluster endpoints: logical name -> concrete URL. Built from
+    cluster_config.endpoints by the daemon entrypoint. Registered into the
+    controller service's _system_endpoints during start()."""
 
 
 def _log_client_interceptors(config: "ControllerConfig") -> tuple:
@@ -1160,28 +1172,35 @@ class Controller:
         return self._started
 
     def _start_local_log_server(self) -> str:
-        """Start an in-process log server on a free port and return its address.
+        """Start a bundled in-process MemStore-backed log server and return its address.
 
-        Used in local/test mode when no external log server is configured.
-        The server runs in a background thread managed by the ThreadContainer.
+        Used as a fallback when ``cluster_config.endpoints`` does not declare
+        ``/system/log-server`` (and in tests). MemStore is capped at
+        ``BUNDLED_LOG_SERVER_MAX_ROWS`` with FIFO eviction so a chatty job
+        cannot OOM the controller; logs are lost on controller restart. For
+        production deployments, run finelog-server out-of-band and point the
+        endpoints config at it.
+
+        TODO(#5215): when rigging-mediated log sinks land, this fallback
+        becomes a NullSink + StderrSink pair instead of a bundled server,
+        and the LogPusher / LogServiceProxy wiring below stops being a
+        special case.
         """
         log_server_port = find_free_port()
         self._log_service = LogServiceImpl(
-            log_dir=self._config.local_state_dir / "logs",
-            remote_log_dir=f"{self._config.remote_state_dir.rstrip('/')}/logs",
+            log_store=MemStore(max_rows=BUNDLED_LOG_SERVER_MAX_ROWS),
         )
 
         # Wrap the verifier in NullAuthInterceptor so anonymous calls are
         # still accepted in null-auth/test mode, matching the dashboard's
         # behaviour. Real workers attach JWTs that the verifier validates.
         interceptors = (NullAuthInterceptor(verifier=self._config.auth_verifier),)
-        # Stats collector for the in-process log server. Snapshot is reachable
-        # via /iris.stats.StatsService/GetRpcStats on the log-server port.
-        self._log_stats_collector = RpcStatsCollector(slow_threshold_ms=SLOW_RPC_THRESHOLD_MS)
+        # finelog's ASGI builder owns the FetchLogs concurrency interceptor
+        # and does not collect RPC stats — production stats live in the
+        # dedicated finelog-server deployment.
         app = build_log_server_asgi(
             self._log_service,
             interceptors=interceptors,
-            stats_collector=self._log_stats_collector,
         )
         log_server_config = uvicorn.Config(
             app,
@@ -1252,9 +1271,16 @@ class Controller:
             timeout=Duration.from_seconds(5.0),
         )
 
-        # Register log server endpoint so workers can resolve it via ListEndpoints.
+        # Register configured cluster endpoints so workers can resolve them via ListEndpoints.
+        # Endpoints are pre-resolved (scheme dispatched) by the daemon entrypoint.
+        for name, url in self._config.endpoints.items():
+            self._service._system_endpoints[name] = url
+            logger.info("Registered system endpoint %s -> %s", name, url)
+
+        # Always advertise the in-use log server address under /system/log-server.
+        # If the daemon supplied it via endpoints, this is a no-op overwrite with
+        # the same value; in tests the in-process server's address lands here.
         self._service._system_endpoints["/system/log-server"] = self._log_service_address
-        logger.info("Registered system endpoint /system/log-server -> %s", self._log_service_address)
 
     def stop(self) -> None:
         """Stop all background components gracefully. Idempotent.
