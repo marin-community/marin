@@ -25,6 +25,7 @@ def scale_by_adamh(
     eps: float = 1e-8,
     learning_rate: float = 0.02,
     mu_dtype: Any | None = None,
+    flatten_3d: bool = False,  # If True, flatten 3D to 2D (all experts share one norm)
 ) -> optax.GradientTransformation:
     mu_dtype = jax.dtypes.canonicalize_dtype(mu_dtype)
 
@@ -60,7 +61,13 @@ def scale_by_adamh(
                 return None
             if p.ndim <= 2:
                 return _scale_invariant_2d(p, u)
-            # For higher-rank tensors, vmap the 2-D logic over the leading axis.
+            if flatten_3d:
+                # Flatten to 2D: all experts share one norm ball.
+                orig_shape = p.shape
+                p_flat = p.reshape(-1, p.shape[-1])
+                u_flat = u.reshape(-1, u.shape[-1])
+                return _scale_invariant_2d(p_flat, u_flat).reshape(orig_shape)
+            # Default: vmap over leading axis (per-expert norms).
             return jax.vmap(_scale_invariant_2d)(p, u)
 
         adamh_updates = jax.tree_util.tree_map(

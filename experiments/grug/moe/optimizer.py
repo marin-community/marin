@@ -27,6 +27,7 @@ class GrugMoeAdamHConfig(OptimizerConfig):
     max_grad_norm: float | None = 1.0
     adam_lr: float = 6e-4
     expert_lr: float | None = None
+    flatten_expert_norm: bool = False  # If True, all experts share one AdamH norm ball
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -46,7 +47,9 @@ class GrugMoeAdamHConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, expert_lr))
+                components.append(
+                    scale_by_adamh(self.beta1, self.beta2, self.epsilon, expert_lr, flatten_3d=self.flatten_expert_norm)
+                )
                 return optax.chain(*components)
 
             def adam_transform():
