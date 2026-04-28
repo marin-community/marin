@@ -10,6 +10,7 @@ list is small enough that subprocess is the right tool.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -17,6 +18,8 @@ import click
 
 from finelog.deploy.bootstrap import render_template
 from finelog.deploy.config import FinelogConfig
+
+_TEMPLATE_VAR_RE = re.compile(r"\{\{ (\w+) \}\}")
 
 # Manifests live at `lib/finelog/deploy/k8s/*.yaml` in the repo. We resolve
 # this once at import time; the directory is part of the source tree, not
@@ -27,23 +30,30 @@ _MANIFESTS = ("01-pvc.yaml.tmpl", "02-deployment.yaml.tmpl", "03-service.yaml.tm
 
 
 def _render_manifest(template_path: Path, cfg: FinelogConfig) -> str:
-    """Render a single k8s manifest template against `cfg`."""
+    """Render a single k8s manifest template against `cfg`.
+
+    `render_template` raises on unused variables, and the three manifests use
+    disjoint subsets of the available config fields (PVC needs storage_*;
+    Deployment needs image/port/remote_log_dir; Service needs port). We pass
+    only the variables the template actually references.
+    """
     assert cfg.deployment.k8s is not None
     k8s = cfg.deployment.k8s
     storage_class_block = (
         f"storageClassName: {k8s.storage_class}" if k8s.storage_class else "# storageClassName: <cluster default>"
     )
     template = template_path.read_text()
-    return render_template(
-        template,
-        name=cfg.name,
-        namespace=k8s.namespace,
-        image=cfg.image,
-        port=cfg.port,
-        remote_log_dir=cfg.remote_log_dir,
-        storage_class_block=storage_class_block,
-        storage_gb=k8s.storage_gb,
-    )
+    all_vars: dict[str, str | int] = {
+        "name": cfg.name,
+        "namespace": k8s.namespace,
+        "image": cfg.image,
+        "port": cfg.port,
+        "remote_log_dir": cfg.remote_log_dir,
+        "storage_class_block": storage_class_block,
+        "storage_gb": k8s.storage_gb,
+    }
+    referenced = set(_TEMPLATE_VAR_RE.findall(template))
+    return render_template(template, **{k: v for k, v in all_vars.items() if k in referenced})
 
 
 def _kubectl(*args: str, stdin: str | None = None, check: bool = True) -> subprocess.CompletedProcess:

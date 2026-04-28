@@ -7,18 +7,22 @@ Hosts ``LogServiceImpl`` on a dedicated port. No auth, no stats, no JWT —
 finelog ships pure log ingest + query. Wires only the
 ``ConcurrencyLimitInterceptor`` for ``FetchLogs``.
 
+All flags also read from environment variables so the Docker image can be
+configured without overriding ``CMD``.
+
 Usage:
-    python -m finelog.server.main --port 10001 --log-dir /var/cache/finelog/logs --remote-log-dir gs://bucket/logs
+    python -m finelog.server.main --port 10001 --log-dir /var/cache/finelog --remote-log-dir gs://bucket/logs
+    FINELOG_PORT=20001 python -m finelog.server.main
 """
 
 from __future__ import annotations
 
-import argparse
 import logging
 import signal
 import sys
 from pathlib import Path
 
+import click
 import uvicorn
 from rigging.log_setup import configure_logging
 
@@ -64,25 +68,32 @@ def run_log_server(
     logger.info("Log server stopped")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Finelog log server")
-    parser.add_argument("--port", type=int, required=True, help="Port to bind")
-    parser.add_argument("--log-dir", type=Path, required=True, help="Local log storage directory")
-    parser.add_argument("--remote-log-dir", type=str, required=True, help="Remote log storage URI")
-    parser.add_argument(
-        "--log-level",
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Log level",
-    )
-    args = parser.parse_args()
-
-    configure_logging(level=getattr(logging, args.log_level))
-    run_log_server(
-        port=args.port,
-        log_dir=args.log_dir,
-        remote_log_dir=args.remote_log_dir,
-    )
+@click.command(context_settings={"show_default": True})
+@click.option("--port", type=int, default=10001, envvar="FINELOG_PORT", help="Port to bind.")
+@click.option(
+    "--log-dir",
+    type=click.Path(path_type=Path),
+    default=Path("/var/cache/finelog"),
+    envvar="FINELOG_LOG_DIR",
+    help="Local log storage directory.",
+)
+@click.option(
+    "--remote-log-dir",
+    type=str,
+    default="",
+    envvar="FINELOG_REMOTE_DIR",
+    help="Remote log storage URI (e.g. gs://bucket/path); empty disables offload.",
+)
+@click.option(
+    "--log-level",
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]),
+    default="INFO",
+    envvar="FINELOG_LOG_LEVEL",
+    help="Log level.",
+)
+def main(port: int, log_dir: Path, remote_log_dir: str, log_level: str) -> None:
+    configure_logging(level=getattr(logging, log_level))
+    run_log_server(port=port, log_dir=log_dir, remote_log_dir=remote_log_dir)
 
 
 if __name__ == "__main__":

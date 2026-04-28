@@ -35,6 +35,8 @@ spec:
               containerPort: {{ port }}
               protocol: TCP
           env:
+            - name: FINELOG_PORT
+              value: "{{ port }}"
             - name: FINELOG_REMOTE_DIR
               value: "{{ remote_log_dir }}"
           volumeMounts:

@@ -39,9 +39,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     printf '[tool.uv.workspace]\nmembers = ["lib/finelog", "lib/rigging"]\n\n[tool.uv.sources]\nmarin-rigging = { workspace = true }\n' > pyproject.toml \
     && uv sync --package marin-finelog --no-install-project
 
-# Full source, then install the project itself.
+# Full source, then install the project itself. `lib/finelog/config/` is
+# force-included by hatchling's wheel build (see lib/finelog/pyproject.toml);
+# copy it before the project install so non-editable wheel builds succeed.
 COPY lib/rigging/src/ ./lib/rigging/src/
 COPY lib/finelog/src/ ./lib/finelog/src/
+COPY lib/finelog/config/ ./lib/finelog/config/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --package marin-finelog
 
@@ -67,8 +70,7 @@ USER finelog
 
 EXPOSE 10001
 
-# FINELOG_REMOTE_DIR drives the same image in dev (unset → no offload) and
-# prod (gs://bucket/path → archive segments to GCS).
-ENV FINELOG_REMOTE_DIR=""
-
-CMD ["sh", "-c", "exec python -m finelog.server.main --port 10001 --log-dir /var/cache/finelog --remote-log-dir \"${FINELOG_REMOTE_DIR}\""]
+# All server flags read from FINELOG_* envvars (see finelog/server/main.py).
+# Defaults: FINELOG_PORT=10001, FINELOG_LOG_DIR=/var/cache/finelog,
+# FINELOG_REMOTE_DIR="" (no offload). Override per deployment via env.
+CMD ["python", "-m", "finelog.server.main"]
