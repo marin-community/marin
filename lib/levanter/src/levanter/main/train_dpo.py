@@ -5,7 +5,7 @@ import dataclasses
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Optional, Union, cast
+from typing import Any, Literal, Optional, Union, cast
 
 import equinox as eqx
 import haliax as hax
@@ -22,6 +22,7 @@ from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_conf
 from levanter.data.dataset import AsyncDataset
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import (
+    BlockShuffleConfig,
     DpoExample,
     PreferenceChatLmDatasetFormat,
     PreferenceLmDataConfig,
@@ -98,6 +99,27 @@ def _get_training_components(config: PreferenceLmDataConfig) -> dict[str, Any]:
     return {name: comp for name, comp in config.components.items() if name in has_weight}
 
 
+def _shuffle_dpo_dataset(
+    dataset: AsyncDataset[DpoExample],
+    shuffle: bool | int | BlockShuffleConfig,
+    *,
+    key: jrandom.PRNGKey,
+    perm_type: Literal["feistel", "linear"],
+) -> AsyncDataset[DpoExample]:
+    if isinstance(shuffle, BlockShuffleConfig):
+        return dataset.block_shuffle(
+            io_block_size=shuffle.io_block_size,
+            window_blocks=shuffle.window_blocks,
+            key=key,
+            perm_type=shuffle.perm_type,
+        )
+    if shuffle is True:
+        return dataset.shuffle(key, perm_type=perm_type)
+    if isinstance(shuffle, int) and not isinstance(shuffle, bool) and shuffle > 0:
+        return dataset.era_shuffle(shuffle, key=key, perm_type=perm_type)
+    return dataset
+
+
 def _build_dpo_dataset(
     config: PreferenceLmDataConfig,
     Pos: Axis,
@@ -127,14 +149,8 @@ def _build_dpo_dataset(
     perm_type = config.permutation_type
     if perm_type == "linear":
         logger.warning("Using linear shuffling, not recommended. Please use Feistel permutation instead.")
-    elif perm_type is None:
-        perm_type = "feistel"
 
-    train_dataset = base_dataset
-    if config.shuffle is True:
-        train_dataset = train_dataset.shuffle(key, perm_type=perm_type)
-    elif isinstance(config.shuffle, int) and config.shuffle > 0:
-        train_dataset = train_dataset.era_shuffle(config.shuffle, key=key, perm_type=perm_type)
+    train_dataset = _shuffle_dpo_dataset(base_dataset, config.shuffle, key=key, perm_type=perm_type)
 
     mix_key, _ = jrandom.split(key)
     mixture = MixtureDataset(
@@ -186,14 +202,8 @@ def _build_validation_split(
     perm_type = config.permutation_type
     if perm_type == "linear":
         logger.warning("Using linear shuffling, not recommended. Please use Feistel permutation instead.")
-    elif perm_type is None:
-        perm_type = "feistel"
 
-    train_dataset = train_base
-    if config.shuffle is True:
-        train_dataset = train_dataset.shuffle(key, perm_type=perm_type)
-    elif isinstance(config.shuffle, int) and config.shuffle > 0:
-        train_dataset = train_dataset.era_shuffle(config.shuffle, key=key, perm_type=perm_type)
+    train_dataset = _shuffle_dpo_dataset(train_base, config.shuffle, key=key, perm_type=perm_type)
 
     mix_key, _ = jrandom.split(key)
     mixture = MixtureDataset(

@@ -8,7 +8,7 @@ from functools import lru_cache
 
 import numpy
 
-from levanter.data.text import BlockShuffleConfig, DatasetComponent, LmDataConfig
+from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE, BlockShuffleConfig, DatasetComponent, LmDataConfig
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
 from marin.execution import unwrap_versioned_value
@@ -55,7 +55,7 @@ def lm_data_config(
     training_set: TokenizerStep | InputName,
     *,
     validation_sets: dict[str, TokenizerStep] | None = None,
-    shuffle: bool | int | BlockShuffleConfig = True,
+    shuffle: bool | int | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
     max_train_batches: dict[str, int] | None = None,
     num_validation_sequences: dict[str, int] | None = None,
     block_cross_document_attention: bool = True,
@@ -68,7 +68,8 @@ def lm_data_config(
     Args:
         training_set: The training set to use
         validation_sets: A sequence of validation sets to use
-        shuffle: Shuffle policy. `True` = full shuffle, positive `int` = era shuffle,
+        shuffle: Shuffle policy. Defaults to hierarchical block shuffle.
+            `True` = full shuffle, positive `int` = era shuffle,
             `BlockShuffleConfig` = hierarchical block shuffle.
         max_train_batches: Maximum number of batches to use for the training set per dataset.
         num_validation_sequences: Number of validation sequences to take from the training set per dataset.
@@ -101,7 +102,7 @@ def lm_mixture_data_config(
     components: dict[str, TokenizerStep | TokenizeConfig],
     weights: dict[str, float],
     *,
-    shuffle: bool | int | BlockShuffleConfig = True,
+    shuffle: bool | int | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
     missing_weights_are_validation: bool = True,
     include_raw_paths: bool = True,
     max_train_batches: dict[str, int] | None = None,
@@ -116,7 +117,7 @@ def lm_mixture_data_config(
     Args:
         components: dict from names of datasets to the steps that produced them.
         weights: dict from names of datasets to their weights.
-        shuffle: shuffling policy. int means era shuffling (~shuffle buffer);
+        shuffle: shuffling policy. Defaults to hierarchical block shuffle. int means era shuffling (~shuffle buffer);
             `BlockShuffleConfig` enables hierarchical block shuffling.
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
         include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
@@ -196,7 +197,7 @@ def lm_varying_mixture_data_config(
     components: dict[str, TokenizerStep],
     weights_list: list[tuple[int, dict[str, float]]],
     *,
-    shuffle: bool | int | BlockShuffleConfig = True,
+    shuffle: bool | int | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
     missing_weights_are_validation: bool = True,
     include_raw_paths: bool = True,
     mixture_block_size: int | None = None,
@@ -213,7 +214,7 @@ def lm_varying_mixture_data_config(
             weights_dict maps dataset names to their weights.
             The weights will change at each start_seq_index. start_seq_index's must be sorted in ascending order.
             Note that start_seq_index should be the index of the sequence (not batch) where the transition should occur.
-        shuffle: shuffling policy. int means era shuffling (~shuffle buffer);
+        shuffle: shuffling policy. Defaults to hierarchical block shuffle. int means era shuffling (~shuffle buffer);
             `BlockShuffleConfig` enables hierarchical block shuffling.
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
         include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
