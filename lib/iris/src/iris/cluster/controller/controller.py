@@ -504,6 +504,91 @@ def _get_running_tasks_with_band_and_value(
     return result
 
 
+def _preempt_solo(
+    candidate: PreemptionCandidate,
+    wanted_variant: str | None,
+    solo_victims: list[RunningTaskInfo],
+    context: SchedulingContext,
+) -> tuple[JobName, JobName] | None:
+    """Find a single solo victim whose eviction would free enough capacity for
+    a non-coscheduled preemptor. Mutates the chosen victim's already_preempted
+    flag so subsequent candidates skip it. Returns the (preemptor, victim) pair
+    or None if no victim qualifies.
+
+    The same-variant gate ensures the freed slot shape matches the preemptor;
+    the hypothetical-capacity check covers partial-worker tenancy (e.g. a
+    victim using only some of a worker's CPUs or TPUs).
+    """
+    req = candidate.requirements
+    for victim in solo_victims:
+        if victim.already_preempted:
+            continue
+        if victim.device_variant != wanted_variant:
+            continue
+        # Can only preempt strictly lower priority (higher band_sort_key)
+        if victim.band_sort_key <= candidate.band:
+            continue
+
+        cap = context.capacities.get(victim.worker_id)
+        if cap is None:
+            continue
+        if not cap.matches_constraints(req.constraints):
+            continue
+        # If current capacity already fits, no preemption needed
+        if cap.can_fit(req) is None:
+            continue
+
+        # Would freeing this victim's resources create enough capacity?
+        hypothetical = WorkerCapacity(
+            worker_id=cap.worker_id,
+            available_cpu_millicores=cap.available_cpu_millicores + victim.resources.cpu_millicores,
+            available_memory=cap.available_memory + victim.resources.memory_bytes,
+            available_gpus=cap.available_gpus + get_gpu_count(victim.resources.device),
+            available_tpus=cap.available_tpus + get_tpu_count(victim.resources.device),
+            attributes=cap.attributes,
+            building_task_count=max(0, cap.building_task_count - 1),
+            max_building_tasks=cap.max_building_tasks,
+        )
+        if hypothetical.can_fit(req) is None:
+            victim.already_preempted = True
+            return (candidate.job_name, victim.task_id)
+    return None
+
+
+def _preempt_coscheduled(
+    candidate: PreemptionCandidate,
+    wanted_variant: str | None,
+    n_required: int,
+    sorted_groups: list[tuple[JobName, list[RunningTaskInfo]]],
+) -> list[tuple[JobName, JobName]]:
+    """Find a victim slice (all running tasks of one coscheduled job) whose
+    eviction satisfies a coscheduled preemptor. Returns one (preemptor, victim)
+    pair per slice member, or [] if no slice qualifies. Mutates already_preempted
+    on every member of the chosen slice.
+
+    Coscheduled tasks own their workers whole, so once variant matches and the
+    slice is at least as large as the preemptor, freeing it yields exactly the
+    shape the preemptor needs — no per-worker capacity arithmetic required.
+    """
+    if wanted_variant is None:
+        return []
+    for _victim_job, members in sorted_groups:
+        if any(m.already_preempted for m in members):
+            continue
+        if members[0].device_variant != wanted_variant:
+            continue
+        # Strict band: every sibling must be lower priority than the preemptor.
+        if any(m.band_sort_key <= candidate.band for m in members):
+            continue
+        if len(members) < n_required:
+            continue
+        pairs = [(candidate.job_name, m.task_id) for m in members]
+        for m in members:
+            m.already_preempted = True
+        return pairs
+    return []
+
+
 def _run_preemption_pass(
     unscheduled_tasks: list[PreemptionCandidate],
     running_tasks_info: list[RunningTaskInfo],
@@ -540,10 +625,10 @@ def _run_preemption_pass(
         for v in running_tasks_info:
             if not v.is_coscheduled or v.device_variant is None:
                 continue
-            parent = v.task_id.parent
-            if parent is None:
+            vparent = v.task_id.parent
+            if vparent is None:
                 continue
-            grouped.setdefault(parent, []).append(v)
+            grouped.setdefault(vparent, []).append(v)
         sorted_groups = sorted(
             grouped.items(),
             key=lambda kv: (
@@ -552,84 +637,37 @@ def _run_preemption_pass(
             ),
         )
 
-    # Track preemptor jobs whose siblings have already been satisfied by a
-    # slice eviction this pass; the remaining N-1 siblings short-circuit.
+    # Preemptor jobs whose siblings have already been satisfied by a slice
+    # eviction this pass; the remaining N-1 siblings short-circuit.
     satisfied_preemptor_jobs: set[JobName] = set()
+    sibling_count: dict[JobName, int] = defaultdict(int)
+    for c in unscheduled_tasks:
+        if c.job_name.parent is not None:
+            sibling_count[c.job_name.parent] += 1
 
     for candidate in unscheduled_tasks:
-        task_id, req, task_band_key = candidate.job_name, candidate.requirements, candidate.band
         # Batch never preempts
-        if task_band_key >= job_pb2.PRIORITY_BAND_BATCH:
+        if candidate.band >= job_pb2.PRIORITY_BAND_BATCH:
             continue
 
-        parent = task_id.parent
+        parent = candidate.job_name.parent
         if parent is not None and parent in satisfied_preemptor_jobs:
             continue
 
-        wanted_variant = get_device_variant(req.resources.device)
+        wanted_variant = get_device_variant(candidate.requirements.resources.device)
 
-        if not req.is_coscheduled:
-            for victim in solo_victims:
-                if victim.already_preempted:
-                    continue
-                # Same-variant gate: only preempt victims that free the
-                # exact device-variant the preemptor requested. Skips any
-                # variant comparison when the preemptor is unconstrained
-                # (CPU-only) and the victim is too — both are None.
-                if victim.device_variant != wanted_variant:
-                    continue
-                # Can only preempt strictly lower priority (higher band_sort_key)
-                if victim.band_sort_key <= task_band_key:
-                    continue
-
-                cap = context.capacities.get(victim.worker_id)
-                if cap is None:
-                    continue
-
-                if not cap.matches_constraints(req.constraints):
-                    continue
-
-                # If current capacity already fits, no preemption needed
-                if cap.can_fit(req) is None:
-                    continue
-
-                # Check if freeing the victim's resources would create enough capacity
-                hypothetical = WorkerCapacity(
-                    worker_id=cap.worker_id,
-                    available_cpu_millicores=cap.available_cpu_millicores + victim.resources.cpu_millicores,
-                    available_memory=cap.available_memory + victim.resources.memory_bytes,
-                    available_gpus=cap.available_gpus + get_gpu_count(victim.resources.device),
-                    available_tpus=cap.available_tpus + get_tpu_count(victim.resources.device),
-                    attributes=cap.attributes,
-                    building_task_count=max(0, cap.building_task_count - 1),
-                    max_building_tasks=cap.max_building_tasks,
-                )
-                if hypothetical.can_fit(req) is None:
-                    preemptions.append((task_id, victim.task_id))
-                    victim.already_preempted = True
-                    break
+        if not candidate.requirements.is_coscheduled:
+            pair = _preempt_solo(candidate, wanted_variant, solo_victims, context)
+            if pair is not None:
+                preemptions.append(pair)
             continue
 
-        # Coscheduled preemptor → evict a same-variant victim slice as a unit.
-        if wanted_variant is None:
-            continue
-        n_required = sum(1 for c in unscheduled_tasks if c.job_name.parent == parent)
-        for _victim_job, members in sorted_groups:
-            if any(m.already_preempted for m in members):
-                continue
-            if members[0].device_variant != wanted_variant:
-                continue
-            # Strict band: every sibling must be lower priority than the preemptor.
-            if any(m.band_sort_key <= task_band_key for m in members):
-                continue
-            if len(members) < n_required:
-                continue
-            for m in members:
-                preemptions.append((task_id, m.task_id))
-                m.already_preempted = True
+        n_required = sibling_count.get(parent, 1) if parent is not None else 1
+        pairs = _preempt_coscheduled(candidate, wanted_variant, n_required, sorted_groups)
+        if pairs:
+            preemptions.extend(pairs)
             if parent is not None:
                 satisfied_preemptor_jobs.add(parent)
-            break
 
     return preemptions
 
