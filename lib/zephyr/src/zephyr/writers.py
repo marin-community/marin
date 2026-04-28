@@ -466,9 +466,6 @@ def write_levanter_cache(
     try:
         exemplar = next(record_iter)
     except StopIteration:
-        logger.info("write_levanter_cache: no records for %s, writing empty success sentinel", output_path)
-        with open_url(f"{output_path}/.success", "w") as f:
-            f.write("")
         return {"path": output_path, "count": 0}
 
     count = 0
