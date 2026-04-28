@@ -42,6 +42,32 @@ def migrate(conn: sqlite3.Connection) -> None:
     active_placeholders = ",".join("?" * len(_ACTIVE))
     terminal_placeholders = ",".join("?" * len(_TERMINAL_TASK))
     now_ms = int(conn.execute("SELECT CAST(strftime('%s','now') AS INTEGER) * 1000").fetchone()[0])
+
+    counts = conn.execute(
+        f"""
+        SELECT
+          SUM(CASE WHEN t.state IN ({terminal_placeholders}) THEN 1 ELSE 0 END) AS terminal_task,
+          SUM(CASE WHEN t.state NOT IN ({terminal_placeholders})
+                    AND ta.attempt_id != t.current_attempt_id THEN 1 ELSE 0 END) AS superseded,
+          COUNT(DISTINCT ta.task_id) AS distinct_tasks,
+          COUNT(*) AS total_attempts
+        FROM task_attempts ta
+        JOIN tasks t ON t.task_id = ta.task_id
+        WHERE ta.state IN ({active_placeholders})
+          AND (
+            t.state IN ({terminal_placeholders})
+            OR ta.attempt_id != t.current_attempt_id
+          )
+        """,
+        (*_TERMINAL_TASK, *_TERMINAL_TASK, *_ACTIVE, *_TERMINAL_TASK),
+    ).fetchone()
+    terminal_task, superseded, distinct_tasks, total_attempts = (c or 0 for c in counts)
+    print(
+        f"[0038_finalize_orphan_attempts] finalizing {total_attempts} orphan attempt(s) "
+        f"across {distinct_tasks} task(s) "
+        f"(terminal_task={terminal_task}, superseded={superseded})"
+    )
+
     conn.execute(
         f"""
         UPDATE task_attempts
