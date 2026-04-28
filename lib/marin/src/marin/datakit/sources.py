@@ -19,6 +19,10 @@ from functools import cache
 
 from marin.datakit.download.coderforge import coderforge_normalize_steps
 from marin.datakit.download.common_pile import common_pile_normalize_steps
+from marin.datakit.download.davinci_dev import (
+    davinci_dev_ctx_native_normalize_steps,
+    davinci_dev_env_native_normalize_steps,
+)
 from marin.datakit.download.finepdfs import finepdfs_normalize_steps
 from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_normalize_steps
 from marin.datakit.download.institutional_books import institutional_books_normalize_steps
@@ -136,6 +140,9 @@ def all_sources() -> dict[str, DatakitSource]:
     # a rough token count.
     single_sources: tuple[_SourceRow, ...] = (
         ("coderforge", coderforge_normalize_steps, 10.29),
+        # daVinci-Dev token counts are rough placeholders pending a real count pass.
+        ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 12.0),
+        ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 3.5),
         ("gpt-oss-rollouts", gpt_oss_rollouts_normalize_steps, 3.20),
         ("institutional_books", institutional_books_normalize_steps, 203.63),
         ("nemotron-terminal", nemotron_terminal_normalize_steps, 6.08),
