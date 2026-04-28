@@ -6,13 +6,18 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from marin.datakit.download.diagnostic_logs import (
+    ExtractedDiagnosticLogs,
+    ExtractedPartitionedDiagnosticLogs,
     extract_diagnostic_logs,
+    extract_ghalogs_step,
     ghalogs_member_to_record,
     logchunks_example_to_record,
     loghub_file_to_record,
     sanitize_diagnostic_log_text,
     source_inventory,
 )
+from marin.execution.artifact import Artifact
+from marin.execution.step_runner import StepRunner
 
 
 def _read_jsonl(path: str) -> list[dict[str, object]]:
@@ -130,13 +135,21 @@ def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
     (loghub_dir / "Linux_2k.log").write_text("FAILED path=/home/alice/project", encoding="utf-8")
     (loghub_dir / "Linux_2k.log_structured.csv").write_text("not ingested", encoding="utf-8")
 
-    extract_diagnostic_logs(
+    extracted = extract_diagnostic_logs(
         str(input_dir),
         str(output_dir),
         max_ghalogs_members=1,
         max_logchunks_examples=1,
         max_loghub_files=1,
     )
+
+    assert isinstance(extracted, ExtractedDiagnosticLogs)
+    assert extracted.ghalogs.record_count == 1
+    assert extracted.logchunks.record_count == 1
+    assert extracted.loghub.record_count == 1
+    assert extracted.ghalogs.metadata_path == str(output_dir / "metadata.json")
+    assert extracted.logchunks.metadata_path == str(output_dir / "eval_only" / "logchunks" / "metadata.json")
+    assert extracted.loghub.metadata_path == str(output_dir / "eval_only" / "loghub" / "metadata.json")
 
     metadata = json.loads((output_dir / "metadata.json").read_text())
     assert "content_fingerprint" in metadata
@@ -161,3 +174,23 @@ def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
     assert loghub_records[0]["source"] == "loghub"
     loghub_metadata = json.loads((output_dir / "eval_only" / "loghub" / "metadata.json").read_text())
     assert loghub_metadata["source_manifest"]["policy"]["eval_only"] is True
+
+
+def test_extract_ghalogs_step_persists_typed_artifact(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    with zipfile.ZipFile(input_dir / "github_run_logs.zip", "w") as archive:
+        archive.writestr("repo-a/run-1/job.log", "ERROR token=abc123456789 traceback")
+
+    step = extract_ghalogs_step(
+        source_path=str(input_dir),
+        max_members=1,
+        output_path_prefix=str(tmp_path / "steps"),
+    )
+    StepRunner().run([step])
+
+    loaded = Artifact.load(step, ExtractedPartitionedDiagnosticLogs)
+    assert loaded.source_label == "ghalogs"
+    assert loaded.record_count == 1
+    assert loaded.metadata_path.endswith("/metadata.json")

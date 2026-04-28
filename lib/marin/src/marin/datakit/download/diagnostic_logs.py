@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 import fsspec
+from pydantic import BaseModel, ConfigDict
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
     IngestionPolicy,
@@ -108,6 +109,47 @@ class DiagnosticPartition(StrEnum):
     DEV = "dev"
     TEST = "test"
     ISSUE_5093_HOLDOUT = "issue_5093_holdout"
+
+
+class DiagnosticLogsArtifact(BaseModel):
+    """Strict typed artifact for a materialized diagnostic-log step."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class ExtractedPartitionedDiagnosticLogs(DiagnosticLogsArtifact):
+    """Materialized GHALogs sample with train/dev/test/holdout partitions."""
+
+    source_label: str
+    output_dir: str
+    train_file: str
+    dev_file: str
+    test_file: str
+    holdout_file: str
+    metadata_path: str
+    record_count: int
+    bytes_written: int
+    content_fingerprint: str
+
+
+class ExtractedDiagnosticLogSlice(DiagnosticLogsArtifact):
+    """Materialized single-file diagnostic-log slice."""
+
+    source_label: str
+    output_dir: str
+    output_file: str
+    metadata_path: str
+    record_count: int
+    bytes_written: int
+    content_fingerprint: str
+
+
+class ExtractedDiagnosticLogs(DiagnosticLogsArtifact):
+    """Combined result for the public diagnostic-log extraction helpers."""
+
+    ghalogs: ExtractedPartitionedDiagnosticLogs
+    logchunks: ExtractedDiagnosticLogSlice
+    loghub: ExtractedDiagnosticLogSlice
 
 
 def _source_policy(
@@ -457,7 +499,7 @@ def extract_ghalogs(
     output_path: str,
     *,
     max_members: int = DEFAULT_GHALOGS_MAX_MEMBERS,
-) -> None:
+) -> ExtractedPartitionedDiagnosticLogs:
     """Extract a capped sample of partitioned, sanitized records from a staged GHALogs archive."""
     if max_members <= 0:
         raise ValueError(f"max_members must be positive, got {max_members}")
@@ -504,8 +546,9 @@ def extract_ghalogs(
                 writers[partition].write(payload)
                 writers[partition].write("\n")
 
-    _write_source_metadata(
-        manifest=source_manifest("ghalogs"),
+    manifest = source_manifest("ghalogs")
+    metadata_path = _write_source_metadata(
+        manifest=manifest,
         input_path=input_path,
         output_path=output_path,
         output_file=output_file_paths[DiagnosticPartition.TRAIN.value],
@@ -519,6 +562,18 @@ def extract_ghalogs(
             "partition_files": output_file_paths,
             "training_ready_sources": [source.source_label for source in training_ready_sources()],
         },
+    )
+    return ExtractedPartitionedDiagnosticLogs(
+        source_label=manifest.source_label,
+        output_dir=output_path,
+        train_file=output_file_paths[DiagnosticPartition.TRAIN.value],
+        dev_file=output_file_paths[DiagnosticPartition.DEV.value],
+        test_file=output_file_paths[DiagnosticPartition.TEST.value],
+        holdout_file=output_file_paths[DiagnosticPartition.ISSUE_5093_HOLDOUT.value],
+        metadata_path=metadata_path,
+        record_count=counters["kept_records"],
+        bytes_written=total_bytes_written,
+        content_fingerprint=manifest.fingerprint(),
     )
 
 
@@ -548,7 +603,7 @@ def extract_logchunks(
     output_path: str,
     *,
     max_examples: int = DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
-) -> None:
+) -> ExtractedDiagnosticLogSlice:
     """Extract a capped sample of sanitized eval-only records from staged LogChunks."""
     if max_examples <= 0:
         raise ValueError(f"max_examples must be positive, got {max_examples}")
@@ -556,10 +611,12 @@ def extract_logchunks(
     archive_path = os.path.join(input_path, LOGCHUNKS_ZIP_FILENAME)
     output_file = os.path.join(output_path, "eval_only", "logchunks", "data-00000-of-00001.jsonl")
     kept_records, bytes_written = _write_jsonl_records(output_file, _iter_logchunks_records(archive_path, max_examples))
-    _write_source_metadata(
-        manifest=source_manifest("logchunks"),
+    manifest = source_manifest("logchunks")
+    slice_output_dir = os.path.join(output_path, "eval_only", "logchunks")
+    metadata_path = _write_source_metadata(
+        manifest=manifest,
         input_path=input_path,
-        output_path=os.path.join(output_path, "eval_only", "logchunks"),
+        output_path=slice_output_dir,
         output_file=output_file,
         record_count=kept_records,
         bytes_written=bytes_written,
@@ -567,6 +624,15 @@ def extract_logchunks(
             "source_archive": archive_path,
             "sample_limits": {"max_examples": max_examples},
         },
+    )
+    return ExtractedDiagnosticLogSlice(
+        source_label=manifest.source_label,
+        output_dir=slice_output_dir,
+        output_file=output_file,
+        metadata_path=metadata_path,
+        record_count=kept_records,
+        bytes_written=bytes_written,
+        content_fingerprint=manifest.fingerprint(),
     )
 
 
@@ -599,7 +665,7 @@ def extract_loghub(
     output_path: str,
     *,
     max_files: int = DEFAULT_LOGHUB_MAX_FILES,
-) -> None:
+) -> ExtractedDiagnosticLogSlice:
     """Extract sanitized eval-only records from a staged LogHub checkout."""
     if max_files <= 0:
         raise ValueError(f"max_files must be positive, got {max_files}")
@@ -607,10 +673,12 @@ def extract_loghub(
     loghub_path = os.path.join(input_path, LOGHUB_DIRNAME)
     output_file = os.path.join(output_path, "eval_only", "loghub", "data-00000-of-00001.jsonl")
     kept_records, bytes_written = _write_jsonl_records(output_file, _iter_loghub_records(loghub_path, max_files))
-    _write_source_metadata(
-        manifest=source_manifest("loghub"),
+    manifest = source_manifest("loghub")
+    slice_output_dir = os.path.join(output_path, "eval_only", "loghub")
+    metadata_path = _write_source_metadata(
+        manifest=manifest,
         input_path=input_path,
-        output_path=os.path.join(output_path, "eval_only", "loghub"),
+        output_path=slice_output_dir,
         output_file=output_file,
         record_count=kept_records,
         bytes_written=bytes_written,
@@ -618,6 +686,15 @@ def extract_loghub(
             "source_path": loghub_path,
             "sample_limits": {"max_files": max_files},
         },
+    )
+    return ExtractedDiagnosticLogSlice(
+        source_label=manifest.source_label,
+        output_dir=slice_output_dir,
+        output_file=output_file,
+        metadata_path=metadata_path,
+        record_count=kept_records,
+        bytes_written=bytes_written,
+        content_fingerprint=manifest.fingerprint(),
     )
 
 
@@ -628,11 +705,111 @@ def extract_diagnostic_logs(
     max_ghalogs_members: int = DEFAULT_GHALOGS_MAX_MEMBERS,
     max_logchunks_examples: int = DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
     max_loghub_files: int = DEFAULT_LOGHUB_MAX_FILES,
-) -> None:
+) -> ExtractedDiagnosticLogs:
     """Extract GHALogs for training plus LogChunks/LogHub as eval-only records."""
-    extract_ghalogs(input_path, output_path, max_members=max_ghalogs_members)
-    extract_logchunks(input_path, output_path, max_examples=max_logchunks_examples)
-    extract_loghub(input_path, output_path, max_files=max_loghub_files)
+    return ExtractedDiagnosticLogs(
+        ghalogs=extract_ghalogs(input_path, output_path, max_members=max_ghalogs_members),
+        logchunks=extract_logchunks(input_path, output_path, max_examples=max_logchunks_examples),
+        loghub=extract_loghub(input_path, output_path, max_files=max_loghub_files),
+    )
+
+
+def extract_ghalogs_step(
+    *,
+    source_path: str,
+    max_members: int = DEFAULT_GHALOGS_MAX_MEMBERS,
+    output_path_prefix: str | None = None,
+) -> StepSpec:
+    """Return a StepSpec that materializes the capped GHALogs sample."""
+    source = source_manifest("ghalogs")
+    return StepSpec(
+        name="processed/diagnostic_logs/ghalogs_public_sample",
+        output_path_prefix=output_path_prefix,
+        fn=lambda output_path: extract_ghalogs(source_path, output_path, max_members=max_members),
+        hash_attrs={
+            "version": "v3",
+            "source_path": source_path,
+            "source_label": source.source_label,
+            "max_members": max_members,
+            "split_policy": "97% train / 1% dev / 1% test / 1% issue_5093_holdout",
+            "source_content_fingerprint": source.fingerprint(),
+            "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",
+        },
+    )
+
+
+def extract_logchunks_step(
+    *,
+    source_path: str,
+    max_examples: int = DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
+    output_path_prefix: str | None = None,
+) -> StepSpec:
+    """Return a StepSpec that materializes the capped LogChunks eval slice."""
+    source = source_manifest("logchunks")
+    return StepSpec(
+        name="processed/diagnostic_logs/logchunks_eval_only",
+        output_path_prefix=output_path_prefix,
+        fn=lambda output_path: extract_logchunks(source_path, output_path, max_examples=max_examples),
+        hash_attrs={
+            "version": "v3",
+            "source_path": source_path,
+            "source_label": source.source_label,
+            "max_examples": max_examples,
+            "source_content_fingerprint": source.fingerprint(),
+            "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",
+        },
+    )
+
+
+def extract_loghub_step(
+    *,
+    source_path: str,
+    max_files: int = DEFAULT_LOGHUB_MAX_FILES,
+    output_path_prefix: str | None = None,
+) -> StepSpec:
+    """Return a StepSpec that materializes the capped LogHub eval slice."""
+    source = source_manifest("loghub")
+    return StepSpec(
+        name="processed/diagnostic_logs/loghub_eval_only",
+        output_path_prefix=output_path_prefix,
+        fn=lambda output_path: extract_loghub(source_path, output_path, max_files=max_files),
+        hash_attrs={
+            "version": "v3",
+            "source_path": source_path,
+            "source_label": source.source_label,
+            "max_files": max_files,
+            "source_content_fingerprint": source.fingerprint(),
+            "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",
+        },
+    )
+
+
+def extract_diagnostic_logs_steps(
+    *,
+    source_path: str,
+    max_ghalogs_members: int = DEFAULT_GHALOGS_MAX_MEMBERS,
+    max_logchunks_examples: int = DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
+    max_loghub_files: int = DEFAULT_LOGHUB_MAX_FILES,
+    output_path_prefix: str | None = None,
+) -> tuple[StepSpec, StepSpec, StepSpec]:
+    """Return one materialization step per public diagnostic-log source."""
+    return (
+        extract_ghalogs_step(
+            source_path=source_path,
+            max_members=max_ghalogs_members,
+            output_path_prefix=output_path_prefix,
+        ),
+        extract_logchunks_step(
+            source_path=source_path,
+            max_examples=max_logchunks_examples,
+            output_path_prefix=output_path_prefix,
+        ),
+        extract_loghub_step(
+            source_path=source_path,
+            max_files=max_loghub_files,
+            output_path_prefix=output_path_prefix,
+        ),
+    )
 
 
 def extract_diagnostic_logs_step(
@@ -641,10 +818,12 @@ def extract_diagnostic_logs_step(
     max_ghalogs_members: int = DEFAULT_GHALOGS_MAX_MEMBERS,
     max_logchunks_examples: int = DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
     max_loghub_files: int = DEFAULT_LOGHUB_MAX_FILES,
+    output_path_prefix: str | None = None,
 ) -> StepSpec:
-    """Return a StepSpec that materializes diagnostic-log records."""
+    """Return a StepSpec that materializes all public diagnostic-log slices together."""
     return StepSpec(
         name="processed/diagnostic_logs/public_sample",
+        output_path_prefix=output_path_prefix,
         fn=lambda output_path: extract_diagnostic_logs(
             source_path,
             output_path,
@@ -653,7 +832,7 @@ def extract_diagnostic_logs_step(
             max_loghub_files=max_loghub_files,
         ),
         hash_attrs={
-            "version": "v2",
+            "version": "v3",
             "sample_only": True,
             "source_path": source_path,
             "max_ghalogs_members": max_ghalogs_members,
