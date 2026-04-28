@@ -78,9 +78,48 @@ the v16 compute-optimal baseline.
 - **Wandb group:** `lm-head-init-sweep` in project `marin_moe`.
 - **Run ID pattern:** `lm-head-init-{2x|4x}-d{dim}-{budget}` e.g.
   `lm-head-init-2x-d512-2.19e17`.
-- **Result:** pending — gate 1 parent submitted as
-  `/kaiyue/iris-run-job-20260427-225917` at 2026-04-27 22:59:26 UTC.
-  Children will be 4 v5p-8 jobs (d512×{2x,4x}, d768×{2x,4x}).
-  Tracking issue: marin-community/marin#5222.
-- **Next action:** wait ~3h for d768 to finish; pull final macro and tok/s
-  from wandb; compute effective speedup.
+- **Result:** see "gate 1 final" entry below.
+
+### 2026-04-28 02:24 UTC - gate 1 final, both variants FAIL
+- **Confidence:** stable (single-seed but consistent direction across two scales).
+- **W&B entity/project:** `understanding-sam/marin_moe`
+  (note: not `marin-community/marin_moe` — runs land in the personal entity).
+
+| variant | dim | macro_loss | Δ vs baseline | tok/s   | speedup | verdict |
+|---------|-----|------------|---------------|---------|---------|---------|
+| 2x      | d512 | 3.8165    | +0.0061       | 406,157 | 0.973   | FAIL    |
+| 2x      | d768 | 3.4360    | +0.0021       | 274,354 | 0.991   | FAIL    |
+| 4x      | d512 | 3.8382    | +0.0278       | 406,696 | 0.878   | FAIL    |
+| 4x      | d768 | 3.4314    | **−0.0025**   | 273,949 | 1.016   | (alone) |
+
+- **Interpretation:** scaling the LM-head init causes a small,
+  scale-decreasing loss penalty under the v16 LR fit — costly at d512,
+  almost nothing at d768. 4x at d768 marginally beats baseline (−0.003
+  macro) but 4x at d512 is clearly worse (+0.028), so 4x as a recipe-wide
+  multiplier fails Gate 1. 2x is essentially neutral at d768 and slightly
+  negative at d512.
+- **Decision:** Gate 1 requires effective speedup > 1 at *both* d512 and
+  d768; both variants fail. **Gate 2 not submitted.** Closing the
+  experiment with a negative result.
+- **Repro bundle:**
+  - Branch: `research/moe-lm-head-init-scale`
+  - Sweep launch: `experiments/grug/moe/lm_head_init_sweep.py`
+  - Hardware: 4 × v5p-8 (one per variant × scale)
+  - Iris parent job: `/kaiyue/iris-run-job-20260427-225917`
+
+## Conclusion
+- **Outcome:** negative. Larger LM-head init (2x or 4x) does not improve
+  the v16 compute-optimal MoE recipe at d512–d768; the harm shrinks with
+  scale but Gate 1 still fails for both variants.
+- **Confidence:** stable (consistent direction across two scales, monotonic
+  in scale factor at the smaller scale).
+- **Limitation:** single seed; the v16 LR was fit against the smaller
+  default init, so the small d768 4x improvement may simply reflect that
+  larger inits become tolerable as model size grows. Acting on it would
+  require a co-tuned LR + seed replication.
+
+## Followups (optional, ordered)
+1. Refit LR for the 2x/4x variants at d512 — cheap, would tell us whether
+   the d512 gap is just LR mis-calibration vs. a real architectural cost.
+2. If (1) closes the d512 gap, re-run gate 1 with co-tuned LR; otherwise
+   stop.
