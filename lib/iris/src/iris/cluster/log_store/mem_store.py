@@ -74,12 +74,7 @@ class MemStore:
     def append(self, key: str, entries: list) -> None:
         if not entries:
             return
-        with self._lock:
-            first_seq = self._next_seq
-            self._next_seq += len(entries)
-            self._rows.extend(
-                (first_seq + i, key, e.source, e.data, e.timestamp.epoch_ms, e.level) for i, e in enumerate(entries)
-            )
+        self.append_batch([(key, entries)])
 
     def append_batch(self, items: list[tuple[str, list]]) -> None:
         with self._lock:

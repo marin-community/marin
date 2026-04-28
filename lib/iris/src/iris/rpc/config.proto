@@ -109,6 +109,12 @@ message GcpSliceConfig {
   string machine_type = 7;      // Required for mode=GCP_SLICE_MODE_VM
   reserved 8;  // was: boot_disk_size_gb (moved to SliceConfig.disk_size_gb)
   string service_account = 9;
+  // Default: true. Set false to provision the slice without external IPs (e.g.
+  // in projects subject to the constraints/compute.vmExternalIpAccess org
+  // policy). Currently honored only for TPU-mode slices. The caller is
+  // responsible for in-VPC connectivity to the controller — Iris does not
+  // manage controller-side SSH or RPC routing.
+  bool enable_external_ip = 10;
 }
 
 message CoreweaveSliceConfig {
