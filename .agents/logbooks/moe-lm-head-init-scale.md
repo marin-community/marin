@@ -123,3 +123,26 @@ the v16 compute-optimal baseline.
    the d512 gap is just LR mis-calibration vs. a real architectural cost.
 2. If (1) closes the d512 gap, re-run gate 1 with co-tuned LR; otherwise
    stop.
+
+### 2026-04-28 02:28 UTC - reopen + Gate 2 submitted (user override)
+- **Why reopened:** user override of the Gate 1 stop rule. Hypothesis is
+  that the 4x init's ~zero d512 cost / +Δ d768 trend continues at d1024 /
+  d1280, so the variant may be net-positive at the larger compute
+  budgets even though Gate 1 failed at d512.
+- **Submitted:** `/kaiyue/iris-run-job-20260428-022733` at 02:27:45 UTC
+  via `LM_HEAD_INIT_SWEEP_GATE=2`.
+- **Children (4 v5p-8):**
+  - `lm-head-init-2x-d1024-9.00e+18` (~10.5h baseline)
+  - `lm-head-init-4x-d1024-9.00e+18` (~10.5h)
+  - `lm-head-init-2x-d1280-2.83e+19` (~26.8h)
+  - `lm-head-init-4x-d1280-2.83e+19` (~26.8h)
+- **Wall-clock ETA:** d1024 first (~10.5h), d1280 dominates total (~27h).
+- **What we'll compute when Gate 2 lands:** effective speedup at all 4
+  scales for each variant + refit `loss(C) = 1.6 + A · C^(-α)` on each
+  variant's 4 optima and project to 1e21 / 1e23. Compare to baseline
+  projections (2.606 @ 1e21, 2.252 @ 1e23).
+- **Note:** 2x-d512 (0.973), 4x-d512 (0.878), and 2x-d768 (0.991) already
+  disqualify both variants from promotion under `agent.md`'s Gate 2 rule
+  (speedup > 1 at *all four* scales). Gate 2 here is informational — it
+  characterizes the scaling behavior of the cost rather than testing
+  promotability.
