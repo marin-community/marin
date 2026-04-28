@@ -15,7 +15,15 @@ from haliax.partitioning import ResourceAxis
 
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.examples import GrugLmExample, TraceLmExample, named_lm_example_from_grug
-from levanter.eval import EvalResult, LossFnOutput, MaskedEvaluator, TaggedEvaluator, cb_tagged_evaluate
+from levanter.eval import (
+    EvalResult,
+    LossFnOutput,
+    MaskedEvaluator,
+    MaskedEvalResult,
+    TaggedEvaluator,
+    cb_tagged_evaluate,
+    construct_masked_log_dict,
+)
 from levanter.models.lm_model import LmExample
 from levanter.tracker import current_tracker
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -215,6 +223,24 @@ def test_masked_evaluator_aggregates_token_masks():
     assert result.mask_losses["middle"] == pytest.approx(2.5)
     assert result.mask_token_counts["first"] == pytest.approx(float(EvalBatch.size))
     assert result.mask_token_counts["middle"] == pytest.approx(float(EvalBatch.size * 2))
+
+
+def test_masked_log_dict_omits_loss_and_bpb_for_empty_masks():
+    result = MaskedEvalResult(
+        mask_losses={"present": 1.5, "empty": 0.0},
+        mask_token_counts={"present": 2.0, "empty": 0.0},
+        total_eval_loading_time=0.25,
+        mask_bpb={"present": 0.5, "empty": 0.0},
+    )
+
+    log_dict = construct_masked_log_dict(result, total_time=1.0, prefix="eval")
+
+    assert log_dict["eval/present/tokens"] == 2.0
+    assert log_dict["eval/present/loss"] == 1.5
+    assert log_dict["eval/present/bpb"] == 0.5
+    assert log_dict["eval/empty/tokens"] == 0.0
+    assert "eval/empty/loss" not in log_dict
+    assert "eval/empty/bpb" not in log_dict
 
 
 def test_trace_masked_evaluator_resizes_pos_to_batch_length():

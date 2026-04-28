@@ -5,6 +5,7 @@ import json
 
 from fray.cluster import ResourceConfig
 from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
+from experiments.marin_models import MARIN_CHAT_TEMPLATE
 from levanter.data.sharded_datasource import ShardedDataSource
 from levanter.data.text import TraceChatEvaluationFormat
 from levanter.data.text import HfDatasetSourceConfig
@@ -24,6 +25,7 @@ from marin.evaluation.trace_masked_eval import (
     _binary_auroc,
     _completed_dataset_metrics,
     _contrastive_outcome_summary,
+    _grouped_binary_auroc,
     _is_completed_dataset_result,
     _load_or_create_results,
     _record_dataset_result,
@@ -107,7 +109,7 @@ def test_llama_template_preserves_empty_tool_call_messages_and_tool_call_content
     processor = TraceChatEvaluationFormat(
         messages_field="messages",
         chat_template=LLAMA_3_1_CHAT_TEMPLATE,
-        loss_tags=("assistant", "tool_call", "observation", "final_assistant"),
+        loss_tags=("assistant", "assistant_text", "tool_call", "observation", "final_assistant"),
     ).build_preprocessor(tokenizer)
 
     result = processor(
@@ -143,9 +145,55 @@ def test_llama_template_preserves_empty_tool_call_messages_and_tool_call_content
 
     masks = result["trace_masks"]
     assert masks["assistant"].sum() > masks["tool_call"].sum()
+    assert masks["assistant_text"].sum() > 0
+    assert masks["assistant_text"].sum() < masks["assistant"].sum()
     assert masks["tool_call"].sum() > 0
     assert masks["observation"].sum() > 0
     assert masks["final_assistant"].sum() > 0
+
+
+def test_marin_template_supports_multiple_tool_calls():
+    tokenizer = load_tokenizer("gpt2")
+    processor = TraceChatEvaluationFormat(
+        messages_field="messages",
+        chat_template=MARIN_CHAT_TEMPLATE,
+        loss_tags=("assistant", "assistant_text", "tool_call"),
+    ).build_preprocessor(tokenizer)
+
+    result = processor(
+        [
+            {
+                "messages": [
+                    {"role": "user", "content": "Use both tools.", "tool_calls": []},
+                    {
+                        "role": "assistant",
+                        "content": "calling tools",
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "search",
+                                    "arguments": {"query": "marin"},
+                                }
+                            },
+                            {
+                                "function": {
+                                    "name": "read_file",
+                                    "arguments": {"path": "README.md"},
+                                }
+                            },
+                        ],
+                    },
+                ]
+            }
+        ]
+    )[0]
+
+    rendered = tokenizer.decode(result["input_ids"])
+    assert "calling tools" in rendered
+    assert "search" in rendered
+    assert "read_file" in rendered
+    assert result["trace_masks"]["assistant_text"].sum() > 0
+    assert result["trace_masks"]["tool_call"].sum() > 0
 
 
 def test_trace_row_adapter_adds_patch_and_outcome_targets(tmp_path):
@@ -245,6 +293,112 @@ def test_trace_row_adapter_limits_large_trace_before_derived_targets():
     assert preserve_only == [row["trajectory"][0]]
 
 
+def test_trace_row_adapter_prefix_fraction_omits_patch_before_full_trace():
+    row = {
+        "trajectory": [
+            {"role": "system", "content": "system context"},
+            {"role": "user", "content": "original task"},
+            {"role": "assistant", "content": "inspect files"},
+            {"role": "tool", "content": "ls output"},
+        ],
+        "patch": "diff --git a/a.py b/a.py",
+        "resolved": True,
+    }
+    trace_format = TraceChatEvaluationFormat(messages_field="messages", loss_tags=("outcome",))
+    row_adapter = TraceRowAdapterConfig(
+        input_messages_field="trajectory",
+        patch_field="patch",
+        outcome_field="resolved",
+        task_id_field="instance_id",
+    )
+
+    adapted_row = trace_masked_eval_module._adapt_trace_row(
+        row,
+        trace_format,
+        row_adapter,
+        include_patch=False,
+        prefix_fraction=0.5,
+    )
+
+    assert [message["content"] for message in adapted_row["messages"]] == [
+        "system context",
+        "original task",
+        "CORRECT",
+    ]
+    assert adapted_row["trace_task_id"] == ""
+    assert adapted_row["trace_record_id"] == ""
+
+
+def test_source_for_dataset_applies_row_prefix_fraction(tmp_path):
+    row = {
+        "trajectory": [
+            {"role": "system", "content": "system context"},
+            {"role": "user", "content": "original task"},
+            {"role": "assistant", "content": "inspect files"},
+            {"role": "tool", "content": "ls output"},
+        ],
+        "patch": "diff --git a/a.py b/a.py",
+        "resolved": True,
+    }
+    path = tmp_path / "traces.jsonl"
+    path.write_text(json.dumps(row) + "\n")
+    trace_format = TraceChatEvaluationFormat(messages_field="messages", loss_tags=("patch", "outcome"))
+    dataset_config = TraceMaskedEvalDatasetConfig(
+        source=UrlDatasetSourceConfig(train_urls=[str(path)]),
+        split="train",
+        trace_format=trace_format,
+        row_adapter=TraceRowAdapterConfig(
+            input_messages_field="trajectory",
+            patch_field="patch",
+            outcome_field="resolved",
+        ),
+        row_prefix_fraction=0.5,
+    )
+
+    adapted_row = next(iter(trace_masked_eval_module._source_for_dataset(dataset_config)))
+
+    assert [message["content"] for message in adapted_row["messages"]] == [
+        "system context",
+        "original task",
+        "Final Patch:\ndiff --git a/a.py b/a.py",
+        "CORRECT",
+    ]
+
+
+def test_source_for_dataset_allows_zero_row_prefix_fraction(tmp_path):
+    row = {
+        "trajectory": [
+            {"role": "system", "content": "system context"},
+            {"role": "user", "content": "original task"},
+            {"role": "assistant", "content": "inspect files"},
+            {"role": "tool", "content": "ls output"},
+        ],
+        "patch": "diff --git a/a.py b/a.py",
+        "resolved": True,
+    }
+    path = tmp_path / "traces.jsonl"
+    path.write_text(json.dumps(row) + "\n")
+    trace_format = TraceChatEvaluationFormat(messages_field="messages", loss_tags=("patch", "outcome"))
+    dataset_config = TraceMaskedEvalDatasetConfig(
+        source=UrlDatasetSourceConfig(train_urls=[str(path)]),
+        split="train",
+        trace_format=trace_format,
+        row_adapter=TraceRowAdapterConfig(
+            input_messages_field="trajectory",
+            patch_field="patch",
+            outcome_field="resolved",
+        ),
+        row_prefix_fraction=0.0,
+    )
+
+    adapted_row = next(iter(trace_masked_eval_module._source_for_dataset(dataset_config)))
+
+    assert [message["content"] for message in adapted_row["messages"]] == [
+        "Final Patch:\ndiff --git a/a.py b/a.py",
+        "CORRECT",
+    ]
+
+
 def test_contrastive_outcome_row_adds_judge_prompt_without_gold_label():
     row = {
         "trajectory": [
@@ -319,11 +473,23 @@ def test_contrastive_outcome_summary_reports_accuracy_and_auroc():
     auroc, defined = _binary_auroc([2.0, -1.0, 1.0, -0.5], [True, False, True, False])
     assert auroc == 1.0
     assert defined
+    same_task_auroc, same_task_defined, groups, groups_with_pairs, pairs, mean_group_auroc = _grouped_binary_auroc(
+        [2.0, -1.0, 1.0, -0.5],
+        [True, False, True, False],
+        ["task-a", "task-a", "task-b", "task-b"],
+    )
+    assert same_task_auroc == 1.0
+    assert same_task_defined
+    assert groups == 2
+    assert groups_with_pairs == 2
+    assert pairs == 2
+    assert mean_group_auroc == 1.0
 
     summary = _contrastive_outcome_summary(
         margins=[2.0, -1.0, 1.0, -0.5],
         normalized_margins=[2.0, -1.0, 1.0, -0.5],
         gold_is_correct=[True, False, True, False],
+        group_ids=["task-a", "task-a", "task-b", "task-b"],
         correct_logprobs=[-1.0, -3.0, -2.0, -4.0],
         incorrect_logprobs=[-3.0, -2.0, -3.0, -3.5],
         correct_token_counts=[1.0, 1.0, 1.0, 1.0],
@@ -338,6 +504,13 @@ def test_contrastive_outcome_summary_reports_accuracy_and_auroc():
     assert summary["normalized_auroc_defined"] == 1.0
     assert summary["positive_examples"] == 2.0
     assert summary["negative_examples"] == 2.0
+    assert summary["same_task_auroc"] == 1.0
+    assert summary["same_task_auroc_defined"] == 1.0
+    assert summary["same_task_groups"] == 2.0
+    assert summary["same_task_groups_with_pairs"] == 2.0
+    assert summary["same_task_pairs"] == 2.0
+    assert summary["same_task_normalized_auroc"] == 1.0
+    assert summary["same_task_normalized_auroc_defined"] == 1.0
 
 
 def test_run_with_retries_retries_transient_failures(monkeypatch):
@@ -395,3 +568,45 @@ def test_trace_masked_eval_results_checkpoint_supports_resume(tmp_path):
     assert loaded["status"] == "partial"
     assert loaded_datasets["openhands"]["metrics"] == metrics
     assert _completed_dataset_metrics(loaded) == metrics
+
+
+def test_record_dataset_result_preserves_artifacts(tmp_path):
+    results = {
+        "datasets": {},
+        "status": "partial",
+        "completed_datasets": 0,
+    }
+    dataset_config = TraceMaskedEvalDatasetConfig(
+        source=UrlDatasetSourceConfig(train_urls=[str(tmp_path / "traces.jsonl")]),
+        split="train",
+        max_examples=1,
+    )
+
+    _record_dataset_result(
+        results,
+        "openhands",
+        dataset_config,
+        {"trace_masked_eval/openhands/outcome/loss": 0.25},
+        artifacts={"outcome_example_scores": str(tmp_path / "examples.jsonl")},
+    )
+
+    dataset_result = results["datasets"]["openhands"]
+    assert isinstance(dataset_result, dict)
+    assert dataset_result["artifacts"] == {"outcome_example_scores": str(tmp_path / "examples.jsonl")}
+
+
+def test_write_jsonl_records_writes_output(tmp_path):
+    path = trace_masked_eval_module._outcome_example_scores_path(str(tmp_path), "openhands")
+    trace_masked_eval_module._write_jsonl_records(
+        path,
+        [
+            {"example_index": 0, "margin": 1.0},
+            {"example_index": 1, "margin": -1.0},
+        ],
+    )
+
+    assert path.endswith("openhands.outcome_examples.jsonl")
+    assert (tmp_path / "examples" / "openhands.outcome_examples.jsonl").read_text().splitlines() == [
+        '{"example_index": 0, "margin": 1.0}',
+        '{"example_index": 1, "margin": -1.0}',
+    ]

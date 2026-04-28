@@ -759,11 +759,14 @@ def construct_masked_log_dict(eval_result: MaskedEvalResult, total_time: float, 
         _join_prefix(prefix, "total_time"): total_time,
     }
     for name, loss in eval_result.mask_losses.items():
-        log_dict[_join_prefix(prefix, name) + "/loss"] = loss
-        log_dict[_join_prefix(prefix, name) + "/tokens"] = eval_result.mask_token_counts[name]
+        tokens = eval_result.mask_token_counts[name]
+        log_dict[_join_prefix(prefix, name) + "/tokens"] = tokens
+        if tokens > 0:
+            log_dict[_join_prefix(prefix, name) + "/loss"] = loss
     if eval_result.mask_bpb is not None:
         for name, bpb in eval_result.mask_bpb.items():
-            log_dict[_join_prefix(prefix, name) + "/bpb"] = bpb
+            if eval_result.mask_token_counts[name] > 0:
+                log_dict[_join_prefix(prefix, name) + "/bpb"] = bpb
     return log_dict
 
 

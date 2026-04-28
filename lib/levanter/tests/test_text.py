@@ -247,7 +247,7 @@ def test_trace_chat_processor_emits_named_masks(local_gpt2_marin_tokenizer):
     processor = TraceChatProcessor(
         local_gpt2_marin_tokenizer,
         chat_template=_SIMPLE_TRACE_CHAT_TEMPLATE,
-        loss_tags=("assistant", "tool", "observation", "bash", "patch", "final_assistant"),
+        loss_tags=("assistant", "assistant_text", "tool", "observation", "bash", "patch", "final_assistant"),
     )
     processed = processor(
         [
@@ -269,6 +269,7 @@ def test_trace_chat_processor_emits_named_masks(local_gpt2_marin_tokenizer):
 
     masks = processed["trace_masks"]
     assert masks["assistant"].sum() > masks["patch"].sum()
+    assert masks["assistant_text"].sum() == masks["assistant"].sum()
     assert masks["tool"].sum() > 0
     assert masks["observation"].sum() == masks["tool"].sum()
 
@@ -286,7 +287,7 @@ def test_trace_chat_processor_fills_common_chat_template_defaults(local_gpt2_mar
     processor = TraceChatProcessor(
         local_gpt2_marin_tokenizer,
         chat_template=_TOOL_AWARE_TRACE_CHAT_TEMPLATE,
-        loss_tags=("assistant", "tool_call"),
+        loss_tags=("assistant", "assistant_text", "tool_call"),
     )
 
     processed = processor(
@@ -303,7 +304,94 @@ def test_trace_chat_processor_fills_common_chat_template_defaults(local_gpt2_mar
     rendered = local_gpt2_marin_tokenizer.decode(processed["input_ids"], skip_special_tokens=False)
     assert "I will do that." in rendered
     assert processed["trace_masks"]["assistant"].sum() > 0
+    assert processed["trace_masks"]["assistant_text"].sum() > 0
     assert processed["trace_masks"]["tool_call"].sum() == 0
+
+
+def test_trace_chat_processor_parses_text_tool_calls(local_gpt2_marin_tokenizer):
+    processor = TraceChatProcessor(
+        local_gpt2_marin_tokenizer,
+        chat_template=_TOOL_AWARE_TRACE_CHAT_TEMPLATE,
+        loss_tags=("assistant", "assistant_text", "tool_call"),
+    )
+
+    processed = processor(
+        [
+            {
+                "messages": [
+                    {"role": "user", "content": "Search."},
+                    {
+                        "role": "assistant",
+                        "content": (
+                            "<think>need search</think>\n"
+                            "<tool_call>\n"
+                            "{'name': 'search', 'arguments': {'query': 'marin'}}\n"
+                            "</tool_call>"
+                        ),
+                    },
+                ],
+            }
+        ]
+    )[0]
+
+    input_ids = np.asarray(processed["input_ids"])
+    masks = processed["trace_masks"]
+    rendered = local_gpt2_marin_tokenizer.decode(input_ids.tolist(), skip_special_tokens=False)
+    tool_call_text = local_gpt2_marin_tokenizer.decode(
+        input_ids[np.asarray(masks["tool_call"]) > 0].tolist(),
+        skip_special_tokens=False,
+    )
+    assistant_text = local_gpt2_marin_tokenizer.decode(
+        input_ids[np.asarray(masks["assistant_text"]) > 0].tolist(),
+        skip_special_tokens=False,
+    )
+
+    assert "need search" in rendered
+    assert "<tool_call>1</tool_call>" in tool_call_text
+    assert "need search" not in tool_call_text
+    assert "need search" in assistant_text
+    assert "<tool_call>" not in assistant_text
+    assert masks["assistant"].sum() > masks["tool_call"].sum()
+    assert masks["assistant_text"].sum() < masks["assistant"].sum()
+
+
+def test_trace_chat_processor_separates_assistant_text_from_structured_tool_calls(local_gpt2_marin_tokenizer):
+    processor = TraceChatProcessor(
+        local_gpt2_marin_tokenizer,
+        chat_template=_TOOL_AWARE_TRACE_CHAT_TEMPLATE,
+        loss_tags=("assistant", "assistant_text", "tool_call"),
+    )
+
+    processed = processor(
+        [
+            {
+                "messages": [
+                    {"role": "user", "content": "Search."},
+                    {
+                        "role": "assistant",
+                        "content": "need search",
+                        "tool_calls": [{"function": {"name": "search", "arguments": {"query": "marin"}}}],
+                    },
+                ],
+            }
+        ]
+    )[0]
+
+    input_ids = np.asarray(processed["input_ids"])
+    masks = processed["trace_masks"]
+    tool_call_text = local_gpt2_marin_tokenizer.decode(
+        input_ids[np.asarray(masks["tool_call"]) > 0].tolist(),
+        skip_special_tokens=False,
+    )
+    assistant_text = local_gpt2_marin_tokenizer.decode(
+        input_ids[np.asarray(masks["assistant_text"]) > 0].tolist(),
+        skip_special_tokens=False,
+    )
+
+    assert "search" in tool_call_text
+    assert "need search" in assistant_text
+    assert "<tool_call>" not in assistant_text
+    assert masks["assistant_text"].sum() < masks["assistant"].sum()
 
 
 def test_trace_chat_dataset_packs_and_shifts_masks(tmp_path, local_gpt2_marin_tokenizer):

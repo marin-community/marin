@@ -20,7 +20,7 @@ TRACE_FORMAT = TraceChatEvaluationFormat(
     messages_field="messages",
     chat_template=QWEN_3_CHAT_TEMPLATE,
     chat_template_kwargs="chat_template_kwargs",
-    loss_tags=("assistant", "tool_call", "tool", "observation", "final_assistant"),
+    loss_tags=("assistant", "assistant_text", "tool_call", "tool", "observation", "final_assistant"),
     pack=4,
 )
 

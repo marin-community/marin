@@ -5,8 +5,10 @@
 
 import json
 import logging
+import math
 import os
 import time
+from collections import defaultdict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, TypeVar
@@ -17,6 +19,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
+from tqdm_loggable.auto import tqdm
 
 import haliax as hax
 from haliax import Axis
@@ -81,6 +84,8 @@ class TraceRowAdapterConfig:
     input_messages_field: str | None = None
     patch_field: str | None = None
     outcome_field: str | None = None
+    task_id_field: str | None = None
+    record_id_field: str | None = None
     patch_loss_tag: str = "patch"
     outcome_loss_tag: str = "outcome"
     patch_prefix: str = "Final Patch:\n"
@@ -103,7 +108,10 @@ class TraceMaskedEvalDatasetConfig:
     trace_format: TraceChatEvaluationFormat = field(default_factory=TraceChatEvaluationFormat)
     max_examples: int | None = None
     row_adapter: TraceRowAdapterConfig | None = None
+    row_prefix_fraction: float | None = None
     contrastive_outcome: bool = False
+    outcome_prefix_fractions: tuple[float, ...] = ()
+    write_outcome_example_scores: bool = False
 
 
 @dataclass
@@ -306,6 +314,33 @@ def _limited_trace_messages(
     return [*limited_messages[:preserve_initial], *limited_messages[-tail_count:]]
 
 
+def _prefixed_trace_messages(
+    messages: Sequence[Mapping[str, Any]], prefix_fraction: float | None
+) -> list[dict[str, Any]]:
+    if prefix_fraction is None:
+        return [dict(message) for message in messages]
+    if not 0.0 <= prefix_fraction <= 1.0:
+        raise ValueError(f"prefix_fraction must be in [0, 1], got {prefix_fraction!r}")
+    if prefix_fraction <= 0.0:
+        return []
+    if prefix_fraction >= 1.0:
+        return [dict(message) for message in messages]
+    if not messages:
+        return []
+
+    keep_messages = max(1, math.ceil(len(messages) * prefix_fraction))
+    return [dict(message) for message in messages[:keep_messages]]
+
+
+def _row_identifier(row: Mapping[str, Any], field_path: str | None, *, default: str) -> str:
+    if field_path is None:
+        return default
+    value = _lookup_field(row, field_path)
+    if value is None:
+        return default
+    return str(value)
+
+
 def _outcome_label(value: Any, row_adapter: TraceRowAdapterConfig) -> str:
     if isinstance(value, bool):
         return row_adapter.positive_outcome_label if value else row_adapter.negative_outcome_label
@@ -327,12 +362,17 @@ def _adapt_trace_row(
     row_adapter: TraceRowAdapterConfig,
     *,
     include_outcome_label: bool = True,
+    include_patch: bool = True,
+    prefix_fraction: float | None = None,
 ) -> dict[str, Any]:
     input_messages_field = row_adapter.input_messages_field or trace_format.messages_field
     messages = _normalize_trace_messages(_lookup_field(row, input_messages_field))
     messages = _limited_trace_messages(messages, row_adapter)
+    messages = _prefixed_trace_messages(messages, prefix_fraction)
 
-    patch = _lookup_field(row, row_adapter.patch_field) if row_adapter.patch_field is not None else None
+    patch = (
+        _lookup_field(row, row_adapter.patch_field) if include_patch and row_adapter.patch_field is not None else None
+    )
     patch_text = _normalize_message_content(patch)
     if patch_text:
         max_patch_chars = row_adapter.max_patch_chars
@@ -348,6 +388,8 @@ def _adapt_trace_row(
         )
 
     adapted = dict(row)
+    adapted["trace_task_id"] = _row_identifier(row, row_adapter.task_id_field, default="")
+    adapted["trace_record_id"] = _row_identifier(row, row_adapter.record_id_field, default="")
     if row_adapter.outcome_field is not None:
         label = _outcome_label(_lookup_field(row, row_adapter.outcome_field), row_adapter)
         if include_outcome_label:
@@ -387,6 +429,7 @@ def _source_for_dataset(
             dataset_config.trace_format,
             dataset_config.row_adapter,
             include_outcome_label=include_outcome_label,
+            prefix_fraction=dataset_config.row_prefix_fraction,
         )
     )
 
@@ -396,8 +439,18 @@ def _adapt_contrastive_outcome_row(
     trace_format: TraceChatEvaluationFormat,
     row_adapter: TraceRowAdapterConfig,
     candidate_label: str,
+    *,
+    include_patch: bool = True,
+    prefix_fraction: float | None = None,
 ) -> dict[str, Any]:
-    adapted = _adapt_trace_row(row, trace_format, row_adapter, include_outcome_label=False)
+    adapted = _adapt_trace_row(
+        row,
+        trace_format,
+        row_adapter,
+        include_outcome_label=False,
+        include_patch=include_patch,
+        prefix_fraction=prefix_fraction,
+    )
     messages = [dict(message) for message in adapted[trace_format.messages_field]]
     messages.append({"role": "user", "content": row_adapter.outcome_prompt})
     messages.append(
@@ -423,13 +476,18 @@ def _dataset_metadata(dataset_config: TraceMaskedEvalDatasetConfig) -> dict[str,
         "split": dataset_config.split,
         "max_examples": dataset_config.max_examples,
         "loss_tags": list(dataset_config.trace_format.loss_tags),
+        "row_prefix_fraction": dataset_config.row_prefix_fraction,
         "contrastive_outcome": dataset_config.contrastive_outcome,
+        "outcome_prefix_fractions": list(dataset_config.outcome_prefix_fractions),
+        "write_outcome_example_scores": dataset_config.write_outcome_example_scores,
     }
     if dataset_config.row_adapter is not None:
         metadata["row_adapter"] = {
             "input_messages_field": dataset_config.row_adapter.input_messages_field,
             "patch_field": dataset_config.row_adapter.patch_field,
             "outcome_field": dataset_config.row_adapter.outcome_field,
+            "task_id_field": dataset_config.row_adapter.task_id_field,
+            "record_id_field": dataset_config.row_adapter.record_id_field,
             "patch_loss_tag": dataset_config.row_adapter.patch_loss_tag,
             "outcome_loss_tag": dataset_config.row_adapter.outcome_loss_tag,
             "outcome_prompt": dataset_config.row_adapter.outcome_prompt,
@@ -540,12 +598,17 @@ def _record_dataset_result(
     dataset_name: str,
     dataset_config: TraceMaskedEvalDatasetConfig,
     metrics: Mapping[str, float],
+    *,
+    artifacts: Mapping[str, str] | None = None,
 ) -> None:
-    _dataset_results(results)[dataset_name] = {
+    dataset_result: dict[str, object] = {
         "status": TRACE_MASKED_EVAL_DATASET_STATUS_COMPLETED,
         "metadata": _dataset_metadata(dataset_config),
         "metrics": dict(metrics),
     }
+    if artifacts:
+        dataset_result["artifacts"] = dict(artifacts)
+    _dataset_results(results)[dataset_name] = dataset_result
     results["status"] = TRACE_MASKED_EVAL_STATUS_PARTIAL
     results["completed_datasets"] = _completed_dataset_count(results)
 
@@ -602,6 +665,9 @@ def _prepare_contrastive_candidate(
     tokenizer: Any,
     max_eval_length: int,
     candidate_label: str,
+    *,
+    include_patch: bool = True,
+    prefix_fraction: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     contrastive_format = replace(
         trace_format,
@@ -610,7 +676,14 @@ def _prepare_contrastive_candidate(
         include_role_tags=False,
         include_final_assistant_tag=False,
     )
-    candidate_row = _adapt_contrastive_outcome_row(row, contrastive_format, row_adapter, candidate_label)
+    candidate_row = _adapt_contrastive_outcome_row(
+        row,
+        contrastive_format,
+        row_adapter,
+        candidate_label,
+        include_patch=include_patch,
+        prefix_fraction=prefix_fraction,
+    )
     processed = contrastive_format.build_preprocessor(tokenizer)([candidate_row])[0]
 
     input_ids = np.asarray(processed["input_ids"], dtype=np.int32)
@@ -643,6 +716,76 @@ def _binary_auroc(scores: Sequence[float], labels: Sequence[bool]) -> tuple[floa
     return wins / (len(positives) * len(negatives)), True
 
 
+def _grouped_binary_auroc(
+    scores: Sequence[float], labels: Sequence[bool], group_ids: Sequence[str]
+) -> tuple[float, bool, int, int, int, float]:
+    grouped_examples: dict[str, list[tuple[float, bool]]] = defaultdict(list)
+    for score, label, group_id in zip(scores, labels, group_ids, strict=True):
+        if not group_id:
+            continue
+        grouped_examples[group_id].append((score, label))
+
+    if not grouped_examples:
+        return 0.5, False, 0, 0, 0, 0.5
+
+    total_wins = 0.0
+    total_pairs = 0
+    comparable_groups = 0
+    mean_group_aurocs: list[float] = []
+    for examples in grouped_examples.values():
+        positive_scores = [score for score, label in examples if label]
+        negative_scores = [score for score, label in examples if not label]
+        if not positive_scores or not negative_scores:
+            continue
+
+        comparable_groups += 1
+        group_wins = 0.0
+        for positive_score in positive_scores:
+            for negative_score in negative_scores:
+                if positive_score > negative_score:
+                    group_wins += 1.0
+                elif positive_score == negative_score:
+                    group_wins += 0.5
+        group_pairs = len(positive_scores) * len(negative_scores)
+        total_wins += group_wins
+        total_pairs += group_pairs
+        mean_group_aurocs.append(group_wins / group_pairs)
+
+    if total_pairs == 0:
+        return 0.5, False, len(grouped_examples), 0, 0, 0.5
+
+    return (
+        total_wins / total_pairs,
+        True,
+        len(grouped_examples),
+        comparable_groups,
+        total_pairs,
+        float(np.mean(mean_group_aurocs)),
+    )
+
+
+def _prefix_metric_name(prefix_fraction: float) -> str:
+    if prefix_fraction >= 1.0:
+        return "prefix_100"
+    percent = round(prefix_fraction * 100)
+    return f"prefix_{percent}"
+
+
+def _outcome_example_scores_path(output_path: str, dataset_name: str) -> str:
+    return os.path.join(output_path, "examples", f"{_safe_name(dataset_name)}.outcome_examples.jsonl")
+
+
+def _write_jsonl_records(path: str, records: Sequence[Mapping[str, Any]]) -> None:
+    fs, _, _ = fsspec.get_fs_token_paths(path)
+    fs.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp_path = f"{path}.tmp.{os.getpid()}"
+    with fs.open(tmp_path, "w") as f:
+        for record in records:
+            json.dump(record, f, sort_keys=True)
+            f.write("\n")
+    fs.mv(tmp_path, path)
+
+
 def _sigmoid(value: float) -> float:
     if value >= 0:
         exp_neg = np.exp(-value)
@@ -656,6 +799,7 @@ def _contrastive_outcome_summary(
     margins: Sequence[float],
     normalized_margins: Sequence[float],
     gold_is_correct: Sequence[bool],
+    group_ids: Sequence[str] | None,
     correct_logprobs: Sequence[float],
     incorrect_logprobs: Sequence[float],
     correct_token_counts: Sequence[float],
@@ -683,6 +827,35 @@ def _contrastive_outcome_summary(
             for probability, label in zip(normalized_probabilities, gold_is_correct, strict=True)
         ]
     )
+    same_task_auroc = 0.5
+    same_task_auroc_defined = False
+    same_task_groups = 0
+    same_task_groups_with_pairs = 0
+    same_task_pairs = 0
+    same_task_mean_group_auroc = 0.5
+    same_task_normalized_auroc = 0.5
+    same_task_normalized_auroc_defined = False
+    same_task_normalized_mean_group_auroc = 0.5
+    if group_ids is not None:
+        (
+            same_task_auroc,
+            same_task_auroc_defined,
+            same_task_groups,
+            same_task_groups_with_pairs,
+            same_task_pairs,
+            same_task_mean_group_auroc,
+        ) = _grouped_binary_auroc(margins, gold_is_correct, group_ids)
+        (
+            same_task_normalized_auroc,
+            same_task_normalized_auroc_defined,
+            _same_task_norm_groups,
+            _same_task_norm_groups_with_pairs,
+            _same_task_norm_pairs,
+            same_task_normalized_mean_group_auroc,
+        ) = _grouped_binary_auroc(normalized_margins, gold_is_correct, group_ids)
+        assert _same_task_norm_groups == same_task_groups
+        assert _same_task_norm_groups_with_pairs == same_task_groups_with_pairs
+        assert _same_task_norm_pairs == same_task_pairs
 
     return {
         "accuracy": float(accuracy),
@@ -697,6 +870,15 @@ def _contrastive_outcome_summary(
         "positive_examples": float(sum(gold_is_correct)),
         "negative_examples": float(len(gold_is_correct) - sum(gold_is_correct)),
         "positive_rate": float(np.mean(gold_is_correct)),
+        "same_task_auroc": float(same_task_auroc),
+        "same_task_auroc_defined": float(same_task_auroc_defined),
+        "same_task_groups": float(same_task_groups),
+        "same_task_groups_with_pairs": float(same_task_groups_with_pairs),
+        "same_task_pairs": float(same_task_pairs),
+        "same_task_mean_group_auroc": float(same_task_mean_group_auroc),
+        "same_task_normalized_auroc": float(same_task_normalized_auroc),
+        "same_task_normalized_auroc_defined": float(same_task_normalized_auroc_defined),
+        "same_task_normalized_mean_group_auroc": float(same_task_normalized_mean_group_auroc),
         "mean_margin": float(np.mean(margins)),
         "mean_normalized_margin": float(np.mean(normalized_margins)),
         "mean_correct_logprob": float(np.mean(correct_logprobs)),
@@ -754,6 +936,19 @@ def _validate_eval_config(config: TraceMaskedEvalConfig) -> None:
     if config.job_failure_max_retries < 0:
         raise ValueError("job_failure_max_retries must be non-negative")
     for dataset_name, dataset_config in config.datasets.items():
+        if dataset_config.row_prefix_fraction is not None and dataset_config.row_adapter is None:
+            raise ValueError(f"Dataset {dataset_name!r} requires row_adapter when row_prefix_fraction is set")
+        if dataset_config.row_prefix_fraction is not None and not 0.0 <= dataset_config.row_prefix_fraction <= 1.0:
+            raise ValueError(
+                f"Dataset {dataset_name!r} has invalid row_prefix_fraction {dataset_config.row_prefix_fraction!r}; "
+                "expected a value in [0, 1]."
+            )
+        for prefix_fraction in dataset_config.outcome_prefix_fractions:
+            if not 0.0 < prefix_fraction <= 1.0:
+                raise ValueError(
+                    f"Dataset {dataset_name!r} has invalid outcome prefix fraction {prefix_fraction!r}; "
+                    "expected values in (0, 1]."
+                )
         if not dataset_config.contrastive_outcome:
             continue
         if dataset_config.row_adapter is None:
@@ -771,7 +966,7 @@ def _score_contrastive_outcomes(
     compute_axis_mapping: Mapping[str, Any] | None,
     mp: jmp.Policy,
     prefix: str,
-) -> dict[str, float]:
+) -> tuple[dict[str, float], list[dict[str, Any]]]:
     row_adapter = dataset_config.row_adapter
     if row_adapter is None or row_adapter.outcome_field is None:
         raise ValueError("Contrastive outcome evaluation requires a row adapter with an outcome field.")
@@ -779,6 +974,7 @@ def _score_contrastive_outcomes(
     Pos = model.Pos.resize(max_eval_length)
     positive_label = row_adapter.positive_outcome_label
     negative_label = row_adapter.negative_outcome_label
+    prefix_fractions = tuple(sorted(set(dataset_config.outcome_prefix_fractions)))
     score_model = inference_mode(model, True)
     score_model = mp.cast_to_compute(score_model)
 
@@ -803,9 +999,40 @@ def _score_contrastive_outcomes(
     incorrect_logprobs: list[float] = []
     correct_token_counts: list[float] = []
     incorrect_token_counts: list[float] = []
+    group_ids: list[str] = []
+    example_records: list[dict[str, Any]] = []
+    prefix_metrics_data = {
+        prefix_fraction: {
+            "margins": [],
+            "normalized_margins": [],
+            "gold_is_correct": [],
+            "group_ids": [],
+            "correct_logprobs": [],
+            "incorrect_logprobs": [],
+            "correct_token_counts": [],
+            "incorrect_token_counts": [],
+        }
+        for prefix_fraction in prefix_fractions
+    }
 
-    for row in _base_source_for_dataset(dataset_config):
+    source = _base_source_for_dataset(dataset_config)
+    progress_total = dataset_config.max_examples
+    logger.info(
+        "Scoring contrastive outcomes for %s%s",
+        prefix,
+        f" over {progress_total} example(s)" if progress_total is not None else "",
+    )
+    for example_index, row in enumerate(
+        tqdm(
+            source,
+            desc=f"{prefix}/outcome_contrastive",
+            total=progress_total,
+            unit="example",
+        )
+    ):
         gold_label = _outcome_label(_lookup_field(row, row_adapter.outcome_field), row_adapter)
+        task_id = _row_identifier(row, row_adapter.task_id_field, default="")
+        record_id = _row_identifier(row, row_adapter.record_id_field, default=str(example_index))
         correct_tokens, correct_loss_weight = _prepare_contrastive_candidate(
             row,
             dataset_config.trace_format,
@@ -813,6 +1040,7 @@ def _score_contrastive_outcomes(
             tokenizer,
             max_eval_length,
             positive_label,
+            include_patch=True,
         )
         incorrect_tokens, incorrect_loss_weight = _prepare_contrastive_candidate(
             row,
@@ -821,6 +1049,7 @@ def _score_contrastive_outcomes(
             tokenizer,
             max_eval_length,
             negative_label,
+            include_patch=True,
         )
 
         correct_logprob, correct_token_count = score_candidate(
@@ -843,18 +1072,124 @@ def _score_contrastive_outcomes(
             (correct_logprob / max(correct_token_count, 1.0)) - (incorrect_logprob / max(incorrect_token_count, 1.0))
         )
         gold_is_correct.append(gold_label == positive_label)
+        group_ids.append(task_id)
+
+        example_record: dict[str, Any] = {
+            "example_index": example_index,
+            "record_id": record_id,
+            "task_id": task_id,
+            "gold_label": gold_label,
+            "gold_is_correct": gold_label == positive_label,
+            "correct_logprob": correct_logprob,
+            "incorrect_logprob": incorrect_logprob,
+            "correct_token_count": correct_token_count,
+            "incorrect_token_count": incorrect_token_count,
+            "margin": margins[-1],
+            "normalized_margin": normalized_margins[-1],
+        }
+
+        if prefix_fractions:
+            prefix_record: dict[str, dict[str, float]] = {}
+            for prefix_fraction in prefix_fractions:
+                prefix_name = _prefix_metric_name(prefix_fraction)
+                if prefix_fraction >= 1.0:
+                    prefix_correct_logprob = correct_logprob
+                    prefix_incorrect_logprob = incorrect_logprob
+                    prefix_correct_token_count = correct_token_count
+                    prefix_incorrect_token_count = incorrect_token_count
+                else:
+                    prefix_correct_tokens, prefix_correct_loss_weight = _prepare_contrastive_candidate(
+                        row,
+                        dataset_config.trace_format,
+                        row_adapter,
+                        tokenizer,
+                        max_eval_length,
+                        positive_label,
+                        include_patch=False,
+                        prefix_fraction=prefix_fraction,
+                    )
+                    prefix_incorrect_tokens, prefix_incorrect_loss_weight = _prepare_contrastive_candidate(
+                        row,
+                        dataset_config.trace_format,
+                        row_adapter,
+                        tokenizer,
+                        max_eval_length,
+                        negative_label,
+                        include_patch=False,
+                        prefix_fraction=prefix_fraction,
+                    )
+                    prefix_correct_logprob, prefix_correct_token_count = score_candidate(
+                        score_model,
+                        jnp.asarray(prefix_correct_tokens),
+                        jnp.asarray(prefix_correct_loss_weight),
+                    )
+                    prefix_incorrect_logprob, prefix_incorrect_token_count = score_candidate(
+                        score_model,
+                        jnp.asarray(prefix_incorrect_tokens),
+                        jnp.asarray(prefix_incorrect_loss_weight),
+                    )
+                    prefix_correct_logprob = float(jax.device_get(prefix_correct_logprob))
+                    prefix_incorrect_logprob = float(jax.device_get(prefix_incorrect_logprob))
+                    prefix_correct_token_count = float(jax.device_get(prefix_correct_token_count))
+                    prefix_incorrect_token_count = float(jax.device_get(prefix_incorrect_token_count))
+
+                prefix_margin = prefix_correct_logprob - prefix_incorrect_logprob
+                prefix_normalized_margin = (prefix_correct_logprob / max(prefix_correct_token_count, 1.0)) - (
+                    prefix_incorrect_logprob / max(prefix_incorrect_token_count, 1.0)
+                )
+                prefix_metrics_data[prefix_fraction]["margins"].append(prefix_margin)
+                prefix_metrics_data[prefix_fraction]["normalized_margins"].append(prefix_normalized_margin)
+                prefix_metrics_data[prefix_fraction]["gold_is_correct"].append(gold_label == positive_label)
+                prefix_metrics_data[prefix_fraction]["group_ids"].append(task_id)
+                prefix_metrics_data[prefix_fraction]["correct_logprobs"].append(prefix_correct_logprob)
+                prefix_metrics_data[prefix_fraction]["incorrect_logprobs"].append(prefix_incorrect_logprob)
+                prefix_metrics_data[prefix_fraction]["correct_token_counts"].append(prefix_correct_token_count)
+                prefix_metrics_data[prefix_fraction]["incorrect_token_counts"].append(prefix_incorrect_token_count)
+                prefix_record[prefix_name] = {
+                    "correct_logprob": prefix_correct_logprob,
+                    "incorrect_logprob": prefix_incorrect_logprob,
+                    "correct_token_count": prefix_correct_token_count,
+                    "incorrect_token_count": prefix_incorrect_token_count,
+                    "margin": prefix_margin,
+                    "normalized_margin": prefix_normalized_margin,
+                }
+
+            example_record["prefixes"] = prefix_record
+
+        example_records.append(example_record)
 
     metrics = _contrastive_outcome_summary(
         margins=margins,
         normalized_margins=normalized_margins,
         gold_is_correct=gold_is_correct,
+        group_ids=group_ids,
         correct_logprobs=correct_logprobs,
         incorrect_logprobs=incorrect_logprobs,
         correct_token_counts=correct_token_counts,
         incorrect_token_counts=incorrect_token_counts,
     )
     metrics["total_time"] = time.perf_counter() - start
-    return _prefixed_metrics(f"{prefix}/outcome_contrastive", metrics)
+    prefixed_metrics = _prefixed_metrics(f"{prefix}/outcome_contrastive", metrics)
+
+    for prefix_fraction, prefix_data in prefix_metrics_data.items():
+        prefix_summary = _contrastive_outcome_summary(
+            margins=prefix_data["margins"],
+            normalized_margins=prefix_data["normalized_margins"],
+            gold_is_correct=prefix_data["gold_is_correct"],
+            group_ids=prefix_data["group_ids"],
+            correct_logprobs=prefix_data["correct_logprobs"],
+            incorrect_logprobs=prefix_data["incorrect_logprobs"],
+            correct_token_counts=prefix_data["correct_token_counts"],
+            incorrect_token_counts=prefix_data["incorrect_token_counts"],
+        )
+        prefixed_metrics.update(
+            _prefixed_metrics(
+                f"{prefix}/outcome_contrastive/{_prefix_metric_name(prefix_fraction)}",
+                prefix_summary,
+            )
+        )
+
+    return prefixed_metrics, example_records
 
 
 def trace_masked_eval(config: TraceMaskedEvalConfig) -> None:
@@ -924,7 +1259,7 @@ def trace_masked_eval(config: TraceMaskedEvalConfig) -> None:
                 def evaluate_dataset(
                     current_dataset_name: str = dataset_name,
                     current_dataset_config: TraceMaskedEvalDatasetConfig = dataset_config,
-                ) -> dict[str, float]:
+                ) -> tuple[dict[str, float], dict[str, str]]:
                     source = _source_for_dataset(
                         current_dataset_config,
                         include_outcome_label=not current_dataset_config.contrastive_outcome,
@@ -951,28 +1286,32 @@ def trace_masked_eval(config: TraceMaskedEvalConfig) -> None:
                     )
                     prefix = f"trace_masked_eval/{current_dataset_name}"
                     metrics = eval_masked_model(evaluator, model, prefix=prefix)
+                    artifacts: dict[str, str] = {}
                     if current_dataset_config.contrastive_outcome:
-                        metrics.update(
-                            _score_contrastive_outcomes(
-                                model=model,
-                                dataset_config=current_dataset_config,
-                                tokenizer=tokenizer,
-                                max_eval_length=config.max_eval_length,
-                                compute_axis_mapping=compute_axis_mapping,
-                                mp=mp,
-                                prefix=prefix,
-                            )
+                        outcome_metrics, example_records = _score_contrastive_outcomes(
+                            model=model,
+                            dataset_config=current_dataset_config,
+                            tokenizer=tokenizer,
+                            max_eval_length=config.max_eval_length,
+                            compute_axis_mapping=compute_axis_mapping,
+                            mp=mp,
+                            prefix=prefix,
                         )
-                    return metrics
+                        metrics.update(outcome_metrics)
+                        if current_dataset_config.write_outcome_example_scores and jax.process_index() == 0:
+                            examples_path = _outcome_example_scores_path(config.output_path, current_dataset_name)
+                            _write_jsonl_records(examples_path, example_records)
+                            artifacts["outcome_example_scores"] = examples_path
+                    return metrics, artifacts
 
-                log_dict = _run_with_retries(
+                log_dict, artifacts = _run_with_retries(
                     f"Trace dataset {dataset_name}",
                     evaluate_dataset,
                     max_attempts=config.dataset_eval_max_attempts,
                     initial_delay=config.dataset_eval_retry_initial_delay,
                     max_delay=config.dataset_eval_retry_max_delay,
                 )
-                _record_dataset_result(results, dataset_name, dataset_config, log_dict)
+                _record_dataset_result(results, dataset_name, dataset_config, log_dict, artifacts=artifacts)
                 tracker_metrics.update(log_dict)
 
                 if jax.process_index() == 0:

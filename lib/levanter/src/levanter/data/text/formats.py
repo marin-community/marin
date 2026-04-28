@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import ast
+import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -147,6 +149,9 @@ class ProcessedTraceChatDict(TypedDict):
     trace_masks: dict[str, np.ndarray]
 
 
+_TEXT_TOOL_CALL_PATTERN = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+
+
 def _normalize_chat_message(message: Mapping[str, Any]) -> dict[str, Any]:
     normalized = dict(message)
     normalized.setdefault("content", "")
@@ -155,6 +160,90 @@ def _normalize_chat_message(message: Mapping[str, Any]) -> dict[str, Any]:
     if normalized["tool_calls"] is None:
         normalized["tool_calls"] = []
     return normalized
+
+
+def _parsed_text_tool_call(text: str) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(text.strip())
+    except json.JSONDecodeError:
+        try:
+            payload = ast.literal_eval(text.strip())
+        except (SyntaxError, ValueError):
+            return None
+
+    if not isinstance(payload, Mapping):
+        return None
+
+    function_payload = payload.get("function")
+    if isinstance(function_payload, Mapping):
+        name = function_payload.get("name")
+        arguments = function_payload.get("arguments", function_payload.get("args"))
+    else:
+        name = payload.get("name")
+        arguments = payload.get("arguments", payload.get("args"))
+
+    if not isinstance(name, str) or arguments is None:
+        return None
+
+    tool_call: dict[str, Any] = {
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": arguments,
+        },
+    }
+    tool_call_id = payload.get("id")
+    if isinstance(tool_call_id, str):
+        tool_call["id"] = tool_call_id
+    return tool_call
+
+
+def _message_without_tool_calls(message: Mapping[str, Any], content: str) -> dict[str, Any]:
+    chunk = dict(message)
+    chunk["content"] = content
+    chunk["tool_calls"] = []
+    return chunk
+
+
+def _split_text_tool_call_message(message: Mapping[str, Any]) -> list[dict[str, Any]]:
+    content = message.get("content")
+    if message.get("role") != "assistant" or not isinstance(content, str) or message.get("tool_calls"):
+        return [dict(message)]
+
+    matches = list(_TEXT_TOOL_CALL_PATTERN.finditer(content))
+    if not matches:
+        return [dict(message)]
+
+    split_messages: list[dict[str, Any]] = []
+    cursor = 0
+    parsed_any = False
+    for match in matches:
+        prefix = content[cursor : match.start()]
+        if prefix.strip():
+            split_messages.append(_message_without_tool_calls(message, prefix))
+
+        tool_call = _parsed_text_tool_call(match.group(1))
+        if tool_call is None:
+            split_messages.append(_message_without_tool_calls(message, match.group(0)))
+        else:
+            split_messages.append({"role": "assistant", "content": "", "tool_calls": [tool_call]})
+            parsed_any = True
+        cursor = match.end()
+
+    suffix = content[cursor:]
+    if suffix.strip():
+        split_messages.append(_message_without_tool_calls(message, suffix))
+
+    if not parsed_any:
+        return [dict(message)]
+    return split_messages
+
+
+def _split_text_tool_call_messages(messages: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    split_messages: list[dict[str, Any]] = []
+    for message in messages:
+        split_messages.extend(_split_text_tool_call_message(message))
+    return split_messages
 
 
 def _normalize_chat_kwargs(kwargs: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -317,6 +406,7 @@ class TraceChatEvaluationFormat:
     pack: bool | int | Literal["pad"] | None = None
     loss_tags: tuple[str, ...] = (
         "assistant",
+        "assistant_text",
         "tool",
         "observation",
         "action",
@@ -329,6 +419,7 @@ class TraceChatEvaluationFormat:
     message_loss_tags_field: str | None = "loss_tags"
     include_role_tags: bool = True
     include_final_assistant_tag: bool = True
+    parse_text_tool_calls: bool = True
     slice_strategy: Literal["left", "right", "raise"] = "left"
 
     def build_preprocessor(
@@ -345,6 +436,7 @@ class TraceChatEvaluationFormat:
             message_loss_tags_field=self.message_loss_tags_field,
             include_role_tags=self.include_role_tags,
             include_final_assistant_tag=self.include_final_assistant_tag,
+            parse_text_tool_calls=self.parse_text_tool_calls,
         )
 
 
@@ -362,6 +454,7 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
         message_loss_tags_field: str | None = "loss_tags",
         include_role_tags: bool = True,
         include_final_assistant_tag: bool = True,
+        parse_text_tool_calls: bool = True,
     ):
         if chat_template is None and tokenizer.chat_template is None:
             raise ValueError("No chat template provided and tokenizer has no default chat template")
@@ -377,6 +470,7 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
         self.message_loss_tags_field = message_loss_tags_field
         self.include_role_tags = include_role_tags
         self.include_final_assistant_tag = include_final_assistant_tag
+        self.parse_text_tool_calls = parse_text_tool_calls
 
         if self.chat_template is None:
             raise ValueError("No chat template provided and tokenizer has no default chat template")
@@ -393,7 +487,7 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
             input_ids = tokenized["input_ids"][0]
             assistant_mask = tokenized["assistant_masks"][0]
             spans = self._message_spans(conversation, len(input_ids), kwargs_dict)
-            masks = self._loss_masks(conversation, spans, assistant_mask, len(input_ids))
+            masks = self._loss_masks(conversation, spans, assistant_mask, len(input_ids), kwargs_dict)
 
             out.append(
                 {
@@ -406,6 +500,8 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
     def _normalize_conversation(self, example: dict) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         example_messages = example[self.messages_field]
         normalized_messages = [_normalize_chat_message(message) for message in example_messages]
+        if self.parse_text_tool_calls:
+            normalized_messages = _split_text_tool_call_messages(normalized_messages)
 
         if self.system_prompt_field is not None and self.system_prompt_field in example:
             system_content = example[self.system_prompt_field]
@@ -463,6 +559,7 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
         spans: Sequence[tuple[int, int]],
         assistant_mask: Sequence[int],
         full_length: int,
+        kwargs_dict: Mapping[str, Any],
     ) -> dict[str, list[int]]:
         masks = {tag: [0] * full_length for tag in self.loss_tags}
         assistant_positions = np.asarray(assistant_mask, dtype=np.int32)
@@ -486,6 +583,15 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
         if "assistant" in masks:
             masks["assistant"] = assistant_positions.astype(np.int32).tolist()
 
+        if "assistant_text" in masks:
+            masks["assistant_text"] = self._assistant_text_mask(
+                conversation,
+                spans,
+                assistant_positions,
+                full_length,
+                kwargs_dict,
+            )
+
         if "final_assistant" in masks and final_assistant_idx is not None:
             start, end = spans[final_assistant_idx]
             final_mask = [0] * full_length
@@ -495,6 +601,70 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
             masks["final_assistant"] = final_mask
 
         return masks
+
+    def _assistant_text_mask(
+        self,
+        conversation: Sequence[Mapping[str, Any]],
+        spans: Sequence[tuple[int, int]],
+        assistant_positions: np.ndarray,
+        full_length: int,
+        kwargs_dict: Mapping[str, Any],
+    ) -> list[int]:
+        text_mask = [0] * full_length
+        for idx, (message, (start, end)) in enumerate(zip(conversation, spans)):
+            if message.get("role") != "assistant" or start >= end:
+                continue
+
+            if not message.get("tool_calls"):
+                for pos in range(start, end):
+                    if pos < len(assistant_positions) and assistant_positions[pos]:
+                        text_mask[pos] = 1
+                continue
+
+            content = message.get("content")
+            if not isinstance(content, str) or not content.strip():
+                continue
+
+            content_only_positions = self._assistant_content_only_positions(
+                conversation,
+                message_index=idx,
+                full_length=full_length,
+                kwargs_dict=kwargs_dict,
+            )
+            upper = min(end, len(content_only_positions), full_length)
+            for pos in range(start, upper):
+                if assistant_positions[pos] and content_only_positions[pos]:
+                    text_mask[pos] = 1
+
+        return text_mask
+
+    def _assistant_content_only_positions(
+        self,
+        conversation: Sequence[Mapping[str, Any]],
+        *,
+        message_index: int,
+        full_length: int,
+        kwargs_dict: Mapping[str, Any],
+    ) -> np.ndarray:
+        message = conversation[message_index]
+        content = message.get("content")
+        if not isinstance(content, str):
+            return np.zeros((full_length,), dtype=np.int32)
+
+        content_only_prefix = [dict(previous_message) for previous_message in conversation[:message_index]]
+        content_only_prefix.append(_message_without_tool_calls(message, content))
+        # Supported chat templates render assistant text before structured tool calls, so
+        # retokenizing the prefix without tool calls isolates the assistant-text span.
+        tokenized = self.tokenizer.apply_chat_template_with_masks(
+            [content_only_prefix],
+            chat_template=self.chat_template,
+            **kwargs_dict,
+        )
+        content_only_positions = np.zeros((full_length,), dtype=np.int32)
+        assistant_mask = np.asarray(tokenized["assistant_masks"][0], dtype=np.int32)
+        limit = min(full_length, assistant_mask.shape[0])
+        content_only_positions[:limit] = assistant_mask[:limit]
+        return content_only_positions
 
     def _tags_for_message(self, message: Mapping[str, Any], is_final_assistant: bool) -> set[str]:
         tags: set[str] = set()
@@ -512,6 +682,7 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
             role = message.get("role")
             if role == "assistant":
                 tags.add("assistant")
+                tags.add("assistant_text")
                 if message.get("tool_calls"):
                     tags.add("tool_call")
             elif role in {"tool", "function", "ipython"}:
@@ -554,6 +725,7 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
             "message_loss_tags_field": self.message_loss_tags_field,
             "include_role_tags": self.include_role_tags,
             "include_final_assistant_tag": self.include_final_assistant_tag,
+            "parse_text_tool_calls": self.parse_text_tool_calls,
         }
 
 
