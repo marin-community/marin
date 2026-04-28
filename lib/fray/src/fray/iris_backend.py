@@ -66,19 +66,7 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_coscheduling(device: DeviceConfig, replicas: int) -> CoschedulingConfig | None:
-    """Determine coscheduling config for multi-host jobs.
-
-    Multi-host GPU jobs need coscheduling by pool to ensure all replicas land
-    in the same node pool for NCCL connectivity. Multi-VM TPU slices coschedule
-    by tpu-name so all VMs of a slice share the same TPU pod.
-
-    Single-VM TPU types (``vm_count == 1``, e.g. ``v5p-8``, ``v6e-8``) require
-    no coscheduling: each replica is its own independent slice with its own
-    ``tpu-name``. Grouping by ``tpu-name`` in that case would force the
-    scheduler to find a single tpu-name with ``replicas`` workers, which is
-    impossible because such slices have one worker each. This mirrors the
-    Iris CLI behavior in ``iris/cli/job.py``.
-    """
+    """Determine coscheduling config for multi-host jobs."""
     if replicas <= 1:
         return None
     if isinstance(device, TpuConfig):
