@@ -1982,8 +1982,14 @@ class ControllerTransitions:
                 tasks_to_kill.update(child_kills)
                 task_kill_workers.update(child_workers)
 
-        if new_state == job_pb2.TASK_STATE_PREEMPTED:
+        # Always send a StopTask RPC to the worker that was running this attempt:
+        # _terminate_task decommits the worker's resources but does not stop the
+        # remote process. Without the kill RPC the worker keeps running the old
+        # code while the scheduler reuses the freed slot for a new task,
+        # producing two concurrent processes on the same TPU.
+        if attempt_worker_id is not None:
             tasks_to_kill.add(task_id)
+            task_kill_workers[task_id] = WorkerId(attempt_worker_id)
 
         log_event("task_preempted", task_id.to_wire(), reason=reason)
 

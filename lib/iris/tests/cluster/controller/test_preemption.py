@@ -927,7 +927,7 @@ def test_preempt_task_retries_when_budget_remains():
 
         attempt_id_before = query_task(state, task.task_id).current_attempt_id
         with state._store.transaction() as cur:
-            state.preempt_task(cur, task.task_id, reason="Evicted by /bob/prod:0")
+            result = state.preempt_task(cur, task.task_id, reason="Evicted by /bob/prod:0")
 
         # Task retries to PENDING
         updated = query_task(state, task.task_id)
@@ -938,6 +938,12 @@ def test_preempt_task_retries_when_budget_remains():
         attempt = query_attempt(state, task.task_id, attempt_id_before)
         assert attempt is not None
         assert attempt.state == job_pb2.TASK_STATE_PREEMPTED
+
+        # Even though the task retries, the worker process from the prior attempt
+        # must be stopped — otherwise the next assignment lands on the same TPU
+        # alongside a still-running ghost process.
+        assert task.task_id in result.tasks_to_kill
+        assert result.task_kill_workers[task.task_id] == w1
 
 
 def test_preempt_task_terminal_when_budget_exhausted():
