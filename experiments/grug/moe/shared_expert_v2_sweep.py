@@ -29,6 +29,59 @@ from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 def _make_steps() -> list[ExecutorStep]:
     steps: list[ExecutorStep] = []
 
+    # Variant 4: wider experts (0.75*d), NO shared — all 4 sizes
+    for dim, budget in [(512, 2.19e17), (768, 1.70e18), (1024, 9.00e18), (1280, 2.83e19)]:
+        model, optimizer, batch, num_steps = build_from_heuristic(budget=budget, hidden_dim=dim)
+        wider_expert_dim = math.ceil(0.75 * dim / 128) * 128
+        model = dataclasses.replace(model, intermediate_dim=wider_expert_dim, shared_expert_intermediate_dim=0)
+        run_id = f"wider-no-shared-0_75x-d{dim}-{budget:.2e}"
+
+        steps.append(
+            ExecutorStep(
+                name=f"grug/{run_id}",
+                fn=run_grug_moe_trial,
+                config=GrugMoeLaunchConfig(
+                    model=versioned(model),
+                    data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+                    output_path=this_output_path(),
+                    run_id=run_id,
+                    resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+                    enable_cross_region_ckpt_read=True,
+                    steps=versioned(num_steps),
+                    batch_size=versioned(batch),
+                    seed=versioned(0),
+                    mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+                    tracker=WandbConfig(
+                        project="dial_moe",
+                        tags=["shared-expert-v2", "wider-no-shared", f"d={dim}", f"budget={budget:.2e}"],
+                        group="shared-expert-v2",
+                        name=run_id,
+                    ),
+                    optimizer=versioned(optimizer),
+                    grug_trainer=versioned(
+                        GrugTrainerConfig(
+                            z_loss_weight=1e-4,
+                            ema_beta=None,
+                            log_every=1,
+                        )
+                    ),
+                    eval=versioned(
+                        GrugEvalConfig(
+                            eval_batch_size=512,
+                            steps_per_eval=1000,
+                            max_eval_batches=8,
+                            eval_current=True,
+                            eval_ema=False,
+                        )
+                    ),
+                ),
+            )
+        )
+
+    return steps
+
+    # === Already submitted variants below (commented out) ===
+
     # Variant 1: no shared, E=96, K=6 — all 4 sizes
     for dim, budget in [(512, 2.19e17), (768, 1.70e18), (1024, 9.00e18), (1280, 2.83e19)]:
         model, optimizer, batch, num_steps = build_from_heuristic(budget=budget, hidden_dim=dim)
