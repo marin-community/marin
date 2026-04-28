@@ -46,7 +46,7 @@ def main() -> int:
     print(f"[verify] resolved    = {resolved}")
 
     if not resolved.startswith(marin_prefix().rstrip("/")):
-        print(f"[verify] FAIL: resolved URL does not live under local marin prefix")
+        print("[verify] FAIL: resolved URL does not live under local marin prefix")
         return 1
 
     fs, fspath = fsspec.core.url_to_fs(resolved)

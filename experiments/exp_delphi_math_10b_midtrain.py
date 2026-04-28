@@ -3,16 +3,16 @@
 
 """Midtraining sweep: continue AdamH pretrain checkpoints on Nemotron-CC-Math v1.
 
-Continues training from two of the smallest existing AdamH-trained Marin
+Continues training from existing AdamH-trained Marin
 checkpoints on 10 B tokens of ``nemotron_cc_math_v1/4plus``, sweeping the
-peak LR factor around 2/3 of each base's own pretrain peak. Both bases share
+peak LR factor around 2/3 of each base's own pretrain peak. All bases share
 the same optimizer family (AdamH + Complete(d)P); see Will Held's blog at
 https://oa.williamheld.com/blog/delphi/ and ``experiments.scaling_law_sweeps
 .completed_adamh``.
 
-This file enumerates ``len(BASES) * len(LR_FACTORS) = 6`` :class:`ExecutorStep`
+This file enumerates ``len(BASES) * len(LR_FACTORS)`` :class:`ExecutorStep`
 runs. **Each sweep point must be launched as its own top-level ``iris job
-run`` coordinator** — do NOT put all 6 under a single coordinator, because
+run`` coordinator** — do NOT put all generated steps under a single coordinator, because
 Marin's ``run_levanter_train_lm`` submits its iris child with the hardcoded
 name ``train_lm`` (``lib/marin/src/marin/training/training.py:307``) and
 concurrent same-name submits collapse onto one handle via the iris
@@ -21,19 +21,20 @@ concurrent same-name submits collapse onto one handle via the iris
 marked SUCCESS with empty artifacts.
 
 To launch a single sweep point, set the env vars below so this script
-builds only the matching step. Base ckpts are wrapped in ``mirrored(...)``
-so the job can land in either us-central1-a or us-east5-a (the two v5p
-zones) — MirrorFileSystem copies the ckpt from whichever marin-<region>
-bucket has it on first open.
+builds only the matching step. The coordinator can land in either
+us-central1-a or us-east5-a (the two v5p zones), but once it lands the
+training child is pinned to that same region. Base ckpts are wrapped in
+``mirrored(...)`` so MirrorFileSystem copies the ckpt from whichever
+marin-<region> bucket has it on first open.
 
   iris --cluster=marin job run --cpu 1 --memory 3GB --disk 9GB \\
     --region us-central1 --region us-east5 \\
     --job-name delphi-math-10b-1e21-lr0.67 --no-wait \\
-    -e MARIN_I_WILL_PAY_FOR_ALL_FEES 1 -e WANDB_API_KEY "$WANDB_API_KEY" \\
+    -e WANDB_API_KEY "$WANDB_API_KEY" \\
     -e MIDTRAIN_SELECT_BASE 1e21-v5 -e MIDTRAIN_SELECT_LR 0.67 \\
     -- python experiments/exp_delphi_math_10b_midtrain.py
 
-With no env vars set, all 6 steps are generated (useful for dry-runs /
+With no env vars set, all 9 steps are generated (useful for dry-runs /
 introspection; do NOT actually ``executor_main`` on the full list).
 
 See ``.agents/logbooks/midtraining_delphi.md`` for the full rationale,
@@ -41,33 +42,55 @@ numbers, and verification plan.
 """
 
 import os
+from dataclasses import dataclass
 
 from levanter.main.train_lm import CheckpointInitMode
 from levanter.optim import AdamHConfig
 
 from experiments.defaults import default_train
 from experiments.midtraining_data_buckets import BUCKET_2
+from experiments.midtraining_mixes import (
+    FULL_HIGHQUALITY_NEMO_MATH_NAME,
+    PRETRAIN_33P_MATH_67P_HIGHQUALITY_NEMO_MATH_NAME,
+    PRETRAIN_67P_MATH_33P_HIGHQUALITY_NEMO_MATH_NAME,
+    PRETRAIN_70P_MATH_30P_HIGHQUALITY_NEMO_MATH_NAME,
+    midtraining_mix_by_name,
+)
 from experiments.scaling_law_sweeps.completed_adamh import completed_adamh_heuristic
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, executor_main, mirrored
+from marin.execution.executor import ExecutorStep, MirroredValue, executor_main, mirrored
+from rigging.filesystem import marin_region
 
 # ----------------------------------------------------------------------------
-# Fixed knobs (both bases)
+# Fixed knobs (all bases)
 # ----------------------------------------------------------------------------
 
-SEQ_LEN: int = 4096
-BATCH_SIZE: int = 512
-TOKEN_BUDGET: int = 10_000_000_000
-# ceil(TOKEN_BUDGET / (BATCH_SIZE * SEQ_LEN)); 4768 * 512 * 4096 ≈ 1.00e10.
-NUM_TRAIN_STEPS: int = 4768
-WARMUP_STEPS: int = 500
-DECAY_STEPS: int = NUM_TRAIN_STEPS - WARMUP_STEPS  # 4268
-MIN_LR_RATIO: float = 0.1
-# v5p-64 (32 chips) is the smallest slice that fits this config without
-# gradient checkpointing per marin.scaling_laws.tpu_utils.pick_v5p_type.
-# v5p pool is us-central1-a + us-east5-a (see lib/iris/examples/marin.yaml).
-TPU_TYPE: str = "v5p-64"
+DEFAULT_SEQ_LEN: int = 4096
+REFERENCE_WARMUP_BATCH_SIZE: int = 512
+TOKEN_BUDGET: int = int(os.environ.get("MIDTRAIN_TOKEN_BUDGET", "10000000000"))
+TOKEN_BUDGET_LABEL: str = os.environ.get(
+    "MIDTRAIN_TOKEN_BUDGET_LABEL",
+    "10b" if TOKEN_BUDGET == 10_000_000_000 else f"{TOKEN_BUDGET / 1_000_000_000:.1f}b".replace(".", "p"),
+)
+# The original 1e20/1e21 sweep uses 500 warmup steps at global batch 512, or
+# about 1.05B warmup tokens. Keep that warmup-token budget stable when the
+# batch size changes for larger TPU slices.
+WARMUP_TOKENS: int = 500 * REFERENCE_WARMUP_BATCH_SIZE * DEFAULT_SEQ_LEN
+MIN_LR_RATIO: float = 0.0
+TPU_TYPE_OVERRIDE: str | None = os.environ.get("MIDTRAIN_TPU_TYPE")
+OVERRIDE_BATCH_SIZE: int | None = (
+    int(os.environ["MIDTRAIN_BATCH_SIZE"]) if os.environ.get("MIDTRAIN_BATCH_SIZE") else None
+)
+OVERRIDE_PER_DEVICE_PARALLELISM: int | None = (
+    int(os.environ["MIDTRAIN_PER_DEVICE_PARALLELISM"]) if os.environ.get("MIDTRAIN_PER_DEVICE_PARALLELISM") else None
+)
+OVERRIDE_TENSOR_PARALLEL_SIZE: int | None = (
+    int(os.environ["MIDTRAIN_TENSOR_PARALLEL_SIZE"]) if os.environ.get("MIDTRAIN_TENSOR_PARALLEL_SIZE") else None
+)
+LR_MULTIPLIER: float = float(os.environ.get("MIDTRAIN_LR_MULTIPLIER", "1.0"))
+MIDTRAIN_TRAIN_REGION: str | None = os.environ.get("MIDTRAIN_TRAIN_REGION")
+MIDTRAIN_COORDINATOR_REGIONS: tuple[str, ...] = ("us-central1", "us-east5")
 
 STEPS_PER_EVAL: int = 200
 STEPS_PER_EXPORT: int = 1000
@@ -85,6 +108,35 @@ MAX_GRAD_NORM: float = 0.1
 # wandb config (not recomputed via the heuristic formula — the config is the
 # source of truth for what the weights were optimized against).
 
+
+@dataclass(frozen=True)
+class V5PComputeConfig:
+    tpu_type: str
+    per_device_parallelism: int = -1
+    tensor_parallel_size: int = 1
+
+
+@dataclass(frozen=True)
+class MidtrainingBaseConfig:
+    ckpt: str | MirroredValue[str]
+    hidden_dim: int
+    seq_len: int
+    train_batch_size: int
+    default_tpu_type: str
+    v5p_compute: tuple[V5PComputeConfig, ...]
+    peak_lr: float
+    peak_adam_lr: float
+    beta2: float
+    epsilon: float
+
+    def compute_config(self, tpu_type: str) -> V5PComputeConfig:
+        for compute_config in self.v5p_compute:
+            if compute_config.tpu_type == tpu_type:
+                return compute_config
+        allowed = ", ".join(compute_config.tpu_type for compute_config in self.v5p_compute)
+        raise ValueError(f"{tpu_type!r} is not an approved v5p target for this base. Allowed: {allowed}")
+
+
 # Checkpoint paths are wrapped in `mirrored(...)` so the executor rewrites
 # them to `mirror://<rel>`. MirrorFileSystem locates the file in whichever
 # marin-<region> bucket currently has it and copies to the local prefix on
@@ -92,17 +144,31 @@ MAX_GRAD_NORM: float = 0.1
 # the mirror:// dir down to a concrete gs:// URL before TensorStore opens it
 # (see `_stage_mirror_to_local` in lib/levanter/src/levanter/checkpoint.py).
 # This lets the coordinator land in either us-central1-a or us-east5-a based
-# on capacity — no pre-copy required, no region-pin required.
-BASES: dict[str, dict] = {
+# on capacity. The training child is then pinned to that coordinator region,
+# so concrete gs:// output/cache/checkpoint paths and TPU compute stay aligned.
+BASES: dict[str, MidtrainingBaseConfig] = {
     # ~1.9 B AdamH isoflop scan point at 3e20 FLOPs (compute-optimal).
     # Stands in for "1e20" — no optimal-training run exists at 1e20 FLOPs
     # in the AdamH scaling ladder, only the sweep points up to 3e20.
-    "1e20-iso-d2048-L21": dict(
+    "1e20-iso-d2048-L21": MidtrainingBaseConfig(
         ckpt=mirrored(
             "checkpoints/isoflop/isoflop-3e+20-d2048-L21-B128-adamh_scaling_v5/checkpoints/step-46915",
             budget_gb=30,
         ),
+        # Match the isoflop base run: d2048/L21, seq_len 4096, global B128.
         hidden_dim=2048,
+        seq_len=DEFAULT_SEQ_LEN,
+        train_batch_size=128,
+        default_tpu_type="v5p-32",
+        v5p_compute=(
+            V5PComputeConfig("v5p-32"),
+            V5PComputeConfig("v5p-64"),
+            V5PComputeConfig("v5p-128"),
+            V5PComputeConfig("v5p-256"),
+            # At v5p-512 there are more chips than batch examples, so split the
+            # model axis to keep the effective data axis at 128.
+            V5PComputeConfig("v5p-512", tensor_parallel_size=2),
+        ),
         peak_lr=4.483e-3,
         peak_adam_lr=7.382e-5,
         beta2=0.99980,
@@ -110,16 +176,49 @@ BASES: dict[str, dict] = {
     ),
     # Canonical Delphi 1e21 v5 (~3.4 B). Seed replicates v5-seed42,
     # v5-seed62746, and v6 converge within 0.001 c4-en-loss of this run.
-    "1e21-v5": dict(
+    "1e21-v5": MidtrainingBaseConfig(
         ckpt=mirrored(
             "adamh-scaling-ladder-nemotron-optimal-1e+21-v5-019021/checkpoints/step-21979",
             budget_gb=50,
         ),
+        # Match the Delphi base run: d2560/L26, seq_len 4096, global B512.
         hidden_dim=2560,
+        seq_len=DEFAULT_SEQ_LEN,
+        train_batch_size=512,
+        default_tpu_type="v5p-256",
+        v5p_compute=(
+            V5PComputeConfig("v5p-64"),
+            V5PComputeConfig("v5p-128"),
+            V5PComputeConfig("v5p-256"),
+            V5PComputeConfig("v5p-512"),
+        ),
         peak_lr=7.425e-3,
         peak_adam_lr=4.314e-4,
         beta2=0.99920,
         epsilon=2.81e-8,
+    ),
+    # Canonical Delphi 1e22 v5 (~9.7 B). This base was trained at global
+    # batch 1024 on v4-512 and finished at step 38206. v5p-512 ran cleanly at
+    # B1024; smaller v5p slices keep B1024 with gradient accumulation by fixing
+    # per-device parallelism at 4.
+    "1e22-v5": MidtrainingBaseConfig(
+        ckpt=mirrored(
+            "adamh-scaling-ladder-nemotron-optimal-1e+22-v5-025b0e/checkpoints/step-38206",
+            budget_gb=150,
+        ),
+        hidden_dim=3840,
+        seq_len=DEFAULT_SEQ_LEN,
+        train_batch_size=1024,
+        default_tpu_type="v5p-512",
+        v5p_compute=(
+            V5PComputeConfig("v5p-128", per_device_parallelism=4),
+            V5PComputeConfig("v5p-256", per_device_parallelism=4),
+            V5PComputeConfig("v5p-512", per_device_parallelism=4),
+        ),
+        peak_lr=7.231797280729413e-3,
+        peak_adam_lr=3.276222099351447e-4,
+        beta2=0.9984011994401821,
+        epsilon=3.70426657045089e-8,
     ),
 }
 
@@ -127,37 +226,117 @@ LR_FACTORS: tuple[float, ...] = (0.5, 0.67, 0.83)
 
 
 # ----------------------------------------------------------------------------
-# Data: 100% nemotron_cc_math_v1/4plus via BUCKET_2's ExecutorStep. The
-# raw HF download already landed in `gs://marin-us-east5/raw/nemotron_cc_math_v1-322fe4/`
-# (46 parquet shards, ~62 GB), but normalize and tokenize have not yet been
-# run. When this job lands on a us-east5 coordinator (see --region flags),
-# the executor walks the dep chain:
-#   download (skipped — raw already local)
-#   → normalize (runs fresh, writes to us-east5)
-#   → tokenize (runs fresh, writes to us-east5)
-#   → training
-# All stages read/write in us-east5; no cross-region egress for the data.
+# Data: by default, 100% nemotron_cc_math_v1/4plus via BUCKET_2's ExecutorStep.
+# The raw HF download originally landed in us-east5, but this experiment must
+# not bake concrete `gs://marin-<region>/...` strings into the run identity.
+# Keep region selection at launch/materialization time so the child training
+# job can be pinned to the coordinator's region.
+#
+# Set MIDTRAIN_MIX_NAME to a key from experiments.midtraining_mixes for new
+# mixture runs, e.g. `70p_30m_highquality_nemo_math`. Leaving it unset preserves
+# the original single-step data path and output namespace for currently-running
+# 100% math jobs.
 MATH_TRAIN_STEP = BUCKET_2["nemotron_cc_math_v1/4plus"]
+_MIDTRAIN_MIX_NAME = os.environ.get("MIDTRAIN_MIX_NAME")
+_MATH_TOKENIZED_OUTPUT_PATH_OVERRIDE = os.environ.get("MIDTRAIN_MATH_TOKENIZED_OUTPUT_PATH_OVERRIDE")
+if _MATH_TOKENIZED_OUTPUT_PATH_OVERRIDE:
+    if _MIDTRAIN_MIX_NAME:
+        raise ValueError("MIDTRAIN_MATH_TOKENIZED_OUTPUT_PATH_OVERRIDE is only supported for the single math dataset")
+    MATH_TRAIN_STEP = MATH_TRAIN_STEP.with_output_path(_MATH_TOKENIZED_OUTPUT_PATH_OVERRIDE)
+_TOKENIZED_TRAIN_DATA = midtraining_mix_by_name(_MIDTRAIN_MIX_NAME) if _MIDTRAIN_MIX_NAME else MATH_TRAIN_STEP
+
+_BASE_OUTPUT_TAGS = {
+    "1e20-iso-d2048-L21": "1e20",
+    "1e21-v5": "1e21",
+    "1e22-v5": "1e22",
+}
+
+_MIX_OUTPUT_TAGS = {
+    None: "math",
+    FULL_HIGHQUALITY_NEMO_MATH_NAME: "math",
+    PRETRAIN_70P_MATH_30P_HIGHQUALITY_NEMO_MATH_NAME: "p70m30",
+    PRETRAIN_67P_MATH_33P_HIGHQUALITY_NEMO_MATH_NAME: "p67m33",
+    PRETRAIN_33P_MATH_67P_HIGHQUALITY_NEMO_MATH_NAME: "p33m67",
+}
 
 
 # ----------------------------------------------------------------------------
 
 
-def _build_adamh(base: dict, lr_factor: float) -> AdamHConfig:
+def _num_train_steps(batch_size: int, seq_len: int) -> int:
+    return max(1, round(TOKEN_BUDGET / (batch_size * seq_len)))
+
+
+def _warmup_steps(batch_size: int, seq_len: int, num_train_steps: int) -> int:
+    warmup_steps = max(1, round(WARMUP_TOKENS / (batch_size * seq_len)))
+    return min(warmup_steps, num_train_steps - 1)
+
+
+def _build_adamh(base: MidtrainingBaseConfig, lr_factor: float, warmup_steps: int, decay_steps: int) -> AdamHConfig:
     return AdamHConfig(
-        learning_rate=base["peak_lr"] * lr_factor,
-        adam_lr=base["peak_adam_lr"] * lr_factor,
+        learning_rate=base.peak_lr * lr_factor * LR_MULTIPLIER,
+        adam_lr=base.peak_adam_lr * lr_factor * LR_MULTIPLIER,
         beta1=BETA1,
-        beta2=base["beta2"],
-        epsilon=base["epsilon"],
+        beta2=base.beta2,
+        epsilon=base.epsilon,
         max_grad_norm=MAX_GRAD_NORM,
         # int → absolute step count (see exp898_deeper_cooldown.py).
-        warmup=WARMUP_STEPS,
-        decay=DECAY_STEPS,
+        warmup=warmup_steps,
+        decay=decay_steps,
         min_lr_ratio=MIN_LR_RATIO,
         lr_schedule="linear",
         nesterov=False,
     )
+
+
+def _selected_compute_config(base: MidtrainingBaseConfig) -> V5PComputeConfig:
+    tpu_type = TPU_TYPE_OVERRIDE or base.default_tpu_type
+    compute_config = base.compute_config(tpu_type)
+    per_device_parallelism = (
+        OVERRIDE_PER_DEVICE_PARALLELISM
+        if OVERRIDE_PER_DEVICE_PARALLELISM is not None
+        else compute_config.per_device_parallelism
+    )
+    tensor_parallel_size = (
+        OVERRIDE_TENSOR_PARALLEL_SIZE
+        if OVERRIDE_TENSOR_PARALLEL_SIZE is not None
+        else compute_config.tensor_parallel_size
+    )
+    return V5PComputeConfig(
+        tpu_type=compute_config.tpu_type,
+        per_device_parallelism=per_device_parallelism,
+        tensor_parallel_size=tensor_parallel_size,
+    )
+
+
+def _normalize_region(region_or_zone: str) -> str:
+    region_or_zone = region_or_zone.lower()
+    parts = region_or_zone.split("-")
+    if len(parts) >= 3 and len(parts[-1]) == 1 and parts[-1].isalpha() and any(char.isdigit() for char in parts[-2]):
+        return "-".join(parts[:-1])
+    return region_or_zone
+
+
+def _selected_train_region() -> str | None:
+    explicit_region = MIDTRAIN_TRAIN_REGION is not None
+    region = MIDTRAIN_TRAIN_REGION or marin_region()
+    if region is None:
+        return None
+
+    region = _normalize_region(region)
+    if region in MIDTRAIN_COORDINATOR_REGIONS:
+        return region
+    if explicit_region:
+        allowed = ", ".join(MIDTRAIN_COORDINATOR_REGIONS)
+        raise ValueError(f"Delphi midtraining must run in one of {{{allowed}}}, got {region!r}")
+    return None
+
+
+def _midtrain_tpu_resources(tpu_type: str) -> ResourceConfig:
+    region = _selected_train_region()
+    if region is None:
+        return ResourceConfig.with_tpu(tpu_type)
+    return ResourceConfig.with_tpu(tpu_type, regions=[region])
 
 
 # Env-var filters: set these to restrict the generated sweep to a single
@@ -166,10 +345,38 @@ def _build_adamh(base: dict, lr_factor: float) -> AdamHConfig:
 # `lr0.5-ba7b7f` run) stay cached and will be skipped automatically.
 _SELECT_BASE = os.environ.get("MIDTRAIN_SELECT_BASE")  # e.g. "1e21-v5"
 _SELECT_LR = os.environ.get("MIDTRAIN_SELECT_LR")  # e.g. "0.67"
+_RUN_NAME_SUFFIX = os.environ.get("MIDTRAIN_RUN_NAME_SUFFIX")
+_INIT_CKPT_PATH = os.environ.get("MIDTRAIN_INIT_CKPT_PATH")
+_OUTPUT_PATH_OVERRIDE = os.environ.get("MIDTRAIN_OUTPUT_PATH_OVERRIDE")
+
+if _OUTPUT_PATH_OVERRIDE and (_SELECT_BASE is None or _SELECT_LR is None):
+    raise ValueError("MIDTRAIN_OUTPUT_PATH_OVERRIDE requires MIDTRAIN_SELECT_BASE and MIDTRAIN_SELECT_LR")
 
 
 def _lr_str(lr_factor: float) -> str:
     return f"{lr_factor:.2f}".rstrip("0").rstrip(".")
+
+
+def _base_output_tag(base_tag: str) -> str:
+    if base_tag not in _BASE_OUTPUT_TAGS:
+        raise ValueError(f"Missing short output tag for base {base_tag!r}")
+    return _BASE_OUTPUT_TAGS[base_tag]
+
+
+def _mix_output_tag(mix_name: str | None) -> str:
+    if mix_name not in _MIX_OUTPUT_TAGS:
+        raise ValueError(f"Missing short output tag for midtraining mix {mix_name!r}")
+    return _MIX_OUTPUT_TAGS[mix_name]
+
+
+def _build_run_name(base_tag: str, lr_factor: float) -> str:
+    lr_str = _lr_str(lr_factor)
+    name = f"delphi-{_base_output_tag(base_tag)}-{_mix_output_tag(_MIDTRAIN_MIX_NAME)}-{TOKEN_BUDGET_LABEL}-lr{lr_str}"
+    if _RUN_NAME_SUFFIX:
+        name = f"{name}-{_RUN_NAME_SUFFIX}"
+    if len(name) > 64:
+        raise ValueError(f"Midtraining run name must stay within W&B's 64-char limit, got {len(name)}: {name}")
+    return name
 
 
 def _build_runs() -> list[ExecutorStep]:
@@ -182,26 +389,33 @@ def _build_runs() -> list[ExecutorStep]:
         # Private method is intentional: it's the single source of truth for
         # Delphi architecture and it's what the pretrain path called.
         model_config = completed_adamh_heuristic._build_model_config(
-            hidden_size=base["hidden_dim"],
-            seq_len=SEQ_LEN,
+            hidden_size=base.hidden_dim,
+            seq_len=base.seq_len,
         )
 
         for lr_factor in LR_FACTORS:
             if _SELECT_LR is not None and _lr_str(lr_factor) != _SELECT_LR:
                 continue
-            optimizer = _build_adamh(base, lr_factor)
+            compute_config = _selected_compute_config(base)
+            batch_size = OVERRIDE_BATCH_SIZE or base.train_batch_size
+            num_train_steps = _num_train_steps(batch_size, base.seq_len)
+            warmup_steps = _warmup_steps(batch_size, base.seq_len, num_train_steps)
+            decay_steps = num_train_steps - warmup_steps
+            optimizer = _build_adamh(base, lr_factor, warmup_steps, decay_steps)
 
             train_cfg = SimpleTrainConfig(
-                resources=ResourceConfig.with_tpu(TPU_TYPE),
-                train_batch_size=BATCH_SIZE,
-                num_train_steps=NUM_TRAIN_STEPS,
-                train_seq_len=SEQ_LEN,
+                resources=_midtrain_tpu_resources(compute_config.tpu_type),
+                train_batch_size=batch_size,
+                num_train_steps=num_train_steps,
+                train_seq_len=base.seq_len,
+                per_device_parallelism=compute_config.per_device_parallelism,
+                tensor_parallel_size=compute_config.tensor_parallel_size,
                 # `learning_rate` is a required SimpleTrainConfig field but
                 # is unused when `optimizer_config` is provided. Set it to
                 # the peak we actually use so logs remain consistent.
                 learning_rate=optimizer.learning_rate,
                 optimizer_config=optimizer,
-                initialize_from_checkpoint_path=base["ckpt"],
+                initialize_from_checkpoint_path=_INIT_CKPT_PATH or base.ckpt,
                 # Fresh data iterator: math mix is a different distribution
                 # from the pretrain mix, so pretrain step counter + data
                 # cursor should be discarded.
@@ -217,33 +431,44 @@ def _build_runs() -> list[ExecutorStep]:
                 steps_per_hf_export=STEPS_PER_HF_EXPORT,
             )
 
-            lr_str = _lr_str(lr_factor)
-            # `-v2` suffix forces a new executor output hash so we get a fresh
-            # W&B run_id, escaping the step-monotonic rejection bug from the
-            # broken-run hash collision. Plain SimpleTrainConfig fields like
-            # `checkpoint_init_mode` do NOT bump the hash (the Marin executor
-            # only versions `versioned(...)` values + step.name + upstream deps).
-            name = f"delphi-{base_tag}-math-10b-lr{lr_str}-v2"
+            name = _build_run_name(base_tag, lr_factor)
+
+            data_tags = (
+                (f"midtraining_mix={_MIDTRAIN_MIX_NAME}", "midtraining-mix")
+                if _MIDTRAIN_MIX_NAME
+                else ("nemotron-cc-math-4plus",)
+            )
 
             runs.append(
                 default_train(
                     name=name,
-                    tokenized=MATH_TRAIN_STEP,
+                    tokenized=_TOKENIZED_TRAIN_DATA,
                     model_config=model_config,
                     train_config=train_cfg,
                     tags=(
                         "midtraining",
                         f"base={base_tag}",
-                        "nemotron-cc-math-4plus",
+                        *data_tags,
                         f"lr_factor={lr_factor}",
+                        f"batch_size={batch_size}",
+                        f"seq_len={base.seq_len}",
+                        f"tpu_type={compute_config.tpu_type}",
+                        f"per_device_parallelism={compute_config.per_device_parallelism}",
+                        f"tensor_parallel_size={compute_config.tensor_parallel_size}",
+                        f"token_budget={TOKEN_BUDGET}",
+                        f"num_train_steps={num_train_steps}",
                         f"peak_lr={optimizer.learning_rate:.3e}",
                         f"adam_lr={optimizer.adam_lr:.3e}",
                         "adamh",
                         "delphi-midtrain",
                     ),
                     eval_harness_tasks=(),
+                    override_output_path=_OUTPUT_PATH_OVERRIDE,
                 )
             )
+    run_names = [run.name for run in runs]
+    if len(run_names) != len(set(run_names)):
+        raise ValueError(f"Generated duplicate midtraining run names: {run_names}")
     return runs
 
 
@@ -253,5 +478,5 @@ runs: list[ExecutorStep] = _build_runs()
 if __name__ == "__main__":
     executor_main(
         steps=runs,
-        description="Delphi Nemotron-CC-Math 10B midtraining: LR sweep on two AdamH-trained base checkpoints.",
+        description="Delphi Nemotron-CC-Math 10B midtraining: LR sweep on AdamH-trained base checkpoints.",
     )

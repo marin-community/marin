@@ -14,6 +14,8 @@ The regression this guards against: a future refactor of ``default_train``
 bypasses them.
 """
 
+import pytest
+
 from levanter.main.train_lm import CheckpointInitMode, TrainLmConfig
 
 from experiments.simple_train_config import SimpleTrainConfig
@@ -47,7 +49,7 @@ def test_default_train_propagates_model_only_mode():
     """
     import experiments.exp_delphi_math_10b_midtrain as delphi
 
-    assert len(delphi.runs) == 6, "expected 6 sweep points (2 bases x 3 lr factors)"
+    assert len(delphi.runs) == len(delphi.BASES) * len(delphi.LR_FACTORS)
     for step in delphi.runs:
         # step.config is TrainLmOnPodConfig; step.config.train_config is TrainLmConfig.
         inner = step.config.train_config
@@ -60,3 +62,44 @@ def test_default_train_propagates_model_only_mode():
             f"run {step.name!r} has MODEL_ONLY but no initialize_from_checkpoint_path "
             f"— the mode is dead code without a path"
         )
+
+
+def test_delphi_midtrain_child_resources_follow_coordinator_region(monkeypatch):
+    import experiments.exp_delphi_math_10b_midtrain as delphi
+
+    monkeypatch.setattr(delphi, "MIDTRAIN_TRAIN_REGION", None)
+    monkeypatch.setattr(delphi, "marin_region", lambda: "us-east5")
+
+    resources = delphi._midtrain_tpu_resources("v5p-64")
+
+    assert resources.regions == ["us-east5"]
+
+
+def test_delphi_midtrain_train_region_override_accepts_zone(monkeypatch):
+    import experiments.exp_delphi_math_10b_midtrain as delphi
+
+    monkeypatch.setattr(delphi, "MIDTRAIN_TRAIN_REGION", "us-central1-a")
+
+    resources = delphi._midtrain_tpu_resources("v5p-64")
+
+    assert resources.regions == ["us-central1"]
+
+
+def test_delphi_midtrain_explicit_bad_region_fails(monkeypatch):
+    import experiments.exp_delphi_math_10b_midtrain as delphi
+
+    monkeypatch.setattr(delphi, "MIDTRAIN_TRAIN_REGION", "us-central2")
+
+    with pytest.raises(ValueError, match="Delphi midtraining must run"):
+        delphi._midtrain_tpu_resources("v5p-64")
+
+
+def test_delphi_midtrain_ignores_local_non_v5p_region(monkeypatch):
+    import experiments.exp_delphi_math_10b_midtrain as delphi
+
+    monkeypatch.setattr(delphi, "MIDTRAIN_TRAIN_REGION", None)
+    monkeypatch.setattr(delphi, "marin_region", lambda: "us-central2")
+
+    resources = delphi._midtrain_tpu_resources("v5p-64")
+
+    assert resources.regions is None
