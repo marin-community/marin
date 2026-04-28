@@ -313,6 +313,7 @@ class MoEMLP(eqx.Module):
 
     router: jax.Array
     router_bias: jax.Array
+    router_lambda: jax.Array  # scalar, multiplied by router weights before matmul
     w_gate_up: jax.Array
     w_down: jax.Array
     cfg: GrugModelConfig = eqx.field(static=True)
@@ -337,6 +338,7 @@ class MoEMLP(eqx.Module):
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
+            router_lambda=jnp.ones(()),
             w_gate_up=reshard(w_gate_up, P("expert", "data", "model")),
             w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
             cfg=cfg,
@@ -350,7 +352,8 @@ class MoEMLP(eqx.Module):
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
-        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+        scaled_router = self.router_lambda * reshard(self.router, P(None, None))
+        router_logits = jnp.einsum("td,de->te", x_flat, scaled_router).astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
