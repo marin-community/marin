@@ -888,6 +888,18 @@ def test_fetch_logs_backward_compat_proxy_proto_binary(client):
     assert list(parsed.entries) == []
 
 
+def test_fetch_logs_legacy_iris_logging_path(client):
+    """Pre-finelog-lift clients call /iris.logging.LogService/FetchLogs."""
+    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
+    resp = client.post(
+        "/iris.logging.LogService/FetchLogs",
+        json={"source": re.escape(task_id) + ":.*"},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+    assert resp.json().get("entries", []) == []
+
+
 # =============================================================================
 # Coscheduling Diagnostic Tests
 # =============================================================================

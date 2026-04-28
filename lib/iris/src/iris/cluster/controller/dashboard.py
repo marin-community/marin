@@ -295,8 +295,21 @@ class ControllerDashboard:
         # Connect protocol handles encoding, compression, and auth correctly.
         # The LogService now lives under the finelog.logging proto package.
         _LOG_FETCH_ENDPOINT = "/finelog.logging.LogService/FetchLogs"
+        _LOG_PUSH_ENDPOINT = "/finelog.logging.LogService/PushLogs"
         _COMPAT_FETCH_ENDPOINT = "/iris.cluster.ControllerService/FetchLogs"
         rpc_wsgi_app._endpoints[_COMPAT_FETCH_ENDPOINT] = log_wsgi_app._endpoints[_LOG_FETCH_ENDPOINT]
+
+        # Backward-compat: clients/workers built before the finelog lift call
+        # /iris.logging.LogService/{FetchLogs,PushLogs}. Wire bytes are identical
+        # to /finelog.logging.LogService/*, so mount the same WSGI app at the
+        # legacy prefix and register relative-path aliases.
+        # connectrpc dispatch (_server_sync.py:206-210) first looks up PATH_INFO
+        # directly; the existing /finelog.logging.LogService mount only hits via
+        # the SCRIPT_NAME==self.path fallback. Adding relative keys lets the
+        # first lookup succeed regardless of which mount handled the request.
+        log_wsgi_app._endpoints["/FetchLogs"] = log_wsgi_app._endpoints[_LOG_FETCH_ENDPOINT]
+        log_wsgi_app._endpoints["/PushLogs"] = log_wsgi_app._endpoints[_LOG_PUSH_ENDPOINT]
+        _LEGACY_LOG_SERVICE_PATH = "/iris.logging.LogService"
 
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
@@ -320,6 +333,7 @@ class ControllerDashboard:
             Route("/health", self._health),
             Route(PROXY_ROUTE, _proxy_actor_rpc, methods=["POST"]),
             Mount(log_wsgi_app.path, app=log_app),
+            Mount(_LEGACY_LOG_SERVICE_PATH, app=log_app),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             Mount(stats_wsgi_app.path, app=stats_app),
             static_files_mount(),

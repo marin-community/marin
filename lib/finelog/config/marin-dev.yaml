@@ -1,7 +1,7 @@
 name: finelog-marin-dev
 port: 10001
 image: ghcr.io/marin-community/finelog:latest
-remote_log_dir: ""
+remote_log_dir: gs://marin-us-central2/finelog/marin-dev
 deployment:
   gcp:
     project: hai-gcp-models
