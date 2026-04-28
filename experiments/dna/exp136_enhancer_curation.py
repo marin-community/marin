@@ -100,9 +100,14 @@ MODEL_NUM_HEADS = 16
 MODEL_NUM_KV_HEADS = 8
 MODEL_HEAD_DIM = 128
 
-# Resources & batching.
+# Resources & batching. Region is pinned so the inferred step hash stays
+# stable across parent preemption / migration — without this, the marin
+# executor auto-pins child regions to the parent's current iris region
+# (executor.py:630), which changes the ResourceConfig (and hence step
+# output_path) when the parent migrates, breaking checkpoint resume.
 BATCH_SIZE = 4096
 TPU_TYPES: tuple[str, ...] = ("v5p-8",)
+TPU_REGIONS: tuple[str, ...] = ("us-central1",)
 
 # Optimizer (AdamConfig defaults; schedule shape from exp_bolinas_4b_sweep.py).
 LEARNING_RATE = 1e-3
@@ -284,7 +289,7 @@ def _build_train_step(strategy: str, dataset: str) -> ExecutorStep:
     )
     pod_config = TrainLmOnPodConfig(
         train_config=inner,
-        resources=ResourceConfig.with_tpu(TPU_TYPES),
+        resources=ResourceConfig.with_tpu(TPU_TYPES, regions=list(TPU_REGIONS)),
         output_path=this_output_path(),
     )
     return ExecutorStep(
