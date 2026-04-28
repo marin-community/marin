@@ -1,158 +1,155 @@
 ---
 name: design-doc
-description: Write a tight, readable design document for a proposed change. Use when asked to write a design doc, spec, or technical proposal.
+description: Walk a user through producing a 1-page design doc, opening a PR with it, and pinging Discord for review. Use when asked to write a design doc, spec, or technical proposal.
 ---
 
-# Skill: Writing Design Documents
+# Skill: Design Doc Workflow
 
 ## Purpose
 
-Design docs should be **tight, readable 1-pagers** that explain the problem, reference key code, propose an approach, and reflect on trade-offs. Avoid exhaustive code dumps and detailed implementation plans.
+A design doc in Marin is a **≤500-word 1-pager** posted as a PR for early feedback. The goal is to surface design issues *before* implementation, not to gate work — area owners are expected to LGTM or comment quickly, and the author begins implementation in parallel. See [issue #5210](https://github.com/marin-community/marin/issues/5210) for the rationale.
 
-**Target length**: ~200-400 lines including example
+This skill is the workflow for producing one. It is **interactive** — you ask the user questions, you do not silently autocomplete a draft.
 
----
+The template lives at `.agents/projects/design-template.md`. New docs go to `.agents/projects/<slug>.md` (slug only, no date prefix — `git log` already records the date).
 
-# Guidelines for Agents
+## When to use this skill
 
-When writing a design doc:
+- A task will likely take more than a day, or is load-bearing for other work.
+- A change crosses subproject boundaries (e.g. iris ↔ levanter, marin ↔ zephyr).
+- A change introduces a new service, package, or persistent data shape.
 
-## Structure
-
-**Required sections**:
-1. **Problem** - Concrete scenario with file:line references
-2. **Goals** - Specific objectives and explicit non-goals
-3. **Proposed Solution** - Core approach with minimal code snippets (10-30 lines max)
-4. **Implementation Outline** - Brief bullet points (4-6 items)
-5. **Notes** - Important details about the approach
-6. **Future Work** - What's deliberately excluded
-
-**Target length**: 200-400 lines total
-
-## Writing Style
-
-- Reference actual files with line numbers (`executor.py:664`)
-- Show concrete examples (not placeholders like "[describe problem]")
-- Include small code snippets showing **core idea** (10-30 lines max)
-- Explain **why** you made design choices
-- State backwards compatibility upfront
-- Be concise - every line should add value
-- No massive code dumps (>30 lines)
-- No detailed implementation plans with phases/substeps/validation commands
-- No abstract placeholders ("update the configuration")
-
-## Code Snippets
-
-Show the key idea in 10-30 lines, not complete implementations:
-
-```python
-# Shows core concept
-def timed_wrapper(fn):
-    start = time.time()
-    result = fn()
-    append_status(path, SUCCESS, execution_start_time=start, execution_end_time=time.time())
-    return result
-```
-
-Skip exhaustive details (error handling, edge cases, etc.) - those belong in implementation.
-
-## Implementation Outline
-
-4-6 high-level bullet points:
-
-```markdown
-1. Extend StatusEvent schema with timing fields
-2. Wrap step functions to capture time.time()
-3. Parse timing from status events in get_infos()
-4. Test timing capture, persistence, and failure cases
-```
-
-Include test approach as one bullet. Don't include detailed phases, substeps, file paths, or validation commands.
+If none of those apply, just open the PR — don't manufacture a design doc for a 50-line bug fix.
 
 ---
 
-# Example Design Doc: Step Execution Time Tracking
+# Workflow
 
-## Problem
+The skill has five phases. **Confirm with the user before moving from one phase to the next.** Do not chain through silently.
 
-The Executor framework (`lib/marin/src/marin/execution/executor.py`) provides no visibility into step execution times. When pipelines run slow (e.g., 6 hours for 50 steps), developers can't identify bottlenecks without manual instrumentation.
+## 1. Frame
 
-**Current behavior**: `_launch_step()` at line 664 submits distributed work but never records timing. `ExecutorStepInfo` (line 324) has no timing fields.
+Ask the user, in one batched message:
 
-## Goals
+- One-sentence problem statement (what's broken or missing today?).
+- A project slug — short, lowercase, underscores (`ferry_framework`, `iris_autoscaler_refactor`). Confirm the resulting path: `.agents/projects/<slug>.md`.
+- Whether they already have prior context (an issue, a Slack thread, an earlier doc) you should read.
 
-- Capture execution time per step with <1% overhead
-- Expose timing in `.executor_info` JSON and status events
-- Distinguish scheduling overhead from actual execution time
-- Backwards compatible (existing experiments unchanged)
+If the slug collides with an existing file in `.agents/projects/`, propose a disambiguating one.
 
-**Non-goals**: Distributed tracing, real-time metrics, CPU/memory profiling
+## 2. Research
 
-## Proposed Solution
+Spawn an `Explore` subagent (do not search yourself — the digest stays out of main context). Brief it with the problem statement and ask for:
 
-### Core Approach
+- Relevant files with line numbers (the design doc must reference real code, not placeholders).
+- Related designs already in `.agents/projects/` — read them, note overlap.
+- Related GitHub issues/PRs via `gh` if the user named any, plus a quick `gh issue list --search` on the topic.
+- Existing utilities or abstractions the proposal might reuse (per `AGENTS.md` "Code Reuse").
 
-1. **Extend status events** - Add `execution_start_time` and `execution_end_time` fields to `StatusEvent` (executor_step_status.py:15)
-2. **Wrap step functions** - In `_launch_step()`, wrap functions to capture `time.time()` before/after execution and write to status events
-3. **Compute on read** - `get_infos()` (line 854) reads status events and calculates durations
+Return to the user with a bulleted digest: *"Here's what I found, here's what surprised me, here's what's still unclear."* Ask whether the framing should shift before drafting.
 
-**Key principle**: Use existing status infrastructure rather than creating parallel timing logs.
+## 3. Interrogate
 
-### Data Schema
+Ask 3–6 targeted questions in one batched message. Good questions surface things the doc *must* answer:
 
-```python
-# executor_step_status.py:15 - Add to existing StatusEvent
-execution_start_time: float | None = None  # Unix timestamp
-execution_end_time: float | None = None
+- Scope boundaries — what is explicitly **not** in this design?
+- Backwards compatibility — does this break existing users/experiments? If so, what's the migration?
+- Testing — what's the smallest test that would catch a regression?
+- Tradeoff decisions — when there are two reasonable approaches, which one and why?
+- Unknowns the user wants reviewers to weigh in on (these become Open Questions).
 
-# executor.py:324 - Add to ExecutorStepInfo
-scheduled_time: str | None = None
-execution_start_time: str | None = None
-execution_end_time: str | None = None
-duration_seconds: float | None = None
-total_duration_seconds: float | None = None
-```
+Bad questions are ones research could have answered. Don't ask things you could grep for.
 
-### Timing Capture
+## 4. Draft
 
-```python
-def _create_timed_wrapper(self, original_fn, output_path):
-    def timed_wrapper(config):
-        start = time.time()
-        try:
-            result = original_fn(config)
-            end = time.time()
-            append_status(status_path, STATUS_SUCCESS,
-                         execution_start_time=start, execution_end_time=end)
-            return result
-        except Exception as e:
-            append_status(status_path, STATUS_FAILED, message=str(e),
-                         execution_start_time=start, execution_end_time=time.time())
-            raise
-    return timed_wrapper
-```
+Read `.agents/projects/design-template.md`, fill in each section. Hard rules:
 
-## Implementation Outline
+- **≤500 words.** Count them. If you're over, cut — usually from Design (you're describing implementation, not motivation) or by removing throat-clearing.
+- Reference real `file.py:line` paths from research, not placeholders.
+- One small code snippet (10-30 lines) only if prose is genuinely worse. Default to no snippet.
+- Open Questions section is non-empty — if the design has no unknowns, ask the user what they want feedback on.
+- State backwards-compat posture in the Design section, not as a separate heading.
 
-1. Extend schema - Add timing fields to StatusEvent dataclass and append_status() signature
-2. Capture timing - Add _create_timed_wrapper() method and modify _launch_step() to use it
-3. Expose timing - Add _extract_timing_from_events() and update get_infos() to populate timing fields
-4. Test - Verify timing captured, persisted to JSON, and works on failures
+Show the draft inline, accept edits in conversation. Iterate until the user says ship.
 
-## Notes
+## 5. Stress-test (gap check)
 
-- Wrapper overhead <1% for typical multi-second steps
-- Uses existing status infrastructure (no new systems)
-- `total_duration_seconds` includes scheduling overhead; `duration_seconds` is execution only
+Before publishing, hand the draft to a fresh `Explore` subagent with a prompt like: *"Read this design doc cold. Identify underspecified areas — places where two reasonable engineers would implement different things. Don't propose fixes; just list ambiguities."*
 
-## Future Work
+Surface its findings to the user. Decide together: tighten the doc, or move ambiguities into Open Questions. This step is cheap and catches the gap-implementation problem agents fall into.
 
-- Pipeline visualization (Gantt charts)
-- Integration with executor or Iris traces for distributed view
-- CPU/memory metrics per step
-- Alerting on timing regressions
+## 6. Publish
 
-## See Also
+Three sub-steps, each gated on **explicit user approval** (per `AGENTS.md`'s rule on shared-state actions). Do not chain them.
 
-- `AGENTS.md` - Coding guidelines
-- `.agents/skills/` - Skills for operating on the codebase
+1. **Commit and PR.** Branch named `design/<slug>`. Single commit adding `.agents/projects/<slug>.md`. PR title `[Design] <slug>`. PR body is the doc itself, plus a one-line "Discussion welcome — see Open Questions." footer. Apply labels `design` and `agent-generated`. Use the `pull-request` skill for the actual PR mechanics.
+
+2. **Discord ping.** Run `python scripts/ops/discord.py --channel code-review` with a 2-line message: PR title + URL + the one-sentence problem statement from Phase 1. Confirm the exact message text with the user before sending.
+
+3. **Hand off.** Tell the user: feedback comes on the PR; they can begin exploratory implementation in a separate branch in parallel; the design issue/PR closes when the implementing PR lands (the 1-pager is a snapshot, not a living doc).
+
+---
+
+# Notes for the agent running this skill
+
+- **Don't use existing `.agents/projects/` docs as style references.** They predate this skill and are inconsistent in length, structure, and tone. The example below is the canonical reference; keep it up to date when the skill evolves.
+- `agent-generated` and `design` labels: create the `design` label if it doesn't exist (`gh label create design --description "Design doc / 1-pager for review"`).
+- If the user wants to skip a phase ("just write it, I know what I want"), honor that — but still produce the Open Questions section and still run the Stress-test in Phase 5. Those are the cheapest, highest-value steps.
+- Implementation is out of scope for this skill. After the PR is open, hand off to `fix-issue` or `pull-request` for the work itself.
+
+---
+
+# Canonical example
+
+A target for tone, length, and specificity. From the original RFC ([#5210](https://github.com/marin-community/marin/issues/5210)).
+
+````markdown
+# Project Idea
+
+_Why are we doing this? What's the benefit?_
+
+Lift the logging service out of the Iris controller and add a service independent client per our system design guidelines. This will reduce load on the Iris controller VM and allow us to switch to an external logging vendor in the future if desired. It will also simplify the Iris codebase slightly.
+
+This will allow us to iterate on the logging service independently of the Iris controller, which will reduce the risk of breaking the Iris controller while testing logging changes or introducing a stats engine. This also serves as a test-subject for how to lift resolution & proxy management out of Iris and into a shared set of utilities in our "rigging" repo.
+
+Longer term, this makes it easier for us to work on a stats service as well.
+
+## Challenges
+
+_What's hard?_
+
+Most of the challenges are around structuring services, for which we don't have a great template yet. Thus, this project needs to bear the brunt of figuring out the complexity. For example, we currently start a proxy to the Iris controller automatically for our CLI. If the logging service moves to a separate VM, do we also start a proxy to it? How? When? Is it done during resolution, or manually via a CLI? If it's manual, how do we find the logging service to connect to it, and when do we do it?
+
+Cross-project proto dependencies are a pain, as is the tradeoff of duplicating protos.
+
+## Costs / Risks
+
+_What's bad about doing this?_
+
+* It introduces a new dependency for Iris startup that was previously automated (the log server subprocess)
+* It introduces churn with no immediate user visible improvement.
+
+## Design
+
+_How are we doing this?_
+
+We'll introduce a new lib/finelog package with a bulk rename of the Iris logging code. As part of this lift, we'll introduce a top-level "LogClient" which wraps some of the proto details and provides convenience functions. Iris workers will be changed to use this new logging interface. (Workers already directly operate against the log server and it is resolved via an Iris address.)
+
+The Iris controller will continue to proxy the "FetchLogs" requests to allow Iris CLI operations to work without complex proxy changes. Our long-term plans with proxying are unclear, and this avoids taking on this complexity in the short-term.
+
+## Testing
+_Agents make mistakes, how can we catch them?_
+
+We'll test this against the Iris dev controller & cluster. We want to check for:
+
+* Rolling out with old workers & a new controller
+* Full cluster restart with new workers
+
+As workers are already informed of the logging service host:port via the controller, we expect both conditions to be easy to fulfill.
+
+## Open Questions
+
+* The best way to deal with proxies is unclear to me. Using a bundled service like TailScale or CloudFlare is tempting, but would make new deployments more complicated.
+* Similarly, this raises questions around how we should handle auth across services, if at all - or just assume we'll handle auth at the proxy level.
+````
+
