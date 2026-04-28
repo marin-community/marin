@@ -71,6 +71,7 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.0
+    attn_gate_dim: int = 0  # 0 = single matmul (baseline), >0 = MLP gate with this hidden dim
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -113,19 +114,31 @@ class CausalSelfAttention(eqx.Module):
     w_k: Float[Array, "D MH"]
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
-    attn_gate: Float[Array, "D N"]
+    attn_gate: Float[Array, "D N"]  # Used when attn_gate_dim=0
+    attn_gate_down: jax.Array | None  # (D, gate_dim) — used when attn_gate_dim>0
+    attn_gate_up: jax.Array | None  # (gate_dim, N) — used when attn_gate_dim>0
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
-        k_q, k_k, k_v, k_o = random.split(key, 4)
+        k_q, k_k, k_v, k_o, k_gd, k_gu = random.split(key, 6)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        if cfg.attn_gate_dim > 0:
+            gate = reshard(jnp.zeros((d, n)), P(None, None))  # unused placeholder
+            gate_down = reshard(_init_weight(k_gd, (d, cfg.attn_gate_dim), cfg.initializer_std), P(None, None))
+            gate_up = reshard(_init_weight(k_gu, (cfg.attn_gate_dim, n), cfg.initializer_std), P(None, None))
+        else:
+            gate = reshard(jnp.zeros((d, n)), P(None, None))
+            gate_down = None
+            gate_up = None
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
-            attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            attn_gate=gate,
+            attn_gate_down=gate_down,
+            attn_gate_up=gate_up,
             cfg=cfg,
         )
 
@@ -150,8 +163,14 @@ class CausalSelfAttention(eqx.Module):
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
-        # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+        # Headwise gating: produces one scalar per head.
+        if self.attn_gate_down is not None:
+            # MLP gate: down -> silu -> up -> sigmoid
+            gate_hidden = jnp.einsum("bsd,dg->bsg", x, self.attn_gate_down)
+            gate_hidden = jax.nn.silu(gate_hidden)
+            gate = 2 * jax.nn.sigmoid(jnp.einsum("bsg,gn->bsn", gate_hidden, self.attn_gate_up))[..., None]
+        else:
+            gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
