@@ -54,6 +54,12 @@ Not in the first PR:
 - Deleting `levanter_lm_evaluation_harness`.
 - Forcing raw PPL or perplexity-gap evals through this path.
 
+## Costs / Risks
+
+- Adds a served-model abstraction before the RFC 3 Iris serving path exists.
+- Direct vLLM may look like the blessed long-term path, even though Iris is the target production path.
+- Levanter will not work for normal lm-eval scoring until RFC 2 lands.
+
 ## Core Boundary
 
 Names are provisional, but the shape should stay small:
@@ -166,3 +172,9 @@ RFC 2 should make Levanter pass the same conformance tests by adding prompt scor
 5. Migrate selected lm-eval call sites.
 6. Migrate Harbor and Evalchemy after the lm-eval boundary holds up.
 7. Delete legacy eval framework code after call sites no longer need it.
+
+## Open Questions
+
+- Where should shared conformance tests live so Marin, Levanter, and Iris can use them cleanly?
+- Should `RunningModel` require a tokenizer, or should `run_lm_eval` fail only when lm-eval needs one?
+- What is the smallest real smoke task that proves the vertical slice without making CI brittle?
