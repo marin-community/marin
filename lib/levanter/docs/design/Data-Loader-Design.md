@@ -95,27 +95,13 @@ In code, this is modeled in [levanter.store.TreeStore][].
 
 ### Cache Construction
 
-We use Ray to handle the construction of the cache. There are 4 types of processes/actors that we create using Ray:
+We use Zephyr to handle cache construction. The cache builder turns each input shard into a Zephyr task, each task
+reads and preprocesses its shard, and each task writes a temporary shard cache. After all shard caches are complete,
+Levanter consolidates them into the final `TreeCache` and writes the cache ledger.
 
-- `_TreeStoreCacheBuilder`: This actor is responsible for building the cache. It forks off actors for reading
-  shards and processing documents. It acts as a callback for these processes.
-- `_OrderedCacheWriter`: This actor is responsible for writing to the cache. It is responsible for writing the
-  processed documents to the cache in the correct order.
-- `WorkQueueDispatcherActor`: This actor is responsible for reading batches of documents from a group of shards. It dispatches
-  documents to a group of processors, which are responsible for processing the documents.
-- `_BatchProcessorQueue`: This actor is responsible for managing the queue of batches of documents to be processed. It
-  actually calls the processors to process the documents and then forwards the results to the writer.
-
-The basic flow is that the builder forks off a bunch of `WorkQueueDispatcherActor`s, which read from the shards and
-dispatch the documents to the processors. The processors process the documents and send the results to the writer,
-which writes them to the cache.
-
-The writer is responsible for writing the documents to the cache in the correct order. In particular, fix a batch
-size B. The writer writes the documents in batches of size B, round-robin from the shards. Once a shard is exhausted,
-it is removed from the list of shards.
-
-The writer maintains a "ledger" of the cache, which has the number of documents processed in each shard, as well as
-whether or not the shard is done. This ledger is used for resuming cache construction.
+The shard caches preserve deterministic per-shard order. Consolidation appends the shard caches into the final cache
+and writes a ledger containing the number of documents processed in each shard and whether each shard is complete. This
+ledger is used for resuming cache construction.
 
 ## Datasets and the Data Loader
 

@@ -77,13 +77,13 @@ Include test approach as one bullet. Don't include detailed phases, substeps, fi
 
 The Executor framework (`lib/marin/src/marin/execution/executor.py`) provides no visibility into step execution times. When pipelines run slow (e.g., 6 hours for 50 steps), developers can't identify bottlenecks without manual instrumentation.
 
-**Current behavior**: `_launch_step()` at line 664 launches Ray tasks but never records timing. `ExecutorStepInfo` (line 324) has no timing fields.
+**Current behavior**: `_launch_step()` at line 664 submits distributed work but never records timing. `ExecutorStepInfo` (line 324) has no timing fields.
 
 ## Goals
 
 - Capture execution time per step with <1% overhead
 - Expose timing in `.executor_info` JSON and status events
-- Distinguish Ray scheduling overhead from actual execution time
+- Distinguish scheduling overhead from actual execution time
 - Backwards compatible (existing experiments unchanged)
 
 **Non-goals**: Distributed tracing, real-time metrics, CPU/memory profiling
@@ -143,12 +143,12 @@ def _create_timed_wrapper(self, original_fn, output_path):
 
 - Wrapper overhead <1% for typical multi-second steps
 - Uses existing status infrastructure (no new systems)
-- `total_duration_seconds` includes Ray scheduling overhead; `duration_seconds` is execution only
+- `total_duration_seconds` includes scheduling overhead; `duration_seconds` is execution only
 
 ## Future Work
 
 - Pipeline visualization (Gantt charts)
-- Integration with Ray tracing for distributed view
+- Integration with executor or Iris traces for distributed view
 - CPU/memory metrics per step
 - Alerting on timing regressions
 

@@ -8,11 +8,12 @@ import re
 import tempfile
 import time
 from dataclasses import asdict, dataclass
-from threading import Thread
+from threading import Event, Thread
 
 import pytest
 from draccus.utils import Dataclass
 from fray.types import ResourceConfig
+import marin.execution.executor_step_status as executor_step_status
 from marin.execution import THIS_OUTPUT_PATH
 from marin.evaluation.perplexity_gap import GapFinderModelConfig, default_model_perplexity_gap, raw_text_dataset
 from marin.execution.executor import (
@@ -30,6 +31,7 @@ from marin.execution.executor import (
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
+    step_lock,
 )
 
 
@@ -41,7 +43,7 @@ class MyConfig:
     m: int
 
 
-# Different Ray processes running `ExecutorStep`s cannot share variables, so use filesystem.
+# Different processes running `ExecutorStep`s cannot share variables, so use filesystem.
 # Helper functions
 
 
@@ -151,6 +153,31 @@ def test_status_file_reads_legacy_format(tmp_path):
 
     status_file = StatusFile(str(output_dir), worker_id="legacy-reader")
     assert status_file.status == "SUCCESS"
+
+
+def test_step_lock_terminal_status_does_not_race_heartbeat(tmp_path, monkeypatch):
+    terminal_status_written = Event()
+    heartbeat_waiting = Event()
+    heartbeat_after_terminal_status = Event()
+    original_refresh_lock = StatusFile.refresh_lock
+
+    def refresh_lock(status_file: StatusFile) -> None:
+        heartbeat_waiting.set()
+        assert terminal_status_written.wait(timeout=1)
+        try:
+            original_refresh_lock(status_file)
+        finally:
+            heartbeat_after_terminal_status.set()
+
+    monkeypatch.setattr(executor_step_status, "HEARTBEAT_INTERVAL", 0)
+    monkeypatch.setattr(StatusFile, "refresh_lock", refresh_lock)
+
+    with step_lock(str(tmp_path), "step") as status_file:
+        assert heartbeat_waiting.wait(timeout=1)
+        status_file.write_status(STATUS_SUCCESS)
+        terminal_status_written.set()
+        assert heartbeat_after_terminal_status.wait(timeout=1)
+    assert not StatusFile(str(tmp_path), "check").has_active_lock()
 
 
 def test_perplexity_gap_step_hash_changes_when_tokenizer_changes():
@@ -428,6 +455,66 @@ def test_versioning():
         assert_diff_version(name="bar")
         assert_diff_version(b_n=2)
         assert_same_version(b_m=2)
+
+
+def test_executor_version_stable_across_prefixes():
+    """Regression for marin-community/marin#5216 (legacy ``Executor`` path).
+
+    Identity hashes for ``ExecutorStep`` chains must not depend on the Marin
+    bucket prefix. The same logical pipeline resolved under
+    ``gs://marin-us-central1`` vs ``gs://marin-us-east5`` was producing
+    distinct hashes once the chain exceeded ``Executor._MAX_INLINE_DEPTH``,
+    because ``_dep_version`` falls back to the deep dep's absolute
+    ``output_paths[dep]`` which carries the prefix.
+
+    The chain below has depth 6 at the leaf, which exceeds the default
+    ``_MAX_INLINE_DEPTH`` of 4 and forces the fallback for every step from
+    ``f`` onward.
+    """
+
+    def fn(config):
+        pass
+
+    def build_chain_leaf():
+        prev = ExecutorStep(name="a", fn=fn, config=None)
+        for name in ("b", "c", "d", "e", "f", "g"):
+            prev = ExecutorStep(
+                name=name,
+                fn=fn,
+                config=MyConfig(
+                    input_path=output_path_of(prev),
+                    output_path=this_output_path(),
+                    n=1,
+                    m=1,
+                ),
+            )
+        return prev  # leaf "g" has depth 6
+
+    leaf_central = build_chain_leaf()
+    leaf_east = build_chain_leaf()
+
+    central = Executor(prefix="gs://marin-us-central1", executor_info_base_path="gs://marin-us-central1")
+    central.compute_version(leaf_central, is_pseudo_dep=False)
+
+    east = Executor(prefix="gs://marin-us-east5", executor_info_base_path="gs://marin-us-east5")
+    east.compute_version(leaf_east, is_pseudo_dep=False)
+
+    # Sanity: deep-dep fallback must actually be active, otherwise the test
+    # would silently pass even with the bug present.
+    assert central._dep_depth(leaf_central) > Executor._MAX_INLINE_DEPTH
+
+    # Per-step hashes must match across regions.
+    central_steps = sorted(central.steps, key=lambda s: s.name)
+    east_steps = sorted(east.steps, key=lambda s: s.name)
+    for c, e in zip(central_steps, east_steps, strict=True):
+        assert c.name == e.name
+        c_hash = central.output_paths[c].rsplit("-", 1)[-1]
+        e_hash = east.output_paths[e].rsplit("-", 1)[-1]
+        assert c_hash == e_hash, f"{c.name} hash flipped across prefixes: {c_hash} vs {e_hash}"
+
+    # Output paths themselves must still differ — that's where the prefix lives.
+    assert central.output_paths[leaf_central].startswith("gs://marin-us-central1/")
+    assert east.output_paths[leaf_east].startswith("gs://marin-us-east5/")
 
 
 def test_dedup_version():

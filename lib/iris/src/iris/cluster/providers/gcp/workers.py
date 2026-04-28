@@ -185,6 +185,13 @@ def _gcp_instance_metadata(
     return result
 
 
+def _slice_external_ip_enabled(gcp: config_pb2.GcpSliceConfig) -> bool:
+    """Return enable_external_ip from a GcpSliceConfig, defaulting to True for unset/legacy configs."""
+    if not gcp.HasField("enable_external_ip"):
+        return True
+    return gcp.enable_external_ip
+
+
 def _validate_slice_config(config: config_pb2.SliceConfig) -> None:
     """Validate required fields on a SliceConfig before creating a GCP slice.
 
@@ -416,6 +423,7 @@ class GcpWorkerProvider:
             metadata=metadata,
             service_account=gcp.service_account or None,
             network="default",
+            enable_external_ip=_slice_external_ip_enabled(gcp),
         )
 
         logger.info("Creating TPU slice: %s (type=%s, zone=%s)", slice_id, config.accelerator_variant, gcp.zone)
@@ -477,6 +485,7 @@ class GcpWorkerProvider:
             metadata=metadata,
             service_account=gcp.service_account or None,
             network="default",
+            enable_external_ip=_slice_external_ip_enabled(gcp),
         )
 
         logger.info(

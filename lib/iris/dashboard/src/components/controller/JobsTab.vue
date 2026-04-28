@@ -10,6 +10,13 @@ import { timestampMs, formatDuration, formatRelativeTime } from '@/utils/formatt
 import { flattenLoadedJobTree, getLeafJobName } from '@/utils/jobTree'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
+import { useMediaQuery } from '@/composables/useMediaQuery'
+
+// Tailwind's `sm` breakpoint is 640px. Below that we render mobile cards;
+// at/above we render the desktop table. Switched via v-if so only one
+// variant is in the DOM at a time (otherwise duplicate text trips Playwright
+// locator's `.first` matcher in CI).
+const isMobile = useMediaQuery('(max-width: 639px)')
 
 const PAGE_SIZE = 50
 
@@ -437,14 +444,15 @@ const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / PAGE_
 interface SortableCol {
   field: SortField
   label: string
+  hide?: string
 }
 
 const SORTABLE_COLS: SortableCol[] = [
   { field: 'name', label: 'Name' },
   { field: 'state', label: 'State' },
-  { field: 'date', label: 'Date' },
-  { field: 'failures', label: 'Failed Attempts' },
-  { field: 'preemptions', label: 'Preemptions' },
+  { field: 'date', label: 'Date', hide: 'hidden sm:table-cell' },
+  { field: 'failures', label: 'Failed Attempts', hide: 'hidden md:table-cell' },
+  { field: 'preemptions', label: 'Preemptions', hide: 'hidden lg:table-cell' },
 ]
 
 function sortIndicator(field: SortField): string {
@@ -455,8 +463,8 @@ function sortIndicator(field: SortField): string {
 
 <template>
   <!-- Filter bar -->
-  <div class="mb-4 flex items-center gap-3">
-    <form class="flex gap-2" @submit.prevent="handleFilterSubmit">
+  <div class="mb-4 flex flex-wrap items-center gap-2 sm:gap-3">
+    <form class="flex flex-wrap flex-1 sm:flex-initial gap-2" @submit.prevent="handleFilterSubmit">
       <select
         v-model="stateFilter"
         class="px-3 py-1.5 text-sm border border-surface-border rounded
@@ -470,7 +478,7 @@ function sortIndicator(field: SortField): string {
         v-model="localFilter"
         type="text"
         placeholder="Filter by name..."
-        class="w-52 px-3 py-1.5 text-sm border border-surface-border rounded
+        class="flex-1 sm:flex-initial sm:w-52 px-3 py-1.5 text-sm border border-surface-border rounded
                bg-surface placeholder:text-text-muted
                focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
       />
@@ -549,7 +557,93 @@ function sortIndicator(field: SortField): string {
       : (hasActiveFilter ? 'No jobs matching filter' : 'No jobs')"
   />
 
-  <!-- Jobs table -->
+  <!-- Mobile/desktop split: cards on xs, table on sm+. Pagination is shared.
+       Switched via v-if (not CSS) so only one variant renders, keeping the DOM
+       free of duplicate text-content that confuses Playwright `.first` matchers. -->
+  <template v-else>
+  <!-- Mobile: stacked card-grid (one card per job). -->
+  <div v-if="isMobile" class="grid grid-cols-1 gap-2">
+    <div
+      v-for="node in flattenedJobs"
+      :key="'card-' + node.job.jobId"
+      class="rounded-lg border border-surface-border bg-surface px-3 py-2"
+      :style="node.depth > 0 ? { marginLeft: (Math.min(node.depth, 3) * 12) + 'px' } : undefined"
+    >
+      <!-- Row 1: expand, name, star -->
+      <div class="flex items-start gap-1.5">
+        <button
+          v-if="showExpandToggle(node.job, node.depth)"
+          class="text-text-muted hover:text-text select-none w-4 text-center text-xs shrink-0 mt-0.5"
+          @click.stop="toggleExpanded(node.job)"
+        >
+          {{ loadingChildJobs.has(node.job.jobId) ? '…' : (expandedJobs.has(node.job.jobId) ? '▼' : '▶') }}
+        </button>
+        <span v-else class="w-4 shrink-0" />
+        <RouterLink
+          :to="'/job/' + encodeURIComponent(node.job.jobId)"
+          class="text-accent hover:underline font-mono text-[13px] flex-1 min-w-0 break-anywhere"
+        >
+          {{ node.depth > 0 ? getLeafJobName(node.job.name) : (node.job.name || 'unnamed') }}
+        </RouterLink>
+        <button
+          v-if="node.depth === 0"
+          :class="[
+            'shrink-0 p-1 -m-1',
+            starredJobIds.has(node.job.jobId)
+              ? 'text-status-warning'
+              : 'text-text-muted hover:text-text',
+          ]"
+          :title="starredJobIds.has(node.job.jobId) ? 'Unstar job' : 'Star job'"
+          @click.stop="toggleStar(node.job)"
+        >
+          <svg v-if="starredJobIds.has(node.job.jobId)" class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+            <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.286 3.966a1 1 0 00.95.69h4.17c.969 0 1.371 1.24.588 1.81l-3.37 2.45a1 1 0 00-.364 1.118l1.287 3.966c.3.922-.755 1.688-1.54 1.118l-3.37-2.45a1 1 0 00-1.176 0l-3.37 2.45c-.784.57-1.838-.196-1.539-1.118l1.287-3.966a1 1 0 00-.364-1.118L2.06 9.393c-.783-.57-.38-1.81.588-1.81h4.17a1 1 0 00.95-.69l1.286-3.966z" />
+          </svg>
+          <svg v-else class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+          </svg>
+        </button>
+      </div>
+      <!-- Row 2: state + counters -->
+      <div class="mt-1.5 pl-5 flex items-center gap-2 flex-wrap">
+        <StatusBadge :status="node.job.state" size="sm" />
+        <span class="text-xs text-text-muted font-mono">
+          {{ jobDuration(node.job) }}
+          <span v-if="(node.job.failureCount ?? 0) > 0" class="text-status-danger">
+            · {{ node.job.failureCount }} failed
+          </span>
+          <span v-if="(node.job.preemptionCount ?? 0) > 0">
+            · {{ node.job.preemptionCount }} preempted
+          </span>
+        </span>
+      </div>
+      <!-- Row 3: pending reason (if any) -->
+      <div
+        v-if="node.job.pendingReason"
+        class="mt-1 pl-5 text-xs text-text-muted"
+        :title="node.job.pendingReason"
+      >
+        {{ node.job.pendingReason }}
+      </div>
+      <!-- Row 4: progress bar (if there are tasks) -->
+      <div v-if="(node.job.taskCount ?? 0) > 0" class="mt-2 pl-5 flex items-center gap-2">
+        <div class="flex h-2 flex-1 rounded-full overflow-hidden bg-surface-sunken">
+          <div
+            v-for="(seg, i) in progressSegments(node.job)"
+            :key="i"
+            :class="seg.colorClass"
+            :style="{ width: (seg.count / (node.job.taskCount ?? 1) * 100).toFixed(1) + '%' }"
+            :title="seg.label + ': ' + seg.count"
+          />
+        </div>
+        <span class="text-xs text-text-secondary whitespace-nowrap">
+          {{ progressSummary(node.job) }}
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Desktop: tabular layout (sm+) -->
   <div v-else class="overflow-x-auto">
     <table class="w-full border-collapse">
       <thead>
@@ -557,8 +651,11 @@ function sortIndicator(field: SortField): string {
           <th
             v-for="col in SORTABLE_COLS"
             :key="col.field"
-            class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary
-                   cursor-pointer select-none hover:text-text"
+            :class="[
+              'px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary',
+              'cursor-pointer select-none hover:text-text',
+              col.hide,
+            ]"
             @click="handleSort(col.field)"
           >
             <span class="inline-flex items-center gap-1">
@@ -568,10 +665,10 @@ function sortIndicator(field: SortField): string {
               </span>
             </span>
           </th>
-          <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">
+          <th class="px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">
             Tasks
           </th>
-          <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">
+          <th class="hidden lg:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">
             Diagnostic
           </th>
         </tr>
@@ -584,27 +681,27 @@ function sortIndicator(field: SortField): string {
         >
           <!-- Name -->
           <td
-            class="px-3 py-2 text-[13px]"
+            class="px-2 sm:px-3 py-2 text-[13px]"
             :style="{ paddingLeft: (node.depth * 20 + 12) + 'px' }"
           >
-            <span class="inline-flex items-center gap-1">
+            <span class="inline-flex items-center gap-1 max-w-full">
               <button
                 v-if="showExpandToggle(node.job, node.depth)"
-                class="text-text-muted hover:text-text select-none w-4 text-center text-xs"
+                class="text-text-muted hover:text-text select-none w-4 text-center text-xs shrink-0"
                 @click.stop="toggleExpanded(node.job)"
               >
                 {{ loadingChildJobs.has(node.job.jobId) ? '…' : (expandedJobs.has(node.job.jobId) ? '▼' : '▶') }}
               </button>
-              <span v-else class="w-4" />
+              <span v-else class="w-4 shrink-0" />
               <RouterLink
                 :to="'/job/' + encodeURIComponent(node.job.jobId)"
-                class="text-accent hover:underline font-mono"
+                class="text-accent hover:underline font-mono break-anywhere"
               >
                 {{ node.depth > 0 ? getLeafJobName(node.job.name) : (node.job.name || 'unnamed') }}
               </RouterLink>
               <button
                 v-if="node.job.name"
-                class="ml-1 text-text-muted hover:text-text opacity-0 group-hover/row:opacity-100 transition-opacity"
+                class="ml-1 text-text-muted hover:text-text opacity-0 group-hover/row:opacity-100 transition-opacity shrink-0"
                 title="Copy job name"
                 @click.stop="copyJobName(node.job.name)"
               >
@@ -619,7 +716,7 @@ function sortIndicator(field: SortField): string {
               <button
                 v-if="node.depth === 0"
                 :class="[
-                  'ml-1 transition-opacity',
+                  'ml-1 transition-opacity shrink-0',
                   starredJobIds.has(node.job.jobId)
                     ? 'text-status-warning opacity-100'
                     : 'text-text-muted hover:text-text opacity-0 group-hover/row:opacity-100',
@@ -638,17 +735,17 @@ function sortIndicator(field: SortField): string {
           </td>
 
           <!-- State -->
-          <td class="px-3 py-2 text-[13px]">
+          <td class="px-2 sm:px-3 py-2 text-[13px]">
             <StatusBadge :status="node.job.state" size="sm" />
           </td>
 
           <!-- Date -->
-          <td class="px-3 py-2 text-[13px] text-text-secondary font-mono">
+          <td class="hidden sm:table-cell px-2 sm:px-3 py-2 text-[13px] text-text-secondary font-mono">
             {{ jobDuration(node.job) }}
           </td>
 
           <!-- Failures -->
-          <td class="px-3 py-2 text-[13px] text-right tabular-nums">
+          <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px] text-right tabular-nums">
             <span
               v-if="(node.job.failureCount ?? 0) > 0"
               class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
@@ -661,17 +758,17 @@ function sortIndicator(field: SortField): string {
           </td>
 
           <!-- Preemptions -->
-          <td class="px-3 py-2 text-[13px] text-right tabular-nums">
+          <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-[13px] text-right tabular-nums">
             {{ node.job.preemptionCount ?? 0 }}
           </td>
 
           <!-- Tasks progress bar -->
-          <td class="px-3 py-2 text-[13px]">
+          <td class="px-2 sm:px-3 py-2 text-[13px]">
             <div v-if="(node.job.taskCount ?? 0) === 0" class="text-xs text-text-muted">
               no tasks
             </div>
             <div v-else class="flex items-center gap-1.5">
-              <div class="flex h-2 w-28 rounded-full overflow-hidden bg-surface-sunken">
+              <div class="flex h-2 w-16 sm:w-28 rounded-full overflow-hidden bg-surface-sunken">
                 <div
                   v-for="(seg, i) in progressSegments(node.job)"
                   :key="i"
@@ -680,7 +777,7 @@ function sortIndicator(field: SortField): string {
                   :title="seg.label + ': ' + seg.count"
                 />
               </div>
-              <span class="text-xs text-text-secondary whitespace-nowrap">
+              <span class="hidden sm:inline text-xs text-text-secondary whitespace-nowrap">
                 {{ progressSummary(node.job) }}
               </span>
             </div>
@@ -688,7 +785,7 @@ function sortIndicator(field: SortField): string {
 
           <!-- Diagnostic -->
           <td
-            class="px-3 py-2 text-xs text-text-muted max-w-xs truncate"
+            class="hidden lg:table-cell px-2 sm:px-3 py-2 text-xs text-text-muted max-w-xs truncate"
             :title="node.job.pendingReason ?? ''"
           >
             {{ node.job.pendingReason || '—' }}
@@ -696,33 +793,34 @@ function sortIndicator(field: SortField): string {
         </tr>
       </tbody>
     </table>
+  </div>
 
-    <!-- Pagination -->
-    <div
-      v-if="!showStarredOnly && totalPages > 1"
-      class="flex items-center justify-between px-3 py-2 text-xs text-text-secondary border-t border-surface-border"
-    >
-      <span>
-        {{ page * PAGE_SIZE + 1 }}&ndash;{{ Math.min((page + 1) * PAGE_SIZE, totalCount) }}
-        of {{ totalCount }}
-      </span>
-      <div class="flex items-center gap-1">
-        <button
-          :disabled="page === 0"
-          class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
-          @click="page = Math.max(0, page - 1)"
-        >
-          &larr; Prev
-        </button>
-        <span class="px-2 font-mono">{{ page + 1 }} / {{ totalPages }}</span>
-        <button
-          :disabled="!hasMore"
-          class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
-          @click="page++"
-        >
-          Next &rarr;
-        </button>
-      </div>
+  <!-- Pagination (shared between mobile cards and desktop table) -->
+  <div
+    v-if="!showStarredOnly && totalPages > 1"
+    class="mt-2 flex items-center justify-between px-2 sm:px-3 py-2 text-xs text-text-secondary border-t border-surface-border"
+  >
+    <span>
+      {{ page * PAGE_SIZE + 1 }}&ndash;{{ Math.min((page + 1) * PAGE_SIZE, totalCount) }}
+      of {{ totalCount }}
+    </span>
+    <div class="flex items-center gap-1">
+      <button
+        :disabled="page === 0"
+        class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+        @click="page = Math.max(0, page - 1)"
+      >
+        &larr; Prev
+      </button>
+      <span class="px-2 font-mono">{{ page + 1 }} / {{ totalPages }}</span>
+      <button
+        :disabled="!hasMore"
+        class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+        @click="page++"
+      >
+        Next &rarr;
+      </button>
     </div>
   </div>
+  </template>
 </template>

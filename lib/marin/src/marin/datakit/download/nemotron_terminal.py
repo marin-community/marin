@@ -14,6 +14,7 @@ from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.normalize import normalize_step
 from marin.datakit.download.rollout_transforms import load_parquet_batched
 from marin.execution.step_spec import StepSpec
 
@@ -73,4 +74,13 @@ def download_nemotron_terminal_step() -> StepSpec:
             output_path=output_path,
         ),
         hash_attrs={"version": "v2"},
+    )
+
+
+def nemotron_terminal_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the full ``(download+transform, normalize)`` chain for nemotron-terminal."""
+    processed = download_nemotron_terminal_step()
+    return (
+        processed,
+        normalize_step(name="normalized/nemotron-terminal", download=processed),
     )

@@ -627,6 +627,36 @@ def test_checkpointer_can_keep_previous_temporary_checkpoint_after_save():
         assert _get_checkpoint_steps(tmpdir) == [1, 2]
 
 
+def test_checkpointer_force_save_uses_permanent_path_even_when_time_policy_elapsed():
+    fake_now = datetime.datetime(2021, 1, 1, 0, 0, 0)
+    tick = 10
+
+    def advance_time(delta_seconds):
+        nonlocal fake_now
+        fake_now += timedelta(seconds=delta_seconds)
+
+    with (
+        tempfile.TemporaryDirectory(prefix="checkpoints") as permanent_dir,
+        tempfile.TemporaryDirectory(prefix="temp_checkpoints") as temporary_dir,
+    ):
+        checkpointer = Checkpointer(
+            permanent_dir,
+            timedelta(seconds=tick),
+            [],
+            temporary_base_path=temporary_dir,
+            dt_now_injection=lambda: fake_now,
+        )
+
+        _on_step(checkpointer, 0)
+
+        advance_time(tick)
+        _on_step(checkpointer, 1, force=True)
+        checkpointer.wait_until_finished()
+
+        assert _get_checkpoint_steps(permanent_dir) == [1]
+        assert list(pathlib.Path(temporary_dir).iterdir()) == []
+
+
 def test_load_from_checkpoint_or_initialize():
     In = Axis("in", 2)
     Out = Axis("out", 1)

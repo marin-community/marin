@@ -90,9 +90,8 @@ from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.query import execute_raw_query
 from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
-from iris.cluster.controller.stores import ControllerStore
+from iris.cluster.controller.stores import TASK_RESOURCE_HISTORY_RETENTION, ControllerStore
 from iris.cluster.controller.transitions import (
-    TASK_RESOURCE_HISTORY_RETENTION,
     ControllerTransitions,
     HeartbeatApplyRequest,
     task_updates_from_proto,
@@ -1150,33 +1149,40 @@ class ControllerServiceImpl:
                     f"(state={job_pb2.JobState.Name(parent_state)})",
                 )
 
-        existing_job = _read_job(self._db, job_id)
-        if existing_job:
-            policy = request.existing_job_policy
-            if policy == job_pb2.EXISTING_JOB_POLICY_ERROR:
-                raise ConnectError(
-                    Code.ALREADY_EXISTS,
-                    f"Job {job_id} already exists (state={job_pb2.JobState.Name(existing_job.state)})",
-                )
-            elif policy == job_pb2.EXISTING_JOB_POLICY_KEEP:
-                if not is_job_finished(existing_job.state):
-                    return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
-                # Job finished, replace it (KEEP only preserves running jobs)
-                self._transitions.remove_finished_job(job_id)
-            elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
-                if not is_job_finished(existing_job.state):
-                    self._transitions.cancel_job(job_id, "Replaced by new submission")
-                self._transitions.remove_finished_job(job_id)
-            elif is_job_finished(existing_job.state):
-                # Default/UNSPECIFIED: replace finished jobs
-                logger.info(
-                    "Replacing finished job %s (state=%s) with new submission",
-                    job_id,
-                    job_pb2.JobState.Name(existing_job.state),
-                )
-                self._transitions.remove_finished_job(job_id)
-            else:
-                raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
+        # Existence check + conditional cleanup run in one transaction so a
+        # concurrent submitter cannot land a row between the read and the
+        # cleanup write. The new job's ``submit_job`` still opens its own
+        # transaction further down — between the two txs another submitter
+        # can race, but ``INSERT INTO jobs`` then PK-conflicts, which is a
+        # legitimate error rather than a correctness bug.
+        with self._store.transaction() as cur:
+            existing_state = self._store.jobs.get_state(cur, job_id)
+            if existing_state is not None:
+                policy = request.existing_job_policy
+                if policy == job_pb2.EXISTING_JOB_POLICY_ERROR:
+                    raise ConnectError(
+                        Code.ALREADY_EXISTS,
+                        f"Job {job_id} already exists (state={job_pb2.JobState.Name(existing_state)})",
+                    )
+                elif policy == job_pb2.EXISTING_JOB_POLICY_KEEP:
+                    if not is_job_finished(existing_state):
+                        return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
+                    # Job finished, replace it (KEEP only preserves running jobs)
+                    self._transitions.remove_finished_job(cur, job_id)
+                elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
+                    if not is_job_finished(existing_state):
+                        self._transitions.cancel_job(cur, job_id, "Replaced by new submission")
+                    self._transitions.remove_finished_job(cur, job_id)
+                elif is_job_finished(existing_state):
+                    # Default/UNSPECIFIED: replace finished jobs
+                    logger.info(
+                        "Replacing finished job %s (state=%s) with new submission",
+                        job_id,
+                        job_pb2.JobState.Name(existing_state),
+                    )
+                    self._transitions.remove_finished_job(cur, job_id)
+                else:
+                    raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
 
         # Handle bundle_blob: upload to bundle store, then replace blob
         # with the resulting GCS path (preserving all other fields).
@@ -1229,7 +1235,8 @@ class ControllerServiceImpl:
                     f"Job {job_id} is unschedulable: {error} (constraints: {constraints})",
                 )
 
-        self._transitions.submit_job(job_id, request, Timestamp.now())
+        with self._store.transaction() as cur:
+            self._transitions.submit_job(cur, job_id, request, Timestamp.now())
         self._controller.wake()
 
         with self._db.read_snapshot() as q:
@@ -1381,7 +1388,8 @@ class ControllerServiceImpl:
         self._authorize_job_owner(job_id)
         # cancel_job uses a recursive CTE to walk the full subtree in a single
         # transaction, so there is no need to recurse manually.
-        result = self._transitions.cancel_job(job_id, reason="Terminated by user")
+        with self._store.transaction() as cur:
+            result = self._transitions.cancel_job(cur, job_id, reason="Terminated by user")
         if result.tasks_to_kill:
             self._controller.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
         return job_pb2.Empty()
@@ -1626,14 +1634,16 @@ class ControllerServiceImpl:
             )
         worker_id = WorkerId(request.worker_id)
 
-        self._transitions.register_or_refresh_worker(
-            worker_id=worker_id,
-            address=request.address,
-            metadata=request.metadata,
-            ts=Timestamp.now(),
-            slice_id=request.slice_id,
-            scale_group=request.scale_group,
-        )
+        with self._store.transaction() as cur:
+            self._transitions.register_or_refresh_worker(
+                cur,
+                worker_id=worker_id,
+                address=request.address,
+                metadata=request.metadata,
+                ts=Timestamp.now(),
+                slice_id=request.slice_id,
+                scale_group=request.scale_group,
+            )
 
         logger.info("Worker registered: %s at %s", worker_id, request.address)
         return controller_pb2.Controller.RegisterResponse(
@@ -1712,7 +1722,9 @@ class ControllerServiceImpl:
             registered_at=Timestamp.now(),
         )
 
-        if not self._transitions.add_endpoint(endpoint):
+        with self._store.transaction() as cur:
+            added = self._transitions.add_endpoint(cur, endpoint)
+        if not added:
             raise ConnectError(
                 Code.FAILED_PRECONDITION,
                 f"Task {request.task_id} is already terminal; endpoint not registered",
@@ -1726,7 +1738,8 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> job_pb2.Empty:
         """Unregister a service endpoint. Idempotent."""
-        self._transitions.remove_endpoint(request.endpoint_id)
+        with self._store.transaction() as cur:
+            self._transitions.remove_endpoint(cur, request.endpoint_id)
         return job_pb2.Empty()
 
     def list_endpoints(
@@ -2684,12 +2697,14 @@ class ControllerServiceImpl:
         """
         updates = task_updates_from_proto(request.updates)
         if updates:
-            self._transitions.apply_task_updates(
-                HeartbeatApplyRequest(
-                    worker_id=WorkerId(request.worker_id),
-                    worker_resource_snapshot=None,
-                    updates=updates,
+            with self._store.transaction() as cur:
+                self._transitions.apply_task_updates(
+                    cur,
+                    HeartbeatApplyRequest(
+                        worker_id=WorkerId(request.worker_id),
+                        worker_resource_snapshot=None,
+                        updates=updates,
+                    ),
                 )
-            )
             self._controller.wake()
         return controller_pb2.Controller.UpdateTaskStatusResponse()
