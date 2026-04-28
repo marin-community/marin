@@ -16,7 +16,6 @@ from fray.v2.types import ResourceConfig
 from marin.execution import THIS_OUTPUT_PATH
 from marin.evaluation.perplexity_gap import (
     GapFinderModelConfig,
-    model_perplexity_gap_from_scores,
     model_perplexity_scores,
     raw_text_dataset,
 )
@@ -156,62 +155,6 @@ def test_status_file_reads_legacy_format(tmp_path):
 
     status_file = StatusFile(str(output_dir), worker_id="legacy-reader")
     assert status_file.status == "SUCCESS"
-
-
-def test_perplexity_gap_step_hash_changes_when_tokenizer_changes():
-    datasets = {"eval": raw_text_dataset("gs://example-bucket/eval.jsonl")}
-    resource_config = ResourceConfig.with_tpu("v5p-8", regions=["us-central1"])
-    model_a_scores = model_perplexity_scores(
-        name="marin-score",
-        model=GapFinderModelConfig(
-            checkpoint_path="marin-community/marin-8b-base",
-            checkpoint_is_hf=True,
-            tokenizer="meta-llama/Llama-3.1-8B",
-        ),
-        datasets=datasets,
-        resource_config=resource_config,
-    )
-    model_b_scores_a = model_perplexity_scores(
-        name="qwen-score",
-        model=GapFinderModelConfig(
-            checkpoint_path="Qwen/Qwen3-8B-Base",
-            checkpoint_is_hf=True,
-            tokenizer="Qwen/Qwen3-8B",
-        ),
-        datasets=datasets,
-        resource_config=resource_config,
-    )
-    model_b_scores_b = model_perplexity_scores(
-        name="qwen-score",
-        model=GapFinderModelConfig(
-            checkpoint_path="Qwen/Qwen3-8B-Base",
-            checkpoint_is_hf=True,
-            tokenizer="meta-llama/Llama-3.1-8B",
-        ),
-        datasets=datasets,
-        resource_config=resource_config,
-    )
-    step_a = model_perplexity_gap_from_scores(
-        name="marin-vs-qwen",
-        model_a_name="marin-community/marin-8b-base",
-        model_b_name="Qwen/Qwen3-8B-Base",
-        model_a_scores_path=model_a_scores.as_input_name(),
-        model_b_scores_path=model_b_scores_a.as_input_name(),
-    )
-    step_b = model_perplexity_gap_from_scores(
-        name="marin-vs-qwen",
-        model_a_name="marin-community/marin-8b-base",
-        model_b_name="Qwen/Qwen3-8B-Base",
-        model_a_scores_path=model_a_scores.as_input_name(),
-        model_b_scores_path=model_b_scores_b.as_input_name(),
-    )
-
-    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
-        executor = create_executor(temp_dir)
-        executor.compute_version(step_a, is_pseudo_dep=False)
-        executor.compute_version(step_b, is_pseudo_dep=False)
-
-        assert executor.output_paths[step_a] != executor.output_paths[step_b]
 
 
 def test_model_perplexity_score_step_hash_changes_when_tokenizer_changes():
