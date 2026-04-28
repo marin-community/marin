@@ -7,7 +7,7 @@ This file is the canonical 1-pager template for Marin design docs. It contains:
 
 Keep this file up to date as conventions evolve. The `design-doc` skill points here; existing docs in `.agents/projects/` predate the skill and are inconsistent — don't use them as style references.
 
-**Length target**: ≤500 words, preferably less. If it's longer, you're either solving multiple problems (split it) or writing implementation details (defer them). The 1-pager is a snapshot, not a living doc — close the issue when the PR lands, don't sync it as the design evolves.
+**Length target**: ~500 words is the goal, not a hard limit. Spend words where they buy clarity. If you're well over, you're either solving multiple problems (split it) or writing implementation details (defer them). The 1-pager is a snapshot, not a living doc — close the issue when the PR lands, don't sync it as the design evolves.
 
 ---
 
@@ -39,7 +39,7 @@ _What's bad about doing this?_
 
 _How are we doing this?_
 
-<The actual proposal. Reference real files with line numbers (`lib/iris/src/iris/foo.py:142`). Show the core idea in a 10-30 line snippet if it helps; skip the snippet if prose is clearer. State backwards-compatibility upfront.>
+<The actual proposal. Reference real files with line numbers (`lib/iris/src/iris/foo.py:142`). Show the core idea in a 10-30 line snippet if it helps; skip the snippet if prose is clearer. Marin doesn't generally optimize for backwards compatibility — only call it out if this change genuinely needs migration (persisted data, externally-consumed API, etc.).>
 
 ## Testing
 
