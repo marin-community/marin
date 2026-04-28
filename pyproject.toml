@@ -172,7 +172,7 @@ missing-import = false
 # Unexpected keyword arguments (47 occurrences) - dynamic configs from transformers, dataclasses
 unexpected-keyword = false
 
-# Missing attributes (315 occurrences) - often from untyped libraries like ray, jax, etc.
+# Missing attributes (315 occurrences) - often from untyped libraries like JAX, etc.
 # These are mostly false positives from libraries without complete type stubs
 missing-attribute = false
 

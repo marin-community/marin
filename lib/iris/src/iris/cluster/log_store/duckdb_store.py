@@ -479,15 +479,7 @@ class DuckDBLogStore:
     def append(self, key: str, entries: list) -> None:
         if not entries:
             return
-        with self._memory_lock:
-            first_seq = self._next_seq
-            self._next_seq += len(entries)
-            self._pending.extend(
-                (first_seq + i, key, e.source, e.data, e.timestamp.epoch_ms, e.level) for i, e in enumerate(entries)
-            )
-            needs_drain = self._ram_bytes_locked() >= self._segment_target_bytes
-        if needs_drain:
-            self._wake.set()
+        self.append_batch([(key, entries)])
 
     def append_batch(self, items: list[tuple[str, list]]) -> None:
         """Write log entries from multiple keys in a single operation."""

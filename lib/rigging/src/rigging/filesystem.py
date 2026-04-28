@@ -157,11 +157,18 @@ def marin_region() -> str | None:
     return region_from_metadata() or region_from_prefix(os.environ.get("MARIN_PREFIX", ""))
 
 
-def marin_temp_bucket(ttl_days: int, prefix: str = "") -> str:
+def _append_path_prefix(path: str, prefix: str) -> str:
+    if prefix:
+        return f"{path}/{prefix.strip('/')}"
+    return path
+
+
+def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | None = None) -> str:
     """Return a path on region-local temp storage. Never returns ``None``.
 
-    For a GCS marin prefix with a known region, returns a path on the
-    dedicated temp bucket::
+    For a GCS marin prefix with a known region, or an explicitly provided
+    ``source_prefix`` with a known region, returns a path on the dedicated temp
+    bucket::
 
         gs://marin-tmp-{region}/ttl={N}d/{prefix}
 
@@ -177,25 +184,26 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "") -> str:
         ttl_days: Lifecycle TTL in days.  Should match one of the configured
             values (1-7, 14, 30) in ``infra/configure_temp_buckets.py``.
         prefix: Optional sub-path appended after the TTL directory.
+        source_prefix: Optional path used to choose the temp bucket region.
+            Useful when configuring a remote job from a launcher that may be in
+            a different region than the job output path.
     """
     mp = marin_prefix()
 
-    if mp.startswith("gs://"):
+    region = region_from_prefix(source_prefix) if source_prefix is not None else None
+    if region is None and mp.startswith("gs://"):
         region = marin_region()
-        if region:
-            bucket = REGION_TO_TMP_BUCKET.get(region)
-            if bucket:
-                path = f"gs://{bucket}/ttl={ttl_days}d"
-                if prefix:
-                    path = f"{path}/{prefix.strip('/')}"
-                return path
+
+    if region:
+        bucket = REGION_TO_TMP_BUCKET.get(region)
+        if bucket:
+            path = f"gs://{bucket}/ttl={ttl_days}d"
+            return _append_path_prefix(path, prefix)
 
     if "://" not in mp:
         mp = f"file://{mp}"
     path = f"{mp}/tmp"
-    if prefix:
-        path = f"{path}/{prefix.strip('/')}"
-    return path
+    return _append_path_prefix(path, prefix)
 
 
 # ---------------------------------------------------------------------------

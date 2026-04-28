@@ -3,6 +3,7 @@
 
 import dataclasses
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -25,6 +26,7 @@ from marin.training.training import (
     _enforce_run_id,
     _maybe_auto_resolve_dpo_schedule,
     _update_config_to_use_out_path,
+    temporary_checkpoint_base_path,
 )
 
 
@@ -73,6 +75,38 @@ def test_lm_config_with_train_urls_allowed_out_of_region(trainer_config):
             resources=ResourceConfig.with_tpu("v4-8"),
         )
         _doublecheck_paths(config)
+
+
+def test_temporary_checkpoint_base_path_follows_output_path_region():
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
+    ):
+        assert temporary_checkpoint_base_path("gs://marin-us-east5/experiments/grug/base-trial") == (
+            "gs://marin-tmp-us-east5/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
+        )
+
+
+def test_update_config_to_use_out_path_sets_run_specific_temp_checkpoints(trainer_config):
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
+    ):
+        config = TrainLmOnPodConfig(
+            train_config=train_lm.TrainLmConfig(
+                trainer=trainer_config,
+            ),
+            resources=ResourceConfig.with_tpu("v4-8"),
+            output_path="gs://marin-us-east5/experiments/grug/base-trial",
+        )
+
+        updated = _update_config_to_use_out_path(config)
+
+        checkpointer = updated.train_config.trainer.checkpointer
+        assert checkpointer.base_path == "gs://marin-us-east5/experiments/grug/base-trial/checkpoints"
+        assert checkpointer.temporary_base_path == (
+            "gs://marin-tmp-us-east5/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
+        )
 
 
 def test_recursive_path_checking(trainer_config):
@@ -149,25 +183,31 @@ def test_read_tokenized_cache_stats(tmp_path):
 
 
 def test_output_path_temp_checkpoint_path_is_run_scoped(trainer_config):
-    config = TrainLmOnPodConfig(
-        train_config=train_lm.TrainLmConfig(
-            data={"train_urls": []},  # type: ignore[arg-type]
-            trainer=dataclasses.replace(trainer_config, id=None),
-        ),
-        resources=ResourceConfig.with_tpu("v4-8"),
-        output_path="gs://bucket/checkpoints/dpo/example-run",
-    )
-
-    with patch("marin.training.training.marin_temp_bucket", return_value="gs://tmp/ttl=14d/checkpoints-temp"):
+    output_path = "gs://marin-us-east5/checkpoints/dpo/example-run"
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
+    ):
+        config = TrainLmOnPodConfig(
+            train_config=train_lm.TrainLmConfig(
+                data={"train_urls": []},  # type: ignore[arg-type]
+                trainer=dataclasses.replace(trainer_config, id=None),
+            ),
+            resources=ResourceConfig.with_tpu("v4-8"),
+            output_path=output_path,
+        )
         updated = _enforce_run_id(_update_config_to_use_out_path(config))
 
     checkpointer = updated.train_config.trainer.checkpointer
+    expected_temp = (
+        "gs://marin-tmp-us-east5/ttl=14d/" "checkpoints-temp/marin-us-east5/checkpoints/dpo/example-run/checkpoints"
+    )
 
     assert updated.train_config.trainer.id == "example-run"
     assert checkpointer.append_run_id_to_base_path is False
-    assert checkpointer.base_path == "gs://bucket/checkpoints/dpo/example-run/checkpoints"
-    assert checkpointer.temporary_base_path == "gs://tmp/ttl=14d/checkpoints-temp/example-run"
-    assert checkpointer.expanded_temporary_path("example-run") == "gs://tmp/ttl=14d/checkpoints-temp/example-run"
+    assert checkpointer.base_path == "gs://marin-us-east5/checkpoints/dpo/example-run/checkpoints"
+    assert checkpointer.temporary_base_path == expected_temp
+    assert checkpointer.expanded_temporary_path("example-run") == expected_temp
 
 
 def test_auto_resolve_dpo_schedule_from_stats(trainer_config, tmp_path):
