@@ -248,6 +248,75 @@ def test_step_spec_as_executor_step_round_trip():
     assert resolved.dep_paths == [dep.output_path]
 
 
+def _build_three_level_dag(prefix: str) -> tuple[StepSpec, StepSpec, StepSpec]:
+    """download → normalize → tokenize, all rooted at ``prefix``."""
+    download = StepSpec(
+        name="download",
+        output_path_prefix=prefix,
+        hash_attrs={"source": "fineweb-edu", "revision": "87f0914"},
+    )
+    normalize = StepSpec(
+        name="normalize",
+        output_path_prefix=prefix,
+        deps=[download],
+        hash_attrs={"text_field": "text", "relative_input_path": "sample/10BT"},
+    )
+    tokenize = StepSpec(
+        name="tokenize",
+        output_path_prefix=prefix,
+        deps=[normalize],
+        hash_attrs={"tokenizer": "gpt2"},
+    )
+    return download, normalize, tokenize
+
+
+def test_step_spec_hash_id_stable_across_prefixes():
+    """Identity hashes must not depend on the Marin bucket prefix.
+
+    Regression for marin-community/marin#5216: the same logical pipeline
+    resolved under different ``MARIN_PREFIX`` values (e.g. region failover
+    from ``gs://marin-us-central1`` to ``gs://marin-us-east5``) was producing
+    distinct hashes, changing output paths, checkpoint ids, and W&B run ids.
+    """
+    central = _build_three_level_dag("gs://marin-us-central1")
+    east = _build_three_level_dag("gs://marin-us-east5")
+
+    for c, e in zip(central, east, strict=True):
+        assert c.hash_id == e.hash_id, f"{c.name} hash flipped across prefixes: {c.hash_id} vs {e.hash_id}"
+        assert c.name_with_hash == e.name_with_hash
+
+    # Output paths must still differ — that's where the prefix lives.
+    for c, e in zip(central, east, strict=True):
+        assert c.output_path != e.output_path
+        assert c.output_path.startswith("gs://marin-us-central1/")
+        assert e.output_path.startswith("gs://marin-us-east5/")
+
+
+def test_step_spec_hash_id_via_marin_prefix_env(monkeypatch):
+    """Same as above, but driven by the ``MARIN_PREFIX`` env var path."""
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
+    central = [
+        StepSpec(name="download", hash_attrs={"source": "fineweb-edu"}),
+    ]
+    central.append(StepSpec(name="normalize", deps=[central[0]], hash_attrs={"text_field": "text"}))
+    central.append(StepSpec(name="tokenize", deps=[central[1]], hash_attrs={"tokenizer": "gpt2"}))
+    central_paths = [s.output_path for s in central]  # force prefix resolution into cached_property
+
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-east5")
+    east = [
+        StepSpec(name="download", hash_attrs={"source": "fineweb-edu"}),
+    ]
+    east.append(StepSpec(name="normalize", deps=[east[0]], hash_attrs={"text_field": "text"}))
+    east.append(StepSpec(name="tokenize", deps=[east[1]], hash_attrs={"tokenizer": "gpt2"}))
+    east_paths = [s.output_path for s in east]
+
+    for c, e in zip(central, east, strict=True):
+        assert c.hash_id == e.hash_id
+
+    assert all(p.startswith("gs://marin-us-central1/") for p in central_paths)
+    assert all(p.startswith("gs://marin-us-east5/") for p in east_paths)
+
+
 # ---------------------------------------------------------------------------
 # StepRunner tests: three-step pipeline
 # ---------------------------------------------------------------------------

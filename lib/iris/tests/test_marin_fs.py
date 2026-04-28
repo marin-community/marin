@@ -136,6 +136,30 @@ def test_marin_temp_bucket_from_env_prefix():
         assert marin_temp_bucket(ttl_days=3, prefix="zephyr") == "gs://marin-tmp-us-east1/ttl=3d/zephyr"
 
 
+def test_marin_temp_bucket_uses_source_prefix_region():
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
+    ):
+        assert marin_temp_bucket(
+            ttl_days=14,
+            prefix="checkpoints-temp/marin-us-east5/experiments/grug/run/checkpoints",
+            source_prefix="gs://marin-us-east5/experiments/grug/run",
+        ) == ("gs://marin-tmp-us-east5/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/run/checkpoints")
+
+
+def test_marin_temp_bucket_uses_source_prefix_region_from_local_launcher():
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {}, clear=True),
+    ):
+        assert marin_temp_bucket(
+            ttl_days=14,
+            prefix="checkpoints-temp/marin-us-east5/experiments/grug/run/checkpoints",
+            source_prefix="gs://marin-us-east5/experiments/grug/run",
+        ) == ("gs://marin-tmp-us-east5/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/run/checkpoints")
+
+
 def test_marin_temp_bucket_falls_back_to_marin_prefix_when_no_region():
     # Unknown region in MARIN_PREFIX → no entry in REGION_TO_TMP_BUCKET → falls back to marin_prefix/tmp
     with (

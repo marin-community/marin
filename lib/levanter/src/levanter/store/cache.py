@@ -219,7 +219,7 @@ class CacheMetadata:
 
 class SerialCacheWriter:
     """
-    Writes TreeCache-compatible caches to disk without Ray. Mostly for scripts and debugging.
+    Writes TreeCache-compatible caches to disk directly. Mostly for scripts and debugging.
     """
 
     def __init__(

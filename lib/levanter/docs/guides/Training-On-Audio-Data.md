@@ -81,7 +81,7 @@ so it can transparently handle compressed files and files in cloud storage (like
 
 
 ### Data Preprocessing
-Using Levanter's [Ray](https://docs.ray.io/en/latest/) based pre-processing and caching, you can apply further tokenization and feature extraction in the background while your model is training.
+Using Levanter's Zephyr-backed preprocessing and caching, you can apply further tokenization and feature extraction while building the cache that training will consume.
 
 By default, you can define both the `tokenizer` and `preprocessor` from HuggingFace. By default, if no tokenizer is provided Levanter will fall back to the one defined by the `preprocessor`. Regardless of the tokenization, the Pre-Processor will always be used to convert the time-domain audio data into the expected input for your model, such as Log-Mel-Spectrograms for Whisper.
 

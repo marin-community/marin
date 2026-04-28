@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from dataclasses import replace
 
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
@@ -13,7 +12,6 @@ from marin.datakit.ingestion_manifest import (
     SecretRedaction,
     StagingMetadata,
     UsagePolicy,
-    render_ingestion_metadata,
     write_ingestion_metadata_json,
 )
 
@@ -56,12 +54,12 @@ def _manifest() -> IngestionSourceManifest:
 
 def test_content_fingerprint_ignores_provenance_only_metadata():
     manifest = _manifest()
-    updated = replace(
-        manifest,
-        policy=replace(
-            manifest.policy,
-            contamination_risk="medium: still held out, but with different review outcome",
-        ),
+    updated = manifest.model_copy(
+        update={
+            "policy": manifest.policy.model_copy(
+                update={"contamination_risk": "medium: still held out, but with different review outcome"}
+            )
+        }
     )
 
     assert manifest.fingerprint() == updated.fingerprint()
@@ -70,12 +68,8 @@ def test_content_fingerprint_ignores_provenance_only_metadata():
 
 def test_content_fingerprint_changes_when_text_projection_changes():
     manifest = _manifest()
-    updated = replace(
-        manifest,
-        staging=replace(
-            manifest.staging,
-            serializer_name="wikitablequestions",
-        ),
+    updated = manifest.model_copy(
+        update={"staging": manifest.staging.model_copy(update={"serializer_name": "wikitablequestions"})}
     )
 
     assert manifest.fingerprint() != updated.fingerprint()
@@ -99,11 +93,23 @@ def test_write_ingestion_metadata_json_includes_policy_and_runtime_fields(tmp_pa
 
     payload = json.loads((tmp_path / "metadata.json").read_text(encoding="utf-8"))
     assert metadata_path == str(tmp_path / "metadata.json")
-    assert payload == render_ingestion_metadata(manifest, materialized_output)
+    assert set(payload) == {
+        "schema_version",
+        "manifest_fingerprint",
+        "content_fingerprint",
+        "source_manifest",
+        "materialized_output",
+    }
+    assert payload["schema_version"] == 1
     assert payload["manifest_fingerprint"] == manifest.provenance_fingerprint()
     assert payload["content_fingerprint"] == manifest.fingerprint()
+    assert payload["source_manifest"]["dataset_key"] == "GEM/totto"
     assert payload["source_manifest"]["policy"]["training_allowed"] is False
     assert payload["source_manifest"]["policy"]["eval_only"] is True
     assert payload["source_manifest"]["compressed_size_bytes"] == 123_456
     assert payload["source_manifest"]["rough_tokens_b"] == 0.012
+    assert payload["source_manifest"]["staging"]["serializer_name"] == "totto"
+    assert payload["source_manifest"]["staging"]["metadata"]["output_filename"] == "staged.jsonl.gz"
+    assert payload["materialized_output"]["output_file"] == str(tmp_path / "staged.jsonl.gz")
     assert payload["materialized_output"]["record_count"] == 17
+    assert payload["materialized_output"]["metadata"]["source_file_count"] == 3
