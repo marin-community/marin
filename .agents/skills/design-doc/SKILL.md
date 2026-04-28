@@ -11,7 +11,13 @@ A design doc in Marin is a ~1-page document posted as a PR for early feedback. T
 
 This skill is the workflow for producing one. It is **interactive** — you ask the user questions when you genuinely don't know, but you make reasonable inferences and proceed when you can.
 
-The template lives at `.agents/projects/design-template.md`. New docs go to `.agents/projects/<slug>.md` (slug only, no date prefix — `git log` already records the date).
+The template lives at `.agents/projects/design-template.md`. New docs go to a slug-named directory: `.agents/projects/<slug>/` (slug only, no date prefix — `git log` already records the date). Inside that directory:
+
+- `design.md` — the 1-pager (always)
+- `research.md` — in-repo refs, prior art, Q&A summary (always — even a short one)
+- `spec.md` — concrete contracts: full proto file, public client API signatures, persisted shapes, error types (only when the design adds new external contracts; skip for internal-only refactors)
+
+`spec.md` is the contract layer, not an implementation plan. The full `.proto`, the public class signatures with types, the schema-registry table CREATE, the directory layout — yes. Algorithm pseudocode, sequenced steps, file-by-file plans — no, those belong in the PR description or get deleted in favor of writing the code.
 
 ## When to use this skill
 
@@ -31,7 +37,7 @@ Five phases. Confirm with the user at natural decision points (after Research, a
 
 The user starts the skill with a framing paragraph stating what they want to do and why. If they didn't, query them for it — or infer it from prior conversation context if that context is rich enough. A one-sentence "fix the foo thing" is *not* enough to proceed; push back and ask for the why.
 
-**You infer the slug.** Short, lowercase, underscores (`finelog_lift`, `iris_autoscaler_refactor`). State it in one line ("I'll save this as `.agents/projects/<slug>.md`") and proceed — only stop if it collides with an existing file, in which case propose a disambiguator.
+**You infer the slug.** Short, lowercase, underscores (`finelog_lift`, `iris_autoscaler_refactor`). State it in one line ("I'll save this as `.agents/projects/<slug>/`") and proceed — only stop if it collides with an existing directory, in which case propose a disambiguator.
 
 Once you have a framing paragraph, proceed directly to research. Don't batch a long list of questions up front; that's what Interrogate is for, after research has shown you what to ask.
 
@@ -48,7 +54,7 @@ Spawn an `Explore` subagent (do not search yourself — the digest stays out of 
 
 Return to the user with a bulleted digest combining both passes: *"Here's what I found in-repo, here's what the prior art looks like, here's what surprised me, here's what's still unclear."* Ask whether the framing should shift before drafting.
 
-**Persist the research as a sibling artifact.** Save the full digest (in-repo findings with file:line refs, prior-art digest, anything load-bearing that won't fit in the 1-pager) to `.agents/projects/<slug>-research.md`. The design doc itself gets a short `## Background` section — 3–5 sentences summarizing what we found and how it shapes the proposal — with a link to the research doc for reviewers who want depth. Keep the design doc on-screen; let the research doc grow.
+**Persist the research as a sibling artifact.** Save the full digest (in-repo findings with file:line refs, prior-art digest, anything load-bearing that won't fit in the 1-pager) to `.agents/projects/<slug>/research.md`. The design doc itself gets a short `## Background` section — 3–5 sentences summarizing what we found and how it shapes the proposal — with a link to `research.md` for reviewers who want depth. Keep the design doc on-screen; let the research doc grow.
 
 ## 3. Interrogate
 
@@ -73,6 +79,20 @@ Read `.agents/projects/design-template.md`, fill in each section. Guidelines:
 
 Show the draft inline, accept edits in conversation. Iterate until the user says ship.
 
+### Spec doc (when needed)
+
+If the design adds new external contracts — a new proto, a new public client API, a new persisted format, a new on-disk layout — also produce `.agents/projects/<slug>/spec.md` alongside `design.md`. The spec is the contract layer:
+
+- The full `.proto` file content (or close to it — name every RPC, message, and field).
+- Public client API: full Python class signatures with parameter types and return types. Not implementation bodies.
+- Persisted shapes: schema-registry table CREATE statements, on-disk directory layout, file naming.
+- Error types and what triggers each.
+- File paths where each piece will live (e.g. "proto at `lib/finelog/src/finelog/proto/stats.proto`, client at `lib/finelog/src/finelog/client/stats.py`").
+
+What does **not** go in spec.md: algorithm pseudocode, sequenced implementation steps, file-by-file plans, "how" rather than "what." Those belong in the PR description that ships the actual code, or get deleted in favor of just writing the code.
+
+Spec.md has no length cap — it should be exactly as long as the contracts. Reviewers should be able to read `design.md` for the why, then `spec.md` to check "would I actually build this exact API?" Skip spec.md for internal-only refactors where there are no new contracts to pin down.
+
 ## 5. Stress-test (senior review)
 
 Before publishing, hand the draft to a senior reviewer subagent (`Plan` agent — software architect) with a prompt like: *"Review this design doc thoroughly. Identify underspecified areas, weak motivation, missing tradeoffs, places where two reasonable engineers would implement different things, and concrete suggestions for tightening the proposal."*
@@ -88,7 +108,7 @@ Show the user a brief summary: what you incorporated, what you're punting on, wh
 
 Two actions, can run together. After this, the skill is done.
 
-1. **Commit and PR** via the `pull-request` skill. Branch `design/<slug>`. Single commit adding `.agents/projects/<slug>.md`. PR title `[Design] <slug>`. PR body is the doc itself plus a one-line "Discussion welcome — see Open Questions." footer. Labels `design` and `agent-generated`.
+1. **Commit and PR** via the `pull-request` skill. Branch `design/<slug>`. Single commit adding the `.agents/projects/<slug>/` directory (design.md, research.md, and spec.md if produced). PR title `[Design] <slug>`. PR body is `design.md` itself plus a one-line "Discussion welcome — see Open Questions." footer, with links to the sibling `research.md` and `spec.md` files. Labels `design` and `agent-generated`.
 
 2. **Discord ping.** Run `python scripts/ops/discord.py --channel code-review` with a 2-line message: PR title + URL + the framing paragraph (or a one-sentence compression of it). Send it; no need to confirm exact text unless the user asked.
 
