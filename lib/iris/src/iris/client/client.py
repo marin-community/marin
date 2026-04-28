@@ -50,6 +50,7 @@ from iris.cluster.types import (
     ResourceSpec,
     TaskAttempt,
     adjust_tpu_replicas,
+    is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.proto_utils import job_state_friendly
@@ -771,17 +772,10 @@ class IrisClient:
         Returns:
             List of job IDs that were terminated
         """
-        terminal_states = {
-            job_pb2.JOB_STATE_SUCCEEDED,
-            job_pb2.JOB_STATE_FAILED,
-            job_pb2.JOB_STATE_KILLED,
-            job_pb2.JOB_STATE_UNSCHEDULABLE,
-        }
-
         jobs = self.list_jobs(prefix=prefix)
         terminated = []
         for job in jobs:
-            if exclude_finished and job.state in terminal_states:
+            if exclude_finished and is_job_finished(job.state):
                 continue
             job_id = JobName.from_wire(job.job_id)
             self.terminate(job_id)
