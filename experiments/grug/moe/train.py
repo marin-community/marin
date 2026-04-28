@@ -59,6 +59,8 @@ class GrugTrainerConfig:
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
+    # If set, use fixed bias increment instead of QB. Each step, bias += delta * sign(fair_share - count).
+    fixed_bias_increment: float | None = None
 
 
 @dataclass(frozen=True)
@@ -278,6 +280,7 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
+    fixed_bias_increment: float | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -341,13 +344,24 @@ def _make_train_step(
                 model_tree_type=type(state.params),
             )
 
+        if fixed_bias_increment is not None:
+            # Fixed bias increment: bias += delta * sign(fair_share - actual_count)
+            # routing_counts_per_layer: [num_layers, num_experts]
+            counts = metrics["train/router/routing_counts_per_layer"]
+            fair_share = jnp.sum(counts, axis=-1, keepdims=True) / counts.shape[-1]
+            # Positive increment for underloaded, negative for overloaded
+            bias_delta = fixed_bias_increment * jnp.sign(fair_share - counts)
+            new_betas = state.pending_qb_betas - bias_delta  # _apply_qb_betas negates
+        else:
+            new_betas = metrics["qb_beta_per_layer"]
+
         next_state = dataclasses.replace(
             state,
             step=state.step + one,
             params=params,
             opt_state=opt_state,
             ema_params=ema_params,
-            pending_qb_betas=metrics["qb_beta_per_layer"],
+            pending_qb_betas=new_betas,
         )
 
         return next_state, metrics, watch_stats
@@ -373,6 +387,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
+        fixed_bias_increment=config.trainer.fixed_bias_increment,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
