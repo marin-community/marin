@@ -117,7 +117,7 @@ Show the user a brief summary: what you incorporated (in design vs spec), what y
 
 Two actions, can run together. After this, the skill is done.
 
-1. **Commit and PR** via the `pull-request` skill. Branch `design/<slug>`. Single commit adding the `.agents/projects/<slug>/` directory (design.md, research.md, and spec.md — all three are always present). PR title `[Design] <slug>`. PR body is `design.md` itself plus a one-line "Discussion welcome — see Open Questions." footer, with links to the sibling `research.md` and `spec.md` files. Labels `design` and `agent-generated`.
+1. **Commit and PR** via the `pull-request` skill. Branch `design/<slug>`. Single commit adding the `.agents/projects/<slug>/` directory (design.md, research.md, and spec.md — all three are always present). PR title `[Design] <slug>`. **PR body is a short summary (3–6 sentences) of the proposal — the framing paragraph plus the one-line gist of the design — with explicit links to the three sibling files (`design.md`, `spec.md`, `research.md`) and a "Discussion welcome — see Open Questions in `design.md`" footer.** The full 1-pager lives in `design.md` on the branch, not in the PR description; reviewers click through. This keeps the PR body, `design.md`, `spec.md`, and `research.md` as four peer artifacts (one summary + three files) rather than duplicating `design.md` into the PR body. Labels `design` and `agent-generated`.
 
 2. **Discord ping.** Run `python scripts/ops/discord.py --channel code-review` with a 2-line message: PR title + URL + the framing paragraph (or a one-sentence compression of it). Send it; no need to confirm exact text unless the user asked.
 
