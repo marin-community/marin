@@ -278,10 +278,17 @@ def _scored_document_from_row(row: dict[str, Any]) -> ScoredDocument:
         row_index=int(row["row_index"]),
         text=row["text"],
     )
+    token_byte_starts = np.asarray(row["token_byte_starts"], dtype=np.int32)
+    token_byte_ends = np.asarray(row["token_byte_ends"], dtype=np.int32)
+    token_ids_row = row.get("token_ids")
+    if token_ids_row is None:
+        token_ids = np.zeros(len(token_byte_starts), dtype=np.int32)
+    else:
+        token_ids = np.asarray(token_ids_row, dtype=np.int32)
     tokenized = TokenizedDocument(
-        token_ids=np.asarray(row["token_ids"], dtype=np.int32),
-        byte_starts=np.asarray(row["token_byte_starts"], dtype=np.int32),
-        byte_ends=np.asarray(row["token_byte_ends"], dtype=np.int32),
+        token_ids=token_ids,
+        byte_starts=token_byte_starts,
+        byte_ends=token_byte_ends,
         num_bytes=int(row["num_bytes"]),
     )
     per_byte_loss = np.asarray(row["per_byte_loss"], dtype=np.float64)

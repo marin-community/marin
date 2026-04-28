@@ -9,6 +9,8 @@ from typing import Any
 
 import jax
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 import haliax
@@ -329,6 +331,48 @@ def test_model_score_files_roundtrip():
     assert loaded_documents[0].tokenized.token_ids.tolist() == tokenized.token_ids.tolist()
     assert loaded_documents[0].tokenized.num_bytes == tokenized.num_bytes
     assert loaded_documents[0].tokenized.byte_starts.tolist() == tokenized.byte_starts.tolist()
+
+
+def test_read_scored_documents_backfills_missing_token_ids():
+    table = pa.Table.from_pydict(
+        {
+            "dataset_name": ["paloma/example"],
+            "tags": [["paloma", "paloma/example"]],
+            "shard_name": ["docs"],
+            "row_index": [0],
+            "text": ["abc"],
+            "per_byte_loss": [[0.1, 0.2, 0.3]],
+            "token_byte_starts": [[0, 1]],
+            "token_byte_ends": [[1, 3]],
+            "num_bytes": [3],
+        },
+        schema=pa.schema(
+            [
+                ("dataset_name", pa.string()),
+                ("tags", pa.list_(pa.string())),
+                ("shard_name", pa.string()),
+                ("row_index", pa.int64()),
+                ("text", pa.string()),
+                ("per_byte_loss", pa.list_(pa.float64())),
+                ("token_byte_starts", pa.list_(pa.int32())),
+                ("token_byte_ends", pa.list_(pa.int32())),
+                ("num_bytes", pa.int32()),
+            ]
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with open(os.path.join(tmpdir, "summary.json"), "w") as f:
+            json.dump({"model": "model-a", "datasets": [], "dataset_groups": [], "pattern_buckets": []}, f)
+        with open(os.path.join(tmpdir, "scored_documents.parquet"), "wb") as f:
+            pq.write_table(table, f)
+
+        loaded_documents = read_scored_documents(tmpdir)
+
+    assert len(loaded_documents) == 1
+    assert loaded_documents[0].tokenized.token_ids.tolist() == [0, 0]
+    assert loaded_documents[0].tokenized.byte_starts.tolist() == [0, 1]
+    assert loaded_documents[0].tokenized.byte_ends.tolist() == [1, 3]
 
 
 def test_model_score_files_write_token_count_summary():
