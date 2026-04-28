@@ -4,7 +4,6 @@
 from typing import Sequence, Any
 
 import regex
-from rigging.timing import log_time
 
 from levanter.data import BatchProcessor
 from levanter.tokenizers import MarinTokenizer
@@ -104,26 +103,25 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         tokens, regardless of how long the original text is.
         """
         ids: list[int] = []
-        with log_time(f"BatchTokenizer encoded {len(text):,}-char outlier record"):
-            pieces: list[str] = []
-            remaining = text
-            while True:
-                if len(remaining) > self._workaround_len:
-                    match = ws.search(remaining, self._workaround_len)
-                    split = match.start() if match is not None else len(remaining)
-                    pieces.append(remaining[:split])
-                    remaining = remaining[split:]
-                else:
-                    pieces.append(remaining)
-                    remaining = ""
+        pieces: list[str] = []
+        remaining = text
+        while True:
+            if len(remaining) > self._workaround_len:
+                match = ws.search(remaining, self._workaround_len)
+                split = match.start() if match is not None else len(remaining)
+                pieces.append(remaining[:split])
+                remaining = remaining[split:]
+            else:
+                pieces.append(remaining)
+                remaining = ""
 
-                if len(pieces) >= _LONG_STRING_BATCH_SIZE or not remaining:
-                    for encoded_piece in self.tokenizer.encode_batch(pieces, add_special_tokens=False):
-                        ids.extend(encoded_piece)
-                    pieces.clear()
+            if len(pieces) >= _LONG_STRING_BATCH_SIZE or not remaining:
+                for encoded_piece in self.tokenizer.encode_batch(pieces, add_special_tokens=False):
+                    ids.extend(encoded_piece)
+                pieces.clear()
 
-                if not remaining:
-                    break
+            if not remaining:
+                break
 
         return ids
 
