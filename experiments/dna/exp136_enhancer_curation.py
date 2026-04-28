@@ -235,18 +235,15 @@ def _checkpointer(num_train_steps: int) -> CheckpointerConfig:
 
 
 def _build_train_step(strategy: str, dataset: str) -> ExecutorStep:
-    if _warmup_mode():
-        num_train_steps = WARMUP_NUM_TRAIN_STEPS
-        evals_per_run = WARMUP_EVALS_PER_RUN
-    else:
-        num_train_steps = NUM_TRAIN_STEPS
-        evals_per_run = EVALS_PER_RUN
+    warmup = _warmup_mode()
+    num_train_steps = WARMUP_NUM_TRAIN_STEPS if warmup else NUM_TRAIN_STEPS
+    evals_per_run = WARMUP_EVALS_PER_RUN if warmup else EVALS_PER_RUN
     steps_per_eval = max(1, num_train_steps // evals_per_run)
 
-    warmup_suffix = "-warmup" if _warmup_mode() else ""
+    warmup_suffix = "-warmup" if warmup else ""
     run_name = f"dna-bolinas-enhancer-curation-{VERSION}{warmup_suffix}-{strategy}"
     tags = ("dna", "exp136", "enhancer_curation", VERSION, f"strategy={strategy}")
-    if _warmup_mode():
+    if warmup:
         tags = (*tags, "warmup")
 
     inner = TrainLmConfig(
@@ -275,6 +272,11 @@ def _build_train_step(strategy: str, dataset: str) -> ExecutorStep:
     )
     pod_config = TrainLmOnPodConfig(
         train_config=inner,
+        # list() cast is load-bearing: matches the type the executor's auto-pin
+        # writes (executor.py:630 does `regions=[pinned_region]`), so the
+        # ResourceConfig dataclass — and thus the step hash + output_path —
+        # stays equal to what the un-pinned earlier code produced. Switching
+        # to a tuple would orphan existing step-N checkpoints.
         resources=ResourceConfig.with_tpu(TPU_TYPES, regions=list(TPU_REGIONS)),
         output_path=this_output_path(),
     )
