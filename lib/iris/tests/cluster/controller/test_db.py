@@ -493,3 +493,94 @@ def test_backfill_attempt_finished_at_migration(tmp_path: Path) -> None:
     assert out[("/u/E", 0)] == 7200
     assert out[("/u/E", 1)] is None
     conn.close()
+
+
+def test_finalize_orphan_attempts_migration(tmp_path: Path) -> None:
+    """0038 finalizes task_attempts orphaned by the cancel_job bug.
+
+    Two orphan classes must be healed: (1) attempt active while task is
+    terminal, (2) attempt active but superseded by a newer attempt_id on
+    the same task. Healthy active attempts must not be touched.
+    """
+    import importlib
+
+    conn = sqlite3.connect(str(tmp_path / "c.sqlite3"))
+    conn.execute(
+        """
+        CREATE TABLE tasks (
+            task_id TEXT PRIMARY KEY,
+            state INTEGER NOT NULL,
+            current_attempt_id INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE task_attempts (
+            task_id TEXT NOT NULL,
+            attempt_id INTEGER NOT NULL,
+            state INTEGER NOT NULL,
+            finished_at_ms INTEGER,
+            error TEXT,
+            PRIMARY KEY (task_id, attempt_id)
+        )
+        """
+    )
+    # /u/killed: task was KILLED by cancel_job but attempt is still RUNNING.
+    conn.execute("INSERT INTO tasks VALUES ('/u/killed', 6, 0)")  # 6 = KILLED
+    conn.execute("INSERT INTO task_attempts VALUES ('/u/killed', 0, 3, NULL, NULL)")  # 3 = RUNNING
+
+    # /u/super: task is RUNNING on attempt 1; attempt 0 was abandoned but never
+    # finalized.
+    conn.execute("INSERT INTO tasks VALUES ('/u/super', 3, 1)")
+    conn.execute("INSERT INTO task_attempts VALUES ('/u/super', 0, 3, NULL, NULL)")  # orphan
+    conn.execute("INSERT INTO task_attempts VALUES ('/u/super', 1, 3, NULL, NULL)")  # current
+
+    # /u/healthy: task RUNNING on attempt 0; attempt is current and active.
+    # Must not be touched.
+    conn.execute("INSERT INTO tasks VALUES ('/u/healthy', 3, 0)")
+    conn.execute("INSERT INTO task_attempts VALUES ('/u/healthy', 0, 3, NULL, NULL)")
+
+    # /u/already_done: task succeeded normally — attempt already terminal. The
+    # COALESCE(error, ...) clause must not overwrite a NULL error with the
+    # reconcile message for rows the migration shouldn't touch at all.
+    conn.execute("INSERT INTO tasks VALUES ('/u/already_done', 4, 0)")  # 4 = SUCCEEDED
+    conn.execute("INSERT INTO task_attempts VALUES ('/u/already_done', 0, 4, 9999, NULL)")
+    conn.commit()
+
+    mod = importlib.import_module("iris.cluster.controller.migrations.0038_finalize_orphan_attempts")
+    mod.migrate(conn)
+    conn.commit()
+
+    out = {
+        (r[0], r[1]): (r[2], r[3], r[4])
+        for r in conn.execute("SELECT task_id, attempt_id, state, finished_at_ms, error FROM task_attempts").fetchall()
+    }
+
+    # Orphans: PREEMPTED (state 10), finished_at_ms stamped, reason recorded.
+    killed_state, killed_finished, killed_error = out[("/u/killed", 0)]
+    assert killed_state == 10
+    assert killed_finished is not None and killed_finished > 0
+    assert "Reconciled" in killed_error
+
+    super_state, super_finished, super_error = out[("/u/super", 0)]
+    assert super_state == 10
+    assert super_finished is not None and super_finished > 0
+    assert "Reconciled" in super_error
+
+    # Live attempt for /u/super and the healthy attempt are untouched.
+    assert out[("/u/super", 1)] == (3, None, None)
+    assert out[("/u/healthy", 0)] == (3, None, None)
+
+    # Already-terminal row preserved.
+    assert out[("/u/already_done", 0)] == (4, 9999, None)
+
+    # Idempotency: rerun is a no-op.
+    mod.migrate(conn)
+    conn.commit()
+    out2 = {
+        (r[0], r[1]): (r[2], r[3], r[4])
+        for r in conn.execute("SELECT task_id, attempt_id, state, finished_at_ms, error FROM task_attempts").fetchall()
+    }
+    assert out2 == out
+    conn.close()
