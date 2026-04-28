@@ -8,7 +8,7 @@ This adds a small **stats service** co-hosted in the existing finelog process: t
 
 ## Background
 
-File refs, prior-art comparison, and Q&A summary live in [`stats_service-research.md`](./stats_service-research.md). The load-bearing change is generalizing the DuckDB backend's hardcoded log row schema (`lib/finelog/src/finelog/store/duckdb_store.py:79`) into a per-namespace schema registry. Co-hosting inside finelog keeps the operational footprint small and shares the storage layer; we revisit splitting if stats traffic ever dominates.
+File refs, prior-art comparison, and Q&A summary live in [`research.md`](./research.md); concrete contracts (proto, public API, persisted shapes) in [`spec.md`](./spec.md). The load-bearing change is generalizing the DuckDB backend's hardcoded log row schema (`lib/finelog/src/finelog/store/duckdb_store.py:79`) into a per-namespace schema registry. Co-hosting inside finelog keeps the operational footprint small and shares the storage layer; we revisit splitting if stats traffic ever dominates.
 
 ## Challenges
 
