@@ -127,25 +127,8 @@ Once both have happened, you're done. Feedback lives on the PR; the user can sta
 
 # Linking conventions
 
-Two failure modes worth heading off — neither is intuitive, and reviewers complain about both:
-
-1. **Code citations in `design.md` / `spec.md` / `research.md` go stale.** Plain `path:line` text (e.g. `executor.py:1037`) is fine while you're drafting locally, but the file evolves and the line number drifts within days. **Anything you expect a reviewer to click should be a commit-pinned permalink:**
-
-   ```
-   https://github.com/marin-community/marin/blob/<sha>/lib/marin/src/marin/execution/executor.py#L1037
-   ```
-
-   Use the design-branch HEAD SHA (`git rev-parse HEAD`) — the citation freezes to a known state, and a reviewer six weeks later still lands on the right line. Run a permalink pass at the end of Phase 4 (Draft) and Phase 5 (Spec) to convert key citations from `path:line` text into permalinks. Plain text refs are OK for incidental mentions; permalinks for anything load-bearing.
-
-2. **Relative paths in the PR description don't render.** A PR body with `[design.md](.agents/projects/<slug>/design.md)` *looks* like a working link in the editor, but GitHub does not resolve relative paths from PR descriptions — the link 404s. **In the PR body, use absolute branch-rooted URLs:**
-
-   ```
-   https://github.com/marin-community/marin/blob/design/<slug>/.agents/projects/<slug>/design.md
-   ```
-
-   Branch (not SHA) is right here: reviewers want the latest version when they click through during review. Inside the docs, the inverse — pin to a SHA so citations are reproducible.
-
-Both rules apply equally to spec.md / research.md / Discord pings and to inline references inside design.md. If a reviewer says "these links don't work but the bottom ones do," it's almost always rule 2.
+- **Code citations inside the docs.** Use SHA-pinned permalinks for anything load-bearing: `https://github.com/marin-community/marin/blob/<sha>/path#Lnnn` (SHA from `git rev-parse main`). Plain `path:line` text drifts within days. Run a permalink pass at the end of Phase 4/5.
+- **Sibling-file links from the PR body.** Use absolute branch-rooted URLs — `https://github.com/marin-community/marin/blob/design/<slug>/.agents/projects/<slug>/design.md`. Relative paths 404 from PR descriptions. Use the branch name (not a SHA) so the link follows future edits to the design.
 
 ---
 
