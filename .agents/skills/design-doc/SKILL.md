@@ -79,7 +79,7 @@ Read `.agents/projects/design-template.md`, fill in each section. Guidelines:
 - Open Questions section is non-empty — if the design has no unknowns, ask the user what they want feedback on.
 - Don't add a backwards-compat section by default. Mention compat only if the change genuinely needs migration (persisted data, public API consumed externally, etc.).
 
-Show the draft inline, accept edits in conversation. Iterate until the user says the design is settled. **Do not write `spec.md` yet** — it derives from the stable design, and writing it before the design has converged means rewriting it.
+Write the draft to `.agents/projects/<slug>/design.md` from the start (don't keep it as conversation-only snippets) and iterate on the file. Tools like Codex's in-app diff and any reviewer who pulls the branch work on the file; conversation-only drafts are invisible to them. Summarize the diff inline as you go so the user can react quickly without leaving the chat — but the file is the source of truth. Iterate until the user says the design is settled. **Do not write `spec.md` yet** — it derives from the stable design, and writing it before the design has converged means rewriting it.
 
 ## 5. Spec
 
@@ -100,7 +100,7 @@ What does **not** go in `spec.md`: algorithm pseudocode, sequenced implementatio
 
 For genuinely tiny changes — a one-function refactor, a single config flag — `spec.md` may be very short (a single function signature with a docstring is a valid spec). It still exists; the act of writing it forces you to commit to the surface.
 
-Show the spec inline, accept edits, iterate until the user says it's settled.
+Write the spec to `.agents/projects/<slug>/spec.md` from the start, the same way as `design.md`. Summarize the contract decisions inline (function signatures, key tradeoffs) so the user can push back without opening the file — but the file is the source of truth. Iterate on the file until the user says it's settled.
 
 ## 6. Stress-test (senior review)
 
