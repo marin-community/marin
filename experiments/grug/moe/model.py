@@ -71,6 +71,8 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.0
+    # "none", "output_proj", "all_adamh" — normalize weight on forward pass
+    grad_aware_norm: str = "none"
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -108,24 +110,45 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
+def _normed_weight(w: jax.Array, target_norm: float) -> jax.Array:
+    """Normalize weight to target Frobenius norm on the forward pass."""
+    current_norm = jnp.sqrt(jnp.sum(jnp.square(w.astype(jnp.float32))))
+    return (w * (target_norm / jnp.maximum(current_norm, 1e-8))).astype(w.dtype)
+
+
+def _init_target_norm(shape: tuple[int, ...], std: float) -> float:
+    """Expected Frobenius norm of a truncated normal init with given std."""
+    import math
+
+    return std * math.sqrt(math.prod(shape))
+
+
 class CausalSelfAttention(eqx.Module):
     w_q: Float[Array, "D NH"]
     w_k: Float[Array, "D MH"]
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
+    _target_norms: dict[str, float] = eqx.field(static=True)
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        std = cfg.initializer_std
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
+            w_q=reshard(_init_weight(k_q, (d, n * h), std), P("data", "model")),
+            w_k=reshard(_init_weight(k_k, (d, m * h), std), P("data", "model")),
+            w_v=reshard(_init_weight(k_v, (d, m * h), std), P("data", "model")),
+            w_o=reshard(_init_weight(k_o, (n * h, d), std), P("model", "data")),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            _target_norms={
+                "q": _init_target_norm((d, n * h), std),
+                "k": _init_target_norm((d, m * h), std),
+                "v": _init_target_norm((d, m * h), std),
+                "o": _init_target_norm((n * h, d), std),
+            },
             cfg=cfg,
         )
 
@@ -135,9 +158,13 @@ class CausalSelfAttention(eqx.Module):
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        norm_all = self.cfg.grad_aware_norm == "all_adamh"
+        w_q = _normed_weight(self.w_q, self._target_norms["q"]) if norm_all else self.w_q
+        w_k = _normed_weight(self.w_k, self._target_norms["k"]) if norm_all else self.w_k
+        w_v = _normed_weight(self.w_v, self._target_norms["v"]) if norm_all else self.w_v
+        q = rearrange(jnp.einsum("bsh,hd->bsd", x, w_q), "... (n d) -> ... n d", d=head_dim)
+        k = rearrange(jnp.einsum("bsh,hd->bsd", x, w_k), "... (m d) -> ... m d", d=head_dim)
+        v = rearrange(jnp.einsum("bsh,hd->bsd", x, w_v), "... (m d) -> ... m d", d=head_dim)
         q = rms_norm(q)
         k = rms_norm(k)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
@@ -154,7 +181,8 @@ class CausalSelfAttention(eqx.Module):
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        w_o = _normed_weight(self.w_o, self._target_norms["o"]) if norm_all else self.w_o
+        return jnp.einsum("bsh,hd->bsd", attn_out, w_o, out_sharding=batch_spec)
 
 
 class RMSNorm(eqx.Module):
@@ -454,6 +482,7 @@ class Transformer(eqx.Module):
     embed_norm: RMSNorm
     embed_gated_norm: GatedNorm
     output_proj: jax.Array
+    output_proj_target_norm: float = eqx.field(static=True)
     blocks: tuple[Block, ...]
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
@@ -472,6 +501,7 @@ class Transformer(eqx.Module):
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
             output_proj=output_proj,
+            output_proj_target_norm=_init_target_norm((cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std),
             blocks=blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
@@ -512,6 +542,11 @@ class Transformer(eqx.Module):
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
 
+    def _get_output_proj(self) -> jax.Array:
+        if self.config.grad_aware_norm in ("output_proj", "all_adamh"):
+            return _normed_weight(self.output_proj, self.output_proj_target_norm)
+        return self.output_proj
+
     @named_call
     def logits(
         self,
@@ -520,7 +555,7 @@ class Transformer(eqx.Module):
     ) -> Float[Array, "B S V"]:
         batch_spec = _batch_spec()
         hidden, _ = self(token_ids, mask=mask)
-        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+        return jnp.einsum("bsh,hd->bsd", hidden, self._get_output_proj(), out_sharding=batch_spec)
 
     def next_token_loss(
         self,
@@ -539,7 +574,7 @@ class Transformer(eqx.Module):
 
         cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
-            self.output_proj,
+            self._get_output_proj(),
             labels,
             weight=loss_weight,
             reduction=reduction,
