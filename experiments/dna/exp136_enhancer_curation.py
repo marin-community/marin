@@ -33,6 +33,7 @@ Environment variables:
 https://github.com/Open-Athena/bolinas-dna/issues/136
 """
 
+import dataclasses
 import logging
 import os
 from datetime import timedelta
@@ -41,8 +42,8 @@ from functools import lru_cache
 import jmp
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import DNALmDatasetFormat
+from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamConfig
@@ -53,6 +54,7 @@ from levanter.utils.mesh import MeshConfig
 from experiments.defaults import default_tokenize
 from experiments.dna.defaults import dna_effective_seq_len
 from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2_255, convert_to_levanter_task_config
+from experiments.qwen3 import qwen3_0_6b_hd128
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.execution.remote import remote
@@ -90,15 +92,9 @@ VAL_SPECS: tuple[tuple[str, DNALmDatasetFormat], ...] = (
     ("nonfunctional", DNALmDatasetFormat(uppercase_weight=0.0, lowercase_weight=1.0)),
 )
 
-# Architecture: Qwen3 ~0.6B at vocab_size=7. Matches
-# experiments.qwen3.qwen3_0_6b_hd128 (replicated inline for parity with the
-# constant-driven exp135 / exp_bolinas_4b_sweep style).
-MODEL_HIDDEN_DIM = 1024
-MODEL_INTERMEDIATE_DIM = 3072
-MODEL_NUM_LAYERS = 28
-MODEL_NUM_HEADS = 16
-MODEL_NUM_KV_HEADS = 8
-MODEL_HEAD_DIM = 128
+# Architecture: ~0.6B Qwen3 (h=1024, L=28, head_dim=128) — imported from
+# the canonical preset so this file picks up any upstream changes
+# automatically; max_seq_len is overridden to the DNA context size below.
 
 # Resources & batching. Region is pinned so the inferred step hash stays
 # stable across parent preemption / migration — without this, the marin
@@ -186,13 +182,13 @@ def _tokenize(name: str, dataset: str, dataset_format: DNALmDatasetFormat) -> Ex
     )
 
 
-def _build_data_mixture(strategy: str, dataset: str):
+def _build_data_mixture(strategy: str, dataset: str) -> LmDataConfig:
     """One training component + the v30 validation set tokenized per VAL_SPEC.
 
     Validation entries are absent from ``weights`` and so receive weight=0 via
     ``missing_weights_are_validation=True`` — sampled only at eval time.
     """
-    components: dict = {
+    components: dict[str, ExecutorStep] = {
         strategy: _tokenize(f"bolinas-v5-{strategy}-char-bos", dataset, TRAIN_FORMAT),
     }
     for suffix, fmt in VAL_SPECS:
@@ -205,17 +201,7 @@ def _build_data_mixture(strategy: str, dataset: str):
 
 
 def _build_model_config() -> Qwen3Config:
-    return Qwen3Config(
-        hidden_dim=MODEL_HIDDEN_DIM,
-        intermediate_dim=MODEL_INTERMEDIATE_DIM,
-        num_layers=MODEL_NUM_LAYERS,
-        num_heads=MODEL_NUM_HEADS,
-        num_kv_heads=MODEL_NUM_KV_HEADS,
-        head_dim=MODEL_HEAD_DIM,
-        max_seq_len=_model_seq_len(),
-        rope=Llama3RotaryEmbeddingsConfig(),
-        tie_word_embeddings=True,
-    )
+    return dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=_model_seq_len())
 
 
 def _build_optimizer() -> AdamConfig:
