@@ -25,6 +25,7 @@ from marin.datakit.download.davinci_dev import (
 )
 from marin.datakit.download.finepdfs import finepdfs_normalize_steps
 from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_normalize_steps
+from marin.datakit.download.hplt import hplt_v3_normalize_steps
 from marin.datakit.download.institutional_books import institutional_books_normalize_steps
 from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
 from marin.datakit.download.nemotron_terminal import nemotron_terminal_normalize_steps
@@ -120,10 +121,6 @@ def _rows_nemotron(
 # into /multilingual and /web needs different text_field, hf_urls_glob, or
 # data_subdir so the two accounting slices don't normalize to identical rows.
 #
-# TODO: confirm there's a download module for HPLT/HPLT3.0. The previous
-# download_hplt_v3_step was removed from the tree and the staged dir has no
-# provenance.json to recover the revision.
-#
 # TODO: confirm there's a download module for AI-MO/NuminaMath-1.5. Today
 # the dataset is only referenced through gpt-oss-rollouts' NuminaMath-CoT
 # subset; there's no standalone download helper.
@@ -145,6 +142,9 @@ def all_sources() -> dict[str, DatakitSource]:
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
         ("gpt-oss-rollouts", gpt_oss_rollouts_normalize_steps, 3.20),
+        # HPLT v3 English filtered to non-CC sources (WIDE, survey crawls);
+        # rough token count from the upstream HPLT3.0 publication.
+        ("hplt_v3", hplt_v3_normalize_steps, 450.0),
         ("institutional_books", institutional_books_normalize_steps, 203.63),
         ("molmo2-cap", molmo2_cap_normalize_steps, 0.36),
         ("nemotron-terminal", nemotron_terminal_normalize_steps, 6.08),

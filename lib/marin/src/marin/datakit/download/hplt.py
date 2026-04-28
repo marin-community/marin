@@ -13,11 +13,11 @@ from contextlib import closing
 import requests
 import urllib3
 import zstandard
-from zephyr import counters
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
-from zephyr import Dataset, ZephyrContext
+from zephyr import Dataset, ZephyrContext, counters
 
 logger = logging.getLogger(__name__)
 
@@ -249,3 +249,20 @@ def download_hplt_v3_step() -> StepSpec:
         fn=lambda output_path: download_hplt_v3(output_path=output_path),
         override_output_path="raw/hplt_v3",
     )
+
+
+def normalize_hplt_v3_step(download: StepSpec) -> StepSpec:
+    """Normalize HPLT v3: generate content-hash IDs, preserve HPLT id as source_id."""
+    return normalize_step(
+        name="normalized/hplt_v3",
+        download=download,
+        text_field="text",
+        id_field="id",
+        file_extensions=(".parquet",),
+    )
+
+
+def hplt_v3_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the ``(download, normalize)`` chain for HPLT v3."""
+    download = download_hplt_v3_step()
+    return (download, normalize_hplt_v3_step(download))
