@@ -7,7 +7,7 @@ This file is the canonical 1-pager template for Marin design docs. It contains:
 
 Keep this file up to date as conventions evolve. The `design-doc` skill points here; existing docs in `.agents/projects/` predate the skill and are inconsistent — don't use them as style references.
 
-**Length target**: ~500 words is the goal, not a hard limit. Spend words where they buy clarity. If you're well over, you're either solving multiple problems (split it) or writing implementation details (defer them). The 1-pager is a snapshot, not a living doc — close the issue when the PR lands, don't sync it as the design evolves.
+**Length target**: ~1000 words is the goal, not a hard limit. Spend words where they buy clarity. If you're well over, you're either solving multiple problems (split it) or writing implementation details (defer them). The 1-pager is a snapshot, not a living doc — close the issue when the PR lands, don't sync it as the design evolves.
 
 ---
 

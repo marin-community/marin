@@ -44,7 +44,11 @@ Spawn an `Explore` subagent (do not search yourself — the digest stays out of 
 - Related GitHub issues/PRs via `gh` if the user named any, plus a quick `gh issue list --search` on the topic.
 - Existing utilities or abstractions the proposal might reuse (per `AGENTS.md` "Code Reuse").
 
-Return to the user with a bulleted digest: *"Here's what I found, here's what surprised me, here's what's still unclear."* Ask whether the framing should shift before drafting.
+**For proposals that reinvent a category of system** (a logger, a stats store, a queue, a scheduler, a KV, a service-discovery layer, a workflow engine, etc.), also do a **prior-art pass via web search** — in parallel with the in-repo Explore, since the two are independent. Spawn a `general-purpose` agent (it has WebSearch/WebFetch) with a focused brief: *what does the established shape of this kind of system look like, what are 2–4 representative implementations (OSS or well-known), and what design choices do they converge or disagree on?* Cap to ~5 results and ask for a short bulleted digest (under 200 words). The point is to surface obvious patterns we'd otherwise reinvent badly, and to give the design doc one or two reference points reviewers can compare against — not to write a literature review. Skip this pass for in-repo refactors, internal API tweaks, or anything where the category is novel to the user, not novel in the world.
+
+Return to the user with a bulleted digest combining both passes: *"Here's what I found in-repo, here's what the prior art looks like, here's what surprised me, here's what's still unclear."* Ask whether the framing should shift before drafting.
+
+**Persist the research as a sibling artifact.** Save the full digest (in-repo findings with file:line refs, prior-art digest, anything load-bearing that won't fit in the 1-pager) to `.agents/projects/<slug>-research.md`. The design doc itself gets a short `## Background` section — 3–5 sentences summarizing what we found and how it shapes the proposal — with a link to the research doc for reviewers who want depth. Keep the design doc on-screen; let the research doc grow.
 
 ## 3. Interrogate
 
@@ -61,7 +65,7 @@ Bad questions are ones research could have answered. Don't ask things you could 
 
 Read `.agents/projects/design-template.md`, fill in each section. Guidelines:
 
-- **~500 words is the target, not a hard limit.** Concision is a virtue; spend words where they buy clarity. If you're at 700, look for cuts. If 600 is genuinely tighter than 500, ship 600.
+- **~1000 words is the target, not a hard limit.** Concision is a virtue; spend words where they buy clarity. If you're at 1200, look for cuts. If 800 is genuinely tighter than 600, ship 800. The goal is "good design" not "short doc" — but a doc that's mostly load-bearing detail is better than one that buries the decision in throat-clearing.
 - Reference real `file.py:line` paths from research, not placeholders.
 - One small code snippet (10-30 lines) only if prose is genuinely worse. Default to no snippet.
 - Open Questions section is non-empty — if the design has no unknowns, ask the user what they want feedback on.
