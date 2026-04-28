@@ -19,7 +19,7 @@ edition = "2023";
 // controller.proto and worker.proto respectively.
 package iris.job;
 
-import "logging.proto";
+import "iris_logging.proto";
 import "time.proto";
 
 // ============================================================================

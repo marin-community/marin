@@ -1,0 +1,46 @@
+// Copyright The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Iris-side wire shape for log entries embedded in controller/job RPCs.
+// Wire-format compatible with finelog.logging.LogEntry — controller code
+// transcodes via SerializeToString when crossing the boundary.
+//
+// File renamed to iris_logging.proto so the descriptor pool key does not
+// collide with finelog/proto/logging.proto when both packages load.
+
+edition = "2023";
+
+package iris.logging;
+
+import "time.proto";
+
+option features.field_presence = EXPLICIT;
+
+enum LogLevel {
+  LOG_LEVEL_UNKNOWN = 0;
+  LOG_LEVEL_DEBUG = 1;
+  LOG_LEVEL_INFO = 2;
+  LOG_LEVEL_WARNING = 3;
+  LOG_LEVEL_ERROR = 4;
+  LOG_LEVEL_CRITICAL = 5;
+}
+
+message LogEntry {
+  iris.time.Timestamp timestamp = 1;
+  string source = 2;
+  string data = 3;
+  int32 attempt_id = 4;
+  LogLevel level = 5;
+  string key = 6;
+}

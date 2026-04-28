@@ -750,7 +750,7 @@ def _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime):
 def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_store, mock_runtime, tmp_path):
     """Worker known locally (e.g. via slice_id) attaches under worker_log_key
     *before* register so pre-register failures ship remote logs."""
-    from iris.cluster.log_store import worker_log_key
+    from iris.cluster.log_store_helpers import worker_log_key
 
     config = WorkerConfig(
         port=0,
@@ -785,7 +785,7 @@ def test_attach_log_handler_noop_without_worker_id(mock_bundle_store, mock_runti
 
 def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runtime, tmp_path):
     """Re-attach under a new worker_id renames the handler's key in place."""
-    from iris.cluster.log_store import worker_log_key
+    from iris.cluster.log_store_helpers import worker_log_key
 
     config = WorkerConfig(
         port=0,

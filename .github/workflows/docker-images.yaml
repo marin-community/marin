@@ -72,6 +72,44 @@ jobs:
             --tag ghcr.io/marin-community/${{ matrix.image }}:${{ steps.set-tags.outputs.HASH_TAG }} \
             ${{ matrix.context }}
 
+  # Finelog Image - Standalone log server (lib/finelog)
+  finelog-image:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Set tags
+        id: set-tags
+        run: |
+          echo "DATE_TAG=`date -u +"%Y%m%d"`" >> "$GITHUB_OUTPUT"
+          echo "HASH_TAG=`git rev-parse --short HEAD`" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push finelog
+        run: |
+          docker buildx build --file lib/finelog/deploy/Dockerfile \
+            --cache-from type=registry,ref=ghcr.io/marin-community/finelog-cache:latest \
+            --cache-to type=registry,ref=ghcr.io/marin-community/finelog-cache:latest,mode=max \
+            --output type=image,compression=zstd,compression-level=3,push=true \
+            --provenance=false \
+            --tag ghcr.io/marin-community/finelog:latest \
+            --tag ghcr.io/marin-community/finelog:${{ steps.set-tags.outputs.DATE_TAG }} \
+            --tag ghcr.io/marin-community/finelog:${{ steps.set-tags.outputs.HASH_TAG }} \
+            .
+
   # Marin TPU CI Images - For self-hosted TPU CI runners
   marin-tpu-ci-images:
     # Run on: manual trigger OR daily schedule (03:00 UTC) OR push to docker files
