@@ -1707,8 +1707,7 @@ class ControllerTransitions:
 
         # ── Pass 2b: transitions via existing state machine ───────────
         for req_idx, treq in transition_entries:
-            tx_result = self._apply_task_transitions(cur, treq, now_ms)
-            results[req_idx] = TxResult(tasks_to_kill=tx_result.tasks_to_kill)
+            results[req_idx] = self._apply_task_transitions(cur, treq, now_ms)
 
         return results
 

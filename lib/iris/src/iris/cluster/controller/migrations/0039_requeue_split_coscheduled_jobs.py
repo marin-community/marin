@@ -73,6 +73,34 @@ def migrate(conn: sqlite3.Connection) -> None:
     job_placeholders = ",".join("?" * len(split_job_ids))
     now_ms = int(conn.execute("SELECT CAST(strftime('%s','now') AS INTEGER) * 1000").fetchone()[0])
 
+    # Diagnostics: log every split job + the tasks we're about to requeue so
+    # ops can correlate post-restart re-coscheduling against the heal action.
+    affected = conn.execute(
+        f"""
+        SELECT t.job_id, t.task_id, t.current_attempt_id, t.current_worker_id,
+               COALESCE(w.md_tpu_name, '') AS tpu_name
+        FROM tasks t
+        LEFT JOIN workers w ON w.worker_id = t.current_worker_id
+        WHERE t.job_id IN ({job_placeholders})
+          AND t.state IN ({active_placeholders})
+        ORDER BY t.job_id, t.task_id
+        """,
+        (*split_job_ids, *_ACTIVE),
+    ).fetchall()
+    by_job: dict[str, list[tuple]] = {}
+    for job_id, task_id, attempt_id, worker_id, tpu_name in affected:
+        by_job.setdefault(job_id, []).append((task_id, attempt_id, worker_id, tpu_name))
+    print(
+        f"[0039_requeue_split_coscheduled_jobs] healing {len(split_job_ids)} split job(s), "
+        f"{len(affected)} task(s) total"
+    )
+    for job_id in split_job_ids:
+        rows = by_job.get(job_id, [])
+        slices = sorted({r[3] for r in rows if r[3]})
+        print(f"  job={job_id} tasks={len(rows)} slices={slices}")
+        for task_id, attempt_id, worker_id, tpu_name in rows:
+            print(f"    task={task_id} attempt={attempt_id} worker={worker_id} tpu_name={tpu_name}")
+
     # Per-task resource decommit. We must subtract from each worker exactly
     # what was committed at dispatch time, sourced from job_config (the same
     # spec workers.commit_resources used originally). Using SUM over an
@@ -117,14 +145,19 @@ def migrate(conn: sqlite3.Connection) -> None:
             ),
             committed_gpu = MAX(
               0,
+              -- Mirror types.get_gpu_count: ``device.gpu.count or 1`` — a job
+              -- spec with $.gpu present but count=0 still committed 1 GPU at
+              -- dispatch, so we must decommit the same amount.
               committed_gpu - COALESCE((
-                SELECT SUM(CAST(json_extract(jc.res_device_json, '$.gpu.count') AS INTEGER))
+                SELECT SUM(
+                  COALESCE(NULLIF(CAST(json_extract(jc.res_device_json, '$.gpu.count') AS INTEGER), 0), 1)
+                )
                 FROM tasks t
                 JOIN job_config jc ON jc.job_id = t.job_id
                 WHERE t.current_worker_id = workers.worker_id
                   AND t.job_id IN ({job_placeholders})
                   AND t.state IN ({active_placeholders})
-                  AND json_extract(jc.res_device_json, '$.gpu.count') IS NOT NULL
+                  AND json_extract(jc.res_device_json, '$.gpu') IS NOT NULL
               ), 0)
             )
         WHERE worker_id IN (
