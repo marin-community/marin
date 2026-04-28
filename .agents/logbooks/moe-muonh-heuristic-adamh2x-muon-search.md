@@ -100,4 +100,4 @@
 - Result: validation passed; commit `6c96430bc` was pushed; Iris parent jobs submitted.
   - MuonH 2x Vizier parent: `/pc0618/iris-run-job-20260428-214334`
   - Muon 2x Vizier parent: `/pc0618/iris-run-job-20260428-214351`
-- Interpretation: both parents are running, with v5p-8 reservations initially pending because no matching non-preemptible capacity was available at submission time.
+- Interpretation: both parents are running. The loop-0 suggest steps succeeded for both scales, and all eight loop-0 training trials per optimizer are running on v5p-8.
