@@ -20,6 +20,12 @@ ModelDeployment -> ModelLauncher -> RunningModel -> run_lm_eval(...)
 
 For the first PR, `ModelLauncher` can be direct vLLM. Later, RFC 3 should provide an Iris launcher that returns the same `RunningModel`. `run_lm_eval` should not change.
 
+The first PR is done when:
+- direct vLLM can produce a `RunningModel`
+- `run_lm_eval` can run one small task against it
+- conformance tests cover the HTTP subset using a deterministic stub
+- no legacy eval framework code is deleted
+
 ## Why Now
 
 The old RFC tried to migrate lm-eval, Harbor, and Evalchemy together. That made the first PR too broad.
@@ -36,8 +42,8 @@ In the first PR:
 - Add the served-model types.
 - Add a direct vLLM launcher.
 - Add a small lm-eval runner that consumes `RunningModel`.
-- Add a lean HTTP stub and reusable conformance tests for the Marin eval OpenAI subset.
-- Add one gated real smoke that launches vLLM and runs a tiny lm-eval task.
+- Add reusable conformance tests for the Marin eval OpenAI subset, backed by a deterministic HTTP stub.
+- Add one gated real smoke.
 
 Not in the first PR:
 - Harbor.
@@ -137,41 +143,11 @@ Tokenizer HTTP endpoints are not part of the MVP. The runner may pass an explici
 
 Exact edge semantics should live in conformance tests rather than in prose.
 
-## RFC 3 Compatibility
-
-RFC 3 is the intended production path. This RFC should not assume direct vLLM is the final operational shape.
-
-The first PR can implement:
-
-```python
-VllmLauncher.launch(...) -> RunningModel
-```
-
-RFC 3 should later implement:
-
-```python
-IrisInferenceLauncher.launch(...) -> RunningModel
-```
-
-Under RFC 3, the returned `RunningModel` should point at the EvalJob's local proxy. The lm-eval runner should not know about the broker, worker pool, preemption, or replay.
-
 ## Testing
 
-Use three test layers:
+Use reusable conformance tests for the Marin eval OpenAI subset. They should run first against a tiny deterministic stub server, then eventually against vLLM, Levanter, and the RFC 3 Iris proxy.
 
-1. **Stub server tests**
-   - Tiny deterministic HTTP server.
-   - Validates request shape, URL construction, model args, and response parsing.
-   - Does not validate model quality or backend correctness.
-
-2. **Conformance tests**
-   - Reusable tests for the Marin eval OpenAI subset.
-   - Should eventually run against stub, vLLM, Levanter, and the RFC 3 Iris proxy.
-
-3. **Real smoke**
-   - Gated/manual or TPU-CI only.
-   - Launch tiny vLLM.
-   - Run one small lm-eval task through `run_lm_eval`.
+Also keep one gated/manual or TPU-CI smoke that launches tiny vLLM and runs one small lm-eval task through `run_lm_eval`.
 
 ## Levanter Status
 
