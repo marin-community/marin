@@ -1961,6 +1961,26 @@ class ControllerTransitions:
             preemption_count=preemption_count,
         )
 
+        # Coscheduled retry: bounce siblings back to PENDING so the job
+        # re-coschedules atomically. Without this, the lone preempted task's
+        # retry can land on a different slice from its still-RUNNING siblings,
+        # splitting the SPMD mesh across pods.
+        if new_state == job_pb2.TASK_STATE_PENDING and row.has_coscheduling:
+            siblings = _find_coscheduled_siblings(cur, self._store.tasks, row.job_id, task_id, True)
+            sibling_kills, sibling_workers = _requeue_coscheduled_siblings(
+                cur,
+                self._store.attempts,
+                self._store.tasks,
+                self._store.workers,
+                self._store.endpoints,
+                siblings,
+                task_id,
+                row.resources,
+                now_ms,
+            )
+            tasks_to_kill.update(sibling_kills)
+            task_kill_workers.update(sibling_workers)
+
         # Recompute job state and cascade if terminal
         job_id = row.job_id
         new_job_state = self._recompute_job_state(cur, job_id)

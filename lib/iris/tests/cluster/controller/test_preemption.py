@@ -979,6 +979,57 @@ def test_preempt_task_terminal_when_budget_exhausted():
         assert attempt.state == job_pb2.TASK_STATE_PREEMPTED
 
 
+def test_preempt_task_requeues_coscheduled_siblings_on_retry():
+    """When a coscheduled task is preempted but retries (PENDING), siblings are
+    bounced to PENDING so the job re-coschedules atomically. Without this, the
+    retry could land on a different slice from the still-RUNNING siblings,
+    splitting the SPMD mesh."""
+    from iris.cluster.constraints import WellKnownAttribute
+
+    with make_controller_state() as state:
+        for i in range(2):
+            meta = make_worker_metadata()
+            meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+            meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+            register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+        req = controller_pb2.Controller.LaunchJobRequest(
+            name="cosched-preempt-retry",
+            entrypoint=make_test_entrypoint(),
+            resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+            replicas=2,
+            environment=job_pb2.EnvironmentConfig(),
+            max_retries_preemption=3,
+        )
+        req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+        tasks = submit_job(state, "cosched-preempt-retry", req)
+        assert len(tasks) == 2
+
+        for i, task in enumerate(tasks):
+            dispatch_task(state, task, WorkerId(f"w{i}"))
+
+        with state._store.transaction() as cur:
+            result = state.preempt_task(cur, tasks[0].task_id, reason="evicted")
+
+        # Preempted task retries to PENDING with attempt PREEMPTED.
+        preempted = query_task(state, tasks[0].task_id)
+        assert preempted.state == job_pb2.TASK_STATE_PENDING
+        assert preempted.preemption_count == 1
+
+        # Sibling bounced to PENDING so the job re-coschedules atomically;
+        # its preemption budget is preserved (only the original victim pays).
+        sibling = query_task(state, tasks[1].task_id)
+        assert sibling.state == job_pb2.TASK_STATE_PENDING
+        assert sibling.preemption_count == 0
+
+        # Both workers must receive a StopTask RPC so neither leaks a process
+        # onto the TPU when the scheduler reuses the slot.
+        assert tasks[0].task_id in result.tasks_to_kill
+        assert tasks[1].task_id in result.tasks_to_kill
+        assert result.task_kill_workers[tasks[0].task_id] == WorkerId("w0")
+        assert result.task_kill_workers[tasks[1].task_id] == WorkerId("w1")
+
+
 def test_preempt_task_cascades_coscheduled_siblings():
     """When all coscheduled tasks are preempted to terminal, the job finalizes and kills survivors.
 
