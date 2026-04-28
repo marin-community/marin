@@ -488,17 +488,10 @@ class ZephyrCoordinator:
         dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
 
         totals = self.get_counters()
-        items = totals.get(ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=self._stage_name), 0)
-        bytes_processed = totals.get(ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=self._stage_name), 0)
-        elapsed = time.monotonic() - (
-            self._stage_monotonic_start if self._stage_monotonic_start is not None else float("inf")
-        )
-        item_rate = items / elapsed
-        byte_rate = bytes_processed / elapsed
-
-        logger.info(
-            "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead; "
-            "items=%d (%.1f/s), bytes_processed=%.1fMiB (%.1fMiB/s)",
+        item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=self._stage_name)
+        byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=self._stage_name)
+        base_msg = "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead"
+        base_args = (
             self._execution_id,
             self._stage_name,
             self._completed_shards,
@@ -508,11 +501,29 @@ class ZephyrCoordinator:
             alive,
             len(self._worker_handles),
             dead,
-            items,
-            item_rate,
-            bytes_processed / (1024 * 1024),
-            byte_rate / (1024 * 1024),
         )
+
+        # Map-only stages don't yield through StatisticsGenerator and never
+        # populate these counters. Drop the items/bytes_processed segment for
+        # those stages — see ``subprocess_worker._periodic_status_logger``.
+        if item_key in totals or byte_key in totals:
+            items = totals.get(item_key, 0)
+            bytes_processed = totals.get(byte_key, 0)
+            elapsed = time.monotonic() - (
+                self._stage_monotonic_start if self._stage_monotonic_start is not None else float("inf")
+            )
+            item_rate = items / elapsed
+            byte_rate = bytes_processed / elapsed
+            logger.info(
+                base_msg + "; items=%d (%.1f/s), bytes_processed=%.1fMiB (%.1fMiB/s)",
+                *base_args,
+                items,
+                item_rate,
+                bytes_processed / (1024 * 1024),
+                byte_rate / (1024 * 1024),
+            )
+        else:
+            logger.info(base_msg, *base_args)
         if retried:
             attempts_histogram = dict(sorted(Counter(retried.values()).items()))
             logger.warning("[%s] Shards retried (attempts: shard count): %s", self._execution_id, attempts_histogram)
