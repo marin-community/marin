@@ -97,4 +97,7 @@
   - Batch sizes and steps: `d512` batch `64`, steps `3194`; `d768` batch `128`, steps `5172`, preserving the gate-1 token counts.
   - Search space: matrix LR multiplier in `[0.5, 3.0]`, Adam fallback LR multiplier in `[0.5, 3.0]`, momentum in `[0.92, 0.99]`, beta1 in `[0.70, 0.95]`, beta2 in `[0.95, 0.999]`.
   - Muon uses AOL coefficients; MuonH uses the existing quintic MuonH coefficient path to match the prior MuonH 2x-batch ablation.
-- Result: pending validation, commit, push, and Iris submission.
+- Result: validation passed; commit `6c96430bc` was pushed; Iris parent jobs submitted.
+  - MuonH 2x Vizier parent: `/pc0618/iris-run-job-20260428-214334`
+  - Muon 2x Vizier parent: `/pc0618/iris-run-job-20260428-214351`
+- Interpretation: both parents are running, with v5p-8 reservations initially pending because no matching non-preemptible capacity was available at submission time.
