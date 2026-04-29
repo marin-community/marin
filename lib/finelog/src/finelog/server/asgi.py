@@ -26,10 +26,12 @@ from finelog.server.service import LogServiceImpl
 # duckdb_store.py.
 _MAX_CONCURRENT_FETCH_LOGS = 4
 
+# CRON(2026-05-12) -- remove this legacy workaround as all workers & clients
+# will be updated by this point.
 # Pre-#5212 (b212f0015) the LogService proto package was iris.logging, so old
 # worker images push to /iris.logging.LogService/*. Wire format is identical
 # (same field numbers across PushLogsRequest/LogEntry/etc.), so we rewrite
-# the path before routing. Drop this once all worker images are post-#5212.
+# the path before routing.
 _LEGACY_PATH_PREFIX = "/iris.logging.LogService/"
 _CURRENT_PATH_PREFIX = "/finelog.logging.LogService/"
 
