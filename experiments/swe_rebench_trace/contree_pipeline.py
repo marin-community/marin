@@ -42,6 +42,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pyarrow as pa
+from contree_sdk._internals.utils.wrapper import coro_sync
 from fray.v2 import ResourceConfig
 from rigging.filesystem import marin_prefix
 from datasets import load_dataset
@@ -352,7 +353,10 @@ def _recover_broad_session(
     try:
         m = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", str(error))
         if m:
-            client._api.cancel_operation(uuid.UUID(m.group(0)))
+            # _api is the async client; ContreeSync runs coroutines on a
+            # daemon-thread loop via coro_sync. Calling _api.* directly returns
+            # an unawaited coroutine, so we reuse the SDK's wrapper here.
+            coro_sync(client._api.cancel_operation(uuid.UUID(m.group(0))))
     except Exception as cancel_err:
         logger.info("cancel_operation best-effort failed for %s: %s", instance_id, cancel_err)
     time.sleep(5)
