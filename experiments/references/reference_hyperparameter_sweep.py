@@ -23,8 +23,8 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 from marin.execution.remote import remote
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
-from experiments.defaults import default_validation_sets
-from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, run_grug_base_trial
+from experiments.defaults import default_validation_sets, run_train
+from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, prepare_grug_trial
 from experiments.grug.base.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.pretraining_datasets.nemotron import nemotron_mix
 
@@ -427,7 +427,21 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
         grug_trainer=grug_trainer,
     )
 
-    run_grug_base_trial(launch_config)
+    # The CPU coordinator (this function, dispatched as a `remote(...)` step)
+    # builds a TrainingPlan locally and submits it as a child TPU job via
+    # `run_train`. Replaces the legacy `run_grug_base_trial` two-hop path.
+    #
+    # `launch_config.output_path` is already a concrete path here: the outer
+    # executor resolved `this_output_path()` to the `_build_train_step` step's
+    # path before invoking this function. Pin the plan's output to that same
+    # path so the trial writes checkpoints to the location the executor knows
+    # about (and the update step reads metrics from).
+    plan = prepare_grug_trial(
+        name=launch_config.run_id,
+        launch=launch_config,
+        override_output_path=launch_config.output_path,
+    )
+    run_train(plan)
 
 
 def run_vizier_update(config: VizierUpdateConfig) -> None:

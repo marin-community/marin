@@ -33,7 +33,6 @@ from experiments.grug.base.train import (
     GrugRunConfig,
     GrugTrainerConfig,
     _run_grug_local,
-    run_grug,
 )
 from experiments.pretraining_datasets import nemotron_mix_block_shuffle
 
@@ -99,9 +98,9 @@ def _build_grug_run_config(
 ) -> GrugRunConfig:
     """Map launch-knobs into the trainer's full ``GrugRunConfig``.
 
-    Mirrors the body that used to live inside ``run_grug_base_trial`` before it
-    was split into a build phase (here) and a worker phase
-    (``_run_grug_local``).
+    Split into a build phase (this function, called locally by
+    ``prepare_grug_trial``) and a worker phase (``_run_grug_local``, invoked
+    on the TPU worker by ``run_train``).
     """
     trainer = TrainerConfig(
         id=launch.run_id,
@@ -133,26 +132,6 @@ def _build_grug_run_config(
         trainer=grug_trainer,
         eval=launch.eval,
     )
-
-
-def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
-    """Legacy entry point used by ``reference_hyperparameter_sweep.py`` and the
-    other unmigrated grug callers. Materializes upstream data ExecutorSteps
-    embedded in ``config.data``, builds a ``GrugRunConfig`` from the launch
-    knobs, and dispatches it through ``run_grug`` (which submits the actual
-    training as a child Iris job — i.e. an extra hop relative to the new
-    ``prepare_grug_trial`` / ``run_train`` flow).
-
-    New code should prefer ``prepare_grug_trial(name, launch) -> TrainingPlan``
-    plus ``run_train(plan)``: that flow has no nested submit (entrypoint → TPU
-    is one hop) and lets the worker do upstream materialization in its own
-    region.
-    """
-    from marin.execution.dag import materialize  # local import to avoid an import cycle at module load
-
-    config = materialize(config)
-    run_config = _build_grug_run_config(config, output_path=config.output_path)
-    run_grug(run_config)
 
 
 def prepare_grug_trial(
