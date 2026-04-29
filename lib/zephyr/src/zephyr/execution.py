@@ -1235,11 +1235,11 @@ class ZephyrWorker:
             mib = bytes_processed / (1024 * 1024)
             mib_rate = byte_rate / (1024 * 1024)
 
-            summary_lines = [f"**{stage_name}**", f"shard {shard_idx}/{total_shards}"]
+            summary_lines = [f"**{stage_name}**", f"shard {shard_idx + 1}/{total_shards}"]
             summary_md = "  \n".join(summary_lines)
             detail_lines = [
                 f"**Stage**: {stage_name}",
-                f"**Shard**: {shard_idx}/{total_shards}",
+                f"**Shard**: {shard_idx + 1}/{total_shards}",
             ]
             if items > 0:
                 detail_lines += [

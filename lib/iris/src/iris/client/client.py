@@ -801,7 +801,7 @@ class IrisClient:
         Args:
             task_id: Full task ID of the currently-running task.
             detail_md: Full markdown for the task detail page.
-            summary_md: Short single-line summary for the task list table.
+            summary_md: Short summary (up to ~3 lines) for the task list table.
         """
         self._cluster_client.report_task_status_text(task_id, detail_md, summary_md)
 

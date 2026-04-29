@@ -491,7 +491,7 @@ class RemoteClusterClient:
         Args:
             task_id: Full task ID of the currently-running task.
             detail_md: Full markdown for the task detail page.
-            summary_md: Short single-line summary for the task list table.
+            summary_md: Short summary (up to ~3 lines) for the task list table.
         """
         request = job_pb2.SetTaskStatusTextRequest(
             task_id=task_id.to_wire(),
