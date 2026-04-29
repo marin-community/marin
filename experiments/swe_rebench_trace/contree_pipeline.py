@@ -26,9 +26,6 @@ Submit on Iris::
         -e CONTREE_BASE_URL "$CONTREE_BASE_URL" \\
         -e CONTREE_TOKEN "$CONTREE_TOKEN" \\
         -- python -m experiments.swe_rebench_trace.contree_pipeline
-
-Set ``CONTREE_TRACER=rust`` and ``CONTREE_RUSTTRACER_MODULE`` to try the
-experimental Rust tracer.
 """
 
 from __future__ import annotations
@@ -56,10 +53,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 PYTRACER_DIR = Path(__file__).resolve().parents[2] / "scripts" / "contree_pytracer"
-RUSTTRACER_DIR = Path(__file__).resolve().parents[2] / "scripts" / "contree_rusttracer"
 TRACER_MOUNT = "/pytracer"
-TRACER_MODE_ENV = "CONTREE_TRACER"
-RUSTTRACER_MODULE_ENV = "CONTREE_RUSTTRACER_MODULE"
 TRACE_META_MARKER = "::TRACE_META::"
 RATE_LIMIT_BACKOFFS = (3, 6, 12, 24, 48)
 BROAD_CHUNK_SIZE = 20
@@ -210,30 +204,10 @@ def _oci_ref(image_name: str) -> str:
 
 
 def _tracer_injection() -> tuple[dict[str, str], dict[str, str]]:
-    mode = os.environ.get(TRACER_MODE_ENV, "python").strip().lower()
-    env = {"PYTHONPATH": TRACER_MOUNT}
-    if mode == "python":
-        return env, {f"{TRACER_MOUNT}/sitecustomize.py": str(PYTRACER_DIR / "sitecustomize.py")}
-    if mode != "rust":
-        raise ValueError(f"{TRACER_MODE_ENV} must be 'python' or 'rust', got {mode!r}")
-
-    sitecustomize = RUSTTRACER_DIR / "sitecustomize.py"
-    native_module = os.environ.get(RUSTTRACER_MODULE_ENV)
-    native_path = (
-        Path(native_module)
-        if native_module
-        else next(iter(sorted(RUSTTRACER_DIR.glob("_contree_rusttracer*.so"))), None)
+    return (
+        {"PYTHONPATH": TRACER_MOUNT},
+        {f"{TRACER_MOUNT}/sitecustomize.py": str(PYTRACER_DIR / "sitecustomize.py")},
     )
-    if not sitecustomize.exists() or native_path is None or not native_path.exists():
-        raise RuntimeError(
-            f"{TRACER_MODE_ENV}=rust requires {sitecustomize} and a built "
-            f"_contree_rusttracer*.so in {RUSTTRACER_DIR}, or {RUSTTRACER_MODULE_ENV}"
-        )
-    files = {
-        f"{TRACER_MOUNT}/sitecustomize.py": str(sitecustomize),
-        f"{TRACER_MOUNT}/_contree_rusttracer.so": str(native_path),
-    }
-    return env, files
 
 
 # ---------------------------------------------------------------------------
