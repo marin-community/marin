@@ -92,15 +92,25 @@ def _local_marin_prefix(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_prepare_train_returns_training_plan(small_train_config, fake_tokenized_step):
-    plan = prepare_train(
-        name="my-run",
-        tokenized=fake_tokenized_step,
-        model_config=versioned(llama_30m),
-        train_config=small_train_config,
-        eval_harness_tasks=[],
-        use_default_validation=False,
-    )
+@pytest.fixture
+def make_plan(small_train_config, fake_tokenized_step):
+    """Build a TrainingPlan via prepare_train with the standard small-CPU shape."""
+
+    def _make(name: str = "my-run") -> TrainingPlan:
+        return prepare_train(
+            name=name,
+            tokenized=fake_tokenized_step,
+            model_config=versioned(llama_30m),
+            train_config=small_train_config,
+            eval_harness_tasks=[],
+            use_default_validation=False,
+        )
+
+    return _make
+
+
+def test_prepare_train_returns_training_plan(make_plan, small_train_config):
+    plan = make_plan(name="my-run")
 
     assert isinstance(plan, TrainingPlan)
     assert plan.resources == small_train_config.resources
@@ -110,16 +120,9 @@ def test_prepare_train_returns_training_plan(small_train_config, fake_tokenized_
     assert plan.output_path.startswith("/")  # tmp_path-rooted
 
 
-def test_prepare_train_output_path_is_concrete(small_train_config, fake_tokenized_step):
+def test_prepare_train_output_path_is_concrete(make_plan):
     """``plan.output_path`` is a fully-resolved string (no placeholders)."""
-    plan = prepare_train(
-        name="resolved-path",
-        tokenized=fake_tokenized_step,
-        model_config=versioned(llama_30m),
-        train_config=small_train_config,
-        eval_harness_tasks=[],
-        use_default_validation=False,
-    )
+    plan = make_plan(name="resolved-path")
     assert isinstance(plan.output_path, str)
     assert "OutputName" not in plan.output_path
     # Both checkpointer paths have been baked from `output_path`.
@@ -127,17 +130,10 @@ def test_prepare_train_output_path_is_concrete(small_train_config, fake_tokenize
     assert plan.train_config.hf_save_path.startswith(plan.output_path)
 
 
-def test_prepare_train_preserves_input_name_placeholders(small_train_config, fake_tokenized_step):
+def test_prepare_train_preserves_input_name_placeholders(make_plan, fake_tokenized_step):
     """Upstream ``InputName(step=...)`` references stay unresolved on the
     plan; ``materialize`` resolves them on the worker in the worker's region."""
-    plan = prepare_train(
-        name="upstream-deferred",
-        tokenized=fake_tokenized_step,
-        model_config=versioned(llama_30m),
-        train_config=small_train_config,
-        eval_harness_tasks=[],
-        use_default_validation=False,
-    )
+    plan = make_plan(name="upstream-deferred")
 
     # Walk the embedded data config and assert at least one InputName remains.
     found_input_names: list[InputName] = []
@@ -162,7 +158,7 @@ def test_prepare_train_preserves_input_name_placeholders(small_train_config, fak
     ), "Expected at least one InputName referencing the upstream tokenize step."
 
 
-def test_prepare_train_no_iris_submission(small_train_config, fake_tokenized_step):
+def test_prepare_train_no_iris_submission(make_plan):
     """``prepare_train`` must not submit any Iris jobs by itself."""
 
     class _BangClient:
@@ -170,14 +166,7 @@ def test_prepare_train_no_iris_submission(small_train_config, fake_tokenized_ste
             raise AssertionError("prepare_train should not call IrisClient.submit")
 
     with patch.object(fray_client_module, "current_client", lambda: _BangClient()):
-        prepare_train(
-            name="no-submit",
-            tokenized=fake_tokenized_step,
-            model_config=versioned(llama_30m),
-            train_config=small_train_config,
-            eval_harness_tasks=[],
-            use_default_validation=False,
-        )
+        make_plan(name="no-submit")
 
 
 # ---------------------------------------------------------------------------
@@ -203,73 +192,63 @@ def _trivial_worker(config) -> None:  # pragma: no cover - runs on worker
     return None
 
 
-def test_run_train_submits_one_job(monkeypatch, tmp_path):
-    """``run_train`` submits exactly one JobRequest with the plan's resources."""
-    plan = TrainingPlan(
-        name="job-shape",
+def _make_plan(tmp_path, *, name: str, resources: ResourceConfig, env_vars: dict | None = None) -> TrainingPlan:
+    return TrainingPlan(
+        name=name,
         output_path=str(tmp_path / "out"),
         train_config=_LeafCfg(output_path=str(tmp_path / "out")),
         worker_fn=_trivial_worker,
+        resources=resources,
+        env_vars=env_vars or {},
+    )
+
+
+@pytest.fixture
+def recording_client(monkeypatch):
+    fake = _RecordingClient()
+    monkeypatch.setattr(fray_client_module, "current_client", lambda: fake)
+    return fake
+
+
+def test_run_train_submits_one_job(tmp_path, recording_client):
+    """``run_train`` submits exactly one JobRequest with the plan's resources
+    and carries user-supplied env vars through env resolution."""
+    plan = _make_plan(
+        tmp_path,
+        name="job-shape",
         resources=ResourceConfig.with_cpu(),
         env_vars={"USER_KEY": "user-value"},
     )
 
-    fake = _RecordingClient()
-    monkeypatch.setattr(fray_client_module, "current_client", lambda: fake)
-
     run_train(plan)
 
-    assert len(fake.requests) == 1
-    request = fake.requests[0]
+    assert len(recording_client.requests) == 1
+    request = recording_client.requests[0]
     assert request.resources == plan.resources
 
-    # The user-supplied env var is carried into the job environment after env
-    # resolution. (Other run-metadata keys like GIT_COMMIT may also be added.)
-    env = request.environment.env_vars
-    assert env.get("USER_KEY") == "user-value"
+    # Other run-metadata keys like GIT_COMMIT may also be present; we only
+    # assert that the user-supplied var survived.
+    assert request.environment.env_vars.get("USER_KEY") == "user-value"
 
 
-def test_run_train_passes_tpu_extras_for_tpu_resources(monkeypatch, tmp_path):
-    """TPU plans must request the ``tpu`` uv extra so jax[tpu] is installed."""
+@pytest.mark.parametrize(
+    "resources, expected_extras",
+    [
+        pytest.param(ResourceConfig.with_cpu(), [], id="cpu_no_extras"),
+        # WANDB_API_KEY is required by `_check_for_wandb_key` for TpuConfig.
+        pytest.param(ResourceConfig.with_tpu("v4-8"), ["tpu"], id="tpu_jax_extra"),
+    ],
+)
+def test_run_train_extras_match_resource_class(tmp_path, recording_client, monkeypatch, resources, expected_extras):
     monkeypatch.setenv("WANDB_API_KEY", "fake-key-for-tpu-resolve")
-
-    plan = TrainingPlan(
-        name="tpu-extras",
-        output_path=str(tmp_path / "out"),
-        train_config=_LeafCfg(output_path=str(tmp_path / "out")),
-        worker_fn=_trivial_worker,
-        resources=ResourceConfig.with_tpu("v4-8"),
-        env_vars={},
-    )
-
-    fake = _RecordingClient()
-    monkeypatch.setattr(fray_client_module, "current_client", lambda: fake)
+    plan = _make_plan(tmp_path, name="extras-test", resources=resources)
 
     run_train(plan)
 
-    assert list(fake.requests[0].environment.extras) == ["tpu"]
+    assert list(recording_client.requests[0].environment.extras) == expected_extras
 
 
-def test_run_train_passes_no_extras_for_cpu_resources(monkeypatch, tmp_path):
-    """CPU plans must not request accelerator extras."""
-    plan = TrainingPlan(
-        name="cpu-extras",
-        output_path=str(tmp_path / "out"),
-        train_config=_LeafCfg(output_path=str(tmp_path / "out")),
-        worker_fn=_trivial_worker,
-        resources=ResourceConfig.with_cpu(),
-        env_vars={},
-    )
-
-    fake = _RecordingClient()
-    monkeypatch.setattr(fray_client_module, "current_client", lambda: fake)
-
-    run_train(plan)
-
-    assert list(fake.requests[0].environment.extras) == []
-
-
-def test_run_train_worker_entrypoint_calls_materialize_then_worker_fn(monkeypatch, tmp_path):
+def test_run_train_worker_entrypoint_calls_materialize_then_worker_fn(monkeypatch, tmp_path, recording_client):
     """The worker's captured callable runs `materialize` followed by
     `worker_fn(materialised_config)`."""
     received: list = []
@@ -292,12 +271,9 @@ def test_run_train_worker_entrypoint_calls_materialize_then_worker_fn(monkeypatc
         env_vars={"FAKE_ENV": "1"},
     )
 
-    fake = _RecordingClient()
-    monkeypatch.setattr(fray_client_module, "current_client", lambda: fake)
-
     run_train(plan)
 
-    request = fake.requests[0]
+    request = recording_client.requests[0]
     callable_ep = request.entrypoint.callable_entrypoint
     assert callable_ep is not None
     callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)

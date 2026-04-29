@@ -39,11 +39,9 @@ def test_primitive_returns_empty(value):
     assert upstream_steps(value) == []
 
 
-def test_empty_collections_return_empty():
-    assert upstream_steps([]) == []
-    assert upstream_steps({}) == []
-    assert upstream_steps(()) == []
-    assert upstream_steps(set()) == []
+@pytest.mark.parametrize("empty", [[], {}, (), set()], ids=["list", "dict", "tuple", "set"])
+def test_empty_collections_return_empty(empty):
+    assert upstream_steps(empty) == []
 
 
 def test_single_executor_step():
@@ -51,42 +49,33 @@ def test_single_executor_step():
     assert upstream_steps(step) == [step]
 
 
-def test_dataclass_with_embedded_step():
-    step = _step()
-
-    @dataclass
-    class Outer:
-        inner: ExecutorStep
-        other: int = 0
-
-    result = upstream_steps(Outer(inner=step))
-    assert result == [step]
+@dataclass
+class _OuterWithStep:
+    inner: ExecutorStep
+    other: int = 0
 
 
-def test_dict_with_embedded_step():
-    step = _step()
-    assert upstream_steps({"a": step, "b": 1}) == [step]
+@pytest.fixture
+def step():
+    return _step()
 
 
-def test_list_with_embedded_step():
-    step = _step()
-    assert upstream_steps([1, step, "x"]) == [step]
+@pytest.mark.parametrize(
+    "make_container",
+    [
+        pytest.param(lambda s: _OuterWithStep(inner=s), id="dataclass"),
+        pytest.param(lambda s: {"a": s, "b": 1}, id="dict"),
+        pytest.param(lambda s: [1, s, "x"], id="list"),
+        pytest.param(lambda s: (1, s, "x"), id="tuple"),
+        # ExecutorStep is hashable (id-based), so it can live in a set.
+        pytest.param(lambda s: {s}, id="set"),
+    ],
+)
+def test_container_with_embedded_step(step, make_container):
+    assert upstream_steps(make_container(step)) == [step]
 
 
-def test_tuple_with_embedded_step():
-    step = _step()
-    assert upstream_steps((1, step, "x")) == [step]
-
-
-def test_set_with_embedded_step():
-    step = _step()
-    # ExecutorStep is hashable (id-based), so it can live in a set.
-    assert upstream_steps({step}) == [step]
-
-
-def test_duplicate_step_returned_once():
-    step = _step()
-
+def test_duplicate_step_returned_once(step):
     @dataclass
     class Cfg:
         a: ExecutorStep
@@ -97,8 +86,7 @@ def test_duplicate_step_returned_once():
     assert result == [step]
 
 
-def test_input_name_with_step_included():
-    step = _step()
+def test_input_name_with_step_included(step):
     inp = InputName(step=step, name="ckpt.pt")
     assert upstream_steps(inp) == [step]
 
@@ -109,8 +97,7 @@ def test_input_name_without_step_returns_empty():
     assert upstream_steps(inp) == []
 
 
-def test_input_name_nonblocking_still_included():
-    step = _step()
+def test_input_name_nonblocking_still_included(step):
     inp = InputName(step=step, name="ckpt.pt").nonblocking()
     assert upstream_steps(inp) == [step]
 
