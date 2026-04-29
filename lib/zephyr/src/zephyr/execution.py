@@ -68,6 +68,9 @@ MAX_SHARD_FAILURES = 3
 ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/stage/{stage_name}/item_count"
 ZEPHYR_STAGE_BYTES_PROCESSED_KEY = "zephyr/stage/{stage_name}/bytes_processed"
 
+# Typical status text for a 6-stage pipeline is ~300 chars.
+MAX_STATUS_TEXT_LENGTH = 1000
+
 
 class ShardFailureKind(enum.StrEnum):
     """TASK failures count toward MAX_SHARD_FAILURES; INFRA failures (preemption) do not."""
@@ -528,7 +531,7 @@ class ZephyrCoordinator:
         mib_rate = byte_rate / (1024 * 1024)
         lines.append(f"\n**Throughput** — {items:,} items ({item_rate:.1f}/s), {mib:.1f} MiB ({mib_rate:.1f} MiB/s)")
 
-        status_text_md = "\n".join(lines)
+        status_text_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
         try:
             iris_client.report_task_status_text(job_info.task_id, status_text_md)
         except Exception:

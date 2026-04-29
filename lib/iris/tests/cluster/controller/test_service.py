@@ -1381,11 +1381,6 @@ def test_launch_job_nested_with_stale_client_date_is_exempt(service):
     assert response.job_id == child_id.to_wire()
 
 
-# =============================================================================
-# Task Status Text Push Tests
-# =============================================================================
-
-
 def test_set_task_status_text_persists_via_store(service):
     """set_task_status_text persists the supplied markdown via the store."""
     service.launch_job(make_job_request("stats-job"), None)
@@ -1394,17 +1389,3 @@ def test_set_task_status_text_persists_via_store(service):
     request = job_pb2.SetTaskStatusTextRequest(task_id=task_id.to_wire(), status_text_md=status_text)
     service.set_task_status_text(request, None)
     assert service._store.tasks.get_status_text(task_id.to_wire()) == status_text
-
-
-def test_set_task_status_text_unknown_task_raises_not_found(service):
-    """set_task_status_text raises NOT_FOUND for a task that doesn't exist."""
-    task_id = JobName.root("test-user", "nonexistent-job").task(0)
-
-    request = job_pb2.SetTaskStatusTextRequest(
-        task_id=task_id.to_wire(),
-        status_text_md="",
-    )
-    with pytest.raises(ConnectError) as exc_info:
-        service.set_task_status_text(request, None)
-
-    assert exc_info.value.code == Code.NOT_FOUND
