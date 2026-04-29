@@ -26,8 +26,19 @@ MARIN_MODEL = GapFinderModelConfig(
     checkpoint_is_hf=True,
     tokenizer="meta-llama/Llama-3.1-8B",
 )
+LLAMA_MODEL = GapFinderModelConfig(
+    checkpoint_path="meta-llama/Llama-3.1-8B",
+    checkpoint_is_hf=True,
+    tokenizer="meta-llama/Llama-3.1-8B",
+)
+QWEN3_MODEL = GapFinderModelConfig(
+    checkpoint_path="Qwen/Qwen3-8B-Base",
+    checkpoint_is_hf=True,
+    tokenizer="Qwen/Qwen3-8B",
+)
 
 MARIN_SCORES = model_perplexity_scores(
+    name="multilingual_raw/marin_8b",
     model=MARIN_MODEL,
     datasets=DATASETS,
     resource_config=RESOURCE_CONFIG,
@@ -35,32 +46,29 @@ MARIN_SCORES = model_perplexity_scores(
     max_eval_length=4096,
     max_docs_per_dataset=MAX_DOCS_PER_DATASET,
     max_doc_bytes=MAX_DOC_BYTES,
+    wandb_tags=["model=marin-community/marin-8b-base"],
 )
 LLAMA_SCORES = model_perplexity_scores(
-    model=GapFinderModelConfig(
-        checkpoint_path="meta-llama/Llama-3.1-8B",
-        checkpoint_is_hf=True,
-        tokenizer="meta-llama/Llama-3.1-8B",
-    ),
+    name="multilingual_raw/llama3_1_8b",
+    model=LLAMA_MODEL,
     datasets=DATASETS,
     resource_config=RESOURCE_CONFIG,
     per_device_batch_size=4,
     max_eval_length=4096,
     max_docs_per_dataset=MAX_DOCS_PER_DATASET,
     max_doc_bytes=MAX_DOC_BYTES,
+    wandb_tags=["model=meta-llama/Llama-3.1-8B"],
 )
 QWEN3_SCORES = model_perplexity_scores(
-    model=GapFinderModelConfig(
-        checkpoint_path="Qwen/Qwen3-8B-Base",
-        checkpoint_is_hf=True,
-        tokenizer="Qwen/Qwen3-8B",
-    ),
+    name="multilingual_raw/qwen3_8b",
+    model=QWEN3_MODEL,
     datasets=DATASETS,
     resource_config=RESOURCE_CONFIG,
     per_device_batch_size=4,
     max_eval_length=4096,
     max_docs_per_dataset=MAX_DOCS_PER_DATASET,
     max_doc_bytes=MAX_DOC_BYTES,
+    wandb_tags=["model=Qwen/Qwen3-8B-Base"],
 )
 
 MARIN_VS_LLAMA = model_perplexity_gap_from_scores(
