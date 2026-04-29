@@ -199,15 +199,21 @@ def _run_log_activations_local(config: LogActivationsConfig) -> None:
     model_cfg, _, _, _ = build_from_heuristic(budget=config.budget, hidden_dim=config.hidden_dim)
     print(f"Model: d={model_cfg.hidden_dim}, L={model_cfg.num_layers}, E={model_cfg.num_experts}")
 
+    from jax.sharding import AxisType
+
     import haliax.partitioning
 
-    # Use a single device to avoid sharding complications with splash attention
-    mesh = create_mesh_from_axis_specs(
-        ici_axes={"data": 1, "replica": 1, "model": 1, "expert": 1},
+    single_device = jax.devices()[:1]
+    mesh_axes = {"data": 1, "replica": 1, "model": 1, "expert": 1}
+
+    # Explicit axes for init + checkpoint loading (model uses reshard with PartitionSpec)
+    explicit_mesh = create_mesh_from_axis_specs(
+        ici_axes=mesh_axes,
         dcn_axes={},
-        devices=jax.devices()[:1],
+        devices=single_device,
+        axis_types=tuple(AxisType.Explicit for _ in range(4)),
     )
-    with haliax.partitioning.set_mesh(mesh):
+    with haliax.partitioning.set_mesh(explicit_mesh):
         mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
         model = Transformer.init(model_cfg, key=jax.random.PRNGKey(0))
 
@@ -218,10 +224,17 @@ def _run_log_activations_local(config: LogActivationsConfig) -> None:
             config.checkpoint,
             subpath="params",
             discover_latest=False,
-            mesh=mesh,
+            mesh=explicit_mesh,
         )
         model = mp.cast_to_compute(model)
 
+    # Auto axes for forward pass (splash attention can't handle Explicit)
+    auto_mesh = create_mesh_from_axis_specs(
+        ici_axes=mesh_axes,
+        dcn_axes={},
+        devices=single_device,
+    )
+    with haliax.partitioning.set_mesh(auto_mesh):
         # 1. Custom text (if provided)
         if config.text:
             print("\n=== Custom text ===")
