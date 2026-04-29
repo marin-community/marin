@@ -217,9 +217,17 @@ def test_marin_temp_bucket_rounds_up_unsupported_ttl(caplog):
     assert any("rounding up to 30" in rec.message for rec in caplog.records)
 
 
-def test_marin_temp_bucket_rejects_above_max_ttl():
-    with pytest.raises(ValueError, match="exceeds the largest configured value"):
-        marin_temp_bucket(ttl_days=100)
+def test_marin_temp_bucket_clamps_above_max_ttl(caplog):
+    """ttl_days above the configured maximum clamp to the max with a warning."""
+    with (
+        patch(
+            "rigging.filesystem.urllib.request.urlopen",
+            return_value=_mock_urlopen(b"projects/12345/zones/us-east1-c"),
+        ),
+        caplog.at_level("WARNING", logger="rigging.filesystem"),
+    ):
+        assert marin_temp_bucket(ttl_days=100) == "gs://marin-us-east1/tmp/ttl=30d"
+    assert any("clamping to 30" in rec.message for rec in caplog.records)
 
 
 def test_marin_temp_bucket_rejects_non_positive_ttl():

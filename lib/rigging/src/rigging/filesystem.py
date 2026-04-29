@@ -170,9 +170,10 @@ def _append_path_prefix(path: str, prefix: str) -> str:
 def _resolve_ttl_days(ttl_days: int) -> int:
     """Map *ttl_days* to the smallest configured value that is ``>= ttl_days``.
 
-    Rounding up keeps callers honest: an unconfigured request gets at least
-    the lifetime they asked for, never less. Logs a warning when rounding,
-    and raises if the request exceeds the largest configured value.
+    Requests above the largest configured value clamp to that maximum (with
+    a warning) — temp data is by definition disposable, so capping the TTL
+    is preferable to forcing the caller to handle an exception. Logs a
+    warning whenever the requested value is rounded.
     """
     if ttl_days <= 0:
         raise ValueError(f"ttl_days={ttl_days} must be positive. Allowed values: {ALLOWED_TTL_DAYS}.")
@@ -182,10 +183,9 @@ def _resolve_ttl_days(ttl_days: int) -> int:
         if n > ttl_days:
             logger.warning("ttl_days=%d not configured; rounding up to %d", ttl_days, n)
             return n
-    raise ValueError(
-        f"ttl_days={ttl_days} exceeds the largest configured value ({max(ALLOWED_TTL_DAYS)}). "
-        f"Allowed values: {ALLOWED_TTL_DAYS}."
-    )
+    capped = max(ALLOWED_TTL_DAYS)
+    logger.warning("ttl_days=%d exceeds the configured maximum; clamping to %d", ttl_days, capped)
+    return capped
 
 
 def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | None = None) -> str:
@@ -208,8 +208,8 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
     Args:
         ttl_days: Lifecycle TTL in days.  Values not in
             :data:`ALLOWED_TTL_DAYS` are rounded up to the nearest configured
-            value (with a warning); requests above the maximum raise
-            :class:`ValueError`.
+            value (with a warning); values above the maximum clamp to it.
+            Non-positive values raise :class:`ValueError`.
         prefix: Optional sub-path appended after the TTL directory.
         source_prefix: Optional path used to choose the temp bucket region.
             Useful when configuring a remote job from a launcher that may be in
