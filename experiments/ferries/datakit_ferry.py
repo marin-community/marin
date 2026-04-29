@@ -57,7 +57,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
     normalized = normalize_step(
         name="datakit-smoke/normalize",
         download=downloaded,
-        input_path=f"{downloaded.output_path}/sample/10BT",
+        relative_input_path="sample/10BT",
         worker_resources=ResourceConfig(cpu=2, ram="16g", disk="20g"),
         override_output_path=f"{base}/normalize",
     )

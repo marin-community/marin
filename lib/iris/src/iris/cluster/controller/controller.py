@@ -28,6 +28,7 @@ from iris.cluster.constraints import (
     constraints_from_resources,
     evaluate_constraint,
     extract_placement_requirements,
+    get_device_variant,
     merge_constraints,
     region_constraint as make_region_constraint,
 )
@@ -105,14 +106,13 @@ from iris.cluster.controller.transitions import (
     log_event,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.log_store import CONTROLLER_LOG_KEY
+from finelog.client import LogPusher, LogServiceProxy, RemoteLogHandler
+from finelog.server import LogServiceImpl
+from finelog.server.asgi import build_log_server_asgi
+from finelog.store.mem_store import MemStore
+from iris.cluster.log_store_helpers import CONTROLLER_LOG_KEY
 from iris.cluster.providers.types import find_free_port, resolve_external_host
-from iris.log_server.client import LogPusher, LogServiceProxy, RemoteLogHandler
-from iris.log_server.main import build_log_server_asgi
-from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider
-from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS
-from iris.rpc.stats import RpcStatsCollector
 from iris.cluster.types import (
     JobName,
     WorkerStatus,
@@ -164,6 +164,13 @@ def _drain_queue(q: queue_mod.Queue, timeout: float = 1.0) -> list:
 # Log a detailed per-phase scheduling trace every this many rounds.
 _SCHEDULING_TRACE_INTERVAL = 50
 
+# Cap on the bundled in-process log server's MemStore. ~256 bytes/row puts
+# this under ~50 MB of resident size for the controller — large enough to
+# tail a chatty job for a while, small enough that an unbounded ingest can't
+# OOM the process. Operators who need real log retention run finelog-server
+# externally and declare it in cluster_config.endpoints.
+BUNDLED_LOG_SERVER_MAX_ROWS = 200_000
+
 # Taint attribute injected onto claimed workers to prevent non-reservation
 # jobs from landing on them.  Non-reservation jobs get a NOT_EXISTS constraint
 # for this key; reservation jobs do not, so they naturally prefer claimed
@@ -181,6 +188,10 @@ class RunningTaskInfo:
     resource_value: int
     is_coscheduled: bool
     resources: job_pb2.ResourceSpecProto
+    # Device variant (e.g. "v5p-64") the task is running on, derived from the
+    # task's own resource spec. Used to gate preemption to same-variant victims
+    # so a v5p-64 request can never reclaim a v5p-256 slice and vice versa.
+    device_variant: str | None = None
     already_preempted: bool = False
 
 
@@ -493,9 +504,95 @@ def _get_running_tasks_with_band_and_value(
                 ),
                 is_coscheduled=bool(int(row.has_coscheduling)),
                 resources=resources,
+                device_variant=get_device_variant(resources.device),
             )
         )
     return result
+
+
+def _preempt_solo(
+    candidate: PreemptionCandidate,
+    wanted_variant: str | None,
+    solo_victims: list[RunningTaskInfo],
+    context: SchedulingContext,
+) -> tuple[JobName, JobName] | None:
+    """Find a single solo victim whose eviction would free enough capacity for
+    a non-coscheduled preemptor. Mutates the chosen victim's already_preempted
+    flag so subsequent candidates skip it. Returns the (preemptor, victim) pair
+    or None if no victim qualifies.
+
+    The same-variant gate ensures the freed slot shape matches the preemptor;
+    the hypothetical-capacity check covers partial-worker tenancy (e.g. a
+    victim using only some of a worker's CPUs or TPUs).
+    """
+    req = candidate.requirements
+    for victim in solo_victims:
+        if victim.already_preempted:
+            continue
+        if victim.device_variant != wanted_variant:
+            continue
+        # Can only preempt strictly lower priority (higher band_sort_key)
+        if victim.band_sort_key <= candidate.band:
+            continue
+
+        cap = context.capacities.get(victim.worker_id)
+        if cap is None:
+            continue
+        if not cap.matches_constraints(req.constraints):
+            continue
+        # If current capacity already fits, no preemption needed
+        if cap.can_fit(req) is None:
+            continue
+
+        # Would freeing this victim's resources create enough capacity?
+        hypothetical = WorkerCapacity(
+            worker_id=cap.worker_id,
+            available_cpu_millicores=cap.available_cpu_millicores + victim.resources.cpu_millicores,
+            available_memory=cap.available_memory + victim.resources.memory_bytes,
+            available_gpus=cap.available_gpus + get_gpu_count(victim.resources.device),
+            available_tpus=cap.available_tpus + get_tpu_count(victim.resources.device),
+            attributes=cap.attributes,
+            building_task_count=max(0, cap.building_task_count - 1),
+            max_building_tasks=cap.max_building_tasks,
+        )
+        if hypothetical.can_fit(req) is None:
+            victim.already_preempted = True
+            return (candidate.job_name, victim.task_id)
+    return None
+
+
+def _preempt_coscheduled(
+    candidate: PreemptionCandidate,
+    wanted_variant: str | None,
+    n_required: int,
+    sorted_groups: list[tuple[JobName, list[RunningTaskInfo]]],
+) -> list[tuple[JobName, JobName]]:
+    """Find a victim slice (all running tasks of one coscheduled job) whose
+    eviction satisfies a coscheduled preemptor. Returns one (preemptor, victim)
+    pair per slice member, or [] if no slice qualifies. Mutates already_preempted
+    on every member of the chosen slice.
+
+    Coscheduled tasks own their workers whole, so once variant matches and the
+    slice is at least as large as the preemptor, freeing it yields exactly the
+    shape the preemptor needs — no per-worker capacity arithmetic required.
+    """
+    if wanted_variant is None:
+        return []
+    for _victim_job, members in sorted_groups:
+        if any(m.already_preempted for m in members):
+            continue
+        if members[0].device_variant != wanted_variant:
+            continue
+        # Strict band: every sibling must be lower priority than the preemptor.
+        if any(m.band_sort_key <= candidate.band for m in members):
+            continue
+        if len(members) < n_required:
+            continue
+        pairs = [(candidate.job_name, m.task_id) for m in members]
+        for m in members:
+            m.already_preempted = True
+        return pairs
+    return []
 
 
 def _run_preemption_pass(
@@ -510,54 +607,73 @@ def _run_preemption_pass(
     - INTERACTIVE preempts BATCH only.
     - BATCH never preempts.
     - Within same band, no preemption (compete via scheduling order only).
-    - Coscheduled tasks are not preemptible (v1).
+    - Solo (non-coscheduled) preemptors only evict solo victims of the same
+      device-variant.
+    - Coscheduled preemptors evict an entire victim *slice* (all running tasks
+      of one coscheduled job) of the same device-variant and at least the
+      preemptor's task count. A non-coscheduled preemptor never tears down a
+      slice. Same-variant + slice-shaped guarantees the freed capacity matches
+      the request, which avoids large/small thrashing.
     """
     preemptions: list[tuple[JobName, JobName]] = []
 
-    # Sort victims: lowest priority first (highest band_sort_key), then cheapest
-    victims = sorted(running_tasks_info, key=lambda t: (-t.band_sort_key, t.resource_value))
+    # Solo victims: existing per-worker preemption path (same-variant gated).
+    solo_victims = sorted(
+        (v for v in running_tasks_info if not v.is_coscheduled),
+        key=lambda t: (-t.band_sort_key, t.resource_value),
+    )
+
+    # Lazy: only build coscheduled-victim slice index if some preemptor needs
+    # one. The common case (no coscheduled preemptors) skips the bucketing.
+    sorted_groups: list[tuple[JobName, list[RunningTaskInfo]]] = []
+    if any(c.requirements.is_coscheduled for c in unscheduled_tasks):
+        grouped: dict[JobName, list[RunningTaskInfo]] = {}
+        for v in running_tasks_info:
+            if not v.is_coscheduled or v.device_variant is None:
+                continue
+            vparent = v.task_id.parent
+            if vparent is None:
+                continue
+            grouped.setdefault(vparent, []).append(v)
+        sorted_groups = sorted(
+            grouped.items(),
+            key=lambda kv: (
+                -max(t.band_sort_key for t in kv[1]),
+                sum(t.resource_value for t in kv[1]),
+            ),
+        )
+
+    # Preemptor jobs whose siblings have already been satisfied by a slice
+    # eviction this pass; the remaining N-1 siblings short-circuit.
+    satisfied_preemptor_jobs: set[JobName] = set()
+    sibling_count: dict[JobName, int] = defaultdict(int)
+    for c in unscheduled_tasks:
+        if c.job_name.parent is not None:
+            sibling_count[c.job_name.parent] += 1
 
     for candidate in unscheduled_tasks:
-        task_id, req, task_band_key = candidate.job_name, candidate.requirements, candidate.band
         # Batch never preempts
-        if task_band_key >= job_pb2.PRIORITY_BAND_BATCH:
+        if candidate.band >= job_pb2.PRIORITY_BAND_BATCH:
             continue
 
-        for victim in victims:
-            if victim.already_preempted:
-                continue
-            if victim.is_coscheduled:
-                continue
-            # Can only preempt strictly lower priority (higher band_sort_key)
-            if victim.band_sort_key <= task_band_key:
-                continue
+        parent = candidate.job_name.parent
+        if parent is not None and parent in satisfied_preemptor_jobs:
+            continue
 
-            cap = context.capacities.get(victim.worker_id)
-            if cap is None:
-                continue
+        wanted_variant = get_device_variant(candidate.requirements.resources.device)
 
-            if not cap.matches_constraints(req.constraints):
-                continue
+        if not candidate.requirements.is_coscheduled:
+            pair = _preempt_solo(candidate, wanted_variant, solo_victims, context)
+            if pair is not None:
+                preemptions.append(pair)
+            continue
 
-            # If current capacity already fits, no preemption needed
-            if cap.can_fit(req) is None:
-                continue
-
-            # Check if freeing the victim's resources would create enough capacity
-            hypothetical = WorkerCapacity(
-                worker_id=cap.worker_id,
-                available_cpu_millicores=cap.available_cpu_millicores + victim.resources.cpu_millicores,
-                available_memory=cap.available_memory + victim.resources.memory_bytes,
-                available_gpus=cap.available_gpus + get_gpu_count(victim.resources.device),
-                available_tpus=cap.available_tpus + get_tpu_count(victim.resources.device),
-                attributes=cap.attributes,
-                building_task_count=max(0, cap.building_task_count - 1),
-                max_building_tasks=cap.max_building_tasks,
-            )
-            if hypothetical.can_fit(req) is None:
-                preemptions.append((task_id, victim.task_id))
-                victim.already_preempted = True
-                break
+        n_required = sibling_count.get(parent, 1) if parent is not None else 1
+        pairs = _preempt_coscheduled(candidate, wanted_variant, n_required, sorted_groups)
+        if pairs:
+            preemptions.extend(pairs)
+            if parent is not None:
+                satisfied_preemptor_jobs.add(parent)
 
     return preemptions
 
@@ -959,8 +1075,14 @@ class ControllerConfig:
     log_service_address: str | None = None
     """Address of an externally-hosted log server (e.g. http://localhost:10001).
     When set, the controller connects to the existing server. When None,
-    the Controller starts an in-process LogServiceImpl on a free port.
-    Either way, all controller code accesses the log server via RPC clients."""
+    the Controller starts an in-process LogServiceImpl on a free port (used by
+    tests and local-mode runs). In production this address is sourced from
+    `endpoints["/system/log-server"]` and passed in here by the daemon entrypoint."""
+
+    endpoints: dict[str, str] = field(default_factory=dict)
+    """Resolved cluster endpoints: logical name -> concrete URL. Built from
+    cluster_config.endpoints by the daemon entrypoint. Registered into the
+    controller service's _system_endpoints during start()."""
 
 
 def _log_client_interceptors(config: "ControllerConfig") -> tuple:
@@ -1160,28 +1282,35 @@ class Controller:
         return self._started
 
     def _start_local_log_server(self) -> str:
-        """Start an in-process log server on a free port and return its address.
+        """Start a bundled in-process MemStore-backed log server and return its address.
 
-        Used in local/test mode when no external log server is configured.
-        The server runs in a background thread managed by the ThreadContainer.
+        Used as a fallback when ``cluster_config.endpoints`` does not declare
+        ``/system/log-server`` (and in tests). MemStore is capped at
+        ``BUNDLED_LOG_SERVER_MAX_ROWS`` with FIFO eviction so a chatty job
+        cannot OOM the controller; logs are lost on controller restart. For
+        production deployments, run finelog-server out-of-band and point the
+        endpoints config at it.
+
+        TODO(#5215): when rigging-mediated log sinks land, this fallback
+        becomes a NullSink + StderrSink pair instead of a bundled server,
+        and the LogPusher / LogServiceProxy wiring below stops being a
+        special case.
         """
         log_server_port = find_free_port()
         self._log_service = LogServiceImpl(
-            log_dir=self._config.local_state_dir / "logs",
-            remote_log_dir=f"{self._config.remote_state_dir.rstrip('/')}/logs",
+            log_store=MemStore(max_rows=BUNDLED_LOG_SERVER_MAX_ROWS),
         )
 
         # Wrap the verifier in NullAuthInterceptor so anonymous calls are
         # still accepted in null-auth/test mode, matching the dashboard's
         # behaviour. Real workers attach JWTs that the verifier validates.
         interceptors = (NullAuthInterceptor(verifier=self._config.auth_verifier),)
-        # Stats collector for the in-process log server. Snapshot is reachable
-        # via /iris.stats.StatsService/GetRpcStats on the log-server port.
-        self._log_stats_collector = RpcStatsCollector(slow_threshold_ms=SLOW_RPC_THRESHOLD_MS)
+        # finelog's ASGI builder owns the FetchLogs concurrency interceptor
+        # and does not collect RPC stats — production stats live in the
+        # dedicated finelog-server deployment.
         app = build_log_server_asgi(
             self._log_service,
             interceptors=interceptors,
-            stats_collector=self._log_stats_collector,
         )
         log_server_config = uvicorn.Config(
             app,
@@ -1252,9 +1381,16 @@ class Controller:
             timeout=Duration.from_seconds(5.0),
         )
 
-        # Register log server endpoint so workers can resolve it via ListEndpoints.
+        # Register configured cluster endpoints so workers can resolve them via ListEndpoints.
+        # Endpoints are pre-resolved (scheme dispatched) by the daemon entrypoint.
+        for name, url in self._config.endpoints.items():
+            self._service._system_endpoints[name] = url
+            logger.info("Registered system endpoint %s -> %s", name, url)
+
+        # Always advertise the in-use log server address under /system/log-server.
+        # If the daemon supplied it via endpoints, this is a no-op overwrite with
+        # the same value; in tests the in-process server's address lands here.
         self._service._system_endpoints["/system/log-server"] = self._log_service_address
-        logger.info("Registered system endpoint /system/log-server -> %s", self._log_service_address)
 
     def stop(self) -> None:
         """Stop all background components gracefully. Idempotent.
@@ -1987,13 +2123,17 @@ class Controller:
                 user_budget_defaults=self._config.user_budget_defaults,
             )
             preemptions = _run_preemption_pass(unscheduled, running_info, context)
-            for preemptor_name, victim_id in preemptions:
-                with self._store.transaction() as cur:
-                    preempt_result = self._transitions.preempt_task(
-                        cur, victim_id, reason=f"Preempted by {preemptor_name}"
-                    )
-                self.kill_tasks_on_workers(preempt_result.tasks_to_kill)
+            # Apply all preemptions in one transaction so slice evictions
+            # (N siblings of a coscheduled preemptor) are all-or-nothing.
+            kills: set[JobName] = set()
             if preemptions:
+                with self._store.transaction() as cur:
+                    for preemptor_name, victim_id in preemptions:
+                        preempt_result = self._transitions.preempt_task(
+                            cur, victim_id, reason=f"Preempted by {preemptor_name}"
+                        )
+                        kills |= preempt_result.tasks_to_kill
+                self.kill_tasks_on_workers(kills)
                 logger.info("Preemption pass: %d tasks preempted", len(preemptions))
         return preemptions
 

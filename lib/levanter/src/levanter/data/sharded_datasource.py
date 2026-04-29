@@ -70,10 +70,10 @@ class ShardedDataSource(Generic[T_co]):
         path: str,
     ) -> AsyncDataset[T]:
         """
-        Constructs a shard cache version of this dataset using Ray.
+        Constructs a shard cache version of this dataset.
 
         Levanter's preprocessing pipeline offers the following features/guarantees:
-        * distributed, sharded preprocessing using Ray
+        * distributed, sharded preprocessing using Zephyr
         * deterministic ordering of data
         * interruptible and resumable
         * streaming results (no need to wait for everything to finish)

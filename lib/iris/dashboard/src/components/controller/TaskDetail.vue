@@ -20,6 +20,7 @@ import ResourceGauge from '@/components/shared/ResourceGauge.vue'
 import Sparkline from '@/components/shared/Sparkline.vue'
 import ProfileButtons from '@/components/shared/ProfileButtons.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
+import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 
 const props = defineProps<{
   jobId: string
@@ -285,6 +286,13 @@ watch(() => props.taskId, async () => {
           <div class="text-xs font-mono text-text-muted mt-1">{{ memUsedMb.toFixed(0) }} MB</div>
         </div>
       </div>
+
+      <!-- Status text -->
+      <InfoCard v-if="task.statusTextMd" title="Status Text" class="mb-6">
+        <div class="text-sm text-text">
+          <MarkdownRenderer :content="task.statusTextMd" />
+        </div>
+      </InfoCard>
 
       <!-- Error display -->
       <div

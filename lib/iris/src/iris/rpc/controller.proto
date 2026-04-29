@@ -22,7 +22,7 @@ edition = "2023";
 package iris.cluster;
 
 import "job.proto";
-import "logging.proto";
+import "iris_logging.proto";
 import "query.proto";
 import "time.proto";
 import "vm.proto";
@@ -637,4 +637,7 @@ service ControllerService {
 
   // Worker-to-controller task status push
   rpc UpdateTaskStatus(Controller.UpdateTaskStatusRequest) returns (Controller.UpdateTaskStatusResponse);
+
+  // Task-to-controller status text push
+  rpc SetTaskStatusText(iris.job.SetTaskStatusTextRequest) returns (iris.job.SetTaskStatusTextResponse);
 }

@@ -13,9 +13,9 @@ from pathlib import Path
 import uvicorn
 
 from iris.chaos import chaos
-from iris.cluster.log_store import worker_log_key
+from iris.cluster.log_store_helpers import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
-from iris.log_server.client import LogPusher, RemoteLogHandler
+from finelog.client import LogPusher, RemoteLogHandler
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
 from iris.cluster.types import JobName, TaskAttempt as TaskAttemptId
 from iris.cluster.bundle import BundleStore
@@ -191,13 +191,15 @@ class Worker:
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
-        # LogPusher and RemoteLogHandler are created before registration so
-        # pre-register failures (container bring-up, disk/health probes,
-        # registration rejection) leave remote logs. Attachment relies on
-        # ``self._worker_id`` having been resolved locally (IRIS_WORKER_ID,
-        # slice_id + TPU index, or GCE instance name); the rare case where
-        # the controller assigns the id is handled by re-attaching post-
-        # register.
+        # LogPusher and RemoteLogHandler are created in start() before container
+        # adoption and registration. Building before adoption ensures adopted
+        # attempts capture a live pusher (regression #5261). Building before
+        # registration ensures pre-register failures (container bring-up,
+        # disk/health probes, registration rejection) leave remote logs.
+        # Attachment relies on ``self._worker_id`` having been resolved locally
+        # (IRIS_WORKER_ID, slice_id + TPU index, or GCE instance name); the rare
+        # case where the controller assigns the id is handled by re-attaching
+        # post-register.
         self._log_pusher: LogPusher | None = None
         self._log_handler: RemoteLogHandler | None = None
 
@@ -226,6 +228,20 @@ class Worker:
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
 
     def start(self) -> None:
+        # Build the LogPusher *before* adopting containers so adopted attempts
+        # capture a live pusher rather than a permanent ``None`` (regression #5261).
+        # The pusher only depends on auth + the resolver callback, neither of
+        # which need the uvicorn server or controller client to exist yet.
+        interceptors: tuple[AuthTokenInjector, ...] = ()
+        if self._config.controller_address and self._config.auth_token:
+            interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
+        if self._config.controller_address:
+            self._log_pusher = LogPusher(
+                "/system/log-server",
+                interceptors=interceptors,
+                resolver=self._resolve_log_service,
+            )
+
         # Try to adopt running containers from a previous worker process.
         # If adoption succeeds, skip the destructive cleanup that would kill them.
         adopted = self.adopt_running_containers()
@@ -255,18 +271,10 @@ class Worker:
 
         # Create controller client if controller configured
         if self._config.controller_address:
-            interceptors = ()
-            if self._config.auth_token:
-                interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
             self._controller_client = ControllerServiceClientSync(
                 address=self._config.controller_address,
                 timeout_ms=10_000,
                 interceptors=interceptors,
-            )
-            self._log_pusher = LogPusher(
-                "/system/log-server",
-                interceptors=interceptors,
-                resolver=self._resolve_log_service,
             )
 
             # Start lifecycle thread: register + serve + reset loop

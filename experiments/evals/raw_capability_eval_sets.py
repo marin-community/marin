@@ -306,8 +306,10 @@ CAPABILITY_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
             transform_name="render_capability_eval_dataset",
             serializer_name=CapabilityEvalRenderer.WILDCHAT.value,
             split="train",
-            output_filename="raw_text/data-00000-of-00001.jsonl.gz",
-            record_provenance_fields=("id", "source"),
+            metadata={
+                "output_filename": "raw_text/data-00000-of-00001.jsonl.gz",
+                "provenance_fields": ["id", "source"],
+            },
         ),
         epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
         issue_numbers=(RAW_CAPABILITY_ISSUE,),
@@ -327,8 +329,10 @@ CAPABILITY_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
             transform_name="render_capability_eval_dataset",
             serializer_name=CapabilityEvalRenderer.OPENHANDS.value,
             split="train",
-            output_filename="raw_text/data-00000-of-00001.jsonl.gz",
-            record_provenance_fields=("id", "source"),
+            metadata={
+                "output_filename": "raw_text/data-00000-of-00001.jsonl.gz",
+                "provenance_fields": ["id", "source"],
+            },
         ),
         epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
         issue_numbers=(RAW_CAPABILITY_ISSUE,),
@@ -349,8 +353,10 @@ CAPABILITY_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
             serializer_name=CapabilityEvalRenderer.GSM8K.value,
             split="train",
             subset="main",
-            output_filename="raw_text/data-00000-of-00001.jsonl.gz",
-            record_provenance_fields=("id", "source"),
+            metadata={
+                "output_filename": "raw_text/data-00000-of-00001.jsonl.gz",
+                "provenance_fields": ["id", "source"],
+            },
         ),
         epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
         issue_numbers=(RAW_CAPABILITY_ISSUE,),
@@ -370,8 +376,10 @@ CAPABILITY_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
             serializer_name=CapabilityEvalRenderer.GLOBAL_MGSM.value,
             split="test",
             subset="en",
-            output_filename="raw_text/data-00000-of-00001.jsonl.gz",
-            record_provenance_fields=("id", "source"),
+            metadata={
+                "output_filename": "raw_text/data-00000-of-00001.jsonl.gz",
+                "provenance_fields": ["id", "source"],
+            },
         ),
         epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
         issue_numbers=(RAW_CAPABILITY_ISSUE,),
@@ -390,8 +398,10 @@ CAPABILITY_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
             transform_name="render_capability_eval_dataset",
             serializer_name=CapabilityEvalRenderer.LIMA.value,
             split="train",
-            output_filename="raw_text/data-00000-of-00001.jsonl.gz",
-            record_provenance_fields=("id", "source"),
+            metadata={
+                "output_filename": "raw_text/data-00000-of-00001.jsonl.gz",
+                "provenance_fields": ["id", "source"],
+            },
         ),
         epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
         issue_numbers=(RAW_CAPABILITY_ISSUE,),
@@ -410,8 +420,10 @@ CAPABILITY_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
             transform_name="render_capability_eval_dataset",
             serializer_name=CapabilityEvalRenderer.LMSYS_CHAT.value,
             split="train",
-            output_filename="raw_text/data-00000-of-00001.jsonl.gz",
-            record_provenance_fields=("id", "source"),
+            metadata={
+                "output_filename": "raw_text/data-00000-of-00001.jsonl.gz",
+                "provenance_fields": ["id", "source"],
+            },
         ),
         epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
         issue_numbers=(RAW_CAPABILITY_ISSUE,),
@@ -845,6 +857,8 @@ def _stable_hash(*parts: str) -> str:
 def _config_suffix(config: CapabilityEvalDatasetConfig) -> str:
     config_dict = asdict(config)
     config_dict["renderer"] = config.renderer.value
+    if config.source_manifest is not None:
+        config_dict["source_manifest"] = config.source_manifest.to_dict()
     config_dict.pop("output_path", None)
     payload = json.dumps(config_dict, sort_keys=True)
     return hashlib.md5(payload.encode("utf-8")).hexdigest()[:6]

@@ -307,7 +307,7 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
         operations=[],
         stage_name="test",
     )
-    coord._start_stage("test", [task])
+    coord._start_stage("test", 0, [task])
 
     # Register 3 workers
     for i in range(3):
@@ -358,6 +358,53 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
     assert len(coord._task_queue) == 1  # task was requeued
 
 
+def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_path, caplog):
+    """Map-only stages don't populate item/byte counters, so the coordinator's
+    status log should drop the ``items=... bytes_processed=...`` segment rather
+    than print misleading zeros. Once either counter is recorded, the segment
+    reappears."""
+    from zephyr.execution import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="map_only",
+    )
+    coord._start_stage("map_only", 0, [task])
+
+    # No counters recorded → throughput segment is suppressed.
+    with caplog.at_level(logging.INFO, logger="zephyr.execution"):
+        caplog.clear()
+        coord._log_status()
+    msgs = [r.getMessage() for r in caplog.records if "complete" in r.getMessage()]
+    assert msgs, "expected a status line"
+    assert all("items=" not in m and "bytes_processed=" not in m for m in msgs), msgs
+
+    # Once a counter snapshot exists, the throughput segment reappears.
+    coord._worker_counters["worker-A"] = CounterSnapshot(
+        counters={ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name="map_only"): 7}, generation=1
+    )
+    with caplog.at_level(logging.INFO, logger="zephyr.execution"):
+        caplog.clear()
+        coord._log_status()
+    msgs = [r.getMessage() for r in caplog.records if "complete" in r.getMessage()]
+    assert msgs and "items=7" in msgs[-1] and "bytes_processed=0.0MiB" in msgs[-1], msgs
+
+    # Same when only the byte counter is present.
+    coord._worker_counters["worker-A"] = CounterSnapshot(
+        counters={ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name="map_only"): 1024}, generation=2
+    )
+    with caplog.at_level(logging.INFO, logger="zephyr.execution"):
+        caplog.clear()
+        coord._log_status()
+    msgs = [r.getMessage() for r in caplog.records if "complete" in r.getMessage()]
+    assert msgs and "items=0" in msgs[-1] and "bytes_processed=" in msgs[-1], msgs
+
+
 def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
     """When a task is requeued after heartbeat timeout, the original worker's
     stale result (from a previous attempt) is rejected by the coordinator."""
@@ -371,7 +418,7 @@ def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
         operations=[],
         stage_name="test",
     )
-    coord._start_stage("test", [task])
+    coord._start_stage("test", 0, [task])
 
     # Worker A pulls task (attempt 0)
     pulled = coord.pull_task("worker-A")
@@ -435,7 +482,7 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
         operations=[],
         stage_name="test",
     )
-    coord._start_stage("test", [task])
+    coord._start_stage("test", 0, [task])
 
     # Worker A pulls task (attempt 0)
     pulled_a = coord.pull_task("worker-A")
@@ -520,7 +567,7 @@ def test_report_error_requeues_until_max_shard_failures(actor_context, tmp_path)
         operations=[],
         stage_name="test",
     )
-    coord._start_stage("test", [task])
+    coord._start_stage("test", 0, [task])
     coord.register_worker("worker-0", MagicMock())
 
     # Each failure should re-queue until the limit
@@ -553,7 +600,7 @@ def test_heartbeat_timeouts_do_not_count_toward_shard_failures(actor_context, tm
         operations=[],
         stage_name="test",
     )
-    coord._start_stage("test", [task])
+    coord._start_stage("test", 0, [task])
     coord.register_worker("worker-0", MagicMock())
 
     # Far more heartbeat timeouts than MAX_SHARD_FAILURES — must not abort.
@@ -586,7 +633,7 @@ def test_worker_reregistration_does_not_count_toward_shard_failures(actor_contex
         operations=[],
         stage_name="test",
     )
-    coord._start_stage("test", [task])
+    coord._start_stage("test", 0, [task])
     coord.register_worker("worker-0", MagicMock())
 
     for _ in range(MAX_SHARD_FAILURES * 5):
@@ -613,7 +660,7 @@ def test_report_error_still_aborts_at_max_shard_failures_after_preemptions(actor
         operations=[],
         stage_name="test",
     )
-    coord._start_stage("test", [task])
+    coord._start_stage("test", 0, [task])
     coord.register_worker("worker-0", MagicMock())
 
     # Several preemption cycles first — these must not count.
@@ -649,7 +696,7 @@ def test_wait_for_stage_fails_when_all_workers_die(actor_context, tmp_path):
         operations=[],
         stage_name="test",
     )
-    coord._start_stage("test", [task])
+    coord._start_stage("test", 0, [task])
 
     # Register 2 workers
     coord.register_worker("worker-0", MagicMock())
@@ -682,7 +729,7 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
         operations=[],
         stage_name="test",
     )
-    coord._start_stage("test", [task])
+    coord._start_stage("test", 0, [task])
 
     # Register and kill a worker
     coord.register_worker("worker-0", MagicMock())
@@ -838,7 +885,7 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
     )
 
     # Non-last stage: empty queue returns None
-    coord._start_stage("stage-0", [task], is_last_stage=False)
+    coord._start_stage("stage-0", 0, [task], is_last_stage=False)
     pulled = coord.pull_task("worker-A")
     assert pulled is not None and pulled != "SHUTDOWN"
     _task, attempt, _config = pulled
@@ -856,7 +903,7 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
         operations=[],
         stage_name="test-last",
     )
-    coord._start_stage("stage-1", [task2], is_last_stage=True)
+    coord._start_stage("stage-1", 1, [task2], is_last_stage=True)
     pulled = coord.pull_task("worker-A")
     assert pulled is not None and pulled != "SHUTDOWN"
     _task, attempt, _config = pulled
@@ -871,7 +918,7 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
         ShardTask(shard_idx=i, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test-last2")
         for i in range(2)
     ]
-    coord._start_stage("stage-2", tasks_2, is_last_stage=True)
+    coord._start_stage("stage-2", 2, tasks_2, is_last_stage=True)
     coord.pull_task("worker-A")  # task 0 in-flight
     # Queue has one task left; worker-B takes it
     coord.pull_task("worker-B")  # task 1 in-flight
@@ -889,7 +936,7 @@ def test_last_stage_deadlock_detected_when_worker_job_dies(actor_context, tmp_pa
         ShardTask(shard_idx=i, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test")
         for i in range(2)
     ]
-    coord._start_stage("last-stage", tasks, is_last_stage=True)
+    coord._start_stage("last-stage", 0, tasks, is_last_stage=True)
 
     # Set up a mock worker group so _check_worker_group can query it.
     mock_group = MagicMock()
@@ -1084,6 +1131,69 @@ def test_execute_does_not_retry_worker_errors(local_client, tmp_path):
 
     # Should fail fast — no retries for application errors
     assert elapsed < 15.0, f"Took {elapsed:.1f}s, expected fast failure (no retries)"
+
+
+def test_stage_index_correct_with_join(local_client, tmp_path):
+    """_current_stage_index is set correctly for main and join-right stages.
+
+    The right-side sub-plan must carry the parent's stage_idx so the arrow
+    indicator in _report_task_stats stays on the parent stage while the
+    right side executes. If _compute_join_aux passes a different index,
+    the highlighted stage would be wrong.
+    """
+    # (stage_name, current_stage_index) recorded at each _start_stage call.
+    stage_calls: list[tuple[str, int]] = []
+    original_start_stage = ZephyrCoordinator._start_stage
+
+    def recording_start_stage(self, stage_name, current_stage_index, tasks, is_last_stage=False):
+        original_start_stage(self, stage_name, current_stage_index, tasks, is_last_stage=is_last_stage)
+        stage_calls.append((stage_name, self._current_stage_index))
+
+    ctx = ZephyrContext(
+        client=local_client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"test-join-index-{uuid.uuid4().hex[:8]}",
+    )
+
+    # The right side needs a worker stage so _compute_join_aux calls _start_stage.
+    left = Dataset.from_list([{"id": 1}, {"id": 2}])
+    right = Dataset.from_list([{"id": 1}, {"id": 2}]).map(lambda x: x)
+    joined = left.sorted_merge_join(
+        right,
+        left_key=lambda x: x["id"],
+        right_key=lambda x: x["id"],
+        combiner=lambda l, r: {**l, **r},
+    )
+
+    ZephyrCoordinator._start_stage = recording_start_stage
+    try:
+        ctx.execute(joined)
+    finally:
+        ZephyrCoordinator._start_stage = original_start_stage
+        ctx.shutdown()
+
+    main_calls = [(n, i) for n, i in stage_calls if not n.startswith("join-right")]
+    join_right_calls = [(n, i) for n, i in stage_calls if n.startswith("join-right")]
+
+    assert join_right_calls, f"Expected join-right stages; got: {stage_calls}"
+    assert main_calls, f"Expected main stages; got: {stage_calls}"
+
+    # Each join-right stage must carry the same current_stage_index as the
+    # main stage that follows it (the parent stage).
+    for right_name, right_idx in join_right_calls:
+        # The parent stage_idx is encoded in the join-right label: join-right-{parent}-...
+        parent_idx = int(right_name.split("-")[2])
+        assert right_idx == parent_idx, f"{right_name!r} has current_stage_index={right_idx}, expected {parent_idx}"
+
+    # The main stage immediately following the join-right stages must have its
+    # own stage_idx, not the join-right stages' index.
+    for main_name, main_idx in main_calls:
+        # Verify each main stage's recorded index matches what run_pipeline passed.
+        # stage_label format: "stage{stage_idx}-{stage_name}"
+        expected_idx = int(main_name.split("-")[0].replace("stage", ""))
+        assert main_idx == expected_idx, f"{main_name!r} has current_stage_index={main_idx}, expected {expected_idx}"
 
 
 # --- Integration tests (all backends) ---
