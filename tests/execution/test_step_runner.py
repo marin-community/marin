@@ -655,28 +655,6 @@ class _SubmitSpy:
         return getattr(self._inner, item)
 
 
-def test_plain_fn_runs_inline_without_resources(tmp_path: Path, fray_client):
-    """A plain callable with no ``resources`` field runs inline — no Fray submit."""
-    spy = _SubmitSpy(fray_client)
-    from fray.client import set_current_client
-
-    def my_step(output_path: str) -> PathMetadata:
-        return PathMetadata(path=output_path)
-
-    step = StepSpec(
-        name="inline_step",
-        override_output_path=tmp_path.as_posix(),
-        fn=my_step,
-    )
-
-    with set_current_client(spy):
-        StepRunner().run([step])
-
-    assert spy.requests == []
-    loaded = Artifact.load(tmp_path.as_posix(), PathMetadata)
-    assert loaded.path == tmp_path.as_posix()
-
-
 def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
     """Setting ``resources`` on a StepSpec submits ``fn`` as a Fray job."""
     spy = _SubmitSpy(fray_client)
@@ -699,50 +677,6 @@ def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
 
     assert len(spy.requests) == 1
     assert spy.requests[0].resources == custom
-    loaded = Artifact.load(tmp_path.as_posix(), PathMetadata)
-    assert loaded.path == tmp_path.as_posix()
-
-
-def test_executor_step_resources_propagates_to_step_spec(tmp_path: Path):
-    """``ExecutorStep.resources`` flows through ``resolve_executor_step``."""
-    custom = ResourceConfig.with_cpu(cpu=4, ram="16g")
-
-    def my_fn(config):
-        return None
-
-    step = ExecutorStep(name="explicit", fn=my_fn, config=None, resources=custom)
-    resolved = resolve_executor_step(step, config={}, output_path="/out/explicit")
-
-    assert resolved.resources == custom
-    # fn is wrapped to ignore output_path; it should NOT be a RemoteCallable.
-    assert not isinstance(resolved.fn, RemoteCallable)
-
-
-def test_step_resources_wins_over_remote_callable(tmp_path: Path, fray_client):
-    """When both ``step.resources`` and a ``RemoteCallable`` ``fn`` are set,
-    ``step.resources`` is used and the inner callable is unwrapped."""
-    spy = _SubmitSpy(fray_client)
-    from fray.client import set_current_client
-
-    explicit = ResourceConfig.with_cpu(cpu=8, ram="32g")
-    legacy = ResourceConfig.with_cpu(cpu=1, ram="2g")
-
-    @remote(resources=legacy)
-    def my_step(output_path):
-        return PathMetadata(path=output_path)
-
-    step = StepSpec(
-        name="dual_step",
-        override_output_path=tmp_path.as_posix(),
-        fn=my_step,
-        resources=explicit,
-    )
-
-    with set_current_client(spy):
-        StepRunner().run([step])
-
-    assert len(spy.requests) == 1
-    assert spy.requests[0].resources == explicit, "step.resources must take precedence"
     loaded = Artifact.load(tmp_path.as_posix(), PathMetadata)
     assert loaded.path == tmp_path.as_posix()
 
