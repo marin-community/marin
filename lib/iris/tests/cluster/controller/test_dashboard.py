@@ -17,7 +17,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.log_server.server import LogServiceImpl
+from finelog.server import LogServiceImpl
 from iris.cluster.controller.db import (
     healthy_active_workers_with_attributes,
 )
@@ -59,7 +59,8 @@ def submit_job(
     """Submit a job through the state command API."""
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
-    state.submit_job(jid, request, Timestamp.now())
+    with state._store.transaction() as cur:
+        state.submit_job(cur, jid, request, Timestamp.now())
     return jid
 
 
@@ -170,7 +171,7 @@ def service(state, scheduler, tmp_path):
     log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
@@ -190,7 +191,7 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
     log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
@@ -301,26 +302,30 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     set_job_state(state, succeeded_id, job_pb2.JOB_STATE_SUCCEEDED)
 
     # Add endpoints only for non-terminal jobs
-    state.add_endpoint(
-        EndpointRow(
-            endpoint_id="ep1",
-            name="pending-svc",
-            address="h:1",
-            task_id=pending_id.task(0),
-            metadata={},
-            registered_at=Timestamp.now(),
-        ),
-    )
-    state.add_endpoint(
-        EndpointRow(
-            endpoint_id="ep2",
-            name="running-svc",
-            address="h:2",
-            task_id=running_id.task(0),
-            metadata={},
-            registered_at=Timestamp.now(),
-        ),
-    )
+    with state._store.transaction() as cur:
+        state.add_endpoint(
+            cur,
+            EndpointRow(
+                endpoint_id="ep1",
+                name="pending-svc",
+                address="h:1",
+                task_id=pending_id.task(0),
+                metadata={},
+                registered_at=Timestamp.now(),
+            ),
+        )
+    with state._store.transaction() as cur:
+        state.add_endpoint(
+            cur,
+            EndpointRow(
+                endpoint_id="ep2",
+                name="running-svc",
+                address="h:2",
+                task_id=running_id.task(0),
+                metadata={},
+                registered_at=Timestamp.now(),
+            ),
+        )
 
     resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
     endpoints = resp.get("endpoints", [])
@@ -336,16 +341,18 @@ def test_list_endpoints_returns_task_id(client, state, job_request):
     set_job_state(state, job_id, job_pb2.JOB_STATE_RUNNING)
 
     task_id = job_id.task(0)
-    state.add_endpoint(
-        EndpointRow(
-            endpoint_id="ep-task",
-            name="my-actor",
-            address="h:1",
-            task_id=task_id,
-            metadata={},
-            registered_at=Timestamp.now(),
-        ),
-    )
+    with state._store.transaction() as cur:
+        state.add_endpoint(
+            cur,
+            EndpointRow(
+                endpoint_id="ep-task",
+                name="my-actor",
+                address="h:1",
+                task_id=task_id,
+                metadata={},
+                registered_at=Timestamp.now(),
+            ),
+        )
 
     resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
     endpoints = resp.get("endpoints", [])
@@ -754,21 +761,26 @@ def test_get_worker_status_recent_tasks_have_timestamps(client, state, job_reque
     job_id = submit_job(state, "ts-job", job_request)
     task_id = job_id.task(0)
 
-    state.queue_assignments([Assignment(task_id=task_id, worker_id=wid)])
-    state.apply_task_updates(
-        HeartbeatApplyRequest(
-            worker_id=wid,
-            worker_resource_snapshot=None,
-            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                worker_resource_snapshot=None,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+            ),
         )
-    )
-    state.apply_task_updates(
-        HeartbeatApplyRequest(
-            worker_id=wid,
-            worker_resource_snapshot=None,
-            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                worker_resource_snapshot=None,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
+            ),
         )
-    )
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
     tasks = resp.get("recentTasks", [])
@@ -793,12 +805,15 @@ def test_get_worker_status_includes_running_tasks_and_resource_history(client, s
     wid = register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())
     job_id = submit_job(state, "worker-detail-res", job_request)
     task_id = job_id.task(0)
-    state.queue_assignments([Assignment(task_id=task_id, worker_id=wid)])
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
 
     first = job_pb2.WorkerResourceSnapshot(host_cpu_percent=25, running_task_count=1)
     second = job_pb2.WorkerResourceSnapshot(host_cpu_percent=50, running_task_count=1)
-    state.apply_task_updates(HeartbeatApplyRequest(worker_id=wid, worker_resource_snapshot=first, updates=[]))
-    state.apply_task_updates(HeartbeatApplyRequest(worker_id=wid, worker_resource_snapshot=second, updates=[]))
+    with state._store.transaction() as cur:
+        state.apply_task_updates(cur, HeartbeatApplyRequest(worker_id=wid, worker_resource_snapshot=first, updates=[]))
+    with state._store.transaction() as cur:
+        state.apply_task_updates(cur, HeartbeatApplyRequest(worker_id=wid, worker_resource_snapshot=second, updates=[]))
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
     running_job_ids = resp.get("worker", {}).get("runningJobIds", [])
@@ -834,7 +849,7 @@ def test_fetch_logs_for_missing_task_returns_empty_entries(client):
     """FetchLogs on LogService returns empty entries for a nonexistent task."""
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     resp = client.post(
-        "/iris.logging.LogService/FetchLogs",
+        "/finelog.logging.LogService/FetchLogs",
         json={"source": re.escape(task_id) + ":.*"},
         headers={"Content-Type": "application/json"},
     )
@@ -858,7 +873,7 @@ def test_fetch_logs_backward_compat_proxy(client):
 
 def test_fetch_logs_backward_compat_proxy_proto_binary(client):
     """Old clients using default Connect proto encoding hit the compat endpoint."""
-    from iris.rpc import logging_pb2
+    from finelog.rpc import logging_pb2
 
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     req = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
@@ -871,6 +886,18 @@ def test_fetch_logs_backward_compat_proxy_proto_binary(client):
     parsed = logging_pb2.FetchLogsResponse()
     parsed.ParseFromString(resp.content)
     assert list(parsed.entries) == []
+
+
+def test_fetch_logs_legacy_iris_logging_path(client):
+    """Pre-finelog-lift clients call /iris.logging.LogService/FetchLogs."""
+    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
+    resp = client.post(
+        "/iris.logging.LogService/FetchLogs",
+        json={"source": re.escape(task_id) + ":.*"},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+    assert resp.json().get("entries", []) == []
 
 
 # =============================================================================
@@ -1042,7 +1069,7 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
     log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
@@ -1074,7 +1101,7 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path):
     log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,

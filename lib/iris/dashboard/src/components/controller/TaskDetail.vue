@@ -20,6 +20,7 @@ import ResourceGauge from '@/components/shared/ResourceGauge.vue'
 import Sparkline from '@/components/shared/Sparkline.vue'
 import ProfileButtons from '@/components/shared/ProfileButtons.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
+import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 
 const props = defineProps<{
   jobId: string
@@ -276,15 +277,22 @@ watch(() => props.taskId, async () => {
       <div v-if="cpuHistory.length > 1" class="grid grid-cols-2 gap-4 mb-6">
         <div class="rounded-lg border border-surface-border bg-surface p-3">
           <div class="text-xs text-text-secondary mb-2">CPU %</div>
-          <Sparkline :data="cpuHistory" :width="200" :height="40" color="var(--color-accent, #2563eb)" />
+          <Sparkline :data="cpuHistory" :height="40" color="var(--color-accent, #2563eb)" />
           <div class="text-xs font-mono text-text-muted mt-1">{{ cpuUsed.toFixed(0) }}%</div>
         </div>
         <div class="rounded-lg border border-surface-border bg-surface p-3">
           <div class="text-xs text-text-secondary mb-2">Memory (MB)</div>
-          <Sparkline :data="memHistory" :width="200" :height="40" color="var(--color-status-purple, #8b5cf6)" />
+          <Sparkline :data="memHistory" :height="40" color="var(--color-status-purple, #8b5cf6)" />
           <div class="text-xs font-mono text-text-muted mt-1">{{ memUsedMb.toFixed(0) }} MB</div>
         </div>
       </div>
+
+      <!-- Status text -->
+      <InfoCard v-if="task.statusTextMd" title="Status Text" class="mb-6">
+        <div class="text-sm text-text">
+          <MarkdownRenderer :content="task.statusTextMd" />
+        </div>
+      </InfoCard>
 
       <!-- Error display -->
       <div

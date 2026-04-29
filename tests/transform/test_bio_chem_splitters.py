@@ -10,7 +10,6 @@ format-preserving splitter.
 
 from __future__ import annotations
 
-from marin.datakit.download.bio_chem.uniprot import iter_uniprot_dat_records
 from marin.transform.bio_chem.splitters import (
     SamplingCap,
     iter_fasta_records,
@@ -18,6 +17,7 @@ from marin.transform.bio_chem.splitters import (
     iter_mmcif_blocks,
     iter_sdf_records,
     iter_smiles_records,
+    iter_uniprot_dat_records,
     pack_records_into_docs,
     take_until_cap,
 )
@@ -74,6 +74,19 @@ def test_gff_splitter_groups_by_seqid_and_keeps_directives():
     assert blocks[1].endswith("###\n")
     # Tab columns are preserved verbatim.
     assert "\t" in blocks[0]
+    assert "".join(blocks) == gff
+
+
+def test_gff_splitter_preserves_blank_lines_inside_blocks():
+    gff = (
+        "##gff-version 3\n"
+        "\n"
+        "NC_001416.1\tRefSeq\tgene\t191\t736\t.\t+\t.\tID=gene-lambdap01\n"
+        "\n"
+        "NC_001416.1\tRefSeq\tCDS\t191\t736\t.\t+\t0\tParent=gene-lambdap01\n"
+    )
+    blocks = list(iter_gff_blocks(_lines(gff)))
+    assert blocks == [gff]
 
 
 def test_smiles_splitter_keeps_full_lines_and_skips_comments():
@@ -152,6 +165,12 @@ def test_mmcif_splitter_preserves_blocks():
     assert "".join(blocks) == cif[cif.index("data_1ABC") :]
 
 
+def test_mmcif_splitter_handles_final_data_boundary_without_newline():
+    cif = "data_1ABC\n_entry.id 1ABC\ndata_2DEF"
+    blocks = list(iter_mmcif_blocks([cif]))
+    assert blocks == ["data_1ABC\n_entry.id 1ABC\n", "data_2DEF"]
+
+
 def test_uniprot_dat_splitter_preserves_entries():
     dat = (
         "ID   001R_FRG3G              Reviewed;         256 AA.\n"
@@ -203,6 +222,4 @@ def test_take_until_cap_stops_at_record_count():
 def test_take_until_cap_stops_at_byte_budget():
     cap = SamplingCap(max_records=10, max_bytes=4)
     out = list(take_until_cap(iter(["abc", "de", "fgh"]), cap))
-    # After "abc" (3 bytes) we are still under 4; after "de" (2 more bytes) we
-    # hit 5 which exceeds the cap, so the next iteration stops.
-    assert out == ["abc", "de"]
+    assert out == ["abc"]

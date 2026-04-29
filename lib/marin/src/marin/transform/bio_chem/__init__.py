@@ -15,16 +15,7 @@ from marin.transform.bio_chem.splitters import (
     iter_mmcif_blocks,
     iter_sdf_records,
     iter_smiles_records,
+    iter_uniprot_dat_records,
     pack_records_into_docs,
     take_until_cap,
 )
-
-__all__ = [
-    "iter_fasta_records",
-    "iter_gff_blocks",
-    "iter_mmcif_blocks",
-    "iter_sdf_records",
-    "iter_smiles_records",
-    "pack_records_into_docs",
-    "take_until_cap",
-]

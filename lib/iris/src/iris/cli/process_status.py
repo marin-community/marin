@@ -14,9 +14,9 @@ import humanfriendly
 
 from iris.cli.main import require_controller_url, rpc_client
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
-from iris.rpc import logging_pb2
+from finelog.rpc import logging_pb2
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.rpc import job_pb2
-from iris.rpc.logging_connect import LogServiceClientSync
 
 _CONTROLLER_LOG_TARGET = "/system/controller"
 

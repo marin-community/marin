@@ -20,11 +20,3 @@ from marin.datakit.download.bio_chem._runtime import (
     bio_chem_slice_step,
     run_notation_slice,
 )
-
-__all__ = [
-    "NotationFormat",
-    "NotationSliceSpec",
-    "PackingConfig",
-    "bio_chem_slice_step",
-    "run_notation_slice",
-]

@@ -19,8 +19,6 @@ preferable for scale; add them as separate slices if you need them.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
-
 from marin.datakit.download.bio_chem._runtime import (
     NotationFormat,
     NotationSliceSpec,
@@ -32,26 +30,6 @@ from marin.transform.bio_chem.splitters import SamplingCap
 UNIPROT_BASE = "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete"
 UNIPROT_SPROT_FASTA_URL = f"{UNIPROT_BASE}/uniprot_sprot.fasta.gz"
 UNIPROT_SPROT_DAT_URL = f"{UNIPROT_BASE}/uniprot_sprot.dat.gz"
-
-
-def iter_uniprot_dat_records(lines: Iterable[str]) -> Iterator[str]:
-    """Yield UniProt flat-file entries terminated by ``//``.
-
-    Each entry includes the trailing ``//\\n`` so concatenated entries
-    round-trip the original stream verbatim (modulo whitespace before the
-    first entry).
-    """
-    buf: list[str] = []
-    for raw in lines:
-        if not buf and not raw.startswith("ID "):
-            # Skip preamble before the first ID line.
-            continue
-        buf.append(raw)
-        if raw.rstrip("\r\n") == "//":
-            yield "".join(buf)
-            buf = []
-    if buf:
-        yield "".join(buf)
 
 
 UNIPROT_SLICES: tuple[NotationSliceSpec, ...] = (

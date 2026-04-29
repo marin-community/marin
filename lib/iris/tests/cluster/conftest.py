@@ -23,13 +23,14 @@ from iris.cluster.controller.schema import (
     WORKER_DETAIL_PROJECTION,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.log_server.server import LogServiceImpl
+from finelog.server import LogServiceImpl
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.k8s.types import K8sResource
@@ -222,9 +223,11 @@ class ServiceTestHarness:
     def sync_k8s(self) -> None:
         """Run one K8s direct provider sync cycle."""
         assert self.k8s_provider is not None, "sync_k8s requires K8s harness"
-        batch = self.state.drain_for_direct_provider()
+        with self.state._store.transaction() as cur:
+            batch = self.state.drain_for_direct_provider(cur)
         result = self.k8s_provider.sync(batch)
-        self.state.apply_direct_provider_updates(result.updates)
+        with self.state._store.transaction() as cur:
+            self.state.apply_direct_provider_updates(cur, result.updates)
 
     # ── GCP-specific ────────────────────────────────────────────
 
@@ -249,7 +252,8 @@ class ServiceTestHarness:
         metadata.attributes["device-type"].string_value = device_type
         metadata.attributes["preemptible"].string_value = str(preemptible).lower()
         metadata.attributes["region"].string_value = region
-        self.state.register_or_refresh_worker(wid, f"{worker_id}:8080", metadata, Timestamp.now())
+        with self.state._store.transaction() as cur:
+            self.state.register_or_refresh_worker(cur, wid, f"{worker_id}:8080", metadata, Timestamp.now())
         return wid
 
     # ── Private drivers ─────────────────────────────────────────
@@ -339,7 +343,10 @@ class ServiceTestHarness:
                 workers = WORKER_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM workers"))
             if not workers:
                 raise ValueError("No GCP workers registered -- call register_gcp_worker first")
-            self.state.queue_assignments([Assignment(task_id=task_id, worker_id=WorkerId(workers[0].worker_id))])
+            with self.state._store.transaction() as cur:
+                self.state.queue_assignments(
+                    cur, [Assignment(task_id=task_id, worker_id=WorkerId(workers[0].worker_id))]
+                )
 
         worker_id, attempt_id = self._current_attempt_info(task_id)
         if worker_id is None:
@@ -355,7 +362,25 @@ class ServiceTestHarness:
             )
             and task.state != job_pb2.TASK_STATE_RUNNING
         ):
+            with self.state._store.transaction() as cur:
+                self.state.apply_task_updates(
+                    cur,
+                    HeartbeatApplyRequest(
+                        worker_id=worker_id,
+                        worker_resource_snapshot=None,
+                        updates=[
+                            TaskUpdate(
+                                task_id=task_id,
+                                attempt_id=attempt_id,
+                                new_state=job_pb2.TASK_STATE_RUNNING,
+                            )
+                        ],
+                    ),
+                )
+
+        with self.state._store.transaction() as cur:
             self.state.apply_task_updates(
+                cur,
                 HeartbeatApplyRequest(
                     worker_id=worker_id,
                     worker_resource_snapshot=None,
@@ -363,25 +388,11 @@ class ServiceTestHarness:
                         TaskUpdate(
                             task_id=task_id,
                             attempt_id=attempt_id,
-                            new_state=job_pb2.TASK_STATE_RUNNING,
+                            new_state=new_state,
                         )
                     ],
-                )
+                ),
             )
-
-        self.state.apply_task_updates(
-            HeartbeatApplyRequest(
-                worker_id=worker_id,
-                worker_resource_snapshot=None,
-                updates=[
-                    TaskUpdate(
-                        task_id=task_id,
-                        attempt_id=attempt_id,
-                        new_state=new_state,
-                    )
-                ],
-            )
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +402,8 @@ class ServiceTestHarness:
 
 def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "k8s_db")
-    state = ControllerTransitions(db=db)
+    store = ControllerStore(db)
+    state = ControllerTransitions(store=store)
 
     k8s = InMemoryK8sService()
     k8s.add_node_pool(
@@ -413,7 +425,7 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
 
     service = ControllerServiceImpl(
         state,
-        db,
+        store,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "k8s_bundles")),
         log_service=LogServiceImpl(),
@@ -431,14 +443,15 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
 
 def _make_gcp_harness(tmp_path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "gcp_db")
-    state = ControllerTransitions(db=db)
+    store = ControllerStore(db)
+    state = ControllerTransitions(store=store)
 
     ctrl = _HarnessController()
     ctrl.has_direct_provider = False
 
     service = ControllerServiceImpl(
         state,
-        db,
+        store,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "gcp_bundles")),
         log_service=LogServiceImpl(),

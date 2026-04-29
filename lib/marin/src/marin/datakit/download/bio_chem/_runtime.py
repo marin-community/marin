@@ -29,6 +29,7 @@ from marin.transform.bio_chem.splitters import (
     iter_mmcif_blocks,
     iter_sdf_records,
     iter_smiles_records,
+    iter_uniprot_dat_records,
     pack_records_into_docs,
     take_until_cap,
 )
@@ -107,7 +108,6 @@ class BioChemSliceConfig:
 
     output_path: str = THIS_OUTPUT_PATH
     slices: tuple[NotationSliceSpec, ...] = ()
-    parallelism: int = 4
 
 
 def _stream_lines(spec: NotationSliceSpec) -> Iterator[str]:
@@ -137,10 +137,6 @@ def _records_for(spec: NotationSliceSpec) -> Iterator[str]:
     if spec.fmt is NotationFormat.MMCIF:
         return iter_mmcif_blocks(lines)
     if spec.fmt is NotationFormat.UNIPROT_DAT:
-        # Imported lazily to avoid a circular import (uniprot module imports
-        # this runtime to build its slice specs).
-        from marin.datakit.download.bio_chem.uniprot import iter_uniprot_dat_records
-
         return iter_uniprot_dat_records(lines)
     raise ValueError(f"Unhandled notation format: {spec.fmt!r}")
 
@@ -201,7 +197,6 @@ def bio_chem_slice_step(
     *,
     name: str,
     slices: tuple[NotationSliceSpec, ...],
-    parallelism: int = 4,
     description: str | None = None,
 ) -> ExecutorStep:
     """Build an ExecutorStep that streams all ``slices`` into one output dir.
@@ -216,6 +211,5 @@ def bio_chem_slice_step(
         config=BioChemSliceConfig(
             output_path=this_output_path(),
             slices=slices,
-            parallelism=parallelism,
         ),
     )

@@ -62,6 +62,10 @@ def iter_gff_blocks(lines: Iterable[str]) -> Iterator[str]:
     for raw in lines:
         line = raw.rstrip("\n").rstrip("\r")
         if not line:
+            if block:
+                block.append(raw)
+            elif pending_directives:
+                pending_directives.append(raw)
             continue
         if line.startswith("###"):
             flushed = _flush()
@@ -170,9 +174,12 @@ def iter_mmcif_blocks(text: Iterable[str]) -> Iterator[str]:
             if nl == -1:
                 tail = chunk[start:]
                 if tail:
-                    if in_block or tail.startswith("data_"):
-                        if not in_block and tail.startswith("data_"):
-                            in_block = True
+                    if tail.startswith("data_"):
+                        if buf:
+                            yield "".join(buf)
+                            buf = []
+                        in_block = True
+                    if in_block:
                         buf.append(tail)
                 break
             line = chunk[start : nl + 1]
@@ -187,6 +194,20 @@ def iter_mmcif_blocks(text: Iterable[str]) -> Iterator[str]:
                 buf.append(line)
             # Pre-block comments / whitespace are dropped.
             start = nl + 1
+    if buf:
+        yield "".join(buf)
+
+
+def iter_uniprot_dat_records(lines: Iterable[str]) -> Iterator[str]:
+    """Yield UniProt flat-file entries terminated by ``//``."""
+    buf: list[str] = []
+    for raw in lines:
+        if not buf and not raw.startswith("ID "):
+            continue
+        buf.append(raw)
+        if raw.rstrip("\r\n") == "//":
+            yield "".join(buf)
+            buf = []
     if buf:
         yield "".join(buf)
 
@@ -208,11 +229,12 @@ def take_until_cap(records: Iterable[str], cap: SamplingCap) -> Iterator[str]:
     seen_records = 0
     seen_bytes = 0
     for record in records:
-        if seen_records >= cap.max_records or seen_bytes >= cap.max_bytes:
+        record_bytes = len(record.encode("utf-8"))
+        if seen_records >= cap.max_records or seen_bytes + record_bytes > cap.max_bytes:
             return
         yield record
         seen_records += 1
-        seen_bytes += len(record.encode("utf-8"))
+        seen_bytes += record_bytes
 
 
 def pack_records_into_docs(

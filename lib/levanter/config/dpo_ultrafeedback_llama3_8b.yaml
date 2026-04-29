@@ -3,8 +3,10 @@
 # python infra/launch.py --zone us-central1-a --tpu_name debug --tpu_type v5p-8 -- python src/levanter/main/train_dpo.py --config_path config/dpo_ultrafeedback_llama3_8b.yaml
 data:
   tokenizer: marin-community/marin-tokenizer
-  shuffle: true
-  permutation_type: feistel
+  shuffle:
+    io_block_size: 256
+    window_blocks: 512
+    perm_type: feistel
   components:
     ultrafeedback_train_prefs:
       source:

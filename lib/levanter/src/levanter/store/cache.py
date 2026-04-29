@@ -20,7 +20,7 @@ import numpy as np
 import pyarrow as pa
 import tensorstore as ts
 from dataclasses_json import dataclass_json
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from fsspec import AbstractFileSystem
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
@@ -219,7 +219,7 @@ class CacheMetadata:
 
 class SerialCacheWriter:
     """
-    Writes TreeCache-compatible caches to disk without Ray. Mostly for scripts and debugging.
+    Writes TreeCache-compatible caches to disk directly. Mostly for scripts and debugging.
     """
 
     def __init__(

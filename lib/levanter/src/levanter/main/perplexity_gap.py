@@ -6,7 +6,7 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Sequence
 
 import equinox as eqx
 import jax
@@ -19,6 +19,7 @@ from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
 import levanter.tracker
+from levanter.analysis.model_perplexity import ModelScoreReportBuilder, ScoredDocument, write_model_score_files
 from levanter.analysis.perplexity_gap import (
     GapReportBuilder,
     RawTextDocument,
@@ -62,6 +63,17 @@ class GapFinderConfig:
     datasets: dict[str, DatasetComponent] = field(default_factory=dict)
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     output_path: str = "perplexity-gap"
+    max_eval_length: int = 4096
+    max_docs_per_dataset: int | None = 256
+    max_doc_bytes: int | None = 32_768
+
+
+@dataclass
+class ModelPerplexityConfig:
+    model: GapFinderModelConfig
+    datasets: dict[str, DatasetComponent] = field(default_factory=dict)
+    trainer: TrainerConfig = field(default_factory=TrainerConfig)
+    output_path: str = "model-perplexity"
     max_eval_length: int = 4096
     max_docs_per_dataset: int | None = 256
     max_doc_bytes: int | None = 32_768
@@ -119,6 +131,70 @@ class _ModelRunner:
         )
         losses = self.compute_losses(self.model, batch)
         return np.asarray(jax.device_get(losses), dtype=np.float64)
+
+
+def score_main(config: ModelPerplexityConfig) -> None:
+    levanter.initialize(config)
+    if not config.datasets:
+        raise ValueError("Model perplexity scoring requires at least one dataset.")
+
+    compute_axis_mapping = config.trainer.compute_axis_mapping
+    parameter_axis_mapping = config.trainer.parameter_axis_mapping
+    model_spec = _resolved_model_spec(config.model)
+
+    with config.trainer.use_device_mesh():
+        runner = _load_model_runner(
+            spec=model_spec,
+            trainer=config.trainer,
+            max_eval_length=config.max_eval_length,
+            compute_axis_mapping=compute_axis_mapping,
+            parameter_axis_mapping=parameter_axis_mapping,
+        )
+
+        report = ModelScoreReportBuilder(model_name=runner.label)
+        scored_documents: list[ScoredDocument] = []
+
+        docs_processed = 0
+        current_dataset: str | None = None
+        for docs in _document_batches(
+            iter_raw_text_documents(
+                config.datasets,
+                max_docs_per_dataset=config.max_docs_per_dataset,
+                max_doc_bytes=config.max_doc_bytes,
+            ),
+            batch_size=config.trainer.eval_batch_size,
+        ):
+            batch_dataset = docs[0].dataset_name
+            if batch_dataset != current_dataset:
+                current_dataset = batch_dataset
+                logger.info("Starting dataset %s", current_dataset)
+            texts = [doc.text for doc in docs]
+            tokenized_docs, per_byte_losses = runner.score_texts(texts)
+            for doc, tokenized, losses in zip(docs, tokenized_docs, per_byte_losses, strict=True):
+                report.add_document(document=doc, per_byte_loss=losses)
+                scored_documents.append(ScoredDocument(document=doc, per_byte_loss=losses, tokenized=tokenized))
+            docs_processed += len(docs)
+            if docs_processed % 32 == 0:
+                logger.info("Processed %s documents for model perplexity scores", docs_processed)
+
+        token_id_to_text = _token_id_to_text(scored_documents, runner.hf_tokenizer)
+        summary = report.build_summary()
+        write_model_score_files(
+            config.output_path,
+            summary,
+            scored_documents,
+            vocab_size=len(runner.tokenizer),
+            token_id_to_text=token_id_to_text,
+        )
+        levanter.tracker.log(_model_score_scalars(summary), step=0)
+        _log_model_score_artifact(
+            summary,
+            scored_documents,
+            vocab_size=len(runner.tokenizer),
+            token_id_to_text=token_id_to_text,
+        )
+
+    levanter.tracker.current_tracker().finish()
 
 
 def main(config: GapFinderConfig) -> None:
@@ -298,6 +374,23 @@ def _model_label(spec: GapFinderModelConfig) -> str:
     return os.path.basename(spec.checkpoint_path.rstrip("/")) or spec.checkpoint_path
 
 
+def _token_id_to_text(scored_documents: Sequence[ScoredDocument], hf_tokenizer: Any) -> dict[int, str]:
+    token_ids = sorted({int(token_id) for doc in scored_documents for token_id in doc.tokenized.token_ids.tolist()})
+    if not token_ids:
+        return {}
+
+    token_texts = hf_tokenizer.convert_ids_to_tokens(token_ids)
+    if not isinstance(token_texts, list):
+        token_texts = list(token_texts)
+
+    mapping: dict[int, str] = {}
+    for token_id, token_text in zip(token_ids, token_texts, strict=True):
+        if token_text is None:
+            continue
+        mapping[token_id] = str(token_text)
+    return mapping
+
+
 def _accumulate_token_losses(
     out: np.ndarray,
     starts: np.ndarray,
@@ -338,6 +431,23 @@ def _summary_scalars(summary: dict[str, Any]) -> dict[str, float]:
     return scalars
 
 
+def _model_score_scalars(summary: dict[str, Any]) -> dict[str, float]:
+    scalars: dict[str, float] = {}
+    for row in summary["datasets"]:
+        if row["bpb"] is None:
+            continue
+        scalars[f"score/datasets/{row['name']}/bpb"] = float(row["bpb"])
+    for row in summary["dataset_groups"]:
+        if row["bpb"] is None:
+            continue
+        scalars[f"score/groups/{row['name']}/bpb"] = float(row["bpb"])
+    for row in summary["pattern_buckets"]:
+        if row["bpb"] is None:
+            continue
+        scalars[f"score/patterns/{row['name']}/bpb"] = float(row["bpb"])
+    return scalars
+
+
 def _check_finite_losses(label: str, losses: np.ndarray) -> None:
     if np.isfinite(losses).all():
         return
@@ -358,6 +468,31 @@ def _log_report_artifact(summary: dict[str, Any]) -> None:
             tmpdir,
             name="perplexity_gap_report",
             type="perplexity_gap_report",
+        )
+
+
+def _log_model_score_artifact(
+    summary: dict[str, Any],
+    scored_documents: Sequence[ScoredDocument],
+    *,
+    vocab_size: int | None = None,
+    token_id_to_text: dict[int, str] | None = None,
+) -> None:
+    if jax.process_index() != 0:
+        return
+
+    with tempfile.TemporaryDirectory(prefix="model-perplexity-scores-") as tmpdir:
+        write_model_score_files(
+            tmpdir,
+            summary,
+            scored_documents,
+            vocab_size=vocab_size,
+            token_id_to_text=token_id_to_text,
+        )
+        levanter.tracker.current_tracker().log_artifact(
+            tmpdir,
+            name="model_perplexity_scores",
+            type="model_perplexity_scores",
         )
 
 

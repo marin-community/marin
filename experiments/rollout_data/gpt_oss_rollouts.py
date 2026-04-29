@@ -4,7 +4,8 @@
 """andyrdt/gpt-oss-20b-rollouts rollout dataset (non-benchmark subsets).
 
 Usage:
-    uv run lib/marin/src/marin/run/ray_run.py -- python experiments/rollout_data/gpt_oss_rollouts.py
+    uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
+      -- python -m experiments.rollout_data.gpt_oss_rollouts
 """
 
 from marin.datakit.download.gpt_oss_rollouts import download_gpt_oss_rollouts_step

@@ -38,11 +38,11 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
-from iris.cluster.log_store._types import task_log_key
-from iris.log_server.client import LogPusher
-from iris.logging import str_to_log_level
+from iris.cluster.log_store_helpers import task_log_key
+from finelog.client import LogPusher
+from finelog.types import str_to_log_level
 from rigging.log_setup import parse_log_level
-from iris.rpc import logging_pb2
+from finelog.rpc import logging_pb2
 from iris.rpc import job_pb2
 from iris.rpc import worker_pb2
 from iris.rpc.job_pb2 import TaskState, WorkerMetadata

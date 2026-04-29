@@ -10,8 +10,8 @@ upstream data is refreshed.
 Slices:
 
 * ``chembl_<v>_chemreps.txt.gz`` — TSV with ``chembl_id``, ``canonical_smiles``,
-  ``standard_inchi``, ``standard_inchi_key``. We keep the SMILES column (1-indexed
-  column 2) so the slice exercises ChEMBL's SMILES dialect.
+  ``standard_inchi``, ``standard_inchi_key``. We keep the full row so IDs,
+  SMILES, InChI strings, and key metadata remain in their original notation.
 * ``chembl_<v>.sdf.gz`` — full SDF dump; capped to a small head.
 """
 

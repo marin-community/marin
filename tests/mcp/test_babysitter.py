@@ -11,6 +11,7 @@ from marin.mcp.babysitter import (
     _token_provider,
     classify_diagnosis,
     parse_zephyr_progress,
+    parse_zephyr_thread_state,
     task_status_to_json,
 )
 
@@ -161,6 +162,28 @@ def test_parse_zephyr_progress_keeps_latest_stage_snapshot():
     assert progress[1]["stage"] == "stage1-Reduce"
 
 
+def test_parse_zephyr_thread_state_classifies_active_and_zombie_dumps():
+    active = parse_zephyr_thread_state(
+        """
+        Thread actor-method_0:
+          File "zephyr/execution.py", line 873, in _wait_for_stage
+        Thread zephyr-coordinator-loop:
+          File "zephyr/execution.py", line 444, in _coordinator_loop
+        """
+    )
+    zombie = parse_zephyr_thread_state(
+        """
+        Thread worker-pool-0:
+          File "concurrent/futures/thread.py", line 58, in _worker
+        """
+    )
+
+    assert active["state"] == "active"
+    assert "waiting for stage completion" in active["evidence"]
+    assert zombie["state"] == "zombie_suspected"
+    assert "worker pool frames without coordinator loop" in zombie["evidence"]
+
+
 def test_classify_diagnosis_reports_common_babysitting_signals():
     job = {
         "state": "failed",
@@ -191,12 +214,15 @@ def test_classify_diagnosis_reports_common_babysitting_signals():
         }
     ]
 
-    signals = classify_diagnosis(job=job, logs=logs, workers=workers, thread_dump="")
+    thread_dump = 'File "concurrent/futures/thread.py", line 58, in _worker'
+
+    signals = classify_diagnosis(job=job, logs=logs, workers=workers, thread_dump=thread_dump)
     names = {signal["signal"] for signal in signals}
 
     assert "oom_or_exit_137" in names
     assert "quota_or_backoff" in names
     assert "tpu_xla_bad_node" in names
     assert "dead_worker" in names
+    assert "zombie_coordinator" in names
     assert "repeated_retries" in names
     assert "misleading_terminated_by_user" in names

@@ -9,9 +9,9 @@ from collections.abc import Callable
 from typing import TypeVar
 
 from fray.cluster import ResourceConfig
-from fray.v2.client import current_client
-from fray.v2.types import Entrypoint, JobRequest, create_environment
-from fray.v2.types import GpuConfig, TpuConfig
+from fray.client import current_client
+from fray.types import Entrypoint, JobRequest, create_environment
+from fray.types import GpuConfig, TpuConfig
 
 logger = logging.getLogger(__name__)
 

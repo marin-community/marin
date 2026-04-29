@@ -5,13 +5,14 @@ import dataclasses
 import importlib
 import logging
 import os
+import urllib.parse
 from copy import deepcopy
-from dataclasses import dataclass, replace
 from collections.abc import Callable
+from dataclasses import dataclass, replace
 from typing import TypeVar
 
 import draccus
-from fray.v2 import (
+from fray import (
     CpuConfig,
     Entrypoint,
     GpuConfig,
@@ -84,10 +85,32 @@ TrainOnPodConfigT = TypeVar("TrainOnPodConfigT", TrainLmOnPodConfig, TrainDpoOnP
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
+TEMPORARY_CHECKPOINT_TTL_DAYS = 14
+TEMPORARY_CHECKPOINTS_PATH = "checkpoints-temp"
 
 
 def _cli_helpers_module():
     return importlib.import_module("levanter.infra.cli_helpers")
+
+
+def _output_path_temp_component(output_path: str) -> str:
+    parsed = urllib.parse.urlparse(output_path)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.netloc}{parsed.path}".strip("/")
+    if parsed.scheme:
+        return f"{parsed.scheme}{parsed.path}".strip("/")
+    return output_path.strip("/")
+
+
+def temporary_checkpoint_base_path(output_path: str) -> str:
+    """Return the region-local temporary checkpoint base for an executor output path."""
+    output_component = _output_path_temp_component(output_path)
+    temp_prefix = os.path.join(TEMPORARY_CHECKPOINTS_PATH, output_component, DEFAULT_CHECKPOINTS_PATH)
+    return marin_temp_bucket(
+        ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
+        prefix=temp_prefix,
+        source_prefix=output_path,
+    )
 
 
 def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodConfigT:
@@ -109,7 +132,7 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
         checkpointer=replace(
             pod_config.train_config.trainer.checkpointer,
             base_path=os.path.join(pod_config.output_path, DEFAULT_CHECKPOINTS_PATH),
-            temporary_base_path=marin_temp_bucket(ttl_days=14, prefix="checkpoints-temp"),
+            temporary_base_path=temporary_checkpoint_base_path(pod_config.output_path),
         ),
     )
 
@@ -277,10 +300,9 @@ def _submit_training_job(
 
 
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
-    """Run the Levanter LM training main function on a Ray cluster.
+    """Run the Levanter LM training main function by submitting a job to Fray.
 
-    This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
-    It should also be run with a Ray cluster already running.
+    Expects the following env vars (in the process env or ``config.env_vars``):
 
     - WANDB_API_KEY: The API key for Weights and Biases.
     - RUN_ID: (Optional) The run ID for this training run. Will default to a random UID if not set.
@@ -289,7 +311,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     This function makes a number of changes to the config and ensures a few things are set:
     - The run ID is set, or sets a default if not.
     - WANDB_API_KEY is set.
-    - It disables the auto-ray-start and auto-worker-start options since we're already in a Ray cluster.
+    - Accelerator-appropriate extras (``tpu``/``gpu``) are selected for the Fray environment.
     - It checks that configured GCS paths are in the same region as the VM (except train/validation source URLs).
     """
     config, train_config, env, extras = _prepare_training_run(config)
@@ -315,10 +337,9 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
 
 def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
-    """Run the Levanter DPO training main function on a Ray cluster.
+    """Run the Levanter DPO training main function through Fray.
 
     This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
-    It should also be run with a Ray cluster already running.
     """
     config, train_config, env, extras = _prepare_training_run(config)
 
@@ -353,7 +374,7 @@ def _add_default_env_variables(env: dict, default_env: dict | None):
         default_env = deepcopy(default_env)
         env = mergedeep.merge(default_env, env)
 
-    # Ray gets mad if the values aren't all strings, but e.g. ints
+    # Task environment values are serialized as strings.
     env = {str(k): str(v) for k, v in env.items()}
     return env
 

@@ -58,36 +58,7 @@ jobs:
       - name: Test with pytest
         run: |
           # Test with specific JAX version, excluding TPU tests
-          PYTHONPATH=tests:src:. uv run --package marin-levanter --frozen --with "jax[cpu]==0.8.0" pytest tests -m "not entry and not slow and not ray and not tpu" --durations=20
-
-  levanter-ray-tests:
-    needs: changes
-    if: needs.changes.outputs.should_run == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: lib/levanter
-
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install uv and Python
-        uses: astral-sh/setup-uv@v6
-        with:
-          version: "0.7.20"
-          python-version: "3.11"
-          enable-cache: true
-          working-directory: lib/levanter
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Set up Python
-        run: uv python install
-      - name: Install dependencies
-        run: uv sync --package marin-levanter --dev --group test --frozen
-      - name: Test with pytest
-        run: |
-          PYTHONPATH=tests:src:. uv run --package marin-levanter --frozen pytest tests -m "ray" --durations=20
+          PYTHONPATH=tests:src:. uv run --package marin-levanter --frozen --with "jax[cpu]==0.8.0" pytest tests -m "not entry and not slow and not tpu" --durations=20
 
   levanter-entry-tests:
     needs: changes
@@ -241,7 +212,7 @@ jobs:
               timeout --kill-after=5 --signal=TERM 890 \
               uv run --package marin-levanter --frozen --group test --with 'jax[tpu]==$JAX_VERSION' \
               pytest -n 0 lib/levanter/tests \
-              -m 'not entry and not ray and not slow and not torch' \
+              -m 'not entry and not slow and not torch' \
               --ignore=lib/levanter/tests/test_audio.py \
               --ignore=lib/levanter/tests/test_new_cache.py \
               --ignore=lib/levanter/tests/test_hf_checkpoints.py \
