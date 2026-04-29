@@ -146,3 +146,82 @@ the v16 compute-optimal baseline.
   (speedup > 1 at *all four* scales). Gate 2 here is informational — it
   characterizes the scaling behavior of the cost rather than testing
   promotability.
+
+### 2026-04-29 - Gate 2 infra recovery
+Gate 2 hit two infra issues during execution:
+
+1. **Original Gate 2 parent (`/kaiyue/iris-run-job-20260428-022733`)** ran from
+   17:06 UTC for 9.3h, then crashed when Iris briefly reported
+   `unschedulable: no groups in region us-central2` mid-run. d1024 / d1280 had
+   permanent checkpoints at step 1k–9k.
+2. **Resume parent (`/kaiyue/iris-run-job-20260428-170638`)** picked up cleanly —
+   d1024 finished, d1280 ran 14h, then both d1280 children received SIGTERM
+   from Iris at step 11271/11269 (96–98%) — last permanent checkpoint at
+   step 11000, last temp checkpoint at step 11344. Macros at last logged eval:
+   2x=3.036, 4x=3.041 (both at step 11000).
+3. **Subsequent resubmits failed in 25–30s** with `RuntimeError: N step(s) failed`
+   and no informative parent stderr. After patching the launcher to dump the
+   full traceback to `gs://marin-us-east5/grug/lm_head_init_sweep/_debug/`, the
+   actual exception turned out to be:
+   `connectrpc.errors.ConnectError: Job ... is unschedulable: no groups in
+   region us-central2; did you mean us-central1?`
+   Root cause: Iris's `iris.client.client.submit()` inherits the parent CPU
+   worker's region onto the v5p-8 child request when the child has no explicit
+   region constraint. Original Gate 2 parents happened to run in us-east5 →
+   children went to us-east5 → success. Post-SIGTERM resubmits landed on
+   us-central2 CPU → children inherited us-central2 → `no groups`.
+4. **Fix 1** (`launch.py` commit `6f0ef28a1`): in `run_grug_moe_trial`, set
+   `resources.regions = ("us-east5", "us-central1")` for any TPU resource
+   when not already specified. This is a function-body change → does not
+   alter `ExecutorStep` hashes → existing checkpoints resume cleanly.
+5. **Fix 2** (submission flag): even with Fix 1, the executor's prefix
+   `marin_prefix()` is region-dependent (reads GCS metadata of the parent
+   worker), so a parent in us-central2 wrote to `gs://marin-us-central2/.../a1cab3/`
+   instead of `gs://marin-us-east5/.../a1cab3/`. Same hash, different bucket →
+   no resume. Forced via `iris job run --region us-east5
+   -e MARIN_PREFIX=gs://marin-us-east5 ...`. Persistent fix would either pin
+   `MARIN_PREFIX` per experiment or have the executor probe alternate prefixes
+   for cached state.
+6. **Successful resubmit (`/kaiyue/iris-run-job-20260429-182115`)** loaded
+   checkpoint from `gs://marin-tmp-us-east5/.../checkpoints/step-11344` and
+   trained the remaining ~460 steps (×2 variants) cleanly.
+
+### 2026-04-29 13:10 UTC - Gate 2 final
+| variant | dim   | budget    | macro   | Δ vs baseline | tok/s    | speedup |
+|---------|-------|-----------|---------|---------------|----------|---------|
+| 2x      | d512  | 2.19e17   | 3.8165  | +0.006        | 406,157  | 0.973   |
+| 2x      | d768  | 1.70e18   | 3.4360  | +0.002        | 274,354  | 0.991   |
+| 2x      | d1024 | 9.00e18   | 3.1637  | +0.003        | 177,465  | 0.991   |
+| 2x      | d1280 | 2.83e19   | 3.0133  | +0.007        | 128,273  | 0.950   |
+| 4x      | d512  | 2.19e17   | 3.8382  | +0.028        | 406,696  | 0.878   |
+| 4x      | d768  | 1.70e18   | 3.4314  | **−0.003**    | 273,949  | **1.016** |
+| 4x      | d1024 | 9.00e18   | 3.1713  | +0.011        | 176,683  | 0.937   |
+| 4x      | d1280 | 2.83e19   | 3.0181  | +0.012        | 128,497  | 0.918   |
+
+**Scaling-law refit** (`loss(C) = 1.6 + A · C^(-α)`, asymptote pinned at L∞=1.6):
+
+| variant   | A     | α      | macro@1e21    | macro@1e23    |
+|-----------|-------|--------|---------------|---------------|
+| baseline  | 95.18 | 0.0941 | 2.606         | 2.252         |
+| 2x        | 90.99 | 0.0930 | 2.612 (+0.006)| 2.260 (+0.008)|
+| 4x        | 96.71 | 0.0944 | 2.608 (+0.002)| 2.253 (+0.001)|
+
+## Conclusion
+- **Outcome:** negative for promotion. Neither 2x nor 4x achieves effective
+  speedup > 1 at all four scales, so neither passes Gate 2.
+- **Confidence:** stable across four scales, single-seed.
+- **Quantitative note:** 4x's projected scaling-law loss at 1e21/1e23 is
+  within +0.002 of baseline — essentially indistinguishable from baseline at
+  scale within fit noise. So while 4x doesn't *help*, it doesn't durably
+  *hurt* either; the d512 outlier (0.878 speedup) is the binding constraint.
+  2x is consistently a small (~1–5% effective compute) tax across all scales.
+- **User hypothesis ("4x init may help more with larger scale") not supported.**
+  4x at d768 is the only point that beats baseline (Δ=−0.003, speedup 1.016),
+  but the trend doesn't hold at d1024/d1280, suggesting d768 is seed noise
+  rather than scale benefit.
+
+## Followups (optional, ordered)
+1. Refit LR for the 2x/4x variants at d512 — cheap, would tell us whether
+   the d512 cost is just LR mis-calibration.
+2. If LR co-tune closes d512 gap, redo the full 4-scale sweep with co-tuned
+   LR; otherwise stop.
