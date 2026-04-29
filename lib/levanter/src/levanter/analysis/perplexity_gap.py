@@ -431,7 +431,7 @@ def iter_raw_text_documents(
                 "Gap finding currently supports TextLmDatasetFormat only."
             )
 
-        source = component.source.get_shard_source("validation")
+        source = component.source.get_shard_source(component.split)
         if source is None:
             continue
 

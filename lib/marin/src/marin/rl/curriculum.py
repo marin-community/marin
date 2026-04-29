@@ -142,7 +142,7 @@ class CurriculumConfig:
     """Temperature for sampling weight distribution."""
 
     actor_name: str = "curriculum"
-    """Name for the Ray actor (shared between rollout and train workers)."""
+    """Name for the curriculum actor shared between rollout and train workers."""
 
     minimum_sample_probability: float = 0.1
     """Minimum probability for sampling any active lesson."""

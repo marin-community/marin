@@ -205,7 +205,8 @@ def main(config: EvalLmConfig):
 
             levanter.tracker.log(log_dict, step=0)
 
-    # ray tasks don't reliably wait for the subprocesses to finish, so we need to manually finish the tracker
+    # When run in a subprocess (as under Iris/Fray), parent tasks don't reliably wait for
+    # subprocesses to finish, so we manually finish the tracker here.
     levanter.tracker.current_tracker().finish()
 
 

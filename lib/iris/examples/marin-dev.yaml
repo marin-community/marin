@@ -2,6 +2,8 @@
 # Mirrors production marin.yaml with isolated state and smaller scale caps.
 # Usage: uv run iris --cluster=marin-dev cluster start
 
+log_server_config: marin-dev
+
 platform:
   label_prefix: marin-dev
   gcp:
@@ -30,7 +32,6 @@ worker_provider: {}
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
-  use_split_heartbeat: true # try out split heartbeats on dev
   gcp:
     service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
     zone: us-central1-a
@@ -125,3 +126,15 @@ scale_groups:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         mode: GCP_SLICE_MODE_VM
         machine_type: n2-highmem-2
+
+# ---------------------------------------------------------------------------
+# User budget tiers (dev)
+#
+# Minimal tier list for exercising the budget path end-to-end. Everyone
+# else falls through to UserBudgetDefaults (INTERACTIVE with a small
+# budget that degrades to BATCH once exceeded).
+# ---------------------------------------------------------------------------
+user_budgets:
+  - user_ids: [power]
+    budget_limit: 75000
+    max_band: PRIORITY_BAND_PRODUCTION

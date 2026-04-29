@@ -4,25 +4,21 @@ Distributed execution abstraction layer. Start with the shared instructions in `
 
 ## Key Docs
 
-- Archived: `.agents/project/20260130_fray_lite_design.md` — v2 API design (implemented; read code instead)
+- Archived: `.agents/projects/20260130_fray_lite_design.md` — original API design (implemented; read code instead)
 
 ## Source Layout
 
-- `src/fray/__init__.py` — v2 public API exports (recommended interface)
-- `src/fray/v2/client.py` — `Client` protocol, `current_client()`, auto-detection
-- `src/fray/v2/types.py` — `JobRequest`, `ResourceConfig`, `DeviceConfig` (CPU/GPU/TPU)
-- `src/fray/v2/actor.py` — `ActorHandle`, `ActorGroup`, actor hosting
-- `src/fray/v2/ray_backend/` — Ray backend (`submit`, `host_actor`)
-- `src/fray/v2/iris_backend.py` — Iris backend
-- `src/fray/v2/local_backend.py` — Local/thread backend (testing)
-- `src/fray/v2/device_flops.py` — TPU/GPU flops calculation
-- `src/fray/v1/` — Legacy API (Cluster, JobContext, Queue) — do not extend
-- `src/fray/cluster/` — Shared TPU orchestration (`run_on_pod`, gang scheduling)
+- `src/fray/__init__.py` — public API exports (recommended interface)
+- `src/fray/client.py` — `Client` protocol, `current_client()`, auto-detection
+- `src/fray/types.py` — `JobRequest`, `ResourceConfig`, `DeviceConfig` (CPU/GPU/TPU)
+- `src/fray/actor.py` — `ActorHandle`, `ActorGroup`, actor hosting
+- `src/fray/iris_backend.py` — Iris backend
+- `src/fray/local_backend.py` — Local/thread backend (testing)
+- `src/fray/device_flops.py` — TPU/GPU flops calculation
+- `src/fray/cluster/` — type re-exports (back-compat shim for `from fray.cluster import ResourceConfig`)
 
 ## Conventions
 
-- **v2 is the production API.** All new code should use `fray.v2`. Do not add features to v1.
 - Always use the `Client` protocol, not concrete backend implementations.
 - Actor resources: set `num_cpus=0` on actors to avoid head-node resource contention.
-- Testing: use `LocalClient` for unit tests. Only use Ray/Iris backends for integration tests.
-- No backward compatibility shims between v1 and v2 — migrate callers directly.
+- Testing: use `LocalClient` for unit tests. Only use the Iris backend for integration tests.

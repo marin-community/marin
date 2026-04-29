@@ -10,8 +10,8 @@ from typing import Literal
 from urllib.parse import urlparse
 
 import requests
-from fray.v2 import current_client
-from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+from fray import current_client
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
@@ -138,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         "--mode",
         choices=["docker", "native"],
         default=None,
-        help="Override MARIN_VLLM_MODE (default: use env; docker if unset).",
+        help="Override MARIN_VLLM_MODE (default: use env; native if unset).",
     )
     parser.add_argument(
         "--docker-image",
@@ -159,12 +159,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--tpu-type",
         default="v5p-8",
-        help="TPU type to request when launching via Ray/Fray (default: v5p-8).",
+        help="TPU type to request when launching via Fray (default: v5p-8).",
     )
     parser.add_argument(
         "--local",
         action="store_true",
-        help="Run in the current process instead of launching a Ray/Fray job.",
+        help="Run in the current process instead of launching a Fray job.",
     )
     args = parser.parse_args(argv)
 

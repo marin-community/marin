@@ -123,8 +123,8 @@ def transform_row(row: dict, task: SplitTask, adapter: PreferenceTransformAdapte
     example = adapter.extract_preference_example(row)
     if example is None:
         return None
-    chosen_dicts = [msg.__dict__ for msg in example["chosen"]]
-    rejected_dicts = [msg.__dict__ for msg in example["rejected"]]
+    chosen_dicts = [msg.model_dump() for msg in example["chosen"]]
+    rejected_dicts = [msg.model_dump() for msg in example["rejected"]]
     result = {
         "chosen": chosen_dicts,
         "rejected": rejected_dicts,
@@ -139,9 +139,6 @@ def transform_row(row: dict, task: SplitTask, adapter: PreferenceTransformAdapte
 def get_shard_dir(dir_name: str, subset_name: str | None, split: str) -> str:
     if (subset_name == "default") or (subset_name is None):
         return os.path.join(dir_name, split)
-
-    logger.info(f"Getting shard dir for {dir_name} {subset_name} {split}")
-    logger.info(f"shard dir (os.path.join(dir_name, subset_name, split)): {os.path.join(dir_name, subset_name, split)}")
     return os.path.join(dir_name, subset_name, split)
 
 

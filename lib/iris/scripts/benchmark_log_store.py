@@ -30,10 +30,10 @@ from tempfile import TemporaryDirectory
 import click
 import duckdb
 
-from iris.cluster.log_store import task_log_key
-from iris.cluster.log_store.duckdb_store import DuckDBLogStore as LogStore
+from finelog.rpc import logging_pb2
+from finelog.store.duckdb_store import DuckDBLogStore as LogStore
+from iris.cluster.log_store_helpers import task_log_key
 from iris.cluster.types import JobName, TaskAttempt
-from iris.rpc import logging_pb2
 
 
 def _make_entries(count: int, prefix: str, start_ms: int = 0) -> list[logging_pb2.LogEntry]:

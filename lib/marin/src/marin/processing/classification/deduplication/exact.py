@@ -20,7 +20,7 @@ import dupekit
 from marin.utils import rebase_file_path
 import pyarrow as pa
 import logging
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from zephyr import ZephyrContext, counters, write_parquet_file
 from zephyr.dataset import Dataset
 

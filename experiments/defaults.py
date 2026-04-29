@@ -14,13 +14,13 @@ from functools import lru_cache
 from typing import Any
 
 import jmp
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from marin.execution.remote import remote
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import (
-    BlockShuffleConfig,
+    DEFAULT_LM_DATA_SHUFFLE,
     LmDatasetFormatBase,
     LMMixtureDatasetConfig,
     PreferenceLmDataConfig,
@@ -86,14 +86,6 @@ def _normalize_hf_bucket_path(path: str) -> str:
     if path.startswith(HF_BUCKET_URI_PREFIX):
         return path.removeprefix("hf://")
     return path
-
-
-DEFAULT_NEW_RUN_DATA_SHUFFLE = BlockShuffleConfig(
-    io_block_size=256,
-    window_blocks=512,
-    perm_type="feistel",
-)
-"""Hierarchical block-shuffle default for newly constructed training runs."""
 
 
 def _truncate_wandb_name(name: str) -> str:
@@ -760,7 +752,7 @@ def _prepare_data_config(
         pretraining_data = lm_data_config(
             training_set=tokenized,
             validation_sets=validation_sets,
-            shuffle=versioned(DEFAULT_NEW_RUN_DATA_SHUFFLE),
+            shuffle=versioned(DEFAULT_LM_DATA_SHUFFLE),
         )
     else:
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures

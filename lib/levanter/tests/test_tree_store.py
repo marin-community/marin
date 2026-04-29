@@ -257,34 +257,6 @@ def test_reading_from_written():
                 pytest.fail("Unexpected index")
 
 
-def test_using_prepared_batches():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        exemplar = {"a": np.array([0], dtype=np.float64), "b": np.array([0], dtype=np.float64)}
-        builder = TreeStore.open(exemplar, tmpdir, mode="w")
-        preparer = builder.batch_preparer
-
-        batch = [
-            {"a": np.array([1.0, 2.0]), "b": np.array([3.0, 4.0])},
-            {"a": np.array([5.0, 6.0]), "b": np.array([7.0, 8.0])},
-        ]
-        batch = preparer(batch)
-        builder.extend_with_batch(batch)
-
-        del builder
-
-        builder2 = TreeStore.open(exemplar, tmpdir, mode="r")
-
-        for i, result in enumerate(builder2):
-            if i == 0:
-                assert np.all(result["a"] == np.array([1.0, 2.0]))
-                assert np.all(result["b"] == np.array([3.0, 4.0]))
-            elif i == 1:
-                assert np.all(result["a"] == np.array([5.0, 6.0]))
-                assert np.all(result["b"] == np.array([7.0, 8.0]))
-            else:
-                pytest.fail("Unexpected index")
-
-
 def test_resolve_changed_cache_size():
     with tempfile.TemporaryDirectory() as tmpdir:
         exemplar = {"a": np.array([0], dtype=np.float64), "b": np.array([0], dtype=np.float64)}

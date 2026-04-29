@@ -9,7 +9,7 @@ answer, topic, and answer type. We render these into a single document.
 
 import hashlib
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
@@ -58,7 +58,7 @@ def transform(input_path: str, output_path: str) -> None:
         .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
     ctx = ZephyrContext(name="principia-transform", resources=ResourceConfig(cpu=1, ram="4g"))
-    list(ctx.execute(pipeline))
+    ctx.execute(pipeline)
 
 
 def download_principia_step() -> StepSpec:
