@@ -18,7 +18,7 @@ import itertools
 import logging
 import os
 import pickle
-import signal
+import re
 import sys
 from datetime import datetime, timezone
 import threading
@@ -31,7 +31,7 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 import cloudpickle
 from rigging.filesystem import open_url, url_to_fs
@@ -52,8 +52,10 @@ from zephyr.plan import (
     Scatter,
     Shard,
     SourceItem,
+    StageContext,
     StageType,
     compute_plan,
+    run_stage,
 )
 from zephyr.shuffle import ListShard, MemChunk, _write_scatter
 from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir
@@ -311,6 +313,55 @@ def zephyr_worker_ctx() -> WorkerContext:
     return ctx
 
 
+class _InProcessWorkerContext:
+    """WorkerContext for shards executed in the worker actor's own process.
+
+    Holds counters in memory (no file flushing); the worker's heartbeat thread
+    reads them directly. Loads shared data lazily from the chunk store on first
+    access and caches it for the rest of the task.
+    """
+
+    def __init__(self, chunk_prefix: str, execution_id: str):
+        self._chunk_prefix = chunk_prefix
+        self._execution_id = execution_id
+        self._shared_data_cache: dict[str, Any] = {}
+        self._counters: dict[str, int] = {}
+        self._generation = 0
+
+    def get_shared(self, name: str) -> Any:
+        if name not in self._shared_data_cache:
+            path = _shared_data_path(self._chunk_prefix, self._execution_id, name)
+            logger.info("Loading shared data '%s' from %s", name, path)
+            with open_url(path, "rb") as f:
+                self._shared_data_cache[name] = cloudpickle.loads(f.read())
+        return self._shared_data_cache[name]
+
+    def increment_counter(self, name: str, value: int = 1) -> None:
+        self._counters[name] = self._counters.get(name, 0) + value
+
+    def get_counter_snapshot(self) -> CounterSnapshot:
+        self._generation += 1
+        return CounterSnapshot(counters=dict(self._counters), generation=self._generation)
+
+
+_T = TypeVar("_T")
+
+
+class _StageStatsGenerator:
+    """Wraps a generator and records item count + byte size into the worker context."""
+
+    def __init__(self, stage_name: str, ctx: _InProcessWorkerContext) -> None:
+        self._item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
+        self._byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
+        self._ctx = ctx
+
+    def wrap(self, gen: Iterator[_T]) -> Iterator[_T]:
+        for item in gen:
+            self._ctx.increment_counter(self._item_key, 1)
+            self._ctx.increment_counter(self._byte_key, sys.getsizeof(item))
+            yield item
+
+
 # ---------------------------------------------------------------------------
 # ZephyrCoordinator
 # ---------------------------------------------------------------------------
@@ -560,9 +611,9 @@ class ZephyrCoordinator:
             dead,
         )
 
-        # Map-only stages don't yield through StatisticsGenerator and never
+        # Map-only stages don't yield through ``_StageStatsGenerator`` and never
         # populate these counters. Drop the items/bytes_processed segment for
-        # those stages — see ``subprocess_worker._periodic_status_logger``.
+        # those stages.
         if item_key in totals or byte_key in totals:
             items = totals.get(item_key, 0)
             bytes_processed = totals.get(byte_key, 0)
@@ -1091,7 +1142,9 @@ class ZephyrWorker:
         self._execution_id: str = ""
         self._counter_generation: int = 0
         self._last_reported_counters: dict[str, int] = {}
-        self._subprocess_counter_file: str | None = None
+        # Worker context for the currently executing shard, or None when idle.
+        # The heartbeat thread reads counters off this directly.
+        self._current_worker_ctx: _InProcessWorkerContext | None = None
 
         # Capture shutdown_event from the actor context while the ContextVar
         # is still set (child threads in Python <3.12 don't inherit it).
@@ -1112,30 +1165,16 @@ class ZephyrWorker:
         self._polling_thread.start()
 
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
-        """Read the live subprocess counter file and return a snapshot if changed.
+        """Snapshot the running task's counters, or None when idle/unchanged.
 
-        Called once per heartbeat. While ``_subprocess_counter_file`` is set,
-        the subprocess flushes its counter dict to that path every
-        ``SUBPROCESS_COUNTER_FLUSH_INTERVAL`` seconds via an atomic temp-write
-        + rename. We re-read it on each beat, compare to the last reported
-        value, and emit a fresh ``CounterSnapshot`` only when something has
-        actually changed — heartbeats with ``None`` are cheap on the
-        coordinator side. A missing or partially-written counter file (race
-        against the atomic rename, file already cleaned up post-task) is
-        treated as an empty snapshot; the post-shard ``report_result`` call
-        is the source of truth for the final per-task values.
+        The current shard runs in this same process via ``_execute_shard``,
+        so its counter dict lives on ``self._current_worker_ctx`` and we just
+        copy it. Skipping when nothing has changed keeps heartbeat traffic
+        cheap on the coordinator side. ``report_result`` is the source of
+        truth for the final per-task values.
         """
-        counter_file = self._subprocess_counter_file
-        current: dict[str, int] = {}
-        if counter_file is not None:
-            try:
-                with open(counter_file, "rb") as f:
-                    current = cloudpickle.load(f)
-            except (FileNotFoundError, EOFError, pickle.UnpicklingError):
-                pass
-            except Exception:
-                logger.warning("Failed to read counter file %s", counter_file, exc_info=True)
-
+        ctx = self._current_worker_ctx
+        current: dict[str, int] = dict(ctx._counters) if ctx is not None else {}
         if current == self._last_reported_counters:
             return None
         self._last_reported_counters = current
@@ -1291,93 +1330,69 @@ class ZephyrWorker:
                 ).result()
 
     def _execute_shard(self, task: ShardTask, config: dict) -> tuple[TaskResult, dict[str, int]]:
-        """Execute a stage's operations in a child process for memory isolation.
+        """Execute a stage's operations inline in the worker process.
 
-        Serializes the task via cloudpickle, runs it in a subprocess via
-        ``python -m zephyr.subprocess_worker``, and returns
-        ``(TaskResult, counters)`` — the latter is the user counter dict
-        accumulated inside the subprocess, which the caller hands straight
-        to ``coordinator.report_result``. All child memory (page cache,
-        Arrow pool, Python heap) is reclaimed when the child exits, so
-        successive tasks on the same worker actor do not accumulate state.
+        Sets up a fresh ``_InProcessWorkerContext`` for the task so user code
+        can call ``zephyr.counters.increment`` and ``zephyr_worker_ctx()``,
+        runs the stage's operations, and returns ``(TaskResult, counters)``.
+
+        Worker actors live for the duration of the pipeline, so each task
+        shares the worker process — there is no per-shard memory reclamation
+        like the old subprocess design provided. Long-running pipelines that
+        depend on that should run under Iris where each worker actor is
+        already its own VM.
         """
-        import subprocess as sp
-        import tempfile
-
-        # Update config for this execution
-        self._chunk_prefix = config["chunk_prefix"]
-        self._execution_id = config["execution_id"]
+        chunk_prefix = config["chunk_prefix"]
+        execution_id = config["execution_id"]
+        self._chunk_prefix = chunk_prefix
+        self._execution_id = execution_id
 
         logger.info(
             "[%s] [shard %d/%d] Starting stage=%s, %d ops",
-            self._execution_id,
+            execution_id,
             task.shard_idx,
             task.total_shards,
             task.stage_name,
             len(task.operations),
         )
 
-        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
-            cloudpickle.dump((task, self._chunk_prefix, self._execution_id), f)
-            task_file = f.name
-        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
-            result_file = f.name
-        counters_file = f"{result_file}.counters"
-        self._subprocess_counter_file = counters_file
-
+        ctx = _InProcessWorkerContext(chunk_prefix, execution_id)
+        # Expose ctx to the heartbeat thread (live counters) and to user task
+        # code (zephyr.counters.increment, zephyr_worker_ctx()).
+        self._current_worker_ctx = ctx
+        token = _worker_ctx_var.set(ctx)
         try:
-            # ``-u`` keeps the child's stdout/stderr unbuffered so any traceback
-            # written by ``faulthandler`` (or by Python on a normal exception)
-            # actually reaches the parent's log before the process dies.
-            proc = sp.run(
-                [sys.executable, "-u", "-m", "zephyr.subprocess_worker", task_file, result_file],
-                stdout=sys.stdout,
-                stderr=sys.stderr,
+            stage_ctx = StageContext(
+                shard=task.shard,
+                shard_idx=task.shard_idx,
+                total_shards=task.total_shards,
+                aux_shards=task.aux_shards,
             )
 
-            if proc.returncode != 0:
-                # Linux OOM-killer sends SIGKILL → returncode == -9. There's no
-                # in-process way to catch it (the kernel kills the child before
-                # any handler runs), so we infer OOM from the signal here and
-                # raise a typed MemoryError instead of a generic RuntimeError so
-                # callers / retries can distinguish memory pressure from other
-                # crashes.
-                if proc.returncode == -signal.SIGKILL:
-                    raise MemoryError(
-                        f"Subprocess for shard {task.shard_idx} was killed by SIGKILL "
-                        f"(returncode {proc.returncode}); most likely OOM-killed by the kernel. "
-                        f"See worker stderr above."
-                    )
-                raise RuntimeError(
-                    f"Subprocess for shard {task.shard_idx} exited with code {proc.returncode}; "
-                    f"see worker stderr above for the faulthandler traceback"
-                )
+            # Sanitize stage_name for use as a path component.
+            output_stage_name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", task.stage_name).strip("-")
+            stage_dir = f"{chunk_prefix}/{execution_id}/{output_stage_name}"
+            external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
+            scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
 
-            with open(result_file, "rb") as f:
-                result_or_error, child_counters = cloudpickle.load(f)
-
-            # Clear the counter file pointer BEFORE returning so any heartbeat
-            # racing between this point and the report_result call in
-            # _poll_loop reads an empty snapshot rather than stale subprocess
-            # data — otherwise the live counters would be double-counted on
-            # top of the final ones the caller is about to ship via
-            # report_result.
-            self._subprocess_counter_file = None
-
-            if isinstance(result_or_error, Exception):
-                raise result_or_error
-
+            stats = _StageStatsGenerator(task.stage_name, ctx)
+            result = _write_stage_output(
+                stats.wrap(run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir)),
+                source_shard=task.shard_idx,
+                stage_dir=stage_dir,
+                shard_idx=task.shard_idx,
+                scatter_op=scatter_op,
+                total_shards=task.total_shards,
+            )
             logger.info(
                 "[shard %d] Complete: %d refs produced",
                 task.shard_idx,
-                len(result_or_error.shard.refs),
+                len(result.shard.refs),
             )
-            return result_or_error, dict(child_counters)
+            return result, dict(ctx._counters)
         finally:
-            self._subprocess_counter_file = None
-            for p in (task_file, result_file, counters_file, f"{counters_file}.tmp"):
-                with suppress(FileNotFoundError):
-                    os.unlink(p)
+            _worker_ctx_var.reset(token)
+            self._current_worker_ctx = None
 
     def __repr__(self) -> str:
         return f"ZephyrWorker(id={self._worker_id})"
