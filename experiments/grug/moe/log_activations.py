@@ -199,7 +199,7 @@ def _run_log_activations_local(config: LogActivationsConfig) -> None:
     model_cfg, _, _, _ = build_from_heuristic(budget=config.budget, hidden_dim=config.hidden_dim)
     print(f"Model: d={model_cfg.hidden_dim}, L={model_cfg.num_layers}, E={model_cfg.num_experts}")
 
-    from jax.sharding import AxisType
+    from jax.sharding import AxisType, NamedSharding
 
     import haliax.partitioning
 
@@ -228,12 +228,15 @@ def _run_log_activations_local(config: LogActivationsConfig) -> None:
         )
         model = mp.cast_to_compute(model)
 
-    # Auto axes for forward pass (splash attention can't handle Explicit)
+    # Move model to Auto mesh for forward pass (splash attention can't handle Explicit)
     auto_mesh = create_mesh_from_axis_specs(
         ici_axes=mesh_axes,
         dcn_axes={},
         devices=single_device,
     )
+    replicated = NamedSharding(auto_mesh, P())
+    model = jax.tree.map(lambda x: jax.device_put(x, replicated) if hasattr(x, "sharding") else x, model)
+
     with haliax.partitioning.set_mesh(auto_mesh):
         # 1. Custom text (if provided)
         if config.text:
