@@ -201,9 +201,30 @@ def test_marin_temp_bucket_strips_prefix_slashes():
         assert marin_temp_bucket(ttl_days=3, prefix="/foo/bar/") == "gs://marin-us-central1/tmp/ttl=3d/foo/bar"
 
 
-def test_marin_temp_bucket_rejects_unsupported_ttl():
-    with pytest.raises(ValueError, match="ttl_days=10 is not configured"):
-        marin_temp_bucket(ttl_days=10)
+def test_marin_temp_bucket_rounds_up_unsupported_ttl(caplog):
+    """ttl_days values between configured points round up to the next one with a warning."""
+    with (
+        patch(
+            "rigging.filesystem.urllib.request.urlopen",
+            return_value=_mock_urlopen(b"projects/12345/zones/us-east1-c"),
+        ),
+        caplog.at_level("WARNING", logger="rigging.filesystem"),
+    ):
+        # 10 → 14, 15 → 30
+        assert marin_temp_bucket(ttl_days=10, prefix="zephyr") == "gs://marin-us-east1/tmp/ttl=14d/zephyr"
+        assert marin_temp_bucket(ttl_days=15) == "gs://marin-us-east1/tmp/ttl=30d"
+    assert any("rounding up to 14" in rec.message for rec in caplog.records)
+    assert any("rounding up to 30" in rec.message for rec in caplog.records)
+
+
+def test_marin_temp_bucket_rejects_above_max_ttl():
+    with pytest.raises(ValueError, match="exceeds the largest configured value"):
+        marin_temp_bucket(ttl_days=100)
+
+
+def test_marin_temp_bucket_rejects_non_positive_ttl():
+    with pytest.raises(ValueError, match="must be positive"):
+        marin_temp_bucket(ttl_days=0)
 
 
 def test_check_gcs_paths_same_region_accepts_matching_region():

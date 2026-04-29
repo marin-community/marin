@@ -55,7 +55,7 @@ marin/
 │   └── quickstart-data/
 │
 ├── docs/                       # Documentation (tutorials/, explanations/, references/, recipes/, reports/, design/, dev-guide/, model-cards/)
-├── infra/                      # Cluster configs (configure_gcp_registry.py, configure_main_buckets.py). Iris cluster configs live under lib/iris/examples/.
+├── infra/                      # Cluster configs (configure_gcp_registry.py, configure_buckets.py). Iris cluster configs live under lib/iris/examples/.
 ├── scripts/                    # Utilities (iris/, training/, pm/, debug/, gpu_eval/)
 └── docker/                     # Docker configs (marin/, levanter/)
 ```

@@ -76,13 +76,13 @@ Supported TTLs: 1, 2, 3, 4, 5, 6, 7, 14, and 30 days. The canonical list lives i
 To re-apply lifecycle rules and confirm soft-delete is disabled across every regional `marin-*` bucket (idempotent; merges with any unrelated rules already present):
 
 ```bash
-uv run infra/configure_main_buckets.py
+uv run infra/configure_buckets.py
 
 # Preview without applying changes:
-uv run infra/configure_main_buckets.py --dry-run
+uv run infra/configure_buckets.py --dry-run
 
 # Target a single bucket:
-uv run infra/configure_main_buckets.py --bucket marin-us-central2
+uv run infra/configure_buckets.py --bucket marin-us-central2
 ```
 
 ### Custom lifecycle rules for your own buckets

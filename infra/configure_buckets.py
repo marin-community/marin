@@ -14,9 +14,9 @@ lot of multi-gigabyte ephemeral data, and soft-delete retention quickly
 explodes storage cost.
 
 Usage:
-    uv run infra/configure_main_buckets.py              # apply to all buckets
-    uv run infra/configure_main_buckets.py --dry-run    # preview without applying
-    uv run infra/configure_main_buckets.py --bucket marin-us-central2
+    uv run infra/configure_buckets.py              # apply to all buckets
+    uv run infra/configure_buckets.py --dry-run    # preview without applying
+    uv run infra/configure_buckets.py --bucket marin-us-central2
 """
 
 import json

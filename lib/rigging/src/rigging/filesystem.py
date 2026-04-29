@@ -6,7 +6,7 @@ and cross-region read guards.
 
 Provides a unified API for resolving the marin storage prefix and building
 GCS paths with lifecycle-managed TTL prefixes. Lifecycle rules on the
-``marin-{region}`` buckets are managed by ``infra/configure_main_buckets.py``.
+``marin-{region}`` buckets are managed by ``infra/configure_buckets.py``.
 
 Resolution chain for the storage prefix:
   1. ``MARIN_PREFIX`` environment variable
@@ -75,7 +75,7 @@ _REGION_ALIASES: dict[str, str] = {
 
 # Allowed TTL-day values. Each value N corresponds to a lifecycle rule on every
 # ``marin-{region}`` bucket that deletes objects under ``tmp/ttl=Nd/`` after N
-# days. Keep in sync with ``infra/configure_main_buckets.py``.
+# days. Keep in sync with ``infra/configure_buckets.py``.
 ALLOWED_TTL_DAYS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 30)
 
 # Path prefix under each ``marin-{region}`` bucket where TTL-managed scratch
@@ -167,6 +167,27 @@ def _append_path_prefix(path: str, prefix: str) -> str:
     return path
 
 
+def _resolve_ttl_days(ttl_days: int) -> int:
+    """Map *ttl_days* to the smallest configured value that is ``>= ttl_days``.
+
+    Rounding up keeps callers honest: an unconfigured request gets at least
+    the lifetime they asked for, never less. Logs a warning when rounding,
+    and raises if the request exceeds the largest configured value.
+    """
+    if ttl_days <= 0:
+        raise ValueError(f"ttl_days={ttl_days} must be positive. Allowed values: {ALLOWED_TTL_DAYS}.")
+    if ttl_days in ALLOWED_TTL_DAYS:
+        return ttl_days
+    for n in ALLOWED_TTL_DAYS:
+        if n > ttl_days:
+            logger.warning("ttl_days=%d not configured; rounding up to %d", ttl_days, n)
+            return n
+    raise ValueError(
+        f"ttl_days={ttl_days} exceeds the largest configured value ({max(ALLOWED_TTL_DAYS)}). "
+        f"Allowed values: {ALLOWED_TTL_DAYS}."
+    )
+
+
 def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | None = None) -> str:
     """Return a path on region-local temp storage. Never returns ``None``.
 
@@ -181,19 +202,20 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
         {marin_prefix}/tmp/{prefix}
 
     Lifecycle rules on each ``marin-{region}`` bucket — managed by
-    ``infra/configure_main_buckets.py`` — auto-delete objects under
+    ``infra/configure_buckets.py`` — auto-delete objects under
     ``tmp/ttl=Nd/`` after *N* days.
 
     Args:
-        ttl_days: Lifecycle TTL in days.  Must be one of
-            :data:`ALLOWED_TTL_DAYS`.
+        ttl_days: Lifecycle TTL in days.  Values not in
+            :data:`ALLOWED_TTL_DAYS` are rounded up to the nearest configured
+            value (with a warning); requests above the maximum raise
+            :class:`ValueError`.
         prefix: Optional sub-path appended after the TTL directory.
         source_prefix: Optional path used to choose the temp bucket region.
             Useful when configuring a remote job from a launcher that may be in
             a different region than the job output path.
     """
-    if ttl_days not in ALLOWED_TTL_DAYS:
-        raise ValueError(f"ttl_days={ttl_days} is not configured. Allowed values: {ALLOWED_TTL_DAYS}.")
+    ttl_days = _resolve_ttl_days(ttl_days)
 
     mp = marin_prefix()
 
