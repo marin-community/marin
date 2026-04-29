@@ -25,6 +25,7 @@ from experiments.defaults import (
 )
 from experiments.llama import llama_30m
 from experiments.simple_train_config import SimpleTrainConfig
+from marin.execution.dag import materialize
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
@@ -365,7 +366,6 @@ def test_sweep_runs_each_plan_once(tmp_path):
 def test_materialize_accepts_explicit_output_path(tmp_path):
     """``materialize(config, output_path=...)`` resolves OutputName placeholders
     against the explicit argument when the config has no `output_path` field."""
-    from marin.execution.dag import materialize
 
     @dataclass(frozen=True)
     class _NoOutputPath:
@@ -383,7 +383,6 @@ def test_materialize_accepts_explicit_output_path(tmp_path):
 def test_materialize_rejects_output_name_in_explicit_argument(tmp_path):
     """If the caller passes an OutputName as the explicit ``output_path``,
     fail loudly — that means the launcher forgot to resolve it."""
-    from marin.execution.dag import materialize
 
     @dataclass(frozen=True)
     class _NoOutputPath:
