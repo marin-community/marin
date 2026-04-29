@@ -170,21 +170,12 @@ def _short_desc_from_lm_config(input_config: LmDatasetSourceConfigBase) -> str:
             url += f" (name: {input_config.name})"
         return url
     elif isinstance(input_config, UrlDatasetSourceConfig):
-        out = ""
+        sections = []
         if input_config.train_urls:
-            out = "Train Urls: \n"
-            for url in input_config.train_urls:
-                out += f"- {url}\n"
-
+            sections.append("Train Urls: \n" + "".join(f"- {url}\n" for url in input_config.train_urls))
         if input_config.validation_urls:
-            out = "Validation Urls: \n"
-            for url in input_config.validation_urls:
-                out += f"- {url}\n"
-
-        if not out:
-            out = "{missing urls}"
-
-        return out
+            sections.append("Validation Urls: \n" + "".join(f"- {url}\n" for url in input_config.validation_urls))
+        return "".join(sections) if sections else "{missing urls}"
     else:
         return ""
 

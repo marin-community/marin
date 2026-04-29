@@ -7,10 +7,10 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 from levanter.data import ShardedDataSource
-from levanter.data.text import LmDatasetSourceConfigBase
+from levanter.data.text import LmDatasetSourceConfigBase, UrlDatasetSourceConfig
 from levanter.store import SerialCacheWriter, TreeCache
 
-from marin.tokenize.slice_cache import SliceCacheConfig, _do_slice_cache
+from marin.tokenize.slice_cache import SliceCacheConfig, _do_slice_cache, _short_desc_from_lm_config
 from tests.test_utils import skip_in_ci
 
 
@@ -126,3 +126,14 @@ def test_slice_cache_tags():
         sliced_config2 = _do_slice_cache(SliceCacheConfig(source, 1000, f"{tmpdir}/sliced_cache", "gpt2", 0))
         assert "subsampled-1K" in sliced_config2.tags
         assert "subsampled-500" not in sliced_config2.tags  # old tag shouldn't be there
+
+
+def test_short_desc_url_config_includes_both_train_and_validation():
+    cfg = UrlDatasetSourceConfig(train_urls=["t1.json.gz"], validation_urls=["v1.json.gz"])
+    out = _short_desc_from_lm_config(cfg)
+    assert "t1.json.gz" in out
+    assert "v1.json.gz" in out
+
+
+def test_short_desc_url_config_handles_missing_urls():
+    assert _short_desc_from_lm_config(UrlDatasetSourceConfig()) == "{missing urls}"
