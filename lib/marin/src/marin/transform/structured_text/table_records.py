@@ -14,6 +14,7 @@ No ``float(cell)``, no ``" ".join(cell.split())``, no case folding.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -43,6 +44,11 @@ TABLE_CELL_DELIMITER = "\t"
 """Tab-separated rows, newline-separated rows. TSV is the serialization
 format with the least whitespace-munging behavior in tokenizers and is
 the standard choice across the structured-eval literature."""
+
+GITTABLES_TARGET_BENCHMARK_DATASET = "target-benchmark/gittables-corpus"
+GITTABLES_IID_HOLDOUT_NUM_BUCKETS = 1000
+GITTABLES_IID_HOLDOUT_SELECTED_BUCKET = 0
+GITTABLES_IID_HOLDOUT_SALT = "marin:gittables:zenodo_iid_holdout:v1"
 
 
 @dataclass(frozen=True)
@@ -98,6 +104,24 @@ def _format_cell(cell_value: Any) -> str:
     if isinstance(cell_value, str):
         return cell_value
     return str(cell_value)
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _hash_bucket(key: str, num_buckets: int) -> int:
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return int(digest[:16], 16) % num_buckets
+
+
+def _serialize_row_values(row: Any) -> str:
+    row_values = row.values() if isinstance(row, dict) else row
+    return TABLE_CELL_DELIMITER.join(_format_cell(cell) for cell in row_values)
+
+
+def _serialize_table_rows(table_rows: Any) -> str:
+    return TABLE_ROW_DELIMITER.join(_serialize_row_values(row) for row in table_rows)
 
 
 def serialize_totto_example(example: dict[str, Any]) -> str:
@@ -233,12 +257,7 @@ def serialize_gittables_example(example: dict[str, Any]) -> str:
         if number_columns:
             metadata_lines.append(f"columns: {number_columns}")
 
-    table_rows = example.get("table") or []
-    serialized_rows: list[str] = []
-    for row in table_rows:
-        row_values = row.values() if isinstance(row, dict) else row
-        serialized_rows.append(TABLE_CELL_DELIMITER.join(_format_cell(cell) for cell in row_values))
-    table_block = TABLE_ROW_DELIMITER.join(serialized_rows)
+    table_block = _serialize_table_rows(example.get("table") or [])
 
     parts: list[str] = []
     if metadata_lines:
@@ -247,6 +266,65 @@ def serialize_gittables_example(example: dict[str, Any]) -> str:
         parts.append(table_block)
 
     return "\n\n".join(parts)
+
+
+def gittables_decontamination_metadata(
+    example: dict[str, Any],
+    serialized_text: str,
+    *,
+    target_benchmark_holdout: bool,
+) -> dict[str, Any]:
+    """Return GitTables identity hashes and deterministic validation buckets.
+
+    ``target-benchmark/gittables-corpus`` is a GitTables-derived benchmark
+    subset, but its upstream sampling recipe is not documented enough to treat
+    it as an official split. These hashes let a future Zenodo GitTables training
+    materializer remove exact TARGET overlaps by serialized table content. The
+    IID bucket gives us an additional deterministic held-out slice from the
+    full Zenodo corpus without needing a side manifest.
+    """
+
+    context = example.get("context") or {}
+    context_table_id = ""
+    if isinstance(context, dict):
+        context_table_id = _format_cell(context.get("table_id", ""))
+
+    database_id = _format_cell(example.get("database_id", ""))
+    table_id = _format_cell(example.get("table_id", ""))
+    table_body = _serialize_table_rows(example.get("table") or [])
+    table_body_sha256 = _sha256_text(table_body)
+    identity_payload = json.dumps(
+        {
+            "context_table_id": context_table_id,
+            "database_id": database_id,
+            "table_id": table_id,
+            "table_body_sha256": table_body_sha256,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    iid_bucket = _hash_bucket(f"{GITTABLES_IID_HOLDOUT_SALT}:{table_body_sha256}", GITTABLES_IID_HOLDOUT_NUM_BUCKETS)
+
+    holdout_roles: list[str] = []
+    if target_benchmark_holdout:
+        holdout_roles.append("target_benchmark_validation")
+    if iid_bucket == GITTABLES_IID_HOLDOUT_SELECTED_BUCKET:
+        holdout_roles.append("zenodo_iid_validation")
+
+    return {
+        "context_table_id": context_table_id,
+        "database_id": database_id,
+        "table_id": table_id,
+        "identity_sha256": _sha256_text(identity_payload),
+        "serialized_text_sha256": _sha256_text(serialized_text),
+        "table_body_sha256": table_body_sha256,
+        "holdout_roles": holdout_roles,
+        "iid_holdout_bucket": iid_bucket,
+        "iid_holdout_num_buckets": GITTABLES_IID_HOLDOUT_NUM_BUCKETS,
+        "iid_holdout_selected_bucket": GITTABLES_IID_HOLDOUT_SELECTED_BUCKET,
+        "iid_holdout_salt": GITTABLES_IID_HOLDOUT_SALT,
+    }
 
 
 SERIALIZERS: dict[str, Any] = {
@@ -341,6 +419,11 @@ def stage_table_record_source(cfg: TableRecordStagingConfig) -> dict[str, int | 
 
     total_text_bytes = 0
     record_count = 0
+    target_benchmark_gittables = (
+        cfg.serializer_name == "gittables"
+        and cfg.source_manifest is not None
+        and cfg.source_manifest.dataset_key == GITTABLES_TARGET_BENCHMARK_DATASET
+    )
 
     with atomic_rename(out_file) as temp_path:
         with open_url(temp_path, "wt", encoding="utf-8", compression=compression) as outfile:
@@ -357,18 +440,26 @@ def stage_table_record_source(cfg: TableRecordStagingConfig) -> dict[str, int | 
                     )
                     break
 
+                provenance: dict[str, Any] = {
+                    "dataset": cfg.input_path,
+                    "split": cfg.split,
+                    "subset": cfg.subset,
+                    "serializer": cfg.serializer_name,
+                    "index": index,
+                    **cfg.extra_metadata,
+                }
+                if cfg.serializer_name == "gittables":
+                    provenance["gittables_decontam"] = gittables_decontamination_metadata(
+                        example,
+                        text,
+                        target_benchmark_holdout=target_benchmark_gittables,
+                    )
+
                 record = {
                     "id": f"{cfg.source_label}:{cfg.split}:{index:08d}",
                     "text": text,
                     "source": cfg.source_label,
-                    "provenance": {
-                        "dataset": cfg.input_path,
-                        "split": cfg.split,
-                        "subset": cfg.subset,
-                        "serializer": cfg.serializer_name,
-                        "index": index,
-                        **cfg.extra_metadata,
-                    },
+                    "provenance": provenance,
                 }
                 json.dump(record, outfile, ensure_ascii=False)
                 outfile.write("\n")

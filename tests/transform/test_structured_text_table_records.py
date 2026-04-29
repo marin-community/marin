@@ -10,6 +10,7 @@ no float round-trip, no case folding.
 """
 
 import gzip
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -201,6 +202,7 @@ def _gittables_fixture() -> dict:
             "license": "MIT",
             "number_rows": 2,
             "number_columns": 3,
+            "table_id": "zenodo-table-42",
         },
     }
 
@@ -333,6 +335,19 @@ def test_stage_table_record_source_end_to_end_gittables(tmp_path):
     assert records[0]["provenance"]["serializer"] == "gittables"
     assert "csv_url: https://github.com/example/repo/raw/main/users.csv" in records[0]["text"]
     assert "1\tAda\t3.14159265358979323846" in records[0]["text"]
+    decontam = records[0]["provenance"]["gittables_decontam"]
+    assert decontam["database_id"] == "42"
+    assert decontam["table_id"] == "sample_repo/users"
+    assert decontam["context_table_id"] == "zenodo-table-42"
+    assert "target_benchmark_validation" in decontam["holdout_roles"]
+    assert (
+        decontam["table_body_sha256"]
+        == hashlib.sha256("id\tname\tscore\n1\tAda\t3.14159265358979323846\n2\tJosé\t".encode()).hexdigest()
+    )
+    assert decontam["serialized_text_sha256"] == hashlib.sha256(records[0]["text"].encode("utf-8")).hexdigest()
+    assert 0 <= decontam["iid_holdout_bucket"] < decontam["iid_holdout_num_buckets"]
+    assert decontam["iid_holdout_selected_bucket"] == 0
+    assert decontam["iid_holdout_num_buckets"] == 1000
 
 
 def test_stage_table_record_source_loads_downloaded_parquet_split(tmp_path):
