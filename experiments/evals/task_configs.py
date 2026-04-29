@@ -82,20 +82,6 @@ BASE_GENERATION_TASKS = (
 )
 
 
-def finepdf_extractive_qa_task(*, context_len: int, manifest_path: str, max_gen_toks: int = 64) -> EvalTaskConfig:
-    context_len_k = context_len // 1024
-    return EvalTaskConfig(
-        name=f"finepdf_extractive_qa_{context_len_k}k",
-        num_fewshot=0,
-        task_kwargs={
-            "family": "finepdf_qa",
-            "context_len": context_len,
-            "manifest_path": manifest_path,
-            "max_gen_toks": max_gen_toks,
-        },
-    )
-
-
 LONG_CONTEXT_TASKS_BY_LENGTH = {
     4096: (
         EvalTaskConfig(
@@ -148,18 +134,12 @@ LONG_CONTEXT_TASKS_BY_LENGTH = {
 }
 
 
-def long_context_tasks_for_lengths(
-    lengths: Sequence[int],
-    *,
-    finepdf_manifest_path: str | None = None,
-) -> tuple[EvalTaskConfig, ...]:
+def long_context_tasks_for_lengths(lengths: Sequence[int]) -> tuple[EvalTaskConfig, ...]:
     tasks: list[EvalTaskConfig] = []
     for length in lengths:
         if length not in LONG_CONTEXT_TASKS_BY_LENGTH:
             raise KeyError(f"Unsupported long-context length: {length}")
         tasks.extend(LONG_CONTEXT_TASKS_BY_LENGTH[length])
-        if finepdf_manifest_path is not None:
-            tasks.append(finepdf_extractive_qa_task(context_len=length, manifest_path=finepdf_manifest_path))
 
     return tuple(tasks)
 
