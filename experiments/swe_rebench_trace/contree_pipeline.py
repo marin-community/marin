@@ -43,7 +43,7 @@ from pathlib import Path
 
 import pyarrow as pa
 from contree_sdk._internals.utils.wrapper import coro_sync
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from rigging.filesystem import marin_prefix
 from datasets import load_dataset
 from zephyr import Dataset, ZephyrContext, counters
