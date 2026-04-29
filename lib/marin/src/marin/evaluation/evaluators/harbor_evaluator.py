@@ -27,8 +27,9 @@ from typing import Any
 from rigging.filesystem import open_url
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.evaluators.evaluator import Evaluator
 from marin.evaluation.utils import download_from_gcs, is_remote_path, upload_to_gcs
+from marin.inference.model_config import ModelConfig
 from marin.inference.vllm_server import VllmEnvironment
 from marin.utils import fsspec_exists, fsspec_glob
 

@@ -6,8 +6,8 @@ import time
 import pytest
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvaluationConfig
-from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.run import evaluate
+from marin.inference.model_config import ModelConfig
 
 from experiments.evals.task_configs import EvalTaskConfig
 
