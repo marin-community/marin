@@ -42,6 +42,13 @@ def _forward_with_activations(
     token_ids: jax.Array,
 ) -> dict[str, np.ndarray]:
     """Run forward pass, capturing activations at every sublayer."""
+    import experiments.grug.moe.model as model_mod
+    from levanter.grug.attention import reference_attention
+
+    # Use reference attention to avoid splash attention sharding issues
+    _orig_attention = model_mod.attention
+    model_mod.attention = lambda q, k, v, mask: reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+
     cfg = model.config
     # Replicate — batch=1 can't be sharded across data devices
     batch_spec = P(None, None, None)
@@ -199,21 +206,18 @@ def _run_log_activations_local(config: LogActivationsConfig) -> None:
     model_cfg, _, _, _ = build_from_heuristic(budget=config.budget, hidden_dim=config.hidden_dim)
     print(f"Model: d={model_cfg.hidden_dim}, L={model_cfg.num_layers}, E={model_cfg.num_experts}")
 
-    from jax.sharding import AxisType, NamedSharding
+    from jax.sharding import AxisType
 
     import haliax.partitioning
 
     single_device = jax.devices()[:1]
-    mesh_axes = {"data": 1, "replica": 1, "model": 1, "expert": 1}
-
-    # Explicit axes for init + checkpoint loading (model uses reshard with PartitionSpec)
-    explicit_mesh = create_mesh_from_axis_specs(
-        ici_axes=mesh_axes,
+    mesh = create_mesh_from_axis_specs(
+        ici_axes={"data": 1, "replica": 1, "model": 1, "expert": 1},
         dcn_axes={},
         devices=single_device,
         axis_types=tuple(AxisType.Explicit for _ in range(4)),
     )
-    with haliax.partitioning.set_mesh(explicit_mesh):
+    with haliax.partitioning.set_mesh(mesh):
         mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
         model = Transformer.init(model_cfg, key=jax.random.PRNGKey(0))
 
@@ -224,20 +228,9 @@ def _run_log_activations_local(config: LogActivationsConfig) -> None:
             config.checkpoint,
             subpath="params",
             discover_latest=False,
-            mesh=explicit_mesh,
+            mesh=mesh,
         )
         model = mp.cast_to_compute(model)
-
-    # Move model to Auto mesh for forward pass (splash attention can't handle Explicit)
-    auto_mesh = create_mesh_from_axis_specs(
-        ici_axes=mesh_axes,
-        dcn_axes={},
-        devices=single_device,
-    )
-    replicated = NamedSharding(auto_mesh, P())
-    model = jax.tree.map(lambda x: jax.device_put(x, replicated) if hasattr(x, "sharding") else x, model)
-
-    with haliax.partitioning.set_mesh(auto_mesh):
         # 1. Custom text (if provided)
         if config.text:
             print("\n=== Custom text ===")
