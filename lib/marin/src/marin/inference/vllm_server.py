@@ -26,7 +26,7 @@ from marin.evaluation.evaluators.evaluator import ModelConfig
 logger = logging.getLogger(__name__)
 DEFAULT_VLLM_TPU_DOCKER_IMAGE: str = "vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e"
 DEFAULT_VLLM_GPU_DOCKER_IMAGE: str = "nvcr.io/nvidia/vllm:25.12.post1-py3"
-VLLM_NATIVE_PIP_PACKAGES: tuple[str, ...] = ("vllm-tpu",)
+VLLM_NATIVE_PIP_PACKAGES: tuple[str, ...] = ("vllm-tpu==0.13.2.post6",)
 
 _SENSITIVE_ENV_KEYS = frozenset(
     {

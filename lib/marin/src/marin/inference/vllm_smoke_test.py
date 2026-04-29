@@ -161,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
         default="v5p-8",
         help="TPU type to request when launching via Fray (default: v5p-8).",
     )
+    parser.add_argument("--regions", default=None, help="Optional comma-separated Iris regions.")
     parser.add_argument(
         "--local",
         action="store_true",
@@ -227,7 +228,11 @@ def main(argv: list[str] | None = None) -> int:
                 print(output)
 
     client = current_client()
-    resources = ResourceConfig.with_tpu(args.tpu_type)
+    resource_kwargs: dict[str, object] = {}
+    regions = _parse_csv(args.regions)
+    if regions:
+        resource_kwargs["regions"] = regions
+    resources = ResourceConfig.with_tpu(args.tpu_type, **resource_kwargs)
     job_request = JobRequest(
         name=f"vllm-smoke:{args.tpu_type}",
         entrypoint=Entrypoint.from_callable(_run),
@@ -241,6 +246,12 @@ def main(argv: list[str] | None = None) -> int:
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)
     return 0
+
+
+def _parse_csv(value: str | None) -> list[str]:
+    if value is None:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 if __name__ == "__main__":
