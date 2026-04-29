@@ -21,7 +21,7 @@ from experiments.grug.moe.launch import (
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 GATE2_CONFIGS: list[tuple[int, float]] = [
-    (1024, 9.00e18),
+    # (1024, 9.00e18),  # already succeeded
     (1280, 2.83e19),
 ]
 
