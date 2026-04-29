@@ -5,25 +5,25 @@
 plus router logits for each token. Saves to GCS as numpy arrays.
 
 Usage:
-    python -m experiments.grug.moe.log_activations \
-        --checkpoint gs://marin-us-central1/grug/moe-v16-compute-opt-d1024-9.00e+18-d3bc52/checkpoints/step-12648 \
-        --output gs://marin-us-central1/grug/activations/d1024-step12648 \
-        --text "The quick brown fox jumps over the lazy dog."
+    python -m experiments.grug.moe.log_activations
 """
 
-import argparse
+import dataclasses
 import io
 import json
+from dataclasses import dataclass
 
 import gcsfs
 import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
+from fray.cluster import ResourceConfig
 from jax.sharding import PartitionSpec as P
+from marin.execution.executor import ExecutorStep, executor_main, versioned
 
 from experiments.grug.moe.heuristic import build_from_heuristic
-from experiments.grug.moe.model import GrugModelConfig, Transformer, _batch_spec
+from experiments.grug.moe.model import Transformer, _batch_spec
 from levanter.grug.attention import AttentionMask
 
 
@@ -33,7 +33,7 @@ def _tokenize(text: str, max_tokens: int = 100) -> np.ndarray:
 
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3.1-8B")
     ids = tokenizer.encode(text, add_special_tokens=False)[: max_tokens - 1]
-    ids = [tokenizer.bos_token_id] + ids
+    ids = [tokenizer.bos_token_id, *ids]
     return np.array(ids, dtype=np.int32)
 
 
@@ -73,9 +73,7 @@ def _forward_with_activations(
         from jax.sharding import reshard
 
         x_flat = rearrange(mlp_in, "b s d -> (b s) d")
-        router_logits = jnp.einsum(
-            "td,de->te", x_flat, reshard(block.mlp.router, P(None, None))
-        ).astype(jnp.float32)
+        router_logits = jnp.einsum("td,de->te", x_flat, reshard(block.mlp.router, P(None, None))).astype(jnp.float32)
         router_logits_all.append(np.array(router_logits))
 
         mlp_out, _ = block.mlp(mlp_in)
@@ -98,7 +96,9 @@ def _forward_with_activations(
     }
 
 
-def _save_to_gcs(activations: dict[str, np.ndarray], output_path: str, token_ids: np.ndarray, text: str, num_layers: int):
+def _save_to_gcs(
+    activations: dict[str, np.ndarray], output_path: str, token_ids: np.ndarray, text: str, num_layers: int
+):
     """Save activations to GCS: metadata + residual_stream + router_logits + token_ids."""
     fs = gcsfs.GCSFileSystem()
 
@@ -138,55 +138,120 @@ def _save_to_gcs(activations: dict[str, np.ndarray], output_path: str, token_ids
     print(f"\nSaved to {output_path} (4 files)")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Log model activations to GCS")
-    parser.add_argument("--checkpoint", required=True, help="GCS path to checkpoint step dir")
-    parser.add_argument("--output", required=True, help="GCS path to save activations")
-    parser.add_argument("--text", required=True, help="Input text to process")
-    parser.add_argument("--hidden_dim", type=int, required=True, help="Model hidden dim")
-    parser.add_argument("--budget", type=float, required=True, help="Compute budget used for this model")
-    parser.add_argument("--max_tokens", type=int, default=100, help="Max tokens to process")
-    args = parser.parse_args()
+def _get_nemotron_tokens(max_tokens: int = 100) -> tuple[np.ndarray, str]:
+    """Get first max_tokens from the nemotron mix training data."""
+    from transformers import AutoTokenizer
 
-    # Tokenize
-    token_ids = _tokenize(args.text, args.max_tokens)
-    print(f"Tokenized {len(token_ids)} tokens")
+    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3.1-8B")
 
-    # Build model config
-    model_cfg, _, _, _ = build_from_heuristic(budget=args.budget, hidden_dim=args.hidden_dim)
-    print(f"Model: d={model_cfg.hidden_dim}, L={model_cfg.num_layers}, E={model_cfg.num_experts}")
+    import levanter.store as store
 
-    # Load checkpoint
-    from levanter.utils.mesh import MeshConfig
+    nemotron_path = "marin-us-central1/tokenized/nemotron_cc/hq_actual-5af4cc"
+    try:
+        cache = store.TreeCache.load(f"gs://{nemotron_path}", mode="r")
+        first_doc = cache[0]
+        token_ids = np.array(first_doc["input_ids"][:max_tokens], dtype=np.int32)
+        text = tokenizer.decode(token_ids)
+        return token_ids, text
+    except Exception as e:
+        print(f"Warning: Could not load nemotron tokens ({e}), using fallback text")
+        fallback = "The United States of America is a country primarily located in North America."
+        return _tokenize(fallback, max_tokens), fallback
 
-    mesh_config = MeshConfig(axes={"expert": 1})
-    with mesh_config.axis_resources():
-        mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
-        model = Transformer.init(model_cfg, key=jax.random.PRNGKey(0))
 
-        # Load from checkpoint
-        from experiments.grug.checkpointing import load_checkpoint
+def _run_and_save(model, model_cfg, token_ids: np.ndarray, text: str, output_path: str):
+    """Run forward pass and save activations."""
+    token_ids_jax = jnp.array(token_ids[None, :], dtype=jnp.int32)
+    activations = _forward_with_activations(model, token_ids_jax)
 
-        model = load_checkpoint(model, args.checkpoint)
-        model = mp.cast_to_compute(model)
-
-        # Prepare input: (1, seq_len)
-        token_ids_jax = jnp.array(token_ids[None, :], dtype=jnp.int32)
-
-        # Forward with activations
-        activations = _forward_with_activations(model, token_ids_jax)
-
-    # Squeeze batch dim from residual_stream: (snapshots, 1, seq, d) -> (snapshots, seq, d)
+    # Squeeze batch dim
     for key in activations:
         if activations[key].ndim == 4 and activations[key].shape[1] == 1:
             activations[key] = activations[key][:, 0, :, :]
-        elif activations[key].ndim == 3 and activations[key].shape[1] == 1:
-            # router_logits batch dim is already squeezed by rearrange
-            pass
 
-    # Save
-    _save_to_gcs(activations, args.output, token_ids, args.text, num_layers=model_cfg.num_layers)
+    _save_to_gcs(activations, output_path, token_ids, text, num_layers=model_cfg.num_layers)
 
+
+@dataclass(frozen=True)
+class LogActivationsConfig:
+    checkpoint: str
+    output_path: str
+    hidden_dim: int
+    budget: float
+    text: str | None = None
+    max_tokens: int = 100
+    resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig.with_tpu("v5p-8"))
+
+
+def _run_log_activations_local(config: LogActivationsConfig) -> None:
+    """Runs on TPU: load checkpoint, forward pass, save activations."""
+    from levanter.utils.mesh import create_mesh_from_axis_specs
+
+    model_cfg, _, _, _ = build_from_heuristic(budget=config.budget, hidden_dim=config.hidden_dim)
+    print(f"Model: d={model_cfg.hidden_dim}, L={model_cfg.num_layers}, E={model_cfg.num_experts}")
+
+    num_devices = len(jax.devices())
+    mesh = create_mesh_from_axis_specs(ici_axes={"data": num_devices, "expert": 1}, dcn_axes={})
+    with mesh:
+        mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
+        model = Transformer.init(model_cfg, key=jax.random.PRNGKey(0))
+
+        from levanter.checkpoint import load_checkpoint
+
+        model = load_checkpoint(
+            model,
+            config.checkpoint,
+            subpath="params",
+            discover_latest=False,
+            mesh=mesh,
+        )
+        model = mp.cast_to_compute(model)
+
+        # 1. Custom text (if provided)
+        if config.text:
+            print("\n=== Custom text ===")
+            custom_ids = _tokenize(config.text, config.max_tokens)
+            print(f"Tokenized {len(custom_ids)} tokens")
+            _run_and_save(model, model_cfg, custom_ids, config.text, f"{config.output_path}/custom")
+
+        # 2. Nemotron mix first tokens
+        print("\n=== Nemotron mix ===")
+        nemotron_ids, nemotron_text = _get_nemotron_tokens(config.max_tokens)
+        print(f"Loaded {len(nemotron_ids)} tokens from nemotron")
+        _run_and_save(model, model_cfg, nemotron_ids, nemotron_text, f"{config.output_path}/nemotron")
+
+
+def run_log_activations(config: LogActivationsConfig) -> None:
+    """Dispatch activation logging through Fray to get TPU access."""
+    from experiments.grug.dispatch import dispatch_grug_training_run
+
+    dispatch_grug_training_run(
+        run_id=f"log-activations-d{config.hidden_dim}",
+        config=config,
+        local_entrypoint=_run_log_activations_local,
+        resources=config.resources,
+        max_retries_failure=1,
+    )
+
+
+# --- Define the step for d512 compute-optimal checkpoint ---
+_d512_checkpoint = "gs://marin-us-central1/grug/moe-v16-compute-opt-d512-2.19e+17-d3b963/checkpoints/step-6387"
+
+log_activations_step = ExecutorStep(
+    name="grug/activations-d512",
+    fn=run_log_activations,
+    config=LogActivationsConfig(
+        checkpoint=versioned(_d512_checkpoint),
+        output_path="gs://marin-us-central1/grug/activations/d512-step6387",
+        hidden_dim=versioned(512),
+        budget=versioned(2.19e17),
+        text=versioned("The quick brown fox jumps over the lazy dog."),
+        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+    ),
+)
 
 if __name__ == "__main__":
-    main()
+    executor_main(
+        steps=[log_activations_step],
+        description="Log activations from trained MoE checkpoints.",
+    )
