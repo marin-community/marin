@@ -49,7 +49,7 @@ from zephyr import Dataset, ZephyrContext, counters
 
 logger = logging.getLogger(__name__)
 
-PYTRACER_DIR = Path(__file__).resolve().parents[2] / "scripts" / "contree_pytracer"
+PYTRACER_DIR = Path(__file__).resolve().parent / "pytracer"
 TRACER_MOUNT = "/pytracer"
 TRACE_META_MARKER = "::TRACE_META::"
 RATE_LIMIT_BACKOFFS = (3, 6, 12, 24, 48)
