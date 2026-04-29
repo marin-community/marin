@@ -15,8 +15,6 @@ from marin.execution.executor import executor_main
 RESOURCE_CONFIG = ResourceConfig.with_tpu("v5p-8", regions=["us-central1"])
 MAX_DOCS_PER_DATASET = 256
 MAX_DOC_BYTES = 32_768
-MAX_EVAL_LENGTH = 4096
-PER_DEVICE_BATCH_SIZE = 4
 
 DATASETS = {
     **default_raw_validation_sets(),
@@ -28,40 +26,41 @@ MARIN_MODEL = GapFinderModelConfig(
     checkpoint_is_hf=True,
     tokenizer="meta-llama/Llama-3.1-8B",
 )
-LLAMA_MODEL = GapFinderModelConfig(
-    checkpoint_path="meta-llama/Llama-3.1-8B",
-    checkpoint_is_hf=True,
-    tokenizer="meta-llama/Llama-3.1-8B",
-)
-QWEN3_MODEL = GapFinderModelConfig(
-    checkpoint_path="Qwen/Qwen3-8B-Base",
-    checkpoint_is_hf=True,
-    tokenizer="Qwen/Qwen3-8B",
-)
-
-COMMON_SCORE_KWARGS = dict(
-    datasets=DATASETS,
-    resource_config=RESOURCE_CONFIG,
-    per_device_batch_size=PER_DEVICE_BATCH_SIZE,
-    max_eval_length=MAX_EVAL_LENGTH,
-    max_docs_per_dataset=MAX_DOCS_PER_DATASET,
-    max_doc_bytes=MAX_DOC_BYTES,
-)
 
 MARIN_SCORES = model_perplexity_scores(
     model=MARIN_MODEL,
-    wandb_tags=["model=marin-community/marin-8b-base", "dataset_bundle=default_raw_plus_fineweb2_multilingual"],
-    **COMMON_SCORE_KWARGS,
+    datasets=DATASETS,
+    resource_config=RESOURCE_CONFIG,
+    per_device_batch_size=4,
+    max_eval_length=4096,
+    max_docs_per_dataset=MAX_DOCS_PER_DATASET,
+    max_doc_bytes=MAX_DOC_BYTES,
 )
 LLAMA_SCORES = model_perplexity_scores(
-    model=LLAMA_MODEL,
-    wandb_tags=["model=meta-llama/Llama-3.1-8B", "dataset_bundle=default_raw_plus_fineweb2_multilingual"],
-    **COMMON_SCORE_KWARGS,
+    model=GapFinderModelConfig(
+        checkpoint_path="meta-llama/Llama-3.1-8B",
+        checkpoint_is_hf=True,
+        tokenizer="meta-llama/Llama-3.1-8B",
+    ),
+    datasets=DATASETS,
+    resource_config=RESOURCE_CONFIG,
+    per_device_batch_size=4,
+    max_eval_length=4096,
+    max_docs_per_dataset=MAX_DOCS_PER_DATASET,
+    max_doc_bytes=MAX_DOC_BYTES,
 )
 QWEN3_SCORES = model_perplexity_scores(
-    model=QWEN3_MODEL,
-    wandb_tags=["model=Qwen/Qwen3-8B-Base", "dataset_bundle=default_raw_plus_fineweb2_multilingual"],
-    **COMMON_SCORE_KWARGS,
+    model=GapFinderModelConfig(
+        checkpoint_path="Qwen/Qwen3-8B-Base",
+        checkpoint_is_hf=True,
+        tokenizer="Qwen/Qwen3-8B",
+    ),
+    datasets=DATASETS,
+    resource_config=RESOURCE_CONFIG,
+    per_device_batch_size=4,
+    max_eval_length=4096,
+    max_docs_per_dataset=MAX_DOCS_PER_DATASET,
+    max_doc_bytes=MAX_DOC_BYTES,
 )
 
 MARIN_VS_LLAMA = model_perplexity_gap_from_scores(
