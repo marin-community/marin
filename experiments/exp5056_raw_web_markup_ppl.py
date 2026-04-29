@@ -4,8 +4,6 @@
 """
 Registry helpers for raw web, markup, and image-text perplexity-gap slices.
 
-This module stays opt-in: call ``raw_web_markup_raw_validation_sets()`` explicitly
-from a pilot gap experiment instead of extending ``default_raw_validation_sets()``.
 The first non-empty slices use ``starvector/svg-stack`` directly from Hugging Face
 so we can preserve exact SVG XML without adding a downloader.
 """
