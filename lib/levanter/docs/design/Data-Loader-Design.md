@@ -116,21 +116,12 @@ Along with the cache, we introduce interfaces and classes for working with the c
 - [levanter.data.text.TokenSeqDataset][]: This is an async dataset that does the chunking of documents into examples. It
   takes a cache and a `max_seq_len` and returns examples of length `max_seq_len`.
 - [levanter.data.PermutationDataset][]: This is a dataset that permutes the indices of another dataset. It is used for shuffling.
-- [levanter.data.EraShufflingDataset][]: This is a dataset that emulates the behavior of a shuffle buffer, while
-  still support random access. It is used for shuffling while still building the cache.
 - [levanter.data.MixtureDataset][]: This is a dataset that mixes together multiple datasets with different weights.
 
 ### [levanter.data.PermutationDataset][]
 
 The PermutationDataset is a dataset that permutes the indices of another dataset. It is backed by a pseudo-random
 permutation (PRP). PRPs give you random access to a permutation with O(1) time and memory.
-
-### [levanter.data.EraShufflingDataset][]
-
-The EraShufflingDataset is a dataset that emulates the behavior of a shuffle buffer, while still supporting random access.
-It works by defining an "era" length, which is the number of samples that are shuffled together. After an era is exhausted,
-the dataset shuffles the next era.
-
 
 ### [levanter.data.MixtureDataset][]
 

@@ -101,7 +101,7 @@ def _get_training_components(config: PreferenceLmDataConfig) -> dict[str, Any]:
 
 def _shuffle_dpo_dataset(
     dataset: AsyncDataset[DpoExample],
-    shuffle: bool | int | BlockShuffleConfig,
+    shuffle: bool | BlockShuffleConfig,
     *,
     key: jrandom.PRNGKey,
     perm_type: Literal["feistel", "linear"],
@@ -115,8 +115,6 @@ def _shuffle_dpo_dataset(
         )
     if shuffle is True:
         return dataset.shuffle(key, perm_type=perm_type)
-    if isinstance(shuffle, int) and not isinstance(shuffle, bool) and shuffle > 0:
-        return dataset.era_shuffle(shuffle, key=key, perm_type=perm_type)
     return dataset
 
 
