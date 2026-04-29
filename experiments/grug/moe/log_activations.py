@@ -226,12 +226,15 @@ def _run_log_activations_local(config: LogActivationsConfig) -> None:
         )
         model = mp.cast_to_compute(model)
 
-    # Strip all sharding annotations so forward pass runs unsharded
-    device = single_device[0]
-    model = jax.tree.map(lambda x: jax.device_put(np.array(x), device) if hasattr(x, "sharding") else x, model)
+    # Auto mesh for forward pass — model internally uses unshard/reshard which need a mesh,
+    # but Explicit axes cause sharding conflicts in attention. Replicate params on Auto mesh.
+    from jax.sharding import NamedSharding, PartitionSpec
 
-    # Forward pass with no mesh context — everything is on one device, no sharding
-    with jax.default_device(device):
+    auto_mesh = create_mesh_from_axis_specs(**mesh_kw)
+    replicated = NamedSharding(auto_mesh, PartitionSpec())
+    model = jax.tree.map(lambda x: jax.device_put(x, replicated) if hasattr(x, "sharding") else x, model)
+
+    with haliax.partitioning.set_mesh(auto_mesh):
         # 1. Custom text (if provided)
         if config.text:
             print("\n=== Custom text ===")
