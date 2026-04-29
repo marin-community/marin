@@ -5,7 +5,11 @@ import gzip
 import json
 from pathlib import Path
 
+import pytest
+
 from experiments.evals.gh_archive_structured_output import (
+    GH_ARCHIVE_STRUCTURED_OUTPUT_SLICES,
+    gh_archive_structured_output_eval,
     GH_ARCHIVE_OPTIONAL_EVENT_TYPES,
     GH_ARCHIVE_REQUIRED_EVENT_TYPES,
     gh_archive_structured_output_raw_validation_sets,
@@ -105,17 +109,12 @@ def test_download_gh_archive_events_filters_masks_and_serializes(tmp_path: Path)
 def test_gh_archive_structured_output_raw_validation_sets_paths_and_tags():
     datasets = gh_archive_structured_output_raw_validation_sets(raw_root="gs://example-bucket/raw/gha")
 
-    push = datasets["gh_archive_structured_output/PushEvent"]
-    workflow = datasets["gh_archive_structured_output/WorkflowRunEvent"]
+    assert set(datasets) == {slice_.registry_key for slice_ in GH_ARCHIVE_STRUCTURED_OUTPUT_SLICES}
 
-    assert push.input_path == "gs://example-bucket/raw/gha/PushEvent/*.jsonl.gz"
-    assert push.tags == (
-        "gh_archive_structured_output",
-        "epic:5005",
-        "issue:5098",
-        "event_type:PushEvent",
-    )
-    assert workflow.input_path == "gs://example-bucket/raw/gha/WorkflowRunEvent/*.jsonl.gz"
+    for slice_ in GH_ARCHIVE_STRUCTURED_OUTPUT_SLICES:
+        dataset = datasets[slice_.registry_key]
+        assert dataset.input_path == f"gs://example-bucket/raw/gha/{slice_.raw_relative_glob}"
+        assert dataset.tags == slice_.tags
 
 
 def test_gh_archive_raw_validation_sets_can_drop_optional_event_types():
@@ -123,10 +122,26 @@ def test_gh_archive_raw_validation_sets_can_drop_optional_event_types():
         raw_root="gs://example-bucket/raw/gha",
         include_optional_event_types=False,
     )
-    assert "gh_archive_structured_output/WorkflowRunEvent" not in datasets
+    assert set(datasets) == {
+        f"gh_archive_structured_output/{event_type}" for event_type in GH_ARCHIVE_REQUIRED_EVENT_TYPES
+    }
 
 
-def test_gh_archive_step_hash_attrs_include_window_and_caps():
+def test_gh_archive_structured_output_raw_validation_sets_default_to_built_step_and_reject_ambiguous_source():
+    datasets = gh_archive_structured_output_raw_validation_sets()
+
+    assert datasets["gh_archive_structured_output/PushEvent"].input_path == gh_archive_structured_output_eval.cd(
+        "PushEvent/*.jsonl.gz"
+    )
+
+    with pytest.raises(ValueError, match=r"Provide either raw_root or gh_archive_raw, not both\."):
+        gh_archive_structured_output_raw_validation_sets(
+            raw_root="gs://example-bucket/raw/gha",
+            gh_archive_raw=gh_archive_structured_output_eval,
+        )
+
+
+def test_gh_archive_step_cache_identity_tracks_data_window_not_runtime_knobs():
     step = gh_archive_step(
         start_date="2024-02-01",
         end_date="2024-02-02",
@@ -136,10 +151,38 @@ def test_gh_archive_step_hash_attrs_include_window_and_caps():
         max_events_per_event_type=64,
         base_url="https://example-gh-archive",
     )
-    assert step.hash_attrs["start_date"] == "2024-02-01"
-    assert step.hash_attrs["end_date"] == "2024-02-02"
-    assert step.hash_attrs["start_hour"] == 6
-    assert step.hash_attrs["end_hour"] == 8
-    assert step.hash_attrs["event_types"] == ("PushEvent", "IssuesEvent")
-    assert step.hash_attrs["max_events_per_event_type"] == 64
-    assert step.hash_attrs["base_url"] == "https://example-gh-archive"
+
+    runtime_only_change = gh_archive_step(
+        start_date="2024-02-01",
+        end_date="2024-02-02",
+        start_hour=6,
+        end_hour=8,
+        event_types=("PushEvent", "IssuesEvent"),
+        max_events_per_event_type=64,
+        request_timeout=5,
+        skip_existing=False,
+        base_url="https://example-gh-archive",
+    )
+    different_window = gh_archive_step(
+        start_date="2024-02-01",
+        end_date="2024-02-02",
+        start_hour=7,
+        end_hour=8,
+        event_types=("PushEvent", "IssuesEvent"),
+        max_events_per_event_type=64,
+        base_url="https://example-gh-archive",
+    )
+    different_cap = gh_archive_step(
+        start_date="2024-02-01",
+        end_date="2024-02-02",
+        start_hour=6,
+        end_hour=8,
+        event_types=("PushEvent", "IssuesEvent"),
+        max_events_per_event_type=32,
+        base_url="https://example-gh-archive",
+    )
+
+    assert step.name == runtime_only_change.name
+    assert step.output_path == runtime_only_change.output_path
+    assert step.output_path != different_window.output_path
+    assert step.output_path != different_cap.output_path

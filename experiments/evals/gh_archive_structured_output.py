@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Opt-in GH Archive structured-output PPL/gap eval wiring for issue #5098."""
+"""Opt-in GH Archive structured-output raw validation slices for issue #5098.
+
+These slices are meant to be consumed by the shared perplexity-gap cache
+builder, not by a dedicated one-off experiment entrypoint.
+"""
 
 from __future__ import annotations
 
