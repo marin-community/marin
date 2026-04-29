@@ -20,7 +20,7 @@ from iris.cluster.controller.service import (
     ControllerServiceImpl,
     _check_client_freshness,
 )
-from iris.log_server.server import LogServiceImpl
+from finelog.server import LogServiceImpl
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.transitions import (
     Assignment,

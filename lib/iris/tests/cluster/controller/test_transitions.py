@@ -42,7 +42,7 @@ from iris.cluster.controller.transitions import (
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
-from iris.rpc import logging_pb2
+from finelog.rpc import logging_pb2
 from rigging.timing import Duration, Timestamp
 
 from .conftest import (
@@ -1390,7 +1390,7 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
 
 def test_log_service_direct_push(state, log_service):
     """Log entries pushed via LogService are queryable."""
-    from iris.cluster.log_store import task_log_key
+    from iris.cluster.log_store_helpers import task_log_key
     from iris.cluster.types import TaskAttempt
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
@@ -1416,7 +1416,7 @@ def test_log_service_direct_push(state, log_service):
 def test_log_service_accumulates_pushes(state, log_service):
     """Multiple pushes accumulate logs in the service."""
 
-    from iris.cluster.log_store import task_log_key
+    from iris.cluster.log_store_helpers import task_log_key
     from iris.cluster.types import TaskAttempt
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())

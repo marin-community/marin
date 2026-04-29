@@ -10,7 +10,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from iris.cluster.bundle import BundleStore
-from iris.log_server.server import LogServiceImpl
+from finelog.server import LogServiceImpl
 from iris.cluster.controller.auth import (
     JwtTokenManager,
     _get_or_create_signing_key,

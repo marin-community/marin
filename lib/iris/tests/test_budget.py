@@ -21,7 +21,7 @@ from iris.cluster.controller.budget import (
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.types import JobName, WorkerId
-from iris.log_server.server import LogServiceImpl
+from finelog.server import LogServiceImpl
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import VerifiedIdentity, _verified_identity
 from iris.rpc.proto_utils import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value

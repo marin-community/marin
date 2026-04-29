@@ -30,7 +30,7 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.log_server.server import LogServiceImpl
+from finelog.server import LogServiceImpl
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.k8s.types import K8sResource

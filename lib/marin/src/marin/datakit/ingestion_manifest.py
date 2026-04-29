@@ -8,56 +8,51 @@ from __future__ import annotations
 import hashlib
 import json
 import posixpath
-from dataclasses import asdict, dataclass, field
-from enum import StrEnum
+from enum import StrEnum, auto
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem import open_url
+from typing_extensions import TypeAliasType
 from zephyr.writers import atomic_rename
 
 from marin.utils import fsspec_mkdirs
 
 JsonScalar = str | int | float | bool | None
-JsonValue = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
+JsonValue = TypeAliasType("JsonValue", JsonScalar | list["JsonValue"] | dict[str, "JsonValue"])
+INGESTION_METADATA_SCHEMA_VERSION = 1
 
 
-def _json_ready(value: Any) -> Any:
-    if isinstance(value, StrEnum):
-        return str(value)
-    if isinstance(value, tuple):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, list):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, dict):
-        return {key: _json_ready(item) for key, item in value.items()}
-    return value
+class ManifestModel(BaseModel):
+    """Strict base model for ingestion metadata payloads."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class UsagePolicy(StrEnum):
     """Policy gate for whether a source is allowed in training or eval."""
 
-    TRAINING_ALLOWED = "training_allowed"
-    EVAL_ONLY = "eval_only"
-    BLOCKED = "blocked"
+    TRAINING_ALLOWED = auto()
+    EVAL_ONLY = auto()
+    BLOCKED = auto()
 
 
 class IdentityTreatment(StrEnum):
     """How person-identifying strings should be handled during ingestion."""
 
-    PRESERVE = "preserve"
-    PSEUDONYMIZE = "pseudonymize"
-    DROP = "drop"
+    PRESERVE = auto()
+    PSEUDONYMIZE = auto()
+    DROP = auto()
 
 
 class SecretRedaction(StrEnum):
     """Whether source text requires secret redaction before downstream use."""
 
-    NONE = "none"
-    REQUIRED = "required"
+    NONE = auto()
+    REQUIRED = auto()
 
 
-@dataclass(frozen=True)
-class IngestionPolicy:
+class IngestionPolicy(ManifestModel):
     """Policy and risk metadata for an ingestible source."""
 
     usage_policy: UsagePolicy
@@ -77,8 +72,7 @@ class IngestionPolicy:
         return self.usage_policy == UsagePolicy.EVAL_ONLY
 
 
-@dataclass(frozen=True)
-class SampleCapConfig:
+class SampleCapConfig(ManifestModel):
     """Optional source-level sampling caps used by a staging or extraction step."""
 
     max_bytes_per_source: int | None = None
@@ -89,22 +83,24 @@ class SampleCapConfig:
     max_examples: int | None = None
 
 
-@dataclass(frozen=True)
-class StagingMetadata:
-    """How a source is rendered into downstream text records."""
+class StagingMetadata(ManifestModel):
+    """How a source is rendered into downstream text records.
+
+    This block is the source -> text projection contract. Keep only fields
+    that affect or meaningfully describe the emitted text surface here.
+    Filesystem plumbing and runtime output details belong in
+    ``MaterializedOutputMetadata`` instead.
+    """
 
     transform_name: str
     serializer_name: str | None = None
     split: str | None = None
     subset: str | None = None
     preserve_header: bool | None = None
-    output_filename: str = "staged.jsonl.gz"
-    record_provenance_fields: tuple[str, ...] = ()
-    metadata: dict[str, JsonValue] = field(default_factory=dict)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class IngestionSourceManifest:
+class IngestionSourceManifest(ManifestModel):
     """Typed source manifest for a reusable ingestion registry entry."""
 
     dataset_key: str
@@ -118,24 +114,53 @@ class IngestionSourceManifest:
     staging: StagingMetadata
     epic_issue: int | None = None
     issue_numbers: tuple[int, ...] = ()
-    sample_caps: SampleCapConfig = field(default_factory=SampleCapConfig)
+    sample_caps: SampleCapConfig = Field(default_factory=SampleCapConfig)
     compressed_size_bytes: int | None = None
     rough_tokens_b: float | None = None
-    source_metadata: dict[str, JsonValue] = field(default_factory=dict)
+    source_metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        payload = _json_ready(asdict(self))
+        payload = self.model_dump(mode="json")
         payload["policy"]["training_allowed"] = self.policy.training_allowed
         payload["policy"]["eval_only"] = self.policy.eval_only
         return payload
 
+    def content_fingerprint_payload(self) -> dict[str, Any]:
+        """Return the subset of manifest fields that can affect staged bytes.
+
+        This payload is for executor hashing and config validation. It excludes
+        issue links, descriptive policy text, and other provenance-only fields
+        so additive metadata evolution does not force unnecessary rebuilds.
+        """
+        return {
+            "dataset_key": self.dataset_key,
+            "slice_key": self.slice_key,
+            "source_label": self.source_label,
+            "source_urls": list(self.source_urls),
+            "source_format": self.source_format,
+            "surface_form": self.surface_form,
+            "policy": {
+                "requires_sanitization": self.policy.requires_sanitization,
+                "identity_treatment": str(self.policy.identity_treatment),
+                "secret_redaction": str(self.policy.secret_redaction),
+            },
+            "staging": self.staging.model_dump(mode="json"),
+            "sample_caps": self.sample_caps.model_dump(mode="json"),
+            "source_metadata": self.source_metadata,
+        }
+
     def fingerprint(self) -> str:
+        """Return the content hash used for cache keys and config validation."""
+        blob = json.dumps(self.content_fingerprint_payload(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+    def provenance_fingerprint(self) -> str:
+        """Return an exact hash over the full manifest payload."""
         blob = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-@dataclass(frozen=True)
-class MaterializedOutputMetadata:
+class MaterializedOutputMetadata(ManifestModel):
     """Runtime output metadata for a concrete staging or extraction run."""
 
     input_path: str
@@ -143,10 +168,10 @@ class MaterializedOutputMetadata:
     output_file: str
     record_count: int
     bytes_written: int
-    metadata: dict[str, JsonValue] = field(default_factory=dict)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return _json_ready(asdict(self))
+        return self.model_dump(mode="json")
 
 
 def render_ingestion_metadata(
@@ -156,8 +181,9 @@ def render_ingestion_metadata(
     """Render the sidecar payload for a materialized source."""
 
     return {
-        "schema_version": 1,
-        "manifest_fingerprint": manifest.fingerprint(),
+        "schema_version": INGESTION_METADATA_SCHEMA_VERSION,
+        "manifest_fingerprint": manifest.provenance_fingerprint(),
+        "content_fingerprint": manifest.fingerprint(),
         "source_manifest": manifest.to_dict(),
         "materialized_output": materialized_output.to_dict(),
     }

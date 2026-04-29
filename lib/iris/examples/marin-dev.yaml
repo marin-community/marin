@@ -2,6 +2,8 @@
 # Mirrors production marin.yaml with isolated state and smaller scale caps.
 # Usage: uv run iris --cluster=marin-dev cluster start
 
+log_server_config: marin-dev
+
 platform:
   label_prefix: marin-dev
   gcp:

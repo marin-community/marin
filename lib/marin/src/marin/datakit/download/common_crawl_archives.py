@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sample-capped Common Crawl WARC/WAT materializers for issue #5056.
+"""Sample-capped Common Crawl WARC/WAT materializers.
 
 This module streams a tiny, deterministic text slice from one pinned Common Crawl
 archive without mirroring whole WARC/WAT shards. It preserves archive structure by
@@ -57,6 +57,8 @@ COMMON_CRAWL_MAX_FILES = 4
 COMMON_CRAWL_MAX_OUTPUT_BYTES = 30 * 1024 * 1024
 COMMON_CRAWL_MAX_RECORD_BYTES = 512 * 1024
 COMMON_CRAWL_OUTPUT_FILENAME = "data.jsonl.gz"
+COMMON_CRAWL_WARC_SLICE_KEY = "raw_web_markup/common_crawl/warc"
+COMMON_CRAWL_WAT_SLICE_KEY = "raw_web_markup/common_crawl/wat"
 _SEGMENT_RE = re.compile(r"/segments/([^/]+)/")
 _TEXTUAL_HTTP_TYPES = (
     "text/",
@@ -167,9 +169,12 @@ def _common_crawl_manifest(*, slice_key: str, archive_kind: CommonCrawlArchiveKi
         policy=_common_crawl_policy(),
         staging=StagingMetadata(
             transform_name="download_common_crawl_sample",
-            output_filename=COMMON_CRAWL_OUTPUT_FILENAME,
-            record_provenance_fields=("id", "source_file", "record_index", "warc_type", "target_uri"),
-            metadata={"archive_kind": archive_kind.value, "crawl_id": COMMON_CRAWL_CRAWL_ID},
+            metadata={
+                "archive_kind": archive_kind.value,
+                "crawl_id": COMMON_CRAWL_CRAWL_ID,
+                "output_filename": COMMON_CRAWL_OUTPUT_FILENAME,
+                "provenance_fields": ["id", "source_file", "record_index", "warc_type", "target_uri"],
+            },
         ),
         epic_issue=COMMON_CRAWL_EPIC,
         issue_numbers=(COMMON_CRAWL_ISSUE,),
@@ -184,14 +189,14 @@ def _common_crawl_manifest(*, slice_key: str, archive_kind: CommonCrawlArchiveKi
 
 COMMON_CRAWL_WARC_SOURCE = CommonCrawlArchiveSource(
     manifest=_common_crawl_manifest(
-        slice_key="raw_web_markup/common_crawl_warc",
+        slice_key=COMMON_CRAWL_WARC_SLICE_KEY,
         archive_kind=CommonCrawlArchiveKind.WARC,
     ),
     archive_kind=CommonCrawlArchiveKind.WARC,
 )
 COMMON_CRAWL_WAT_SOURCE = CommonCrawlArchiveSource(
     manifest=_common_crawl_manifest(
-        slice_key="raw_web_markup/common_crawl_wat",
+        slice_key=COMMON_CRAWL_WAT_SLICE_KEY,
         archive_kind=CommonCrawlArchiveKind.WAT,
     ),
     archive_kind=CommonCrawlArchiveKind.WAT,
@@ -404,9 +409,6 @@ def download_common_crawl_sample(config: DownloadCommonCrawlSampleConfig) -> dic
     output_file = posixpath.join(output_path, config.output_filename)
     fsspec_mkdirs(output_path, exist_ok=True)
 
-    session = _build_session()
-    selected_paths = _selected_archive_paths(session, source, http_timeout=config.http_timeout)
-
     counters = {
         "records_seen": 0,
         "records_kept": 0,
@@ -417,7 +419,9 @@ def download_common_crawl_sample(config: DownloadCommonCrawlSampleConfig) -> dic
     bytes_written = 0
     record_types: dict[str, int] = {}
 
+    session = _build_session()
     try:
+        selected_paths = _selected_archive_paths(session, source, http_timeout=config.http_timeout)
         with atomic_rename(output_file) as temp_path:
             with open_url(temp_path, "wt", encoding="utf-8", compression="gzip") as writer:
                 for relative_path in selected_paths:

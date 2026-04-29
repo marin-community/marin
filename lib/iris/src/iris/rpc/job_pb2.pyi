@@ -1,4 +1,4 @@
-from . import logging_pb2 as _logging_pb2
+from . import iris_logging_pb2 as _iris_logging_pb2
 from . import time_pb2 as _time_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
@@ -337,8 +337,8 @@ class GetProcessStatusResponse(_message.Message):
     PROCESS_INFO_FIELD_NUMBER: _ClassVar[int]
     LOG_ENTRIES_FIELD_NUMBER: _ClassVar[int]
     process_info: ProcessInfo
-    log_entries: _containers.RepeatedCompositeFieldContainer[_logging_pb2.LogEntry]
-    def __init__(self, process_info: _Optional[_Union[ProcessInfo, _Mapping]] = ..., log_entries: _Optional[_Iterable[_Union[_logging_pb2.LogEntry, _Mapping]]] = ...) -> None: ...
+    log_entries: _containers.RepeatedCompositeFieldContainer[_iris_logging_pb2.LogEntry]
+    def __init__(self, process_info: _Optional[_Union[ProcessInfo, _Mapping]] = ..., log_entries: _Optional[_Iterable[_Union[_iris_logging_pb2.LogEntry, _Mapping]]] = ...) -> None: ...
 
 class TaskStatus(_message.Message):
     __slots__ = ("task_id", "state", "worker_id", "worker_address", "exit_code", "error", "started_at", "finished_at", "ports", "resource_usage", "build_metrics", "current_attempt_id", "attempts", "pending_reason", "can_be_scheduled", "container_id", "resource_history")
