@@ -62,10 +62,17 @@ from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
-# Max explicit task errors (report_error) per shard before aborting. Preemption
-# requeues (re-registration, heartbeat timeout) do not count — they retry
-# unbounded. `_check_worker_group` backstops if workers fully exhaust Iris retries.
+# Max explicit task errors (report_error) per shard before aborting.
 MAX_SHARD_FAILURES = 3
+
+# Max infra failures observed *while the same shard was in flight* on the
+# crashing worker before treating that shard as a deterministic crasher and
+# aborting. Genuine preemption distributes across all in-flight shards, so
+# the same shard hitting this cap is strong evidence the shard payload is
+# what's killing the worker (e.g. native SIGSEGV from Arrow / JAX, or an
+# OOM that brings the host down). Set well above realistic preemption
+# storms for any one shard in a multi-shard pipeline.
+MAX_SHARD_INFRA_FAILURES = 20
 
 ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/stage/{stage_name}/item_count"
 ZEPHYR_STAGE_BYTES_PROCESSED_KEY = "zephyr/stage/{stage_name}/bytes_processed"
@@ -642,7 +649,13 @@ class ZephyrCoordinator:
         kind: ShardFailureKind,
         error_info: str | None = None,
     ) -> bool:
-        """Requeue the worker's in-flight shard; abort only if TASK errors hit MAX_SHARD_FAILURES.
+        """Requeue the worker's in-flight shard; abort if a per-shard cap is hit.
+
+        TASK errors are bounded by ``MAX_SHARD_FAILURES``. INFRA failures
+        observed while the *same* shard was in flight are bounded by
+        ``MAX_SHARD_INFRA_FAILURES`` so a payload that deterministically
+        crashes its worker (native SIGSEGV, OOM) doesn't loop forever now
+        that shard execution is in-process.
 
         Must be called with lock held. Returns True if the pipeline was aborted.
         """
@@ -693,14 +706,35 @@ class ZephyrCoordinator:
                 MAX_SHARD_FAILURES,
             )
         else:
+            self._task_infra_attempts[shard_idx] += 1
+            infra_attempts = self._task_infra_attempts[shard_idx]
+            if infra_attempts >= MAX_SHARD_INFRA_FAILURES:
+                logger.error(
+                    "Shard %d has been in flight during %d infra failures (max %d); "
+                    "treating as a deterministic crasher (likely native SIGSEGV / OOM in shard "
+                    "code) and aborting pipeline. Last failure on worker %s.",
+                    shard_idx,
+                    infra_attempts,
+                    MAX_SHARD_INFRA_FAILURES,
+                    worker_id,
+                )
+                self._fatal_error = (
+                    f"Shard {shard_idx} crashed its worker {infra_attempts} times "
+                    f"(max {MAX_SHARD_INFRA_FAILURES} infra failures while in flight); "
+                    f"last failure on worker {worker_id}."
+                )
+                return True
+
             logger.warning(
-                "Shard %d requeued from worker %s due to infra failure (preemption/heartbeat); "
-                "infra retries are unbounded. Total generation: %d, task errors so far: %d/%d.",
+                "Shard %d requeued from worker %s due to infra failure (preemption/heartbeat). "
+                "Total generation: %d, task errors so far: %d/%d, infra-while-in-flight: %d/%d.",
                 shard_idx,
                 worker_id,
                 self._task_attempts[shard_idx],
                 self._task_error_attempts[shard_idx],
                 MAX_SHARD_FAILURES,
+                infra_attempts,
+                MAX_SHARD_INFRA_FAILURES,
             )
 
         self._task_queue.append(task)
@@ -897,6 +931,11 @@ class ZephyrCoordinator:
             self._in_flight = {}
             self._task_attempts = {task.shard_idx: 0 for task in tasks}
             self._task_error_attempts = {task.shard_idx: 0 for task in tasks}
+            # Counts INFRA failures observed while this specific shard was in
+            # flight on the dying worker — bounded by MAX_SHARD_INFRA_FAILURES
+            # so a shard that deterministically crashes its worker (native
+            # SIGSEGV, OOM) eventually aborts instead of retrying forever.
+            self._task_infra_attempts = {task.shard_idx: 0 for task in tasks}
             self._shard_errors = {}
             self._fatal_error = None
             self._is_last_stage = is_last_stage

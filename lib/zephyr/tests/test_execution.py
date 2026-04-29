@@ -21,6 +21,7 @@ from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import (
     MAX_SHARD_FAILURES,
+    MAX_SHARD_INFRA_FAILURES,
     CounterSnapshot,
     ListShard,
     PickleDiskChunk,
@@ -560,6 +561,47 @@ def test_heartbeat_timeouts_do_not_count_toward_shard_failures(actor_context, tm
     coord.report_result("worker-0", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
     assert coord._completed_shards == 1
     assert coord._fatal_error is None
+
+
+def test_repeated_infra_failures_on_same_shard_eventually_abort(actor_context, tmp_path):
+    """A shard that consistently crashes its worker must eventually abort the pipeline.
+
+    With in-process shard execution, a native SIGSEGV / OOM in shard code
+    takes down the whole worker actor. The coordinator sees that as an
+    INFRA failure (heartbeat timeout / re-registration). If the same shard
+    causes this repeatedly, it's deterministic — keep retrying forever and
+    the pipeline never converges. ``MAX_SHARD_INFRA_FAILURES`` bounds it.
+    """
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord._start_stage("test", 0, [task])
+    coord.register_worker("worker-0", MagicMock())
+
+    # One short of the cap: still re-queues, no abort yet.
+    for _ in range(MAX_SHARD_INFRA_FAILURES - 1):
+        pulled = coord.pull_task("worker-0")
+        assert pulled is not None and pulled != "SHUTDOWN"
+        coord._last_seen["worker-0"] = 0.0
+        coord.check_heartbeats(timeout=0.0)
+        assert coord._fatal_error is None
+
+    # The next failure crosses the cap and aborts.
+    pulled = coord.pull_task("worker-0")
+    assert pulled is not None and pulled != "SHUTDOWN"
+    coord._last_seen["worker-0"] = 0.0
+    coord.check_heartbeats(timeout=0.0)
+
+    assert coord._fatal_error is not None
+    assert "Shard 0" in coord._fatal_error
+    assert "crashed its worker" in coord._fatal_error
 
 
 def test_worker_reregistration_does_not_count_toward_shard_failures(actor_context, tmp_path):
