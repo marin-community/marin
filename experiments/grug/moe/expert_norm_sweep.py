@@ -33,7 +33,7 @@ GATE1_CONFIGS: list[tuple[int, float]] = [
 
 # (label, split_gate_up, flatten_expert_norm)
 CONFIGS: list[tuple[str, bool, bool]] = [
-    ("split-per-expert", True, False),
+    # ("split-per-expert", True, False),  # already succeeded
     ("merged-all-expert", False, True),
     ("split-all-expert", True, True),
 ]

@@ -62,11 +62,11 @@ def scale_by_adamh(
             if p.ndim <= 2:
                 return _scale_invariant_2d(p, u)
             if flatten_3d:
-                # Flatten to 2D: all experts share one norm ball.
-                orig_shape = p.shape
-                p_flat = p.reshape(-1, p.shape[-1])
-                u_flat = u.reshape(-1, u.shape[-1])
-                return _scale_invariant_2d(p_flat, u_flat).reshape(orig_shape)
+                # All experts share one norm ball (no reshape needed).
+                p_norm = jnp.linalg.norm(p)
+                u_norm = jnp.linalg.norm(u)
+                new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
+                return new_p / jnp.linalg.norm(new_p) * p_norm - p
             # Default: vmap over leading axis (per-expert norms).
             return jax.vmap(_scale_invariant_2d)(p, u)
 
