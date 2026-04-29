@@ -5,7 +5,7 @@ import dataclasses
 from types import SimpleNamespace
 
 import pytest
-from fray.v2.types import ResourceConfig
+from fray.types import ResourceConfig
 from levanter.checkpoint import CheckpointDebugConfig
 from levanter.layers.attention import AttentionBackend
 from levanter.models.llama import LlamaConfig

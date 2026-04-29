@@ -3,7 +3,7 @@
 
 import logging
 
-from fray.v2.types import ResourceConfig, TpuConfig
+from fray.types import ResourceConfig, TpuConfig
 from marin.execution.executor import infer_tpu_variant_regions_from_iris
 from rigging.filesystem import REGION_TO_DATA_BUCKET, marin_region
 
