@@ -1,0 +1,75 @@
+[
+  {
+    "round": "r0",
+    "n_rubrics": 22,
+    "n_flagged": 9,
+    "n_edits": 9,
+    "spec": "/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/experiments/posttrain/specs/openai_model_spec.jsonl",
+    "delta_from_prev": null
+  },
+  {
+    "round": "r1",
+    "n_rubrics": 22,
+    "n_flagged": 7,
+    "n_edits": 7,
+    "spec": "/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/experiments/posttrain/specs/openai_model_spec_m5_loop_flash_r1.jsonl",
+    "delta_from_prev": {
+      "n": 22,
+      "avg_BAD_change": 0.748,
+      "avg_alt_change": 0.785,
+      "avg_WE_change": 0.739
+    }
+  },
+  {
+    "round": "r2",
+    "n_rubrics": 22,
+    "n_flagged": 8,
+    "n_edits": 8,
+    "spec": "/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/experiments/posttrain/specs/openai_model_spec_m5_loop_flash_r2.jsonl",
+    "delta_from_prev": {
+      "n": 22,
+      "avg_BAD_change": 0.781,
+      "avg_alt_change": 0.788,
+      "avg_WE_change": 0.719
+    }
+  },
+  {
+    "round": "r3",
+    "n_rubrics": 22,
+    "n_flagged": 9,
+    "n_edits": 9,
+    "spec": "/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/experiments/posttrain/specs/openai_model_spec_m5_loop_flash_r3.jsonl",
+    "delta_from_prev": {
+      "n": 22,
+      "avg_BAD_change": 0.783,
+      "avg_alt_change": 0.802,
+      "avg_WE_change": 0.65
+    }
+  },
+  {
+    "round": "r4",
+    "n_rubrics": 22,
+    "n_flagged": 11,
+    "n_edits": 11,
+    "spec": "/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/experiments/posttrain/specs/openai_model_spec_m5_loop_flash_r4.jsonl",
+    "delta_from_prev": {
+      "n": 22,
+      "avg_BAD_change": 0.811,
+      "avg_alt_change": 0.765,
+      "avg_WE_change": 0.635
+    }
+  },
+  {
+    "round": "r5",
+    "n_rubrics": 22,
+    "n_flagged": 9,
+    "n_edits": 0,
+    "spec": "/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/experiments/posttrain/specs/openai_model_spec_m5_loop_flash_r5.jsonl",
+    "delta_from_prev": {
+      "n": 22,
+      "avg_BAD_change": 0.737,
+      "avg_alt_change": 0.769,
+      "avg_WE_change": 0.55
+    }
+  }
+]

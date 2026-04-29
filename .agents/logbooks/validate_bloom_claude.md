@@ -3166,3 +3166,189 @@ grew far beyond a single experiment entry. That logbook covers:
   experiments (plan at `.agents/projects/continual_alignment_single_statement_dpo.md`)
 
 **Start there for any continuation of this work.**
+
+---
+
+# VALIDATE_INIT_A_ZERO
+
+*Appendix written 2026-04-25T21:10Z by the agent driving the
+A=0 init LoRA-DPO sweep in worktree
+``/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat``
+(branch ``dpo-lora``). Cross-reference: that worktree's logbook
+is ``.agents/logbooks/a_zero_init_lora_dpo_lr_sweep.md`` and the
+mechanism backstory is in ``bug_1_dpo_lora_physical_topology.md``.*
+
+## Why this section exists
+
+The earlier judge eval in this logbook (the "Marin DPO LoRA
+adherence comparison" block) compared three step-1699 HF
+checkpoints under GPT-4.1 / GPT-5.1 judges:
+
+1. ``full_dpo_beta01_b64_step1699`` (lr=5e-7 full FT)
+2. ``lora_lr1e5_b64_step1699`` (LoRA, **standard B=0 init**)
+3. ``lora_lr5e6_b64_step1699`` (LoRA, **standard B=0 init**)
+
+Since then, the Bug-1 mechanism investigation
+(``bug_1_dpo_lora_physical_topology.md``) showed that LoRA-DPO
+with the standard ``zero_init_b=True, a_init_mode="random"``
+init is fragile to the physical device permutation of the FSDP
+mesh on v5p-8. The "A=0 rescue" — flip the init to
+``zero_init_b=False, a_init_mode="zero"`` — was shown to remove
+the saturation cliff and reduce the canonical/reverse rate gap
+from ~14× to ~14% at the 20-step probe horizon. We then ran a
+**full 9-LR × 2-seed sweep at A=0 init** to see whether the
+fix carries through to production-horizon (1700-step)
+training.
+
+Training-metric result (this is the open question for judge eval):
+
+> **A=0 strictly dominates B=0 on every metric at every LR.**
+> Best B=0 config: ``lr=1e-5`` at mean eval acc 0.992759.
+> Best A=0 config: ``lr=1e-6`` at mean eval acc 0.993140 —
+> *higher than any B=0 LR ever reached*.
+>
+> Spearman ρ between B=0 and A=0 LR rankings (by mean final
+> eval/dpo_accuracy) is **−0.05 (p = 0.89, N=9)** — A=0
+> reshuffles the LR landscape; lr=1e-6 flips from rank 9
+> (worst B=0) to rank 1 (only A=0 LR above the 5-way tied
+> ceiling).
+
+Open question: **does the A=0 train-metric advantage carry
+through to the GPT-4.1/5.1 judge?** Previously we established
+that A=0 and B=0 both reach near-identical final train DPO loss
+on the lr=1e-5 single-point probe (i.e., DPO loss saturates),
+so the *judge* eval is the load-bearing test of whether A=0 is
+worth shipping as the LoRA-DPO default.
+
+## What the agent over there should do
+
+Run the A=0 cohort through the same judge pipeline that
+produced the existing 3-row comparison table in this logbook
+(GPT-4.1 + GPT-5.1, bloom-speceval-v2 prompts,
+``run_eval_judge`` flow as documented earlier in this doc).
+
+Two natural extension points:
+
+1. **Single-LR add-on row.** Take A=0 lr=1e-6 seed=0 step-1699
+   and judge it. That's the *highest-eval-acc* A=0 config and
+   the most surprising one (it was the *worst* under B=0). If
+   the judge ranks it above ``lora_lr1e5_b64_step1699`` (the
+   prior LoRA winner), A=0 shifts the optimal LR claim from
+   "10× full-FT LR" to "1× full-FT LR" and the recommended
+   recipe changes.
+2. **Full 17-row matrix.** Judge every A=0 (LR, seed) at
+   step-1699, build a Spearman correlation between
+   train-eval-accuracy ranking and judge-adherence ranking
+   *under A=0 specifically*. The Codex/GPT-5 prior analysis
+   used eval accuracy as primary because it correlated with
+   judge under B=0 init; whether that correlation still holds
+   under A=0 is a meaningful question by itself.
+
+## A=0 cohort — W&B + HF checkpoint paths
+
+All 17 runs use the same recipe: β=0.1, b=64, r=64, α=64,
+``marin-community/marin-8b-instruct``, bloom-speceval-v2
+preferences, 1700 steps, cosine schedule with warmup=0.1, on
+v5p-8. The only change from the standard sweep is the LoRA
+init (``zero_init_b=False, a_init_mode="zero"``). 16 of 17
+finished cleanly; ``lr=4p5e6 seed=2`` still running at the
+time of this writeup with step-1600 HF saved. The
+``lr=1e5 seed=0`` slot of the new sweep no-op'd against an
+existing executor output ``-d93e61`` from a prior single-point
+A=0 run; that run is the canonical lr=1e5 seed=0 A=0 datapoint
+and is included below.
+
+| LR | seed | W&B run name | HF step-1699 path |
+| --- | ---: | --- | --- |
+| 1e-6 | 0 | `lora_bloom_speceval_v2_lr1e6_seed0_b64_v5p8_azero-8e1101` | `gs://marin-us-central2/checkpoints/dpo/tune_lora/lora_bloom_speceval_v2_lr1e6_seed0_b64_v5p8_azero-8e1101/hf/step-1699/` |
+| 1e-6 | 2 | `lora_bloom_speceval_v2_lr1e6_seed2_b64_v5p8_azero-76f693` | `gs://marin-us-central2/checkpoints/dpo/tune_lora/lora_bloom_speceval_v2_lr1e6_seed2_b64_v5p8_azero-76f693/hf/step-1699/` |
+| 2.5e-6 | 0 | `lora_bloom_speceval_lr2p5e6_seed0_b64_v5p8_azero-50448f` | `gs://marin-us-central2/checkpoints/dpo/tune_lora/lora_bloom_speceval_lr2p5e6_seed0_b64_v5p8_azero-50448f/hf/step-1699/` |
+| 2.5e-6 | 2 | `lora_bloom_speceval_lr2p5e6_seed2_b64_v5p8_azero-7f8caf` | `gs://marin-us-central2/checkpoints/dpo/tune_lora/lora_bloom_speceval_lr2p5e6_seed2_b64_v5p8_azero-7f8caf/hf/step-1699/` |
+| 3.75e-6 | 0 | `lora_bloom_speceval_lr3p75e6_seed0_b64_v5p8_azero-137514` | `gs://marin-us-central2/checkpoints/dpo/tune_lora/lora_bloom_speceval_lr3p75e6_seed0_b64_v5p8_azero-137514/hf/step-1699/` |
+| 3.75e-6 | 2 | `lora_bloom_speceval_lr3p75e6_seed2_b64_v5p8_azero-133232` | `gs://marin-us-central2/checkpoints/dpo/tune_lora/lora_bloom_speceval_lr3p75e6_seed2_b64_v5p8_azero-133232/hf/step-1699/` |
+| 4.5e-6 | 0 | `lora_bloom_speceval_lr4p5e6_seed0_b64_v5p8_azero-3e3574` | `gs://marin-us-central2/checkpoints/dpo/tune_lora/lora_bloom_speceval_lr4p5e6_seed0_b64_v5p8_azero-3e3574/hf/step-1699/` |
+| 4.5e-6 | 2 | `lora_bloom_speceval_lr4p5e6_seed2_b64_v5p8_azero-0d4d0a` | **still running** — latest at `gs://marin-us-east5/checkpoints/dpo/tune_lora/lora_bloom_speceval_lr4p5e6_seed2_b64_v5p8_azero-0d4d0a/hf/step-1600/` |
+| 5e-6 | 0 | `lora_bloom_speceval_v2_lr5e6_seed0_b64_v5p8_azero-a9e388` | `gs://marin-us-central2/checkpoints/dpo/tune_lora/lora_bloom_speceval_v2_lr5e6_seed0_b64_v5p8_azero-a9e388/hf/step-1699/` |
+| 5e-6 | 2 | `lora_bloom_speceval_v2_lr5e6_seed2_b64_v5p8_azero-fac059` | `gs://marin-us-central1/checkpoints/dpo/tune_lora/lora_bloom_speceval_v2_lr5e6_seed2_b64_v5p8_azero-fac059/hf/step-1699/` |
+| 6.25e-6 | 0 | `lora_bloom_speceval_lr6p25e6_seed0_b64_v5p8_azero-1ae54c` | `gs://marin-us-east5/checkpoints/dpo/tune_lora/lora_bloom_speceval_lr6p25e6_seed0_b64_v5p8_azero-1ae54c/hf/step-1699/` |
+| 6.25e-6 | 2 | `lora_bloom_speceval_lr6p25e6_seed2_b64_v5p8_azero-cf9851` | `gs://marin-us-east5/checkpoints/dpo/tune_lora/lora_bloom_speceval_lr6p25e6_seed2_b64_v5p8_azero-cf9851/hf/step-1699/` |
+| 7.5e-6 | 0 | `lora_bloom_speceval_lr7p5e6_seed0_b64_v5p8_azero-f628fc` | `gs://marin-us-east5/checkpoints/dpo/tune_lora/lora_bloom_speceval_lr7p5e6_seed0_b64_v5p8_azero-f628fc/hf/step-1699/` |
+| 7.5e-6 | 2 | `lora_bloom_speceval_lr7p5e6_seed2_b64_v5p8_azero-d00c6a` | `gs://marin-us-east5/checkpoints/dpo/tune_lora/lora_bloom_speceval_lr7p5e6_seed2_b64_v5p8_azero-d00c6a/hf/step-1699/` |
+| 8.75e-6 | 0 | `lora_bloom_speceval_lr8p75e6_seed0_b64_v5p8_azero-4a1bf7` | `gs://marin-us-east5/checkpoints/dpo/tune_lora/lora_bloom_speceval_lr8p75e6_seed0_b64_v5p8_azero-4a1bf7/hf/step-1699/` |
+| 8.75e-6 | 2 | `lora_bloom_speceval_lr8p75e6_seed2_b64_v5p8_azero-664ce3` | `gs://marin-us-east5/checkpoints/dpo/tune_lora/lora_bloom_speceval_lr8p75e6_seed2_b64_v5p8_azero-664ce3/hf/step-1699/` |
+| 1e-5 | 0 | `lora_bloom_speceval_v2_lr1e5_seed0_b64_v5p8_azero-d93e61` (reused) | `gs://marin-us-east5/checkpoints/dpo/tune_lora/lora_bloom_speceval_v2_lr1e5_seed0_b64_v5p8_azero-d93e61/hf/step-1699/` |
+| 1e-5 | 2 | `lora_bloom_speceval_v2_lr1e5_seed2_b64_v5p8_azero-1ae5bb` | `gs://marin-us-central2/checkpoints/dpo/tune_lora/lora_bloom_speceval_v2_lr1e5_seed2_b64_v5p8_azero-1ae5bb/hf/step-1699/` |
+
+W&B URLs are `https://wandb.ai/marin-community/dpo/runs/<run-name>`.
+
+## B=0 cohort — W&B URLs (judging baseline reference)
+
+These are the canonical 18 runs the original GPT-5/Codex
+analysis ranked. They live in
+`marin-community/dpo` and are the same source as
+`scratch/wandb_dpo_data/tune_lora/` over in the dpo-lora
+worktree. Use them as the comparison axis when you produce the
+side-by-side judge ranking.
+
+```text
+seed 0:
+  lr=1e-6     bloom_speceval_v2_marin_lr1e6_seed0_b64_v5p8-f55cdd
+  lr=2.5e-6   bloom_speceval_v2_marin_lr2p5e6_seed0_b64_v5p8-fde891
+  lr=3.75e-6  bloom_speceval_v2_marin_lr3p75e6_seed0_b64_v5p8-5dd6f9
+  lr=4.5e-6   bloom_speceval_v2_marin_lr4p5e6_seed0_b64_v5p8-5777fb
+  lr=5e-6     bloom_speceval_v2_marin_lr5e6_seed0_b64_v5p8-274540
+  lr=6.25e-6  bloom_speceval_v2_marin_lr6p25e6_seed0_b64_v5p8-9bf4a5
+  lr=7.5e-6   bloom_speceval_v2_marin_lr7p5e6_seed0_b64_v5p8-da8f07
+  lr=8.75e-6  bloom_speceval_v2_marin_lr8p75e6_seed0_b64_v5p8-ee2e69
+  lr=1e-5     bloom_speceval_v2_marin_lr1e5_seed0_b64_v5p8-41586d  ← prior judge target
+
+seed 2:
+  lr=1e-6     bloom_speceval_v2_marin_lr1e6_seed2_b64_v5p8-0ccb95
+  lr=2.5e-6   bloom_speceval_v2_marin_lr2p5e6_seed2_b64_v5p8-53c5c6
+  lr=3.75e-6  bloom_speceval_v2_marin_lr3p75e6_seed2_b64_v5p8-a8f183
+  lr=4.5e-6   bloom_speceval_v2_marin_lr4p5e6_seed2_b64_v5p8-e8649f
+  lr=5e-6     bloom_speceval_v2_marin_lr5e6_seed2_b64_v5p8-68378e
+  lr=6.25e-6  bloom_speceval_v2_marin_lr6p25e6_seed2_b64_v5p8-0f0331
+  lr=7.5e-6   bloom_speceval_v2_marin_lr7p5e6_seed2_b64_v5p8-981a35
+  lr=8.75e-6  bloom_speceval_v2_marin_lr8p75e6_seed2_b64_v5p8-f0636c
+  lr=1e-5     bloom_speceval_v2_marin_lr1e5_seed2_b64_v5p8-a73d6f
+```
+
+The B=0 lr=5e-6 seed=0 (`-274540`) and lr=1e-5 seed=0
+(`-41586d`) are the two LoRA targets that have *already* been
+judged in the table above (see "Marin DPO LoRA adherence
+comparison"). The remaining 16 B=0 runs are not yet judged —
+add them as needed for a full B=0-vs-A=0 ranking comparison.
+
+## Cross-references back to the dpo-lora worktree
+
+Open these (or sync them across worktrees) to see the training
+side of the picture:
+
+- `.agents/logbooks/a_zero_init_lora_dpo_lr_sweep.md` — daily
+  log of the A=0 sweep, including the priority/budget primer
+  at the top, the multi-region checkpoint debugging, and the
+  ranking analysis.
+- `.agents/logbooks/bug_1_dpo_lora_physical_topology.md` — the
+  Bug-1 mechanism story and the 6-seed A=0 vs B=0 control
+  result that motivated this whole sweep.
+- `dpo_bloom_plots/azero_compare/` — the analysis output:
+  - `data/sweep_data.json` — all 35 (B=0 + A=0) histories,
+    pulled fresh from W&B and the cached `tune_lora/` archive.
+    Reusable as input for any further analysis (e.g.
+    judge-vs-train-acc Spearman) without re-pulling.
+  - `final_state_table.md` — final-step values per (LR, init).
+  - `ranking_table.md` — accuracy-only LR ranking + Spearman.
+  - `dpo_eval_loss_per_lr.png` — the cleanest single plot:
+    A=0 dominates B=0 on eval loss at every LR, especially
+    striking at lr=1e-6.
+  - `combined_overlay.png` — 2×3 grid, sweep-averaged
+    B=0-vs-A=0 mean curves on every metric.
+- `dpo_bloom_plots/azero_compare.py` — the script that
+  produced the per-LR grids + combined overlay.
+- `dpo_bloom_plots/azero_ranking_compare.py` — the script that
+  produced the Spearman ranking analysis. Re-runs cheaply via
+  `--plot-only` on the cached sweep_data.
+
+The training is essentially done. Whatever judge framing this
+agent picks up next is what closes the A=0-vs-B=0 question.

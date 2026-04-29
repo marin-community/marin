@@ -21,12 +21,12 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
 from levanter.data.utils import batched
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import marin_prefix, url_to_fs
 
 from marin.alignment.batched_vllm_serve import BatchedVllmServeSession, write_vllm_metrics_artifact
 from marin.alignment.generate_prompts import load_sharded_jsonl_gz, load_spec, write_sharded_jsonl_gz
@@ -113,6 +113,42 @@ def _resolve_inference_config(model_config: dict[str, Any] | InferenceConfig) ->
     raise ValueError(f"Unknown inference backend: {backend}")
 
 
+def _materialize_mirror_path(path: str, label: str) -> str:
+    """Copy a mirror:// path into the local Marin prefix and return its concrete path."""
+    if not path.startswith("mirror://"):
+        return path
+
+    fs, fs_path = url_to_fs(path)
+    mirror_path = fs_path.strip("/")
+    if "://" in mirror_path:
+        raise ValueError(f"{label} must be a mirror-relative path, got {path!r}")
+
+    entries = fs.find(mirror_path, detail=True)
+    if not entries:
+        fs.info(mirror_path)
+        logger.info("Materialized mirrored %s %s into %s", label, path, marin_prefix())
+        return f"{marin_prefix().rstrip('/')}/{mirror_path}"
+
+    copied = 0
+    for entry_path, entry in sorted(entries.items()):
+        if entry.get("type") == "directory":
+            continue
+        fs.info(entry_path)
+        copied += 1
+
+    local_path = f"{marin_prefix().rstrip('/')}/{mirror_path}"
+    logger.info("Materialized mirrored %s %s into %s (%d files)", label, path, local_path, copied)
+    return local_path
+
+
+def _materialize_vllm_mirror_paths(config: VLLMConfig) -> VLLMConfig:
+    model = _materialize_mirror_path(config.model, "model")
+    tokenizer = _materialize_mirror_path(config.tokenizer, "tokenizer") if config.tokenizer is not None else None
+    if model == config.model and tokenizer == config.tokenizer:
+        return config
+    return replace(config, model=model, tokenizer=tokenizer)
+
+
 # ---------------------------------------------------------------------------
 # Eval inference
 # ---------------------------------------------------------------------------
@@ -180,6 +216,7 @@ def run_eval_inference(config: EvalInferenceConfig) -> None:
     inference_config = config.resolve_inference_config()
     if not isinstance(inference_config, VLLMConfig):
         raise ValueError("Eval inference currently supports only VLLMConfig (local vLLM).")
+    inference_config = _materialize_vllm_mirror_paths(inference_config)
 
     logger.info(
         "Running eval inference: %d prompts, n=%d, model=%s, temp=%.2f, max_tokens=%d",

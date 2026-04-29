@@ -1,0 +1,17 @@
+{
+  "batch_id": "batch_69e735389c3c8190b604230ea8d45f39",
+  "input_file_id": "file-TLdLNbhPUn8aPy3mqt51ZT",
+  "status": "completed",
+  "num_requests": 4000,
+  "submitted_at": "2026-04-21T08:28:40.758121Z",
+  "metadata": {
+    "project": "m2_pilot_dpo",
+    "stage": "chosen_judge",
+    "judge_model": "gpt-5.1",
+    "num_generations": "2000"
+  },
+  "endpoint": "/v1/chat/completions",
+  "completion_window": "24h",
+  "output_file_id": "file-H9Pz1jamSBXLQwshN2z3T8",
+  "error_file_id": null
+}

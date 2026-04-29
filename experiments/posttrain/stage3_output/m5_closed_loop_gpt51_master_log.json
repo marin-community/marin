@@ -1,0 +1,36 @@
+[
+  {
+    "round": "r0",
+    "n_rubrics": 22,
+    "n_flagged": 19,
+    "n_edits": 19,
+    "spec": "/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/experiments/posttrain/specs/openai_model_spec.jsonl",
+    "delta_from_prev": null
+  },
+  {
+    "round": "r1",
+    "n_rubrics": 22,
+    "n_flagged": 18,
+    "n_edits": 18,
+    "spec": "/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/experiments/posttrain/specs/openai_model_spec_m5_loop_r1.jsonl",
+    "delta_from_prev": {
+      "n": 22,
+      "avg_BAD_change": 0.935,
+      "avg_alt_change": 0.936,
+      "avg_WE_change": 0.847
+    }
+  },
+  {
+    "round": "r2",
+    "n_rubrics": 22,
+    "n_flagged": 19,
+    "n_edits": 0,
+    "spec": "/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/experiments/posttrain/specs/openai_model_spec_m5_loop_r2.jsonl",
+    "delta_from_prev": {
+      "n": 22,
+      "avg_BAD_change": 0.918,
+      "avg_alt_change": 0.918,
+      "avg_WE_change": 0.71
+    }
+  }
+]

@@ -74,6 +74,58 @@ TARGETS: dict[str, EvalTarget] = {
             "checkpoints/dpo/tune_lora/" "bloom_speceval_v2_marin_lr1e5_seed0_b64_v5p8-41586d/hf-reexport-r3/step-1699"
         ),
     ),
+    "m2_bloomv2_m2_step1744": EvalTarget(
+        key="m2_bloomv2_m2_step1744",
+        name="bcg_probe_m2_bloomv2_m2_step1744",
+        description="M2 LoRA DPO on bloomv2_m2 (bloomv2 + 10-pt pilot tension pairs) from SFT, lr=1e-5 seed=0 step-1744",
+        model_relative_path=(
+            "checkpoints/dpo/tune_lora/" "lora_m2_from_sft_bloomv2_m2_lr1e5_seed0_b64_v5p8-d33a24/hf/step-1744"
+        ),
+    ),
+    "m3_bloomv2_m3_step1727": EvalTarget(
+        key="m3_bloomv2_m3_step1727",
+        name="bcg_probe_m3_bloomv2_m3_step1727",
+        description=(
+            "M3 LoRA DPO on bloomv2_m3 (hierarchy-aware cross-tier plus same-class tradeoffs) "
+            "from SFT, lr=1e-5 seed=0 expected final step-1727"
+        ),
+        model_relative_path=(
+            "checkpoints/dpo/tune_lora/" "lora_m3_from_sft_bloomv2_m3_lr1e5_seed0_b64_v5p8-c36d70/hf/step-1727"
+        ),
+    ),
+    "m3_bloomv2_m3_step200": EvalTarget(
+        key="m3_bloomv2_m3_step200",
+        name="bcg_probe_m3_bloomv2_m3_step200",
+        description=(
+            "Intermediate M3 LoRA DPO checkpoint on bloomv2_m3, lr=1e-5 seed=0 step-200. "
+            "Use only as an early signal while final M3 training continues."
+        ),
+        model_relative_path=(
+            "checkpoints/dpo/tune_lora/" "lora_m3_from_sft_bloomv2_m3_lr1e5_seed0_b64_v5p8-c36d70/hf/step-200"
+        ),
+    ),
+    "m3_bloomv2_m3_step600": EvalTarget(
+        key="m3_bloomv2_m3_step600",
+        name="bcg_probe_m3_bloomv2_m3_step600",
+        description=(
+            "Intermediate M3 LoRA DPO checkpoint on bloomv2_m3, lr=1e-5 seed=0 step-600. "
+            "Use as a stronger in-flight signal while final M3 training continues."
+        ),
+        model_relative_path=(
+            "checkpoints/dpo/tune_lora/" "lora_m3_from_sft_bloomv2_m3_lr1e5_seed0_b64_v5p8-c36d70/hf/step-600"
+        ),
+    ),
+    "m3_bloomv2_m3_step800": EvalTarget(
+        key="m3_bloomv2_m3_step800",
+        name="bcg_probe_m3_bloomv2_m3_step800",
+        description=(
+            "Intermediate M3 LoRA DPO checkpoint on bloomv2_m3, lr=1e-5 seed=0 step-800. "
+            "Use as a post-step-600 in-flight signal while final M3 training continues."
+        ),
+        model_relative_path=(
+            "checkpoints/dpo/tune_lora/" "lora_m3_from_sft_bloomv2_m3_lr1e5_seed0_b64_v5p8-c36d70/hf/step-800"
+        ),
+    ),
 }
 
 
@@ -111,6 +163,11 @@ def _regional_path(region: str, relative_path: str) -> str:
 
 
 def _target_vllm_config(target: EvalTarget, region: str, tpu_type: str) -> VLLMConfig:
+    # vLLM's model path goes through huggingface_hub.from_pretrained, which
+    # doesn't understand fsspec mirror:// URIs — it wants a HF repo id or a
+    # local/GCS path. So use _regional_path here, and ensure the checkpoint
+    # exists in the chosen region (or be prepared to pre-stage it).
+    # Executor-tracked paths (prompts, output) still use mirror:// upstream.
     tpu_cfg = TPU_TYPE_CONFIG[tpu_type]
     return VLLMConfig(
         model=_regional_path(region, target.model_relative_path),
@@ -139,7 +196,11 @@ def build_inference_steps(
     n_samples: int = 4,
 ) -> list[ExecutorStep]:
     target = TARGETS[target_key]
-    prompts_path = _regional_path(region, prompts_relative_path)
+    # mirror:// so the prompts file is resolved to whichever region the TPU
+    # lands in (falling back to the canonical copy on first read); this
+    # matches how the model path is now resolved and keeps the executor's
+    # cross-region guard happy when the scheduler picks any v6e zone.
+    prompts_path = f"mirror://{prompts_relative_path.strip('/')}"
     step_name = _step_name(target, region, tpu_type) + step_suffix
     eval_steps = evaluate(
         name=step_name,

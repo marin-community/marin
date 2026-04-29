@@ -1,0 +1,17 @@
+{
+  "batch_id": "batch_69e7163ebbfc819082d11f4d77360bf7",
+  "input_file_id": "file-2QjnLrA3R2ehPnse4EpuWw",
+  "status": "completed",
+  "num_requests": 800,
+  "submitted_at": "2026-04-21T06:16:31.078656Z",
+  "metadata": {
+    "project": "m2_stage4_bcg",
+    "stage": "score",
+    "judge_model": "gpt-5.1",
+    "num_generations": "400"
+  },
+  "endpoint": "/v1/chat/completions",
+  "completion_window": "24h",
+  "output_file_id": "file-DspU1EhWKiMMjdUniSzKtY",
+  "error_file_id": null
+}

@@ -36,11 +36,12 @@ import argparse
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from marin.alignment.align import EvalConfig, evaluate
 from marin.alignment.evaluate import PromptFormat
 from marin.alignment.inference_config import VLLMConfig
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.executor import ExecutorStep, executor_main, mirrored
 from rigging.filesystem import REGION_TO_DATA_BUCKET
 
 SPEC_PATH = str(Path(__file__).parent / "specs" / "openai_model_spec.jsonl")
@@ -63,6 +64,7 @@ TPU_RAM_BY_PREFIX = {
     "v5p": "128g",
 }
 JUDGE_MODEL = "gpt-4.1"
+MIRRORED_MODEL_BUDGET_GB = 80
 
 SFT_MODEL_RELATIVE_PATH = "models/marin-community--marin-8b-instruct--0378f9c"
 
@@ -96,7 +98,10 @@ class EvalTarget:
     key: str
     name: str
     description: str
-    model_relative_path: str
+    model_relative_path: str | None = None
+    model_path: str | None = None
+    mirror_model: bool = False
+    mirror_budget_gb: float = MIRRORED_MODEL_BUDGET_GB
 
 
 TARGETS = {
@@ -162,9 +167,45 @@ TARGETS = {
             "checkpoints/dpo/tune_lora/" "bloom_speceval_v2_marin_lr5e6_seed0_b64_v5p8-274540/hf-fixed-r1/step-1699"
         ),
     ),
+    "azero_lr1e6_seed0_step1699": EvalTarget(
+        key="azero_lr1e6_seed0_step1699",
+        name="marin_dpo_lora_azero_lr1e6_seed0_step1699_bloom_speceval",
+        description="A=0 LoRA DPO lr1e-6 seed0 step1699 on 2,576 Bloom eval prompts (46 statements)",
+        model_relative_path=(
+            "checkpoints/dpo/tune_lora/" "lora_bloom_speceval_v2_lr1e6_seed0_b64_v5p8_azero-8e1101/hf/step-1699"
+        ),
+        mirror_model=True,
+    ),
+    "azero_lr1e5_seed0_step1699": EvalTarget(
+        key="azero_lr1e5_seed0_step1699",
+        name="marin_dpo_lora_azero_lr1e5_seed0_step1699_bloom_speceval",
+        description="A=0 LoRA DPO lr1e-5 seed0 step1699 on 2,576 Bloom eval prompts (46 statements)",
+        model_relative_path=(
+            "checkpoints/dpo/tune_lora/" "lora_bloom_speceval_v2_lr1e5_seed0_b64_v5p8_azero-d93e61/hf/step-1699"
+        ),
+        mirror_model=True,
+    ),
+    "azero_lr8p75e6_seed0_step1699": EvalTarget(
+        key="azero_lr8p75e6_seed0_step1699",
+        name="marin_dpo_lora_azero_lr8p75e6_seed0_step1699_bloom_speceval",
+        description="A=0 LoRA DPO lr8.75e-6 seed0 step1699 on 2,576 Bloom eval prompts (46 statements)",
+        model_relative_path=(
+            "checkpoints/dpo/tune_lora/" "lora_bloom_speceval_lr8p75e6_seed0_b64_v5p8_azero-4a1bf7/hf/step-1699"
+        ),
+        mirror_model=True,
+    ),
+    "azero_lr5e6_seed0_step1699": EvalTarget(
+        key="azero_lr5e6_seed0_step1699",
+        name="marin_dpo_lora_azero_lr5e6_seed0_step1699_bloom_speceval",
+        description="A=0 LoRA DPO lr5e-6 seed0 step1699 on 2,576 Bloom eval prompts (46 statements)",
+        model_relative_path=(
+            "checkpoints/dpo/tune_lora/" "lora_bloom_speceval_v2_lr5e6_seed0_b64_v5p8_azero-a9e388/hf/step-1699"
+        ),
+        mirror_model=True,
+    ),
 }
 
-DEFAULT_TARGET_KEYS = tuple(TARGETS)
+DEFAULT_TARGET_KEYS = tuple(key for key in TARGETS if not key.startswith("azero_"))
 
 EVAL_CONFIG = EvalConfig(
     prompt_format=PromptFormat.BLOOM,
@@ -179,8 +220,18 @@ EVAL_CONFIG = EvalConfig(
 
 
 def _target_vllm_config(target: EvalTarget, region: str, tpu_type: str) -> VLLMConfig:
+    if target.mirror_model:
+        if target.model_relative_path is None:
+            raise ValueError(f"Mirrored target {target.key} must define model_relative_path")
+        model = cast(str, mirrored(target.model_relative_path, budget_gb=target.mirror_budget_gb))
+    elif target.model_path is not None:
+        model = target.model_path
+    elif target.model_relative_path is not None:
+        model = _regional_path(region, target.model_relative_path)
+    else:
+        raise ValueError(f"Target {target.key} does not define a model path")
     return VLLMConfig(
-        model=_regional_path(region, target.model_relative_path),
+        model=model,
         tensor_parallel_size=TENSOR_PARALLEL_SIZE,
         max_model_len=MAX_MODEL_LEN,
         gpu_memory_utilization=GPU_MEMORY_UTILIZATION,

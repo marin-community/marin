@@ -1,0 +1,51 @@
+{
+  "run_name": "m3_flash_v1_20260426_0836",
+  "created_utc": "2026-04-26T08:30:37.290942Z",
+  "model": "gemini-3-flash-preview",
+  "thinking_budget": 0,
+  "n_points": 22,
+  "n_variants": 10,
+  "k_chosen": 2,
+  "top_k_chosen": 1,
+  "max_workers": 16,
+  "cross_tier_rubrics_path": "/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/experiments/posttrain/stage3_output/cross_tier_rubrics_seed22_gemini_flash_repair1.jsonl",
+  "same_class_pairs_path": "/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/experiments/posttrain/stage4_output/tier_b/pairs_tier_b.jsonl",
+  "git_status_short": " M .agents/logbooks/claude_m2_datacomposition.md\n M .agents/logbooks/validate_bloom.md\n M .agents/logbooks/validate_bloom_claude.md\n M experiments/posttrain/bcg_probe_infer.py\n M experiments/posttrain/eval_llama3_8b_alignment.py\n M experiments/posttrain/stage4_output/comparison_full.json\n M lib/marin/src/marin/alignment/evaluate.py\n M lib/marin/src/marin/alignment/prompts/judge.py\n?? .agents/logbooks/claude_m3_cross_tier_pilot.md\n?? .agents/logbooks/executable_specs_codex.md\n?? .agents/projects/executable_specifications.md\n?? experiments/posttrain/build_m2_visualizer.py\n?? experiments/posttrain/build_m3_cross_tier_dataset.py\n?? experiments/posttrain/compare_m1_m2_seed_n10.py\n?? experiments/posttrain/judge_bloom_gpt41_batch.py\n?? experiments/posttrain/plot_m2_vs_m1_seed_radar.py\n?? experiments/posttrain/score_cross_tier_pilot.py\n?? experiments/posttrain/stage3_output/\n?? experiments/posttrain/stage4_output/bcg_M1_seed_n10/\n?? experiments/posttrain/stage4_output/bcg_M2_seed_n10/\n?? experiments/posttrain/stage4_output/bcg_ORACLE_seed_n3/\n?? experiments/posttrain/stage4_output/m2_vs_m1_seed_n10_comparison.json\n?? experiments/posttrain/stage4_output/m2_vs_m1_seed_radar.png\n?? experiments/posttrain/stage4_output/pilot_dpo/\n?? experiments/posttrain/stage4_output/tier_b/\n?? experiments/posttrain/test_gemini_flash_cross_tier_gate.py\n?? experiments/posttrain/test_hierarchy_aware_oracle.py\n?? experiments/posttrain/write_cross_tier_rubrics.py\n?? experiments/posttrain/write_gemini_cross_tier_seed_rubrics.py\n",
+  "output_dir": "/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/experiments/posttrain/stage4_output/m3/m3_flash_v1_20260426_0836",
+  "dataset_dir": "/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/experiments/posttrain/stage4_output/m3/m3_flash_v1_20260426_0836/dataset/bloomv2_m3",
+  "chosen_summary": {
+    "n_candidates": 440,
+    "n_selected": 211,
+    "n_failed_variants": 9,
+    "candidate_pass_rate": 0.959,
+    "serious_leakage_candidates": 5,
+    "dominant_mean_selected": 10,
+    "non_leakage_mean_selected": 9.98
+  },
+  "n_chosen_failures": 9,
+  "n_cross_tier_pairs": 422,
+  "n_same_class_pairs": 1497,
+  "n_total_pairs": 1919,
+  "n_train_records": 1722,
+  "n_val_records": 197,
+  "bucket_counts": {
+    "cross_tier_m3": 422,
+    "same_class_m2_style": 1497
+  },
+  "same_class_authority_counts": {
+    "PLATFORM": 430,
+    "USER": 538,
+    "GUIDELINE": 529
+  },
+  "cross_tier_rejected_failure_counts": {
+    "pathological_refusal": 211,
+    "subordinate_over_satisfaction": 211
+  },
+  "gate_pass": false,
+  "gate_thresholds": {
+    "max_failed_variants": 25,
+    "min_cross_tier_pairs": 300,
+    "min_chosen_score": 7,
+    "serious_leakage_candidates": 0
+  }
+}

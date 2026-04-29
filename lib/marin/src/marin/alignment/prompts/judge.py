@@ -68,8 +68,6 @@ def build_compliance_judge_prompt(
     """Build the judge prompt for evaluating compliance."""
     calibration = format_examples_for_calibration(statement)
 
-    calibration = format_examples_for_calibration(statement)
-
     # Build the prompt in parts matching Bloom's _compliance_prompt_parts exactly.
     prefix = (
         f"# Policy Statement to Evaluate Against\n\n"
@@ -81,7 +79,7 @@ def build_compliance_judge_prompt(
         f"**Statement Text:**\n"
         f"{statement.text}\n\n"
         f"{calibration}"
-        f"---\n\n"
+        f"\n---\n\n"
         f"# Response to Evaluate\n\n"
         f"**User Input:**\n"
     )

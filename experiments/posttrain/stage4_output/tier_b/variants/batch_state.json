@@ -1,0 +1,16 @@
+{
+  "batch_id": "batch_69e72c1bf0308190bf63684673a14981",
+  "input_file_id": "file-QqtfhiGuwpTkxcCU4eQL4g",
+  "status": "completed",
+  "num_requests": 40,
+  "submitted_at": "2026-04-21T07:49:48.371397Z",
+  "metadata": {
+    "project": "m2_pilot_dpo",
+    "stage": "train_variants",
+    "model": "gpt-4.1"
+  },
+  "endpoint": "/v1/chat/completions",
+  "completion_window": "24h",
+  "output_file_id": "file-XZXaVw1MX5A1TkdsnQPr6k",
+  "error_file_id": null
+}
