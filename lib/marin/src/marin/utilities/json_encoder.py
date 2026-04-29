@@ -15,8 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class CustomJsonEncoder(json.JSONEncoder):
-    def default(self, o):
-        obj = o
+    def default(self, obj):  # pyrefly: ignore[bad-param-name-override]
         if isinstance(obj, timedelta):
             return {"days": obj.days, "seconds": obj.seconds, "microseconds": obj.microseconds}
         if isinstance(obj, Path):
