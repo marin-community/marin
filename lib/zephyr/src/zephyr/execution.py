@@ -18,7 +18,6 @@ import itertools
 import logging
 import os
 import pickle
-import re
 import sys
 from datetime import datetime, timezone
 import threading
@@ -31,7 +30,7 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Protocol, TypeVar
+from typing import Any, Protocol
 
 import cloudpickle
 from rigging.filesystem import open_url, url_to_fs
@@ -52,10 +51,8 @@ from zephyr.plan import (
     Scatter,
     Shard,
     SourceItem,
-    StageContext,
     StageType,
     compute_plan,
-    run_stage,
 )
 from zephyr.shuffle import ListShard, MemChunk, _write_scatter
 from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir
@@ -320,53 +317,39 @@ def zephyr_worker_ctx() -> WorkerContext:
     return ctx
 
 
-class _InProcessWorkerContext:
-    """WorkerContext for shards executed in the worker actor's own process.
+class StageRunner(Protocol):
+    """Strategy a worker uses to execute a single shard. See ``zephyr.runners``."""
 
-    Holds counters in memory (no file flushing); the worker's heartbeat thread
-    reads them directly. Loads shared data lazily from the chunk store on first
-    access and caches it for the rest of the task.
+    def execute(
+        self,
+        task: ShardTask,
+        chunk_prefix: str,
+        execution_id: str,
+    ) -> tuple[TaskResult, dict[str, int]]: ...
+
+    def live_counters(self) -> dict[str, int]: ...
+
+
+def _default_stage_runner_factory_for(client: Client) -> Callable[[], StageRunner]:
+    """Pick the default ``stage_runner_factory`` based on the client type.
+
+    ``LocalClient`` is the dev/test backend — workers are threads in a
+    single process, so per-shard subprocess isolation adds latency without
+    delivering meaningful isolation. Distributed clients run each worker
+    actor as its own VM where subprocess-per-shard gives real protection
+    against native crashes and per-shard memory growth. Callers that want
+    the other behavior pass ``stage_runner_factory=...`` explicitly.
     """
+    from fray.local_backend import LocalClient
 
-    def __init__(self, chunk_prefix: str, execution_id: str):
-        self._chunk_prefix = chunk_prefix
-        self._execution_id = execution_id
-        self._shared_data_cache: dict[str, Any] = {}
-        self._counters: dict[str, int] = {}
-        self._generation = 0
+    if isinstance(client, LocalClient):
+        from zephyr.runners import InlineRunner
 
-    def get_shared(self, name: str) -> Any:
-        if name not in self._shared_data_cache:
-            path = _shared_data_path(self._chunk_prefix, self._execution_id, name)
-            logger.info("Loading shared data '%s' from %s", name, path)
-            with open_url(path, "rb") as f:
-                self._shared_data_cache[name] = cloudpickle.loads(f.read())
-        return self._shared_data_cache[name]
+        return InlineRunner
 
-    def increment_counter(self, name: str, value: int = 1) -> None:
-        self._counters[name] = self._counters.get(name, 0) + value
+    from zephyr.runners import SubprocessRunner
 
-    def get_counter_snapshot(self) -> CounterSnapshot:
-        self._generation += 1
-        return CounterSnapshot(counters=dict(self._counters), generation=self._generation)
-
-
-_T = TypeVar("_T")
-
-
-class _StageStatsGenerator:
-    """Wraps a generator and records item count + byte size into the worker context."""
-
-    def __init__(self, stage_name: str, ctx: _InProcessWorkerContext) -> None:
-        self._item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
-        self._byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
-        self._ctx = ctx
-
-    def wrap(self, gen: Iterator[_T]) -> Iterator[_T]:
-        for item in gen:
-            self._ctx.increment_counter(self._item_key, 1)
-            self._ctx.increment_counter(self._byte_key, sys.getsizeof(item))
-            yield item
+    return SubprocessRunner
 
 
 # ---------------------------------------------------------------------------
@@ -1172,8 +1155,21 @@ class ZephyrWorker:
     without restart.
     """
 
-    def __init__(self, coordinator_handle: ActorHandle):
+    def __init__(
+        self,
+        coordinator_handle: ActorHandle,
+        stage_runner_factory: Callable[[], StageRunner] | None = None,
+    ):
         from fray import current_actor
+
+        # ZephyrContext normally pre-resolves this via _CoordinatorJobConfig;
+        # the fallback here covers callers that construct a worker directly
+        # (mostly internal tests). Default to InlineRunner since direct
+        # construction is a dev/test path.
+        if stage_runner_factory is None:
+            from zephyr.runners import InlineRunner
+
+            stage_runner_factory = InlineRunner
 
         self._coordinator = coordinator_handle
         self._shutdown_event = threading.Event()
@@ -1181,9 +1177,9 @@ class ZephyrWorker:
         self._execution_id: str = ""
         self._counter_generation: int = 0
         self._last_reported_counters: dict[str, int] = {}
-        # Worker context for the currently executing shard, or None when idle.
-        # The heartbeat thread reads counters off this directly.
-        self._current_worker_ctx: _InProcessWorkerContext | None = None
+        # Each worker owns its runner instance; the heartbeat thread polls
+        # ``live_counters()`` off it while a task is in flight.
+        self._stage_runner: StageRunner = stage_runner_factory()
 
         # Capture shutdown_event from the actor context while the ContextVar
         # is still set (child threads in Python <3.12 don't inherit it).
@@ -1206,14 +1202,13 @@ class ZephyrWorker:
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
         """Snapshot the running task's counters, or None when idle/unchanged.
 
-        The current shard runs in this same process via ``_execute_shard``,
-        so its counter dict lives on ``self._current_worker_ctx`` and we just
-        copy it. Skipping when nothing has changed keeps heartbeat traffic
-        cheap on the coordinator side. ``report_result`` is the source of
-        truth for the final per-task values.
+        Delegates to the configured ``StageRunner.live_counters``: the inline
+        runner exposes its in-memory ctx; the subprocess runner reads the
+        child's flush file. Skipping when nothing has changed keeps
+        heartbeat traffic cheap on the coordinator side. ``report_result``
+        is the source of truth for the final per-task values.
         """
-        ctx = self._current_worker_ctx
-        current: dict[str, int] = dict(ctx._counters) if ctx is not None else {}
+        current = self._stage_runner.live_counters()
         if current == self._last_reported_counters:
             return None
         self._last_reported_counters = current
@@ -1369,17 +1364,12 @@ class ZephyrWorker:
                 ).result()
 
     def _execute_shard(self, task: ShardTask, config: dict) -> tuple[TaskResult, dict[str, int]]:
-        """Execute a stage's operations inline in the worker process.
+        """Hand the task to the configured ``StageRunner``.
 
-        Sets up a fresh ``_InProcessWorkerContext`` for the task so user code
-        can call ``zephyr.counters.increment`` and ``zephyr_worker_ctx()``,
-        runs the stage's operations, and returns ``(TaskResult, counters)``.
-
-        Worker actors live for the duration of the pipeline, so each task
-        shares the worker process — there is no per-shard memory reclamation
-        like the old subprocess design provided. Long-running pipelines that
-        depend on that should run under Iris where each worker actor is
-        already its own VM.
+        The runner owns the worker-context lifetime and decides whether to
+        execute inline or in a subprocess; this method just plumbs the
+        per-execution config and surfaces the final ``(TaskResult, counters)``
+        for ``report_result``.
         """
         chunk_prefix = config["chunk_prefix"]
         execution_id = config["execution_id"]
@@ -1395,43 +1385,13 @@ class ZephyrWorker:
             len(task.operations),
         )
 
-        ctx = _InProcessWorkerContext(chunk_prefix, execution_id)
-        # Expose ctx to the heartbeat thread (live counters) and to user task
-        # code (zephyr.counters.increment, zephyr_worker_ctx()).
-        self._current_worker_ctx = ctx
-        token = _worker_ctx_var.set(ctx)
-        try:
-            stage_ctx = StageContext(
-                shard=task.shard,
-                shard_idx=task.shard_idx,
-                total_shards=task.total_shards,
-                aux_shards=task.aux_shards,
-            )
-
-            # Sanitize stage_name for use as a path component.
-            output_stage_name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", task.stage_name).strip("-")
-            stage_dir = f"{chunk_prefix}/{execution_id}/{output_stage_name}"
-            external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
-            scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
-
-            stats = _StageStatsGenerator(task.stage_name, ctx)
-            result = _write_stage_output(
-                stats.wrap(run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir)),
-                source_shard=task.shard_idx,
-                stage_dir=stage_dir,
-                shard_idx=task.shard_idx,
-                scatter_op=scatter_op,
-                total_shards=task.total_shards,
-            )
-            logger.info(
-                "[shard %d] Complete: %d refs produced",
-                task.shard_idx,
-                len(result.shard.refs),
-            )
-            return result, dict(ctx._counters)
-        finally:
-            _worker_ctx_var.reset(token)
-            self._current_worker_ctx = None
+        result, counters = self._stage_runner.execute(task, chunk_prefix, execution_id)
+        logger.info(
+            "[shard %d] Complete: %d refs produced",
+            task.shard_idx,
+            len(result.shard.refs),
+        )
+        return result, counters
 
     def __repr__(self) -> str:
         return f"ZephyrWorker(id={self._worker_id})"
@@ -1516,6 +1476,10 @@ class _CoordinatorJobConfig:
     worker_resources: ResourceConfig
     name: str
     pipeline_id: int
+    # None → workers fall back to InlineRunner (default). The factory is
+    # cloudpickled and re-invoked once per worker actor, so per-runner
+    # mutable state is per-worker.
+    stage_runner_factory: Callable[[], StageRunner] | None = None
 
 
 def _run_coordinator_job(config_path: str, result_path: str) -> None:
@@ -1574,6 +1538,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
         worker_group = client.create_actor_group(
             ZephyrWorker,
             coordinator,
+            config.stage_runner_factory,
             name=worker_name,
             count=actual_workers,
             resources=config.worker_resources,
@@ -1657,6 +1622,13 @@ class ZephyrContext:
         max_execution_retries: Maximum number of times to retry a pipeline execution after
             an infrastructure failure (e.g., coordinator VM preemption). Application errors
             (ZephyrWorkerError) are never retried. Defaults to 100.
+        stage_runner_factory: Zero-arg callable returning a fresh ``StageRunner``
+            for each worker. If left ``None``, the default depends on the
+            client: ``LocalClient`` (dev/test) gets ``InlineRunner`` so shards
+            run in-process for speed; distributed clients (Iris) get
+            ``SubprocessRunner`` so each shard is isolated against native
+            crashes and per-shard memory growth. Pass an explicit factory to
+            override.
     """
 
     client: Client | None = None
@@ -1670,6 +1642,7 @@ class ZephyrContext:
     no_workers_timeout: float | None = None
     # NOTE: 100 is fairly aggressive but it fits the preemptible env better
     max_execution_retries: int = 100
+    stage_runner_factory: Callable[[], StageRunner] | None = None
 
     # Shared data staged by put(), uploaded to disk at the start of execute()
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -1700,6 +1673,9 @@ class ZephyrContext:
         if self.chunk_storage_prefix is None:
             # TODO: consider increasing TTL for long-running pipelines (e.g. multi-day fuzzy dedup)
             self.chunk_storage_prefix = marin_temp_bucket(ttl_days=1, prefix="zephyr")
+
+        if self.stage_runner_factory is None:
+            self.stage_runner_factory = _default_stage_runner_factory_for(self.client)
 
         # make sure each context is unique
         self.name = f"{self.name}-{uuid.uuid4().hex[:8]}"
@@ -1788,6 +1764,7 @@ class ZephyrContext:
                     worker_resources=self.resources,
                     name=self.name,
                     pipeline_id=self._pipeline_id,
+                    stage_runner_factory=self.stage_runner_factory,
                 )
                 ensure_parent_dir(config_path)
                 with open_url(config_path, "wb") as f:
