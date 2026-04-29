@@ -40,10 +40,16 @@ class LogStoreProtocol(Protocol):
     def append_batch(self, items: list[tuple[str, list]]) -> None: ...
 
 
-class LogPusherProtocol(Protocol):
-    """Minimal interface for pushing log entries to the LogService."""
+class LogWriterProtocol(Protocol):
+    """Minimal interface for writing log entries to the LogService.
 
-    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None: ...
+    Satisfied by :class:`finelog.client.LogClient` (via ``write_batch``) and
+    by lightweight test fakes that don't want to subclass LogClient. The
+    protocol exists so collectors can accept either without import-cycling
+    through ``finelog.client``.
+    """
+
+    def write_batch(self, key: str, messages: list[logging_pb2.LogEntry]) -> None: ...
 
 
 _STR_TO_ENUM = {

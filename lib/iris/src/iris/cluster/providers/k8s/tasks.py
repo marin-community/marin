@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from finelog.rpc import logging_pb2
-from finelog.types import LogPusherProtocol, str_to_log_level
+from finelog.types import LogWriterProtocol, str_to_log_level
 from rigging.log_setup import parse_log_level
 from rigging.timing import Timestamp
 
@@ -885,13 +885,13 @@ class LogCollector:
     def __init__(
         self,
         kubectl: K8sService,
-        log_pusher: LogPusherProtocol,
+        log_client: LogWriterProtocol,
         concurrency: int = 8,
         poll_interval: float = 15.0,
         limit_bytes: int | None = _DEFAULT_LIMIT_BYTES,
     ):
         self._kubectl = kubectl
-        self._log_pusher = log_pusher
+        self._log_client = log_client
         self._poll_interval = poll_interval
         self._limit_bytes = limit_bytes
         self._pods: dict[str, _LogPod] = {}
@@ -954,7 +954,7 @@ class LogCollector:
             if result.lines:
                 entries = [_kubectl_log_line_to_log_entry(kll, pod.attempt_id) for kll in result.lines]
                 key = task_log_key(TaskAttempt(task_id=pod.task_id, attempt_id=pod.attempt_id))
-                self._log_pusher.push(key, entries)
+                self._log_client.write_batch(key, entries)
             pod.last_timestamp = result.last_timestamp
             pod.consecutive_failures = 0
             return True
@@ -1070,7 +1070,7 @@ class K8sTaskProvider:
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
-    log_pusher: LogPusherProtocol | None = None
+    log_client: LogWriterProtocol | None = None
     poll_concurrency: int = 32
     log_poll_interval: float = 15.0
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
@@ -1086,9 +1086,9 @@ class K8sTaskProvider:
         return self._resource_collector
 
     def _ensure_log_collector(self) -> LogCollector | None:
-        if self._log_collector is None and self.log_pusher is not None:
+        if self._log_collector is None and self.log_client is not None:
             self._log_collector = LogCollector(
-                self.kubectl, self.log_pusher, concurrency=self.poll_concurrency, poll_interval=self.log_poll_interval
+                self.kubectl, self.log_client, concurrency=self.poll_concurrency, poll_interval=self.log_poll_interval
             )
         return self._log_collector
 

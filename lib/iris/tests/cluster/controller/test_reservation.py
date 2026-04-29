@@ -216,7 +216,7 @@ def ctrl(make_controller) -> Controller:
     """Minimal Controller for reservation unit tests.
 
     Uses the shared ``make_controller`` factory so the Controller's
-    RemoteLogHandler is detached and its LogPusher drain thread stopped
+    RemoteLogHandler is detached and its LogClient drain thread stopped
     at teardown.
     """
     return make_controller(remote_state_dir="file:///tmp/iris-test-bundles")

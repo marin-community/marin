@@ -21,6 +21,47 @@ Workflow: dry-run locally (`iris cluster controller serve --dry-run`) -> capture
 
 If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
 
+## Finelog (log + stats service)
+
+**Layout migration on first boot**: finelog now stores log segments under
+`{data_dir}/log/` (per-namespace layout). The first boot after upgrading
+runs a synchronous migration before the server binds — multi-thousand-segment
+migrations may take minutes. Tail finelog stdout for `layout migration:` INFO
+lines; do not kill the pod during migration.
+
+### Stats service: dashboard worker pane cutover
+
+The worker pane on the iris dashboard is migrating from the controller's
+sqlite-backed read path to a finelog stats-service read path. Cutover is
+gated by the controller-side env var `IRIS_STATS_SERVICE_WORKER_PANE`,
+which takes three values:
+
+- `off` — default, today's path (sqlite). No stats query is issued.
+- `shadow` — query both paths, log diffs, return sqlite. Safe to flip on a
+  single controller for parity verification.
+- `on` — query stats only; sqlite is not consulted for the worker pane.
+
+**Rollout sequence:**
+
+1. Deploy with `off` (default).
+2. After the first heartbeat cycle, optionally sanity-check stats data:
+
+   ```python
+   LogClient.get_table("iris.worker", IrisWorkerStat).query(
+       'SELECT count(*) FROM "iris.worker"'
+   )
+   ```
+
+3. Flip a single controller to `shadow`. Tail logs for `stats pane shadow diff:`
+   for ~24h; expect empty diffs.
+4. With shadow stable, flip the same controller to `on`. After another stable
+   window, schedule deletion of the sqlite path + flag (separate PR).
+
+**Failure mode**: with `on`, a stats query failure returns an empty roster —
+the Vue dashboard renders "no workers" rather than crashing. If the dashboard
+suddenly shows zero workers, check controller logs for `stats pane query failed:`
+warnings. Either rollback to `off` or fix forward depending on the cause.
+
 ## Job Management
 
 ```bash

@@ -29,7 +29,7 @@ from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
 import httpx
-from finelog.client import LogServiceProxy
+from finelog.client.proxy import LogServiceProxy
 from finelog.rpc.logging_connect import LogServiceWSGIApplication
 from finelog.server import LogServiceImpl
 from starlette.applications import Starlette

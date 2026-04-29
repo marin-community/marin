@@ -8,27 +8,29 @@ Concrete contracts for the design in [`design.md`](./design.md). This doc names 
 lib/finelog/src/finelog/
   proto/
     logging.proto          # existing
-    stats.proto            # NEW
+    finelog_stats.proto    # NEW (renamed from `stats.proto` to avoid descriptor-pool collision with iris's existing `iris/rpc/stats.proto` (same precedent as `time.proto`).)
   rpc/                     # buf-generated stubs (already present for logging)
-    stats_pb2.py           # generated
-    stats_pb2.pyi          # generated
-    stats_connect.py       # generated
+    finelog_stats_pb2.py     # generated
+    finelog_stats_pb2.pyi    # generated
+    finelog_stats_connect.py # generated
   client/
-    __init__.py            # MODIFIED: re-export LogClient
-    log_client.py          # NEW: top-level LogClient
-    table.py               # NEW: Table handle
-    pusher.py              # existing — used by LogClient internally
-    proxy.py               # existing
+    __init__.py            # MODIFIED: re-export LogClient (LogPusher removed)
+    log_client.py          # NEW: top-level LogClient + Table
+    proxy.py               # existing — read-side helper, unchanged
+    remote_log_handler.py  # MODIFIED: now takes (LogClient, key), no LogPusher
+    # NOTE: pusher.py is DELETED. The Table-owned buffer in log_client.py is
+    # the only batcher.
   server/
-    asgi.py                # MODIFIED: register StatsService alongside LogService
+    asgi.py                # MODIFIED: build_log_server_asgi mounts a second Connect app for StatsService
     service.py             # existing — LogServiceImpl
     stats_service.py       # NEW: StatsServiceImpl
   store/
-    duckdb_store.py        # MODIFIED: per-namespace registry + segments
-    schema.py              # NEW: Schema/Column dataclasses, validation
+    duckdb_store.py        # MODIFIED: becomes the NamespaceRegistry; per-namespace state lives in LogNamespace
+    log_namespace.py       # NEW: LogNamespace (per-namespace pending/segments/flush/compaction/offload)
+    schema.py              # NEW: Schema/Column dataclasses, validation, Arrow-schema bridge
 ```
 
-## Proto: `lib/finelog/src/finelog/proto/stats.proto`
+## Proto: `lib/finelog/src/finelog/proto/finelog_stats.proto`
 
 ```protobuf
 edition = "2023";
@@ -45,6 +47,7 @@ enum ColumnType {
   COLUMN_TYPE_BOOL = 4;         // pa.bool_()
   COLUMN_TYPE_TIMESTAMP_MS = 5; // pa.timestamp("ms")
   COLUMN_TYPE_BYTES = 6;        // pa.binary()
+  COLUMN_TYPE_INT32 = 7;        // pa.int32()
 }
 
 message Column {
@@ -55,26 +58,18 @@ message Column {
 
 message Schema {
   repeated Column columns = 1;
+
+  // Column to sort by during compaction. Must name an existing column of
+  // type INT64 or TIMESTAMP_MS. If empty, the server requires a column
+  // named "timestamp_ms" of type INT64 or TIMESTAMP_MS and uses it
+  // implicitly. A schema with neither is rejected at register time.
+  string key_column = 2;
 }
 
-// One row, ordered to match the registered Schema.columns. Missing nullable
-// columns can be represented either by a Value with null=true or by absence
-// (server pads to schema length).
-message Value {
-  oneof kind {
-    string string_value = 1;
-    int64 int_value = 2;
-    double float_value = 3;
-    bool bool_value = 4;
-    int64 timestamp_ms = 5;
-    bytes bytes_value = 6;
-    bool null = 7;          // Explicit null marker
-  }
-}
-
-message Row {
-  repeated Value values = 1;
-}
+// Write batches are Arrow IPC RecordBatches on the wire — columnar, with
+// the batch's schema embedded in the IPC header. There is no proto-level
+// Row or Value type; the column types in the table above (ColumnType)
+// describe the Arrow types the server accepts.
 
 // ============================================================================
 // STATS SERVICE
@@ -96,7 +91,12 @@ message RegisterTableResponse {
 
 message WriteRowsRequest {
   string namespace = 1;
-  repeated Row rows = 2;
+  // Arrow IPC stream containing exactly one RecordBatch. The batch's
+  // Arrow schema must be a subset of (or equal to) the registered schema:
+  // every column name must exist in the registry with a matching Arrow
+  // type. Missing nullable columns are filled with NULL on append.
+  // Unknown column names raise SchemaValidationError.
+  bytes arrow_ipc = 2;
 }
 
 message WriteRowsResponse {
@@ -112,12 +112,25 @@ message QueryRequest {
 
 message QueryResponse {
   bytes arrow_ipc = 1;      // Arrow IPC stream serialization of the result.
+  int64 row_count = 2;      // Number of rows in the result. Lets callers
+                            // size buffers / decide whether to decode without
+                            // walking the IPC stream first.
+}
+
+message DropTableRequest {
+  string namespace = 1;
+}
+
+message DropTableResponse {
+  // Empty. Server has removed the registry entry and deleted the local
+  // segment directory. GCS-archived data for the namespace is left in place.
 }
 
 service StatsService {
   rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse);
   rpc WriteRows(WriteRowsRequest) returns (WriteRowsResponse);
   rpc Query(QueryRequest) returns (QueryResponse);
+  rpc DropTable(DropTableRequest) returns (DropTableResponse);
 }
 ```
 
@@ -140,10 +153,21 @@ class LogClient:
 
     # --- log-side (existing semantics, lifted into LogClient) ---
 
-    def write_batch(self, key: str, messages: Sequence[LogMessage]) -> None: ...
-    def query(self, query: LogQuery) -> Sequence[LogRecord]: ...
+    def write_batch(self, key: str, messages: Sequence[LogEntry]) -> None: ...
+    def query(self, request: FetchLogsRequest) -> FetchLogsResponse: ...
 
     # --- stats-side (new) ---
+
+    def drop_table(self, namespace: str) -> None:
+        """Remove `namespace` from the registry and delete its local segment
+        directory. GCS-archived data for the namespace is left in place;
+        callers who want it deleted must clean the bucket themselves.
+
+        Subsequent get_table on the same namespace registers it fresh —
+        old archived data and the new registration are independent.
+
+        No-op (does not raise) if the namespace was not registered.
+        """
 
     def get_table(
         self,
@@ -177,6 +201,7 @@ class LogClient:
 @dataclass(frozen=True)
 class Schema:
     columns: tuple[Column, ...]
+    key_column: str = ""        # empty → server uses implicit "timestamp_ms"
 
 @dataclass(frozen=True)
 class Column:
@@ -223,10 +248,12 @@ class Table:
         """
 
     def query(self, sql: str, *, max_rows: int = 100_000) -> pa.Table:
-        """Run Postgres-flavored SQL. The string `t` (or the namespace name)
-        in the SQL is rewritten to the backing per-namespace Parquet path.
-        Returns an Arrow table; SQL syntax is DuckDB's. Coupling to DuckDB
-        syntax is deliberate (see design.md "Queries").
+        """Run Postgres-flavored SQL. Reference namespaces by name in the
+        FROM clause (e.g. `FROM "iris.worker"`); the server registers a
+        DuckDB view per registered namespace before executing the query
+        and never rewrites the user SQL string. Returns an Arrow table;
+        SQL syntax is DuckDB's. Coupling to DuckDB syntax is deliberate
+        (see design.md "Query execution").
 
         If the result exceeds `max_rows`, raises QueryResultTooLargeError
         rather than silently truncating. Caller can re-issue with a higher
@@ -241,6 +268,8 @@ class Table:
 
 ### Errors (in `finelog.client`)
 
+Stage 2 ships these in `finelog.store.schema`; Stage 4 moves them to `finelog.client` alongside the new client surface.
+
 ```python
 class StatsError(Exception): ...
 
@@ -251,10 +280,15 @@ class SchemaConflictError(StatsError):
     merged silently and do not raise."""
 
 class SchemaValidationError(StatsError):
-    """Raised by Table.write() when a row is missing a non-nullable column,
-    has a type mismatch, or contains an unknown column name. Validation
-    happens client-side before flush; the server re-validates and rejects
-    the batch with the same error if it sees a violation (defense in depth)."""
+    """Raised by:
+      - Table.write() when a row is missing a non-nullable column, has a
+        type mismatch, or contains an unknown column name. Validation
+        happens client-side before flush; the server re-validates and
+        rejects the batch with the same error (defense in depth).
+      - LogClient.get_table() when the schema is structurally invalid:
+        unsupported dataclass field type, or no ordering key (neither
+        an explicit Schema.key_column nor a TIMESTAMP_MS column named
+        'timestamp_ms')."""
 
 class NamespaceNotFoundError(StatsError):
     """Raised by Table.query() when the SQL references an unregistered
@@ -263,6 +297,13 @@ class NamespaceNotFoundError(StatsError):
 class QueryResultTooLargeError(StatsError):
     """Raised by Table.query() when the result row count exceeds `max_rows`.
     Caller should add a LIMIT, aggregate further, or pass a higher cap."""
+
+class InvalidNamespaceError(StatsError):
+    """Raised by LogClient.get_table() (and DropTable) when the namespace
+    name does not resolve to a path strictly inside the finelog data dir,
+    e.g. it contains '..' or absolute components. The check is path-
+    containment: (data_dir / namespace).resolve() must be a subdir of
+    data_dir.resolve(). No regex beyond what that check implies."""
 ```
 
 ### Dataclass schema inference
@@ -275,11 +316,31 @@ When `LogClient.get_table(namespace, schema=SomeDataclass)` is called with a dat
 | `int` | `INT64` | `False` |
 | `float` | `FLOAT64` | `False` |
 | `bool` | `BOOL` | `False` |
-| `datetime` | `TIMESTAMP_MS` | `False` |
+| `datetime` | `TIMESTAMP_MS` | `False` (microseconds truncated) |
 | `bytes` | `BYTES` | `False` |
 | `T \| None` (or `Optional[T]`) | as `T` | `True` |
 
 Dataclasses with unsupported field types (collections, nested dataclasses, custom classes) raise `SchemaValidationError` at `get_table` time, not at first write. Construct an explicit `Schema` if you need finer control than the inference gives you.
+
+The inferred schema's `key_column` defaults to `""` (empty). To pick a non-default key column, declare it as a `ClassVar[str]` on the dataclass:
+
+```python
+from typing import ClassVar
+from datetime import datetime
+
+@dataclass
+class WorkerStat:
+    key_column: ClassVar[str] = "ts"   # opts out of the implicit "timestamp_ms"
+    worker_id: str
+    ts: datetime
+    mem_bytes: int
+```
+
+`ClassVar` is idiomatic for schema-level metadata and doesn't appear as a column. The inference code reads `getattr(cls, "key_column", "")`.
+
+When `key_column` is empty, the server requires a column named `timestamp_ms` of type `INT64` or `TIMESTAMP_MS` (Python `int` annotated as `timestamp_ms` works; so does `datetime`). A dataclass with neither a `timestamp_ms` field nor a `key_column` ClassVar raises `SchemaValidationError` at `get_table` time.
+
+`datetime` columns store at millisecond precision; sub-millisecond components of a Python `datetime` are silently truncated. If a namespace ever needs microsecond accuracy we add a `TIMESTAMP_US` `ColumnType`; until then this is documented and accepted.
 
 ## Persisted shapes
 
@@ -291,7 +352,8 @@ The registry lives in a DuckDB database file in the finelog data directory. It i
 -- Path: {data_dir}/_finelog_registry.duckdb
 CREATE TABLE namespaces (
     namespace        TEXT PRIMARY KEY,
-    schema_json      TEXT NOT NULL,         -- JSON serialization of Schema proto
+    schema_json      TEXT NOT NULL,         -- JSON serialization of Schema proto (includes key_column)
+    key_column       TEXT NOT NULL,         -- Resolved ordering key (explicit or implicit "timestamp_ms")
     registered_at_ms BIGINT NOT NULL,
     last_modified_ms BIGINT NOT NULL        -- Updated on additive evolution
 );
@@ -305,20 +367,34 @@ CREATE TABLE namespaces (
 {data_dir}/
   _finelog_registry.duckdb
   log/
-    tmp_{seq}_{uuid}.parquet            # in-flight (renamed from existing flat layout at startup)
-    logs_{seq_lo}_{seq_hi}.parquet      # compacted segments
+    tmp_{seq:019d}.parquet               # in-flight (renamed from flat layout at startup)
+    logs_{seq:019d}.parquet              # sealed/compacted segments
   iris.worker/
-    tmp_{seq}_{uuid}.parquet
-    logs_{seq_lo}_{seq_hi}.parquet
+    tmp_{seq:019d}.parquet
+    logs_{seq:019d}.parquet
   iris.task/
     ...
 ```
 
-**One-time migration of existing logs**: at startup, if `{data_dir}/log/` does not exist but flat `{data_dir}/{tmp,logs}_*.parquet` files do, the server takes a lock at `{data_dir}/.migration_lock` and renames the flat files into `log/`. The lock file persists if the rename is interrupted; on next startup, the recovery walk completes any partial moves before serving traffic.
+Namespace names must resolve to a subdirectory strictly inside `{data_dir}` — `(data_dir / namespace).resolve()` must be a subdir of `data_dir.resolve()`. Names containing `..` or absolute components raise `InvalidNamespaceError` at register time. No regex beyond that path-containment check.
+
+**GCS upload layout** mirrors the local layout: `{remote_log_dir}/{namespace}/{filename}`. `_offload_to_gcs` (`duckdb_store.py:860`) is updated to include the namespace in the upload path; recovery from GCS reads the same per-namespace prefix. Future direction: Hive-style daily partitioning (`{remote_log_dir}/{namespace}/dt=YYYY-MM-DD/`); v1 keeps a flat per-namespace layout.
+
+**Storage caps** stay global (`DEFAULT_MAX_LOCAL_SEGMENTS` / `DEFAULT_MAX_LOCAL_BYTES` at `duckdb_store.py:122`) — one budget shared across all namespaces. Eviction drops the oldest segments first, regardless of namespace. Per-namespace quotas are deferred until evidence of starvation forces them.
+
+**Namespace deletion** removes the registry row and deletes the local segment directory. GCS-archived data is *not* deleted by drop — it is the caller's responsibility to clean up bucket contents if desired. A subsequent `get_table` on the same namespace registers it fresh; the new registration shares no state with the old archived data.
+
+**One-time migration of existing logs**: see `design.md` "Migration: flat → per-namespace layout" for the full state machine. The sentinel file is `{data_dir}/.layout-migration` (not `.migration_lock`); it carries a JSON `state` field (`in-progress` or `done`) and the migration walk is idempotent so a crashed run resumes cleanly.
 
 ### Sequence numbers
 
 `_next_seq` is per-namespace, not global. `_recover_max_seq()` runs once per namespace at startup, walking only that namespace's segment directory. Cross-namespace queries do not require a global sequence.
+
+### Compaction across schema versions
+
+Segments within a namespace may have been written under different (additively-evolved) schemas. Compaction reads them with `union_by_name` and projects the result to the *currently-registered* schema before re-writing the compacted segment. Newer columns missing from old segments come back as NULL. The compacted segment carries the current registered schema's column set.
+
+Namespaces may declare a non-key compaction order. The `log` namespace orders by `(key, seq)` to preserve per-key read locality for `get_logs`. Other namespaces order by their declared `key_column`.
 
 ## Concurrent-register and validation behavior
 
