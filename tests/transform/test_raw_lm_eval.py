@@ -85,13 +85,28 @@ def test_stage_lm_eval_source_renders_mmlu_with_choices_and_answer(tmp_path: Pat
         renderer_name=LmEvalRawRenderer.MMLU,
         split="dev",
         subset="all",
+        num_fewshot=2,
+        fewshot_split="dev",
         source_manifest=manifest,
         content_fingerprint=manifest.fingerprint(),
     )
 
     with patch(
         "marin.transform.evaluation.raw_lm_eval._load_hf_iterable",
-        return_value=iter([_mmlu_fixture()]),
+        side_effect=[
+            iter(
+                [
+                    _mmlu_fixture(),
+                    {
+                        **_mmlu_fixture(),
+                        "question": "What is 3 + 3?",
+                        "choices": ["3", "4", "5", "6"],
+                        "answer": 3,
+                    },
+                ]
+            ),
+            iter([_mmlu_fixture()]),
+        ],
     ):
         result = stage_lm_eval_source(cfg)
 
@@ -100,10 +115,13 @@ def test_stage_lm_eval_source_renders_mmlu_with_choices_and_answer(tmp_path: Pat
     assert "Subject: elementary_mathematics" in records[0]["text"]
     assert "A. 1" in records[0]["text"]
     assert "C. 4" in records[0]["text"]
+    assert records[0]["text"].count("Question:") == 2
+    assert "What is 3 + 3?" in records[0]["text"]
+    assert records[0]["provenance"]["num_fewshot"] == 2
     assert records[0]["provenance"]["renderer"] == LmEvalRawRenderer.MMLU.value
 
 
-def test_stage_lm_eval_source_renders_gsm8k_answer_verbatim(tmp_path: Path):
+def test_stage_lm_eval_source_renders_gsm8k_in_icl_format(tmp_path: Path):
     manifest = _manifest(LmEvalRawRenderer.GSM8K, source_label="gsm8k:test", split="train", subset="main")
     cfg = LmEvalRawStagingConfig(
         input_path="fake://gsm8k",
@@ -112,6 +130,7 @@ def test_stage_lm_eval_source_renders_gsm8k_answer_verbatim(tmp_path: Path):
         renderer_name=LmEvalRawRenderer.GSM8K,
         split="train",
         subset="main",
+        num_fewshot=2,
         source_manifest=manifest,
         content_fingerprint=manifest.fingerprint(),
     )
@@ -124,11 +143,14 @@ def test_stage_lm_eval_source_renders_gsm8k_answer_verbatim(tmp_path: Path):
 
     assert result["record_count"] == 1
     records = _read_staged_records(tmp_path)
-    assert "Question: Natalia sold 48 clips" in records[0]["text"]
+    assert records[0]["text"].startswith("Q: There are 15 trees in the grove.")
+    assert "\n\nQ: If there are 3 cars in the parking lot" in records[0]["text"]
+    assert "\n\nQ: Natalia sold 48 clips in April and half as many in May. How many in total?\nA:" in records[0]["text"]
     assert "#### 72" in records[0]["text"]
     metadata = json.loads((tmp_path / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["source_manifest"]["source_label"] == "gsm8k:test"
     assert metadata["materialized_output"]["record_count"] == 1
+    assert metadata["materialized_output"]["metadata"]["num_fewshot"] == 2
 
 
 def test_stage_lm_eval_source_loads_downloaded_parquet_split(tmp_path: Path):

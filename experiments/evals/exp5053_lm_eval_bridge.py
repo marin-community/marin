@@ -24,6 +24,9 @@ from marin.datakit.download.huggingface import DownloadConfig as HfDownloadConfi
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.transform.evaluation.raw_lm_eval import (
+    GSM8K_COT_DEFAULT_NUM_FEWSHOT,
+    MMLU_DEFAULT_FEWSHOT_SPLIT,
+    MMLU_DEFAULT_NUM_FEWSHOT,
     LmEvalRawRenderer,
     LmEvalRawStagingConfig,
     stage_lm_eval_source,
@@ -90,6 +93,7 @@ LM_EVAL_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
             serializer_name=LmEvalRawRenderer.MMLU.value,
             split="auxiliary_train",
             subset="all",
+            metadata={"num_fewshot": MMLU_DEFAULT_NUM_FEWSHOT, "fewshot_split": MMLU_DEFAULT_FEWSHOT_SPLIT},
         ),
         epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
         issue_numbers=(LM_EVAL_BRIDGE_ISSUE,),
@@ -110,6 +114,7 @@ LM_EVAL_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
             serializer_name=LmEvalRawRenderer.MMLU.value,
             split="dev",
             subset="all",
+            metadata={"num_fewshot": MMLU_DEFAULT_NUM_FEWSHOT, "fewshot_split": MMLU_DEFAULT_FEWSHOT_SPLIT},
         ),
         epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
         issue_numbers=(LM_EVAL_BRIDGE_ISSUE,),
@@ -130,6 +135,7 @@ LM_EVAL_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
             serializer_name=LmEvalRawRenderer.GSM8K.value,
             split="train",
             subset="main",
+            metadata={"num_fewshot": GSM8K_COT_DEFAULT_NUM_FEWSHOT},
         ),
         epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
         issue_numbers=(LM_EVAL_BRIDGE_ISSUE,),
@@ -151,6 +157,8 @@ def _stage_step(dataset_key: str, raw_step: ExecutorStep, manifest: IngestionSou
             split=manifest.staging.split or "train",
             subset=manifest.staging.subset,
             max_examples=manifest.sample_caps.max_examples,
+            num_fewshot=int((manifest.staging.metadata or {}).get("num_fewshot", 0)),
+            fewshot_split=(manifest.staging.metadata or {}).get("fewshot_split"),
             source_manifest=manifest,
             content_fingerprint=manifest.fingerprint(),
         ),
