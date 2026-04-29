@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for ``scripts/contree_pytracer/sitecustomize.py``.
+"""Tests for the colocated pytracer ``sitecustomize.py``.
 
 The tracer module is loaded via ``importlib`` so ``_install()`` is skipped
 (it's gated on ``__name__ == "sitecustomize"``). End-to-end tests run a real
@@ -18,12 +18,12 @@ from pathlib import Path
 
 import pytest
 
-PYTRACER_DIR = Path(__file__).resolve().parents[2] / "scripts" / "contree_pytracer"
+PYTRACER_DIR = Path(__file__).resolve().parents[2] / "experiments" / "swe_rebench_trace" / "pytracer"
 
 
 @pytest.fixture(scope="module")
 def tracer():
-    spec = importlib.util.spec_from_file_location("contree_pytracer_test_load", PYTRACER_DIR / "sitecustomize.py")
+    spec = importlib.util.spec_from_file_location("pytracer_test_load", PYTRACER_DIR / "sitecustomize.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
