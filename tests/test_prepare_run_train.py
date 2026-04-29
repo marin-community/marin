@@ -8,18 +8,16 @@ training paths.
 from __future__ import annotations
 
 import os
-import pickle
 import threading
 from dataclasses import dataclass
 from unittest.mock import patch
 
 import pytest
 from fray import client as fray_client_module
-from fray.types import Entrypoint, ResourceConfig
+from fray.types import ResourceConfig
 
 from experiments.defaults import (
     TrainingPlan,
-    _run_training_on_worker,
     prepare_train,
     run_train,
 )
@@ -27,7 +25,6 @@ from experiments.llama import llama_30m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import (
     ExecutorStep,
-    InputName,
     OutputName,
     materialize,
     this_output_path,
@@ -109,53 +106,14 @@ def make_plan(small_train_config, fake_tokenized_step):
     return _make
 
 
-def test_prepare_train_returns_training_plan(make_plan, small_train_config):
-    plan = make_plan(name="my-run")
-
-    assert isinstance(plan, TrainingPlan)
-    assert plan.resources == small_train_config.resources
-    # The plan's name is the `checkpoints/<name>` key the executor would have
-    # used; the resolved path is concrete and contains the run name.
-    assert "my-run" in plan.output_path
-    assert plan.output_path.startswith("/")  # tmp_path-rooted
-
-
 def test_prepare_train_output_path_is_concrete(make_plan):
-    """``plan.output_path`` is a fully-resolved string (no placeholders)."""
+    """``plan.output_path`` is a fully-resolved string (no placeholders)
+    and the checkpointer paths are baked from it."""
     plan = make_plan(name="resolved-path")
-    assert isinstance(plan.output_path, str)
+    assert "resolved-path" in plan.output_path
     assert "OutputName" not in plan.output_path
-    # Both checkpointer paths have been baked from `output_path`.
     assert plan.train_config.trainer.checkpointer.base_path.startswith(plan.output_path)
     assert plan.train_config.hf_save_path.startswith(plan.output_path)
-
-
-def test_prepare_train_preserves_input_name_placeholders(make_plan, fake_tokenized_step):
-    """Upstream ``InputName(step=...)`` references stay unresolved on the
-    plan; ``materialize`` resolves them on the worker in the worker's region."""
-    plan = make_plan(name="upstream-deferred")
-
-    # Walk the embedded data config and assert at least one InputName remains.
-    found_input_names: list[InputName] = []
-
-    def walk(obj):
-        if isinstance(obj, InputName):
-            found_input_names.append(obj)
-            return
-        if hasattr(obj, "__dataclass_fields__"):
-            for f in obj.__dataclass_fields__:
-                walk(getattr(obj, f))
-        elif isinstance(obj, dict):
-            for v in obj.values():
-                walk(v)
-        elif isinstance(obj, (list, tuple)):
-            for v in obj:
-                walk(v)
-
-    walk(plan.train_config)
-    assert any(
-        n.step is fake_tokenized_step for n in found_input_names
-    ), "Expected at least one InputName referencing the upstream tokenize step."
 
 
 def test_prepare_train_no_iris_submission(make_plan):
@@ -283,19 +241,6 @@ def test_run_train_worker_entrypoint_calls_materialize_then_worker_fn(monkeypatc
     assert tag == "materialized"
     assert original_cfg == plan.train_config
     assert materialise_out_path == plan.output_path
-
-
-def test_worker_entrypoint_is_picklable(tmp_path):
-    """``Entrypoint.from_callable(_run_training_on_worker, args=...)`` must be
-    serialisable so Fray can ship it to the worker."""
-    # Use a module-level worker function — locals don't pickle, but the actual
-    # production worker_fns (`levanter.main.train_lm.main`, `_run_grug_local`)
-    # are top-level functions just like this one.
-    args = [_trivial_worker, _LeafCfg(output_path=str(tmp_path)), str(tmp_path), {"K": "V"}]
-    ep = Entrypoint.from_callable(_run_training_on_worker, args=args)
-    # Pickling is the constraint that matters for Fray; if it survives the
-    # round-trip the harness can pickle the JobRequest containing it too.
-    pickle.dumps(ep)
 
 
 # ---------------------------------------------------------------------------

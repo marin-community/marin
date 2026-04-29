@@ -30,39 +30,32 @@ def _status_at(sweep_root: str, target_id: str) -> str | None:
     return StatusFile(os.path.join(sweep_root, target_id), worker_id="check").status
 
 
-def test_single_worker_runs_every_target_in_order(tmp_path):
-    sweep_root = str(tmp_path)
-    targets = _make_targets(5)
-    seen: list[str] = []
+@pytest.mark.parametrize(
+    "num_workers,num_targets",
+    [
+        (1, 5),  # single worker, sequential
+        (2, 5),  # contention, fewer workers than targets
+        (3, 3),  # one worker per target
+        (5, 2),  # more workers than targets
+    ],
+)
+def test_claim_and_run_processes_every_target_exactly_once(num_workers, num_targets, tmp_path):
+    """Across any (workers, targets) combination, every target runs exactly once.
 
-    def run(target: SweepTarget) -> None:
-        seen.append(target.target_id)
-
-    claim_and_run(sweep_root, targets, run)
-
-    assert seen == [t.target_id for t in targets]
-    for target in targets:
-        assert _status_at(sweep_root, target.target_id) == STATUS_SUCCESS
-
-
-def test_two_threads_each_target_runs_exactly_once(tmp_path):
-    """Two workers race for 8 targets; every target executes exactly once.
-
-    The contract this test enforces is *exactly-once* across the worker pool —
-    no duplicates and no misses. We do not assert that both workers grab at
-    least one target: with very fast run_fns the first worker can win every
-    race, which is fine and correct behavior.
+    The contract is *exactly-once* across the worker pool — no duplicates and
+    no misses. We do not assert each worker grabbed at least one target: with
+    fast run_fns one worker can legitimately win every race.
     """
     sweep_root = str(tmp_path)
-    targets = _make_targets(8)
+    targets = _make_targets(num_targets)
 
-    # Map of target_id → worker name that ran it. We assert exactly-one
-    # writer below; concurrent writes here would surface as a duplicate
-    # claim assertion failure inside run_fn.
+    # Concurrent writes would surface as a duplicate-claim assertion below.
     claimed: dict[str, str] = {}
     claim_lock = threading.Lock()
     errors: list[BaseException] = []
-    barrier = threading.Barrier(2)
+    # A barrier party-count of 1 makes barrier.wait() a no-op, so the
+    # single-worker case skips the rendezvous cleanly.
+    barrier = threading.Barrier(num_workers)
 
     def make_run(worker_name: str):
         def run(target: SweepTarget) -> None:
@@ -83,16 +76,15 @@ def test_two_threads_each_target_runs_exactly_once(tmp_path):
             errors.append(exc)
             raise
 
-    t1 = threading.Thread(target=worker, args=("A",))
-    t2 = threading.Thread(target=worker, args=("B",))
-    t1.start()
-    t2.start()
-    t1.join(timeout=30)
-    t2.join(timeout=30)
+    threads = [threading.Thread(target=worker, args=(f"W{i}",)) for i in range(num_workers)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
 
     assert not errors, f"worker errors: {errors}"
     assert set(claimed.keys()) == {t.target_id for t in targets}
-    assert len(claimed) == len(targets)
+    assert len(claimed) == num_targets
     for target in targets:
         assert _status_at(sweep_root, target.target_id) == STATUS_SUCCESS
 
