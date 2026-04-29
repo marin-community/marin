@@ -637,4 +637,7 @@ service ControllerService {
 
   // Worker-to-controller task status push
   rpc UpdateTaskStatus(Controller.UpdateTaskStatusRequest) returns (Controller.UpdateTaskStatusResponse);
+
+  // Task-to-controller status text push
+  rpc SetTaskStatusText(iris.job.SetTaskStatusTextRequest) returns (iris.job.SetTaskStatusTextResponse);
 }
