@@ -30,6 +30,36 @@ logger = logging.getLogger(__name__)
 HF_PROTOCOL_PREFIX = "hf://"
 HF_BUCKET_PATH_PREFIX = "buckets/"
 
+# HF returns 401 when no credentials are sent and 403 when the caller's token
+# lacks access (e.g. gated dataset, accept-license required). Neither is fixed
+# by retrying — fail fast so the worker surfaces an actionable error instead of
+# stalling for hours behind exponential backoff.
+_HF_AUTH_ERROR_STATUSES = frozenset({401, 403})
+
+
+def _hf_auth_error_status(exc: BaseException) -> int | None:
+    """Return the HTTP status if `exc` is an unrecoverable HF auth failure."""
+    if not isinstance(exc, HfHubHTTPError) or exc.response is None:
+        return None
+    status = exc.response.status_code
+    return status if status in _HF_AUTH_ERROR_STATUSES else None
+
+
+def _hf_auth_error_message(file_path: str, status_code: int) -> str:
+    """Build an actionable error message for a 401/403 from HF."""
+    if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+        hint = (
+            "HF_TOKEN is set but lacks access — confirm the token's account has accepted "
+            "the dataset license and has read access."
+        )
+    else:
+        hint = (
+            "HF_TOKEN is not set in the worker environment. `huggingface-cli login` only "
+            "writes ~/.cache/huggingface/token, which iris does not forward to workers; "
+            "export HF_TOKEN before submitting the job."
+        )
+    return f"HuggingFace returned HTTP {status_code} for {file_path} (gated/auth-required). {hint}"
+
 
 @dataclass(frozen=True)
 class DownloadConfig:
@@ -218,6 +248,10 @@ def stream_file_to_fsspec(
             logger.info(f"Streamed {file_path} successfully to {fsspec_file_path} ({bytes_written} bytes)")
             return {"file_path": file_path, "status": "success", "size": bytes_written}
         except Exception as e:
+            auth_status = _hf_auth_error_status(e)
+            if auth_status is not None:
+                raise RuntimeError(_hf_auth_error_message(file_path, auth_status)) from e
+
             last_exception = e
             # Base wait: min 5s, then exponential: 5, 10, 20, 40, 80, 160, 320, 600 (capped)
             wait_base = max(min_base_wait, min_base_wait * (2**attempt))

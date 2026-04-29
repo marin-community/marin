@@ -6,7 +6,10 @@
 import json
 
 import pytest
+from huggingface_hub.errors import HfHubHTTPError
+from requests import Response
 
+from marin.datakit.download import huggingface as hf_download
 from marin.datakit.download.huggingface import (
     DownloadConfig,
     _relative_path_in_source,
@@ -96,6 +99,46 @@ def test_download_hf_bucket_requires_newer_huggingface_hub(tmp_path):
 
     with pytest.raises(RuntimeError, match=r"huggingface_hub>=1\.6\.0"):
         download_hf(cfg)
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_stream_file_to_fsspec_aborts_on_hf_auth_error(tmp_path, monkeypatch, status_code):
+    """401/403 from HF must short-circuit the retry loop and surface immediately."""
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    destination = output_path / "data" / "file1.txt"
+
+    response = Response()
+    response.status_code = status_code
+    auth_error = HfHubHTTPError(f"{status_code} Client Error", response=response)
+
+    real_open_url = hf_download.open_url
+    call_count = {"hf": 0}
+
+    def fake_open_url(url, *args, **kwargs):
+        if str(url).startswith("hf://"):
+            call_count["hf"] += 1
+            raise auth_error
+        return real_open_url(url, *args, **kwargs)
+
+    monkeypatch.setattr(hf_download, "open_url", fake_open_url)
+    # Sleep would only fire on retry; failing here proves no retry happened.
+    monkeypatch.setattr(
+        hf_download.time,
+        "sleep",
+        lambda _: pytest.fail("auth errors must not trigger retry sleeps"),
+    )
+
+    with pytest.raises(RuntimeError, match=f"HTTP {status_code}"):
+        stream_file_to_fsspec(
+            str(output_path),
+            "hf://datasets/private/gated/file.parquet",
+            str(destination),
+            read_timeout_seconds=1.0,
+            progress_log_interval_seconds=0.0,
+        )
+
+    assert call_count["hf"] == 1
 
 
 def test_stream_file_to_fsspec_reads_local_source(tmp_path):
