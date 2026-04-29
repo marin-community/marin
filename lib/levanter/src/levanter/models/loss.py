@@ -56,6 +56,7 @@ def maybe_fused_next_token_loss(
         NamedArray: Computed loss.
     """
     # Resolve axes
+    # pyrefly: ignore[bad-assignment] - resolve_axis returns AxisSpec (broad); resolving a single name yields an Axis
     Pos = pred_embeddings.resolve_axis(Pos.name)
     Vocab = pred_lm_head.resolve_axis(Vocab)
 

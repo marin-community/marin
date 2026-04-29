@@ -426,4 +426,5 @@ def _compute_output_axes(inputs, batch_dims, In, Out):
     2. turn spatial dims (non-batch, non-In, non-Out) into raw names b/c they change size in convolutions
     """
     unchanging_dims = [Out, *batch_dims]
+    # pyrefly: ignore[not-iterable] - inputs.axes is a tuple, so replace_axis returns AxisSelection (iterable)
     return [ax.name if ax not in unchanging_dims else ax for ax in replace_axis(inputs.axes, In, Out)]

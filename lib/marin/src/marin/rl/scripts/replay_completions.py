@@ -200,6 +200,7 @@ async def replay_all_with_warmup(
     logger.info(f"Processing {len(requests)} requests in {total_batches} batches of " f"size {config.batch_size}")
 
     current_start = 0
+    start_time = time.time()
 
     # First batch without timeout for warm-up
     if requests:
@@ -207,7 +208,8 @@ async def replay_all_with_warmup(
         warmup_batch = requests[current_start:warmup_end]
         await send_batch_requests(client, warmup_batch, 0, timeout=None)
 
-    # Process remaining batches with timeout
+    # send_batch_requests raises on any failure, so reaching the return below
+    # implies every batch succeeded; failed_batches is always [] here.
     batch_idx = 1
     while current_start < len(requests):
         end_idx = min(current_start + config.batch_size, len(requests))
@@ -215,6 +217,15 @@ async def replay_all_with_warmup(
         await send_batch_requests(client, batch, batch_idx, timeout=config.timeout)
         current_start = end_idx
         batch_idx += 1
+
+    return {
+        "total_requests": len(requests),
+        "total_batches": total_batches,
+        "completed_batches": batch_idx,
+        "failed_batches": [],
+        "total_time": time.time() - start_time,
+        "results": [],
+    }
 
 
 class CompletionReplayer:

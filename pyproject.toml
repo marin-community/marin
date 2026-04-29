@@ -172,14 +172,8 @@ deprecated = false
 # Unknown name errors (17 occurrences) - often from dynamic code or missing stubs
 unknown-name = false
 
-# Not iterable errors (17 occurrences) - complex type inference issues with JAX/numpy
-not-iterable = false
-
 # No matching overload (16 occurrences) - complex overload resolution issues
 no-matching-overload = false
-
-# Bad index (12 occurrences) - complex dict/list type inference
-bad-index = false
 
 # Library/stub-related noise - disable to focus on real issues:
 
@@ -187,16 +181,9 @@ bad-index = false
 # Common culprits: smart_open, Flax API, JAX/numpy arrays
 bad-argument-type = false
 
-# Bad context manager (30 occurrences) - tqdm and similar libraries
-bad-context-manager = false
-
 # Missing/bad argument count (99 occurrences) - Flax API positional/keyword confusion
 missing-argument = false
 bad-argument-count = false
-
-# Unbound name (64 occurrences) - pyrefly's control flow analysis doesn't understand
-# patterns where variables are guaranteed to be initialized by program logic
-unbound-name = false
 
 # Keep these enabled to catch real type errors:
 # bad-override = true (126 occurrences)
@@ -204,6 +191,9 @@ unbound-name = false
 # bad-return = true (84 occurrences)
 # unsupported-operation = true (68 occurrences)
 # not-callable = true (27 occurrences)
+# unbound-name, not-iterable, bad-index, bad-context-manager: re-enabled in PR-1
+# invalid-annotation, not-a-type, invalid-type-var, invalid-variance,
+# invalid-inheritance: re-enabled in PR-0
 
 [tool.hatch.metadata]
 allow-direct-references = true

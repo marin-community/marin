@@ -130,7 +130,7 @@ def _checkpoint_debug_json(state: Mapping[str, Any]) -> str:
     return json.dumps(dict(state), sort_keys=True, default=str)
 
 
-def _tracemalloc_memory_state() -> dict[str, str]:
+def _tracemalloc_memory_state() -> dict[str, str | None]:
     if not tracemalloc.is_tracing():
         return {}
 

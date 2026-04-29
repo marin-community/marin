@@ -53,7 +53,7 @@ def convert_page_with_resiliparse(
     html: str,
     url: str | None = None,
     config: ResiliparseConfig = ResiliparseConfig(),
-) -> dict[str, str]:
+) -> dict[str, str | None]:
     """
     Convert HTML to text[non-markdown] using Resiliparse.
 
@@ -97,7 +97,7 @@ def convert_page(
     url: str | None = None,
     extract_method: str = "resiliparse",
     config: ExtractionConfig = ResiliparseConfig(),
-) -> dict[str, str]:
+) -> dict[str, str | None]:
     """
     Convert HTML to text/markdown using Resiliparse.
 

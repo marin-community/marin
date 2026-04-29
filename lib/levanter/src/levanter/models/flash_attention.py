@@ -176,6 +176,7 @@ def _flash_attention_forward(
     Tc = KPos.size // block_size
 
     # Row axes: everything in q except (QPos, Key)
+    # pyrefly: ignore[bad-assignment] - eliminate_axes returns the broad AxisSelection; q.axes is a concrete tuple[Axis, ...]
     q_batch_axes: Tuple[hax.Axis, ...] = hax.eliminate_axes(q.axes, (QPos, Key))
 
     # output variables: O is the attention output, ell is the per-position log normalizer
@@ -423,6 +424,7 @@ def _flash_attention_backward(
     j, dQ, dK, dV = jax.lax.while_loop(lambda state: state[0] < Tc, do_kv_block, (0, dQ, dK, dV))
 
     if attn_sink is not None:
+        # pyrefly: ignore[bad-assignment] - same rationale as the first q_batch_axes assignment
         q_batch_axes: Tuple[hax.Axis, ...] = hax.eliminate_axes(q.axes, (QPos, Key))
         sink_prefix = attn_sink
         for ax in q_batch_axes:

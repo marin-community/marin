@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 import itertools
 import os
-from typing import Any
+from typing import Any, NoReturn
 
 import pyarrow as pa
 from rigging.filesystem import open_url, url_to_fs
@@ -190,7 +190,7 @@ def _accumulate_tables(
     convert: Callable | None = None
     schema_inferred = schema is None
 
-    def _raise_schema_mismatch(e: Exception, dicts: list[dict[str, Any]]) -> None:
+    def _raise_schema_mismatch(e: Exception, dicts: list[dict[str, Any]]) -> NoReturn:
         actual_schema = pa.Table.from_pylist(dicts).schema
         origin = (
             f"inferred from first {_MICRO_BATCH_SIZE} records (no explicit schema passed)"
@@ -215,13 +215,11 @@ def _accumulate_tables(
         divergence isn't representable as a widening (e.g. ``int`` vs
         ``string``).
         """
-        mismatch_error: Exception | None = None
         try:
             table = pa.Table.from_pylist(dicts, schema=schema)
         except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError) as e:
-            mismatch_error = e
-
-        if mismatch_error is None:
+            mismatch_error: Exception = e
+        else:
             extra_keys = {k for d in dicts for k in d.keys()} - set(schema.names)
             if not extra_keys:
                 return table, schema

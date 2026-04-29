@@ -289,7 +289,7 @@ def parse_rearrangement(expression: str) -> tuple[Expression, Expression]:
     return lhs, rhs
 
 
-def parse_einsum(expression: str) -> tuple[Sequence[Expression], Expression]:
+def parse_einsum(expression: str) -> tuple[Sequence[Expression] | None, Expression]:
     """
     Parse a haliax-style einsum string. This is an expansion of the einsum syntax
     to support named axes
