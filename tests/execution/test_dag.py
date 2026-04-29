@@ -14,7 +14,7 @@ from marin.execution.dag import upstream_steps
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
-    _resolve_step_output_path,
+    compute_output_path,
     materialize,
     mirrored,
     output_path_of,
@@ -396,7 +396,7 @@ def test_materialize_concurrent_callers_run_step_once(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# _resolve_step_output_path
+# compute_output_path
 # ---------------------------------------------------------------------------
 
 
@@ -414,18 +414,39 @@ def _noop_fn(config) -> None:
     return None
 
 
-def test_resolve_step_output_path_returns_concrete_path(tmp_path):
-    """`_resolve_step_output_path` produces a concrete path under the given prefix
-    without running the step."""
-    step = ExecutorStep(
-        name="my-step",
-        fn=_noop_fn,
-        config=_SubmitCfg(output_path=this_output_path()),
-    )
+def test_compute_output_path_returns_concrete_path(tmp_path):
+    """``compute_output_path`` produces a concrete path under the given prefix
+    without running anything or touching GCS."""
+    config = _SubmitCfg(output_path=this_output_path())
 
-    path = _resolve_step_output_path(step, prefix=str(tmp_path))
+    path = compute_output_path("my-step", config, prefix=str(tmp_path))
 
     assert isinstance(path, str)
     assert path.startswith(str(tmp_path) + "/my-step-")
     # No GCS / disk side-effects: compute_version only walks in-memory state.
     assert not (tmp_path / "experiments").exists()
+
+
+def test_compute_output_path_honors_override(tmp_path):
+    """``override_output_path`` short-circuits hash derivation and returns the
+    override verbatim (after prefix resolution)."""
+    config = _SubmitCfg(output_path=this_output_path())
+    override = "gs://some-bucket/exact/path"
+
+    path = compute_output_path("my-step", config, override_output_path=override, prefix=str(tmp_path))
+
+    assert path == override
+
+
+def test_compute_output_path_is_deterministic_and_versioned(tmp_path):
+    """Same (name, config) -> same path across calls; different versioned
+    values -> different paths."""
+    cfg_a = _SubmitCfg(output_path=this_output_path(), extra=versioned("a"))
+    cfg_b = _SubmitCfg(output_path=this_output_path(), extra=versioned("b"))
+
+    path_a1 = compute_output_path("step", cfg_a, prefix=str(tmp_path))
+    path_a2 = compute_output_path("step", cfg_a, prefix=str(tmp_path))
+    path_b = compute_output_path("step", cfg_b, prefix=str(tmp_path))
+
+    assert path_a1 == path_a2
+    assert path_a1 != path_b

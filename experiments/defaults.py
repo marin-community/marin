@@ -20,7 +20,7 @@ from fray import ResourceConfig
 from fray import client as fray_client
 from fray.types import Entrypoint, JobRequest, create_environment
 from marin.execution.dag import resolve_local_placeholders
-from marin.execution.executor import _resolve_step_output_path, materialize
+from marin.execution.executor import compute_output_path, materialize
 from marin.execution.remote import _sanitize_job_name, remote
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
@@ -575,29 +575,6 @@ class TrainingPlan(Generic[ConfigT]):
     env_vars: dict[str, str]
 
 
-def _compute_training_output_path(
-    name: str,
-    config: Any,
-    *,
-    override_output_path: str | None = None,
-) -> str:
-    """Compute the concrete output path a training run will write to.
-
-    Uses the executor's version-hashing pass via a sentinel ``ExecutorStep``
-    whose ``config`` field carries the same dependency graph as the real run.
-    ``Executor.compute_version`` walks the dependency graph and assembles the
-    version hash without submitting jobs or writing to GCS, so this is
-    side-effect free.
-    """
-    sentinel = ExecutorStep(
-        name=os.path.join("checkpoints", name),
-        fn=lambda c: None,
-        config=config,
-        override_output_path=override_output_path,
-    )
-    return _resolve_step_output_path(sentinel)
-
-
 def _bake_output_path_into_train_config(
     train_config: TrainLmConfig,
     output_path: str,
@@ -772,8 +749,8 @@ def prepare_train(
     # resolved output_path. InputName(step=...) references for upstream
     # tokenize steps are preserved here and resolved by `materialize` on the
     # worker (which runs in the data's region).
-    resolved_output_path = _compute_training_output_path(
-        name,
+    resolved_output_path = compute_output_path(
+        os.path.join("checkpoints", name),
         inner_config,
         override_output_path=override_output_path,
     )
