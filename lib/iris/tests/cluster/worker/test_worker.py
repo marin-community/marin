@@ -750,7 +750,7 @@ def _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime):
 def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_store, mock_runtime, tmp_path):
     """Worker known locally (e.g. via slice_id) attaches under worker_log_key
     *before* register so pre-register failures ship remote logs."""
-    from iris.cluster.log_store import worker_log_key
+    from iris.cluster.log_store_helpers import worker_log_key
 
     config = WorkerConfig(
         port=0,
@@ -785,7 +785,7 @@ def test_attach_log_handler_noop_without_worker_id(mock_bundle_store, mock_runti
 
 def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runtime, tmp_path):
     """Re-attach under a new worker_id renames the handler's key in place."""
-    from iris.cluster.log_store import worker_log_key
+    from iris.cluster.log_store_helpers import worker_log_key
 
     config = WorkerConfig(
         port=0,
@@ -1087,6 +1087,39 @@ def test_stop_preserve_containers_does_not_kill_tasks(mock_worker, mock_runtime)
     mock_worker.stop(preserve_containers=True)
     # The task should still be in RUNNING state (not KILLED)
     assert task.status == job_pb2.TASK_STATE_RUNNING
+
+
+def test_start_wires_log_pusher_into_adopted_attempts(mock_bundle_store, mock_runtime, tmp_path):
+    """Regression for #5261.
+
+    Worker.start() must construct the LogPusher *before* adopting containers,
+    otherwise adopted TaskAttempts capture ``log_pusher=None`` permanently
+    and silently drop every container log line for the rest of the task.
+    """
+    container = _make_discovered_container()
+    mock_runtime.discover_containers = Mock(return_value=[container])
+
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+        # Unreachable controller; lifecycle thread retries register and exits on stop().
+        controller_address="http://127.0.0.1:1",
+        poll_interval=Duration.from_seconds(0.05),
+    )
+    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
+
+    try:
+        worker.start()
+
+        assert worker._log_pusher is not None
+        task = worker.get_task(container.task_id, container.attempt_id)
+        assert task is not None
+        # The adopted attempt must reference the worker's live pusher, not None.
+        assert task._log_pusher is worker._log_pusher
+    finally:
+        worker.stop()
 
 
 def test_task_attempt_adopt_factory():

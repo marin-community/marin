@@ -17,9 +17,8 @@ from iris.cluster.types import (
     ReservationEntry,
     ResourceSpec,
 )
-from iris.rpc import logging_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from finelog.rpc import logging_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration
 
 

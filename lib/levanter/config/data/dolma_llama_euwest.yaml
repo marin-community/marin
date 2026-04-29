@@ -4,7 +4,10 @@ cache_options:
   target_size_per_flush: 512MB
 enforce_eos: true
 mixture_block_size: 2048
-shuffle: true
+shuffle:
+  io_block_size: 256
+  window_blocks: 512
+  perm_type: feistel
 stop_strategy: restart
 tokenizer: nvidia/Llama-3.1-Nemotron-70B-Instruct-HF
 train_weights:

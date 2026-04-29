@@ -1,14 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
+import io
 import json
-import threading
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 import zstandard
 
+import marin.datakit.download.game_music_evals as game_music_evals
+from marin.datakit.download.game_music_evals import (
+    HfJsonTextStagingConfig,
+    LichessPgnStagingConfig,
+    stage_hf_json_text_source,
+    stage_lichess_pgn_sample,
+)
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
     IngestionPolicy,
@@ -18,46 +26,40 @@ from marin.datakit.ingestion_manifest import (
     StagingMetadata,
     UsagePolicy,
 )
-from marin.datakit.download.game_music_evals import (
-    HfJsonTextStagingConfig,
-    LichessPgnStagingConfig,
-    stage_hf_json_text_source,
-    stage_lichess_pgn_sample,
-)
 
 
-@pytest.fixture()
-def local_http_server(tmp_path: Path):
-    server_root = tmp_path / "server"
-    server_root.mkdir()
+class _FakeResponse:
+    def __init__(self, *, raw_bytes: bytes | None = None, json_payload: object | None = None):
+        self.raw = io.BytesIO(raw_bytes or b"")
+        self.raw.decode_content = False
+        self._json_payload = json_payload
 
-    class Handler(SimpleHTTPRequestHandler):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=str(server_root), **kwargs)
+    def raise_for_status(self) -> None:
+        return None
 
-        def log_message(self, format, *args):  # noqa: A002  # stdlib signature
-            pass
+    def json(self) -> object:
+        return self._json_payload
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    try:
-        host, port = httpd.server_address
-        yield f"http://{host}:{port}", server_root
-    finally:
-        httpd.shutdown()
-        thread.join()
+    def iter_lines(self, *, decode_unicode: bool = False):
+        for line in self.raw.getvalue().splitlines():
+            yield line.decode("utf-8") if decode_unicode else line
 
+    def __enter__(self) -> _FakeResponse:
+        return self
 
-def _write_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
 
 
-def _write_zstd(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    compressed = zstandard.ZstdCompressor().compress(content.encode("utf-8"))
-    path.write_bytes(compressed)
+class _FakeSession:
+    def __init__(self, responses: dict[str, _FakeResponse]):
+        self._responses = responses
+
+    def get(self, url: str, *, timeout: int, stream: bool = False):
+        return self._responses[url]
+
+    def close(self) -> None:
+        return None
 
 
 def _source_manifest(
@@ -87,11 +89,7 @@ def _source_manifest(
             contamination_risk="high: held-out eval slice",
             provenance_notes="Test fixture",
         ),
-        staging=StagingMetadata(
-            transform_name="test_fixture",
-            output_filename="data.jsonl.gz",
-            record_provenance_fields=("index",),
-        ),
+        staging=StagingMetadata(transform_name="test_fixture", metadata={"provenance_fields": ["index"]}),
         epic_issue=5005,
         issue_numbers=(5062,),
         sample_caps=SampleCapConfig(max_records=max_records),
@@ -99,12 +97,9 @@ def _source_manifest(
 
 
 def test_stage_lichess_pgn_sample_preserves_symbolic_text_and_writes_metadata(
-    tmp_path: Path,
-    local_http_server,
-    read_jsonl_gz,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_jsonl_gz
 ) -> None:
-    base_url, server_root = local_http_server
-    source_url = f"{base_url}/lichess_db_standard_rated_2013-01.pgn.zst"
+    source_url = "https://example.test/lichess_db_standard_rated_2013-01.pgn.zst"
     game_one = """[Event "Rated Blitz game"]
 [Site "https://lichess.org/abcd1234"]
 [Date "2013.01.01"]
@@ -123,7 +118,12 @@ def test_stage_lichess_pgn_sample_preserves_symbolic_text_and_writes_metadata(
 
 1. d4 d5 2. c4 e6 3. Nc3 Be7 $1 0-1
 """
-    _write_zstd(server_root / "lichess_db_standard_rated_2013-01.pgn.zst", f"{game_one}\n{game_two}\n")
+    compressed = zstandard.ZstdCompressor().compress(f"{game_one}\n{game_two}\n".encode())
+    monkeypatch.setattr(
+        game_music_evals,
+        "_build_session",
+        lambda: _FakeSession({source_url: _FakeResponse(raw_bytes=compressed)}),
+    )
 
     manifest = _source_manifest(
         dataset_key="lichess/public",
@@ -157,18 +157,17 @@ def test_stage_lichess_pgn_sample_preserves_symbolic_text_and_writes_metadata(
     assert records[0]["provenance"]["index"] == 0
 
     metadata = json.loads((output_dir / "metadata.json").read_text(encoding="utf-8"))
-    assert metadata["manifest_fingerprint"] == manifest.fingerprint()
+    assert metadata["manifest_fingerprint"] == manifest.provenance_fingerprint()
+    assert metadata["content_fingerprint"] == manifest.fingerprint()
     assert metadata["materialized_output"]["record_count"] == 1
     assert metadata["materialized_output"]["metadata"]["source_url"] == source_url
     assert result["output_file"].endswith("data.jsonl.gz")
 
 
 def test_stage_hf_json_text_source_preserves_abc_notation_and_caps_examples(
-    tmp_path: Path,
-    local_http_server,
-    read_jsonl_gz,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_jsonl_gz
 ) -> None:
-    base_url, server_root = local_http_server
+    source_url = "https://example.test/validation.json"
     records = [
         {
             "abc notation": "X:1\nT:First Tune\nM:6/8\nK:Bb\n|: B2d c2f :|",
@@ -179,12 +178,17 @@ def test_stage_hf_json_text_source_preserves_abc_notation_and_caps_examples(
             "control code": "S:3\nB:5\n",
         },
     ]
-    _write_text(server_root / "validation.json", json.dumps(records))
+    monkeypatch.setattr(
+        game_music_evals,
+        "_build_session",
+        lambda: _FakeSession({source_url: _FakeResponse(json_payload=records)}),
+    )
+
     manifest = _source_manifest(
         dataset_key="irishman/public",
         slice_key="game_music/irishman_abc",
         source_label="irishman_abc",
-        source_url=f"{base_url}/validation.json",
+        source_url=source_url,
         source_format="hf_json",
         surface_form="abc_notation",
         max_records=1,
@@ -202,7 +206,7 @@ def test_stage_hf_json_text_source_preserves_abc_notation_and_caps_examples(
             max_examples=1,
             source_manifest=manifest,
             manifest_fingerprint=manifest.fingerprint(),
-            source_file_url_override=f"{base_url}/validation.json",
+            source_file_url_override=source_url,
         )
     )
 

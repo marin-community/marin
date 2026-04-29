@@ -18,8 +18,8 @@ from iris.cluster.providers.k8s.tasks import (
     _LABEL_RUNTIME,
     _RUNTIME_LABEL_VALUE,
 )
-from iris.log_server.server import LogServiceImpl
-from iris.rpc import logging_pb2
+from finelog.server import LogServiceImpl
+from finelog.rpc import logging_pb2
 from iris.rpc import job_pb2
 
 
