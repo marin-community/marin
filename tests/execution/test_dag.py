@@ -9,19 +9,13 @@ from dataclasses import dataclass, field
 from threading import Thread
 
 import pytest
-from fray import client as fray_client_module
-from fray.types import ResourceConfig
 
-from marin.execution.dag import (
-    _resolve_step_output_path,
-    _substitute_output_paths_only,
-    materialize,
-    submit_step_to_iris,
-    upstream_steps,
-)
+from marin.execution.dag import upstream_steps
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
+    _resolve_step_output_path,
+    materialize,
     mirrored,
     output_path_of,
     this_output_path,
@@ -402,7 +396,7 @@ def test_materialize_concurrent_callers_run_step_once(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# submit_step_to_iris
+# _resolve_step_output_path
 # ---------------------------------------------------------------------------
 
 
@@ -420,7 +414,7 @@ def _noop_fn(config) -> None:
     return None
 
 
-def test_resolve_step_output_path_returns_concrete_path(tmp_path, monkeypatch):
+def test_resolve_step_output_path_returns_concrete_path(tmp_path):
     """`_resolve_step_output_path` produces a concrete path under the given prefix
     without running the step."""
     step = ExecutorStep(
@@ -435,126 +429,3 @@ def test_resolve_step_output_path_returns_concrete_path(tmp_path, monkeypatch):
     assert path.startswith(str(tmp_path) + "/my-step-")
     # No GCS / disk side-effects: compute_version only walks in-memory state.
     assert not (tmp_path / "experiments").exists()
-
-
-def test_substitute_preserves_upstream_input_names():
-    """`_substitute_output_paths_only` replaces the current step's OutputName
-    placeholders but leaves InputName references to upstream steps untouched."""
-    upstream = ExecutorStep(name="tok", fn=_noop_fn, config=_SubmitCfg(output_path=this_output_path()))
-    cfg = _SubmitCfg(
-        output_path=this_output_path(),
-        tokenized=InputName(step=upstream, name="output"),
-        extra=this_output_path(name="logs"),
-    )
-
-    resolved = _substitute_output_paths_only(cfg, "/concrete/path")
-
-    # OutputName at top level is now a concrete string under the resolved
-    # output_path.
-    assert resolved.output_path == "/concrete/path"
-    # Nested OutputName(name="logs") is resolved to {output_path}/logs.
-    assert resolved.extra == "/concrete/path/logs"
-    # Upstream InputName is unchanged so the worker can resolve it later.
-    assert isinstance(resolved.tokenized, InputName)
-    assert resolved.tokenized.step is upstream
-    assert resolved.tokenized.name == "output"
-
-
-def test_substitute_preserves_executor_step_reference():
-    """A bare ExecutorStep embedded in a config must survive pre-substitution
-    so the worker can run + resolve it."""
-    upstream = ExecutorStep(name="tok", fn=_noop_fn, config=_SubmitCfg(output_path=this_output_path()))
-    cfg = _SubmitCfg(output_path=this_output_path(), tokenized=upstream)
-
-    resolved = _substitute_output_paths_only(cfg, "/concrete/path")
-
-    assert resolved.output_path == "/concrete/path"
-    assert resolved.tokenized is upstream
-
-
-def test_substitute_recurses_into_versioned_and_mirrored():
-    """VersionedValue and MirroredValue wrappers should keep their type but
-    have any nested OutputName resolved."""
-    cfg = _SubmitCfg(
-        output_path=this_output_path(),
-        extra=mirrored(versioned("data/v1")),
-    )
-
-    resolved = _substitute_output_paths_only(cfg, "/concrete/path")
-
-    # mirrored(versioned("data/v1")) → MirroredValue(VersionedValue("data/v1"))
-    # No OutputName inside; both wrappers should round-trip unchanged in shape.
-    inner = resolved.extra
-    assert inner.value.value == "data/v1"
-
-
-class _RecordingClient:
-    """Captures submit() calls and returns a handle whose wait() is a no-op."""
-
-    def __init__(self) -> None:
-        self.requests: list = []
-
-    def submit(self, request, adopt_existing: bool = True):
-        self.requests.append(request)
-        return _RecordingHandle()
-
-
-class _RecordingHandle:
-    def wait(self, raise_on_failure: bool = True):
-        return None
-
-
-def test_submit_step_to_iris_submits_one_job(monkeypatch, tmp_path):
-    """End-to-end: building a JobRequest from a step and submitting via the
-    fray client. The captured entrypoint, when invoked, runs `step.fn` with a
-    config whose `output_path` is concrete."""
-    seen_configs: list = []
-
-    def fn(config) -> None:
-        seen_configs.append(config)
-
-    resources = ResourceConfig.with_cpu()
-    step = ExecutorStep(
-        name="trainer",
-        fn=fn,
-        config=_SubmitCfg(output_path=this_output_path()),
-        resources=resources,
-    )
-
-    fake = _RecordingClient()
-    monkeypatch.setattr(fray_client_module, "current_client", lambda: fake)
-    # Use tmp_path as the prefix so the resolved path is deterministic under
-    # the test's filesystem rather than gs://marin-…/.
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-
-    submit_step_to_iris(step)
-
-    # Exactly one JobRequest was submitted with the step's resources.
-    assert len(fake.requests) == 1
-    request = fake.requests[0]
-    assert request.resources == resources
-
-    # Invoking the captured entrypoint must run `fn(resolved_config)` where
-    # `resolved_config.output_path` is concrete.
-    callable_ep = request.entrypoint.callable_entrypoint
-    assert callable_ep is not None
-    callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-    assert len(seen_configs) == 1
-    resolved = seen_configs[0]
-    assert isinstance(resolved.output_path, str)
-    assert resolved.output_path.startswith(str(tmp_path) + "/trainer-")
-
-
-def test_submit_step_to_iris_requires_resources(tmp_path, monkeypatch):
-    """A step with `resources=None` raises a clear ValueError — falling back
-    to inline execution would defeat the purpose of the helper."""
-    step = ExecutorStep(
-        name="trainer",
-        fn=_noop_fn,
-        config=_SubmitCfg(output_path=this_output_path()),
-        resources=None,
-    )
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-
-    with pytest.raises(ValueError, match="resources"):
-        submit_step_to_iris(step)

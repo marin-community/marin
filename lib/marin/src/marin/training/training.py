@@ -15,7 +15,7 @@ from fray import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
 from mergedeep import mergedeep
 from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
 
-from marin.execution.dag import materialize
+from marin.execution.executor import materialize
 from marin.training.run_environment import add_run_env_variables
 
 logger = logging.getLogger(__name__)

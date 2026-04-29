@@ -19,7 +19,8 @@ import levanter.main.train_lm as levanter_train_lm
 from fray import ResourceConfig
 from fray import client as fray_client
 from fray.types import Entrypoint, JobRequest, create_environment
-from marin.execution.dag import _resolve_step_output_path, materialize, resolve_local_placeholders
+from marin.execution.dag import resolve_local_placeholders
+from marin.execution.executor import _resolve_step_output_path, materialize
 from marin.execution.remote import _sanitize_job_name, remote
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig

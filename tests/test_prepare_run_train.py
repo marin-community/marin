@@ -25,11 +25,11 @@ from experiments.defaults import (
 )
 from experiments.llama import llama_30m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.dag import materialize
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
     OutputName,
+    materialize,
     this_output_path,
     versioned,
 )
