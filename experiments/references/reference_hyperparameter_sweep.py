@@ -427,10 +427,6 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
         grug_trainer=grug_trainer,
     )
 
-    # The CPU coordinator (this function, dispatched as a `remote(...)` step)
-    # builds a TrainingPlan locally and submits it as a child TPU job via
-    # `run_train`. Replaces the legacy `run_grug_base_trial` two-hop path.
-    #
     # `launch_config.output_path` is already a concrete path here: the outer
     # executor resolved `this_output_path()` to the `_build_train_step` step's
     # path before invoking this function. Pin the plan's output to that same

@@ -217,17 +217,13 @@ def resolve_training_env(
     base_env: dict[str, str] | None,
     resources: ResourceConfig,
 ) -> dict[str, str]:
-    """Resolve the training-side environment dict in the *caller's* process.
+    """Build the training-side environment dict.
 
     Combines the base env from the user (typically ``train_config.env_vars``)
     with hardware-specific defaults from ``levanter.infra.cli_helpers``, run
     metadata (GIT_COMMIT, FERRY_DATE, etc. via ``add_run_env_variables``), a
     JAX compilation cache pointing at ``marin_temp_bucket``, and a guard
     against XLA's autotune subcache when the cache lives on remote storage.
-
-    The dict is meant to be applied to ``os.environ`` on the training worker
-    via ``_apply_env_to_process``, so values like ``GIT_COMMIT`` and
-    ``WANDB_API_KEY`` carry the user's submission environment forward.
     """
     default_launch_config = _cli_helpers_module().load_config()
 
@@ -253,9 +249,8 @@ def resolve_training_env(
 def extras_for_resources(resources: ResourceConfig) -> list[str]:
     """Return the uv extras (``["tpu"]`` / ``["gpu"]`` / ``[]``) for a device config.
 
-    Worker JobRequests must declare the matching uv extras so accelerator-only
-    Python dependencies (e.g. ``jax[tpu]``, ``jax[cuda]``) are installed in the
-    runtime environment. CPU jobs need no extras.
+    Worker JobRequests must declare the matching extras so accelerator-only
+    Python dependencies (e.g. ``jax[tpu]``, ``jax[cuda]``) are installed.
     """
     device = resources.device
     if isinstance(device, TpuConfig):
@@ -300,13 +295,8 @@ def _prepare_training_run(
 def _apply_env_to_process(env: dict[str, str]) -> None:
     """Apply training env vars to ``os.environ`` so Levanter's main reads them.
 
-    The training body now runs inline in the worker process, so additions
-    that ``_prepare_training_run`` computes (JAX compilation cache dir,
-    WANDB_API_KEY, accelerator defaults, run metadata) must be propagated
-    to ``os.environ`` rather than handed off in a child JobRequest. We
-    ``setdefault`` so ambient env (already set by Iris from the parent
-    JobRequest) wins on conflict, matching the previous merge order where
-    ``_prepare_training_run`` only filled in missing keys.
+    Uses ``setdefault`` so ambient env (set by Iris from the parent
+    JobRequest) wins on conflict; only missing keys are filled in.
     """
     for key, value in env.items():
         os.environ.setdefault(key, value)
@@ -326,7 +316,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     - WANDB_API_KEY is set.
     - It checks that configured GCS paths are in the same region as the VM (except train/validation source URLs).
     """
-    # Run any embedded ExecutorStep upstream deps under the worker's region and substitute placeholders.
+    # Run upstream ExecutorStep deps in the worker's region and substitute placeholders.
     config = materialize(config)
     config, train_config, env = _prepare_training_run(config)
 

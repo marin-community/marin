@@ -5,12 +5,11 @@
 
 A *sweep* is a flat collection of independent targets — typically
 hyper-parameter combinations — that need to be evaluated exactly once across a
-pool of workers. Under the new "executor inside the training job" design we
-launch N independent Iris jobs, each running this library: every worker walks
-the same target list in the same order and uses ``step_lock`` to claim each
-target. Workers are otherwise uncoordinated; ``step_lock``'s heartbeat handles
-dead claimants and its STATUS_SUCCESS check makes already-completed targets
-no-ops.
+pool of workers. N independent jobs run this library concurrently: every
+worker walks the same target list in the same order and uses ``step_lock`` to
+claim each target. Workers are otherwise uncoordinated; ``step_lock``'s
+heartbeat handles dead claimants and its STATUS_SUCCESS check makes
+already-completed targets no-ops.
 """
 
 import logging

@@ -15,12 +15,10 @@ _DUMMY_DATA: Any = object()
 
 
 def test_prepare_grug_trial_sets_temporary_checkpoint_base_path():
-    """Building a TrainingPlan via ``prepare_grug_trial`` wires the
-    checkpointer's ``base_path`` and ``temporary_base_path`` to paths derived
-    from the resolved output_path. Mirrors the legacy
-    ``run_grug_base_trial`` -> ``run_grug`` checkpointer wiring path so callers
-    that pin ``override_output_path`` get stable, predictable checkpoint
-    locations.
+    """``prepare_grug_trial`` wires the checkpointer's ``base_path`` and
+    ``temporary_base_path`` to paths derived from the resolved output_path,
+    so callers that pin ``override_output_path`` get stable, predictable
+    checkpoint locations.
     """
     output_path = "gs://marin-us-east5/experiments/grug/base-trial"
     with (
