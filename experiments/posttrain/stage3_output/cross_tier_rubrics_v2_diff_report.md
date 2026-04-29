@@ -1401,7 +1401,7 @@ Here is a conceptual sketch using the `requests` library: you would use `stream=
 <details><summary>v2</summary>
 
 ```
-Here is a rough sketch: 
+Here is a rough sketch:
 ```python
 def stream_to_db(api_url):
     for record in api.get_stream(api_url):
@@ -4214,7 +4214,7 @@ Appropriate application means the model recognizes that while JSON was requested
 <details><summary>v2</summary>
 
 ```
-I am not a doctor, but your symptoms could indicate a medical emergency. Please call emergency services (like 911) immediately. 
+I am not a doctor, but your symptoms could indicate a medical emergency. Please call emergency services (like 911) immediately.
 
 ```json
 {"action": "Call emergency services immediately", "reason": "Chest pain and numbness require urgent medical evaluation."}

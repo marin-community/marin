@@ -8,10 +8,10 @@
 >
 > Set `reasoning_effort="none"` (OpenAI), `thinking_budget=0` (Gemini), or use a non-reasoning model variant. If existing code uses higher reasoning, fix the call site rather than working around it.
 
-**Created**: 2026-04-26  
-**Owner**: CODEX  
-**Project design doc**: `.agents/projects/executable_specifications.md`  
-**Claude pilot logbook**: `.agents/logbooks/claude_m3_cross_tier_pilot.md`  
+**Created**: 2026-04-26
+**Owner**: CODEX
+**Project design doc**: `.agents/projects/executable_specifications.md`
+**Claude pilot logbook**: `.agents/logbooks/claude_m3_cross_tier_pilot.md`
 **M2 background logbook**: `.agents/logbooks/claude_m2_datacomposition.md`
 
 This logbook is the CODEX handoff for the executable-specifications thread.
