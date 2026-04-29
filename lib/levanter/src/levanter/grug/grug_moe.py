@@ -24,7 +24,7 @@ import jax
 import jax.numpy as jnp
 from haliax.jax_utils import named_call, tree_checkpoint_name
 from jax import shard_map
-from jax.sharding import PartitionSpec as P, get_abstract_mesh
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_mesh, get_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
@@ -38,19 +38,29 @@ MoeImplementation: TypeAlias = Literal["ring", "ragged_all_to_all"]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 
 
-def _mesh_has_axis(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> bool:
+def _current_mesh() -> Mesh | jax.sharding.AbstractMesh:
+    try:
+        mesh = get_mesh()
+    except ValueError:
+        mesh = None
+    if mesh is not None and not mesh.empty:
+        return mesh
+    return get_abstract_mesh()
+
+
+def _mesh_has_axis(mesh: Mesh | jax.sharding.AbstractMesh | None, axis_name: str) -> bool:
     if mesh is None or mesh.empty:
         return False
     return axis_name in mesh.shape
 
 
-def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
+def _mesh_axis_size(mesh: Mesh | jax.sharding.AbstractMesh | None, axis_name: str) -> int:
     if mesh is None or mesh.empty:
         return 1
     return int(mesh.shape.get(axis_name, 1))
 
 
-def _batch_spec(mesh: jax.sharding.AbstractMesh | None) -> P:
+def _batch_spec(mesh: Mesh | jax.sharding.AbstractMesh | None) -> P:
     if _mesh_has_axis(mesh, "expert"):
         return P(("data", "expert"))
     return P(("data",))
@@ -131,12 +141,26 @@ def _moe_mlp_local(
     return out, jnp.array(0, dtype=jnp.int32)
 
 
-def _batch_spec_from_x(x: jax.Array, mesh: jax.sharding.AbstractMesh | None) -> P:
+def _batch_spec_from_x(x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None) -> P:
     sharding = getattr(x, "sharding", None)
     spec = getattr(sharding, "spec", None)
     if spec is not None and len(spec) > 0:
         return P(spec[0])
     return _batch_spec(mesh)
+
+
+def _value_spec_or_replicated(x: jax.Array) -> P:
+    sharding = getattr(x, "sharding", None)
+    spec = getattr(sharding, "spec", None)
+    if spec is not None:
+        return spec
+    return P(*(None for _ in range(x.ndim)))
+
+
+def _reshard_for_shard_map(x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None, spec: P) -> jax.Array:
+    if isinstance(mesh, Mesh):
+        return reshard(x, NamedSharding(mesh, spec))
+    return x
 
 
 def _sort_activations(inputs: jax.Array, sort_indices: jax.Array) -> jax.Array:
@@ -529,7 +553,7 @@ def moe_mlp(
     dropped expert assignments from EP capacity clipping.
     """
     if mesh is None:
-        mesh = get_abstract_mesh()
+        mesh = _current_mesh()
 
     if isinstance(activation, ActivationFunctionEnum):
         activation_fn = activation.to_jax_fn()
@@ -576,7 +600,6 @@ def moe_mlp(
         return out
 
     batch_spec = _batch_spec_from_x(x, mesh)
-    local_expert_spec = P("expert", None, None) if has_expert_axis else P(None, None, None)
 
     if has_expert_axis and expert_axis_size > 1:
         if num_experts % expert_axis_size != 0:
@@ -588,6 +611,12 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
+
+        x = _reshard_for_shard_map(x, mesh, batch_spec)
+        selected_experts = _reshard_for_shard_map(selected_experts, mesh, batch_spec)
+        combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
+        w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, P("expert", None, None))
+        w_down = _reshard_for_shard_map(w_down, mesh, P("expert", None, None))
 
         shard_fn = shard_map(
             partial(
@@ -613,7 +642,15 @@ def moe_mlp(
         return out
 
     # Fallback path for no expert axis (or expert axis size 1) keeps routing
-    # semantics without EP collectives.
+    # semantics without EP collectives. JAX 0.9 requires shard_map in_specs to
+    # match the actual input sharding, so use attached value specs when present
+    # and replicated specs otherwise.
+    x_spec = _value_spec_or_replicated(x)
+    selected_experts_spec = _value_spec_or_replicated(selected_experts)
+    combine_weights_spec = _value_spec_or_replicated(combine_weights)
+    w_up_gate_spec = _value_spec_or_replicated(w_up_gate)
+    w_down_spec = _value_spec_or_replicated(w_down)
+
     shard_fn = shard_map(
         partial(
             _moe_mlp_local,
@@ -622,13 +659,13 @@ def moe_mlp(
         ),
         mesh=mesh,
         in_specs=(
-            batch_spec,
-            batch_spec,
-            batch_spec,
-            local_expert_spec,
-            local_expert_spec,
+            x_spec,
+            selected_experts_spec,
+            combine_weights_spec,
+            w_up_gate_spec,
+            w_down_spec,
         ),
-        out_specs=(batch_spec, P()),
+        out_specs=(x_spec, P()),
         check_vma=False,
     )
     out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
