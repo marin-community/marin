@@ -49,10 +49,6 @@ from zephyr import Dataset, ZephyrContext, counters
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants — keep in sync with scripts/contree_bench.py
-# ---------------------------------------------------------------------------
-
 PYTRACER_DIR = Path(__file__).resolve().parents[2] / "scripts" / "contree_pytracer"
 TRACER_MOUNT = "/pytracer"
 TRACE_META_MARKER = "::TRACE_META::"
@@ -96,11 +92,6 @@ def _scrub_surrogates(s: str) -> str:
     if not s:
         return s
     return s.encode("utf-8", "replace").decode("utf-8")
-
-
-# ---------------------------------------------------------------------------
-# Trace splitting / row formatting
-# ---------------------------------------------------------------------------
 
 
 def _split_trace(trace: str) -> tuple[str, str]:
@@ -513,11 +504,6 @@ def _determine_status(
     return "ok"
 
 
-# ---------------------------------------------------------------------------
-# The per-row map function
-# ---------------------------------------------------------------------------
-
-
 def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Iterator[dict]:
     """Pull, sandbox, and trace one SWE-rebench-V2 row via ConTree.
 
@@ -702,11 +688,6 @@ def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Itera
             logger.info("workdir cleanup failed for %s: %s", workdir_path, cleanup_err)
 
 
-# ---------------------------------------------------------------------------
-# Pipeline driver
-# ---------------------------------------------------------------------------
-
-
 def _load_images(language: str = "python", limit: int | None = None) -> list[dict]:
     """Stream Python rows out of the HF dataset and shape them for the map fn."""
     ds = load_dataset("nebius/SWE-rebench-V2", split="train", streaming=True)
@@ -732,10 +713,9 @@ def _load_images(language: str = "python", limit: int | None = None) -> list[dic
     return out
 
 
-# Pipeline configuration — adjust here, not via CLI.
-LIMIT: int | None = None  # None = all 7,243 Python rows
-MAX_WORKERS: int = 10  # Matches ConTree's instance_max_concurrency
-WORKER_RAM: str = "4g"  # Per-worker RAM budget
+LIMIT: int | None = None
+MAX_WORKERS: int = 10  # ConTree's instance_max_concurrency
+WORKER_RAM: str = "4g"
 
 
 def main() -> None:

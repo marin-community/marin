@@ -250,7 +250,7 @@ class _Tracer:
         self._fp = None
         self._lock = threading.RLock()
         self._stopped = False
-        self.event_count = 0  # total across all tests (for reporting)
+        self.event_count = 0
         self.row_count = 0
         # {frame_id: (src, locals_before, func, rel, lineno, iter_count)}
         self._pending = {}
@@ -268,7 +268,6 @@ class _Tracer:
         # {caller_frame_id: (indent, pre_call_snapshot)} — set on return,
         # consumed on the next line event in the caller frame.
         self._pending_caller_delta = {}
-        # Active-test state: buffer lives only while we're inside a test frame.
         self._active_frame_id = None
         self._active_meta = None
         self._buffer = None
@@ -313,7 +312,6 @@ class _Tracer:
         self._stopped = True
         sys.settrace(None)
         threading.settrace(None)
-        # If a test was mid-flight when the interpreter exited, finalize it.
         if self._active_meta is not None:
             self._finalize_test()
         if self._fp:
@@ -434,7 +432,6 @@ class _Tracer:
         self._active_thread_ids = {threading.get_ident()}
 
     def _finalize_test(self):
-        # Flush anything still buffered in the active frame.
         if self._active_frame_id in self._pending:
             src = self._pending.pop(self._active_frame_id)[0]
             self._buffer.write(src + "\n")
@@ -477,7 +474,6 @@ class _Tracer:
         if delta:
             parts.append(_fmt_locals(delta))
 
-        # Branch annotation for conditional block headers.
         if next_lineno is not None:
             kw = _block_keyword(src)
             if kw is not None:
@@ -521,7 +517,6 @@ class _Tracer:
                 indent = _indent_of(src) + "    "
                 self._write(f"{indent}# ENTER: {_fmt_locals(current)}\n")
             self._last_emitted_frame = frame_id
-            # New frame — fresh iter counter scope.
             self._iter_counts.pop(frame_id, None)
         elif event == "line":
             # If a call just returned into this frame, emit the caller-locals
@@ -643,4 +638,5 @@ def _install():
     atexit.register(_on_exit)
 
 
-_install()
+if __name__ == "sitecustomize":
+    _install()
