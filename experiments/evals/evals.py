@@ -11,11 +11,11 @@ import re
 from collections.abc import Sequence
 
 from fray.cluster import ResourceConfig
-from iris.marin_fs import marin_prefix
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.evaluators.harbor_evaluator import HARBOR_EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.run import evaluate
 from marin.execution.remote import remote
+from rigging.filesystem import marin_prefix
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
@@ -356,6 +356,14 @@ def _required_long_context_max_model_len(evals: Sequence[EvalTaskConfig]) -> int
     return max_context_len + max_gen_toks + 256
 
 
+def _default_long_context_tensor_parallel_size(resource_config: ResourceConfig | None) -> int | None:
+    if resource_config is None:
+        return None
+
+    chip_count = resource_config.chip_count()
+    return chip_count if chip_count > 0 else None
+
+
 def evaluate_long_context(
     model_name: str,
     model_path: str,
@@ -372,7 +380,12 @@ def evaluate_long_context(
     task_names = "_".join(sorted(eval_task.name for eval_task in evals))
     return ExecutorStep(
         name=f"evaluation/long_context/{model_name}/{task_names}",
-        fn=evaluate,
+        fn=remote(
+            evaluate,
+            resources=resource_config,
+            env_vars=env_vars_from_keys(HARBOR_EVAL_ENV_KEYS),
+            pip_dependency_groups=EVAL_DEPENDENCY_GROUPS,
+        ),
         config=EvaluationConfig(
             evaluator="long_context",
             model_name=model_name,
@@ -380,7 +393,6 @@ def evaluate_long_context(
             evaluation_path=this_output_path(),
             evals=versioned(list(evals)),
             max_eval_instances=max_eval_instances,
-            launch_with_ray=True,
             discover_latest_checkpoint=discover_latest_checkpoint,
             engine_kwargs=engine_kwargs,
             generation_params=generation_params,
@@ -395,7 +407,6 @@ def default_long_context_eval(
     step: ExecutorStep | InputName | str,
     *,
     lengths: Sequence[int] | None = None,
-    finepdf_manifest_path: str | None = None,
     evals: Sequence[EvalTaskConfig] | None = None,
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v5p-8"),
     max_eval_instances: int | None = None,
@@ -408,13 +419,12 @@ def default_long_context_eval(
 
     if evals is None:
         selected_lengths = tuple(lengths) if lengths is not None else tuple(sorted(LONG_CONTEXT_TASKS_BY_LENGTH))
-        evals = long_context_tasks_for_lengths(
-            selected_lengths,
-            finepdf_manifest_path=finepdf_manifest_path,
-        )
+        evals = long_context_tasks_for_lengths(selected_lengths)
 
     resolved_engine_kwargs = dict(engine_kwargs or {})
-    resolved_engine_kwargs.setdefault("tensor_parallel_size", 4)
+    default_tensor_parallel_size = _default_long_context_tensor_parallel_size(resource_config)
+    if default_tensor_parallel_size is not None:
+        resolved_engine_kwargs.setdefault("tensor_parallel_size", default_tensor_parallel_size)
     resolved_engine_kwargs.setdefault("max_model_len", _required_long_context_max_model_len(evals))
 
     resolved_generation_params = dict(generation_params or {})

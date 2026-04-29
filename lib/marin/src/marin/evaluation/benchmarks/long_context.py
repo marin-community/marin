@@ -1,10 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Synthetic long-context sanity checks for Marin eval runs.
+
+These bespoke tasks are intentionally small and deterministic. `passkey`
+places one generated identifier inside filler text and asks the model to copy
+it back. `kv` builds a generated key-value registry and asks for one value.
+They are useful for catching obvious context-extension failures, but they are
+not a replacement for external long-context suites such as lm-eval tasks,
+RULER, or NIAH.
+"""
+
 import json
 import random
 import re
-from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -33,7 +42,6 @@ _FILLER_VOCAB = (
 class LongContextFamily(StrEnum):
     PASSKEY = "passkey"
     KV = "kv"
-    FINEPDF_QA = "finepdf_qa"
 
 
 @dataclass(frozen=True)
@@ -70,9 +78,6 @@ def build_long_context_task(
     elif family is LongContextFamily.KV:
         examples = _build_kv_examples(context_len=context_len, task_kwargs=task_kwargs)
         metric_names = ("exact_match",)
-    elif family is LongContextFamily.FINEPDF_QA:
-        examples = _load_finepdf_examples(task_kwargs=task_kwargs)
-        metric_names = ("exact_match", "token_f1")
     else:
         raise ValueError(f"Unsupported long-context family: {family}")
 
@@ -127,7 +132,6 @@ def write_long_context_results(output_dir: str | Path, results: Sequence[dict[st
 
 def score_long_context_task(task: LongContextTask, predictions: Sequence[str]) -> dict[str, Any]:
     exact_total = 0.0
-    f1_total = 0.0
     example_results: list[dict[str, Any]] = []
 
     for example, prediction in zip(task.examples, predictions, strict=True):
@@ -140,12 +144,6 @@ def score_long_context_task(task: LongContextTask, predictions: Sequence[str]) -
             "correct": bool(exact_match),
             "metadata": example.metadata,
         }
-
-        if task.family is LongContextFamily.FINEPDF_QA:
-            token_f1 = _token_f1(prediction, example.gold_answer)
-            f1_total += token_f1
-            example_result["token_f1"] = token_f1
-
         example_results.append(example_result)
 
     num_examples = len(task.examples)
@@ -153,8 +151,6 @@ def score_long_context_task(task: LongContextTask, predictions: Sequence[str]) -
         raise ValueError(f"Long-context task {task.task_name!r} produced zero examples")
 
     metrics: dict[str, float] = {"exact_match": exact_total / num_examples}
-    if task.family is LongContextFamily.FINEPDF_QA:
-        metrics["token_f1"] = f1_total / num_examples
 
     return {
         "task_name": task.task_name,
@@ -232,70 +228,6 @@ def _build_kv_examples(*, context_len: int, task_kwargs: dict[str, Any]) -> list
     return examples
 
 
-def _load_finepdf_examples(*, task_kwargs: dict[str, Any]) -> list[LongContextExample]:
-    manifest_path = task_kwargs.get("manifest_path")
-    if not isinstance(manifest_path, str) or not manifest_path:
-        raise ValueError("finepdf_qa tasks require a non-empty task_kwargs['manifest_path']")
-
-    requested_context_len = int(task_kwargs["context_len"])
-    examples: list[LongContextExample] = []
-    with _open_manifest(manifest_path) as manifest_file:
-        for line_num, line in enumerate(manifest_file, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            record = json.loads(line)
-            if "context_len" not in record:
-                raise ValueError(
-                    f"finepdf_qa manifest {manifest_path!r} record on line {line_num} is missing required "
-                    "'context_len'"
-                )
-
-            record_context_len = int(record["context_len"])
-            if record_context_len != requested_context_len:
-                continue
-
-            example_id = str(record["id"])
-            gold_answer = str(record["answer"])
-            metadata = dict(record.get("metadata", {}))
-            metadata["context_len"] = record_context_len
-            if "prompt" in record:
-                prompt = str(record["prompt"])
-            else:
-                context = str(record["context"])
-                question = str(record["question"])
-                prompt = (
-                    "Read the following document excerpt and answer the question.\n\n"
-                    f"Document:\n{context}\n\n"
-                    f"Question: {question}\n"
-                    "Answer with a short extract from the document."
-                )
-            examples.append(
-                LongContextExample(
-                    example_id=example_id,
-                    prompt=prompt,
-                    gold_answer=gold_answer,
-                    metadata=metadata,
-                )
-            )
-
-    if not examples:
-        raise ValueError(
-            f"finepdf_qa manifest {manifest_path!r} did not contain any examples for context_len={requested_context_len}"
-        )
-
-    return examples
-
-
-def _open_manifest(manifest_path: str):
-    if "://" not in manifest_path:
-        return open(manifest_path, "r")
-
-    import fsspec
-
-    return fsspec.open(manifest_path, "r").open()
-
-
 def _build_filler(*, target_units: int, rng: random.Random) -> str:
     fragments: list[str] = []
     num_units = 0
@@ -309,22 +241,3 @@ def _build_filler(*, target_units: int, rng: random.Random) -> str:
 def _normalize_text(text: str) -> str:
     normalized = _NON_WORD_RE.sub(" ", text.lower()).strip()
     return re.sub(r"\s+", " ", normalized)
-
-
-def _token_f1(prediction: str, gold_answer: str) -> float:
-    pred_tokens = _normalize_text(prediction).split()
-    gold_tokens = _normalize_text(gold_answer).split()
-    if not pred_tokens and not gold_tokens:
-        return 1.0
-    if not pred_tokens or not gold_tokens:
-        return 0.0
-
-    pred_counts = Counter(pred_tokens)
-    gold_counts = Counter(gold_tokens)
-    overlap = sum((pred_counts & gold_counts).values())
-    if overlap == 0:
-        return 0.0
-
-    precision = overlap / len(pred_tokens)
-    recall = overlap / len(gold_tokens)
-    return 2 * precision * recall / (precision + recall)

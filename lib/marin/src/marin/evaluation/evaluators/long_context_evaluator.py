@@ -6,69 +6,19 @@ import logging
 import os
 import shutil
 import tempfile
-from collections.abc import Sequence
 
 import requests
-from fray.v1.cluster import ResourceConfig
 
 from marin.evaluation.benchmarks.long_context import evaluate_long_context_tasks, write_long_context_results
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.utils import is_remote_path, upload_to_gcs
-from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
+from marin.inference.vllm_server import VllmEnvironment
 
 logger = logging.getLogger(__name__)
 
 
-def _env_vars_from_keys(keys: Sequence[str]) -> dict[str, str]:
-    env_vars: dict[str, str] = {}
-    for key in keys:
-        value = os.environ.get(key)
-        if value:
-            env_vars[key] = value
-    return env_vars
-
-
 class LongContextEvaluator(Evaluator):
-    def launch_evaluate_with_ray(
-        self,
-        model: ModelConfig,
-        evals: list[EvalTaskConfig],
-        output_path: str,
-        resource_config: ResourceConfig,
-        max_eval_instances: int | None = None,
-        wandb_tags: list[str] | None = None,
-    ) -> None:
-        mode_str = resolve_vllm_mode(None)
-        pip_packages = VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else ()
-        env_vars = _env_vars_from_keys(
-            [
-                "HF_TOKEN",
-                "MARIN_PREFIX",
-                "MARIN_VLLM_MODE",
-                "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
-                "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
-                "VLLM_TPU_SKIP_PRECOMPILE",
-            ]
-        )
-        env_vars.setdefault("VLLM_ALLOW_LONG_MAX_MODEL_LEN", "1")
-        env_vars.setdefault("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1")
-        env_vars.setdefault("VLLM_TPU_SKIP_PRECOMPILE", "1")
-
-        launch_evaluate_with_ray(
-            evaluator=self,
-            job_name="long-context-eval",
-            model=model,
-            evals=evals,
-            output_path=output_path,
-            resource_config=resource_config,
-            max_eval_instances=max_eval_instances,
-            wandb_tags=wandb_tags,
-            extras=("eval", "tpu"),
-            pip_packages=pip_packages,
-            env_vars=env_vars,
-        )
-
     def evaluate(
         self,
         model: ModelConfig,
