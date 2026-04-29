@@ -57,7 +57,9 @@ def _forward_with_activations(
 
     cfg = model.config
 
-    hidden = model.token_embed.at[token_ids].get()
+    # token_embed gather needs out_sharding on Explicit mesh; use one_hot matmul instead
+    one_hot = jax.nn.one_hot(token_ids, cfg.vocab_size, dtype=model.token_embed.dtype)
+    hidden = jnp.einsum("...v,vd->...d", one_hot, model.token_embed)
     hidden = model.embed_gated_norm(model.embed_norm(hidden))
 
     # Collect residual stream snapshots: embed, post_attn_0, post_mlp_0, ..., final
