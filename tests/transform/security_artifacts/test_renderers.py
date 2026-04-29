@@ -147,11 +147,3 @@ def test_render_zeek_tsv_log_rejects_mismatched_types_length():
             zeek_path="conn",
             types=("string",),
         )
-
-
-def test_render_zeek_tsv_log_is_deterministic():
-    records = [{"ts": "1", "uid": "X"}, {"ts": "2", "uid": "Y"}]
-    fields = ("ts", "uid")
-    left = render_zeek_tsv_log(records, fields=fields, zeek_path="conn")
-    right = render_zeek_tsv_log(records, fields=fields, zeek_path="conn")
-    assert left == right

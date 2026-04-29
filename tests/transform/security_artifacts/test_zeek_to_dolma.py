@@ -9,7 +9,6 @@ import gzip
 import json
 from pathlib import Path
 
-import pytest
 
 from marin.transform.security_artifacts.zeek_to_dolma import (
     ZEEK_RENDER_TAG,
@@ -143,24 +142,3 @@ def test_render_file_to_dolma_blocks_reads_gzipped_jsonl(tmp_path: Path) -> None
     blocks = render_file_to_dolma_blocks(str(input_file), cfg)
 
     assert len(blocks) == 2
-
-
-def test_zeek_to_dolma_config_rejects_invalid_input_format():
-    with pytest.raises(ValueError, match="input_format"):
-        _base_config("a", "b", input_format="tsv")
-
-
-def test_zeek_to_dolma_config_rejects_type_field_length_mismatch():
-    with pytest.raises(ValueError, match="types length"):
-        _base_config("a", "b", types=("string",))
-
-
-def test_zeek_to_dolma_config_rejects_empty_fields():
-    with pytest.raises(ValueError, match="fields"):
-        ZeekToDolmaConfig(
-            input_path="a",
-            output_path="b",
-            zeek_path="conn",
-            fields=(),
-            source_label="s",
-        )

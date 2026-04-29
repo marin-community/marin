@@ -22,10 +22,9 @@ import hashlib
 import logging
 import posixpath
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
-import draccus
 from zephyr import Dataset, ZephyrContext, load_jsonl, load_parquet
 
 from marin.transform.security_artifacts.renderers import (
@@ -80,8 +79,6 @@ class ZeekToDolmaConfig:
     empty_field: str = DEFAULT_ZEEK_EMPTY_FIELD
     unset_field: str = DEFAULT_ZEEK_UNSET_FIELD
     max_blocks_per_file: int | None = None
-    # Reserved for draccus compatibility with future nested knobs.
-    _reserved: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.input_format not in SUPPORTED_INPUT_FORMATS:
@@ -100,8 +97,8 @@ def _default_input_glob(cfg: ZeekToDolmaConfig) -> str:
     if cfg.input_glob is not None:
         return cfg.input_glob
     if cfg.input_format == "parquet":
-        return "*.parquet"
-    return "*.jsonl*"
+        return "**/*.parquet"
+    return "**/*.jsonl*"
 
 
 def _project_record(record: Any, fields: tuple[str, ...]) -> dict[str, Any]:
@@ -181,7 +178,6 @@ def render_records_to_dolma_blocks(
     return list(_render_records_into_blocks(records, cfg))
 
 
-@draccus.wrap()
 def convert_zeek_to_dolma(cfg: ZeekToDolmaConfig) -> None:
     """Transform Zeek log records to Dolma-format JSONL shards.
 

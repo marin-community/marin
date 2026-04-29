@@ -3,13 +3,11 @@
 
 import gzip
 import json
-import threading
-from collections.abc import Iterator
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 
+import marin.datakit.download.uwf_zeek as uwf_zeek
 from marin.datakit.download.uwf_zeek import (
     DEFAULT_OUTPUT_FILENAME,
     DownloadUwfZeekSampleConfig,
@@ -18,32 +16,31 @@ from marin.datakit.download.uwf_zeek import (
 )
 
 
-@pytest.fixture()
-def local_uwf_server(tmp_path: Path) -> Iterator[tuple[str, Path]]:
-    server_root = tmp_path / "server"
-    server_root.mkdir()
+class _FakeResponse:
+    def __init__(self, *, text: str = "", lines: list[str] | None = None):
+        self.text = text
+        self._lines = [] if lines is None else lines
 
-    class Handler(SimpleHTTPRequestHandler):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=str(server_root), **kwargs)
+    def raise_for_status(self) -> None:
+        return None
 
-        def log_message(self, format, *args):  # noqa: A002  # stdlib signature
-            pass
+    def iter_lines(self, *, decode_unicode: bool = False):
+        for line in self._lines:
+            yield line if decode_unicode else line.encode("utf-8")
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    try:
-        host, port = httpd.server_address
-        yield f"http://{host}:{port}", server_root
-    finally:
-        httpd.shutdown()
-        thread.join()
+    def close(self) -> None:
+        return None
 
 
-def _publish(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+class _FakeSession:
+    def __init__(self, responses: dict[str, _FakeResponse]):
+        self._responses = responses
+
+    def get(self, url: str, *, timeout: int, stream: bool = False):
+        return self._responses[url]
+
+    def close(self) -> None:
+        return None
 
 
 def _read_jsonl_gz(path: Path) -> list[dict]:
@@ -51,21 +48,10 @@ def _read_jsonl_gz(path: Path) -> list[dict]:
         return [json.loads(line) for line in handle if line.strip()]
 
 
-def test_download_uwf_zeek_sample_lists_categories_and_caps_rows(tmp_path: Path, local_uwf_server) -> None:
-    base_url, server_root = local_uwf_server
-    _publish(
-        server_root / "csv" / "Benign" / "index.html",
-        '<html><body><a href="part-00001.csv">part-00001.csv</a></body></html>',
-    )
-    _publish(
-        server_root / "csv" / "Discovery" / "index.html",
-        '<html><body><a href="part-00002.csv">part-00002.csv</a></body></html>',
-    )
-    _publish(
-        server_root / "csv" / "Reconnaissance" / "index.html",
-        '<html><body><a href="part-00003.csv">part-00003.csv</a></body></html>',
-    )
-
+def test_download_uwf_zeek_sample_lists_categories_and_caps_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_url = "https://example.test/csv/"
     header = (
         "community_id,conn_state,duration,history,src_ip_zeek,src_port_zeek,dest_ip_zeek,dest_port_zeek,"
         "local_orig,local_resp,missed_bytes,orig_bytes,orig_ip_bytes,orig_pkts,proto,resp_bytes,"
@@ -84,16 +70,28 @@ def test_download_uwf_zeek_sample_lists_categories_and_caps_rows(tmp_path: Path,
         "2025-05-30T16:28:57.666Z,103,Reconnaissance,T1595,True,none\n"
     )
 
-    _publish(server_root / "csv" / "Benign" / "part-00001.csv", header + "".join(benign_rows))
-    _publish(server_root / "csv" / "Discovery" / "part-00002.csv", header + discovery_row)
-    _publish(server_root / "csv" / "Reconnaissance" / "part-00003.csv", header + recon_row)
+    responses = {
+        f"{base_url}Benign/": _FakeResponse(
+            text='<html><body><a href="part-00001.csv">part-00001.csv</a></body></html>'
+        ),
+        f"{base_url}Discovery/": _FakeResponse(
+            text='<html><body><a href="part-00002.csv">part-00002.csv</a></body></html>'
+        ),
+        f"{base_url}Reconnaissance/": _FakeResponse(
+            text='<html><body><a href="part-00003.csv">part-00003.csv</a></body></html>'
+        ),
+        f"{base_url}Benign/part-00001.csv": _FakeResponse(lines=(header + "".join(benign_rows)).splitlines()),
+        f"{base_url}Discovery/part-00002.csv": _FakeResponse(lines=(header + discovery_row).splitlines()),
+        f"{base_url}Reconnaissance/part-00003.csv": _FakeResponse(lines=(header + recon_row).splitlines()),
+    }
+    monkeypatch.setattr(uwf_zeek, "_build_session", lambda: _FakeSession(responses))
 
     output_dir = tmp_path / "output"
     manifest = download_uwf_zeek_sample(
         DownloadUwfZeekSampleConfig(
             source=UwfZeekSampleSource(
                 slice_key="binary_network_security/uwf_zeek",
-                base_url=f"{base_url}/csv/",
+                base_url=base_url,
                 max_rows_per_category=1,
             ),
             output_path=str(output_dir),
@@ -113,4 +111,4 @@ def test_download_uwf_zeek_sample_lists_categories_and_caps_rows(tmp_path: Path,
 
     assert manifest["total_rows"] == 3
     assert [entry["rows_written"] for entry in manifest["files"]] == [1, 1, 1]
-    assert manifest["files"][0]["csv_url"].endswith("/csv/Benign/part-00001.csv")
+    assert manifest["files"][0]["csv_url"] == f"{base_url}Benign/part-00001.csv"
