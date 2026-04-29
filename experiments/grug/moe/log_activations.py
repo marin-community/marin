@@ -211,13 +211,11 @@ def _run_log_activations_local(config: LogActivationsConfig) -> None:
     import haliax.partitioning
 
     single_device = jax.devices()[:1]
-    mesh = create_mesh_from_axis_specs(
-        ici_axes={"data": 1, "replica": 1, "model": 1, "expert": 1},
-        dcn_axes={},
-        devices=single_device,
-        axis_types=tuple(AxisType.Explicit for _ in range(4)),
-    )
-    with haliax.partitioning.set_mesh(mesh):
+    mesh_kw = {"ici_axes": {"data": 1, "replica": 1, "model": 1, "expert": 1}, "dcn_axes": {}, "devices": single_device}
+
+    # Explicit mesh for init + checkpoint (model uses reshard with PartitionSpec)
+    explicit_mesh = create_mesh_from_axis_specs(**mesh_kw, axis_types=tuple(AxisType.Explicit for _ in range(4)))
+    with haliax.partitioning.set_mesh(explicit_mesh):
         mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
         model = Transformer.init(model_cfg, key=jax.random.PRNGKey(0))
 
@@ -228,9 +226,16 @@ def _run_log_activations_local(config: LogActivationsConfig) -> None:
             config.checkpoint,
             subpath="params",
             discover_latest=False,
-            mesh=mesh,
+            mesh=explicit_mesh,
         )
         model = mp.cast_to_compute(model)
+
+    # Strip all sharding annotations so forward pass runs unsharded
+    device = single_device[0]
+    model = jax.tree.map(lambda x: jax.device_put(np.array(x), device) if hasattr(x, "sharding") else x, model)
+
+    # Forward pass with no mesh context — everything is on one device, no sharding
+    with jax.default_device(device):
         # 1. Custom text (if provided)
         if config.text:
             print("\n=== Custom text ===")
