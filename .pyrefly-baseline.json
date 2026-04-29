@@ -1105,30 +1105,6 @@
       "severity": "error"
     },
     {
-      "line": 573,
-      "column": 9,
-      "stop_line": 573,
-      "stop_column": 20,
-      "path": "lib/marin/src/marin/rl/weight_transfer/arrow_flight.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `ArrowFlightServer.get_metrics` overrides parent class `WeightTransferServer` in an inconsistent manner\n  `ArrowFlightServer.get_metrics` has type `(self: ArrowFlightServer) -> WeightTransferServerMetrics`, which is not assignable to `(self: ArrowFlightServer) -> dict[Unknown, Unknown]`, the type of `WeightTransferServer.get_metrics`\n  Signature mismatch:\n  expected: def get_metrics(self: ArrowFlightServer) -> dict[Unknown, Unknown]: ...\n                                                        ^^^^^^^^^^^^^^^^^^^^^^ return type\n  found:    def get_metrics(self: ArrowFlightServer) -> WeightTransferServerMetrics: ...\n                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^ return type",
-      "concise_description": "Class member `ArrowFlightServer.get_metrics` overrides parent class `WeightTransferServer` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
-      "line": 577,
-      "column": 9,
-      "stop_line": 577,
-      "stop_column": 27,
-      "path": "lib/marin/src/marin/rl/weight_transfer/arrow_flight.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `ArrowFlightServer.get_debug_snapshot` overrides parent class `WeightTransferServer` in an inconsistent manner\n  `ArrowFlightServer.get_debug_snapshot` has type `(self: ArrowFlightServer) -> Mapping[str, object]`, which is not assignable to `(self: ArrowFlightServer) -> dict[str, object]`, the type of `WeightTransferServer.get_debug_snapshot`\n  Signature mismatch:\n  expected: def get_debug_snapshot(self: ArrowFlightServer) -> dict[str, object]: ...\n                                                               ^^^^ return type\n  found:    def get_debug_snapshot(self: ArrowFlightServer) -> Mapping[str, object]: ...\n                                                               ^^^^^^^ return type",
-      "concise_description": "Class member `ArrowFlightServer.get_debug_snapshot` overrides parent class `WeightTransferServer` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
       "line": 139,
       "column": 21,
       "stop_line": 143,

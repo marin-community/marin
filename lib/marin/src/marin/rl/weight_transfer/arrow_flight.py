@@ -22,7 +22,6 @@ import os
 import socket
 import threading
 import time
-from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import partial
@@ -570,11 +569,11 @@ class ArrowFlightServer(WeightTransferServer):
             logger.debug(f"Shutting down Arrow Flight server at {flight_server._location}...")
             threading.Thread(target=flight_server.shutdown, daemon=True).start()
 
-    def get_metrics(self) -> WeightTransferServerMetrics:
+    def get_metrics(self) -> dict:
         """Get transfer metrics."""
-        return self.metrics
+        return dataclasses.asdict(self.metrics)
 
-    def get_debug_snapshot(self) -> Mapping[str, object]:
+    def get_debug_snapshot(self) -> dict[str, object]:
         latest_metrics = dataclasses.asdict(self.metrics)
         latest_metrics["transfer_bytes_mib"] = round(self.metrics.transfer_bytes / _BYTES_PER_MIB, 2)
         latest_metrics["largest_param_bytes_mib"] = round(self.metrics.largest_param_bytes / _BYTES_PER_MIB, 2)

@@ -280,9 +280,9 @@ def test_arrow_flight_exports_and_tracks_bytes(sample_params):
             assert update.weight_id == 1
 
             server_metrics = server.get_metrics()
-            assert server_metrics.transfer_bytes > 0
-            assert server_metrics.param_count > 0
-            assert server_metrics.materialize_time >= 0
+            assert server_metrics["transfer_bytes"] > 0
+            assert server_metrics["param_count"] > 0
+            assert server_metrics["materialize_time"] >= 0
 
             client_metrics = client.get_metrics()
             assert client_metrics["receive_bytes"] > 0
