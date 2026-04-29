@@ -32,7 +32,8 @@ def _tokenize(text: str, max_tokens: int = 100) -> np.ndarray:
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3.1-8B")
-    ids = tokenizer.encode(text, add_special_tokens=False)[:max_tokens]
+    ids = tokenizer.encode(text, add_special_tokens=False)[: max_tokens - 1]
+    ids = [tokenizer.bos_token_id] + ids
     return np.array(ids, dtype=np.int32)
 
 
