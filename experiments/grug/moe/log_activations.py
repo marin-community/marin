@@ -36,76 +36,68 @@ def _tokenize(text: str, max_tokens: int = 100) -> np.ndarray:
     return np.array(ids, dtype=np.int32)
 
 
-def _forward_with_activations(
-    model: Transformer,
-    token_ids: jax.Array,
-) -> dict[str, np.ndarray]:
-    """Run forward pass, capturing activations at every sublayer."""
-    import levanter.grug.sharding as sharding_mod
-
-    import experiments.grug.moe.model as model_mod
-    from levanter.grug.attention import reference_attention
-
-    # Monkey-patch for single-device inference:
-    # 1. Reference attention instead of splash (avoids Explicit axis closure error)
-    # 2. No-op reshard/unshard (avoids sharding conflicts on single device)
-    # 3. No-op batch_spec (avoids sharding on batch dim)
-    model_mod.attention = lambda q, k, v, mask: reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
-    model_mod.reshard = lambda x, *a, **kw: x
-    model_mod._batch_spec = lambda: None
-    sharding_mod.unshard = lambda x: x
-
+def _make_forward_fn(model: Transformer):
+    """Build a JIT-compiled forward pass that returns all intermediate activations."""
     cfg = model.config
 
-    # token_embed gather needs out_sharding on Explicit mesh; use one_hot matmul instead
-    one_hot = jax.nn.one_hot(token_ids, cfg.vocab_size, dtype=model.token_embed.dtype)
-    hidden = jnp.einsum("...v,vd->...d", one_hot, model.token_embed)
-    hidden = model.embed_gated_norm(model.embed_norm(hidden))
-
-    # Collect residual stream snapshots: embed, post_attn_0, post_mlp_0, ..., final
-    # Shape: (2*num_layers + 2, seq_len, hidden_dim)
-    residual_snapshots = [np.array(hidden)]  # embed
-
-    segment_ids = None
-    short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
-    long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
-
-    router_logits_all = []
-
-    for i, block in enumerate(model.blocks):
-        layer_mask = long_mask if i % 4 == 3 else short_mask
-
-        # Attention sublayer
-        attn_in = block.attn_gated_norm(block.rms_attn(hidden))
-        hidden = hidden + block.attn(attn_in, layer_mask)
-        residual_snapshots.append(np.array(hidden))  # post_attn
-
-        # MLP sublayer — capture router logits
-        mlp_in = block.mlp_gated_norm(block.rms_mlp(hidden))
-
+    @jax.jit
+    def forward(token_ids):
         from einops import rearrange
 
-        x_flat = rearrange(mlp_in, "b s d -> (b s) d")
-        router_logits = jnp.einsum("td,de->te", x_flat, block.mlp.router).astype(jnp.float32)
-        router_logits_all.append(np.array(router_logits))
+        from experiments.grug.moe.model import _batch_spec
 
-        mlp_out, _ = block.mlp(mlp_in)
-        if block.shared is not None:
-            from levanter.utils.activation import ActivationFunctionEnum
+        batch_spec = _batch_spec()
 
-            mlp_out = mlp_out + block.shared(mlp_in, activation=ActivationFunctionEnum.silu)
-        hidden = hidden + mlp_out
-        residual_snapshots.append(np.array(hidden))  # post_mlp
+        hidden = model.token_embed.at[token_ids].get(out_sharding=batch_spec)
+        hidden = model.embed_gated_norm(model.embed_norm(hidden))
 
-    # Final norm
-    hidden = model.final_gated_norm(model.final_norm(hidden))
-    residual_snapshots.append(np.array(hidden))  # final
+        residual_snapshots = [hidden]
+
+        segment_ids = None
+        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
+        long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+
+        router_logits_all = []
+
+        for i, block in enumerate(model.blocks):
+            layer_mask = long_mask if i % 4 == 3 else short_mask
+
+            attn_in = block.attn_gated_norm(block.rms_attn(hidden))
+            hidden = hidden + block.attn(attn_in, layer_mask)
+            residual_snapshots.append(hidden)
+
+            mlp_in = block.mlp_gated_norm(block.rms_mlp(hidden))
+
+            x_flat = rearrange(mlp_in, "b s d -> (b s) d")
+            router_logits = jnp.einsum("td,de->te", x_flat, block.mlp.router).astype(jnp.float32)
+            router_logits_all.append(router_logits)
+
+            mlp_out, _ = block.mlp(mlp_in)
+            if block.shared is not None:
+                from levanter.utils.activation import ActivationFunctionEnum
+
+                mlp_out = mlp_out + block.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            hidden = hidden + mlp_out
+            residual_snapshots.append(hidden)
+
+        hidden = model.final_gated_norm(model.final_norm(hidden))
+        residual_snapshots.append(hidden)
+
+        return residual_snapshots, router_logits_all
+
+    return forward
+
+
+def _forward_with_activations(
+    forward_fn,
+    token_ids: jax.Array,
+) -> dict[str, np.ndarray]:
+    """Run JIT'd forward pass and collect activations as numpy arrays."""
+    residual_snapshots, router_logits_all = forward_fn(token_ids)
 
     return {
-        # (2*L+2, seq_len, hidden_dim) — order: embed, post_attn_0, post_mlp_0, ..., post_attn_L-1, post_mlp_L-1, final
-        "residual_stream": np.stack(residual_snapshots, axis=0),
-        # (num_layers, num_tokens, num_experts)
-        "router_logits": np.stack(router_logits_all, axis=0),
+        "residual_stream": np.stack([np.array(s) for s in residual_snapshots], axis=0),
+        "router_logits": np.stack([np.array(r) for r in router_logits_all], axis=0),
     }
 
 
@@ -115,7 +107,6 @@ def _save_to_gcs(
     """Save activations to GCS: metadata + residual_stream + router_logits + token_ids."""
     fs = gcsfs.GCSFileSystem()
 
-    # Build residual stream index: which row corresponds to what
     residual_labels = ["embed"]
     for i in range(num_layers):
         residual_labels.append(f"layer_{i}_post_attn")
@@ -172,7 +163,7 @@ def _get_nemotron_tokens(max_tokens: int = 100) -> tuple[np.ndarray, str]:
         return _tokenize(fallback, max_tokens), fallback
 
 
-def _run_and_save(model, model_cfg, token_ids: np.ndarray, text: str, output_path: str):
+def _run_and_save(forward_fn, model_cfg, token_ids: np.ndarray, text: str, output_path: str):
     """Run forward pass and save activations."""
     seq_len = len(token_ids)
     # Splash attention requires seq_len to be a multiple of 128
@@ -181,7 +172,7 @@ def _run_and_save(model, model_cfg, token_ids: np.ndarray, text: str, output_pat
     padded_ids[:seq_len] = token_ids
 
     token_ids_jax = jnp.array(padded_ids[None, :], dtype=jnp.int32)
-    activations = _forward_with_activations(model, token_ids_jax)
+    activations = _forward_with_activations(forward_fn, token_ids_jax)
 
     # Squeeze batch dim and trim padding
     for key in activations:
@@ -215,12 +206,14 @@ def _run_log_activations_local(config: LogActivationsConfig) -> None:
 
     import haliax.partitioning
 
-    single_device = jax.devices()[:1]
-    mesh_kw = {"ici_axes": {"data": 1, "replica": 1, "model": 1, "expert": 1}, "dcn_axes": {}, "devices": single_device}
-
-    # Explicit mesh for init + checkpoint (model uses reshard with PartitionSpec)
-    explicit_mesh = create_mesh_from_axis_specs(**mesh_kw, axis_types=tuple(AxisType.Explicit for _ in range(4)))
-    with haliax.partitioning.set_mesh(explicit_mesh):
+    # Match the training mesh: Explicit axes, single device
+    mesh = create_mesh_from_axis_specs(
+        ici_axes={"data": 1, "replica": 1, "model": 1, "expert": 1},
+        dcn_axes={},
+        devices=jax.devices()[:1],
+        axis_types=tuple(AxisType.Explicit for _ in range(4)),
+    )
+    with haliax.partitioning.set_mesh(mesh):
         mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
         model = Transformer.init(model_cfg, key=jax.random.PRNGKey(0))
 
@@ -231,21 +224,25 @@ def _run_log_activations_local(config: LogActivationsConfig) -> None:
             config.checkpoint,
             subpath="params",
             discover_latest=False,
-            mesh=explicit_mesh,
+            mesh=mesh,
         )
         model = mp.cast_to_compute(model)
+
+        # Build JIT'd forward pass — runs under the Explicit mesh like training
+        forward_fn = _make_forward_fn(model)
+
         # 1. Custom text (if provided)
         if config.text:
             print("\n=== Custom text ===")
             custom_ids = _tokenize(config.text, config.max_tokens)
             print(f"Tokenized {len(custom_ids)} tokens")
-            _run_and_save(model, model_cfg, custom_ids, config.text, f"{config.output_path}/custom")
+            _run_and_save(forward_fn, model_cfg, custom_ids, config.text, f"{config.output_path}/custom")
 
         # 2. Nemotron mix first tokens
         print("\n=== Nemotron mix ===")
         nemotron_ids, nemotron_text = _get_nemotron_tokens(config.max_tokens)
         print(f"Loaded {len(nemotron_ids)} tokens from nemotron")
-        _run_and_save(model, model_cfg, nemotron_ids, nemotron_text, f"{config.output_path}/nemotron")
+        _run_and_save(forward_fn, model_cfg, nemotron_ids, nemotron_text, f"{config.output_path}/nemotron")
 
 
 def run_log_activations(config: LogActivationsConfig) -> None:
