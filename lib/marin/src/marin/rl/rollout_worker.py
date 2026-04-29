@@ -24,11 +24,9 @@ from typing import Any
 
 import equinox as eqx
 import haliax as hax
-import jax
 import jax.random as jrandom
 import levanter
 import wandb
-from jax.experimental import multihost_utils
 from levanter.inference.openai import InferenceServer
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
@@ -929,14 +927,9 @@ class RolloutWorker:
                     logger.info("Still waiting for first weight transfer (elapsed: %.1fs)", elapsed)
                 logger.info("First weights received, starting inference loop")
 
-            use_jax_rng = self.config.inference_type == "levanter"
-
-            # Initialize RNG - use Python's random for vLLM to avoid JAX device access
-            if use_jax_rng:
-                rng = jax.random.PRNGKey(self.config.seed)
-                rng = multihost_utils.broadcast_one_to_all(rng)
-            else:
-                py_rng = random.Random(self.config.seed)
+            # All hosts derive int seeds from the same Python RNG; downstream
+            # consumers feed these through env.sample's extract_seed helper.
+            py_rng = random.Random(self.config.seed)
 
             logger.info(f"Starting rollout worker with seed {self.config.seed}")
 
@@ -971,11 +964,7 @@ class RolloutWorker:
                     logger.info(f"Reached max rollouts ({self.config.max_rollouts}), stopping")
                     break
 
-                if use_jax_rng:
-                    rng, seed_key = jax.random.split(rng)
-                    seed = int(seed_key[0])
-                else:
-                    seed = py_rng.randint(0, 2**31 - 1)
+                seed = py_rng.randint(0, 2**31 - 1)
 
                 try:
                     future = self._curriculum_actor.sample_lesson.remote(seed)
@@ -991,10 +980,7 @@ class RolloutWorker:
                     micro_eval_frequency=self.config.curriculum_config.micro_eval_frequency,
                     worker_index=self.config.worker_index,
                 ):
-                    if use_jax_rng:
-                        rng, micro_eval_rng = jrandom.split(rng)
-                    else:
-                        micro_eval_rng = py_rng.randint(0, 2**31 - 1)
+                    micro_eval_rng = py_rng.randint(0, 2**31 - 1)
                     self._evaluate_lesson(
                         lesson_id=lesson_id,
                         n_examples=self.config.curriculum_config.micro_eval_n_examples,
@@ -1010,19 +996,13 @@ class RolloutWorker:
                     eval_frequency=self.config.curriculum_config.eval_frequency,
                     worker_index=self.config.worker_index,
                 ):
-                    if use_jax_rng:
-                        rng, eval_rng = jrandom.split(rng)
-                    else:
-                        eval_rng = py_rng.randint(0, 2**31 - 1)
+                    eval_rng = py_rng.randint(0, 2**31 - 1)
                     self._evaluate_curriculum(eval_rng, self._current_train_step)
                     self._last_eval_train_step = self._current_train_step
 
                 logger.info(f"Sampled lesson '{lesson_id}' from curriculum")
 
-                if use_jax_rng:
-                    rng, input_rng = jax.random.split(rng)
-                else:
-                    input_rng = py_rng.randint(0, 2**31 - 1)
+                input_rng = py_rng.randint(0, 2**31 - 1)
 
                 lesson_config = self.config.curriculum_config.lessons[lesson_id]
 
@@ -1091,7 +1071,7 @@ class RolloutWorker:
                     )
 
             logger.info(f"Inference worker completed after generating {step} rollouts")
-            if use_jax_rng:
+            if self.config.inference_type == "levanter":
                 barrier_sync()
 
         except Exception:
