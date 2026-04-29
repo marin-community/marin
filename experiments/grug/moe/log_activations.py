@@ -162,13 +162,21 @@ def _get_nemotron_tokens(max_tokens: int = 100) -> tuple[np.ndarray, str]:
 
 def _run_and_save(model, model_cfg, token_ids: np.ndarray, text: str, output_path: str):
     """Run forward pass and save activations."""
-    token_ids_jax = jnp.array(token_ids[None, :], dtype=jnp.int32)
+    seq_len = len(token_ids)
+    # Splash attention requires seq_len to be a multiple of 128
+    padded_len = ((seq_len + 127) // 128) * 128
+    padded_ids = np.zeros(padded_len, dtype=np.int32)
+    padded_ids[:seq_len] = token_ids
+
+    token_ids_jax = jnp.array(padded_ids[None, :], dtype=jnp.int32)
     activations = _forward_with_activations(model, token_ids_jax)
 
-    # Squeeze batch dim
+    # Squeeze batch dim and trim padding
     for key in activations:
         if activations[key].ndim == 4 and activations[key].shape[1] == 1:
-            activations[key] = activations[key][:, 0, :, :]
+            activations[key] = activations[key][:, 0, :seq_len, :]
+        elif activations[key].ndim == 3:
+            activations[key] = activations[key][:, :seq_len, :]
 
     _save_to_gcs(activations, output_path, token_ids, text, num_layers=model_cfg.num_layers)
 
